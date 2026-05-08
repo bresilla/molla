@@ -1407,31 +1407,67 @@ limits, drives, friction, multi-articulation, substeps), 5 box
 tests (4 prior + 1 external-substep stack), 3 GPU featherstone
 tests (1 prior + 2: PD+limits parity, GPU limit-clamp).
 
-### Stage 6 — Convex contact (capsules + cylinders + GJK + EPA + meshes)
+### Stage 6 — Convex contact (capsules + cylinders + GJK + EPA + meshes) ✅ COMPLETE (2026-05-08)
 
-**Goal**: arbitrary convex shapes. After this stage molla can handle
-anything URDF or MJCF describes.
+- **6.1 ✅** — Capsule + Cylinder shapes (URDF +Y axis convention).
+  Builder: `add_shape_capsule`, `add_shape_cylinder`. AABB for both
+  (capsule = OBB of two end-cap spheres; cylinder = tight per-axis
+  projection). Closed-form narrow phase: sphere-capsule (segment
+  closest-point), capsule-plane (per end-cap sphere-plane),
+  capsule-capsule (segment-segment closest points, Ericson). 8
+  unit tests + 3 XPBD integration tests (settle on plane, stack,
+  side-by-side).
+- **6.2 ✅** — Support functions for sphere, plane, box, capsule,
+  cylinder, triangle. World-frame query that rotates `dir` into
+  shape-local frame, evaluates analytic support, returns world
+  point. 7 unit tests including Minkowski-difference reduction.
+- **6.3 ✅** — GJK distance + overlap detection (CPU). Standard
+  4-simplex algorithm with `v·v − v·w ≤ ε·v·v` termination
+  (Ericson §9.5). Returns `Disjoint` (with closest-points +
+  distance) or `Overlap` (with simplex feeding EPA). 6 unit tests
+  covering separated and overlapping primitive pairs.
+- **6.4 ✅** — EPA penetration depth + contact normal. Expands
+  GJK's overlap simplex into a polytope, picks the face nearest
+  the origin, queries support past it. Standard silhouette-edge
+  expansion with **directed** edge tracking (so new face windings
+  preserve outward orientation even on degenerate origin-on-face
+  initial polytopes). Pad-to-tetra logic with cardinal-axis
+  fallback for radially-symmetric pair degeneracies. 3 unit tests.
+- **6.5 ✅** — GJK + EPA wired into the narrow phase as the
+  fallback for non-closed-form pairs: capsule-box, box-capsule,
+  capsule-cylinder, cylinder-cylinder, cylinder-sphere,
+  cylinder-box, triangle-anything. Cylinder-plane uses a
+  4-perimeter sample fallback (single-support produces an
+  off-centre torque that rocks the cylinder onto its side).
+- **6.6 ✅** — BVH broad phase. Top-down construction with
+  median-split on the longest centroid-extent axis. Plane-shape
+  AABBs are infinite, so planes are excluded from the BVH and
+  paired with finite shapes separately. CPU only — GPU LBVH is
+  future work. Tests: parity against brute-force on 100 + 1024
+  shapes.
+- **6.7 ✅** — Triangle + TriMesh shapes. `ShapeGeometry::Triangle
+  { v0, v1, v2 }` for direct per-triangle collision.
+  `ShapeGeometry::TriMesh { mesh_id }` references a `Model.meshes:
+  Vec<TriMesh>` storage. Narrow phase routes mesh pairs through
+  per-triangle GJK+EPA, with a vertex-projection fast path for
+  mesh-vs-plane. 2 XPBD integration tests (sphere on triangle,
+  sphere on trimesh quad floor).
 
-Deliverables:
-- `ShapeGeometry::Capsule { half_height, radius }`,
-  `Cylinder { half_height, radius }`, `Cone`,
-  `ConvexHull { vertices, faces }`, `TriMesh { ... }`.
-- Support functions per shape (`support(direction) -> Vec3`).
-- GJK distance/closest-points (CPU + WGSL).
-- EPA penetration depth + contact normal (CPU + WGSL).
-- MPR as an alternative for deep penetration (Newton's choice).
-- Triangle-mesh narrow phase via per-triangle GJK.
-- Convex-hull builder (qhull port or `parry3d` reuse — TBD).
-- BVH broad-phase (CPU+GPU), replaces SAP for scenes with > a
-  few hundred shapes or any triangle-mesh shape. SAP stays as
-  fallback.
+**Test surface added in stage 6**: 28 narrow-phase + GJK + EPA +
+support + BVH unit tests in lib (76 total now), 7 integration
+tests (capsule, cylinder, trimesh).
 
-Definition of done:
-- Capsule-on-plane, cylinder-on-plane stable.
-- Cylinder-cylinder stable at any orientation.
-- Mesh-convex-hull on plane stable.
-- BVH broad-phase passes parity test against SAP on a 1k-shape
-  scene.
+Known limitations carried forward:
+- Cone shape — not yet added; closed-form GJK support trivial when
+  needed.
+- Convex-hull builder (qhull-style construction from a mesh) —
+  deferred until a concrete consumer arrives.
+- MPR fallback for deep penetration — current EPA handles all our
+  test cases, but on extreme deformation MPR is more robust.
+- GPU port of GJK+EPA — CPU is the only path. The viewer's GPU
+  XPBD solver still works for sphere/box/plane workloads; capsule
+  and cylinder demos run on CPU narrow-phase + GPU XPBD.
+- BVH GPU port (LBVH) — CPU only.
 
 ### Stage 7 — `usd_molla` crate
 

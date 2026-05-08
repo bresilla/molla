@@ -53,6 +53,24 @@ pub enum ShapeGeometry {
         /// Radius.
         radius: Real,
     },
+    /// Triangle in the shape's local frame. Three vertex positions.
+    /// Used as a primitive for narrow-phase queries against
+    /// individual mesh triangles; the user typically builds meshes
+    /// via [`super::Model::meshes`] and references them with
+    /// [`Self::TriMesh`]. Volume-degenerate — narrow phase routes
+    /// triangle-vs-volume pairs through GJK+EPA.
+    Triangle {
+        v0: Vec3,
+        v1: Vec3,
+        v2: Vec3,
+    },
+    /// Triangle mesh — references entry `mesh_id` in
+    /// [`super::Model::meshes`]. Used for static terrain and
+    /// convex-hull approximations of arbitrary meshes.
+    TriMesh {
+        /// Index into [`super::Model::meshes`].
+        mesh_id: u32,
+    },
 }
 
 /// Parameters for [`ModelBuilder::add_body`].
@@ -173,6 +191,7 @@ pub struct ModelBuilder {
     shape_flags: Vec<u32>,
     shape_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
+    meshes: Vec<super::TriMesh>,
 
     // Joint arrays.
     joint_type: Vec<u32>,
@@ -375,6 +394,50 @@ impl ModelBuilder {
             body,
             local_pose,
             ShapeGeometry::Cylinder { half_height, radius },
+        ))
+    }
+
+    /// Register a triangle mesh in the model and return its
+    /// `mesh_id`. Pass that id into [`Self::add_shape_trimesh`].
+    pub fn add_mesh(&mut self, mesh: super::TriMesh) -> u32 {
+        let id = self.meshes.len() as u32;
+        self.meshes.push(mesh);
+        id
+    }
+
+    /// Attach a triangle-mesh shape to `body`. The `mesh_id` must be
+    /// a value previously returned by [`Self::add_mesh`].
+    pub fn add_shape_trimesh(
+        &mut self,
+        body: BodyId,
+        mesh_id: u32,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_trimesh")?;
+        if (mesh_id as usize) >= self.meshes.len() {
+            return Err(Error::Build(format!(
+                "add_shape_trimesh: mesh_id {mesh_id} not registered (have {} meshes)",
+                self.meshes.len()
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::TriMesh { mesh_id }))
+    }
+
+    /// Attach a triangle shape to `body`. Standalone — for direct
+    /// per-triangle collision (terrain patches, etc.).
+    pub fn add_shape_triangle(
+        &mut self,
+        body: BodyId,
+        v0: Vec3,
+        v1: Vec3,
+        v2: Vec3,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_triangle")?;
+        Ok(self.push_shape(
+            body,
+            local_pose,
+            ShapeGeometry::Triangle { v0, v1, v2 },
         ))
     }
 
@@ -776,6 +839,7 @@ impl ModelBuilder {
             shape_flags: Buffer::from_vec(self.shape_flags, s),
             shape_friction: Buffer::from_vec(self.shape_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
+            meshes: self.meshes,
 
             joint_count: self.joint_type.len(),
             joint_type: Buffer::from_vec(self.joint_type, s),

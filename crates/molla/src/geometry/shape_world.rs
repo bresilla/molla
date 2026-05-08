@@ -87,6 +87,34 @@ pub fn shape_world_aabb(
             let h = absax * half_height + perp * radius;
             Aabb::centred(xf.position, h).expanded(margin)
         }
+        ShapeGeometry::Triangle { v0, v1, v2 } => {
+            // Triangle vertices are in shape-local frame; transform
+            // each to world.
+            let w0 = xf.transform_point(v0);
+            let w1 = xf.transform_point(v1);
+            let w2 = xf.transform_point(v2);
+            let lo = w0.min(w1).min(w2);
+            let hi = w0.max(w1).max(w2);
+            Aabb { min: lo, max: hi }.expanded(margin)
+        }
+        ShapeGeometry::TriMesh { mesh_id } => {
+            // Loose bound: AABB of all mesh vertices in world frame.
+            let mesh = match model.meshes.get(mesh_id as usize) {
+                Some(m) => m,
+                None => return Aabb::infinite(),
+            };
+            if mesh.vertices.is_empty() {
+                return Aabb::infinite();
+            }
+            let mut lo = Vec3::splat(crate::math::Real::INFINITY);
+            let mut hi = Vec3::splat(-crate::math::Real::INFINITY);
+            for &v in &mesh.vertices {
+                let w = xf.transform_point(v);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+            Aabb { min: lo, max: hi }.expanded(margin)
+        }
     }
 }
 

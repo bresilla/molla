@@ -8,6 +8,8 @@ use crate::math::{Mat3, Real, Transform, Vec3};
 use crate::sim::{Model, ShapeGeometry, State};
 
 use super::broad_phase::ShapePair;
+use super::epa::epa;
+use super::gjk::{gjk, GjkResult};
 use super::shape_world::shape_world_transform;
 
 /// Output of the narrow phase. The contact normal points from `a` to
@@ -199,14 +201,42 @@ pub fn pair_contact(
             }
         }
 
-        // ── Stage 6.x — GJK + EPA fallback for everything else ───
-        // Cylinder + capsule-vs-box land here. Until GJK is wired in
-        // we silently emit no contact. Tests covering these pairs
-        // are expected to fail until stage 6.5.
+        // ── GJK + EPA fallback (no closed-form path) ─────────────
+        // Plane is a half-space — GJK isn't well-defined against it
+        // (unbounded support). Pair-vs-plane uses a ray-test fast
+        // path (only the 'lowest' support point matters). We don't
+        // have one for cylinder yet; skip those and let the caller
+        // decide.
+        (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Plane { .. })
+        | (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. }) => {
+            cylinder_plane_fallback(geom_a, &xf_a, geom_b, &xf_b, pair, out);
+        }
+
+        // Convex-vs-convex via GJK + EPA. Covers capsule-box,
+        // box-capsule, capsule-cylinder, cylinder-*, triangle-*.
         (ShapeGeometry::Capsule { .. }, ShapeGeometry::Box { .. })
         | (ShapeGeometry::Box { .. }, ShapeGeometry::Capsule { .. })
-        | (ShapeGeometry::Cylinder { .. }, _)
-        | (_, ShapeGeometry::Cylinder { .. }) => {}
+        | (ShapeGeometry::Capsule { .. }, ShapeGeometry::Cylinder { .. })
+        | (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Capsule { .. })
+        | (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Cylinder { .. })
+        | (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Sphere { .. })
+        | (ShapeGeometry::Sphere { .. }, ShapeGeometry::Cylinder { .. })
+        | (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Box { .. })
+        | (ShapeGeometry::Box { .. }, ShapeGeometry::Cylinder { .. })
+        | (ShapeGeometry::Triangle { .. }, _)
+        | (_, ShapeGeometry::Triangle { .. }) => {
+            if let Some(m) = gjk_epa_pair(geom_a, &xf_a, geom_b, &xf_b, pair) {
+                out.push(m);
+            }
+        }
+
+        // ── TriMesh — iterate triangles ──────────────────────────
+        (ShapeGeometry::TriMesh { mesh_id }, _) => {
+            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::TriMesh { mesh_id }) => {
+            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
 
         (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => {}
     }
@@ -1005,6 +1035,215 @@ fn capsule_capsule(
     // Now sphere-sphere between (pa, a_radius) and (pb, b_radius),
     // but emitting indices from the original capsules.
     sphere_sphere(pa, a_radius, pb, b_radius, a_shape, b_shape)
+}
+
+// ─── Generic GJK + EPA narrow phase ─────────────────────────────────
+
+/// Run GJK on the pair, then EPA if overlapping, returning a single
+/// contact manifold. Used as the fallback for any convex-vs-convex
+/// pair without a closed-form fast path (capsule-box, cylinder-*,
+/// future cone / convex hull).
+fn gjk_epa_pair(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    pair: ShapePair,
+) -> Option<ContactManifold> {
+    let res = gjk(geom_a, xf_a, geom_b, xf_b);
+    let simplex = match res {
+        GjkResult::Disjoint(_) => return None,
+        GjkResult::Overlap(s) => s,
+    };
+    let contact = epa(geom_a, xf_a, geom_b, xf_b, &simplex)?;
+    if contact.depth <= 0.0 {
+        return None;
+    }
+    let point = (contact.point_a + contact.point_b) * 0.5;
+    Some(ContactManifold {
+        a_shape: pair.a,
+        b_shape: pair.b,
+        point,
+        normal: contact.normal,
+        depth: contact.depth,
+        friction: 0.0,
+        restitution: 0.0,
+    })
+}
+
+/// Triangle-mesh narrow phase: dispatch each mesh triangle to the
+/// generic GJK+EPA pair routine. `flip_output` is true when the
+/// mesh side is the contact pair's `b` (so each emitted manifold
+/// gets its normal flipped before `out.push`).
+#[allow(clippy::too_many_arguments)]
+fn trimesh_pair(
+    model: &Model,
+    mesh_id: u32,
+    mesh_xf: &Transform,
+    other_geom: ShapeGeometry,
+    other_xf: &Transform,
+    pair: ShapePair,
+    flip_output: bool,
+    out: &mut Vec<ContactManifold>,
+) {
+    let mesh = match model.meshes.get(mesh_id as usize) {
+        Some(m) => m,
+        None => return,
+    };
+    if matches!(other_geom, ShapeGeometry::Plane { .. }) {
+        // GJK doesn't support plane (unbounded support). Plane-mesh
+        // is best done as "for each triangle vertex, signed-dist
+        // against plane".
+        let plane_normal_world = match other_geom {
+            ShapeGeometry::Plane { normal } => other_xf.rotation * normal,
+            _ => unreachable!(),
+        };
+        let plane_p = other_xf.position;
+        // Convention: normal points pair.a → pair.b. Mesh side is
+        // pair.a when !flip_output, else pair.b.
+        let normal = if flip_output {
+            plane_normal_world // plane(a) → mesh(b) = +plane_normal
+        } else {
+            -plane_normal_world // mesh(a) → plane(b) = −plane_normal
+        };
+        for &tri in &mesh.indices {
+            for &vi in &tri {
+                let local = mesh.vertices[vi as usize];
+                let world = mesh_xf.transform_point(local);
+                let signed = (world - plane_p).dot(plane_normal_world);
+                if signed < 0.0 {
+                    let depth = -signed;
+                    let point = world + plane_normal_world * (0.5 * depth);
+                    out.push(ContactManifold {
+                        a_shape: pair.a,
+                        b_shape: pair.b,
+                        point,
+                        normal,
+                        depth,
+                        friction: 0.0,
+                        restitution: 0.0,
+                    });
+                }
+            }
+        }
+        return;
+    }
+    for &tri in &mesh.indices {
+        let v0 = mesh.vertices[tri[0] as usize];
+        let v1 = mesh.vertices[tri[1] as usize];
+        let v2 = mesh.vertices[tri[2] as usize];
+        let tri_geom = ShapeGeometry::Triangle { v0, v1, v2 };
+        let pair_for_call = if flip_output {
+            // Pass pair (a,b) as the geom_a=other, geom_b=tri pair so
+            // gjk_epa_pair's normal-labelling matches the outer pair.
+            ShapePair {
+                a: pair.a,
+                b: pair.b,
+            }
+        } else {
+            pair
+        };
+        let m = if flip_output {
+            // Outer pair: pair.a = other-shape, pair.b = trimesh.
+            // Call GJK with (other, tri) so EPA's normal points
+            // other → tri = pair.a → pair.b. ✓
+            gjk_epa_pair(other_geom, other_xf, tri_geom, mesh_xf, pair_for_call)
+        } else {
+            // Outer pair: pair.a = trimesh, pair.b = other.
+            gjk_epa_pair(tri_geom, mesh_xf, other_geom, other_xf, pair_for_call)
+        };
+        if let Some(m) = m {
+            out.push(m);
+        }
+    }
+}
+
+/// Cylinder–plane fallback. Emits up to 6 contact points: the two
+/// disk centres + 4 perimeter samples per disk that lie below the
+/// plane. The 4-perimeter strategy mirrors box-plane: a single
+/// support point creates an off-centre torque that rocks the
+/// cylinder onto its side, which is non-physical.
+fn cylinder_plane_fallback(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    pair: ShapePair,
+    out: &mut Vec<ContactManifold>,
+) {
+    let (cyl_xf, plane_xf, cyl_geom, cyl_shape, plane_shape, flip) =
+        match (geom_a, geom_b) {
+            (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Plane { .. }) => {
+                (xf_a, xf_b, geom_a, pair.a, pair.b, false)
+            }
+            (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. }) => {
+                (xf_b, xf_a, geom_b, pair.b, pair.a, true)
+            }
+            _ => return,
+        };
+    let plane_normal_world = match (geom_a, geom_b) {
+        (_, ShapeGeometry::Plane { normal }) => xf_b.rotation * normal,
+        (ShapeGeometry::Plane { normal }, _) => xf_a.rotation * normal,
+        _ => return,
+    };
+    let plane_p = plane_xf.position;
+
+    let (half_height, radius) = match cyl_geom {
+        ShapeGeometry::Cylinder { half_height, radius } => (half_height, radius),
+        _ => return,
+    };
+
+    let axis = cyl_xf.rotation * Vec3::Y;
+    let top = cyl_xf.position + axis * half_height;
+    let bot = cyl_xf.position - axis * half_height;
+
+    // Build an orthonormal in-plane basis (u, v) perpendicular to
+    // the cylinder axis so we can sample 4 points per disk rim.
+    let abs_a = Vec3::new(axis.x.abs(), axis.y.abs(), axis.z.abs());
+    let helper = if abs_a.x <= abs_a.y && abs_a.x <= abs_a.z {
+        Vec3::X
+    } else if abs_a.y <= abs_a.z {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let u = axis.cross(helper).normalize_or_zero();
+    let v = axis.cross(u).normalize_or_zero();
+
+    let normal = -plane_normal_world; // a→b: cyl(a) → plane(b)
+
+    // Try a comprehensive set: 2 disk centres + 8 perimeter samples
+    // (4 per disk, at ±u, ±v). Push only the points below the plane.
+    let mut candidates: Vec<Vec3> = Vec::with_capacity(10);
+    candidates.push(top);
+    candidates.push(bot);
+    for &disk in &[top, bot] {
+        candidates.push(disk + u * radius);
+        candidates.push(disk - u * radius);
+        candidates.push(disk + v * radius);
+        candidates.push(disk - v * radius);
+    }
+
+    let mut emitted = 0usize;
+    for c in candidates {
+        let signed = (c - plane_p).dot(plane_normal_world);
+        if signed < 0.0 {
+            let depth = -signed;
+            let point = c + plane_normal_world * (0.5 * depth);
+            let m = ContactManifold {
+                a_shape: cyl_shape,
+                b_shape: plane_shape,
+                point,
+                normal,
+                depth,
+                friction: 0.0,
+                restitution: 0.0,
+            };
+            out.push(if flip { flip_manifold(m) } else { m });
+            emitted += 1;
+        }
+    }
+    let _ = emitted;
 }
 
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {

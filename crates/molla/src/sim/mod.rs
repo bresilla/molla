@@ -17,5 +17,5 @@ pub use contacts::Contacts;
 pub use control::Control;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};
 pub use joint::{JointTargetMode, JointType};
-pub use model::Model;
+pub use model::{Model, TriMesh};
 pub use state::State;

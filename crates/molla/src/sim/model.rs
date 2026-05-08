@@ -4,6 +4,24 @@ use crate::core::Result;
 use crate::math::{Mat3, Real, Transform, Vec3};
 use crate::storage::{Buffer, BufferUsage};
 
+/// A triangle mesh stored on the host. Vertices are in the mesh's
+/// local frame; world positioning comes from the shape's transform.
+/// Triangle indexing convention: `indices[t]` gives the three
+/// vertex indices forming triangle `t`, wound CCW when looking
+/// against the outward normal (right-hand rule).
+#[derive(Clone, Debug, Default)]
+pub struct TriMesh {
+    pub vertices: Vec<Vec3>,
+    pub indices: Vec<[u32; 3]>,
+}
+
+impl TriMesh {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Static description of a simulation. Built once from a `ModelBuilder`
 /// and shared across many [`State`](super::State) instances.
 #[derive(Debug)]
@@ -60,6 +78,9 @@ pub struct Model {
     pub shape_friction: Buffer<Real>,
     /// Per-shape restitution. Same `NaN` sentinel + max-rule as friction.
     pub shape_restitution: Buffer<Real>,
+    /// Triangle-mesh storage. `ShapeGeometry::TriMesh { mesh_id }`
+    /// references entries here.
+    pub meshes: Vec<TriMesh>,
 
     // ── Joints ──────────────────────────────────────────────────────
     /// Number of joints.
@@ -166,6 +187,7 @@ impl Model {
             shape_flags: Buffer::from_vec(Vec::new(), s),
             shape_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),
+            meshes: Vec::new(),
 
             joint_count: 0,
             joint_type: Buffer::from_vec(Vec::new(), s),
