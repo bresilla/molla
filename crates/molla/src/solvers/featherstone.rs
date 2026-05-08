@@ -540,15 +540,48 @@ fn cpu_step(
                 qd_new[dof_idx] = qd_after;
                 q_new[coord_idx] = q_clamped;
             }
-            JointType::Fixed
-            | JointType::Free
-            | JointType::Ball
-            | JointType::Distance
-            | JointType::D6 => {
-                // Fixed: no coords. Multi-DoF joints (Free / Ball /
-                // Distance / D6): pass through. Their reduced-coord
-                // dynamics arrive in a follow-up; they currently
-                // integrate kinematically (caller drives qd).
+            JointType::Ball => {
+                // 4 coords (qx, qy, qz, qw); 3 DoF angular velocity.
+                // Reduced-coord ABA dynamics are deferred (3×3 D
+                // matrix, requires Mat3 inverse machinery in the
+                // chain). For now the ball joint integrates
+                // **kinematically** — the caller is expected to
+                // drive `joint_qd` directly (e.g. via a CONNECT
+                // equality constraint in XPBD scenes, or by
+                // applying torque outside Featherstone).
+                let dof_idx = joint_dof_offset[j] as usize;
+                let omega = Vec3::new(
+                    qd_in.get(dof_idx).copied().unwrap_or(0.0),
+                    qd_in.get(dof_idx + 1).copied().unwrap_or(0.0),
+                    qd_in.get(dof_idx + 2).copied().unwrap_or(0.0),
+                );
+                // Integrate quaternion: q_new = exp(0.5·dt·ω) ⊗ q_old.
+                let q_old = Quat::from_xyzw(
+                    q_in[coord_idx],
+                    q_in[coord_idx + 1],
+                    q_in[coord_idx + 2],
+                    q_in[coord_idx + 3],
+                );
+                let dq = Quat::from_xyzw(
+                    omega.x * 0.5 * dt,
+                    omega.y * 0.5 * dt,
+                    omega.z * 0.5 * dt,
+                    0.0,
+                );
+                let q_new_quat = (dq * q_old + q_old).normalize();
+                q_new[coord_idx] = q_new_quat.x;
+                q_new[coord_idx + 1] = q_new_quat.y;
+                q_new[coord_idx + 2] = q_new_quat.z;
+                q_new[coord_idx + 3] = q_new_quat.w;
+                qd_new[dof_idx] = omega.x;
+                qd_new[dof_idx + 1] = omega.y;
+                qd_new[dof_idx + 2] = omega.z;
+            }
+            JointType::Fixed | JointType::Free | JointType::Distance | JointType::D6 => {
+                // Fixed: no coords. 6-DoF multi-coord joints (Free /
+                // Distance / D6): pass through unchanged. Their
+                // reduced-coord dynamics arrive with the IK / RNEA
+                // stage; they currently integrate kinematically.
             }
         }
     }

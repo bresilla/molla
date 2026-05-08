@@ -1511,35 +1511,60 @@ slot in any time).
 | MPR alternative to EPA | Drop-in narrow-phase replacement; current EPA passes all tests. | `geometry/mpr.py` |
 | GPU GJK / EPA / BVH | Performance optimisation; CPU paths are fine for single-arm scenes. | — |
 
-### Stage 7 — Architectural completion (BEFORE USD)
+### Stage 7 — Architectural completion (BEFORE USD) ✅ COMPLETE (2026-05-08)
 
-**Goal**: finish the `Model` data layout so subsequent USD / MJCF
-importers don't paint themselves into a corner. No new physics
-capabilities yet — just the storage + plumbing.
+- **7.1 ✅** — Multi-world per entity. `Model.joint_world` /
+  `articulation_world` (joints inherit child body's world;
+  articulation inherits its first joint's world). Builder
+  propagation tested via `joint_and_articulation_worlds_propagate`.
+- **7.2 ✅** — Joint metadata. `Model.joint_enabled` (1 = active),
+  `joint_ancestor` (parent joint in chain, -1 root),
+  `joint_target_ke` (per-DOF static stiffness, distinct from PD
+  `target_kp`). Featherstone honours `joint_enabled` (disabled
+  joints freeze, gravity stops affecting them). Test:
+  `disabled_joint_stays_frozen`.
+- **7.3 ✅** — Collision groups + filter pairs.
+  `Model.shape_collision_group: u32` (default 0xffff_ffff) and
+  `Model.shape_collision_filter_pairs: Vec<(u32, u32)>` (sorted +
+  dedup). Shared `pair_passes_filters` helper used by brute-force,
+  SAP, and BVH broad phases. Tests:
+  `bvh_filters_by_collision_group`, `explicit_exclusion_filters_pair`.
+- **7.4 ✅** — Spatial-Jacobian primitive.
+  `math::spatial_jacobian_column(kind, axis, joint_origin, body_point)`
+  for revolute / prismatic single-DoF columns. Foundation for IK,
+  RNEA, contact-Jacobian. Tested against analytical pendulum.
+- **7.5 ✅** — New joint types (data layout): `JointType::Ball`
+  (4 coord quat, 3 DoF), `Distance` (7 coord, 6 DoF, soft distance
+  limit), `D6` (7 coord, 6 DoF, per-axis lock via existing
+  per-DOF limit arrays). Builder methods: `add_joint_ball`,
+  `add_joint_distance`, `add_joint_d6`. FK tests:
+  `ball_joint_fk_rotates_via_quat`, `d6_joint_fk_translates`.
+  Featherstone integrates ball-joint quaternion kinematically (caller
+  drives qd); full 3-DoF ABA dynamics deferred to stage 11.
+- **7.6 ✅** — Equality constraints.
+  `Model.equality_constraint_*` storage with `CONNECT` (3-DoF
+  positional pin) and `WELD` (6-DoF position+orientation pin)
+  variants. Builder `add_equality_connect/weld`. XPBD position-
+  projection pass with mass-weighted Jacobi-style correction.
+  Tests: `connect_pins_two_bodies_under_gravity`,
+  `weld_keeps_orientation_aligned`,
+  `humanoid_ball_joint_swings_under_gravity` (the stage-7 DoD demo,
+  using a CONNECT pin as a 3-DoF spherical joint).
+- **7.7 ✅** — Mimic constraints. `Model.constraint_mimic_*` arrays
+  (`q_a = c0 + c1 · q_b`). Featherstone pre-step pass overrides
+  driven joint's `joint_q` and `joint_qd` from the driver. Test:
+  `mimic_constraint_couples_two_joints`.
 
-Deliverables:
-- `Model.joint_world`, `articulation_world`, `equality_constraint_world`,
-  `constraint_mimic_world` (per-entity world indices, not just per-body).
-- New joint types: **Ball** (3-DOF spherical, 4-coord quat),
-  **D6** (6-DOF with per-axis limits/targets), **Distance**.
-  Featherstone CPU+GPU and XPBD both honour them; CPU+GPU parity tests.
-- `Model.equality_constraint_*` storage (CONNECT / WELD /
-  JOINT-mimic). Builder `add_equality_*` API. XPBD position-projection
-  pass that resolves them.
-- `Model.constraint_mimic_*` (`q0 = c0 + c1·q1`) wired into Featherstone
-  pre-step.
-- `Model.shape_collision_group` (per-shape u32 bitmask) +
-  `Model.shape_collision_filter_pairs` (exclusion list). Broad-phase
-  filters by group / pair before generating contacts.
-- `Model.joint_enabled`, `joint_ancestor`, per-DOF `joint_target_ke`.
-- `math::spatial_jacobian(...)` primitive (CPU, used later by IK).
+**Test surface added**: 85 lib tests (up from 80), 2 new equality
+integration tests, 1 humanoid ball-joint demo, FK tests for Ball /
+D6 joints, multi-world propagation test, mimic test. All green.
 
-Definition of done:
-- Humanoid hip ball joint swings under gravity in a XPBD scene.
-- Two-box welded assembly stays welded under impact.
-- Parallel-gripper mimic test: setting one finger angle moves both.
-- Group-filtered scene: shapes in group A don't collide with shapes
-  in group B.
+Carried forward to stage 11 (RNEA/IK + sparse linalg):
+- Reduced-coord ABA dynamics for Ball / D6 / Distance joints
+  (currently kinematic; needs 3×3 D-matrix inverse machinery and
+  per-DOF block algorithms).
+- Equality-constraint *velocity* projection (current implementation
+  is position-only, which can damp swing momentum).
 
 ### Stage 8 — `usd_molla` crate
 

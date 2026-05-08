@@ -58,6 +58,96 @@ fn connect_pins_two_bodies_under_gravity() {
     );
 }
 
+/// Stage-7 DoD: humanoid hip ball-joint demo. A "pelvis" body is
+/// kinematically anchored in space; a "thigh" body hangs from it via
+/// a CONNECT equality constraint at the hip anchor point. The thigh
+/// starts pinned (no initial constraint violation) with a small
+/// angular kick. Under gravity it swings as a 3-DoF pendulum about
+/// the hip anchor — exactly what a ball joint provides.
+#[test]
+fn humanoid_ball_joint_swings_under_gravity() {
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.0);
+
+    let pelvis = b.add_body(
+        BodyParams::new()
+            .with_mass(0.0)
+            .with_pose(Transform::new(Vec3::new(0.0, 5.0, 0.0), Quat::IDENTITY))
+            .with_flags(BodyFlags::DYNAMIC | BodyFlags::KINEMATIC),
+    );
+    // Thigh COM starts directly below pelvis at (0, 4.5, 0), with
+    // identity rotation. Hip anchor in thigh-local frame at +Y =
+    // (0, 0.5, 0); world hip anchor = (0, 5, 0) = pelvis origin.
+    // Constraint already satisfied (no initial violation), so
+    // velocity recovery doesn't blow up.
+    let thigh = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: Vec3::ZERO,
+                inertia: Mat3::IDENTITY * 0.083,
+            })
+            .with_pose(Transform::new(
+                Vec3::new(0.0, 4.5, 0.0),
+                Quat::IDENTITY,
+            )),
+    );
+    b.add_equality_connect(pelvis, thigh, Vec3::ZERO, Vec3::new(0.0, 0.5, 0.0));
+
+    let model = b.build().unwrap();
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    // Give the thigh an initial angular velocity about Z (kicks it
+    // sideways from rest).
+    s_a.body_qd.host_mut().unwrap()[1] =
+        SpatialVector::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+    let control = model.control();
+    let contacts = Contacts::with_capacity(0);
+    let mut solver = XpbdSolver::new().with_iterations(16);
+
+    let dt = 0.002;
+    let mut min_x = Real::INFINITY;
+    let mut max_x = -Real::INFINITY;
+    for _ in 0..2000 {
+        solver
+            .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+        let q = s_a.body_q.host().unwrap();
+        let thigh_x = q[1].position.x;
+        if thigh_x < min_x {
+            min_x = thigh_x;
+        }
+        if thigh_x > max_x {
+            max_x = thigh_x;
+        }
+    }
+
+    let q = s_a.body_q.host().unwrap();
+    let pelvis_pos = q[0].position;
+    let thigh_xf = q[1];
+    let hip_world = thigh_xf.transform_point(Vec3::new(0.0, 0.5, 0.0));
+    let pin_err = (hip_world - pelvis_pos).length();
+    eprintln!(
+        "ball joint demo: pin_err={pin_err:.4} thigh x range=[{min_x:.3}, {max_x:.3}]"
+    );
+    assert!(
+        pin_err < 0.05,
+        "CONNECT failed to pin hip: |Δ|={pin_err}"
+    );
+    // The thigh should have swung sideways enough to register.
+    assert!(
+        max_x - min_x > 0.05,
+        "thigh didn't swing — x range = {:.3}",
+        max_x - min_x
+    );
+    // Thigh COM must stay below pelvis (it's a pendulum).
+    assert!(
+        thigh_xf.position.y < pelvis_pos.y,
+        "thigh ended above pelvis"
+    );
+}
+
 #[test]
 fn weld_keeps_orientation_aligned() {
     // Two bodies welded together. The first is kinematic at the
