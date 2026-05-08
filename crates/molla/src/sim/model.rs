@@ -199,10 +199,15 @@ impl Model {
         up!(shape_body);
         up!(shape_transform);
         up!(shape_flags);
+        up!(joint_type);
         up!(joint_parent);
         up!(joint_child);
         up!(joint_x_p);
         up!(joint_x_c);
+        up!(joint_axis);
+        up!(joint_coord_offset);
+        up!(joint_dof_offset);
+        up!(initial_joint_q);
         up!(gravity);
         Ok(())
     }

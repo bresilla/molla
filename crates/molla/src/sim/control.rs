@@ -27,12 +27,14 @@ impl Control {
     }
 
     /// Allocate a zero-initialised control set sized for `model`.
+    /// `joint_target` is sized for the position-coordinate count,
+    /// `joint_force` for the velocity-dof count.
     #[must_use]
     pub fn for_model(model: &super::Model) -> Self {
         use crate::storage::BufferUsage::Storage;
         Self {
-            joint_target: Buffer::from_vec(Vec::new(), Storage),
-            joint_force: Buffer::from_vec(Vec::new(), Storage),
+            joint_target: Buffer::from_vec(vec![0.0; model.joint_coord_total], Storage),
+            joint_force: Buffer::from_vec(vec![0.0; model.joint_dof_total], Storage),
             body_external_f: Buffer::from_vec(
                 vec![SpatialVector::ZERO; model.body_count],
                 Storage,

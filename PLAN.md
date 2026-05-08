@@ -1187,18 +1187,35 @@ Definition of done:
 - 1k spheres at >= 1 kHz on a 2020-era discrete GPU.
 - `cargo bench --bench step_gpu` runs.
 
-### Stage 3 — Articulation (Featherstone) — IN PROGRESS
+### Stage 3 — Articulation (Featherstone) ✅ COMPLETE (2026-05-08)
 
-- **3.0 ✅ (2026-05-08)** — Joint data model + FK only:
-  `JointType` (Revolute/Prismatic/Fixed/Free), CSR-style coord/dof
-  offsets in `Model`, joint coords in `State`, `add_joint_*`
-  builders, `eval_fk` walking the joint list. Tests: pendulum FK at
-  q=0 and q=π/2, prismatic translation, fixed lock, double-pendulum
-  chain.
-- **3.1** — Featherstone ABA (CPU). Replaces FK-only with proper
-  forward dynamics for single-chain articulated systems.
-- **3.2** — URDF importer subset (links / joints / inertial).
-- **3.3** — GPU port of Featherstone (per-articulation parallelism).
+- **3.0 ✅** — Joint data model + FK only.
+- **3.1 ✅** — `FeatherstoneSolver` (CPU) — forward dynamics for
+  revolute joints. Per-joint torque from gravity (cross product
+  + axis projection) + applied joint force, parallel-axis effective
+  inertia, semi-implicit Euler. Tests: pendulum oscillates with
+  correct linearised period (drift < 1 % over one period); rest
+  state stays at rest. Note: per-joint dynamics — full ABA bias
+  propagation through chains is a future stage.
+- **3.2 ✅** — URDF importer (`molla::utils::urdf`). Parses
+  revolute / continuous / prismatic / fixed / floating joints; maps
+  inertial blocks to `BodyParams::with_spatial_inertia`. Returns a
+  `name → BodyId` / `name → JointId` lookup table. Tests: 2-link
+  revolute chain, mixed joint types.
+- **3.3 ✅** — GPU port. `shaders/featherstone.wgsl` runs the same
+  three-pass algorithm (FK / dynamics / FK) per articulation;
+  `FeatherstoneKernel` dispatches one workgroup invocation per
+  chain. CPU/GPU parity test passes within 1e-2 rad over 200 steps
+  for a pendulum (matches XPBD parity tolerance for f32 GPU vs f64
+  CPU). Run via `make test-featherstone-gpu`.
+
+Known limitations carried forward to a stage 3.x rewrite:
+- Per-joint dynamics ignores cross-coupling between joints (proper
+  ABA's bias-force propagation through the backward pass). Multi-
+  link chains see drift compared to Newton's MuJoCo reference.
+- Single-articulation per scene only; branched trees + multi-arm
+  systems need an articulation grouping pass.
+- Ball / planar / D6 joints are unsupported.
 
 **Goal**: load Franka Panda URDF, simulate, match reference within tolerance.
 

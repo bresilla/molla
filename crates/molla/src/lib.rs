@@ -25,5 +25,6 @@ pub mod sensors;
 pub mod sim;
 pub mod solvers;
 pub mod storage;
+pub mod utils;
 
 pub mod prelude;
