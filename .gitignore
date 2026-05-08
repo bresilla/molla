@@ -4,8 +4,5 @@ Cargo.lock.bak
 *.rs.bk
 
 # Transient session/tempfiles the viewer writes alongside loaded assets.
-assets/.bevy_openusd_session_*.usda
-assets/.bevy_openusd_tmp_*.usda
-
-# Vendored 3rd-party USD asset packs (large + duplicates upstream).
-assets/external/agilebot/
+assets/.molla_session_*.usda
+assets/.molla_tmp_*.usda

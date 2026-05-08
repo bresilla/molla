@@ -1,0 +1,28 @@
+//! `Control` — user-supplied joint targets and applied wrenches.
+
+use crate::math::{Real, SpatialVector};
+use crate::storage::Buffer;
+
+/// Per-step control inputs handed to the solver.
+#[derive(Debug)]
+pub struct Control {
+    /// Joint position or velocity targets, depending on actuator mode.
+    pub joint_target: Buffer<Real>,
+    /// Direct joint torque/force (N·m or N).
+    pub joint_force: Buffer<Real>,
+    /// External wrenches per body, world frame at COM.
+    pub body_external_f: Buffer<SpatialVector>,
+}
+
+impl Control {
+    /// An empty control set (no actuation, no external forces).
+    #[must_use]
+    pub fn empty() -> Self {
+        use crate::storage::BufferUsage::Storage;
+        Self {
+            joint_target: Buffer::from_vec(Vec::new(), Storage),
+            joint_force: Buffer::from_vec(Vec::new(), Storage),
+            body_external_f: Buffer::from_vec(Vec::new(), Storage),
+        }
+    }
+}

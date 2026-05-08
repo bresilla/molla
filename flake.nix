@@ -1,5 +1,5 @@
 {
-  description = "gearbox Rust vehicle/robot simulator development shell";
+  description = "molla — OpenUSD viewer and physics simulator development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -25,14 +25,14 @@
           };
         };
 
-        # .envrc exports GEARBOX_NVIDIA_VERSION from /proc/driver/nvidia/version
+        # .envrc exports MOLLA_NVIDIA_VERSION from /proc/driver/nvidia/version
         # before direnv loads the flake. We read it via getEnv (works because
         # --impure is wired into .envrc). Reading from a file under .direnv/
         # doesn't work: flakes in a git repo only expose git-tracked files to
         # the evaluator, and .direnv/ is globally gitignored.
-        nvidiaVersion = let v = builtins.getEnv "GEARBOX_NVIDIA_VERSION";
+        nvidiaVersion = let v = builtins.getEnv "MOLLA_NVIDIA_VERSION";
         in if v != "" then v
-           else throw "gearbox: GEARBOX_NVIDIA_VERSION is unset — is direnv loaded and is the NVIDIA driver running?";
+           else throw "molla: MOLLA_NVIDIA_VERSION is unset — is direnv loaded and is the NVIDIA driver running?";
 
         # Build nixGL pinned to the detected version. `nvidiaHash = null`
         # makes it fetch the matching .run impurely (--impure is wired into
@@ -86,10 +86,9 @@
             nixglPkgs.nixGLIntel      # Mesa fallback (AMD / Intel iGPU)
             nixglPkgs.nixVulkanIntel
 
-            # Pixar's OpenUSD reference toolchain — `usdview`,
-            # `usdrecord`, `usdcat`, etc. Lets us cross-check the
-            # Rust viewer's output against Pixar's renderer when an
-            # asset doesn't render the way the author intended.
+            # OpenUSD reference toolchain — used to cross-check molla's
+            # output against the reference renderer when an asset doesn't
+            # render the way the author intended.
             pkgs.openusd
           ] ++ bevyLibs;
 

@@ -1,0 +1,32 @@
+[package]
+name = "molla"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "molla — pure-Rust, wgpu-accelerated physics engine."
+
+[lints]
+workspace = true
+
+[features]
+default = ["gpu"]
+# Enable the wgpu GPU backend. The CPU paths and math/storage layers compile
+# without it, which is useful for pure-CPU CI runners and for users that only
+# want the data model and importers.
+gpu = ["dep:wgpu", "dep:pollster"]
+
+[dependencies]
+glam = { version = "0.30", features = ["bytemuck"] }
+thiserror = "2"
+tracing = "0.1"
+slotmap = "1"
+bytemuck = { version = "1.18", features = ["derive"] }
+
+# Optional GPU stack (gated behind `gpu` feature).
+wgpu = { version = "23", optional = true, default-features = false, features = ["wgsl"] }
+pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+

@@ -1,91 +1,21 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/usd_schema",
-    "crates/usd_rapier",
-    "crates/usd_bevy",
+    "crates/molla",
 ]
 exclude = ["xtra"]
 
-[package]
-name = "usdview"
-version = "0.0.1"
+[workspace.package]
 edition = "2024"
 license = "MIT"
-description = "Interactive viewer for OpenUSD scenes — built on bevy + the usd_bevy plugin."
-repository = "https://github.com/bresilla/bevy_openusd"
-build = "build.rs"
+repository = "https://github.com/bresilla/molla"
+authors = ["Trim Bresilla"]
 
-[[bin]]
-name = "usdview"
-path = "src/main.rs"
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
-[dependencies]
-# The Bevy USD plugin: asset loader, scene projection, marker
-# components, Rapier physics adapter. Single dep brings in everything
-# needed to load a USD into a Bevy app.
-usd_bevy = { path = "crates/usd_bevy" }
-# Pure-Rust USD readers/writers — the viewer reads camera projection
-# and anim track data directly off the loaded `Stage` without going
-# through Bevy components.
-usd_schema = { path = "crates/usd_schema" }
-# Direct Rapier dep for the viewer's static-ground collider authoring;
-# `usd_bevy::physics::PhysicsWorld` exposes the Rapier sets we mutate.
-rapier3d-f64 = "0.32"
-
-bevy = { version = "0.18", default-features = false, features = [
-    "std",
-    "async_executor",
-    "multi_threaded",
-    "bevy_asset",
-    "bevy_state",
-    "bevy_log",
-    "bevy_window",
-    "bevy_winit",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_pbr",
-    "bevy_light",
-    "bevy_mesh",
-    "bevy_camera",
-    "bevy_image",
-    "bevy_scene",
-    "bevy_gizmos",
-    "bevy_gizmos_render",
-    "bevy_post_process",
-    "morph",
-    "default_font",
-    "tonemapping_luts",
-    "smaa_luts",
-    "png",
-    "jpeg",
-    "bmp",
-    "tga",
-    "hdr",
-    "webp",
-    "tiff",
-    "ktx2",
-    "zstd_rust",
-    "x11",
-    "reflect_auto_register",
-] }
-
-anyhow = "1"
-# Native file-picker dialog for the "Browse USD…" button.
-rfd = "0.15"
-# VS-Code-style egui chrome.
-bevy_egui = { version = "0.39", default-features = false, features = [
-    "default_fonts",
-    "render",
-] }
-# Glass-themed editor UI kit (ribbons, floating panels, widgets, tokens).
-bevy_frost = { git = "https://github.com/bresilla/bevy_frost", branch = "develop", package = "bevy_frost" }
-# Reusable 3D-scene gizmos (axis triads + joint primitives).
-bevy_glacial = { git = "https://github.com/bresilla/bevy_glacial", branch = "main" }
-
-# `build.rs` bakes a sample USDZ (USDA + procedural PNG) into
-# `assets/external/` so `cargo run -- usdz_sample.usdz` always has
-# something real to show.
-[build-dependencies]
-zip = { version = "8", default-features = false, features = ["deflate"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
