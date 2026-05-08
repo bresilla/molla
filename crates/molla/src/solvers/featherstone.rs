@@ -253,6 +253,7 @@ fn cpu_step(
     let joint_axis = model.joint_axis.host()?;
     let joint_coord_offset = model.joint_coord_offset.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
+    let joint_enabled = model.joint_enabled.host()?;
     let art_start = model.articulation_start.host()?;
     let art_count = model.articulation_count.max(1);
 
@@ -382,7 +383,9 @@ fn cpu_step(
         // For 0-DoF joints (Fixed / unsupported), skip the rank-1
         // update — there's no joint coordinate to project against.
         let jt = joint_type_from_u32(joint_type[j]);
-        let supported = matches!(jt, JointType::Revolute | JointType::Prismatic);
+        let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
+        let supported = enabled
+            && matches!(jt, JointType::Revolute | JointType::Prismatic);
 
         if supported {
             let u = i_a[j].mul_sv(s_j);
@@ -454,7 +457,9 @@ fn cpu_step(
         let parent = joint_parent[j];
         let s_j = s[j];
         let jt = joint_type_from_u32(joint_type[j]);
-        let supported = matches!(jt, JointType::Revolute | JointType::Prismatic);
+        let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
+        let supported = enabled
+            && matches!(jt, JointType::Revolute | JointType::Prismatic);
 
         let a_p = if parent < 0 {
             SpatialVector::ZERO
@@ -1032,6 +1037,47 @@ mod tests {
         let drift = (q1 - q4).abs();
         eprintln!("substeps=1: q={q1:.6}, substeps=4: q={q4:.6}, |Δ|={drift:.6}");
         assert!(drift < 0.05, "substep result diverged: {drift}");
+    }
+
+    /// Disabling a joint freezes its DOF — gravity stops affecting it.
+    /// A pendulum that would normally swing should stay at its initial
+    /// angle when its joint is disabled.
+    #[test]
+    fn disabled_joint_stays_frozen() {
+        let mut b = ModelBuilder::new();
+        let link = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY,
+        }));
+        let joint = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                link,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+        b.set_joint_enabled(joint, false).unwrap();
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        s_a.joint_q.host_mut().unwrap()[0] = 0.5;
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..1000 {
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let q = s_a.joint_q.host().unwrap()[0];
+        assert!(
+            (q - 0.5).abs() < 1e-6,
+            "disabled joint moved: q={q}, expected 0.5"
+        );
     }
 
     /// Pendulum with no initial energy + control torque = 0 stays at q=0.

@@ -192,6 +192,8 @@ pub struct ModelBuilder {
     shape_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
     meshes: Vec<super::TriMesh>,
+    shape_collision_group: Vec<u32>,
+    shape_collision_filter_pairs: Vec<(u32, u32)>,
 
     // Joint arrays.
     joint_type: Vec<u32>,
@@ -221,6 +223,16 @@ pub struct ModelBuilder {
     /// `true` iff the most recent push was to a still-open articulation
     /// — used to coalesce consecutive joints into the same chain.
     articulation_open: bool,
+    /// Per-joint world (defaults to child body's world).
+    joint_world: Vec<i32>,
+    /// Per-articulation world (set when articulation closes).
+    articulation_world: Vec<i32>,
+    /// Per-joint enable flag (1 = active by default).
+    joint_enabled: Vec<u32>,
+    /// Per-joint ancestor index in the articulation tree.
+    joint_ancestor: Vec<i32>,
+    /// Per-DOF static joint stiffness (default 0).
+    joint_target_ke: Vec<Real>,
 
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
@@ -260,6 +272,16 @@ impl ModelBuilder {
     /// the new chain. Calling this twice in a row is a no-op.
     pub fn begin_articulation(&mut self) {
         if self.articulation_open {
+            // Capture the world of the just-closed articulation: the
+            // first joint in this chain dictates it (matches Newton).
+            let first_joint_idx =
+                *self.articulation_start.last().unwrap_or(&0) as usize;
+            let world = self
+                .joint_world
+                .get(first_joint_idx)
+                .copied()
+                .unwrap_or(0);
+            self.articulation_world.push(world);
             self.articulation_start.push(self.joint_type.len() as u32);
             self.articulation_open = false;
         }
@@ -484,7 +506,38 @@ impl ModelBuilder {
         self.shape_flags.push(super::flags::ShapeFlags::COLLIDES);
         self.shape_friction.push(Real::NAN);
         self.shape_restitution.push(Real::NAN);
+        self.shape_collision_group.push(0xffff_ffff);
         id
+    }
+
+    /// Set the collision-group bitmask for an already-added shape.
+    /// Two shapes collide only if `group_a & group_b != 0`. Default
+    /// is `0xffff_ffff` (all groups).
+    pub fn set_shape_collision_group(
+        &mut self,
+        shape: ShapeId,
+        group: u32,
+    ) -> Result<()> {
+        let i = shape.index();
+        if i >= self.shape_collision_group.len() {
+            return Err(Error::Build(format!(
+                "set_shape_collision_group: shape {shape:?} out of range"
+            )));
+        }
+        self.shape_collision_group[i] = group;
+        Ok(())
+    }
+
+    /// Add an explicit shape-pair exclusion. The pair is always
+    /// filtered out by the broad phase, even if group bitmasks would
+    /// allow it.
+    pub fn add_shape_collision_exclusion(&mut self, a: ShapeId, b: ShapeId) {
+        let (lo, hi) = if a.0 < b.0 {
+            (a.0, b.0)
+        } else {
+            (b.0, a.0)
+        };
+        self.shape_collision_filter_pairs.push((lo, hi));
     }
 
     /// Override the friction/restitution for an already-added shape.
@@ -660,6 +713,33 @@ impl ModelBuilder {
             self.joint_effort_limit.push(Real::NAN);
             self.joint_velocity_limit.push(Real::NAN);
         }
+        // Joint world inherits from the child body's world.
+        let child_world = self
+            .body_world
+            .get(child.0 as usize)
+            .copied()
+            .unwrap_or(0);
+        self.joint_world.push(child_world);
+        self.joint_enabled.push(1);
+        // Ancestor: scan the current articulation's joints for one
+        // whose child body matches this joint's parent body.
+        let parent_body_idx = parent_idx;
+        let articulation_first =
+            *self.articulation_start.last().unwrap_or(&0) as usize;
+        let mut ancestor: i32 = -1;
+        if parent_body_idx >= 0 {
+            for k in articulation_first..self.joint_child.len().saturating_sub(1) {
+                if self.joint_child[k] == parent_body_idx {
+                    ancestor = k as i32;
+                    break;
+                }
+            }
+        }
+        self.joint_ancestor.push(ancestor);
+        // Per-DOF static stiffness defaults to 0.
+        for _ in 0..dc {
+            self.joint_target_ke.push(0.0);
+        }
         // First joint of a (re-)opened articulation: nothing to push
         // into `articulation_start` — the trailing offset is set when
         // the articulation closes (either via `begin_articulation` or
@@ -724,6 +804,33 @@ impl ModelBuilder {
             )));
         }
         self.joint_effort_limit[start..end].copy_from_slice(effort);
+        Ok(())
+    }
+
+    /// Enable or disable a joint. Disabled joints don't contribute
+    /// to the dynamics solve.
+    pub fn set_joint_enabled(&mut self, joint: JointId, enabled: bool) -> Result<()> {
+        let i = joint.index();
+        if i >= self.joint_enabled.len() {
+            return Err(Error::Build(format!(
+                "set_joint_enabled: joint {joint:?} out of range"
+            )));
+        }
+        self.joint_enabled[i] = if enabled { 1 } else { 0 };
+        Ok(())
+    }
+
+    /// Per-DOF static joint stiffness (e.g. for spring-style drives).
+    pub fn set_joint_target_ke(&mut self, joint: JointId, ke: &[Real]) -> Result<()> {
+        let (start, end) = self.joint_dof_range(joint, "set_joint_target_ke")?;
+        let n = end - start;
+        if ke.len() != n {
+            return Err(Error::Build(format!(
+                "set_joint_target_ke: joint {joint:?} has {n} DOFs, got {}",
+                ke.len()
+            )));
+        }
+        self.joint_target_ke[start..end].copy_from_slice(ke);
         Ok(())
     }
 
@@ -800,6 +907,14 @@ impl ModelBuilder {
 
         // Close the trailing articulation if the user didn't.
         if self.articulation_open {
+            let first_joint_idx =
+                *self.articulation_start.last().unwrap_or(&0) as usize;
+            let world = self
+                .joint_world
+                .get(first_joint_idx)
+                .copied()
+                .unwrap_or(0);
+            self.articulation_world.push(world);
             self.articulation_start.push(self.joint_type.len() as u32);
             self.articulation_open = false;
         }
@@ -840,6 +955,13 @@ impl ModelBuilder {
             shape_friction: Buffer::from_vec(self.shape_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
             meshes: self.meshes,
+            shape_collision_group: Buffer::from_vec(self.shape_collision_group, s),
+            shape_collision_filter_pairs: {
+                let mut p = self.shape_collision_filter_pairs;
+                p.sort_unstable();
+                p.dedup();
+                p
+            },
 
             joint_count: self.joint_type.len(),
             joint_type: Buffer::from_vec(self.joint_type, s),
@@ -861,6 +983,11 @@ impl ModelBuilder {
 
             articulation_count,
             articulation_start: Buffer::from_vec(self.articulation_start, s),
+            articulation_world: Buffer::from_vec(self.articulation_world, s),
+            joint_world: Buffer::from_vec(self.joint_world, s),
+            joint_enabled: Buffer::from_vec(self.joint_enabled, s),
+            joint_ancestor: Buffer::from_vec(self.joint_ancestor, s),
+            joint_target_ke: Buffer::from_vec(self.joint_target_ke, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),
@@ -911,5 +1038,39 @@ mod tests {
         assert_eq!(m.world_count, 3);
         let g = m.gravity.host().unwrap();
         assert!((g[2].z + 1.0).abs() < 1e-12);
+    }
+
+    /// Joints inherit their child body's world; articulations
+    /// inherit their first joint's world. With two pendulums in
+    /// different worlds, both indices propagate correctly.
+    #[test]
+    fn joint_and_articulation_worlds_propagate() {
+        let mut b = ModelBuilder::new();
+        let l0 = b.add_body(BodyParams::new().with_world(WorldId(0)));
+        let _ = b.add_joint_revolute(
+            BodyId::NONE,
+            l0,
+            Transform::IDENTITY,
+            Transform::IDENTITY,
+            Vec3::Z,
+        )
+        .unwrap();
+        b.begin_articulation();
+        let l1 = b.add_body(BodyParams::new().with_world(WorldId(2)));
+        let _ = b.add_joint_revolute(
+            BodyId::NONE,
+            l1,
+            Transform::IDENTITY,
+            Transform::IDENTITY,
+            Vec3::Z,
+        )
+        .unwrap();
+
+        let m = b.build().unwrap();
+        assert_eq!(m.articulation_count, 2);
+        let aw = m.articulation_world.host().unwrap();
+        assert_eq!(aw, &[0i32, 2]);
+        let jw = m.joint_world.host().unwrap();
+        assert_eq!(jw, &[0i32, 2]);
     }
 }

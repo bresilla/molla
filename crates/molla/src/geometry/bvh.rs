@@ -171,22 +171,17 @@ impl Bvh {
         let body_world = model.body_world.host().expect("body_world");
 
         if self.root >= 0 {
-            // Self-pair traversal of the BVH.
-            self.traverse_self(self.root, shape_body, body_world, out);
+            self.traverse_self(model, self.root, shape_body, body_world, out);
         }
 
         // Plane-vs-finite: planes are excluded from the BVH; pair
         // every plane with every finite shape that survives the
         // body / world filters.
         for &p in &self.infinite_idx {
-            let pi = p as usize;
-            let bp = shape_body[pi];
-            let wp = if bp < 0 { -1 } else { body_world[bp as usize] };
             self.collect_finite_against_plane(
+                model,
                 self.root,
                 p,
-                bp,
-                wp,
                 shape_body,
                 body_world,
                 out,
@@ -196,6 +191,7 @@ impl Bvh {
 
     fn traverse_self(
         &self,
+        model: &Model,
         node: i32,
         shape_body: &[i32],
         body_world: &[i32],
@@ -208,15 +204,14 @@ impl Bvh {
         if n.is_leaf() {
             return;
         }
-        // Recurse into children individually first, then test the
-        // pair (left, right) against each other.
-        self.traverse_self(n.child0, shape_body, body_world, out);
-        self.traverse_self(n.child1, shape_body, body_world, out);
-        self.traverse_pair(n.child0, n.child1, shape_body, body_world, out);
+        self.traverse_self(model, n.child0, shape_body, body_world, out);
+        self.traverse_self(model, n.child1, shape_body, body_world, out);
+        self.traverse_pair(model, n.child0, n.child1, shape_body, body_world, out);
     }
 
     fn traverse_pair(
         &self,
+        model: &Model,
         a: i32,
         b: i32,
         shape_body: &[i32],
@@ -235,7 +230,7 @@ impl Bvh {
             (true, true) => {
                 let i = na.shape_index();
                 let j = nb.shape_index();
-                if Self::pair_passes_filters(shape_body, body_world, i, j) {
+                if super::broad_phase::pair_passes_filters(model, shape_body, body_world, i, j) {
                     let (lo, hi) = if i < j { (i, j) } else { (j, i) };
                     out.push(ShapePair {
                         a: lo as u32,
@@ -244,24 +239,22 @@ impl Bvh {
                 }
             }
             (false, true) => {
-                self.traverse_pair(na.child0, b, shape_body, body_world, out);
-                self.traverse_pair(na.child1, b, shape_body, body_world, out);
+                self.traverse_pair(model, na.child0, b, shape_body, body_world, out);
+                self.traverse_pair(model, na.child1, b, shape_body, body_world, out);
             }
             (true, false) => {
-                self.traverse_pair(a, nb.child0, shape_body, body_world, out);
-                self.traverse_pair(a, nb.child1, shape_body, body_world, out);
+                self.traverse_pair(model, a, nb.child0, shape_body, body_world, out);
+                self.traverse_pair(model, a, nb.child1, shape_body, body_world, out);
             }
             (false, false) => {
-                // Descend into the bigger node first (cheap
-                // optimization).
                 let va = (na.aabb.max - na.aabb.min).length_squared();
                 let vb = (nb.aabb.max - nb.aabb.min).length_squared();
                 if va > vb {
-                    self.traverse_pair(na.child0, b, shape_body, body_world, out);
-                    self.traverse_pair(na.child1, b, shape_body, body_world, out);
+                    self.traverse_pair(model, na.child0, b, shape_body, body_world, out);
+                    self.traverse_pair(model, na.child1, b, shape_body, body_world, out);
                 } else {
-                    self.traverse_pair(a, nb.child0, shape_body, body_world, out);
-                    self.traverse_pair(a, nb.child1, shape_body, body_world, out);
+                    self.traverse_pair(model, a, nb.child0, shape_body, body_world, out);
+                    self.traverse_pair(model, a, nb.child1, shape_body, body_world, out);
                 }
             }
         }
@@ -269,10 +262,9 @@ impl Bvh {
 
     fn collect_finite_against_plane(
         &self,
+        model: &Model,
         node: i32,
         plane_shape: u32,
-        plane_body: i32,
-        plane_world: i32,
         shape_body: &[i32],
         body_world: &[i32],
         out: &mut Vec<ShapePair>,
@@ -283,8 +275,9 @@ impl Bvh {
         let n = self.nodes[node as usize];
         if n.is_leaf() {
             let f = n.shape_index();
-            let bf = shape_body[f];
-            if Self::plane_pair_passes_filters(plane_body, plane_world, bf, body_world) {
+            if super::broad_phase::pair_passes_filters(
+                model, shape_body, body_world, plane_shape as usize, f,
+            ) {
                 let (lo, hi) = if (plane_shape as usize) < f {
                     (plane_shape, f as u32)
                 } else {
@@ -295,71 +288,23 @@ impl Bvh {
             return;
         }
         self.collect_finite_against_plane(
+            model,
             n.child0,
             plane_shape,
-            plane_body,
-            plane_world,
             shape_body,
             body_world,
             out,
         );
         self.collect_finite_against_plane(
+            model,
             n.child1,
             plane_shape,
-            plane_body,
-            plane_world,
             shape_body,
             body_world,
             out,
         );
     }
 
-    #[inline]
-    fn pair_passes_filters(
-        shape_body: &[i32],
-        body_world: &[i32],
-        i: usize,
-        j: usize,
-    ) -> bool {
-        let bi = shape_body[i];
-        let bj = shape_body[j];
-        if bi < 0 && bj < 0 {
-            return false;
-        }
-        if bi >= 0 && bi == bj {
-            return false;
-        }
-        let wi = if bi < 0 { -1 } else { body_world[bi as usize] };
-        let wj = if bj < 0 { -1 } else { body_world[bj as usize] };
-        if wi >= 0 && wj >= 0 && wi != wj {
-            return false;
-        }
-        true
-    }
-
-    #[inline]
-    fn plane_pair_passes_filters(
-        plane_body: i32,
-        plane_world: i32,
-        finite_body: i32,
-        body_world: &[i32],
-    ) -> bool {
-        if plane_body < 0 && finite_body < 0 {
-            return false;
-        }
-        if plane_body >= 0 && plane_body == finite_body {
-            return false;
-        }
-        let wf = if finite_body < 0 {
-            -1
-        } else {
-            body_world[finite_body as usize]
-        };
-        if plane_world >= 0 && wf >= 0 && plane_world != wf {
-            return false;
-        }
-        true
-    }
 }
 
 #[cfg(test)]
@@ -423,6 +368,55 @@ mod tests {
         bv.sort();
         assert_eq!(bf.len(), bv.len(), "pair-count mismatch (BF {} vs BVH {})", bf.len(), bv.len());
         assert_eq!(bf, bv, "BVH/BF pair-set mismatch on 1k shapes");
+    }
+
+    /// Group bitmask: shapes in non-overlapping groups don't pair
+    /// up. Two spheres close together with disjoint groups produce
+    /// zero pairs.
+    #[test]
+    fn bvh_filters_by_collision_group() {
+        use crate::math::Transform as MTransform;
+        let mut b = ModelBuilder::new();
+        let a = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 0.0, 0.0)));
+        let b_body = b.add_body(BodyParams::new().with_position(Vec3::new(0.5, 0.0, 0.0)));
+        let s_a = b.add_shape_sphere(a, 0.5, MTransform::IDENTITY).unwrap();
+        let s_b = b.add_shape_sphere(b_body, 0.5, MTransform::IDENTITY).unwrap();
+        b.set_shape_collision_group(s_a, 0b0001).unwrap();
+        b.set_shape_collision_group(s_b, 0b0010).unwrap();
+        let model = b.build().unwrap();
+        let state = model.state().unwrap();
+
+        let mut bvh = Bvh::new();
+        bvh.build(&model, &state, 0.0);
+        let mut pairs = Vec::new();
+        bvh.pairs(&model, &mut pairs);
+        assert!(
+            pairs.is_empty(),
+            "groups don't overlap → expected 0 pairs, got {pairs:?}"
+        );
+
+        // Brute force should agree.
+        let mut bf = Vec::new();
+        super::super::broad_phase::brute_force_pairs(&model, &state, 0.0, &mut bf);
+        assert!(bf.is_empty(), "brute force also expected 0 pairs");
+    }
+
+    /// Explicit exclusion list: even with overlapping groups, a
+    /// listed pair is filtered out.
+    #[test]
+    fn explicit_exclusion_filters_pair() {
+        use crate::math::Transform as MTransform;
+        let mut b = ModelBuilder::new();
+        let a = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 0.0, 0.0)));
+        let b_body = b.add_body(BodyParams::new().with_position(Vec3::new(0.5, 0.0, 0.0)));
+        let s_a = b.add_shape_sphere(a, 0.5, MTransform::IDENTITY).unwrap();
+        let s_b = b.add_shape_sphere(b_body, 0.5, MTransform::IDENTITY).unwrap();
+        b.add_shape_collision_exclusion(s_a, s_b);
+        let model = b.build().unwrap();
+        let state = model.state().unwrap();
+        let mut bf = Vec::new();
+        super::super::broad_phase::brute_force_pairs(&model, &state, 0.0, &mut bf);
+        assert!(bf.is_empty());
     }
 
     #[test]

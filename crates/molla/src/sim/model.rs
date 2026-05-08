@@ -81,6 +81,15 @@ pub struct Model {
     /// Triangle-mesh storage. `ShapeGeometry::TriMesh { mesh_id }`
     /// references entries here.
     pub meshes: Vec<TriMesh>,
+    /// Per-shape collision group bitmask. Two shapes can collide
+    /// only if `group_a & group_b != 0`. Default `0xffff_ffff` =
+    /// "collides with every group". Length = `shape_count`.
+    pub shape_collision_group: Buffer<u32>,
+    /// Explicit shape-pair exclusions (always filtered out, even
+    /// when group bitmasks would allow). Stored as `(min, max)`
+    /// shape-index pairs; broad phase tests pair membership against
+    /// this set.
+    pub shape_collision_filter_pairs: Vec<(u32, u32)>,
 
     // ── Joints ──────────────────────────────────────────────────────
     /// Number of joints.
@@ -133,6 +142,25 @@ pub struct Model {
     /// CSR offsets into the joint arrays — length `articulation_count + 1`.
     /// Articulation `a` owns joints `articulation_start[a]..articulation_start[a+1]`.
     pub articulation_start: Buffer<u32>,
+    /// Per-articulation world index — defaults to the world of the
+    /// first joint's child body. Length = `articulation_count`.
+    pub articulation_world: Buffer<i32>,
+    /// Per-joint world index. Defaults to the child body's world.
+    /// Length = `joint_count`.
+    pub joint_world: Buffer<i32>,
+    /// Per-joint enable flag (1 = active, 0 = disabled). Disabled
+    /// joints don't contribute torque or constrain motion. Length =
+    /// `joint_count`.
+    pub joint_enabled: Buffer<u32>,
+    /// Per-joint ancestor — index of the parent joint in the
+    /// articulation tree, or -1 for a root. Length = `joint_count`.
+    /// Currently informational; future tree traversals consume it.
+    pub joint_ancestor: Buffer<i32>,
+    /// Per-DOF stiffness (N·m/rad or N/m). Distinct from
+    /// `Control.joint_target_kp` — `target_ke` is a static joint
+    /// property used by Featherstone for spring-style joint drives;
+    /// `target_kp` is the per-step PD gain. Length = `joint_dof_total`.
+    pub joint_target_ke: Buffer<Real>,
 
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
@@ -188,6 +216,8 @@ impl Model {
             shape_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),
             meshes: Vec::new(),
+            shape_collision_group: Buffer::from_vec(Vec::new(), s),
+            shape_collision_filter_pairs: Vec::new(),
 
             joint_count: 0,
             joint_type: Buffer::from_vec(Vec::new(), s),
@@ -209,6 +239,11 @@ impl Model {
 
             articulation_count: 0,
             articulation_start: Buffer::from_vec(vec![0u32], s),
+            articulation_world: Buffer::from_vec(Vec::new(), s),
+            joint_world: Buffer::from_vec(Vec::new(), s),
+            joint_enabled: Buffer::from_vec(Vec::new(), s),
+            joint_ancestor: Buffer::from_vec(Vec::new(), s),
+            joint_target_ke: Buffer::from_vec(Vec::new(), s),
 
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
@@ -276,6 +311,12 @@ impl Model {
         up!(joint_effort_limit);
         up!(joint_velocity_limit);
         up!(articulation_start);
+        up!(articulation_world);
+        up!(joint_world);
+        up!(joint_enabled);
+        up!(joint_ancestor);
+        up!(joint_target_ke);
+        up!(shape_collision_group);
         up!(gravity);
         Ok(())
     }

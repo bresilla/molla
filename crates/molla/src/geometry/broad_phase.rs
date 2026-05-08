@@ -13,6 +13,44 @@
 use crate::math::{Real, Vec3};
 use crate::sim::{Model, ShapeGeometry, State};
 
+/// Pair-level filter: returns true if the broad phase should keep
+/// the pair `(i, j)`. Combines static-shape, self-collision, world,
+/// collision-group bitmask, and explicit-exclusion checks.
+#[inline]
+pub fn pair_passes_filters(model: &Model, shape_body: &[i32], body_world: &[i32], i: usize, j: usize) -> bool {
+    let bi = shape_body[i];
+    let bj = shape_body[j];
+    if bi < 0 && bj < 0 {
+        return false;
+    }
+    if bi >= 0 && bi == bj {
+        return false;
+    }
+    let wi = if bi < 0 { -1 } else { body_world[bi as usize] };
+    let wj = if bj < 0 { -1 } else { body_world[bj as usize] };
+    if wi >= 0 && wj >= 0 && wi != wj {
+        return false;
+    }
+    // Group bitmask.
+    if let Ok(groups) = model.shape_collision_group.host() {
+        let gi = groups.get(i).copied().unwrap_or(0xffff_ffff);
+        let gj = groups.get(j).copied().unwrap_or(0xffff_ffff);
+        if gi & gj == 0 {
+            return false;
+        }
+    }
+    // Explicit exclusion list (sorted, so binary search).
+    let pairs = &model.shape_collision_filter_pairs;
+    if !pairs.is_empty() {
+        let lo = i.min(j) as u32;
+        let hi = i.max(j) as u32;
+        if pairs.binary_search(&(lo, hi)).is_ok() {
+            return false;
+        }
+    }
+    true
+}
+
 use super::aabb::Aabb;
 use super::shape_world::shape_world_aabb;
 
@@ -114,21 +152,14 @@ impl BroadPhase {
                     break;
                 }
 
-                // Standard filters — same as brute force.
-                let bj = shape_body[j];
-                if bi < 0 && bj < 0 {
-                    continue;
-                }
-                if bi >= 0 && bi == bj {
-                    continue;
-                }
-                let wj = if bj < 0 { -1 } else { body_world[bj as usize] };
-                if wi >= 0 && wj >= 0 && wi != wj {
+                if !pair_passes_filters(model, shape_body, body_world, i, j) {
                     continue;
                 }
                 if !aabb_i.intersects(&aabb_j) {
                     continue;
                 }
+                // Suppress unused-vars warnings in this branch.
+                let _ = (bi, wi);
                 let (a, b) = if (i as u32) < (j as u32) {
                     (i as u32, j as u32)
                 } else {
@@ -142,20 +173,8 @@ impl BroadPhase {
         // shape that's not static. Cheap O(P · F) — there's typically
         // one plane.
         for &p in &self.infinite_idx {
-            let pi = p as usize;
-            let bp = shape_body[pi];
-            let wp = if bp < 0 { -1 } else { body_world[bp as usize] };
             for &f in &self.finite_idx {
-                let fi = f as usize;
-                let bf = shape_body[fi];
-                if bp < 0 && bf < 0 {
-                    continue;
-                }
-                if bp >= 0 && bp == bf {
-                    continue;
-                }
-                let wf = if bf < 0 { -1 } else { body_world[bf as usize] };
-                if wp >= 0 && wf >= 0 && wp != wf {
+                if !pair_passes_filters(model, shape_body, body_world, p as usize, f as usize) {
                     continue;
                 }
                 let (a, b) = if p < f { (p, f) } else { (f, p) };
@@ -187,23 +206,10 @@ pub fn brute_force_pairs(
         .collect();
 
     for i in 0..n {
-        let bi = shape_body[i];
-        let wi = if bi < 0 { -1 } else { body_world[bi as usize] };
-
         for j in (i + 1)..n {
-            let bj = shape_body[j];
-
-            if bi < 0 && bj < 0 {
+            if !pair_passes_filters(model, shape_body, body_world, i, j) {
                 continue;
             }
-            if bi >= 0 && bi == bj {
-                continue;
-            }
-            let wj = if bj < 0 { -1 } else { body_world[bj as usize] };
-            if wi >= 0 && wj >= 0 && wi != wj {
-                continue;
-            }
-
             if aabbs[i].intersects(&aabbs[j]) {
                 out.push(ShapePair {
                     a: i as u32,
