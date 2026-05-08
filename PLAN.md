@@ -1282,9 +1282,138 @@ Known limitations carried forward:
   matter if we ever switched to per-contact GPU dispatch with atomics.
 - No torsional / rolling friction (mu_torsional, mu_rolling) yet — Newton
   has these for stable rolling; molla's stage-4 tests don't need them.
-- Capsule / cylinder / mesh contact follows in stage 6 (GJK + EPA).
+- Capsule / cylinder / mesh contact follows in the GJK + EPA stage.
 
-### Stage 5 — `usd_molla` crate (3–4 weeks)
+---
+
+### Newton + Warp gap analysis (2026-05-08)
+
+After stage 4 completed, we did a deep audit of `xtra/newton/` and
+`xtra/warp/` to map what molla still needs for full reimplementation
+parity. The key finding: **molla's solver depth matches Newton
+(Featherstone ABA, XPBD with full angular response are real
+implementations), but breadth is thin** — the menu of joints, shapes,
+sensors, and importers around the solvers is tiny next to Newton's.
+
+The original stage-5/6 ordering (USD adapter, then GJK+EPA) doesn't
+match the actual blocking gaps — we don't need USD before we have
+joint limits, capsules, or multi-articulation support. The stage list
+below is reordered accordingly.
+
+#### P0 — physics-engine blockers
+
+| Gap | Why | Reference |
+|---|---|---|
+| Joint limits + per-DOF damping + position/velocity/effort drives | Revolute joints currently rotate freely with no bounds and no actuator targets. Required for Franka / UR / pendulum-with-stop demos. | `Model.joint_limit_lower/upper`, `joint_target_mode`, `joint_friction`, `joint_effort_limit`, `joint_velocity_limit` |
+| Multi-articulation grouping in Featherstone | Solver currently assumes one chain per scene. Real scenes have multiple robots. | `Model.articulation_start/world` |
+| XPBD/Featherstone sub-stepping | Standard Müller (2020) pattern: N substeps × 1 iter is stabler than 1 step × N iters with contact. | All Newton solvers default to N substeps. |
+| Capsule + cylinder + cone shapes | Robotics meshes are mostly capsules/cylinders. Without these, no realistic robot demos. | `geometry/types.py:GeoType` |
+| GJK + EPA + support functions | Required for cylinder-cylinder, cone-mesh, convex-hull contact. molla currently handles only the 6 sphere/box/plane combos. | `geometry/{simplex_solver,support_function,mpr}.py` |
+| Convex-hull / triangle-mesh collision | URDF and USD scenes ship triangle meshes. Without convex-hull contact the importer is a toy. | `geometry/mesh.py`, Warp `mesh_query_*` |
+| Heightfield collision | Standard for terrain/locomotion RL. | `geometry/heightfield.py`, `Model.heightfield_*` |
+| BVH broad-phase (GPU) | SAP degrades on uneven scenes; BVH is the standard for >1k bodies and triangle-mesh contact. | `geometry/bvh.py`, Warp `bvh_query_aabb/ray` |
+| Hash-grid spatial accel | Particles, granular, fluid all need it; O(N²) is unworkable. | Warp `hash_grid_query/_next` |
+
+#### P1 — needed for serious use
+
+| Gap | Why | Reference |
+|---|---|---|
+| Ball / D6 / Distance / Cable joints | Spherical joints (humanoid hips), D6 (locked-axis configurable), distance constraints (ropes), cables. | `sim/enums.py:JointType` |
+| Equality constraints (CONNECT / WELD / JOINT-mimic) | First-class in Newton — gear/transmission/coupled-joint support. | `Model.equality_constraint_*` |
+| Mimic constraints (`joint0 = c0 + c1·joint1`) | Parallel grippers, gear trains. | `Model.constraint_mimic_*` |
+| PD controller + actuator pipeline (delay → controller → clamping) | molla's `Control` has only `body_external_f` + `joint_force`. Newton has a modular actuator pipeline. | `actuators/{actuator,controllers,clamping}.py` |
+| Inverse kinematics (LM + L-BFGS, position/rotation/limit objectives) | Robotics needs this. | `sim/ik/` |
+| Mass matrix (CRBA) + inverse dynamics (RNEA) | Inverse dynamics is fundamental for control. molla has only forward dynamics. | `solvers/kamino/_src/dynamics/`, Warp `dense_chol*` |
+| Sparse linear algebra (BSR matrix, sparse matvec, CG/GMRES) | Needed for any large-system solver. molla has zero sparse infra. | Warp `sparse.py`, `optim/linear.py` |
+| Cholesky / LDLT factorization | CRBA + dense MuJoCo-style solver requires it. | Warp `dense_chol`, `tile_cholesky` |
+| Graph coloring | Currently Jacobi (works). Coloring would let us do parallel Gauss-Seidel; also needed for VBD/Style3D. | `coloring.py` |
+| MJCF importer | MuJoCo Menagerie is the de-facto robot zoo; URDF is barely usable, MJCF is. | `utils/import_mjcf.py` |
+| Particles + cloth (springs, triangles, edges, tetrahedra, muscles) | Newton's `Model` has the data layout; molla's has `particle_*` arrays but no solver. | `Model.spring_*/tri_*/edge_*/tet_*` |
+| Multi-world batching for joints / articulations / constraints | molla has it on bodies/particles only. | `Model.{joint_world,articulation_world,equality_constraint_world}` |
+| Collision filtering (groups + filter pairs) | Standard layer/mask exclusion. | `Model.shape_collision_filter_pairs/group` |
+| IMU + raycast + contact + tiled-camera + frame-transform sensors | Robotics needs IMU/lidar; visual RL needs cameras. molla's `sensors/` dir is empty. | `sensors/sensor_*.py` |
+| Spatial Jacobian builtin + spatial_adjoint + spatial_mass | For constraint enforcement and contact-force Jacobians. | Warp `spatial_jacobian/_adjoint/_mass` |
+| Quat utilities: twist/swing decomposition, RPY ↔ quat, Euler conversions | Joint axis-aligned twist, initial-condition specification. | Warp `quat_twist`, `quat_to_rpy`, `quat_from_euler` |
+| Robust loss norms (Huber, pseudo-Huber, smooth_normalize) | Robust loss functions for soft constraints, IK. | Warp `norm_huber`, `norm_pseudo_huber` |
+
+#### P2 — advanced / specialty
+
+| Gap | Why |
+|---|---|
+| Differentiable contacts + tape/autograd | Trajectory optimization, sim-to-real. |
+| Hydroelastic contact (Drake-style pressure fields) | Niche but elegant. |
+| MuJoCo solver wrapper (mjx) | Validation against industry standard. |
+| VBD / Style3D / Implicit MPM solvers | Soft body, cloth, granular — only when those workloads are in scope. |
+| SDF collision (`sdf_contact`, `sdf_hydroelastic`, texture sampling) | GPU-resident geometry. |
+| Marching cubes | SDF → mesh extraction. |
+| BVH/hash-grid as Warp-style WGSL builtins | Generic acceleration-structure layer in `molla::math/geometry`. |
+| Command-buffer reuse / "graph capture" analog | We currently rebuild every frame. |
+| Custom attribute system | Newton lets users register arbitrary per-entity arrays. |
+| USD adapter | Reading `UsdPhysics*` schemas (was original stage 5). |
+| Viewer backends (file / rerun / USD export) | molla_viewer is bevy-only. |
+| Tile primitives (cooperative shared memory ops) | Fast workgroup-level reductions, blocked GEMM/Cholesky. |
+| RNG / Perlin / curl noise / Poisson disk | Stochastic init, procedural scenes. |
+
+---
+
+### Stage 5 — Joint limits, drives, multi-articulation, sub-stepping (2 weeks)
+
+**Goal**: existing solvers usable on real robots. No new collision
+geometry; just make Featherstone + XPBD survive Franka / UR /
+pendulum-with-stops scenes.
+
+Deliverables:
+- `Model.joint_limit_lower / joint_limit_upper / joint_friction /
+  joint_effort_limit / joint_velocity_limit` (per DOF, NaN sentinel
+  = unlimited).
+- `Model.joint_target_mode` enum (NONE / POSITION / VELOCITY /
+  POSITION_VELOCITY / EFFORT) and `Control.joint_target` /
+  `Control.joint_target_kp / kd`.
+- Featherstone solver respects joint limits via XPBD-style
+  position projection in joint-space + clamps on `joint_qd`.
+- Multi-articulation: `Model.articulation_start` (CSR offsets),
+  `Model.articulation_world`. `FeatherstoneSolver` dispatches one
+  workgroup invocation per chain (already CPU+GPU; just plumb
+  multi-chain).
+- Sub-stepping in `XpbdSolver` and `FeatherstoneSolver`: a
+  `Solver::with_substeps(n)` knob; the default Detailed Rigid
+  Body Sim configuration is `substeps=8, iterations_per_step=1`.
+
+Definition of done:
+- Pendulum with `joint_limit_lower=-π/4, upper=π/4` swings inside
+  the cone, doesn't escape.
+- Two independent pendulums in one scene step in parallel via
+  Featherstone (CPU/GPU parity).
+- Box stack settles with `substeps=8, iters=1` instead of the
+  current `substeps=2, iters=16`.
+
+### Stage 6 — Convex contact (capsules + cylinders + GJK + EPA + meshes)
+
+**Goal**: arbitrary convex shapes. After this stage molla can handle
+anything URDF or MJCF describes.
+
+Deliverables:
+- `ShapeGeometry::Capsule { half_height, radius }`,
+  `Cylinder { half_height, radius }`, `Cone`,
+  `ConvexHull { vertices, faces }`, `TriMesh { ... }`.
+- Support functions per shape (`support(direction) -> Vec3`).
+- GJK distance/closest-points (CPU + WGSL).
+- EPA penetration depth + contact normal (CPU + WGSL).
+- MPR as an alternative for deep penetration (Newton's choice).
+- Triangle-mesh narrow phase via per-triangle GJK.
+- Convex-hull builder (qhull port or `parry3d` reuse — TBD).
+- BVH broad-phase (CPU+GPU), replaces SAP for scenes with > a
+  few hundred shapes or any triangle-mesh shape. SAP stays as
+  fallback.
+
+Definition of done:
+- Capsule-on-plane, cylinder-on-plane stable.
+- Cylinder-cylinder stable at any orientation.
+- Mesh-convex-hull on plane stable.
+- BVH broad-phase passes parity test against SAP on a 1k-shape
+  scene.
+
+### Stage 7 — `usd_molla` crate
 
 **Goal**: load a USD file with `UsdPhysics` opinions, simulate, write back.
 
@@ -1293,43 +1422,71 @@ Deliverables:
 - `build_model_from_stage` for `UsdRigidBody`, `UsdCollider`,
   `UsdPhysicsJoint`, `UsdMass`, `UsdPhysicsScene`, `UsdPhysicsMaterial`.
 - `project_state_to_stage` for time-sampled writes.
-- Integration test: round-trip a small USD scene through builder → step ×
-  100 → write back → compare to a recorded golden.
+- Integration test: round-trip a small USD scene through builder → step
+  × 100 → write back → compare to a recorded golden.
 
 Definition of done:
-- A USD file authored in `molla` opens, runs, and the resulting USD has
-  correct time samples.
-- `usd_bevy` with `features = ["newton"]` swaps Rapier for newton in the
-  viewer and the scene runs identically (modulo solver differences).
+- A USD file authored in `molla` opens, runs, and the resulting USD
+  has correct time samples.
+- `usd_bevy` with `features = ["newton"]` swaps Rapier for molla in
+  the viewer and the scene runs identically (modulo solver
+  differences).
 
-### Stage 6 — General convex contact (GJK + EPA) (3–5 weeks)
+### Stage 8 — MJCF importer + sensors + actuator pipeline
 
-**Goal**: arbitrary convex shapes (cones, cylinders, convex hulls of meshes).
+**Goal**: load MuJoCo Menagerie scenes, attach IMU / raycast sensors,
+drive joints with a PD pipeline.
 
 Deliverables:
-- GJK in WGSL.
-- EPA fallback for deep penetration.
-- Convex hull builder for meshes (qhull port or `parry` reuse).
-- Capsule, cone, cylinder primitives.
+- `utils/import_mjcf.rs` covering the subset of MJCF that maps onto
+  molla's `Model` (joints, geoms, meshes, actuators, equalities).
+- `sensors/{imu, raycast, contact, frame_transform}.rs`.
+- `actuators/{controller_pd, clamping_max_effort,
+  clamping_velocity_saturation, delay}.rs`. Modular pipeline matching
+  Newton's `actuator.py`.
 
-Definition of done:
-- Cylinder-cylinder contact stable.
-- Mesh (convex hull) on plane stable.
+### Stage 9 — Equality + mimic constraints + collision filtering
 
-### Stage 7+ — XPBD particles & cloth, sensors, actuators
+**Goal**: gear trains, parallel grippers, layer-based collision filtering.
 
-Deliverables grow from here based on what molla actually needs. Likely
-order: cloth (XPBD particles + distance/bending), then IMU + raycast
-sensors, then PD actuators.
+Deliverables:
+- `Model.equality_constraint_*` (CONNECT / WELD / JOINT-mimic).
+- `Model.constraint_mimic_*` (`joint0 = c0 + c1·joint1`).
+- `Model.shape_collision_group / shape_collision_filter_pairs` —
+  mask/exclude logic in broad phase.
+- XPBD position-projection pass for equality constraints.
 
-### Stage 9+ — Differentiability
+### Stage 10 — Particles + cloth (XPBD distance/bending) + springs
 
-Manual adjoints for XPBD only. Out of scope until there's a concrete user.
+**Goal**: cloth on a sphere, rope dragging across boxes.
 
-### Stage 10+ — Python bindings
+Deliverables:
+- Wire up `Model.spring_*/tri_*/edge_*` arrays the builder already
+  has into XPBD constraint passes.
+- Distance + bending + area constraints on triangle meshes.
+- Particle-rigid contact (sphere-particle for now; particle-mesh in
+  stage 11).
 
-If at all. Newton's Python users probably stay on Python Newton; we serve
-Rust users.
+### Stage 11 — Inverse kinematics + mass matrix + RNEA
+
+**Goal**: differentiable & control-friendly articulation queries.
+
+Deliverables:
+- `sim/ik/` — LM + L-BFGS solvers, position/rotation/joint-limit
+  objectives.
+- CRBA mass-matrix construction.
+- RNEA inverse dynamics.
+- Sparse linear algebra layer (BSR matrix, sparse matvec, CG/GMRES,
+  Cholesky) — introduce when the first consumer arrives, not
+  preemptively.
+
+### Stage 12+ — Differentiability, advanced solvers, Python bindings
+
+Manual adjoints for XPBD; tape-style autograd for Featherstone.
+MuJoCo solver wrapper as a validation oracle. VBD / Style3D / MPM
+when there's a concrete user. Python bindings (`pyo3`) only if
+explicitly requested — Newton's Python users stay on Python Newton;
+molla serves Rust.
 
 ---
 
