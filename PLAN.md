@@ -1469,14 +1469,88 @@ Known limitations carried forward:
   and cylinder demos run on CPU narrow-phase + GPU XPBD.
 - BVH GPU port (LBVH) — CPU only.
 
-### Stage 7 — `usd_molla` crate
+---
+
+### Newton + Warp gap analysis #2 (post-stage-6, 2026-05-08)
+
+After stages 5-6 we did a second deep audit of `xtra/newton/_src/` and
+`xtra/warp/_src/`. The key strategic question that came out: **does
+the new gap go before or after USD/MJCF import?**
+
+The split is by whether a gap is *architectural* (changes the `Model`
+struct layout — adding it after the USD importer means refactoring
+the importer too) or *additive* (lives outside the `Model` and can
+slot in any time).
+
+#### Architectural gaps (must land BEFORE USD/MJCF)
+
+| Gap | Why before USD | Newton ref |
+|---|---|---|
+| Multi-world per joint / articulation / constraint | molla currently has `world_index` on bodies/particles only. USD + MJCF scenes assign joints / articulations / equality constraints to worlds — adding the index later requires rewriting the importer. | `Model.{joint,articulation,equality_constraint,constraint_mimic}_world` |
+| Ball / D6 / Distance joint types | USD `UsdPhysicsSphericalJoint`, MJCF `<joint type="ball">` and 6-DOF mounts map directly to these. Without them, the importer would silently drop or wrongly approximate them as Fixed/Revolute. | `sim/enums.py:JointType` |
+| Equality constraints (CONNECT, WELD, JOINT-mimic) | Both formats encode rigged-assembly couplings as equality constraints. Storage layout in `Model` has to exist before the importer can populate it. | `Model.equality_constraint_*` |
+| Mimic constraints (`q0 = c0 + c1·q1`) | Parallel grippers, gear trains, transmission ratios. Same architectural reasoning. | `Model.constraint_mimic_*` |
+| Per-shape collision groups + filter pairs | Both formats encode collision filtering as scene metadata; needs a Model home. | `Model.shape_collision_group`, `shape_collision_filter_pairs` |
+| `joint_enabled` flag, `joint_ancestor`, per-DOF `joint_target_ke` | Newton's joint metadata that USD/MJCF importers populate. Adding fields later means re-walking every imported scene. | `Model.joint_*` |
+| Spatial Jacobian builtin | Foundation primitive used by IK, contact-Jacobian, RNEA. Cleanest to add before the importer because importers attach drive metadata that ends up flowing through the Jacobian path. | Warp `builtins.py:2261` |
+
+#### Additive gaps (can land AFTER USD/MJCF — sloted into the relevant later stage)
+
+| Gap | Where it slots | Newton ref |
+|---|---|---|
+| Sensors (IMU, raycast, contact, frame-transform) | New `sensors/` crate module. USD/MJCF can store metadata; sensor code consumes it later. | `sensors/sensor_*.py` |
+| Actuator pipeline (PD/PID, clamping, delay) | New `actuators/` module. Sits between user code and Solver. | `actuators/` |
+| Sparse linalg (BSR matrix, CG, GMRES, Cholesky) | Goes with the IK / CRBA / RNEA stage. Lives in `math/sparse.rs`. | Warp `sparse.py`, `optim/linear.py` |
+| Mass matrix (CRBA), inverse dynamics (RNEA), IK (LM + L-BFGS) | Same stage as sparse linalg. | `solvers/kamino/_src/dynamics/`, `sim/ik/` |
+| Contact warm-starting / matching | Stand-alone post-broad-phase pass; extends `Contacts` (additive). | `geometry/contact_match.py` |
+| Torsional + rolling friction | Per-shape material extension (already have μ, restitution; add μ_torsional, μ_rolling). | `Model.shape_material_*` |
+| Mesh AABB tree (per-mesh BVH for trimesh narrow-phase) | Extends `TriMesh` struct (additive). Critical for non-trivial trimesh sizes. | `geometry/narrow_phase.py` |
+| Contact reduction (voxel-AABB pruning) | Stand-alone post-narrow-phase pass. | `geometry/contact_reduction_global.py` |
+| Math utilities: `quat_twist`, Euler conversions, robust Huber norms | Pure additions to `math/`. | Warp `math.py:36-422` |
+| Cone / ConvexHull / Heightfield shapes | Just new `ShapeGeometry` variants + support functions. | `geometry/types.py:GeoType` |
+| MPR alternative to EPA | Drop-in narrow-phase replacement; current EPA passes all tests. | `geometry/mpr.py` |
+| GPU GJK / EPA / BVH | Performance optimisation; CPU paths are fine for single-arm scenes. | — |
+
+### Stage 7 — Architectural completion (BEFORE USD)
+
+**Goal**: finish the `Model` data layout so subsequent USD / MJCF
+importers don't paint themselves into a corner. No new physics
+capabilities yet — just the storage + plumbing.
+
+Deliverables:
+- `Model.joint_world`, `articulation_world`, `equality_constraint_world`,
+  `constraint_mimic_world` (per-entity world indices, not just per-body).
+- New joint types: **Ball** (3-DOF spherical, 4-coord quat),
+  **D6** (6-DOF with per-axis limits/targets), **Distance**.
+  Featherstone CPU+GPU and XPBD both honour them; CPU+GPU parity tests.
+- `Model.equality_constraint_*` storage (CONNECT / WELD /
+  JOINT-mimic). Builder `add_equality_*` API. XPBD position-projection
+  pass that resolves them.
+- `Model.constraint_mimic_*` (`q0 = c0 + c1·q1`) wired into Featherstone
+  pre-step.
+- `Model.shape_collision_group` (per-shape u32 bitmask) +
+  `Model.shape_collision_filter_pairs` (exclusion list). Broad-phase
+  filters by group / pair before generating contacts.
+- `Model.joint_enabled`, `joint_ancestor`, per-DOF `joint_target_ke`.
+- `math::spatial_jacobian(...)` primitive (CPU, used later by IK).
+
+Definition of done:
+- Humanoid hip ball joint swings under gravity in a XPBD scene.
+- Two-box welded assembly stays welded under impact.
+- Parallel-gripper mimic test: setting one finger angle moves both.
+- Group-filtered scene: shapes in group A don't collide with shapes
+  in group B.
+
+### Stage 8 — `usd_molla` crate
 
 **Goal**: load a USD file with `UsdPhysics` opinions, simulate, write back.
 
 Deliverables:
 - `crates/usd_molla/` scaffold.
 - `build_model_from_stage` for `UsdRigidBody`, `UsdCollider`,
-  `UsdPhysicsJoint`, `UsdMass`, `UsdPhysicsScene`, `UsdPhysicsMaterial`.
+  `UsdPhysicsJoint` (revolute/prismatic/spherical/D6/fixed/distance),
+  `UsdMass`, `UsdPhysicsScene`, `UsdPhysicsMaterial`,
+  `UsdPhysicsCollisionGroup`, joint drives.
 - `project_state_to_stage` for time-sampled writes.
 - Integration test: round-trip a small USD scene through builder → step
   × 100 → write back → compare to a recorded golden.
@@ -1488,31 +1562,76 @@ Definition of done:
   the viewer and the scene runs identically (modulo solver
   differences).
 
-### Stage 8 — MJCF importer + sensors + actuator pipeline
+### Stage 9 — MJCF importer
 
-**Goal**: load MuJoCo Menagerie scenes, attach IMU / raycast sensors,
-drive joints with a PD pipeline.
+**Goal**: load MuJoCo Menagerie scenes (Franka, UR, Anymal, H1).
 
 Deliverables:
 - `utils/import_mjcf.rs` covering the subset of MJCF that maps onto
-  molla's `Model` (joints, geoms, meshes, actuators, equalities).
-- `sensors/{imu, raycast, contact, frame_transform}.rs`.
-- `actuators/{controller_pd, clamping_max_effort,
-  clamping_velocity_saturation, delay}.rs`. Modular pipeline matching
-  Newton's `actuator.py`.
+  molla's `Model` (joints, geoms, meshes, actuators, equalities,
+  collision groups).
+- Test: import a Menagerie URDF + MJCF pair, verify body positions
+  match within 1e-3 after one step.
 
-### Stage 9 — Equality + mimic constraints + collision filtering
+### Stage 10 — Sensors + actuator pipeline
 
-**Goal**: gear trains, parallel grippers, layer-based collision filtering.
+**Goal**: RL-grade scenes with observation + control.
 
 Deliverables:
-- `Model.equality_constraint_*` (CONNECT / WELD / JOINT-mimic).
-- `Model.constraint_mimic_*` (`joint0 = c0 + c1·joint1`).
-- `Model.shape_collision_group / shape_collision_filter_pairs` —
-  mask/exclude logic in broad phase.
-- XPBD position-projection pass for equality constraints.
+- `sensors/{imu, raycast, contact, frame_transform}.rs`. IMU = linear
+  accel + angular vel in body frame; raycast = ray vs collision shape;
+  contact = per-contact forces/normals; frame_transform = pose tracking.
+- `actuators/{controller_pd, controller_pid, clamping_max_effort,
+  clamping_velocity_saturation, delay}.rs`. Modular pipeline matching
+  Newton's `actuator.py`.
+- Tests: IMU on a swinging pendulum returns the analytical accel +
+  ω; raycast against a sphere returns the right hit distance; PD
+  actuator drives a joint to a target with effort cap respected.
 
-### Stage 10 — Particles + cloth (XPBD distance/bending) + springs
+### Stage 11 — Inverse kinematics + mass matrix + RNEA + sparse linalg
+
+**Goal**: differentiable & control-friendly articulation queries —
+plus the foundation everything in stage 12+ needs.
+
+Deliverables:
+- **Sparse linalg layer** (`crates/molla/src/math/sparse.rs`): `BsrMatrix<T>`
+  block-sparse-row type, `bsr_zeros / from_triplets / mv / mm /
+  set_transpose / get_diag / scale`. CPU first; GPU port when a
+  consumer needs it. `LinearOperator` trait abstracting dense /
+  sparse / custom matvec.
+- Iterative solvers: `cg`, `bicgstab`, `gmres` with Jacobi diagonal
+  preconditioner. Tested against a hand-built SPD matrix.
+- Dense `Cholesky` + forward/back-substitution (`dense_chol`,
+  `dense_subs`) for CRBA mass-matrix solves on small articulations.
+- `sim/ik/` — Levenberg-Marquardt + L-BFGS optimisers.
+  Position / rotation / joint-limit objectives, multi-seed sampling.
+- CRBA mass-matrix construction (composite rigid body algorithm).
+- RNEA inverse dynamics (recursive Newton-Euler).
+- Robust-loss math primitives (`norm_huber`, `norm_pseudo_huber`,
+  `smooth_normalize`) for IK regularisation.
+
+Definition of done:
+- Sparse `cg` solves a 1000×1000 SPD system to 1e-6 in < 100 ms on CPU.
+- Pendulum CRBA mass matrix matches the analytical 1×1 value within
+  1e-9.
+- IK on a 7-DOF Franka arm reaches a target pose within 5 mm.
+
+### Stage 12 — Contact extras
+
+**Goal**: the contact-quality features that distinguish a toy from a
+production engine.
+
+Deliverables:
+- Torsional friction (μ_torsional) per shape — stable rolling.
+- Rolling friction (μ_rolling) per shape — wheel-on-ground.
+- Contact warm-starting / matching across frames (Newton's
+  `geometry/contact_match.py` pattern: deterministic sort-key match,
+  warm-start XPBD λ).
+- Contact reduction (voxel-AABB pruning of redundant contacts).
+- Per-mesh BVH (mesh AABB tree) — molla currently iterates ALL
+  triangles per pair; this scales to thousand-triangle meshes.
+
+### Stage 13 — Particles + cloth (XPBD distance/bending) + springs
 
 **Goal**: cloth on a sphere, rope dragging across boxes.
 
@@ -1520,23 +1639,20 @@ Deliverables:
 - Wire up `Model.spring_*/tri_*/edge_*` arrays the builder already
   has into XPBD constraint passes.
 - Distance + bending + area constraints on triangle meshes.
-- Particle-rigid contact (sphere-particle for now; particle-mesh in
-  stage 11).
+- Particle-rigid contact (sphere-particle for now; particle-mesh in a
+  follow-up).
+- Hash grid spatial accel (Warp `hash_grid_*`) for particle-particle.
 
-### Stage 11 — Inverse kinematics + mass matrix + RNEA
+### Stage 14 — Specialty shapes + GPU GJK
 
-**Goal**: differentiable & control-friendly articulation queries.
+**Goal**: catch up on geometry breadth.
 
 Deliverables:
-- `sim/ik/` — LM + L-BFGS solvers, position/rotation/joint-limit
-  objectives.
-- CRBA mass-matrix construction.
-- RNEA inverse dynamics.
-- Sparse linear algebra layer (BSR matrix, sparse matvec, CG/GMRES,
-  Cholesky) — introduce when the first consumer arrives, not
-  preemptively.
+- Cone, ConvexHull (vertices + faces), Heightfield, SDF shapes.
+- MPR fallback for deep penetration (alternative to EPA).
+- GPU port of GJK + EPA + BVH (LBVH parallel construction).
 
-### Stage 12+ — Differentiability, advanced solvers, Python bindings
+### Stage 15+ — Differentiability, advanced solvers, Python bindings
 
 Manual adjoints for XPBD; tape-style autograd for Featherstone.
 MuJoCo solver wrapper as a validation oracle. VBD / Style3D / MPM
