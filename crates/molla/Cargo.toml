@@ -50,3 +50,8 @@ name = "step_gpu"
 harness = false
 required-features = ["gpu"]
 
+[[bench]]
+name = "featherstone_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+

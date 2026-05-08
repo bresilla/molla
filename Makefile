@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -76,6 +76,9 @@ bench-cpu:
 
 bench-gpu:
 	@$(RUN_ENV) $(CARGO) bench -p molla --bench step_gpu --features gpu
+
+bench-featherstone:
+	@$(RUN_ENV) $(CARGO) bench -p molla --bench featherstone_cpu_vs_gpu --features gpu
 
 check:
 	@$(CARGO) check --workspace --all-targets
