@@ -47,10 +47,13 @@ pub struct GpuBackend {
     pub(crate) queue: std::sync::Arc<wgpu::Queue>,
     pub(crate) kernel: crate::kernels::XpbdKernel,
     /// GPU-side equality-constraint projection — replaces the
-    /// host-side `apply_equality_post_gpu` shim. Built lazily so
-    /// solvers without equality constraints don't pay the pipeline
-    /// compile cost.
+    /// host-side `apply_equality_post_gpu` shim.
     pub(crate) equality_kernel: crate::kernels::XpbdEqualityKernel,
+    /// GPU-side particle XPBD step (predict + distance constraints +
+    /// strain limit + plane collision + velocity recovery). Built
+    /// lazily on the first step that has particles, so models without
+    /// particles don't pay the pipeline compile cost.
+    pub(crate) particles_kernel: Option<crate::kernels::XpbdParticlesKernel>,
 }
 
 /// Position-based dynamics solver.
@@ -114,6 +117,7 @@ impl XpbdSolver {
                 queue,
                 kernel,
                 equality_kernel,
+                particles_kernel: None,
             }),
         })
     }
@@ -268,6 +272,7 @@ impl XpbdSolver {
                     queue,
                     kernel,
                     equality_kernel,
+                    particles_kernel,
                 } = gpu;
                 kernel.dispatch(
                     device,
@@ -280,10 +285,7 @@ impl XpbdSolver {
                     dt,
                     state_out,
                 )?;
-                // Equality constraints (CONNECT / WELD) — full GPU
-                // dispatch via `XpbdEqualityKernel`; modifies
-                // `state_out.body_q` in place and recomputes
-                // `state_out.body_qd` from the corrected pose.
+                // Equality constraints (CONNECT / WELD) — GPU dispatch.
                 equality_kernel.dispatch(
                     device,
                     queue,
@@ -293,17 +295,41 @@ impl XpbdSolver {
                     self.position_iterations as u32,
                     dt as f32,
                 )?;
-                // Particles (cloth/rope/springs) likewise live on the
-                // CPU side for now.
-                apply_particles_post_gpu(
-                    model,
-                    state_in,
-                    state_out,
-                    dt,
-                    self.position_iterations,
-                    device,
-                    queue,
-                )
+                // Particle XPBD (cloth / rope / springs) — GPU
+                // dispatch via `XpbdParticlesKernel`. Built lazily on
+                // first step that has particles so rigid-only solvers
+                // don't pay the pipeline compile cost.
+                if model.particle_count > 0 {
+                    let need_pn = model.particle_count as u32;
+                    let need_sn = model.spring_count as u32;
+                    let needs_rebuild = match particles_kernel {
+                        None => true,
+                        Some(k) => {
+                            k.particle_count() != need_pn
+                                || k.spring_count() != need_sn
+                        }
+                    };
+                    if needs_rebuild {
+                        *particles_kernel = Some(
+                            crate::kernels::XpbdParticlesKernel::new(
+                                device, need_pn, need_sn,
+                            ),
+                        );
+                    }
+                    let pk = particles_kernel
+                        .as_mut()
+                        .expect("particles_kernel just built");
+                    pk.dispatch(
+                        device,
+                        queue,
+                        model,
+                        state_in,
+                        state_out,
+                        dt,
+                        self.position_iterations as u32,
+                    )?;
+                }
+                Ok(())
             }
         }
     }
@@ -1174,35 +1200,8 @@ pub(crate) fn step_particles(
     Ok(())
 }
 
-/// CPU shim that runs `step_particles` after the GPU rigid-body step.
-/// Particles aren't yet in the WGSL kernel — same situation as
-/// equality constraints. Downloads the existing particle buffers,
-/// runs one substep on host, uploads the result.
-#[cfg(feature = "gpu")]
-pub(crate) fn apply_particles_post_gpu(
-    model: &Model,
-    state_in: &State,
-    state_out: &mut State,
-    dt: Real,
-    iterations: usize,
-    _device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> Result<()> {
-    if model.particle_count == 0 {
-        return Ok(());
-    }
-    let p_in = state_in.particle_q.host()?.to_vec();
-    let v_in = state_in.particle_qd.host()?.to_vec();
-
-    // Safety: state_out particle buffers are sized to particle_count
-    // by State::for_model + clone_host. Just write into them.
-    let mut p_out = vec![Vec3::ZERO; model.particle_count];
-    let mut v_out = vec![Vec3::ZERO; model.particle_count];
-    step_particles(model, &p_in, &v_in, &mut p_out, &mut v_out, dt, iterations)?;
-
-    state_out.particle_q.host_mut()?.copy_from_slice(&p_out);
-    state_out.particle_qd.host_mut()?.copy_from_slice(&v_out);
-    state_out.particle_q.upload(queue)?;
-    state_out.particle_qd.upload(queue)?;
-    Ok(())
-}
+// `apply_particles_post_gpu` (CPU shim) was removed when
+// `XpbdParticlesKernel` (`shaders/xpbd_particles.wgsl`) replaced it
+// with a true GPU dispatch. The CPU `step_particles` above is kept —
+// it's still used by the CPU `cpu_step` path and by tests as the
+// reference oracle for the WGSL port.

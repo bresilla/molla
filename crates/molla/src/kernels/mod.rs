@@ -20,6 +20,8 @@ mod raycast;
 mod xpbd;
 #[cfg(feature = "gpu")]
 mod xpbd_equality;
+#[cfg(feature = "gpu")]
+mod xpbd_particles;
 
 #[cfg(feature = "gpu")]
 pub use actuator_pd::ActuatorPdKernel;
@@ -41,3 +43,5 @@ pub use raycast::RaycastKernel;
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd_equality::XpbdEqualityKernel;
+#[cfg(feature = "gpu")]
+pub use xpbd_particles::XpbdParticlesKernel;
