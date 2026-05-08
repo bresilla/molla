@@ -1606,18 +1606,29 @@ Carried forward:
   built-in single-axis revolute/prismatic limits. Wire-up is
   mechanical when D6 / Spherical limit demos land.
 
-### Stage 9 — MJCF importer
+### MJCF importer — DROPPED (2026-05-08)
 
-**Goal**: load MuJoCo Menagerie scenes (Franka, UR, Anymal, H1).
+A native MJCF reader was originally pencilled in here. It's been
+removed because the ecosystem already solves the problem upstream:
 
-Deliverables:
-- `utils/import_mjcf.rs` covering the subset of MJCF that maps onto
-  molla's `Model` (joints, geoms, meshes, actuators, equalities,
-  collision groups).
-- Test: import a Menagerie URDF + MJCF pair, verify body positions
-  match within 1e-3 after one step.
+- Isaac Lab / Isaac Sim convert MJCF → USD as part of their normal
+  workflow; MuJoCo Menagerie scenes are routinely loaded that way.
+- `mujoco_to_usd` exists as a standalone tool.
+- NVIDIA Newton itself doesn't ship an MJCF importer either —
+  Newton's MJCF path is "MJCF → USD via Isaac → Newton". USD is the
+  lingua franca.
 
-### Stage 10 — Sensors + actuator pipeline
+Since `usd_molla` (stage 8) already handles the USD half, users with
+Menagerie scenes get there via `mujoco_to_usd` → `usd_molla`. A
+faithful MJCF importer (~3-5 kLoC: composite bodies, tendons,
+contact pairs, MJCF actuators, compiler defaults) would mostly
+duplicate work upstream tools already do well, so we skip it.
+
+The stages below are renumbered relative to the previous PLAN —
+stage 9 is now sensors + actuators, stage 10 is IK / RNEA / sparse
+linalg, etc.
+
+### Stage 9 — Sensors + actuator pipeline
 
 **Goal**: RL-grade scenes with observation + control.
 
@@ -1632,7 +1643,7 @@ Deliverables:
   ω; raycast against a sphere returns the right hit distance; PD
   actuator drives a joint to a target with effort cap respected.
 
-### Stage 11 — Inverse kinematics + mass matrix + RNEA + sparse linalg
+### Stage 10 — Inverse kinematics + mass matrix + RNEA + sparse linalg
 
 **Goal**: differentiable & control-friendly articulation queries —
 plus the foundation everything in stage 12+ needs.
@@ -1660,7 +1671,7 @@ Definition of done:
   1e-9.
 - IK on a 7-DOF Franka arm reaches a target pose within 5 mm.
 
-### Stage 12 — Contact extras
+### Stage 11 — Contact extras
 
 **Goal**: the contact-quality features that distinguish a toy from a
 production engine.
@@ -1675,7 +1686,7 @@ Deliverables:
 - Per-mesh BVH (mesh AABB tree) — molla currently iterates ALL
   triangles per pair; this scales to thousand-triangle meshes.
 
-### Stage 13 — Particles + cloth (XPBD distance/bending) + springs
+### Stage 12 — Particles + cloth (XPBD distance/bending) + springs
 
 **Goal**: cloth on a sphere, rope dragging across boxes.
 
@@ -1687,7 +1698,7 @@ Deliverables:
   follow-up).
 - Hash grid spatial accel (Warp `hash_grid_*`) for particle-particle.
 
-### Stage 14 — Specialty shapes + GPU GJK
+### Stage 13 — Specialty shapes + GPU GJK
 
 **Goal**: catch up on geometry breadth.
 
@@ -1696,7 +1707,7 @@ Deliverables:
 - MPR fallback for deep penetration (alternative to EPA).
 - GPU port of GJK + EPA + BVH (LBVH parallel construction).
 
-### Stage 15+ — Differentiability, advanced solvers, Python bindings
+### Stage 14+ — Differentiability, advanced solvers, Python bindings
 
 Manual adjoints for XPBD; tape-style autograd for Featherstone.
 MuJoCo solver wrapper as a validation oracle. VBD / Style3D / MPM
