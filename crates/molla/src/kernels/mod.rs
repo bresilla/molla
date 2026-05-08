@@ -2,6 +2,10 @@
 
 #[cfg(feature = "gpu")]
 mod integrate_bodies;
+#[cfg(feature = "gpu")]
+mod xpbd;
 
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
+#[cfg(feature = "gpu")]
+pub use xpbd::XpbdKernel;

@@ -22,32 +22,91 @@ use crate::sim::{BodyFlags, Contacts, Control, Model, State};
 
 use super::Solver;
 
+/// Backend selector for [`XpbdSolver`].
+#[allow(clippy::large_enum_variant, reason = "GPU variant holds Arcs / kernel; one solver instance, fine")]
+pub enum XpbdBackend {
+    Cpu,
+    /// GPU dispatch via wgpu. Built once for a fixed `body_count`;
+    /// rebuild the solver if the model changes.
+    #[cfg(feature = "gpu")]
+    Gpu(GpuBackend),
+}
+
+#[cfg(feature = "gpu")]
+pub struct GpuBackend {
+    pub(crate) device: std::sync::Arc<wgpu::Device>,
+    pub(crate) queue: std::sync::Arc<wgpu::Queue>,
+    pub(crate) kernel: crate::kernels::XpbdKernel,
+}
+
 /// Position-based dynamics solver.
-#[derive(Debug, Clone)]
 pub struct XpbdSolver {
     /// Position-projection iterations per step. Multiple iterations
     /// help when many contacts share a body (e.g. a stack).
     pub position_iterations: usize,
+    backend: XpbdBackend,
 }
 
 impl Default for XpbdSolver {
     fn default() -> Self {
-        Self {
-            position_iterations: 4,
-        }
+        Self::new_cpu()
     }
 }
 
 impl XpbdSolver {
+    /// CPU backend (used by tests + as a fallback). The molla project
+    /// is GPU-first — prefer [`Self::new_gpu`] for any user-facing
+    /// scene.
+    #[must_use]
+    pub fn new_cpu() -> Self {
+        Self {
+            position_iterations: 4,
+            backend: XpbdBackend::Cpu,
+        }
+    }
+
+    /// Backwards-compat shim. Same as [`Self::new_cpu`].
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::new_cpu()
+    }
+
+    /// GPU backend. The kernel is built for `body_count` bodies; if
+    /// the model later grows, rebuild the solver. Uploads are done by
+    /// the caller (`Model::upload_to_device`, etc.).
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu(engine: &crate::compute::Engine, body_count: u32) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
+            .clone();
+        let kernel = crate::kernels::XpbdKernel::new(&device, body_count);
+        Ok(Self {
+            position_iterations: 4,
+            backend: XpbdBackend::Gpu(GpuBackend { device, queue, kernel }),
+        })
     }
 
     #[must_use]
     pub fn with_iterations(mut self, n: usize) -> Self {
         self.position_iterations = n;
         self
+    }
+
+    #[must_use]
+    pub fn is_gpu(&self) -> bool {
+        #[cfg(feature = "gpu")]
+        {
+            matches!(self.backend, XpbdBackend::Gpu(_))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            false
+        }
     }
 }
 
@@ -72,8 +131,38 @@ impl Solver for XpbdSolver {
             )));
         }
 
-        let n = model.body_count;
-        let q_in = state_in.body_q.host()?;
+        match &mut self.backend {
+            XpbdBackend::Cpu => cpu_step(model, state_in, control, contacts, dt, state_out, self.position_iterations),
+            #[cfg(feature = "gpu")]
+            XpbdBackend::Gpu(gpu) => {
+                let GpuBackend { device, queue, kernel } = gpu;
+                kernel.dispatch(
+                    device,
+                    queue,
+                    model,
+                    state_in,
+                    control,
+                    contacts,
+                    self.position_iterations,
+                    dt,
+                    state_out,
+                )
+            }
+        }
+    }
+}
+
+fn cpu_step(
+    model: &Model,
+    state_in: &State,
+    control: &Control,
+    contacts: &Contacts,
+    dt: Real,
+    state_out: &mut State,
+    position_iterations: usize,
+) -> Result<()> {
+    let n = model.body_count;
+    let q_in = state_in.body_q.host()?;
         let qd_in = state_in.body_qd.host()?;
         let f_in = state_in.body_f.host()?;
         let inv_mass = model.body_inv_mass.host()?;
@@ -113,22 +202,31 @@ impl Solver for XpbdSolver {
         }
 
         // ── 2. Position projection ────────────────────────────────
+        // We recompute the *current* penetration each iteration as
+        //   d_now = d_initial + (Δq_a - Δq_b) · n_ab
+        // where Δq_x is each body's accumulated displacement away
+        // from the input pose. This corrects two issues:
+        //   * The contact's `depth` was measured at `state_in`,
+        //     but the predict step moves bodies further into the
+        //     contact — we need to resolve the larger penetration.
+        //   * For bodies in multiple contacts, earlier corrections
+        //     in the same iteration affect the accuracy of later
+        //     ones; reading current displacement keeps the constraint
+        //     truthful as the loop walks.
         let n_contacts = contacts.count as usize;
+        let q_in_pos: Vec<Vec3> = q_in.iter().map(|t| t.position).collect();
         if n_contacts > 0 {
             let a_idx = contacts.a_index.host()?;
             let b_idx = contacts.b_index.host()?;
             let normal = contacts.normal.host()?;
             let depth = contacts.depth.host()?;
 
-            for _ in 0..self.position_iterations {
+            for _ in 0..position_iterations {
                 for c in 0..n_contacts {
                     let a = a_idx[c] as usize;
                     let b = b_idx[c] as usize;
                     let n_ab = normal[c]; // points a → b
-                    let d_target = depth[c];
-                    if d_target <= 0.0 {
-                        continue;
-                    }
+                    let initial = depth[c];
 
                     let (w_a, w_b, kin_a, kin_b) = inv_masses(flags, inv_mass, a, b);
                     let w_sum = w_a + w_b;
@@ -136,13 +234,25 @@ impl Solver for XpbdSolver {
                         continue;
                     }
 
-                    // λ = depth / w_sum (signed-correction magnitude
-                    // per unit inverse mass). Distribute across the
-                    // requested iteration count so we don't over-shoot
-                    // when a body is in multiple contacts.
-                    let lambda = (d_target / self.position_iterations as Real) / w_sum;
+                    let delta_a = if kin_a {
+                        Vec3::ZERO
+                    } else {
+                        q_pred[a].position - q_in_pos[a]
+                    };
+                    let delta_b = if kin_b || b >= q_pred.len() {
+                        Vec3::ZERO
+                    } else {
+                        q_pred[b].position - q_in_pos[b]
+                    };
 
-                    // Push a along -normal (away from b), b along +normal.
+                    // a moving along +n_ab is moving toward b → depth grows.
+                    let current = initial + (delta_a - delta_b).dot(n_ab);
+                    if current <= 0.0 {
+                        continue;
+                    }
+
+                    let lambda = current / w_sum;
+                    // Push a along -n_ab (away from b), b along +n_ab.
                     if !kin_a {
                         q_pred[a].position -= n_ab * (lambda * w_a);
                     }
@@ -276,7 +386,6 @@ impl Solver for XpbdSolver {
             *f = SpatialVector::ZERO;
         }
         Ok(())
-    }
 }
 
 fn inv_masses(

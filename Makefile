@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r test t test-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -39,6 +39,14 @@ RELEASE_FLAG := $(if $(RELEASE),--release,)
 BIN := molla_viewer
 run:
 	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -p $(BIN) -- $(ARGS)
+
+# Run with Tracy instrumentation. Build with `make run-profile RELEASE=1`,
+# then in another terminal launch the Tracy GUI (`nix-shell -p tracy &&
+# tracy` or download from https://github.com/wolfpld/tracy/releases) and
+# click "Connect". Every Bevy schedule + system + render pass appears
+# on the timeline.
+run-profile:
+	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -p $(BIN) --features profile -- $(ARGS)
 
 r: run
 
@@ -80,6 +88,7 @@ help:
 	@echo "  build        Build the workspace (all targets)"
 	@echo "  compile      Clean and rebuild"
 	@echo "  run          Launch molla_viewer (RELEASE=1 recommended; BIN=name overrides)"
+	@echo "  run-profile  Launch with Tracy instrumentation; connect Tracy GUI separately"
 	@echo "  test         Run the test suite"
 	@echo "  test-gpu     Run GPU-only tests via nixVulkan (CPU/GPU parity, etc.)"
 	@echo "  bench-cpu    cargo bench the CPU integrator"

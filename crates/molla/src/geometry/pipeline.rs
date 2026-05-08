@@ -107,6 +107,87 @@ fn push_contacts_into(
     }
 
     contacts.count = n as u32;
+
+    // Build the per-body CSR that the GPU XPBD solver consumes.
+    // Two passes: count, then scatter.
+    build_body_contact_csr(contacts, model)?;
+    Ok(())
+}
+
+fn build_body_contact_csr(contacts: &mut Contacts, model: &Model) -> Result<()> {
+    let body_count = model.body_count;
+    let n = contacts.count as usize;
+
+    // Count per-body contact participation. Skip STATIC_BODY peers —
+    // there's no body slot to update.
+    let mut counts = vec![0u32; body_count];
+    {
+        let a = contacts.a_index.host()?;
+        let b = contacts.b_index.host()?;
+        for c in 0..n {
+            let ai = a[c];
+            let bi = b[c];
+            if ai != STATIC_BODY && (ai as usize) < body_count {
+                counts[ai as usize] += 1;
+            }
+            if bi != STATIC_BODY && (bi as usize) < body_count {
+                counts[bi as usize] += 1;
+            }
+        }
+    }
+
+    // Prefix-sum into offsets [body_count + 1].
+    let mut offsets = Vec::with_capacity(body_count + 1);
+    offsets.push(0u32);
+    let mut acc = 0u32;
+    for &c in &counts {
+        acc += c;
+        offsets.push(acc);
+    }
+    let total = acc as usize;
+
+    // Scatter — use a per-body cursor to fill `indices`.
+    let mut indices = vec![0u32; total];
+    let mut cursor = vec![0u32; body_count];
+    {
+        let a = contacts.a_index.host()?;
+        let b = contacts.b_index.host()?;
+        for c in 0..n {
+            let ai = a[c];
+            let bi = b[c];
+            let c32 = c as u32;
+            if ai != STATIC_BODY && (ai as usize) < body_count {
+                let ix = offsets[ai as usize] + cursor[ai as usize];
+                indices[ix as usize] = c32; // top bit clear → a-side
+                cursor[ai as usize] += 1;
+            }
+            if bi != STATIC_BODY && (bi as usize) < body_count {
+                let ix = offsets[bi as usize] + cursor[bi as usize];
+                indices[ix as usize] = c32 | Contacts::B_SIDE_BIT;
+                cursor[bi as usize] += 1;
+            }
+        }
+    }
+
+    // Resize buffers if needed and write.
+    let need_offsets = body_count + 1;
+    if contacts.body_contact_offsets.len() != need_offsets {
+        contacts.body_contact_offsets =
+            Buffer::from_vec(offsets, BufferUsage::StorageReadWrite);
+    } else {
+        contacts.body_contact_offsets.host_mut()?.copy_from_slice(&offsets);
+    }
+    if contacts.body_contact_indices.len() < total.max(1) {
+        // Round up so we don't reallocate every frame on minor jitter.
+        let cap = total.max(1).next_power_of_two();
+        let mut buf = vec![0u32; cap];
+        buf[..total].copy_from_slice(&indices);
+        contacts.body_contact_indices = Buffer::from_vec(buf, BufferUsage::StorageReadWrite);
+    } else {
+        let dst = contacts.body_contact_indices.host_mut()?;
+        dst[..total].copy_from_slice(&indices);
+    }
+
     Ok(())
 }
 

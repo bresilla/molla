@@ -22,15 +22,22 @@
 //!   * R       reset poses to the initial drop
 //!   * Esc     quit
 
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::diagnostic::{
+    DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
+};
+#[cfg(any(feature = "profile", feature = "log_diag"))]
+use bevy::diagnostic::LogDiagnosticsPlugin;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
+#[cfg(not(feature = "profile"))]
+use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
 use bevy_frost::prelude::*;
 use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
+use molla::compute::Engine;
 use molla::geometry::{collide, ShapePair};
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
@@ -54,8 +61,8 @@ const PANE_ID: &str = "molla_panel";
 
 fn main() {
     let geometry = WindowGeometry::load("molla_viewer");
-    App::new()
-        .add_plugins(
+    let mut app = App::new();
+    app.add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(geometry.to_window("molla viewer")),
@@ -69,6 +76,27 @@ fn main() {
         )
         .add_plugins(EguiPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(EntityCountDiagnosticsPlugin::default());
+    // RenderDiagnosticsPlugin is auto-added by Bevy when the `trace`
+    // feature is on (i.e. our `profile` feature). Add it ourselves
+    // only when profiling is OFF.
+    #[cfg(not(feature = "profile"))]
+    app.add_plugins(RenderDiagnosticsPlugin);
+    // Stdout diagnostics — enabled by either `profile` or `log_diag`.
+    // Filter to fps + frame_time so the periodic log call doesn't
+    // itself become a frame stall.
+    #[cfg(any(feature = "profile", feature = "log_diag"))]
+    {
+        let mut filter = bevy::platform::collections::HashSet::default();
+        filter.insert(FrameTimeDiagnosticsPlugin::FPS.clone());
+        filter.insert(FrameTimeDiagnosticsPlugin::FRAME_TIME.clone());
+        app.add_plugins(LogDiagnosticsPlugin {
+            debug: false,
+            wait_duration: std::time::Duration::from_secs(1),
+            filter: Some(filter),
+        });
+    }
+    app
         .add_plugins(FrostPlugin)
         .add_plugins(
             GlacialPlugins
@@ -103,16 +131,18 @@ struct SimRunState {
     step_once: bool,
 }
 
-/// Per-frame physics timing.
+/// Per-frame physics timing. Each EMA in microseconds.
 #[derive(Resource, Default)]
 struct SimStats {
     smoothed_step_us: f64,
     smoothed_solve_us: f64,
     smoothed_collide_us: f64,
+    smoothed_download_us: f64,
     last_contacts: u32,
 }
 
-/// Owns the molla simulation.
+/// Owns the molla simulation. **GPU-first** per the project rule —
+/// `Engine::new_gpu()` is hard-required at startup, no CPU fallback.
 #[derive(Resource)]
 struct Sim {
     model: mp::Model,
@@ -122,6 +152,8 @@ struct Sim {
     contacts: mp::Contacts,
     solver: mp::XpbdSolver,
     pair_buf: Vec<ShapePair>,
+    engine: Engine,
+    adapter_label: String,
 }
 
 impl Sim {
@@ -149,23 +181,44 @@ impl Sim {
             }
         }
 
-        // Static ground plane at y = 0 with +Y normal — real
-        // collision shape, not a viewer-side post-step clamp.
         b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
             .expect("plane shape");
 
         let mut model = b.build().expect("model");
-        // Tune the global contact material so the demo doesn't look
-        // like a mausoleum (perfect inelasticity) or a bouncy castle.
         model.default_friction = PLANE_FRICTION;
         model.default_restitution = PLANE_RESTITUTION;
         model.contact_margin = 0.02;
 
-        let state_a = model.state().expect("state");
-        let state_b = model.state().expect("state");
-        let control = model.control();
-        let contacts = mp::Contacts::with_capacity(2048);
-        let solver = mp::XpbdSolver::new().with_iterations(4);
+        let mut state_a = model.state().expect("state");
+        let mut state_b = model.state().expect("state");
+        let mut control = model.control();
+        let mut contacts = mp::Contacts::with_capacity(8192);
+
+        // GPU-first: bring up wgpu and bind the XPBD GPU solver. We
+        // hard-fail if there's no adapter rather than silently
+        // falling back to CPU.
+        let engine = Engine::new_gpu().expect(
+            "molla viewer is GPU-first; wgpu adapter required. \
+             Run via `make run RELEASE=1` (nixVulkan-wrapped).",
+        );
+        let adapter_label = engine
+            .adapter_info()
+            .map(|i| format!("{} ({})", i.name, i.backend))
+            .unwrap_or_else(|| "unknown".into());
+        let device = engine.device().unwrap().clone();
+        let queue = engine.queue().unwrap().clone();
+
+        // One-time uploads of model + initial state + control. The
+        // step loop re-uploads contacts + state_a each substep.
+        model.upload_to_device(&device, &queue).expect("model upload");
+        state_a.upload_to_device(&device, &queue).expect("state_a upload");
+        state_b.upload_to_device(&device, &queue).expect("state_b upload");
+        control.upload_to_device(&device, &queue).expect("control upload");
+        contacts.upload_to_device(&device, &queue).expect("contacts upload");
+
+        let solver = mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
+            .expect("XPBD GPU solver init")
+            .with_iterations(4);
 
         Self {
             model,
@@ -174,7 +227,9 @@ impl Sim {
             control,
             contacts,
             solver,
-            pair_buf: Vec::with_capacity(8192),
+            pair_buf: Vec::with_capacity(16384),
+            engine,
+            adapter_label,
         }
     }
 
@@ -185,6 +240,14 @@ impl Sim {
             .host()
             .expect("initial poses")
             .to_vec();
+
+        let device = self.engine.device().unwrap().clone();
+        let queue = self.engine.queue().unwrap().clone();
+        // Host may be stale after a GPU step — pull fresh data first
+        // so host_mut doesn't trip the DeviceDirty guard.
+        let _ = self.state_a.download_from_device(&device, &queue);
+        let _ = self.state_b.download_from_device(&device, &queue);
+
         self.state_a
             .body_q
             .host_mut()
@@ -193,6 +256,8 @@ impl Sim {
         for v in self.state_a.body_qd.host_mut().expect("body_qd") {
             *v = mp::SpatialVector::ZERO;
         }
+        let _ = self.state_a.upload_to_device(&device, &queue);
+        let _ = self.state_b.upload_to_device(&device, &queue);
     }
 }
 
@@ -331,6 +396,9 @@ fn step_simulation(
     run.step_once = false;
     let frame_start = std::time::Instant::now();
 
+    let device = sim.engine.device().unwrap().clone();
+    let queue = sim.engine.queue().unwrap().clone();
+
     let Sim {
         model,
         state_a,
@@ -339,19 +407,36 @@ fn step_simulation(
         contacts,
         solver,
         pair_buf,
+        ..
     } = &mut *sim;
 
     let mut total_collide_us = 0.0_f64;
+    let mut total_download_us = 0.0_f64;
     let solve_start = std::time::Instant::now();
     for _ in 0..SUBSTEPS_PER_FRAME {
+        // Collide on host using the freshest body poses (downloaded
+        // at the end of the previous substep, or set up by the
+        // initial state for the very first substep).
         let c0 = std::time::Instant::now();
         collide(model, state_a, contacts, pair_buf).expect("collide");
+        contacts.upload_to_device(&device, &queue).expect("contacts upload");
         total_collide_us += c0.elapsed().as_secs_f64() * 1_000_000.0;
+
+        // Push host-mutated state up to the device before dispatch.
+        let _ = state_a.body_q.upload(&queue);
+        let _ = state_a.body_qd.upload(&queue);
 
         solver
             .step(model, state_a, control, contacts, FIXED_DT, state_b)
             .expect("solver step");
         std::mem::swap(state_a, state_b);
+
+        // Pull the new state back so the next substep's collide and
+        // sync_transforms see real numbers.
+        let d0 = std::time::Instant::now();
+        let _ = state_a.body_q.download(&device, &queue);
+        let _ = state_a.body_qd.download(&device, &queue);
+        total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
     }
     let solve_us = solve_start.elapsed().as_secs_f64() * 1_000_000.0;
     let total_us = frame_start.elapsed().as_secs_f64() * 1_000_000.0;
@@ -359,6 +444,7 @@ fn step_simulation(
     stats.smoothed_step_us = 0.9 * stats.smoothed_step_us + 0.1 * total_us;
     stats.smoothed_solve_us = 0.9 * stats.smoothed_solve_us + 0.1 * solve_us;
     stats.smoothed_collide_us = 0.9 * stats.smoothed_collide_us + 0.1 * total_collide_us;
+    stats.smoothed_download_us = 0.9 * stats.smoothed_download_us + 0.1 * total_download_us;
     stats.last_contacts = contacts.count;
 }
 
@@ -411,15 +497,15 @@ fn control_pane(
             );
             ui.separator();
 
-            // Per-frame physics timing — collide + XPBD step are
-            // separated so you can see what dominates.
             readout(ui, "Phys total", &format!("{:>4.0} µs", stats.smoothed_step_us));
-            readout(ui, "  · collide", &format!("{:>4.0} µs", stats.smoothed_collide_us));
-            readout(ui, "  · solve",   &format!("{:>4.0} µs", stats.smoothed_solve_us));
+            readout(ui, "  · collide",  &format!("{:>4.0} µs", stats.smoothed_collide_us));
+            readout(ui, "  · dispatch", &format!("{:>4.0} µs", stats.smoothed_solve_us));
+            readout(ui, "  · download", &format!("{:>4.0} µs", stats.smoothed_download_us));
             readout(ui, "Contacts", &format!("{}", stats.last_contacts));
             ui.separator();
 
-            readout(ui, "Solver", "XPBD-CPU");
+            readout(ui, "Solver", "XPBD-GPU");
+            readout(ui, "Adapter", &sim.adapter_label);
             readout(ui, "Friction", &format!("{PLANE_FRICTION:.2}"));
             readout(ui, "Restitution", &format!("{PLANE_RESTITUTION:.2}"));
             ui.separator();

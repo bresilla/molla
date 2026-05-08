@@ -10,6 +10,22 @@ description = "Bevy-based interactive viewer for molla physics scenes."
 [lints]
 workspace = true
 
+[features]
+default = []
+# Build with Tracy instrumentation. Every Bevy system, render pass,
+# and our own scopes emit timeline events to the Tracy server. Run
+# with `make run-profile RELEASE=1`, then point a `tracy` GUI at the
+# process to see what's eating frame time.
+#
+# NOTE: when `profile` is on but no Tracy client is connected, the
+# trace buffer grows without bound and causes huge frame stalls.
+# Connect a `tracy` GUI immediately after launch, or use `log_diag`
+# instead.
+profile = ["bevy/trace_tracy"]
+# Print every diagnostic to stdout each second. No Tracy, no memory
+# growth — just text-mode perf data on stderr.
+log_diag = []
+
 [dependencies]
 # molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the
 # viewer can step on either CPU or GPU based on the user's UI toggle.

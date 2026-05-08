@@ -90,6 +90,12 @@
             # output against the reference renderer when an asset doesn't
             # render the way the author intended.
             pkgs.openusd
+
+            # Tracy — frame-by-frame profiler for the viewer. Run
+            # `tracy` (or `tracy-profiler`) and connect to a viewer
+            # built via `make run-profile RELEASE=1` to see every
+            # Bevy system / render pass / our scopes on a timeline.
+            pkgs.tracy
           ] ++ bevyLibs;
 
           RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";

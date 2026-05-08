@@ -55,6 +55,76 @@ fn sphere_settles_on_plane() {
 }
 
 #[test]
+fn stack_settles_without_growing() {
+    // Stack four spheres above a plane — exercises sphere-sphere
+    // *and* sphere-plane contacts on the same body. The bug this
+    // test catches: under-corrected position projection leaving
+    // residual penetration each frame, which an XPBD velocity
+    // projection then converts into spurious upward velocity →
+    // the stack bounces ever higher instead of settling.
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.0);
+
+    for i in 0..4 {
+        let body = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.5))
+                .with_position(Vec3::new(0.0, 5.0 + i as f64 * 1.05, 0.0)),
+        );
+        b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
+    }
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
+
+    let mut model = b.build().unwrap();
+    model.default_restitution = 0.3;
+    model.default_friction = 0.5;
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let mut contacts = Contacts::with_capacity(64);
+    let mut pair_buf = Vec::new();
+    let mut solver = XpbdSolver::new().with_iterations(8);
+
+    // Track the high-water mark of the topmost sphere across the
+    // simulation. If the bug is back, this peak grows over time.
+    let mut max_top_y_after_start = 0.0_f64;
+    let warmup_steps = 200;
+    for step in 0..1500 {
+        collide(&model, &s_a, &mut contacts, &mut pair_buf).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, 0.005, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+        if step > warmup_steps {
+            let q = s_a.body_q.host().unwrap();
+            let top_y = q[3].position.y;
+            if top_y > max_top_y_after_start {
+                max_top_y_after_start = top_y;
+            }
+        }
+    }
+
+    // Initial top sphere centre at y = 5 + 3*1.05 = 8.15. After
+    // settle it should sit at ~3.5 (4 stacked spheres of radius 0.5,
+    // bottom at 0.5). It must never exceed the initial drop height.
+    assert!(
+        max_top_y_after_start < 8.5,
+        "stack bouncing higher than start: peak top y = {max_top_y_after_start}",
+    );
+
+    let q = s_a.body_q.host().unwrap();
+    let qd = s_a.body_qd.host().unwrap();
+    let top_v = qd[3].linear.length();
+    assert!(top_v < 0.5, "top sphere still moving fast: |v| = {top_v}");
+    eprintln!(
+        "stack settled: bottom y={:.3} top y={:.3} peak top y={:.3}",
+        q[0].position.y, q[3].position.y, max_top_y_after_start
+    );
+}
+
+#[test]
 fn two_spheres_dont_overlap() {
     // Two spheres dropped side-by-side; check they don't penetrate.
     let mut b = ModelBuilder::new();
