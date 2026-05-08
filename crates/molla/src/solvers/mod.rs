@@ -1,7 +1,8 @@
 //! Time-integration solvers.
-//!
-//! Stage 0 ships only the [`Solver`] trait. Concrete solvers (`semi_implicit`,
-//! `featherstone`, `xpbd`) arrive in stages 1, 3, and 4 respectively.
+
+mod semi_implicit;
+
+pub use semi_implicit::SemiImplicitSolver;
 
 use crate::core::Result;
 use crate::math::Real;

@@ -25,4 +25,18 @@ impl Control {
             body_external_f: Buffer::from_vec(Vec::new(), Storage),
         }
     }
+
+    /// Allocate a zero-initialised control set sized for `model`.
+    #[must_use]
+    pub fn for_model(model: &super::Model) -> Self {
+        use crate::storage::BufferUsage::Storage;
+        Self {
+            joint_target: Buffer::from_vec(Vec::new(), Storage),
+            joint_force: Buffer::from_vec(Vec::new(), Storage),
+            body_external_f: Buffer::from_vec(
+                vec![SpatialVector::ZERO; model.body_count],
+                Storage,
+            ),
+        }
+    }
 }

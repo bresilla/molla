@@ -1,13 +1,11 @@
 //! `Model` — static, immutable simulation description.
-//!
-//! Stage 0: field declarations only. Field access patterns and the
-//! `ModelBuilder::build` path are stage 1.
 
+use crate::core::Result;
 use crate::math::{Mat3, Real, Transform, Vec3};
-use crate::storage::Buffer;
+use crate::storage::{Buffer, BufferUsage};
 
 /// Static description of a simulation. Built once from a `ModelBuilder`
-/// (added in stage 1) and shared across many [`State`](super::State) instances.
+/// and shared across many [`State`](super::State) instances.
 #[derive(Debug)]
 pub struct Model {
     // ── Particles ───────────────────────────────────────────────────
@@ -19,7 +17,7 @@ pub struct Model {
     pub particle_inv_mass: Buffer<Real>,
     /// Per-particle radius (m).
     pub particle_radius: Buffer<Real>,
-    /// Per-particle bitflags (see `ParticleFlags` — added in stage 4).
+    /// Per-particle bitflags (see [`super::ParticleFlags`]).
     pub particle_flags: Buffer<u32>,
     /// Per-particle world index (-1 = global).
     pub particle_world: Buffer<i32>,
@@ -37,10 +35,13 @@ pub struct Model {
     pub body_inv_inertia: Buffer<Mat3>,
     /// Per-body centre of mass in body frame (m).
     pub body_com: Buffer<Vec3>,
-    /// Per-body bitflags (see `BodyFlags` — added in stage 1).
+    /// Per-body bitflags (see [`super::BodyFlags`]).
     pub body_flags: Buffer<u32>,
     /// Per-body world index.
     pub body_world: Buffer<i32>,
+    /// Initial body pose snapshotted at build time. [`super::State::for_model`]
+    /// copies this into the working state.
+    pub initial_body_q: Buffer<Transform>,
 
     // ── Shapes ──────────────────────────────────────────────────────
     /// Number of collision shapes.
@@ -49,10 +50,12 @@ pub struct Model {
     pub shape_body: Buffer<i32>,
     /// Shape transform in owning body frame.
     pub shape_transform: Buffer<Transform>,
+    /// Per-shape geometry tags (sphere radius, etc). Stage 4 expands this.
+    pub shape_geometry: Vec<super::ShapeGeometry>,
     /// Per-shape bitflags.
     pub shape_flags: Buffer<u32>,
 
-    // ── Joints ──────────────────────────────────────────────────────
+    // ── Joints (placeholder until stage 3) ──────────────────────────
     /// Number of joints.
     pub joint_count: usize,
     /// Per-joint parent body index (-1 = world).
@@ -69,46 +72,67 @@ pub struct Model {
     pub world_count: usize,
     /// Per-world gravity vector (m/s²).
     pub gravity: Buffer<Vec3>,
+
+    // ── Global solver knobs ─────────────────────────────────────────
+    /// Angular damping coefficient applied each step (1/s).
+    pub angular_damping: Real,
+    /// Velocity cap applied to particles (m/s) for stability.
+    pub particle_velocity_max: Real,
 }
 
 impl Model {
     /// An empty model: zero particles, zero bodies, zero shapes, one
-    /// world with standard gravity. Used as a sentinel and as the seed
-    /// for ad-hoc construction in tests.
+    /// world with standard gravity.
     #[must_use]
     pub fn empty() -> Self {
-        use crate::storage::BufferUsage::Storage;
+        let s = BufferUsage::Storage;
         Self {
             particle_count: 0,
-            particle_mass: Buffer::from_vec(Vec::new(), Storage),
-            particle_inv_mass: Buffer::from_vec(Vec::new(), Storage),
-            particle_radius: Buffer::from_vec(Vec::new(), Storage),
-            particle_flags: Buffer::from_vec(Vec::new(), Storage),
-            particle_world: Buffer::from_vec(Vec::new(), Storage),
+            particle_mass: Buffer::from_vec(Vec::new(), s),
+            particle_inv_mass: Buffer::from_vec(Vec::new(), s),
+            particle_radius: Buffer::from_vec(Vec::new(), s),
+            particle_flags: Buffer::from_vec(Vec::new(), s),
+            particle_world: Buffer::from_vec(Vec::new(), s),
 
             body_count: 0,
-            body_mass: Buffer::from_vec(Vec::new(), Storage),
-            body_inv_mass: Buffer::from_vec(Vec::new(), Storage),
-            body_inertia: Buffer::from_vec(Vec::new(), Storage),
-            body_inv_inertia: Buffer::from_vec(Vec::new(), Storage),
-            body_com: Buffer::from_vec(Vec::new(), Storage),
-            body_flags: Buffer::from_vec(Vec::new(), Storage),
-            body_world: Buffer::from_vec(Vec::new(), Storage),
+            body_mass: Buffer::from_vec(Vec::new(), s),
+            body_inv_mass: Buffer::from_vec(Vec::new(), s),
+            body_inertia: Buffer::from_vec(Vec::new(), s),
+            body_inv_inertia: Buffer::from_vec(Vec::new(), s),
+            body_com: Buffer::from_vec(Vec::new(), s),
+            body_flags: Buffer::from_vec(Vec::new(), s),
+            body_world: Buffer::from_vec(Vec::new(), s),
+            initial_body_q: Buffer::from_vec(Vec::new(), s),
 
             shape_count: 0,
-            shape_body: Buffer::from_vec(Vec::new(), Storage),
-            shape_transform: Buffer::from_vec(Vec::new(), Storage),
-            shape_flags: Buffer::from_vec(Vec::new(), Storage),
+            shape_body: Buffer::from_vec(Vec::new(), s),
+            shape_transform: Buffer::from_vec(Vec::new(), s),
+            shape_geometry: Vec::new(),
+            shape_flags: Buffer::from_vec(Vec::new(), s),
 
             joint_count: 0,
-            joint_parent: Buffer::from_vec(Vec::new(), Storage),
-            joint_child: Buffer::from_vec(Vec::new(), Storage),
-            joint_x_p: Buffer::from_vec(Vec::new(), Storage),
-            joint_x_c: Buffer::from_vec(Vec::new(), Storage),
+            joint_parent: Buffer::from_vec(Vec::new(), s),
+            joint_child: Buffer::from_vec(Vec::new(), s),
+            joint_x_p: Buffer::from_vec(Vec::new(), s),
+            joint_x_c: Buffer::from_vec(Vec::new(), s),
 
             world_count: 1,
-            gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], Storage),
+            gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
+
+            angular_damping: 0.0,
+            particle_velocity_max: 1.0e6,
         }
+    }
+
+    /// Allocate a fresh [`super::State`] sized for this model.
+    pub fn state(&self) -> Result<super::State> {
+        super::State::for_model(self)
+    }
+
+    /// Allocate a fresh [`super::Control`] sized for this model.
+    #[must_use]
+    pub fn control(&self) -> super::Control {
+        super::Control::for_model(self)
     }
 }
 
