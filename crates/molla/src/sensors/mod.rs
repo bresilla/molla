@@ -16,7 +16,11 @@
 //! - `frame_transform` — pose tracking with optional smoothing (TODO).
 
 #[cfg(feature = "gpu")]
+pub mod imu;
+#[cfg(feature = "gpu")]
 pub mod raycast;
 
+#[cfg(feature = "gpu")]
+pub use imu::{ImuMount, ImuReading, ImuSensor};
 #[cfg(feature = "gpu")]
 pub use raycast::{RayHit, Raycaster};

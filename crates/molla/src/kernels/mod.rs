@@ -3,6 +3,8 @@
 #[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
+mod imu;
+#[cfg(feature = "gpu")]
 mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod raycast;
@@ -11,6 +13,8 @@ mod xpbd;
 
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
+#[cfg(feature = "gpu")]
+pub use imu::ImuKernel;
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]

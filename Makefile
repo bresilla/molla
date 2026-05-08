@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -70,6 +70,9 @@ test-xpbd-gpu:
 
 test-raycast-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test sensor_raycast_gpu -- --ignored
+
+test-imu-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test sensor_imu_gpu -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored

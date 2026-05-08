@@ -41,6 +41,10 @@ use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
 use bevy_frost::prelude::*;
+use bevy_frost::ribbon::{
+    draw_assembly, find_item, RibbonCluster, RibbonDef, RibbonDrag, RibbonEdge, RibbonGlyph,
+    RibbonItem, RibbonMode, RibbonOpen, RibbonPlacement, RibbonRole,
+};
 use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
@@ -48,7 +52,7 @@ use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
-use molla::sensors::{RayHit, Raycaster};
+use molla::sensors::{ImuMount, ImuReading, ImuSensor, RayHit, Raycaster};
 use molla::solvers::Solver as _;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,7 +74,66 @@ const PLANE_FRICTION: f64 = 0.9;
 /// forever and cubes hit by impulses skid off into the distance.
 const LINEAR_DAMPING: f64 = 0.30;
 
-const PANE_ID: &str = "molla_panel";
+// ── Ribbon / pane identifiers ────────────────────────────────────
+// Each `Pane2::new(...)` takes a unique id; ribbons reference the
+// same ids so clicking a ribbon button toggles the matching pane.
+const PANE_MAIN: &str = "molla_main";
+/// Single right-rail pane id. Its title and body change per scene
+/// (`Lidar` shows lidar config; `IMU` shows live readings; etc.) but
+/// it's the SAME pane / ribbon button — never two on the same rail.
+const PANE_SCENE: &str = "molla_scene";
+
+const RIBBON_LEFT: &str = "molla_ribbon_left";
+const RIBBON_RIGHT: &str = "molla_ribbon_right";
+
+/// Static description of the ribbon rails. molla currently uses two
+/// — left for the always-present global pane, right for per-scene
+/// settings (Lidar today; future sensors / actuators will register
+/// more items here).
+const RIBBONS: &[RibbonDef] = &[
+    RibbonDef {
+        id: RIBBON_LEFT,
+        edge: RibbonEdge::Left,
+        role: RibbonRole::Panel,
+        mode: RibbonMode::ThreeSided,
+        draggable: false,
+        accepts: &[RIBBON_RIGHT],
+    },
+    RibbonDef {
+        id: RIBBON_RIGHT,
+        edge: RibbonEdge::Right,
+        role: RibbonRole::Panel,
+        mode: RibbonMode::ThreeSided,
+        draggable: false,
+        accepts: &[RIBBON_LEFT],
+    },
+];
+
+/// Ribbon items map a pane id → ribbon edge / cluster / icon. Adding
+/// a new pane is one entry here + one `if is_open(id) { Pane2::new(...).show() }`
+/// arm in `control_pane`.
+const RIBBON_ITEMS: &[RibbonItem] = &[
+    RibbonItem {
+        id: PANE_MAIN,
+        ribbon: RIBBON_LEFT,
+        cluster: RibbonCluster::Start,
+        slot: 0,
+        glyph: RibbonGlyph::Icon("apps"),
+        tooltip: "molla controls",
+        child_ribbon: None,
+        role: None,
+    },
+    RibbonItem {
+        id: PANE_SCENE,
+        ribbon: RIBBON_RIGHT,
+        cluster: RibbonCluster::Start,
+        slot: 0,
+        glyph: RibbonGlyph::Icon("settings"),
+        tooltip: "Per-example settings (changes with the active scene)",
+        child_ribbon: None,
+        role: None,
+    },
+];
 
 // --- Mouse grab tuning ---------------------------------------------
 // Velocity-based pick: each frame we set the picked body's linear
@@ -204,6 +267,23 @@ fn main() {
         .insert_resource(WireframeOn(false))
         .insert_resource(LidarConfig::default())
         .insert_resource(LidarState::default())
+        .insert_resource(ImuExampleState::default())
+        // Ribbon state — open the main control pane on startup so
+        // the user sees something immediately. Other panes (lidar)
+        // start closed and are toggled via the right-rail button.
+        .insert_resource({
+            let mut o = RibbonOpen::default();
+            o.set(RIBBON_LEFT, PANE_MAIN);
+            // The right rail has a single pane whose body changes
+            // per scene. Pre-open it so the moment the user picks
+            // Lidar or IMU the settings are visible — for scenes
+            // with no per-example settings the ribbon button is
+            // disabled and the pane simply doesn't render.
+            o.set(RIBBON_RIGHT, PANE_SCENE);
+            o
+        })
+        .init_resource::<RibbonPlacement>()
+        .init_resource::<RibbonDrag>()
         .insert_resource(WireframeConfig {
             // Always false — we don't want a *global* wireframe (would
             // catch bevy_glacial's ground grid mesh). We tag individual
@@ -226,6 +306,7 @@ fn main() {
                 sync_transforms,
                 sync_cloth_mesh,
                 update_lidar,
+                update_imu_example,
                 update_activity_colors,
                 apply_wireframe,
                 draw_grab_gizmo,
@@ -293,6 +374,10 @@ enum Scene {
     /// `Raycaster`, hits drawn as gizmo lines. Right-rail pane carries
     /// the per-scene config (origin, FOV, ray count, range).
     Lidar,
+    /// IMU example — a single dynamic sphere bouncing on the floor
+    /// with a GPU `ImuSensor` mounted at its centre. Right-rail pane
+    /// shows the live accelerometer + gyroscope readout.
+    Imu,
 }
 
 impl Scene {
@@ -303,6 +388,7 @@ impl Scene {
         Scene::Tower,
         Scene::Cloth,
         Scene::Lidar,
+        Scene::Imu,
     ];
 
     fn label(self) -> &'static str {
@@ -312,6 +398,7 @@ impl Scene {
             Scene::Tower => "Tower",
             Scene::Cloth => "Cloth",
             Scene::Lidar => "Lidar (raycast)",
+            Scene::Imu => "IMU (accel + gyro)",
         }
     }
 }
@@ -414,6 +501,19 @@ struct LidarRay {
     hit: Option<Vec3>,
 }
 
+/// IMU example runtime state. Lazy-initialised when entering the IMU
+/// scene; reset on scene switch.
+#[derive(Resource, Default)]
+struct ImuExampleState {
+    sensor: Option<ImuSensor>,
+    /// Most recent reading (for the right-rail readout). `None` until
+    /// the sensor primes.
+    last: Option<ImuReading>,
+    /// Smoothed magnitude (for the simple bar visualization).
+    smoothed_accel_mag: f32,
+    smoothed_gyro_mag: f32,
+}
+
 /// Solid box principal moments at the COM, body frame.
 fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
     let h2 = half * half;
@@ -444,6 +544,7 @@ impl Sim {
             Scene::Tower => build_tower_model(),
             Scene::Cloth => build_cloth_model(),
             Scene::Lidar => build_lidar_model(),
+            Scene::Imu => build_imu_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -914,6 +1015,28 @@ fn build_lidar_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), visuals)
 }
 
+/// IMU example — a single dynamic sphere bouncing on the floor with
+/// an `ImuSensor` mounted at its COM. Restitution is high so the
+/// accelerometer reading is dramatic on each impact (specific force
+/// spikes when the contact impulse fires).
+fn build_imu_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.0); // let the bounces stay lively
+
+    let body = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(1.0, 0.4))
+            .with_position(MVec3::new(0.0, 4.0, 0.0)),
+    );
+    b.add_shape_sphere(body, 0.4, mp::Transform::IDENTITY)
+        .expect("imu sphere");
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("imu plane");
+
+    (b.build().expect("model"), vec![BodyVisual::Sphere(0.4)])
+}
+
 // ---- Bevy systems -------------------------------------------------
 
 fn setup(
@@ -1188,6 +1311,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Digit5) && sim.scene != Scene::Lidar {
         pending.0 = Some(Scene::Lidar);
     }
+    if keys.just_pressed(KeyCode::Digit6) && sim.scene != Scene::Imu {
+        pending.0 = Some(Scene::Imu);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -1203,6 +1329,7 @@ fn apply_scene_switch(
     cloth_q: Query<Entity, With<ClothMesh>>,
     mut grab: ResMut<MouseGrab>,
     mut lidar: ResMut<LidarState>,
+    mut imu: ResMut<ImuExampleState>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
@@ -1217,6 +1344,12 @@ fn apply_scene_switch(
     lidar.raycaster = None;
     lidar.raycaster_capacity = 0;
     lidar.rays.clear();
+    // Same for the IMU sensor — its prev_qd buffer is sized to the old
+    // model's body_count.
+    imu.sensor = None;
+    imu.last = None;
+    imu.smoothed_accel_mag = 0.0;
+    imu.smoothed_gyro_mag = 0.0;
 
     for e in bodies_q.iter() {
         commands.entity(e).despawn();
@@ -1974,6 +2107,66 @@ fn update_lidar(
     }
 }
 
+/// IMU example — runs the GPU `ImuSensor` against the bouncing
+/// sphere each frame and stashes the latest reading for the right-rail
+/// readout. No-op for any other scene.
+fn update_imu_example(
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<ImuExampleState>,
+) {
+    if sim.scene != Scene::Imu {
+        if state.sensor.is_some() {
+            state.sensor = None;
+            state.last = None;
+            state.smoothed_accel_mag = 0.0;
+            state.smoothed_gyro_mag = 0.0;
+        }
+        return;
+    }
+
+    if state.sensor.is_none() {
+        // Body 0 is the bouncing sphere we built in `build_imu_model`.
+        let mounts = [ImuMount {
+            body: mp::BodyId::from_index(0),
+            local_pose: mp::Transform::IDENTITY,
+        }];
+        match ImuSensor::new(&sim.engine, &sim.model, &mounts) {
+            Ok(s) => state.sensor = Some(s),
+            Err(e) => {
+                warn!("imu sensor init failed: {e}");
+                return;
+            }
+        }
+    }
+
+    // dt for the IMU = the wall-clock time between consecutive frames'
+    // body_qd snapshots, which is `SUBSTEPS_PER_FRAME * FIXED_DT`
+    // (the integrator advances `body_qd` by that much per frame).
+    let frame_dt = (SUBSTEPS_PER_FRAME as f64) * FIXED_DT;
+    let Sim {
+        ref engine,
+        ref model,
+        ref state_a,
+        ..
+    } = *sim;
+    let sensor = state.sensor.as_mut().expect("sensor");
+    let readings = match sensor.update(engine, model, state_a, frame_dt) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("imu update failed: {e}");
+            return;
+        }
+    };
+    if let Some(&r) = readings.first() {
+        state.last = Some(r);
+        let alpha = 0.2_f32;
+        state.smoothed_accel_mag =
+            (1.0 - alpha) * state.smoothed_accel_mag + alpha * r.accelerometer.length() as f32;
+        state.smoothed_gyro_mag =
+            (1.0 - alpha) * state.smoothed_gyro_mag + alpha * r.gyroscope.length() as f32;
+    }
+}
+
 fn hit_to_world(hit: &RayHit) -> Option<Vec3> {
     if hit.shape_id.is_some() {
         Some(Vec3::new(
@@ -2082,6 +2275,7 @@ fn draw_grab_gizmo(grab: Res<MouseGrab>, sim: Res<Sim>, mut gizmos: Gizmos) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn control_pane(
     mut contexts: EguiContexts,
     accent: Res<AccentColor>,
@@ -2093,9 +2287,40 @@ fn control_pane(
     mut activity: ResMut<ActivityView>,
     mut lidar_config: ResMut<LidarConfig>,
     lidar_state: Res<LidarState>,
+    imu_state: Res<ImuExampleState>,
+    mut ribbon_open: ResMut<RibbonOpen>,
+    mut ribbon_placement: ResMut<RibbonPlacement>,
+    mut ribbon_drag: ResMut<RibbonDrag>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let accent_color = accent.0;
+    let scene = sim.scene;
+
+    // Draw the ribbon strips (left + right) FIRST so panes layout
+    // around them. The third closure decides whether each ribbon
+    // button is greyed out — we disable the lidar pane's button when
+    // the active scene isn't Lidar (no settings to show).
+    let _clicks = draw_assembly(
+        ctx,
+        accent_color,
+        RIBBONS,
+        RIBBON_ITEMS,
+        &mut ribbon_open,
+        &mut ribbon_placement,
+        &mut ribbon_drag,
+        |id| match id {
+            // Right pane is enabled only for scenes that have
+            // per-example settings — Pile/Rope/Tower/Cloth don't.
+            PANE_SCENE => !matches!(scene, Scene::Lidar | Scene::Imu),
+            _ => false,
+        },
+    );
+
+    let is_open = |id: &'static str| -> bool {
+        let Some(item) = find_item(RIBBON_ITEMS, id) else { return false };
+        let (rid, _, _) = ribbon_placement.resolve(item);
+        ribbon_open.is_open(rid, id)
+    };
 
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
@@ -2107,10 +2332,10 @@ fn control_pane(
         .unwrap_or(0.0);
 
     let body_count = sim.model.body_count;
-    let scene = sim.scene;
 
-    // ── Left rail: global controls (always visible). ──────────────
-    Pane2::new(PANE_ID, "molla", PaneAnchor::LeftRail(RailZone::Start), accent_color).show(
+    // ── Left rail: main control pane. Toggle via the left ribbon. ─
+    if is_open(PANE_MAIN) {
+    Pane2::new(PANE_MAIN, "molla", PaneAnchor::LeftRail(RailZone::Start), accent_color).show(
         ctx,
         |ui| {
             ui.add_space(2.0);
@@ -2185,101 +2410,137 @@ fn control_pane(
             ui.small("Space pause · R reset · MMB pan · LMB+RMB orbit");
         },
     );
+    } // end is_open(PANE_MAIN)
 
-    // ── Right rail: per-scene panel. ──────────────────────────────
-    // Only shown when the active scene needs settings of its own.
-    // Stays empty for Pile / Rope / Tower / Cloth — those are
-    // pure-physics demos with nothing to tune in real time.
-    if scene == Scene::Lidar {
-        Pane2::new(
-            "molla_lidar_pane",
-            "Lidar",
-            PaneAnchor::RightRail(RailZone::Start),
-            accent_color,
-        )
-        .show(ctx, |ui| {
-            ui.add_space(2.0);
-            readout(ui, "Sensor", "GPU raycast");
-            readout(ui, "Rays", &format!("{}", lidar_state.rays.len()));
-            let n_hits = lidar_state.rays.iter().filter(|r| r.hit.is_some()).count();
-            readout(ui, "Hits", &format!("{n_hits}"));
-            ui.separator();
-
-            ui.label("Origin");
-            ui.add(
-                egui::DragValue::new(&mut lidar_config.origin.x)
-                    .speed(0.05)
-                    .prefix("x "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut lidar_config.origin.y)
-                    .speed(0.05)
-                    .range(0.05..=10.0)
-                    .prefix("y "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut lidar_config.origin.z)
-                    .speed(0.05)
-                    .prefix("z "),
-            );
-            ui.separator();
-
-            ui.label("Heading");
-            ui.add(
-                egui::Slider::new(&mut lidar_config.yaw, 0.0..=std::f32::consts::TAU)
-                    .text("yaw (rad)"),
-            );
-            ui.add(
-                egui::Slider::new(
-                    &mut lidar_config.pitch,
-                    -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
-                )
-                .text("pitch (rad)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut lidar_config.auto_rotate_speed, 0.0..=4.0)
-                    .text("auto-spin (rad/s)"),
-            );
-            ui.separator();
-
-            ui.label("FOV");
-            let mut fov_h_deg = lidar_config.fov_h.to_degrees();
-            let mut fov_v_deg = lidar_config.fov_v.to_degrees();
-            if ui
-                .add(egui::Slider::new(&mut fov_h_deg, 5.0..=360.0).text("horizontal °"))
-                .changed()
-            {
-                lidar_config.fov_h = fov_h_deg.to_radians();
-            }
-            if ui
-                .add(egui::Slider::new(&mut fov_v_deg, 1.0..=120.0).text("vertical °"))
-                .changed()
-            {
-                lidar_config.fov_v = fov_v_deg.to_radians();
-            }
-            ui.separator();
-
-            ui.label("Resolution");
-            let mut nh = lidar_config.ray_count_h as i32;
-            if ui
-                .add(egui::Slider::new(&mut nh, 8..=512).text("rays h"))
-                .changed()
-            {
-                lidar_config.ray_count_h = nh.max(1) as u32;
-            }
-            let mut nv = lidar_config.ray_count_v as i32;
-            if ui
-                .add(egui::Slider::new(&mut nv, 1..=64).text("rays v"))
-                .changed()
-            {
-                lidar_config.ray_count_v = nv.max(1) as u32;
-            }
-            ui.separator();
-
-            ui.add(
-                egui::Slider::new(&mut lidar_config.max_range, 1.0..=100.0)
-                    .text("range (m)"),
-            );
-        });
+    // ── Right rail: a single pane whose body switches on `scene`.
+    // The ribbon button toggles whether the pane is shown; whether
+    // the button is enabled at all is decided by the disabled-closure
+    // passed to `draw_assembly` above (only enabled for scenes that
+    // have something to show here).
+    let scene_pane_title: Option<&'static str> = match scene {
+        Scene::Lidar => Some("Lidar"),
+        Scene::Imu => Some("IMU"),
+        _ => None,
+    };
+    if let Some(title) = scene_pane_title {
+        if is_open(PANE_SCENE) {
+            Pane2::new(
+                PANE_SCENE,
+                title,
+                PaneAnchor::RightRail(RailZone::Start),
+                accent_color,
+            )
+            .show(ctx, |ui| match scene {
+                Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
+                Scene::Imu => imu_pane(ui, &imu_state),
+                _ => {}
+            });
+        }
     }
+}
+
+/// Body for the right-rail pane in the Lidar scene.
+fn lidar_pane(ui: &mut egui::Ui, config: &mut LidarConfig, state: &LidarState) {
+    ui.add_space(2.0);
+    readout(ui, "Sensor", "GPU raycast");
+    readout(ui, "Rays", &format!("{}", state.rays.len()));
+    let n_hits = state.rays.iter().filter(|r| r.hit.is_some()).count();
+    readout(ui, "Hits", &format!("{n_hits}"));
+    ui.separator();
+
+    ui.label("Origin");
+    ui.add(egui::DragValue::new(&mut config.origin.x).speed(0.05).prefix("x "));
+    ui.add(
+        egui::DragValue::new(&mut config.origin.y)
+            .speed(0.05)
+            .range(0.05..=10.0)
+            .prefix("y "),
+    );
+    ui.add(egui::DragValue::new(&mut config.origin.z).speed(0.05).prefix("z "));
+    ui.separator();
+
+    ui.label("Heading");
+    ui.add(
+        egui::Slider::new(&mut config.yaw, 0.0..=std::f32::consts::TAU).text("yaw (rad)"),
+    );
+    ui.add(
+        egui::Slider::new(
+            &mut config.pitch,
+            -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
+        )
+        .text("pitch (rad)"),
+    );
+    ui.add(
+        egui::Slider::new(&mut config.auto_rotate_speed, 0.0..=4.0).text("auto-spin (rad/s)"),
+    );
+    ui.separator();
+
+    ui.label("FOV");
+    let mut fov_h_deg = config.fov_h.to_degrees();
+    let mut fov_v_deg = config.fov_v.to_degrees();
+    if ui
+        .add(egui::Slider::new(&mut fov_h_deg, 5.0..=360.0).text("horizontal °"))
+        .changed()
+    {
+        config.fov_h = fov_h_deg.to_radians();
+    }
+    if ui
+        .add(egui::Slider::new(&mut fov_v_deg, 1.0..=120.0).text("vertical °"))
+        .changed()
+    {
+        config.fov_v = fov_v_deg.to_radians();
+    }
+    ui.separator();
+
+    ui.label("Resolution");
+    let mut nh = config.ray_count_h as i32;
+    if ui.add(egui::Slider::new(&mut nh, 8..=512).text("rays h")).changed() {
+        config.ray_count_h = nh.max(1) as u32;
+    }
+    let mut nv = config.ray_count_v as i32;
+    if ui.add(egui::Slider::new(&mut nv, 1..=64).text("rays v")).changed() {
+        config.ray_count_v = nv.max(1) as u32;
+    }
+    ui.separator();
+    ui.add(egui::Slider::new(&mut config.max_range, 1.0..=100.0).text("range (m)"));
+}
+
+/// Body for the right-rail pane in the IMU scene.
+fn imu_pane(ui: &mut egui::Ui, state: &ImuExampleState) {
+    ui.add_space(2.0);
+    readout(ui, "Sensor", "GPU IMU");
+    ui.separator();
+
+    match state.last {
+        None => {
+            ui.label("priming…");
+            ui.small("(first frame snapshots body_qd; reading shows next frame)");
+        }
+        Some(r) => {
+            ui.label("Accelerometer (sensor frame)");
+            readout(ui, "  ax", &format!("{:>8.3} m/s²", r.accelerometer.x));
+            readout(ui, "  ay", &format!("{:>8.3} m/s²", r.accelerometer.y));
+            readout(ui, "  az", &format!("{:>8.3} m/s²", r.accelerometer.z));
+            readout(ui, "  |a|", &format!("{:>8.3} m/s²", r.accelerometer.length()));
+            ui.separator();
+            ui.label("Gyroscope (sensor frame)");
+            readout(ui, "  ωx", &format!("{:>8.3} rad/s", r.gyroscope.x));
+            readout(ui, "  ωy", &format!("{:>8.3} rad/s", r.gyroscope.y));
+            readout(ui, "  ωz", &format!("{:>8.3} rad/s", r.gyroscope.z));
+            readout(ui, "  |ω|", &format!("{:>8.3} rad/s", r.gyroscope.length()));
+            ui.separator();
+            let accel_norm = (state.smoothed_accel_mag / 50.0).clamp(0.0, 1.0);
+            let gyro_norm = (state.smoothed_gyro_mag / 20.0).clamp(0.0, 1.0);
+            ui.label("|a| (0..50 m/s²)");
+            ui.add(egui::ProgressBar::new(accel_norm).show_percentage());
+            ui.label("|ω| (0..20 rad/s)");
+            ui.add(egui::ProgressBar::new(gyro_norm).show_percentage());
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.small(
+        "At rest: |a| ≈ 9.81. Free fall: |a| ≈ 0. Bounce impacts \
+         produce sharp accel spikes.",
+    );
 }
