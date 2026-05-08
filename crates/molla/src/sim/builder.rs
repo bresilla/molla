@@ -10,8 +10,8 @@ use crate::storage::{Buffer, BufferUsage};
 use super::flags::BodyFlags;
 use super::Model;
 
-/// Per-shape geometry tag. Stage 4 currently ships sphere + plane;
-/// box / capsule / mesh follow in 4.x.
+/// Per-shape geometry tag. Stage 4 ships sphere, plane, and box;
+/// capsule / cylinder / mesh follow in stage 6 (GJK + EPA).
 #[derive(Copy, Clone, Debug)]
 pub enum ShapeGeometry {
     /// Solid sphere centred on the shape's local origin.
@@ -26,6 +26,14 @@ pub enum ShapeGeometry {
     Plane {
         /// Outward-facing unit normal in shape-local frame.
         normal: Vec3,
+    },
+    /// Solid axis-aligned box in the shape's local frame, centred on
+    /// the shape's local origin. World orientation comes from the
+    /// shape's transform — i.e. it's an OBB once you compose with
+    /// the body pose.
+    Box {
+        /// Half-extents along the shape-local x/y/z axes (m).
+        half_extents: Vec3,
     },
 }
 
@@ -238,6 +246,30 @@ impl ModelBuilder {
             )));
         }
         Ok(self.push_shape(body, local_pose, ShapeGeometry::Sphere { radius }))
+    }
+
+    /// Attach a solid box shape to `body`. `half_extents` are the
+    /// local half-widths along x/y/z (must be strictly positive). Pass
+    /// [`BodyId::NONE`] for a static-world box.
+    pub fn add_shape_box(
+        &mut self,
+        body: BodyId,
+        half_extents: Vec3,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_box")?;
+        if !half_extents.x.is_finite()
+            || !half_extents.y.is_finite()
+            || !half_extents.z.is_finite()
+            || half_extents.x <= 0.0
+            || half_extents.y <= 0.0
+            || half_extents.z <= 0.0
+        {
+            return Err(Error::Build(format!(
+                "add_shape_box: half_extents must be positive finite, got {half_extents:?}"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Box { half_extents }))
     }
 
     /// Attach a static-plane half-space shape to `body`. Pass

@@ -6,8 +6,57 @@ use crate::core::Result;
 use crate::sim::{Contacts, Model, State};
 use crate::storage::BufferUsage;
 
-use super::broad_phase::{brute_force_pairs, ShapePair};
+use super::broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
 use super::narrow_phase::{pair_contact, ContactManifold};
+
+/// Stateful CPU collision pipeline: caches the SAP scratch buffers
+/// across frames. Use this in real simulations; [`collide`] still
+/// exists as a stateless brute-force entry-point for tests.
+#[derive(Debug, Default)]
+pub struct CollisionPipeline {
+    broad: BroadPhase,
+    pair_buf: Vec<ShapePair>,
+    manifolds: Vec<ContactManifold>,
+}
+
+impl CollisionPipeline {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run the SAP broad phase + narrow phase, write into `contacts`.
+    /// Returns the contact count.
+    pub fn collide(
+        &mut self,
+        model: &Model,
+        state: &State,
+        contacts: &mut Contacts,
+    ) -> Result<usize> {
+        contacts.clear();
+        if model.shape_count < 2 {
+            return Ok(0);
+        }
+
+        self.broad
+            .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+
+        self.manifolds.clear();
+        for &pair in self.pair_buf.iter() {
+            pair_contact(
+                model,
+                state,
+                pair,
+                model.default_friction,
+                model.default_restitution,
+                &mut self.manifolds,
+            );
+        }
+
+        push_contacts_into(contacts, &self.manifolds, model)?;
+        Ok(self.manifolds.len())
+    }
+}
 
 /// Top-level CPU collision pipeline. Mutates `contacts` in place;
 /// returns the number of contacts found.
@@ -30,18 +79,18 @@ pub fn collide(
     // Generate AABB-overlap pairs.
     brute_force_pairs(model, state, model.contact_margin, pair_buf);
 
-    // Narrow phase + push into Contacts.
+    // Narrow phase + push into Contacts. Each pair can yield 0..N
+    // manifolds (boxes can give up to 4).
     let mut manifolds: Vec<ContactManifold> = Vec::with_capacity(pair_buf.len());
     for &pair in pair_buf.iter() {
-        if let Some(m) = pair_contact(
+        pair_contact(
             model,
             state,
             pair,
             model.default_friction,
             model.default_restitution,
-        ) {
-            manifolds.push(m);
-        }
+            &mut manifolds,
+        );
     }
 
     push_contacts_into(contacts, &manifolds, model)?;

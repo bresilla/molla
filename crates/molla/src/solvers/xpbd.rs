@@ -1,23 +1,32 @@
 //! XPBD (eXtended Position-Based Dynamics) — position-projection
 //! solver for rigid bodies with contacts.
 //!
-//! Stage 4.0 implementation:
-//! 1. Predict positions from velocities + gravity (semi-implicit-ish).
+//! Stage 4.x implementation:
+//! 1. Predict positions + rotations from velocities + gravity
+//!    (semi-implicit-ish).
 //! 2. **Position projection**: for every contact, push the two
 //!    bodies apart along the normal until the recorded penetration
-//!    is removed. Mass-weighted; static / kinematic peers contribute
-//!    zero inverse mass and absorb no correction.
-//! 3. **Velocity recovery**: `v = (p_new - p_old) / dt` (PBD-classic).
+//!    is removed. **With angular response** — the contact point's
+//!    lever arm `r = p_contact - body_com_world` produces an
+//!    angular delta `Δθ = I⁻¹·(r × n) · λ` alongside the linear
+//!    delta `Δp = ±n · (1/m) · λ`. Generalised inverse mass
+//!    `w = 1/m + (r × n)ᵀ · I⁻¹ · (r × n)`.
+//! 3. **Velocity recovery**: linear from `(p_new - p_old) / dt`,
+//!    angular from the small-rotation extracted from the quat delta.
 //! 4. **Velocity projection**: along each contact normal, replace
-//!    the relative approach velocity by `-restitution * v_in`. With
-//!    `restitution = 0` this stops bouncing and the body settles.
+//!    the relative *contact-point* approach velocity by
+//!    `-restitution · v_in`. The contact-point velocity includes the
+//!    angular contribution `ω × r`.
 //!
 //! Friction: Coulomb tangential clamp on the velocity-projection
-//! pass. The clamp is `μ` times the normal impulse magnitude.
+//! pass with the full angular Jacobian.
+//!
+//! Reference: Müller et al., "Detailed Rigid Body Simulation with
+//! Extended Position Based Dynamics" (Eurographics 2020).
 
 use crate::core::{Error, Result};
 use crate::geometry::STATIC_BODY;
-use crate::math::{Real, SpatialVector, Transform, Vec3};
+use crate::math::{Mat3, Quat, Real, SpatialVector, Transform, Vec3};
 use crate::sim::{BodyFlags, Contacts, Control, Model, State};
 
 use super::Solver;
@@ -163,250 +172,391 @@ fn cpu_step(
 ) -> Result<()> {
     let n = model.body_count;
     let q_in = state_in.body_q.host()?;
-        let qd_in = state_in.body_qd.host()?;
-        let f_in = state_in.body_f.host()?;
-        let inv_mass = model.body_inv_mass.host()?;
-        let flags = model.body_flags.host()?;
-        let world_idx = model.body_world.host()?;
-        let gravity = model.gravity.host()?;
-        let external = if control.body_external_f.len() == n {
-            Some(control.body_external_f.host()?)
+    let qd_in = state_in.body_qd.host()?;
+    let f_in = state_in.body_f.host()?;
+    let inv_mass = model.body_inv_mass.host()?;
+    let inv_inertia_body = model.body_inv_inertia.host()?;
+    let body_com = model.body_com.host()?;
+    let flags = model.body_flags.host()?;
+    let world_idx = model.body_world.host()?;
+    let gravity = model.gravity.host()?;
+    let external = if control.body_external_f.len() == n {
+        Some(control.body_external_f.host()?)
+    } else {
+        None
+    };
+
+    // ── 1. Predict ────────────────────────────────────────────
+    // x_new = x + dt·v + dt²·(f/m + g)
+    // q_new = quat_integrate(q, ω, dt)
+    let mut q_pred: Vec<Transform> = q_in.to_vec();
+    let mut v_pred: Vec<Vec3> = (0..n).map(|i| qd_in[i].linear).collect();
+    let mut w_pred: Vec<Vec3> = (0..n).map(|i| qd_in[i].angular).collect();
+
+    for i in 0..n {
+        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
+            continue;
+        }
+        let mut applied_lin = f_in[i].linear;
+        let mut applied_ang = f_in[i].angular;
+        if let Some(ext) = external {
+            applied_lin += ext[i].linear;
+            applied_ang += ext[i].angular;
+        }
+        let world = world_idx[i].max(0) as usize;
+        let g = if inv_mass[i] > 0.0 {
+            gravity[world]
         } else {
-            None
+            Vec3::ZERO
         };
+        let v0 = qd_in[i].linear;
+        let v1 = v0 + (applied_lin * inv_mass[i] + g) * dt;
+        v_pred[i] = v1;
+        q_pred[i].position = q_in[i].position + v1 * dt;
 
-        // ── 1. Predict ────────────────────────────────────────────
-        // x_new = x + dt·v + dt²·(f/m + g)
-        // v_new = v + dt·(f/m + g)            (provisional)
-        let mut q_pred: Vec<Transform> = q_in.to_vec();
-        let mut v_pred: Vec<Vec3> = (0..n).map(|i| qd_in[i].linear).collect();
+        // Angular: ω̇ = I⁻¹·(τ - ω × I·ω). For stage 4, with small ω
+        // and no torque, we drop the gyroscopic term — boxes don't
+        // need it for stacking. Add when needed.
+        let i_inv_world = world_inv_inertia(q_in[i].rotation, inv_inertia_body[i]);
+        let dw = i_inv_world * applied_ang * dt;
+        let w1 = w_pred[i] + dw;
+        w_pred[i] = w1;
+        // Quat integration: q_new = exp(0.5 · dt · ω) ⊗ q_old.
+        q_pred[i].rotation = integrate_rotation(q_in[i].rotation, w1, dt);
+    }
 
-        for i in 0..n {
-            if (flags[i] & BodyFlags::KINEMATIC) != 0 {
-                continue;
-            }
-            let mut applied = f_in[i].linear;
-            if let Some(ext) = external {
-                applied += ext[i].linear;
-            }
-            let world = world_idx[i].max(0) as usize;
-            let g = if inv_mass[i] > 0.0 {
-                gravity[world]
-            } else {
+    // ── 2. Position projection ────────────────────────────────
+    // Jacobi-style relaxation: each contact computes deltas
+    // independently, accumulated and averaged per body. Stable for
+    // multi-contact bodies like box stacks. Mirrors Newton's
+    // `solve_body_contact_positions` + `apply_body_deltas`.
+    let n_contacts = contacts.count as usize;
+
+    // Pre-compute body-local contact points (frozen at narrow-phase
+    // time). At each iteration we rotate these into world frame using
+    // the current pose so the penetration estimate stays faithful even
+    // after angular corrections accumulate. Shared between position
+    // and velocity projection.
+    let (p_a_local, p_b_local) = if n_contacts > 0 {
+        let a_idx = contacts.a_index.host()?;
+        let b_idx = contacts.b_index.host()?;
+        let point = contacts.point.host()?;
+        let mut pa = Vec::with_capacity(n_contacts);
+        let mut pb = Vec::with_capacity(n_contacts);
+        for c in 0..n_contacts {
+            let a = a_idx[c] as usize;
+            let b = b_idx[c] as usize;
+            let pw = point[c];
+            pa.push(if is_static_or_kinematic(flags, a) {
                 Vec3::ZERO
-            };
-            let v0 = qd_in[i].linear;
-            let v1 = v0 + (applied * inv_mass[i] + g) * dt;
-            v_pred[i] = v1;
-            q_pred[i].position = q_in[i].position + v1 * dt;
+            } else {
+                q_in[a].rotation.conjugate() * (pw - q_in[a].position)
+            });
+            pb.push(if is_static_or_kinematic(flags, b) || b >= q_in.len() {
+                Vec3::ZERO
+            } else {
+                q_in[b].rotation.conjugate() * (pw - q_in[b].position)
+            });
         }
+        (pa, pb)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
-        // ── 2. Position projection ────────────────────────────────
-        // We recompute the *current* penetration each iteration as
-        //   d_now = d_initial + (Δq_a - Δq_b) · n_ab
-        // where Δq_x is each body's accumulated displacement away
-        // from the input pose. This corrects two issues:
-        //   * The contact's `depth` was measured at `state_in`,
-        //     but the predict step moves bodies further into the
-        //     contact — we need to resolve the larger penetration.
-        //   * For bodies in multiple contacts, earlier corrections
-        //     in the same iteration affect the accuracy of later
-        //     ones; reading current displacement keeps the constraint
-        //     truthful as the loop walks.
-        let n_contacts = contacts.count as usize;
-        let q_in_pos: Vec<Vec3> = q_in.iter().map(|t| t.position).collect();
-        if n_contacts > 0 {
-            let a_idx = contacts.a_index.host()?;
-            let b_idx = contacts.b_index.host()?;
-            let normal = contacts.normal.host()?;
-            let depth = contacts.depth.host()?;
+    if n_contacts > 0 {
+        let a_idx = contacts.a_index.host()?;
+        let b_idx = contacts.b_index.host()?;
+        let normal = contacts.normal.host()?;
+        let depth = contacts.depth.host()?;
+        let point = contacts.point.host()?;
 
-            for _ in 0..position_iterations {
-                for c in 0..n_contacts {
-                    let a = a_idx[c] as usize;
-                    let b = b_idx[c] as usize;
-                    let n_ab = normal[c]; // points a → b
-                    let initial = depth[c];
+        // Jacobi-style relaxation (matches Newton's
+        // `solve_body_contact_positions` + `apply_body_deltas`). Each
+        // contact computes its impulse independently, then deltas are
+        // averaged per body. Much more stable for multi-contact bodies
+        // (e.g. box stacks) than per-contact Gauss-Seidel.
+        let mut lin_delta = vec![Vec3::ZERO; n];
+        let mut ang_delta = vec![Vec3::ZERO; n];
+        let mut weight = vec![0.0_f64; n];
 
-                    let (w_a, w_b, kin_a, kin_b) = inv_masses(flags, inv_mass, a, b);
-                    let w_sum = w_a + w_b;
-                    if w_sum <= 0.0 {
-                        continue;
-                    }
-
-                    let delta_a = if kin_a {
-                        Vec3::ZERO
-                    } else {
-                        q_pred[a].position - q_in_pos[a]
-                    };
-                    let delta_b = if kin_b || b >= q_pred.len() {
-                        Vec3::ZERO
-                    } else {
-                        q_pred[b].position - q_in_pos[b]
-                    };
-
-                    // a moving along +n_ab is moving toward b → depth grows.
-                    let current = initial + (delta_a - delta_b).dot(n_ab);
-                    if current <= 0.0 {
-                        continue;
-                    }
-
-                    let lambda = current / w_sum;
-                    // Push a along -n_ab (away from b), b along +n_ab.
-                    if !kin_a {
-                        q_pred[a].position -= n_ab * (lambda * w_a);
-                    }
-                    if !kin_b && b < q_pred.len() {
-                        q_pred[b].position += n_ab * (lambda * w_b);
-                    }
-                }
+        for _ in 0..position_iterations {
+            for d in lin_delta.iter_mut() {
+                *d = Vec3::ZERO;
             }
-        }
-
-        // ── 3. Velocity recovery from position delta ─────────────
-        // For unconstrained motion this equals `v_pred`. For bodies
-        // that got a position projection, it includes the artificial
-        // separating velocity that the projection produced — that's
-        // why step 4 is necessary.
-        let mut v_post: Vec<Vec3> = (0..n)
-            .map(|i| (q_pred[i].position - q_in[i].position) / dt)
-            .collect();
-
-        // ── 4. Velocity projection at contacts ───────────────────
-        // Target the *pre-projection* normal velocity (`v_pred`), not
-        // the post-projection velocity, otherwise the position
-        // correction's artificial separation gets read as a real bounce.
-        if n_contacts > 0 {
-            let a_idx = contacts.a_index.host()?;
-            let b_idx = contacts.b_index.host()?;
-            let normal = contacts.normal.host()?;
-            let restitution_arr = contacts.restitution.host()?;
-            let friction_arr = contacts.friction.host()?;
+            for d in ang_delta.iter_mut() {
+                *d = Vec3::ZERO;
+            }
+            for w in weight.iter_mut() {
+                *w = 0.0;
+            }
 
             for c in 0..n_contacts {
                 let a = a_idx[c] as usize;
                 let b = b_idx[c] as usize;
-                let n_ab = normal[c]; // a → b
+                let n_ab = normal[c];
+                let initial = depth[c];
 
-                let (w_a, w_b, kin_a, kin_b) = inv_masses(flags, inv_mass, a, b);
-                let w_sum = w_a + w_b;
-                if w_sum <= 0.0 {
+                let kin_a = is_static_or_kinematic(flags, a);
+                let kin_b = is_static_or_kinematic(flags, b);
+                let inv_m_a = if kin_a { 0.0 } else { inv_mass.get(a).copied().unwrap_or(0.0) };
+                let inv_m_b = if kin_b { 0.0 } else { inv_mass.get(b).copied().unwrap_or(0.0) };
+
+                let p_a_now = if kin_a {
+                    point[c]
+                } else {
+                    q_pred[a].position + q_pred[a].rotation * p_a_local[c]
+                };
+                let p_b_now = if kin_b || b >= q_pred.len() {
+                    point[c]
+                } else {
+                    q_pred[b].position + q_pred[b].rotation * p_b_local[c]
+                };
+
+                let r_a = if kin_a {
+                    Vec3::ZERO
+                } else {
+                    p_a_now - com_world(q_pred[a], body_com[a])
+                };
+                let r_b = if kin_b || b >= q_pred.len() {
+                    Vec3::ZERO
+                } else {
+                    p_b_now - com_world(q_pred[b], body_com[b])
+                };
+
+                let i_inv_a = if kin_a {
+                    Mat3::ZERO
+                } else {
+                    world_inv_inertia(q_pred[a].rotation, inv_inertia_body[a])
+                };
+                let i_inv_b = if kin_b || b >= q_pred.len() {
+                    Mat3::ZERO
+                } else {
+                    world_inv_inertia(q_pred[b].rotation, inv_inertia_body[b])
+                };
+
+                let ra_x_n = r_a.cross(n_ab);
+                let rb_x_n = r_b.cross(n_ab);
+                // Jacobian rows: linear_a = -n, angular_a = -r_a × n.
+                let denom = inv_m_a
+                    + inv_m_b
+                    + ra_x_n.dot(i_inv_a * ra_x_n)
+                    + rb_x_n.dot(i_inv_b * rb_x_n);
+                if denom <= 0.0 {
                     continue;
                 }
 
-                // Pre-projection relative velocity at this contact.
-                let v_a_pre = if kin_a { Vec3::ZERO } else { v_pred[a] };
-                let v_b_pre = if kin_b || b >= v_pred.len() {
-                    Vec3::ZERO
-                } else {
-                    v_pred[b]
-                };
-                let v_rel_pre = v_b_pre - v_a_pre;
-                let v_n_pre = v_rel_pre.dot(n_ab); // < 0 means approaching
-
-                // Skip pairs that were already separating before the
-                // position projection — there's nothing to resolve and
-                // we don't want to brake them.
-                if v_n_pre >= 0.0 {
+                let current = initial + (p_a_now - p_b_now).dot(n_ab);
+                if current <= 0.0 {
                     continue;
                 }
 
-                let e = restitution_arr[c];
-                // Target normal velocity post-resolution: bounce back
-                // with restitution. v_n_pre is negative when
-                // approaching, so `-e * v_n_pre` is positive
-                // (separating). With e=0 the target is 0 and we just
-                // brake the approach component without bouncing.
-                let v_n_target = -e * v_n_pre;
+                let lambda = current / denom;
 
-                // Current post-projection relative normal velocity.
-                let v_a = if kin_a { Vec3::ZERO } else { v_post[a] };
-                let v_b = if kin_b || b >= v_post.len() {
-                    Vec3::ZERO
-                } else {
-                    v_post[b]
-                };
-                let v_rel = v_b - v_a;
-                let v_n = v_rel.dot(n_ab);
-
-                let dv_n = v_n_target - v_n;
-                let lambda_v = dv_n / w_sum;
                 if !kin_a {
-                    v_post[a] -= n_ab * (lambda_v * w_a);
+                    lin_delta[a] -= n_ab * lambda;
+                    ang_delta[a] -= ra_x_n * lambda;
+                    weight[a] += 1.0;
                 }
-                if !kin_b && b < v_post.len() {
-                    v_post[b] += n_ab * (lambda_v * w_b);
-                }
-
-                // Coulomb friction — clamps the tangential
-                // post-projection velocity by `μ · |λ_n|`. Uses the
-                // post-projection v_t since friction acts on whatever
-                // tangential motion survives the normal correction.
-                let mu = friction_arr[c];
-                if mu > 0.0 {
-                    let v_a2 = if kin_a { Vec3::ZERO } else { v_post[a] };
-                    let v_b2 = if kin_b || b >= v_post.len() {
-                        Vec3::ZERO
-                    } else {
-                        v_post[b]
-                    };
-                    let v_rel2 = v_b2 - v_a2;
-                    let v_n2 = v_rel2.dot(n_ab);
-                    apply_friction(
-                        &mut v_post,
-                        n_ab,
-                        v_rel2,
-                        v_n2,
-                        w_a,
-                        w_b,
-                        w_sum,
-                        kin_a,
-                        kin_b,
-                        a,
-                        b,
-                        mu * lambda_v.abs(),
-                    );
+                if !kin_b && b < lin_delta.len() {
+                    lin_delta[b] += n_ab * lambda;
+                    ang_delta[b] += rb_x_n * lambda;
+                    weight[b] += 1.0;
                 }
             }
-        }
 
-        // ── Write outputs ────────────────────────────────────────
-        let q_out = state_out.body_q.host_mut()?;
-        let qd_out = state_out.body_qd.host_mut()?;
-        for i in 0..n {
-            if (flags[i] & BodyFlags::KINEMATIC) != 0 {
-                q_out[i] = q_in[i];
-                qd_out[i] = qd_in[i];
+            // Apply averaged per-body deltas.
+            for i in 0..n {
+                if weight[i] <= 0.0 || (flags[i] & BodyFlags::KINEMATIC) != 0 {
+                    continue;
+                }
+                let inv_w = 1.0 / weight[i];
+                let dp = lin_delta[i] * (inv_mass[i] * inv_w);
+                let dtheta = world_inv_inertia(q_pred[i].rotation, inv_inertia_body[i])
+                    * ang_delta[i]
+                    * inv_w;
+                q_pred[i].position += dp;
+                q_pred[i].rotation = apply_rotation_delta(q_pred[i].rotation, dtheta);
+            }
+        }
+    }
+
+    // ── 3. Velocity recovery ─────────────────────────────────
+    // Linear: v_post = (p_new - p_old) / dt.
+    // Angular: ω_post = quat_to_axis_angle(q_new · q_old⁻¹) / dt.
+    let mut v_post: Vec<Vec3> = (0..n)
+        .map(|i| (q_pred[i].position - q_in[i].position) / dt)
+        .collect();
+    let mut w_post: Vec<Vec3> = (0..n)
+        .map(|i| {
+            let dq = q_pred[i].rotation * q_in[i].rotation.conjugate();
+            quat_to_omega(dq) / dt
+        })
+        .collect();
+
+    // ── 4. Velocity projection at contacts ───────────────────
+    // Jacobi-style: for each contact compute Δv_lin / Δω contributions,
+    // accumulate per body, then average. Targets the *pre-projection*
+    // contact-point relative normal velocity for restitution.
+    if n_contacts > 0 {
+        let a_idx = contacts.a_index.host()?;
+        let b_idx = contacts.b_index.host()?;
+        let normal = contacts.normal.host()?;
+        let restitution_arr = contacts.restitution.host()?;
+        let friction_arr = contacts.friction.host()?;
+
+        let mut v_lin_delta = vec![Vec3::ZERO; n];
+        let mut v_ang_delta = vec![Vec3::ZERO; n];
+        let mut v_weight = vec![0.0_f64; n];
+
+        for c in 0..n_contacts {
+            let a = a_idx[c] as usize;
+            let b = b_idx[c] as usize;
+            let n_ab = normal[c];
+
+            let kin_a = is_static_or_kinematic(flags, a);
+            let kin_b = is_static_or_kinematic(flags, b);
+            let inv_m_a = if kin_a { 0.0 } else { inv_mass.get(a).copied().unwrap_or(0.0) };
+            let inv_m_b = if kin_b { 0.0 } else { inv_mass.get(b).copied().unwrap_or(0.0) };
+
+            // Lever arms at the post-projection pose (q_pred), using
+            // the body-local contact points frozen at narrow-phase time.
+            let r_a = if kin_a {
+                Vec3::ZERO
+            } else {
+                let p_a_now = q_pred[a].position + q_pred[a].rotation * p_a_local[c];
+                p_a_now - com_world(q_pred[a], body_com[a])
+            };
+            let r_b = if kin_b || b >= q_pred.len() {
+                Vec3::ZERO
+            } else {
+                let p_b_now = q_pred[b].position + q_pred[b].rotation * p_b_local[c];
+                p_b_now - com_world(q_pred[b], body_com[b])
+            };
+
+            let i_inv_a = if kin_a {
+                Mat3::ZERO
+            } else {
+                world_inv_inertia(q_pred[a].rotation, inv_inertia_body[a])
+            };
+            let i_inv_b = if kin_b || b >= q_pred.len() {
+                Mat3::ZERO
+            } else {
+                world_inv_inertia(q_pred[b].rotation, inv_inertia_body[b])
+            };
+
+            let ra_x_n = r_a.cross(n_ab);
+            let rb_x_n = r_b.cross(n_ab);
+            let denom = inv_m_a
+                + inv_m_b
+                + ra_x_n.dot(i_inv_a * ra_x_n)
+                + rb_x_n.dot(i_inv_b * rb_x_n);
+            if denom <= 0.0 {
                 continue;
             }
-            q_out[i] = q_pred[i];
-            qd_out[i] = SpatialVector::new(v_post[i], qd_in[i].angular);
-        }
-        for f in state_out.body_f.host_mut()? {
-            *f = SpatialVector::ZERO;
-        }
-        Ok(())
-}
 
-fn inv_masses(
-    flags: &[u32],
-    inv_mass: &[Real],
-    a: usize,
-    b: usize,
-) -> (Real, Real, bool, bool) {
-    let kin_a = is_static_or_kinematic(flags, a);
-    let kin_b = is_static_or_kinematic(flags, b);
-    let w_a = if kin_a {
-        0.0
-    } else {
-        inv_mass.get(a).copied().unwrap_or(0.0)
-    };
-    let w_b = if kin_b {
-        0.0
-    } else {
-        inv_mass.get(b).copied().unwrap_or(0.0)
-    };
-    (w_a, w_b, kin_a, kin_b)
+            // Pre-projection contact-point relative velocity.
+            let v_a_pre = if kin_a {
+                Vec3::ZERO
+            } else {
+                v_pred[a] + w_pred[a].cross(r_a)
+            };
+            let v_b_pre = if kin_b || b >= v_pred.len() {
+                Vec3::ZERO
+            } else {
+                v_pred[b] + w_pred[b].cross(r_b)
+            };
+            let v_n_pre = (v_b_pre - v_a_pre).dot(n_ab);
+            if v_n_pre >= 0.0 {
+                continue;
+            }
+            let e = restitution_arr[c];
+            let v_n_target = -e * v_n_pre;
+
+            // Current post-projection contact-point rel velocity.
+            let v_a = if kin_a {
+                Vec3::ZERO
+            } else {
+                v_post[a] + w_post[a].cross(r_a)
+            };
+            let v_b = if kin_b || b >= v_post.len() {
+                Vec3::ZERO
+            } else {
+                v_post[b] + w_post[b].cross(r_b)
+            };
+            let v_rel = v_b - v_a;
+            let v_n = v_rel.dot(n_ab);
+            let dv_n = v_n_target - v_n;
+            let lambda_n = dv_n / denom;
+
+            if !kin_a {
+                v_lin_delta[a] -= n_ab * lambda_n;
+                v_ang_delta[a] -= ra_x_n * lambda_n;
+                v_weight[a] += 1.0;
+            }
+            if !kin_b && b < v_lin_delta.len() {
+                v_lin_delta[b] += n_ab * lambda_n;
+                v_ang_delta[b] += rb_x_n * lambda_n;
+                v_weight[b] += 1.0;
+            }
+
+            // Coulomb tangential — same Jacobi accumulation.
+            let mu = friction_arr[c];
+            if mu > 0.0 {
+                let v_t = v_rel - n_ab * v_n;
+                let v_t_len = v_t.length();
+                if v_t_len > 1e-9 {
+                    let t_hat = v_t / v_t_len;
+                    let ra_x_t = r_a.cross(t_hat);
+                    let rb_x_t = r_b.cross(t_hat);
+                    let denom_t = inv_m_a
+                        + inv_m_b
+                        + ra_x_t.dot(i_inv_a * ra_x_t)
+                        + rb_x_t.dot(i_inv_b * rb_x_t);
+                    if denom_t > 0.0 {
+                        let impulse_cap = mu * lambda_n.abs();
+                        let dv_t = v_t_len.min(impulse_cap.max(0.0));
+                        let lambda_t = dv_t / denom_t;
+                        if !kin_a {
+                            v_lin_delta[a] += t_hat * lambda_t;
+                            v_ang_delta[a] += ra_x_t * lambda_t;
+                        }
+                        if !kin_b && b < v_lin_delta.len() {
+                            v_lin_delta[b] -= t_hat * lambda_t;
+                            v_ang_delta[b] -= rb_x_t * lambda_t;
+                        }
+                    }
+                }
+            }
+        }
+
+        for i in 0..n {
+            if v_weight[i] <= 0.0 || (flags[i] & BodyFlags::KINEMATIC) != 0 {
+                continue;
+            }
+            let inv_w = 1.0 / v_weight[i];
+            v_post[i] += v_lin_delta[i] * (inv_mass[i] * inv_w);
+            let i_inv = world_inv_inertia(q_pred[i].rotation, inv_inertia_body[i]);
+            w_post[i] += i_inv * v_ang_delta[i] * inv_w;
+        }
+    }
+
+    // ── Write outputs ────────────────────────────────────────
+    let q_out = state_out.body_q.host_mut()?;
+    let qd_out = state_out.body_qd.host_mut()?;
+    for i in 0..n {
+        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
+            q_out[i] = q_in[i];
+            qd_out[i] = qd_in[i];
+            continue;
+        }
+        q_out[i] = q_pred[i];
+        q_out[i].renormalize();
+        qd_out[i] = SpatialVector::new(v_post[i], w_post[i]);
+    }
+    for f in state_out.body_f.host_mut()? {
+        *f = SpatialVector::ZERO;
+    }
+    Ok(())
 }
 
 fn is_static_or_kinematic(flags: &[u32], idx: usize) -> bool {
@@ -419,33 +569,37 @@ fn is_static_or_kinematic(flags: &[u32], idx: usize) -> bool {
         .is_none_or(|f| f & BodyFlags::KINEMATIC != 0)
 }
 
-#[allow(clippy::too_many_arguments, reason = "small helper, all args are direct refs to step-loop state")]
-fn apply_friction(
-    v_post: &mut [Vec3],
-    n_ab: Vec3,
-    v_rel: Vec3,
-    v_n: Real,
-    w_a: Real,
-    w_b: Real,
-    w_sum: Real,
-    kin_a: bool,
-    kin_b: bool,
-    a: usize,
-    b: usize,
-    impulse_cap: Real,
-) {
-    let v_t = v_rel - n_ab * v_n;
-    let v_t_len = v_t.length();
-    if v_t_len < 1e-9 {
-        return;
-    }
-    let t = v_t / v_t_len;
-    let dv_t = v_t_len.min(impulse_cap.max(0.0));
-    let lambda_t = dv_t / w_sum;
-    if !kin_a {
-        v_post[a] += t * (lambda_t * w_a);
-    }
-    if !kin_b && b < v_post.len() {
-        v_post[b] -= t * (lambda_t * w_b);
-    }
+#[inline]
+fn com_world(xf: Transform, com: Vec3) -> Vec3 {
+    xf.position + xf.rotation * com
+}
+
+/// World-frame inverse inertia: R · I_body⁻¹ · Rᵀ.
+fn world_inv_inertia(rotation: Quat, body_inv_inertia: Mat3) -> Mat3 {
+    let r = Mat3::from_quat(rotation);
+    r * body_inv_inertia * r.transpose()
+}
+
+/// `q_new = exp(0.5 · dt · ω) ⊗ q_old`, using the small-angle form.
+fn integrate_rotation(q: Quat, omega: Vec3, dt: Real) -> Quat {
+    let dq = Quat::from_xyzw(
+        omega.x * 0.5 * dt,
+        omega.y * 0.5 * dt,
+        omega.z * 0.5 * dt,
+        0.0,
+    );
+    (dq * q + q).normalize()
+}
+
+/// Apply a small rotation `Δθ` (rotation vector) to a unit quaternion.
+fn apply_rotation_delta(q: Quat, dtheta: Vec3) -> Quat {
+    let dq = Quat::from_xyzw(dtheta.x * 0.5, dtheta.y * 0.5, dtheta.z * 0.5, 0.0);
+    (dq * q + q).normalize()
+}
+
+/// Recover `ω` from a unit-quaternion delta. Caller divides by `dt`.
+fn quat_to_omega(dq: Quat) -> Vec3 {
+    // Make sure we take the short way around.
+    let sign = if dq.w < 0.0 { -1.0 } else { 1.0 };
+    Vec3::new(dq.x * 2.0 * sign, dq.y * 2.0 * sign, dq.z * 2.0 * sign)
 }

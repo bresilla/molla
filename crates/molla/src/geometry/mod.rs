@@ -11,7 +11,7 @@ mod pipeline;
 mod shape_world;
 
 pub use aabb::Aabb;
-pub use broad_phase::{brute_force_pairs, ShapePair};
-pub use narrow_phase::{pair_contact, ContactManifold};
-pub use pipeline::{collide, STATIC_BODY};
+pub use broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
+pub use narrow_phase::{pair_contact, ContactManifold, MAX_MANIFOLD_POINTS};
+pub use pipeline::{collide, CollisionPipeline, STATIC_BODY};
 pub use shape_world::{shape_world_aabb, shape_world_transform};

@@ -1,9 +1,10 @@
 //! Narrow phase: produces real contacts from candidate shape pairs.
 //!
-//! Stage 4.0 ships sphere-sphere and sphere-plane. Box / capsule / GJK
-//! follow in 4.x.
+//! Stage 4 ships sphere-sphere, sphere-plane, sphere-box, box-plane,
+//! and box-box (SAT). Capsule / cylinder / convex-mesh follow in
+//! stage 6 (GJK + EPA).
 
-use crate::math::{Real, Vec3};
+use crate::math::{Mat3, Real, Transform, Vec3};
 use crate::sim::{Model, ShapeGeometry, State};
 
 use super::broad_phase::ShapePair;
@@ -27,49 +28,108 @@ pub struct ContactManifold {
     pub restitution: Real,
 }
 
-/// Generate contacts for one candidate pair. Returns `None` if there
-/// is no contact (separation > 0). Stage-4.0 supports sphere-sphere
-/// and sphere-plane (in either order).
+/// Maximum manifold points returned per pair. Box-box / box-plane can
+/// produce up to 4 (the deepest face-incident vertices).
+pub const MAX_MANIFOLD_POINTS: usize = 4;
+
+/// Generate contacts for one candidate pair. Pushes 0..N manifolds
+/// onto `out`. Stage 4 supports sphere-sphere, sphere-plane,
+/// sphere-box, box-plane, box-box (SAT).
 pub fn pair_contact(
     model: &Model,
     state: &State,
     pair: ShapePair,
     default_friction: Real,
     default_restitution: Real,
-) -> Option<ContactManifold> {
+    out: &mut Vec<ContactManifold>,
+) {
     let geom_a = model.shape_geometry[pair.a as usize];
     let geom_b = model.shape_geometry[pair.b as usize];
     let xf_a = shape_world_transform(model, state, pair.a as usize);
     let xf_b = shape_world_transform(model, state, pair.b as usize);
 
-    let manifold = match (geom_a, geom_b) {
+    let start = out.len();
+    match (geom_a, geom_b) {
         (ShapeGeometry::Sphere { radius: ra }, ShapeGeometry::Sphere { radius: rb }) => {
-            sphere_sphere(xf_a.position, ra, xf_b.position, rb, pair.a, pair.b)
+            if let Some(m) = sphere_sphere(xf_a.position, ra, xf_b.position, rb, pair.a, pair.b) {
+                out.push(m);
+            }
         }
         (ShapeGeometry::Sphere { radius }, ShapeGeometry::Plane { normal }) => {
-            sphere_plane(xf_a.position, radius, xf_b.position, xf_b.rotation * normal, pair.a, pair.b)
+            if let Some(m) = sphere_plane(
+                xf_a.position,
+                radius,
+                xf_b.position,
+                xf_b.rotation * normal,
+                pair.a,
+                pair.b,
+            ) {
+                out.push(m);
+            }
         }
         (ShapeGeometry::Plane { normal }, ShapeGeometry::Sphere { radius }) => {
-            // Same as above but flip a/b so normal still points a→b.
-            sphere_plane(
+            if let Some(m) = sphere_plane(
                 xf_b.position,
                 radius,
                 xf_a.position,
                 xf_a.rotation * normal,
                 pair.b,
                 pair.a,
-            )
-            .map(flip_manifold)
+            ) {
+                out.push(flip_manifold(m));
+            }
         }
-        (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => None,
-    };
+        (ShapeGeometry::Sphere { radius }, ShapeGeometry::Box { half_extents }) => {
+            if let Some(m) = sphere_box(xf_a.position, radius, &xf_b, half_extents, pair.a, pair.b)
+            {
+                out.push(m);
+            }
+        }
+        (ShapeGeometry::Box { half_extents }, ShapeGeometry::Sphere { radius }) => {
+            if let Some(m) = sphere_box(xf_b.position, radius, &xf_a, half_extents, pair.b, pair.a)
+            {
+                out.push(flip_manifold(m));
+            }
+        }
+        (ShapeGeometry::Box { half_extents }, ShapeGeometry::Plane { normal }) => {
+            box_plane(
+                &xf_a,
+                half_extents,
+                xf_b.position,
+                xf_b.rotation * normal,
+                pair.a,
+                pair.b,
+                out,
+            );
+        }
+        (ShapeGeometry::Plane { normal }, ShapeGeometry::Box { half_extents }) => {
+            let n0 = out.len();
+            box_plane(
+                &xf_b,
+                half_extents,
+                xf_a.position,
+                xf_a.rotation * normal,
+                pair.b,
+                pair.a,
+                out,
+            );
+            for m in &mut out[n0..] {
+                *m = flip_manifold(*m);
+            }
+        }
+        (ShapeGeometry::Box { half_extents: ha }, ShapeGeometry::Box { half_extents: hb }) => {
+            box_box_sat(&xf_a, ha, &xf_b, hb, pair.a, pair.b, out);
+        }
+        (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => {}
+    }
 
-    manifold.map(|mut m| {
+    for m in &mut out[start..] {
         m.friction = default_friction;
         m.restitution = default_restitution;
-        m
-    })
+    }
 }
+
+// ─── Sphere-sphere ───────────────────────────────────────────────────
 
 fn sphere_sphere(
     pa: Vec3,
@@ -86,12 +146,7 @@ fn sphere_sphere(
         return None;
     }
     let dist = d_sq.sqrt();
-    // Pick a deterministic fallback normal when the centres coincide.
-    let normal = if dist > 1e-12 {
-        delta / dist
-    } else {
-        Vec3::Y
-    };
+    let normal = if dist > 1e-12 { delta / dist } else { Vec3::Y };
     let depth = r_sum - dist;
     let point = pa + normal * (ra - 0.5 * depth);
     Some(ContactManifold {
@@ -104,6 +159,8 @@ fn sphere_sphere(
         restitution: 0.0,
     })
 }
+
+// ─── Sphere-plane ────────────────────────────────────────────────────
 
 fn sphere_plane(
     sphere_p: Vec3,
@@ -118,8 +175,7 @@ fn sphere_plane(
         return None;
     }
     let depth = radius - signed;
-    // Normal points from the sphere TOWARD the plane (so corrections
-    // push the sphere out of the plane, away from `plane_normal`).
+    // Normal points from sphere toward plane (corrects sphere out of plane).
     let normal = -plane_normal;
     let point = sphere_p + normal * (radius - 0.5 * depth);
     Some(ContactManifold {
@@ -133,6 +189,580 @@ fn sphere_plane(
     })
 }
 
+// ─── Sphere-box ──────────────────────────────────────────────────────
+
+fn sphere_box(
+    sphere_p: Vec3,
+    radius: Real,
+    box_xf: &Transform,
+    box_half: Vec3,
+    sphere_shape: u32,
+    box_shape: u32,
+) -> Option<ContactManifold> {
+    // Express sphere centre in box-local frame.
+    let p_local = box_xf.inverse_transform_point(sphere_p);
+    // Closest point on the box to the sphere centre, box-local.
+    let q_local = Vec3::new(
+        p_local.x.clamp(-box_half.x, box_half.x),
+        p_local.y.clamp(-box_half.y, box_half.y),
+        p_local.z.clamp(-box_half.z, box_half.z),
+    );
+    let delta_local = p_local - q_local;
+    let d_sq = delta_local.length_squared();
+
+    if d_sq > radius * radius {
+        return None;
+    }
+
+    let (normal_local, depth, contact_local) = if d_sq > 1e-24 {
+        // Sphere centre outside the box.
+        let dist = d_sq.sqrt();
+        let n_local = delta_local / dist; // points from box → sphere
+        let depth = radius - dist;
+        let contact = q_local + n_local * (0.5 * (depth));
+        (-n_local, depth, contact) // normal a→b: sphere(a) → box(b) = −n_local
+    } else {
+        // Sphere centre inside the box — pick the axis with smallest
+        // distance to a face and push out along it.
+        let dx = box_half.x - p_local.x.abs();
+        let dy = box_half.y - p_local.y.abs();
+        let dz = box_half.z - p_local.z.abs();
+        let (axis_local, depth) = if dx <= dy && dx <= dz {
+            (Vec3::new(p_local.x.signum(), 0.0, 0.0), radius + dx)
+        } else if dy <= dz {
+            (Vec3::new(0.0, p_local.y.signum(), 0.0), radius + dy)
+        } else {
+            (Vec3::new(0.0, 0.0, p_local.z.signum()), radius + dz)
+        };
+        // axis_local points from box centre toward the closest face.
+        // Sphere centre is *inside* the box, normal sphere→box = -axis_local.
+        let contact = p_local; // sphere centre — half-buried
+        (-axis_local, depth, contact)
+    };
+
+    let point_world = box_xf.transform_point(contact_local);
+    let normal_world = box_xf.transform_vector(normal_local);
+    Some(ContactManifold {
+        a_shape: sphere_shape,
+        b_shape: box_shape,
+        point: point_world,
+        normal: normal_world,
+        depth,
+        friction: 0.0,
+        restitution: 0.0,
+    })
+}
+
+// ─── Box-plane ───────────────────────────────────────────────────────
+
+fn box_plane(
+    box_xf: &Transform,
+    box_half: Vec3,
+    plane_p: Vec3,
+    plane_normal: Vec3,
+    box_shape: u32,
+    plane_shape: u32,
+    out: &mut Vec<ContactManifold>,
+) {
+    // Test all 8 corners of the box. Each corner that's below the
+    // plane is a contact point. Convention: normal points a→b. With
+    // a = box, b = plane, the normal is along -plane_normal (toward
+    // the plane). XPBD then pushes the box along +plane_normal.
+    let corners = box_corners_world(box_xf, box_half);
+    let normal = -plane_normal;
+    let start = out.len();
+    for c in corners {
+        let signed = (c - plane_p).dot(plane_normal);
+        if signed < 0.0 {
+            let depth = -signed;
+            let point = c + plane_normal * (0.5 * depth);
+            out.push(ContactManifold {
+                a_shape: box_shape,
+                b_shape: plane_shape,
+                point,
+                normal,
+                depth,
+                friction: 0.0,
+                restitution: 0.0,
+            });
+        }
+    }
+    if out.len() - start > MAX_MANIFOLD_POINTS {
+        keep_deepest_range(out, start, MAX_MANIFOLD_POINTS);
+    }
+}
+
+fn box_corners_world(xf: &Transform, h: Vec3) -> [Vec3; 8] {
+    let r = Mat3::from_quat(xf.rotation);
+    let cx = r.x_axis * h.x;
+    let cy = r.y_axis * h.y;
+    let cz = r.z_axis * h.z;
+    let p = xf.position;
+    [
+        p - cx - cy - cz,
+        p + cx - cy - cz,
+        p - cx + cy - cz,
+        p + cx + cy - cz,
+        p - cx - cy + cz,
+        p + cx - cy + cz,
+        p - cx + cy + cz,
+        p + cx + cy + cz,
+    ]
+}
+
+fn keep_deepest_range(out: &mut Vec<ContactManifold>, start: usize, k: usize) {
+    let n = out.len();
+    if n - start <= k {
+        return;
+    }
+    out[start..].sort_by(|a, b| {
+        b.depth
+            .partial_cmp(&a.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.truncate(start + k);
+}
+
+// ─── Box-box (SAT) ───────────────────────────────────────────────────
+
+fn box_box_sat(
+    a_xf: &Transform,
+    a_half: Vec3,
+    b_xf: &Transform,
+    b_half: Vec3,
+    a_shape: u32,
+    b_shape: u32,
+    out: &mut Vec<ContactManifold>,
+) {
+    // Reference: Erin Catto's box-box from Bullet / Box2D, simplified.
+    // Goal: find the SAT axis with the smallest penetration depth, then
+    // emit a contact manifold (1–4 points).
+    let ra = Mat3::from_quat(a_xf.rotation);
+    let rb = Mat3::from_quat(b_xf.rotation);
+    let a_axes = [ra.x_axis, ra.y_axis, ra.z_axis];
+    let b_axes = [rb.x_axis, rb.y_axis, rb.z_axis];
+
+    let t = b_xf.position - a_xf.position;
+
+    // R[i][j] = a_axes[i] · b_axes[j], absR with epsilon.
+    let mut rmat = [[0.0; 3]; 3];
+    let mut absr = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            rmat[i][j] = a_axes[i].dot(b_axes[j]);
+            absr[i][j] = rmat[i][j].abs() + 1e-12;
+        }
+    }
+
+    let a_h = [a_half.x, a_half.y, a_half.z];
+    let b_h = [b_half.x, b_half.y, b_half.z];
+    let t_in_a = [t.dot(a_axes[0]), t.dot(a_axes[1]), t.dot(a_axes[2])];
+
+    // Track best axis: 0..3 = a's faces, 3..6 = b's faces, 6..15 = edge-edge.
+    let mut best_depth = Real::INFINITY;
+    let mut best_axis = -1i32;
+    let mut best_normal = Vec3::Y; // points from a → b
+
+    // Faces of A.
+    for i in 0..3 {
+        let ra_proj = a_h[i];
+        let rb_proj = b_h[0] * absr[i][0] + b_h[1] * absr[i][1] + b_h[2] * absr[i][2];
+        let dist = t_in_a[i].abs();
+        let pen = ra_proj + rb_proj - dist;
+        if pen < 0.0 {
+            return; // separating axis — no contact
+        }
+        if pen < best_depth {
+            best_depth = pen;
+            best_axis = i as i32;
+            let s = if t_in_a[i] >= 0.0 { 1.0 } else { -1.0 };
+            best_normal = a_axes[i] * s;
+        }
+    }
+
+    // Faces of B.
+    let t_in_b = [t.dot(b_axes[0]), t.dot(b_axes[1]), t.dot(b_axes[2])];
+    for j in 0..3 {
+        let ra_proj = a_h[0] * absr[0][j] + a_h[1] * absr[1][j] + a_h[2] * absr[2][j];
+        let rb_proj = b_h[j];
+        let dist = t_in_b[j].abs();
+        let pen = ra_proj + rb_proj - dist;
+        if pen < 0.0 {
+            return;
+        }
+        // Bias toward face axes by a hair to prefer them over edge-edge
+        // (edge-edge contacts produce 1 point, faces produce 4 — much
+        // more stable for stacking).
+        if pen + 1e-3 < best_depth {
+            best_depth = pen;
+            best_axis = (3 + j) as i32;
+            let s = if t_in_b[j] >= 0.0 { 1.0 } else { -1.0 };
+            best_normal = b_axes[j] * s;
+        }
+    }
+
+    // Edge-edge axes (a_i × b_j).
+    for i in 0..3 {
+        for j in 0..3 {
+            let axis = a_axes[i].cross(b_axes[j]);
+            let axis_len = axis.length();
+            if axis_len < 1e-9 {
+                continue; // parallel edges — covered by face axes
+            }
+            let n = axis / axis_len;
+            // Project A and B half-extents onto this axis.
+            let mut ra_proj: Real = 0.0;
+            for k in 0..3 {
+                ra_proj += (a_h[k] * a_axes[k].dot(n)).abs();
+            }
+            let mut rb_proj: Real = 0.0;
+            for k in 0..3 {
+                rb_proj += (b_h[k] * b_axes[k].dot(n)).abs();
+            }
+            let dist = t.dot(n).abs();
+            let pen = ra_proj + rb_proj - dist;
+            if pen < 0.0 {
+                return;
+            }
+            if pen + 5e-3 < best_depth {
+                best_depth = pen;
+                best_axis = (6 + i * 3 + j) as i32;
+                let s = if t.dot(n) >= 0.0 { 1.0 } else { -1.0 };
+                best_normal = n * s;
+            }
+        }
+    }
+
+    if best_axis < 0 || best_depth <= 0.0 {
+        return;
+    }
+
+    // Manifold generation: clip B's incident face against A's reference
+    // face for axis < 6 (face contact), or use closest points for
+    // edge-edge axes (axis >= 6).
+    if best_axis < 6 {
+        emit_face_manifold(
+            a_xf, a_half, &a_axes, b_xf, b_half, &b_axes, best_normal, best_depth, a_shape,
+            b_shape, best_axis, out,
+        );
+    } else {
+        emit_edge_manifold(
+            a_xf,
+            a_half,
+            &a_axes,
+            b_xf,
+            b_half,
+            &b_axes,
+            best_normal,
+            best_depth,
+            a_shape,
+            b_shape,
+            best_axis - 6,
+            out,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_face_manifold(
+    a_xf: &Transform,
+    a_half: Vec3,
+    a_axes: &[Vec3; 3],
+    b_xf: &Transform,
+    b_half: Vec3,
+    b_axes: &[Vec3; 3],
+    normal: Vec3, // a → b
+    depth: Real,
+    a_shape: u32,
+    b_shape: u32,
+    axis_idx: i32,
+    out: &mut Vec<ContactManifold>,
+) {
+    // Reference body: the one whose face is the SAT separating axis.
+    // - axis_idx 0..3: A's face is reference (normal == ±a_axes[i]).
+    // - axis_idx 3..6: B's face is reference; we want normal pointing
+    //   FROM the reference body, so flip.
+    // We always emit the manifold in the convention "normal points a→b".
+
+    let (ref_xf, ref_half, ref_axes, inc_xf, inc_half, inc_axes, ref_is_a) = if axis_idx < 3 {
+        (a_xf, a_half, a_axes, b_xf, b_half, b_axes, true)
+    } else {
+        (b_xf, b_half, b_axes, a_xf, a_half, a_axes, false)
+    };
+
+    // Reference face: pick the face of `ref` whose outward normal best
+    // aligns with `normal` (if ref_is_a) or `-normal` (if !ref_is_a).
+    // We want the outward face that points TOWARD the incident body.
+    let ref_face_n = if ref_is_a { normal } else { -normal };
+    let mut best_dot = -Real::INFINITY;
+    let mut ref_axis_idx = 0usize;
+    let mut ref_axis_sign = 1.0;
+    for k in 0..3 {
+        for s in [-1.0, 1.0] {
+            let candidate = ref_axes[k] * s;
+            let d = candidate.dot(ref_face_n);
+            if d > best_dot {
+                best_dot = d;
+                ref_axis_idx = k;
+                ref_axis_sign = s;
+            }
+        }
+    }
+    let ref_n = ref_axes[ref_axis_idx] * ref_axis_sign;
+    let ref_h = [ref_half.x, ref_half.y, ref_half.z];
+    let ref_face_centre = ref_xf.position + ref_n * ref_h[ref_axis_idx];
+    // Two in-plane axes for the reference face.
+    let (u_idx, v_idx) = match ref_axis_idx {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let ref_u = ref_axes[u_idx];
+    let ref_v = ref_axes[v_idx];
+    let ref_hu = ref_h[u_idx];
+    let ref_hv = ref_h[v_idx];
+
+    // Incident face: pick the face of `inc` whose outward normal is
+    // most opposite to `ref_n`.
+    let mut best = Real::INFINITY;
+    let mut inc_axis_idx = 0usize;
+    let mut inc_axis_sign = 1.0;
+    for k in 0..3 {
+        for s in [-1.0, 1.0] {
+            let candidate = inc_axes[k] * s;
+            let d = candidate.dot(ref_n);
+            if d < best {
+                best = d;
+                inc_axis_idx = k;
+                inc_axis_sign = s;
+            }
+        }
+    }
+    let inc_n = inc_axes[inc_axis_idx] * inc_axis_sign;
+    let inc_h = [inc_half.x, inc_half.y, inc_half.z];
+    let inc_face_centre = inc_xf.position + inc_n * inc_h[inc_axis_idx];
+    let (iu_idx, iv_idx) = match inc_axis_idx {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let inc_u = inc_axes[iu_idx] * inc_h[iu_idx];
+    let inc_v = inc_axes[iv_idx] * inc_h[iv_idx];
+
+    // Incident face quad in world space (4 corners).
+    let mut quad = [
+        inc_face_centre - inc_u - inc_v,
+        inc_face_centre + inc_u - inc_v,
+        inc_face_centre + inc_u + inc_v,
+        inc_face_centre - inc_u + inc_v,
+    ];
+
+    // Clip the incident quad against the 4 side planes of the reference face.
+    let clip_planes = [
+        (ref_u, ref_face_centre - ref_u * ref_hu),  // -u side, inward normal +u
+        (-ref_u, ref_face_centre + ref_u * ref_hu), // +u side, inward normal -u
+        (ref_v, ref_face_centre - ref_v * ref_hv),  // -v side
+        (-ref_v, ref_face_centre + ref_v * ref_hv), // +v side
+    ];
+    let mut clipped: Vec<Vec3> = quad.to_vec();
+    for (n, p) in clip_planes.iter() {
+        clipped = clip_polygon_to_plane(&clipped, *n, *p);
+        if clipped.is_empty() {
+            break;
+        }
+    }
+    // Avoid the unused-binding warning when clip is bypassed.
+    let _ = &mut quad;
+
+    // For each survivor, project onto reference plane; keep points
+    // whose signed distance below the ref face is positive (i.e.
+    // penetrating). Emit (point, depth).
+    let mut candidates: Vec<(Vec3, Real)> = Vec::new();
+    for p in clipped {
+        let signed = (p - ref_face_centre).dot(ref_n);
+        if signed <= 0.0 {
+            // Penetration depth (positive).
+            let d = -signed;
+            // Contact point: midway between the incident point and its
+            // projection on the reference face.
+            let mid = p - ref_n * (0.5 * d);
+            candidates.push((mid, d));
+        }
+    }
+
+    if candidates.is_empty() {
+        // Fallback to the SAT-reported depth at the incident face centre.
+        let mid = inc_face_centre - ref_n * (0.5 * depth);
+        candidates.push((mid, depth));
+    }
+
+    // Reduce to <=4 points: keep the deepest, then the 3 most extreme
+    // along the in-plane axes.
+    if candidates.len() > MAX_MANIFOLD_POINTS {
+        candidates = reduce_manifold(&candidates, ref_face_centre, ref_u, ref_v);
+    }
+
+    for (point, d) in candidates {
+        out.push(ContactManifold {
+            a_shape,
+            b_shape,
+            point,
+            normal,
+            depth: d,
+            friction: 0.0,
+            restitution: 0.0,
+        });
+    }
+}
+
+fn clip_polygon_to_plane(poly: &[Vec3], plane_normal: Vec3, plane_point: Vec3) -> Vec<Vec3> {
+    if poly.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    let mut prev = poly[poly.len() - 1];
+    let mut prev_d = (prev - plane_point).dot(plane_normal);
+    for &cur in poly.iter() {
+        let cur_d = (cur - plane_point).dot(plane_normal);
+        if cur_d >= 0.0 {
+            if prev_d < 0.0 {
+                let t = prev_d / (prev_d - cur_d);
+                out.push(prev + (cur - prev) * t);
+            }
+            out.push(cur);
+        } else if prev_d >= 0.0 {
+            let t = prev_d / (prev_d - cur_d);
+            out.push(prev + (cur - prev) * t);
+        }
+        prev = cur;
+        prev_d = cur_d;
+    }
+    out
+}
+
+fn reduce_manifold(
+    pts: &[(Vec3, Real)],
+    centre: Vec3,
+    u: Vec3,
+    v: Vec3,
+) -> Vec<(Vec3, Real)> {
+    // Pick the deepest point first. Then iteratively pick the point
+    // furthest from the already-picked set in the (u, v) plane.
+    let mut chosen: Vec<usize> = Vec::with_capacity(MAX_MANIFOLD_POINTS);
+    let deepest = pts
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    chosen.push(deepest);
+    while chosen.len() < MAX_MANIFOLD_POINTS && chosen.len() < pts.len() {
+        let mut best = -Real::INFINITY;
+        let mut best_idx = 0usize;
+        for (i, (p, _)) in pts.iter().enumerate() {
+            if chosen.contains(&i) {
+                continue;
+            }
+            let pi = *p - centre;
+            let pu = pi.dot(u);
+            let pv = pi.dot(v);
+            let mut min_d = Real::INFINITY;
+            for &c in &chosen {
+                let qi = pts[c].0 - centre;
+                let qu = qi.dot(u);
+                let qv = qi.dot(v);
+                let d = (pu - qu).powi(2) + (pv - qv).powi(2);
+                if d < min_d {
+                    min_d = d;
+                }
+            }
+            if min_d > best {
+                best = min_d;
+                best_idx = i;
+            }
+        }
+        chosen.push(best_idx);
+    }
+    chosen.into_iter().map(|i| pts[i]).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_edge_manifold(
+    a_xf: &Transform,
+    a_half: Vec3,
+    a_axes: &[Vec3; 3],
+    b_xf: &Transform,
+    b_half: Vec3,
+    b_axes: &[Vec3; 3],
+    normal: Vec3, // a → b
+    depth: Real,
+    a_shape: u32,
+    b_shape: u32,
+    axis_pair: i32,
+    out: &mut Vec<ContactManifold>,
+) {
+    // axis_pair = i*3 + j → A's edge along a_axes[i], B's edge along b_axes[j].
+    let i = (axis_pair / 3) as usize;
+    let j = (axis_pair % 3) as usize;
+    // Pick edge endpoints on A: the edge most aligned with `+normal`
+    // (i.e. closest to B). Same idea on B but with `-normal`.
+    let a_h = [a_half.x, a_half.y, a_half.z];
+    let b_h = [b_half.x, b_half.y, b_half.z];
+    let (u_idx, v_idx) = match i {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let su = if a_axes[u_idx].dot(normal) >= 0.0 { 1.0 } else { -1.0 };
+    let sv = if a_axes[v_idx].dot(normal) >= 0.0 { 1.0 } else { -1.0 };
+    let a_edge_centre =
+        a_xf.position + a_axes[u_idx] * (su * a_h[u_idx]) + a_axes[v_idx] * (sv * a_h[v_idx]);
+
+    let (bu_idx, bv_idx) = match j {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let bsu = if b_axes[bu_idx].dot(-normal) >= 0.0 { 1.0 } else { -1.0 };
+    let bsv = if b_axes[bv_idx].dot(-normal) >= 0.0 { 1.0 } else { -1.0 };
+    let b_edge_centre =
+        b_xf.position + b_axes[bu_idx] * (bsu * b_h[bu_idx]) + b_axes[bv_idx] * (bsv * b_h[bv_idx]);
+
+    // Closest points between two infinite lines, then clamp.
+    let pa = a_edge_centre;
+    let pb = b_edge_centre;
+    let da = a_axes[i];
+    let db = b_axes[j];
+    let r = pa - pb;
+    let aa = da.dot(da);
+    let bb = db.dot(db);
+    let ab = da.dot(db);
+    let denom = aa * bb - ab * ab;
+    let (sa, sb) = if denom.abs() > 1e-12 {
+        let s = (ab * r.dot(db) - bb * r.dot(da)) / denom;
+        let t = (aa * r.dot(db) - ab * r.dot(da)) / denom;
+        (s, t)
+    } else {
+        (0.0, 0.0)
+    };
+    let sa = sa.clamp(-a_h[i], a_h[i]);
+    let sb = sb.clamp(-b_h[j], b_h[j]);
+
+    let cpa = pa + da * sa;
+    let cpb = pb + db * sb;
+    let mid = (cpa + cpb) * 0.5;
+
+    out.push(ContactManifold {
+        a_shape,
+        b_shape,
+        point: mid,
+        normal,
+        depth,
+        friction: 0.0,
+        restitution: 0.0,
+    });
+}
+
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
     std::mem::swap(&mut m.a_shape, &mut m.b_shape);
     m.normal = -m.normal;
@@ -142,23 +772,25 @@ fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::Quat;
 
     #[test]
     fn sphere_sphere_overlap() {
-        let m = sphere_sphere(Vec3::ZERO, 1.0, Vec3::new(1.5, 0.0, 0.0), 1.0, 0, 1).unwrap();
-        // r_sum = 2, dist = 1.5 → depth = 0.5
+        let m =
+            sphere_sphere(Vec3::ZERO, 1.0, Vec3::new(1.5, 0.0, 0.0), 1.0, 0, 1).unwrap();
         assert!((m.depth - 0.5).abs() < 1e-9);
         assert!((m.normal - Vec3::X).length() < 1e-9);
     }
 
     #[test]
     fn sphere_sphere_separated() {
-        assert!(sphere_sphere(Vec3::ZERO, 1.0, Vec3::new(3.0, 0.0, 0.0), 1.0, 0, 1).is_none());
+        assert!(
+            sphere_sphere(Vec3::ZERO, 1.0, Vec3::new(3.0, 0.0, 0.0), 1.0, 0, 1).is_none()
+        );
     }
 
     #[test]
     fn sphere_above_plane_no_contact() {
-        // sphere at y=1, radius 0.5; plane at y=0 with +Y normal. signed = 1, radius = 0.5 → no contact.
         let m = sphere_plane(
             Vec3::new(0.0, 1.0, 0.0),
             0.5,
@@ -172,7 +804,6 @@ mod tests {
 
     #[test]
     fn sphere_through_plane_contacts() {
-        // sphere at y=0.3, radius 0.5; plane at y=0 with +Y normal. signed=0.3, depth=0.2.
         let m = sphere_plane(
             Vec3::new(0.0, 0.3, 0.0),
             0.5,
@@ -183,7 +814,95 @@ mod tests {
         )
         .unwrap();
         assert!((m.depth - 0.2).abs() < 1e-9);
-        // Normal points from sphere toward plane → -Y.
         assert!((m.normal + Vec3::Y).length() < 1e-9);
+    }
+
+    #[test]
+    fn sphere_box_face_contact() {
+        // Sphere at (0, 1.4, 0), r=0.5; box at origin half=(1,1,1).
+        // Penetration on +Y face = 1 + 0.5 - 1.4 = 0.1.
+        let xf = Transform::IDENTITY;
+        let m = sphere_box(
+            Vec3::new(0.0, 1.4, 0.0),
+            0.5,
+            &xf,
+            Vec3::splat(1.0),
+            0,
+            1,
+        )
+        .unwrap();
+        assert!((m.depth - 0.1).abs() < 1e-9);
+        assert!((m.normal + Vec3::Y).length() < 1e-3);
+    }
+
+    #[test]
+    fn sphere_box_inside() {
+        // Sphere at the box centre — should produce a contact along the
+        // closest face, depth = radius + half (here 0.5 + 1.0 = 1.5).
+        let xf = Transform::IDENTITY;
+        let m = sphere_box(Vec3::ZERO, 0.5, &xf, Vec3::splat(1.0), 0, 1).unwrap();
+        assert!(m.depth > 1.0);
+    }
+
+    #[test]
+    fn box_plane_flat_makes_4_contacts() {
+        // Box half=(1,1,1) sitting at y=0.9 with y=0 ground plane → all
+        // 4 bottom corners are at y = -0.1, depth 0.1.
+        let xf = Transform::new(Vec3::new(0.0, 0.9, 0.0), Quat::IDENTITY);
+        let mut out = Vec::new();
+        box_plane(
+            &xf,
+            Vec3::splat(1.0),
+            Vec3::ZERO,
+            Vec3::Y,
+            0,
+            1,
+            &mut out,
+        );
+        assert_eq!(out.len(), 4);
+        for m in &out {
+            assert!((m.depth - 0.1).abs() < 1e-9);
+            assert!((m.normal + Vec3::Y).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn box_box_face_overlap() {
+        // Two unit boxes, B sitting on top of A with 0.1 overlap.
+        let a_xf = Transform::IDENTITY;
+        let b_xf = Transform::new(Vec3::new(0.0, 1.9, 0.0), Quat::IDENTITY);
+        let mut out = Vec::new();
+        box_box_sat(
+            &a_xf,
+            Vec3::splat(1.0),
+            &b_xf,
+            Vec3::splat(1.0),
+            0,
+            1,
+            &mut out,
+        );
+        assert!(!out.is_empty(), "expected contacts for overlapping boxes");
+        for m in &out {
+            assert!(m.depth >= 0.0);
+            // a→b normal should point +Y (B is above A).
+            assert!(m.normal.dot(Vec3::Y) > 0.5);
+        }
+    }
+
+    #[test]
+    fn box_box_separated_no_contact() {
+        let a_xf = Transform::IDENTITY;
+        let b_xf = Transform::new(Vec3::new(3.0, 0.0, 0.0), Quat::IDENTITY);
+        let mut out = Vec::new();
+        box_box_sat(
+            &a_xf,
+            Vec3::splat(1.0),
+            &b_xf,
+            Vec3::splat(1.0),
+            0,
+            1,
+            &mut out,
+        );
+        assert!(out.is_empty());
     }
 }

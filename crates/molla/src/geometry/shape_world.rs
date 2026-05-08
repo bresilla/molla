@@ -41,6 +41,17 @@ pub fn shape_world_aabb(
             Aabb::centred(xf.position, Vec3::splat(radius)).expanded(margin)
         }
         ShapeGeometry::Plane { .. } => Aabb::infinite(),
+        ShapeGeometry::Box { half_extents } => {
+            // World-axis half-extents = |R| · h_local, where |R|
+            // is the elementwise absolute of the rotation matrix.
+            let rot = crate::math::Mat3::from_quat(xf.rotation);
+            let abs_x = Vec3::new(rot.x_axis.x.abs(), rot.x_axis.y.abs(), rot.x_axis.z.abs());
+            let abs_y = Vec3::new(rot.y_axis.x.abs(), rot.y_axis.y.abs(), rot.y_axis.z.abs());
+            let abs_z = Vec3::new(rot.z_axis.x.abs(), rot.z_axis.y.abs(), rot.z_axis.z.abs());
+            let h: Vec3 = abs_x * half_extents.x + abs_y * half_extents.y + abs_z * half_extents.z;
+            Aabb::centred(xf.position, h).expanded(margin)
+        }
     }
 }
+
 
