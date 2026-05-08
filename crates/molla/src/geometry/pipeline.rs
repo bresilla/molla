@@ -35,6 +35,12 @@ impl CollisionPipeline {
     ) -> Result<usize> {
         contacts.clear();
         if model.shape_count < 2 {
+            // No pairs possible; still write an empty body-contact
+            // CSR so `body_contact_offsets` / `body_contact_indices`
+            // get sized for `body_count`. Solvers + sensors bind
+            // these unconditionally and would otherwise hit "no
+            // device mirror" on first dispatch.
+            push_contacts_into(contacts, &[], model)?;
             return Ok(0);
         }
 
@@ -73,6 +79,12 @@ pub fn collide(
     contacts.clear();
 
     if model.shape_count < 2 {
+        // No pairs possible; still build an **empty** body-contact CSR
+        // so `body_contact_offsets` / `body_contact_indices` get sized
+        // for `body_count` (and gain a GPU device buffer on the next
+        // `upload_to_device`). Solvers / sensors that bind these
+        // unconditionally would otherwise hit "no device mirror".
+        push_contacts_into(contacts, &[], model)?;
         return Ok(0);
     }
 

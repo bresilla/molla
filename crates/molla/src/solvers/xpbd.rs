@@ -46,6 +46,11 @@ pub struct GpuBackend {
     pub(crate) device: std::sync::Arc<wgpu::Device>,
     pub(crate) queue: std::sync::Arc<wgpu::Queue>,
     pub(crate) kernel: crate::kernels::XpbdKernel,
+    /// GPU-side equality-constraint projection — replaces the
+    /// host-side `apply_equality_post_gpu` shim. Built lazily so
+    /// solvers without equality constraints don't pay the pipeline
+    /// compile cost.
+    pub(crate) equality_kernel: crate::kernels::XpbdEqualityKernel,
 }
 
 /// Position-based dynamics solver.
@@ -100,10 +105,16 @@ impl XpbdSolver {
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
         let kernel = crate::kernels::XpbdKernel::new(&device, body_count);
+        let equality_kernel = crate::kernels::XpbdEqualityKernel::new(&device);
         Ok(Self {
             position_iterations: 4,
             substeps: 1,
-            backend: XpbdBackend::Gpu(GpuBackend { device, queue, kernel }),
+            backend: XpbdBackend::Gpu(GpuBackend {
+                device,
+                queue,
+                kernel,
+                equality_kernel,
+            }),
         })
     }
 
@@ -252,7 +263,12 @@ impl XpbdSolver {
                 // not implemented yet — fall back to using state_in's
                 // body_q (works for substeps == 1).
                 let _ = q_at_contact;
-                let GpuBackend { device, queue, kernel } = gpu;
+                let GpuBackend {
+                    device,
+                    queue,
+                    kernel,
+                    equality_kernel,
+                } = gpu;
                 kernel.dispatch(
                     device,
                     queue,
@@ -264,16 +280,18 @@ impl XpbdSolver {
                     dt,
                     state_out,
                 )?;
-                // Equality constraints (CONNECT / WELD) are not yet
-                // in the WGSL kernel — apply them on host then upload.
-                apply_equality_post_gpu(
+                // Equality constraints (CONNECT / WELD) — full GPU
+                // dispatch via `XpbdEqualityKernel`; modifies
+                // `state_out.body_q` in place and recomputes
+                // `state_out.body_qd` from the corrected pose.
+                equality_kernel.dispatch(
+                    device,
+                    queue,
                     model,
                     state_in,
                     state_out,
-                    dt,
-                    self.position_iterations,
-                    device,
-                    queue,
+                    self.position_iterations as u32,
+                    dt as f32,
                 )?;
                 // Particles (cloth/rope/springs) likewise live on the
                 // CPU side for now.
@@ -944,50 +962,11 @@ pub(crate) fn equality_projection_pass(
     Ok(())
 }
 
-/// CPU shim: project equality constraints on host poses after the GPU
-/// kernel has finished. Reads `state_in.body_q` for velocity recovery,
-/// downloads `state_out.body_q` from the device, projects, recomputes
-/// `state_out.body_qd` from the corrected pose, then uploads both
-/// buffers back. Cheap for the small numbers of equality constraints
-/// typical of articulated assemblies.
-#[cfg(feature = "gpu")]
-pub(crate) fn apply_equality_post_gpu(
-    model: &Model,
-    state_in: &State,
-    state_out: &mut State,
-    dt: Real,
-    iterations: usize,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> Result<()> {
-    if model.equality_count == 0 {
-        return Ok(());
-    }
-    state_out.body_q.download(device, queue)?;
-    state_out.body_qd.download(device, queue)?;
-
-    let q_in = state_in.body_q.host()?.to_vec();
-    let flags = model.body_flags.host()?.to_vec();
-
-    let mut q_work = state_out.body_q.host()?.to_vec();
-    equality_projection_pass(model, &mut q_work, iterations)?;
-
-    state_out.body_q.host_mut()?.copy_from_slice(&q_work);
-
-    let qd_slice = state_out.body_qd.host_mut()?;
-    for i in 0..model.body_count {
-        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
-            continue;
-        }
-        let dp = q_work[i].position - q_in[i].position;
-        let dq = q_work[i].rotation * q_in[i].rotation.conjugate();
-        qd_slice[i] = SpatialVector::new(dp / dt, quat_to_omega(dq) / dt);
-    }
-
-    state_out.body_q.upload(queue)?;
-    state_out.body_qd.upload(queue)?;
-    Ok(())
-}
+// `apply_equality_post_gpu` (CPU shim) was removed when
+// `XpbdEqualityKernel` (`shaders/xpbd_equality.wgsl`) replaced it
+// with a true GPU dispatch. The CPU `equality_projection_pass`
+// above is kept — it's still used by the CPU `cpu_step` path and
+// by tests as the reference oracle for the WGSL port.
 
 /// Run one full XPBD particle step on host:
 /// 1. Predict: `p_new = p + dt·v + dt²·g`, with linear damping.

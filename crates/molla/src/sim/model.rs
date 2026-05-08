@@ -449,6 +449,15 @@ impl Model {
         up!(joint_ancestor);
         up!(joint_target_ke);
         up!(shape_collision_group);
+        // Equality + mimic constraint arrays — added when the GPU
+        // `XpbdEqualityKernel` replaced the host-side shim.
+        up!(equality_type);
+        up!(equality_body_a);
+        up!(equality_body_b);
+        up!(equality_anchor_a);
+        up!(equality_anchor_b);
+        up!(equality_relative_rotation);
+        up!(equality_enabled);
         up!(gravity);
         Ok(())
     }

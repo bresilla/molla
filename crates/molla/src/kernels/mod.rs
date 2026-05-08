@@ -18,6 +18,8 @@ mod integrate_bodies;
 mod raycast;
 #[cfg(feature = "gpu")]
 mod xpbd;
+#[cfg(feature = "gpu")]
+mod xpbd_equality;
 
 #[cfg(feature = "gpu")]
 pub use actuator_pd::ActuatorPdKernel;
@@ -37,3 +39,5 @@ pub use integrate_bodies::IntegrateBodiesKernel;
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
+#[cfg(feature = "gpu")]
+pub use xpbd_equality::XpbdEqualityKernel;
