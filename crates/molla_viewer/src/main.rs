@@ -2519,7 +2519,12 @@ fn update_arm_example(
     // joint_dof_offset[i]..[i+1]. For revolute joints that's a
     // single DOF per joint, so dof = i. We also zero target_vel
     // so the derivative term tracks the joint coming to rest at
-    // the target.
+    // the target. We do NOT touch joint_force here — the PD
+    // kernel writes it on the device (and marks it device-dirty),
+    // so a host-side write would conflict. The kernel does
+    // `joint_force[dof] = effort` (assignment, not accumulate)
+    // and our 3 actuators cover all 3 DOFs of this scene, so no
+    // stale values leak through.
     {
         let queue = sim.engine.queue().expect("queue").clone();
         let target_pos = sim
@@ -2540,17 +2545,6 @@ fn update_arm_example(
         for v in target_vel.iter_mut() {
             *v = 0.0;
         }
-        // Zero joint_force before the controller writes (and so
-        // unused DOFs stay at zero).
-        for f in sim
-            .control
-            .joint_force
-            .host_mut()
-            .expect("joint_force")
-            .iter_mut()
-        {
-            *f = 0.0;
-        }
         sim.control
             .joint_target_pos
             .upload(&queue)
@@ -2559,10 +2553,6 @@ fn update_arm_example(
             .joint_target_vel
             .upload(&queue)
             .expect("target_vel upload");
-        sim.control
-            .joint_force
-            .upload(&queue)
-            .expect("joint_force upload");
     }
 
     // Run the PD controller — writes effort into Control.joint_force.
