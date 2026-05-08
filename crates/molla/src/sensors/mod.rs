@@ -18,12 +18,16 @@
 #[cfg(feature = "gpu")]
 pub mod contact;
 #[cfg(feature = "gpu")]
+pub mod frame_transform;
+#[cfg(feature = "gpu")]
 pub mod imu;
 #[cfg(feature = "gpu")]
 pub mod raycast;
 
 #[cfg(feature = "gpu")]
 pub use contact::{BodyContactReading, ContactSensor};
+#[cfg(feature = "gpu")]
+pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 #[cfg(feature = "gpu")]
 pub use imu::{ImuMount, ImuReading, ImuSensor};
 #[cfg(feature = "gpu")]

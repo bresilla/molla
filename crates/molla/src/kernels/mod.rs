@@ -5,6 +5,8 @@ mod contact_sensor;
 #[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
+mod frame_transform;
+#[cfg(feature = "gpu")]
 mod imu;
 #[cfg(feature = "gpu")]
 mod integrate_bodies;
@@ -17,6 +19,8 @@ mod xpbd;
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
+#[cfg(feature = "gpu")]
+pub use frame_transform::FrameTransformKernel;
 #[cfg(feature = "gpu")]
 pub use imu::ImuKernel;
 #[cfg(feature = "gpu")]
