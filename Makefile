@@ -11,7 +11,9 @@ CARGO := nixVulkan cargo
 # cargo is invoked from contexts (nix shell, systemd user unit, etc.)
 # that don't inherit the desktop session's DISPLAY env var. Only
 # matters for targets that actually open a window (`run`).
-RUN_ENV := DISPLAY=:1
+# WAYLAND_DISPLAY= forces winit onto the X11 path: if both env vars
+# are set, winit prefers Wayland and we want it pinned to X11.
+RUN_ENV := DISPLAY=:1 WAYLAND_DISPLAY=
 
 $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))

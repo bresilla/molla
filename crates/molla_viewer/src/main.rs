@@ -18,6 +18,13 @@ const DROP_HEIGHT: f32 = 12.0;
 const FIXED_DT: f64 = 1.0 / 240.0; // 240 Hz physics
 const SUBSTEPS_PER_FRAME: usize = 4; // ~60Hz frame, 4 sub-steps = 240Hz
 
+// Floor at y = 0 — purely a viewer-side post-step clamp until stage 4
+// adds the real collision pipeline. We bounce with a small restitution
+// so the demo doesn't look statically dead after a few seconds.
+const FLOOR_Y: f64 = 0.0;
+const FLOOR_RESTITUTION: f64 = 0.45;
+const FLOOR_FRICTION: f64 = 0.6;
+
 fn main() {
     App::new()
         .add_plugins(
@@ -219,6 +226,34 @@ fn step_simulation(mut sim: ResMut<Sim>) {
             .step(model, state_a, control, contacts, FIXED_DT, state_b)
             .expect("solver step");
         std::mem::swap(state_a, state_b);
+        clamp_to_floor(state_a);
+    }
+}
+
+/// Viewer-side floor clamp. Stage-1 molla has no contact pipeline, so
+/// without this the spheres fall through the visual ground forever.
+/// Removed when stage 4 ships the real broad/narrow phase.
+fn clamp_to_floor(state: &mut mp::State) {
+    let q = state.body_q.host_mut().expect("body_q");
+    let mut hits = vec![false; q.len()];
+    for (i, t) in q.iter_mut().enumerate() {
+        let radius = SPHERE_RADIUS as f64;
+        let min_y = FLOOR_Y + radius;
+        if t.position.y < min_y {
+            t.position.y = min_y;
+            hits[i] = true;
+        }
+    }
+    let qd = state.body_qd.host_mut().expect("body_qd");
+    for (i, v) in qd.iter_mut().enumerate() {
+        if hits[i] && v.linear.y < 0.0 {
+            v.linear.y = -v.linear.y * FLOOR_RESTITUTION;
+            // Coulomb-ish tangential damping.
+            v.linear.x *= 1.0 - FLOOR_FRICTION;
+            v.linear.z *= 1.0 - FLOOR_FRICTION;
+            // Bleed angular velocity too so spinners settle.
+            v.angular *= 1.0 - 0.5 * FLOOR_FRICTION;
+        }
     }
 }
 
