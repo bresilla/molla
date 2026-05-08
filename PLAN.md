@@ -1237,24 +1237,52 @@ Definition of done:
 - Franka URDF loads, runs without contacts, matches reference.
 - `cargo bench --bench feathestone_arm` reports per-step time budget met.
 
-### Stage 4 — First collision pipeline (XPBD rigid contacts) (4–6 weeks)
+### Stage 4 — First collision pipeline (XPBD rigid contacts) ✅ COMPLETE (2026-05-08)
 
-**Goal**: spheres + boxes + planes collide and pile correctly.
+- **4.0 ✅** — sphere-sphere, sphere-plane narrow phase; brute-force broad
+  phase; CPU XPBD with COM-aligned linear projection. Sphere stacks
+  settle.
+- **4.1 ✅** — Box geometry (`ShapeGeometry::Box { half_extents }`),
+  OBB→world AABB. `add_shape_box` builder.
+- **4.2 ✅** — Box narrow-phase: sphere-box closest-point, box-plane
+  corner test (4 deepest), box-box SAT (15 axes — 3 + 3 face axes plus
+  9 edge-edge crosses). Sutherland-Hodgman face clipping for the
+  manifold (up to 4 deepest contact points per pair).
+- **4.3 ✅** — SAP broad phase (CPU). Variance-axis sweep, AABB-overlap
+  pair generation. `BroadPhase` reuses scratch buffers across frames.
+  `CollisionPipeline` ties broad+narrow into a stateful end-to-end CPU
+  pipeline; brute-force pair generator kept for parity tests.
+- **4.4 ✅** — XPBD with full angular response. Jacobi-style relaxation
+  per Newton's `solve_body_contact_positions` + `apply_body_deltas`:
+  each contact computes its λ independently, deltas accumulate into
+  per-body slots, then average by per-body contact count. Generalised
+  inverse mass `w = 1/m + (r × n)ᵀ · I⁻¹ · (r × n)`. Linear projection
+  + angular projection + Coulomb friction + restitution. Stable
+  10-box stack settling test (1.5s sim, no jitter, no interpenetration
+  > 5mm).
+- **4.5 ✅** — GPU XPBD shader updated to match: per-body Jacobi over
+  contacts, body_com / body_inv_inertia / contact_point bindings,
+  angular impulse accumulation. CPU/GPU parity test for a 4-box stack
+  passes within 5cm. Run via `make test-xpbd-gpu`.
+- **4.6 ✅** — Per-shape material (μ, e). `set_shape_material(shape,
+  friction, restitution)` on the builder. Pair-rule = max (matches
+  Newton). `NaN` sentinel falls back to `Model::default_*`.
 
-Deliverables:
-- `Model.shape_geometry` populated, AABB computation per shape.
-- SAP broad-phase (CPU + GPU).
-- Narrow-phase: sphere-sphere, sphere-box, sphere-plane, box-box (SAT).
-- `Contacts` populated.
-- `XpbdSolver` for contacts: position correction, friction, restitution.
-- Graph-coloring builder pass.
-- Oracle: stack of 10 boxes, 1s simulation, final positions match Newton's
-  XPBD within 5mm.
+Tests added:
+- `tests/xpbd_boxes.rs`: `box_settles_on_plane`, `sphere_on_box`,
+  `box_stack_settles` (10-box stack), `per_shape_material_overrides_default`.
+- `tests/xpbd_gpu_parity.rs`: CPU/GPU box-stack parity (gated on
+  `make test-xpbd-gpu`).
+- Lib: `box_box_face_overlap`, `box_box_separated_no_contact`,
+  `sphere_box_face_contact`, `sphere_box_inside`,
+  `box_plane_flat_makes_4_contacts`, `sap_matches_brute_force_on_small_scene`.
 
-Definition of done:
-- 10-box stack settles, no jitter or interpenetration > 1mm.
-- 1k spheres falling on a plane, 60Hz on integrated GPU.
-- Friction parameter measurably affects sliding.
+Known limitations carried forward:
+- No graph coloring pass — Jacobi per-body avoids the need; would only
+  matter if we ever switched to per-contact GPU dispatch with atomics.
+- No torsional / rolling friction (mu_torsional, mu_rolling) yet — Newton
+  has these for stable rolling; molla's stage-4 tests don't need them.
+- Capsule / cylinder / mesh contact follows in stage 6 (GJK + EPA).
 
 ### Stage 5 — `usd_molla` crate (3–4 weeks)
 

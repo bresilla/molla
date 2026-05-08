@@ -70,6 +70,55 @@ fn box_settles_on_plane() {
 }
 
 #[test]
+fn per_shape_material_overrides_default() {
+    // Sphere shape with explicit μ=0.0 sliding on a plane shape with
+    // μ=1.0 — the pair-rule (max) yields 1.0, but if we tag both with
+    // μ=0.0 the sphere should slide freely.
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.0);
+    let body = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.5))
+            .with_position(Vec3::new(0.0, 0.5, 0.0))
+            .with_flags(BodyFlags::DYNAMIC),
+    );
+    let sphere_shape = b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
+    let plane_shape = b
+        .add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
+    // Tag both shapes as frictionless; the model default is 0.5.
+    b.set_shape_material(sphere_shape, 0.0, 0.0).unwrap();
+    b.set_shape_material(plane_shape, 0.0, 0.0).unwrap();
+
+    let mut model = b.build().unwrap();
+    model.default_friction = 1.0;
+    model.default_restitution = 0.0;
+
+    let mut s_a = model.state().unwrap();
+    // Push the sphere sideways at 1 m/s along +X.
+    s_a.body_qd.host_mut().unwrap()[0] = SpatialVector::new(Vec3::X, Vec3::ZERO);
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let mut contacts = Contacts::with_capacity(64);
+    let mut pipeline = CollisionPipeline::new();
+    let mut solver = XpbdSolver::new().with_iterations(8);
+
+    for _ in 0..200 {
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, 0.005, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+
+    let qd = s_a.body_qd.host().unwrap();
+    let vx = qd[0].linear.x;
+    // With μ=0 the sphere should still be moving close to its initial
+    // 1 m/s; with the model default μ=1 it would have stopped.
+    assert!(vx > 0.7, "frictionless sphere slowed too much: vx = {vx}");
+}
+
+#[test]
 fn sphere_on_box() {
     let half = Vec3::new(2.0, 0.25, 2.0);
     let mut b = ModelBuilder::new();

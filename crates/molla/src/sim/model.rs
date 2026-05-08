@@ -50,10 +50,16 @@ pub struct Model {
     pub shape_body: Buffer<i32>,
     /// Shape transform in owning body frame.
     pub shape_transform: Buffer<Transform>,
-    /// Per-shape geometry tags (sphere radius, etc). Stage 4 expands this.
+    /// Per-shape geometry tags (sphere radius, etc).
     pub shape_geometry: Vec<super::ShapeGeometry>,
     /// Per-shape bitflags.
     pub shape_flags: Buffer<u32>,
+    /// Per-shape Coulomb friction coefficient. `NaN` = use the
+    /// `default_friction` model knob; otherwise the pair-rule is
+    /// `max(μ_a, μ_b)` (matches Newton).
+    pub shape_friction: Buffer<Real>,
+    /// Per-shape restitution. Same `NaN` sentinel + max-rule as friction.
+    pub shape_restitution: Buffer<Real>,
 
     // ── Joints ──────────────────────────────────────────────────────
     /// Number of joints.
@@ -134,6 +140,8 @@ impl Model {
             shape_transform: Buffer::from_vec(Vec::new(), s),
             shape_geometry: Vec::new(),
             shape_flags: Buffer::from_vec(Vec::new(), s),
+            shape_friction: Buffer::from_vec(Vec::new(), s),
+            shape_restitution: Buffer::from_vec(Vec::new(), s),
 
             joint_count: 0,
             joint_type: Buffer::from_vec(Vec::new(), s),

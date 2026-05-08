@@ -48,6 +48,21 @@ pub fn pair_contact(
     let xf_a = shape_world_transform(model, state, pair.a as usize);
     let xf_b = shape_world_transform(model, state, pair.b as usize);
 
+    // Pair-rule: per-shape material wins over the model default.
+    // `NaN` sentinel = "use default". `max` matches Newton's pair rule.
+    let pair_friction = pair_material(
+        model.shape_friction.host().expect("shape_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        default_friction,
+    );
+    let pair_restitution = pair_material(
+        model.shape_restitution.host().expect("shape_restitution"),
+        pair.a as usize,
+        pair.b as usize,
+        default_restitution,
+    );
+
     let start = out.len();
     match (geom_a, geom_b) {
         (ShapeGeometry::Sphere { radius: ra }, ShapeGeometry::Sphere { radius: rb }) => {
@@ -124,9 +139,20 @@ pub fn pair_contact(
     }
 
     for m in &mut out[start..] {
-        m.friction = default_friction;
-        m.restitution = default_restitution;
+        m.friction = pair_friction;
+        m.restitution = pair_restitution;
     }
+}
+
+/// Pair-rule for per-shape materials: take `max` of the two when both
+/// are real, fall back to `default` for `NaN` shapes (same convention
+/// as Newton's `solve_body_contact_positions`).
+fn pair_material(arr: &[Real], a: usize, b: usize, default: Real) -> Real {
+    let ma = arr.get(a).copied().unwrap_or(Real::NAN);
+    let mb = arr.get(b).copied().unwrap_or(Real::NAN);
+    let va = if ma.is_nan() { default } else { ma };
+    let vb = if mb.is_nan() { default } else { mb };
+    va.max(vb)
 }
 
 // ─── Sphere-sphere ───────────────────────────────────────────────────

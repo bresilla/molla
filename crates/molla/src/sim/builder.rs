@@ -153,6 +153,8 @@ pub struct ModelBuilder {
     shape_transform: Vec<Transform>,
     shape_geometry: Vec<ShapeGeometry>,
     shape_flags: Vec<u32>,
+    shape_friction: Vec<Real>,
+    shape_restitution: Vec<Real>,
 
     // Joint arrays.
     joint_type: Vec<u32>,
@@ -313,7 +315,28 @@ impl ModelBuilder {
         self.shape_transform.push(local_pose);
         self.shape_geometry.push(geom);
         self.shape_flags.push(super::flags::ShapeFlags::COLLIDES);
+        self.shape_friction.push(Real::NAN);
+        self.shape_restitution.push(Real::NAN);
         id
+    }
+
+    /// Override the friction/restitution for an already-added shape.
+    /// `NaN` falls back to `Model::default_*`.
+    pub fn set_shape_material(
+        &mut self,
+        shape: ShapeId,
+        friction: Real,
+        restitution: Real,
+    ) -> Result<()> {
+        let i = shape.index();
+        if i >= self.shape_geometry.len() {
+            return Err(Error::Build(format!(
+                "set_shape_material: shape id {shape:?} out of range"
+            )));
+        }
+        self.shape_friction[i] = friction;
+        self.shape_restitution[i] = restitution;
+        Ok(())
     }
 
     // ── Joints ──────────────────────────────────────────────────────
@@ -532,6 +555,8 @@ impl ModelBuilder {
             shape_transform: Buffer::from_vec(self.shape_transform, s),
             shape_geometry: self.shape_geometry,
             shape_flags: Buffer::from_vec(self.shape_flags, s),
+            shape_friction: Buffer::from_vec(self.shape_friction, s),
+            shape_restitution: Buffer::from_vec(self.shape_restitution, s),
 
             joint_count: self.joint_type.len(),
             joint_type: Buffer::from_vec(self.joint_type, s),

@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -64,6 +64,9 @@ test-gpu:
 
 test-featherstone-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test featherstone_gpu_parity -- --ignored
+
+test-xpbd-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_gpu_parity -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored

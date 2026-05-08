@@ -38,7 +38,7 @@ use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
 use molla::compute::Engine;
-use molla::geometry::{collide, ShapePair};
+use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::solvers::Solver as _;
@@ -47,10 +47,11 @@ use molla::solvers::Solver as _;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const GRID_N: usize = 50; // 50×50 = 2500 spheres
-const GRID_SPACING: f32 = 1.2;
-const SPHERE_RADIUS: f32 = 0.5;
-const DROP_HEIGHT: f32 = 15.0;
+const GRID_N: usize = 12; // 12×12 = 144 mixed bodies
+const GRID_SPACING: f32 = 1.4;
+const SPHERE_RADIUS: f32 = 0.45;
+const BOX_HALF: f32 = 0.45;
+const DROP_HEIGHT: f32 = 12.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
 const SUBSTEPS_PER_FRAME: usize = 2;
 
@@ -111,8 +112,9 @@ fn main() {
             color: Color::srgba(0.30, 0.38, 0.50, 0.42),
         })
         .insert_resource(SimRunState::default())
-        .insert_resource(SimStats::default())
-        .insert_resource(Sim::build())
+        .insert_resource(SimStats::default());
+    let (sim, visuals) = Sim::build();
+    app.insert_resource(sim).insert_resource(BodyVisuals(visuals))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -151,33 +153,75 @@ struct Sim {
     control: mp::Control,
     contacts: mp::Contacts,
     solver: mp::XpbdSolver,
-    pair_buf: Vec<ShapePair>,
+    pipeline: CollisionPipeline,
     engine: Engine,
     adapter_label: String,
 }
 
+/// Geometry tag for the spawn loop — keeps the rendering side in
+/// sync with the body→shape mapping.
+#[derive(Component, Copy, Clone)]
+enum BodyVisual {
+    Sphere,
+    Box,
+}
+
+#[derive(Resource)]
+struct BodyVisuals(Vec<BodyVisual>);
+
+/// Solid box principal moments at the COM, body frame.
+fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
+    let h2 = half * half;
+    let s = mass / 3.0;
+    molla::math::Mat3::from_diagonal(MVec3::new(
+        s * (h2 + h2),
+        s * (h2 + h2),
+        s * (h2 + h2),
+    ))
+}
+
 impl Sim {
-    fn build() -> Self {
+    fn build() -> (Self, Vec<BodyVisual>) {
         let mut b = mp::ModelBuilder::new();
         b.set_angular_damping(0.05);
 
+        let mut visuals: Vec<BodyVisual> = Vec::with_capacity(GRID_N * GRID_N);
         for ix in 0..GRID_N {
             for iz in 0..GRID_N {
                 let x = (ix as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
                 let z = (iz as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
+                // Stagger heights so they don't all land at once.
                 let y = DROP_HEIGHT as f64 + 0.4 * ((ix + iz) as f64 / 2.0).sin();
                 let pos = MVec3::new(x, y, z);
 
-                let body = b.add_body(
-                    mp::BodyParams::new()
-                        .with_spatial_inertia(mp::SpatialInertia::sphere(
-                            1.0,
-                            SPHERE_RADIUS as f64,
-                        ))
-                        .with_position(pos),
-                );
-                b.add_shape_sphere(body, SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
-                    .expect("sphere shape");
+                // Checkerboard sphere/box.
+                if (ix + iz) % 2 == 0 {
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia::sphere(
+                                1.0,
+                                SPHERE_RADIUS as f64,
+                            ))
+                            .with_position(pos),
+                    );
+                    b.add_shape_sphere(body, SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
+                        .expect("sphere shape");
+                    visuals.push(BodyVisual::Sphere);
+                } else {
+                    let half = MVec3::splat(BOX_HALF as f64);
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia {
+                                mass: 1.0,
+                                com: MVec3::ZERO,
+                                inertia: box_inertia(1.0, BOX_HALF as f64),
+                            })
+                            .with_position(pos),
+                    );
+                    b.add_shape_box(body, half, mp::Transform::IDENTITY)
+                        .expect("box shape");
+                    visuals.push(BodyVisual::Box);
+                }
             }
         }
 
@@ -218,19 +262,22 @@ impl Sim {
 
         let solver = mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
             .expect("XPBD GPU solver init")
-            .with_iterations(4);
+            .with_iterations(8);
 
-        Self {
-            model,
-            state_a,
-            state_b,
-            control,
-            contacts,
-            solver,
-            pair_buf: Vec::with_capacity(16384),
-            engine,
-            adapter_label,
-        }
+        (
+            Self {
+                model,
+                state_a,
+                state_b,
+                control,
+                contacts,
+                solver,
+                pipeline: CollisionPipeline::new(),
+                engine,
+                adapter_label,
+            },
+            visuals,
+        )
     }
 
     fn reset(&mut self) {
@@ -266,6 +313,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     sim: Res<Sim>,
+    visuals: Res<BodyVisuals>,
 ) {
     // Sun + cascade shadows.
     let sun_shadow = CascadeShadowConfigBuilder {
@@ -319,10 +367,10 @@ fn setup(
         },
     ));
 
-    // 8-colour palette. Spheres are NotShadowCaster — at 2500
-    // instances the shadow pass would dominate frame time and the
-    // visual gain is negligible against the LOD grid.
+    // 8-colour palette. Bodies are NotShadowCaster to keep frame time
+    // down with many instances; the LOD grid carries the depth cue.
     let sphere_mesh = meshes.add(Sphere::new(SPHERE_RADIUS).mesh().ico(1).expect("ico"));
+    let box_mesh = meshes.add(Cuboid::from_size(Vec3::splat(BOX_HALF * 2.0)).mesh());
     let palette = [
         Color::srgb(0.88, 0.35, 0.28),
         Color::srgb(0.90, 0.60, 0.20),
@@ -347,9 +395,13 @@ fn setup(
 
     let body_q = sim.state_a.body_q.host().expect("body_q").to_vec();
     for (i, pose) in body_q.iter().enumerate() {
+        let mesh = match visuals.0[i] {
+            BodyVisual::Sphere => sphere_mesh.clone(),
+            BodyVisual::Box => box_mesh.clone(),
+        };
         commands.spawn((
             MollaBody(mp::BodyId::from_index(i)),
-            Mesh3d(sphere_mesh.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(mats[i % mats.len()].clone()),
             NotShadowCaster,
             Transform::from_xyz(
@@ -406,7 +458,7 @@ fn step_simulation(
         control,
         contacts,
         solver,
-        pair_buf,
+        pipeline,
         ..
     } = &mut *sim;
 
@@ -418,7 +470,7 @@ fn step_simulation(
         // at the end of the previous substep, or set up by the
         // initial state for the very first substep).
         let c0 = std::time::Instant::now();
-        collide(model, state_a, contacts, pair_buf).expect("collide");
+        pipeline.collide(model, state_a, contacts).expect("collide");
         contacts.upload_to_device(&device, &queue).expect("contacts upload");
         total_collide_us += c0.elapsed().as_secs_f64() * 1_000_000.0;
 

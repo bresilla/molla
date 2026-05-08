@@ -49,6 +49,8 @@ pub struct XpbdKernel {
     body_v_pred: wgpu::Buffer,
     body_q_alt: wgpu::Buffer,
     body_v_post: wgpu::Buffer,
+    body_w_pred: wgpu::Buffer,
+    body_w_post: wgpu::Buffer,
     /// 1-element dummy for empty `Control::body_external_f`.
     external_f_dummy: wgpu::Buffer,
 
@@ -66,7 +68,7 @@ impl XpbdKernel {
 
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd model"),
-            entries: &storage_entries(4, true),
+            entries: &storage_entries(6, true),
         });
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd state"),
@@ -78,7 +80,7 @@ impl XpbdKernel {
         });
         let layout_contacts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd contacts"),
-            entries: &storage_entries(8, true),
+            entries: &storage_entries(9, true),
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd uniforms"),
@@ -158,6 +160,22 @@ impl XpbdKernel {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let body_w_pred = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::xpbd body_w_pred"),
+            size: 16 * n,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let body_w_post = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::xpbd body_w_post"),
+            size: 16 * n,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let external_f_dummy = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::xpbd dummy external_f"),
             size: 32,
@@ -180,6 +198,8 @@ impl XpbdKernel {
             body_v_pred,
             body_q_alt,
             body_v_post,
+            body_w_pred,
+            body_w_post,
             external_f_dummy,
             body_count,
         }
@@ -224,6 +244,8 @@ impl XpbdKernel {
                 buffer_entry(1, model.body_flags.device_buffer())?,
                 buffer_entry(2, model.body_world.device_buffer())?,
                 buffer_entry(3, model.gravity.device_buffer())?,
+                buffer_entry(4, model.body_com.device_buffer())?,
+                buffer_entry(5, model.body_inv_inertia.device_buffer())?,
             ],
         });
 
@@ -251,6 +273,8 @@ impl XpbdKernel {
                     wgpu::BindGroupEntry { binding: 6, resource: state_out_qd.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 7, resource: q_alt.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 8, resource: self.body_v_post.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 9, resource: self.body_w_pred.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 10, resource: self.body_w_post.as_entire_binding() },
                 ],
             })
         };
@@ -287,6 +311,7 @@ impl XpbdKernel {
                 buffer_entry(5, contacts.restitution.device_buffer())?,
                 buffer_entry(6, contacts.body_contact_offsets.device_buffer())?,
                 buffer_entry(7, contacts.body_contact_indices.device_buffer())?,
+                buffer_entry(8, contacts.point.device_buffer())?,
             ],
         });
 
@@ -436,11 +461,11 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
         .collect()
 }
 
-/// State bind group has 9 bindings — first 3 read-only, rest read-write.
+/// State bind group has 11 bindings — first 3 read-only, rest read-write.
 fn xpbd_state_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     let read = wgpu::BufferBindingType::Storage { read_only: true };
     let rw = wgpu::BufferBindingType::Storage { read_only: false };
-    (0..9u32)
+    (0..11u32)
         .map(|i| {
             let ty = if i < 3 { read } else { rw };
             wgpu::BindGroupLayoutEntry {
