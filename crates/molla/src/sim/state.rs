@@ -82,6 +82,36 @@ impl State {
         })
     }
 
+    /// Allocate a fresh `State` with the same shape as `self` and copy
+    /// host-side data. Used by sub-stepping wrappers to ping-pong
+    /// without re-touching device buffers.
+    pub fn clone_host(&self) -> crate::core::Result<Self> {
+        use crate::storage::BufferUsage::StorageReadWrite;
+        Ok(Self {
+            particle_q: Buffer::from_vec(self.particle_q.host()?.to_vec(), StorageReadWrite),
+            particle_qd: Buffer::from_vec(self.particle_qd.host()?.to_vec(), StorageReadWrite),
+            particle_f: Buffer::from_vec(self.particle_f.host()?.to_vec(), StorageReadWrite),
+            body_q: Buffer::from_vec(self.body_q.host()?.to_vec(), StorageReadWrite),
+            body_qd: Buffer::from_vec(self.body_qd.host()?.to_vec(), StorageReadWrite),
+            body_f: Buffer::from_vec(self.body_f.host()?.to_vec(), StorageReadWrite),
+            joint_q: Buffer::from_vec(self.joint_q.host()?.to_vec(), StorageReadWrite),
+            joint_qd: Buffer::from_vec(self.joint_qd.host()?.to_vec(), StorageReadWrite),
+        })
+    }
+
+    /// Copy host-side data from `other` into `self`. Sizes must match.
+    pub fn copy_host_from(&mut self, other: &Self) -> crate::core::Result<()> {
+        self.particle_q.host_mut()?.copy_from_slice(other.particle_q.host()?);
+        self.particle_qd.host_mut()?.copy_from_slice(other.particle_qd.host()?);
+        self.particle_f.host_mut()?.copy_from_slice(other.particle_f.host()?);
+        self.body_q.host_mut()?.copy_from_slice(other.body_q.host()?);
+        self.body_qd.host_mut()?.copy_from_slice(other.body_qd.host()?);
+        self.body_f.host_mut()?.copy_from_slice(other.body_f.host()?);
+        self.joint_q.host_mut()?.copy_from_slice(other.joint_q.host()?);
+        self.joint_qd.host_mut()?.copy_from_slice(other.joint_qd.host()?);
+        Ok(())
+    }
+
     /// Zero out all force arrays. Solvers call this at the top of each step.
     pub fn clear_forces(&mut self) -> crate::core::Result<()> {
         for f in self.body_f.host_mut()? {

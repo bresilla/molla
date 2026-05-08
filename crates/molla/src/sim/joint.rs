@@ -7,6 +7,39 @@
 
 use crate::math::Real;
 
+/// Per-DOF actuator target mode. Mirrors Newton's
+/// `sim/enums.py:JointTargetMode`. Stored as a `u32` per DOF on
+/// [`super::Control`] so each DOF can be driven independently.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[repr(u32)]
+pub enum JointTargetMode {
+    /// No drive; the DOF responds only to gravity / friction / external
+    /// forces / explicit `joint_force`.
+    None = 0,
+    /// PD around a position target: `τ = kp·(q_target − q) + kd·(0 − qd)`.
+    Position = 1,
+    /// PD around a velocity target: `τ = kd·(qd_target − qd)`.
+    Velocity = 2,
+    /// PD around both: `τ = kp·(q_target − q) + kd·(qd_target − qd)`.
+    PositionVelocity = 3,
+    /// Direct effort — `τ = q_target` (interpreted as torque/force).
+    Effort = 4,
+}
+
+impl JointTargetMode {
+    /// Decode a `u32` to the enum, falling back to `None` for unknown values.
+    #[must_use]
+    pub fn from_u32(v: u32) -> Self {
+        match v {
+            1 => Self::Position,
+            2 => Self::Velocity,
+            3 => Self::PositionVelocity,
+            4 => Self::Effort,
+            _ => Self::None,
+        }
+    }
+}
+
 /// Joint kind. Lays out which transform map a joint imposes between
 /// its parent and child.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]

@@ -49,6 +49,13 @@ const MAX_JOINTS_PER_ART: u32 = 64u;
 @group(0) @binding(5) var<storage, read> joint_axis:         array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> joint_coord_offset: array<u32>;
 @group(0) @binding(7) var<storage, read> joint_dof_offset:   array<u32>;
+// Per-DOF limits / drives. NaN sentinel = unlimited (signalled
+// by `isFinite(...) == false`). Length = joint_dof_total.
+@group(0) @binding(8) var<storage, read> joint_limit_lower:    array<f32>;
+@group(0) @binding(9) var<storage, read> joint_limit_upper:    array<f32>;
+@group(0) @binding(10) var<storage, read> joint_friction:      array<f32>;
+@group(0) @binding(11) var<storage, read> joint_effort_limit:  array<f32>;
+@group(0) @binding(12) var<storage, read> joint_velocity_limit: array<f32>;
 
 // Group 1 — Body data + State
 @group(1) @binding(0) var<storage, read>       body_mass:    array<f32>;
@@ -61,7 +68,34 @@ const MAX_JOINTS_PER_ART: u32 = 64u;
 @group(1) @binding(7) var<storage, read_write> joint_qd:     array<f32>;
 
 // Group 2 — Control
-@group(2) @binding(0) var<storage, read> joint_force: array<f32>;
+@group(2) @binding(0) var<storage, read> joint_force:        array<f32>;
+@group(2) @binding(1) var<storage, read> joint_target_mode:  array<u32>;
+@group(2) @binding(2) var<storage, read> joint_target_pos:   array<f32>;
+@group(2) @binding(3) var<storage, read> joint_target_vel:   array<f32>;
+@group(2) @binding(4) var<storage, read> joint_target_kp:    array<f32>;
+@group(2) @binding(5) var<storage, read> joint_target_kd:    array<f32>;
+
+// Joint target modes (mirror src/sim/joint.rs:JointTargetMode).
+const TARGET_NONE: u32 = 0u;
+const TARGET_POS:  u32 = 1u;
+const TARGET_VEL:  u32 = 2u;
+const TARGET_PV:   u32 = 3u;
+const TARGET_EFF:  u32 = 4u;
+
+// NaN-aware clamp: if `limit` is non-finite (NaN), passthrough.
+fn clamp_or_passthrough(x: f32, limit: f32) -> f32 {
+    if (limit != limit) { return x; } // NaN check via self-ne
+    if (limit > 1e30) { return x; }   // inf passthrough
+    return clamp(x, -limit, limit);
+}
+
+fn drive_torque(mode: u32, q: f32, qd: f32, kp: f32, kd: f32, pos_t: f32, vel_t: f32) -> f32 {
+    if (mode == TARGET_POS) { return kp * (pos_t - q) - kd * qd; }
+    if (mode == TARGET_VEL) { return kd * (vel_t - qd); }
+    if (mode == TARGET_PV)  { return kp * (pos_t - q) + kd * (vel_t - qd); }
+    if (mode == TARGET_EFF) { return pos_t; }
+    return 0.0;
+}
 
 // Group 3 — Articulation ranges
 @group(3) @binding(0) var<storage, read> art_offsets: array<u32>;
@@ -357,7 +391,20 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         u_ang[k] = u_a;
         d_inv[k] = d_i;
         let dof = joint_dof_offset[j];
-        u_tau[k] = joint_force[dof] - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));
+        let coord = joint_coord_offset[j];
+        let q_now = joint_q[coord];
+        let qd_now = joint_qd[dof];
+        let mode = joint_target_mode[dof];
+        let drive = drive_torque(
+            mode,
+            q_now, qd_now,
+            joint_target_kp[dof], joint_target_kd[dof],
+            joint_target_pos[dof], joint_target_vel[dof],
+        );
+        let mu_jt = joint_friction[dof];
+        let tau_raw = joint_force[dof] + drive - mu_jt * qd_now;
+        let tau_app = clamp_or_passthrough(tau_raw, joint_effort_limit[dof]);
+        u_tau[k] = tau_app - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));
 
         if (parent >= 0) {
             // Find this joint's parent-joint within the articulation.
@@ -429,9 +476,25 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let qd_old = joint_qd[dof];
             let qd_int = qd_old + q_dd * uniforms.dt;
             let damp = max(1.0 - uniforms.joint_damping * uniforms.dt, 0.0);
-            let qd_new = qd_int * damp;
-            joint_qd[dof] = qd_new;
-            joint_q[coord] = joint_q[coord] + qd_new * uniforms.dt;
+            let qd_damped = qd_int * damp;
+            // Per-DOF velocity cap.
+            let qd_capped = clamp_or_passthrough(qd_damped, joint_velocity_limit[dof]);
+            let q_pred = joint_q[coord] + qd_capped * uniforms.dt;
+            // Hard joint-position limits (NaN = unlimited).
+            let lo = joint_limit_lower[dof];
+            let hi = joint_limit_upper[dof];
+            var q_clamped = q_pred;
+            var qd_after = qd_capped;
+            if ((lo == lo) && (q_clamped < lo)) {
+                q_clamped = lo;
+                if (qd_after < 0.0) { qd_after = 0.0; }
+            }
+            if ((hi == hi) && (q_clamped > hi)) {
+                q_clamped = hi;
+                if (qd_after > 0.0) { qd_after = 0.0; }
+            }
+            joint_qd[dof] = qd_after;
+            joint_q[coord] = q_clamped;
         } else {
             a_lin[k] = ap_l + c_lin[k];
             a_ang[k] = ap_a + c_ang[k];

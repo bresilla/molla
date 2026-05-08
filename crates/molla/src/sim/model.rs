@@ -88,6 +88,30 @@ pub struct Model {
     /// Initial joint coordinates snapshotted at build time —
     /// [`super::State::for_model`] copies these into `joint_q`.
     pub initial_joint_q: Buffer<Real>,
+    /// Per-DOF lower position limit (rad or m). `NaN` = unlimited.
+    /// Length = `joint_dof_total`.
+    pub joint_limit_lower: Buffer<Real>,
+    /// Per-DOF upper position limit. `NaN` = unlimited.
+    pub joint_limit_upper: Buffer<Real>,
+    /// Per-DOF Coulomb-style damping coefficient (N·m·s/rad or N·s/m).
+    /// 0 = none. Damping torque each step is `−friction·qd`.
+    pub joint_friction: Buffer<Real>,
+    /// Per-DOF effort cap (N·m or N). `NaN` = unlimited. Applied
+    /// torque (joint_force + drive + friction) is clamped to
+    /// `[−effort_limit, +effort_limit]`.
+    pub joint_effort_limit: Buffer<Real>,
+    /// Per-DOF velocity cap (rad/s or m/s). `NaN` = unlimited.
+    /// Post-step `qd` is clamped to `[−velocity_limit, +velocity_limit]`.
+    pub joint_velocity_limit: Buffer<Real>,
+
+    // ── Articulations ───────────────────────────────────────────────
+    /// Number of independent articulations (kinematic chains). The
+    /// Featherstone solver dispatches one workgroup invocation per
+    /// articulation. Equals `articulation_start.len() − 1`.
+    pub articulation_count: usize,
+    /// CSR offsets into the joint arrays — length `articulation_count + 1`.
+    /// Articulation `a` owns joints `articulation_start[a]..articulation_start[a+1]`.
+    pub articulation_start: Buffer<u32>,
 
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
@@ -155,6 +179,14 @@ impl Model {
             joint_coord_total: 0,
             joint_dof_total: 0,
             initial_joint_q: Buffer::from_vec(Vec::new(), s),
+            joint_limit_lower: Buffer::from_vec(Vec::new(), s),
+            joint_limit_upper: Buffer::from_vec(Vec::new(), s),
+            joint_friction: Buffer::from_vec(Vec::new(), s),
+            joint_effort_limit: Buffer::from_vec(Vec::new(), s),
+            joint_velocity_limit: Buffer::from_vec(Vec::new(), s),
+
+            articulation_count: 0,
+            articulation_start: Buffer::from_vec(vec![0u32], s),
 
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
@@ -216,6 +248,12 @@ impl Model {
         up!(joint_coord_offset);
         up!(joint_dof_offset);
         up!(initial_joint_q);
+        up!(joint_limit_lower);
+        up!(joint_limit_upper);
+        up!(joint_friction);
+        up!(joint_effort_limit);
+        up!(joint_velocity_limit);
+        up!(articulation_start);
         up!(gravity);
         Ok(())
     }

@@ -168,6 +168,22 @@ pub struct ModelBuilder {
     /// Initial coordinates accumulated as joints are added; length
     /// equals the last entry of `joint_coord_offset`.
     joint_q0: Vec<Real>,
+    // Per-DOF limit / drive tables — grow with `joint_dof_offset`.
+    joint_limit_lower: Vec<Real>,
+    joint_limit_upper: Vec<Real>,
+    joint_friction: Vec<Real>,
+    joint_effort_limit: Vec<Real>,
+    joint_velocity_limit: Vec<Real>,
+
+    // Articulation CSR — joint `i` is in articulation `a` iff
+    // `articulation_start[a] <= i < articulation_start[a+1]`.
+    // The vec always starts at `[0]`; a new articulation is opened
+    // by `begin_articulation()` (or implicitly by calling
+    // `add_joint_*` after a closed one).
+    articulation_start: Vec<u32>,
+    /// `true` iff the most recent push was to a still-open articulation
+    /// — used to coalesce consecutive joints into the same chain.
+    articulation_open: bool,
 
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
@@ -196,7 +212,19 @@ impl ModelBuilder {
             // first joint pushes the next entry.
             joint_coord_offset: vec![0],
             joint_dof_offset: vec![0],
+            articulation_start: vec![0],
+            articulation_open: false,
             ..Default::default()
+        }
+    }
+
+    /// Close the current articulation (if any joints are open) and start
+    /// a fresh one. The next `add_joint_*` will be the first joint of
+    /// the new chain. Calling this twice in a row is a no-op.
+    pub fn begin_articulation(&mut self) {
+        if self.articulation_open {
+            self.articulation_start.push(self.joint_type.len() as u32);
+            self.articulation_open = false;
         }
     }
 
@@ -485,7 +513,115 @@ impl ModelBuilder {
         self.joint_coord_offset.push(prev_coord + cc as u32);
         self.joint_dof_offset.push(prev_dof + dc as u32);
         joint_type.write_zero_coords(&mut self.joint_q0);
+        // Default limits / drives: NaN = unlimited, 0 friction.
+        for _ in 0..dc {
+            self.joint_limit_lower.push(Real::NAN);
+            self.joint_limit_upper.push(Real::NAN);
+            self.joint_friction.push(0.0);
+            self.joint_effort_limit.push(Real::NAN);
+            self.joint_velocity_limit.push(Real::NAN);
+        }
+        // First joint of a (re-)opened articulation: nothing to push
+        // into `articulation_start` — the trailing offset is set when
+        // the articulation closes (either via `begin_articulation` or
+        // at `build` time).
+        self.articulation_open = true;
         id
+    }
+
+    /// Set the position limits for a joint's DOFs. Pass `NaN` to leave a
+    /// bound unset. For multi-DOF joints (e.g. `Free`, future ball/D6),
+    /// `lower` and `upper` must have length = `joint.dof_count()`.
+    pub fn set_joint_limits(
+        &mut self,
+        joint: JointId,
+        lower: &[Real],
+        upper: &[Real],
+    ) -> Result<()> {
+        let (start, end) = self.joint_dof_range(joint, "set_joint_limits")?;
+        let n = end - start;
+        if lower.len() != n || upper.len() != n {
+            return Err(Error::Build(format!(
+                "set_joint_limits: joint {joint:?} has {n} DOFs, got lower={} upper={}",
+                lower.len(),
+                upper.len()
+            )));
+        }
+        self.joint_limit_lower[start..end].copy_from_slice(lower);
+        self.joint_limit_upper[start..end].copy_from_slice(upper);
+        Ok(())
+    }
+
+    /// Set per-DOF damping (joint friction, N·m·s/rad or N·s/m).
+    pub fn set_joint_friction(
+        &mut self,
+        joint: JointId,
+        friction: &[Real],
+    ) -> Result<()> {
+        let (start, end) = self.joint_dof_range(joint, "set_joint_friction")?;
+        let n = end - start;
+        if friction.len() != n {
+            return Err(Error::Build(format!(
+                "set_joint_friction: joint {joint:?} has {n} DOFs, got {}",
+                friction.len()
+            )));
+        }
+        self.joint_friction[start..end].copy_from_slice(friction);
+        Ok(())
+    }
+
+    /// Set per-DOF effort cap (N·m or N). `NaN` = unlimited.
+    pub fn set_joint_effort_limit(
+        &mut self,
+        joint: JointId,
+        effort: &[Real],
+    ) -> Result<()> {
+        let (start, end) = self.joint_dof_range(joint, "set_joint_effort_limit")?;
+        let n = end - start;
+        if effort.len() != n {
+            return Err(Error::Build(format!(
+                "set_joint_effort_limit: joint {joint:?} has {n} DOFs, got {}",
+                effort.len()
+            )));
+        }
+        self.joint_effort_limit[start..end].copy_from_slice(effort);
+        Ok(())
+    }
+
+    /// Set per-DOF velocity cap (rad/s or m/s). `NaN` = unlimited.
+    pub fn set_joint_velocity_limit(
+        &mut self,
+        joint: JointId,
+        velocity: &[Real],
+    ) -> Result<()> {
+        let (start, end) = self.joint_dof_range(joint, "set_joint_velocity_limit")?;
+        let n = end - start;
+        if velocity.len() != n {
+            return Err(Error::Build(format!(
+                "set_joint_velocity_limit: joint {joint:?} has {n} DOFs, got {}",
+                velocity.len()
+            )));
+        }
+        self.joint_velocity_limit[start..end].copy_from_slice(velocity);
+        Ok(())
+    }
+
+    fn joint_dof_range(
+        &self,
+        joint: JointId,
+        fn_name: &'static str,
+    ) -> Result<(usize, usize)> {
+        let i = joint.index();
+        if i + 1 >= self.joint_dof_offset.len() {
+            return Err(Error::Build(format!(
+                "{fn_name}: joint id {joint:?} out of range (have {} joints)",
+                self.joint_type.len()
+            )));
+        }
+        Ok((
+            self.joint_dof_offset[i] as usize,
+            self.joint_dof_offset[i + 1] as usize,
+        ))
     }
 
     /// Set the gravity vector for `world`. Auto-extends the world list as
@@ -517,11 +653,18 @@ impl ModelBuilder {
     }
 
     /// Finalise into a [`Model`].
-    pub fn build(self) -> Result<Model> {
+    pub fn build(mut self) -> Result<Model> {
         let s = BufferUsage::Storage;
         let body_count = self.body_mass.len();
         let shape_count = self.shape_geometry.len();
         let world_count = self.world_gravity.len();
+
+        // Close the trailing articulation if the user didn't.
+        if self.articulation_open {
+            self.articulation_start.push(self.joint_type.len() as u32);
+            self.articulation_open = false;
+        }
+        let articulation_count = self.articulation_start.len().saturating_sub(1);
 
         // Validate. `shape_body == -1` is the static-world sentinel.
         for (i, &body) in self.shape_body.iter().enumerate() {
@@ -570,6 +713,14 @@ impl ModelBuilder {
             joint_coord_offset: Buffer::from_vec(self.joint_coord_offset, s),
             joint_dof_offset: Buffer::from_vec(self.joint_dof_offset, s),
             initial_joint_q: Buffer::from_vec(self.joint_q0, s),
+            joint_limit_lower: Buffer::from_vec(self.joint_limit_lower, s),
+            joint_limit_upper: Buffer::from_vec(self.joint_limit_upper, s),
+            joint_friction: Buffer::from_vec(self.joint_friction, s),
+            joint_effort_limit: Buffer::from_vec(self.joint_effort_limit, s),
+            joint_velocity_limit: Buffer::from_vec(self.joint_velocity_limit, s),
+
+            articulation_count,
+            articulation_start: Buffer::from_vec(self.articulation_start, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),

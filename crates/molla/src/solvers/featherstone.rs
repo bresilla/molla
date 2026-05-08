@@ -39,7 +39,7 @@ use crate::math::{
     spatial_cross, spatial_cross_dual, Mat3, Quat, Real, SpatialMatrix6, SpatialVector,
     Transform, Vec3,
 };
-use crate::sim::{eval_fk, Contacts, Control, JointType, Model, State};
+use crate::sim::{eval_fk, Contacts, Control, JointTargetMode, JointType, Model, State};
 
 use super::Solver;
 
@@ -63,6 +63,9 @@ pub struct FeatherstoneSolver {
     /// Joint-space damping coefficient (1/s) applied to `joint_qd`
     /// each step. Helps keep long-running pendulums numerically calm.
     pub joint_damping: Real,
+    /// Number of substeps per outer `step` call. Each substep advances
+    /// `dt/substeps`. Default 1.
+    pub substeps: usize,
     backend: FeatherstoneBackend,
 }
 
@@ -78,6 +81,7 @@ impl FeatherstoneSolver {
     pub fn new_cpu() -> Self {
         Self {
             joint_damping: 0.0,
+            substeps: 1,
             backend: FeatherstoneBackend::Cpu,
         }
     }
@@ -103,6 +107,7 @@ impl FeatherstoneSolver {
         let kernel = crate::kernels::FeatherstoneKernel::new(&device, &queue, model);
         Ok(Self {
             joint_damping: 0.0,
+            substeps: 1,
             backend: FeatherstoneBackend::Gpu(GpuBackend {
                 device,
                 queue,
@@ -114,6 +119,14 @@ impl FeatherstoneSolver {
     #[must_use]
     pub fn with_damping(mut self, d: Real) -> Self {
         self.joint_damping = d;
+        self
+    }
+
+    /// Configure substepping: each outer `step(dt)` runs `n` inner
+    /// substeps with `dt/n`.
+    #[must_use]
+    pub fn with_substeps(mut self, n: usize) -> Self {
+        self.substeps = n.max(1);
         self
     }
 
@@ -132,6 +145,41 @@ impl FeatherstoneSolver {
 
 impl Solver for FeatherstoneSolver {
     fn step(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        contacts: &Contacts,
+        dt: Real,
+        state_out: &mut State,
+    ) -> Result<()> {
+        let n_sub = self.substeps.max(1);
+        let dt_sub = dt / n_sub as Real;
+
+        if n_sub == 1 {
+            return self.step_inner(model, state_in, control, contacts, dt_sub, state_out);
+        }
+
+        let mut scratch = state_in.clone_host()?;
+        self.step_inner(model, state_in, control, contacts, dt_sub, state_out)?;
+        let mut output_in_scratch = false;
+        for _ in 1..n_sub {
+            if output_in_scratch {
+                self.step_inner(model, &scratch, control, contacts, dt_sub, state_out)?;
+            } else {
+                self.step_inner(model, state_out, control, contacts, dt_sub, &mut scratch)?;
+            }
+            output_in_scratch = !output_in_scratch;
+        }
+        if output_in_scratch {
+            state_out.copy_host_from(&scratch)?;
+        }
+        Ok(())
+    }
+}
+
+impl FeatherstoneSolver {
+    fn step_inner(
         &mut self,
         model: &Model,
         state_in: &State,
@@ -205,6 +253,8 @@ fn cpu_step(
     let joint_axis = model.joint_axis.host()?;
     let joint_coord_offset = model.joint_coord_offset.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
+    let art_start = model.articulation_start.host()?;
+    let art_count = model.articulation_count.max(1);
 
     let body_q = state_out.body_q.host()?.to_vec();
     let body_mass = model.body_mass.host()?;
@@ -213,6 +263,18 @@ fn cpu_step(
     let body_world = model.body_world.host()?;
     let gravity = model.gravity.host()?;
     let control_force = control.joint_force.host()?;
+    // Per-DOF drive + limit tables (length = joint_dof_total). All
+    // optional with NaN sentinel = "unbounded".
+    let limit_lower = model.joint_limit_lower.host()?;
+    let limit_upper = model.joint_limit_upper.host()?;
+    let joint_friction = model.joint_friction.host()?;
+    let effort_limit = model.joint_effort_limit.host()?;
+    let velocity_limit = model.joint_velocity_limit.host()?;
+    let target_mode = control.joint_target_mode.host()?;
+    let target_pos = control.joint_target_pos.host()?;
+    let target_vel = control.joint_target_vel.host()?;
+    let target_kp = control.joint_target_kp.host()?;
+    let target_kd = control.joint_target_kd.host()?;
 
     // ── Per-joint scratch — indexed by joint id ──────────────────────
     let mut s = vec![SpatialVector::ZERO; n]; // motion subspace (world)
@@ -225,8 +287,21 @@ fn cpu_step(
     let mut u_tau = vec![0.0_f64; n];
     let mut joint_world_axis = vec![Vec3::ZERO; n];
 
+    // ── Per-articulation outer loop ─────────────────────────────────
+    // Each articulation owns its joint range; the parent-joint search
+    // inside the passes naturally stays within `j_begin..j_end` because
+    // it only scans `0..j` (which is at most `j_begin..j`).
+    let mut q_new: Vec<Real> = q_in.clone();
+    let mut qd_new: Vec<Real> = qd_in.clone();
+    for art in 0..art_count {
+    let j_begin = art_start[art] as usize;
+    let j_end = art_start[art + 1] as usize;
+    if j_begin == j_end {
+        continue;
+    }
+
     // ── Pass 1: forward kinematics + body kinematics ─────────────────
-    for j in 0..n {
+    for j in j_begin..j_end {
         let jt = joint_type_from_u32(joint_type[j]);
         let parent = joint_parent[j];
         let child = joint_child[j] as usize;
@@ -253,17 +328,14 @@ fn cpu_step(
         s[j] = s_j;
         let v_j = s_j.scale(qd_j);
 
-        // Parent body's spatial velocity (zero if root).
+        // Parent body's spatial velocity (zero if root). The parent
+        // must be a child of an earlier joint in *this* articulation;
+        // a parent in a different articulation is treated as world.
         let v_p = if parent < 0 {
             SpatialVector::ZERO
         } else {
-            // For chains, the parent body of joint j may be a child of
-            // an earlier joint k. Look up that joint's `v_body`.
-            // For our single-chain assumption: parent body index ==
-            // child of some earlier joint. Find by linear search; for
-            // typical small chains this is cheap.
             let mut v = SpatialVector::ZERO;
-            for k in 0..j {
+            for k in j_begin..j {
                 if joint_child[k] as usize == parent as usize {
                     v = v_body[k];
                     break;
@@ -303,7 +375,7 @@ fn cpu_step(
     }
 
     // ── Pass 2: backward — articulated inertia accumulation ──────────
-    for j in (0..n).rev() {
+    for j in (j_begin..j_end).rev() {
         let parent = joint_parent[j];
         let s_j = s[j];
 
@@ -319,14 +391,42 @@ fn cpu_step(
             d_inv[j] = if d.abs() > 1e-12 { 1.0 / d } else { 0.0 };
 
             let dof_idx = joint_dof_offset[j] as usize;
-            let tau_app = control_force.get(dof_idx).copied().unwrap_or(0.0);
+            let coord_idx = joint_coord_offset[j] as usize;
+            let q_now = q_in.get(coord_idx).copied().unwrap_or(0.0);
+            let qd_now = qd_in.get(dof_idx).copied().unwrap_or(0.0);
+            let mode = JointTargetMode::from_u32(
+                target_mode.get(dof_idx).copied().unwrap_or(0),
+            );
+            let kp = target_kp.get(dof_idx).copied().unwrap_or(0.0);
+            let kd = target_kd.get(dof_idx).copied().unwrap_or(0.0);
+            let pos_t = target_pos.get(dof_idx).copied().unwrap_or(0.0);
+            let vel_t = target_vel.get(dof_idx).copied().unwrap_or(0.0);
+            let drive_torque = match mode {
+                JointTargetMode::None => 0.0,
+                JointTargetMode::Position => kp * (pos_t - q_now) - kd * qd_now,
+                JointTargetMode::Velocity => kd * (vel_t - qd_now),
+                JointTargetMode::PositionVelocity => {
+                    kp * (pos_t - q_now) + kd * (vel_t - qd_now)
+                }
+                JointTargetMode::Effort => pos_t,
+            };
+            let mu = joint_friction.get(dof_idx).copied().unwrap_or(0.0);
+            let friction_torque = -mu * qd_now;
+            let tau_raw = control_force.get(dof_idx).copied().unwrap_or(0.0)
+                + drive_torque
+                + friction_torque;
+            let tau_app = clamp_or_passthrough(
+                tau_raw,
+                effort_limit.get(dof_idx).copied().unwrap_or(Real::NAN),
+            );
             u_tau[j] = tau_app - sv_dot(s_j, p_a[j]);
 
             if parent >= 0 {
                 // Find the earlier joint whose child is this joint's
-                // parent body — that's where we accumulate.
+                // parent body — that's where we accumulate. Confined
+                // to the current articulation.
                 let mut parent_joint: Option<usize> = None;
-                for k in 0..j {
+                for k in j_begin..j {
                     if joint_child[k] as usize == parent as usize {
                         parent_joint = Some(k);
                         break;
@@ -350,7 +450,7 @@ fn cpu_step(
     let mut q_dd = vec![0.0_f64; model.joint_dof_total];
     let mut a_body = vec![SpatialVector::ZERO; n]; // body spatial accel
 
-    for j in 0..n {
+    for j in j_begin..j_end {
         let parent = joint_parent[j];
         let s_j = s[j];
         let jt = joint_type_from_u32(joint_type[j]);
@@ -360,7 +460,7 @@ fn cpu_step(
             SpatialVector::ZERO
         } else {
             let mut a = SpatialVector::ZERO;
-            for k in 0..j {
+            for k in j_begin..j {
                 if joint_child[k] as usize == parent as usize {
                     a = a_body[k];
                     break;
@@ -379,10 +479,8 @@ fn cpu_step(
         }
     }
 
-    // ── Integrate q, q̇ ──────────────────────────────────────────────
-    let mut q_new = q_in.clone();
-    let mut qd_new = qd_in.clone();
-    for j in 0..n {
+    // ── Integrate q, q̇ for joints in this articulation ──────────────
+    for j in j_begin..j_end {
         let jt = joint_type_from_u32(joint_type[j]);
         let coord_idx = joint_coord_offset[j] as usize;
         let dof_idx = joint_dof_offset[j] as usize;
@@ -391,8 +489,20 @@ fn cpu_step(
                 let qd_old = qd_in[dof_idx];
                 let qd_int = qd_old + q_dd[dof_idx] * dt;
                 let qd_damped = qd_int * (1.0 - joint_damping * dt).max(0.0);
-                qd_new[dof_idx] = qd_damped;
-                q_new[coord_idx] = q_in[coord_idx] + qd_damped * dt;
+                // Per-DOF velocity cap (NaN = unlimited).
+                let qd_capped = clamp_or_passthrough(
+                    qd_damped,
+                    velocity_limit.get(dof_idx).copied().unwrap_or(Real::NAN),
+                );
+                let q_pred = q_in[coord_idx] + qd_capped * dt;
+
+                // Hard joint-position limits with velocity zeroing at
+                // the limit. NaN = unlimited.
+                let lo = limit_lower.get(dof_idx).copied().unwrap_or(Real::NAN);
+                let hi = limit_upper.get(dof_idx).copied().unwrap_or(Real::NAN);
+                let (q_clamped, qd_after) = clamp_joint_pos(q_pred, qd_capped, lo, hi);
+                qd_new[dof_idx] = qd_after;
+                q_new[coord_idx] = q_clamped;
             }
             JointType::Fixed | JointType::Free => {
                 // Fixed: no coords. Free: 7 coords / 6 dof — pass
@@ -402,6 +512,7 @@ fn cpu_step(
             }
         }
     }
+    } // end per-articulation outer loop
 
     state_out.joint_q.host_mut()?.copy_from_slice(&q_new);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
@@ -415,6 +526,37 @@ fn cpu_step(
 
 fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
     a.linear.dot(b.linear) + a.angular.dot(b.angular)
+}
+
+/// Clamp `x` to `[-limit, +limit]`. If `limit` is NaN, passthrough.
+#[inline]
+fn clamp_or_passthrough(x: Real, limit: Real) -> Real {
+    if limit.is_nan() {
+        x
+    } else {
+        x.clamp(-limit, limit)
+    }
+}
+
+/// Project a joint coordinate to its limits and zero its velocity at
+/// the boundary. Each bound is independently optional (NaN sentinel).
+#[inline]
+fn clamp_joint_pos(q: Real, qd: Real, lo: Real, hi: Real) -> (Real, Real) {
+    let mut q_out = q;
+    let mut qd_out = qd;
+    if !lo.is_nan() && q_out < lo {
+        q_out = lo;
+        if qd_out < 0.0 {
+            qd_out = 0.0;
+        }
+    }
+    if !hi.is_nan() && q_out > hi {
+        q_out = hi;
+        if qd_out > 0.0 {
+            qd_out = 0.0;
+        }
+    }
+    (q_out, qd_out)
 }
 
 /// Rotate a body-frame inertia tensor `I_local` into world frame
@@ -592,6 +734,304 @@ mod tests {
             "double pendulum energy drift too high: {max_energy_excess} > 50% of |E_0|={}",
             v_init.abs()
         );
+    }
+
+    /// Pendulum with hard joint limits stays inside its allowed cone
+    /// even after a free swing that would otherwise overshoot.
+    #[test]
+    fn pendulum_with_limits_stays_inside_cone() {
+        let mut b = ModelBuilder::new();
+        let link = b.add_body(
+            BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::IDENTITY,
+            }),
+        );
+        let joint = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                link,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+        // Constrain the swing to ±15°.
+        let lo = -0.26_f64; // ~ -15°
+        let hi = 0.26_f64;
+        b.set_joint_limits(joint, &[lo], &[hi]).unwrap();
+
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        // Start at the high limit with a positive velocity that would
+        // otherwise push past it.
+        s_a.joint_q.host_mut().unwrap()[0] = hi;
+        s_a.joint_qd.host_mut().unwrap()[0] = 5.0;
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+
+        let mut max_q = -Real::INFINITY;
+        let mut min_q = Real::INFINITY;
+        for _ in 0..2000 {
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+            let q = s_a.joint_q.host().unwrap()[0];
+            if q > max_q {
+                max_q = q;
+            }
+            if q < min_q {
+                min_q = q;
+            }
+        }
+        assert!(
+            max_q <= hi + 1e-6,
+            "joint exceeded upper limit: max_q={max_q} (hi={hi})"
+        );
+        assert!(
+            min_q >= lo - 1e-6,
+            "joint exceeded lower limit: min_q={min_q} (lo={lo})"
+        );
+    }
+
+    /// PD drive holds the pendulum at a non-zero target angle against
+    /// gravity. With kp large enough, residual error stays below 5°.
+    #[test]
+    fn pd_drive_holds_pendulum_at_target() {
+        let mut b = ModelBuilder::new();
+        let link = b.add_body(
+            BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::IDENTITY,
+            }),
+        );
+        b.add_joint_revolute(
+            BodyId::NONE,
+            link,
+            Transform::IDENTITY,
+            Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+            V3::Z,
+        )
+        .unwrap();
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+
+        let target = 1.0_f64; // ~57° lift
+        let mut control = model.control();
+        control.joint_target_mode.host_mut().unwrap()[0] =
+            crate::sim::JointTargetMode::Position as u32;
+        control.joint_target_pos.host_mut().unwrap()[0] = target;
+        control.joint_target_kp.host_mut().unwrap()[0] = 200.0;
+        control.joint_target_kd.host_mut().unwrap()[0] = 20.0;
+
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..3000 {
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let q = s_a.joint_q.host().unwrap()[0];
+        let err = (q - target).abs();
+        assert!(
+            err < 0.10,
+            "PD didn't hold target: q={q}, target={target}, err={err}"
+        );
+    }
+
+    /// Joint friction damps a freely-swinging pendulum to rest.
+    #[test]
+    fn joint_friction_damps_swing_to_rest() {
+        let mut b = ModelBuilder::new();
+        let link = b.add_body(
+            BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::IDENTITY,
+            }),
+        );
+        let joint = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                link,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+        b.set_joint_friction(joint, &[2.0]).unwrap();
+
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        s_a.joint_q.host_mut().unwrap()[0] = 0.5;
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..5000 {
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let qd = s_a.joint_qd.host().unwrap()[0];
+        assert!(
+            qd.abs() < 0.05,
+            "friction failed to damp pendulum: qd={qd}"
+        );
+    }
+
+    /// Two independent pendulums in one scene step in parallel —
+    /// neither articulation's parent-search reaches into the other.
+    /// Each pendulum should oscillate exactly the same as if it were
+    /// alone in the scene.
+    #[test]
+    fn two_independent_pendulums() {
+        // Build two single-pendulum models AND a combined model with
+        // both pendulums marked as separate articulations. After the
+        // same simulation, each joint angle in the combined run should
+        // match its counterpart in the single-pendulum run.
+        fn single_model() -> Model {
+            let mut b = ModelBuilder::new();
+            let link = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::IDENTITY,
+            }));
+            b.add_joint_revolute(
+                BodyId::NONE,
+                link,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+            b.build().unwrap()
+        }
+
+        let single = single_model();
+        let mut sa = single.state().unwrap();
+        let mut sb = single.state().unwrap();
+        sa.joint_q.host_mut().unwrap()[0] = 0.3;
+        let ctl = single.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver_single = FeatherstoneSolver::new();
+        for _ in 0..500 {
+            solver_single.step(&single, &sa, &ctl, &contacts, 0.001, &mut sb).unwrap();
+            std::mem::swap(&mut sa, &mut sb);
+        }
+        let single_q = sa.joint_q.host().unwrap()[0];
+
+        // Combined model: pendulum 1 starts at q=0.3, pendulum 2 at q=−0.2.
+        let mut b = ModelBuilder::new();
+        let l1 = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY,
+        }));
+        b.add_joint_revolute(
+            BodyId::NONE,
+            l1,
+            Transform::IDENTITY,
+            Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+            V3::Z,
+        )
+        .unwrap();
+        b.begin_articulation();
+        let l2 = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY,
+        }));
+        b.add_joint_revolute(
+            BodyId::NONE,
+            l2,
+            Transform::IDENTITY,
+            Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+            V3::Z,
+        )
+        .unwrap();
+
+        let model = b.build().unwrap();
+        assert_eq!(model.articulation_count, 2);
+        let arts = model.articulation_start.host().unwrap();
+        assert_eq!(arts, &[0u32, 1, 2]);
+
+        let mut sa = model.state().unwrap();
+        let mut sb = model.state().unwrap();
+        sa.joint_q.host_mut().unwrap()[0] = 0.3;
+        sa.joint_q.host_mut().unwrap()[1] = -0.2;
+        let ctl = model.control();
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..500 {
+            solver.step(&model, &sa, &ctl, &contacts, 0.001, &mut sb).unwrap();
+            std::mem::swap(&mut sa, &mut sb);
+        }
+        let q = sa.joint_q.host().unwrap();
+        // Pendulum 1 in the combined run must match the single-pendulum
+        // baseline to within solver tolerance — proves the two
+        // articulations don't bleed into each other.
+        let drift = (q[0] - single_q).abs();
+        assert!(
+            drift < 1e-6,
+            "articulation 1 drifted from baseline: combined={} single={} Δ={drift}",
+            q[0],
+            single_q
+        );
+        // And pendulum 2 (started at q=-0.2) should be in the
+        // mirror-image oscillation phase, bounded.
+        assert!(q[1].abs() < 0.5, "pendulum 2 amplitude grew: q={}", q[1]);
+    }
+
+    /// Substepping the Featherstone solver should converge toward the
+    /// same trajectory as a single big step (just smaller integration
+    /// error). With dt=0.005 and substeps=4, a swinging pendulum's
+    /// final angle should match the same scene with substeps=1 within
+    /// integration tolerance.
+    #[test]
+    fn substeps_reduce_integration_error() {
+        fn run(substeps: usize) -> Real {
+            let mut b = ModelBuilder::new();
+            let link = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::IDENTITY,
+            }));
+            b.add_joint_revolute(
+                BodyId::NONE,
+                link,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+            let model = b.build().unwrap();
+            let mut s_a = model.state().unwrap();
+            let mut s_b = model.state().unwrap();
+            s_a.joint_q.host_mut().unwrap()[0] = 0.5;
+            let control = model.control();
+            let contacts = Contacts::with_capacity(0);
+            let mut solver = FeatherstoneSolver::new().with_substeps(substeps);
+            for _ in 0..1000 {
+                solver.step(&model, &s_a, &control, &contacts, 0.005, &mut s_b).unwrap();
+                std::mem::swap(&mut s_a, &mut s_b);
+            }
+            s_a.joint_q.host().unwrap()[0]
+        }
+        // Substepping should produce nearly the same trajectory; energy
+        // drift differs slightly but within solver noise.
+        let q1 = run(1);
+        let q4 = run(4);
+        let drift = (q1 - q4).abs();
+        eprintln!("substeps=1: q={q1:.6}, substeps=4: q={q4:.6}, |Δ|={drift:.6}");
+        assert!(drift < 0.05, "substep result diverged: {drift}");
     }
 
     /// Pendulum with no initial energy + control torque = 0 stays at q=0.

@@ -166,6 +166,68 @@ fn sphere_on_box() {
 }
 
 #[test]
+fn external_substeps_box_stack() {
+    // Müller 2020 substepping — done by the **caller** because
+    // contacts must be re-detected each substep. Inside the solver
+    // we'd use a fixed contact set, which doesn't produce the
+    // stability benefit Müller's paper claims.
+    //
+    // Caller pattern: outer loop runs at `dt`, inner substep loop
+    // runs `N` times with `dt/N`, calling `pipeline.collide(...)`
+    // before each `solver.step(..., dt/N)`.
+    let half = Vec3::splat(0.5);
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    let count = 10;
+    for i in 0..count {
+        let body = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(box_si(1.0, half))
+                .with_position(Vec3::new(0.0, 0.5 + i as Real * 1.05, 0.0)),
+        );
+        b.add_shape_box(body, half, Transform::IDENTITY).unwrap();
+    }
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    let mut model = b.build().unwrap();
+    model.default_friction = 0.8;
+    model.default_restitution = 0.0;
+    model.contact_margin = 0.02;
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let mut contacts = Contacts::with_capacity(512);
+    let mut pipeline = CollisionPipeline::new();
+    let mut solver = XpbdSolver::new().with_iterations(4);
+
+    let dt = 0.005;
+    let n_sub = 4;
+    let dt_sub = dt / n_sub as Real;
+    let total_outer = 600;
+
+    for _ in 0..total_outer {
+        for _ in 0..n_sub {
+            pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+            solver
+                .step(&model, &s_a, &control, &contacts, dt_sub, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+    }
+
+    let q = s_a.body_q.host().unwrap();
+    let qd = s_a.body_qd.host().unwrap();
+    let bottom_y = q[0].position.y;
+    let top_v = qd[count - 1].linear.length();
+    eprintln!("external substep stack: bottom_y={bottom_y:.3} top_v={top_v:.3}");
+    assert!(
+        (0.495..0.55).contains(&bottom_y),
+        "bottom box at y={bottom_y}"
+    );
+    assert!(top_v < 0.3, "top box still moving: |v|={top_v}");
+}
+
+#[test]
 fn box_stack_settles() {
     // 10 unit boxes stacked along +Y. They start with a small gap so
     // each one falls onto the one below it. After 1.5s all 10 must

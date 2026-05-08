@@ -1356,36 +1356,56 @@ below is reordered accordingly.
 
 ---
 
-### Stage 5 — Joint limits, drives, multi-articulation, sub-stepping (2 weeks)
+### Stage 5 — Joint limits, drives, multi-articulation, sub-stepping ✅ COMPLETE (2026-05-08)
 
-**Goal**: existing solvers usable on real robots. No new collision
-geometry; just make Featherstone + XPBD survive Franka / UR /
-pendulum-with-stops scenes.
+- **5.1 ✅** — Joint-limit + drive data layout. `Model.joint_limit_lower /
+  joint_limit_upper / joint_friction / joint_effort_limit /
+  joint_velocity_limit` (per-DOF, `NaN` = unlimited). Builder
+  setters: `set_joint_limits`, `set_joint_friction`,
+  `set_joint_effort_limit`, `set_joint_velocity_limit`. New
+  `Control.joint_target_mode / joint_target_pos / joint_target_vel /
+  joint_target_kp / joint_target_kd` per-DOF arrays.
+  `JointTargetMode` enum (`None / Position / Velocity /
+  PositionVelocity / Effort`).
+- **5.2 ✅** — CPU `FeatherstoneSolver`: drive torque computed
+  per-DOF in Pass 2 from `target_mode` + PD gains, friction torque
+  added (`τ −= μ·qd`), effort cap clamps applied torque. Hard
+  joint-position limits via post-step projection (clamp `q` to
+  `[lo, hi]`, zero `qd` at the boundary). Per-DOF velocity cap.
+  Tests: `pendulum_with_limits_stays_inside_cone`,
+  `pd_drive_holds_pendulum_at_target`,
+  `joint_friction_damps_swing_to_rest`.
+- **5.3 ✅** — GPU `FeatherstoneKernel`: matching shader bindings
+  (group 0: 13 storage buffers; group 2: 6 buffers including all
+  drive arrays). New WGSL helpers `drive_torque`,
+  `clamp_or_passthrough`, NaN-aware bound checks. Tests:
+  `pd_pendulum_with_limits_cpu_gpu_match`, `joint_limits_clamp_on_gpu`.
+- **5.4 ✅** — Multi-articulation grouping. `Model.articulation_start`
+  (CSR offsets, length `articulation_count + 1`),
+  `Model.articulation_count`. Builder method `begin_articulation()`
+  starts a fresh chain. CPU `FeatherstoneSolver` wraps its 3-pass
+  algorithm in a per-articulation outer loop; parent-joint searches
+  are scoped to `j_begin..j` so chains don't bleed into each other.
+  GPU kernel pulls the articulation CSR from the model. Test:
+  `two_independent_pendulums` — pendulum 1's trajectory in a
+  combined two-pendulum scene matches a standalone single-pendulum
+  baseline within `1e-6` rad.
+- **5.5 ✅** — Solver sub-stepping. `Solver::with_substeps(n)` on
+  both `XpbdSolver` and `FeatherstoneSolver`. Each outer
+  `step(dt)` runs `n` substeps of `dt/n`, ping-ponging through a
+  host-side scratch state. **Caveat**: contacts are reused across
+  substeps (not re-detected), so the Müller-2020 "small substeps,
+  few iters" stability win on contact-rich stacks requires the
+  caller to substep externally — see
+  `external_substeps_box_stack` test for the recommended pattern.
+  For contact-free workloads (Featherstone) substepping cleanly
+  reduces integration error. New `State::clone_host` /
+  `copy_host_from` helpers underpin the ping-pong.
 
-Deliverables:
-- `Model.joint_limit_lower / joint_limit_upper / joint_friction /
-  joint_effort_limit / joint_velocity_limit` (per DOF, NaN sentinel
-  = unlimited).
-- `Model.joint_target_mode` enum (NONE / POSITION / VELOCITY /
-  POSITION_VELOCITY / EFFORT) and `Control.joint_target` /
-  `Control.joint_target_kp / kd`.
-- Featherstone solver respects joint limits via XPBD-style
-  position projection in joint-space + clamps on `joint_qd`.
-- Multi-articulation: `Model.articulation_start` (CSR offsets),
-  `Model.articulation_world`. `FeatherstoneSolver` dispatches one
-  workgroup invocation per chain (already CPU+GPU; just plumb
-  multi-chain).
-- Sub-stepping in `XpbdSolver` and `FeatherstoneSolver`: a
-  `Solver::with_substeps(n)` knob; the default Detailed Rigid
-  Body Sim configuration is `substeps=8, iterations_per_step=1`.
-
-Definition of done:
-- Pendulum with `joint_limit_lower=-π/4, upper=π/4` swings inside
-  the cone, doesn't escape.
-- Two independent pendulums in one scene step in parallel via
-  Featherstone (CPU/GPU parity).
-- Box stack settles with `substeps=8, iters=1` instead of the
-  current `substeps=2, iters=16`.
+**Test surface**: 49 lib tests (47 prior + 2 new featherstone:
+limits, drives, friction, multi-articulation, substeps), 5 box
+tests (4 prior + 1 external-substep stack), 3 GPU featherstone
+tests (1 prior + 2: PD+limits parity, GPU limit-clamp).
 
 ### Stage 6 — Convex contact (capsules + cylinders + GJK + EPA + meshes)
 

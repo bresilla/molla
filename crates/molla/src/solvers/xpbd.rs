@@ -50,9 +50,14 @@ pub struct GpuBackend {
 
 /// Position-based dynamics solver.
 pub struct XpbdSolver {
-    /// Position-projection iterations per step. Multiple iterations
-    /// help when many contacts share a body (e.g. a stack).
+    /// Position-projection iterations per substep. Many iterations
+    /// help when many contacts share a body (e.g. a stack), but the
+    /// preferred way to scale is to **add substeps** (Müller 2020 §3.2).
     pub position_iterations: usize,
+    /// Number of substeps per outer `step` call. The contact set
+    /// from the caller is held fixed across all substeps, while
+    /// each substep advances `dt/substeps`. Default 1.
+    pub substeps: usize,
     backend: XpbdBackend,
 }
 
@@ -70,6 +75,7 @@ impl XpbdSolver {
     pub fn new_cpu() -> Self {
         Self {
             position_iterations: 4,
+            substeps: 1,
             backend: XpbdBackend::Cpu,
         }
     }
@@ -96,6 +102,7 @@ impl XpbdSolver {
         let kernel = crate::kernels::XpbdKernel::new(&device, body_count);
         Ok(Self {
             position_iterations: 4,
+            substeps: 1,
             backend: XpbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
     }
@@ -103,6 +110,24 @@ impl XpbdSolver {
     #[must_use]
     pub fn with_iterations(mut self, n: usize) -> Self {
         self.position_iterations = n;
+        self
+    }
+
+    /// Configure substepping: each outer `step(dt)` runs `n` inner
+    /// substeps with `dt/n`, **reusing the caller-supplied contact
+    /// set across all substeps**.
+    ///
+    /// **Limitations**: because contacts aren't re-detected per
+    /// substep, this is most useful for contact-free workloads. For
+    /// the Müller (2020) "many small substeps × few iterations"
+    /// stability win on contact-rich stacks, the caller should run
+    /// the substep loop externally — `pipeline.collide` + `solver.step`
+    /// inside an `n`-iteration inner loop, with `solver.substeps = 1`.
+    /// See `tests/xpbd_boxes.rs::external_substeps_box_stack` for the
+    /// recommended pattern.
+    #[must_use]
+    pub fn with_substeps(mut self, n: usize) -> Self {
+        self.substeps = n.max(1);
         self
     }
 
@@ -140,10 +165,93 @@ impl Solver for XpbdSolver {
             )));
         }
 
+        let n_sub = self.substeps.max(1);
+        let dt_sub = dt / n_sub as Real;
+
+        // Single substep: no scratch buffer needed, no contact-pose
+        // override — cpu_step uses state_in.body_q for p_a_local.
+        if n_sub == 1 {
+            return self.step_inner(model, state_in, control, contacts, dt_sub, state_out, None);
+        }
+
+        // Multi-substep: ping-pong between state_out and a host-side
+        // scratch state. The contact set is reused across substeps —
+        // Müller (2020) §3.2: contacts captured once at the outer
+        // step boundary, refined by N short substeps. The body poses
+        // **at contact-detection time** (= caller's state_in.body_q)
+        // are passed to every substep so the per-contact body-frame
+        // anchor `p_a_local` stays consistent across substeps.
+        let q_at_contact = state_in.body_q.host()?.to_vec();
+        let mut scratch = state_in.clone_host()?;
+        self.step_inner(
+            model,
+            state_in,
+            control,
+            contacts,
+            dt_sub,
+            state_out,
+            Some(&q_at_contact),
+        )?;
+        let mut output_in_scratch = false;
+        for _ in 1..n_sub {
+            if output_in_scratch {
+                self.step_inner(
+                    model,
+                    &scratch,
+                    control,
+                    contacts,
+                    dt_sub,
+                    state_out,
+                    Some(&q_at_contact),
+                )?;
+            } else {
+                self.step_inner(
+                    model,
+                    state_out,
+                    control,
+                    contacts,
+                    dt_sub,
+                    &mut scratch,
+                    Some(&q_at_contact),
+                )?;
+            }
+            output_in_scratch = !output_in_scratch;
+        }
+        if output_in_scratch {
+            state_out.copy_host_from(&scratch)?;
+        }
+        Ok(())
+    }
+}
+
+impl XpbdSolver {
+    fn step_inner(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        contacts: &Contacts,
+        dt: Real,
+        state_out: &mut State,
+        q_at_contact: Option<&[Transform]>,
+    ) -> Result<()> {
         match &mut self.backend {
-            XpbdBackend::Cpu => cpu_step(model, state_in, control, contacts, dt, state_out, self.position_iterations),
+            XpbdBackend::Cpu => cpu_step(
+                model,
+                state_in,
+                control,
+                contacts,
+                dt,
+                state_out,
+                self.position_iterations,
+                q_at_contact,
+            ),
             #[cfg(feature = "gpu")]
             XpbdBackend::Gpu(gpu) => {
+                // GPU substep with contact-relative pose override is
+                // not implemented yet — fall back to using state_in's
+                // body_q (works for substeps == 1).
+                let _ = q_at_contact;
                 let GpuBackend { device, queue, kernel } = gpu;
                 kernel.dispatch(
                     device,
@@ -169,9 +277,15 @@ fn cpu_step(
     dt: Real,
     state_out: &mut State,
     position_iterations: usize,
+    q_at_contact: Option<&[Transform]>,
 ) -> Result<()> {
     let n = model.body_count;
     let q_in = state_in.body_q.host()?;
+    // Body poses at contact-detection time. Same as `q_in` in single-step
+    // mode; supplied by the substepping wrapper otherwise so the
+    // body-local contact anchors `p_a_local` stay consistent across
+    // substeps.
+    let q_anchor = q_at_contact.unwrap_or(q_in);
     let qd_in = state_in.body_qd.host()?;
     let f_in = state_in.body_f.host()?;
     let inv_mass = model.body_inv_mass.host()?;
@@ -236,7 +350,8 @@ fn cpu_step(
     // time). At each iteration we rotate these into world frame using
     // the current pose so the penetration estimate stays faithful even
     // after angular corrections accumulate. Shared between position
-    // and velocity projection.
+    // and velocity projection. Computed against `q_anchor` so the
+    // anchors stay consistent across substeps.
     let (p_a_local, p_b_local) = if n_contacts > 0 {
         let a_idx = contacts.a_index.host()?;
         let b_idx = contacts.b_index.host()?;
@@ -250,12 +365,12 @@ fn cpu_step(
             pa.push(if is_static_or_kinematic(flags, a) {
                 Vec3::ZERO
             } else {
-                q_in[a].rotation.conjugate() * (pw - q_in[a].position)
+                q_anchor[a].rotation.conjugate() * (pw - q_anchor[a].position)
             });
-            pb.push(if is_static_or_kinematic(flags, b) || b >= q_in.len() {
+            pb.push(if is_static_or_kinematic(flags, b) || b >= q_anchor.len() {
                 Vec3::ZERO
             } else {
-                q_in[b].rotation.conjugate() * (pw - q_in[b].position)
+                q_anchor[b].rotation.conjugate() * (pw - q_anchor[b].position)
             });
         }
         (pa, pb)

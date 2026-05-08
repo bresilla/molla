@@ -16,6 +16,6 @@ pub use builder::{BodyParams, ModelBuilder, ShapeGeometry};
 pub use contacts::Contacts;
 pub use control::Control;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};
-pub use joint::JointType;
+pub use joint::{JointTargetMode, JointType};
 pub use model::Model;
 pub use state::State;

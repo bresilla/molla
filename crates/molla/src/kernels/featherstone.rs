@@ -28,9 +28,8 @@ pub struct FeatherstoneKernel {
     layout_control: wgpu::BindGroupLayout,
     layout_arts: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
-    /// Articulation CSR — one entry per articulation start, last
-    /// entry = `joint_count`. Stage 3.3 default: a single
-    /// articulation covering every joint.
+    /// Articulation CSR — built from `model.articulation_start` at
+    /// kernel construction. Length = `articulation_count + 1`.
     art_offsets: wgpu::Buffer,
     articulation_count: u32,
     joint_count: u32,
@@ -47,7 +46,7 @@ impl FeatherstoneKernel {
 
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone model"),
-            entries: &storage_entries(8, true),
+            entries: &storage_entries(13, true),
         });
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone state"),
@@ -55,7 +54,7 @@ impl FeatherstoneKernel {
         });
         let layout_control = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone control"),
-            entries: &storage_entries(1, true),
+            entries: &storage_entries(6, true),
         });
         let layout_arts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone arts"),
@@ -96,10 +95,20 @@ impl FeatherstoneKernel {
             cache: None,
         });
 
-        // Default articulation grouping: one articulation owning all
-        // joints. CSR = [0, joint_count].
+        // Articulation CSR — pull from the model. Falls back to a
+        // single articulation covering every joint when
+        // `articulation_count == 0` (e.g. an empty/legacy model).
         let joint_count = model.joint_count as u32;
-        let art_offsets_data: Vec<u32> = vec![0u32, joint_count];
+        let art_offsets_data: Vec<u32> = if model.articulation_count == 0 {
+            vec![0u32, joint_count]
+        } else {
+            model
+                .articulation_start
+                .host()
+                .map(|s| s.to_vec())
+                .unwrap_or_else(|_| vec![0u32, joint_count])
+        };
+        let articulation_count = (art_offsets_data.len().saturating_sub(1)) as u32;
         let art_offsets = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::featherstone art_offsets"),
             size: (art_offsets_data.len() * core::mem::size_of::<u32>()) as u64,
@@ -116,7 +125,7 @@ impl FeatherstoneKernel {
             layout_arts,
             layout_uniforms,
             art_offsets,
-            articulation_count: 1,
+            articulation_count,
             joint_count,
         }
     }
@@ -159,6 +168,11 @@ impl FeatherstoneKernel {
                 buffer_entry(5, model.joint_axis.device_buffer())?,
                 buffer_entry(6, model.joint_coord_offset.device_buffer())?,
                 buffer_entry(7, model.joint_dof_offset.device_buffer())?,
+                buffer_entry(8, model.joint_limit_lower.device_buffer())?,
+                buffer_entry(9, model.joint_limit_upper.device_buffer())?,
+                buffer_entry(10, model.joint_friction.device_buffer())?,
+                buffer_entry(11, model.joint_effort_limit.device_buffer())?,
+                buffer_entry(12, model.joint_velocity_limit.device_buffer())?,
             ],
         });
 
@@ -180,7 +194,14 @@ impl FeatherstoneKernel {
         let bg_control = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::featherstone control bg"),
             layout: &self.layout_control,
-            entries: &[buffer_entry(0, control.joint_force.device_buffer())?],
+            entries: &[
+                buffer_entry(0, control.joint_force.device_buffer())?,
+                buffer_entry(1, control.joint_target_mode.device_buffer())?,
+                buffer_entry(2, control.joint_target_pos.device_buffer())?,
+                buffer_entry(3, control.joint_target_vel.device_buffer())?,
+                buffer_entry(4, control.joint_target_kp.device_buffer())?,
+                buffer_entry(5, control.joint_target_kd.device_buffer())?,
+            ],
         });
 
         let bg_arts = device.create_bind_group(&wgpu::BindGroupDescriptor {
