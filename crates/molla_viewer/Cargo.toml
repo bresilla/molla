@@ -1,0 +1,47 @@
+[package]
+name = "molla_viewer"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Bevy-based interactive viewer for molla physics scenes."
+
+[lints]
+workspace = true
+
+[dependencies]
+# We disable `molla/gpu` so Bevy is the only crate pulling `wgpu` into the
+# viewer binary. Stage-1 stepping is CPU-only anyway; we can re-enable the
+# GPU path once we align wgpu versions with Bevy in stage 2.
+molla = { path = "../molla", default-features = false }
+
+bevy = { version = "0.18", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_mesh",
+    "bevy_camera",
+    "bevy_image",
+    "bevy_scene",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "tonemapping_luts",
+    "default_font",
+    "zstd_rust",
+    "ktx2",
+    "x11",
+    "wayland",
+] }
+
+[[bin]]
+name = "molla_viewer"
+path = "src/main.rs"

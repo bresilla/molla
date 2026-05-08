@@ -30,13 +30,13 @@ compile:
 
 c: compile
 
-# `cargo run` launches the viewer binary in the root package.
-# Pass args through: `make run ARGS="path/to/scene.usda"`.
-# Set RELEASE=1 to build with optimisations (much smoother rendering
-# for heavy scenes like the tractor / city).
+# Launches `molla_viewer` (the Bevy app). `BIN` overrides the bin name.
+# `RELEASE=1` builds with optimisations (recommended — debug builds are
+# noticeably laggy under Bevy).
 RELEASE_FLAG := $(if $(RELEASE),--release,)
+BIN := molla_viewer
 run:
-	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -- $(ARGS)
+	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -p $(BIN) -- $(ARGS)
 
 r: run
 
@@ -61,7 +61,7 @@ help:
 	@echo "Available targets:"
 	@echo "  build        Build the workspace (all targets)"
 	@echo "  compile      Clean and rebuild"
-	@echo "  run          Launch the viewer: \`make run [ARGS=\"scene.usda\"]\`"
+	@echo "  run          Launch molla_viewer (RELEASE=1 recommended; BIN=name overrides)"
 	@echo "  test         Run the test suite"
 	@echo "  check        cargo check the workspace"
 	@echo "  fmt          Format the workspace"
