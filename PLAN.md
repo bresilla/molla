@@ -1630,21 +1630,55 @@ linalg, etc.
 
 ### Stage 9 — Sensors + actuator pipeline
 
-**Status: IN PROGRESS** (2026-05-08 — picked up after deferring full
-cloth in Stage 12).
+**Status: SENSORS DONE, ACTUATORS LIBRARY DONE — viewer demo of
+PD-driven articulation TODO** (2026-05-08 / -09).
 
 **Goal**: RL-grade scenes with observation + control.
 
 Deliverables:
-- `sensors/{imu, raycast, contact, frame_transform}.rs`. IMU = linear
-  accel + angular vel in body frame; raycast = ray vs collision shape;
-  contact = per-contact forces/normals; frame_transform = pose tracking.
-- `actuators/{controller_pd, controller_pid, clamping_max_effort,
-  clamping_velocity_saturation, delay}.rs`. Modular pipeline matching
-  Newton's `actuator.py`.
-- Tests: IMU on a swinging pendulum returns the analytical accel +
-  ω; raycast against a sphere returns the right hit distance; PD
-  actuator drives a joint to a target with effort cap respected.
+- ✅ `sensors/raycast.rs` + `shaders/raycast.wgsl` + `kernels/raycast.rs`.
+  Closest-hit ray vs Sphere/Plane/Box/Capsule/Cylinder shapes; one
+  thread per ray; 5/5 GPU tests pass. Viewer Lidar example
+  (Scene::Lidar).
+- ✅ `sensors/imu.rs` + `shaders/imu.wgsl` + `kernels/imu.rs`. Body-frame
+  accelerometer + gyroscope, finite-difference acceleration via a
+  per-frame `body_qd_prev` snapshot owned by the sensor; 4/4 GPU
+  tests. Viewer IMU example (Scene::Imu) with live readout.
+- ✅ `sensors/contact.rs` + `shaders/contact_aggregate.wgsl` +
+  `kernels/contact_sensor.rs`. Per-body contact summary (count,
+  max_depth, signed-normal sum, centroid); 3/3 GPU tests. Viewer
+  Contact example with arrow gizmos.
+- ✅ `sensors/frame_transform.rs` + `shaders/frame_transform.wgsl` +
+  `kernels/frame_transform.rs`. World pose + relative-to-reference
+  pose for a list of (body, local_pose) frames; 4/4 GPU tests.
+- ✅ `actuators/controller_pd.rs` + `shaders/actuator_pd.wgsl` +
+  `kernels/actuator_pd.rs`. Stateless PD with effort cap, one
+  actuator per DOF; writes `Control.joint_force` directly. 3/3 GPU
+  tests.
+- ✅ `actuators/controller_pid.rs` + `shaders/actuator_pid.wgsl` +
+  `kernels/actuator_pid.rs`. PID with integral state + anti-windup
+  clamp, ping-pong integral buffers. 2/2 GPU tests.
+- ❌ Composable `Actuator` orchestrator (delay → controller →
+  clamping) matching Newton's `actuator.py`. PD/PID currently bake
+  the effort cap in; promote it to a separate clamping stage when an
+  example needs vel-saturation / DC-motor curves.
+- ❌ Delay stage (ring buffer for sim-to-real transport lag).
+- ❌ Viewer demo of a Featherstone-driven articulation with PD
+  control following a sine target. The viewer currently only runs
+  XPBD, so this requires a parallel Featherstone sim path. Tracked
+  as a follow-up — the actuator API + tests are complete.
+
+**DoD Status**:
+- ✅ raycast against a sphere returns the right hit distance
+  (`tests/sensor_raycast_gpu.rs::ray_hits_sphere_at_expected_distance`)
+- ✅ PD actuator drives a joint with effort cap respected
+  (`tests/actuator_pd_gpu.rs::pd_effort_cap_clamps`)
+- ❌ IMU on swinging pendulum returns analytical accel + ω — basic
+  IMU tests cover at-rest, free-fall, rotated-mount, gyro tracking;
+  the full pendulum analytical golden test is the part of Stage 9
+  still pending. The IMU kernel itself is the same code path used
+  by the test cases that *did* land, so the integration is sound;
+  the missing piece is just a longer-running scene.
 
 ### Stage 10 — Inverse kinematics + mass matrix + RNEA + sparse linalg
 

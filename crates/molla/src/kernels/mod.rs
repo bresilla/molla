@@ -1,6 +1,10 @@
 //! WGSL compute kernels and their Rust dispatch wrappers.
 
 #[cfg(feature = "gpu")]
+mod actuator_pd;
+#[cfg(feature = "gpu")]
+mod actuator_pid;
+#[cfg(feature = "gpu")]
 mod contact_sensor;
 #[cfg(feature = "gpu")]
 mod featherstone;
@@ -15,6 +19,10 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod xpbd;
 
+#[cfg(feature = "gpu")]
+pub use actuator_pd::ActuatorPdKernel;
+#[cfg(feature = "gpu")]
+pub use actuator_pid::ActuatorPidKernel;
 #[cfg(feature = "gpu")]
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
