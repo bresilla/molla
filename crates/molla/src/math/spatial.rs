@@ -344,6 +344,50 @@ pub fn spatial_cross(a: SpatialVector, b: SpatialVector) -> SpatialVector {
     SpatialVector::new(w_a.cross(v_b) + v_a.cross(w_b), w_a.cross(w_b))
 }
 
+/// Spatial-Jacobian column for one joint's effect on a downstream
+/// body's reference point. Mirrors Newton's `spatial_jacobian`
+/// builtin (`xtra/warp/_src/builtins.py:2261`).
+///
+/// Inputs are all in **world frame**:
+/// - `joint_axis_world`: rotation/translation axis (unit).
+/// - `joint_origin_world`: world position of the joint frame.
+/// - `body_point_world`: the body reference point whose spatial
+///   velocity we're parameterising (typically the body's COM in
+///   world).
+/// - `kind`: which DoF — `Revolute` returns angular axis +
+///   moment arm cross; `Prismatic` returns translation axis with
+///   zero angular.
+///
+/// The returned spatial vector is the column of the Jacobian
+/// matrix s.t. `v_body = Σ_j J_j · qd_j` for joints `j` upstream
+/// of the body in the kinematic tree.
+#[must_use]
+pub fn spatial_jacobian_column(
+    kind: JacobianKind,
+    joint_axis_world: Vec3,
+    joint_origin_world: Vec3,
+    body_point_world: Vec3,
+) -> SpatialVector {
+    match kind {
+        JacobianKind::Revolute => SpatialVector::new(
+            joint_axis_world.cross(body_point_world - joint_origin_world),
+            joint_axis_world,
+        ),
+        JacobianKind::Prismatic => {
+            SpatialVector::new(joint_axis_world, Vec3::ZERO)
+        }
+    }
+}
+
+/// What flavour of single-DoF joint to take the Jacobian column of.
+/// Multi-DoF joints (Ball, D6) decompose into multiple single-DoF
+/// columns and call this helper repeatedly.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum JacobianKind {
+    Revolute,
+    Prismatic,
+}
+
 /// Dual spatial cross-product `a ×* b` for force vectors (Coriolis
 /// term in ABA's bias). Per Newton's `spatial_cross_dual`:
 /// ```text
@@ -404,6 +448,42 @@ mod tests {
         let d = a - b;
         assert!(vec_close(d.linear, Vec3::new(1.0, -1.0, 0.0), 1e-12));
         assert!(vec_close(d.angular, Vec3::new(0.0, 1.0, -1.0), 1e-12));
+    }
+
+    /// Jacobian column for a revolute joint at world origin
+    /// rotating about +Z, applied to a body point at (1, 0, 0):
+    /// linear = ω × r = (0,0,1) × (1,0,0) = (0,1,0).
+    /// angular = (0,0,1).
+    /// Then v_body = ω·qd reproduces a planar rotation.
+    #[test]
+    fn jacobian_revolute_rotates_offset_point() {
+        let j = spatial_jacobian_column(
+            JacobianKind::Revolute,
+            Vec3::Z,
+            Vec3::ZERO,
+            Vec3::X,
+        );
+        assert!((j.linear - Vec3::Y).length() < 1e-12);
+        assert!((j.angular - Vec3::Z).length() < 1e-12);
+        // Multiply by qd=2 → (lin=2Y, ang=2Z).
+        let v = j.scale(2.0);
+        assert!((v.linear - Vec3::new(0.0, 2.0, 0.0)).length() < 1e-12);
+        assert!((v.angular - Vec3::new(0.0, 0.0, 2.0)).length() < 1e-12);
+    }
+
+    /// Jacobian column for a prismatic joint along +Y: linear = +Y,
+    /// angular = 0 (regardless of body point — translation doesn't
+    /// rotate).
+    #[test]
+    fn jacobian_prismatic_translates() {
+        let j = spatial_jacobian_column(
+            JacobianKind::Prismatic,
+            Vec3::Y,
+            Vec3::ZERO,
+            Vec3::new(2.5, 1.0, -3.0),
+        );
+        assert!((j.linear - Vec3::Y).length() < 1e-12);
+        assert!(j.angular.length() < 1e-12);
     }
 
     #[test]

@@ -195,6 +195,24 @@ pub struct ModelBuilder {
     shape_collision_group: Vec<u32>,
     shape_collision_filter_pairs: Vec<(u32, u32)>,
 
+    // Equality-constraint arrays.
+    equality_type: Vec<u32>,
+    equality_body_a: Vec<i32>,
+    equality_body_b: Vec<i32>,
+    equality_anchor_a: Vec<Vec3>,
+    equality_anchor_b: Vec<Vec3>,
+    equality_relative_rotation: Vec<crate::math::Quat>,
+    equality_enabled: Vec<u32>,
+    equality_constraint_world: Vec<i32>,
+
+    // Mimic-constraint arrays.
+    mimic_joint_a: Vec<i32>,
+    mimic_joint_b: Vec<i32>,
+    mimic_c0: Vec<Real>,
+    mimic_c1: Vec<Real>,
+    mimic_enabled: Vec<u32>,
+    mimic_constraint_world: Vec<i32>,
+
     // Joint arrays.
     joint_type: Vec<u32>,
     joint_parent: Vec<i32>,
@@ -635,6 +653,70 @@ impl ModelBuilder {
         ))
     }
 
+    /// 3-DoF spherical / ball joint between `parent` and `child`.
+    /// Adds 4 coordinates (quaternion qx, qy, qz, qw) and 3 dof.
+    pub fn add_joint_ball(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_ball")?;
+        Ok(self.push_joint(
+            super::JointType::Ball,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        ))
+    }
+
+    /// 6-DoF distance joint — like `Free` but with a distance limit
+    /// between the joint anchors. Adds 7 coordinates / 6 dof. Set
+    /// `min_distance` / `max_distance` via the per-DOF
+    /// `set_joint_limits` once the joint id is known.
+    pub fn add_joint_distance(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_distance")?;
+        Ok(self.push_joint(
+            super::JointType::Distance,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        ))
+    }
+
+    /// 6-DoF D6 joint with per-axis lock/limit configuration. Adds
+    /// 7 coordinates / 6 dof. Per-axis locks are applied via
+    /// `set_joint_limits(joint, lower, upper)` — set `lower==upper==0`
+    /// on the locked axes.
+    pub fn add_joint_d6(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_d6")?;
+        Ok(self.push_joint(
+            super::JointType::D6,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        ))
+    }
+
     /// Free 6-DoF joint between `child` and the world frame (or
     /// `parent`). Adds 7 coordinates (xyz + quat) and 6 dof.
     pub fn add_joint_free(
@@ -870,6 +952,92 @@ impl ModelBuilder {
         ))
     }
 
+    /// Add a CONNECT (ball-weld) equality constraint: pin
+    /// `anchor_a` (in body A's local frame) to `anchor_b` (in body
+    /// B's local frame). Bodies remain free to rotate.
+    pub fn add_equality_connect(
+        &mut self,
+        body_a: BodyId,
+        body_b: BodyId,
+        anchor_a: Vec3,
+        anchor_b: Vec3,
+    ) -> usize {
+        let id = self.equality_type.len();
+        self.equality_type.push(super::EqualityType::Connect as u32);
+        self.equality_body_a.push(if body_a == BodyId::NONE { -1 } else { body_a.0 as i32 });
+        self.equality_body_b.push(if body_b == BodyId::NONE { -1 } else { body_b.0 as i32 });
+        self.equality_anchor_a.push(anchor_a);
+        self.equality_anchor_b.push(anchor_b);
+        self.equality_relative_rotation
+            .push(crate::math::Quat::IDENTITY);
+        self.equality_enabled.push(1);
+        let world = if body_a != BodyId::NONE {
+            self.body_world
+                .get(body_a.0 as usize)
+                .copied()
+                .unwrap_or(0)
+        } else if body_b != BodyId::NONE {
+            self.body_world
+                .get(body_b.0 as usize)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        self.equality_constraint_world.push(world);
+        id
+    }
+
+    /// Add a WELD equality constraint: pin BOTH position and
+    /// orientation. `relative_rotation` is the rotation that
+    /// transforms body A's frame into body B's frame at rest.
+    pub fn add_equality_weld(
+        &mut self,
+        body_a: BodyId,
+        body_b: BodyId,
+        anchor_a: Vec3,
+        anchor_b: Vec3,
+        relative_rotation: crate::math::Quat,
+    ) -> usize {
+        let id = self.add_equality_connect(body_a, body_b, anchor_a, anchor_b);
+        self.equality_type[id] = super::EqualityType::Weld as u32;
+        self.equality_relative_rotation[id] = relative_rotation;
+        id
+    }
+
+    /// Add a mimic constraint: forces `q_driven = c0 + c1 · q_driver`.
+    /// Both joints must already exist. The Featherstone solver
+    /// applies this in a pre-step pass — disabling the driven
+    /// joint's dynamics for that DOF.
+    pub fn add_mimic_constraint(
+        &mut self,
+        driven: JointId,
+        driver: JointId,
+        c0: Real,
+        c1: Real,
+    ) -> Result<usize> {
+        if driven.index() >= self.joint_type.len()
+            || driver.index() >= self.joint_type.len()
+        {
+            return Err(Error::Build(format!(
+                "add_mimic_constraint: joint id out of range"
+            )));
+        }
+        let id = self.mimic_joint_a.len();
+        self.mimic_joint_a.push(driven.0 as i32);
+        self.mimic_joint_b.push(driver.0 as i32);
+        self.mimic_c0.push(c0);
+        self.mimic_c1.push(c1);
+        self.mimic_enabled.push(1);
+        let world = self
+            .joint_world
+            .get(driver.index())
+            .copied()
+            .unwrap_or(0);
+        self.mimic_constraint_world.push(world);
+        Ok(id)
+    }
+
     /// Set the gravity vector for `world`. Auto-extends the world list as
     /// needed; new worlds default to -9.81 m/s² on -Y.
     pub fn set_world_gravity(&mut self, world: WorldId, gravity: Vec3) {
@@ -962,6 +1130,30 @@ impl ModelBuilder {
                 p.dedup();
                 p
             },
+
+            equality_count: self.equality_type.len(),
+            equality_type: Buffer::from_vec(self.equality_type, s),
+            equality_body_a: Buffer::from_vec(self.equality_body_a, s),
+            equality_body_b: Buffer::from_vec(self.equality_body_b, s),
+            equality_anchor_a: Buffer::from_vec(self.equality_anchor_a, s),
+            equality_anchor_b: Buffer::from_vec(self.equality_anchor_b, s),
+            equality_relative_rotation: Buffer::from_vec(
+                self.equality_relative_rotation,
+                s,
+            ),
+            equality_enabled: Buffer::from_vec(self.equality_enabled, s),
+            equality_constraint_world: Buffer::from_vec(
+                self.equality_constraint_world,
+                s,
+            ),
+
+            mimic_count: self.mimic_joint_a.len(),
+            mimic_joint_a: Buffer::from_vec(self.mimic_joint_a, s),
+            mimic_joint_b: Buffer::from_vec(self.mimic_joint_b, s),
+            mimic_c0: Buffer::from_vec(self.mimic_c0, s),
+            mimic_c1: Buffer::from_vec(self.mimic_c1, s),
+            mimic_enabled: Buffer::from_vec(self.mimic_enabled, s),
+            mimic_constraint_world: Buffer::from_vec(self.mimic_constraint_world, s),
 
             joint_count: self.joint_type.len(),
             joint_type: Buffer::from_vec(self.joint_type, s),

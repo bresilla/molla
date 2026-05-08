@@ -78,6 +78,21 @@ impl BufferElement for Transform {
     }
 }
 
+impl BufferElement for crate::math::Quat {
+    type Gpu = [f32; 4];
+    fn to_gpu(&self) -> Self::Gpu {
+        [self.x as f32, self.y as f32, self.z as f32, self.w as f32]
+    }
+    fn from_gpu(gpu: &Self::Gpu) -> Self {
+        crate::math::Quat::from_xyzw(
+            gpu[0] as f64,
+            gpu[1] as f64,
+            gpu[2] as f64,
+            gpu[3] as f64,
+        )
+    }
+}
+
 impl BufferElement for SpatialVector {
     type Gpu = GpuSpatialVector;
     fn to_gpu(&self) -> Self::Gpu {

@@ -7,6 +7,29 @@
 
 use crate::math::Real;
 
+/// Equality-constraint kind. Stored as a `u32` per constraint on
+/// [`super::Model`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[repr(u32)]
+pub enum EqualityType {
+    /// Ball weld — pin two anchor points together (3 positional
+    /// constraints, 0 rotational). Bodies remain free to rotate.
+    Connect = 0,
+    /// Fixed weld — pin position AND orientation. 6 constraints.
+    Weld = 1,
+}
+
+impl EqualityType {
+    /// Decode a `u32` to the enum, defaulting to `Connect`.
+    #[must_use]
+    pub fn from_u32(v: u32) -> Self {
+        match v {
+            1 => Self::Weld,
+            _ => Self::Connect,
+        }
+    }
+}
+
 /// Per-DOF actuator target mode. Mirrors Newton's
 /// `sim/enums.py:JointTargetMode`. Stored as a `u32` per DOF on
 /// [`super::Control`] so each DOF can be driven independently.
@@ -42,6 +65,19 @@ impl JointTargetMode {
 
 /// Joint kind. Lays out which transform map a joint imposes between
 /// its parent and child.
+///
+/// Numeric values are kept stable for serialisation and for
+/// matching Newton's `JointType` enum:
+///
+/// | enum         | u32 | coord | dof |
+/// |--------------|-----|-------|-----|
+/// | `Prismatic`  | 0   | 1     | 1   |
+/// | `Revolute`   | 1   | 1     | 1   |
+/// | `Ball`       | 2   | 4     | 3   |
+/// | `Fixed`      | 3   | 0     | 0   |
+/// | `Free`       | 4   | 7     | 6   |
+/// | `Distance`   | 5   | 7     | 6   |
+/// | `D6`         | 6   | 7     | 6   |
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[repr(u32)]
 pub enum JointType {
@@ -49,23 +85,42 @@ pub enum JointType {
     Prismatic = 0,
     /// 1 DoF rotation about a fixed axis (1 coord, 1 dof).
     Revolute = 1,
+    /// 3-DoF spherical / ball joint — rotation only, parameterised
+    /// as a quaternion (4 coord) with body-frame angular velocity
+    /// (3 dof). Featherstone dynamics for ball joints land in a
+    /// follow-up; for now they integrate kinematically (the user
+    /// drives `joint_qd` directly).
+    Ball = 2,
     /// Locks all relative motion (0 coord, 0 dof).
     Fixed = 3,
     /// 6 DoF unconstrained motion (7 coord — quaternion + translation, 6 dof).
     Free = 4,
+    /// 6-DoF "soft" distance joint: like `Free` but with `min_distance`
+    /// / `max_distance` between the joint anchors enforced by XPBD.
+    /// Storage matches `Free` (7 coord, 6 dof); the limits live in
+    /// the joint's per-DOF limit arrays.
+    Distance = 5,
+    /// 6-DoF joint with per-axis lock/unlock + per-axis limits. The
+    /// per-DOF axis lock pattern is encoded via the existing
+    /// `joint_limit_lower / joint_limit_upper` arrays (a locked
+    /// axis sets `lower == upper == 0`).
+    D6 = 6,
 }
 
 impl JointType {
     /// `(coord_count, dof_count)` — coord is the size in `joint_q`,
-    /// dof is the size in `joint_qd`. They differ for `Free` because
-    /// the rotation is parameterised as a quaternion.
+    /// dof is the size in `joint_qd`. They differ for joints whose
+    /// orientation is parameterised by a quaternion.
     #[must_use]
     pub fn coord_dof(self) -> (usize, usize) {
         match self {
             JointType::Prismatic => (1, 1),
             JointType::Revolute => (1, 1),
+            JointType::Ball => (4, 3),
             JointType::Fixed => (0, 0),
             JointType::Free => (7, 6),
+            JointType::Distance => (7, 6),
+            JointType::D6 => (7, 6),
         }
     }
 
@@ -89,8 +144,12 @@ impl JointType {
         match self {
             JointType::Revolute | JointType::Prismatic => out.push(0.0),
             JointType::Fixed => {}
-            JointType::Free => {
-                // [tx, ty, tz, qx, qy, qz, qw] — identity = (0,0,0, 0,0,0,1)
+            JointType::Ball => {
+                // 4 coords = identity quaternion (qx, qy, qz, qw).
+                out.extend_from_slice(&[0.0, 0.0, 0.0, 1.0]);
+            }
+            JointType::Free | JointType::Distance | JointType::D6 => {
+                // 7 coords: [tx, ty, tz, qx, qy, qz, qw] — identity.
                 out.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
             }
         }

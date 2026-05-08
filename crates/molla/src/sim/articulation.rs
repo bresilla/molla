@@ -70,8 +70,11 @@ fn joint_type_from_u32(v: u32) -> JointType {
     match v {
         0 => JointType::Prismatic,
         1 => JointType::Revolute,
+        2 => JointType::Ball,
         3 => JointType::Fixed,
         4 => JointType::Free,
+        5 => JointType::Distance,
+        6 => JointType::D6,
         _ => JointType::Fixed, // safe fallback
     }
 }
@@ -89,8 +92,13 @@ fn joint_local_transform(jt: JointType, qj: &[Real], axis: Vec3) -> Transform {
             Transform::from_translation(axis * q)
         }
         JointType::Fixed => Transform::IDENTITY,
-        JointType::Free => {
-            // [tx, ty, tz, qx, qy, qz, qw]
+        JointType::Ball => {
+            // 4 coords = quaternion (qx, qy, qz, qw). Pure rotation.
+            let r = Quat::from_xyzw(qj[0], qj[1], qj[2], qj[3]).normalize();
+            Transform::from_rotation(r)
+        }
+        JointType::Free | JointType::Distance | JointType::D6 => {
+            // 7 coords: [tx, ty, tz, qx, qy, qz, qw].
             let t = Vec3::new(qj[0], qj[1], qj[2]);
             let r = Quat::from_xyzw(qj[3], qj[4], qj[5], qj[6]).normalize();
             Transform::new(t, r)
@@ -164,6 +172,62 @@ mod tests {
         eval_fk(&model, &mut state).unwrap();
         let p = state.body_q.host().unwrap()[body.index()].position;
         assert!((p - crate::math::Vec3::new(0.0, 2.5, 0.0)).length() < 1e-12);
+    }
+
+    /// Ball joint: setting joint_q to a non-identity quaternion
+    /// rotates the child accordingly via FK.
+    #[test]
+    fn ball_joint_fk_rotates_via_quat() {
+        use crate::math::{Quat, Vec3};
+        let mut b = ModelBuilder::new();
+        let body = b.add_body(BodyParams::new());
+        b.add_joint_ball(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
+            .unwrap();
+        let model = b.build().unwrap();
+        // Coord layout: 4 quaternion components (x, y, z, w).
+        assert_eq!(model.joint_coord_total, 4);
+        assert_eq!(model.joint_dof_total, 3);
+        let mut state = model.state().unwrap();
+        // Set quaternion = rotation of 90° about +Z.
+        let target = Quat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let q = state.joint_q.host_mut().unwrap();
+        q[0] = target.x;
+        q[1] = target.y;
+        q[2] = target.z;
+        q[3] = target.w;
+        eval_fk(&model, &mut state).unwrap();
+        let pose = state.body_q.host().unwrap()[body.index()];
+        // The world rotation should match `target`. Compare via dot
+        // (handle the q == -q ambiguity).
+        let dot = pose.rotation.x * target.x
+            + pose.rotation.y * target.y
+            + pose.rotation.z * target.z
+            + pose.rotation.w * target.w;
+        assert!(dot.abs() > 1.0 - 1e-9, "ball fk rotation off, dot = {dot}");
+    }
+
+    /// D6 joint: 7-coord pose (3 translation + 4 quat) maps directly
+    /// through FK. With identity transforms and only translation set,
+    /// the child sits at that translation.
+    #[test]
+    fn d6_joint_fk_translates() {
+        use crate::math::Vec3;
+        let mut b = ModelBuilder::new();
+        let body = b.add_body(BodyParams::new());
+        b.add_joint_d6(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
+            .unwrap();
+        let model = b.build().unwrap();
+        assert_eq!(model.joint_coord_total, 7);
+        assert_eq!(model.joint_dof_total, 6);
+        let mut state = model.state().unwrap();
+        let q = state.joint_q.host_mut().unwrap();
+        q[0] = 1.0;
+        q[1] = 2.0;
+        q[2] = 3.0;
+        q[3] = 0.0; q[4] = 0.0; q[5] = 0.0; q[6] = 1.0; // identity quat
+        eval_fk(&model, &mut state).unwrap();
+        let p = state.body_q.host().unwrap()[body.index()].position;
+        assert!((p - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-12);
     }
 
     #[test]

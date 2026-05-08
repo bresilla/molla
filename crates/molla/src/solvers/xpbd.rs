@@ -495,6 +495,181 @@ fn cpu_step(
         }
     }
 
+    // ── 2b. Equality-constraint projection (CONNECT / WELD) ──
+    // Each constraint is a Jacobi-style position correction that
+    // pulls anchor points together (CONNECT) and aligns frames
+    // (WELD). One pass per outer step matches Newton's XPBD pattern.
+    if model.equality_count > 0 {
+        let eq_type = model.equality_type.host()?;
+        let eq_a = model.equality_body_a.host()?;
+        let eq_b = model.equality_body_b.host()?;
+        let eq_anchor_a = model.equality_anchor_a.host()?;
+        let eq_anchor_b = model.equality_anchor_b.host()?;
+        let eq_relrot = model.equality_relative_rotation.host()?;
+        let eq_enabled = model.equality_enabled.host()?;
+        for _ in 0..position_iterations.max(1) {
+            for c in 0..model.equality_count {
+                if eq_enabled[c] == 0 {
+                    continue;
+                }
+                let a = eq_a[c];
+                let b = eq_b[c];
+                let anchor_a_local = eq_anchor_a[c];
+                let anchor_b_local = eq_anchor_b[c];
+
+                let kin_a = a < 0
+                    || ((flags.get(a as usize).copied().unwrap_or(0))
+                        & BodyFlags::KINEMATIC
+                        != 0);
+                let kin_b = b < 0
+                    || ((flags.get(b as usize).copied().unwrap_or(0))
+                        & BodyFlags::KINEMATIC
+                        != 0);
+                let inv_m_a = if kin_a {
+                    0.0
+                } else {
+                    inv_mass.get(a as usize).copied().unwrap_or(0.0)
+                };
+                let inv_m_b = if kin_b {
+                    0.0
+                } else {
+                    inv_mass.get(b as usize).copied().unwrap_or(0.0)
+                };
+                if inv_m_a + inv_m_b <= 0.0 {
+                    continue;
+                }
+                // Always use the body's current pose to find the
+                // anchor's world position. Kinematic bodies don't
+                // RECEIVE corrections; that's handled below.
+                let xf_a = if a >= 0 {
+                    q_pred[a as usize]
+                } else {
+                    Transform::IDENTITY
+                };
+                let xf_b = if b >= 0 {
+                    q_pred[b as usize]
+                } else {
+                    Transform::IDENTITY
+                };
+                let p_a = xf_a.transform_point(anchor_a_local);
+                let p_b = xf_b.transform_point(anchor_b_local);
+
+                // Positional correction: pull p_a → p_b mass-weighted.
+                let delta = p_b - p_a;
+                let r_a = if kin_a {
+                    Vec3::ZERO
+                } else {
+                    p_a - com_world(q_pred[a as usize], body_com[a as usize])
+                };
+                let r_b = if kin_b {
+                    Vec3::ZERO
+                } else {
+                    p_b - com_world(q_pred[b as usize], body_com[b as usize])
+                };
+                // Generalised inverse mass for constraint
+                // direction `n = delta / |delta|`. For zero delta
+                // skip — already pinned.
+                let len = delta.length();
+                if len > 1e-9 {
+                    let n_dir = delta / len;
+                    let i_inv_a = if kin_a {
+                        Mat3::ZERO
+                    } else {
+                        world_inv_inertia(
+                            q_pred[a as usize].rotation,
+                            inv_inertia_body[a as usize],
+                        )
+                    };
+                    let i_inv_b = if kin_b {
+                        Mat3::ZERO
+                    } else {
+                        world_inv_inertia(
+                            q_pred[b as usize].rotation,
+                            inv_inertia_body[b as usize],
+                        )
+                    };
+                    let ra_x_n = r_a.cross(n_dir);
+                    let rb_x_n = r_b.cross(n_dir);
+                    let w_a = inv_m_a + ra_x_n.dot(i_inv_a * ra_x_n);
+                    let w_b = inv_m_b + rb_x_n.dot(i_inv_b * rb_x_n);
+                    let w_sum = w_a + w_b;
+                    if w_sum > 0.0 {
+                        let lambda = len / w_sum;
+                        if !kin_a {
+                            q_pred[a as usize].position += n_dir * (lambda * inv_m_a);
+                            let dtheta = i_inv_a * ra_x_n * lambda;
+                            q_pred[a as usize].rotation =
+                                apply_rotation_delta(q_pred[a as usize].rotation, dtheta);
+                        }
+                        if !kin_b {
+                            q_pred[b as usize].position -= n_dir * (lambda * inv_m_b);
+                            let dtheta = i_inv_b * rb_x_n * (-lambda);
+                            q_pred[b as usize].rotation =
+                                apply_rotation_delta(q_pred[b as usize].rotation, dtheta);
+                        }
+                    }
+                }
+
+                // WELD: also align orientations. q_b should equal
+                // q_a · relative_rotation. Compute the rotation
+                // delta and apply mass-weighted to both bodies.
+                if eq_type[c] == crate::sim::EqualityType::Weld as u32 {
+                    let r_target = eq_relrot[c];
+                    let q_a_now = q_pred[a as usize].rotation;
+                    let q_b_now = q_pred[b as usize].rotation;
+                    let q_b_target = q_a_now * r_target;
+                    // Rotation delta from q_b_now to q_b_target,
+                    // expressed as an axis-angle vector (small-angle
+                    // approximation via 2 · imaginary).
+                    let dq = q_b_target * q_b_now.conjugate();
+                    let sign = if dq.w < 0.0 { -1.0 } else { 1.0 };
+                    let theta_full = Vec3::new(
+                        dq.x * 2.0 * sign,
+                        dq.y * 2.0 * sign,
+                        dq.z * 2.0 * sign,
+                    );
+                    // Distribute mass-weighted by angular inv-inertia
+                    // sums (3-trace approx).
+                    let tr_a = if kin_a {
+                        0.0
+                    } else {
+                        let i_inv = world_inv_inertia(
+                            q_pred[a as usize].rotation,
+                            inv_inertia_body[a as usize],
+                        );
+                        i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
+                    };
+                    let tr_b = if kin_b {
+                        0.0
+                    } else {
+                        let i_inv = world_inv_inertia(
+                            q_pred[b as usize].rotation,
+                            inv_inertia_body[b as usize],
+                        );
+                        i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
+                    };
+                    let tr_sum = tr_a + tr_b;
+                    if tr_sum > 0.0 {
+                        let frac_a = tr_a / tr_sum;
+                        let frac_b = tr_b / tr_sum;
+                        if !kin_a {
+                            q_pred[a as usize].rotation = apply_rotation_delta(
+                                q_pred[a as usize].rotation,
+                                -theta_full * frac_a,
+                            );
+                        }
+                        if !kin_b {
+                            q_pred[b as usize].rotation = apply_rotation_delta(
+                                q_pred[b as usize].rotation,
+                                theta_full * frac_b,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── 3. Velocity recovery ─────────────────────────────────
     // Linear: v_post = (p_new - p_old) / dt.
     // Angular: ω_post = quat_to_axis_angle(q_new · q_old⁻¹) / dt.

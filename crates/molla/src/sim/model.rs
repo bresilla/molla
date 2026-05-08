@@ -91,6 +91,43 @@ pub struct Model {
     /// this set.
     pub shape_collision_filter_pairs: Vec<(u32, u32)>,
 
+    // ── Equality constraints (CONNECT / WELD) ──────────────────────
+    /// Number of equality constraints.
+    pub equality_count: usize,
+    /// Per-constraint type — `EqualityType::{Connect, Weld}` as `u32`.
+    pub equality_type: Buffer<u32>,
+    /// Per-constraint body A index (-1 = world).
+    pub equality_body_a: Buffer<i32>,
+    /// Per-constraint body B index (-1 = world).
+    pub equality_body_b: Buffer<i32>,
+    /// Per-constraint anchor in body A's local frame.
+    pub equality_anchor_a: Buffer<Vec3>,
+    /// Per-constraint anchor in body B's local frame.
+    pub equality_anchor_b: Buffer<Vec3>,
+    /// Per-constraint relative orientation (used by `Weld`). For
+    /// `Connect` it's ignored.
+    pub equality_relative_rotation: Buffer<crate::math::Quat>,
+    /// Per-constraint enabled flag (1 = active).
+    pub equality_enabled: Buffer<u32>,
+    /// Per-constraint world index (defaults to body A's world).
+    pub equality_constraint_world: Buffer<i32>,
+
+    // ── Mimic constraints (q_a = c0 + c1 · q_b) ────────────────────
+    /// Number of mimic constraints.
+    pub mimic_count: usize,
+    /// Per-mimic driven joint index (the one whose q is overridden).
+    pub mimic_joint_a: Buffer<i32>,
+    /// Per-mimic driver joint index (the one whose q is read).
+    pub mimic_joint_b: Buffer<i32>,
+    /// Per-mimic constant offset.
+    pub mimic_c0: Buffer<Real>,
+    /// Per-mimic linear coefficient.
+    pub mimic_c1: Buffer<Real>,
+    /// Per-mimic enabled flag.
+    pub mimic_enabled: Buffer<u32>,
+    /// Per-mimic world index (defaults to driver joint's world).
+    pub mimic_constraint_world: Buffer<i32>,
+
     // ── Joints ──────────────────────────────────────────────────────
     /// Number of joints.
     pub joint_count: usize,
@@ -218,6 +255,24 @@ impl Model {
             meshes: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),
             shape_collision_filter_pairs: Vec::new(),
+
+            equality_count: 0,
+            equality_type: Buffer::from_vec(Vec::new(), s),
+            equality_body_a: Buffer::from_vec(Vec::new(), s),
+            equality_body_b: Buffer::from_vec(Vec::new(), s),
+            equality_anchor_a: Buffer::from_vec(Vec::new(), s),
+            equality_anchor_b: Buffer::from_vec(Vec::new(), s),
+            equality_relative_rotation: Buffer::from_vec(Vec::new(), s),
+            equality_enabled: Buffer::from_vec(Vec::new(), s),
+            equality_constraint_world: Buffer::from_vec(Vec::new(), s),
+
+            mimic_count: 0,
+            mimic_joint_a: Buffer::from_vec(Vec::new(), s),
+            mimic_joint_b: Buffer::from_vec(Vec::new(), s),
+            mimic_c0: Buffer::from_vec(Vec::new(), s),
+            mimic_c1: Buffer::from_vec(Vec::new(), s),
+            mimic_enabled: Buffer::from_vec(Vec::new(), s),
+            mimic_constraint_world: Buffer::from_vec(Vec::new(), s),
 
             joint_count: 0,
             joint_type: Buffer::from_vec(Vec::new(), s),

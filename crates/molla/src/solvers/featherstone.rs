@@ -235,8 +235,39 @@ fn cpu_step(
 
     // Snapshot input + run FK so `state_out.body_q` reflects the
     // input poses (we'll integrate q,qd below and re-FK at the end).
-    let q_in = state_in.joint_q.host()?.to_vec();
-    let qd_in = state_in.joint_qd.host()?.to_vec();
+    let mut q_in = state_in.joint_q.host()?.to_vec();
+    let mut qd_in = state_in.joint_qd.host()?.to_vec();
+
+    // ── Pre-step: apply mimic constraints (q_a = c0 + c1·q_b) ──
+    // Each mimic overrides the driven joint's first coord/dof to
+    // match its driver. Only single-DoF driven joints are handled;
+    // multi-DoF mimic is a future extension.
+    if model.mimic_count > 0 {
+        let m_a = model.mimic_joint_a.host()?;
+        let m_b = model.mimic_joint_b.host()?;
+        let m_c0 = model.mimic_c0.host()?;
+        let m_c1 = model.mimic_c1.host()?;
+        let m_en = model.mimic_enabled.host()?;
+        let coord_off = model.joint_coord_offset.host()?;
+        let dof_off = model.joint_dof_offset.host()?;
+        for c in 0..model.mimic_count {
+            if m_en[c] == 0 {
+                continue;
+            }
+            let a = m_a[c] as usize;
+            let b = m_b[c] as usize;
+            if a >= model.joint_count || b >= model.joint_count {
+                continue;
+            }
+            let coord_a = coord_off[a] as usize;
+            let coord_b = coord_off[b] as usize;
+            let dof_a = dof_off[a] as usize;
+            let dof_b = dof_off[b] as usize;
+            // Override q_a and qd_a from driver's values.
+            q_in[coord_a] = m_c0[c] + m_c1[c] * q_in[coord_b];
+            qd_in[dof_a] = m_c1[c] * qd_in[dof_b];
+        }
+    }
     state_out.joint_q.host_mut()?.copy_from_slice(&q_in);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_in);
     state_out
@@ -509,11 +540,15 @@ fn cpu_step(
                 qd_new[dof_idx] = qd_after;
                 q_new[coord_idx] = q_clamped;
             }
-            JointType::Fixed | JointType::Free => {
-                // Fixed: no coords. Free: 7 coords / 6 dof — pass
-                // through (dynamics for Free joints handled in a
-                // future stage; usual case is they're driven by the
-                // bias-force machinery as a 6-DoF root).
+            JointType::Fixed
+            | JointType::Free
+            | JointType::Ball
+            | JointType::Distance
+            | JointType::D6 => {
+                // Fixed: no coords. Multi-DoF joints (Free / Ball /
+                // Distance / D6): pass through. Their reduced-coord
+                // dynamics arrive in a follow-up; they currently
+                // integrate kinematically (caller drives qd).
             }
         }
     }
@@ -575,7 +610,10 @@ fn joint_type_from_u32(v: u32) -> JointType {
     match v {
         0 => JointType::Prismatic,
         1 => JointType::Revolute,
+        2 => JointType::Ball,
         4 => JointType::Free,
+        5 => JointType::Distance,
+        6 => JointType::D6,
         _ => JointType::Fixed,
     }
 }
@@ -1037,6 +1075,67 @@ mod tests {
         let drift = (q1 - q4).abs();
         eprintln!("substeps=1: q={q1:.6}, substeps=4: q={q4:.6}, |Δ|={drift:.6}");
         assert!(drift < 0.05, "substep result diverged: {drift}");
+    }
+
+    /// Mimic constraint (`q_a = c0 + c1·q_b`): drive one joint's
+    /// position from another. With c0=0, c1=1 the two joint angles
+    /// stay equal; with c1=-1 they mirror.
+    #[test]
+    fn mimic_constraint_couples_two_joints() {
+        let mut b = ModelBuilder::new();
+        let l0 = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY,
+        }));
+        let driver = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                l0,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+        b.begin_articulation();
+        let l1 = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY,
+        }));
+        let driven = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                l1,
+                Transform::IDENTITY,
+                Transform::from_translation(V3::new(0.0, 0.5, 0.0)),
+                V3::Z,
+            )
+            .unwrap();
+        // q_driven = -q_driver (mirror).
+        b.add_mimic_constraint(driven, driver, 0.0, -1.0).unwrap();
+
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        s_a.joint_q.host_mut().unwrap()[0] = 0.5; // initial driver
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..200 {
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let q = s_a.joint_q.host().unwrap();
+        let drift = (q[0] + q[1]).abs(); // q_driver + q_driven should equal 0
+        assert!(
+            drift < 1e-3,
+            "mimic broke: driver={} driven={} sum={drift}",
+            q[0],
+            q[1]
+        );
     }
 
     /// Disabling a joint freezes its DOF — gravity stops affecting it.
