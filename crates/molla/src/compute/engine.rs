@@ -108,7 +108,7 @@ impl Engine {
 }
 
 fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends,
         ..Default::default()
     });
@@ -118,7 +118,7 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
         compatible_surface: None,
         force_fallback_adapter: false,
     }))
-    .ok_or_else(|| Error::Gpu("no compatible wgpu adapter".into()))?;
+    .map_err(|e| Error::Gpu(format!("no compatible wgpu adapter: {e}")))?;
 
     let adapter_info = AdapterInfo::from_wgpu(adapter.get_info());
 
@@ -127,15 +127,14 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
     // integrator (7 model + 5 state + 1 control = 13). Modern desktop GPUs
     // typically allow 16+, mobile / web much less; if we ever target the
     // browser we'll need to consolidate buffers.
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("molla::compute::Engine"),
-            required_features: wgpu::Features::empty(),
-            required_limits: adapter.limits(),
-            memory_hints: wgpu::MemoryHints::Performance,
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("molla::compute::Engine"),
+        required_features: wgpu::Features::empty(),
+        required_limits: adapter.limits(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+    }))
     .map_err(|e| Error::Gpu(format!("device request failed: {e}")))?;
 
     Ok(Engine {

@@ -11,10 +11,14 @@ description = "Bevy-based interactive viewer for molla physics scenes."
 workspace = true
 
 [dependencies]
-# We disable `molla/gpu` so Bevy is the only crate pulling `wgpu` into the
-# viewer binary. Stage-1 stepping is CPU-only anyway; we can re-enable the
-# GPU path once we align wgpu versions with Bevy in stage 2.
-molla = { path = "../molla", default-features = false }
+# molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the
+# viewer can step on either CPU or GPU based on the user's UI toggle.
+molla = { path = "../molla" }
+
+# Microsoft's mimalloc — drop-in global allocator. egui's tessellator
+# thrashes the system allocator, and frost's NOTES say mimalloc cuts
+# frame time from ~120 ms to ~13 ms in the heavy demo. Worth the dep.
+mimalloc = { version = "0.1", default-features = false }
 
 bevy = { version = "0.18", default-features = false, features = [
     "std",

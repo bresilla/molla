@@ -300,7 +300,9 @@ impl<T: BufferElement> Buffer<T> {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        device.poll(wgpu::Maintain::Wait).panic_on_timeout();
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("download recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("buffer map: {e:?}")))?;
