@@ -7,6 +7,10 @@
 //!   pointer-event firewall so clicks over the panel don't leak into
 //!   the viewport.
 //!
+//! Stage 4 viewer: XPBD CPU solver with a real static-plane collision
+//! shape. The GPU toggle from the previous build is parked until XPBD
+//! has a GPU port (next sub-stage).
+//!
 //! Mouse:
 //!   * MMB-drag             pan the camera focus (XZ plane)
 //!   * MMB+LMB / MMB+RMB    lift the focus (vertical Y)
@@ -22,36 +26,29 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-
-// mimalloc — egui's tessellator allocates a lot per frame; mimalloc
-// keeps fragmentation low and small-alloc throughput high. Frost's
-// own notes show ~10× speedup vs the system allocator on heavy egui
-// scenes.
-#[cfg(not(target_arch = "wasm32"))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
 use bevy_frost::prelude::*;
 use bevy_frost::style::AccentColor;
-use bevy_frost::widget::{button, readout, toggle};
+use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
-use molla::compute::Engine;
+use molla::geometry::{collide, ShapePair};
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::solvers::Solver as _;
 
-// 50×50 = 2500 spheres. Stage-2 bench showed the GPU pulls ahead of
-// CPU around N≈500-1000 bodies; this scene size makes the win visible.
-const GRID_N: usize = 50;
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+const GRID_N: usize = 50; // 50×50 = 2500 spheres
 const GRID_SPACING: f32 = 1.2;
 const SPHERE_RADIUS: f32 = 0.5;
 const DROP_HEIGHT: f32 = 15.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
 const SUBSTEPS_PER_FRAME: usize = 2;
 
-const FLOOR_Y: f64 = 0.0;
-const FLOOR_RESTITUTION: f64 = 0.45;
-const FLOOR_FRICTION: f64 = 0.6;
+const PLANE_RESTITUTION: f64 = 0.35;
+const PLANE_FRICTION: f64 = 0.6;
 
 const PANE_ID: &str = "molla_panel";
 
@@ -73,8 +70,6 @@ fn main() {
         .add_plugins(EguiPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(FrostPlugin)
-        // Drop the transform gizmo + selection ring — we don't need
-        // per-body manipulation in the demo.
         .add_plugins(
             GlacialPlugins
                 .build()
@@ -99,52 +94,25 @@ fn main() {
         .run();
 }
 
-/// Marker linking a Bevy entity to its molla `BodyId`.
 #[derive(Component)]
 struct MollaBody(mp::BodyId);
 
-/// Pause / step state.
 #[derive(Resource, Default)]
 struct SimRunState {
     paused: bool,
-    /// One-shot used by the "step once" button while paused.
     step_once: bool,
 }
 
-/// Per-frame physics timing surfaced in the control pane. Kept on its
-/// own resource so the panel can read it without holding a borrow on
-/// the `Sim` itself.
+/// Per-frame physics timing.
 #[derive(Resource, Default)]
 struct SimStats {
-    /// Smoothed total time spent inside `step_simulation`, in
-    /// microseconds. Includes GPU upload + dispatch + download when
-    /// the GPU backend is active.
     smoothed_step_us: f64,
-    /// Smoothed time spent only in the substep loop (just
-    /// `solver.step` calls — excludes upload / download / floor
-    /// clamp). On GPU this measures host-side encoding cost, not the
-    /// async kernel runtime.
     smoothed_solve_us: f64,
+    smoothed_collide_us: f64,
+    last_contacts: u32,
 }
 
-/// Which solver backend the sim is currently running on.
-#[derive(Clone, Debug)]
-enum ActiveBackend {
-    Cpu,
-    Gpu,
-    /// User asked for GPU but it's unavailable. Sticky reason string
-    /// shown in the panel; the toggle stays off.
-    GpuUnavailable(String),
-}
-
-impl ActiveBackend {
-    fn is_gpu(&self) -> bool {
-        matches!(self, Self::Gpu)
-    }
-}
-
-/// Owns the molla simulation, the active solver, and (lazily) the
-/// `Engine` that hosts the GPU backend.
+/// Owns the molla simulation.
 #[derive(Resource)]
 struct Sim {
     model: mp::Model,
@@ -152,11 +120,8 @@ struct Sim {
     state_b: mp::State,
     control: mp::Control,
     contacts: mp::Contacts,
-    solver: mp::SemiImplicitSolver,
-    backend: ActiveBackend,
-    engine: Option<Engine>,
-    /// Adapter string for display in the panel. None when CPU-only.
-    adapter_label: Option<String>,
+    solver: mp::XpbdSolver,
+    pair_buf: Vec<ShapePair>,
 }
 
 impl Sim {
@@ -184,11 +149,23 @@ impl Sim {
             }
         }
 
-        let model = b.build().expect("model");
+        // Static ground plane at y = 0 with +Y normal — real
+        // collision shape, not a viewer-side post-step clamp.
+        b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+            .expect("plane shape");
+
+        let mut model = b.build().expect("model");
+        // Tune the global contact material so the demo doesn't look
+        // like a mausoleum (perfect inelasticity) or a bouncy castle.
+        model.default_friction = PLANE_FRICTION;
+        model.default_restitution = PLANE_RESTITUTION;
+        model.contact_margin = 0.02;
+
         let state_a = model.state().expect("state");
         let state_b = model.state().expect("state");
         let control = model.control();
-        let contacts = mp::Contacts::with_capacity(0);
+        let contacts = mp::Contacts::with_capacity(2048);
+        let solver = mp::XpbdSolver::new().with_iterations(4);
 
         Self {
             model,
@@ -196,69 +173,9 @@ impl Sim {
             state_b,
             control,
             contacts,
-            solver: mp::SemiImplicitSolver::new_cpu(),
-            backend: ActiveBackend::Cpu,
-            engine: None,
-            adapter_label: None,
+            solver,
+            pair_buf: Vec::with_capacity(8192),
         }
-    }
-
-    fn switch_to_gpu(&mut self) {
-        if self.engine.is_none() {
-            match Engine::new_gpu() {
-                Ok(e) => {
-                    self.adapter_label = e.adapter_info().map(|i| {
-                        format!("{} ({})", i.name, i.backend)
-                    });
-                    self.engine = Some(e);
-                }
-                Err(e) => {
-                    self.backend = ActiveBackend::GpuUnavailable(format!("{e}"));
-                    return;
-                }
-            }
-        }
-        let engine = self.engine.as_ref().unwrap();
-        let device = engine.device().unwrap().clone();
-        let queue = engine.queue().unwrap().clone();
-
-        if let Err(e) = self
-            .model
-            .upload_to_device(&device, &queue)
-            .and_then(|_| self.state_a.upload_to_device(&device, &queue))
-            .and_then(|_| self.state_b.upload_to_device(&device, &queue))
-            .and_then(|_| self.control.upload_to_device(&device, &queue))
-        {
-            self.backend = ActiveBackend::GpuUnavailable(format!("upload failed: {e}"));
-            return;
-        }
-
-        match mp::SemiImplicitSolver::new_gpu(engine) {
-            Ok(s) => {
-                self.solver = s;
-                self.backend = ActiveBackend::Gpu;
-            }
-            Err(e) => {
-                self.backend = ActiveBackend::GpuUnavailable(format!("solver init: {e}"));
-            }
-        }
-    }
-
-    fn switch_to_cpu(&mut self) {
-        // Pull the latest pose data off the device so subsequent CPU
-        // steps and `sync_transforms` see fresh values. Both `state_a`
-        // and `state_b` need to come back: the kernel marked each as
-        // `DeviceDirty` during dispatch, and the next CPU step will
-        // call `host_mut` on `state_b` (which would otherwise panic).
-        if self.backend.is_gpu()
-            && let Some(engine) = &self.engine
-            && let (Some(device), Some(queue)) = (engine.device(), engine.queue())
-        {
-            let _ = self.state_a.download_from_device(device, queue);
-            let _ = self.state_b.download_from_device(device, queue);
-        }
-        self.solver = mp::SemiImplicitSolver::new_cpu();
-        self.backend = ActiveBackend::Cpu;
     }
 
     fn reset(&mut self) {
@@ -276,12 +193,6 @@ impl Sim {
         for v in self.state_a.body_qd.host_mut().expect("body_qd") {
             *v = mp::SpatialVector::ZERO;
         }
-        // If running on GPU, push the reset state back to the device.
-        if self.backend.is_gpu()
-            && let Some(engine) = &self.engine
-                && let (Some(device), Some(queue)) = (engine.device(), engine.queue()) {
-                    let _ = self.state_a.upload_to_device(device, queue);
-                }
     }
 }
 
@@ -291,7 +202,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     sim: Res<Sim>,
 ) {
-    // Sun + cascade shadows. Cascade tuned for the 60m-wide scene.
+    // Sun + cascade shadows.
     let sun_shadow = CascadeShadowConfigBuilder {
         num_cascades: 2,
         minimum_distance: 0.1,
@@ -311,8 +222,6 @@ fn setup(
         sun_shadow,
     ));
 
-    // Camera with the chase rig + ambient + GizmoCamera marker.
-    // Tuned for a 50×50 sphere grid at 1.2m spacing (~60m wide).
     let chase = ChaseCamera {
         focus: Vec3::new(0.0, 6.0, 0.0),
         distance: 80.0,
@@ -336,7 +245,6 @@ fn setup(
         GizmoCamera,
     ));
 
-    // World-origin axis triad — drawn by `AxisGizmoPlugin`.
     commands.spawn((
         Name::new("OriginAxes"),
         Transform::from_xyz(0.0, 0.001, 0.0),
@@ -346,16 +254,9 @@ fn setup(
         },
     ));
 
-    // Body meshes. Two perf decisions:
-    //   * Low-poly icosphere (subdivision 1 = 80 tris). At 2500
-    //     instances we'd have 2M tris with subdiv 2 — most of those
-    //     get sub-pixel coverage and just thrash the rasteriser.
-    //   * `NotShadowCaster` on every sphere. The directional light's
-    //     shadow pass would otherwise re-draw all 2500 spheres into
-    //     the cascade map, doubling the geometry cost. Spheres still
-    //     RECEIVE shadows from anything that does cast.
-    // Eight materials rendered behind one mesh handle still allow
-    // Bevy's render-graph batching by-bin.
+    // 8-colour palette. Spheres are NotShadowCaster — at 2500
+    // instances the shadow pass would dominate frame time and the
+    // visual gain is negligible against the LOD grid.
     let sphere_mesh = meshes.add(Sphere::new(SPHERE_RADIUS).mesh().ico(1).expect("ico"));
     let palette = [
         Color::srgb(0.88, 0.35, 0.28),
@@ -395,9 +296,10 @@ fn setup(
     }
 
     info!(
-        "molla viewer: {} bodies, {}Hz physics — Space: pause, R: reset, Esc: quit",
-        GRID_N * GRID_N,
-        (1.0 / FIXED_DT) as u32
+        "molla viewer: {} bodies + plane, {}× @ {:.0} Hz physics — Space pause, R reset, Esc quit",
+        sim.model.body_count,
+        SUBSTEPS_PER_FRAME,
+        1.0 / FIXED_DT
     );
 }
 
@@ -429,18 +331,6 @@ fn step_simulation(
     run.step_once = false;
     let frame_start = std::time::Instant::now();
 
-    // Snapshot the device handles up front to avoid borrowing
-    // `sim.engine` while we mutably borrow the rest of the struct.
-    let gpu_handles = if sim.backend.is_gpu() {
-        sim.engine.as_ref().and_then(|e| {
-            let d = e.device()?.clone();
-            let q = e.queue()?.clone();
-            Some((d, q))
-        })
-    } else {
-        None
-    };
-
     let Sim {
         model,
         state_a,
@@ -448,65 +338,28 @@ fn step_simulation(
         control,
         contacts,
         solver,
-        ..
+        pair_buf,
     } = &mut *sim;
 
-    // GPU mode: state_a's device buffer is stale because the
-    // previous frame's floor clamp dirtied the host copy. Upload
-    // once, then run all substeps device-side without round-tripping.
-    if let Some((_d, q)) = gpu_handles.as_ref() {
-        let _ = state_a.body_q.upload(q);
-        let _ = state_a.body_qd.upload(q);
-    }
-
+    let mut total_collide_us = 0.0_f64;
     let solve_start = std::time::Instant::now();
     for _ in 0..SUBSTEPS_PER_FRAME {
+        let c0 = std::time::Instant::now();
+        collide(model, state_a, contacts, pair_buf).expect("collide");
+        total_collide_us += c0.elapsed().as_secs_f64() * 1_000_000.0;
+
         solver
             .step(model, state_a, control, contacts, FIXED_DT, state_b)
             .expect("solver step");
         std::mem::swap(state_a, state_b);
     }
     let solve_us = solve_start.elapsed().as_secs_f64() * 1_000_000.0;
-
-    // GPU mode: bring the final state_a back for the floor clamp +
-    // `sync_transforms`. Only one device→host transfer per frame
-    // regardless of substep count, instead of one per substep.
-    if let Some((d, q)) = gpu_handles.as_ref() {
-        let _ = state_a.body_q.download(d, q);
-        let _ = state_a.body_qd.download(d, q);
-    }
-
-    clamp_to_floor(state_a);
-
-    // EMA smoothing — α = 0.1 keeps the readout legible while still
-    // tracking drift.
     let total_us = frame_start.elapsed().as_secs_f64() * 1_000_000.0;
+
     stats.smoothed_step_us = 0.9 * stats.smoothed_step_us + 0.1 * total_us;
     stats.smoothed_solve_us = 0.9 * stats.smoothed_solve_us + 0.1 * solve_us;
-}
-
-/// Viewer-side floor clamp. Stage-1 molla has no contact pipeline; this
-/// keeps spheres above `y = 0` until stage 4 lands proper collisions.
-fn clamp_to_floor(state: &mut mp::State) {
-    let q = state.body_q.host_mut().expect("body_q");
-    let mut hits = vec![false; q.len()];
-    for (i, t) in q.iter_mut().enumerate() {
-        let radius = SPHERE_RADIUS as f64;
-        let min_y = FLOOR_Y + radius;
-        if t.position.y < min_y {
-            t.position.y = min_y;
-            hits[i] = true;
-        }
-    }
-    let qd = state.body_qd.host_mut().expect("body_qd");
-    for (i, v) in qd.iter_mut().enumerate() {
-        if hits[i] && v.linear.y < 0.0 {
-            v.linear.y = -v.linear.y * FLOOR_RESTITUTION;
-            v.linear.x *= 1.0 - FLOOR_FRICTION;
-            v.linear.z *= 1.0 - FLOOR_FRICTION;
-            v.angular *= 1.0 - 0.5 * FLOOR_FRICTION;
-        }
-    }
+    stats.smoothed_collide_us = 0.9 * stats.smoothed_collide_us + 0.1 * total_collide_us;
+    stats.last_contacts = contacts.count;
 }
 
 fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
@@ -523,7 +376,6 @@ fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
     }
 }
 
-/// Frost `Pane2` on the left rail with stats + controls.
 fn control_pane(
     mut contexts: EguiContexts,
     accent: Res<AccentColor>,
@@ -546,18 +398,6 @@ fn control_pane(
 
     let body_count = sim.model.body_count;
 
-    let backend_label = match &sim.backend {
-        ActiveBackend::Cpu => "CPU".to_string(),
-        ActiveBackend::Gpu => "GPU".to_string(),
-        ActiveBackend::GpuUnavailable(_) => "CPU (GPU N/A)".to_string(),
-    };
-    let adapter = sim.adapter_label.clone().unwrap_or_else(|| "—".into());
-    let backend_err = match &sim.backend {
-        ActiveBackend::GpuUnavailable(msg) => Some(msg.clone()),
-        _ => None,
-    };
-    let mut want_gpu = sim.backend.is_gpu();
-
     Pane2::new(PANE_ID, "molla", PaneAnchor::LeftRail(RailZone::Start), accent_color).show(
         ctx,
         |ui| {
@@ -571,32 +411,17 @@ fn control_pane(
             );
             ui.separator();
 
-            // Physics timing — the headline indicator of CPU vs GPU.
-            // `total` includes the GPU-mode upload + download tax;
-            // `solve` is just the dispatch loop (host-side encoding
-            // on GPU, true compute on CPU).
+            // Per-frame physics timing — collide + XPBD step are
+            // separated so you can see what dominates.
             readout(ui, "Phys total", &format!("{:>4.0} µs", stats.smoothed_step_us));
-            readout(ui, "Phys solve", &format!("{:>4.0} µs", stats.smoothed_solve_us));
+            readout(ui, "  · collide", &format!("{:>4.0} µs", stats.smoothed_collide_us));
+            readout(ui, "  · solve",   &format!("{:>4.0} µs", stats.smoothed_solve_us));
+            readout(ui, "Contacts", &format!("{}", stats.last_contacts));
             ui.separator();
 
-            readout(ui, "Backend", &backend_label);
-            readout(ui, "Adapter", &adapter);
-
-            let prev = want_gpu;
-            toggle(ui, "Use GPU", &mut want_gpu, accent_color);
-            if want_gpu != prev {
-                if want_gpu {
-                    sim.switch_to_gpu();
-                } else {
-                    sim.switch_to_cpu();
-                }
-            }
-            if let Some(err) = backend_err {
-                ui.colored_label(
-                    egui::Color32::from_rgb(220, 90, 90),
-                    egui::RichText::new(err).small(),
-                );
-            }
+            readout(ui, "Solver", "XPBD-CPU");
+            readout(ui, "Friction", &format!("{PLANE_FRICTION:.2}"));
+            readout(ui, "Restitution", &format!("{PLANE_RESTITUTION:.2}"));
             ui.separator();
 
             ui.horizontal(|ui| {
@@ -618,6 +443,3 @@ fn control_pane(
         },
     );
 }
-
-// `egui` re-import for the in-function colored_label call.
-use bevy_egui::egui;

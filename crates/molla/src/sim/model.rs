@@ -78,6 +78,15 @@ pub struct Model {
     pub angular_damping: Real,
     /// Velocity cap applied to particles (m/s) for stability.
     pub particle_velocity_max: Real,
+    /// Slack added to AABBs in the broad phase (m). Catches contacts
+    /// that would otherwise be missed at the boundary of a step.
+    pub contact_margin: Real,
+    /// Default Coulomb friction coefficient applied to fresh contacts
+    /// when shapes don't carry a per-shape material.
+    pub default_friction: Real,
+    /// Default restitution applied to fresh contacts when shapes
+    /// don't carry a per-shape material.
+    pub default_restitution: Real,
 }
 
 impl Model {
@@ -121,6 +130,9 @@ impl Model {
 
             angular_damping: 0.0,
             particle_velocity_max: 1.0e6,
+            contact_margin: 0.01,
+            default_friction: 0.5,
+            default_restitution: 0.0,
         }
     }
 

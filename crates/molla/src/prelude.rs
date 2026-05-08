@@ -10,7 +10,8 @@ pub use crate::sim::{
     BodyFlags, BodyParams, Contacts, Control, Model, ModelBuilder, ParticleFlags, ShapeFlags,
     ShapeGeometry, State,
 };
-pub use crate::solvers::{SemiImplicitSolver, Solver};
+pub use crate::geometry::collide;
+pub use crate::solvers::{SemiImplicitSolver, Solver, XpbdSolver};
 pub use crate::storage::{Buffer, BufferUsage};
 
 #[cfg(feature = "gpu")]

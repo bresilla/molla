@@ -10,14 +10,22 @@ use crate::storage::{Buffer, BufferUsage};
 use super::flags::BodyFlags;
 use super::Model;
 
-/// Per-shape geometry tag. Stage 1 only ships [`ShapeGeometry::Sphere`];
-/// boxes/capsules/planes/meshes follow in stage 4.
+/// Per-shape geometry tag. Stage 4 currently ships sphere + plane;
+/// box / capsule / mesh follow in 4.x.
 #[derive(Copy, Clone, Debug)]
 pub enum ShapeGeometry {
     /// Solid sphere centred on the shape's local origin.
     Sphere {
         /// Radius (m).
         radius: Real,
+    },
+    /// Infinite half-space plane in the shape's local frame.
+    /// Points satisfying `normal · x <= 0` are *inside* the half-space
+    /// (i.e. penetrating). The plane is anchored at the shape's local
+    /// origin; use the shape's local `Transform` to position it.
+    Plane {
+        /// Outward-facing unit normal in shape-local frame.
+        normal: Vec3,
     },
 }
 
@@ -144,6 +152,9 @@ pub struct ModelBuilder {
     // Solver knobs (defaults match Newton's `SemiImplicitSolver`).
     angular_damping: Real,
     particle_velocity_max: Real,
+    contact_margin: Real,
+    default_friction: Real,
+    default_restitution: Real,
 }
 
 impl ModelBuilder {
@@ -154,6 +165,9 @@ impl ModelBuilder {
         Self {
             world_gravity: vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)],
             angular_damping: 0.05,
+            contact_margin: 0.01,
+            default_friction: 0.5,
+            default_restitution: 0.0,
             particle_velocity_max: 1.0e6,
             ..Default::default()
         }
@@ -192,30 +206,65 @@ impl ModelBuilder {
         id
     }
 
-    /// Attach a sphere shape to `body`.
+    /// Attach a sphere shape to `body`. Pass [`BodyId::NONE`] to make
+    /// the shape part of the static world frame instead of any body.
     pub fn add_shape_sphere(
         &mut self,
         body: BodyId,
         radius: Real,
         local_pose: Transform,
     ) -> Result<ShapeId> {
-        if body.index() >= self.body_mass.len() {
-            return Err(Error::Build(format!(
-                "add_shape_sphere: body id {body:?} out of range (have {} bodies)",
-                self.body_mass.len()
-            )));
-        }
+        self.validate_body_for_shape(body, "add_shape_sphere")?;
         if !radius.is_finite() || radius <= 0.0 {
             return Err(Error::Build(format!(
                 "add_shape_sphere: radius must be a positive finite number, got {radius}"
             )));
         }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Sphere { radius }))
+    }
+
+    /// Attach a static-plane half-space shape to `body`. Pass
+    /// [`BodyId::NONE`] for a world-frame ground / wall. `normal` is
+    /// the outward-facing direction in shape-local frame; the
+    /// `local_pose`'s translation positions a point on the plane.
+    pub fn add_shape_plane(
+        &mut self,
+        body: BodyId,
+        normal: Vec3,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_plane")?;
+        let len = normal.length();
+        if !len.is_finite() || len < 1e-9 {
+            return Err(Error::Build(format!(
+                "add_shape_plane: normal must be a finite non-zero vector, got {normal:?}"
+            )));
+        }
+        let unit = normal / len;
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Plane { normal: unit }))
+    }
+
+    fn validate_body_for_shape(&self, body: BodyId, fn_name: &str) -> Result<()> {
+        if body == BodyId::NONE {
+            return Ok(());
+        }
+        if body.index() >= self.body_mass.len() {
+            return Err(Error::Build(format!(
+                "{fn_name}: body id {body:?} out of range (have {} bodies)",
+                self.body_mass.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn push_shape(&mut self, body: BodyId, local_pose: Transform, geom: ShapeGeometry) -> ShapeId {
         let id = ShapeId::from_index(self.shape_geometry.len());
-        self.shape_body.push(body.0 as i32);
+        let body_idx = if body == BodyId::NONE { -1 } else { body.0 as i32 };
+        self.shape_body.push(body_idx);
         self.shape_transform.push(local_pose);
-        self.shape_geometry.push(ShapeGeometry::Sphere { radius });
+        self.shape_geometry.push(geom);
         self.shape_flags.push(super::flags::ShapeFlags::COLLIDES);
-        Ok(id)
+        id
     }
 
     /// Set the gravity vector for `world`. Auto-extends the world list as
@@ -253,9 +302,9 @@ impl ModelBuilder {
         let shape_count = self.shape_geometry.len();
         let world_count = self.world_gravity.len();
 
-        // Validate.
+        // Validate. `shape_body == -1` is the static-world sentinel.
         for (i, &body) in self.shape_body.iter().enumerate() {
-            if body < 0 || (body as usize) >= body_count {
+            if body != -1 && (body < 0 || (body as usize) >= body_count) {
                 return Err(Error::Build(format!(
                     "shape {i} references invalid body id {body}"
                 )));
@@ -297,6 +346,9 @@ impl ModelBuilder {
 
             angular_damping: self.angular_damping,
             particle_velocity_max: self.particle_velocity_max,
+            contact_margin: self.contact_margin,
+            default_friction: self.default_friction,
+            default_restitution: self.default_restitution,
         })
     }
 }

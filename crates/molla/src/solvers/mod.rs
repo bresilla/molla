@@ -1,8 +1,10 @@
 //! Time-integration solvers.
 
 mod semi_implicit;
+mod xpbd;
 
 pub use semi_implicit::SemiImplicitSolver;
+pub use xpbd::XpbdSolver;
 
 use crate::core::Result;
 use crate::math::Real;
