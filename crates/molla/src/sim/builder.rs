@@ -187,6 +187,7 @@ pub struct ModelBuilder {
     spring_b: Vec<u32>,
     spring_rest_length: Vec<Real>,
     spring_compliance: Vec<Real>,
+    spring_max_stretch: Vec<Real>,
 
     // Triangle topology — flat `tri_count*3` u32 array.
     tri_indices: Vec<u32>,
@@ -352,19 +353,29 @@ impl ModelBuilder {
     }
 
     /// Add a distance constraint between two particles.
-    /// `compliance` is the XPBD α parameter (0 = rigid).
+    ///
+    /// * `compliance` — XPBD α (m/N). 0 = stiff, 1e-7 = stiff
+    ///   stretch, 1e-2 = soft. Equivalent to `1 / spring_stiffness`.
+    /// * `max_stretch` — hard upper bound on stretch as a ratio of
+    ///   rest length. 0.0 = perfectly inextensible, 0.05 = 5 % linen,
+    ///   0.5 = jersey, ≥ 1.0 effectively disables the cap. Enforced
+    ///   as a non-linear projection after the soft XPBD pass so
+    ///   pulling on cloth never exceeds the configured stretch
+    ///   regardless of how the user yanks the cursor.
     pub fn add_distance_constraint(
         &mut self,
         a: u32,
         b: u32,
         rest_length: Real,
         compliance: Real,
+        max_stretch: Real,
     ) -> usize {
         let id = self.spring_a.len();
         self.spring_a.push(a);
         self.spring_b.push(b);
         self.spring_rest_length.push(rest_length);
         self.spring_compliance.push(compliance);
+        self.spring_max_stretch.push(max_stretch);
         id
     }
 
@@ -398,6 +409,7 @@ impl ModelBuilder {
         particle_mass: Real,
         particle_radius: Real,
         compliance: Real,
+        max_stretch: Real,
         world: WorldId,
     ) -> (u32, u32, u32) {
         let nx = n_x.max(2);
@@ -422,10 +434,22 @@ impl ModelBuilder {
         for iy in 0..ny {
             for ix in 0..nx {
                 if ix + 1 < nx {
-                    self.add_distance_constraint(idx(ix, iy), idx(ix + 1, iy), dx, compliance);
+                    self.add_distance_constraint(
+                        idx(ix, iy),
+                        idx(ix + 1, iy),
+                        dx,
+                        compliance,
+                        max_stretch,
+                    );
                 }
                 if iy + 1 < ny {
-                    self.add_distance_constraint(idx(ix, iy), idx(ix, iy + 1), dy, compliance);
+                    self.add_distance_constraint(
+                        idx(ix, iy),
+                        idx(ix, iy + 1),
+                        dy,
+                        compliance,
+                        max_stretch,
+                    );
                 }
             }
         }
@@ -439,12 +463,14 @@ impl ModelBuilder {
                     idx(ix + 1, iy + 1),
                     diag,
                     compliance,
+                    max_stretch,
                 );
                 self.add_distance_constraint(
                     idx(ix + 1, iy),
                     idx(ix, iy + 1),
                     diag,
                     compliance,
+                    max_stretch,
                 );
             }
         }
@@ -1291,6 +1317,7 @@ impl ModelBuilder {
             spring_b: Buffer::from_vec(self.spring_b, s),
             spring_rest_length: Buffer::from_vec(self.spring_rest_length, s),
             spring_compliance: Buffer::from_vec(self.spring_compliance, s),
+            spring_max_stretch: Buffer::from_vec(self.spring_max_stretch, s),
 
             tri_count,
             tri_indices: Buffer::from_vec(self.tri_indices, s),
@@ -1307,6 +1334,45 @@ impl ModelBuilder {
 
             shape_count,
             shape_body: Buffer::from_vec(self.shape_body, s),
+            // Flatten ShapeGeometry into GPU-friendly parallel arrays.
+            // Encoding matches the doc on `Model::shape_geom_kind` /
+            // `_data`. Triangle / TriMesh stay host-only for now (mesh
+            // BVH lives on host until stage 11), so their kind is the
+            // unsupported sentinel 0xff and the kernel skips them.
+            shape_geom_kind: Buffer::from_vec(
+                self.shape_geometry
+                    .iter()
+                    .map(|g| match g {
+                        ShapeGeometry::Sphere { .. } => 0u32,
+                        ShapeGeometry::Plane { .. } => 1,
+                        ShapeGeometry::Box { .. } => 2,
+                        ShapeGeometry::Capsule { .. } => 3,
+                        ShapeGeometry::Cylinder { .. } => 4,
+                        ShapeGeometry::Triangle { .. } => 0xff,
+                        ShapeGeometry::TriMesh { .. } => 0xff,
+                    })
+                    .collect(),
+                s,
+            ),
+            shape_geom_data: Buffer::from_vec(
+                self.shape_geometry
+                    .iter()
+                    .map(|g| match *g {
+                        ShapeGeometry::Sphere { radius } => Vec3::new(radius, 0.0, 0.0),
+                        ShapeGeometry::Plane { normal } => normal,
+                        ShapeGeometry::Box { half_extents } => half_extents,
+                        ShapeGeometry::Capsule { half_height, radius } => {
+                            Vec3::new(half_height, radius, 0.0)
+                        }
+                        ShapeGeometry::Cylinder { half_height, radius } => {
+                            Vec3::new(half_height, radius, 0.0)
+                        }
+                        ShapeGeometry::Triangle { .. } => Vec3::ZERO,
+                        ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
+                    })
+                    .collect(),
+                s,
+            ),
             shape_transform: Buffer::from_vec(self.shape_transform, s),
             shape_geometry: self.shape_geometry,
             shape_flags: Buffer::from_vec(self.shape_flags, s),

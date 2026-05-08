@@ -1630,6 +1630,9 @@ linalg, etc.
 
 ### Stage 9 — Sensors + actuator pipeline
 
+**Status: IN PROGRESS** (2026-05-08 — picked up after deferring full
+cloth in Stage 12).
+
 **Goal**: RL-grade scenes with observation + control.
 
 Deliverables:
@@ -1688,15 +1691,45 @@ Deliverables:
 
 ### Stage 12 — Particles + cloth (XPBD distance/bending) + springs
 
+**Status: PARTIAL** (took an early swing during the visualization
+push to get a draggable cloth on screen — stretch limit, mouse pin,
+and Bevy mesh sync working in `molla_viewer`'s scene 4. The hard
+parts of full cloth — bending, area, particle-particle and
+particle-rigid contact — are still TODO.)
+
 **Goal**: cloth on a sphere, rope dragging across boxes.
 
 Deliverables:
-- Wire up `Model.spring_*/tri_*/edge_*` arrays the builder already
-  has into XPBD constraint passes.
-- Distance + bending + area constraints on triangle meshes.
-- Particle-rigid contact (sphere-particle for now; particle-mesh in a
-  follow-up).
-- Hash grid spatial accel (Warp `hash_grid_*`) for particle-particle.
+- ✅ Particle storage in `Model` and `State`
+  (`particle_q/qd/mass/inv_mass/radius/flags/world` + `initial_particle_q`).
+- ✅ Distance constraint (`Model.spring_*`) authoring API:
+  `add_particle`, `add_distance_constraint`, `add_cloth_grid`,
+  `pin_particle`.
+- ✅ Triangle topology (`Model.tri_indices`) for rendering — the
+  `molla_viewer` cloth scene builds a deforming Bevy mesh from these
+  indices.
+- ✅ XPBD particle solver (`solvers::xpbd::step_particles`):
+  predict (gravity + linear damping) → distance constraint with proper
+  λ accumulator (Newton/Warp `solve_springs`) → per-spring hard
+  strain limiter via Jacobi-style position projection
+  (`Model.spring_max_stretch`) → particle vs Y=0 plane.
+- ✅ GPU shim (`apply_particles_post_gpu`) — host-side particle step
+  runs after the GPU rigid-body kernel; particle buffers download /
+  reupload around it like the equality-constraint shim.
+- ❌ Bending constraints (edge / dihedral angle) — without these the
+  cloth folds freely, which is fine for hanging demos but won't hold
+  shape over a sphere or under wind.
+- ❌ Area / triangle constraints — for self-area preservation under
+  large strain.
+- ❌ Particle-rigid contact — cloth currently passes through every
+  rigid body. Plane is special-cased; sphere/box/capsule needed for
+  the "drape on a sphere" demo.
+- ❌ Hash-grid spatial accel — needed for particle-particle (cloth
+  self-collision) and large-N rope/cable scenes.
+- ❌ GPU port — particles still run on host via the shim.
+
+The current implementation is enough to demo "interactive cloth"
+but stops short of being usable for production cloth scenes.
 
 ### Stage 13 — Specialty shapes + GPU GJK
 

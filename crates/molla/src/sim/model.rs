@@ -56,6 +56,12 @@ pub struct Model {
     /// stretch, ~1e-2 = soft. `(1 / stiffness)` if you'd think in
     /// terms of a spring constant.
     pub spring_compliance: Buffer<Real>,
+    /// Per-spring hard stretch cap as a ratio of rest length:
+    /// `length ≤ rest · (1 + max_stretch)` is enforced as a
+    /// post-XPBD non-linear projection. 0.0 means perfectly
+    /// inextensible (length capped at rest length). 0.05 = 5 %
+    /// stretchy linen. >= ~1.0 effectively disables the cap.
+    pub spring_max_stretch: Buffer<Real>,
 
     // ── Triangle topology (cloth surfaces) ──────────────────────────
     /// Number of triangles. Used for rendering today; bending /
@@ -90,6 +96,25 @@ pub struct Model {
     pub shape_count: usize,
     /// Owning body index, or -1 for static-world shapes.
     pub shape_body: Buffer<i32>,
+    /// **GPU-side shape kind**, parallel to `shape_geometry`. The
+    /// `ShapeGeometry` enum is a Rust-side convenience; for the GPU we
+    /// flatten it into two parallel arrays — kind discriminant +
+    /// packed scalar parameters — so kernels can branch on it.
+    /// Values: 0=Sphere · 1=Plane · 2=Box · 3=Capsule · 4=Cylinder ·
+    /// 5=Triangle · 6=TriMesh · 0xff=unsupported-on-gpu (skipped).
+    pub shape_geom_kind: Buffer<u32>,
+    /// **GPU-side shape parameters**, parallel to `shape_geometry`.
+    /// Per-kind packing:
+    /// - Sphere    → `(radius, 0, 0)`
+    /// - Plane     → `(nx, ny, nz)` (local-frame normal)
+    /// - Box       → `(hx, hy, hz)` (half-extents)
+    /// - Capsule   → `(half_height, radius, 0)`
+    /// - Cylinder  → `(half_height, radius, 0)`
+    /// - Triangle  → `(0, 0, 0)` (vertices held host-side; see
+    ///                `ShapeGeometry::Triangle`)
+    /// - TriMesh   → `(mesh_id_as_f32, 0, 0)` (mesh BVH lives on host
+    ///                until stage 11 ports it)
+    pub shape_geom_data: Buffer<Vec3>,
     /// Shape transform in owning body frame.
     pub shape_transform: Buffer<Transform>,
     /// Per-shape geometry tags (sphere radius, etc).
@@ -270,6 +295,7 @@ impl Model {
             spring_b: Buffer::from_vec(Vec::new(), s),
             spring_rest_length: Buffer::from_vec(Vec::new(), s),
             spring_compliance: Buffer::from_vec(Vec::new(), s),
+            spring_max_stretch: Buffer::from_vec(Vec::new(), s),
 
             tri_count: 0,
             tri_indices: Buffer::from_vec(Vec::new(), s),
@@ -286,6 +312,8 @@ impl Model {
 
             shape_count: 0,
             shape_body: Buffer::from_vec(Vec::new(), s),
+            shape_geom_kind: Buffer::from_vec(Vec::new(), s),
+            shape_geom_data: Buffer::from_vec(Vec::new(), s),
             shape_transform: Buffer::from_vec(Vec::new(), s),
             shape_geometry: Vec::new(),
             shape_flags: Buffer::from_vec(Vec::new(), s),
@@ -385,6 +413,7 @@ impl Model {
         up!(spring_b);
         up!(spring_rest_length);
         up!(spring_compliance);
+        up!(spring_max_stretch);
         up!(tri_indices);
         up!(body_mass);
         up!(body_inv_mass);
@@ -395,6 +424,8 @@ impl Model {
         up!(body_world);
         up!(initial_body_q);
         up!(shape_body);
+        up!(shape_geom_kind);
+        up!(shape_geom_data);
         up!(shape_transform);
         up!(shape_flags);
         up!(joint_type);

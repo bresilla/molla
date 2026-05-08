@@ -1036,13 +1036,33 @@ pub(crate) fn step_particles(
         p[i] += v1 * dt;
     }
 
-    // --- 2. Distance constraint projection --------------------------
+    // --- 2. Distance constraint projection (XPBD) ------------------
+    // Faithful port of Newton's `solve_springs` (Warp): per-constraint
+    // Lagrange multiplier accumulator `λ` reset to zero at the start
+    // of each substep. Each iteration computes
+    //
+    //     Δλ = -(C + α·λ) / (Σw + α)
+    //     Δp_i = ±wᵢ · Δλ · n
+    //     λ ← λ + Δλ
+    //
+    // The accumulator is what distinguishes XPBD from plain PBD —
+    // without it, the per-iter correction overshoots and the spring
+    // oscillates instead of converging. That oscillation looks like
+    // "the middle particles wiggling weirdly" when you grab the cloth.
+    //
+    // Reference: Macklin et al., "XPBD: Position-Based Simulation of
+    // Compliant Constrained Dynamics" (2016), eq. 18; Warp's
+    // `solve_springs` kernel.
     if model.spring_count > 0 {
         let sa = model.spring_a.host()?;
         let sb = model.spring_b.host()?;
         let rest = model.spring_rest_length.host()?;
         let comp = model.spring_compliance.host()?;
-        let alpha_dt = |c: usize| comp[c] / (dt * dt);
+
+        // λ accumulator — one entry per spring, reset each substep.
+        let mut lambdas = vec![0.0; model.spring_count];
+        let dt2 = dt * dt;
+
         for _ in 0..iterations.max(1) {
             for c in 0..model.spring_count {
                 let a = sa[c] as usize;
@@ -1062,14 +1082,91 @@ pub(crate) fn step_particles(
                     continue;
                 }
                 let n_dir = delta / len;
-                let constraint = len - rest[c];
-                // XPBD λ = -C / (sum_w + α/dt²). Per-constraint
-                // accumulation isn't needed for one-shot Jacobi; the
-                // Gauss-Seidel iteration converges fine without it.
-                let lambda = -constraint / (w_sum + alpha_dt(c));
-                let dp = n_dir * lambda;
+                let c_val = len - rest[c];
+                // α has units of m/N — XPBD compliance. We store
+                // it as a per-spring buffer so different spring
+                // populations (cloth vs rope) can have different
+                // stiffness without rebuilding the model.
+                let alpha = comp[c] / dt2;
+                let dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+                lambdas[c] += dlambda;
+                let dp = n_dir * dlambda;
+                // grad_c_xa = -n, grad_c_xb = +n →
+                // Δx_a = wa · Δλ · grad_c_xa = -wa · Δλ · n
+                // Δx_b = wb · Δλ · grad_c_xb = +wb · Δλ · n
                 p[a] -= dp * wa;
                 p[b] += dp * wb;
+            }
+        }
+
+        // --- 2b. Hard strain limit (Jacobi) ---------------------------
+        // XPBD with finite iterations leaves residual stretch when a
+        // corner is yanked fast. The strain-limit pass enforces
+        //   length(a, b) ≤ rest · (1 + max_stretch)
+        // as a unilateral position projection.
+        //
+        // Jacobi-style: each iteration first **proposes** corrections
+        // for every violated spring, accumulates them per-particle,
+        // and applies the AVERAGED correction once. That avoids the
+        // zigzag pattern Gauss-Seidel produces in chained meshes
+        // (clamping spring AB shifts particle B, which violates BC,
+        // which when clamped shifts B back — visible as the middle
+        // particles tangling). Reference: Macklin 2014 PBD §3.2.
+        //
+        // Only triggers for springs with `max_stretch < 1.0`; large
+        // values are the "no cap" sentinel and skip the work.
+        let mss = model.spring_max_stretch.host()?;
+        let strain_max_iters = iterations * 4;
+        let mut deltas: Vec<Vec3> = vec![Vec3::ZERO; n];
+        let mut counts: Vec<u32> = vec![0; n];
+        for _ in 0..strain_max_iters {
+            for d in deltas.iter_mut() {
+                *d = Vec3::ZERO;
+            }
+            for c_count in counts.iter_mut() {
+                *c_count = 0;
+            }
+            let mut violated = false;
+            for c in 0..model.spring_count {
+                let ms = mss[c];
+                if ms >= 1.0 {
+                    continue;
+                }
+                let a = sa[c] as usize;
+                let b = sb[c] as usize;
+                if a >= n || b >= n {
+                    continue;
+                }
+                let wa = inv_mass[a];
+                let wb = inv_mass[b];
+                let w_sum = wa + wb;
+                if w_sum <= 0.0 {
+                    continue;
+                }
+                let max_len = rest[c] * (1.0 + ms);
+                let delta = p[b] - p[a];
+                let len = delta.length();
+                if len > max_len && len > 1e-9 {
+                    violated = true;
+                    let n_dir = delta / len;
+                    let excess = len - max_len;
+                    let dp = n_dir * (excess / w_sum);
+                    deltas[a] += dp * wa;
+                    deltas[b] -= dp * wb;
+                    counts[a] += 1;
+                    counts[b] += 1;
+                }
+            }
+            if !violated {
+                break;
+            }
+            // Apply averaged deltas (Jacobi). Skip pinned particles
+            // (inv_mass = 0) — they shouldn't be moved.
+            for i in 0..n {
+                if inv_mass[i] <= 0.0 || counts[i] == 0 {
+                    continue;
+                }
+                p[i] += deltas[i] / counts[i] as Real;
             }
         }
     }

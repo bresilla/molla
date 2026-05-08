@@ -1,1 +1,22 @@
-//! Sensors (IMU, raycast, contact, frame transform). Stage 0 placeholder.
+//! Sensors — primitives for closing the perception loop in RL /
+//! teleop scenes.
+//!
+//! **GPU-first** by construction: each sensor's heavy compute lives
+//! in WGSL (`crates/molla/shaders/<sensor>.wgsl`) with a Rust
+//! dispatch wrapper and a thin orchestrator. CPU fallback paths
+//! exist only as test oracles, not as the primary execution path.
+//!
+//! Stage 9 deliverables (in progress):
+//! - [`raycast`] — closest-hit ray vs collision shapes. Lives in
+//!   `shaders/raycast.wgsl` with the [`Raycaster`] orchestrator on
+//!   top. Sphere / Plane / Box / Capsule / Cylinder supported on GPU;
+//!   Triangle / TriMesh skipped (will land with stage 11's mesh BVH).
+//! - `imu` — body-frame linear acceleration + angular velocity (TODO).
+//! - `contact` — per-body contact summary (TODO).
+//! - `frame_transform` — pose tracking with optional smoothing (TODO).
+
+#[cfg(feature = "gpu")]
+pub mod raycast;
+
+#[cfg(feature = "gpu")]
+pub use raycast::{RayHit, Raycaster};

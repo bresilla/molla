@@ -38,7 +38,7 @@ use bevy::pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin};
 use bevy::prelude::*;
 #[cfg(not(feature = "profile"))]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
 use bevy_frost::prelude::*;
 use bevy_frost::style::AccentColor;
@@ -48,14 +48,20 @@ use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
+use molla::sensors::{RayHit, Raycaster};
 use molla::solvers::Solver as _;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const FIXED_DT: f64 = 1.0 / 120.0;
-const SUBSTEPS_PER_FRAME: usize = 2;
+// Match Newton's XPBD cloth example pattern: many small substeps
+// give the constraint solver enough Gauss-Seidel sweeps per frame to
+// propagate corrections corner-to-corner across a 36×36 cloth (≈50
+// cells diagonal). At 2 × 1/120 dt we had 40 total sweeps per frame —
+// not enough; cloth stretched and the strain limit zigzagged.
+const FIXED_DT: f64 = 1.0 / 600.0;
+const SUBSTEPS_PER_FRAME: usize = 10;
 
 const PLANE_RESTITUTION: f64 = 0.05;
 const PLANE_FRICTION: f64 = 0.9;
@@ -117,11 +123,19 @@ const CLOTH_SIZE: f32 = 1.8;
 const CLOTH_TOP_Y: f32 = 5.0;
 const CLOTH_PARTICLE_MASS: f64 = 0.05;
 const CLOTH_PARTICLE_RADIUS: f64 = 0.02;
-/// XPBD compliance — `α = 1/k`. 1e-5 stretch-stiff (sag is sub-cm),
-/// 5e-5 visible drape, 1e-3 rubbery. Set to give the tablecloth a
-/// few cm of sag in the centre — enough that you can clearly see
-/// it isn't a flat sheet.
-const CLOTH_COMPLIANCE: f64 = 5.0e-5;
+/// XPBD compliance — `α = 1/k`. Lower = stiffer XPBD pull toward rest.
+/// Combined with `CLOTH_MAX_STRETCH` (which is a *hard* cap) this gives
+/// you a soft elastic feel within the allowed range and a brick wall
+/// at the limit.
+const CLOTH_COMPLIANCE: f64 = 1.5e-5;
+/// Per-spring hard upper-bound on stretch, expressed as a ratio of
+/// rest length. The XPBD solver's strain-limit pass enforces
+/// `length ≤ rest · (1 + max_stretch)` regardless of compliance.
+/// 0.0 → perfectly inextensible (e.g. metal mesh)
+/// 0.05 → 5 % linen (default for the demo)
+/// 0.20 → 20 % jersey
+/// 1.0  → effectively no cap
+const CLOTH_MAX_STRETCH: f64 = 0.05;
 
 // --- Tower scene ----------------------------------------------------
 const TOWER_LAYERS: usize = 8;
@@ -188,6 +202,8 @@ fn main() {
         .insert_resource(MouseGrab::default())
         .insert_resource(ActivityView::default())
         .insert_resource(WireframeOn(false))
+        .insert_resource(LidarConfig::default())
+        .insert_resource(LidarState::default())
         .insert_resource(WireframeConfig {
             // Always false — we don't want a *global* wireframe (would
             // catch bevy_glacial's ground grid mesh). We tag individual
@@ -209,9 +225,11 @@ fn main() {
                 step_simulation,
                 sync_transforms,
                 sync_cloth_mesh,
+                update_lidar,
                 update_activity_colors,
                 apply_wireframe,
                 draw_grab_gizmo,
+                draw_lidar_gizmos,
             )
                 .chain(),
         )
@@ -257,7 +275,8 @@ struct Sim {
 #[derive(Component, Copy, Clone)]
 enum BodyVisual {
     Sphere(f32),
-    Box(f32),
+    /// Box half-extents along x/y/z (m).
+    Box(Vec3),
     Capsule { half_h: f32, radius: f32 },
 }
 
@@ -270,15 +289,29 @@ enum Scene {
     Rope,
     Tower,
     Cloth,
+    /// Lidar example — kinematic obstacle scene scanned by a GPU
+    /// `Raycaster`, hits drawn as gizmo lines. Right-rail pane carries
+    /// the per-scene config (origin, FOV, ray count, range).
+    Lidar,
 }
 
 impl Scene {
+    /// All known scenes, in dropdown order.
+    const ALL: &'static [Scene] = &[
+        Scene::Pile,
+        Scene::Rope,
+        Scene::Tower,
+        Scene::Cloth,
+        Scene::Lidar,
+    ];
+
     fn label(self) -> &'static str {
         match self {
-            Scene::Pile => "1  Pile",
-            Scene::Rope => "2  Rope",
-            Scene::Tower => "3  Tower",
-            Scene::Cloth => "4  Cloth",
+            Scene::Pile => "Pile",
+            Scene::Rope => "Rope",
+            Scene::Tower => "Tower",
+            Scene::Cloth => "Cloth",
+            Scene::Lidar => "Lidar (raycast)",
         }
     }
 }
@@ -319,6 +352,68 @@ struct ClothMesh;
 #[derive(Resource, Default)]
 struct WireframeOn(bool);
 
+/// Per-frame configuration for the Lidar example. Driven by the
+/// right-rail panel sliders. The `update_lidar` system rebuilds N
+/// rays from this config every frame, runs the GPU raycaster, and
+/// stashes the results in [`LidarState`] for the gizmo system.
+#[derive(Resource, Clone, Copy)]
+struct LidarConfig {
+    /// World-space lidar origin.
+    origin: Vec3,
+    /// Heading angle around +Y, radians.
+    yaw: f32,
+    /// Up/down tilt, radians (0 = horizontal).
+    pitch: f32,
+    /// Horizontal FOV (radians).
+    fov_h: f32,
+    /// Vertical FOV (radians).
+    fov_v: f32,
+    /// Horizontal ray count (azimuth).
+    ray_count_h: u32,
+    /// Vertical ray count (elevation).
+    ray_count_v: u32,
+    /// Max ray distance (m).
+    max_range: f32,
+    /// Auto-rotate the yaw each frame (rad/s).
+    auto_rotate_speed: f32,
+}
+
+impl Default for LidarConfig {
+    fn default() -> Self {
+        Self {
+            origin: Vec3::new(0.0, 1.5, 0.0),
+            yaw: 0.0,
+            pitch: 0.0,
+            fov_h: 120f32.to_radians(),
+            fov_v: 30f32.to_radians(),
+            ray_count_h: 64,
+            ray_count_v: 8,
+            max_range: 20.0,
+            auto_rotate_speed: 0.6,
+        }
+    }
+}
+
+/// Lazily-initialised lidar runtime state — the GPU `Raycaster` and
+/// the most recent set of (origin, dir, hit) triplets used by the
+/// gizmo system. Reset on scene switch.
+#[derive(Resource, Default)]
+struct LidarState {
+    raycaster: Option<Raycaster>,
+    /// Capacity the raycaster was built for; rebuild if the config
+    /// asks for more rays than this.
+    raycaster_capacity: u32,
+    /// Last frame's rays + hit results (one entry per ray).
+    rays: Vec<LidarRay>,
+}
+
+#[derive(Clone, Copy)]
+struct LidarRay {
+    origin: Vec3,
+    direction: Vec3,
+    hit: Option<Vec3>,
+}
+
 /// Solid box principal moments at the COM, body frame.
 fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
     let h2 = half * half;
@@ -348,6 +443,7 @@ impl Sim {
             Scene::Rope => build_rope_model(),
             Scene::Tower => build_tower_model(),
             Scene::Cloth => build_cloth_model(),
+            Scene::Lidar => build_lidar_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -386,9 +482,14 @@ impl Sim {
         control.upload_to_device(&device, &queue).expect("control upload");
         contacts.upload_to_device(&device, &queue).expect("contacts upload");
 
+        // 10 iterations × 10 substeps = 100 Gauss-Seidel sweeps per
+        // frame, matching Newton's XPBD cloth example. With smaller dt
+        // per substep, each XPBD pass converges per-spring residuals
+        // tighter, and the chain has plenty of sweep budget to
+        // propagate corner-to-corner.
         let solver = mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
             .expect("XPBD GPU solver init")
-            .with_iterations(12);
+            .with_iterations(10);
 
         (
             Self {
@@ -528,7 +629,7 @@ fn build_pile_model() -> (mp::Model, Vec<BodyVisual>) {
                     );
                     b.add_shape_box(body, half, mp::Transform::IDENTITY)
                         .expect("box shape");
-                    visuals.push(BodyVisual::Box(PILE_BOX_HALF));
+                    visuals.push(BodyVisual::Box(Vec3::splat(PILE_BOX_HALF)));
                 }
                 _ => {
                     let body = b.add_body(
@@ -666,7 +767,7 @@ fn build_tower_model() -> (mp::Model, Vec<BodyVisual>) {
                 );
                 b.add_shape_box(body, half_v, mp::Transform::IDENTITY)
                     .expect("brick shape");
-                visuals.push(BodyVisual::Box(TOWER_BRICK_HALF));
+                visuals.push(BodyVisual::Box(Vec3::splat(TOWER_BRICK_HALF)));
             }
         }
     }
@@ -720,6 +821,7 @@ fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
         CLOTH_PARTICLE_MASS,
         CLOTH_PARTICLE_RADIUS,
         CLOTH_COMPLIANCE,
+        CLOTH_MAX_STRETCH,
         mp::WorldId(0),
     );
 
@@ -737,6 +839,79 @@ fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
     // No rigid-body visuals — the cloth is rendered as a dedicated
     // triangle mesh updated each frame by `sync_cloth_mesh`.
     (model, Vec::new())
+}
+
+/// Lidar example — a static stage with kinematic obstacles for a GPU
+/// [`mp::sensors::Raycaster`] to scan. The lidar config + state lives
+/// in the [`LidarConfig`] / [`LidarState`] resources; the right-rail
+/// pane edits the config and `update_lidar` re-runs the GPU sensor
+/// each frame.
+///
+/// Obstacles are kinematic (mass = 0 + KINEMATIC flag) so they don't
+/// fall under gravity — the lidar wants stable targets, not a
+/// settling pile.
+fn build_lidar_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let mut visuals = Vec::new();
+
+    let kin_at = |pos: MVec3| {
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_pose(mp::Transform::new(pos, MQuat::IDENTITY))
+            .with_flags(mp::BodyFlags::KINEMATIC)
+    };
+
+    // Big sphere off to the right.
+    {
+        let body = b.add_body(kin_at(MVec3::new(4.5, 1.2, 0.0)));
+        b.add_shape_sphere(body, 1.2, mp::Transform::IDENTITY)
+            .expect("sphere");
+        visuals.push(BodyVisual::Sphere(1.2));
+    }
+    // Tall box on the left.
+    {
+        let body = b.add_body(kin_at(MVec3::new(-3.5, 1.5, 2.0)));
+        let h = MVec3::new(0.7, 1.5, 0.7);
+        b.add_shape_box(body, h, mp::Transform::IDENTITY)
+            .expect("box");
+        visuals.push(BodyVisual::Box(Vec3::new(0.7, 1.5, 0.7)));
+    }
+    // Wide low box behind.
+    {
+        let body = b.add_body(kin_at(MVec3::new(0.0, 0.6, 6.0)));
+        let h = MVec3::new(3.0, 0.6, 0.4);
+        b.add_shape_box(body, h, mp::Transform::IDENTITY)
+            .expect("wall");
+        visuals.push(BodyVisual::Box(Vec3::new(3.0, 0.6, 0.4)));
+    }
+    // Capsule pillar on the right-back.
+    {
+        let body = b.add_body(kin_at(MVec3::new(3.0, 1.0, -3.5)));
+        b.add_shape_capsule(body, 1.0, 0.4, mp::Transform::IDENTITY)
+            .expect("capsule");
+        visuals.push(BodyVisual::Capsule {
+            half_h: 1.0,
+            radius: 0.4,
+        });
+    }
+    // Cylinder on the left-back.
+    {
+        let body = b.add_body(kin_at(MVec3::new(-3.0, 0.8, -3.0)));
+        b.add_shape_cylinder(body, 0.8, 0.5, mp::Transform::IDENTITY)
+            .expect("cylinder");
+        // BodyVisual doesn't have a cylinder variant — render as a
+        // capsule of the same dimensions, close enough for the demo.
+        visuals.push(BodyVisual::Capsule {
+            half_h: 0.8,
+            radius: 0.5,
+        });
+    }
+
+    // Static plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("model"), visuals)
 }
 
 // ---- Bevy systems -------------------------------------------------
@@ -884,7 +1059,7 @@ fn spawn_body_entities(
             BodyVisual::Sphere(r) => meshes.add(Sphere::new(r).mesh().ico(4).expect("ico")),
             // Cuboid only has 12 triangles regardless of subdivision —
             // looks fine even in wireframe (12 cube edges visible).
-            BodyVisual::Box(h) => meshes.add(Cuboid::from_size(Vec3::splat(h * 2.0)).mesh()),
+            BodyVisual::Box(h) => meshes.add(Cuboid::from_size(h * 2.0).mesh()),
             BodyVisual::Capsule { half_h, radius } => meshes.add(
                 Capsule3d::new(radius, half_h * 2.0)
                     .mesh()
@@ -1010,6 +1185,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Digit4) && sim.scene != Scene::Cloth {
         pending.0 = Some(Scene::Cloth);
     }
+    if keys.just_pressed(KeyCode::Digit5) && sim.scene != Scene::Lidar {
+        pending.0 = Some(Scene::Lidar);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -1023,10 +1201,22 @@ fn apply_scene_switch(
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies_q: Query<Entity, With<MollaBody>>,
     cloth_q: Query<Entity, With<ClothMesh>>,
+    mut grab: ResMut<MouseGrab>,
+    mut lidar: ResMut<LidarState>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
     };
+
+    // Drop any in-flight grab — its body/particle index belongs to the
+    // outgoing model and would dangle against the new one.
+    grab.state = None;
+    // The Raycaster's pipeline + GPU buffers were tied to the previous
+    // model's wgpu device. Drop it so the next `update_lidar` rebuilds
+    // it against the new sim.
+    lidar.raycaster = None;
+    lidar.raycaster_capacity = 0;
+    lidar.rays.clear();
 
     for e in bodies_q.iter() {
         commands.entity(e).despawn();
@@ -1247,9 +1437,12 @@ enum GrabKind {
     /// `v_anchor = v_lin + ω × r` for `v_lin` so the anchor moves at
     /// the desired velocity while preserving the body's spin.
     Body { body: mp::BodyId, local_anchor: MVec3 },
-    /// Grab a single cloth particle. We just set its velocity to the
-    /// desired anchor velocity directly — the particle has no rotation.
-    Particle { index: u32 },
+    /// Grab a single cloth particle. While held, the particle's
+    /// `particle_inv_mass` is forced to 0 so the XPBD constraint
+    /// solver treats it as kinematic — the cloth has to deform around
+    /// our position instead of dragging us back. We save the original
+    /// inv_mass so we can restore it on release.
+    Particle { index: u32, saved_inv_mass: f64 },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1291,12 +1484,12 @@ fn update_mouse_grab(
     // orbit; MMB pans / lifts. Anything held with another button is
     // not a grab gesture.
     if rmb_held || mmb_held || alt_held {
-        grab.state = None;
+        release_grab(&mut sim, &mut grab);
         return;
     }
 
     if !lmb_held {
-        grab.state = None;
+        release_grab(&mut sim, &mut grab);
         return;
     }
 
@@ -1324,14 +1517,14 @@ fn update_mouse_grab(
                         bt,
                     ))
                 } else {
-                    Some((GrabKind::Particle { index: pid }, pt))
+                    Some((begin_particle_grab(&mut sim, pid), pt))
                 }
             }
             (Some((bid, bt, banchor)), None) => Some((
                 GrabKind::Body { body: bid, local_anchor: banchor },
                 bt,
             )),
-            (None, Some((pid, pt))) => Some((GrabKind::Particle { index: pid }, pt)),
+            (None, Some((pid, pt))) => Some((begin_particle_grab(&mut sim, pid), pt)),
             (None, None) => None,
         };
         if let Some((kind, t)) = best {
@@ -1343,8 +1536,8 @@ fn update_mouse_grab(
         }
     }
 
-    // While grabbing, recompute target and drive the chosen
-    // body/particle anchor velocity toward it.
+    // While grabbing, recompute target and drive the picked
+    // body/particle toward it.
     if let Some(state) = grab.state {
         let target = ro + rd * state.drag_distance as f64;
         grab.state = Some(GrabState {
@@ -1355,8 +1548,43 @@ fn update_mouse_grab(
             GrabKind::Body { body, local_anchor } => {
                 apply_grab_velocity(&mut sim, body, local_anchor, target);
             }
-            GrabKind::Particle { index } => {
-                apply_particle_grab_velocity(&mut sim, index, target);
+            GrabKind::Particle { index, .. } => {
+                apply_particle_grab_pin(&mut sim, index, target);
+            }
+        }
+    }
+}
+
+/// Mark a cloth particle as kinematic for the duration of a grab and
+/// stash its original inv_mass into the returned `GrabKind`. Caller
+/// must pair this with `release_grab` to restore the inv_mass.
+fn begin_particle_grab(sim: &mut Sim, index: u32) -> GrabKind {
+    let i = index as usize;
+    let inv = sim
+        .model
+        .particle_inv_mass
+        .host()
+        .expect("particle_inv_mass")[i];
+    sim.model
+        .particle_inv_mass
+        .host_mut()
+        .expect("particle_inv_mass_mut")[i] = 0.0;
+    GrabKind::Particle {
+        index,
+        saved_inv_mass: inv,
+    }
+}
+
+/// End the current grab. For `Particle` grabs we restore the original
+/// inverse mass so the cloth resumes simulating the released vertex.
+fn release_grab(sim: &mut Sim, grab: &mut MouseGrab) {
+    if let Some(state) = grab.state.take() {
+        if let GrabKind::Particle { index, saved_inv_mass } = state.kind {
+            let i = index as usize;
+            if let Ok(slice) = sim.model.particle_inv_mass.host_mut() {
+                if i < slice.len() {
+                    slice[i] = saved_inv_mass;
+                }
             }
         }
     }
@@ -1383,7 +1611,11 @@ fn pick_body(
         let ld = pose.rotation.conjugate() * rd;
         let t = match *vis {
             BodyVisual::Sphere(r) => ray_sphere_local(lo, ld, r as f64),
-            BodyVisual::Box(h) => ray_box_local(lo, ld, h as f64),
+            BodyVisual::Box(h) => ray_box_local(
+                lo,
+                ld,
+                MVec3::new(h.x as f64, h.y as f64, h.z as f64),
+            ),
             // Capsule pick uses a tight axis-aligned-box approximation
             // in body frame — accurate enough for grabbing.
             BodyVisual::Capsule { half_h, radius } => ray_box_local(
@@ -1435,38 +1667,45 @@ fn pick_particle(sim: &Sim, ro: MVec3, rd: MVec3) -> Option<(u32, f64)> {
     best.map(|(t, i)| (i, t))
 }
 
-/// Drive a single cloth particle's velocity so it tracks `target` at
-/// bounded speed. Mirrors `apply_grab_velocity` for bodies, but a
-/// particle has no rotation, so we just set `particle_qd` directly.
-fn apply_particle_grab_velocity(sim: &mut Sim, index: u32, target: MVec3) {
+/// Move a grabbed cloth particle directly to `target` (clamped per
+/// frame so a fast cursor doesn't teleport it across the world).
+///
+/// Only valid while the particle's inv_mass is 0 — see
+/// `begin_particle_grab`. With inv_mass = 0, the integrator skips the
+/// particle (predict pass `if inv_mass <= 0 continue`) and the
+/// constraint solver sends 100% of every distance correction to the
+/// other side. Result: the cloth mesh follows the cursor, the rest of
+/// the cloth gets dragged along by the constraint chain, and the user
+/// can pull as far as they want — the only resistance comes from
+/// stretching the surrounding fabric.
+fn apply_particle_grab_pin(sim: &mut Sim, index: u32, target: MVec3) {
     let i = index as usize;
     if i >= sim.model.particle_count {
         return;
     }
-    let inv_mass = sim
-        .model
-        .particle_inv_mass
-        .host()
-        .expect("particle_inv_mass");
-    if inv_mass[i] <= 0.0 {
-        return; // pinned — nothing to do
-    }
-
-    let p = sim.state_a.particle_q.host().expect("particle_q")[i];
-    let to_target = target - p;
+    let prev = sim.state_a.particle_q.host().expect("particle_q")[i];
+    let to_target = target - prev;
     let dist = to_target.length();
-    let v_want = if dist > 1e-6 {
-        let dir = to_target / dist;
-        let speed = (dist / GRAB_LAG_TIME).min(GRAB_MAX_SPEED);
-        dir * speed
+    // Per-frame step cap — at 60 fps × 14 m/s = 0.23 m/frame, plenty
+    // for natural drag, low enough not to tunnel a particle through
+    // collisions.
+    let max_step = GRAB_MAX_SPEED / 60.0;
+    let new_pos = if dist > max_step && dist > 1e-6 {
+        prev + to_target * (max_step / dist)
     } else {
-        MVec3::ZERO
+        target
     };
-
+    sim.state_a
+        .particle_q
+        .host_mut()
+        .expect("particle_q_mut")[i] = new_pos;
+    // Zero velocity — the constraint solver doesn't touch this
+    // particle (inv_mass = 0), and we don't want stale velocity to
+    // confuse the velocity-recovery pass.
     sim.state_a
         .particle_qd
         .host_mut()
-        .expect("particle_qd_mut")[i] = v_want;
+        .expect("particle_qd_mut")[i] = MVec3::ZERO;
 }
 
 /// Ray vs unit sphere centred at origin (radius `r`).
@@ -1600,6 +1839,194 @@ fn apply_grab_velocity(
         mp::SpatialVector::new(v_lin, w);
 }
 
+/// Lidar example — runs the GPU [`Raycaster`] each frame against the
+/// current scene and stashes the (origin, dir, hit) triplets in
+/// [`LidarState`] for `draw_lidar_gizmos` to render. No-op for any
+/// scene other than [`Scene::Lidar`].
+///
+/// Ray construction: for each `(iy, ix)` cell in a `ray_count_v ×
+/// ray_count_h` grid covering `fov_v × fov_h`, build a unit direction
+/// from yaw + pitch + per-cell offsets, applied to the lidar origin.
+fn update_lidar(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut config: ResMut<LidarConfig>,
+    mut state: ResMut<LidarState>,
+) {
+    if sim.scene != Scene::Lidar {
+        if !state.rays.is_empty() {
+            state.rays.clear();
+        }
+        return;
+    }
+
+    // Auto-rotate yaw if configured. Wraps in [0, 2π).
+    if config.auto_rotate_speed.abs() > 1e-6 {
+        config.yaw += config.auto_rotate_speed * time.delta_secs();
+        let two_pi = std::f32::consts::TAU;
+        if config.yaw > two_pi {
+            config.yaw -= two_pi;
+        }
+        if config.yaw < 0.0 {
+            config.yaw += two_pi;
+        }
+    }
+
+    let nh = config.ray_count_h.max(1);
+    let nv = config.ray_count_v.max(1);
+    let n_rays = (nh * nv) as usize;
+
+    // Build (or rebuild) the GPU raycaster if capacity changed.
+    if state.raycaster.is_none() || state.raycaster_capacity < n_rays as u32 {
+        // Round up to next multiple of 64 to play nicely with the
+        // kernel's workgroup size.
+        let cap = ((n_rays as u32 + 63) / 64) * 64;
+        state.raycaster = Some(
+            Raycaster::new(&sim.engine, cap.max(64))
+                .expect("lidar Raycaster init"),
+        );
+        state.raycaster_capacity = cap.max(64);
+    }
+
+    // Build N ray origins + directions on host. yaw/pitch convention:
+    // yaw = 0 looks at +Z (forward), increases toward +X (right);
+    // pitch = 0 horizontal, positive looks up.
+    let mut origins = Vec::with_capacity(n_rays);
+    let mut directions = Vec::with_capacity(n_rays);
+
+    let half_h = config.fov_h * 0.5;
+    let half_v = config.fov_v * 0.5;
+    let dh = if nh > 1 {
+        config.fov_h / (nh - 1) as f32
+    } else {
+        0.0
+    };
+    let dv = if nv > 1 {
+        config.fov_v / (nv - 1) as f32
+    } else {
+        0.0
+    };
+
+    for iy in 0..nv {
+        let pitch_off = if nv > 1 {
+            -half_v + iy as f32 * dv
+        } else {
+            0.0
+        };
+        let pitch = config.pitch + pitch_off;
+        for ix in 0..nh {
+            let yaw_off = if nh > 1 {
+                -half_h + ix as f32 * dh
+            } else {
+                0.0
+            };
+            let yaw = config.yaw + yaw_off;
+            // Spherical → Cartesian. Forward is +Z when yaw = pitch = 0.
+            let cp = pitch.cos();
+            let dir = Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp);
+            origins.push(MVec3::new(
+                config.origin.x as f64,
+                config.origin.y as f64,
+                config.origin.z as f64,
+            ));
+            directions.push(MVec3::new(dir.x as f64, dir.y as f64, dir.z as f64));
+        }
+    }
+
+    // Need to make sure model + state are uploaded. The pile/tower/etc.
+    // pipeline uploads model once; the lidar scene model was uploaded
+    // in `Sim::finalize` and `state.body_q` in `step_simulation`.
+    let raycaster = state.raycaster.as_mut().expect("raycaster");
+    let max_range = config.max_range as f64;
+    let hits = match raycaster.cast(
+        &sim.engine,
+        &sim.model,
+        &sim.state_a,
+        &origins,
+        &directions,
+        max_range,
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            warn!("lidar raycast failed: {e}");
+            return;
+        }
+    };
+
+    // Stash for the gizmo system. Convert from molla f64 vecs to
+    // bevy f32 along the way.
+    state.rays.clear();
+    state.rays.reserve(n_rays);
+    for (i, hit) in hits.iter().enumerate() {
+        let o = origins[i];
+        let d = directions[i];
+        let origin = Vec3::new(o.x as f32, o.y as f32, o.z as f32);
+        let direction = Vec3::new(d.x as f32, d.y as f32, d.z as f32);
+        let hit_world: Option<Vec3> = match hit_to_world(hit) {
+            Some(p) => Some(p),
+            None => None,
+        };
+        state.rays.push(LidarRay {
+            origin,
+            direction,
+            hit: hit_world,
+        });
+    }
+}
+
+fn hit_to_world(hit: &RayHit) -> Option<Vec3> {
+    if hit.shape_id.is_some() {
+        Some(Vec3::new(
+            hit.point.x as f32,
+            hit.point.y as f32,
+            hit.point.z as f32,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Draw the lidar's rays + hit points as Bevy gizmos. Hit rays are
+/// red with a small white cross at the hit point; missed rays are
+/// dim cyan extending to the max range. Lidar origin gets a small
+/// yellow sphere so you can see where the sensor is.
+fn draw_lidar_gizmos(
+    sim: Res<Sim>,
+    state: Res<LidarState>,
+    config: Res<LidarConfig>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::Lidar {
+        return;
+    }
+
+    // Sensor body indicator.
+    gizmos.sphere(config.origin, 0.06, Color::srgb(1.0, 0.95, 0.2));
+
+    let hit_color = Color::srgb(1.0, 0.25, 0.20);
+    let miss_color = Color::srgba(0.30, 0.75, 0.85, 0.18);
+    let cross_color = Color::srgb(1.0, 1.0, 1.0);
+    let cross_half = 0.06_f32;
+
+    for ray in state.rays.iter() {
+        let end = match ray.hit {
+            Some(p) => p,
+            None => ray.origin + ray.direction * config.max_range,
+        };
+        let color = if ray.hit.is_some() {
+            hit_color
+        } else {
+            miss_color
+        };
+        gizmos.line(ray.origin, end, color);
+        if let Some(p) = ray.hit {
+            gizmos.line(p - Vec3::X * cross_half, p + Vec3::X * cross_half, cross_color);
+            gizmos.line(p - Vec3::Y * cross_half, p + Vec3::Y * cross_half, cross_color);
+            gizmos.line(p - Vec3::Z * cross_half, p + Vec3::Z * cross_half, cross_color);
+        }
+    }
+}
+
 /// While dragging, draw a yellow line from the picked anchor (body or
 /// cloth particle) to the cursor target so the user can see what
 /// they're holding.
@@ -1614,7 +2041,7 @@ fn draw_grab_gizmo(grab: Res<MouseGrab>, sim: Res<Sim>, mut gizmos: Gizmos) {
             }
             q[i].transform_point(local_anchor)
         }
-        GrabKind::Particle { index } => {
+        GrabKind::Particle { index, .. } => {
             let Ok(q) = sim.state_a.particle_q.host() else { return };
             let i = index as usize;
             if i >= q.len() {
@@ -1664,6 +2091,8 @@ fn control_pane(
     mut run: ResMut<SimRunState>,
     mut pending: ResMut<PendingSceneSwitch>,
     mut activity: ResMut<ActivityView>,
+    mut lidar_config: ResMut<LidarConfig>,
+    lidar_state: Res<LidarState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let accent_color = accent.0;
@@ -1680,25 +2109,28 @@ fn control_pane(
     let body_count = sim.model.body_count;
     let scene = sim.scene;
 
+    // ── Left rail: global controls (always visible). ──────────────
     Pane2::new(PANE_ID, "molla", PaneAnchor::LeftRail(RailZone::Start), accent_color).show(
         ctx,
         |ui| {
             ui.add_space(2.0);
 
-            readout(ui, "Scene", scene.label());
+            // Scene dropdown — replaces the row of number-keyed buttons.
             ui.horizontal(|ui| {
-                if button(ui, "1 Pile", accent_color).clicked() && scene != Scene::Pile {
-                    pending.0 = Some(Scene::Pile);
-                }
-                if button(ui, "2 Rope", accent_color).clicked() && scene != Scene::Rope {
-                    pending.0 = Some(Scene::Rope);
-                }
-                if button(ui, "3 Tower", accent_color).clicked() && scene != Scene::Tower {
-                    pending.0 = Some(Scene::Tower);
-                }
-                if button(ui, "4 Cloth", accent_color).clicked() && scene != Scene::Cloth {
-                    pending.0 = Some(Scene::Cloth);
-                }
+                ui.label("Example");
+                egui::ComboBox::from_id_salt("scene_dropdown")
+                    .selected_text(scene.label())
+                    .show_ui(ui, |ui| {
+                        for &candidate in Scene::ALL {
+                            if ui
+                                .selectable_label(scene == candidate, candidate.label())
+                                .clicked()
+                                && scene != candidate
+                            {
+                                pending.0 = Some(candidate);
+                            }
+                        }
+                    });
             });
             ui.separator();
 
@@ -1749,8 +2181,105 @@ fn control_pane(
             });
 
             ui.add_space(4.0);
-            ui.small("LMB drag · 1·2·3·4 scene · T activity · W wireframe");
+            ui.small("LMB drag · T activity · W wireframe");
             ui.small("Space pause · R reset · MMB pan · LMB+RMB orbit");
         },
     );
+
+    // ── Right rail: per-scene panel. ──────────────────────────────
+    // Only shown when the active scene needs settings of its own.
+    // Stays empty for Pile / Rope / Tower / Cloth — those are
+    // pure-physics demos with nothing to tune in real time.
+    if scene == Scene::Lidar {
+        Pane2::new(
+            "molla_lidar_pane",
+            "Lidar",
+            PaneAnchor::RightRail(RailZone::Start),
+            accent_color,
+        )
+        .show(ctx, |ui| {
+            ui.add_space(2.0);
+            readout(ui, "Sensor", "GPU raycast");
+            readout(ui, "Rays", &format!("{}", lidar_state.rays.len()));
+            let n_hits = lidar_state.rays.iter().filter(|r| r.hit.is_some()).count();
+            readout(ui, "Hits", &format!("{n_hits}"));
+            ui.separator();
+
+            ui.label("Origin");
+            ui.add(
+                egui::DragValue::new(&mut lidar_config.origin.x)
+                    .speed(0.05)
+                    .prefix("x "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut lidar_config.origin.y)
+                    .speed(0.05)
+                    .range(0.05..=10.0)
+                    .prefix("y "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut lidar_config.origin.z)
+                    .speed(0.05)
+                    .prefix("z "),
+            );
+            ui.separator();
+
+            ui.label("Heading");
+            ui.add(
+                egui::Slider::new(&mut lidar_config.yaw, 0.0..=std::f32::consts::TAU)
+                    .text("yaw (rad)"),
+            );
+            ui.add(
+                egui::Slider::new(
+                    &mut lidar_config.pitch,
+                    -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
+                )
+                .text("pitch (rad)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut lidar_config.auto_rotate_speed, 0.0..=4.0)
+                    .text("auto-spin (rad/s)"),
+            );
+            ui.separator();
+
+            ui.label("FOV");
+            let mut fov_h_deg = lidar_config.fov_h.to_degrees();
+            let mut fov_v_deg = lidar_config.fov_v.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut fov_h_deg, 5.0..=360.0).text("horizontal °"))
+                .changed()
+            {
+                lidar_config.fov_h = fov_h_deg.to_radians();
+            }
+            if ui
+                .add(egui::Slider::new(&mut fov_v_deg, 1.0..=120.0).text("vertical °"))
+                .changed()
+            {
+                lidar_config.fov_v = fov_v_deg.to_radians();
+            }
+            ui.separator();
+
+            ui.label("Resolution");
+            let mut nh = lidar_config.ray_count_h as i32;
+            if ui
+                .add(egui::Slider::new(&mut nh, 8..=512).text("rays h"))
+                .changed()
+            {
+                lidar_config.ray_count_h = nh.max(1) as u32;
+            }
+            let mut nv = lidar_config.ray_count_v as i32;
+            if ui
+                .add(egui::Slider::new(&mut nv, 1..=64).text("rays v"))
+                .changed()
+            {
+                lidar_config.ray_count_v = nv.max(1) as u32;
+            }
+            ui.separator();
+
+            ui.add(
+                egui::Slider::new(&mut lidar_config.max_range, 1.0..=100.0)
+                    .text("range (m)"),
+            );
+        });
+    }
 }
