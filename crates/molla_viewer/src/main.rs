@@ -51,6 +51,8 @@ const GRID_N: usize = 12; // 12×12 = 144 mixed bodies
 const GRID_SPACING: f32 = 1.4;
 const SPHERE_RADIUS: f32 = 0.45;
 const BOX_HALF: f32 = 0.45;
+const CAPSULE_HALF_H: f32 = 0.45;
+const CAPSULE_RADIUS: f32 = 0.25;
 const DROP_HEIGHT: f32 = 12.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
 const SUBSTEPS_PER_FRAME: usize = 2;
@@ -164,6 +166,7 @@ struct Sim {
 enum BodyVisual {
     Sphere,
     Box,
+    Capsule,
 }
 
 #[derive(Resource)]
@@ -180,6 +183,16 @@ fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
     ))
 }
 
+/// Solid capsule (cylinder + 2 hemispheres) approximate inertia
+/// about the capsule axis (+Y) and perpendicular axes.
+fn capsule_inertia(mass: f64, half_height: f64, radius: f64) -> molla::math::Mat3 {
+    let r2 = radius * radius;
+    let h2 = half_height * half_height;
+    let i_y = 0.5 * mass * r2;
+    let i_perp = mass * (h2 / 3.0 + r2 / 4.0);
+    molla::math::Mat3::from_diagonal(MVec3::new(i_perp, i_y, i_perp))
+}
+
 impl Sim {
     fn build() -> (Self, Vec<BodyVisual>) {
         let mut b = mp::ModelBuilder::new();
@@ -194,33 +207,64 @@ impl Sim {
                 let y = DROP_HEIGHT as f64 + 0.4 * ((ix + iz) as f64 / 2.0).sin();
                 let pos = MVec3::new(x, y, z);
 
-                // Checkerboard sphere/box.
-                if (ix + iz) % 2 == 0 {
-                    let body = b.add_body(
-                        mp::BodyParams::new()
-                            .with_spatial_inertia(mp::SpatialInertia::sphere(
-                                1.0,
-                                SPHERE_RADIUS as f64,
-                            ))
-                            .with_position(pos),
-                    );
-                    b.add_shape_sphere(body, SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
-                        .expect("sphere shape");
-                    visuals.push(BodyVisual::Sphere);
-                } else {
-                    let half = MVec3::splat(BOX_HALF as f64);
-                    let body = b.add_body(
-                        mp::BodyParams::new()
-                            .with_spatial_inertia(mp::SpatialInertia {
-                                mass: 1.0,
-                                com: MVec3::ZERO,
-                                inertia: box_inertia(1.0, BOX_HALF as f64),
-                            })
-                            .with_position(pos),
-                    );
-                    b.add_shape_box(body, half, mp::Transform::IDENTITY)
-                        .expect("box shape");
-                    visuals.push(BodyVisual::Box);
+                // Three-way mix: sphere / box / capsule.
+                match (ix + iz) % 3 {
+                    0 => {
+                        let body = b.add_body(
+                            mp::BodyParams::new()
+                                .with_spatial_inertia(mp::SpatialInertia::sphere(
+                                    1.0,
+                                    SPHERE_RADIUS as f64,
+                                ))
+                                .with_position(pos),
+                        );
+                        b.add_shape_sphere(body, SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
+                            .expect("sphere shape");
+                        visuals.push(BodyVisual::Sphere);
+                    }
+                    1 => {
+                        let half = MVec3::splat(BOX_HALF as f64);
+                        let body = b.add_body(
+                            mp::BodyParams::new()
+                                .with_spatial_inertia(mp::SpatialInertia {
+                                    mass: 1.0,
+                                    com: MVec3::ZERO,
+                                    inertia: box_inertia(1.0, BOX_HALF as f64),
+                                })
+                                .with_position(pos),
+                        );
+                        b.add_shape_box(body, half, mp::Transform::IDENTITY)
+                            .expect("box shape");
+                        visuals.push(BodyVisual::Box);
+                    }
+                    _ => {
+                        let body = b.add_body(
+                            mp::BodyParams::new()
+                                .with_spatial_inertia(mp::SpatialInertia {
+                                    mass: 1.0,
+                                    com: MVec3::ZERO,
+                                    inertia: capsule_inertia(
+                                        1.0,
+                                        CAPSULE_HALF_H as f64,
+                                        CAPSULE_RADIUS as f64,
+                                    ),
+                                })
+                                // Lie on side (rotation about Z) so
+                                // the capsule axis is along world X.
+                                .with_pose(mp::Transform::new(
+                                    pos,
+                                    MQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
+                                )),
+                        );
+                        b.add_shape_capsule(
+                            body,
+                            CAPSULE_HALF_H as f64,
+                            CAPSULE_RADIUS as f64,
+                            mp::Transform::IDENTITY,
+                        )
+                        .expect("capsule shape");
+                        visuals.push(BodyVisual::Capsule);
+                    }
                 }
             }
         }
@@ -371,6 +415,12 @@ fn setup(
     // down with many instances; the LOD grid carries the depth cue.
     let sphere_mesh = meshes.add(Sphere::new(SPHERE_RADIUS).mesh().ico(1).expect("ico"));
     let box_mesh = meshes.add(Cuboid::from_size(Vec3::splat(BOX_HALF * 2.0)).mesh());
+    // Bevy's `Capsule3d`'s `half_length` is the **cylinder** half-
+    // length, matching molla's `half_height`. Default axis is +Y,
+    // also matching molla.
+    let capsule_mesh = meshes.add(
+        Capsule3d::new(CAPSULE_RADIUS, CAPSULE_HALF_H * 2.0).mesh(),
+    );
     let palette = [
         Color::srgb(0.88, 0.35, 0.28),
         Color::srgb(0.90, 0.60, 0.20),
@@ -398,6 +448,7 @@ fn setup(
         let mesh = match visuals.0[i] {
             BodyVisual::Sphere => sphere_mesh.clone(),
             BodyVisual::Box => box_mesh.clone(),
+            BodyVisual::Capsule => capsule_mesh.clone(),
         };
         commands.spawn((
             MollaBody(mp::BodyId::from_index(i)),

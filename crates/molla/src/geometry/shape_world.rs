@@ -51,6 +51,42 @@ pub fn shape_world_aabb(
             let h: Vec3 = abs_x * half_extents.x + abs_y * half_extents.y + abs_z * half_extents.z;
             Aabb::centred(xf.position, h).expanded(margin)
         }
+        ShapeGeometry::Capsule { half_height, radius } => {
+            // Capsule AABB = AABB of two end-cap spheres.
+            let axis_world = xf.rotation * Vec3::Y;
+            let p0 = xf.position - axis_world * half_height;
+            let p1 = xf.position + axis_world * half_height;
+            let lo = p0.min(p1) - Vec3::splat(radius);
+            let hi = p0.max(p1) + Vec3::splat(radius);
+            Aabb { min: lo, max: hi }.expanded(margin)
+        }
+        ShapeGeometry::Cylinder { half_height, radius } => {
+            // Conservative AABB: take the cylinder's bounding sphere
+            // along the rotated axis, then add radius slack on every
+            // axis. Tight bound: project the disk axis onto each
+            // world axis and combine with `half_height`.
+            let r = crate::math::Mat3::from_quat(xf.rotation);
+            let axis_world = r.y_axis; // local +Y
+            // Half-extents along world X/Y/Z:
+            //   along axis direction: half_height
+            //   perpendicular: radius
+            // For a generic rotation: extent along world axis e_i is
+            //   |e_i · axis_world|·half_height + sqrt(1-(e_i·axis_world)²)·radius
+            let absax = Vec3::new(
+                axis_world.x.abs(),
+                axis_world.y.abs(),
+                axis_world.z.abs(),
+            );
+            let one = Vec3::splat(1.0);
+            let perp_scale = (one - absax * absax).max(Vec3::ZERO);
+            let perp = Vec3::new(
+                perp_scale.x.sqrt(),
+                perp_scale.y.sqrt(),
+                perp_scale.z.sqrt(),
+            );
+            let h = absax * half_height + perp * radius;
+            Aabb::centred(xf.position, h).expanded(margin)
+        }
     }
 }
 

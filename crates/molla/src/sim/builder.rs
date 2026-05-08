@@ -11,7 +11,8 @@ use super::flags::BodyFlags;
 use super::Model;
 
 /// Per-shape geometry tag. Stage 4 ships sphere, plane, and box;
-/// capsule / cylinder / mesh follow in stage 6 (GJK + EPA).
+/// capsule / cylinder land in stage 6.1 (closed-form narrow phase
+/// for capsule + GJK fallback for cylinder).
 #[derive(Copy, Clone, Debug)]
 pub enum ShapeGeometry {
     /// Solid sphere centred on the shape's local origin.
@@ -34,6 +35,23 @@ pub enum ShapeGeometry {
     Box {
         /// Half-extents along the shape-local x/y/z axes (m).
         half_extents: Vec3,
+    },
+    /// Capsule (cylinder + two hemispherical caps) along the
+    /// shape-local **Y axis** — matches URDF/MJCF convention.
+    /// Total length = `2·(half_height + radius)`.
+    Capsule {
+        /// Half-length of the cylindrical section (excluding caps).
+        half_height: Real,
+        /// Radius of the cylindrical section + caps.
+        radius: Real,
+    },
+    /// Cylinder along the shape-local **Y axis**. Flat caps (no
+    /// hemisphere). Mostly handled via GJK + EPA in stage 6.x.
+    Cylinder {
+        /// Half-length of the cylindrical section.
+        half_height: Real,
+        /// Radius.
+        radius: Real,
     },
 }
 
@@ -300,6 +318,64 @@ impl ModelBuilder {
             )));
         }
         Ok(self.push_shape(body, local_pose, ShapeGeometry::Box { half_extents }))
+    }
+
+    /// Attach a capsule shape to `body`. Capsule axis is the
+    /// shape-local +Y direction (URDF convention). `half_height` is
+    /// the half-length of the cylindrical section (cap centres are
+    /// at `±half_height·Y` in shape-local frame); `radius` is the
+    /// cap + cylinder radius. Both must be strictly positive.
+    pub fn add_shape_capsule(
+        &mut self,
+        body: BodyId,
+        half_height: Real,
+        radius: Real,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_capsule")?;
+        if !half_height.is_finite() || half_height <= 0.0 {
+            return Err(Error::Build(format!(
+                "add_shape_capsule: half_height must be positive finite, got {half_height}"
+            )));
+        }
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(Error::Build(format!(
+                "add_shape_capsule: radius must be positive finite, got {radius}"
+            )));
+        }
+        Ok(self.push_shape(
+            body,
+            local_pose,
+            ShapeGeometry::Capsule { half_height, radius },
+        ))
+    }
+
+    /// Attach a cylinder shape to `body`. Cylinder axis is the
+    /// shape-local +Y direction. Flat caps (no hemispheres). Use
+    /// [`Self::add_shape_capsule`] if you need rounded caps.
+    pub fn add_shape_cylinder(
+        &mut self,
+        body: BodyId,
+        half_height: Real,
+        radius: Real,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_cylinder")?;
+        if !half_height.is_finite() || half_height <= 0.0 {
+            return Err(Error::Build(format!(
+                "add_shape_cylinder: half_height must be positive finite, got {half_height}"
+            )));
+        }
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(Error::Build(format!(
+                "add_shape_cylinder: radius must be positive finite, got {radius}"
+            )));
+        }
+        Ok(self.push_shape(
+            body,
+            local_pose,
+            ShapeGeometry::Cylinder { half_height, radius },
+        ))
     }
 
     /// Attach a static-plane half-space shape to `body`. Pass

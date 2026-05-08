@@ -135,6 +135,79 @@ pub fn pair_contact(
         (ShapeGeometry::Box { half_extents: ha }, ShapeGeometry::Box { half_extents: hb }) => {
             box_box_sat(&xf_a, ha, &xf_b, hb, pair.a, pair.b, out);
         }
+
+        // ── Capsule fast paths (closed-form) ─────────────────────
+        (
+            ShapeGeometry::Sphere { radius: rs },
+            ShapeGeometry::Capsule { half_height: hh, radius: rc },
+        ) => {
+            if let Some(m) = sphere_capsule(xf_a.position, rs, &xf_b, hh, rc, pair.a, pair.b)
+            {
+                out.push(m);
+            }
+        }
+        (
+            ShapeGeometry::Capsule { half_height: hh, radius: rc },
+            ShapeGeometry::Sphere { radius: rs },
+        ) => {
+            if let Some(m) = sphere_capsule(xf_b.position, rs, &xf_a, hh, rc, pair.b, pair.a)
+            {
+                out.push(flip_manifold(m));
+            }
+        }
+        (
+            ShapeGeometry::Capsule { half_height: hh, radius: rc },
+            ShapeGeometry::Plane { normal },
+        ) => {
+            capsule_plane(
+                &xf_a,
+                hh,
+                rc,
+                xf_b.position,
+                xf_b.rotation * normal,
+                pair.a,
+                pair.b,
+                out,
+            );
+        }
+        (
+            ShapeGeometry::Plane { normal },
+            ShapeGeometry::Capsule { half_height: hh, radius: rc },
+        ) => {
+            let n0 = out.len();
+            capsule_plane(
+                &xf_b,
+                hh,
+                rc,
+                xf_a.position,
+                xf_a.rotation * normal,
+                pair.b,
+                pair.a,
+                out,
+            );
+            for m in &mut out[n0..] {
+                *m = flip_manifold(*m);
+            }
+        }
+        (
+            ShapeGeometry::Capsule { half_height: ha, radius: ra },
+            ShapeGeometry::Capsule { half_height: hb, radius: rb },
+        ) => {
+            if let Some(m) = capsule_capsule(&xf_a, ha, ra, &xf_b, hb, rb, pair.a, pair.b)
+            {
+                out.push(m);
+            }
+        }
+
+        // ── Stage 6.x — GJK + EPA fallback for everything else ───
+        // Cylinder + capsule-vs-box land here. Until GJK is wired in
+        // we silently emit no contact. Tests covering these pairs
+        // are expected to fail until stage 6.5.
+        (ShapeGeometry::Capsule { .. }, ShapeGeometry::Box { .. })
+        | (ShapeGeometry::Box { .. }, ShapeGeometry::Capsule { .. })
+        | (ShapeGeometry::Cylinder { .. }, _)
+        | (_, ShapeGeometry::Cylinder { .. }) => {}
+
         (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => {}
     }
 
@@ -789,6 +862,151 @@ fn emit_edge_manifold(
     });
 }
 
+// ─── Sphere-capsule (closed form) ────────────────────────────────────
+
+/// Closest point on the line segment `[a, b]` to a query point `p`,
+/// returned as a parameter `t ∈ [0, 1]` and the world-space point.
+fn closest_point_on_segment(p: Vec3, a: Vec3, b: Vec3) -> (Real, Vec3) {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq < 1e-24 {
+        return (0.0, a);
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    (t, a + ab * t)
+}
+
+fn sphere_capsule(
+    sphere_p: Vec3,
+    sphere_r: Real,
+    capsule_xf: &Transform,
+    capsule_half_h: Real,
+    capsule_r: Real,
+    sphere_shape: u32,
+    capsule_shape: u32,
+) -> Option<ContactManifold> {
+    // Capsule axis in world: shape-local +Y, rotated.
+    let axis = capsule_xf.rotation * Vec3::Y;
+    let p0 = capsule_xf.position - axis * capsule_half_h;
+    let p1 = capsule_xf.position + axis * capsule_half_h;
+    let (_, q) = closest_point_on_segment(sphere_p, p0, p1);
+    // Now reduces to sphere-sphere between (sphere_p, sphere_r) and
+    // (q, capsule_r).
+    sphere_sphere(sphere_p, sphere_r, q, capsule_r, sphere_shape, capsule_shape)
+}
+
+// ─── Capsule-plane ──────────────────────────────────────────────────
+
+fn capsule_plane(
+    capsule_xf: &Transform,
+    capsule_half_h: Real,
+    capsule_r: Real,
+    plane_p: Vec3,
+    plane_normal: Vec3,
+    capsule_shape: u32,
+    plane_shape: u32,
+    out: &mut Vec<ContactManifold>,
+) {
+    // Two end-cap centres; check each as a sphere-vs-plane.
+    let axis = capsule_xf.rotation * Vec3::Y;
+    let centres = [
+        capsule_xf.position - axis * capsule_half_h,
+        capsule_xf.position + axis * capsule_half_h,
+    ];
+    let normal = -plane_normal; // a → b convention: capsule(a) → plane(b)
+    for &c in &centres {
+        let signed = (c - plane_p).dot(plane_normal);
+        if signed < capsule_r {
+            let depth = capsule_r - signed;
+            let point = c + plane_normal * (capsule_r - 0.5 * depth);
+            out.push(ContactManifold {
+                a_shape: capsule_shape,
+                b_shape: plane_shape,
+                point,
+                normal,
+                depth,
+                friction: 0.0,
+                restitution: 0.0,
+            });
+        }
+    }
+}
+
+// ─── Capsule-capsule ────────────────────────────────────────────────
+
+/// Closest points between two line segments `(a0, a1)` and `(b0, b1)`,
+/// each returned with its segment parameter `t_a, t_b ∈ [0, 1]`.
+/// Lifted from the standard "Real-Time Collision Detection" (Ericson).
+fn closest_segment_segment(
+    a0: Vec3,
+    a1: Vec3,
+    b0: Vec3,
+    b1: Vec3,
+) -> (Vec3, Vec3) {
+    let d1 = a1 - a0;
+    let d2 = b1 - b0;
+    let r = a0 - b0;
+    let a = d1.length_squared();
+    let e = d2.length_squared();
+    let f = d2.dot(r);
+    let eps = 1e-12;
+
+    let mut s;
+    let mut t;
+    if a <= eps && e <= eps {
+        return (a0, b0);
+    }
+    if a <= eps {
+        s = 0.0;
+        t = (f / e).clamp(0.0, 1.0);
+    } else {
+        let c = d1.dot(r);
+        if e <= eps {
+            t = 0.0;
+            s = (-c / a).clamp(0.0, 1.0);
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            s = if denom != 0.0 {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+        }
+    }
+    (a0 + d1 * s, b0 + d2 * t)
+}
+
+fn capsule_capsule(
+    a_xf: &Transform,
+    a_half: Real,
+    a_radius: Real,
+    b_xf: &Transform,
+    b_half: Real,
+    b_radius: Real,
+    a_shape: u32,
+    b_shape: u32,
+) -> Option<ContactManifold> {
+    let a_axis = a_xf.rotation * Vec3::Y;
+    let b_axis = b_xf.rotation * Vec3::Y;
+    let a0 = a_xf.position - a_axis * a_half;
+    let a1 = a_xf.position + a_axis * a_half;
+    let b0 = b_xf.position - b_axis * b_half;
+    let b1 = b_xf.position + b_axis * b_half;
+    let (pa, pb) = closest_segment_segment(a0, a1, b0, b1);
+    // Now sphere-sphere between (pa, a_radius) and (pb, b_radius),
+    // but emitting indices from the original capsules.
+    sphere_sphere(pa, a_radius, pb, b_radius, a_shape, b_shape)
+}
+
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
     std::mem::swap(&mut m.a_shape, &mut m.b_shape);
     m.normal = -m.normal;
@@ -930,5 +1148,150 @@ mod tests {
             &mut out,
         );
         assert!(out.is_empty());
+    }
+
+    // ── Capsule fast-path unit tests ─────────────────────────────────
+
+    #[test]
+    fn sphere_capsule_side_contact() {
+        // Capsule at origin along Y, half_height=1, radius=0.3.
+        // Sphere at (0.5, 0, 0), radius=0.3 — surfaces overlap by
+        // 0.6 − 0.5 = 0.1. Convention: normal a→b, sphere=a,
+        // capsule=b → normal points from sphere(+0.5,0,0) toward
+        // capsule centre(0,0,0) = −X.
+        let xf_cap = Transform::IDENTITY;
+        let m = sphere_capsule(
+            Vec3::new(0.5, 0.0, 0.0),
+            0.3,
+            &xf_cap,
+            1.0,
+            0.3,
+            0,
+            1,
+        )
+        .unwrap();
+        assert!(
+            (m.depth - 0.1).abs() < 1e-9,
+            "expected depth 0.1, got {}",
+            m.depth
+        );
+        assert!(
+            (m.normal + Vec3::X).length() < 1e-9,
+            "expected normal -X, got {:?}",
+            m.normal
+        );
+    }
+
+    #[test]
+    fn sphere_capsule_endpoint_contact() {
+        // Sphere beyond +Y end-cap; closest segment point is the
+        // end-cap centre at (0, 1, 0). a→b normal points from sphere
+        // toward capsule end-cap, i.e. −Y.
+        let xf_cap = Transform::IDENTITY;
+        let m = sphere_capsule(
+            Vec3::new(0.0, 1.4, 0.0),
+            0.3,
+            &xf_cap,
+            1.0,
+            0.3,
+            0,
+            1,
+        )
+        .unwrap();
+        assert!((m.depth - 0.2).abs() < 1e-9);
+        assert!((m.normal + Vec3::Y).length() < 1e-9);
+    }
+
+    #[test]
+    fn sphere_capsule_separated() {
+        let xf_cap = Transform::IDENTITY;
+        assert!(sphere_capsule(
+            Vec3::new(2.0, 0.0, 0.0),
+            0.3,
+            &xf_cap,
+            1.0,
+            0.3,
+            0,
+            1
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn capsule_plane_lying_horizontal() {
+        // Capsule lying flat on its side along X above a Y=0 plane.
+        // half_height=1, radius=0.3. Centre at (0, 0.4, 0): both
+        // end-cap centres at y=0.4, both penetrating the plane by
+        // depth=radius-y=-0.4+0.3=−0.1? No: signed = 0.4 < 0.3? No
+        // 0.4 > 0.3. So depth = 0.3 - 0.4 = -0.1 → no contact. Move
+        // capsule lower: centre at (0, 0.2, 0).
+        let xf_cap = Transform::new(
+            Vec3::new(0.0, 0.2, 0.0),
+            Quat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        );
+        let mut out = Vec::new();
+        capsule_plane(
+            &xf_cap,
+            1.0,
+            0.3,
+            Vec3::ZERO,
+            Vec3::Y,
+            0,
+            1,
+            &mut out,
+        );
+        // Both end-cap centres now sit at y=0.2 (rotation puts them
+        // on the X axis, but the plane signed-distance only cares
+        // about Y). depth = radius - signed = 0.3 - 0.2 = 0.1.
+        assert_eq!(out.len(), 2);
+        for m in &out {
+            assert!((m.depth - 0.1).abs() < 1e-9, "got depth {}", m.depth);
+            assert!((m.normal + Vec3::Y).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn capsule_plane_above() {
+        // Capsule centre at (0, 5, 0), no contact.
+        let xf_cap = Transform::from_translation(Vec3::new(0.0, 5.0, 0.0));
+        let mut out = Vec::new();
+        capsule_plane(&xf_cap, 1.0, 0.3, Vec3::ZERO, Vec3::Y, 0, 1, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn capsule_capsule_perpendicular() {
+        // A along Y at origin (segment x=0, z=0, y∈[-1,1]).
+        // B along X at (0, 0, 0.5) — segment y=0, z=0.5, x∈[-1,1].
+        // Closest points: A(0,0,0), B(0,0,0.5). Distance 0.5, sum
+        // radii 0.6 → depth 0.1. Normal a→b points from A's segment
+        // point (0,0,0) toward B's (0,0,0.5) = +Z.
+        let xf_a = Transform::IDENTITY;
+        let xf_b = Transform::new(
+            Vec3::new(0.0, 0.0, 0.5),
+            Quat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        );
+        let m = capsule_capsule(&xf_a, 1.0, 0.3, &xf_b, 1.0, 0.3, 0, 1).unwrap();
+        assert!((m.depth - 0.1).abs() < 1e-9, "got {}", m.depth);
+        assert!((m.normal - Vec3::Z).length() < 1e-9);
+    }
+
+    #[test]
+    fn capsule_capsule_parallel_separated() {
+        // Two parallel Y-capsules far apart on X.
+        let xf_a = Transform::IDENTITY;
+        let xf_b = Transform::from_translation(Vec3::new(2.0, 0.0, 0.0));
+        assert!(capsule_capsule(&xf_a, 1.0, 0.3, &xf_b, 1.0, 0.3, 0, 1).is_none());
+    }
+
+    #[test]
+    fn capsule_capsule_parallel_overlapping() {
+        // Two parallel Y-capsules close on X.
+        let xf_a = Transform::IDENTITY;
+        let xf_b = Transform::from_translation(Vec3::new(0.5, 0.0, 0.0));
+        let m = capsule_capsule(&xf_a, 1.0, 0.3, &xf_b, 1.0, 0.3, 0, 1).unwrap();
+        // Distance 0.5, sum radii 0.6, depth 0.1.
+        assert!((m.depth - 0.1).abs() < 1e-9, "got {}", m.depth);
+        assert!((m.normal - Vec3::X).length() < 1e-9);
     }
 }
