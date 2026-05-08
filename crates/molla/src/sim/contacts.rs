@@ -46,6 +46,7 @@ pub struct Contacts {
     /// - top bit clear (`< 0x8000_0000`): body is the `a` side
     /// - top bit set: body is the `b` side, real index =
     ///   `value & 0x7fff_ffff`
+    ///
     /// Decode helper: see [`Contacts::decode_index`].
     pub body_contact_indices: Buffer<u32>,
 }

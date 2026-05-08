@@ -1187,7 +1187,18 @@ Definition of done:
 - 1k spheres at >= 1 kHz on a 2020-era discrete GPU.
 - `cargo bench --bench step_gpu` runs.
 
-### Stage 3 — Articulation (Featherstone) (4–6 weeks)
+### Stage 3 — Articulation (Featherstone) — IN PROGRESS
+
+- **3.0 ✅ (2026-05-08)** — Joint data model + FK only:
+  `JointType` (Revolute/Prismatic/Fixed/Free), CSR-style coord/dof
+  offsets in `Model`, joint coords in `State`, `add_joint_*`
+  builders, `eval_fk` walking the joint list. Tests: pendulum FK at
+  q=0 and q=π/2, prismatic translation, fixed lock, double-pendulum
+  chain.
+- **3.1** — Featherstone ABA (CPU). Replaces FK-only with proper
+  forward dynamics for single-chain articulated systems.
+- **3.2** — URDF importer subset (links / joints / inertial).
+- **3.3** — GPU port of Featherstone (per-articulation parallelism).
 
 **Goal**: load Franka Panda URDF, simulate, match reference within tolerance.
 

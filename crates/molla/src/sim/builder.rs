@@ -3,7 +3,7 @@
 //! Stage 1 surface: rigid bodies, sphere shapes, per-world gravity. More
 //! arrives in stages 3 (joints) and 4 (other shapes).
 
-use crate::core::{BodyId, Error, Result, ShapeId, WorldId};
+use crate::core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use crate::math::{Mat3, Real, SpatialInertia, Transform, Vec3};
 use crate::storage::{Buffer, BufferUsage};
 
@@ -146,6 +146,19 @@ pub struct ModelBuilder {
     shape_geometry: Vec<ShapeGeometry>,
     shape_flags: Vec<u32>,
 
+    // Joint arrays.
+    joint_type: Vec<u32>,
+    joint_parent: Vec<i32>,
+    joint_child: Vec<i32>,
+    joint_x_p: Vec<Transform>,
+    joint_x_c: Vec<Transform>,
+    joint_axis: Vec<Vec3>,
+    joint_coord_offset: Vec<u32>, // CSR; ends at total
+    joint_dof_offset: Vec<u32>,
+    /// Initial coordinates accumulated as joints are added; length
+    /// equals the last entry of `joint_coord_offset`.
+    joint_q0: Vec<Real>,
+
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
 
@@ -169,6 +182,10 @@ impl ModelBuilder {
             default_friction: 0.5,
             default_restitution: 0.0,
             particle_velocity_max: 1.0e6,
+            // CSR offset arrays start with a single 0 sentinel; the
+            // first joint pushes the next entry.
+            joint_coord_offset: vec![0],
+            joint_dof_offset: vec![0],
             ..Default::default()
         }
     }
@@ -267,6 +284,155 @@ impl ModelBuilder {
         id
     }
 
+    // ── Joints ──────────────────────────────────────────────────────
+
+    /// Attach a revolute joint between `parent` and `child` rotating
+    /// about `axis` (joint-local). Pass [`BodyId::NONE`] for `parent`
+    /// to ground the joint to the world frame. `x_p` / `x_c` place
+    /// the joint frame in each body's local frame.
+    pub fn add_joint_revolute(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+        axis: Vec3,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_revolute")?;
+        let len = axis.length();
+        if !len.is_finite() || len < 1e-9 {
+            return Err(Error::Build(format!(
+                "add_joint_revolute: axis must be a finite non-zero vector, got {axis:?}"
+            )));
+        }
+        Ok(self.push_joint(
+            super::JointType::Revolute,
+            parent,
+            child,
+            x_p,
+            x_c,
+            axis / len,
+        ))
+    }
+
+    /// Prismatic joint — translation along `axis` (joint-local).
+    pub fn add_joint_prismatic(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+        axis: Vec3,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_prismatic")?;
+        let len = axis.length();
+        if !len.is_finite() || len < 1e-9 {
+            return Err(Error::Build(format!(
+                "add_joint_prismatic: axis must be finite non-zero, got {axis:?}"
+            )));
+        }
+        Ok(self.push_joint(
+            super::JointType::Prismatic,
+            parent,
+            child,
+            x_p,
+            x_c,
+            axis / len,
+        ))
+    }
+
+    /// Fixed joint — locks all 6 DoFs.
+    pub fn add_joint_fixed(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_fixed")?;
+        Ok(self.push_joint(
+            super::JointType::Fixed,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        ))
+    }
+
+    /// Free 6-DoF joint between `child` and the world frame (or
+    /// `parent`). Adds 7 coordinates (xyz + quat) and 6 dof.
+    pub fn add_joint_free(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_free")?;
+        Ok(self.push_joint(
+            super::JointType::Free,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        ))
+    }
+
+    fn validate_joint(&self, parent: BodyId, child: BodyId, fn_name: &str) -> Result<()> {
+        if child == BodyId::NONE {
+            return Err(Error::Build(format!(
+                "{fn_name}: child body required (BodyId::NONE not allowed)"
+            )));
+        }
+        if child.index() >= self.body_mass.len() {
+            return Err(Error::Build(format!(
+                "{fn_name}: child {child:?} out of range (have {} bodies)",
+                self.body_mass.len()
+            )));
+        }
+        if parent != BodyId::NONE && parent.index() >= self.body_mass.len() {
+            return Err(Error::Build(format!(
+                "{fn_name}: parent {parent:?} out of range (have {} bodies)",
+                self.body_mass.len()
+            )));
+        }
+        if parent != BodyId::NONE && parent == child {
+            return Err(Error::Build(format!(
+                "{fn_name}: parent and child must differ ({parent:?})"
+            )));
+        }
+        Ok(())
+    }
+
+    fn push_joint(
+        &mut self,
+        joint_type: super::JointType,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+        axis: Vec3,
+    ) -> JointId {
+        let id = JointId::from_index(self.joint_type.len());
+        let parent_idx = if parent == BodyId::NONE { -1 } else { parent.0 as i32 };
+        self.joint_type.push(joint_type as u32);
+        self.joint_parent.push(parent_idx);
+        self.joint_child.push(child.0 as i32);
+        self.joint_x_p.push(x_p);
+        self.joint_x_c.push(x_c);
+        self.joint_axis.push(axis);
+
+        let (cc, dc) = joint_type.coord_dof();
+        let prev_coord = *self.joint_coord_offset.last().unwrap();
+        let prev_dof = *self.joint_dof_offset.last().unwrap();
+        self.joint_coord_offset.push(prev_coord + cc as u32);
+        self.joint_dof_offset.push(prev_dof + dc as u32);
+        joint_type.write_zero_coords(&mut self.joint_q0);
+        id
+    }
+
     /// Set the gravity vector for `world`. Auto-extends the world list as
     /// needed; new worlds default to -9.81 m/s² on -Y.
     pub fn set_world_gravity(&mut self, world: WorldId, gravity: Vec3) {
@@ -335,11 +501,18 @@ impl ModelBuilder {
             shape_geometry: self.shape_geometry,
             shape_flags: Buffer::from_vec(self.shape_flags, s),
 
-            joint_count: 0,
-            joint_parent: Buffer::from_vec(Vec::new(), s),
-            joint_child: Buffer::from_vec(Vec::new(), s),
-            joint_x_p: Buffer::from_vec(Vec::new(), s),
-            joint_x_c: Buffer::from_vec(Vec::new(), s),
+            joint_count: self.joint_type.len(),
+            joint_type: Buffer::from_vec(self.joint_type, s),
+            joint_parent: Buffer::from_vec(self.joint_parent, s),
+            joint_child: Buffer::from_vec(self.joint_child, s),
+            joint_x_p: Buffer::from_vec(self.joint_x_p, s),
+            joint_x_c: Buffer::from_vec(self.joint_x_c, s),
+            joint_axis: Buffer::from_vec(self.joint_axis, s),
+            joint_coord_total: *self.joint_coord_offset.last().unwrap_or(&0) as usize,
+            joint_dof_total: *self.joint_dof_offset.last().unwrap_or(&0) as usize,
+            joint_coord_offset: Buffer::from_vec(self.joint_coord_offset, s),
+            joint_dof_offset: Buffer::from_vec(self.joint_dof_offset, s),
+            initial_joint_q: Buffer::from_vec(self.joint_q0, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),

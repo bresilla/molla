@@ -71,8 +71,14 @@ impl State {
                 vec![SpatialVector::ZERO; model.body_count],
                 BufferUsage::StorageReadWrite,
             ),
-            joint_q: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
-            joint_qd: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
+            joint_q: Buffer::from_vec(
+                model.initial_joint_q.host()?.to_vec(),
+                BufferUsage::StorageReadWrite,
+            ),
+            joint_qd: Buffer::from_vec(
+                vec![0.0; model.joint_dof_total],
+                BufferUsage::StorageReadWrite,
+            ),
         })
     }
 

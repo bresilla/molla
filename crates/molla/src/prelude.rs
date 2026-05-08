@@ -7,8 +7,8 @@
 pub use crate::core::{BodyId, Error, JointId, ParticleId, Result, ShapeId, WorldId};
 pub use crate::math::{Mat3, Quat, Real, SpatialInertia, SpatialVector, Transform, Vec3};
 pub use crate::sim::{
-    BodyFlags, BodyParams, Contacts, Control, Model, ModelBuilder, ParticleFlags, ShapeFlags,
-    ShapeGeometry, State,
+    eval_fk, BodyFlags, BodyParams, Contacts, Control, JointType, Model, ModelBuilder,
+    ParticleFlags, ShapeFlags, ShapeGeometry, State,
 };
 pub use crate::geometry::collide;
 pub use crate::solvers::{SemiImplicitSolver, Solver, XpbdSolver};

@@ -55,9 +55,11 @@ pub struct Model {
     /// Per-shape bitflags.
     pub shape_flags: Buffer<u32>,
 
-    // ── Joints (placeholder until stage 3) ──────────────────────────
+    // ── Joints ──────────────────────────────────────────────────────
     /// Number of joints.
     pub joint_count: usize,
+    /// Joint kind, as a `u32` mirror of [`super::JointType`].
+    pub joint_type: Buffer<u32>,
     /// Per-joint parent body index (-1 = world).
     pub joint_parent: Buffer<i32>,
     /// Per-joint child body index.
@@ -66,6 +68,20 @@ pub struct Model {
     pub joint_x_p: Buffer<Transform>,
     /// Joint frame in child body.
     pub joint_x_c: Buffer<Transform>,
+    /// Per-joint axis in joint-local frame. Unused for fixed/free.
+    pub joint_axis: Buffer<Vec3>,
+    /// CSR-style offset into `state.joint_q` for joint `i` —
+    /// length `joint_count + 1`, last entry = total coord count.
+    pub joint_coord_offset: Buffer<u32>,
+    /// CSR-style offset into `state.joint_qd` — length `joint_count + 1`.
+    pub joint_dof_offset: Buffer<u32>,
+    /// Total joint coordinates (== last entry of `joint_coord_offset`).
+    pub joint_coord_total: usize,
+    /// Total joint DoFs (== last entry of `joint_dof_offset`).
+    pub joint_dof_total: usize,
+    /// Initial joint coordinates snapshotted at build time —
+    /// [`super::State::for_model`] copies these into `joint_q`.
+    pub initial_joint_q: Buffer<Real>,
 
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
@@ -120,10 +136,17 @@ impl Model {
             shape_flags: Buffer::from_vec(Vec::new(), s),
 
             joint_count: 0,
+            joint_type: Buffer::from_vec(Vec::new(), s),
             joint_parent: Buffer::from_vec(Vec::new(), s),
             joint_child: Buffer::from_vec(Vec::new(), s),
             joint_x_p: Buffer::from_vec(Vec::new(), s),
             joint_x_c: Buffer::from_vec(Vec::new(), s),
+            joint_axis: Buffer::from_vec(Vec::new(), s),
+            joint_coord_offset: Buffer::from_vec(vec![0u32], s),
+            joint_dof_offset: Buffer::from_vec(vec![0u32], s),
+            joint_coord_total: 0,
+            joint_dof_total: 0,
+            initial_joint_q: Buffer::from_vec(Vec::new(), s),
 
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
