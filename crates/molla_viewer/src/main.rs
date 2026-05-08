@@ -52,10 +52,11 @@ use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
+use molla::actuators::{ControllerPd, ControllerPdConfig};
 use molla::sensors::{
     BodyContactReading, ContactSensor, ImuMount, ImuReading, ImuSensor, RayHit, Raycaster,
 };
-use molla::solvers::Solver as _;
+use molla::solvers::{FeatherstoneSolver, Solver as _};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
@@ -271,6 +272,7 @@ fn main() {
         .insert_resource(LidarState::default())
         .insert_resource(ImuExampleState::default())
         .insert_resource(ContactExampleState::default())
+        .insert_resource(ArmExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -305,6 +307,9 @@ fn main() {
                 handle_input,
                 apply_scene_switch,
                 update_mouse_grab,
+                // Arm controller runs BEFORE the physics step so its
+                // `joint_force` writes are picked up by the solver.
+                update_arm_example,
                 step_simulation,
                 sync_transforms,
                 sync_cloth_mesh,
@@ -352,10 +357,37 @@ struct Sim {
     state_b: mp::State,
     control: mp::Control,
     contacts: mp::Contacts,
-    solver: mp::XpbdSolver,
+    solver: SolverBackend,
     pipeline: CollisionPipeline,
     engine: Engine,
     adapter_label: String,
+}
+
+/// Per-scene solver dispatch. Both variants implement the same
+/// `Solver::step` signature, so callers don't need to care which
+/// backend the active scene picked.
+enum SolverBackend {
+    Xpbd(mp::XpbdSolver),
+    Featherstone(FeatherstoneSolver),
+}
+
+impl SolverBackend {
+    fn step(
+        &mut self,
+        model: &mp::Model,
+        state_in: &mp::State,
+        control: &mp::Control,
+        contacts: &mp::Contacts,
+        dt: f64,
+        state_out: &mut mp::State,
+    ) -> molla::core::Result<()> {
+        match self {
+            Self::Xpbd(s) => s.step(model, state_in, control, contacts, dt, state_out),
+            Self::Featherstone(s) => {
+                s.step(model, state_in, control, contacts, dt, state_out)
+            }
+        }
+    }
 }
 
 #[derive(Component, Copy, Clone)]
@@ -388,6 +420,11 @@ enum Scene {
     /// contact counts; arrow gizmos point along the net push
     /// direction at each body's contact centroid.
     Contact,
+    /// Arm example — 3-link revolute chain driven by a GPU PD
+    /// actuator. Featherstone solver (not XPBD). Right-rail pane has
+    /// per-joint target sliders and an auto-sine toggle so you can
+    /// see the controller chase a moving target.
+    Arm,
 }
 
 impl Scene {
@@ -400,6 +437,7 @@ impl Scene {
         Scene::Lidar,
         Scene::Imu,
         Scene::Contact,
+        Scene::Arm,
     ];
 
     fn label(self) -> &'static str {
@@ -411,8 +449,24 @@ impl Scene {
             Scene::Lidar => "Lidar (raycast)",
             Scene::Imu => "IMU (accel + gyro)",
             Scene::Contact => "Contact (per-body)",
+            Scene::Arm => "Arm (PD actuator)",
         }
     }
+
+    /// Which dynamics solver this scene wants. Most scenes use XPBD;
+    /// the Arm example needs Featherstone for proper joint dynamics.
+    fn solver_kind(self) -> SolverKind {
+        match self {
+            Scene::Arm => SolverKind::Featherstone,
+            _ => SolverKind::Xpbd,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum SolverKind {
+    Xpbd,
+    Featherstone,
 }
 
 #[derive(Resource)]
@@ -535,6 +589,37 @@ struct ContactExampleState {
     readings: Vec<BodyContactReading>,
 }
 
+/// Arm example runtime state. Owns the GPU PD controller and the
+/// per-joint target inputs (slider value, optional auto-sine).
+#[derive(Resource)]
+struct ArmExampleState {
+    controller: Option<ControllerPd>,
+    /// Per-joint target position [rad]. Driven by the right-rail
+    /// sliders or by the auto-sine generator below.
+    targets: [f32; ARM_LINKS],
+    /// Auto-sine drive: when enabled, each joint follows
+    /// `amplitude · sin(2π·frequency·t + phase[i])`. Disabled by
+    /// default so the user can drag the sliders manually.
+    sine_enabled: bool,
+    sine_amplitude: f32,
+    sine_frequency: f32,
+    /// Wall-clock since the scene started, for the sine generator.
+    elapsed: f32,
+}
+
+impl Default for ArmExampleState {
+    fn default() -> Self {
+        Self {
+            controller: None,
+            targets: [0.6, -0.4, -0.2],
+            sine_enabled: true,
+            sine_amplitude: 0.7,
+            sine_frequency: 0.3,
+            elapsed: 0.0,
+        }
+    }
+}
+
 /// Solid box principal moments at the COM, body frame.
 fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
     let h2 = half * half;
@@ -567,6 +652,7 @@ impl Sim {
             Scene::Lidar => build_lidar_model(),
             Scene::Imu => build_imu_model(),
             Scene::Contact => build_contact_model(),
+            Scene::Arm => build_arm_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -605,14 +691,20 @@ impl Sim {
         control.upload_to_device(&device, &queue).expect("control upload");
         contacts.upload_to_device(&device, &queue).expect("contacts upload");
 
-        // 10 iterations × 10 substeps = 100 Gauss-Seidel sweeps per
-        // frame, matching Newton's XPBD cloth example. With smaller dt
-        // per substep, each XPBD pass converges per-spring residuals
-        // tighter, and the chain has plenty of sweep budget to
-        // propagate corner-to-corner.
-        let solver = mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
-            .expect("XPBD GPU solver init")
-            .with_iterations(10);
+        // Pick the solver this scene wants. XPBD for everything but
+        // the Arm scene; Featherstone for proper articulated dynamics
+        // (joint_q, joint_qd, joint_force, etc.).
+        let solver = match scene.solver_kind() {
+            SolverKind::Xpbd => SolverBackend::Xpbd(
+                mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
+                    .expect("XPBD GPU solver init")
+                    .with_iterations(10),
+            ),
+            SolverKind::Featherstone => SolverBackend::Featherstone(
+                FeatherstoneSolver::new_gpu(&engine, &model)
+                    .expect("Featherstone GPU solver init"),
+            ),
+        };
 
         (
             Self {
@@ -1037,6 +1129,100 @@ fn build_lidar_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), visuals)
 }
 
+// --- Arm scene -----------------------------------------------------
+const ARM_LINKS: usize = 3;
+/// Length of each arm link (m). Three links of 1.0m make a ~3m arm.
+const ARM_LINK_LEN: f32 = 1.0;
+const ARM_LINK_RADIUS: f32 = 0.08;
+const ARM_BASE_HEIGHT: f32 = 3.0;
+/// PD gains. kp = 80 rad-stiff target tracking; kd = 8 critically
+/// damped for ~1.0kg-m² inertia at the joint axis. max_effort caps
+/// the torque so a step input doesn't crank the arm at infinite
+/// acceleration.
+const ARM_KP: f64 = 80.0;
+const ARM_KD: f64 = 8.0;
+const ARM_MAX_EFFORT: f64 = 200.0;
+
+/// 3-link revolute arm anchored at (0, ARM_BASE_HEIGHT, 0). All
+/// joints rotate around +X (so the arm sweeps in the YZ plane,
+/// camera-facing). Each link is a capsule with its long axis along
+/// +Y in the joint-local frame; the joint-X transforms place the
+/// next joint at the tip of the previous link.
+fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let mut visuals = Vec::with_capacity(ARM_LINKS);
+    let half_h = (ARM_LINK_LEN as f64) * 0.5;
+    let radius = ARM_LINK_RADIUS as f64;
+
+    let inertia = capsule_inertia(1.0, half_h, radius);
+
+    // Begin a single articulation; subsequent revolute joints get
+    // chained via `parent` = previous link.
+    b.begin_articulation();
+
+    // Base at the world anchor — Featherstone treats parent = NONE as
+    // a fixed world frame, so the first joint anchors the arm in
+    // space.
+    let mut prev_body = mp::BodyId::NONE;
+    // Initial pose for body 0: COM at (0, base_height + half_h, 0) so
+    // the link extends DOWN from the base anchor in the rest pose.
+    // The Featherstone forward kinematics will recompute body_q from
+    // joint_q each step; this is just the baseline.
+    let mut next_pos = MVec3::new(0.0, ARM_BASE_HEIGHT as f64 - half_h, 0.0);
+
+    for i in 0..ARM_LINKS {
+        // Body — capsule along +Y in body frame.
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: 1.0,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(next_pos),
+        );
+        b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("arm link shape");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+
+        // Joint anchor in PARENT frame.
+        // For the first joint, the parent is the static world; the
+        // anchor is the world-space base position. For subsequent
+        // joints, the anchor is the *tip* of the previous link in
+        // the previous link's body frame (= +Y by half_h*2).
+        let x_p = if i == 0 {
+            mp::Transform::new(
+                MVec3::new(0.0, ARM_BASE_HEIGHT as f64, 0.0),
+                MQuat::IDENTITY,
+            )
+        } else {
+            // Tip of previous link in its body frame: +Y by full
+            // half-length plus radius (capsule cap).
+            mp::Transform::from_translation(MVec3::new(0.0, half_h, 0.0))
+        };
+        // Joint anchor in CHILD frame: the proximal end of the link
+        // (= -Y by half-length so the link extends from the joint).
+        let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+
+        b.add_joint_revolute(prev_body, body, x_p, x_c, MVec3::X)
+            .expect("arm joint");
+
+        prev_body = body;
+        // Stack the next link below this one in the rest pose. (Real
+        // Featherstone FK will overwrite this — only the initial
+        // body_q matters for the very first frame's collision broad
+        // phase, which the arm scene doesn't exercise.)
+        next_pos = next_pos - MVec3::new(0.0, ARM_LINK_LEN as f64, 0.0);
+    }
+
+    (b.build().expect("arm model"), visuals)
+}
+
 /// Contact-sensor example — a small stack of bodies settling on the
 /// plane. The GPU `ContactSensor` runs every frame and the right-rail
 /// pane shows per-body contact counts + max depth + net push
@@ -1402,6 +1588,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Digit7) && sim.scene != Scene::Contact {
         pending.0 = Some(Scene::Contact);
     }
+    if keys.just_pressed(KeyCode::Digit8) && sim.scene != Scene::Arm {
+        pending.0 = Some(Scene::Arm);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -1419,6 +1608,7 @@ fn apply_scene_switch(
     mut lidar: ResMut<LidarState>,
     mut imu: ResMut<ImuExampleState>,
     mut contact: ResMut<ContactExampleState>,
+    mut arm: ResMut<ArmExampleState>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
@@ -1442,6 +1632,10 @@ fn apply_scene_switch(
     // Contact sensor is sized to body_count too — drop on switch.
     contact.sensor = None;
     contact.readings.clear();
+    // Arm PD controller is bound to a specific joint_dof_total —
+    // drop and rebuild on the next arm-scene step.
+    arm.controller = None;
+    arm.elapsed = 0.0;
 
     for e in bodies_q.iter() {
         commands.entity(e).despawn();
@@ -1504,6 +1698,14 @@ fn step_simulation(
         let d0 = std::time::Instant::now();
         let _ = state_a.body_q.download(&device, &queue);
         let _ = state_a.body_qd.download(&device, &queue);
+        // Featherstone scenes also need joint_q / joint_qd on the
+        // host so the PD controller (and right-rail panel) can read
+        // them. XPBD scenes have joint_*_total = 0 so download is a
+        // no-op.
+        if model.joint_dof_total > 0 {
+            let _ = state_a.joint_q.download(&device, &queue);
+            let _ = state_a.joint_qd.download(&device, &queue);
+        }
         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
     }
     let solve_us = solve_start.elapsed().as_secs_f64() * 1_000_000.0;
@@ -2259,6 +2461,124 @@ fn update_imu_example(
     }
 }
 
+/// Arm example — sets per-joint targets (auto-sine or slider) and
+/// runs the GPU `ControllerPd` to write `Control.joint_force`. The
+/// physics step (Featherstone) then consumes that force. No-op for
+/// any other scene.
+fn update_arm_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<ArmExampleState>,
+) {
+    if sim.scene != Scene::Arm {
+        if state.controller.is_some() {
+            state.controller = None;
+        }
+        return;
+    }
+
+    if state.controller.is_none() {
+        // 1 actuator per joint DOF. Featherstone's joint_dof_total
+        // covers all joint DOFs — for our 3-revolute arm, that's 3.
+        let configs: Vec<ControllerPdConfig> = (0..ARM_LINKS)
+            .map(|i| ControllerPdConfig {
+                dof: i as u32,
+                kp: ARM_KP,
+                kd: ARM_KD,
+                max_effort: ARM_MAX_EFFORT,
+            })
+            .collect();
+        match ControllerPd::new(&sim.engine, &sim.model, &configs) {
+            Ok(c) => state.controller = Some(c),
+            Err(e) => {
+                warn!("arm: controller init failed: {e}");
+                return;
+            }
+        }
+    }
+
+    state.elapsed += time.delta_secs();
+
+    // Determine target positions for this frame.
+    let mut targets = state.targets;
+    if state.sine_enabled {
+        let t = state.elapsed * state.sine_frequency * std::f32::consts::TAU;
+        for (i, target) in targets.iter_mut().enumerate() {
+            // Phase-stagger each joint by 2π/N so the arm looks
+            // wavey rather than flapping in unison.
+            let phase = (i as f32) * std::f32::consts::TAU / (ARM_LINKS as f32);
+            *target = state.sine_amplitude * (t + phase).sin();
+        }
+        // Reflect the auto-generated targets back into the slider
+        // values so the UI stays in sync.
+        state.targets = targets;
+    }
+
+    // Push the targets into Control.joint_target_pos. Targets for
+    // joint i live at the start-of-DOF index for that joint —
+    // joint_dof_offset[i]..[i+1]. For revolute joints that's a
+    // single DOF per joint, so dof = i. We also zero target_vel
+    // so the derivative term tracks the joint coming to rest at
+    // the target.
+    {
+        let queue = sim.engine.queue().expect("queue").clone();
+        let target_pos = sim
+            .control
+            .joint_target_pos
+            .host_mut()
+            .expect("joint_target_pos");
+        for (i, t) in targets.iter().enumerate() {
+            if i < target_pos.len() {
+                target_pos[i] = *t as f64;
+            }
+        }
+        let target_vel = sim
+            .control
+            .joint_target_vel
+            .host_mut()
+            .expect("joint_target_vel");
+        for v in target_vel.iter_mut() {
+            *v = 0.0;
+        }
+        // Zero joint_force before the controller writes (and so
+        // unused DOFs stay at zero).
+        for f in sim
+            .control
+            .joint_force
+            .host_mut()
+            .expect("joint_force")
+            .iter_mut()
+        {
+            *f = 0.0;
+        }
+        sim.control
+            .joint_target_pos
+            .upload(&queue)
+            .expect("target_pos upload");
+        sim.control
+            .joint_target_vel
+            .upload(&queue)
+            .expect("target_vel upload");
+        sim.control
+            .joint_force
+            .upload(&queue)
+            .expect("joint_force upload");
+    }
+
+    // Run the PD controller — writes effort into Control.joint_force.
+    let Sim {
+        ref engine,
+        ref state_a,
+        ref mut control,
+        ..
+    } = *sim;
+    if let Some(controller) = state.controller.as_mut() {
+        if let Err(e) = controller.step(engine, state_a, control) {
+            warn!("arm: controller step failed: {e}");
+        }
+    }
+}
+
 /// Contact example — runs the GPU `ContactSensor` against the
 /// current `Contacts` and stashes the readings. No-op for any other
 /// scene.
@@ -2464,6 +2784,7 @@ fn control_pane(
     lidar_state: Res<LidarState>,
     imu_state: Res<ImuExampleState>,
     contact_state: Res<ContactExampleState>,
+    mut arm_state: ResMut<ArmExampleState>,
     mut ribbon_open: ResMut<RibbonOpen>,
     mut ribbon_placement: ResMut<RibbonPlacement>,
     mut ribbon_drag: ResMut<RibbonDrag>,
@@ -2487,7 +2808,10 @@ fn control_pane(
         |id| match id {
             // Right pane is enabled only for scenes that have
             // per-example settings — Pile/Rope/Tower/Cloth don't.
-            PANE_SCENE => !matches!(scene, Scene::Lidar | Scene::Imu | Scene::Contact),
+            PANE_SCENE => !matches!(
+                scene,
+                Scene::Lidar | Scene::Imu | Scene::Contact | Scene::Arm
+            ),
             _ => false,
         },
     );
@@ -2597,6 +2921,7 @@ fn control_pane(
         Scene::Lidar => Some("Lidar"),
         Scene::Imu => Some("IMU"),
         Scene::Contact => Some("Contacts"),
+        Scene::Arm => Some("Arm (PD)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -2611,6 +2936,7 @@ fn control_pane(
                 Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
                 Scene::Imu => imu_pane(ui, &imu_state),
                 Scene::Contact => contact_pane(ui, &contact_state),
+                Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
                 _ => {}
             });
         }
@@ -2726,6 +3052,60 @@ fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
         "Yellow arrows in the viewport point along the net push \
          direction at each body's contact centroid; length scales \
          with penetration depth.",
+    );
+}
+
+/// Body for the right-rail pane in the Arm scene.
+fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
+    ui.add_space(2.0);
+    readout(ui, "Solver", "Featherstone GPU");
+    readout(ui, "Controller", "GPU PD");
+    readout(ui, "Joints", &format!("{ARM_LINKS}"));
+    readout(
+        ui,
+        "Effort cap",
+        &format!("{:.0} N·m", ARM_MAX_EFFORT),
+    );
+    ui.separator();
+
+    // Live joint state — read joint_q (already host-mirrored after
+    // the Featherstone download in step_simulation).
+    if let Ok(q) = sim.state_a.joint_q.host() {
+        ui.label("Current angles");
+        for i in 0..ARM_LINKS {
+            if i < q.len() {
+                readout(ui, &format!("  q{i}"), &format!("{:.3} rad", q[i]));
+            }
+        }
+        ui.separator();
+    }
+
+    ui.checkbox(&mut state.sine_enabled, "Auto-sine drive");
+    if state.sine_enabled {
+        ui.add(
+            egui::Slider::new(&mut state.sine_amplitude, 0.0..=1.4).text("amplitude (rad)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut state.sine_frequency, 0.0..=2.0).text("frequency (Hz)"),
+        );
+    } else {
+        ui.label("Targets (rad)");
+        for i in 0..ARM_LINKS {
+            ui.add(
+                egui::Slider::new(
+                    &mut state.targets[i],
+                    -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
+                )
+                .text(format!("q{i} target")),
+            );
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.small(
+        "PD effort = kp·(target − q) + kd·(0 − qd), capped to ±max_effort. \
+         Watch the arm settle on slider changes; at high gains it's stiff, \
+         at low gains it overshoots.",
     );
 }
 
