@@ -9,7 +9,7 @@ mod spatial;
 mod transform;
 
 pub use gpu::{GpuMat3, GpuSpatialVector, GpuTransform};
-pub use spatial::{SpatialInertia, SpatialVector};
+pub use spatial::{spatial_cross, spatial_cross_dual, SpatialInertia, SpatialMatrix6, SpatialVector};
 pub use transform::Transform;
 
 /// Host-side scalar. The crate is `f64` everywhere on the host — see the

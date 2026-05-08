@@ -1190,32 +1190,35 @@ Definition of done:
 ### Stage 3 — Articulation (Featherstone) ✅ COMPLETE (2026-05-08)
 
 - **3.0 ✅** — Joint data model + FK only.
-- **3.1 ✅** — `FeatherstoneSolver` (CPU) — forward dynamics for
-  revolute joints. Per-joint torque from gravity (cross product
-  + axis projection) + applied joint force, parallel-axis effective
-  inertia, semi-implicit Euler. Tests: pendulum oscillates with
-  correct linearised period (drift < 1 % over one period); rest
-  state stays at rest. Note: per-joint dynamics — full ABA bias
-  propagation through chains is a future stage.
+- **3.1 ✅** — `FeatherstoneSolver` (CPU) — proper Featherstone
+  Articulated Body Algorithm (ABA) per Featherstone (2008) ch. 7.
+  Three passes: forward kinematics + body kinematics, backward
+  articulated-inertia accumulation (with full bias-force propagation
+  including Coriolis terms via `spatial_cross_dual(v_s, I_s · v_s)`),
+  forward acceleration solve. Spatial 6×6 inertias expressed at the
+  world origin (matches Newton's `solvers/featherstone/kernels.py`
+  layout). Tests: pendulum oscillates with correct linearised period
+  (drift < 1 % over one period); rest state stays at rest;
+  double-pendulum energy bounded within 50 % over 5000 steps.
 - **3.2 ✅** — URDF importer (`molla::utils::urdf`). Parses
   revolute / continuous / prismatic / fixed / floating joints; maps
   inertial blocks to `BodyParams::with_spatial_inertia`. Returns a
   `name → BodyId` / `name → JointId` lookup table. Tests: 2-link
   revolute chain, mixed joint types.
 - **3.3 ✅** — GPU port. `shaders/featherstone.wgsl` runs the same
-  three-pass algorithm (FK / dynamics / FK) per articulation;
-  `FeatherstoneKernel` dispatches one workgroup invocation per
-  chain. CPU/GPU parity test passes within 1e-2 rad over 200 steps
-  for a pendulum (matches XPBD parity tolerance for f32 GPU vs f64
-  CPU). Run via `make test-featherstone-gpu`.
+  three-pass ABA per articulation with spatial-vector primitives
+  ported from Warp's `_src/math.py`; `FeatherstoneKernel` dispatches
+  one workgroup invocation per chain. CPU/GPU parity test passes
+  within 1e-3 rad for a pendulum (f32 GPU vs f64 CPU). Run via
+  `make test-featherstone-gpu`.
 
 Known limitations carried forward to a stage 3.x rewrite:
-- Per-joint dynamics ignores cross-coupling between joints (proper
-  ABA's bias-force propagation through the backward pass). Multi-
-  link chains see drift compared to Newton's MuJoCo reference.
 - Single-articulation per scene only; branched trees + multi-arm
   systems need an articulation grouping pass.
 - Ball / planar / D6 joints are unsupported.
+- ABA assumes serial chains (parent index < child index). Tree
+  topologies work but rely on the linker's ordering — explicit
+  topological sort is a future cleanup.
 
 **Goal**: load Franka Panda URDF, simulate, match reference within tolerance.
 
