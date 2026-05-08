@@ -208,25 +208,113 @@ impl<T: BufferElement> Buffer<T> {
         Ok(&mut self.host)
     }
 
-    /// Allocate the GPU mirror if not already present. Stubbed for stage 0.
+    /// Allocate the GPU mirror if not already present, sized for `host.len()`
+    /// elements of `T::Gpu`. Does not upload — call [`Self::upload`] after.
     #[cfg(feature = "gpu")]
-    pub fn ensure_device(&mut self, _device: &wgpu::Device) -> Result<()> {
-        // TODO(stage-2): allocate `wgpu::Buffer` of size
-        //   `self.host.len() * size_of::<T::Gpu>()`,
-        // upload from self.host, mark InSync.
-        todo!("Buffer::ensure_device — implement in stage 2")
+    pub fn ensure_device(&mut self, device: &wgpu::Device) -> Result<()> {
+        if self.device.is_some() {
+            return Ok(());
+        }
+        if self.host.is_empty() {
+            // wgpu requires non-zero buffer size; nothing useful to allocate.
+            return Ok(());
+        }
+
+        let usage = match self.usage {
+            BufferUsage::Storage => {
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST
+            }
+            BufferUsage::StorageReadWrite => {
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST
+            }
+            BufferUsage::Uniform => {
+                wgpu::BufferUsages::UNIFORM
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST
+            }
+        };
+
+        let size = (self.host.len() * core::mem::size_of::<T::Gpu>()) as u64;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::Buffer"),
+            size,
+            usage,
+            mapped_at_creation: false,
+        });
+        self.device = Some(buf);
+        // Host is the authoritative copy until we upload.
+        self.state = SyncState::HostDirty;
+        Ok(())
     }
 
-    /// Upload host → device. Stubbed for stage 0.
+    /// Upload host data to the device buffer. No-op if no device buffer
+    /// is allocated.
     #[cfg(feature = "gpu")]
-    pub fn upload(&mut self, _queue: &wgpu::Queue) -> Result<()> {
-        todo!("Buffer::upload — implement in stage 2")
+    pub fn upload(&mut self, queue: &wgpu::Queue) -> Result<()> {
+        let Some(buf) = self.device.as_ref() else {
+            return Ok(());
+        };
+        if self.host.is_empty() {
+            return Ok(());
+        }
+        let gpu_data: Vec<T::Gpu> = self.host.iter().map(BufferElement::to_gpu).collect();
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(&gpu_data));
+        self.state = SyncState::InSync;
+        Ok(())
     }
 
-    /// Download device → host. Stubbed for stage 0.
+    /// Download device data into the host buffer. Blocks until the
+    /// transfer completes (uses `pollster`).
     #[cfg(feature = "gpu")]
-    pub fn download(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue) -> Result<()> {
-        todo!("Buffer::download — implement in stage 2")
+    pub fn download(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+        let Some(buf) = self.device.as_ref() else {
+            return Ok(());
+        };
+        if self.host.is_empty() {
+            return Ok(());
+        }
+
+        let elem_size = core::mem::size_of::<T::Gpu>();
+        let byte_size = (self.host.len() * elem_size) as u64;
+
+        // Staging buffer that supports MAP_READ.
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::Buffer staging"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(buf, 0, &staging, 0, byte_size);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and wait.
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        device.poll(wgpu::Maintain::Wait).panic_on_timeout();
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("download recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("buffer map: {e:?}")))?;
+
+        let mapped = slice.get_mapped_range();
+        let gpu_slice: &[T::Gpu] = bytemuck::cast_slice(&mapped);
+        for (host, gpu) in self.host.iter_mut().zip(gpu_slice.iter()) {
+            *host = T::from_gpu(gpu);
+        }
+        drop(mapped);
+        staging.unmap();
+
+        self.state = SyncState::InSync;
+        Ok(())
     }
 
     /// Borrow the underlying `wgpu::Buffer` if it's been allocated.
@@ -234,6 +322,14 @@ impl<T: BufferElement> Buffer<T> {
     #[must_use]
     pub fn device_buffer(&self) -> Option<&wgpu::Buffer> {
         self.device.as_ref()
+    }
+
+    /// Mark the device copy as authoritative (used after a kernel writes
+    /// to the buffer in place). Subsequent [`Self::host`] calls will
+    /// trigger an error until [`Self::download`] is invoked.
+    #[cfg(feature = "gpu")]
+    pub fn mark_device_dirty(&mut self) {
+        self.state = SyncState::DeviceDirty;
     }
 }
 

@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r test t check fmt clean help h
+.PHONY: build b compile c run r test t test-gpu test-oracle bench-cpu bench-gpu check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -47,6 +47,22 @@ test:
 
 t: test
 
+# GPU tests are gated behind `--ignored` because the wgpu adapter is
+# only reachable through nixVulkan. `make test-gpu` runs only the
+# GPU-specific parity test (skips the Newton-oracle tests, which need a
+# venv'd Python — those run via `make test-oracle`).
+test-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test cpu_gpu_parity -- --ignored
+
+test-oracle:
+	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
+
+bench-cpu:
+	@$(CARGO) bench -p molla --bench step_cpu
+
+bench-gpu:
+	@$(RUN_ENV) $(CARGO) bench -p molla --bench step_gpu --features gpu
+
 check:
 	@$(CARGO) check --workspace --all-targets
 
@@ -65,6 +81,9 @@ help:
 	@echo "  compile      Clean and rebuild"
 	@echo "  run          Launch molla_viewer (RELEASE=1 recommended; BIN=name overrides)"
 	@echo "  test         Run the test suite"
+	@echo "  test-gpu     Run GPU-only tests via nixVulkan (CPU/GPU parity, etc.)"
+	@echo "  bench-cpu    cargo bench the CPU integrator"
+	@echo "  bench-gpu    cargo bench the GPU integrator via nixVulkan"
 	@echo "  check        cargo check the workspace"
 	@echo "  fmt          Format the workspace"
 	@echo "  clean        Remove Cargo build artifacts"

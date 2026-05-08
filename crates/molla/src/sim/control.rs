@@ -39,4 +39,23 @@ impl Control {
             ),
         }
     }
+
+    /// Allocate device buffers and upload host data.
+    #[cfg(feature = "gpu")]
+    pub fn upload_to_device(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> crate::core::Result<()> {
+        macro_rules! up {
+            ($field:ident) => {{
+                self.$field.ensure_device(device)?;
+                self.$field.upload(queue)?;
+            }};
+        }
+        up!(joint_target);
+        up!(joint_force);
+        up!(body_external_f);
+        Ok(())
+    }
 }

@@ -35,3 +35,8 @@ criterion = { version = "0.5", default-features = false, features = ["plotters",
 name = "step_cpu"
 harness = false
 
+[[bench]]
+name = "step_gpu"
+harness = false
+required-features = ["gpu"]
+

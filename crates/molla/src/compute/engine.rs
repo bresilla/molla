@@ -122,11 +122,16 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
 
     let adapter_info = AdapterInfo::from_wgpu(adapter.get_info());
 
+    // Request whatever this adapter natively supports — `downlevel_defaults`
+    // caps storage buffers at 4 per stage, which we exceed in the rigid-body
+    // integrator (7 model + 5 state + 1 control = 13). Modern desktop GPUs
+    // typically allow 16+, mobile / web much less; if we ever target the
+    // browser we'll need to consolidate buffers.
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("molla::compute::Engine"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            required_limits: adapter.limits(),
             memory_hints: wgpu::MemoryHints::Performance,
         },
         None,

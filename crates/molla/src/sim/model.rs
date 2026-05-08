@@ -134,6 +134,43 @@ impl Model {
     pub fn control(&self) -> super::Control {
         super::Control::for_model(self)
     }
+
+    /// Allocate device buffers for every model array and upload host data.
+    ///
+    /// The model is read-only at simulation time, so this only needs to
+    /// run once before the first GPU step. Re-running is harmless but
+    /// re-uploads the same data.
+    #[cfg(feature = "gpu")]
+    pub fn upload_to_device(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+        macro_rules! up {
+            ($field:ident) => {{
+                self.$field.ensure_device(device)?;
+                self.$field.upload(queue)?;
+            }};
+        }
+        up!(particle_mass);
+        up!(particle_inv_mass);
+        up!(particle_radius);
+        up!(particle_flags);
+        up!(particle_world);
+        up!(body_mass);
+        up!(body_inv_mass);
+        up!(body_inertia);
+        up!(body_inv_inertia);
+        up!(body_com);
+        up!(body_flags);
+        up!(body_world);
+        up!(initial_body_q);
+        up!(shape_body);
+        up!(shape_transform);
+        up!(shape_flags);
+        up!(joint_parent);
+        up!(joint_child);
+        up!(joint_x_p);
+        up!(joint_x_c);
+        up!(gravity);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

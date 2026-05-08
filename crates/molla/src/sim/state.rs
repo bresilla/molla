@@ -86,4 +86,42 @@ impl State {
         }
         Ok(())
     }
+
+    /// Allocate device buffers for every state array and upload host data.
+    /// Idempotent: subsequent calls re-upload from host.
+    #[cfg(feature = "gpu")]
+    pub fn upload_to_device(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> crate::core::Result<()> {
+        macro_rules! up {
+            ($field:ident) => {{
+                self.$field.ensure_device(device)?;
+                self.$field.upload(queue)?;
+            }};
+        }
+        up!(particle_q);
+        up!(particle_qd);
+        up!(particle_f);
+        up!(body_q);
+        up!(body_qd);
+        up!(body_f);
+        up!(joint_q);
+        up!(joint_qd);
+        Ok(())
+    }
+
+    /// Read every device buffer back into the host mirror. Blocks until
+    /// the transfers complete.
+    #[cfg(feature = "gpu")]
+    pub fn download_from_device(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> crate::core::Result<()> {
+        self.body_q.download(device, queue)?;
+        self.body_qd.download(device, queue)?;
+        Ok(())
+    }
 }

@@ -1169,7 +1169,7 @@ Definition of done:
 - 100-sphere case matches within 1e-5 (numerical reordering tolerance).
 - `cargo bench --bench step_cpu` reports < 100µs per step for 100 spheres.
 
-### Stage 2 — GPU semi-implicit (2–3 weeks)
+### Stage 2 — GPU semi-implicit ✅ COMPLETE (2026-05-08)
 
 **Goal**: same scene, GPU backend, on Vulkan/Metal/DX12.
 
@@ -1304,6 +1304,7 @@ rationale, who decided.
 | 2026-05-08 | Workspace placement under `crates/` co-located with existing crates. Excluded `xtra/` reference Newton tree from workspace. |
 | 2026-05-08 | Stage 0 complete. 19 tests pass, 0 doc warnings, 0 clippy warnings. wgpu pinned at 23 (later upgrade tracked separately). Switched test asserts from `approx` to `(a-b).length() < eps` because `glam::DVec3` doesn't impl `AbsDiffEq`; dropped `approx` from dev-deps. SI unit annotations use `(unit)` parens not `[unit]` because rustdoc treats brackets as broken intra-doc links. |
 | 2026-05-08 | Stage 1 complete. 25 tests pass, 2 oracle tests ignored (require venv). `SemiImplicitSolver` (CPU) is a direct port of Newton's `integrate_rigid_body`. Free-fall trajectory matches the closed-form `g·dt²·n(n+1)/2` to within 1e-9. Bench: 4.92µs/step for 100 spheres (DoD target was <100µs; 20× under). `Engine::step` deferred to stage 2 — `Solver::step` is the canonical API and mirrors Newton; the Engine type is the GPU runtime, not a frontend wrapper. |
+| 2026-05-08 | Stage 2 complete. WGSL `integrate_bodies` kernel + Rust dispatch wrapper. CPU/GPU parity test passes (100 spheres × 100 steps, agreement within 1e-3 m). GPU bench on RTX 4080: 19.5µs/step for 1k spheres (DoD <1ms; 51× under). Kernel cost is dispatch-bound up to 10k bodies; CPU wins below ~500 bodies. wgpu device requested with `adapter.limits()` rather than `downlevel_defaults` — the latter caps storage buffers per stage at 4 and we use 13. `Engine::step` deferred again — Solver::step does the dispatch directly; no value in wrapping it. Viewer kept on CPU backend to dodge the wgpu version mismatch with Bevy's pinned wgpu; revisit when we want a single binary running GPU sim + Bevy render. |
 
 ---
 

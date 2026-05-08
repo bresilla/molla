@@ -1,37 +1,117 @@
-//! Semi-implicit Euler integrator for rigid bodies and particles.
+//! Semi-implicit Euler integrator for rigid bodies.
 //!
-//! Direct CPU port of Newton's `integrate_rigid_body` (see
-//! `xtra/newton/newton/_src/solvers/solver.py`). Stage 1 implements rigid
-//! bodies only; particles arrive in stage 5.
-//!
-//! Semi-implicit means we update velocity from forces, then position from
-//! the **new** velocity:
-//!
-//! ```text
-//!   v_{k+1} = v_k + f * inv_m * dt + g * dt
-//!   x_{k+1} = x_k + v_{k+1} * dt
-//! ```
-//!
-//! Angular dynamics are integrated in body frame to keep the inertia
-//! tensor diagonal, then rotated back. Quaternions are renormalised every
-//! step.
+//! CPU path is a direct port of Newton's `integrate_rigid_body` (see
+//! `xtra/newton/newton/_src/solvers/solver.py`); the GPU path runs the
+//! same algorithm in WGSL via [`crate::kernels::IntegrateBodiesKernel`].
 
 use crate::core::{Error, Result};
 use crate::math::{Mat3, Quat, Real, SpatialVector, Transform, Vec3};
 use crate::sim::{BodyFlags, Contacts, Control, Model, State};
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use super::Solver;
 
-/// Semi-implicit Euler integrator. Stateless — `step` is a pure function
-/// of its inputs, modulo the output state arrays.
-#[derive(Debug, Default)]
-pub struct SemiImplicitSolver;
+/// Backend selector for [`SemiImplicitSolver`].
+#[allow(clippy::large_enum_variant, reason = "GPU variant holds Arcs and a kernel; the size delta is fine for a per-solver enum that lives once")]
+pub enum SemiImplicitBackend {
+    /// Single-threaded CPU loop.
+    Cpu,
+    /// GPU dispatch via wgpu. The model and both states must be uploaded
+    /// (see `Model::upload_to_device`, `State::upload_to_device`) before
+    /// calling [`Solver::step`].
+    #[cfg(feature = "gpu")]
+    Gpu(GpuBackend),
+}
+
+/// GPU bookkeeping for [`SemiImplicitBackend::Gpu`]. Holds the kernel,
+/// device handles, and a 1-element dummy `body_external_f` buffer used
+/// when the user-supplied [`Control`] has no per-body wrenches.
+#[cfg(feature = "gpu")]
+pub struct GpuBackend {
+    pub(crate) device: Arc<wgpu::Device>,
+    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) kernel: crate::kernels::IntegrateBodiesKernel,
+    pub(crate) external_f_dummy: wgpu::Buffer,
+}
+
+#[cfg(feature = "gpu")]
+impl GpuBackend {
+    fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        let kernel = crate::kernels::IntegrateBodiesKernel::new(&device);
+        // 1-element dummy storage buffer so the control bind group has
+        // something to bind when the user-supplied Control is empty.
+        let external_f_dummy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::semi_implicit dummy external_f"),
+            size: 32, // matches GpuSpatialVector
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            device,
+            queue,
+            kernel,
+            external_f_dummy,
+        }
+    }
+}
+
+/// Semi-implicit Euler integrator. Construct via [`Self::new_cpu`] or
+/// [`Self::new_gpu`].
+pub struct SemiImplicitSolver {
+    backend: SemiImplicitBackend,
+}
+
+impl Default for SemiImplicitSolver {
+    fn default() -> Self {
+        Self::new_cpu()
+    }
+}
 
 impl SemiImplicitSolver {
-    /// Construct the solver. Cheap; safe to recreate per step.
+    /// CPU backend.
+    #[must_use]
+    pub fn new_cpu() -> Self {
+        Self {
+            backend: SemiImplicitBackend::Cpu,
+        }
+    }
+
+    /// Backwards-compatible alias for [`Self::new_cpu`].
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::new_cpu()
+    }
+
+    /// GPU backend. The provided [`crate::compute::Engine`] must have
+    /// been constructed with `Engine::new_gpu()`.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu(engine: &crate::compute::Engine) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
+            .clone();
+        Ok(Self {
+            backend: SemiImplicitBackend::Gpu(GpuBackend::new(device, queue)),
+        })
+    }
+
+    /// `true` if the solver runs on a GPU backend.
+    #[must_use]
+    pub fn is_gpu(&self) -> bool {
+        #[cfg(feature = "gpu")]
+        {
+            matches!(self.backend, SemiImplicitBackend::Gpu(_))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            false
+        }
     }
 }
 
@@ -41,91 +121,109 @@ impl Solver for SemiImplicitSolver {
         model: &Model,
         state_in: &State,
         control: &Control,
-        _contacts: &Contacts,
+        contacts: &Contacts,
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
-        if state_in.body_q.len() != model.body_count
-            || state_out.body_q.len() != model.body_count
-        {
-            return Err(Error::Solver(format!(
-                "state size mismatch: model has {} bodies, state_in has {}, state_out has {}",
-                model.body_count,
-                state_in.body_q.len(),
-                state_out.body_q.len()
-            )));
-        }
-
-        let q_in = state_in.body_q.host()?;
-        let qd_in = state_in.body_qd.host()?;
-        let f_in = state_in.body_f.host()?;
-        let mass = model.body_mass.host()?;
-        let inv_mass = model.body_inv_mass.host()?;
-        let inertia = model.body_inertia.host()?;
-        let inv_inertia = model.body_inv_inertia.host()?;
-        let com = model.body_com.host()?;
-        let flags = model.body_flags.host()?;
-        let world_idx = model.body_world.host()?;
-        let gravity = model.gravity.host()?;
-        let external = if control.body_external_f.len() == model.body_count {
-            Some(control.body_external_f.host()?)
-        } else {
-            None
-        };
-
-        // Snapshot all inputs before borrowing state_out mutably (host_mut
-        // takes exclusive borrow).
-        let mut q_out = vec![Transform::IDENTITY; model.body_count];
-        let mut qd_out = vec![SpatialVector::ZERO; model.body_count];
-
-        for tid in 0..model.body_count {
-            if (flags[tid] & BodyFlags::KINEMATIC) != 0 {
-                q_out[tid] = q_in[tid];
-                qd_out[tid] = qd_in[tid];
-                continue;
+        match &mut self.backend {
+            SemiImplicitBackend::Cpu => cpu_step(model, state_in, control, contacts, dt, state_out),
+            #[cfg(feature = "gpu")]
+            SemiImplicitBackend::Gpu(gpu) => {
+                gpu.kernel.dispatch(
+                    &gpu.device,
+                    &gpu.queue,
+                    model,
+                    state_in,
+                    control,
+                    &gpu.external_f_dummy,
+                    state_out,
+                    dt,
+                )
             }
-
-            let mut applied = f_in[tid];
-            if let Some(ext) = external {
-                applied = applied + ext[tid];
-            }
-
-            let world = world_idx[tid].max(0) as usize;
-            let g = gravity[world];
-
-            let (q_new, qd_new) = integrate_rigid_body(
-                q_in[tid],
-                qd_in[tid],
-                applied,
-                com[tid],
-                mass[tid],
-                inertia[tid],
-                inv_mass[tid],
-                inv_inertia[tid],
-                g,
-                model.angular_damping,
-                dt,
-            );
-            q_out[tid] = q_new;
-            qd_out[tid] = qd_new;
         }
-
-        state_out.body_q.host_mut()?.copy_from_slice(&q_out);
-        state_out.body_qd.host_mut()?.copy_from_slice(&qd_out);
-        // Forces from the input step are not persisted into the next.
-        for f in state_out.body_f.host_mut()? {
-            *f = SpatialVector::ZERO;
-        }
-
-        Ok(())
     }
+}
+
+fn cpu_step(
+    model: &Model,
+    state_in: &State,
+    control: &Control,
+    _contacts: &Contacts,
+    dt: Real,
+    state_out: &mut State,
+) -> Result<()> {
+    if state_in.body_q.len() != model.body_count || state_out.body_q.len() != model.body_count {
+        return Err(Error::Solver(format!(
+            "state size mismatch: model has {} bodies, state_in has {}, state_out has {}",
+            model.body_count,
+            state_in.body_q.len(),
+            state_out.body_q.len()
+        )));
+    }
+
+    let q_in = state_in.body_q.host()?;
+    let qd_in = state_in.body_qd.host()?;
+    let f_in = state_in.body_f.host()?;
+    let mass = model.body_mass.host()?;
+    let inv_mass = model.body_inv_mass.host()?;
+    let inertia = model.body_inertia.host()?;
+    let inv_inertia = model.body_inv_inertia.host()?;
+    let com = model.body_com.host()?;
+    let flags = model.body_flags.host()?;
+    let world_idx = model.body_world.host()?;
+    let gravity = model.gravity.host()?;
+    let external = if control.body_external_f.len() == model.body_count {
+        Some(control.body_external_f.host()?)
+    } else {
+        None
+    };
+
+    let mut q_out = vec![Transform::IDENTITY; model.body_count];
+    let mut qd_out = vec![SpatialVector::ZERO; model.body_count];
+
+    for tid in 0..model.body_count {
+        if (flags[tid] & BodyFlags::KINEMATIC) != 0 {
+            q_out[tid] = q_in[tid];
+            qd_out[tid] = qd_in[tid];
+            continue;
+        }
+
+        let mut applied = f_in[tid];
+        if let Some(ext) = external {
+            applied = applied + ext[tid];
+        }
+
+        let world = world_idx[tid].max(0) as usize;
+        let g = gravity[world];
+
+        let (q_new, qd_new) = integrate_rigid_body(
+            q_in[tid],
+            qd_in[tid],
+            applied,
+            com[tid],
+            mass[tid],
+            inertia[tid],
+            inv_mass[tid],
+            inv_inertia[tid],
+            g,
+            model.angular_damping,
+            dt,
+        );
+        q_out[tid] = q_new;
+        qd_out[tid] = qd_new;
+    }
+
+    state_out.body_q.host_mut()?.copy_from_slice(&q_out);
+    state_out.body_qd.host_mut()?.copy_from_slice(&qd_out);
+    for f in state_out.body_f.host_mut()? {
+        *f = SpatialVector::ZERO;
+    }
+    Ok(())
 }
 
 /// Closed-form semi-implicit Euler step for one rigid body.
 ///
-/// Direct port of Newton's `integrate_rigid_body` in
-/// `xtra/newton/newton/_src/solvers/solver.py`. Arguments mirror that
-/// kernel in the same order.
+/// Direct port of Newton's `integrate_rigid_body`.
 #[allow(clippy::too_many_arguments, reason = "matches Newton's reference signature")]
 fn integrate_rigid_body(
     q: Transform,
@@ -143,42 +241,31 @@ fn integrate_rigid_body(
     let x0 = q.position;
     let r0 = q.rotation;
 
-    // Newton's spatial layout: top = linear, bottom = angular.
     let v0 = qd.linear;
     let w0 = qd.angular;
-    let f0 = f.linear; // applied force (world frame, at COM)
-    let t0 = f.angular; // applied torque (world frame)
+    let f0 = f.linear;
+    let t0 = f.angular;
 
-    // World position of the COM: body origin + R * com_local.
     let x_com = x0 + r0 * com;
 
-    // Linear part. Gravity acts only on bodies with nonzero inv_mass,
-    // matching Newton's `wp.nonzero(inv_mass)` gate.
     let gravity_gate = if inv_mass > 0.0 { 1.0 } else { 0.0 };
     let v1 = v0 + (f0 * inv_mass + gravity * gravity_gate) * dt;
     let x1 = x_com + v1 * dt;
 
-    // Angular part — compute in body frame so inertia is diagonal.
     let r0_inv = r0.conjugate();
     let wb = r0_inv * w0;
-    let tb = r0_inv * t0 - (wb).cross(inertia * wb); // Coriolis
+    let tb = r0_inv * t0 - (wb).cross(inertia * wb);
 
     let mut w1 = r0 * (wb + inv_inertia * tb * dt);
 
-    // Quaternion update: r1 = normalise(r0 + 0.5 * dt * (w1 ⊗ r0)).
-    // Newton stores the angular velocity quaternion as (w_xyz, 0).
     let w_quat = Quat::from_xyzw(w1.x, w1.y, w1.z, 0.0);
     let r1 = (r0 + w_quat * r0 * (0.5 * dt)).normalize();
 
-    // Angular damping (post-rotation, as Newton does).
     w1 *= 1.0 - angular_damping * dt;
 
-    // Recover body-origin pose: x_com - R1 * com_local.
     let position_new = x1 - r1 * com;
 
-    let q_new = Transform::new(position_new, r1);
-    let qd_new = SpatialVector::new(v1, w1);
-    (q_new, qd_new)
+    (Transform::new(position_new, r1), SpatialVector::new(v1, w1))
 }
 
 #[cfg(test)]
@@ -187,10 +274,6 @@ mod tests {
     use crate::math::SpatialInertia;
     use crate::sim::{BodyParams, ModelBuilder};
 
-    /// One-body free fall, com=0. After `n` steps from rest under gravity g,
-    /// semi-implicit Euler gives:
-    ///   v_n = g * n * dt
-    ///   x_n = x_0 + g * dt² * n*(n+1)/2
     #[test]
     fn free_fall_matches_closed_form() {
         let mut b = ModelBuilder::new();
@@ -208,7 +291,7 @@ mod tests {
         let control = model.control();
         let contacts = Contacts::with_capacity(0);
 
-        let mut solver = SemiImplicitSolver::new();
+        let mut solver = SemiImplicitSolver::new_cpu();
         let dt = 0.01;
         let n_steps = 100usize;
 
@@ -226,17 +309,8 @@ mod tests {
 
         let q = s_a.body_q.host().unwrap();
         let qd = s_a.body_qd.host().unwrap();
-        let got_x = q[0].position.y;
-        let got_v = qd[0].linear.y;
-
-        assert!(
-            (got_x - expected_x).abs() < 1e-9,
-            "y mismatch: got {got_x}, expected {expected_x}"
-        );
-        assert!(
-            (got_v - expected_v).abs() < 1e-9,
-            "v_y mismatch: got {got_v}, expected {expected_v}"
-        );
+        assert!((q[0].position.y - expected_x).abs() < 1e-9);
+        assert!((qd[0].linear.y - expected_v).abs() < 1e-9);
     }
 
     #[test]
@@ -254,7 +328,7 @@ mod tests {
         let mut s_b = model.state().unwrap();
         let control = model.control();
         let contacts = Contacts::with_capacity(0);
-        let mut solver = SemiImplicitSolver::new();
+        let mut solver = SemiImplicitSolver::new_cpu();
 
         for _ in 0..10 {
             solver
@@ -282,7 +356,7 @@ mod tests {
         let mut s_b = model.state().unwrap();
         let control = model.control();
         let contacts = Contacts::with_capacity(0);
-        let mut solver = SemiImplicitSolver::new();
+        let mut solver = SemiImplicitSolver::new_cpu();
 
         for _ in 0..50 {
             solver
