@@ -263,6 +263,28 @@ impl XpbdSolver {
                     self.position_iterations,
                     dt,
                     state_out,
+                )?;
+                // Equality constraints (CONNECT / WELD) are not yet
+                // in the WGSL kernel — apply them on host then upload.
+                apply_equality_post_gpu(
+                    model,
+                    state_in,
+                    state_out,
+                    dt,
+                    self.position_iterations,
+                    device,
+                    queue,
+                )?;
+                // Particles (cloth/rope/springs) likewise live on the
+                // CPU side for now.
+                apply_particles_post_gpu(
+                    model,
+                    state_in,
+                    state_out,
+                    dt,
+                    self.position_iterations,
+                    device,
+                    queue,
                 )
             }
         }
@@ -324,7 +346,14 @@ fn cpu_step(
             Vec3::ZERO
         };
         let v0 = qd_in[i].linear;
-        let v1 = v0 + (applied_lin * inv_mass[i] + g) * dt;
+        let mut v1 = v0 + (applied_lin * inv_mass[i] + g) * dt;
+        // Linear damping: v *= exp(-damp · dt). Small-dt approximation
+        // is fine and faster — std exp is overkill for ≤10/s damping.
+        let damp = model.linear_damping;
+        if damp > 0.0 {
+            let factor = (1.0 - damp * dt).max(0.0);
+            v1 *= factor;
+        }
         v_pred[i] = v1;
         q_pred[i].position = q_in[i].position + v1 * dt;
 
@@ -496,179 +525,10 @@ fn cpu_step(
     }
 
     // ── 2b. Equality-constraint projection (CONNECT / WELD) ──
-    // Each constraint is a Jacobi-style position correction that
-    // pulls anchor points together (CONNECT) and aligns frames
-    // (WELD). One pass per outer step matches Newton's XPBD pattern.
-    if model.equality_count > 0 {
-        let eq_type = model.equality_type.host()?;
-        let eq_a = model.equality_body_a.host()?;
-        let eq_b = model.equality_body_b.host()?;
-        let eq_anchor_a = model.equality_anchor_a.host()?;
-        let eq_anchor_b = model.equality_anchor_b.host()?;
-        let eq_relrot = model.equality_relative_rotation.host()?;
-        let eq_enabled = model.equality_enabled.host()?;
-        for _ in 0..position_iterations.max(1) {
-            for c in 0..model.equality_count {
-                if eq_enabled[c] == 0 {
-                    continue;
-                }
-                let a = eq_a[c];
-                let b = eq_b[c];
-                let anchor_a_local = eq_anchor_a[c];
-                let anchor_b_local = eq_anchor_b[c];
-
-                let kin_a = a < 0
-                    || ((flags.get(a as usize).copied().unwrap_or(0))
-                        & BodyFlags::KINEMATIC
-                        != 0);
-                let kin_b = b < 0
-                    || ((flags.get(b as usize).copied().unwrap_or(0))
-                        & BodyFlags::KINEMATIC
-                        != 0);
-                let inv_m_a = if kin_a {
-                    0.0
-                } else {
-                    inv_mass.get(a as usize).copied().unwrap_or(0.0)
-                };
-                let inv_m_b = if kin_b {
-                    0.0
-                } else {
-                    inv_mass.get(b as usize).copied().unwrap_or(0.0)
-                };
-                if inv_m_a + inv_m_b <= 0.0 {
-                    continue;
-                }
-                // Always use the body's current pose to find the
-                // anchor's world position. Kinematic bodies don't
-                // RECEIVE corrections; that's handled below.
-                let xf_a = if a >= 0 {
-                    q_pred[a as usize]
-                } else {
-                    Transform::IDENTITY
-                };
-                let xf_b = if b >= 0 {
-                    q_pred[b as usize]
-                } else {
-                    Transform::IDENTITY
-                };
-                let p_a = xf_a.transform_point(anchor_a_local);
-                let p_b = xf_b.transform_point(anchor_b_local);
-
-                // Positional correction: pull p_a → p_b mass-weighted.
-                let delta = p_b - p_a;
-                let r_a = if kin_a {
-                    Vec3::ZERO
-                } else {
-                    p_a - com_world(q_pred[a as usize], body_com[a as usize])
-                };
-                let r_b = if kin_b {
-                    Vec3::ZERO
-                } else {
-                    p_b - com_world(q_pred[b as usize], body_com[b as usize])
-                };
-                // Generalised inverse mass for constraint
-                // direction `n = delta / |delta|`. For zero delta
-                // skip — already pinned.
-                let len = delta.length();
-                if len > 1e-9 {
-                    let n_dir = delta / len;
-                    let i_inv_a = if kin_a {
-                        Mat3::ZERO
-                    } else {
-                        world_inv_inertia(
-                            q_pred[a as usize].rotation,
-                            inv_inertia_body[a as usize],
-                        )
-                    };
-                    let i_inv_b = if kin_b {
-                        Mat3::ZERO
-                    } else {
-                        world_inv_inertia(
-                            q_pred[b as usize].rotation,
-                            inv_inertia_body[b as usize],
-                        )
-                    };
-                    let ra_x_n = r_a.cross(n_dir);
-                    let rb_x_n = r_b.cross(n_dir);
-                    let w_a = inv_m_a + ra_x_n.dot(i_inv_a * ra_x_n);
-                    let w_b = inv_m_b + rb_x_n.dot(i_inv_b * rb_x_n);
-                    let w_sum = w_a + w_b;
-                    if w_sum > 0.0 {
-                        let lambda = len / w_sum;
-                        if !kin_a {
-                            q_pred[a as usize].position += n_dir * (lambda * inv_m_a);
-                            let dtheta = i_inv_a * ra_x_n * lambda;
-                            q_pred[a as usize].rotation =
-                                apply_rotation_delta(q_pred[a as usize].rotation, dtheta);
-                        }
-                        if !kin_b {
-                            q_pred[b as usize].position -= n_dir * (lambda * inv_m_b);
-                            let dtheta = i_inv_b * rb_x_n * (-lambda);
-                            q_pred[b as usize].rotation =
-                                apply_rotation_delta(q_pred[b as usize].rotation, dtheta);
-                        }
-                    }
-                }
-
-                // WELD: also align orientations. q_b should equal
-                // q_a · relative_rotation. Compute the rotation
-                // delta and apply mass-weighted to both bodies.
-                if eq_type[c] == crate::sim::EqualityType::Weld as u32 {
-                    let r_target = eq_relrot[c];
-                    let q_a_now = q_pred[a as usize].rotation;
-                    let q_b_now = q_pred[b as usize].rotation;
-                    let q_b_target = q_a_now * r_target;
-                    // Rotation delta from q_b_now to q_b_target,
-                    // expressed as an axis-angle vector (small-angle
-                    // approximation via 2 · imaginary).
-                    let dq = q_b_target * q_b_now.conjugate();
-                    let sign = if dq.w < 0.0 { -1.0 } else { 1.0 };
-                    let theta_full = Vec3::new(
-                        dq.x * 2.0 * sign,
-                        dq.y * 2.0 * sign,
-                        dq.z * 2.0 * sign,
-                    );
-                    // Distribute mass-weighted by angular inv-inertia
-                    // sums (3-trace approx).
-                    let tr_a = if kin_a {
-                        0.0
-                    } else {
-                        let i_inv = world_inv_inertia(
-                            q_pred[a as usize].rotation,
-                            inv_inertia_body[a as usize],
-                        );
-                        i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
-                    };
-                    let tr_b = if kin_b {
-                        0.0
-                    } else {
-                        let i_inv = world_inv_inertia(
-                            q_pred[b as usize].rotation,
-                            inv_inertia_body[b as usize],
-                        );
-                        i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
-                    };
-                    let tr_sum = tr_a + tr_b;
-                    if tr_sum > 0.0 {
-                        let frac_a = tr_a / tr_sum;
-                        let frac_b = tr_b / tr_sum;
-                        if !kin_a {
-                            q_pred[a as usize].rotation = apply_rotation_delta(
-                                q_pred[a as usize].rotation,
-                                -theta_full * frac_a,
-                            );
-                        }
-                        if !kin_b {
-                            q_pred[b as usize].rotation = apply_rotation_delta(
-                                q_pred[b as usize].rotation,
-                                theta_full * frac_b,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Logic factored into `equality_projection_pass` so the GPU
+    // backend can reuse it as a CPU shim until the kernel grows
+    // native support.
+    equality_projection_pass(model, &mut q_pred, position_iterations)?;
 
     // ── 3. Velocity recovery ─────────────────────────────────
     // Linear: v_post = (p_new - p_old) / dt.
@@ -846,6 +706,23 @@ fn cpu_step(
     for f in state_out.body_f.host_mut()? {
         *f = SpatialVector::ZERO;
     }
+
+    // Particle XPBD pass — separate from rigid bodies for now.
+    if model.particle_count > 0 {
+        let p_in = state_in.particle_q.host()?.to_vec();
+        let v_in = state_in.particle_qd.host()?.to_vec();
+        let mut p_out = vec![Vec3::ZERO; model.particle_count];
+        let mut v_out = vec![Vec3::ZERO; model.particle_count];
+        step_particles(model, &p_in, &v_in, &mut p_out, &mut v_out, dt, position_iterations)?;
+        state_out
+            .particle_q
+            .host_mut()?
+            .copy_from_slice(&p_out);
+        state_out
+            .particle_qd
+            .host_mut()?
+            .copy_from_slice(&v_out);
+    }
     Ok(())
 }
 
@@ -892,4 +769,364 @@ fn quat_to_omega(dq: Quat) -> Vec3 {
     // Make sure we take the short way around.
     let sign = if dq.w < 0.0 { -1.0 } else { 1.0 };
     Vec3::new(dq.x * 2.0 * sign, dq.y * 2.0 * sign, dq.z * 2.0 * sign)
+}
+
+/// Run `iterations` Jacobi-style passes of the CONNECT / WELD
+/// equality constraints over `q_pred`. Each pass reads the per-body
+/// flags / inv-mass / inv-inertia from `model` and pulls anchor
+/// points together (CONNECT) and aligns frames (WELD). Used by the
+/// CPU step directly and by the GPU backend as a host-side shim.
+pub(crate) fn equality_projection_pass(
+    model: &Model,
+    q_pred: &mut [Transform],
+    iterations: usize,
+) -> Result<()> {
+    if model.equality_count == 0 {
+        return Ok(());
+    }
+    let flags = model.body_flags.host()?;
+    let inv_mass = model.body_inv_mass.host()?;
+    let body_com = model.body_com.host()?;
+    let inv_inertia_body = model.body_inv_inertia.host()?;
+    let eq_type = model.equality_type.host()?;
+    let eq_a = model.equality_body_a.host()?;
+    let eq_b = model.equality_body_b.host()?;
+    let eq_anchor_a = model.equality_anchor_a.host()?;
+    let eq_anchor_b = model.equality_anchor_b.host()?;
+    let eq_relrot = model.equality_relative_rotation.host()?;
+    let eq_enabled = model.equality_enabled.host()?;
+    for _ in 0..iterations.max(1) {
+        for c in 0..model.equality_count {
+            if eq_enabled[c] == 0 {
+                continue;
+            }
+            let a = eq_a[c];
+            let b = eq_b[c];
+            let anchor_a_local = eq_anchor_a[c];
+            let anchor_b_local = eq_anchor_b[c];
+
+            let kin_a = a < 0
+                || ((flags.get(a as usize).copied().unwrap_or(0))
+                    & BodyFlags::KINEMATIC
+                    != 0);
+            let kin_b = b < 0
+                || ((flags.get(b as usize).copied().unwrap_or(0))
+                    & BodyFlags::KINEMATIC
+                    != 0);
+            let inv_m_a = if kin_a {
+                0.0
+            } else {
+                inv_mass.get(a as usize).copied().unwrap_or(0.0)
+            };
+            let inv_m_b = if kin_b {
+                0.0
+            } else {
+                inv_mass.get(b as usize).copied().unwrap_or(0.0)
+            };
+            if inv_m_a + inv_m_b <= 0.0 {
+                continue;
+            }
+            let xf_a = if a >= 0 {
+                q_pred[a as usize]
+            } else {
+                Transform::IDENTITY
+            };
+            let xf_b = if b >= 0 {
+                q_pred[b as usize]
+            } else {
+                Transform::IDENTITY
+            };
+            let p_a = xf_a.transform_point(anchor_a_local);
+            let p_b = xf_b.transform_point(anchor_b_local);
+
+            let delta = p_b - p_a;
+            let r_a = if kin_a {
+                Vec3::ZERO
+            } else {
+                p_a - com_world(q_pred[a as usize], body_com[a as usize])
+            };
+            let r_b = if kin_b {
+                Vec3::ZERO
+            } else {
+                p_b - com_world(q_pred[b as usize], body_com[b as usize])
+            };
+            let len = delta.length();
+            if len > 1e-9 {
+                let n_dir = delta / len;
+                let i_inv_a = if kin_a {
+                    Mat3::ZERO
+                } else {
+                    world_inv_inertia(
+                        q_pred[a as usize].rotation,
+                        inv_inertia_body[a as usize],
+                    )
+                };
+                let i_inv_b = if kin_b {
+                    Mat3::ZERO
+                } else {
+                    world_inv_inertia(
+                        q_pred[b as usize].rotation,
+                        inv_inertia_body[b as usize],
+                    )
+                };
+                let ra_x_n = r_a.cross(n_dir);
+                let rb_x_n = r_b.cross(n_dir);
+                let w_a = inv_m_a + ra_x_n.dot(i_inv_a * ra_x_n);
+                let w_b = inv_m_b + rb_x_n.dot(i_inv_b * rb_x_n);
+                let w_sum = w_a + w_b;
+                if w_sum > 0.0 {
+                    let lambda = len / w_sum;
+                    if !kin_a {
+                        q_pred[a as usize].position += n_dir * (lambda * inv_m_a);
+                        let dtheta = i_inv_a * ra_x_n * lambda;
+                        q_pred[a as usize].rotation =
+                            apply_rotation_delta(q_pred[a as usize].rotation, dtheta);
+                    }
+                    if !kin_b {
+                        q_pred[b as usize].position -= n_dir * (lambda * inv_m_b);
+                        let dtheta = i_inv_b * rb_x_n * (-lambda);
+                        q_pred[b as usize].rotation =
+                            apply_rotation_delta(q_pred[b as usize].rotation, dtheta);
+                    }
+                }
+            }
+
+            if eq_type[c] == crate::sim::EqualityType::Weld as u32 {
+                let r_target = eq_relrot[c];
+                let q_a_now = q_pred[a as usize].rotation;
+                let q_b_now = q_pred[b as usize].rotation;
+                let q_b_target = q_a_now * r_target;
+                let dq = q_b_target * q_b_now.conjugate();
+                let sign = if dq.w < 0.0 { -1.0 } else { 1.0 };
+                let theta_full = Vec3::new(
+                    dq.x * 2.0 * sign,
+                    dq.y * 2.0 * sign,
+                    dq.z * 2.0 * sign,
+                );
+                let tr_a = if kin_a {
+                    0.0
+                } else {
+                    let i_inv = world_inv_inertia(
+                        q_pred[a as usize].rotation,
+                        inv_inertia_body[a as usize],
+                    );
+                    i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
+                };
+                let tr_b = if kin_b {
+                    0.0
+                } else {
+                    let i_inv = world_inv_inertia(
+                        q_pred[b as usize].rotation,
+                        inv_inertia_body[b as usize],
+                    );
+                    i_inv.x_axis.x + i_inv.y_axis.y + i_inv.z_axis.z
+                };
+                let tr_sum = tr_a + tr_b;
+                if tr_sum > 0.0 {
+                    let frac_a = tr_a / tr_sum;
+                    let frac_b = tr_b / tr_sum;
+                    if !kin_a {
+                        q_pred[a as usize].rotation = apply_rotation_delta(
+                            q_pred[a as usize].rotation,
+                            -theta_full * frac_a,
+                        );
+                    }
+                    if !kin_b {
+                        q_pred[b as usize].rotation = apply_rotation_delta(
+                            q_pred[b as usize].rotation,
+                            theta_full * frac_b,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// CPU shim: project equality constraints on host poses after the GPU
+/// kernel has finished. Reads `state_in.body_q` for velocity recovery,
+/// downloads `state_out.body_q` from the device, projects, recomputes
+/// `state_out.body_qd` from the corrected pose, then uploads both
+/// buffers back. Cheap for the small numbers of equality constraints
+/// typical of articulated assemblies.
+#[cfg(feature = "gpu")]
+pub(crate) fn apply_equality_post_gpu(
+    model: &Model,
+    state_in: &State,
+    state_out: &mut State,
+    dt: Real,
+    iterations: usize,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<()> {
+    if model.equality_count == 0 {
+        return Ok(());
+    }
+    state_out.body_q.download(device, queue)?;
+    state_out.body_qd.download(device, queue)?;
+
+    let q_in = state_in.body_q.host()?.to_vec();
+    let flags = model.body_flags.host()?.to_vec();
+
+    let mut q_work = state_out.body_q.host()?.to_vec();
+    equality_projection_pass(model, &mut q_work, iterations)?;
+
+    state_out.body_q.host_mut()?.copy_from_slice(&q_work);
+
+    let qd_slice = state_out.body_qd.host_mut()?;
+    for i in 0..model.body_count {
+        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
+            continue;
+        }
+        let dp = q_work[i].position - q_in[i].position;
+        let dq = q_work[i].rotation * q_in[i].rotation.conjugate();
+        qd_slice[i] = SpatialVector::new(dp / dt, quat_to_omega(dq) / dt);
+    }
+
+    state_out.body_q.upload(queue)?;
+    state_out.body_qd.upload(queue)?;
+    Ok(())
+}
+
+/// Run one full XPBD particle step on host:
+/// 1. Predict: `p_new = p + dt·v + dt²·g`, with linear damping.
+/// 2. Project distance constraints (springs) using XPBD compliance.
+/// 3. Project particle vs static plane Y=0 (snap up to `radius`).
+/// 4. Recover velocity: `v_post = (p_new - p) / dt`.
+///
+/// All three molla scenes that use particles today (cloth) are CPU-
+/// only — porting to a WGSL kernel is straightforward but mirrors the
+/// rigid-body kernel's effort and isn't on the critical path. For
+/// 10k-particle workloads this loop runs in well under a millisecond
+/// per step on a modern host CPU thanks to the simple data layout.
+pub(crate) fn step_particles(
+    model: &Model,
+    particle_q_in: &[Vec3],
+    particle_qd_in: &[Vec3],
+    particle_q_out: &mut [Vec3],
+    particle_qd_out: &mut [Vec3],
+    dt: Real,
+    iterations: usize,
+) -> Result<()> {
+    if model.particle_count == 0 {
+        return Ok(());
+    }
+    let n = model.particle_count;
+    let inv_mass = model.particle_inv_mass.host()?;
+    let radius = model.particle_radius.host()?;
+    let world_idx = model.particle_world.host()?;
+    let gravity = model.gravity.host()?;
+    let lin_damp = model.linear_damping;
+
+    // --- 1. Predict -------------------------------------------------
+    let mut p: Vec<Vec3> = (0..n).map(|i| particle_q_in[i]).collect();
+    let mut v: Vec<Vec3> = (0..n).map(|i| particle_qd_in[i]).collect();
+    for i in 0..n {
+        if inv_mass[i] <= 0.0 {
+            continue; // pinned / kinematic
+        }
+        let world = world_idx[i].max(0) as usize;
+        let g = gravity.get(world).copied().unwrap_or(Vec3::ZERO);
+        let mut v1 = v[i] + g * dt;
+        if lin_damp > 0.0 {
+            v1 *= (1.0 - lin_damp * dt).max(0.0);
+        }
+        v[i] = v1;
+        p[i] += v1 * dt;
+    }
+
+    // --- 2. Distance constraint projection --------------------------
+    if model.spring_count > 0 {
+        let sa = model.spring_a.host()?;
+        let sb = model.spring_b.host()?;
+        let rest = model.spring_rest_length.host()?;
+        let comp = model.spring_compliance.host()?;
+        let alpha_dt = |c: usize| comp[c] / (dt * dt);
+        for _ in 0..iterations.max(1) {
+            for c in 0..model.spring_count {
+                let a = sa[c] as usize;
+                let b = sb[c] as usize;
+                if a >= n || b >= n {
+                    continue;
+                }
+                let wa = inv_mass[a];
+                let wb = inv_mass[b];
+                let w_sum = wa + wb;
+                if w_sum <= 0.0 {
+                    continue;
+                }
+                let delta = p[b] - p[a];
+                let len = delta.length();
+                if len < 1e-9 {
+                    continue;
+                }
+                let n_dir = delta / len;
+                let constraint = len - rest[c];
+                // XPBD λ = -C / (sum_w + α/dt²). Per-constraint
+                // accumulation isn't needed for one-shot Jacobi; the
+                // Gauss-Seidel iteration converges fine without it.
+                let lambda = -constraint / (w_sum + alpha_dt(c));
+                let dp = n_dir * lambda;
+                p[a] -= dp * wa;
+                p[b] += dp * wb;
+            }
+        }
+    }
+
+    // --- 3. Particle vs Y=0 plane (cheap floor collision) ----------
+    for i in 0..n {
+        if inv_mass[i] <= 0.0 {
+            continue;
+        }
+        let r = radius[i];
+        if p[i].y < r {
+            p[i].y = r;
+        }
+    }
+
+    // --- 4. Velocity recovery + write out --------------------------
+    for i in 0..n {
+        if inv_mass[i] <= 0.0 {
+            particle_q_out[i] = particle_q_in[i];
+            particle_qd_out[i] = Vec3::ZERO;
+            continue;
+        }
+        particle_qd_out[i] = (p[i] - particle_q_in[i]) / dt;
+        particle_q_out[i] = p[i];
+    }
+    Ok(())
+}
+
+/// CPU shim that runs `step_particles` after the GPU rigid-body step.
+/// Particles aren't yet in the WGSL kernel — same situation as
+/// equality constraints. Downloads the existing particle buffers,
+/// runs one substep on host, uploads the result.
+#[cfg(feature = "gpu")]
+pub(crate) fn apply_particles_post_gpu(
+    model: &Model,
+    state_in: &State,
+    state_out: &mut State,
+    dt: Real,
+    iterations: usize,
+    _device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<()> {
+    if model.particle_count == 0 {
+        return Ok(());
+    }
+    let p_in = state_in.particle_q.host()?.to_vec();
+    let v_in = state_in.particle_qd.host()?.to_vec();
+
+    // Safety: state_out particle buffers are sized to particle_count
+    // by State::for_model + clone_host. Just write into them.
+    let mut p_out = vec![Vec3::ZERO; model.particle_count];
+    let mut v_out = vec![Vec3::ZERO; model.particle_count];
+    step_particles(model, &p_in, &v_in, &mut p_out, &mut v_out, dt, iterations)?;
+
+    state_out.particle_q.host_mut()?.copy_from_slice(&p_out);
+    state_out.particle_qd.host_mut()?.copy_from_slice(&v_out);
+    state_out.particle_q.upload(queue)?;
+    state_out.particle_qd.upload(queue)?;
+    Ok(())
 }

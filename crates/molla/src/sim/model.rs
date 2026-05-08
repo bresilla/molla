@@ -39,6 +39,30 @@ pub struct Model {
     pub particle_flags: Buffer<u32>,
     /// Per-particle world index (-1 = global).
     pub particle_world: Buffer<i32>,
+    /// Initial particle positions snapshotted at build time. Reset via
+    /// `State::for_model`.
+    pub initial_particle_q: Buffer<Vec3>,
+
+    // ── Springs / distance constraints ──────────────────────────────
+    /// Number of distance constraints (cloth edges, ropes, springs).
+    pub spring_count: usize,
+    /// Endpoint-A particle index.
+    pub spring_a: Buffer<u32>,
+    /// Endpoint-B particle index.
+    pub spring_b: Buffer<u32>,
+    /// Rest length of each constraint (m).
+    pub spring_rest_length: Buffer<Real>,
+    /// XPBD compliance α (m/N). 0 = perfectly rigid, ~1e-7 = stiff
+    /// stretch, ~1e-2 = soft. `(1 / stiffness)` if you'd think in
+    /// terms of a spring constant.
+    pub spring_compliance: Buffer<Real>,
+
+    // ── Triangle topology (cloth surfaces) ──────────────────────────
+    /// Number of triangles. Used for rendering today; bending /
+    /// area-preservation constraints will read this in stage 12.x.
+    pub tri_count: usize,
+    /// Flat `tri_count * 3` array of particle indices (CCW winding).
+    pub tri_indices: Buffer<u32>,
 
     // ── Rigid bodies ────────────────────────────────────────────────
     /// Number of rigid bodies.
@@ -208,6 +232,11 @@ pub struct Model {
     // ── Global solver knobs ─────────────────────────────────────────
     /// Angular damping coefficient applied each step (1/s).
     pub angular_damping: Real,
+    /// Linear damping coefficient applied to body velocities each step
+    /// (1/s). Models air drag / rolling resistance crudely:
+    /// `v *= exp(-linear_damping · dt)`. Default 0 — keeps existing
+    /// tests bit-identical.
+    pub linear_damping: Real,
     /// Velocity cap applied to particles (m/s) for stability.
     pub particle_velocity_max: Real,
     /// Slack added to AABBs in the broad phase (m). Catches contacts
@@ -234,6 +263,16 @@ impl Model {
             particle_radius: Buffer::from_vec(Vec::new(), s),
             particle_flags: Buffer::from_vec(Vec::new(), s),
             particle_world: Buffer::from_vec(Vec::new(), s),
+            initial_particle_q: Buffer::from_vec(Vec::new(), s),
+
+            spring_count: 0,
+            spring_a: Buffer::from_vec(Vec::new(), s),
+            spring_b: Buffer::from_vec(Vec::new(), s),
+            spring_rest_length: Buffer::from_vec(Vec::new(), s),
+            spring_compliance: Buffer::from_vec(Vec::new(), s),
+
+            tri_count: 0,
+            tri_indices: Buffer::from_vec(Vec::new(), s),
 
             body_count: 0,
             body_mass: Buffer::from_vec(Vec::new(), s),
@@ -304,6 +343,7 @@ impl Model {
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
 
             angular_damping: 0.0,
+            linear_damping: 0.0,
             particle_velocity_max: 1.0e6,
             contact_margin: 0.01,
             default_friction: 0.5,
@@ -340,6 +380,12 @@ impl Model {
         up!(particle_radius);
         up!(particle_flags);
         up!(particle_world);
+        up!(initial_particle_q);
+        up!(spring_a);
+        up!(spring_b);
+        up!(spring_rest_length);
+        up!(spring_compliance);
+        up!(tri_indices);
         up!(body_mass);
         up!(body_inv_mass);
         up!(body_inertia);

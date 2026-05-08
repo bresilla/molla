@@ -49,11 +49,13 @@ impl State {
     /// `model.initial_body_q`; everything else is zero.
     pub fn for_model(model: &super::Model) -> crate::core::Result<Self> {
         let initial = model.initial_body_q.host()?.to_vec();
+        let initial_particles = if model.particle_count > 0 {
+            model.initial_particle_q.host()?.to_vec()
+        } else {
+            Vec::new()
+        };
         Ok(Self {
-            particle_q: Buffer::from_vec(
-                vec![Vec3::ZERO; model.particle_count],
-                BufferUsage::StorageReadWrite,
-            ),
+            particle_q: Buffer::from_vec(initial_particles, BufferUsage::StorageReadWrite),
             particle_qd: Buffer::from_vec(
                 vec![Vec3::ZERO; model.particle_count],
                 BufferUsage::StorageReadWrite,

@@ -48,6 +48,11 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_input_focus",
     "bevy_render",
     "bevy_core_pipeline",
+    # Required by WireframePlugin: it adds an edge to `Node3d::PostProcessing`
+    # in the Core3d graph, which is registered by `bevy_post_process`.
+    # Without this feature wireframe init panics with `node PostProcessing
+    # does not exist`.
+    "bevy_post_process",
     "bevy_pbr",
     "bevy_light",
     "bevy_mesh",

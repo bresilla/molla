@@ -41,6 +41,10 @@ struct Uniforms {
     angular_damping:    f32,
     body_count:         u32,
     has_external_force: u32,
+    linear_damping:     f32,
+    _pad0:              f32,
+    _pad1:              f32,
+    _pad2:              f32,
 };
 
 const FLAG_KINEMATIC: u32 = 1u;
@@ -162,7 +166,11 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let v0 = body_qd_in[tid].linear.xyz;
     let w0 = body_qd_in[tid].angular.xyz;
-    let v1 = v0 + (applied_lin * inv_m + g) * uniforms.dt;
+    var v1 = v0 + (applied_lin * inv_m + g) * uniforms.dt;
+    // Linear damping: v *= max(0, 1 - λ·dt). Models air drag /
+    // rolling resistance crudely; small-dt approximation of exp().
+    let lin_damp_factor = max(0.0, 1.0 - uniforms.linear_damping * uniforms.dt);
+    v1 = v1 * lin_damp_factor;
     let p0 = body_q_in[tid].position.xyz;
     let p1 = p0 + v1 * uniforms.dt;
 

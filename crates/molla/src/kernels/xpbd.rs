@@ -25,6 +25,10 @@ struct Uniforms {
     angular_damping: f32,
     body_count: u32,
     has_external_force: u32,
+    linear_damping: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -321,6 +325,10 @@ impl XpbdKernel {
             angular_damping: model.angular_damping as f32,
             body_count: model.body_count as u32,
             has_external_force: has_external,
+            linear_damping: model.linear_damping as f32,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::xpbd uniforms"),

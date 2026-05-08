@@ -174,6 +174,23 @@ impl Default for BodyParams {
 /// finalises into typed [`Buffer`]s in [`ModelBuilder::build`].
 #[derive(Debug, Default)]
 pub struct ModelBuilder {
+    // Particle arrays.
+    particle_mass: Vec<Real>,
+    particle_inv_mass: Vec<Real>,
+    particle_radius: Vec<Real>,
+    particle_flags: Vec<u32>,
+    particle_world: Vec<i32>,
+    particle_q0: Vec<Vec3>,
+
+    // Spring (distance constraint) arrays.
+    spring_a: Vec<u32>,
+    spring_b: Vec<u32>,
+    spring_rest_length: Vec<Real>,
+    spring_compliance: Vec<Real>,
+
+    // Triangle topology — flat `tri_count*3` u32 array.
+    tri_indices: Vec<u32>,
+
     // Body arrays.
     body_mass: Vec<Real>,
     body_inv_mass: Vec<Real>,
@@ -257,6 +274,7 @@ pub struct ModelBuilder {
 
     // Solver knobs (defaults match Newton's `SemiImplicitSolver`).
     angular_damping: Real,
+    linear_damping: Real,
     particle_velocity_max: Real,
     contact_margin: Real,
     default_friction: Real,
@@ -271,6 +289,7 @@ impl ModelBuilder {
         Self {
             world_gravity: vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)],
             angular_damping: 0.05,
+            linear_damping: 0.0,
             contact_margin: 0.01,
             default_friction: 0.5,
             default_restitution: 0.0,
@@ -303,6 +322,156 @@ impl ModelBuilder {
             self.articulation_start.push(self.joint_type.len() as u32);
             self.articulation_open = false;
         }
+    }
+
+    /// Add a particle at `position`. Returns the particle index.
+    /// Pass `mass = 0.0` for a kinematic anchor (its position will be
+    /// passed through unchanged by the integrator).
+    pub fn add_particle(
+        &mut self,
+        position: Vec3,
+        mass: Real,
+        radius: Real,
+        world: WorldId,
+    ) -> u32 {
+        // Make sure the requested world exists.
+        let w = world.0 as usize;
+        while self.world_gravity.len() <= w {
+            self.world_gravity
+                .push(Vec3::new(0.0, -crate::math::GRAVITY, 0.0));
+        }
+        let id = self.particle_mass.len() as u32;
+        let inv_mass = if mass > 0.0 { 1.0 / mass } else { 0.0 };
+        self.particle_mass.push(mass);
+        self.particle_inv_mass.push(inv_mass);
+        self.particle_radius.push(radius);
+        self.particle_flags.push(super::ParticleFlags::ACTIVE);
+        self.particle_world.push(world.0 as i32);
+        self.particle_q0.push(position);
+        id
+    }
+
+    /// Add a distance constraint between two particles.
+    /// `compliance` is the XPBD α parameter (0 = rigid).
+    pub fn add_distance_constraint(
+        &mut self,
+        a: u32,
+        b: u32,
+        rest_length: Real,
+        compliance: Real,
+    ) -> usize {
+        let id = self.spring_a.len();
+        self.spring_a.push(a);
+        self.spring_b.push(b);
+        self.spring_rest_length.push(rest_length);
+        self.spring_compliance.push(compliance);
+        id
+    }
+
+    /// Add a triangle (CCW) referencing three particles. Used for
+    /// rendering / future bending constraints.
+    pub fn add_triangle(&mut self, v0: u32, v1: u32, v2: u32) -> usize {
+        let id = self.tri_indices.len() / 3;
+        self.tri_indices.push(v0);
+        self.tri_indices.push(v1);
+        self.tri_indices.push(v2);
+        id
+    }
+
+    /// Helper: build a `n_x × n_y` cloth grid spanned by `u_axis` and
+    /// `v_axis` at `origin`. The grid corners sit at `origin`,
+    /// `origin + u_axis`, `origin + v_axis`, `origin + u_axis + v_axis`.
+    /// Wires structural (edge) + shear (diagonal) distance constraints
+    /// and emits two CCW triangles per quad cell for rendering.
+    ///
+    /// For a horizontal cloth pass `u_axis = +X`, `v_axis = +Z`. For a
+    /// vertical curtain hanging from the top edge pass `u_axis = +X`,
+    /// `v_axis = -Y`. Returns `(first_particle_index, n_x, n_y)`. Pin
+    /// specific particles afterwards via `pin_particle`.
+    pub fn add_cloth_grid(
+        &mut self,
+        origin: Vec3,
+        u_axis: Vec3,
+        v_axis: Vec3,
+        n_x: u32,
+        n_y: u32,
+        particle_mass: Real,
+        particle_radius: Real,
+        compliance: Real,
+        world: WorldId,
+    ) -> (u32, u32, u32) {
+        let nx = n_x.max(2);
+        let ny = n_y.max(2);
+        let du = u_axis / (nx - 1) as Real;
+        let dv = v_axis / (ny - 1) as Real;
+        let dx = du.length();
+        let dy = dv.length();
+        let first = self.particle_mass.len() as u32;
+
+        // Particles laid out row-major: linear(ix, iy) = first + iy*nx + ix.
+        for iy in 0..ny {
+            for ix in 0..nx {
+                let p = origin + du * ix as Real + dv * iy as Real;
+                self.add_particle(p, particle_mass, particle_radius, world);
+            }
+        }
+
+        let idx = |ix: u32, iy: u32| first + iy * nx + ix;
+
+        // Structural constraints (4-neighbour edges).
+        for iy in 0..ny {
+            for ix in 0..nx {
+                if ix + 1 < nx {
+                    self.add_distance_constraint(idx(ix, iy), idx(ix + 1, iy), dx, compliance);
+                }
+                if iy + 1 < ny {
+                    self.add_distance_constraint(idx(ix, iy), idx(ix, iy + 1), dy, compliance);
+                }
+            }
+        }
+
+        // Shear constraints (both diagonals of every quad cell).
+        let diag = (dx * dx + dy * dy).sqrt();
+        for iy in 0..ny - 1 {
+            for ix in 0..nx - 1 {
+                self.add_distance_constraint(
+                    idx(ix, iy),
+                    idx(ix + 1, iy + 1),
+                    diag,
+                    compliance,
+                );
+                self.add_distance_constraint(
+                    idx(ix + 1, iy),
+                    idx(ix, iy + 1),
+                    diag,
+                    compliance,
+                );
+            }
+        }
+
+        // Triangle topology — two CCW triangles per quad.
+        for iy in 0..ny - 1 {
+            for ix in 0..nx - 1 {
+                let v00 = idx(ix, iy);
+                let v10 = idx(ix + 1, iy);
+                let v01 = idx(ix, iy + 1);
+                let v11 = idx(ix + 1, iy + 1);
+                self.add_triangle(v00, v10, v11);
+                self.add_triangle(v00, v11, v01);
+            }
+        }
+
+        (first, nx, ny)
+    }
+
+    /// Pin particle `i` in place by setting its mass to zero.
+    pub fn pin_particle(&mut self, i: u32) {
+        let i = i as usize;
+        if i >= self.particle_mass.len() {
+            return;
+        }
+        self.particle_mass[i] = 0.0;
+        self.particle_inv_mass[i] = 0.0;
     }
 
     /// Add a rigid body. Returns a stable [`BodyId`] equal to the body's
@@ -1054,6 +1223,13 @@ impl ModelBuilder {
         self.angular_damping = damping;
     }
 
+    /// Set the global linear-damping coefficient (1/s). Models air
+    /// drag / rolling resistance crudely as `v *= exp(-damp · dt)`.
+    /// 0.0 disables it; values around 0.05–0.5 give visible slowdown.
+    pub fn set_linear_damping(&mut self, damping: Real) {
+        self.linear_damping = damping;
+    }
+
     /// Number of bodies registered so far.
     #[must_use]
     pub fn body_count(&self) -> usize {
@@ -1097,13 +1273,27 @@ impl ModelBuilder {
             }
         }
 
+        let particle_count = self.particle_mass.len();
+        let spring_count = self.spring_a.len();
+        let tri_count = self.tri_indices.len() / 3;
+
         Ok(Model {
-            particle_count: 0,
-            particle_mass: Buffer::from_vec(Vec::new(), s),
-            particle_inv_mass: Buffer::from_vec(Vec::new(), s),
-            particle_radius: Buffer::from_vec(Vec::new(), s),
-            particle_flags: Buffer::from_vec(Vec::new(), s),
-            particle_world: Buffer::from_vec(Vec::new(), s),
+            particle_count,
+            particle_mass: Buffer::from_vec(self.particle_mass, s),
+            particle_inv_mass: Buffer::from_vec(self.particle_inv_mass, s),
+            particle_radius: Buffer::from_vec(self.particle_radius, s),
+            particle_flags: Buffer::from_vec(self.particle_flags, s),
+            particle_world: Buffer::from_vec(self.particle_world, s),
+            initial_particle_q: Buffer::from_vec(self.particle_q0, s),
+
+            spring_count,
+            spring_a: Buffer::from_vec(self.spring_a, s),
+            spring_b: Buffer::from_vec(self.spring_b, s),
+            spring_rest_length: Buffer::from_vec(self.spring_rest_length, s),
+            spring_compliance: Buffer::from_vec(self.spring_compliance, s),
+
+            tri_count,
+            tri_indices: Buffer::from_vec(self.tri_indices, s),
 
             body_count,
             body_mass: Buffer::from_vec(self.body_mass, s),
@@ -1185,6 +1375,7 @@ impl ModelBuilder {
             gravity: Buffer::from_vec(self.world_gravity, s),
 
             angular_damping: self.angular_damping,
+            linear_damping: self.linear_damping,
             particle_velocity_max: self.particle_velocity_max,
             contact_margin: self.contact_margin,
             default_friction: self.default_friction,

@@ -1,33 +1,40 @@
 //! `molla_viewer` — Bevy app that runs a molla scene and visualises it.
 //!
-//! - **`bevy_glacial`** drives the camera (mouse pan / orbit / zoom),
-//!   the LOD ground grid, and an axis triad at the world origin.
-//! - **`bevy_frost`** themes egui, hosts the `molla` control pane on
-//!   the left rail (frost `Pane2` + corekit widgets), and runs the
-//!   pointer-event firewall so clicks over the panel don't leak into
-//!   the viewport.
-//!
-//! Stage 4 viewer: XPBD CPU solver with a real static-plane collision
-//! shape. The GPU toggle from the previous build is parked until XPBD
-//! has a GPU port (next sub-stage).
+//! Four switchable demo scenes (hotkeys 1/2/3/4):
+//! * **1 Pile**   — 12×12 mixed sphere/box/capsule rain (collision +
+//!                  restitution + friction).
+//! * **2 Rope**   — chain of small spheres pinned by CONNECT equality
+//!                  constraints, top link held kinematic (stage 7).
+//! * **3 Tower**  — 8-layer 4×4 box pyramid getting smashed by a heavy
+//!                  sphere dropped from above (stacking + impact).
+//! * **4 Cloth**  — 24×24 hanging curtain pinned along its top edge,
+//!                  sags and swings via XPBD distance constraints
+//!                  (stage 12).
 //!
 //! Mouse:
+//!   * **LMB-click+drag**   grab a body and drag it (spring-pull force)
 //!   * MMB-drag             pan the camera focus (XZ plane)
 //!   * MMB+LMB / MMB+RMB    lift the focus (vertical Y)
 //!   * LMB+RMB-drag         orbit yaw + pitch
 //!   * Scroll               zoom
 //!
 //! Keys:
-//!   * Space   pause / resume the simulation
-//!   * R       reset poses to the initial drop
-//!   * Esc     quit
+//!   * 1 / 2 / 3 / 4   switch demo scene
+//!   * T           toggle "activity view" — sleeping bodies turn grey,
+//!                 only active (moving) bodies keep their colour
+//!   * W           toggle wireframe view (every mesh outlined)
+//!   * Space       pause / resume the simulation
+//!   * R           reset poses to the initial drop
+//!   * Esc         quit
 
 use bevy::diagnostic::{
     DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
 };
+use bevy::window::PrimaryWindow;
 #[cfg(any(feature = "profile", feature = "log_diag"))]
 use bevy::diagnostic::LogDiagnosticsPlugin;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin};
 use bevy::prelude::*;
 #[cfg(not(feature = "profile"))]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
@@ -47,20 +54,87 @@ use molla::solvers::Solver as _;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const GRID_N: usize = 12; // 12×12 = 144 mixed bodies
-const GRID_SPACING: f32 = 1.4;
-const SPHERE_RADIUS: f32 = 0.45;
-const BOX_HALF: f32 = 0.45;
-const CAPSULE_HALF_H: f32 = 0.45;
-const CAPSULE_RADIUS: f32 = 0.25;
-const DROP_HEIGHT: f32 = 12.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
 const SUBSTEPS_PER_FRAME: usize = 2;
 
-const PLANE_RESTITUTION: f64 = 0.35;
-const PLANE_FRICTION: f64 = 0.6;
+const PLANE_RESTITUTION: f64 = 0.05;
+const PLANE_FRICTION: f64 = 0.9;
+/// Global linear damping (1/s) applied to body velocities each step.
+/// Models air drag / rolling resistance — without it spheres roll
+/// forever and cubes hit by impulses skid off into the distance.
+const LINEAR_DAMPING: f64 = 0.30;
 
 const PANE_ID: &str = "molla_panel";
+
+// --- Mouse grab tuning ---------------------------------------------
+// Velocity-based pick: each frame we set the picked body's linear
+// velocity so its anchor point moves toward the cursor target at a
+// bounded speed. Force-based picks (spring + damper through external
+// force) overshoot violently with chained equality constraints — the
+// rope was the canary. Velocity-based picks are what Rapier / Bullet /
+// PhysX use for interactive grabs because they're mass-independent
+// and never produce impulses larger than the configured cap.
+//
+// `LAG_TIME` is the time we'd take to close the gap if there were no
+// speed cap — i.e. v = distance / lag_time. 0.08 s feels snappy.
+// `MAX_SPEED` caps the anchor speed so we never tunnel a body
+// through a wall. 14 m/s is fast but well below the contact margin
+// safety budget (margin 0.02 m × 240 Hz substep = 4.8 m/s recovery).
+const GRAB_LAG_TIME: f64 = 0.08;
+const GRAB_MAX_SPEED: f64 = 14.0;
+
+// --- Activity view (Muli-style) ------------------------------------
+// A body whose combined kinematic norm |v| + ω·R is below this is
+// considered "asleep" and shown in grey. Above → coloured. R is a
+// rough body radius — 0.3m here matches the typical scene scale.
+const ACTIVITY_THRESHOLD: f64 = 0.08;
+const ACTIVITY_OMEGA_RADIUS: f64 = 0.30;
+
+// --- Pile scene -----------------------------------------------------
+const PILE_GRID_N: usize = 12;
+// Tight horizontal spacing so bodies actually overlap on impact.
+// Body half-extents are ~0.45, so 0.95 leaves a 0.05m gap → with the
+// random rotation + drop-height stagger, plenty of off-axis impacts.
+const PILE_SPACING: f32 = 0.95;
+const PILE_SPHERE_RADIUS: f32 = 0.40;
+const PILE_BOX_HALF: f32 = 0.40;
+const PILE_CAPSULE_HALF_H: f32 = 0.40;
+const PILE_CAPSULE_RADIUS: f32 = 0.22;
+const PILE_DROP_HEIGHT: f32 = 4.0;
+const PILE_DROP_BAND: f32 = 6.0;
+
+// --- Rope scene -----------------------------------------------------
+const ROPE_LINKS: usize = 18;
+const ROPE_LINK_RADIUS: f32 = 0.12;
+const ROPE_LINK_SPACING: f32 = 0.26;
+const ROPE_ANCHOR_HEIGHT: f32 = 6.0;
+
+// --- Cloth scene ----------------------------------------------------
+// 36² = 1296 particles, 4·35² = 4900 distance constraints.
+// CPU XPBD at 12 iters runs in ~0.5 ms per substep on a modern host.
+const CLOTH_GRID: u32 = 36;
+const CLOTH_SIZE: f32 = 1.8;
+const CLOTH_TOP_Y: f32 = 5.0;
+const CLOTH_PARTICLE_MASS: f64 = 0.05;
+const CLOTH_PARTICLE_RADIUS: f64 = 0.02;
+/// XPBD compliance — `α = 1/k`. 1e-5 stretch-stiff (sag is sub-cm),
+/// 5e-5 visible drape, 1e-3 rubbery. Set to give the tablecloth a
+/// few cm of sag in the centre — enough that you can clearly see
+/// it isn't a flat sheet.
+const CLOTH_COMPLIANCE: f64 = 5.0e-5;
+
+// --- Tower scene ----------------------------------------------------
+const TOWER_LAYERS: usize = 8;
+const TOWER_GRID: usize = 4;
+const TOWER_BRICK_HALF: f32 = 0.30;
+// Brick is 0.6m on a side. Spacing 0.65 = 0.05m gap so neighbours
+// don't kiss each other on frame 0 and trigger jitter.
+const TOWER_BRICK_SPACING: f32 = 0.65;
+// Vertical: brick height = 0.6, gap 0.005, so 0.605m per layer.
+const TOWER_LAYER_HEIGHT: f32 = 0.605;
+const TOWER_BALL_RADIUS: f32 = 1.0;
+const TOWER_BALL_MASS: f64 = 50.0;
+const TOWER_BALL_HEIGHT: f32 = 14.0;
 
 fn main() {
     let geometry = WindowGeometry::load("molla_viewer");
@@ -79,15 +153,10 @@ fn main() {
         )
         .add_plugins(EguiPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(EntityCountDiagnosticsPlugin::default());
-    // RenderDiagnosticsPlugin is auto-added by Bevy when the `trace`
-    // feature is on (i.e. our `profile` feature). Add it ourselves
-    // only when profiling is OFF.
+        .add_plugins(EntityCountDiagnosticsPlugin::default())
+        .add_plugins(WireframePlugin::default());
     #[cfg(not(feature = "profile"))]
     app.add_plugins(RenderDiagnosticsPlugin);
-    // Stdout diagnostics — enabled by either `profile` or `log_diag`.
-    // Filter to fps + frame_time so the periodic log call doesn't
-    // itself become a frame stall.
     #[cfg(any(feature = "profile", feature = "log_diag"))]
     {
         let mut filter = bevy::platform::collections::HashSet::default();
@@ -114,13 +183,37 @@ fn main() {
             color: Color::srgba(0.30, 0.38, 0.50, 0.42),
         })
         .insert_resource(SimRunState::default())
-        .insert_resource(SimStats::default());
-    let (sim, visuals) = Sim::build();
+        .insert_resource(SimStats::default())
+        .insert_resource(PendingSceneSwitch(None))
+        .insert_resource(MouseGrab::default())
+        .insert_resource(ActivityView::default())
+        .insert_resource(WireframeOn(false))
+        .insert_resource(WireframeConfig {
+            // Always false — we don't want a *global* wireframe (would
+            // catch bevy_glacial's ground grid mesh). We tag individual
+            // physics-mesh entities with the `Wireframe` component
+            // instead via `apply_wireframe`.
+            global: false,
+            default_color: Color::srgb(0.95, 0.95, 0.95),
+        });
+    let initial_scene = Scene::Pile;
+    let (sim, visuals) = Sim::build_scene(initial_scene);
     app.insert_resource(sim).insert_resource(BodyVisuals(visuals))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (handle_input, step_simulation, sync_transforms).chain(),
+            (
+                handle_input,
+                apply_scene_switch,
+                update_mouse_grab,
+                step_simulation,
+                sync_transforms,
+                sync_cloth_mesh,
+                update_activity_colors,
+                apply_wireframe,
+                draw_grab_gizmo,
+            )
+                .chain(),
         )
         .add_systems(EguiPrimaryContextPass, control_pane)
         .run();
@@ -149,6 +242,7 @@ struct SimStats {
 /// `Engine::new_gpu()` is hard-required at startup, no CPU fallback.
 #[derive(Resource)]
 struct Sim {
+    scene: Scene,
     model: mp::Model,
     state_a: mp::State,
     state_b: mp::State,
@@ -160,17 +254,70 @@ struct Sim {
     adapter_label: String,
 }
 
-/// Geometry tag for the spawn loop — keeps the rendering side in
-/// sync with the body→shape mapping.
 #[derive(Component, Copy, Clone)]
 enum BodyVisual {
-    Sphere,
-    Box,
-    Capsule,
+    Sphere(f32),
+    Box(f32),
+    Capsule { half_h: f32, radius: f32 },
 }
 
 #[derive(Resource)]
 struct BodyVisuals(Vec<BodyVisual>);
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Scene {
+    Pile,
+    Rope,
+    Tower,
+    Cloth,
+}
+
+impl Scene {
+    fn label(self) -> &'static str {
+        match self {
+            Scene::Pile => "1  Pile",
+            Scene::Rope => "2  Rope",
+            Scene::Tower => "3  Tower",
+            Scene::Cloth => "4  Cloth",
+        }
+    }
+}
+
+#[derive(Resource)]
+struct PendingSceneSwitch(Option<Scene>);
+
+/// Muli-style activity visualisation. When `enabled`, every body that
+/// is below the kinematic threshold is rendered in `sleeping_mat`
+/// (uniform grey), while moving bodies keep their original palette
+/// colour. Toggled by the `T` key.
+#[derive(Resource, Default)]
+struct ActivityView {
+    enabled: bool,
+    /// Cached count of "active" bodies — refreshed each frame in
+    /// `update_activity_colors` and shown in the panel.
+    active_count: usize,
+    sleeping_mat: Option<Handle<StandardMaterial>>,
+}
+
+/// Per-body cache of the body's "awake" (palette) material so we can
+/// flip back to it when the body wakes up again. The active material
+/// lives in `MeshMaterial3d` like normal — this is just a snapshot of
+/// the original colour assigned at spawn time.
+#[derive(Component)]
+struct AwakeMaterial(Handle<StandardMaterial>);
+
+/// Tag for the deforming cloth mesh entity. Stage-12 cloth is rendered
+/// as a single Bevy `Mesh` whose vertex positions are rewritten each
+/// frame from `state.particle_q`.
+#[derive(Component)]
+struct ClothMesh;
+
+/// Whether to draw wireframes over the physics meshes (not the ground
+/// grid). Toggled by `W`. We use the per-entity `Wireframe` component
+/// rather than `WireframeConfig.global` so bevy_glacial's ground grid
+/// is left alone.
+#[derive(Resource, Default)]
+struct WireframeOn(bool);
 
 /// Solid box principal moments at the COM, body frame.
 fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
@@ -194,97 +341,34 @@ fn capsule_inertia(mass: f64, half_height: f64, radius: f64) -> molla::math::Mat
 }
 
 impl Sim {
-    fn build() -> (Self, Vec<BodyVisual>) {
-        let mut b = mp::ModelBuilder::new();
-        b.set_angular_damping(0.05);
+    /// Dispatch on `scene` and assemble `(Sim, BodyVisuals)`.
+    fn build_scene(scene: Scene) -> (Self, Vec<BodyVisual>) {
+        let (model, visuals) = match scene {
+            Scene::Pile => build_pile_model(),
+            Scene::Rope => build_rope_model(),
+            Scene::Tower => build_tower_model(),
+            Scene::Cloth => build_cloth_model(),
+        };
+        Self::finalize(scene, model, visuals)
+    }
 
-        let mut visuals: Vec<BodyVisual> = Vec::with_capacity(GRID_N * GRID_N);
-        for ix in 0..GRID_N {
-            for iz in 0..GRID_N {
-                let x = (ix as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
-                let z = (iz as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
-                // Stagger heights so they don't all land at once.
-                let y = DROP_HEIGHT as f64 + 0.4 * ((ix + iz) as f64 / 2.0).sin();
-                let pos = MVec3::new(x, y, z);
-
-                // Three-way mix: sphere / box / capsule.
-                match (ix + iz) % 3 {
-                    0 => {
-                        let body = b.add_body(
-                            mp::BodyParams::new()
-                                .with_spatial_inertia(mp::SpatialInertia::sphere(
-                                    1.0,
-                                    SPHERE_RADIUS as f64,
-                                ))
-                                .with_position(pos),
-                        );
-                        b.add_shape_sphere(body, SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
-                            .expect("sphere shape");
-                        visuals.push(BodyVisual::Sphere);
-                    }
-                    1 => {
-                        let half = MVec3::splat(BOX_HALF as f64);
-                        let body = b.add_body(
-                            mp::BodyParams::new()
-                                .with_spatial_inertia(mp::SpatialInertia {
-                                    mass: 1.0,
-                                    com: MVec3::ZERO,
-                                    inertia: box_inertia(1.0, BOX_HALF as f64),
-                                })
-                                .with_position(pos),
-                        );
-                        b.add_shape_box(body, half, mp::Transform::IDENTITY)
-                            .expect("box shape");
-                        visuals.push(BodyVisual::Box);
-                    }
-                    _ => {
-                        let body = b.add_body(
-                            mp::BodyParams::new()
-                                .with_spatial_inertia(mp::SpatialInertia {
-                                    mass: 1.0,
-                                    com: MVec3::ZERO,
-                                    inertia: capsule_inertia(
-                                        1.0,
-                                        CAPSULE_HALF_H as f64,
-                                        CAPSULE_RADIUS as f64,
-                                    ),
-                                })
-                                // Lie on side (rotation about Z) so
-                                // the capsule axis is along world X.
-                                .with_pose(mp::Transform::new(
-                                    pos,
-                                    MQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
-                                )),
-                        );
-                        b.add_shape_capsule(
-                            body,
-                            CAPSULE_HALF_H as f64,
-                            CAPSULE_RADIUS as f64,
-                            mp::Transform::IDENTITY,
-                        )
-                        .expect("capsule shape");
-                        visuals.push(BodyVisual::Capsule);
-                    }
-                }
-            }
-        }
-
-        b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
-            .expect("plane shape");
-
-        let mut model = b.build().expect("model");
+    /// Common upload + GPU solver wiring shared by every scene.
+    fn finalize(
+        scene: Scene,
+        mut model: mp::Model,
+        visuals: Vec<BodyVisual>,
+    ) -> (Self, Vec<BodyVisual>) {
         model.default_friction = PLANE_FRICTION;
         model.default_restitution = PLANE_RESTITUTION;
         model.contact_margin = 0.02;
+        model.linear_damping = LINEAR_DAMPING;
 
         let mut state_a = model.state().expect("state");
         let mut state_b = model.state().expect("state");
         let mut control = model.control();
         let mut contacts = mp::Contacts::with_capacity(8192);
 
-        // GPU-first: bring up wgpu and bind the XPBD GPU solver. We
-        // hard-fail if there's no adapter rather than silently
-        // falling back to CPU.
+        // GPU-first: bring up wgpu and bind the XPBD GPU solver.
         let engine = Engine::new_gpu().expect(
             "molla viewer is GPU-first; wgpu adapter required. \
              Run via `make run RELEASE=1` (nixVulkan-wrapped).",
@@ -296,8 +380,6 @@ impl Sim {
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 
-        // One-time uploads of model + initial state + control. The
-        // step loop re-uploads contacts + state_a each substep.
         model.upload_to_device(&device, &queue).expect("model upload");
         state_a.upload_to_device(&device, &queue).expect("state_a upload");
         state_b.upload_to_device(&device, &queue).expect("state_b upload");
@@ -306,10 +388,11 @@ impl Sim {
 
         let solver = mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
             .expect("XPBD GPU solver init")
-            .with_iterations(8);
+            .with_iterations(12);
 
         (
             Self {
+                scene,
                 model,
                 state_a,
                 state_b,
@@ -334,8 +417,6 @@ impl Sim {
 
         let device = self.engine.device().unwrap().clone();
         let queue = self.engine.queue().unwrap().clone();
-        // Host may be stale after a GPU step — pull fresh data first
-        // so host_mut doesn't trip the DeviceDirty guard.
         let _ = self.state_a.download_from_device(&device, &queue);
         let _ = self.state_b.download_from_device(&device, &queue);
 
@@ -347,10 +428,318 @@ impl Sim {
         for v in self.state_a.body_qd.host_mut().expect("body_qd") {
             *v = mp::SpatialVector::ZERO;
         }
+
+        if self.model.particle_count > 0 {
+            let initial_p = self
+                .model
+                .initial_particle_q
+                .host()
+                .expect("initial particles")
+                .to_vec();
+            self.state_a
+                .particle_q
+                .host_mut()
+                .expect("particle_q")
+                .copy_from_slice(&initial_p);
+            for v in self.state_a.particle_qd.host_mut().expect("particle_qd") {
+                *v = MVec3::ZERO;
+            }
+        }
+
         let _ = self.state_a.upload_to_device(&device, &queue);
         let _ = self.state_b.upload_to_device(&device, &queue);
     }
 }
+
+// ---- Scene builders -----------------------------------------------
+
+/// 12×12 mixed sphere / box / capsule rain falling onto a static plane.
+///
+/// Bodies start with **random orientations** and **staggered heights**
+/// — so when they hit the ground they tip onto edges/corners and
+/// produce off-axis impulses, instead of all bouncing straight up
+/// along +Y. Without random rotation a flat-faced box hitting a flat
+/// plane only gets a normal impulse, so it just bounces vertically;
+/// the tumbling behaviour is what makes it look like a real pile.
+fn build_pile_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    // Deterministic LCG so every reset gives the same pile but
+    // different bodies have different rotations.
+    let mut rng_state: u64 = 0x9E3779B97F4A7C15;
+    fn next_unit(s: &mut u64) -> f64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let v = (*s >> 11) as f64 / (1u64 << 53) as f64;
+        v * 2.0 - 1.0 // ∈ [-1, 1)
+    }
+    fn random_rotation(s: &mut u64) -> MQuat {
+        let axis =
+            MVec3::new(next_unit(s), next_unit(s), next_unit(s)).normalize_or_zero();
+        let axis = if axis.length_squared() < 1e-9 { MVec3::Y } else { axis };
+        let angle = next_unit(s) * std::f64::consts::PI;
+        MQuat::from_axis_angle(axis, angle)
+    }
+
+    let mut visuals: Vec<BodyVisual> = Vec::with_capacity(PILE_GRID_N * PILE_GRID_N);
+    for ix in 0..PILE_GRID_N {
+        for iz in 0..PILE_GRID_N {
+            let x = (ix as f64 - (PILE_GRID_N as f64 - 1.0) * 0.5) * PILE_SPACING as f64
+                + 0.15 * next_unit(&mut rng_state);
+            let z = (iz as f64 - (PILE_GRID_N as f64 - 1.0) * 0.5) * PILE_SPACING as f64
+                + 0.15 * next_unit(&mut rng_state);
+            // Spread the drop heights over a band so contacts come in
+            // waves — the falling stack pushes the lower bodies sideways.
+            let y = PILE_DROP_HEIGHT as f64
+                + (((ix + iz) as f64) / ((PILE_GRID_N + PILE_GRID_N) as f64))
+                    * PILE_DROP_BAND as f64
+                + 0.1 * next_unit(&mut rng_state);
+            let pos = MVec3::new(x, y, z);
+            let rot = random_rotation(&mut rng_state);
+
+            match (ix + iz) % 3 {
+                0 => {
+                    // Spheres are rotation-invariant — random rotation
+                    // doesn't help, so give them a random tangential
+                    // angular velocity instead. We can't set initial
+                    // qd through BodyParams; that's done after build().
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia::sphere(
+                                1.0,
+                                PILE_SPHERE_RADIUS as f64,
+                            ))
+                            .with_position(pos),
+                    );
+                    b.add_shape_sphere(body, PILE_SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
+                        .expect("sphere shape");
+                    visuals.push(BodyVisual::Sphere(PILE_SPHERE_RADIUS));
+                }
+                1 => {
+                    let half = MVec3::splat(PILE_BOX_HALF as f64);
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia {
+                                mass: 1.0,
+                                com: MVec3::ZERO,
+                                inertia: box_inertia(1.0, PILE_BOX_HALF as f64),
+                            })
+                            .with_pose(mp::Transform::new(pos, rot)),
+                    );
+                    b.add_shape_box(body, half, mp::Transform::IDENTITY)
+                        .expect("box shape");
+                    visuals.push(BodyVisual::Box(PILE_BOX_HALF));
+                }
+                _ => {
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia {
+                                mass: 1.0,
+                                com: MVec3::ZERO,
+                                inertia: capsule_inertia(
+                                    1.0,
+                                    PILE_CAPSULE_HALF_H as f64,
+                                    PILE_CAPSULE_RADIUS as f64,
+                                ),
+                            })
+                            .with_pose(mp::Transform::new(pos, rot)),
+                    );
+                    b.add_shape_capsule(
+                        body,
+                        PILE_CAPSULE_HALF_H as f64,
+                        PILE_CAPSULE_RADIUS as f64,
+                        mp::Transform::IDENTITY,
+                    )
+                    .expect("capsule shape");
+                    visuals.push(BodyVisual::Capsule {
+                        half_h: PILE_CAPSULE_HALF_H,
+                        radius: PILE_CAPSULE_RADIUS,
+                    });
+                }
+            }
+        }
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    (b.build().expect("model"), visuals)
+}
+
+/// Vertical chain of small spheres. The top link is **kinematic**
+/// (mass-zero, integrators leave its pose alone) so the rope dangles
+/// from a fixed anchor. Adjacent links are pinned with `CONNECT`
+/// equality constraints — this exercises the stage-7 XPBD constraint
+/// projection. A small horizontal kick at the bottom makes it swing.
+fn build_rope_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.10);
+
+    let mut visuals = Vec::with_capacity(ROPE_LINKS);
+    let mut bodies = Vec::with_capacity(ROPE_LINKS);
+
+    for i in 0..ROPE_LINKS {
+        let y = ROPE_ANCHOR_HEIGHT as f64 - i as f64 * ROPE_LINK_SPACING as f64;
+        // Slight horizontal offset so the rope starts to swing instead
+        // of sitting in unstable vertical equilibrium.
+        let x = 0.001 * i as f64;
+        let pos = MVec3::new(x, y, 0.0);
+
+        let mut params = mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(0.4, ROPE_LINK_RADIUS as f64))
+            .with_position(pos);
+
+        if i == 0 {
+            // Kinematic anchor: zero mass + KINEMATIC flag so the
+            // integrator passes its pose through unchanged.
+            params = params
+                .with_mass(0.0)
+                .with_inertia(molla::math::Mat3::ZERO)
+                .with_flags(mp::BodyFlags::KINEMATIC);
+        }
+
+        let id = b.add_body(params);
+        b.add_shape_sphere(id, ROPE_LINK_RADIUS as f64, mp::Transform::IDENTITY)
+            .expect("rope sphere");
+        bodies.push(id);
+        visuals.push(BodyVisual::Sphere(ROPE_LINK_RADIUS));
+    }
+
+    // Pin every consecutive pair at the midpoint between their COMs.
+    // Anchor offsets are body-local, so half a link spacing along ±Y.
+    let half = (ROPE_LINK_SPACING as f64) * 0.5;
+    for i in 1..ROPE_LINKS {
+        let _ = b.add_equality_connect(
+            bodies[i - 1],
+            bodies[i],
+            MVec3::new(0.0, -half, 0.0),
+            MVec3::new(0.0, half, 0.0),
+        );
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    (b.build().expect("model"), visuals)
+}
+
+/// 8-layer 4×4 brick tower. A heavy sphere drops onto it from above —
+/// shows stacking stability, contact reduction, and impact impulses.
+///
+/// Tried 45°-alternated layers initially (real masonry is bonded
+/// half-brick offsets); rotating 0.6 m bricks by 45° gives a 0.85 m
+/// diagonal, which overlaps neighbours within a layer and explodes the
+/// stack on frame 0. Now: identical pose every layer, straight columns.
+/// Each column is independent — settles immediately, smooth impact.
+fn build_tower_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    // Higher angular damping than the other scenes — bricks shouldn't
+    // spin gracefully in mid-air, they should drop and stop.
+    b.set_angular_damping(0.20);
+    // Linear damping is set globally by `Sim::finalize` from
+    // `LINEAR_DAMPING`; the per-scene call would be overwritten.
+
+    let mut visuals = Vec::with_capacity(TOWER_LAYERS * TOWER_GRID * TOWER_GRID + 1);
+    let half = TOWER_BRICK_HALF as f64;
+    let half_v = MVec3::splat(half);
+    let inertia = box_inertia(1.0, half);
+
+    let layer_y0 = half + 0.001; // tiny lift to avoid frame-0 plane overlap
+    for layer in 0..TOWER_LAYERS {
+        let y = layer_y0 + (layer as f64) * (TOWER_LAYER_HEIGHT as f64);
+        for ix in 0..TOWER_GRID {
+            for iz in 0..TOWER_GRID {
+                let x = (ix as f64 - (TOWER_GRID as f64 - 1.0) * 0.5)
+                    * TOWER_BRICK_SPACING as f64;
+                let z = (iz as f64 - (TOWER_GRID as f64 - 1.0) * 0.5)
+                    * TOWER_BRICK_SPACING as f64;
+                let pose =
+                    mp::Transform::new(MVec3::new(x, y, z), MQuat::IDENTITY);
+                let body = b.add_body(
+                    mp::BodyParams::new()
+                        .with_spatial_inertia(mp::SpatialInertia {
+                            mass: 1.0,
+                            com: MVec3::ZERO,
+                            inertia,
+                        })
+                        .with_pose(pose),
+                );
+                b.add_shape_box(body, half_v, mp::Transform::IDENTITY)
+                    .expect("brick shape");
+                visuals.push(BodyVisual::Box(TOWER_BRICK_HALF));
+            }
+        }
+    }
+
+    // Heavy sphere wrecking ball.
+    let ball_radius = TOWER_BALL_RADIUS as f64;
+    let ball = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(TOWER_BALL_MASS, ball_radius))
+            .with_position(MVec3::new(0.0, TOWER_BALL_HEIGHT as f64, 0.0)),
+    );
+    b.add_shape_sphere(ball, ball_radius, mp::Transform::IDENTITY)
+        .expect("ball shape");
+    visuals.push(BodyVisual::Sphere(TOWER_BALL_RADIUS));
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    (b.build().expect("model"), visuals)
+}
+
+/// Vertical hanging cloth pinned at its **two top corners only**.
+///
+/// Built in the XY plane (X horizontal, -Y the v-axis going downward).
+/// Gravity acts within the cloth plane, so the cloth hangs in
+/// equilibrium — but only the two top corners are anchored, so when
+/// the user grabs and drags any particle the rest of the sheet has
+/// 3-DoF freedom and the deformation is fully visible.
+///
+/// Stage-12 cloth, no rigid bodies in the scene apart from the static
+/// floor plane. Particle-particle self-collision isn't implemented yet
+/// (so the cloth can pass through itself), and particle-rigid contact
+/// is still TODO.
+fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let nx = CLOTH_GRID;
+    let ny = CLOTH_GRID;
+    let size = CLOTH_SIZE as f64;
+    let origin = MVec3::new(-size * 0.5, CLOTH_TOP_Y as f64, 0.0);
+    let u_axis = MVec3::new(size, 0.0, 0.0);
+    let v_axis = MVec3::new(0.0, -size, 0.0);
+
+    let (first, _, _) = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        nx,
+        ny,
+        CLOTH_PARTICLE_MASS,
+        CLOTH_PARTICLE_RADIUS,
+        CLOTH_COMPLIANCE,
+        mp::WorldId(0),
+    );
+
+    // Pin only top-left and top-right corners. Bottom corners and
+    // everything in between are dynamic — the cloth dangles like a
+    // banner and can be pulled / pushed out of the XY plane by
+    // grabbing any particle.
+    b.pin_particle(first); // top-left  (ix=0,    iy=0)
+    b.pin_particle(first + nx - 1); // top-right (ix=nx-1, iy=0)
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    let model = b.build().expect("model");
+    // No rigid-body visuals — the cloth is rendered as a dedicated
+    // triangle mesh updated each frame by `sync_cloth_mesh`.
+    (model, Vec::new())
+}
+
+// ---- Bevy systems -------------------------------------------------
 
 fn setup(
     mut commands: Commands,
@@ -358,8 +747,18 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     sim: Res<Sim>,
     visuals: Res<BodyVisuals>,
+    mut activity: ResMut<ActivityView>,
 ) {
-    // Sun + cascade shadows.
+    // Sleeping material — uniform muted grey, lower roughness so it
+    // doesn't blend completely into the dark background.
+    let sleeping = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.32, 0.34, 0.38),
+        metallic: 0.0,
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+    activity.sleeping_mat = Some(sleeping);
+
     let sun_shadow = CascadeShadowConfigBuilder {
         num_cascades: 2,
         minimum_distance: 0.1,
@@ -368,21 +767,44 @@ fn setup(
         overlap_proportion: 0.2,
     }
     .build();
+    // Three-point rig: key + fill + back. The key has shadows, the
+    // fill softens the shadowed side without doubling shadow cost,
+    // the back rim light separates objects from the dark background.
     commands.spawn((
         Name::new("Sun"),
         Transform::from_xyz(20.0, 60.0, 15.0).looking_at(Vec3::ZERO, Vec3::Y),
         DirectionalLight {
-            illuminance: 12_000.0,
+            illuminance: 14_000.0,
             shadows_enabled: true,
             ..default()
         },
         sun_shadow,
     ));
+    commands.spawn((
+        Name::new("FillLight"),
+        Transform::from_xyz(-25.0, 35.0, -10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            illuminance: 6_500.0,
+            shadows_enabled: false,
+            color: Color::srgb(0.85, 0.90, 1.00),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        Name::new("RimLight"),
+        Transform::from_xyz(0.0, 25.0, -45.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            illuminance: 4_000.0,
+            shadows_enabled: false,
+            color: Color::srgb(1.00, 0.90, 0.78),
+            ..default()
+        },
+    ));
 
     let chase = ChaseCamera {
-        focus: Vec3::new(0.0, 6.0, 0.0),
-        distance: 80.0,
-        elevation: 28f32.to_radians(),
+        focus: Vec3::new(0.0, 4.0, 0.0),
+        distance: 30.0,
+        elevation: 20f32.to_radians(),
         min_elevation: -2f32.to_radians(),
         max_distance: 250.0,
         ..ChaseCamera::default()
@@ -395,7 +817,7 @@ fn setup(
         tr,
         AmbientLight {
             color: Color::srgb(0.85, 0.90, 1.0),
-            brightness: 100.0,
+            brightness: 280.0,
             ..default()
         },
         chase,
@@ -411,16 +833,27 @@ fn setup(
         },
     ));
 
-    // 8-colour palette. Bodies are NotShadowCaster to keep frame time
-    // down with many instances; the LOD grid carries the depth cue.
-    let sphere_mesh = meshes.add(Sphere::new(SPHERE_RADIUS).mesh().ico(1).expect("ico"));
-    let box_mesh = meshes.add(Cuboid::from_size(Vec3::splat(BOX_HALF * 2.0)).mesh());
-    // Bevy's `Capsule3d`'s `half_length` is the **cylinder** half-
-    // length, matching molla's `half_height`. Default axis is +Y,
-    // also matching molla.
-    let capsule_mesh = meshes.add(
-        Capsule3d::new(CAPSULE_RADIUS, CAPSULE_HALF_H * 2.0).mesh(),
+    spawn_body_entities(&mut commands, &mut meshes, &mut materials, &sim, &visuals);
+
+    info!(
+        "molla viewer: scene = {}, {} bodies, {}× @ {:.0} Hz physics",
+        sim.scene.label(),
+        sim.model.body_count,
+        SUBSTEPS_PER_FRAME,
+        1.0 / FIXED_DT
     );
+    info!("keys: 1 / 2 / 3 switch scene · Space pause · R reset · Esc quit");
+}
+
+/// Build a per-visual mesh + material and spawn one entity per molla
+/// body. Called from `setup` and after every scene switch.
+fn spawn_body_entities(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    sim: &Sim,
+    visuals: &BodyVisuals,
+) {
     let palette = [
         Color::srgb(0.88, 0.35, 0.28),
         Color::srgb(0.90, 0.60, 0.20),
@@ -446,14 +879,25 @@ fn setup(
     let body_q = sim.state_a.body_q.host().expect("body_q").to_vec();
     for (i, pose) in body_q.iter().enumerate() {
         let mesh = match visuals.0[i] {
-            BodyVisual::Sphere => sphere_mesh.clone(),
-            BodyVisual::Box => box_mesh.clone(),
-            BodyVisual::Capsule => capsule_mesh.clone(),
+            // ico(3) → 1280 tris/sphere (vs 320 at ico(2)). Smooth at
+            // grab range, still cheap at 144 spheres.
+            BodyVisual::Sphere(r) => meshes.add(Sphere::new(r).mesh().ico(4).expect("ico")),
+            // Cuboid only has 12 triangles regardless of subdivision —
+            // looks fine even in wireframe (12 cube edges visible).
+            BodyVisual::Box(h) => meshes.add(Cuboid::from_size(Vec3::splat(h * 2.0)).mesh()),
+            BodyVisual::Capsule { half_h, radius } => meshes.add(
+                Capsule3d::new(radius, half_h * 2.0)
+                    .mesh()
+                    .longitudes(32)
+                    .latitudes(16),
+            ),
         };
+        let awake = mats[i % mats.len()].clone();
         commands.spawn((
             MollaBody(mp::BodyId::from_index(i)),
             Mesh3d(mesh),
-            MeshMaterial3d(mats[i % mats.len()].clone()),
+            MeshMaterial3d(awake.clone()),
+            AwakeMaterial(awake),
             NotShadowCaster,
             Transform::from_xyz(
                 pose.position.x as f32,
@@ -463,12 +907,71 @@ fn setup(
         ));
     }
 
-    info!(
-        "molla viewer: {} bodies + plane, {}× @ {:.0} Hz physics — Space pause, R reset, Esc quit",
-        sim.model.body_count,
-        SUBSTEPS_PER_FRAME,
-        1.0 / FIXED_DT
+    // Cloth: build a single deforming triangle mesh from
+    // `model.tri_indices`, attach it to one entity. The
+    // `sync_cloth_mesh` system updates vertex positions each frame.
+    if sim.model.particle_count > 0 && sim.model.tri_count > 0 {
+        let mesh = build_cloth_mesh(sim);
+        let mesh_handle = meshes.add(mesh);
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.55, 0.30),
+            metallic: 0.05,
+            perceptual_roughness: 0.65,
+            cull_mode: None, // double-sided so back faces are visible
+            ..default()
+        });
+        commands.spawn((
+            ClothMesh,
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(mat),
+            NotShadowCaster,
+            Transform::default(),
+        ));
+    }
+}
+
+/// Build a single Bevy `Mesh` from molla's particle positions and
+/// triangle topology. Called once per scene-switch — `sync_cloth_mesh`
+/// then mutates the same `Mesh` asset's vertex positions every frame.
+fn build_cloth_mesh(sim: &Sim) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+
+    let particle_q = sim
+        .state_a
+        .particle_q
+        .host()
+        .expect("particle_q host");
+    let tri_indices = sim
+        .model
+        .tri_indices
+        .host()
+        .expect("tri_indices host")
+        .to_vec();
+
+    let positions: Vec<[f32; 3]> = particle_q
+        .iter()
+        .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+        .collect();
+    // Provide a flat default UV — good enough for solid-colour shading,
+    // can be replaced with proper grid UVs if we ever want a texture.
+    let uvs: Vec<[f32; 2]> = (0..positions.len()).map(|_| [0.0, 0.0]).collect();
+    let normals: Vec<[f32; 3]> = (0..positions.len()).map(|_| [0.0, 1.0, 0.0]).collect();
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        // MAIN_WORLD so we can mutate vertex positions at runtime.
+        // Default usage is RENDER_WORLD only and rejects further writes.
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(tri_indices));
+    // Flat per-face normals are fine for cloth — recomputed each
+    // frame in `sync_cloth_mesh` so sagging looks lit.
+    mesh.compute_normals();
+    mesh
 }
 
 fn handle_input(
@@ -476,6 +979,9 @@ fn handle_input(
     mut exit: MessageWriter<AppExit>,
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
+    mut pending: ResMut<PendingSceneSwitch>,
+    mut activity: ResMut<ActivityView>,
+    mut wireframe: ResMut<WireframeOn>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
@@ -486,6 +992,56 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Space) {
         run.paused = !run.paused;
     }
+    if keys.just_pressed(KeyCode::KeyT) {
+        activity.enabled = !activity.enabled;
+    }
+    if keys.just_pressed(KeyCode::KeyW) {
+        wireframe.0 = !wireframe.0;
+    }
+    if keys.just_pressed(KeyCode::Digit1) && sim.scene != Scene::Pile {
+        pending.0 = Some(Scene::Pile);
+    }
+    if keys.just_pressed(KeyCode::Digit2) && sim.scene != Scene::Rope {
+        pending.0 = Some(Scene::Rope);
+    }
+    if keys.just_pressed(KeyCode::Digit3) && sim.scene != Scene::Tower {
+        pending.0 = Some(Scene::Tower);
+    }
+    if keys.just_pressed(KeyCode::Digit4) && sim.scene != Scene::Cloth {
+        pending.0 = Some(Scene::Cloth);
+    }
+}
+
+/// If a scene switch was requested this frame, despawn old body
+/// entities, build a new `Sim`, replace the resources, and spawn the
+/// new body entities. Runs after `handle_input` so a key press in the
+/// same frame takes effect immediately.
+fn apply_scene_switch(
+    mut commands: Commands,
+    mut pending: ResMut<PendingSceneSwitch>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    bodies_q: Query<Entity, With<MollaBody>>,
+    cloth_q: Query<Entity, With<ClothMesh>>,
+) {
+    let Some(scene) = pending.0.take() else {
+        return;
+    };
+
+    for e in bodies_q.iter() {
+        commands.entity(e).despawn();
+    }
+    for e in cloth_q.iter() {
+        commands.entity(e).despawn();
+    }
+
+    let (sim, visuals) = Sim::build_scene(scene);
+    let visuals = BodyVisuals(visuals);
+    spawn_body_entities(&mut commands, &mut meshes, &mut materials, &sim, &visuals);
+    commands.insert_resource(sim);
+    commands.insert_resource(visuals);
+
+    info!("scene switched → {}", scene.label());
 }
 
 fn step_simulation(
@@ -517,15 +1073,11 @@ fn step_simulation(
     let mut total_download_us = 0.0_f64;
     let solve_start = std::time::Instant::now();
     for _ in 0..SUBSTEPS_PER_FRAME {
-        // Collide on host using the freshest body poses (downloaded
-        // at the end of the previous substep, or set up by the
-        // initial state for the very first substep).
         let c0 = std::time::Instant::now();
         pipeline.collide(model, state_a, contacts).expect("collide");
         contacts.upload_to_device(&device, &queue).expect("contacts upload");
         total_collide_us += c0.elapsed().as_secs_f64() * 1_000_000.0;
 
-        // Push host-mutated state up to the device before dispatch.
         let _ = state_a.body_q.upload(&queue);
         let _ = state_a.body_qd.upload(&queue);
 
@@ -534,8 +1086,6 @@ fn step_simulation(
             .expect("solver step");
         std::mem::swap(state_a, state_b);
 
-        // Pull the new state back so the next substep's collide and
-        // sync_transforms see real numbers.
         let d0 = std::time::Instant::now();
         let _ = state_a.body_q.download(&device, &queue);
         let _ = state_a.body_qd.download(&device, &queue);
@@ -554,7 +1104,11 @@ fn step_simulation(
 fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
     let body_q = sim.state_a.body_q.host().expect("body_q");
     for (body, mut tf) in q.iter_mut() {
-        let pose = body_q[body.0.index()];
+        let i = body.0.index();
+        if i >= body_q.len() {
+            continue;
+        }
+        let pose = body_q[i];
         tf.translation = Vec3::new(
             pose.position.x as f32,
             pose.position.y as f32,
@@ -565,6 +1119,542 @@ fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
     }
 }
 
+/// Update the cloth `Mesh` asset's vertex positions from the latest
+/// `state.particle_q`. Recomputes flat normals so lighting tracks the
+/// deforming surface. No-op when there's no cloth in the scene.
+fn sync_cloth_mesh(
+    sim: Res<Sim>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    q: Query<&Mesh3d, With<ClothMesh>>,
+) {
+    if sim.model.particle_count == 0 {
+        return;
+    }
+    let particle_q = match sim.state_a.particle_q.host() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    for mesh3d in q.iter() {
+        let Some(mesh) = meshes.get_mut(&mesh3d.0) else {
+            continue;
+        };
+        let positions: Vec<[f32; 3]> = particle_q
+            .iter()
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.compute_normals();
+    }
+}
+
+// ---- Wireframe overlay --------------------------------------------
+
+/// Each frame, ensure every body / cloth entity carries a `Wireframe`
+/// component iff `WireframeOn` is set. Per-entity tagging instead of
+/// `WireframeConfig.global` so the ground grid (owned by bevy_glacial)
+/// is unaffected. Cheap on bevy 0.18 — `Has<T>` skips component
+/// archetype edits when nothing needs to change.
+fn apply_wireframe(
+    wf: Res<WireframeOn>,
+    mut commands: Commands,
+    bodies: Query<
+        (Entity, bevy::ecs::query::Has<Wireframe>),
+        bevy::ecs::query::Or<(With<MollaBody>, With<ClothMesh>)>,
+    >,
+) {
+    let want = wf.0;
+    for (e, has) in bodies.iter() {
+        match (want, has) {
+            (true, false) => {
+                commands.entity(e).insert(Wireframe);
+            }
+            (false, true) => {
+                commands.entity(e).remove::<Wireframe>();
+            }
+            _ => {}
+        }
+    }
+}
+
+// ---- Activity view (sleeping vs moving) ---------------------------
+
+/// Each frame, classify every body as "active" (kinematic norm above
+/// threshold) or "sleeping". When the view is enabled, sleeping bodies
+/// get the shared grey material; active bodies get their original
+/// palette material back. When disabled, every body always wears its
+/// palette material — this still costs one material-swap per body the
+/// frame the view is toggled off, after which the system is a cheap
+/// O(n) read of `body_qd`.
+fn update_activity_colors(
+    mut commands: Commands,
+    mut activity: ResMut<ActivityView>,
+    sim: Res<Sim>,
+    q: Query<(
+        Entity,
+        &MollaBody,
+        &AwakeMaterial,
+        &MeshMaterial3d<StandardMaterial>,
+    )>,
+) {
+    let Ok(qd) = sim.state_a.body_qd.host() else {
+        return;
+    };
+    let Some(sleeping) = activity.sleeping_mat.clone() else {
+        return;
+    };
+    let enabled = activity.enabled;
+
+    let mut active_count = 0usize;
+    for (entity, body, awake, current) in q.iter() {
+        let i = body.0.index();
+        if i >= qd.len() {
+            continue;
+        }
+        let v = qd[i].linear.length();
+        let w = qd[i].angular.length();
+        let kin = v + w * ACTIVITY_OMEGA_RADIUS;
+        let is_active = kin > ACTIVITY_THRESHOLD;
+        if is_active {
+            active_count += 1;
+        }
+        let want = if !enabled || is_active {
+            awake.0.clone()
+        } else {
+            sleeping.clone()
+        };
+        // Re-inserting `MeshMaterial3d` via Commands is the supported
+        // way to swap a body's material in Bevy 0.18 — directly
+        // mutating the component through `Query<&mut>` triggers a
+        // material-bookkeeping panic in some paths.
+        if current.0.id() != want.id() {
+            commands.entity(entity).insert(MeshMaterial3d(want));
+        }
+    }
+    activity.active_count = active_count;
+}
+
+// ---- Mouse grab + ray-cast picking --------------------------------
+
+#[derive(Default, Resource)]
+struct MouseGrab {
+    state: Option<GrabState>,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum GrabKind {
+    /// Grab a rigid body at a body-local anchor point. We solve
+    /// `v_anchor = v_lin + ω × r` for `v_lin` so the anchor moves at
+    /// the desired velocity while preserving the body's spin.
+    Body { body: mp::BodyId, local_anchor: MVec3 },
+    /// Grab a single cloth particle. We just set its velocity to the
+    /// desired anchor velocity directly — the particle has no rotation.
+    Particle { index: u32 },
+}
+
+#[derive(Copy, Clone, Debug)]
+struct GrabState {
+    kind: GrabKind,
+    /// Distance along the ray at the moment of pick. Reused as the
+    /// drag depth so the picked point stays at the same camera-distance
+    /// while dragging — otherwise mouse motion would change pick depth.
+    drag_distance: f32,
+    /// Cached for gizmo rendering.
+    last_target: MVec3,
+}
+
+/// Run before the physics step. Picks a body on LMB-press, applies a
+/// spring-pull external force on the picked body while LMB is held,
+/// clears state on release. Yields to the camera-orbit gesture (LMB +
+/// RMB) so dragging doesn't accidentally grab a body.
+fn update_mouse_grab(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mut sim: ResMut<Sim>,
+    visuals: Res<BodyVisuals>,
+    mut grab: ResMut<MouseGrab>,
+) {
+    let Ok(window) = primary_window.single() else { return };
+    let Ok((cam, cam_tr)) = cameras.single() else { return };
+    let Some(cursor) = window.cursor_position() else { return };
+    let Ok(ray) = cam.viewport_to_world(cam_tr, cursor) else { return };
+
+    let lmb_just = mouse.just_pressed(MouseButton::Left);
+    let lmb_held = mouse.pressed(MouseButton::Left);
+    let rmb_held = mouse.pressed(MouseButton::Right);
+    let mmb_held = mouse.pressed(MouseButton::Middle);
+    let alt_held = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+
+    // Camera gestures or alt = let the camera have it. RMB starts an
+    // orbit; MMB pans / lifts. Anything held with another button is
+    // not a grab gesture.
+    if rmb_held || mmb_held || alt_held {
+        grab.state = None;
+        return;
+    }
+
+    if !lmb_held {
+        grab.state = None;
+        return;
+    }
+
+    let ro = MVec3::new(
+        ray.origin.x as f64,
+        ray.origin.y as f64,
+        ray.origin.z as f64,
+    );
+    let rd = MVec3::new(
+        ray.direction.x as f64,
+        ray.direction.y as f64,
+        ray.direction.z as f64,
+    );
+
+    // Acquire a grab on the press edge — try bodies and particles,
+    // pick whichever has the closer ray-hit.
+    if lmb_just && grab.state.is_none() {
+        let body_hit = pick_body(&sim, &visuals, ro, rd);
+        let particle_hit = pick_particle(&sim, ro, rd);
+        let best = match (body_hit, particle_hit) {
+            (Some((bid, bt, banchor)), Some((pid, pt))) => {
+                if bt <= pt {
+                    Some((
+                        GrabKind::Body { body: bid, local_anchor: banchor },
+                        bt,
+                    ))
+                } else {
+                    Some((GrabKind::Particle { index: pid }, pt))
+                }
+            }
+            (Some((bid, bt, banchor)), None) => Some((
+                GrabKind::Body { body: bid, local_anchor: banchor },
+                bt,
+            )),
+            (None, Some((pid, pt))) => Some((GrabKind::Particle { index: pid }, pt)),
+            (None, None) => None,
+        };
+        if let Some((kind, t)) = best {
+            grab.state = Some(GrabState {
+                kind,
+                drag_distance: t as f32,
+                last_target: ro + rd * t,
+            });
+        }
+    }
+
+    // While grabbing, recompute target and drive the chosen
+    // body/particle anchor velocity toward it.
+    if let Some(state) = grab.state {
+        let target = ro + rd * state.drag_distance as f64;
+        grab.state = Some(GrabState {
+            last_target: target,
+            ..state
+        });
+        match state.kind {
+            GrabKind::Body { body, local_anchor } => {
+                apply_grab_velocity(&mut sim, body, local_anchor, target);
+            }
+            GrabKind::Particle { index } => {
+                apply_particle_grab_velocity(&mut sim, index, target);
+            }
+        }
+    }
+}
+
+/// Walk every body's collider, ray-cast against its body-local primitive,
+/// return the closest positive hit as `(body, t, local_anchor)`.
+fn pick_body(
+    sim: &Sim,
+    visuals: &BodyVisuals,
+    ro: MVec3,
+    rd: MVec3,
+) -> Option<(mp::BodyId, f64, MVec3)> {
+    let q = sim.state_a.body_q.host().ok()?;
+    let flags = sim.model.body_flags.host().ok()?;
+    let mut best: Option<(f64, mp::BodyId, MVec3)> = None;
+    for (i, vis) in visuals.0.iter().enumerate() {
+        // Don't pick kinematic anchors — they're not meant to move.
+        if (flags[i] & mp::BodyFlags::KINEMATIC) != 0 {
+            continue;
+        }
+        let pose = q[i];
+        let lo = pose.inverse_transform_point(ro);
+        let ld = pose.rotation.conjugate() * rd;
+        let t = match *vis {
+            BodyVisual::Sphere(r) => ray_sphere_local(lo, ld, r as f64),
+            BodyVisual::Box(h) => ray_box_local(lo, ld, h as f64),
+            // Capsule pick uses a tight axis-aligned-box approximation
+            // in body frame — accurate enough for grabbing.
+            BodyVisual::Capsule { half_h, radius } => ray_box_local(
+                lo,
+                ld,
+                MVec3::new(radius as f64, (half_h + radius) as f64, radius as f64),
+            ),
+        };
+        if let Some(t) = t {
+            if t > 0.0 && best.is_none_or(|(bt, _, _)| t < bt) {
+                let local_hit = lo + ld * t;
+                best = Some((t, mp::BodyId::from_index(i), local_hit));
+            }
+        }
+    }
+    best.map(|(t, id, l)| (id, t, l))
+}
+
+/// Ray-cast against every cloth particle treated as a small sphere.
+/// Returns `(particle_index, t)` of the nearest hit. Picking radius is
+/// inflated above `particle_radius` so the user doesn't have to land
+/// the cursor on a 2 cm dot — clicking near any vertex on the cloth
+/// reliably grabs it.
+fn pick_particle(sim: &Sim, ro: MVec3, rd: MVec3) -> Option<(u32, f64)> {
+    if sim.model.particle_count == 0 {
+        return None;
+    }
+    let q = sim.state_a.particle_q.host().ok()?;
+    let inv_mass = sim.model.particle_inv_mass.host().ok()?;
+    // Pick radius matches the apparent visual cell size — close to
+    // half the rest spacing so any click between two vertices snaps
+    // to one of them. Without inflation, only direct hits on a 2 cm
+    // dot would register.
+    let pick_r: f64 = 0.05;
+    let mut best: Option<(f64, u32)> = None;
+    for i in 0..sim.model.particle_count {
+        // Don't grab pinned anchors — they can't move anyway.
+        if inv_mass[i] <= 0.0 {
+            continue;
+        }
+        let centre = q[i];
+        let lo = ro - centre;
+        if let Some(t) = ray_sphere_local(lo, rd, pick_r) {
+            if t > 0.0 && best.is_none_or(|(bt, _)| t < bt) {
+                best = Some((t, i as u32));
+            }
+        }
+    }
+    best.map(|(t, i)| (i, t))
+}
+
+/// Drive a single cloth particle's velocity so it tracks `target` at
+/// bounded speed. Mirrors `apply_grab_velocity` for bodies, but a
+/// particle has no rotation, so we just set `particle_qd` directly.
+fn apply_particle_grab_velocity(sim: &mut Sim, index: u32, target: MVec3) {
+    let i = index as usize;
+    if i >= sim.model.particle_count {
+        return;
+    }
+    let inv_mass = sim
+        .model
+        .particle_inv_mass
+        .host()
+        .expect("particle_inv_mass");
+    if inv_mass[i] <= 0.0 {
+        return; // pinned — nothing to do
+    }
+
+    let p = sim.state_a.particle_q.host().expect("particle_q")[i];
+    let to_target = target - p;
+    let dist = to_target.length();
+    let v_want = if dist > 1e-6 {
+        let dir = to_target / dist;
+        let speed = (dist / GRAB_LAG_TIME).min(GRAB_MAX_SPEED);
+        dir * speed
+    } else {
+        MVec3::ZERO
+    };
+
+    sim.state_a
+        .particle_qd
+        .host_mut()
+        .expect("particle_qd_mut")[i] = v_want;
+}
+
+/// Ray vs unit sphere centred at origin (radius `r`).
+fn ray_sphere_local(o: MVec3, d: MVec3, r: f64) -> Option<f64> {
+    let b = o.dot(d);
+    let c = o.dot(o) - r * r;
+    let disc = b * b - c;
+    if disc < 0.0 {
+        return None;
+    }
+    let sd = disc.sqrt();
+    let t1 = -b - sd;
+    if t1 > 0.0 {
+        return Some(t1);
+    }
+    let t2 = -b + sd;
+    if t2 > 0.0 {
+        Some(t2)
+    } else {
+        None
+    }
+}
+
+/// Ray vs box (centred at origin, half-extents `h`). The `h: Into<MVec3>`
+/// trick lets callers pass either a uniform `f64` (cube) or a per-axis
+/// vector (capsule bounding box).
+trait IntoHalfExtents {
+    fn to_half_extents(self) -> MVec3;
+}
+impl IntoHalfExtents for f64 {
+    fn to_half_extents(self) -> MVec3 {
+        MVec3::splat(self)
+    }
+}
+impl IntoHalfExtents for MVec3 {
+    fn to_half_extents(self) -> MVec3 {
+        self
+    }
+}
+fn ray_box_local<H: IntoHalfExtents>(o: MVec3, d: MVec3, h: H) -> Option<f64> {
+    let h = h.to_half_extents();
+    let mut tmin = f64::NEG_INFINITY;
+    let mut tmax = f64::INFINITY;
+    for k in 0..3 {
+        let oi = match k {
+            0 => o.x,
+            1 => o.y,
+            _ => o.z,
+        };
+        let di = match k {
+            0 => d.x,
+            1 => d.y,
+            _ => d.z,
+        };
+        let hi = match k {
+            0 => h.x,
+            1 => h.y,
+            _ => h.z,
+        };
+        if di.abs() < 1e-12 {
+            if oi.abs() > hi {
+                return None;
+            }
+        } else {
+            let t1 = (-hi - oi) / di;
+            let t2 = (hi - oi) / di;
+            let (lo, hi) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+            tmin = tmin.max(lo);
+            tmax = tmax.min(hi);
+            if tmax < tmin {
+                return None;
+            }
+        }
+    }
+    if tmax < 0.0 {
+        return None;
+    }
+    Some(if tmin > 0.0 { tmin } else { tmax })
+}
+
+/// Set the grabbed body's linear velocity so its anchor point moves
+/// toward `target` at a bounded speed. Mass-independent: same speed
+/// for a 50 kg wrecking ball or a 0.4 kg rope link.
+///
+/// We solve `v_anchor = v_lin + ω × r` for `v_lin` so that the anchor
+/// has the desired velocity, while keeping the body's existing angular
+/// velocity. The XPBD solver then handles all downstream behaviour:
+/// CONNECT constraints pull neighbouring bodies along, contacts brake
+/// against other bodies, gravity continues to act. Critically there's
+/// no force overshoot — `v_anchor_want` is bounded by `MAX_SPEED`, so
+/// neighbours can never see an impulse larger than that.
+fn apply_grab_velocity(
+    sim: &mut Sim,
+    body: mp::BodyId,
+    local_anchor: MVec3,
+    target: MVec3,
+) {
+    let i = body.index();
+
+    let pose = sim.state_a.body_q.host().expect("body_q")[i];
+    let qd = sim.state_a.body_qd.host().expect("body_qd")[i];
+    let body_com = sim.model.body_com.host().expect("body_com")[i];
+
+    let anchor_world = pose.transform_point(local_anchor);
+    let com_world = pose.position + pose.rotation * body_com;
+    let r = anchor_world - com_world;
+
+    let to_target = target - anchor_world;
+    let dist = to_target.length();
+    let v_anchor_want = if dist > 1e-6 {
+        let dir = to_target / dist;
+        let speed = (dist / GRAB_LAG_TIME).min(GRAB_MAX_SPEED);
+        dir * speed
+    } else {
+        MVec3::ZERO
+    };
+
+    // Keep current angular velocity. Solve linear so the anchor moves
+    // at `v_anchor_want`: v_anchor = v_lin + ω × r ⇒ v_lin = v_anchor − ω × r.
+    let v_lin = v_anchor_want - qd.angular.cross(r);
+
+    // Soft angular damping so the body doesn't keep spinning forever
+    // while held. Keeps natural rotations from contacts but bleeds off
+    // accumulated spin if the user holds it still.
+    let w = qd.angular * 0.85;
+
+    sim.state_a
+        .body_qd
+        .host_mut()
+        .expect("body_qd_mut")[i] =
+        mp::SpatialVector::new(v_lin, w);
+}
+
+/// While dragging, draw a yellow line from the picked anchor (body or
+/// cloth particle) to the cursor target so the user can see what
+/// they're holding.
+fn draw_grab_gizmo(grab: Res<MouseGrab>, sim: Res<Sim>, mut gizmos: Gizmos) {
+    let Some(state) = grab.state else { return };
+    let anchor_world = match state.kind {
+        GrabKind::Body { body, local_anchor } => {
+            let Ok(q) = sim.state_a.body_q.host() else { return };
+            let i = body.index();
+            if i >= q.len() {
+                return;
+            }
+            q[i].transform_point(local_anchor)
+        }
+        GrabKind::Particle { index } => {
+            let Ok(q) = sim.state_a.particle_q.host() else { return };
+            let i = index as usize;
+            if i >= q.len() {
+                return;
+            }
+            q[i]
+        }
+    };
+    let target = state.last_target;
+    let a = Vec3::new(
+        anchor_world.x as f32,
+        anchor_world.y as f32,
+        anchor_world.z as f32,
+    );
+    let t = Vec3::new(target.x as f32, target.y as f32, target.z as f32);
+    gizmos.line(a, t, Color::srgb(1.0, 0.85, 0.2));
+    // Small + at the anchor and target so they're easier to see.
+    let cross = 0.08;
+    gizmos.line(
+        a - Vec3::X * cross,
+        a + Vec3::X * cross,
+        Color::srgb(1.0, 0.85, 0.2),
+    );
+    gizmos.line(
+        a - Vec3::Y * cross,
+        a + Vec3::Y * cross,
+        Color::srgb(1.0, 0.85, 0.2),
+    );
+    gizmos.line(
+        t - Vec3::X * cross,
+        t + Vec3::X * cross,
+        Color::srgb(0.5, 0.95, 0.5),
+    );
+    gizmos.line(
+        t - Vec3::Y * cross,
+        t + Vec3::Y * cross,
+        Color::srgb(0.5, 0.95, 0.5),
+    );
+}
+
 fn control_pane(
     mut contexts: EguiContexts,
     accent: Res<AccentColor>,
@@ -572,6 +1662,8 @@ fn control_pane(
     stats: Res<SimStats>,
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
+    mut pending: ResMut<PendingSceneSwitch>,
+    mut activity: ResMut<ActivityView>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let accent_color = accent.0;
@@ -586,11 +1678,29 @@ fn control_pane(
         .unwrap_or(0.0);
 
     let body_count = sim.model.body_count;
+    let scene = sim.scene;
 
     Pane2::new(PANE_ID, "molla", PaneAnchor::LeftRail(RailZone::Start), accent_color).show(
         ctx,
         |ui| {
             ui.add_space(2.0);
+
+            readout(ui, "Scene", scene.label());
+            ui.horizontal(|ui| {
+                if button(ui, "1 Pile", accent_color).clicked() && scene != Scene::Pile {
+                    pending.0 = Some(Scene::Pile);
+                }
+                if button(ui, "2 Rope", accent_color).clicked() && scene != Scene::Rope {
+                    pending.0 = Some(Scene::Rope);
+                }
+                if button(ui, "3 Tower", accent_color).clicked() && scene != Scene::Tower {
+                    pending.0 = Some(Scene::Tower);
+                }
+                if button(ui, "4 Cloth", accent_color).clicked() && scene != Scene::Cloth {
+                    pending.0 = Some(Scene::Cloth);
+                }
+            });
+            ui.separator();
 
             readout(ui, "FPS", &format!("{fps:>5.0}  ({frame_ms:>4.1} ms)"));
             readout(
@@ -613,6 +1723,17 @@ fn control_pane(
             readout(ui, "Restitution", &format!("{PLANE_RESTITUTION:.2}"));
             ui.separator();
 
+            // Activity view toggle.
+            let view_label = if activity.enabled { "View: ACTIVITY" } else { "View: NORMAL" };
+            readout(ui, view_label, &format!("{} active", activity.active_count));
+            ui.horizontal(|ui| {
+                let label = if activity.enabled { "Hide sleep" } else { "Show sleep (T)" };
+                if button(ui, label, accent_color).clicked() {
+                    activity.enabled = !activity.enabled;
+                }
+            });
+            ui.separator();
+
             ui.horizontal(|ui| {
                 let label = if run.paused { "▶ Play" } else { "⏸ Pause" };
                 if button(ui, label, accent_color).clicked() {
@@ -628,7 +1749,8 @@ fn control_pane(
             });
 
             ui.add_space(4.0);
-            ui.small("Space · R · MMB pan · LMB+RMB orbit · wheel zoom");
+            ui.small("LMB drag · 1·2·3·4 scene · T activity · W wireframe");
+            ui.small("Space pause · R reset · MMB pan · LMB+RMB orbit");
         },
     );
 }
