@@ -1,0 +1,26 @@
+[package]
+name = "usd_molla"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "USD ↔ molla bridge — load UsdPhysics scenes into a `molla::Model`, write simulated state back as time samples. No Bevy dependency."
+
+[lints]
+workspace = true
+
+[dependencies]
+molla = { path = "../molla" }
+# Match the same openusd git revision usd_schema / usd_rapier /
+# urdf2usd consume so the whole OUSD constellation stays version-
+# locked. Adding usd_schema as a path-dep AND openusd as a git-dep
+# would give Cargo two different `openusd` crates in the graph.
+openusd = { git = "https://github.com/mxpv/openusd", rev = "fe92b73224c611831be244afac9cf7654b5ef51e", features = ["physics"] }
+usd_schema = { path = "../../../bevy_openusd/crates/usd_schema" }
+glam = "0.30"
+anyhow = "1"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
