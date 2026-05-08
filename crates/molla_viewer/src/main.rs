@@ -1,12 +1,27 @@
 //! `molla_viewer` — Bevy app that runs a molla scene and visualises it.
 //!
-//! Stage 1 demo: a 10×10 grid of spheres falling under gravity. The molla
-//! solver runs each Bevy frame; per-body world poses are copied into Bevy
-//! `Transform` components for rendering.
+//! - **`bevy_glacial`** drives the camera (mouse pan / orbit / zoom),
+//!   the LOD ground grid, and an axis triad at the world origin.
+//! - **`bevy_frost`** themes egui and provides the input firewall so
+//!   pointer events over UI panels don't leak into the viewport.
 //!
-//! Press **R** to reset, **ESC** to quit.
+//! Mouse:
+//!   * MMB-drag             pan the camera focus (XZ plane)
+//!   * MMB+LMB / MMB+RMB    lift the focus (vertical Y)
+//!   * LMB+RMB-drag         orbit yaw + pitch
+//!   * Scroll               zoom
+//!
+//! Keys:
+//!   * Space   pause / resume the simulation
+//!   * R       reset poses to the initial drop
+//!   * Esc     quit
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_frost::prelude::*;
+use bevy_glacial::prelude::*;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::solvers::Solver as _;
@@ -15,43 +30,70 @@ const GRID_N: usize = 10; // 10×10 = 100 spheres
 const GRID_SPACING: f32 = 1.5;
 const SPHERE_RADIUS: f32 = 0.5;
 const DROP_HEIGHT: f32 = 12.0;
-const FIXED_DT: f64 = 1.0 / 240.0; // 240 Hz physics
-const SUBSTEPS_PER_FRAME: usize = 4; // ~60Hz frame, 4 sub-steps = 240Hz
+const FIXED_DT: f64 = 1.0 / 240.0;
+const SUBSTEPS_PER_FRAME: usize = 4;
 
-// Floor at y = 0 — purely a viewer-side post-step clamp until stage 4
-// adds the real collision pipeline. We bounce with a small restitution
-// so the demo doesn't look statically dead after a few seconds.
 const FLOOR_Y: f64 = 0.0;
 const FLOOR_RESTITUTION: f64 = 0.45;
 const FLOOR_FRICTION: f64 = 0.6;
 
 fn main() {
+    let geometry = WindowGeometry::load("molla_viewer");
     App::new()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "molla viewer — stage 1".into(),
-                        resolution: (1280u32, 800u32).into(),
-                        ..default()
-                    }),
+                    primary_window: Some(geometry.to_window("molla viewer")),
+                    ..default()
+                })
+                .set(bevy::log::LogPlugin {
+                    level: bevy::log::Level::INFO,
+                    filter: "info,wgpu=error,bevy_render=error,bevy_winit=error,naga=warn".into(),
                     ..default()
                 }),
         )
+        .add_plugins(EguiPlugin::default())
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(FrostPlugin)
+        // Drop the transform gizmo + selection ring — we don't need
+        // per-body manipulation in the demo.
+        .add_plugins(
+            GlacialPlugins
+                .build()
+                .disable::<TransformGizmoPlugin>()
+                .disable::<SelectionRingPlugin>(),
+        )
+        .add_plugins(WindowSettingsPlugin::new("molla_viewer"))
         .insert_resource(ClearColor(Color::srgb(0.05, 0.07, 0.12)))
-        .insert_resource(GlobalAmbientLight {
-            color: Color::srgb(0.8, 0.85, 1.0),
-            brightness: 80.0,
-            ..default()
+        .insert_resource(GroundGrid {
+            visible: true,
+            color: Color::srgba(0.30, 0.38, 0.50, 0.42),
         })
+        .insert_resource(SimRunState::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_input, step_simulation, sync_transforms).chain())
+        .add_systems(
+            Update,
+            (handle_input, step_simulation, sync_transforms).chain(),
+        )
+        .add_systems(EguiPrimaryContextPass, hud_panel)
         .run();
 }
 
 /// Marker linking a Bevy entity to its molla `BodyId`.
 #[derive(Component)]
 struct MollaBody(mp::BodyId);
+
+/// Marker for the world-origin axis triad so we can draw it each frame.
+#[derive(Component)]
+struct OriginAxes;
+
+/// Pause / step state.
+#[derive(Resource, Default)]
+struct SimRunState {
+    paused: bool,
+    /// Sticky one-shot used by the "step once" button while paused.
+    step_once: bool,
+}
 
 /// Owns the molla simulation. Lives as a Bevy `Resource`.
 #[derive(Resource)]
@@ -65,18 +107,16 @@ struct Sim {
 }
 
 impl Sim {
-    fn build() -> (Self, Vec<MVec3>) {
+    fn build() -> Self {
         let mut b = mp::ModelBuilder::new();
         b.set_angular_damping(0.05);
 
-        let mut initial_positions = Vec::with_capacity(GRID_N * GRID_N);
         for ix in 0..GRID_N {
             for iz in 0..GRID_N {
                 let x = (ix as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
                 let z = (iz as f64 - (GRID_N as f64 - 1.0) * 0.5) * GRID_SPACING as f64;
                 let y = DROP_HEIGHT as f64 + 0.4 * ((ix + iz) as f64 / 2.0).sin();
                 let pos = MVec3::new(x, y, z);
-                initial_positions.push(pos);
 
                 let body = b.add_body(
                     mp::BodyParams::new()
@@ -98,17 +138,14 @@ impl Sim {
         let contacts = mp::Contacts::with_capacity(0);
         let solver = mp::SemiImplicitSolver::new();
 
-        (
-            Self {
-                model,
-                state_a,
-                state_b,
-                control,
-                contacts,
-                solver,
-            },
-            initial_positions,
-        )
+        Self {
+            model,
+            state_a,
+            state_b,
+            control,
+            contacts,
+            solver,
+        }
     }
 
     fn reset(&mut self) {
@@ -134,39 +171,60 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Camera — looks across the grid from above, slight tilt.
+    // Sun + cascade shadows.
+    let sun_shadow = CascadeShadowConfigBuilder {
+        num_cascades: 1,
+        minimum_distance: 0.1,
+        maximum_distance: 100.0,
+        first_cascade_far_bound: 100.0,
+        overlap_proportion: 0.0,
+    }
+    .build();
     commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(0.0, 14.0, 22.0).looking_at(Vec3::new(0.0, 4.0, 0.0), Vec3::Y),
-    ));
-
-    // Sun-like directional light with shadows.
-    commands.spawn((
+        Name::new("Sun"),
+        Transform::from_xyz(8.0, 25.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
         DirectionalLight {
             illuminance: 12_000.0,
             shadows_enabled: true,
             ..default()
         },
-        Transform::from_xyz(8.0, 20.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
+        sun_shadow,
     ));
 
-    // Ground plane (visual only — stage 1 has no contacts; spheres will
-    // pass through. Stage 4 wires it up as a collision plane.)
-    let ground_mesh = meshes.add(Cuboid::new(50.0, 0.1, 50.0));
-    let ground_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.18, 0.22, 0.28),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
+    // Camera with the chase rig + ambient + GizmoCamera marker.
+    let chase = ChaseCamera {
+        min_elevation: -5f32.to_radians(),
+        ..ChaseCamera::default()
+    };
+    let mut tr = Transform::default();
+    apply_rig(&chase, &mut tr);
     commands.spawn((
-        Mesh3d(ground_mesh),
-        MeshMaterial3d(ground_mat),
-        Transform::from_xyz(0.0, -0.05, 0.0),
+        Name::new("MainCamera"),
+        Camera3d::default(),
+        tr,
+        AmbientLight {
+            color: Color::srgb(0.85, 0.90, 1.0),
+            brightness: 100.0,
+            ..default()
+        },
+        chase,
+        GizmoCamera,
     ));
 
-    // Spawn the molla scene + matching Bevy entities.
-    let (sim, _initial_positions) = Sim::build();
+    // World-origin axis triad. `AxisGizmoPlugin` draws gizmos every
+    // frame for any entity tagged with `AxisGizmo`.
+    commands.spawn((
+        Name::new("OriginAxes"),
+        OriginAxes,
+        Transform::from_xyz(0.0, 0.001, 0.0),
+        AxisGizmo {
+            length: 1.5,
+            ..AxisGizmo::default()
+        },
+    ));
 
+    // Sim + Bevy entities.
+    let sim = Sim::build();
     let sphere_mesh = meshes.add(Sphere::new(SPHERE_RADIUS).mesh().ico(3).expect("ico"));
     let body_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.85, 0.35, 0.25),
@@ -192,7 +250,7 @@ fn setup(
     commands.insert_resource(sim);
 
     info!(
-        "molla viewer: {} bodies, {}Hz physics, press R to reset, ESC to quit",
+        "molla viewer: {} bodies, {}Hz physics — Space: pause, R: reset, Esc: quit",
         GRID_N * GRID_N,
         (1.0 / FIXED_DT) as u32
     );
@@ -202,17 +260,25 @@ fn handle_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut exit: MessageWriter<AppExit>,
     mut sim: ResMut<Sim>,
+    mut run: ResMut<SimRunState>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
     }
     if keys.just_pressed(KeyCode::KeyR) {
         sim.reset();
-        info!("molla: scene reset");
+    }
+    if keys.just_pressed(KeyCode::Space) {
+        run.paused = !run.paused;
     }
 }
 
-fn step_simulation(mut sim: ResMut<Sim>) {
+fn step_simulation(mut sim: ResMut<Sim>, mut run: ResMut<SimRunState>) {
+    if run.paused && !run.step_once {
+        return;
+    }
+    run.step_once = false;
+
     let Sim {
         model,
         state_a,
@@ -230,9 +296,8 @@ fn step_simulation(mut sim: ResMut<Sim>) {
     }
 }
 
-/// Viewer-side floor clamp. Stage-1 molla has no contact pipeline, so
-/// without this the spheres fall through the visual ground forever.
-/// Removed when stage 4 ships the real broad/narrow phase.
+/// Viewer-side floor clamp. Stage-1 molla has no contact pipeline; this
+/// keeps spheres above `y = 0` until stage 4 lands proper collisions.
 fn clamp_to_floor(state: &mut mp::State) {
     let q = state.body_q.host_mut().expect("body_q");
     let mut hits = vec![false; q.len()];
@@ -248,10 +313,8 @@ fn clamp_to_floor(state: &mut mp::State) {
     for (i, v) in qd.iter_mut().enumerate() {
         if hits[i] && v.linear.y < 0.0 {
             v.linear.y = -v.linear.y * FLOOR_RESTITUTION;
-            // Coulomb-ish tangential damping.
             v.linear.x *= 1.0 - FLOOR_FRICTION;
             v.linear.z *= 1.0 - FLOOR_FRICTION;
-            // Bleed angular velocity too so spinners settle.
             v.angular *= 1.0 - 0.5 * FLOOR_FRICTION;
         }
     }
@@ -269,4 +332,67 @@ fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
         let r: MQuat = pose.rotation;
         tf.rotation = Quat::from_xyzw(r.x as f32, r.y as f32, r.z as f32, r.w as f32);
     }
+}
+
+/// Top-left HUD: FPS, body count, paused state, control buttons.
+fn hud_panel(
+    mut contexts: EguiContexts,
+    diagnostics: Res<DiagnosticsStore>,
+    mut sim: ResMut<Sim>,
+    mut run: ResMut<SimRunState>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    let frame_ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+
+    let body_count = sim.model.body_count;
+    let avg_y = {
+        let qs = sim.state_a.body_q.host().ok();
+        qs.map(|qs| {
+            if qs.is_empty() {
+                0.0
+            } else {
+                qs.iter().map(|q| q.position.y).sum::<f64>() / qs.len() as f64
+            }
+        })
+        .unwrap_or(0.0)
+    };
+
+    egui::Window::new("molla")
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 10.0))
+        .resizable(false)
+        .collapsible(true)
+        .show(ctx, |ui| {
+            ui.label(format!("FPS:        {fps:>6.1}"));
+            ui.label(format!("Frame:      {frame_ms:>6.2} ms"));
+            ui.separator();
+            ui.label(format!("Bodies:     {body_count}"));
+            ui.label(format!("Substeps:   {SUBSTEPS_PER_FRAME} @ {:>3.0} Hz", 1.0 / FIXED_DT));
+            ui.label(format!("Avg y:      {avg_y:>6.2} m"));
+            ui.separator();
+            ui.horizontal(|ui| {
+                let label = if run.paused { "▶  Play" } else { "⏸  Pause" };
+                if ui.button(label).clicked() {
+                    run.paused = !run.paused;
+                }
+                if ui
+                    .add_enabled(run.paused, egui::Button::new("Step"))
+                    .clicked()
+                {
+                    run.step_once = true;
+                }
+                if ui.button("Reset").clicked() {
+                    sim.reset();
+                }
+            });
+            ui.separator();
+            ui.small("Space: pause · R: reset · MMB: pan · LMB+RMB: orbit · Wheel: zoom");
+        });
 }

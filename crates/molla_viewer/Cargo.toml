@@ -22,8 +22,10 @@ bevy = { version = "0.18", default-features = false, features = [
     "multi_threaded",
     "bevy_asset",
     "bevy_log",
+    "bevy_state",
     "bevy_window",
     "bevy_winit",
+    "bevy_input_focus",
     "bevy_render",
     "bevy_core_pipeline",
     "bevy_pbr",
@@ -31,16 +33,32 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_mesh",
     "bevy_camera",
     "bevy_image",
+    "bevy_picking",
     "bevy_scene",
     "bevy_gizmos",
     "bevy_gizmos_render",
     "tonemapping_luts",
+    "smaa_luts",
     "default_font",
     "zstd_rust",
     "ktx2",
     "x11",
     "wayland",
+    "reflect_auto_register",
 ] }
+
+# egui shell — frost styles it; glacial reads pane rects from it for
+# input-firewall purposes.
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "default_fonts",
+    "render",
+] }
+
+# Glass-themed editor UI kit (themed egui via FrostPlugin).
+bevy_frost = { git = "https://github.com/bresilla/bevy_frost", branch = "develop", package = "bevy_frost" }
+
+# Orbit camera + grid + gizmos.
+bevy_glacial = { git = "https://github.com/bresilla/bevy_glacial", branch = "main" }
 
 [[bin]]
 name = "molla_viewer"
