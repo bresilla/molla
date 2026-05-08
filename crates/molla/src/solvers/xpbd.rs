@@ -295,41 +295,29 @@ impl XpbdSolver {
                     self.position_iterations as u32,
                     dt as f32,
                 )?;
-                // Particle XPBD (cloth / rope / springs) — GPU
-                // dispatch via `XpbdParticlesKernel`. Built lazily on
-                // first step that has particles so rigid-only solvers
-                // don't pay the pipeline compile cost.
-                if model.particle_count > 0 {
-                    let need_pn = model.particle_count as u32;
-                    let need_sn = model.spring_count as u32;
-                    let needs_rebuild = match particles_kernel {
-                        None => true,
-                        Some(k) => {
-                            k.particle_count() != need_pn
-                                || k.spring_count() != need_sn
-                        }
-                    };
-                    if needs_rebuild {
-                        *particles_kernel = Some(
-                            crate::kernels::XpbdParticlesKernel::new(
-                                device, need_pn, need_sn,
-                            ),
-                        );
-                    }
-                    let pk = particles_kernel
-                        .as_mut()
-                        .expect("particles_kernel just built");
-                    pk.dispatch(
-                        device,
-                        queue,
-                        model,
-                        state_in,
-                        state_out,
-                        dt,
-                        self.position_iterations as u32,
-                    )?;
-                }
-                Ok(())
+                // Particle XPBD (cloth / rope / springs).
+                //
+                // The single-thread `XpbdParticlesKernel` exists in
+                // `kernels/xpbd_particles.rs` and `shaders/xpbd_particles.wgsl`
+                // and is parity-validated against the CPU oracle in
+                // `tests/xpbd_particles_gpu.rs`. **It is NOT used here**
+                // — for the 36×36 cloth scene, single-thread Gauss-
+                // Seidel on a wide GPU is slower than the CPU shim and
+                // can trip driver-level TDR. Re-enable once we add
+                // parallel passes (predict / floor / recover already
+                // map to per-particle threads; the constraint loops
+                // need Jacobi accumulation with atomic-f32 emulation
+                // for parallel scatter-add).
+                let _ = particles_kernel;
+                apply_particles_post_gpu(
+                    model,
+                    state_in,
+                    state_out,
+                    dt,
+                    self.position_iterations,
+                    device,
+                    queue,
+                )
             }
         }
     }
@@ -1200,8 +1188,40 @@ pub(crate) fn step_particles(
     Ok(())
 }
 
-// `apply_particles_post_gpu` (CPU shim) was removed when
-// `XpbdParticlesKernel` (`shaders/xpbd_particles.wgsl`) replaced it
-// with a true GPU dispatch. The CPU `step_particles` above is kept —
-// it's still used by the CPU `cpu_step` path and by tests as the
-// reference oracle for the WGSL port.
+/// CPU shim: runs `step_particles` after the GPU rigid-body step.
+///
+/// **TEMPORARILY REINSTATED.** A true GPU port lives in
+/// `kernels/xpbd_particles.rs` + `shaders/xpbd_particles.wgsl` (and
+/// is parity-validated by `tests/xpbd_particles_gpu.rs`), but the
+/// current single-thread WGSL implementation is slower than this
+/// shim for cloth-scale workloads (1k+ particles, ~5k springs) and
+/// can trip GPU TDR on some drivers. Switch back to
+/// `XpbdParticlesKernel` once we add parallel passes for predict /
+/// floor / recover and Jacobi-accumulated constraint passes (atomic
+/// scatter-add via the f32-as-u32 CAS workaround).
+#[cfg(feature = "gpu")]
+pub(crate) fn apply_particles_post_gpu(
+    model: &Model,
+    state_in: &State,
+    state_out: &mut State,
+    dt: Real,
+    iterations: usize,
+    _device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<()> {
+    if model.particle_count == 0 {
+        return Ok(());
+    }
+    let p_in = state_in.particle_q.host()?.to_vec();
+    let v_in = state_in.particle_qd.host()?.to_vec();
+
+    let mut p_out = vec![Vec3::ZERO; model.particle_count];
+    let mut v_out = vec![Vec3::ZERO; model.particle_count];
+    step_particles(model, &p_in, &v_in, &mut p_out, &mut v_out, dt, iterations)?;
+
+    state_out.particle_q.host_mut()?.copy_from_slice(&p_out);
+    state_out.particle_qd.host_mut()?.copy_from_slice(&v_out);
+    state_out.particle_q.upload(queue)?;
+    state_out.particle_qd.upload(queue)?;
+    Ok(())
+}
