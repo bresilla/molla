@@ -1,6 +1,8 @@
 //! WGSL compute kernels and their Rust dispatch wrappers.
 
 #[cfg(feature = "gpu")]
+mod contact_sensor;
+#[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
 mod imu;
@@ -11,6 +13,8 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod xpbd;
 
+#[cfg(feature = "gpu")]
+pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
 #[cfg(feature = "gpu")]
