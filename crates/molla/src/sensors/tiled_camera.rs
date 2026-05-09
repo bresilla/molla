@@ -398,6 +398,13 @@ impl TiledCamera {
         let h = self.config.height;
         ((cam * w * h) + y * w + x) as usize
     }
+
+    /// Borrow the host-side per-camera pose array. Useful for read-back
+    /// in tooling / viewer code; no GPU sync involved (we always
+    /// authoritative-write poses on the host via `set_camera_pose`).
+    pub fn poses_host(&self) -> Result<&[Transform]> {
+        self.poses.host()
+    }
 }
 
 /// Build a Transform whose +X is "right", +Y is "up", -Z is "forward
