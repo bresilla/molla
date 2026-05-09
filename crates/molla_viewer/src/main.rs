@@ -1340,7 +1340,8 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
         });
     }
 
-    // ── Falling convex hulls (3 — irregular tetra-pyramid). ─────
+    // ── Falling convex hulls (3 — actual cuboid hulls so the
+    // visual matches the collision geometry). ──────────────────
     for (i, pos) in [
         MVec3::new(-2.5, 10.0, 1.5),
         MVec3::new(0.0, 10.5, -2.0),
@@ -1349,19 +1350,21 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
     .iter()
     .enumerate()
     {
-        // Irregular hull — 6 vertices forming a stretched octahedron.
-        let s = 0.35;
+        // 8-vertex cuboid hull — vertices at every (±sx, ±sy, ±sz)
+        // corner. Slightly different proportions per cube so they
+        // tumble interestingly.
+        let half = MVec3::new(0.30, 0.40, 0.30);
         let verts = vec![
-            MVec3::new(s, 0.0, 0.0),
-            MVec3::new(-s, 0.0, 0.0),
-            MVec3::new(0.0, s * 1.5, 0.0),
-            MVec3::new(0.0, -s * 1.5, 0.0),
-            MVec3::new(0.0, 0.0, s),
-            MVec3::new(0.0, 0.0, -s),
+            MVec3::new(-half.x, -half.y, -half.z),
+            MVec3::new(half.x, -half.y, -half.z),
+            MVec3::new(-half.x, half.y, -half.z),
+            MVec3::new(half.x, half.y, -half.z),
+            MVec3::new(-half.x, -half.y, half.z),
+            MVec3::new(half.x, -half.y, half.z),
+            MVec3::new(-half.x, half.y, half.z),
+            MVec3::new(half.x, half.y, half.z),
         ];
         let mass = 0.6;
-        // Approx inertia via bounding box.
-        let half = MVec3::new(s, s * 1.5, s);
         let h2 = half * half;
         let m_third = mass / 3.0;
         let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
@@ -1380,8 +1383,9 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
         let hull_id = b.add_hull(verts);
         b.add_shape_convex_hull(body, hull_id, mp::Transform::IDENTITY)
             .expect("hull shape");
-        // Render as a box approximation (Bevy doesn't have a hull mesh
-        // primitive; we'd need to feed in the actual triangle list).
+        // Render as the matching box. The hull's bounding box is
+        // exactly the cube formed by ±half, so the visual
+        // matches the collision shape 1:1.
         visuals.push(BodyVisual::Box(Vec3::new(
             half.x as f32,
             half.y as f32,
