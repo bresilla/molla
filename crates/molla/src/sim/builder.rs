@@ -236,6 +236,13 @@ pub struct MaterialNeoHookean {
     pub yield_stress: Real,
     /// Linear hardening modulus `H` (Pa). 0 = perfectly plastic.
     pub hardening: Real,
+    /// Stage 20.4 — kinematic-hardening (back-stress) modulus `c`
+    /// (Pa). When `c > 0`, the yield function shifts from
+    /// `‖dev(τ)‖` to `‖dev(τ) - α‖` and `α` evolves per the Prager
+    /// rule; produces the Bauschinger effect under cyclic loading
+    /// (forward yielding lowers the reverse yield). `c = 0` reduces
+    /// to pure isotropic hardening (Stage 20.3 back-compat).
+    pub kinematic_hardening: Real,
 }
 
 impl MaterialNeoHookean {
@@ -247,6 +254,43 @@ impl MaterialNeoHookean {
             poisson,
             yield_stress: Real::INFINITY,
             hardening: 0.0,
+            kinematic_hardening: 0.0,
+        }
+    }
+
+    /// Stage 20.4 — convenience for plastic with isotropic hardening
+    /// only (back-compat with Stage 20.3 four-arg construction).
+    #[must_use]
+    pub fn plastic(
+        youngs: Real,
+        poisson: Real,
+        yield_stress: Real,
+        hardening: Real,
+    ) -> Self {
+        Self {
+            youngs,
+            poisson,
+            yield_stress,
+            hardening,
+            kinematic_hardening: 0.0,
+        }
+    }
+
+    /// Stage 20.4 — full plastic-with-kinematic-hardening recipe.
+    #[must_use]
+    pub fn plastic_kinematic(
+        youngs: Real,
+        poisson: Real,
+        yield_stress: Real,
+        hardening: Real,
+        kinematic_hardening: Real,
+    ) -> Self {
+        Self {
+            youngs,
+            poisson,
+            yield_stress,
+            hardening,
+            kinematic_hardening,
         }
     }
 }
@@ -323,6 +367,8 @@ pub struct ModelBuilder {
     tet_plastic_strain: Vec<Real>,
     tet_yield_stress: Vec<Real>,
     tet_hardening: Vec<Real>,
+    /// Stage 20.4 — per-tet kinematic-hardening modulus `c` (Pa).
+    tet_kinematic_hardening: Vec<Real>,
     tet_mesh_offsets: Vec<u32>,
 
     // Body arrays.
@@ -725,7 +771,7 @@ impl ModelBuilder {
 
         // Pre-compute Lamé `(μ, λ)` for each material. Clamp ν to keep
         // `(1+ν)(1-2ν)` finite; clamp E to a sane range.
-        let mut lame: Vec<(Real, Real, Real, Real)> = Vec::with_capacity(materials.len());
+        let mut lame: Vec<(Real, Real, Real, Real, Real)> = Vec::with_capacity(materials.len());
         for m in materials {
             let nu = m.poisson.clamp(-0.49, 0.49);
             let e = m.youngs.max(1.0).min(1.0e9);
@@ -740,7 +786,11 @@ impl ModelBuilder {
                 Real::INFINITY
             };
             let hardening = m.hardening.max(0.0);
-            lame.push((mu, lambda, yield_stress, hardening));
+            // Stage 20.4 — kinematic-hardening modulus `c`. Clamped to
+            // ≥ 0 (negative `c` is unphysical and would destabilise the
+            // back-stress evolution).
+            let kin_hard = m.kinematic_hardening.max(0.0);
+            lame.push((mu, lambda, yield_stress, hardening, kin_hard));
         }
 
         let mesh_id = self.tet_mesh_offsets.len().saturating_sub(1).max(0);
@@ -790,7 +840,7 @@ impl ModelBuilder {
             }
             self.tet_dm_inv.push(dm_inv);
             self.tet_rest_volume.push(rest_vol);
-            let (mu, lambda, yield_s, hard) = lame[mi];
+            let (mu, lambda, yield_s, hard, kin_hard) = lame[mi];
             self.tet_mu.push(mu);
             self.tet_lambda.push(lambda);
             // Plasticity init: F_p = I, ε_p = 0, σ_y / H from material.
@@ -798,6 +848,8 @@ impl ModelBuilder {
             self.tet_plastic_strain.push(0.0);
             self.tet_yield_stress.push(yield_s);
             self.tet_hardening.push(hard);
+            // Stage 20.4 — kinematic-hardening modulus c.
+            self.tet_kinematic_hardening.push(kin_hard);
         }
         // Push the closing CSR offset (next mesh starts here).
         self.tet_mesh_offsets.push(self.tet_indices.len() as u32 / 4);
@@ -2070,6 +2122,7 @@ impl ModelBuilder {
             tet_plastic_strain: Buffer::from_vec(self.tet_plastic_strain, s),
             tet_yield_stress: Buffer::from_vec(self.tet_yield_stress, s),
             tet_hardening: Buffer::from_vec(self.tet_hardening, s),
+            tet_kinematic_hardening: Buffer::from_vec(self.tet_kinematic_hardening, s),
             tet_mesh_count: self.tet_mesh_offsets.len().saturating_sub(1),
             tet_mesh_offsets: Buffer::from_vec(
                 if self.tet_mesh_offsets.is_empty() {

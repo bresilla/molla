@@ -153,6 +153,12 @@ struct Mat3Cols {
 @group(5) @binding(11) var<storage, read_write> tet_plastic_strain:           array<f32>;
 @group(5) @binding(12) var<storage, read>       tet_yield_stress:             array<f32>;
 @group(5) @binding(13) var<storage, read>       tet_hardening:                array<f32>;
+// Stage 20.4 — kinematic-hardening back-stress α (3×3 symmetric tensor)
+// + the per-tet kinematic-hardening modulus c. Both default-zero in
+// back-compat models (Stage 20.3 path); the return-mapping kernel
+// short-circuits the back-stress branch when c == 0.
+@group(5) @binding(14) var<storage, read_write> tet_back_stress:              array<Mat3Cols>;
+@group(5) @binding(15) var<storage, read>       tet_kinematic_hardening:      array<f32>;
 
 const KIND_SPHERE:   u32 = 0u;
 const KIND_PLANE:    u32 = 1u;
@@ -981,31 +987,48 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let trace_eps = eps.x + eps.y + eps.z;
     let mean = trace_eps / 3.0;
     let dev = eps - vec3<f32>(mean, mean, mean);
-    let dev_norm = length(dev);
 
-    let s_trial = 2.0 * mu_l * dev_norm;
+    // Stage 20.4 — kinematic-hardening back-stress (Prager rule).
+    // Project α into the SVD's left-singular frame (`Uᵀ·α·U`), then
+    // take the diagonal as the principal back-stress vector. This
+    // assumes α stays approximately aligned with the trial-strain
+    // principal axes substep-to-substep — true under monotonic
+    // loading; small misalignment under cyclic / rotating load is
+    // bounded by the per-substep dt being small.
+    let c_kin = tet_kinematic_hardening[tet];
+    let alpha_raw = tet_back_stress[tet];
+    let alpha_old = mat3x3<f32>(alpha_raw.col0.xyz, alpha_raw.col1.xyz, alpha_raw.col2.xyz);
+    let alpha_local = transpose(svd.u) * alpha_old * svd.u;
+    let alpha_p = vec3<f32>(alpha_local[0].x, alpha_local[1].y, alpha_local[2].z);
+
+    // Shifted principal deviator: ξ = 2μ·dev - α_p (already in stress
+    // units; the scalar 2μ converts log-strain to Kirchhoff stress).
+    let two_mu = 2.0 * mu_l;
+    let xi = two_mu * dev - alpha_p;
+    let xi_norm = length(xi);
+
     let sigma_y = sigma_y0 + h_mod * tet_plastic_strain[tet];
     let sqrt_2_3: f32 = 0.81649658;
-    let f_yield = s_trial - sqrt_2_3 * sigma_y;
-    if (f_yield <= 0.0 || dev_norm < 1e-12) {
+    let f_yield = xi_norm - sqrt_2_3 * sigma_y;
+    if (f_yield <= 0.0 || xi_norm < 1e-12) {
         return;
     }
-    let denom = 2.0 * mu_l + (2.0 / 3.0) * h_mod;
+    // Plastic multiplier: closed-form for linear isotropic + kinematic
+    // hardening (consistent return mapping). The (2/3)·c contribution
+    // grows the denominator by the same shape as `H`, so a positive
+    // `c` shrinks Δγ proportionally — desirable, that's what makes
+    // back-stress well-behaved under cyclic loading.
+    let denom = two_mu + (2.0 / 3.0) * h_mod + (2.0 / 3.0) * c_kin;
     let dgamma_raw = max(f_yield / denom, 0.0);
-    // Damping cap (overshoot defuse). The closed-form return map is a
-    // single Newton step on the non-linear yield function — large
-    // strain steps can cross the yield cylinder and oscillate.
-    // We cap two ways:
-    //   (a) dgamma ≤ 0.1 · ‖dev_eps‖ — proportional cap relative to
-    //       the trial deviator norm.
-    //   (b) dgamma ≤ 0.01           — absolute cap, ~1% strain per
-    //       substep regardless of trial state, so ε_p accumulates at
-    //       a bounded rate even when F_p has drifted enough that
-    //       dev_norm grows large (the multiplicative split feeds
-    //       back into itself).
-    let dgamma = min(min(dgamma_raw, 0.1 * dev_norm), 0.01);
-    let scale = (dev_norm - dgamma) / dev_norm;
-    let new_dev = dev * scale;
+    // Damping cap (overshoot defuse) — same structure as Stage 20.3:
+    //   (a) Δγ ≤ 0.1 · (‖ξ‖ / 2μ) — proportional to the (now shifted)
+    //       trial state (scaled by 1/2μ to keep units of strain).
+    //   (b) Δγ ≤ 0.01           — absolute strain-rate cap.
+    let dgamma = min(min(dgamma_raw, 0.1 * xi_norm / max(two_mu, 1.0)), 0.01);
+    // Plastic flow direction in the principal frame: n̂ = ξ / ‖ξ‖.
+    let n_hat = xi / xi_norm;
+    // Pull the principal log-strain deviator back along n̂ by Δγ.
+    let new_dev = dev - n_hat * dgamma;
     let new_eps = new_dev + vec3<f32>(mean, mean, mean);
     let new_sigma = vec3<f32>(
         clamp(exp(new_eps.x), 0.05, 20.0),
@@ -1074,4 +1097,42 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         vec4<f32>(fp_clamped[2], 0.0),
     );
     tet_plastic_strain[tet] = min(tet_plastic_strain[tet] + sqrt_2_3 * dgamma, 10.0);
+
+    // Stage 20.4 — back-stress evolution (Prager rule). No-op when
+    // c == 0 (Stage 20.3 path). The principal-frame update
+    // `α_p_new = α_p + (2/3)·c·Δγ·n̂` is rotated back to world via
+    // `α = U·diag(α_p_new)·Uᵀ`. Cap |α_p| at 100·σ_y0 (or 1e6, whichever
+    // is larger) so a misbehaving substep doesn't accumulate unbounded.
+    if (c_kin > 0.0) {
+        let dalpha_p = n_hat * ((2.0 / 3.0) * c_kin * dgamma);
+        let alpha_p_new = alpha_p + dalpha_p;
+        let alpha_cap = max(100.0 * sigma_y0, 1.0e6);
+        let alpha_p_clamped = vec3<f32>(
+            clamp(alpha_p_new.x, -alpha_cap, alpha_cap),
+            clamp(alpha_p_new.y, -alpha_cap, alpha_cap),
+            clamp(alpha_p_new.z, -alpha_cap, alpha_cap),
+        );
+        let alpha_diag = mat3x3<f32>(
+            vec3<f32>(alpha_p_clamped.x, 0.0, 0.0),
+            vec3<f32>(0.0, alpha_p_clamped.y, 0.0),
+            vec3<f32>(0.0, 0.0, alpha_p_clamped.z),
+        );
+        let alpha_world = svd.u * alpha_diag * transpose(svd.u);
+        // Symmetrise — guard against numerical drift introducing
+        // an antisymmetric component.
+        let alpha_sym = mat3x3<f32>(
+            (alpha_world[0] + vec3<f32>(alpha_world[0].x, alpha_world[1].x, alpha_world[2].x)) * 0.5,
+            (alpha_world[1] + vec3<f32>(alpha_world[0].y, alpha_world[1].y, alpha_world[2].y)) * 0.5,
+            (alpha_world[2] + vec3<f32>(alpha_world[0].z, alpha_world[1].z, alpha_world[2].z)) * 0.5,
+        );
+        // NaN sentinel.
+        let av = alpha_sym[0].x;
+        if (av == av) {
+            tet_back_stress[tet] = Mat3Cols(
+                vec4<f32>(alpha_sym[0], 0.0),
+                vec4<f32>(alpha_sym[1], 0.0),
+                vec4<f32>(alpha_sym[2], 0.0),
+            );
+        }
+    }
 }

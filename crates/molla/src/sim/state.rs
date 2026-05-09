@@ -41,6 +41,14 @@ pub struct State {
     /// Per-tet equivalent plastic strain (scalar accumulator).
     /// Length = `model.tet_count`. Zero at allocation.
     pub tet_plastic_strain: Buffer<Real>,
+    // ── Stage 20.4 — kinematic-hardening back-stress ───────────────
+    /// Per-tet symmetric back-stress tensor `α` (Pa, 3×3 column-major
+    /// stored as `Mat3`). Mutated by the return-mapping pass per the
+    /// Prager / Ziegler evolution rule when
+    /// `Model.tet_kinematic_hardening > 0`. Length = `model.tet_count`.
+    /// Zero at allocation. Only the symmetric part is physically
+    /// meaningful — the kernel symmetrises on read.
+    pub tet_back_stress: Buffer<Mat3>,
 }
 
 impl State {
@@ -59,6 +67,7 @@ impl State {
             joint_qd: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
             tet_f_plastic: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
             tet_plastic_strain: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
+            tet_back_stress: Buffer::from_vec(Vec::new(), BufferUsage::StorageReadWrite),
         }
     }
 
@@ -83,6 +92,12 @@ impl State {
         };
         let initial_eps = if model.tet_count > 0 {
             model.tet_plastic_strain.host()?.to_vec()
+        } else {
+            Vec::new()
+        };
+        // Stage 20.4 — kinematic-hardening back-stress, zero at start.
+        let initial_alpha = if model.tet_count > 0 {
+            vec![Mat3::ZERO; model.tet_count]
         } else {
             Vec::new()
         };
@@ -115,6 +130,7 @@ impl State {
             ),
             tet_f_plastic: Buffer::from_vec(initial_fp, BufferUsage::StorageReadWrite),
             tet_plastic_strain: Buffer::from_vec(initial_eps, BufferUsage::StorageReadWrite),
+            tet_back_stress: Buffer::from_vec(initial_alpha, BufferUsage::StorageReadWrite),
         })
     }
 
@@ -140,6 +156,10 @@ impl State {
                 self.tet_plastic_strain.host()?.to_vec(),
                 StorageReadWrite,
             ),
+            tet_back_stress: Buffer::from_vec(
+                self.tet_back_stress.host()?.to_vec(),
+                StorageReadWrite,
+            ),
         })
     }
 
@@ -160,6 +180,9 @@ impl State {
             self.tet_plastic_strain
                 .host_mut()?
                 .copy_from_slice(other.tet_plastic_strain.host()?);
+            self.tet_back_stress
+                .host_mut()?
+                .copy_from_slice(other.tet_back_stress.host()?);
         }
         Ok(())
     }
@@ -202,6 +225,7 @@ impl State {
         if !self.tet_f_plastic.host()?.is_empty() {
             up!(tet_f_plastic);
             up!(tet_plastic_strain);
+            up!(tet_back_stress);
         }
         Ok(())
     }
