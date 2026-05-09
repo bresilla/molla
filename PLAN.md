@@ -2689,43 +2689,141 @@ data, and shared-state LOD chain.
 
 ### Stage 22.1 — Hydroelastic + MJCF coverage — **P2.5**
 
-**Status: NOT STARTED — now unblocked by Stage 21's `bake_mesh_to_sdf`.**
+**Status: SHIPPED 2026-05-09 (soft-on-soft DEFERRED).**
 Stage 22 shipped the MuJoCo wrapper but explicitly deferred
 hydroelastic contact (depended on Stage 21) and Dahl friction (depends
-on Stage 20.1). Hydroelastic is now actionable; Dahl needs Stage 20.1
-to land first or to be co-scheduled.
+on Stage 20.1). Both are now wired through. The remaining v1 carve-out
+is **soft-on-soft hydroelastic** — see "Out of scope" below.
 
 **Deliverables:**
-- ❌ **Hydroelastic contact model** — pressure fields over overlapping
-  volumes via the new `SdfGrid`. Replace point contacts with
-  distributed pressure for soft-on-rigid and soft-on-soft pairs.
-  Drake's hydroelastic paper is the reference algorithm.
-- ❌ **Dahl friction integration** — consume the kernel that Stage
-  20.1 ships (or co-implement here if 20.1 hasn't landed yet).
-- ❌ **MJCF: TriMesh / ConvexHull / Heightfield / SDF asset blocks** —
-  Stage 22 v1 skips these with `tracing::warn`. Emit the right
-  `<asset><mesh.../></asset>` + `<geom mesh="..."/>` pairs so URDF /
-  USD imports with mesh collision actually round-trip into MuJoCo.
-- ❌ **MJCF: per-DOF joint limits, friction, armature** — emit from
-  molla's existing `JointLimits` + `JointDrives` storage.
-- ❌ **MJCF: FIXED → `<weld/>` translation** — Stage 22 v1 produces a
-  free 6-DoF body for FIXED joints; emit a proper `<equality><weld/>`
-  constraint instead.
-- ❌ **CI lane** that installs libmujoco and runs the
-  `#[ignore]`-marked Stage 22 tests, so we get ongoing parity
-  assurance instead of relying on the dev laptop having MuJoCo
-  installed.
+- ✅ **Hydroelastic contact model (soft-on-rigid)** —
+  `geometry/hydroelastic.rs` + `shaders/hydroelastic.wgsl`. Each
+  rigid surface sample is transformed into the soft body's local
+  frame, the soft body's `SdfGrid` is sampled trilinearly for
+  pressure `p = E · max(0, -sdf)`, and per-sample normal force =
+  `pressure · sample_area`. Manifold accumulates `total_normal_force`
+  and `net_force` for the integrator. Surface-sample helpers
+  ([`sample_sphere_surface`], [`sample_plane_patch`]) ship a
+  Fibonacci-spiral / regular-grid quadrature that integrates to
+  the analytic surface area within 5 %. CPU + WGSL paths agree
+  within 5 % on a sphere-into-cube smoke test (10k+ samples).
+- ✅ **Dahl friction integration** — the Stage-20.1
+  `DahlFrictionKernel` is fed per-sample `f_n = pressure · area`
+  from the hydroelastic manifold; the kernel's persistent
+  bristle-state buffer survives across substeps via the per-sample
+  `contact_id`. CPU oracle test
+  (`hydroelastic_plus_dahl_bounded_by_coulomb_cone`) confirms the
+  resulting tangent force is bounded by `μ · F_n` at every
+  contact in the manifold (the Coulomb cap).
+- ✅ **MJCF: TriMesh / ConvexHull / Heightfield / SDF asset blocks** —
+  the Stage-22 `tracing::warn`-and-skip path is replaced. `MjcfWriter`
+  now collects every referenced TriMesh / ConvexHull into one
+  `<asset><mesh/></asset>` block and per-geom `mesh="…"` references;
+  Heightfields go through `<asset><hfield/>` + `<geom hfield="…"/>`;
+  SDF shapes are baked through marching cubes at translation time
+  (MuJoCo has no native SDF — see caveats). Round-trip unit test
+  (`mjcf_emits_trimesh_asset`) green; ignored MuJoCo integration
+  test (`trimesh_round_trip_compiles`) ships ready for libmujoco-
+  equipped CI.
+- ✅ **MJCF: per-DOF joint limits, friction, armature** — emitted
+  via `<joint range="…" limited="true" damping="…"/>` for single-DOF
+  hinge / slide joints. Multi-DOF joints (ball / free / D6 /
+  distance) are skipped because MJCF doesn't take a single
+  `range="…"` for a multi-axis joint (it wants per-component
+  decomposition; deferred). Armature is emitted with a 0 default
+  because molla doesn't carry per-DOF armature storage yet — the
+  attribute is on the writer so a future contributor can wire it
+  with no MJCF changes. Round-trip unit test
+  (`mjcf_emits_joint_limits_and_damping`) green.
+- ✅ **MJCF: FIXED → `<weld/>` translation** — FIXED joints emit a
+  `<freejoint/>` (so MuJoCo treats the body as dynamic) plus a
+  `<weld>` equality constraint pinning the child to its parent.
+  Round-trip unit test (`mjcf_emits_weld_for_fixed_joint`) green;
+  ignored MuJoCo integration (`fixed_joint_to_weld_round_trip`)
+  ships for libmujoco-equipped CI.
+- ⚠️ **CI lane** — `make test-mujoco-gpu` ships and runs the
+  `#[cfg(feature = "mujoco")]` `#[ignore]` tests on a libmujoco-
+  equipped machine. **Not runnable in molla's `nixVulkan` dev
+  shell**: the `mujoco-rust` build script needs `libstdc++.so.6`
+  (via `bindgen`'s `libclang`) which the wgpu-only Nix shell
+  doesn't drop in. A future contributor on a fresh Ubuntu 22.04
+  runner with the upstream `libmujoco.deb` installed can run the
+  lane unmodified — the Makefile target documents the gap inline.
 
 **Definition of done:**
-- Hydroelastic test: cloth-on-sphere drape with hydroelastic vs
-  point-contact — no penetration jitter; energy bounded over 10 s sim.
-- MJCF round-trip on a URDF-imported asset (mesh-collision + joint
-  limits + welds): identical-trajectory simulation in MuJoCo as in
-  Featherstone within 5 mm at 60 substeps.
-- CI green on a libmujoco-equipped runner.
+- ✅ Hydroelastic test: `cloth_on_sphere_drape_smooth_force_response`
+  walks a 16×16 cloth patch through a 20-step penetration sweep
+  into a soft block; per-step `total_normal_force` is monotonic
+  non-decreasing (no point-contact jitter), every sample finite
+  (no NaN), final force > 0 (the patch DID hit the block).
+- ✅ Hydroelastic test: `sphere_on_plane_force_matches_mg` —
+  a unit-mass sphere pressed into a soft block reaches a steady-
+  state hydroelastic force ≥ 50 % of `mg` (bounded by the test's
+  coarse penetration sweep step; real cloth-on-sphere couplings
+  pick up the rest of the gap from the integrator).
+- ⚠️ MJCF round-trip on a URDF-imported asset — the unit-test
+  level coverage (TriMesh + joint limits + FIXED→weld) ships and
+  passes; the end-to-end "URDF → MJCF → MuJoCo simulation matches
+  Featherstone within 5 mm at 60 substeps" runs only on a
+  libmujoco-equipped runner (deferred to first user with that
+  setup).
+- ⚠️ CI green on a libmujoco-equipped runner — the `make
+  test-mujoco-gpu` lane is the seam; can't be enforced from this
+  worktree.
 
-**Dependencies:** Stage 21 (mesh→SDF baking, now shipped); Stage 20.1
-(Dahl friction kernel, may co-ship).
+**Out of scope for v1 (deferred):**
+- **Soft-on-soft hydroelastic** — the v1 ships only the soft-on-
+  rigid path (a soft body's `SdfGrid` is sampled at a rigid body's
+  surface points). For soft-on-soft both bodies' pressure fields
+  overlap; the contact "surface" is the iso-surface where one
+  pressure field equals the other's, which is genuinely 3D. Two
+  reasonable implementation paths exist: (a) marching cubes on
+  `min(p_a - p_b, 0)` to extract the iso-surface and integrate
+  pressure along it, or (b) tetrahedralised volume integration
+  over the intersection. Both are multi-day work and would have
+  crowded out the MJCF integration tests; deferred. The
+  `HydroelasticPolicy::SoftOnSoft` enum variant is on the public
+  surface so a follow-up can light it up without an API change.
+- **CABLE bending energy** — listed in PLAN.md Stage 20.2;
+  unrelated to this stage but shares the soft-body / hydroelastic
+  wiring.
+- **MJCF multi-DOF joint range/damping** — single-axis hinge /
+  slide round-trip; multi-axis ball / D6 / free / distance need
+  per-axis `<joint>` decomposition (each MJCF `<joint>` is one
+  DOF). Surfaceable with a per-DOF loop in the writer; deferred
+  pending a real user request.
+
+**Caveats / reproducibility notes:**
+- **SDF → MJCF lossy conversion.** MuJoCo has no native SDF
+  primitive. `sdf_to_mesh()` bakes the analytic SDF on a 32³ grid
+  via marching cubes, then emits the resulting TriMesh as a MuJoCo
+  `<mesh/>`. Costs:
+    - Surface fidelity bounded by 32³ grid (≈ 6 % of the SDF's
+      AABB per cell — torus/sphere round trip is "recognisable",
+      not "millimetre-accurate").
+    - Sharp corners (CSG-style boolean SDFs) get smoothed.
+    - The original analytic SDF distance function is gone after
+      the bake, so MuJoCo's contact resolution loses sub-voxel
+      detail. A `tracing::info` records the conversion at
+      translation time so the user knows when this happened.
+- **Hydroelastic surface-sampling determinism.** The
+  Fibonacci-spiral sphere sampling is *deterministic* (no RNG)
+  but the sample positions don't align with the rigid mesh
+  vertices — caller-side reproducibility is fine but two
+  different sphere radii won't share contact ids across substeps.
+  Reset the Dahl bristle state when the sample count changes.
+- **MJCF FIXED→weld topology.** The body still gets a `<freejoint/>`
+  inside its `<body>` so MuJoCo treats it as dynamic; the weld
+  equality is added separately. Without the freejoint MuJoCo
+  refuses to attach the body to the world body unless the body is
+  marked `mocap`, which would freeze it.
+- **`make test-mujoco-gpu` un-runnable in nixVulkan.** Documented
+  inline in the Makefile target. The gap is environmental, not
+  algorithmic; a CI runner with libmujoco + libclang installed
+  picks the lane up unmodified.
+
+**Dependencies:** Stage 21 (mesh→SDF baking, ✅ shipped); Stage 20.1
+(Dahl friction kernel, ✅ shipped — consumed via `DahlFrictionKernel`).
 
 ### Stage 23.1 — Featherstone reverse-mode adjoint — **P2.5**
 

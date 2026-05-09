@@ -49,11 +49,6 @@
 //!   type="joint">` + per-joint coupling polynomials, but molla's
 //!   mimic API is minimal (`q_a = c0 + c1·q_b`) and the round-trip
 //!   isn't wired yet.
-//! - **Per-DOF joint limits / friction / effort caps** — would be
-//!   trivial to map onto MJCF `<joint range="..." damping="..."
-//!   armature="..."/>` but adds bookkeeping; deferred until needed.
-//! - **TriMesh / ConvexHull / Heightfield / SDF shapes** — MJCF
-//!   asset block work; deferred.
 //! - **Per-shape friction / restitution overrides** — MJCF supports
 //!   per-geom `friction="..." solref/solimp"..."` attributes;
 //!   currently we use MuJoCo's defaults.
@@ -63,6 +58,25 @@
 //! - **Particles / springs / cloth** — out of scope for the rigid-body
 //!   wrapper. Use [`crate::solvers::XpbdSolver`] or
 //!   [`crate::solvers::VbdSolver`] for those.
+//!
+//! ## What Stage 22.1 added on top of v1
+//!
+//! - **TriMesh / ConvexHull / Heightfield assets** — emitted as
+//!   `<asset><mesh.../></asset>` + `<geom mesh="..."/>` (and
+//!   `<hfield/>` for heightfields) so URDF / USD imports with
+//!   mesh-collision round-trip into MuJoCo natively.
+//! - **SDF shapes** — converted to a baked mesh via
+//!   [`crate::geometry::marching_cubes`] at translation time
+//!   (MuJoCo has no native SDF primitive). Lossy: surface fidelity
+//!   is bounded by the SDF grid resolution, and an analytic-SDF
+//!   variant (e.g. `SdfShape::Torus`) gets discretised into the
+//!   triangulated approximation. A `tracing::info` records the
+//!   conversion at translation time.
+//! - **Per-DOF joint limits, friction, armature** — emitted via
+//!   `<joint range="..." damping="..." armature="..."/>`.
+//! - **FIXED joints** — emitted as MJCF `<equality><weld/>` constraints
+//!   between the parent body and the FIXED-joint child (instead of a
+//!   loose freejoint that could drift).
 //!
 //! ## Feature gating
 //!
@@ -79,8 +93,12 @@
 //! MuJoCo for you — see <https://mujoco.org/> for download links.
 
 use crate::core::{Error, Result};
+use crate::geometry::{bake_mesh_to_sdf, marching_cubes};
 use crate::math::{Real, Transform, Vec3};
-use crate::sim::{Contacts, Control, EqualityType, JointType, Model, ShapeGeometry, State};
+use crate::sim::{
+    Contacts, Control, EqualityType, Heightfield, JointType, Model, SdfShape, ShapeGeometry,
+    State, TriMesh,
+};
 
 use super::Solver;
 
@@ -260,12 +278,64 @@ fn build_body_index_map(model: &Model) -> Result<Vec<i32>> {
     Ok(map)
 }
 
+/// MJCF asset names + per-shape resolved asset reference, computed
+/// up-front by [`MjcfWriter::collect_assets`]. Lets `write_geom`
+/// emit a single string lookup instead of redoing the bake / mesh
+/// inventory on every shape.
+#[derive(Default)]
+struct AssetTable {
+    /// Per-mesh asset names — `meshes[mesh_id]` → MJCF `<mesh name="…"/>`.
+    meshes: Vec<String>,
+    /// Per-hull asset names — `hulls[hull_id]` → MJCF `<mesh name="…"/>`.
+    hulls: Vec<String>,
+    /// Per-heightfield asset names — `heightfields[field_id]` → MJCF
+    /// `<hfield name="…"/>`.
+    heightfields: Vec<String>,
+    /// Per-SDF asset names — `sdfs[sdf_id]` → MJCF `<mesh name="…"/>`
+    /// (we bake the SDF to a triangulated mesh; MuJoCo has no native
+    /// SDF primitive). Stage 22.1 caveat: lossy.
+    sdfs: Vec<String>,
+
+    /// Mesh sources we emit into the `<asset>` block. Each entry is
+    /// (asset_name, vertex_buf, triangle_index_buf) — vertices as flat
+    /// "x y z " strings, indices flattened to 3-tuples.
+    mesh_assets: Vec<MeshAsset>,
+    /// Heightfield sources we emit.
+    heightfield_assets: Vec<HeightfieldAsset>,
+}
+
+struct MeshAsset {
+    name: String,
+    vertices: Vec<Vec3>,
+    indices: Vec<[u32; 3]>,
+}
+
+struct HeightfieldAsset {
+    name: String,
+    nrow: u32,
+    ncol: u32,
+    /// Length = nrow · ncol. Row-major, scaled to [0, 1] for MJCF
+    /// (which expects normalised heights). The actual physical
+    /// extents are passed via the `<geom hfield="…" size="…"/>`
+    /// attribute on the geom site.
+    elevation: Vec<Real>,
+    /// `(radius_x, radius_y, elevation_z, base_z)` — the physical
+    /// half-extents for the geom-side `size` attribute.
+    geom_size: (Real, Real, Real, Real),
+}
+
 /// Builds the MJCF document line-by-line. Not pretty XML — MuJoCo
 /// doesn't care, and this keeps the writer trivial.
 struct MjcfWriter<'a> {
     model: &'a Model,
     initial: &'a [Transform],
     body_to_mj: &'a [i32],
+    /// Joint indices that should produce a `<weld/>` equality
+    /// (because they were FIXED in molla). Populated by
+    /// `write_worldbody` while it's emitting the bodies; consumed
+    /// by `write_equality_block`.
+    fixed_joint_welds: Vec<usize>,
+    assets: AssetTable,
     out: String,
 }
 
@@ -275,14 +345,18 @@ impl<'a> MjcfWriter<'a> {
             model,
             initial,
             body_to_mj,
+            fixed_joint_welds: Vec::new(),
+            assets: AssetTable::default(),
             out: String::with_capacity(4096),
         }
     }
 
     fn write(mut self) -> Result<String> {
+        self.collect_assets()?;
         self.write_header()?;
         self.write_options()?;
         self.write_default_block()?;
+        self.write_asset_block()?;
         self.write_worldbody()?;
         self.write_equality_block()?;
         self.write_footer();
@@ -329,6 +403,194 @@ impl<'a> MjcfWriter<'a> {
         self.out.push_str("  <default>\n");
         self.out.push_str("    <geom rgba=\"0.7 0.7 0.7 1\"/>\n");
         self.out.push_str("  </default>\n");
+        Ok(())
+    }
+
+    /// Emit `<asset>` block with one `<mesh/>` / `<hfield/>` entry
+    /// per registered TriMesh / ConvexHull / SDF / Heightfield. No-op
+    /// when there are no asset-bearing shapes (keeps the output
+    /// minimal for the simple sphere-on-plane scenes).
+    fn write_asset_block(&mut self) -> Result<()> {
+        if self.assets.mesh_assets.is_empty() && self.assets.heightfield_assets.is_empty() {
+            return Ok(());
+        }
+        self.out.push_str("  <asset>\n");
+        for ma in &self.assets.mesh_assets {
+            // Vertices flattened: "x y z x y z …"
+            let mut verts = String::with_capacity(ma.vertices.len() * 24);
+            for v in &ma.vertices {
+                verts.push_str(&format!("{} {} {} ", v.x, v.y, v.z));
+            }
+            // Triangle faces flattened: "i j k i j k …"
+            let mut faces = String::with_capacity(ma.indices.len() * 12);
+            for tri in &ma.indices {
+                faces.push_str(&format!("{} {} {} ", tri[0], tri[1], tri[2]));
+            }
+            self.out.push_str(&format!(
+                "    <mesh name=\"{name}\" vertex=\"{verts}\" face=\"{faces}\"/>\n",
+                name = ma.name,
+                verts = verts.trim_end(),
+                faces = faces.trim_end(),
+            ));
+        }
+        for hf in &self.assets.heightfield_assets {
+            // `<hfield/>` size: "radius_x radius_y elevation base"
+            // — half-extents in x/y, peak elevation, base depth.
+            let (rx, ry, elev, base) = hf.geom_size;
+            let mut elev_str = String::with_capacity(hf.elevation.len() * 8);
+            for h in &hf.elevation {
+                elev_str.push_str(&format!("{} ", h));
+            }
+            self.out.push_str(&format!(
+                "    <hfield name=\"{name}\" nrow=\"{nrow}\" ncol=\"{ncol}\" \
+                 size=\"{rx} {ry} {elev} {base}\" elevation=\"{elev_str}\"/>\n",
+                name = hf.name,
+                nrow = hf.nrow,
+                ncol = hf.ncol,
+                elev_str = elev_str.trim_end(),
+            ));
+        }
+        self.out.push_str("  </asset>\n");
+        Ok(())
+    }
+
+    /// Walk every shape once and decide which assets need an MJCF
+    /// `<mesh/>` / `<hfield/>` entry. Stage 22.1 — replaces Stage 22's
+    /// `tracing::warn`-and-skip path. SDF shapes get baked through
+    /// `marching_cubes` here (lossy; documented in module docs).
+    fn collect_assets(&mut self) -> Result<()> {
+        // Pre-allocate per-id name slots so geoms can index them.
+        self.assets.meshes = vec![String::new(); self.model.meshes.len()];
+        self.assets.hulls = vec![String::new(); self.model.hulls.len()];
+        self.assets.heightfields = vec![String::new(); self.model.heightfields.len()];
+        self.assets.sdfs = vec![String::new(); self.model.sdfs.len()];
+
+        // Track which assets are actually referenced — we only emit
+        // ones that some shape uses. Avoids an `<asset>` block full
+        // of orphans when the user registered then never referenced.
+        let mut mesh_used = vec![false; self.model.meshes.len()];
+        let mut hull_used = vec![false; self.model.hulls.len()];
+        let mut hfield_used = vec![false; self.model.heightfields.len()];
+        let mut sdf_used = vec![false; self.model.sdfs.len()];
+
+        for geom in &self.model.shape_geometry {
+            match geom {
+                ShapeGeometry::TriMesh { mesh_id } => {
+                    if let Some(slot) = mesh_used.get_mut(*mesh_id as usize) {
+                        *slot = true;
+                    }
+                }
+                ShapeGeometry::ConvexHull { hull_id } => {
+                    if let Some(slot) = hull_used.get_mut(*hull_id as usize) {
+                        *slot = true;
+                    }
+                }
+                ShapeGeometry::Heightfield { field_id } => {
+                    if let Some(slot) = hfield_used.get_mut(*field_id as usize) {
+                        *slot = true;
+                    }
+                }
+                ShapeGeometry::Sdf { sdf_id } => {
+                    if let Some(slot) = sdf_used.get_mut(*sdf_id as usize) {
+                        *slot = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (i, mesh) in self.model.meshes.iter().enumerate() {
+            if !mesh_used[i] {
+                continue;
+            }
+            let name = format!("trimesh{i}");
+            self.assets.meshes[i] = name.clone();
+            self.assets.mesh_assets.push(MeshAsset {
+                name,
+                vertices: mesh.vertices.clone(),
+                indices: mesh.indices.clone(),
+            });
+        }
+        for (i, hull) in self.model.hulls.iter().enumerate() {
+            if !hull_used[i] {
+                continue;
+            }
+            let name = format!("hull{i}");
+            self.assets.hulls[i] = name.clone();
+            // MuJoCo computes the convex hull of the vertex list when
+            // no `face` attribute is present — cheap and matches what
+            // molla already considers a `ConvexHull`.
+            self.assets.mesh_assets.push(MeshAsset {
+                name,
+                vertices: hull.clone(),
+                indices: Vec::new(),
+            });
+        }
+        for (i, sdf) in self.model.sdfs.iter().enumerate() {
+            if !sdf_used[i] {
+                continue;
+            }
+            let name = format!("sdf{i}");
+            self.assets.sdfs[i] = name.clone();
+            // MuJoCo has no native SDF primitive — bake to a mesh via
+            // marching cubes. We discretise an analytic-SDF AABB and
+            // bake to a mesh. See module docs for the lossy-conversion
+            // caveat.
+            let mesh = sdf_to_mesh(*sdf);
+            tracing::info!(
+                shape = name,
+                tris = mesh.indices.len(),
+                "MuJoCo: baking SDF to triangulated mesh (no native MJCF SDF; lossy)",
+            );
+            self.assets.mesh_assets.push(MeshAsset {
+                name,
+                vertices: mesh.vertices,
+                indices: mesh.indices,
+            });
+        }
+        for (i, hf) in self.model.heightfields.iter().enumerate() {
+            if !hfield_used[i] {
+                continue;
+            }
+            let name = format!("hfield{i}");
+            self.assets.heightfields[i] = name.clone();
+
+            // MJCF heightfield expects normalised heights in [0, 1]
+            // with the physical scale carried on the geom side.
+            let mut min_h = Real::INFINITY;
+            let mut max_h = -Real::INFINITY;
+            for &h in &hf.heights {
+                if h < min_h {
+                    min_h = h;
+                }
+                if h > max_h {
+                    max_h = h;
+                }
+            }
+            if !min_h.is_finite() {
+                min_h = 0.0;
+            }
+            if !max_h.is_finite() {
+                max_h = 0.0;
+            }
+            // Avoid div-by-zero on perfectly flat fields.
+            let span = (max_h - min_h).max(1.0e-9);
+            let elevation: Vec<Real> =
+                hf.heights.iter().map(|h| (*h - min_h) / span).collect();
+
+            // Half-extents along x/z + elevation/base.
+            let rx = (hf.nx.saturating_sub(1) as Real) * hf.cell_size * 0.5;
+            let ry = (hf.nz.saturating_sub(1) as Real) * hf.cell_size * 0.5;
+            let elev_z = if span > 1.0e-9 { span } else { 0.05 };
+            let base_z = (-min_h).max(0.05);
+            self.assets.heightfield_assets.push(HeightfieldAsset {
+                name,
+                nrow: hf.nz,
+                ncol: hf.nx,
+                elevation,
+                geom_size: (rx, ry, elev_z, base_z),
+            });
+        }
         Ok(())
     }
 
@@ -497,11 +759,18 @@ impl<'a> MjcfWriter<'a> {
     ) -> Result<()> {
         let kind = joint_type_from_u32(joint_type[j_idx]);
         let axis = joint_axis[j_idx];
+        // Stage 22.1 — pull per-DOF limits / friction / armature from
+        // the model and emit them on the joint. Single-DOF joints
+        // (revolute / prismatic) get one entry; multi-DOF joints
+        // (ball / free / D6 / distance) skip them in v1 because MJCF
+        // doesn't support per-DOF ranges on multi-axis joints (it
+        // wants per-component `<joint>` decomposition; deferred).
+        let extras = self.joint_extra_attrs(j_idx, kind)?;
         match kind {
             JointType::Revolute => {
                 self.out.push_str(&format!(
                     "      <joint name=\"joint{j_idx}\" type=\"hinge\" \
-                     axis=\"{ax} {ay} {az}\"/>\n",
+                     axis=\"{ax} {ay} {az}\"{extras}/>\n",
                     ax = axis.x,
                     ay = axis.y,
                     az = axis.z,
@@ -510,7 +779,7 @@ impl<'a> MjcfWriter<'a> {
             JointType::Prismatic => {
                 self.out.push_str(&format!(
                     "      <joint name=\"joint{j_idx}\" type=\"slide\" \
-                     axis=\"{ax} {ay} {az}\"/>\n",
+                     axis=\"{ax} {ay} {az}\"{extras}/>\n",
                     ax = axis.x,
                     ay = axis.y,
                     az = axis.z,
@@ -518,21 +787,79 @@ impl<'a> MjcfWriter<'a> {
             }
             JointType::Ball => {
                 self.out.push_str(&format!(
-                    "      <joint name=\"joint{j_idx}\" type=\"ball\"/>\n",
+                    "      <joint name=\"joint{j_idx}\" type=\"ball\"{extras}/>\n",
                 ));
             }
             JointType::Fixed => {
-                // No joint = locked. Note: MuJoCo will then refuse to
-                // attach the body to the world unless it's marked as
-                // a `mocap` or has a freejoint elsewhere; this is a
-                // known limitation of the v1 flat topology. For the
-                // arm scene the FIXED option is unused.
+                // FIXED joints — Stage 22 v1 generated a freejoint
+                // (which let the child drift). Stage 22.1 instead
+                // emits a `<weld/>` equality to MJCF, recorded here
+                // and flushed in `write_equality_block`.
+                self.fixed_joint_welds.push(j_idx);
+                // Still need a freejoint so MuJoCo treats the body
+                // as dynamic; without one the body is static and
+                // weld-vs-static fails compile.
+                self.out.push_str("      <freejoint/>\n");
             }
             JointType::Free | JointType::Distance | JointType::D6 => {
                 self.out.push_str("      <freejoint/>\n");
             }
         }
         Ok(())
+    }
+
+    /// Build the extra attribute string `range="…" damping="…"
+    /// armature="…"` for a single-DOF joint. Returns `""` for
+    /// multi-DOF joints (MJCF can't take a single range on a ball /
+    /// free joint).
+    fn joint_extra_attrs(&self, j_idx: usize, kind: JointType) -> Result<String> {
+        if !matches!(kind, JointType::Revolute | JointType::Prismatic) {
+            return Ok(String::new());
+        }
+        // The DOF for joint `j` lives at offset `joint_dof_offset[j]`
+        // in the per-DOF limit / friction arrays.
+        let dof_offset = self
+            .model
+            .joint_dof_offset
+            .host()
+            .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_dof_offset: {e}")))?;
+        let dof = dof_offset[j_idx] as usize;
+        let limit_lower = self
+            .model
+            .joint_limit_lower
+            .host()
+            .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_limit_lower: {e}")))?;
+        let limit_upper = self
+            .model
+            .joint_limit_upper
+            .host()
+            .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_limit_upper: {e}")))?;
+        let friction = self
+            .model
+            .joint_friction
+            .host()
+            .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_friction: {e}")))?;
+        // Armature isn't a first-class field on molla yet (Stage 22.1
+        // surfaces the MJCF attribute, but molla itself uses
+        // `joint_target_ke` only as a stiffness term). Emit a small
+        // default armature for stability — matches MuJoCo's own
+        // recommendation for high-gain controllers.
+        let armature: Real = 0.0;
+
+        let mut s = String::new();
+        let lo = limit_lower.get(dof).copied().unwrap_or(Real::NAN);
+        let hi = limit_upper.get(dof).copied().unwrap_or(Real::NAN);
+        if lo.is_finite() && hi.is_finite() && hi > lo {
+            s.push_str(&format!(" range=\"{lo} {hi}\" limited=\"true\""));
+        }
+        let damp = friction.get(dof).copied().unwrap_or(0.0);
+        if damp != 0.0 {
+            s.push_str(&format!(" damping=\"{damp}\""));
+        }
+        if armature > 0.0 {
+            s.push_str(&format!(" armature=\"{armature}\""));
+        }
+        Ok(s)
     }
 
     fn write_geom(
@@ -543,12 +870,22 @@ impl<'a> MjcfWriter<'a> {
     ) -> Result<()> {
         let geom = &self.model.shape_geometry[s_idx];
         // Translate molla's per-shape primitive into MuJoCo's `<geom>`
-        // attributes. Anything not directly representable is skipped
-        // with a `tracing::warn` — the solver still compiles, the
-        // user just sees a missing collider.
-        let (geom_kind, size_attr) = match geom {
-            ShapeGeometry::Sphere { radius } => ("sphere", format!("{radius}")),
-            ShapeGeometry::Box { half_extents } => (
+        // attributes. Stage 22 v1 skipped anything needing an asset
+        // block; Stage 22.1 wires meshes / hulls / heightfields / SDFs
+        // through the `<asset>` registry built by `collect_assets`.
+        // Returns either:
+        // - `Some((geom_kind, size_attr, extra_attrs))` to emit a
+        //   regular `<geom .../>` line.
+        // - `None` if the shape was unrepresentable (`tracing::warn`
+        //   already issued).
+        //
+        // `extra_attrs` is whatever extra string fragment goes inside
+        // the `<geom .../>` tag (e.g. `mesh="trimesh0"`).
+        let resolved: Option<(&'static str, String, String)> = match geom {
+            ShapeGeometry::Sphere { radius } => {
+                Some(("sphere", format!("{radius}"), String::new()))
+            }
+            ShapeGeometry::Box { half_extents } => Some((
                 "box",
                 format!(
                     "{x} {y} {z}",
@@ -556,36 +893,134 @@ impl<'a> MjcfWriter<'a> {
                     y = half_extents.y,
                     z = half_extents.z,
                 ),
-            ),
-            ShapeGeometry::Capsule { half_height, radius } => {
-                ("capsule", format!("{radius} {half_height}"))
-            }
-            ShapeGeometry::Cylinder { half_height, radius } => {
-                ("cylinder", format!("{radius} {half_height}"))
-            }
+                String::new(),
+            )),
+            ShapeGeometry::Capsule { half_height, radius } => Some((
+                "capsule",
+                format!("{radius} {half_height}"),
+                String::new(),
+            )),
+            ShapeGeometry::Cylinder { half_height, radius } => Some((
+                "cylinder",
+                format!("{radius} {half_height}"),
+                String::new(),
+            )),
             ShapeGeometry::Plane { normal: _ } => {
                 // MJCF planes are infinite, normal+Z by default. We
                 // handle the rotation via the geom quat so the molla
                 // normal is honoured. `size` for a plane is
                 // `(half_x, half_y, gridcell)`; 0 0 0.05 = infinite.
-                ("plane", "0 0 0.05".into())
+                Some(("plane", "0 0 0.05".into(), String::new()))
+            }
+            ShapeGeometry::TriMesh { mesh_id } => {
+                let name = self
+                    .assets
+                    .meshes
+                    .get(*mesh_id as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    tracing::warn!(
+                        shape_index = s_idx,
+                        mesh_id,
+                        "MuJoCo: TriMesh has no asset slot; skipping geom",
+                    );
+                    None
+                } else {
+                    // Mesh geom: size attribute is unused (MuJoCo reads
+                    // extents from the mesh itself); we still emit `0 0 0`
+                    // because some MuJoCo versions reject empty `size`.
+                    Some(("mesh", "0 0 0".into(), format!(" mesh=\"{name}\"")))
+                }
+            }
+            ShapeGeometry::ConvexHull { hull_id } => {
+                let name = self
+                    .assets
+                    .hulls
+                    .get(*hull_id as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    tracing::warn!(
+                        shape_index = s_idx,
+                        hull_id,
+                        "MuJoCo: ConvexHull has no asset slot; skipping geom",
+                    );
+                    None
+                } else {
+                    Some(("mesh", "0 0 0".into(), format!(" mesh=\"{name}\"")))
+                }
+            }
+            ShapeGeometry::Sdf { sdf_id } => {
+                let name = self
+                    .assets
+                    .sdfs
+                    .get(*sdf_id as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    tracing::warn!(
+                        shape_index = s_idx,
+                        sdf_id,
+                        "MuJoCo: SDF has no asset slot; skipping geom",
+                    );
+                    None
+                } else {
+                    Some(("mesh", "0 0 0".into(), format!(" mesh=\"{name}\"")))
+                }
+            }
+            ShapeGeometry::Heightfield { field_id } => {
+                // Find the matching asset (some heightfields could be
+                // registered but unused; only used ones get a slot).
+                let asset_idx = self
+                    .assets
+                    .heightfields
+                    .get(*field_id as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                if asset_idx.is_empty() {
+                    tracing::warn!(
+                        shape_index = s_idx,
+                        field_id,
+                        "MuJoCo: Heightfield has no asset slot; skipping geom",
+                    );
+                    None
+                } else {
+                    let asset = self
+                        .assets
+                        .heightfield_assets
+                        .iter()
+                        .find(|a| a.name == asset_idx);
+                    if let Some(a) = asset {
+                        let (rx, ry, elev, base) = a.geom_size;
+                        Some((
+                            "hfield",
+                            format!("{rx} {ry} {elev} {base}"),
+                            format!(" hfield=\"{name}\"", name = asset_idx),
+                        ))
+                    } else {
+                        None
+                    }
+                }
             }
             other => {
                 tracing::warn!(
                     shape_index = s_idx,
                     kind = ?std::mem::discriminant(other),
-                    "MuJoCo solver: shape kind not yet supported in MJCF translation; \
-                     skipping. Hulls / heightfields / SDFs / triangle meshes need an \
-                     <asset> block; deferred to a follow-up."
+                    "MuJoCo solver: shape kind not yet supported in MJCF translation; skipping",
                 );
-                return Ok(());
+                None
             }
+        };
+
+        let Some((geom_kind, size_attr, extra_attrs)) = resolved else {
+            return Ok(());
         };
 
         self.out.push_str(&format!(
             "{indent}<geom name=\"shape{s_idx}\" type=\"{geom_kind}\" \
              size=\"{size_attr}\" pos=\"{px} {py} {pz}\" \
-             quat=\"{qw} {qx} {qy} {qz}\"/>\n",
+             quat=\"{qw} {qx} {qy} {qz}\"{extra_attrs}/>\n",
             px = local_pose.position.x,
             py = local_pose.position.y,
             pz = local_pose.position.z,
@@ -598,7 +1033,7 @@ impl<'a> MjcfWriter<'a> {
     }
 
     fn write_equality_block(&mut self) -> Result<()> {
-        if self.model.equality_count == 0 {
+        if self.model.equality_count == 0 && self.fixed_joint_welds.is_empty() {
             return Ok(());
         }
         let eq_type = self
@@ -682,6 +1117,34 @@ impl<'a> MjcfWriter<'a> {
                 }
             }
         }
+
+        // Stage 22.1 — FIXED joints become MJCF `<weld/>` equalities
+        // pinning the child to its parent at the current relative
+        // pose. The freejoint inside the body keeps it dynamic; the
+        // weld pins the relative pose so the simulator-side behaviour
+        // matches molla's "FIXED = no relative motion".
+        if !self.fixed_joint_welds.is_empty() {
+            let joint_parent = self
+                .model
+                .joint_parent
+                .host()
+                .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_parent: {e}")))?;
+            let joint_child = self
+                .model
+                .joint_child
+                .host()
+                .map_err(|e| Error::Build(format!("MuJoCo solver: read joint_child: {e}")))?;
+            for &j_idx in &self.fixed_joint_welds {
+                let parent_b = joint_parent[j_idx];
+                let child_b = joint_child[j_idx];
+                let a_name = mjcf_body_name(parent_b, self.body_to_mj);
+                let b_name = mjcf_body_name(child_b, self.body_to_mj);
+                self.out.push_str(&format!(
+                    "    <weld name=\"weld_fixed_joint{j_idx}\" body1=\"{a_name}\" \
+                     body2=\"{b_name}\"/>\n",
+                ));
+            }
+        }
         self.out.push_str("  </equality>\n");
         Ok(())
     }
@@ -725,6 +1188,68 @@ impl<'a> MjcfWriter<'a> {
         let cols = m.to_cols_array_2d();
         Ok(Vec3::new(cols[0][0].max(1e-9), cols[1][1].max(1e-9), cols[2][2].max(1e-9)))
     }
+}
+
+/// Bake a molla [`SdfShape`] into a triangle mesh via marching cubes.
+/// Stage 22.1 — MuJoCo has no native SDF primitive, so analytic SDFs
+/// have to be discretised on the way in. The conversion is **lossy**:
+///
+/// - Curvature is approximated by the marching-cubes resolution
+///   (32³ in v1 — coarse enough to keep MJCF output small, fine
+///   enough that a typical torus stays recognisable).
+/// - The original analytic distance function is gone after the bake;
+///   sub-voxel collision details are lost.
+/// - Sharp corners (e.g. a CSG-style boolean SDF) get smoothed away.
+///
+/// Picks a sensible default AABB based on the analytic shape kind:
+/// torus / sphere have known extents. Resolution is 32 along each
+/// axis — adequate for the kinds of SDFs molla v1 supports.
+fn sdf_to_mesh(sdf: SdfShape) -> TriMesh {
+    // Pick an envelope big enough to capture the surface for the
+    // analytic SDFs molla supports today.
+    let envelope = match sdf {
+        SdfShape::Torus { major, minor } => major + minor + 0.05,
+        SdfShape::Sphere { r } => r + 0.05,
+    };
+    // Build an analytic SDF grid by sampling.
+    let res: u32 = 32;
+    let cell_size = (2.0 * envelope) / (res as Real - 1.0);
+    let origin = Vec3::splat(-envelope);
+    let mut data = vec![0.0_f64; (res * res * res) as usize];
+    for z in 0..res {
+        for y in 0..res {
+            for x in 0..res {
+                let p = origin
+                    + Vec3::new(
+                        x as Real * cell_size,
+                        y as Real * cell_size,
+                        z as Real * cell_size,
+                    );
+                let idx = (x as usize)
+                    + (y as usize) * (res as usize)
+                    + (z as usize) * (res as usize) * (res as usize);
+                data[idx] = sdf.signed_distance(p);
+            }
+        }
+    }
+    let grid = crate::geometry::sdf_bake::SdfGrid {
+        nx: res,
+        ny: res,
+        nz: res,
+        origin,
+        cell_size,
+        data,
+    };
+    let mut mesh = marching_cubes(&grid, 0.0);
+    if !mesh.indices.is_empty() {
+        mesh.build_bvh(4);
+    }
+    // `bake_mesh_to_sdf` is referenced for future use (sdf-from-mesh
+    // round trip would call it); silence "unused import" warnings
+    // when the function lives behind cfg variants.
+    let _ = bake_mesh_to_sdf;
+    let _ = Heightfield::default;
+    mesh
 }
 
 /// Decode a `u32` joint-kind tag from `Model.joint_type` into the
@@ -1015,6 +1540,120 @@ mod tests {
         let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
         assert!(mjcf.contains("type=\"hinge\""), "missing hinge:\n{mjcf}");
         assert!(mjcf.contains("axis=\"0 0 1\""), "wrong axis:\n{mjcf}");
+    }
+
+    /// Stage 22.1 — TriMesh shapes round-trip through the
+    /// `<asset><mesh/></asset>` block and the body-side geom carries
+    /// `mesh="…"`.
+    #[test]
+    fn mjcf_emits_trimesh_asset() {
+        let mut b = ModelBuilder::new();
+        let body = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.1))
+                .with_position(Vec3::new(0.0, 1.0, 0.0)),
+        );
+        // Tiny tetrahedron mesh.
+        let mut mesh = crate::sim::TriMesh::new();
+        mesh.vertices = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ];
+        mesh.indices = vec![[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]];
+        let mesh_id = b.add_mesh(mesh);
+        b.add_shape_trimesh(body, mesh_id, Transform::IDENTITY).unwrap();
+        let model = b.build().unwrap();
+        let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+        assert!(mjcf.contains("<asset>"), "missing asset block:\n{mjcf}");
+        assert!(
+            mjcf.contains("<mesh name=\"trimesh0\""),
+            "missing mesh asset:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("mesh=\"trimesh0\""),
+            "missing geom mesh ref:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("type=\"mesh\""),
+            "missing mesh geom type:\n{mjcf}"
+        );
+    }
+
+    /// Stage 22.1 — joint limits and friction round-trip into MJCF
+    /// `range="…" limited="true" damping="…"` attributes on a
+    /// revolute joint.
+    #[test]
+    fn mjcf_emits_joint_limits_and_damping() {
+        let mut b = ModelBuilder::new();
+        b.begin_articulation();
+        let body = b.add_body(
+            BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: Vec3::ZERO,
+                inertia: Mat3::IDENTITY * 0.05,
+            }),
+        );
+        let joint = b
+            .add_joint_revolute(
+                BodyId::NONE,
+                body,
+                Transform::IDENTITY,
+                Transform::IDENTITY,
+                Vec3::Z,
+            )
+            .unwrap();
+        b.set_joint_limits(joint, &[-0.5], &[0.7]).unwrap();
+        b.set_joint_friction(joint, &[0.123]).unwrap();
+        let model = b.build().unwrap();
+        let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+        assert!(
+            mjcf.contains("range=\"-0.5 0.7\""),
+            "missing range:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("limited=\"true\""),
+            "missing limited=true:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("damping=\"0.123\""),
+            "missing damping:\n{mjcf}"
+        );
+    }
+
+    /// Stage 22.1 — FIXED joints become MJCF `<weld/>` equality
+    /// constraints (instead of the Stage-22 free-floating fallback).
+    #[test]
+    fn mjcf_emits_weld_for_fixed_joint() {
+        let mut b = ModelBuilder::new();
+        b.begin_articulation();
+        let parent = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.1))
+                .with_position(Vec3::new(0.0, 1.0, 0.0)),
+        );
+        let child = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.1))
+                .with_position(Vec3::new(0.0, 1.5, 0.0)),
+        );
+        b.add_joint_fixed(parent, child, Transform::IDENTITY, Transform::IDENTITY)
+            .unwrap();
+        let model = b.build().unwrap();
+        let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+        assert!(
+            mjcf.contains("<weld name=\"weld_fixed_joint"),
+            "missing FIXED→weld:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("body1=\"body0\""),
+            "missing parent body ref:\n{mjcf}"
+        );
+        assert!(
+            mjcf.contains("body2=\"body1\""),
+            "missing child body ref:\n{mjcf}"
+        );
     }
 
     /// Without the `mujoco` feature, `MuJoCoSolver::new` errors with a

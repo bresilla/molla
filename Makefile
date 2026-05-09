@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -97,6 +97,27 @@ test-equality-gpu:
 
 test-particles-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_particles_gpu -- --ignored --test-threads=1
+
+# Stage 22.1 — hydroelastic contact (CPU + GPU; the CPU-only tests
+# also live behind `#[ignore]` to keep the default `cargo test` lane
+# fast for plain CPU unit tests).
+test-hydroelastic-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test hydroelastic_gpu -- --ignored
+
+# Stage 22 / 22.1 — MuJoCo wrapper parity tests. Requires libmujoco
+# system-installed (the `mujoco-rust` crate searches `~/.local/mujoco`
+# and the standard system paths). Without libmujoco the build fails
+# at link time with a clear error from `mujoco-rust`.
+#
+# **Heads-up:** the molla dev `nixVulkan` shell does NOT carry
+# libmujoco — bindgen needs `libstdc++.so.6` which Nix doesn't drop
+# into the wgpu shell. A future contributor on a libmujoco-equipped
+# CI runner (the `mj-build` Docker image, the upstream Drake
+# packaging recipe, or a fresh Ubuntu 22.04 machine with the
+# mujoco .deb installed) can run this lane unmodified. See PLAN.md
+# Stage 22.1 for the CI gap rationale.
+test-mujoco-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features mujoco --test mujoco_solver -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored

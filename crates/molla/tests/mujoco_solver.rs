@@ -177,6 +177,135 @@ fn double_pendulum_energy_bounded() {
     );
 }
 
+/// Stage 22.1 — TriMesh round-trip: a body with a triangle-mesh
+/// collider compiles cleanly through MuJoCo and the resulting MJCF
+/// declares the matching `<asset><mesh/></asset>` block. This is
+/// the round-trip that Stage 22 v1 explicitly skipped with
+/// `tracing::warn`.
+#[test]
+#[ignore = "needs `mujoco` feature + libmujoco system-installed"]
+fn trimesh_round_trip_compiles() {
+    let mut b = ModelBuilder::new();
+    let body = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.1))
+            .with_position(Vec3::new(0.0, 1.0, 0.0)),
+    );
+    // Tiny tetrahedron mesh.
+    let mut mesh = molla::sim::TriMesh::new();
+    mesh.vertices = vec![
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.1, 0.0, 0.0),
+        Vec3::new(0.0, 0.1, 0.0),
+        Vec3::new(0.0, 0.0, 0.1),
+    ];
+    mesh.indices = vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]];
+    let mid = b.add_mesh(mesh);
+    b.add_shape_trimesh(body, mid, Transform::IDENTITY).unwrap();
+    let model = b.build().unwrap();
+    let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+    assert!(
+        mjcf.contains("<mesh name=\"trimesh0\""),
+        "MJCF missing trimesh asset:\n{mjcf}"
+    );
+    // MuJoCo will fail the compile if the mesh asset is malformed.
+    let solver = MuJoCoSolver::new(&model).expect("MuJoCo accepted MJCF with mesh asset");
+    drop(solver);
+}
+
+/// Stage 22.1 — joint-limit round-trip. Set `[-0.5, 0.7]` on a
+/// revolute joint and confirm the MJCF carries `range="-0.5 0.7"`
+/// + `limited="true"`. The MuJoCo compile path then enforces the
+/// limit at runtime.
+#[test]
+#[ignore = "needs `mujoco` feature + libmujoco system-installed"]
+fn joint_limit_round_trip() {
+    let mut b = ModelBuilder::new();
+    b.begin_articulation();
+    let body = b.add_body(
+        BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: Vec3::ZERO,
+            inertia: Mat3::IDENTITY * 0.05,
+        }),
+    );
+    let joint = b
+        .add_joint_revolute(
+            BodyId::NONE,
+            body,
+            Transform::IDENTITY,
+            Transform::IDENTITY,
+            Vec3::Z,
+        )
+        .unwrap();
+    b.set_joint_limits(joint, &[-0.5], &[0.7]).unwrap();
+    let model = b.build().unwrap();
+    let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+    assert!(
+        mjcf.contains("range=\"-0.5 0.7\""),
+        "missing range:\n{mjcf}"
+    );
+    // Build the solver — MuJoCo will reject the MJCF if the
+    // `limited=true` attribute conflicts with the rest of the joint.
+    let _solver = MuJoCoSolver::new(&model).expect("MuJoCo accepted joint with limit");
+}
+
+/// Stage 22.1 — FIXED → `<weld/>`: a parent + FIXED-jointed child
+/// produces a weld equality in the MJCF. Confirms the new constraint
+/// holds the child rigidly attached at runtime.
+#[test]
+#[ignore = "needs `mujoco` feature + libmujoco system-installed"]
+fn fixed_joint_to_weld_round_trip() {
+    let mut b = ModelBuilder::new();
+    b.begin_articulation();
+    let parent = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia::sphere(1.0, 0.1))
+            .with_position(Vec3::new(0.0, 1.0, 0.0)),
+    );
+    let child = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia::sphere(0.5, 0.05))
+            .with_position(Vec3::new(0.0, 1.5, 0.0)),
+    );
+    b.add_joint_fixed(parent, child, Transform::IDENTITY, Transform::IDENTITY)
+        .unwrap();
+    let model = b.build().unwrap();
+    let mjcf = MuJoCoSolver::build_mjcf(&model).unwrap();
+    assert!(
+        mjcf.contains("<weld name=\"weld_fixed_joint"),
+        "MJCF missing FIXED→weld:\n{mjcf}"
+    );
+    let mut solver = MuJoCoSolver::new(&model).expect("MuJoCo accepted weld constraint");
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(0);
+    let dt = 1.0 / 240.0;
+    step_n(
+        &mut solver,
+        &model,
+        &mut s_a,
+        &mut s_b,
+        &control,
+        &contacts,
+        dt,
+        240,
+    );
+    // After 1 s under gravity the relative pose between parent and
+    // child should be unchanged (weld pins them together). MuJoCo's
+    // weld is enforced via algebraic constraint so the residual is
+    // ≤ a millimetre.
+    let bq = s_a.body_q.host().unwrap();
+    let dist = (bq[0].position - bq[1].position).length();
+    let rest = 0.5_f64;
+    let err_mm = (dist - rest).abs() * 1000.0;
+    assert!(
+        err_mm < 1.0,
+        "FIXED→weld drifted: dist = {dist:.4}, expected = {rest}, err = {err_mm:.3} mm"
+    );
+}
+
 /// CONNECT-equality two-body chain: a kinematic anchor body (mass 0)
 /// pins a dynamic ball below it via an `add_equality_connect`. After
 /// 1 s of simulation under gravity the anchor distance must remain
