@@ -25,6 +25,12 @@ profile = ["bevy/trace_tracy"]
 # Print every diagnostic to stdout each second. No Tracy, no memory
 # growth — just text-mode perf data on stderr.
 log_diag = []
+# Pull through molla's `mujoco` feature so the viewer's `Scene::MuJoCo`
+# scene can use the MuJoCo wrapper solver. Off by default — needs
+# libmujoco system-installed (see `crates/molla/Cargo.toml`). With the
+# feature off the scene is still listed (for visibility / discoverability)
+# but its update system logs once and skips, so the viewer stays usable.
+mujoco = ["molla/mujoco"]
 
 [dependencies]
 # molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the

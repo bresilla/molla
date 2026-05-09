@@ -23,6 +23,9 @@
 //!   * Q           Quadrotor (Stage 17 multi-DOF Featherstone)
 //!   * V           VBD cloth (Stage 20) — high-fidelity drape over a
 //!                 kinematic sphere; right-rail toggles VBD ↔ XPBD.
+//!   * J           MuJoCo wrapper (Stage 22) — double pendulum stepped
+//!                 via `MuJoCoSolver`. Requires the `mujoco` Cargo
+//!                 feature; falls back to Featherstone otherwise.
 //!   * T           toggle "activity view" — sleeping bodies turn grey,
 //!                 only active (moving) bodies keep their colour
 //!   * W           toggle wireframe view (every mesh outlined)
@@ -67,6 +70,8 @@ use molla::sensors::{
     Raycaster, TiledCamera, TiledCameraConfig,
 };
 use molla::solvers::{FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _};
+#[cfg(feature = "mujoco")]
+use molla::solvers::MuJoCoSolver;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
@@ -311,6 +316,7 @@ fn main() {
         .insert_resource(ActuatorExampleState::default())
         .insert_resource(QuadrotorState::default())
         .insert_resource(VbdClothExampleState::default())
+        .insert_resource(MuJoCoExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -353,6 +359,7 @@ fn main() {
                     update_actuator_example,
                     update_gpu_ik_arm,
                     update_quadrotor,
+                    update_mujoco_example,
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -422,6 +429,12 @@ struct SceneStates<'w> {
     gpu_np: ResMut<'w, GpuNpExampleState>,
     gpu_bp: ResMut<'w, GpuBpExampleState>,
     quad: ResMut<'w, QuadrotorState>,
+    /// Stage-22 MuJoCo wrapper demo state. Bundled here (rather than
+    /// added as a fresh `ResMut` parameter) because both
+    /// `apply_scene_switch` and `control_pane` are at the 16-tuple
+    /// ceiling — see PLAN.md Stage 22's "Bevy plumbing constraint"
+    /// note for details.
+    mujoco: ResMut<'w, MuJoCoExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -438,6 +451,10 @@ struct PaneSceneStates<'w> {
     actuator: ResMut<'w, ActuatorExampleState>,
     quad: ResMut<'w, QuadrotorState>,
     vbd: ResMut<'w, VbdClothExampleState>,
+    /// Stage-22 MuJoCo wrapper demo state. Same rationale as the
+    /// matching field on `SceneStates` — bundled to stay under the
+    /// 16-tuple SystemParam ceiling.
+    mujoco: ResMut<'w, MuJoCoExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -456,7 +473,7 @@ struct Sim {
     adapter_label: String,
 }
 
-/// Per-scene solver dispatch. Both variants implement the same
+/// Per-scene solver dispatch. Each variant implements the same
 /// `Solver::step` signature, so callers don't need to care which
 /// backend the active scene picked.
 enum SolverBackend {
@@ -465,6 +482,11 @@ enum SolverBackend {
     /// Stage-20 Vertex Block Descent solver. Used by `Scene::VbdCloth`
     /// for high-fidelity cloth + soft-on-rigid coupling.
     Vbd(mp::VbdSolver),
+    /// Stage-22 MuJoCo wrapper. Only present when the `mujoco`
+    /// Cargo feature is on; otherwise `Scene::MuJoCo` falls back to
+    /// `Featherstone` and the right-rail pane explains why.
+    #[cfg(feature = "mujoco")]
+    MuJoCo(MuJoCoSolver),
 }
 
 impl SolverBackend {
@@ -483,6 +505,8 @@ impl SolverBackend {
                 s.step(model, state_in, control, contacts, dt, state_out)
             }
             Self::Vbd(s) => s.step(model, state_in, control, contacts, dt, state_out),
+            #[cfg(feature = "mujoco")]
+            Self::MuJoCo(s) => s.step(model, state_in, control, contacts, dt, state_out),
         }
     }
 }
@@ -569,6 +593,15 @@ enum Scene {
     /// Stage-12 XPBD baseline for side-by-side comparison.
     /// Hotkey `V`.
     VbdCloth,
+    /// Stage-22 MuJoCo wrapper demo — double pendulum stepped via
+    /// the upstream MuJoCo C library through `MuJoCoSolver`.
+    /// Demonstrates the wrapper backend (industry-standard contact
+    /// + equality solver) running side-by-side with molla's native
+    /// solvers. Right-rail pane shows the active backend label and
+    /// per-frame timing. Hotkey `J` (for muJoco). When the `mujoco`
+    /// Cargo feature is OFF, the scene's update system logs once
+    /// that the backend is unavailable and skips — no crash.
+    MuJoCo,
 }
 
 impl Scene {
@@ -590,6 +623,7 @@ impl Scene {
         Scene::Quadrotor,
         Scene::BroadPhase,
         Scene::VbdCloth,
+        Scene::MuJoCo,
     ];
 
     fn label(self) -> &'static str {
@@ -610,6 +644,7 @@ impl Scene {
             Scene::Quadrotor => "Quadrotor (Stage 17 multi-DOF)",
             Scene::BroadPhase => "GPU broad phase (Stage 19)",
             Scene::VbdCloth => "VBD cloth (Stage 20)",
+            Scene::MuJoCo => "MuJoCo wrapper (Stage 22)",
         }
     }
 
@@ -618,12 +653,17 @@ impl Scene {
     /// `GpuIkArm` reuses the Featherstone backend (any articulation
     /// solver works since `step_simulation` skips this scene anyway).
     /// `VbdCloth` uses the Stage-20 Vertex Block Descent solver.
+    /// `MuJoCo` requests the Stage-22 wrapper backend; if the
+    /// `mujoco` feature is off it falls back to Featherstone (so the
+    /// scene still runs and the user sees the topology + timing,
+    /// just driven by the native solver instead).
     fn solver_kind(self) -> SolverKind {
         match self {
             Scene::Arm | Scene::GpuIkArm | Scene::Actuator | Scene::Quadrotor => {
                 SolverKind::Featherstone
             }
             Scene::VbdCloth => SolverKind::Vbd,
+            Scene::MuJoCo => SolverKind::MuJoCo,
             _ => SolverKind::Xpbd,
         }
     }
@@ -634,6 +674,9 @@ enum SolverKind {
     Xpbd,
     Featherstone,
     Vbd,
+    /// Stage-22 MuJoCo wrapper. Falls back to `Featherstone` at
+    /// runtime when the `mujoco` Cargo feature is OFF.
+    MuJoCo,
 }
 
 #[derive(Resource)]
@@ -1002,6 +1045,41 @@ impl Default for QuadrotorState {
     }
 }
 
+/// Stage-22 MuJoCo wrapper demo runtime state. Tracks whether the
+/// MuJoCo backend is available at compile time (via the `mujoco`
+/// Cargo feature) so the right-rail pane can show "available /
+/// unavailable" instead of silently doing nothing. The actual
+/// `MuJoCoSolver` lives inside [`SolverBackend::MuJoCo`]; this
+/// resource is just per-frame UI / status.
+#[derive(Resource)]
+struct MuJoCoExampleState {
+    /// Smoothed wall-clock per `solver.step()` call (µs). Updated by
+    /// `step_simulation` when this scene is active. Useful for users
+    /// to compare against Featherstone's timing.
+    smoothed_step_us: f64,
+    /// Whether the user has been informed via `info!` that the MuJoCo
+    /// feature is off — only logged once to avoid spamming.
+    notified_unavailable: bool,
+    /// Cached info-style status string for the right-rail pane. Built
+    /// the first time the scene is entered.
+    status: String,
+}
+
+impl Default for MuJoCoExampleState {
+    fn default() -> Self {
+        let status = if cfg!(feature = "mujoco") {
+            "MuJoCo feature ON — backend active".to_owned()
+        } else {
+            "MuJoCo feature OFF — install libmujoco + rebuild with --features mujoco".to_owned()
+        };
+        Self {
+            smoothed_step_us: 0.0,
+            notified_unavailable: false,
+            status,
+        }
+    }
+}
+
 /// GPU IK arm runtime state. Lazy-initialised when entering the
 /// `Scene::GpuIkArm` scene; reset on scene switch. Tracks the
 /// draggable target position, the most recent solver telemetry, and
@@ -1052,6 +1130,65 @@ fn capsule_inertia(mass: f64, half_height: f64, radius: f64) -> molla::math::Mat
     molla::math::Mat3::from_diagonal(MVec3::new(i_perp, i_y, i_perp))
 }
 
+/// Build the requested solver backend, falling back gracefully when
+/// the requested kind isn't available at runtime.
+///
+/// Specifically: requesting `SolverKind::MuJoCo` without the `mujoco`
+/// Cargo feature falls back to `Featherstone` so the viewer's
+/// `Scene::MuJoCo` still loads (the right-rail pane explains the
+/// fallback). Every other kind is unconditional.
+fn build_solver(
+    engine: &Engine,
+    model: &mp::Model,
+    kind: SolverKind,
+) -> SolverBackend {
+    match kind {
+        SolverKind::Xpbd => SolverBackend::Xpbd(
+            mp::XpbdSolver::new_gpu(engine, model.body_count.max(1) as u32)
+                .expect("XPBD GPU solver init")
+                .with_iterations(10),
+        ),
+        SolverKind::Featherstone => SolverBackend::Featherstone(
+            FeatherstoneSolver::new_gpu(engine, model)
+                .expect("Featherstone GPU solver init"),
+        ),
+        SolverKind::Vbd => SolverBackend::Vbd(
+            mp::VbdSolver::new_gpu(engine, model)
+                .expect("VBD GPU solver init")
+                .with_iterations(10)
+                .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
+        ),
+        SolverKind::MuJoCo => mujoco_solver_or_fallback(engine, model),
+    }
+}
+
+/// Try to construct a [`MuJoCoSolver`] when the `mujoco` Cargo
+/// feature is on. Falls back to Featherstone otherwise. Encapsulated
+/// here so the cfg branching doesn't leak into `build_solver`.
+#[cfg(feature = "mujoco")]
+fn mujoco_solver_or_fallback(engine: &Engine, model: &mp::Model) -> SolverBackend {
+    match MuJoCoSolver::new(model) {
+        Ok(s) => SolverBackend::MuJoCo(s.with_substeps(1)),
+        Err(e) => {
+            warn!("MuJoCo solver init failed ({e}); falling back to Featherstone");
+            SolverBackend::Featherstone(
+                FeatherstoneSolver::new_gpu(engine, model)
+                    .expect("Featherstone GPU solver init"),
+            )
+        }
+    }
+}
+
+#[cfg(not(feature = "mujoco"))]
+fn mujoco_solver_or_fallback(engine: &Engine, model: &mp::Model) -> SolverBackend {
+    // Logged once on entry to `Scene::MuJoCo` from `update_mujoco_example`
+    // so we don't double-log here.
+    SolverBackend::Featherstone(
+        FeatherstoneSolver::new_gpu(engine, model)
+            .expect("Featherstone GPU solver init"),
+    )
+}
+
 impl Sim {
     /// Dispatch on `scene` and assemble `(Sim, BodyVisuals)`.
     fn build_scene(scene: Scene) -> (Self, Vec<BodyVisual>) {
@@ -1072,6 +1209,7 @@ impl Sim {
             Scene::Quadrotor => build_quadrotor_model(),
             Scene::BroadPhase => build_broad_phase_model(),
             Scene::VbdCloth => build_vbd_cloth_model(),
+            Scene::MuJoCo => build_mujoco_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1113,23 +1251,7 @@ impl Sim {
         // Pick the solver this scene wants. XPBD for everything but
         // the Arm scene; Featherstone for proper articulated dynamics
         // (joint_q, joint_qd, joint_force, etc.).
-        let solver = match scene.solver_kind() {
-            SolverKind::Xpbd => SolverBackend::Xpbd(
-                mp::XpbdSolver::new_gpu(&engine, model.body_count as u32)
-                    .expect("XPBD GPU solver init")
-                    .with_iterations(10),
-            ),
-            SolverKind::Featherstone => SolverBackend::Featherstone(
-                FeatherstoneSolver::new_gpu(&engine, &model)
-                    .expect("Featherstone GPU solver init"),
-            ),
-            SolverKind::Vbd => SolverBackend::Vbd(
-                mp::VbdSolver::new_gpu(&engine, &model)
-                    .expect("VBD GPU solver init")
-                    .with_iterations(10)
-                    .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
-            ),
-        };
+        let solver = build_solver(&engine, &model, scene.solver_kind());
 
         (
             Self {
@@ -1151,23 +1273,7 @@ impl Sim {
     /// Replace the active solver while keeping the same model + state
     /// — used by the VBD-cloth toggle for side-by-side comparison.
     fn swap_solver_to(&mut self, kind: SolverKind) {
-        self.solver = match kind {
-            SolverKind::Xpbd => SolverBackend::Xpbd(
-                mp::XpbdSolver::new_gpu(&self.engine, self.model.body_count.max(1) as u32)
-                    .expect("XPBD GPU solver init")
-                    .with_iterations(10),
-            ),
-            SolverKind::Featherstone => SolverBackend::Featherstone(
-                FeatherstoneSolver::new_gpu(&self.engine, &self.model)
-                    .expect("Featherstone GPU solver init"),
-            ),
-            SolverKind::Vbd => SolverBackend::Vbd(
-                mp::VbdSolver::new_gpu(&self.engine, &self.model)
-                    .expect("VBD GPU solver init")
-                    .with_iterations(10)
-                    .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
-            ),
-        };
+        self.solver = build_solver(&self.engine, &self.model, kind);
     }
 
     fn reset(&mut self) {
@@ -1716,6 +1822,86 @@ fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
     }
 
     (b.build().expect("arm model"), visuals)
+}
+
+// --- Stage-22 MuJoCo wrapper scene -------------------------------
+//
+// Double pendulum (4-link arm would also work; we picked the
+// pendulum because it's the canonical MuJoCo benchmark scene and
+// the topology is clean: two revolute joints + two capsule links).
+// Same body / joint construction as a slice of `build_arm_model`,
+// just shorter and without the FK-on-elbow rotation tricks.
+const MUJOCO_LINK_LEN: f32 = 0.5;
+const MUJOCO_LINK_RADIUS: f32 = 0.05;
+const MUJOCO_LINK_MASS: f64 = 0.6;
+const MUJOCO_BASE_HEIGHT: f32 = 4.0;
+
+fn build_mujoco_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let half_h = (MUJOCO_LINK_LEN as f64) * 0.5;
+    let radius = MUJOCO_LINK_RADIUS as f64;
+    let inertia = capsule_inertia(MUJOCO_LINK_MASS, half_h, radius);
+
+    b.begin_articulation();
+
+    // Upper link.
+    let upper_pos = MVec3::new(0.0, MUJOCO_BASE_HEIGHT as f64 - half_h, 0.0);
+    let upper = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass: MUJOCO_LINK_MASS,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(upper_pos),
+    );
+    b.add_shape_capsule(upper, half_h, radius, mp::Transform::IDENTITY)
+        .expect("upper link");
+
+    // Shoulder revolute joint about world +Z, anchored at the base
+    // height. The PI rotation around X mirrors the arm scene's trick
+    // for hanging the link along world -Y at q=0.
+    let shoulder_x_p = mp::Transform::new(
+        MVec3::new(0.0, MUJOCO_BASE_HEIGHT as f64, 0.0),
+        MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI),
+    );
+    let shoulder_x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+    b.add_joint_revolute(mp::BodyId::NONE, upper, shoulder_x_p, shoulder_x_c, MVec3::Z)
+        .expect("shoulder joint");
+
+    // Lower link.
+    let lower_pos = upper_pos - MVec3::new(0.0, MUJOCO_LINK_LEN as f64, 0.0);
+    let lower = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass: MUJOCO_LINK_MASS,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(lower_pos),
+    );
+    b.add_shape_capsule(lower, half_h, radius, mp::Transform::IDENTITY)
+        .expect("lower link");
+
+    let elbow_x_p = mp::Transform::from_translation(MVec3::new(0.0, half_h, 0.0));
+    let elbow_x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+    b.add_joint_revolute(upper, lower, elbow_x_p, elbow_x_c, MVec3::X)
+        .expect("elbow joint");
+
+    let visuals = vec![
+        BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        },
+        BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        },
+    ];
+
+    (b.build().expect("mujoco model"), visuals)
 }
 
 // --- Stage-18 composable actuator pipeline scene ------------------
@@ -2997,6 +3183,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyV) && sim.scene != Scene::VbdCloth {
         pending.0 = Some(Scene::VbdCloth);
     }
+    if keys.just_pressed(KeyCode::KeyJ) && sim.scene != Scene::MuJoCo {
+        pending.0 = Some(Scene::MuJoCo);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -3030,6 +3219,12 @@ fn apply_scene_switch(
     let gpu_np = &mut *scene_states.gpu_np;
     let gpu_bp = &mut *scene_states.gpu_bp;
     let quad = &mut *scene_states.quad;
+    // Stage-22 MuJoCo: clear the per-frame timing on scene switch
+    // so the readout doesn't carry stale values from the previous
+    // backend. The `notified_unavailable` flag is intentionally
+    // preserved so we don't re-spam the log if the user toggles
+    // back into the scene.
+    scene_states.mujoco.smoothed_step_us = 0.0;
     stats.arm_logged = false;
     // GPU IK: re-seed the target on next entry from the new arm's rest EE.
     *gpu_ik = GpuIkArmState::default();
@@ -3120,6 +3315,7 @@ fn step_simulation(
     mut run: ResMut<SimRunState>,
     mut stats: ResMut<SimStats>,
     mut gpu_toggles: (ResMut<GpuNpExampleState>, ResMut<GpuBpExampleState>),
+    mut mujoco_state: ResMut<MuJoCoExampleState>,
 ) {
     let (gpu_np, gpu_bp) = (&mut gpu_toggles.0, &mut gpu_toggles.1);
     if run.paused && !run.step_once {
@@ -3226,6 +3422,15 @@ fn step_simulation(
     stats.smoothed_collide_us = 0.9 * stats.smoothed_collide_us + 0.1 * total_collide_us;
     stats.smoothed_download_us = 0.9 * stats.smoothed_download_us + 0.1 * total_download_us;
     stats.last_contacts = contacts.count;
+
+    // Surface MuJoCo timing for the right-rail pane. The solver
+    // dispatch slot in the main stats block also captures it, but
+    // the MuJoCo pane wants its own EMA so the user can A/B compare
+    // against the Featherstone fallback when toggling features.
+    if sim.scene == Scene::MuJoCo {
+        mujoco_state.smoothed_step_us =
+            0.9 * mujoco_state.smoothed_step_us + 0.1 * solve_us;
+    }
 
     // Surface Stage-15 GPU narrow-phase counters for the right-rail
     // pane (only meaningful for the GpuNarrowPhase scene; harmless
@@ -4533,6 +4738,30 @@ fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
     let _ = device;
 }
 
+/// Stage-22 MuJoCo wrapper demo update — almost a no-op. The actual
+/// solver (`SolverBackend::MuJoCo` when the feature is on,
+/// `Featherstone` fallback when off) is driven by `step_simulation`,
+/// the same way every other scene's solver is. This system's only
+/// job is to log ONCE on entry to `Scene::MuJoCo` so the user knows
+/// whether they're hitting MuJoCo or the fallback path. Without
+/// this, the user would see "Featherstone" in the right-rail pane
+/// without explanation when they meant to be exercising MuJoCo.
+fn update_mujoco_example(
+    sim: Res<Sim>,
+    mut state: ResMut<MuJoCoExampleState>,
+) {
+    if sim.scene != Scene::MuJoCo {
+        return;
+    }
+    if !cfg!(feature = "mujoco") && !state.notified_unavailable {
+        info!(
+            "Scene::MuJoCo: `mujoco` Cargo feature is off; falling back to Featherstone. \
+             Rebuild with `--features mujoco` after installing libmujoco to enable the wrapper."
+        );
+        state.notified_unavailable = true;
+    }
+}
+
 /// Convert a quaternion to YXZ Euler (yaw about Y, pitch about X, roll
 /// about Z). Used by the quadrotor pane for a human-readable readout
 /// of the attitude error.
@@ -5059,6 +5288,7 @@ fn control_pane(
                     | Scene::Quadrotor
                     | Scene::BroadPhase
                     | Scene::VbdCloth
+                    | Scene::MuJoCo
             ),
             _ => false,
         },
@@ -5178,6 +5408,7 @@ fn control_pane(
         Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
         Scene::BroadPhase => Some("GPU broad phase"),
         Scene::VbdCloth => Some("VBD cloth (Stage 20)"),
+        Scene::MuJoCo => Some("MuJoCo (Stage 22)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -5214,6 +5445,9 @@ fn control_pane(
                     }
                     Scene::VbdCloth => {
                         vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+                    }
+                    Scene::MuJoCo => {
+                        mujoco_pane(ui, &mut pane_states.mujoco, &sim)
                     }
                     _ => {}
                 });
@@ -5355,6 +5589,48 @@ fn vbd_cloth_pane(
 /// helper's API takes the ui directly, but we want a sized button.
 fn button_widget(text: &str, _accent: egui::Color32) -> egui::Button<'static> {
     egui::Button::new(text.to_owned())
+}
+
+/// Right-rail pane for the Stage-22 MuJoCo wrapper demo. Shows the
+/// active backend label, per-frame timing, and links to PLAN.md
+/// Stage 22 for the scope notes. Read-only — every knob the user
+/// would care about (substeps, integrator, friction) lives on the
+/// MuJoCo side and would need a feature-on rebuild to expose.
+fn mujoco_pane(ui: &mut egui::Ui, state: &mut MuJoCoExampleState, sim: &Sim) {
+    ui.add_space(2.0);
+    let backend_label = match &sim.solver {
+        #[cfg(feature = "mujoco")]
+        SolverBackend::MuJoCo(_) => "MuJoCo (libmujoco wrapper)",
+        SolverBackend::Featherstone(_) => "Featherstone (fallback)",
+        _ => "(unexpected solver)",
+    };
+    readout(ui, "Backend", backend_label);
+    readout(ui, "Status", &state.status);
+    readout(ui, "Bodies", &format!("{}", sim.model.body_count));
+    readout(ui, "Joints", &format!("{}", sim.model.joint_count));
+    readout(
+        ui,
+        "Solve / frame",
+        &format!("{:>5.0} µs", state.smoothed_step_us),
+    );
+    ui.separator();
+
+    if cfg!(feature = "mujoco") {
+        ui.label("MuJoCo wrapper is ACTIVE.");
+        ui.label("Step driven via mj_step (substeps=1).");
+    } else {
+        ui.label("MuJoCo wrapper is DISABLED at compile time.");
+        ui.label("To enable:");
+        ui.label("  1. Install libmujoco (https://mujoco.org/)");
+        ui.label("  2. cargo run -p molla_viewer --features mujoco");
+        ui.label("Currently using Featherstone as a fallback.");
+    }
+    ui.separator();
+
+    ui.small("Hotkey: J  ·  Stage 22 (P2)");
+    ui.small("Reference: PLAN.md Stage 22, GAP.md §2 / §9.");
+    ui.small("Double pendulum — same topology as the Featherstone");
+    ui.small("multi-DOF parity test, makes A/B compare easy.");
 }
 
 /// Re-derive per-spring compliance from the user-chosen stiffness
