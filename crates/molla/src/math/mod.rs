@@ -4,8 +4,11 @@
 //! [`GpuSpatialVector`], [`GpuMat3`]) are `f32`. Conversion happens
 //! exactly once, at the buffer boundary.
 
+pub mod dense_solve;
 pub mod gpu;
+pub mod robust_loss;
 mod spatial;
+pub mod sparse;
 mod transform;
 
 pub use gpu::{GpuMat3, GpuSpatialVector, GpuTransform};
