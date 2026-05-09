@@ -1813,12 +1813,28 @@ folds onto itself without tunnelling, holds shape under bending.
 
 ### Stage 13 — Specialty shapes + GPU GJK
 
+**Status: PARTIAL** (2026-05-09). Cone + ConvexHull done; Heightfield,
+SDF, MPR, GPU GJK/EPA/LBVH still TODO.
+
 **Goal**: catch up on geometry breadth.
 
 Deliverables:
-- Cone, ConvexHull (vertices + faces), Heightfield, SDF shapes.
-- MPR fallback for deep penetration (alternative to EPA).
-- GPU port of GJK + EPA + BVH (LBVH parallel construction).
+- ✅ **Cone** primitive — apex at `+half_height·Y`, base disc at
+  `−half_height·Y`. `add_shape_cone` builder API. Closed-form
+  support function picks max of (apex, base disc edge) by dot
+  product. World-AABB via the same axis-projection trick as
+  Cylinder. Cone-vs-plane fast path (apex + 4 disc rim samples).
+- ✅ **ConvexHull** primitive — `add_hull(vertices)` registers a
+  hull; `add_shape_convex_hull` references it. Linear-scan support
+  function (O(N) per query — fine for ≤50-vertex hulls; future
+  upgrade: DOP / hill-climbing). Hull-vs-plane fast path emits
+  one contact per below-plane vertex (deepest 4 kept). Threaded
+  `&[Vec<Vec3>]` through `gjk_with_hulls` / `epa_with_hulls` /
+  `support_with_hulls` so EPA can resolve hull supports without
+  capturing global state.
+- Heightfield, SDF shapes — TODO.
+- MPR fallback for deep penetration (alternative to EPA) — TODO.
+- GPU port of GJK + EPA + BVH (LBVH parallel construction) — TODO.
 
 ### Stage 14+ — Differentiability, advanced solvers, Python bindings
 

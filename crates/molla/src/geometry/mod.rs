@@ -30,6 +30,6 @@ pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 pub use mesh_bvh::{BvhNode as MeshBvhNode, MeshBvh};
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use support::{
-    support, support_box, support_capsule, support_cylinder, support_minkowski,
-    support_sphere,
+    support, support_box, support_capsule, support_cone, support_convex_hull,
+    support_cylinder, support_minkowski, support_sphere, support_with_hulls,
 };

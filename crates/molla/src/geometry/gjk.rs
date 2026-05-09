@@ -20,7 +20,7 @@
 use crate::math::{Real, Transform, Vec3};
 use crate::sim::ShapeGeometry;
 
-use super::support::support;
+use super::support::{support, support_with_hulls};
 
 /// Result of a successful GJK distance query on disjoint shapes.
 #[derive(Copy, Clone, Debug)]
@@ -73,6 +73,20 @@ pub fn gjk(
     geom_b: ShapeGeometry,
     xf_b: &Transform,
 ) -> GjkResult {
+    gjk_with_hulls(geom_a, xf_a, geom_b, xf_b, &[])
+}
+
+/// `gjk` variant that resolves `ShapeGeometry::ConvexHull` via the
+/// caller's hull table. Pass `&[]` for shapes that don't reference
+/// hulls. Used by the narrow-phase entry point which has access to
+/// `model.hulls`.
+pub fn gjk_with_hulls(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    hulls: &[Vec<Vec3>],
+) -> GjkResult {
     const MAX_ITERS: usize = 64;
     const EPS: Real = 1e-12;
 
@@ -90,7 +104,7 @@ pub fn gjk(
     // means w doesn't lie deeper toward the origin than v already
     // does → simplex is converged.
     let mut simplex: Vec<SupportPoint> = Vec::with_capacity(4);
-    simplex.push(compute_support(geom_a, xf_a, geom_b, xf_b, dir));
+    simplex.push(compute_support(geom_a, xf_a, geom_b, xf_b, hulls, dir));
     let mut v = simplex[0].w;
 
     for _ in 0..MAX_ITERS {
@@ -101,7 +115,7 @@ pub fn gjk(
             return GjkResult::Overlap(GjkSimplex { points: simplex });
         }
         let dir_search = -v;
-        let new_pt = compute_support(geom_a, xf_a, geom_b, xf_b, dir_search);
+        let new_pt = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, dir_search);
         let v_dot_w = v.dot(new_pt.w);
         // No-progress termination: w is no closer to the origin
         // along `v`'s direction than v itself.
@@ -151,15 +165,21 @@ fn compute_support(
     xf_a: &Transform,
     geom_b: ShapeGeometry,
     xf_b: &Transform,
+    hulls: &[Vec<Vec3>],
     dir: Vec3,
 ) -> SupportPoint {
-    let a = support(geom_a, xf_a, dir);
-    let b = support(geom_b, xf_b, -dir);
+    let a = support_with_hulls(geom_a, xf_a, dir, hulls);
+    let b = support_with_hulls(geom_b, xf_b, -dir, hulls);
     SupportPoint {
         w: a - b,
         a,
         b,
     }
+}
+
+#[allow(dead_code)]
+fn _suppress_unused_support_warning(g: ShapeGeometry, xf: &Transform, d: Vec3) -> Vec3 {
+    support(g, xf, d)
 }
 
 enum SimplexStep {

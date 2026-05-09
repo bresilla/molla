@@ -115,6 +115,43 @@ pub fn shape_world_aabb(
             }
             Aabb { min: lo, max: hi }.expanded(margin)
         }
+        ShapeGeometry::Cone { half_height, radius } => {
+            // Same trick as Cylinder: project the local axis onto each
+            // world axis and split between height and radius extents.
+            let r = crate::math::Mat3::from_quat(xf.rotation);
+            let axis_world = r.y_axis;
+            let absax = Vec3::new(
+                axis_world.x.abs(),
+                axis_world.y.abs(),
+                axis_world.z.abs(),
+            );
+            let one = Vec3::splat(1.0);
+            let perp_scale = (one - absax * absax).max(Vec3::ZERO);
+            let perp = Vec3::new(
+                perp_scale.x.sqrt(),
+                perp_scale.y.sqrt(),
+                perp_scale.z.sqrt(),
+            );
+            let h = absax * half_height + perp * radius;
+            Aabb::centred(xf.position, h).expanded(margin)
+        }
+        ShapeGeometry::ConvexHull { hull_id } => {
+            let hull = match model.hulls.get(hull_id as usize) {
+                Some(h) => h,
+                None => return Aabb::infinite(),
+            };
+            if hull.is_empty() {
+                return Aabb::infinite();
+            }
+            let mut lo = Vec3::splat(crate::math::Real::INFINITY);
+            let mut hi = Vec3::splat(-crate::math::Real::INFINITY);
+            for &v in hull {
+                let w = xf.transform_point(v);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+            Aabb { min: lo, max: hi }.expanded(margin)
+        }
     }
 }
 

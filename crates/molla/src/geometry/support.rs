@@ -14,21 +14,27 @@ use crate::sim::ShapeGeometry;
 /// `dir_world`. `dir_world` need not be unit-length; if it's zero,
 /// any point is valid (we return the shape origin in that case).
 pub fn support(geom: ShapeGeometry, xf: &Transform, dir_world: Vec3) -> Vec3 {
+    support_with_hulls(geom, xf, dir_world, &[])
+}
+
+/// Like [`support`] but with access to a hull table for
+/// `ShapeGeometry::ConvexHull`. Standalone callers (no Model in
+/// scope) can pass `&[]` and get a sentinel.
+pub fn support_with_hulls(
+    geom: ShapeGeometry,
+    xf: &Transform,
+    dir_world: Vec3,
+    hulls: &[Vec<Vec3>],
+) -> Vec3 {
     let len_sq = dir_world.length_squared();
     if len_sq < 1e-24 {
         return xf.position;
     }
-    // Rotate dir into the shape's local frame.
     let inv_rot = xf.rotation.conjugate();
     let dir_local = inv_rot * dir_world;
     let local_p = match geom {
         ShapeGeometry::Sphere { radius } => support_sphere(radius, dir_local),
-        ShapeGeometry::Plane { .. } => {
-            // Half-space: support along any direction not against the
-            // outward normal is unbounded. We return the shape origin
-            // — GJK-vs-plane uses a closed-form path instead.
-            Vec3::ZERO
-        }
+        ShapeGeometry::Plane { .. } => Vec3::ZERO,
         ShapeGeometry::Box { half_extents } => support_box(half_extents, dir_local),
         ShapeGeometry::Capsule {
             half_height,
@@ -38,12 +44,20 @@ pub fn support(geom: ShapeGeometry, xf: &Transform, dir_world: Vec3) -> Vec3 {
             half_height,
             radius,
         } => support_cylinder(half_height, radius, dir_local),
+        ShapeGeometry::Cone {
+            half_height,
+            radius,
+        } => support_cone(half_height, radius, dir_local),
         ShapeGeometry::Triangle { v0, v1, v2 } => support_triangle(v0, v1, v2, dir_local),
-        // TriMesh has no closed-form support — narrow phase
-        // iterates triangles individually. Return shape origin as
-        // a sentinel; callers that route TriMesh into GJK directly
-        // are expected to do per-triangle support instead.
         ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
+        ShapeGeometry::ConvexHull { hull_id } => {
+            let id = hull_id as usize;
+            if id < hulls.len() {
+                support_convex_hull(&hulls[id], dir_local)
+            } else {
+                Vec3::ZERO
+            }
+        }
     };
     xf.position + xf.rotation * local_p
 }
@@ -92,6 +106,45 @@ pub fn support_cylinder(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
         Vec3::new(radius, 0.0, 0.0)
     };
     Vec3::new(edge.x, cap_y, edge.z)
+}
+
+/// Cone support along the local +Y axis: apex at `(0, +half_h, 0)`,
+/// base disc at `y = -half_h` with radius `r`. Pick whichever has
+/// the larger dot with `dir`.
+#[inline]
+pub fn support_cone(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
+    let apex_dot = half_height * dir.y;
+    let xz = Vec3::new(dir.x, 0.0, dir.z);
+    let xz_len = xz.length();
+    let base_edge = if xz_len > 1e-12 {
+        xz * (radius / xz_len)
+    } else {
+        Vec3::new(radius, 0.0, 0.0)
+    };
+    let base_dot = base_edge.dot(dir) - half_height * dir.y;
+    if apex_dot >= base_dot {
+        Vec3::new(0.0, half_height, 0.0)
+    } else {
+        Vec3::new(base_edge.x, -half_height, base_edge.z)
+    }
+}
+
+/// Convex-hull support: linear scan over `vertices` for the one
+/// with the largest dot product against `dir`. O(N) per query —
+/// fine for hulls up to ~50 vertices; past that consider DOP /
+/// hill-climbing-with-edge-graph instead.
+#[inline]
+pub fn support_convex_hull(vertices: &[Vec3], dir: Vec3) -> Vec3 {
+    let mut best = vertices[0];
+    let mut best_dot = best.dot(dir);
+    for &v in &vertices[1..] {
+        let d = v.dot(dir);
+        if d > best_dot {
+            best_dot = d;
+            best = v;
+        }
+    }
+    best
 }
 
 /// Triangle support: argmax of the three vertices along `dir`.

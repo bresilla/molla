@@ -71,6 +71,25 @@ pub enum ShapeGeometry {
         /// Index into [`super::Model::meshes`].
         mesh_id: u32,
     },
+    /// Convex hull — references entry `hull_id` in
+    /// [`super::Model::hulls`]. Support function = `argmax_v (v · dir)`
+    /// over the hull's vertex list. Adequate for ~50 vertices; past
+    /// that the linear scan dominates and a per-hull DOP / spherical
+    /// acceleration becomes worth it.
+    ConvexHull {
+        /// Index into [`super::Model::hulls`].
+        hull_id: u32,
+    },
+    /// Solid cone along the shape-local **+Y axis**: apex at
+    /// `(0, +half_height, 0)`, base disc at `y = -half_height` with
+    /// radius `radius`. Note this is the standard graphics/physics
+    /// convention; some CAD tools use apex-down.
+    Cone {
+        /// Half the apex-to-base height (m).
+        half_height: Real,
+        /// Radius of the base disc (m).
+        radius: Real,
+    },
 }
 
 /// Parameters for [`ModelBuilder::add_body`].
@@ -212,6 +231,7 @@ pub struct ModelBuilder {
     shape_torsional_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
     meshes: Vec<super::TriMesh>,
+    hulls: Vec<Vec<Vec3>>,
     shape_collision_group: Vec<u32>,
     shape_collision_filter_pairs: Vec<(u32, u32)>,
 
@@ -740,6 +760,59 @@ impl ModelBuilder {
             )));
         }
         Ok(self.push_shape(body, local_pose, ShapeGeometry::TriMesh { mesh_id }))
+    }
+
+    /// Register a convex hull (vertex list, in shape-local frame)
+    /// and return its `hull_id`. Pass that id into
+    /// [`Self::add_shape_convex_hull`]. The hull is assumed convex
+    /// — caller is responsible for that; if you have a non-convex
+    /// mesh, run a hull builder (`qhull` / `chull3d`) first.
+    pub fn add_hull(&mut self, vertices: Vec<Vec3>) -> u32 {
+        let id = self.hulls.len() as u32;
+        self.hulls.push(vertices);
+        id
+    }
+
+    /// Attach a convex-hull shape to `body`. The `hull_id` must be a
+    /// value previously returned by [`Self::add_hull`].
+    pub fn add_shape_convex_hull(
+        &mut self,
+        body: BodyId,
+        hull_id: u32,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_convex_hull")?;
+        if (hull_id as usize) >= self.hulls.len() {
+            return Err(Error::Build(format!(
+                "add_shape_convex_hull: hull_id {hull_id} not registered (have {} hulls)",
+                self.hulls.len()
+            )));
+        }
+        if self.hulls[hull_id as usize].is_empty() {
+            return Err(Error::Build(format!(
+                "add_shape_convex_hull: hull {hull_id} has no vertices"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::ConvexHull { hull_id }))
+    }
+
+    /// Attach a cone shape to `body`. Cone apex sits at
+    /// `(0, +half_height, 0)` in shape-local frame; base disc at
+    /// `y = -half_height` with radius `radius`.
+    pub fn add_shape_cone(
+        &mut self,
+        body: BodyId,
+        half_height: Real,
+        radius: Real,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_cone")?;
+        if !(half_height > 0.0 && radius > 0.0) {
+            return Err(Error::Build(format!(
+                "add_shape_cone: half_height ({half_height}) and radius ({radius}) must be > 0"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Cone { half_height, radius }))
     }
 
     /// Attach a triangle shape to `body`. Standalone — for direct
@@ -1468,6 +1541,10 @@ impl ModelBuilder {
                         ShapeGeometry::Box { .. } => 2,
                         ShapeGeometry::Capsule { .. } => 3,
                         ShapeGeometry::Cylinder { .. } => 4,
+                        // Cone / ConvexHull are CPU-only for now —
+                        // sentinel 0xff so the GPU kernels skip them.
+                        ShapeGeometry::Cone { .. } => 0xff,
+                        ShapeGeometry::ConvexHull { .. } => 0xff,
                         ShapeGeometry::Triangle { .. } => 0xff,
                         ShapeGeometry::TriMesh { .. } => 0xff,
                     })
@@ -1489,6 +1566,10 @@ impl ModelBuilder {
                         }
                         ShapeGeometry::Triangle { .. } => Vec3::ZERO,
                         ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
+                        ShapeGeometry::Cone { half_height, radius } => {
+                            Vec3::new(half_height, radius, 0.0)
+                        }
+                        ShapeGeometry::ConvexHull { .. } => Vec3::ZERO,
                     })
                     .collect(),
                 s,
@@ -1501,6 +1582,7 @@ impl ModelBuilder {
             shape_torsional_friction: Buffer::from_vec(self.shape_torsional_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
             meshes: self.meshes,
+            hulls: self.hulls,
             shape_collision_group: Buffer::from_vec(self.shape_collision_group, s),
             shape_collision_filter_pairs: {
                 let mut p = self.shape_collision_filter_pairs;

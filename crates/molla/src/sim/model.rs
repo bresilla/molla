@@ -173,6 +173,11 @@ pub struct Model {
     /// Triangle-mesh storage. `ShapeGeometry::TriMesh { mesh_id }`
     /// references entries here.
     pub meshes: Vec<TriMesh>,
+    /// Convex-hull vertex storage. `ShapeGeometry::ConvexHull { hull_id }`
+    /// references entries here. Each hull is a flat `Vec<Vec3>` of
+    /// vertex positions in the shape's local frame; the GJK support
+    /// function scans them linearly.
+    pub hulls: Vec<Vec<Vec3>>,
     /// Per-shape collision group bitmask. Two shapes can collide
     /// only if `group_a & group_b != 0`. Default `0xffff_ffff` =
     /// "collides with every group". Length = `shape_count`.
@@ -370,6 +375,7 @@ impl Model {
             shape_torsional_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),
             meshes: Vec::new(),
+            hulls: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),
             shape_collision_filter_pairs: Vec::new(),
 

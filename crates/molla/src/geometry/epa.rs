@@ -11,7 +11,7 @@ use crate::math::{Real, Transform, Vec3};
 use crate::sim::ShapeGeometry;
 
 use super::gjk::{GjkSimplex, SupportPoint};
-use super::support::support;
+use super::support::{support, support_with_hulls};
 
 /// Result of EPA: the penetration depth and the contact normal
 /// (pointing from A into B), plus closest points on each shape.
@@ -50,6 +50,18 @@ pub fn epa(
     xf_b: &Transform,
     simplex: &GjkSimplex,
 ) -> Option<EpaContact> {
+    epa_with_hulls(geom_a, xf_a, geom_b, xf_b, simplex, &[])
+}
+
+/// `epa` variant with access to a hull table.
+pub fn epa_with_hulls(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    simplex: &GjkSimplex,
+    hulls: &[Vec<Vec3>],
+) -> Option<EpaContact> {
     let mut vertices: Vec<SupportPoint> = simplex.points.clone();
     // GJK may terminate with a 1, 2, or 3-vertex simplex when the
     // Minkowski difference's closest feature passes through the
@@ -66,6 +78,7 @@ pub fn epa(
         xf_a,
         geom_b,
         xf_b,
+        hulls,
     )?;
     let mut faces = faces;
 
@@ -77,7 +90,7 @@ pub fn epa(
         let (face_idx, face) = nearest_face(&faces);
 
         // Get a new support point past that face.
-        let new = compute_support(geom_a, xf_a, geom_b, xf_b, face.normal);
+        let new = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, face.normal);
 
         // Distance from origin to the new support point along the
         // face normal — i.e. how much further the polytope can
@@ -171,8 +184,9 @@ fn build_initial_faces_or_fallback(
     xf_a: &Transform,
     geom_b: ShapeGeometry,
     xf_b: &Transform,
+    hulls: &[Vec<Vec3>],
 ) -> Option<Vec<Face>> {
-    if pad_to_tetra(vertices, geom_a, xf_a, geom_b, xf_b) {
+    if pad_to_tetra(vertices, geom_a, xf_a, geom_b, xf_b, hulls) {
         if let Some(f) = build_initial_faces(vertices) {
             // Reject if origin lies on any face (face.distance == 0).
             // That signals a degenerate / coplanar tetra that EPA
@@ -191,7 +205,7 @@ fn build_initial_faces_or_fallback(
         Vec3::new(1.0, -1.0, -1.0),
     ];
     for d in dirs {
-        vertices.push(compute_support(geom_a, xf_a, geom_b, xf_b, d));
+        vertices.push(compute_support(geom_a, xf_a, geom_b, xf_b, hulls, d));
     }
     build_initial_faces(vertices)
 }
@@ -207,6 +221,7 @@ fn pad_to_tetra(
     xf_a: &Transform,
     geom_b: ShapeGeometry,
     xf_b: &Transform,
+    hulls: &[Vec<Vec3>],
 ) -> bool {
     if vs.is_empty() {
         return false;
@@ -216,7 +231,7 @@ fn pad_to_tetra(
         // opposite side of the origin.
         let axes = [Vec3::X, Vec3::Y, Vec3::Z];
         for d in axes {
-            let p = compute_support(geom_a, xf_a, geom_b, xf_b, d);
+            let p = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, d);
             if (p.w - vs[0].w).length_squared() > 1e-12 {
                 vs.push(p);
                 break;
@@ -258,8 +273,8 @@ fn pad_to_tetra(
         // (next branch) puts a point on the other side perpendicular
         // to the triangle plane, which together usually wraps the
         // origin.
-        let p_pos = compute_support(geom_a, xf_a, geom_b, xf_b, perp);
-        let p_neg = compute_support(geom_a, xf_a, geom_b, xf_b, -perp);
+        let p_pos = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, perp);
+        let p_neg = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, -perp);
         let proj_pos = (p_pos.w - vs[0].w).dot(perp);
         let proj_neg = (p_neg.w - vs[0].w).dot(-perp);
         if proj_pos >= proj_neg {
@@ -289,7 +304,7 @@ fn pad_to_tetra(
         // Pick a search direction whose support places v3 on the
         // OPPOSITE side of the triangle from the origin.
         let pick = if d_origin > 0.0 { -n } else { n };
-        let p = compute_support(geom_a, xf_a, geom_b, xf_b, pick);
+        let p = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, pick);
         // Verify v3 lies on the expected side (Minkowski-diff might
         // not be thick enough — bail if it doesn't).
         let v3_signed = (p.w - vs[0].w).dot(n);
@@ -299,7 +314,7 @@ fn pad_to_tetra(
             // Try the other direction as a last resort — origin may
             // happen to lie exactly on the triangle plane, in which
             // case either side works.
-            let p_alt = compute_support(geom_a, xf_a, geom_b, xf_b, -pick);
+            let p_alt = compute_support(geom_a, xf_a, geom_b, xf_b, hulls, -pick);
             let alt_signed = (p_alt.w - vs[0].w).dot(n);
             if alt_signed.abs() < 1e-9 {
                 return false;
@@ -330,11 +345,17 @@ fn compute_support(
     xf_a: &Transform,
     geom_b: ShapeGeometry,
     xf_b: &Transform,
+    hulls: &[Vec<Vec3>],
     dir: Vec3,
 ) -> SupportPoint {
-    let a = support(geom_a, xf_a, dir);
-    let b = support(geom_b, xf_b, -dir);
+    let a = support_with_hulls(geom_a, xf_a, dir, hulls);
+    let b = support_with_hulls(geom_b, xf_b, -dir, hulls);
     SupportPoint { w: a - b, a, b }
+}
+
+#[allow(dead_code)]
+fn _suppress_unused_support_warning(g: ShapeGeometry, xf: &Transform, d: Vec3) -> Vec3 {
+    support(g, xf, d)
 }
 
 /// Build the initial 4-face polytope from a tetra simplex,

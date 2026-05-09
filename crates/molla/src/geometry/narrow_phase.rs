@@ -8,8 +8,8 @@ use crate::math::{Mat3, Real, Transform, Vec3};
 use crate::sim::{Model, ShapeGeometry, State};
 
 use super::broad_phase::ShapePair;
-use super::epa::epa;
-use super::gjk::{gjk, GjkResult};
+use super::epa::epa_with_hulls;
+use super::gjk::{gjk_with_hulls, GjkResult};
 use super::shape_world::shape_world_transform;
 
 /// Output of the narrow phase. The contact normal points from `a` to
@@ -223,16 +223,23 @@ pub fn pair_contact(
         // ── GJK + EPA fallback (no closed-form path) ─────────────
         // Plane is a half-space — GJK isn't well-defined against it
         // (unbounded support). Pair-vs-plane uses a ray-test fast
-        // path (only the 'lowest' support point matters). We don't
-        // have one for cylinder yet; skip those and let the caller
-        // decide.
+        // path (only the 'lowest' support point matters).
         (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Plane { .. })
         | (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. }) => {
             cylinder_plane_fallback(geom_a, &xf_a, geom_b, &xf_b, pair, out);
         }
+        (ShapeGeometry::Cone { .. }, ShapeGeometry::Plane { .. })
+        | (ShapeGeometry::Plane { .. }, ShapeGeometry::Cone { .. }) => {
+            cone_plane_fallback(geom_a, &xf_a, geom_b, &xf_b, pair, out);
+        }
+        (ShapeGeometry::ConvexHull { .. }, ShapeGeometry::Plane { .. })
+        | (ShapeGeometry::Plane { .. }, ShapeGeometry::ConvexHull { .. }) => {
+            hull_plane_fallback(model, geom_a, &xf_a, geom_b, &xf_b, pair, out);
+        }
 
         // Convex-vs-convex via GJK + EPA. Covers capsule-box,
-        // box-capsule, capsule-cylinder, cylinder-*, triangle-*.
+        // box-capsule, capsule-cylinder, cylinder-*, triangle-*,
+        // cone-*, hull-*.
         (ShapeGeometry::Capsule { .. }, ShapeGeometry::Box { .. })
         | (ShapeGeometry::Box { .. }, ShapeGeometry::Capsule { .. })
         | (ShapeGeometry::Capsule { .. }, ShapeGeometry::Cylinder { .. })
@@ -243,8 +250,27 @@ pub fn pair_contact(
         | (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Box { .. })
         | (ShapeGeometry::Box { .. }, ShapeGeometry::Cylinder { .. })
         | (ShapeGeometry::Triangle { .. }, _)
-        | (_, ShapeGeometry::Triangle { .. }) => {
-            if let Some(m) = gjk_epa_pair(geom_a, &xf_a, geom_b, &xf_b, pair) {
+        | (_, ShapeGeometry::Triangle { .. })
+        | (ShapeGeometry::Cone { .. }, _)
+        | (_, ShapeGeometry::Cone { .. })
+        | (ShapeGeometry::ConvexHull { .. }, _)
+        | (_, ShapeGeometry::ConvexHull { .. }) => {
+            // Cone / ConvexHull need access to model.hulls for the
+            // support function. The `_with_hulls` variant falls back
+            // to the default for non-hull shapes.
+            if matches!(
+                geom_a,
+                ShapeGeometry::Plane { .. } | ShapeGeometry::TriMesh { .. }
+            ) || matches!(
+                geom_b,
+                ShapeGeometry::Plane { .. } | ShapeGeometry::TriMesh { .. }
+            ) {
+                // GJK doesn't handle Plane (unbounded support) and
+                // mesh-vs-* routes through trimesh_pair below. Fall
+                // through.
+            } else if let Some(m) = gjk_epa_pair_with_hulls(
+                geom_a, &xf_a, geom_b, &xf_b, pair, &model.hulls,
+            ) {
                 out.push(m);
             }
         }
@@ -1085,12 +1111,24 @@ fn gjk_epa_pair(
     xf_b: &Transform,
     pair: ShapePair,
 ) -> Option<ContactManifold> {
-    let res = gjk(geom_a, xf_a, geom_b, xf_b);
+    gjk_epa_pair_with_hulls(geom_a, xf_a, geom_b, xf_b, pair, &[])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn gjk_epa_pair_with_hulls(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    pair: ShapePair,
+    hulls: &[Vec<Vec3>],
+) -> Option<ContactManifold> {
+    let res = gjk_with_hulls(geom_a, xf_a, geom_b, xf_b, hulls);
     let simplex = match res {
         GjkResult::Disjoint(_) => return None,
         GjkResult::Overlap(s) => s,
     };
-    let contact = epa(geom_a, xf_a, geom_b, xf_b, &simplex)?;
+    let contact = epa_with_hulls(geom_a, xf_a, geom_b, xf_b, &simplex, hulls)?;
     if contact.depth <= 0.0 {
         return None;
     }
@@ -1255,6 +1293,31 @@ fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
             Vec3::splat(-Real::INFINITY),
             Vec3::splat(Real::INFINITY),
         ),
+        ShapeGeometry::Cone { half_height, radius } => {
+            // Same axis-projection trick as Cylinder.
+            let axis = xf.rotation * Vec3::Y;
+            let absax = Vec3::new(axis.x.abs(), axis.y.abs(), axis.z.abs());
+            let one = Vec3::splat(1.0);
+            let perp_scale = (one - absax * absax).max(Vec3::ZERO);
+            let perp = Vec3::new(
+                perp_scale.x.sqrt(),
+                perp_scale.y.sqrt(),
+                perp_scale.z.sqrt(),
+            );
+            let h = absax * half_height + perp * radius;
+            (xf.position - h, xf.position + h)
+        }
+        ShapeGeometry::ConvexHull { .. } => {
+            // Conservative — caller (narrow_phase) doesn't have
+            // model.hulls handy here. Returning infinity makes the
+            // BVH-overlap check degenerate to "every triangle";
+            // ConvexHull-vs-trimesh narrow phase isn't a hot path
+            // in v1 anyway.
+            (
+                Vec3::splat(-Real::INFINITY),
+                Vec3::splat(Real::INFINITY),
+            )
+        }
     }
 }
 
@@ -1374,6 +1437,142 @@ fn cylinder_plane_fallback(
         }
     }
     let _ = emitted;
+}
+
+/// Cone-vs-plane: emit a contact for the apex + a few base disc
+/// rim samples that fall below the plane. Same pattern as
+/// `cylinder_plane_fallback`.
+fn cone_plane_fallback(
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    pair: ShapePair,
+    out: &mut Vec<ContactManifold>,
+) {
+    let (cone_xf, plane_xf, cone_geom, cone_shape, plane_shape, flip) =
+        match (geom_a, geom_b) {
+            (ShapeGeometry::Cone { .. }, ShapeGeometry::Plane { .. }) => {
+                (xf_a, xf_b, geom_a, pair.a, pair.b, false)
+            }
+            (ShapeGeometry::Plane { .. }, ShapeGeometry::Cone { .. }) => {
+                (xf_b, xf_a, geom_b, pair.b, pair.a, true)
+            }
+            _ => return,
+        };
+    let plane_normal_world = match (geom_a, geom_b) {
+        (_, ShapeGeometry::Plane { normal }) => xf_b.rotation * normal,
+        (ShapeGeometry::Plane { normal }, _) => xf_a.rotation * normal,
+        _ => return,
+    };
+    let plane_p = plane_xf.position;
+    let (half_height, radius) = match cone_geom {
+        ShapeGeometry::Cone { half_height, radius } => (half_height, radius),
+        _ => return,
+    };
+    let axis = cone_xf.rotation * Vec3::Y;
+    let apex = cone_xf.position + axis * half_height;
+    let base_centre = cone_xf.position - axis * half_height;
+    // Two perpendicular axes for sampling the base disc rim.
+    let abs_a = Vec3::new(axis.x.abs(), axis.y.abs(), axis.z.abs());
+    let helper = if abs_a.x <= abs_a.y && abs_a.x <= abs_a.z {
+        Vec3::X
+    } else if abs_a.y <= abs_a.z {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let u = axis.cross(helper).normalize_or_zero();
+    let v = axis.cross(u).normalize_or_zero();
+
+    let normal = -plane_normal_world; // a→b: cone(a) → plane(b)
+    let mut candidates: Vec<Vec3> = Vec::with_capacity(5);
+    candidates.push(apex);
+    candidates.push(base_centre + u * radius);
+    candidates.push(base_centre - u * radius);
+    candidates.push(base_centre + v * radius);
+    candidates.push(base_centre - v * radius);
+    for c in candidates {
+        let signed = (c - plane_p).dot(plane_normal_world);
+        if signed < 0.0 {
+            let depth = -signed;
+            let point = c + plane_normal_world * (0.5 * depth);
+            let m = ContactManifold {
+                a_shape: cone_shape,
+                b_shape: plane_shape,
+                point,
+                normal,
+                depth,
+                friction: 0.0,
+                rolling_friction: 0.0,
+                torsional_friction: 0.0,
+                restitution: 0.0,
+            };
+            out.push(if flip { flip_manifold(m) } else { m });
+        }
+    }
+}
+
+/// ConvexHull-vs-plane: emit a contact for every hull vertex below
+/// the plane. Same pattern as the trimesh-plane path.
+fn hull_plane_fallback(
+    model: &Model,
+    geom_a: ShapeGeometry,
+    xf_a: &Transform,
+    geom_b: ShapeGeometry,
+    xf_b: &Transform,
+    pair: ShapePair,
+    out: &mut Vec<ContactManifold>,
+) {
+    let (hull_xf, plane_xf, hull_geom, hull_shape, plane_shape, flip) =
+        match (geom_a, geom_b) {
+            (ShapeGeometry::ConvexHull { .. }, ShapeGeometry::Plane { .. }) => {
+                (xf_a, xf_b, geom_a, pair.a, pair.b, false)
+            }
+            (ShapeGeometry::Plane { .. }, ShapeGeometry::ConvexHull { .. }) => {
+                (xf_b, xf_a, geom_b, pair.b, pair.a, true)
+            }
+            _ => return,
+        };
+    let plane_normal_world = match (geom_a, geom_b) {
+        (_, ShapeGeometry::Plane { normal }) => xf_b.rotation * normal,
+        (ShapeGeometry::Plane { normal }, _) => xf_a.rotation * normal,
+        _ => return,
+    };
+    let plane_p = plane_xf.position;
+    let hull_id = match hull_geom {
+        ShapeGeometry::ConvexHull { hull_id } => hull_id as usize,
+        _ => return,
+    };
+    let hull = match model.hulls.get(hull_id) {
+        Some(h) => h,
+        None => return,
+    };
+    let normal = -plane_normal_world;
+    let start = out.len();
+    for &v_local in hull {
+        let v_world = hull_xf.transform_point(v_local);
+        let signed = (v_world - plane_p).dot(plane_normal_world);
+        if signed < 0.0 {
+            let depth = -signed;
+            let point = v_world + plane_normal_world * (0.5 * depth);
+            let m = ContactManifold {
+                a_shape: hull_shape,
+                b_shape: plane_shape,
+                point,
+                normal,
+                depth,
+                friction: 0.0,
+                rolling_friction: 0.0,
+                torsional_friction: 0.0,
+                restitution: 0.0,
+            };
+            out.push(if flip { flip_manifold(m) } else { m });
+        }
+    }
+    if out.len() - start > MAX_MANIFOLD_POINTS {
+        keep_deepest_range(out, start, MAX_MANIFOLD_POINTS);
+    }
 }
 
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
