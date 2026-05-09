@@ -703,10 +703,14 @@ pub(crate) fn project_tet_tet_contacts(
         TetAabb::from_corners(0, Vec3::ZERO, Vec3::ZERO);
         n_tets
     ];
-    // Three Jacobi sweeps. Each sweep refits AABBs from the current
+    // Eight Jacobi sweeps. Each sweep refits AABBs from the current
     // (already-projected) positions, rebuilds the mesh-pair overlap
-    // table, and applies one round of position projection.
-    for _sweep in 0..3 {
+    // table, and applies one round of position projection. Multiple
+    // sweeps are essential when both meshes deform (each sweep moves
+    // one particle out at a time, but the partner's vertices may then
+    // poke through the corrected position; iterating to convergence
+    // tightens the residual).
+    for _sweep in 0..8 {
         recompute_tet_aabbs(tet_indices, &q, 0.005, &mut aabbs);
         // Build mesh-pair overlap table.
         let mut pairs: Vec<Vec<u32>> = vec![Vec::new(); n_meshes];
@@ -742,6 +746,12 @@ pub(crate) fn project_tet_tet_contacts(
             }
             let pr = radius[v];
             let pos = q[v];
+            // Find the *deepest* penetration across all candidate tets
+            // and project along its normal. (A "first-found" projection
+            // can flip-flop a vertex between two adjacent tets sharing
+            // a face when the penetration spans them.)
+            let mut deepest_pen: Real = 0.0;
+            let mut deepest_normal = Vec3::ZERO;
             for &m_other in &pairs[o as usize] {
                 let lo_t = tet_mesh_offsets[m_other as usize] as usize;
                 let hi_t = tet_mesh_offsets[m_other as usize + 1] as usize;
@@ -758,37 +768,22 @@ pub(crate) fn project_tet_tet_contacts(
                     if let Some((signed, n_dir)) = tet_closest_face(
                         pos, q[i0], q[i1], q[i2], q[i3],
                     ) {
-                        // Projection target: surface + radius offset
-                        // (push the particle out so it sits on the
-                        // surface with `radius` clearance).
-                        // signed < 0 => penetrating; signed >= 0 with
-                        // signed < pr => touching → still push to
-                        // give the radius clearance.
+                        // signed < 0 ⇒ inside the tet (penetration depth = -signed).
+                        // We treat any signed < pr as a contact so the
+                        // particle gets a `pr` clearance buffer — but
+                        // only positive pen drives projection.
                         let push_dist = pr - signed;
-                        if push_dist > 0.0 {
-                            // Move only this vertex (the partner's
-                            // tet vertices are owned by the other
-                            // mesh; they get their own push when the
-                            // outer loop visits them with `o = m_other`).
-                            q[v] = pos + n_dir * push_dist;
-                            any_projected = true;
-                            break;
+                        if push_dist > deepest_pen {
+                            deepest_pen = push_dist;
+                            deepest_normal = n_dir;
                         }
                     }
                 }
-                if any_projected {
-                    // Loop continues to the next tet in the same mesh,
-                    // because the particle may have been pushed into
-                    // another tet of the same mesh; but we recomputed
-                    // pos via `q[v]` at the top of each `for t in
-                    // lo_t..hi_t` iteration — actually we didn't, so
-                    // the inner re-query needs the updated pos.
-                    // Simpler: break + rely on the next sweep.
-                    break;
-                }
             }
-            // Skip the rest of `pairs[o]` for this particle if we
-            // already pushed; next sweep will re-evaluate.
+            if deepest_pen > 0.0 && deepest_normal.length_squared() > 1.0e-12 {
+                q[v] = pos + deepest_normal * deepest_pen;
+                any_projected = true;
+            }
         }
         if !any_projected {
             break;
