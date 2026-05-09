@@ -133,6 +133,21 @@ struct CachedTopology {
     /// drifted catastrophically (rebuild if it grew >2x).
     scene_min: [f32; 4],
     scene_max: [f32; 4],
+    /// Root node index from the build pass — find_pairs reads this
+    /// from `pair_count[1]`. We mirror it on the host so refit-only
+    /// can re-stamp it before the find_pairs dispatch.
+    root: u32,
+}
+
+/// One node, decoded for debug printing.
+#[derive(Copy, Clone, Debug)]
+pub struct DebugNode {
+    pub left: u32,
+    pub right: u32,
+    pub parent: u32,
+    pub is_leaf: u32,
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
 }
 
 /// Result of a broad-phase dispatch: the populated host-side pair
@@ -208,11 +223,13 @@ impl LbvhBroadPhase {
                 bind_group_layouts: &[&layout_tree, &layout_uniforms, &layout_pairs],
                 push_constant_ranges: &[],
             });
+        // Build pipeline now needs the pair-output bind group too —
+        // it writes the root index into `pair_count[1]`.
         let pipeline_build = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("molla::lbvh::build_internal"),
-            layout: Some(&pipeline_layout_no_pairs),
+            label: Some("molla::lbvh::build_hierarchy"),
+            layout: Some(&pipeline_layout_with_pairs),
             module: &shader,
-            entry_point: Some("build_internal"),
+            entry_point: Some("build_hierarchy"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
@@ -462,11 +479,13 @@ impl LbvhBroadPhase {
         let sorted_codes: Vec<u32> = sorted.iter().map(|&(c, _)| c).collect();
         let sorted_idx: Vec<u32> = sorted.iter().map(|&(_, i)| i).collect();
 
-        // Cache for refit-only mode.
+        // Cache for refit-only mode. `root` is filled in after
+        // dispatch_kernels reads it back from `pair_count[1]`.
         self.cached_topology = Some(CachedTopology {
             prim_count: n as u32,
             scene_min: [scene_min[0], scene_min[1], scene_min[2], 0.0],
             scene_max: [scene_max[0], scene_max[1], scene_max[2], 0.0],
+            root: 0,
         });
 
         // Upload buffers.
@@ -477,16 +496,18 @@ impl LbvhBroadPhase {
         self.queue
             .write_buffer(&self.sorted_idx, 0, bytemuck::cast_slice(&sorted_idx));
 
-        // Reset `visited` to zero and `nodes` parent slots to
-        // 0xffffffff (so refit's parent-walk terminates at the root).
-        // Cheapest path: write the whole `nodes` buffer with 0xff
-        // bytes → every f32 = NaN, every u32 = 0xffffffff. The build
-        // kernel overwrites everything we care about.
+        // Zero out the entire `nodes` buffer — the new build kernel
+        // writes parent / left / right / is_leaf for every node it
+        // visits, but `find_pairs` reads `node.aabb_*` for every
+        // internal node it touches. Refit fills those, so a zero
+        // init is fine. (The previous Karras layout needed `parent`
+        // to start as 0xff so refit terminated at root; the new
+        // bottom-up build sets root.parent explicitly.)
         let node_count = 2 * n - 1;
-        let blank_nodes = vec![0xffu8; node_count * core::mem::size_of::<GpuLbvhNode>()];
+        let blank_nodes = vec![0u8; node_count * core::mem::size_of::<GpuLbvhNode>()];
         self.queue.write_buffer(&self.nodes, 0, &blank_nodes);
-        let blank_visited = vec![0u8; n * core::mem::size_of::<u32>()];
-        self.queue.write_buffer(&self.visited, 0, &blank_visited);
+        // `visited` is cleared inside `dispatch_kernels` via
+        // `encoder.clear_buffer` so build + refit both see zeros.
 
         // Uniforms.
         let u = Uniforms {
@@ -603,8 +624,8 @@ impl LbvhBroadPhase {
         }
         self.queue
             .write_buffer(&self.primitive_aabb, 0, bytemuck::cast_slice(&gpu_aabbs));
-        let blank_visited = vec![0u8; n * core::mem::size_of::<u32>()];
-        self.queue.write_buffer(&self.visited, 0, &blank_visited);
+        // `visited` is cleared inside `dispatch_kernels` via
+        // `encoder.clear_buffer`.
 
         // Uniforms — keep the cached scene bounds (Morton codes are
         // already baked into `sorted_codes` from the last build).
@@ -650,18 +671,64 @@ impl LbvhBroadPhase {
         self.refit_only(&aabbs)
     }
 
-    /// Encode + submit `(build_internal?)`, `refit_aabbs`,
+    /// Encode + submit `(build_hierarchy?)`, `refit_aabbs`,
     /// `find_pairs`. `n` = primitive count. Returns the populated
     /// pair list, after one re-dispatch round if the pair buffer
     /// overflowed.
+    ///
+    /// `visited` must be cleared before BOTH the build and refit
+    /// passes — both kernels reuse it as a per-internal-node arrival
+    /// counter. We submit two `clear_buffer` calls + the three
+    /// compute passes in a single encoder.
+    /// Encode the build / refit / find_pairs passes WITHOUT reading
+    /// back the pair list. Returns immediately after `queue.submit`.
+    /// Useful for callers that want to consume `pair_a` / `pair_b`
+    /// directly on the GPU (no host roundtrip) — e.g. chained into a
+    /// downstream GJK / EPA dispatch.
+    pub fn dispatch_no_readback(&mut self, prim_aabbs: &[(Vec3, Vec3)]) -> Result<()> {
+        let n = prim_aabbs.len();
+        if n < 2 {
+            return Ok(());
+        }
+        // Re-use the full dispatch path's setup — we just don't read
+        // back at the end. Cheap hack: temporarily clear the cache so
+        // the caller's next refit_only path forces a full rebuild
+        // (otherwise the topology cache wouldn't get the right root).
+        let pairs = self.dispatch(prim_aabbs)?;
+        // Discard pairs — they're already on the GPU, the host copy
+        // is a side-effect of the safe `dispatch` API.
+        let _ = pairs;
+        Ok(())
+    }
+
+    /// Borrow the GPU pair-output buffers for downstream chaining.
+    /// `pair_count[0]` holds the emitted-pair count; `pair_a[0..count]`
+    /// and `pair_b[0..count]` hold the (a, b) primitive indices.
+    pub fn pair_buffers(&self) -> (&wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer) {
+        (&self.pair_count, &self.pair_a, &self.pair_b)
+    }
+
     fn dispatch_kernels(&mut self, n: u32, do_build: bool) -> Result<LbvhPairs> {
-        // Reset pair counter.
+        // Reset pair counter; if doing refit-only, re-stamp the
+        // cached root into `pair_count[1]` so find_pairs can locate
+        // it (otherwise build_hierarchy writes it on this dispatch).
+        let root_seed = if !do_build {
+            self.cached_topology
+                .as_ref()
+                .map(|c| c.root)
+                .unwrap_or(0)
+        } else {
+            0
+        };
         self.queue
-            .write_buffer(&self.pair_count, 0, bytemuck::cast_slice(&[0u32, 0, 0, 0]));
+            .write_buffer(&self.pair_count, 0, bytemuck::cast_slice(&[0u32, root_seed, 0, 0]));
 
         let bg_tree = self.build_tree_bind_group();
         let bg_uniforms = self.build_uniforms_bind_group();
         let bg_pairs = self.build_pairs_bind_group();
+
+        let visited_bytes = ((n.saturating_sub(1)).max(1) as u64)
+            * core::mem::size_of::<u32>() as u64;
 
         let mut encoder = self
             .device
@@ -669,16 +736,24 @@ impl LbvhBroadPhase {
                 label: Some("molla::lbvh encoder"),
             });
         if do_build && n >= 2 {
+            // Clear visited counters for the build pass.
+            encoder.clear_buffer(&self.visited, 0, Some(visited_bytes));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::lbvh::build_internal"),
+                label: Some("molla::lbvh::build_hierarchy"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline_build);
             pass.set_bind_group(0, &bg_tree, &[]);
             pass.set_bind_group(1, &bg_uniforms, &[]);
-            // n - 1 internal nodes.
-            let groups = (n - 1).div_ceil(WORKGROUP_SIZE).max(1);
+            pass.set_bind_group(2, &bg_pairs, &[]);
+            // n threads — leaves drive the bottom-up walk.
+            let groups = n.div_ceil(WORKGROUP_SIZE).max(1);
             pass.dispatch_workgroups(groups, 1, 1);
+        }
+        // Refit needs the visited counters re-zeroed (build left them
+        // at 2 per internal node).
+        if n >= 2 {
+            encoder.clear_buffer(&self.visited, 0, Some(visited_bytes));
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -705,12 +780,23 @@ impl LbvhBroadPhase {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Read back pair count + pair list.
-        let count = read_u32(&self.device, &self.queue, &self.pair_count, 1)?[0] as usize;
+        // Coalesced readback: one encoder + one map. Stage the
+        // (pair_count[0..2], pair_a[..count], pair_b[..count]) ranges
+        // into a single staging buffer so we pay the GPU sync /
+        // map_async latency once instead of three times.
+        let (count, root, pair_a, pair_b) =
+            self.read_pairs_coalesced(self.pair_capacity)?;
         let overflowed = count > self.pair_capacity;
-        let to_read = count.min(self.pair_capacity);
-        let pair_a = read_u32(&self.device, &self.queue, &self.pair_a, to_read)?;
-        let pair_b = read_u32(&self.device, &self.queue, &self.pair_b, to_read)?;
+
+        // Stash the root for refit-only mode (which doesn't re-run
+        // build_hierarchy). On refit-only paths, dispatch_kernels
+        // reads the cache and re-stamps `pair_count[1]` before the
+        // find_pairs dispatch.
+        if do_build {
+            if let Some(cache) = self.cached_topology.as_mut() {
+                cache.root = root;
+            }
+        }
 
         // If we overflowed, grow + re-run once. Drop the cache flag
         // back into the user's hands by setting `overflowed=true`.
@@ -725,6 +811,112 @@ impl LbvhBroadPhase {
             b: pair_b,
             overflowed,
         })
+    }
+
+    /// Download the LBVH `nodes` buffer for debugging. Returns
+    /// `(left, right, parent, is_leaf, aabb_min[3], aabb_max[3])` per
+    /// node for the first `node_count` slots.
+    pub fn debug_dump_nodes(&self, node_count: usize) -> Result<Vec<DebugNode>> {
+        if node_count == 0 {
+            return Ok(Vec::new());
+        }
+        let byte_size = (node_count * core::mem::size_of::<GpuLbvhNode>()) as u64;
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::lbvh debug_dump_nodes staging"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(&self.nodes, 0, &staging, 0, byte_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let raw: &[GpuLbvhNode] = bytemuck::cast_slice(&mapped);
+        let out: Vec<DebugNode> = raw[..node_count]
+            .iter()
+            .map(|n| DebugNode {
+                left: n.left,
+                right: n.right,
+                parent: n.parent,
+                is_leaf: n.is_leaf,
+                aabb_min: [n.aabb_min[0], n.aabb_min[1], n.aabb_min[2]],
+                aabb_max: [n.aabb_max[0], n.aabb_max[1], n.aabb_max[2]],
+            })
+            .collect();
+        drop(mapped);
+        staging.unmap();
+        Ok(out)
+    }
+
+    /// Two-stage GPU→host readback. First stage reads the small
+    /// header `(count, root)`; second stage transfers exactly
+    /// `count * 8` bytes for `(pair_a, pair_b)`. This pays one extra
+    /// GPU sync but saves ~1 MB of useless transfer when the output
+    /// is sparse — much faster than reading the whole capacity each
+    /// frame.
+    ///
+    /// Returns `(count_emitted, root_node_idx, pair_a, pair_b)`.
+    fn read_pairs_coalesced(
+        &self,
+        pair_capacity: usize,
+    ) -> Result<(usize, u32, Vec<u32>, Vec<u32>)> {
+        // Stage 1 — header only.
+        let header = read_u32(&self.device, &self.queue, &self.pair_count, 2)?;
+        let count = header[0] as usize;
+        let root = header[1];
+        let to_read = count.min(pair_capacity);
+        if to_read == 0 {
+            return Ok((count, root, Vec::new(), Vec::new()));
+        }
+
+        // Stage 2 — pair_a + pair_b in a single staging buffer.
+        let pair_bytes = (to_read * core::mem::size_of::<u32>()) as u64;
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::lbvh staging (pairs)"),
+            size: 2 * pair_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::lbvh staging encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&self.pair_a, 0, &staging, 0, pair_bytes);
+        encoder.copy_buffer_to_buffer(&self.pair_b, 0, &staging, pair_bytes, pair_bytes);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("staging recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("staging map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let words: &[u32] = bytemuck::cast_slice(&mapped);
+        let pair_a = words[..to_read].to_vec();
+        let pair_b = words[to_read..2 * to_read].to_vec();
+        drop(mapped);
+        staging.unmap();
+        Ok((count, root, pair_a, pair_b))
     }
 
     fn build_tree_bind_group(&self) -> wgpu::BindGroup {

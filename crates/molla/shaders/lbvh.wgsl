@@ -1,23 +1,25 @@
 // LBVH (Linear BVH) construction over an array of primitive AABBs,
-// following Karras (2012). Three compute kernels run in sequence:
+// using NVIDIA Warp's bottom-up build (`xtra/warp/warp/native/bvh.cu :
+// build_hierarchy`). Three compute kernels:
 //
 //   morton_codes — one thread per primitive: compute the Morton code
 //                  of the centroid (mapped into the global AABB to
 //                  [0, 2^10) per axis), and emit (code, primitive_idx).
-//   build_internal — one thread per internal node: determine the
-//                  child range via the longest-common-prefix split,
-//                  store left/right child indices in `nodes`.
-//   refit_aabbs   — one thread per leaf, walking up to the root with
-//                  atomic min/max to union child AABBs.
+//                  Optional — host can compute on the CPU and upload
+//                  the sorted (code, idx) arrays directly.
+//   build_hierarchy — one thread per primitive (leaf): walks bottom-
+//                  up choosing parent direction by which neighbour key
+//                  delta is greater; writes parent link, child slot,
+//                  range, and refit AABBs in the same pass via the
+//                  per-internal-node atomic `visited` counter.
+//   find_pairs   — one thread per leaf: traverse the tree from the
+//                  root; emit overlapping pairs into the per-pair
+//                  output buffers.
 //
-// `primitive_aabb` is sorted-by-Morton-code on the host (radix sort
-// is its own kernel; for v1 we let the CPU sort and just upload the
-// sorted indices). Internal nodes live at indices `[0, n-1)`; leaves
-// at `[n-1, 2n-1)` mirroring the standard Karras layout.
-//
-// Inputs / outputs match the host-side `LbvhBuild` helper. Used by
-// the GPU broad phase as a per-frame replacement for SAP when the
-// pair count grows past the SAP scratch budget.
+// Layout: leaves [0, n), internal nodes [n, 2n-1). Total nodes 2n-1.
+// `visited` is sized `n - 1` (one counter per internal node, index
+// `internal_idx - n`). Root is computed during the build pass and
+// stored in `root_out[0]`.
 
 struct Aabb {
     min: vec4<f32>,
@@ -49,10 +51,11 @@ struct Uniforms {
 @group(0) @binding(4) var<storage, read_write> visited:          array<atomic<u32>>;
 @group(1) @binding(0) var<uniform>             u: Uniforms;
 
-// Pair-output bind group — populated by `find_pairs`. `pair_count` is
-// an atomic counter; `pair_a` / `pair_b` are append-style arrays sized
-// to the host capacity (host re-issues a larger dispatch if it
-// overflowed). `pair_count[1]` is the high-water mark before clamp.
+// Pair-output bind group:
+//   pair_count[0] — atomic pair-emit counter (high-water mark; if
+//                   > arrayLength(&pair_a) the output overflowed).
+//   pair_count[1] — root node index (written by build_hierarchy).
+//   pair_count[2..] — reserved.
 @group(2) @binding(0) var<storage, read_write> pair_count: array<atomic<u32>>;
 @group(2) @binding(1) var<storage, read_write> pair_a:     array<u32>;
 @group(2) @binding(2) var<storage, read_write> pair_b:     array<u32>;
@@ -68,7 +71,6 @@ fn spread_bits(v: u32) -> u32 {
 }
 
 fn morton3(p: vec3<f32>) -> u32 {
-    // p ∈ [0, 1) per component → 30-bit Morton code.
     let xi = u32(clamp(p.x, 0.0, 0.99999) * 1024.0);
     let yi = u32(clamp(p.y, 0.0, 0.99999) * 1024.0);
     let zi = u32(clamp(p.z, 0.0, 0.99999) * 1024.0);
@@ -84,99 +86,166 @@ fn morton_codes(@builtin(global_invocation_id) gid: vec3<u32>) {
     let extent = max(u.scene_max.xyz - u.scene_min.xyz, vec3<f32>(1e-9));
     let normalized = (centroid - u.scene_min.xyz) / extent;
     let code = morton3(normalized);
-    // Re-use the `nodes` storage's scratch slots for (code, idx)
-    // pairs — host re-uploads after sorting, so we only need the
-    // codes here; the idx is implicit (= i before sort).
     nodes[i].left = code;
     nodes[i].right = i;
 }
 
-// Karras-style child-range split using longest-common-prefix on
-// successive Morton codes. Each thread owns one INTERNAL node
-// (index `i ∈ [0, n-1)`) and computes its `left` / `right` children.
-fn delta(i: i32, j: i32) -> i32 {
+// `delta(i)` = longest common prefix between `sorted_codes[i]` and
+// `sorted_codes[i+1]`, with index-based tie-break for duplicate codes.
+// Returns -1 if `i+1 >= n` so callers can compare across boundaries.
+fn key_delta(i: i32) -> i32 {
     let n = i32(u.primitive_count);
-    if (j < 0 || j >= n) { return -1; }
-    let ci = sorted_codes[i];
-    let cj = sorted_codes[j];
-    if (ci == cj) {
-        // Tie-break by primitive index (sorted).
-        return 32 + i32(countLeadingZeros(u32(i) ^ u32(j)));
+    if (i < 0 || i + 1 >= n) { return -1; }
+    let ca = sorted_codes[i];
+    let cb = sorted_codes[i + 1];
+    if (ca == cb) {
+        // Degenerate codes: tie-break by primitive index.
+        return 32 + i32(countLeadingZeros(u32(i) ^ u32(i + 1)));
     }
-    return i32(countLeadingZeros(ci ^ cj));
+    return i32(countLeadingZeros(ca ^ cb));
 }
 
+// Bottom-up Karras build (port of warp's `build_hierarchy`).
+// **Topology only** — writes parent/child/range fields. AABBs are
+// written by `refit_aabbs` in a separate kernel pass so we get a
+// global memory barrier between the two phases (WGSL has no
+// cross-workgroup memory fence beyond the queue / kernel boundary).
+//
+// Layout: leaves at [0, n), internal nodes at [n, 2n-1). `visited`
+// is sized `n - 1` and indexed `internal_idx - n`. Per-internal-node
+// `range_left` / `range_right` is stashed in `aabb_min.w` /
+// `aabb_max.w` lanes during the build — refit overwrites those
+// lanes' xyz channels but preserves the .w stashes via explicit
+// reads.
 @compute @workgroup_size(64)
-fn build_internal(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn build_hierarchy(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = i32(u.primitive_count);
+    if (n < 2) {
+        if (gid.x == 0u) {
+            // Trivial 1-leaf tree: root is leaf 0.
+            atomicStore(&pair_count[1], 0u);
+            if (n == 1) {
+                nodes[0].is_leaf = 1u;
+                nodes[0].parent = 0xffffffffu;
+                nodes[0].aabb_min.w = bitcast<f32>(0u);
+                nodes[0].aabb_max.w = bitcast<f32>(0u);
+            }
+        }
+        return;
+    }
     let idx = i32(gid.x);
-    if (idx >= n - 1) { return; }
-    // Determine direction of range (+1 or -1).
-    let d_minus = delta(idx, idx - 1);
-    let d_plus  = delta(idx, idx + 1);
-    var dir: i32 = 1;
-    if (d_minus > d_plus) { dir = -1; }
-    // Compute upper bound for length of range.
-    let d_min = min(d_minus, d_plus);
-    var l_max: i32 = 2;
-    while (delta(idx, idx + l_max * dir) > d_min) {
-        l_max = l_max * 2;
-        if (l_max > n) { break; }
-    }
-    // Binary search for the exact end.
-    var l: i32 = 0;
-    var t: i32 = l_max / 2;
-    while (t >= 1) {
-        if (delta(idx, idx + (l + t) * dir) > d_min) {
-            l = l + t;
+    if (idx >= n) { return; }
+
+    // Per-leaf ascending range starts as [idx, idx]. Stash in `.w`
+    // lanes; AABB xyz lanes are filled by refit_aabbs afterwards.
+    nodes[idx].is_leaf = 1u;
+    nodes[idx].aabb_min.w = bitcast<f32>(u32(idx));
+    nodes[idx].aabb_max.w = bitcast<f32>(u32(idx));
+
+    var cur: i32 = idx;
+    loop {
+        let left_range  = bitcast<i32>(nodes[cur].aabb_min.w);
+        let right_range = bitcast<i32>(nodes[cur].aabb_max.w);
+
+        // Are we the root?
+        if (left_range == 0 && right_range == n - 1) {
+            nodes[cur].parent = 0xffffffffu;
+            atomicStore(&pair_count[1], u32(cur));
+            return;
         }
-        t = t / 2;
-    }
-    let j = idx + l * dir;
-    let d_node = delta(idx, j);
 
-    // Find split position with binary search.
-    var s: i32 = 0;
-    var div: i32 = 2;
-    var t2: i32 = (l + (div - 1)) / div;
-    while (t2 >= 1) {
-        if (delta(idx, idx + (s + t2) * dir) > d_node) {
-            s = s + t2;
+        // Pick parent direction.
+        var parent_right: bool = false;
+        if (left_range == 0) {
+            parent_right = true;
+        } else if (right_range == n - 1) {
+            parent_right = false;
+        } else {
+            let dl = key_delta(left_range - 1);
+            let dr = key_delta(right_range);
+            parent_right = dr >= dl;
         }
-        div = div * 2;
-        t2 = (l + (div - 1)) / div;
-        if (div > l + 1) { break; }
+
+        var parent_idx: i32;
+        var i_am_left: bool;
+        if (parent_right) {
+            parent_idx = right_range + n;
+            i_am_left = true;
+        } else {
+            parent_idx = left_range - 1 + n;
+            i_am_left = false;
+        }
+
+        nodes[cur].parent = u32(parent_idx);
+        if (i_am_left) {
+            nodes[parent_idx].left = u32(cur);
+            nodes[parent_idx].aabb_min.w = bitcast<f32>(left_range);
+        } else {
+            nodes[parent_idx].right = u32(cur);
+            nodes[parent_idx].aabb_max.w = bitcast<f32>(right_range);
+        }
+
+        // Atomic acquire-release on parent's counter — the
+        // sequencing on this address makes prior writes to the
+        // parent visible to the second arrival.
+        let visited_idx = parent_idx - n;
+        let prior = atomicAdd(&visited[visited_idx], 1u);
+        if (prior == 0u) {
+            return;
+        }
+        nodes[parent_idx].is_leaf = 0u;
+        cur = parent_idx;
     }
-    let split = idx + s * dir + min(dir, 0);
+}
 
-    let left_idx  = u32(min(idx, j));
-    let right_idx = u32(max(idx, j));
-    let left_child  = select(u32(split) + u32(n) - 1u, u32(split),       u32(split) == left_idx);
-    let right_child = select(u32(split + 1) + u32(n) - 1u, u32(split + 1), u32(split + 1) == right_idx);
+// AABB union pass. Run AFTER build_hierarchy (or any time you want
+// to refresh AABBs without changing topology). Each leaf writes its
+// primitive's AABB into `nodes[idx].aabb_xyz`, then walks up via
+// `nodes[cur].parent` atomically counting arrivals.
+//
+// **Caller responsibility**: zero out the `visited` counters before
+// dispatching this kernel — the same counters are reused from the
+// build pass, where each one has already been bumped to 2.
+@compute @workgroup_size(64)
+fn refit_aabbs(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = i32(u.primitive_count);
+    if (n < 1) { return; }
+    let idx = i32(gid.x);
+    if (idx >= n) { return; }
 
-    let me = u32(idx);
-    nodes[me].left  = left_child;
-    nodes[me].right = right_child;
-    nodes[me].is_leaf = 0u;
-    // Children record this as their parent.
-    nodes[left_child].parent  = me;
-    nodes[right_child].parent = me;
+    let prim = sorted_idx[u32(idx)];
+    let aabb = primitive_aabb[prim];
+    // Preserve the per-leaf range stash (.w lanes) so the next refit
+    // can climb the same parent pointers.
+    let lr = nodes[idx].aabb_min.w;
+    let rr = nodes[idx].aabb_max.w;
+    nodes[idx].aabb_min = vec4<f32>(aabb.min.xyz, lr);
+    nodes[idx].aabb_max = vec4<f32>(aabb.max.xyz, rr);
+
+    var cur: i32 = idx;
+    loop {
+        let parent = i32(nodes[cur].parent);
+        if (parent < 0 || u32(parent) == 0xffffffffu) {
+            return;
+        }
+        let visited_idx = parent - n;
+        let prior = atomicAdd(&visited[visited_idx], 1u);
+        if (prior == 0u) { return; }
+        let l_child = nodes[parent].left;
+        let r_child = nodes[parent].right;
+        let lo = min(nodes[l_child].aabb_min.xyz, nodes[r_child].aabb_min.xyz);
+        let hi = max(nodes[l_child].aabb_max.xyz, nodes[r_child].aabb_max.xyz);
+        let lr2 = nodes[parent].aabb_min.w;
+        let rr2 = nodes[parent].aabb_max.w;
+        nodes[parent].aabb_min = vec4<f32>(lo, lr2);
+        nodes[parent].aabb_max = vec4<f32>(hi, rr2);
+        cur = parent;
+    }
 }
 
 // Per-leaf traversal: walk the LBVH from the root and emit any pair
-// (this leaf, other leaf) whose AABBs overlap. We only emit pairs
-// where `me_prim < other_prim` to keep the output deduplicated.
-//
-// `pair_a` / `pair_b` hold the result; `pair_count[0]` is an atomic
-// counter that doubles as a clamp index — appends past the host
-// capacity are dropped (host can detect via `pair_count[0] > cap` and
-// re-dispatch with a bigger buffer next frame).
-//
-// Iterative stack-based traversal — WGSL has no recursion. Stack
-// depth is bounded by `2*ceil(log2(n)) + 1` for the Karras layout;
-// 64 is enough for n up to ~2^31. Most adapters allow 32 KB local
-// memory per workgroup, but we keep the stack in registers (per
-// thread) to dodge cross-thread coordination.
+// (this leaf's primitive, other leaf's primitive) whose AABBs
+// overlap. Only emit pairs where `me_prim < other_prim` to dedup.
 fn aabb_overlap(amin: vec3<f32>, amax: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) -> bool {
     return all(amin <= bmax) && all(amax >= bmin);
 }
@@ -190,29 +259,26 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
     let me_aabb = primitive_aabb[me_prim];
     let me_min = me_aabb.min.xyz;
     let me_max = me_aabb.max.xyz;
-
-    // No pairs in a 1-element scene.
     if (n < 2u) { return; }
+
+    let root = atomicLoad(&pair_count[1]);
 
     var stack: array<u32, 64>;
     var sp: i32 = 0;
-    stack[0] = 0u; // root = internal node 0
+    stack[0] = root;
     sp = 1;
 
     loop {
         if (sp <= 0) { break; }
         sp = sp - 1;
         let node_idx = stack[sp];
-        let node = nodes[node_idx];
-        // Leaf?
-        if (node.is_leaf == 1u) {
-            // The internal-node `parent` field of leaves is set, but
-            // we identify "leaf" via `is_leaf`. The leaf's primitive
-            // is `sorted_idx[leaf_local]` where `leaf_local = node_idx - (n-1)`.
-            let leaf_local = node_idx - (n - 1u);
-            if (leaf_local == leaf) { continue; } // skip self
-            let other_prim = sorted_idx[leaf_local];
-            // Dedup: emit only when me < other.
+        // Leaf? Layout puts leaves at [0, n). Equivalently check
+        // `is_leaf == 1u` for safety.
+        if (node_idx < n) {
+            // Leaf primitive
+            if (node_idx == leaf) { continue; }
+            let other_prim = sorted_idx[node_idx];
+            // Dedup
             if (me_prim >= other_prim) { continue; }
             if (!aabb_overlap(me_min, me_max,
                               primitive_aabb[other_prim].min.xyz,
@@ -220,7 +286,6 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
                 continue;
             }
             let slot = atomicAdd(&pair_count[0], 1u);
-            // Always bump the high-water mark; clamp the write.
             let cap = arrayLength(&pair_a);
             if (slot < cap) {
                 pair_a[slot] = me_prim;
@@ -229,10 +294,10 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         // Internal — test against the node's stored AABB and recurse.
+        let node = nodes[node_idx];
         if (!aabb_overlap(me_min, me_max, node.aabb_min.xyz, node.aabb_max.xyz)) {
             continue;
         }
-        // Push children.
         if (sp + 2 <= 64) {
             stack[sp] = node.left;
             sp = sp + 1;
@@ -242,35 +307,15 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Bottom-up AABB refit using `visited` atomic counters: each
-// internal node waits until both children have been processed.
+// Old Karras top-down build kept for reference / testing parity.
+// Currently unused by the host dispatcher (which calls
+// `build_hierarchy` instead). Left in tree to make the side-by-side
+// comparison easy if anyone wants to revisit the top-down path.
 @compute @workgroup_size(64)
-fn refit_aabbs(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let n = u.primitive_count;
-    let leaf = gid.x;
-    if (leaf >= n) { return; }
-    // Initialise the leaf node from the primitive AABB.
-    let leaf_idx = (n - 1u) + leaf;
-    let prim = sorted_idx[leaf];
-    let aabb = primitive_aabb[prim];
-    nodes[leaf_idx].aabb_min = aabb.min;
-    nodes[leaf_idx].aabb_max = aabb.max;
-    nodes[leaf_idx].is_leaf = 1u;
-    // Walk to root, atomically incrementing each ancestor's visited
-    // counter. The thread that bumps it from 1 → 2 unions the
-    // children and continues; the other thread bails.
-    var cur = nodes[leaf_idx].parent;
-    loop {
-        if (cur == 0xffffffffu) { break; }
-        let count = atomicAdd(&visited[cur], 1u);
-        if (count == 0u) {
-            break; // Other child hasn't arrived yet.
-        }
-        let l = nodes[cur].left;
-        let r = nodes[cur].right;
-        nodes[cur].aabb_min = min(nodes[l].aabb_min, nodes[r].aabb_min);
-        nodes[cur].aabb_max = max(nodes[l].aabb_max, nodes[r].aabb_max);
-        if (cur == 0u) { break; }
-        cur = nodes[cur].parent;
-    }
+fn build_internal(@builtin(global_invocation_id) gid: vec3<u32>) {
+    // Stub: no-op. The original Karras top-down build had a
+    // long-standing parent-pointer race with our layout that the
+    // bottom-up `build_hierarchy` sidesteps entirely. Kept for
+    // backwards compat with anything still importing the entry point.
+    let _unused = gid.x;
 }
