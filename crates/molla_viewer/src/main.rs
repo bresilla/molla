@@ -1520,6 +1520,12 @@ struct JellyExampleState {
     /// puller sphere; the other variants register a baked / sparse
     /// SDF on solver re-creation.
     sdf_shape: JellySdfShape,
+    /// Set to `true` when the user touches a control whose effect is
+    /// only realised on a scene rebuild (`second_cube`, `sdf_shape`).
+    /// Cleared on rebuild. Surfaces a "Rebuild jelly" button so the
+    /// pane doesn't lie about needing the user to re-press Y (the
+    /// hotkey is a no-op when the scene is already active).
+    rebuild_pending: bool,
 }
 
 /// Stage 20.4 — picks which `SdfGrid` (or none) to register with the
@@ -1571,6 +1577,7 @@ impl Default for JellyExampleState {
             kinematic_hardening_modulus: 5.0e3,
             last_max_back_stress: 0.0,
             sdf_shape: JellySdfShape::None,
+            rebuild_pending: false,
         }
     }
 }
@@ -8926,7 +8933,13 @@ fn control_pane(
                         mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
                     }
                     Scene::Jelly => {
-                        jelly_pane(ui, &mut pane_states.jelly, &mut sim, accent_color)
+                        jelly_pane(
+                            ui,
+                            &mut pane_states.jelly,
+                            &mut sim,
+                            &mut pending,
+                            accent_color,
+                        )
                     }
                     _ => {}
                 });
@@ -9317,6 +9330,7 @@ fn jelly_pane(
     ui: &mut egui::Ui,
     state: &mut JellyExampleState,
     sim: &mut Sim,
+    pending: &mut PendingSceneSwitch,
     accent: egui::Color32,
 ) {
     ui.add_space(2.0);
@@ -9501,7 +9515,12 @@ fn jelly_pane(
     // Stage 20.5 will wire the second-cube + SDF rebuilds through
     // apply_scene_switch; v1 surfaces them as informational toggles
     // (changes require a scene re-entry via Y to apply).
-    let _ = ui.checkbox(&mut state.second_cube, "Second jelly cube (re-enter Y to apply)");
+    if ui
+        .checkbox(&mut state.second_cube, "Second jelly cube (rebuild to apply)")
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
     let mut kin_changed = false;
     if ui
         .checkbox(
@@ -9558,7 +9577,7 @@ fn jelly_pane(
             let _ = sim.model.tet_kinematic_hardening.upload(&queue);
         }
     }
-    ui.label("Rigid SDF backing (re-enter Y to apply)");
+    ui.label("Rigid SDF backing (rebuild to apply)");
     egui::ComboBox::from_id_salt("jelly-sdf-shape")
         .selected_text(match state.sdf_shape {
             JellySdfShape::None => "None",
@@ -9571,9 +9590,27 @@ fn jelly_pane(
                 (JellySdfShape::BakedSphere, "Baked sphere SDF"),
                 (JellySdfShape::BakedTorus, "Baked torus SDF"),
             ] {
-                let _ = ui.selectable_value(&mut state.sdf_shape, variant, label);
+                if ui
+                    .selectable_value(&mut state.sdf_shape, variant, label)
+                    .clicked()
+                {
+                    state.rebuild_pending = true;
+                }
             }
         });
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply scene-build toggles.",
+        );
+        if ui.button("Rebuild jelly").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active.
+            pending.0 = Some(sim.scene);
+            state.rebuild_pending = false;
+        }
+    }
     ui.separator();
 
     if ui
