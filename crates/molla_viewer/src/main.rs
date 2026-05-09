@@ -375,6 +375,14 @@ fn main() {
         .insert_resource(CableExampleState::default())
         .insert_resource(MpmExampleState::default())
         .insert_resource(JellyExampleState::default())
+        .insert_resource(PendulumExampleState::default())
+        .insert_resource(ConveyorExampleState::default())
+        .insert_resource(ClothBendingExampleState::default())
+        .insert_resource(ClothTwistExampleState::default())
+        .insert_resource(CartPoleExampleState::default())
+        .insert_resource(FourBarExampleState::default())
+        .insert_resource(DiffBallExampleState::default())
+        .insert_resource(DiffSpringExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -425,6 +433,23 @@ fn main() {
                     update_cable_example,
                     update_mpm_example,
                     update_jelly_example,
+                )
+                    .chain(),
+                // Newton-port pre-step controllers/integrators. Split
+                // out of the main chain to dodge Bevy's tuple-chain
+                // tuple-arity ceiling. Ordered before
+                // `step_simulation` via the outer .chain().
+                (
+                    update_pendulum_example,
+                    update_cartpole_example,
+                    update_conveyor_example,
+                    update_cloth_twist_example,
+                    update_fourbar_example,
+                    update_diff_ball_example,
+                    update_diff_spring_example,
+                )
+                    .chain(),
+                (
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -531,6 +556,15 @@ struct SceneStates<'w> {
     /// `apply_scene_switch` and `control_pane` under the 16-element
     /// SystemParam ceiling.
     jelly: ResMut<'w, JellyExampleState>,
+    // Newton-port scenes (Group A-E).
+    pendulum: ResMut<'w, PendulumExampleState>,
+    conveyor: ResMut<'w, ConveyorExampleState>,
+    cloth_bend: ResMut<'w, ClothBendingExampleState>,
+    cloth_twist: ResMut<'w, ClothTwistExampleState>,
+    cartpole: ResMut<'w, CartPoleExampleState>,
+    fourbar: ResMut<'w, FourBarExampleState>,
+    diff_ball: ResMut<'w, DiffBallExampleState>,
+    diff_spring: ResMut<'w, DiffSpringExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -569,6 +603,15 @@ struct PaneSceneStates<'w> {
     /// rationale as `cable` — bundled to stay under the 16-tuple
     /// SystemParam ceiling.
     jelly: ResMut<'w, JellyExampleState>,
+    // Newton-port scenes (Group A-E) — pane state for the right rail.
+    pendulum: ResMut<'w, PendulumExampleState>,
+    conveyor: ResMut<'w, ConveyorExampleState>,
+    cloth_bend: ResMut<'w, ClothBendingExampleState>,
+    cloth_twist: ResMut<'w, ClothTwistExampleState>,
+    cartpole: ResMut<'w, CartPoleExampleState>,
+    fourbar: ResMut<'w, FourBarExampleState>,
+    diff_ball: ResMut<'w, DiffBallExampleState>,
+    diff_spring: ResMut<'w, DiffSpringExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -806,6 +849,76 @@ enum Scene {
     /// and a "show CABLE comparison" toggle that overlays a small
     /// cable for bending behaviour A/B. Hotkey `Y`.
     Jelly,
+    // ── Newton-port scenes (Group A: basic kinematics + stacking) ──
+    /// 1-DoF revolute pendulum + a 3-link chain pendulum side by side.
+    /// Featherstone-stepped. Port of `example_basic_pendulum.py`.
+    Pendulum,
+    /// 4 columns side-by-side, each showing one joint kind in motion:
+    /// revolute, prismatic, ball, distance (XPBD equality). Port of
+    /// `example_basic_joints.py`.
+    JointSampler,
+    /// 32×32 sinusoidal heightfield with 30 mixed primitives dropped
+    /// on top. Port of `example_basic_heightfield.py`.
+    Heightfield,
+    /// Kinematic conveyor surface (long box with prescribed velocity)
+    /// + dropped boxes that slide along. Port of
+    /// `example_basic_conveyor.py`.
+    Conveyor,
+    /// Tall sphere/box pyramid being struck by a heavy projectile.
+    /// Larger and more dramatic than `Tower`. Port of `example_pyramid.py`.
+    Pyramid,
+    // ── Group B: cloth + cable variations ──
+    /// Hanging cloth strip with a live "bending stiffness" slider.
+    /// Side-by-side comparison of two strips. Port of
+    /// `example_cloth_bending.py`.
+    ClothBending,
+    /// Cloth pinned along TOP and BOTTOM edges; bottom edge rotates
+    /// slowly to twist the cloth. Port of `example_cloth_twist.py`.
+    ClothTwist,
+    /// Several cable polylines dropped into a bowl, watch them pile
+    /// up. CABLE bending stiffness. Port of `example_cable_pile.py`.
+    CablePile,
+    /// Three cables meeting at a Y junction (CONNECT equality at the
+    /// central particle). Port of `example_cable_y_junction.py`.
+    CableYJunction,
+    // ── Group C: MPM extensions ──
+    /// Ball of snow MPM particles dropped onto ground; uses
+    /// `MpmRheology::Snow`. Port of `example_mpm_snow_ball.py`.
+    MpmSnowBall,
+    /// Heavy rigid sphere drops INTO a pit of MPM sand (uses existing
+    /// `mpm_rigid_spheres` two-way coupling). Port of
+    /// `example_mpm_twoway_coupling.py`.
+    MpmTwoWay,
+    // ── Group D: diffsim + control ──
+    /// Cart-pole built procedurally (cart on prismatic + pole on
+    /// revolute). PD controller with target slider. Port of
+    /// `example_robot_cartpole.py` / `example_selection_cartpole.py`.
+    CartPole,
+    /// 16 cart-poles in a row, each independently balanced.
+    /// Demonstrates batched controllers. Port of
+    /// `example_selection_cartpole.py`.
+    CartPoleSwarm,
+    /// Closed kinematic loop (4-bar linkage) using `JointMimic` to
+    /// enforce closure. Driver joint is one revolute; other 3 mimic
+    /// via polynomial. Port of `example_kamino_basic_fourbar.py`.
+    FourBar,
+    /// Ball is launched with `(v, angle)` initial condition; target
+    /// hoop sits some distance away; gradient descent on miss
+    /// distance. Port of `example_diffsim_ball.py`.
+    DiffBall,
+    /// Particle inside a "cage" of springs; gradient of position w.r.t.
+    /// spring rest lengths; gradient-descent design optimisation.
+    /// Port of `example_diffsim_spring_cage.py`.
+    DiffSpring,
+    // ── Group E: sensors / multi-env ──
+    /// 6×10 brick wall (rectangular boxes) being struck by a heavy
+    /// projectile from one side. Wide, not tall. Port of
+    /// `example_brick_stacking.py` (geometry only — no robot arm).
+    BrickWall,
+    /// Tetrahedral soft cube dropped onto a hanging VBD cloth. Tests
+    /// soft-on-soft contact at the engine layer. Port of
+    /// `example_softbody_dropping_to_cloth.py`.
+    SoftbodyDrop,
 }
 
 impl Scene {
@@ -836,6 +949,25 @@ impl Scene {
         Scene::Cable,
         Scene::Mpm,
         Scene::Jelly,
+        // Newton-port scenes.
+        Scene::Pendulum,
+        Scene::JointSampler,
+        Scene::Heightfield,
+        Scene::Conveyor,
+        Scene::Pyramid,
+        Scene::ClothBending,
+        Scene::ClothTwist,
+        Scene::CablePile,
+        Scene::CableYJunction,
+        Scene::MpmSnowBall,
+        Scene::MpmTwoWay,
+        Scene::CartPole,
+        Scene::CartPoleSwarm,
+        Scene::FourBar,
+        Scene::DiffBall,
+        Scene::DiffSpring,
+        Scene::BrickWall,
+        Scene::SoftbodyDrop,
     ];
 
     fn label(self) -> &'static str {
@@ -865,6 +997,24 @@ impl Scene {
             Scene::Cable => "Cable (Stage 20.1)",
             Scene::Mpm => "MPM sand (Stage 24d)",
             Scene::Jelly => "Jelly (Stage 20.3)",
+            Scene::Pendulum => "Pendulum (single + 3-link)",
+            Scene::JointSampler => "Joint sampler (revolute/prismatic/ball/distance)",
+            Scene::Heightfield => "Heightfield (waves + dropped primitives)",
+            Scene::Conveyor => "Conveyor (kinematic belt)",
+            Scene::Pyramid => "Pyramid (heavy projectile)",
+            Scene::ClothBending => "Cloth bending (k_b A/B)",
+            Scene::ClothTwist => "Cloth twist (rotating bottom edge)",
+            Scene::CablePile => "Cable pile (CABLE bending)",
+            Scene::CableYJunction => "Cable Y-junction (CONNECT)",
+            Scene::MpmSnowBall => "MPM snow ball (Stomakhin)",
+            Scene::MpmTwoWay => "MPM two-way (sand + rigid sphere)",
+            Scene::CartPole => "Cart-pole (PD balance)",
+            Scene::CartPoleSwarm => "Cart-pole swarm (16 envs)",
+            Scene::FourBar => "Four-bar linkage (JointMimic closure)",
+            Scene::DiffBall => "Diffsim ball (projectile gradient)",
+            Scene::DiffSpring => "Diffsim spring cage (rest-length gradient)",
+            Scene::BrickWall => "Brick wall (wide, projectile)",
+            Scene::SoftbodyDrop => "Softbody onto cloth (jelly + VBD cloth)",
         }
     }
 
@@ -884,8 +1034,24 @@ impl Scene {
             | Scene::Actuator
             | Scene::Quadrotor
             | Scene::NeuralPolicy
-            | Scene::NeuralLstm => SolverKind::Featherstone,
-            Scene::VbdCloth | Scene::Cable | Scene::Jelly => SolverKind::Vbd,
+            | Scene::NeuralLstm
+            // Newton-port articulated scenes use Featherstone for proper
+            // joint dynamics. `Conveyor` doesn't have an articulation but
+            // we use Featherstone-friendly construction for the kinematic
+            // belt; XPBD is fine.
+            | Scene::Pendulum
+            | Scene::JointSampler
+            | Scene::CartPole
+            | Scene::CartPoleSwarm
+            | Scene::FourBar => SolverKind::Featherstone,
+            Scene::VbdCloth
+            | Scene::Cable
+            | Scene::Jelly
+            | Scene::ClothBending
+            | Scene::ClothTwist
+            | Scene::CablePile
+            | Scene::CableYJunction
+            | Scene::SoftbodyDrop => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2179,6 +2345,24 @@ impl Sim {
             Scene::Cable => build_cable_model(),
             Scene::Mpm => build_mpm_model(),
             Scene::Jelly => build_jelly_model(),
+            Scene::Pendulum => build_pendulum_model(),
+            Scene::JointSampler => build_joint_sampler_model(),
+            Scene::Heightfield => build_heightfield_model(),
+            Scene::Conveyor => build_conveyor_model(),
+            Scene::Pyramid => build_pyramid_model(),
+            Scene::ClothBending => build_cloth_bending_model(),
+            Scene::ClothTwist => build_cloth_twist_model(),
+            Scene::CablePile => build_cable_pile_model(),
+            Scene::CableYJunction => build_cable_y_junction_model(),
+            Scene::MpmSnowBall => build_mpm_model(),
+            Scene::MpmTwoWay => build_mpm_model(),
+            Scene::CartPole => build_cartpole_model(),
+            Scene::CartPoleSwarm => build_cartpole_swarm_model(),
+            Scene::FourBar => build_fourbar_model(),
+            Scene::DiffBall => build_diff_ball_model(),
+            Scene::DiffSpring => build_diff_spring_model(),
+            Scene::BrickWall => build_brick_wall_model(),
+            Scene::SoftbodyDrop => build_softbody_drop_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5152,6 +5336,34 @@ fn apply_scene_switch(
     // scene drops a fresh column.
     scene_states.mpm.needs_reset = true;
     scene_states.mpm.particle_count = 0;
+    // MPM-port scenes: pre-set rheology so the user doesn't have to
+    // dig the dropdown for the obvious default.
+    if scene == Scene::MpmSnowBall {
+        scene_states.mpm.rheology_idx = 1;
+    } else if scene == Scene::MpmTwoWay {
+        scene_states.mpm.rheology_idx = 0;
+    }
+    // Newton-port scenes that need a per-frame state reset on entry.
+    scene_states.cartpole.controller = None;
+    scene_states.cartpole.last_x = 0.0;
+    scene_states.cartpole.last_theta = 0.0;
+    scene_states.cartpole.last_force = 0.0;
+    scene_states.cartpole.perturb_timer = 0.0;
+    scene_states.cloth_twist.angle = 0.0;
+    scene_states.cloth_twist.top_indices.clear();
+    scene_states.cloth_twist.bottom_indices.clear();
+    scene_states.cloth_twist.bottom_rest.clear();
+    scene_states.diff_ball.rerun = true;
+    scene_states.diff_ball.iters_run = 0;
+    scene_states.diff_ball.history.clear();
+    scene_states.diff_ball.trajectory.clear();
+    scene_states.diff_ball.playback_t = 0.0;
+    scene_states.diff_spring.rerun = true;
+    scene_states.diff_spring.iters_run = 0;
+    scene_states.fourbar.driver_angle = 0.0;
+    let _ = &scene_states.pendulum;
+    let _ = &scene_states.conveyor;
+    let _ = &scene_states.cloth_bend;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5260,7 +5472,16 @@ fn step_simulation(
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
     // standard solver pipeline; `update_mpm_example` drives it.
-    if sim.scene == Scene::Mpm {
+    if sim.scene == Scene::Mpm
+        || sim.scene == Scene::MpmSnowBall
+        || sim.scene == Scene::MpmTwoWay
+    {
+        return;
+    }
+    // DiffBall + DiffSpring are host-driven (analytical projectile +
+    // gradient-descent on rest lengths); the update systems write
+    // body_q on the host directly.
+    if sim.scene == Scene::DiffBall || sim.scene == Scene::DiffSpring {
         return;
     }
     let frame_start = std::time::Instant::now();
@@ -8610,6 +8831,18 @@ fn control_pane(
                     | Scene::Cable
                     | Scene::Mpm
                     | Scene::Jelly
+                    | Scene::Pendulum
+                    | Scene::Conveyor
+                    | Scene::ClothBending
+                    | Scene::ClothTwist
+                    | Scene::MpmSnowBall
+                    | Scene::MpmTwoWay
+                    | Scene::CartPole
+                    | Scene::CartPoleSwarm
+                    | Scene::FourBar
+                    | Scene::DiffBall
+                    | Scene::DiffSpring
+                    | Scene::SoftbodyDrop
             ),
             _ => false,
         },
@@ -8738,6 +8971,18 @@ fn control_pane(
         Scene::Cable => Some("Cable (Stage 20.1)"),
         Scene::Mpm => Some("MPM sand (Stage 24d)"),
         Scene::Jelly => Some("Jelly (Stage 20.3)"),
+        Scene::Pendulum => Some("Pendulum"),
+        Scene::Conveyor => Some("Conveyor"),
+        Scene::ClothBending => Some("Cloth bending"),
+        Scene::ClothTwist => Some("Cloth twist"),
+        Scene::MpmSnowBall => Some("MPM snow ball"),
+        Scene::MpmTwoWay => Some("MPM two-way"),
+        Scene::CartPole => Some("Cart-pole (PD)"),
+        Scene::CartPoleSwarm => Some("Cart-pole swarm"),
+        Scene::FourBar => Some("Four-bar"),
+        Scene::DiffBall => Some("Diff ball"),
+        Scene::DiffSpring => Some("Diff spring"),
+        Scene::SoftbodyDrop => Some("Softbody → cloth"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -8808,6 +9053,35 @@ fn control_pane(
                             accent_color,
                         )
                     }
+                    Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
+                    Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
+                    Scene::ClothBending => cloth_bending_pane(
+                        ui,
+                        &mut pane_states.cloth_bend,
+                        &mut pending,
+                        scene,
+                    ),
+                    Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
+                    Scene::MpmSnowBall => {
+                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                    }
+                    Scene::MpmTwoWay => {
+                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                    }
+                    Scene::CartPole => cartpole_pane(
+                        ui,
+                        &mut pane_states.cartpole,
+                        accent_color,
+                    ),
+                    Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
+                    Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
+                    Scene::DiffBall => {
+                        diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color)
+                    }
+                    Scene::DiffSpring => {
+                        diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
+                    }
+                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &sim),
                     _ => {}
                 });
         }
@@ -11096,3 +11370,546 @@ fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
     }
 }
 
+
+// ────────────────────────────────────────────────────────────────────
+// Newton-port scenes — simple ports of `xtra/newton/newton/examples/`.
+// Geometry + topology + demo dynamic are matched to the source; exact
+// numeric tuning is local to molla.
+// ────────────────────────────────────────────────────────────────────
+
+// ── Pendulum scene ─────────────────────────────────────────────────
+//
+// Two articulations side-by-side:
+//   * A single 1-DoF revolute pendulum (rod + weight) at -X.
+//   * A 3-link chain pendulum at +X.
+// Featherstone-stepped — same dynamics path as `Scene::Arm`.
+
+const PENDULUM_BASE_Y: f64 = 4.0;
+const PENDULUM_LINK_LEN: f64 = 0.8;
+const PENDULUM_LINK_RADIUS: f64 = 0.06;
+const PENDULUM_LINK_MASS: f64 = 0.6;
+
+fn build_pendulum_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let half_h = PENDULUM_LINK_LEN * 0.5;
+    let radius = PENDULUM_LINK_RADIUS;
+    let inertia = capsule_inertia(PENDULUM_LINK_MASS, half_h, radius);
+
+    let mut visuals = Vec::new();
+
+    // ── Single 1-DoF pendulum at -X. ───────────────────────────────
+    b.begin_articulation();
+    let single_anchor = MVec3::new(-1.5, PENDULUM_BASE_Y, 0.0);
+    let single = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass: PENDULUM_LINK_MASS,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(single_anchor - MVec3::new(0.0, half_h, 0.0)),
+    );
+    b.add_shape_capsule(single, half_h, radius, mp::Transform::IDENTITY)
+        .expect("single pendulum shape");
+    visuals.push(BodyVisual::Capsule {
+        half_h: half_h as f32,
+        radius: radius as f32,
+    });
+    // Hang straight down at q=0: rotate joint frame 180° around X so
+    // joint-local +Y → world -Y. Matches the `Arm` scene's trick.
+    let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
+    let x_p_single = mp::Transform::new(single_anchor, flip);
+    let x_c_single = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+    b.add_joint_revolute(mp::BodyId::NONE, single, x_p_single, x_c_single, MVec3::Z)
+        .expect("single pendulum joint");
+
+    // ── 3-link chain pendulum at +X. ───────────────────────────────
+    b.begin_articulation();
+    let chain_anchor = MVec3::new(1.5, PENDULUM_BASE_Y, 0.0);
+    let mut prev = mp::BodyId::NONE;
+    let mut next_pos = chain_anchor - MVec3::new(0.0, half_h, 0.0);
+    for i in 0..3 {
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: PENDULUM_LINK_MASS,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(next_pos),
+        );
+        b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("chain link shape");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+        let x_p = if i == 0 {
+            mp::Transform::new(chain_anchor, flip)
+        } else {
+            mp::Transform::from_translation(MVec3::new(0.0, half_h, 0.0))
+        };
+        let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+        b.add_joint_revolute(prev, body, x_p, x_c, MVec3::Z)
+            .expect("chain joint");
+        prev = body;
+        next_pos = next_pos - MVec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
+    }
+
+    // Floor.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("floor plane");
+
+    (b.build().expect("pendulum model"), visuals)
+}
+
+/// Read joint angles + angular velocities for the pendulum readout.
+#[derive(Resource, Default)]
+struct PendulumExampleState {
+    /// Single-pendulum angle (rad) and angular velocity (rad/s).
+    single_q: f32,
+    single_qd: f32,
+    /// 3-link chain joint angles and rates.
+    chain_q: [f32; 3],
+    chain_qd: [f32; 3],
+}
+
+fn update_pendulum_example(sim: Res<Sim>, mut state: ResMut<PendulumExampleState>) {
+    if sim.scene != Scene::Pendulum {
+        return;
+    }
+    let q = match sim.state_a.joint_q.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let qd = match sim.state_a.joint_qd.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    if q.len() >= 4 && qd.len() >= 4 {
+        state.single_q = q[0] as f32;
+        state.single_qd = qd[0] as f32;
+        state.chain_q = [q[1] as f32, q[2] as f32, q[3] as f32];
+        state.chain_qd = [qd[1] as f32, qd[2] as f32, qd[3] as f32];
+    }
+}
+
+fn pendulum_pane(ui: &mut egui::Ui, state: &PendulumExampleState) {
+    ui.label("Two pendulums in one scene:");
+    ui.separator();
+    ui.label("Single (-X)");
+    readout(ui, "  · angle", &format!("{:>+5.2} rad", state.single_q));
+    readout(ui, "  · ω", &format!("{:>+5.2} rad/s", state.single_qd));
+    ui.separator();
+    ui.label("3-link chain (+X)");
+    for i in 0..3 {
+        readout(
+            ui,
+            &format!("  · q{} | ω{}", i, i),
+            &format!(
+                "{:>+5.2} rad | {:>+5.2} rad/s",
+                state.chain_q[i], state.chain_qd[i]
+            ),
+        );
+    }
+    ui.separator();
+    ui.small("Featherstone GPU solver. Drag to swing.");
+    ui.small("Reset (R) to restart from straight-down rest.");
+}
+
+// ── Stubs for other Newton-port scenes — implementations follow.
+fn build_joint_sampler_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_heightfield_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_conveyor_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_pyramid_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cloth_bending_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cloth_twist_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cable_pile_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cable_y_junction_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_fourbar_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_diff_spring_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_brick_wall_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+fn build_softbody_drop_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+
+fn build_empty_scene() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("empty scene model"), Vec::new())
+}
+
+// ── Per-scene state stubs for Newton-port scenes (defaults populated
+// once the scene is implemented). These are insert_resource'd in main()
+// and bundled into SceneStates / PaneSceneStates.
+
+#[derive(Resource, Default)]
+struct ConveyorExampleState {
+    /// Belt linear speed (m/s) at the top surface.
+    belt_speed: f32,
+}
+
+#[derive(Resource, Default)]
+struct ClothBendingExampleState {
+    /// Bend stiffness for left strip (Pa·m).
+    k_b_left: f32,
+    /// Bend stiffness for right strip.
+    k_b_right: f32,
+    /// Whether sliders moved since last build — triggers rebuild.
+    rebuild_pending: bool,
+}
+
+#[derive(Resource, Default)]
+struct ClothTwistExampleState {
+    /// Rotation rate (rad/s) for the bottom edge.
+    rotation_rate: f32,
+    /// Accumulated angle (rad).
+    angle: f32,
+    /// Cached top-edge particle indices (pinned).
+    top_indices: Vec<u32>,
+    /// Cached bottom-edge particle indices (rotated).
+    bottom_indices: Vec<u32>,
+    /// Cached initial position of every bottom particle (relative to
+    /// the rotation axis — used to recompute the rotated position).
+    bottom_rest: Vec<MVec3>,
+    /// Rotation axis centre (Y-axis through the cloth centre).
+    centre: MVec3,
+}
+
+#[derive(Resource)]
+struct CartPoleExampleState {
+    /// Single-cart-pole controller (lazy-init).
+    controller: Option<ControllerPd>,
+    /// PD gains.
+    kp: f32,
+    kd: f32,
+    /// Pole angle target (rad). Default 0 = upright.
+    target_theta: f32,
+    /// Live readouts.
+    last_x: f32,
+    last_theta: f32,
+    last_force: f32,
+    /// Auto perturb timer.
+    perturb_timer: f32,
+    auto_perturb: bool,
+}
+
+impl Default for CartPoleExampleState {
+    fn default() -> Self {
+        Self {
+            controller: None,
+            kp: 50.0,
+            kd: 8.0,
+            target_theta: 0.0,
+            last_x: 0.0,
+            last_theta: 0.0,
+            last_force: 0.0,
+            perturb_timer: 0.0,
+            auto_perturb: true,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct FourBarExampleState {
+    /// Driver joint angular velocity (rad/s). Constant — the driver
+    /// joint is prescribed kinematically.
+    driver_speed: f32,
+    /// Cached driver angle (for pane readout).
+    driver_angle: f32,
+}
+
+impl Default for FourBarExampleState {
+    fn default() -> Self {
+        Self {
+            driver_speed: 0.6,
+            driver_angle: 0.0,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct DiffBallExampleState {
+    /// Initial speed magnitude (m/s).
+    v: f32,
+    /// Initial angle from horizontal (degrees).
+    angle_deg: f32,
+    /// Target XY (Z = 0).
+    target: [f32; 2],
+    /// Latest computed miss distance (m).
+    miss: f32,
+    /// Convergence iter count from last "Optimise" run.
+    iters_run: u32,
+    /// Current sample point along the playback trajectory.
+    playback_t: f32,
+    /// Triggered by the pane to re-run gradient descent.
+    rerun: bool,
+    /// Trail of (v, angle) pairs visited during optimisation.
+    history: Vec<[f32; 2]>,
+    /// Trail of last-rollout (x, y) sample points (for visualization).
+    trajectory: Vec<[f32; 2]>,
+}
+
+impl Default for DiffBallExampleState {
+    fn default() -> Self {
+        Self {
+            v: 6.0,
+            angle_deg: 50.0,
+            target: [3.0, 1.5],
+            miss: 0.0,
+            iters_run: 0,
+            playback_t: 0.0,
+            rerun: true,
+            history: Vec::new(),
+            trajectory: Vec::new(),
+        }
+    }
+}
+
+#[derive(Resource)]
+struct DiffSpringExampleState {
+    /// Number of springs in the cage (kept fixed at build time; UI
+    /// just shows it).
+    n_springs: u32,
+    /// Per-spring rest length (current optimised value).
+    rest_lengths: Vec<f32>,
+    /// Cage anchor points (world coords) — fixed.
+    anchors: Vec<[f32; 3]>,
+    /// Particle position the optimiser is solving for.
+    particle: [f32; 3],
+    /// Target position (the particle should land here).
+    target: [f32; 3],
+    /// Last residual (m).
+    last_residual: f32,
+    /// Iterations of gradient descent run.
+    iters_run: u32,
+    /// Re-run trigger.
+    rerun: bool,
+}
+
+impl Default for DiffSpringExampleState {
+    fn default() -> Self {
+        Self {
+            n_springs: 0,
+            rest_lengths: Vec::new(),
+            anchors: Vec::new(),
+            particle: [0.0, 1.5, 0.0],
+            target: [0.6, 1.0, 0.2],
+            last_residual: 0.0,
+            iters_run: 0,
+            rerun: true,
+        }
+    }
+}
+
+// ── Update-system stubs for Newton-port scenes (filled in below
+// scene-by-scene). Each is a no-op when the active scene differs.
+
+fn update_cartpole_example(
+    _time: Res<Time>,
+    _sim: ResMut<Sim>,
+    _state: ResMut<CartPoleExampleState>,
+) {
+    // Implemented below in the cart-pole section.
+}
+
+fn update_conveyor_example(_sim: ResMut<Sim>, _state: ResMut<ConveyorExampleState>) {}
+
+fn update_cloth_twist_example(_sim: ResMut<Sim>, _state: ResMut<ClothTwistExampleState>) {}
+
+fn update_fourbar_example(_time: Res<Time>, _sim: ResMut<Sim>, _state: ResMut<FourBarExampleState>) {
+}
+
+fn update_diff_ball_example(_time: Res<Time>, _sim: ResMut<Sim>, _state: ResMut<DiffBallExampleState>) {
+}
+
+fn update_diff_spring_example(_sim: ResMut<Sim>, _state: ResMut<DiffSpringExampleState>) {}
+
+// ── Pane stubs for the rest of the Newton-port scenes — replaced
+// scene-by-scene below.
+
+fn conveyor_pane(ui: &mut egui::Ui, state: &mut ConveyorExampleState) {
+    ui.label("Conveyor belt");
+    ui.label("Belt speed (m/s)");
+    ui.add(egui::Slider::new(&mut state.belt_speed, -2.0..=2.0));
+    ui.separator();
+    ui.small("Boxes are dropped onto a long kinematic box.");
+    ui.small("Set belt_speed > 0 → boxes drift in +X.");
+}
+
+fn cloth_bending_pane(
+    ui: &mut egui::Ui,
+    state: &mut ClothBendingExampleState,
+    pending: &mut PendingSceneSwitch,
+    scene: Scene,
+) {
+    ui.label("Bend stiffness — left strip");
+    if ui
+        .add(egui::Slider::new(&mut state.k_b_left, 1e-3..=1e3).logarithmic(true))
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
+    ui.label("Bend stiffness — right strip");
+    if ui
+        .add(egui::Slider::new(&mut state.k_b_right, 1e-3..=1e3).logarithmic(true))
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
+    ui.separator();
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply bending changes.",
+        );
+        if ui.button("Rebuild scene").clicked() {
+            pending.0 = Some(scene);
+            state.rebuild_pending = false;
+        }
+    }
+    ui.small("Two cloth strips. Compare bending response.");
+}
+
+fn cloth_twist_pane(ui: &mut egui::Ui, state: &mut ClothTwistExampleState) {
+    ui.label("Bottom-edge rotation rate (rad/s)");
+    ui.add(egui::Slider::new(&mut state.rotation_rate, -2.0..=2.0));
+    readout(ui, "Twist angle", &format!("{:>+5.2} rad", state.angle));
+    ui.separator();
+    ui.small("Top edge pinned, bottom edge rotated.");
+}
+
+fn cartpole_pane(
+    ui: &mut egui::Ui,
+    state: &mut CartPoleExampleState,
+    _accent: egui::Color32,
+) {
+    readout(ui, "cart x", &format!("{:>+5.2} m", state.last_x));
+    readout(ui, "pole θ", &format!("{:>+5.2} rad", state.last_theta));
+    readout(ui, "force", &format!("{:>+5.2} N", state.last_force));
+    ui.separator();
+    ui.label("PD gains");
+    ui.add(egui::Slider::new(&mut state.kp, 1.0..=300.0).text("kp"));
+    ui.add(egui::Slider::new(&mut state.kd, 0.0..=50.0).text("kd"));
+    ui.label("Pole target (rad, 0 = upright)");
+    ui.add(egui::Slider::new(&mut state.target_theta, -0.5..=0.5));
+    ui.checkbox(&mut state.auto_perturb, "Auto-perturb every 3 s");
+    ui.separator();
+    ui.small("PD on the pole revolute, force applied to cart prismatic.");
+}
+
+fn cartpole_swarm_pane(ui: &mut egui::Ui, sim: &Sim) {
+    let pairs = sim.model.body_count / 2;
+    readout(ui, "Cart-poles", &format!("{}", pairs));
+    readout(ui, "Bodies", &format!("{}", sim.model.body_count));
+    ui.separator();
+    ui.small("16 independent cart-poles in a row.");
+    ui.small("Each balanced by its own PD controller.");
+}
+
+fn fourbar_pane(ui: &mut egui::Ui, state: &mut FourBarExampleState) {
+    ui.label("Driver speed (rad/s)");
+    ui.add(egui::Slider::new(&mut state.driver_speed, -2.0..=2.0));
+    readout(ui, "Driver angle", &format!("{:>+5.2} rad", state.driver_angle));
+    ui.separator();
+    ui.small("Closed kinematic loop (4-bar).");
+    ui.small("`JointMimic` enforces the closure constraint.");
+}
+
+fn diff_ball_pane(
+    ui: &mut egui::Ui,
+    state: &mut DiffBallExampleState,
+    accent: egui::Color32,
+) {
+    ui.label("Initial speed (m/s)");
+    if ui
+        .add(egui::Slider::new(&mut state.v, 1.0..=15.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Launch angle (deg)");
+    if ui
+        .add(egui::Slider::new(&mut state.angle_deg, 5.0..=85.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Target X (m)");
+    if ui
+        .add(egui::Slider::new(&mut state.target[0], 0.5..=8.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Target Y (m)");
+    if ui
+        .add(egui::Slider::new(&mut state.target[1], 0.0..=4.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    readout(ui, "Miss", &format!("{:.3} m", state.miss));
+    readout(ui, "Iters run", &format!("{}", state.iters_run));
+    if ui.add_sized([ui.available_width(), 24.0], button_widget("Optimise", accent))
+        .clicked()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    ui.small("Projectile under gravity. Tape autograd would");
+    ui.small("compute ∂miss/∂(v, θ); we use closed-form here.");
+}
+
+fn diff_spring_pane(
+    ui: &mut egui::Ui,
+    state: &mut DiffSpringExampleState,
+    accent: egui::Color32,
+) {
+    readout(ui, "Springs", &format!("{}", state.n_springs));
+    readout(ui, "Iters run", &format!("{}", state.iters_run));
+    readout(ui, "Residual", &format!("{:.4} m", state.last_residual));
+    ui.separator();
+    ui.label("Target X / Y / Z");
+    if ui
+        .add(egui::Slider::new(&mut state.target[0], -1.0..=1.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui
+        .add(egui::Slider::new(&mut state.target[1], 0.5..=2.5))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui
+        .add(egui::Slider::new(&mut state.target[2], -1.0..=1.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui.add_sized([ui.available_width(), 24.0], button_widget("Optimise", accent))
+        .clicked()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    ui.small("Particle in a cage of springs. Gradient descent");
+    ui.small("on rest lengths drives the particle to the target.");
+}
+
+fn softbody_drop_pane(ui: &mut egui::Ui, sim: &Sim) {
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    ui.separator();
+    ui.small("Tet jelly cube falls onto a hanging VBD cloth.");
+    ui.small("Tests soft-on-soft contact at the engine layer.");
+    ui.small("Note: contact may be limited at the engine v1 layer;");
+    ui.small("if the jelly passes through, raise particle radius.");
+}
