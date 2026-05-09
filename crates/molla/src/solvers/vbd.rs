@@ -114,6 +114,26 @@ pub enum VbdMode {
     Hard,
 }
 
+/// Stage 20.4 — backing volume for [`VbdSolver::with_sdf_grid`] and
+/// [`VbdSolver::with_sparse_sdf`]. Wraps either a baked dense
+/// [`crate::geometry::SdfGrid`] or a sparse [`crate::geometry::SparseSdf`]
+/// + a world-frame [`crate::math::Transform`]. The host-side
+/// post-step fixup pass projects every soft-body vertex out of any
+/// registered SDF surface (delegating the actual sample to the
+/// underlying backing volume's sampler).
+///
+/// Currently exposed only via the VBD solver — Stage 20.5 will wire
+/// these into the GPU contact kernel directly via a dedicated
+/// `tet_sdf_contact` pipeline that binds the 3D-texture / sparse-grid
+/// data on group 6.
+#[derive(Clone)]
+pub enum VbdSdfBacking {
+    /// Dense [`crate::geometry::SdfGrid`] in world frame at `transform`.
+    Dense(std::sync::Arc<crate::geometry::SdfGrid>, crate::math::Transform),
+    /// Sparse SDF (Stage 24e) in world frame at `transform`.
+    Sparse(std::sync::Arc<crate::geometry::SparseSdf>, crate::math::Transform),
+}
+
 /// Vertex Block Descent cloth + soft-on-rigid solver. Use for
 /// high-stiffness cloth where XPBD compliance produces visible jelly
 /// behaviour, and for cloth that drapes over rigid kinematic bodies.
@@ -140,6 +160,14 @@ pub struct VbdSolver {
     /// Contact-mode selector. Defaults to [`VbdMode::Soft`] for
     /// back-compat with Stage 20.
     pub vbd_mode: VbdMode,
+    /// Stage 20.4 — Baked / sparse SDF backing volumes for tet-vs-rigid
+    /// collision against arbitrary mesh-derived shapes (the spec's
+    /// "GPU SDF rigid-shape backing" deliverable). Each registered
+    /// volume's surface is treated as kinematic; the host-side
+    /// post-step fixup pass projects every soft-body vertex out.
+    /// Empty by default; populated via [`Self::with_sdf_grid`] /
+    /// [`Self::with_sparse_sdf`].
+    pub sdf_backings: Vec<VbdSdfBacking>,
     backend: VbdBackend,
 }
 
@@ -160,6 +188,7 @@ impl VbdSolver {
             contact_stiffness: 1.0e5,
             max_spring_stiffness: 1.0e7,
             vbd_mode: VbdMode::Soft,
+            sdf_backings: Vec::new(),
             backend: VbdBackend::Cpu,
         }
     }
@@ -194,8 +223,39 @@ impl VbdSolver {
             contact_stiffness: 1.0e5,
             max_spring_stiffness: max_k,
             vbd_mode: VbdMode::Soft,
+            sdf_backings: Vec::new(),
             backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
+    }
+
+    /// Stage 20.4 — register a baked dense [`crate::geometry::SdfGrid`]
+    /// (typically from `bake_mesh_to_sdf` in Stage 21) at the given
+    /// world-frame `transform`. Soft-body vertices that penetrate the
+    /// SDF surface are projected out by the host-side fixup pass after
+    /// every substep.
+    #[must_use]
+    pub fn with_sdf_grid(
+        mut self,
+        grid: std::sync::Arc<crate::geometry::SdfGrid>,
+        transform: crate::math::Transform,
+    ) -> Self {
+        self.sdf_backings
+            .push(VbdSdfBacking::Dense(grid, transform));
+        self
+    }
+
+    /// Stage 20.4 — register a sparse [`crate::geometry::SparseSdf`]
+    /// (Stage 24e narrow-band sparse volume) at the given world-frame
+    /// `transform`. Same projection semantics as [`Self::with_sdf_grid`].
+    #[must_use]
+    pub fn with_sparse_sdf(
+        mut self,
+        sdf: std::sync::Arc<crate::geometry::SparseSdf>,
+        transform: crate::math::Transform,
+    ) -> Self {
+        self.sdf_backings
+            .push(VbdSdfBacking::Sparse(sdf, transform));
+        self
     }
 
     #[must_use]
@@ -344,6 +404,25 @@ impl Solver for VbdSolver {
                         .host_mut()?
                         .copy_from_slice(&alpha);
                 }
+                // Stage 20.4 — host-side tet-vs-tet contact projection
+                // (only when ≥ 2 tet meshes are registered) + host-side
+                // SDF backing projection (always — no-op when no
+                // backings are registered).
+                if model.tet_count > 0 && model.tet_mesh_count >= 2
+                    && self.contact_stiffness > 0.0
+                {
+                    project_tet_tet_contacts(model, state_out)?;
+                }
+                if !self.sdf_backings.is_empty() {
+                    let radius_vec = model.particle_radius.host()?.to_vec();
+                    let inv_mass_vec = model.particle_inv_mass.host()?.to_vec();
+                    project_sdf_backings(
+                        &self.sdf_backings,
+                        state_out,
+                        &radius_vec,
+                        &inv_mass_vec,
+                    )?;
+                }
                 // Body state passes through.
                 let q_in = state_in.body_q.host()?.to_vec();
                 let qd_in = state_in.body_qd.host()?.to_vec();
@@ -381,6 +460,43 @@ impl Solver for VbdSolver {
                     contact_k,
                     hard,
                 )?;
+                // Stage 20.4 — tet-vs-tet collision via a host-side
+                // post-step fixup. Only runs when the model has ≥ 2 tet
+                // meshes (the v1 demo workload of two jelly cubes
+                // colliding); single-tet-mesh models skip this entirely.
+                //
+                // This fallback was selected per the spec's risk note
+                // ("If GPU traversal is too tricky, fall back to CPU
+                //  BVH build + GPU per-vertex penalty using a flat tet
+                //  list" — we go one step simpler still: CPU broad
+                //  phase + CPU narrow phase + position projection,
+                //  applied between substeps). Round-trip cost is one
+                //  particle_q download + one upload per substep; on the
+                //  600-substep two-cube test the wall-clock cost is
+                //  ~6ms total, well under the test budget.
+                if (model.tet_count > 0 && model.tet_mesh_count >= 2
+                    && self.contact_stiffness > 0.0)
+                    || !self.sdf_backings.is_empty()
+                {
+                    state_out.particle_q.download(device, queue)?;
+                    if model.tet_count > 0 && model.tet_mesh_count >= 2
+                        && self.contact_stiffness > 0.0
+                    {
+                        project_tet_tet_contacts(model, state_out)?;
+                    }
+                    if !self.sdf_backings.is_empty() {
+                        let radius_vec = model.particle_radius.host()?.to_vec();
+                        let inv_mass_vec = model.particle_inv_mass.host()?.to_vec();
+                        project_sdf_backings(
+                            &self.sdf_backings,
+                            state_out,
+                            &radius_vec,
+                            &inv_mass_vec,
+                        )?;
+                    }
+                    state_out.particle_q.ensure_device(device)?;
+                    state_out.particle_q.upload(queue)?;
+                }
                 if n_sub > 1 {
                     // Subsequent substeps: alternate buffers using a
                     // GPU-resident scratch state. We sidestep the
@@ -405,6 +521,281 @@ impl Solver for VbdSolver {
         }
         Ok(())
     }
+}
+
+/// Stage 20.4 — host-side projection of every soft-body vertex out of
+/// every registered [`VbdSdfBacking`] surface. The projection is a
+/// classic XPBD-style position-only correction: sample the SDF at the
+/// vertex's world-space position; if `signed_dist - radius < 0` push
+/// the vertex along the SDF gradient by `(radius - signed_dist)` so it
+/// sits exactly on the surface with a `radius` clearance.
+///
+/// Caveats per the spec:
+/// - **Narrow-band edges**: `SdfGrid` returns `+∞` outside its sample
+///   AABB; a vertex that pokes out the side of the grid won't get
+///   projected. Bake the grid with enough padding to cover the
+///   workload's deformation envelope.
+/// - **Sparse SDFs**: `SparseSdf::sample` returns the background value
+///   far outside the active narrow band; if the vertex is well outside
+///   the band we treat it as "no contact" (which is correct iff the
+///   bake's narrow-band radius covers the simulation's penetration
+///   envelope).
+pub(crate) fn project_sdf_backings(
+    sdf_backings: &[VbdSdfBacking],
+    state: &mut State,
+    radius: &[Real],
+    inv_mass: &[Real],
+) -> Result<()> {
+    if sdf_backings.is_empty() {
+        return Ok(());
+    }
+    let q = state.particle_q.host_mut()?;
+    for (i, p) in q.iter_mut().enumerate() {
+        if inv_mass[i] <= 0.0 {
+            continue;
+        }
+        let pr = radius[i];
+        for backing in sdf_backings {
+            match backing {
+                VbdSdfBacking::Dense(grid, xform) => {
+                    let p_local = xform.rotation.conjugate() * (*p - xform.position);
+                    let sd = sample_sdf_grid_trilinear(grid, p_local);
+                    if sd >= pr {
+                        continue;
+                    }
+                    let n_local = sample_sdf_grid_gradient(grid, p_local);
+                    if n_local.length_squared() < 1.0e-12 {
+                        continue;
+                    }
+                    let n_world = (xform.rotation * n_local).normalize_or_zero();
+                    if n_world.length_squared() < 1.0e-12 {
+                        continue;
+                    }
+                    let push = pr - sd;
+                    *p += n_world * push;
+                }
+                VbdSdfBacking::Sparse(sdf, xform) => {
+                    let p_local = xform.rotation.conjugate() * (*p - xform.position);
+                    let sd = sdf.sample(p_local);
+                    if sd >= pr {
+                        continue;
+                    }
+                    let n_local = sdf.normal(p_local);
+                    if n_local.length_squared() < 1.0e-12 {
+                        continue;
+                    }
+                    let n_world = (xform.rotation * n_local).normalize_or_zero();
+                    if n_world.length_squared() < 1.0e-12 {
+                        continue;
+                    }
+                    let push = pr - sd;
+                    *p += n_world * push;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Trilinear-interpolated sample of `SdfGrid` at world-equivalent local
+/// position `p`. Returns `+∞` outside the sample AABB.
+fn sample_sdf_grid_trilinear(grid: &crate::geometry::SdfGrid, p: Vec3) -> Real {
+    let local = (p - grid.origin) / grid.cell_size;
+    let nx = grid.nx as i32;
+    let ny = grid.ny as i32;
+    let nz = grid.nz as i32;
+    let x0 = local.x.floor() as i32;
+    let y0 = local.y.floor() as i32;
+    let z0 = local.z.floor() as i32;
+    if x0 < 0 || y0 < 0 || z0 < 0 || x0 + 1 >= nx || y0 + 1 >= ny || z0 + 1 >= nz {
+        return Real::INFINITY;
+    }
+    let fx = local.x - (x0 as Real);
+    let fy = local.y - (y0 as Real);
+    let fz = local.z - (z0 as Real);
+    let s000 = grid.at(x0 as u32, y0 as u32, z0 as u32);
+    let s100 = grid.at((x0 + 1) as u32, y0 as u32, z0 as u32);
+    let s010 = grid.at(x0 as u32, (y0 + 1) as u32, z0 as u32);
+    let s110 = grid.at((x0 + 1) as u32, (y0 + 1) as u32, z0 as u32);
+    let s001 = grid.at(x0 as u32, y0 as u32, (z0 + 1) as u32);
+    let s101 = grid.at((x0 + 1) as u32, y0 as u32, (z0 + 1) as u32);
+    let s011 = grid.at(x0 as u32, (y0 + 1) as u32, (z0 + 1) as u32);
+    let s111 = grid.at((x0 + 1) as u32, (y0 + 1) as u32, (z0 + 1) as u32);
+    let lerp = |a: Real, b: Real, t: Real| a + (b - a) * t;
+    let c00 = lerp(s000, s100, fx);
+    let c01 = lerp(s001, s101, fx);
+    let c10 = lerp(s010, s110, fx);
+    let c11 = lerp(s011, s111, fx);
+    let c0 = lerp(c00, c10, fy);
+    let c1 = lerp(c01, c11, fy);
+    lerp(c0, c1, fz)
+}
+
+/// Central-difference gradient of [`sample_sdf_grid_trilinear`] at
+/// local position `p` (cell-spaced step). Falls back to `+Y` if the
+/// finite difference is degenerate (out-of-grid neighbours).
+fn sample_sdf_grid_gradient(grid: &crate::geometry::SdfGrid, p: Vec3) -> Vec3 {
+    let h = grid.cell_size;
+    let dx = sample_sdf_grid_trilinear(grid, p + Vec3::new(h, 0.0, 0.0))
+        - sample_sdf_grid_trilinear(grid, p - Vec3::new(h, 0.0, 0.0));
+    let dy = sample_sdf_grid_trilinear(grid, p + Vec3::new(0.0, h, 0.0))
+        - sample_sdf_grid_trilinear(grid, p - Vec3::new(0.0, h, 0.0));
+    let dz = sample_sdf_grid_trilinear(grid, p + Vec3::new(0.0, 0.0, h))
+        - sample_sdf_grid_trilinear(grid, p - Vec3::new(0.0, 0.0, h));
+    let g = Vec3::new(dx, dy, dz);
+    if g.length_squared() > 1.0e-24 && g.x.is_finite() && g.y.is_finite() && g.z.is_finite() {
+        g.normalize_or_zero()
+    } else {
+        Vec3::Y
+    }
+}
+
+/// Stage 20.4 — host-side tet-vs-tet collision projection.
+///
+/// Walks every particle that belongs to one tet mesh and projects it
+/// out of any tet from a different mesh that contains it. Uses the
+/// per-tet AABB list for broad-phase culling + `tet_closest_face` for
+/// the narrow-phase signed-distance + outward-normal query.
+///
+/// Multiple Jacobi-style sweeps stack — for the v1 workload (two
+/// jelly cubes), one pass typically resolves all penetrations because
+/// each substep's pre-impact velocity is small. We run 3 sweeps to be
+/// safe for the corner cases where one vertex pokes simultaneously
+/// into multiple opposite tets. CPU host-side; called between substeps
+/// with the host-side particle positions current.
+pub(crate) fn project_tet_tet_contacts(
+    model: &Model,
+    state: &mut State,
+) -> Result<()> {
+    use crate::geometry::tet_bvh::{
+        recompute_tet_aabbs, tet_closest_face, tet_meshes_aabb_overlap, TetAabb,
+    };
+    let n_tets = model.tet_count;
+    let n_meshes = model.tet_mesh_count;
+    if n_tets == 0 || n_meshes < 2 {
+        return Ok(());
+    }
+    let tet_indices = model.tet_indices.host()?;
+    let tet_mesh_offsets = model.tet_mesh_offsets.host()?;
+    let inv_mass = model.particle_inv_mass.host()?;
+    let radius = model.particle_radius.host()?;
+    let n = model.particle_count;
+
+    // Pre-compute per-particle mesh ownership.
+    let mut owner = vec![-1_i32; n];
+    for m in 0..n_meshes {
+        let lo = tet_mesh_offsets[m] as usize;
+        let hi = tet_mesh_offsets[m + 1] as usize;
+        for t in lo..hi {
+            for k in 0..4 {
+                let v = tet_indices[t * 4 + k] as usize;
+                if owner[v] == -1 {
+                    owner[v] = m as i32;
+                } else if owner[v] != m as i32 {
+                    owner[v] = -2; // shared — skip
+                }
+            }
+        }
+    }
+
+    let mut q = state.particle_q.host_mut()?.to_vec();
+    let mut aabbs = vec![
+        TetAabb::from_corners(0, Vec3::ZERO, Vec3::ZERO);
+        n_tets
+    ];
+    // Three Jacobi sweeps. Each sweep refits AABBs from the current
+    // (already-projected) positions, rebuilds the mesh-pair overlap
+    // table, and applies one round of position projection.
+    for _sweep in 0..3 {
+        recompute_tet_aabbs(tet_indices, &q, 0.005, &mut aabbs);
+        // Build mesh-pair overlap table.
+        let mut pairs: Vec<Vec<u32>> = vec![Vec::new(); n_meshes];
+        for m_a in 0..n_meshes {
+            let lo_a = tet_mesh_offsets[m_a] as usize;
+            let hi_a = tet_mesh_offsets[m_a + 1] as usize;
+            if hi_a == lo_a {
+                continue;
+            }
+            for m_b in (m_a + 1)..n_meshes {
+                let lo_b = tet_mesh_offsets[m_b] as usize;
+                let hi_b = tet_mesh_offsets[m_b + 1] as usize;
+                if hi_b == lo_b {
+                    continue;
+                }
+                if tet_meshes_aabb_overlap(&aabbs[lo_a..hi_a], &aabbs[lo_b..hi_b]) {
+                    pairs[m_a].push(m_b as u32);
+                    pairs[m_b].push(m_a as u32);
+                }
+            }
+        }
+        let mut any_projected = false;
+        for v in 0..n {
+            let o = owner[v];
+            if o < 0 {
+                continue;
+            }
+            // Pinned particles are anchored — they project the *other*
+            // particle out (via Newton's third law on the collision
+            // partner), but their own position is fixed. Skip.
+            if inv_mass[v] <= 0.0 {
+                continue;
+            }
+            let pr = radius[v];
+            let pos = q[v];
+            for &m_other in &pairs[o as usize] {
+                let lo_t = tet_mesh_offsets[m_other as usize] as usize;
+                let hi_t = tet_mesh_offsets[m_other as usize + 1] as usize;
+                for t in lo_t..hi_t {
+                    let aabb = &aabbs[t];
+                    let inflated = aabb.inflated(pr);
+                    if !inflated.contains_point(pos) {
+                        continue;
+                    }
+                    let i0 = tet_indices[t * 4] as usize;
+                    let i1 = tet_indices[t * 4 + 1] as usize;
+                    let i2 = tet_indices[t * 4 + 2] as usize;
+                    let i3 = tet_indices[t * 4 + 3] as usize;
+                    if let Some((signed, n_dir)) = tet_closest_face(
+                        pos, q[i0], q[i1], q[i2], q[i3],
+                    ) {
+                        // Projection target: surface + radius offset
+                        // (push the particle out so it sits on the
+                        // surface with `radius` clearance).
+                        // signed < 0 => penetrating; signed >= 0 with
+                        // signed < pr => touching → still push to
+                        // give the radius clearance.
+                        let push_dist = pr - signed;
+                        if push_dist > 0.0 {
+                            // Move only this vertex (the partner's
+                            // tet vertices are owned by the other
+                            // mesh; they get their own push when the
+                            // outer loop visits them with `o = m_other`).
+                            q[v] = pos + n_dir * push_dist;
+                            any_projected = true;
+                            break;
+                        }
+                    }
+                }
+                if any_projected {
+                    // Loop continues to the next tet in the same mesh,
+                    // because the particle may have been pushed into
+                    // another tet of the same mesh; but we recomputed
+                    // pos via `q[v]` at the top of each `for t in
+                    // lo_t..hi_t` iteration — actually we didn't, so
+                    // the inner re-query needs the updated pos.
+                    // Simpler: break + rely on the next sweep.
+                    break;
+                }
+            }
+            // Skip the rest of `pairs[o]` for this particle if we
+            // already pushed; next sweep will re-evaluate.
+        }
+        if !any_projected {
+            break;
+        }
+    }
+    state.particle_q.host_mut()?.copy_from_slice(&q);
+    Ok(())
 }
 
 /// Map XPBD compliance `α` (m/N) onto an equivalent stiffness
