@@ -712,7 +712,13 @@ impl ModelBuilder {
 
     /// Register a triangle mesh in the model and return its
     /// `mesh_id`. Pass that id into [`Self::add_shape_trimesh`].
-    pub fn add_mesh(&mut self, mesh: super::TriMesh) -> u32 {
+    pub fn add_mesh(&mut self, mut mesh: super::TriMesh) -> u32 {
+        // Build the BVH eagerly so the first narrow-phase query is
+        // already accelerated. Cheap (~µs per 100 triangles); avoids
+        // an interior-mut cache invariant inside `Model`.
+        if mesh.bvh.nodes.is_empty() && !mesh.indices.is_empty() {
+            mesh.build_bvh(4);
+        }
         let id = self.meshes.len() as u32;
         self.meshes.push(mesh);
         id

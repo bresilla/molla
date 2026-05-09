@@ -13,12 +13,29 @@ use crate::storage::{Buffer, BufferUsage};
 pub struct TriMesh {
     pub vertices: Vec<Vec3>,
     pub indices: Vec<[u32; 3]>,
+    /// Per-mesh AABB BVH for accelerating shape-vs-trimesh narrow
+    /// phase and ray-cast queries. Empty until [`Self::build_bvh`]
+    /// is called (the builder runs that automatically when a mesh
+    /// is added). Without this every shape-mesh pair iterates ALL
+    /// triangles — fine for ~50-tri shapes, ruinous past 1k.
+    pub bvh: crate::geometry::mesh_bvh::MeshBvh,
 }
 
 impl TriMesh {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// (Re)build the BVH from the current `vertices` + `indices`.
+    /// `max_leaf` is the per-leaf triangle cap (4 is a reasonable
+    /// default — Embree's hint).
+    pub fn build_bvh(&mut self, max_leaf: usize) {
+        self.bvh = crate::geometry::mesh_bvh::MeshBvh::build(
+            &self.vertices,
+            &self.indices,
+            max_leaf,
+        );
     }
 }
 

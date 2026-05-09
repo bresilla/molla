@@ -1167,34 +1167,123 @@ fn trimesh_pair(
         }
         return;
     }
-    for &tri in &mesh.indices {
+    // BVH-accelerated triangle iteration: compute the other shape's
+    // world AABB, transform it into the mesh's local frame, query the
+    // BVH for triangles overlapping that box. Falls back to scanning
+    // all triangles if the BVH is empty (legacy meshes).
+    let candidates: Vec<u32> = if mesh.bvh.nodes.is_empty() {
+        (0..mesh.indices.len() as u32).collect()
+    } else {
+        let (other_min, other_max) = shape_world_aabb_quick(other_geom, other_xf);
+        let local_aabb = transform_aabb_to_mesh_local(other_min, other_max, mesh_xf);
+        let mut hits = Vec::new();
+        mesh.bvh
+            .triangles_overlapping_aabb(local_aabb.0, local_aabb.1, &mut hits);
+        hits
+    };
+    for &tri_idx in &candidates {
+        let tri = mesh.indices[tri_idx as usize];
         let v0 = mesh.vertices[tri[0] as usize];
         let v1 = mesh.vertices[tri[1] as usize];
         let v2 = mesh.vertices[tri[2] as usize];
         let tri_geom = ShapeGeometry::Triangle { v0, v1, v2 };
         let pair_for_call = if flip_output {
-            // Pass pair (a,b) as the geom_a=other, geom_b=tri pair so
-            // gjk_epa_pair's normal-labelling matches the outer pair.
-            ShapePair {
-                a: pair.a,
-                b: pair.b,
-            }
+            ShapePair { a: pair.a, b: pair.b }
         } else {
             pair
         };
         let m = if flip_output {
-            // Outer pair: pair.a = other-shape, pair.b = trimesh.
-            // Call GJK with (other, tri) so EPA's normal points
-            // other → tri = pair.a → pair.b. ✓
             gjk_epa_pair(other_geom, other_xf, tri_geom, mesh_xf, pair_for_call)
         } else {
-            // Outer pair: pair.a = trimesh, pair.b = other.
             gjk_epa_pair(tri_geom, mesh_xf, other_geom, other_xf, pair_for_call)
         };
         if let Some(m) = m {
             out.push(m);
         }
     }
+}
+
+/// World-space AABB for a free-floating shape. Mirrors
+/// `shape_world::shape_world_aabb` but takes geom + transform
+/// directly so we can call it on a triangle / etc. without touching
+/// `Model`.
+fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
+    use crate::math::Mat3;
+    match geom {
+        ShapeGeometry::Sphere { radius } => (
+            xf.position - Vec3::splat(radius),
+            xf.position + Vec3::splat(radius),
+        ),
+        ShapeGeometry::Plane { .. } => (
+            Vec3::splat(-Real::INFINITY),
+            Vec3::splat(Real::INFINITY),
+        ),
+        ShapeGeometry::Box { half_extents } => {
+            let r = Mat3::from_quat(xf.rotation);
+            let abs_x = Vec3::new(r.x_axis.x.abs(), r.x_axis.y.abs(), r.x_axis.z.abs());
+            let abs_y = Vec3::new(r.y_axis.x.abs(), r.y_axis.y.abs(), r.y_axis.z.abs());
+            let abs_z = Vec3::new(r.z_axis.x.abs(), r.z_axis.y.abs(), r.z_axis.z.abs());
+            let h = abs_x * half_extents.x + abs_y * half_extents.y + abs_z * half_extents.z;
+            (xf.position - h, xf.position + h)
+        }
+        ShapeGeometry::Capsule { half_height, radius } => {
+            let axis = xf.rotation * Vec3::Y;
+            let p0 = xf.position - axis * half_height;
+            let p1 = xf.position + axis * half_height;
+            (p0.min(p1) - Vec3::splat(radius), p0.max(p1) + Vec3::splat(radius))
+        }
+        ShapeGeometry::Cylinder { half_height, radius } => {
+            let axis = xf.rotation * Vec3::Y;
+            let absax = Vec3::new(axis.x.abs(), axis.y.abs(), axis.z.abs());
+            let one = Vec3::splat(1.0);
+            let perp_scale = (one - absax * absax).max(Vec3::ZERO);
+            let perp = Vec3::new(
+                perp_scale.x.sqrt(),
+                perp_scale.y.sqrt(),
+                perp_scale.z.sqrt(),
+            );
+            let h = absax * half_height + perp * radius;
+            (xf.position - h, xf.position + h)
+        }
+        ShapeGeometry::Triangle { v0, v1, v2 } => {
+            let w0 = xf.transform_point(v0);
+            let w1 = xf.transform_point(v1);
+            let w2 = xf.transform_point(v2);
+            (w0.min(w1).min(w2), w0.max(w1).max(w2))
+        }
+        ShapeGeometry::TriMesh { .. } => (
+            Vec3::splat(-Real::INFINITY),
+            Vec3::splat(Real::INFINITY),
+        ),
+    }
+}
+
+/// Transform a world-space AABB into a local-space AABB by sweeping
+/// all eight world corners through the inverse transform. Conservative
+/// (i.e. resulting box >= true rotated AABB).
+fn transform_aabb_to_mesh_local(
+    world_min: Vec3,
+    world_max: Vec3,
+    mesh_xf: &Transform,
+) -> (Vec3, Vec3) {
+    let corners = [
+        Vec3::new(world_min.x, world_min.y, world_min.z),
+        Vec3::new(world_max.x, world_min.y, world_min.z),
+        Vec3::new(world_min.x, world_max.y, world_min.z),
+        Vec3::new(world_max.x, world_max.y, world_min.z),
+        Vec3::new(world_min.x, world_min.y, world_max.z),
+        Vec3::new(world_max.x, world_min.y, world_max.z),
+        Vec3::new(world_min.x, world_max.y, world_max.z),
+        Vec3::new(world_max.x, world_max.y, world_max.z),
+    ];
+    let mut local_min = Vec3::splat(Real::INFINITY);
+    let mut local_max = Vec3::splat(-Real::INFINITY);
+    for c in corners {
+        let local = mesh_xf.inverse_transform_point(c);
+        local_min = local_min.min(local);
+        local_max = local_max.max(local);
+    }
+    (local_min, local_max)
 }
 
 /// Cylinder–plane fallback. Emits up to 6 contact points: the two
