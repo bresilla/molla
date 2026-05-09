@@ -50,6 +50,8 @@ mod xpbd_equality;
 mod xpbd_particles;
 #[cfg(feature = "gpu")]
 mod vbd_cloth;
+#[cfg(feature = "gpu")]
+mod dahl_friction;
 
 #[cfg(feature = "gpu")]
 pub use actuator_delay::ActuatorDelayKernel;
@@ -104,3 +106,5 @@ pub use xpbd_equality::XpbdEqualityKernel;
 pub use xpbd_particles::XpbdParticlesKernel;
 #[cfg(feature = "gpu")]
 pub use vbd_cloth::VbdClothKernel;
+#[cfg(feature = "gpu")]
+pub use dahl_friction::{dahl_oracle_step, DahlConfig, DahlFrictionKernel};
