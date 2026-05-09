@@ -178,6 +178,25 @@ pub fn shape_world_aabb(
             }
             Aabb { min: lo, max: hi }.expanded(margin)
         }
+        ShapeGeometry::Ellipsoid { half_axes } => {
+            // World-axis half-extents of an oriented ellipsoid:
+            //   h_world.i = sqrt(Σ_j (R[i, j] · half_axes.j)²).
+            // Equivalent to projecting the rotated semi-axes onto each
+            // world axis and combining via Pythagoras (the surface's
+            // support point along eᵢ has coordinate equal to that
+            // sqrt). Reduces to the sphere case when all axes match.
+            let r = crate::math::Mat3::from_quat(xf.rotation);
+            let row_x = Vec3::new(r.x_axis.x, r.y_axis.x, r.z_axis.x);
+            let row_y = Vec3::new(r.x_axis.y, r.y_axis.y, r.z_axis.y);
+            let row_z = Vec3::new(r.x_axis.z, r.y_axis.z, r.z_axis.z);
+            let h_sq = Vec3::new(
+                (row_x * half_axes).length_squared(),
+                (row_y * half_axes).length_squared(),
+                (row_z * half_axes).length_squared(),
+            );
+            let h = Vec3::new(h_sq.x.sqrt(), h_sq.y.sqrt(), h_sq.z.sqrt());
+            Aabb::centred(xf.position, h).expanded(margin)
+        }
         ShapeGeometry::Sdf { sdf_id } => {
             // Conservative AABB depending on the SDF type.
             let sdf = match model.sdfs.get(sdf_id as usize) {

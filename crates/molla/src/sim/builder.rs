@@ -112,6 +112,17 @@ pub enum ShapeGeometry {
         /// Index into [`super::Model::sdfs`].
         sdf_id: u32,
     },
+    /// Solid ellipsoid centred on the shape-local origin with
+    /// per-axis half-extents (semi-axes) `half_axes.x/y/z`.
+    /// Equation in the shape-local frame: `Σ (xᵢ/aᵢ)² ≤ 1`.
+    /// Reduces to a sphere when all three components are equal.
+    /// Stage 30: closed-form vs Sphere/Plane, GJK + EPA fallback
+    /// against everything else (uses `support_ellipsoid`).
+    Ellipsoid {
+        /// Per-axis semi-axes `(a, b, c)` in shape-local frame (m).
+        /// All three must be strictly positive.
+        half_axes: Vec3,
+    },
 }
 
 /// Parameters for [`ModelBuilder::add_body`].
@@ -1320,6 +1331,32 @@ impl ModelBuilder {
         Ok(self.push_shape(body, local_pose, ShapeGeometry::Sdf { sdf_id }))
     }
 
+    /// Attach an ellipsoid shape to `body`. `half_axes` are the
+    /// per-axis semi-axes (must all be strictly positive). Reduces
+    /// to a sphere when all three components are equal — but the
+    /// dispatch always routes through the ellipsoid path (a sphere
+    /// would normally be the more efficient call).
+    pub fn add_shape_ellipsoid(
+        &mut self,
+        body: BodyId,
+        half_axes: Vec3,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_ellipsoid")?;
+        if !half_axes.x.is_finite()
+            || !half_axes.y.is_finite()
+            || !half_axes.z.is_finite()
+            || half_axes.x <= 0.0
+            || half_axes.y <= 0.0
+            || half_axes.z <= 0.0
+        {
+            return Err(Error::Build(format!(
+                "add_shape_ellipsoid: half_axes must be positive finite, got {half_axes:?}"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Ellipsoid { half_axes }))
+    }
+
     /// Attach a triangle shape to `body`. Standalone — for direct
     /// per-triangle collision (terrain patches, etc.).
     pub fn add_shape_triangle(
@@ -2169,6 +2206,12 @@ impl ModelBuilder {
                         // for now — sentinel 0xff so the GPU
                         // kernels skip them.
                         ShapeGeometry::Cone { .. } => 5,
+                        // Ellipsoid (6) gets a real kind — host packs the
+                        // three semi-axes into shape_geom_data; GPU
+                        // kernels that need it (gjk/epa/raycast/camera)
+                        // implement the corresponding support /
+                        // intersection. Stage 30.
+                        ShapeGeometry::Ellipsoid { .. } => 6,
                         ShapeGeometry::ConvexHull { .. } => 0xff,
                         ShapeGeometry::Heightfield { .. } => 0xff,
                         ShapeGeometry::Sdf { .. } => 0xff,
@@ -2196,6 +2239,7 @@ impl ModelBuilder {
                         ShapeGeometry::Cone { half_height, radius } => {
                             Vec3::new(half_height, radius, 0.0)
                         }
+                        ShapeGeometry::Ellipsoid { half_axes } => half_axes,
                         ShapeGeometry::ConvexHull { .. } => Vec3::ZERO,
                         ShapeGeometry::Heightfield { .. } => Vec3::ZERO,
                         ShapeGeometry::Sdf { .. } => Vec3::ZERO,

@@ -4541,6 +4541,109 @@ adaptive refinement, sparse MC, and MPM consumer.
 **Dependencies:** Stage 24e.1 (mutable insert + freelist counter
 slot live in the same `SparseGridStorage` struct).
 
+### Stage 30 — Ellipsoid + Gaussian splat shape primitives — **SHIPPED v1**
+
+Newton 1.0 ships an `Ellipsoid` collision primitive and a
+Gaussian-splat render-only primitive. Stage 30 ports both into
+molla's `ShapeGeometry` taxonomy so URDF/USD/MJCF importers that
+target either don't fall back to TriMesh.
+
+**Shipped:**
+
+- New `ShapeGeometry::Ellipsoid { half_axes: Vec3 }` variant in
+  `crates/molla/src/sim/builder.rs`. Builder method
+  `add_shape_ellipsoid(body, half_axes, transform)` validates the
+  three semi-axes are strictly positive.
+- `support_ellipsoid(half, dir)` in `crates/molla/src/geometry/support.rs`
+  — closed-form Newton/Warp-style support: rescale dir by per-axis
+  semi-axes, normalise, rescale back. Reduces to the sphere case
+  when all three components are equal.
+- World-frame AABB: rotation projects each ellipsoid semi-axis row
+  through the body transform; world half-extents are
+  `sqrt(Σⱼ (R[i,j]·aⱼ)²)`. Wired into both `shape_world_aabb`
+  (BVH input) and `shape_world_aabb_quick` (narrow-phase preview).
+- Narrow phase routes:
+  - **Ellipsoid-vs-Sphere** — closed-form via Eberly's bisection
+    (`closest_point_on_ellipsoid`), gradient-based normal.
+  - **Ellipsoid-vs-Plane** — closed-form via the support function
+    along `−plane_normal`; degenerate to "pole below the plane".
+  - **Ellipsoid-vs-{Box, Capsule, Cylinder, Cone, Ellipsoid,
+    Triangle, ConvexHull}** — generic GJK + EPA fallback (the
+    ellipsoid's support function makes it well-behaved through
+    GJK).
+  - **Ellipsoid-vs-{Plane, TriMesh, Heightfield, SDF}** — same
+    routing as other primitives (plane has the dedicated
+    closed-form path; TriMesh/Heightfield/SDF dispatch first).
+- GPU side:
+  - Host packs `kind=6` and `data = (ax, ay, az)` into
+    `shape_geom_kind` / `shape_geom_data` (`crates/molla/src/sim/builder.rs`).
+  - `KIND_ELLIPSOID = 6u` constant added to gjk.wgsl, epa.wgsl,
+    raycast.wgsl, camera_trace.wgsl. Inline support function +
+    raycast (scale-trick → unit sphere) + outward-normal helper
+    in each. xpbd_particles.wgsl and vbd_cloth.wgsl don't
+    dispatch on it (particles silently miss ellipsoids — gap to
+    flag in caveats).
+- Viewer:
+  - `BodyVisual::Ellipsoid { half_axes }` rendered as a unit
+    icosphere with non-uniform scale baked into the entity
+    transform (`crates/molla_viewer/src/main.rs`).
+  - `BodyVisual::GaussianSplat { centre, covariance_inv, color }`
+    enum stub — render-only, never participates in collision.
+    Viewer falls back to a billboarded sphere whose radius is
+    derived from the inverse-determinant of the covariance.
+    Full anisotropic-Gaussian rendering is deferred (would need a
+    custom shader + sorted-blend pass).
+  - `Scene::Shapes` drops one tilted oblate ellipsoid onto the
+    wavy heightfield to exercise both the closed-form
+    sphere/plane paths and the GJK-vs-cone/hull pairs.
+
+**Tests** (`crates/molla/tests/ellipsoid_collision.rs`, all CPU):
+
+- `ellipsoid_support_axis_poles` — support along ±X/±Y/±Z lands
+  on the matching pole.
+- `ellipsoid_sphere_overlap_along_x_axis` — depth + normal vs
+  analytic ground truth (1×0.5×0.5 ellipsoid, 0.3 sphere at
+  (1.2, 0, 0): depth 0.1, normal +X).
+- `ellipsoid_sphere_separated_no_contact` — disjoint pair → 0
+  contacts.
+- `ellipsoid_sphere_oblate_y_face` — oblate (1, 0.3, 1) ellipsoid
+  vs sphere on +Y; depth 0.1, normal +Y.
+- `ellipsoid_plane_touches_at_lowest_pole` — depth + normal
+  match the lowest-pole geometry.
+- `ellipsoid_plane_above_no_contact` — separated → 0 contacts.
+- `ellipsoid_box_shallow_overlap` — sphere-disguised ellipsoid vs
+  box, GJK + EPA path; depth ≈ 0.1 ± 5e-3, normal ≈ ±Y.
+- `ellipsoid_box_separated_no_contact` — disjoint → 0 contacts.
+- `add_shape_ellipsoid_aabb_axis_aligned` — world AABB matches
+  ±half_axes.
+- `add_shape_ellipsoid_aabb_rotated_90deg_about_z` — world
+  half-extents become `(b, a, c)` after the 90°-Z rotation.
+- `add_shape_ellipsoid_rejects_non_positive_axes` — builder
+  validation.
+
+**Caveats / out of scope for v1:**
+
+- Particle-vs-ellipsoid collision (xpbd_particles.wgsl,
+  vbd_cloth.wgsl) is not implemented — particles passing through
+  ellipsoids will silently miss them. Add `KIND_ELLIPSOID`
+  dispatch arms when a particle workload needs them.
+- The MuJoCo wrapper translation (`crates/molla/src/solvers/mujoco.rs`)
+  has no ellipsoid path — MJCF doesn't have a primitive ellipsoid,
+  so this would have to bake to a mesh.
+- `closest_point_on_ellipsoid` uses Eberly's bisection (60 iters
+  cap). Adequate for smoothly-changing scenes; if ellipsoids end up
+  in a hot per-step loop a Newton iteration or a closed-form
+  quartic root would shave time.
+- Gaussian splat rendering is deferred to a full implementation —
+  the viewer stub draws a sphere with covariance-derived radius
+  but doesn't perform sorted alpha-blend or anisotropic shading.
+  The data model (`covariance_inv` as a `[Vec3; 3]`, `color` as
+  RGBA) is in place so the viewer can grow the renderer without
+  touching the data layout.
+
+**Dependencies:** Stage 6 (GJK + EPA — ellipsoid uses both),
+Stage 4 (collision pipeline + builder).
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
