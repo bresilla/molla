@@ -26,6 +26,10 @@ struct Uniforms {
 
 const WORKGROUP_SIZE: u32 = 64;
 
+/// Per-pair simplex output stride (in `vec4<f32>` elements). 4
+/// vertices × 3 vec3 (w, a, b) = 12 vec4 lanes per pair.
+pub const GJK_SIMPLEX_STRIDE: usize = 12;
+
 pub struct GjkKernel {
     pipeline: wgpu::ComputePipeline,
     layout_shapes: wgpu::BindGroupLayout,
@@ -50,7 +54,7 @@ impl GjkKernel {
         });
         let layout_out = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::gjk out"),
-            entries: &storage_entries(1, false),
+            entries: &storage_entries(2, false),
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::gjk uniforms"),
@@ -94,7 +98,10 @@ impl GjkKernel {
 
     /// Run GJK overlap on `pair_a[i]` × `pair_b[i]` and write the
     /// result into `overlap_out`. All inputs are device buffers
-    /// already populated by the caller.
+    /// already populated by the caller. The simplex output is
+    /// discarded (this overload allocates a tiny scratch buffer to
+    /// satisfy the binding layout — use
+    /// [`Self::dispatch_with_simplex`] when EPA needs the simplex).
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -105,6 +112,37 @@ impl GjkKernel {
         pair_a: &Buffer<u32>,
         pair_b: &Buffer<u32>,
         overlap_out: &mut Buffer<u32>,
+        pair_count: u32,
+    ) -> Result<()> {
+        // Allocate a stub simplex buffer just large enough to satisfy
+        // the binding (one pair worth of vec4 lanes).
+        let mut stub = Buffer::<crate::math::Vec3>::from_vec(
+            vec![crate::math::Vec3::ZERO; GJK_SIMPLEX_STRIDE.max(pair_count as usize * GJK_SIMPLEX_STRIDE)],
+            BufferUsage::StorageReadWrite,
+        );
+        stub.ensure_device(device)?;
+        stub.upload(queue)?;
+        self.dispatch_with_simplex(
+            device, queue, model, body_q_buf, pair_a, pair_b, overlap_out, &mut stub, pair_count,
+        )
+    }
+
+    /// Variant of [`Self::dispatch`] that also writes the 4-vertex
+    /// Minkowski-difference simplex into `simplex_out` for every pair
+    /// where `overlap == 1`. The buffer must hold at least
+    /// `pair_count * GJK_SIMPLEX_STRIDE` vec3 elements (each vec3 is
+    /// padded to 16 bytes on the GPU side).
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch_with_simplex(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        body_q_buf: &wgpu::Buffer,
+        pair_a: &Buffer<u32>,
+        pair_b: &Buffer<u32>,
+        overlap_out: &mut Buffer<u32>,
+        simplex_out: &mut Buffer<crate::math::Vec3>,
         pair_count: u32,
     ) -> Result<()> {
         if pair_count == 0 {
@@ -132,7 +170,10 @@ impl GjkKernel {
         let bg_out = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::gjk out bg"),
             layout: &self.layout_out,
-            entries: &[buffer_entry(0, overlap_out.device_buffer())?],
+            entries: &[
+                buffer_entry(0, overlap_out.device_buffer())?,
+                buffer_entry(1, simplex_out.device_buffer())?,
+            ],
         });
         let uniforms = Uniforms {
             pair_count,
@@ -174,7 +215,25 @@ impl GjkKernel {
         }
         queue.submit(std::iter::once(encoder.finish()));
         overlap_out.mark_device_dirty();
+        simplex_out.mark_device_dirty();
         Ok(())
+    }
+
+    /// Allocate a simplex-output buffer sized for `cap` pairs. Each
+    /// pair occupies `GJK_SIMPLEX_STRIDE` vec3 elements.
+    pub fn alloc_simplex(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cap: usize,
+    ) -> Result<Buffer<crate::math::Vec3>> {
+        let cap = cap.max(1);
+        let mut buf = Buffer::from_vec(
+            vec![crate::math::Vec3::ZERO; cap * GJK_SIMPLEX_STRIDE],
+            BufferUsage::StorageReadWrite,
+        );
+        buf.ensure_device(device)?;
+        buf.upload(queue)?;
+        Ok(buf)
     }
 
     /// Convenience helper to allocate the input/output buffers sized
