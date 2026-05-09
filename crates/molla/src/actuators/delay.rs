@@ -145,6 +145,18 @@ impl Delay {
         &self.out_vel
     }
 
+    /// Mutable access to the delayed-output position array, used by
+    /// tests / introspection that need to call `download` on it.
+    pub fn out_pos_mut(&mut self) -> &mut Buffer<Real> {
+        &mut self.out_pos
+    }
+
+    /// Mutable access to the delayed-output velocity array, used by
+    /// tests / introspection that need to call `download` on it.
+    pub fn out_vel_mut(&mut self) -> &mut Buffer<Real> {
+        &mut self.out_vel
+    }
+
     /// Update per-DOF delay values from host-side data (number of
     /// substeps; clamped to `max_delay`). Useful for live-tuning lag
     /// from a UI without rebuilding the Delay.

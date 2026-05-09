@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-equality-gpu test-particles-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -85,6 +85,9 @@ test-tiled-camera-gpu:
 
 test-actuator-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test actuator_pd_gpu -- --ignored
+
+test-actuator-pipeline-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test actuator_pipeline_gpu -- --ignored --test-threads=1
 
 test-equality-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_equality_gpu -- --ignored --test-threads=1
