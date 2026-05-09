@@ -37,10 +37,7 @@ fn ray_hits_sphere_at_expected_distance() {
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, state)) = setup(model) else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
     let hits = sensor
@@ -82,9 +79,7 @@ fn ray_misses_sphere() {
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
     let hits = sensor
@@ -112,9 +107,7 @@ fn ray_hits_box_top_face() {
     b.add_shape_box(body, Vec3::new(1.0, 0.5, 1.0), Transform::IDENTITY)
         .unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
     let hits = sensor
@@ -146,9 +139,7 @@ fn ray_takes_closer_of_two_spheres() {
     let upper = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 3.0, 0.0)));
     b.add_shape_sphere(upper, 0.4, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
     let hits = sensor
@@ -182,9 +173,7 @@ fn ray_hits_translated_body() {
     );
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
     let hits = sensor

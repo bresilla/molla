@@ -57,7 +57,7 @@ fn engine_or_skip() -> Option<Engine> {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_per_step_jacobians_match_cpu_franka6() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 1);
     let n = chain.links.len();
     let q = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -119,7 +119,7 @@ fn v3_gpu_per_step_jacobians_match_cpu_franka6() {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_full_reverse_matches_cpu_franka6() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 5);
     let n = chain.links.len();
     let q0 = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -160,7 +160,7 @@ fn v3_gpu_full_reverse_matches_cpu_franka6() {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_multi_articulation_batch_matches_cpu() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     const N_CHAINS: usize = 10;
 
     // Build N chains with slightly different initial configs so the
@@ -229,7 +229,6 @@ fn v3_gpu_multi_articulation_batch_matches_cpu() {
 /// near-linear parallelism: per-chain wall time on N=10 should be at
 /// most ~2× the single-chain wall time.
 #[test]
-#[ignore = "needs wgpu adapter (env-only — actually CPU-only test)"]
 fn v3_cpu_batch_per_chain_within_2x_single() {
     const N_CHAINS: usize = 10;
     let chains: Vec<FeatherstoneRevoluteChain> = (0..N_CHAINS)
@@ -303,7 +302,6 @@ fn v3_cpu_batch_per_chain_within_2x_single() {
 /// ~5-9× single-articulation; the < 5× headline target requires the
 /// Stage 23.1.3 pure-analytic q derivative).
 #[test]
-#[ignore = "needs wgpu adapter (env-only — actually CPU-only test)"]
 fn v3_cpu_analytic_qd_bwd_fwd_ratio_franka6() {
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 60);
     let n = chain.links.len();

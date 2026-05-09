@@ -29,7 +29,7 @@ fn try_engine() -> Option<Engine> {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn ball_spherical_pendulum_falls_under_gravity_gpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -108,7 +108,7 @@ fn ball_spherical_pendulum_falls_under_gravity_gpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn free_joint_body_falls_at_g_gpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -161,7 +161,7 @@ fn free_joint_body_falls_at_g_gpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn d6_pretensioned_holds_under_gravity_gpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -214,7 +214,7 @@ fn d6_pretensioned_holds_under_gravity_gpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn free_joint_cpu_gpu_match() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

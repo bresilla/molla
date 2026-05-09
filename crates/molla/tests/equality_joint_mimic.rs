@@ -484,13 +484,7 @@ fn build_mimic_model_gpu(poly: [Real; 5]) -> Model {
 fn gpu_linear_mimic_matches_cpu_reference() {
     use molla::compute::{Backend, Engine};
 
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: {e}");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().expect("device");
     let queue = engine.queue().expect("queue");
 
@@ -551,13 +545,7 @@ fn gpu_linear_mimic_matches_cpu_reference() {
 fn gpu_quadratic_mimic_matches_cpu_reference() {
     use molla::compute::{Backend, Engine};
 
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: {e}");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().expect("device");
     let queue = engine.queue().expect("queue");
 

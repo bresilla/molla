@@ -124,10 +124,7 @@ fn mpm_implicit_explicit_parity() {
     // diff is sub-millimetre. We pump up Young's so the implicit
     // damping has a meaningful gain (and thus the test exercises the
     // implicit path rather than passing trivially).
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let particles = fill_box([-0.10, 0.30, -0.10], [0.10, 0.50, 0.10], 6, 1234);
@@ -195,10 +192,7 @@ fn mpm_implicit_allows_larger_dt() {
     // Strategy: run both at a dt that's 4× larger than the explicit
     // CFL limit. Explicit should NaN or shoot velocities; implicit
     // should remain bounded.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     // High drop with strong initial downward velocity so we're firmly
@@ -272,10 +266,7 @@ fn mpm_implicit_allows_larger_dt() {
 fn mpm_calibrated_aor_30deg() {
     // Calibrated AoR: 30° friction-angle parameter should produce a
     // measured pile slope of 30° ± 5°.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     // The brief asks: 30° friction angle → pile slope 30° ± 5° from
@@ -357,10 +348,7 @@ fn mpm_snow_snowball_displaces_pile() {
     // We pour a snow pile, settle it, then "throw" a small dense
     // snowball at it (initial downward velocity) and verify particles
     // end up displaced.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::snow();
@@ -421,10 +409,7 @@ fn mpm_two_way_rigid_coupling_wrench() {
     // We don't run a full rigid-body solver here — just validate the
     // wrench buffer has plausible values. A real demo wires the
     // wrench into RigidWorld::add_external_force / torque next step.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let cfg = MpmConfig::sand();

@@ -342,10 +342,7 @@ mod gpu {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_lookup_matches_cpu() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping gpu_lookup_matches_cpu");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
         let kernel = SparseGridKernel::new(&device);
@@ -392,10 +389,7 @@ mod gpu {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_sparse_sdf_query_latency_under_50us_per_ray() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping latency test");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
         let kernel = SparseGridKernel::new(&device);

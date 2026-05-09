@@ -32,9 +32,7 @@ fn imu_at_rest_reads_minus_gravity() {
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, mut state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, mut state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut imu = ImuSensor::new(
         &engine,
@@ -80,9 +78,7 @@ fn imu_in_free_fall_reads_zero() {
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, mut state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, mut state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut imu = ImuSensor::new(
         &engine,
@@ -137,9 +133,7 @@ fn imu_local_rotation_swaps_axes() {
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     // Sensor rotated 90° around Z — its local +Y axis points along
     // world -X, so gravity (along world -Y) projects onto sensor +X.
@@ -178,9 +172,7 @@ fn imu_gyro_reads_body_angular_velocity() {
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, mut state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, mut state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     {
         let qd = state.body_qd.host_mut().unwrap();

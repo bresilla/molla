@@ -2281,9 +2281,11 @@ impl ModelBuilder {
                         ShapeGeometry::Capsule { .. } => 3,
                         ShapeGeometry::Cylinder { .. } => 4,
                         // Cone (5) gets a real kind for GPU GJK;
-                        // ConvexHull/Heightfield/Sdf are CPU-only
-                        // for now — sentinel 0xff so the GPU
-                        // kernels skip them.
+                        // ConvexHull/Heightfield/Sdf stay CPU-only —
+                        // sentinel 0xff so the GPU kernels skip them.
+                        // Promotion to GPU kinds is owned by their
+                        // respective stages (Heightfield in Stage 26,
+                        // SDF in Stage 21).
                         ShapeGeometry::Cone { .. } => 5,
                         // Ellipsoid (6) gets a real kind — host packs the
                         // three semi-axes into shape_geom_data; GPU

@@ -63,10 +63,7 @@ fn cpu_gpu_cloth_match() {
     let cpu_positions = s_a_cpu.particle_q.host().unwrap().to_vec();
 
     // ── GPU run ─────────────────────────────────────────────────────
-    let Ok(engine) = Engine::new_gpu() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut model_gpu = model_gpu;
@@ -97,7 +94,15 @@ fn cpu_gpu_cloth_match() {
 
     // Per-particle position parity. f32 GPU vs f64 CPU + Gauss-Seidel
     // ordering means we expect roughly mm-scale deviation per particle
-    // after 60 steps. Tighten if needed.
+    // after 60 steps. The intent is "tight enough that a no-op kernel
+    // can't pass"; 1 mm per particle is the right bar.
+    //
+    // TIGHTENING TO 1e-3 SHOWS GENUINE DIVERGENCE — the f32-vs-f64
+    // delta and Jacobi-vs-Gauss-Seidel iteration order accumulate
+    // beyond the mm budget after 60 substeps; the loose 5 cm bound is
+    // documented as a known parity gap until either the GPU runs in
+    // f64 or the CPU oracle switches to Jacobi sweeps. Do not relax
+    // further without re-examining the parity story.
     assert_eq!(cpu_positions.len(), gpu_positions.len());
     let mut max_err = 0.0_f64;
     for (i, (c, g)) in cpu_positions.iter().zip(gpu_positions.iter()).enumerate() {
@@ -119,9 +124,7 @@ fn pinned_cloth_corners_stay_put() {
     // Sanity check: a cloth pinned at corners should keep those
     // corners exactly where we placed them, on both CPU and GPU.
     let model = build_cloth();
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut model = model;
@@ -171,9 +174,7 @@ fn pinned_cloth_corners_stay_put() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
 fn self_collision_pushes_overlapping_particles_apart() {
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -227,9 +228,7 @@ fn self_collision_pushes_overlapping_particles_apart() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
 fn single_particle_projected_off_each_primitive() {
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -357,9 +356,7 @@ fn single_particle_projected_off_each_primitive() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
 fn cloth_drapes_over_sphere_without_penetration() {
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

@@ -209,10 +209,7 @@ fn max_rel_diff_complex(a: &[Complex32], b: &[RustComplex<f32>]) -> f32 {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_1d_4096_matches_rustfft() {
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);
@@ -261,9 +258,7 @@ fn fft_1d_4096_matches_rustfft() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_2d_256x256_matches_rustfft() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);
@@ -312,9 +307,7 @@ fn fft_2d_256x256_matches_rustfft() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_3d_32x32x32_matches_rustfft() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);
@@ -337,9 +330,7 @@ fn fft_3d_32x32x32_matches_rustfft() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_round_trip_1d() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);
@@ -374,9 +365,7 @@ fn fft_round_trip_1d() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_small_powers_of_two() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);
@@ -401,9 +390,7 @@ fn fft_small_powers_of_two() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn fft_non_power_of_two_rejected() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = FftKernel::new(&device);

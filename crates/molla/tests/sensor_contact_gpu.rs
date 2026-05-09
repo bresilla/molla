@@ -39,9 +39,7 @@ fn sensor_sphere_on_plane_one_contact() {
         .unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, state, mut contacts)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state, mut contacts) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -86,9 +84,7 @@ fn sensor_floating_sphere_zero_contacts() {
     b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
         .unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state, mut contacts)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state, mut contacts) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -130,9 +126,7 @@ fn sensor_stack_of_two_spheres() {
     b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
         .unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state, mut contacts)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state, mut contacts) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

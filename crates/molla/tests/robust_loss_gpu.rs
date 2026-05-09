@@ -61,10 +61,7 @@ fn assert_parity<F, G>(
     F: Fn(Real) -> Real,
     G: Fn(Real) -> Real,
 {
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping {name}");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = RobustLossKernel::new(&device);

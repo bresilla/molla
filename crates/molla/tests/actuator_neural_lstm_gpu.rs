@@ -159,7 +159,7 @@ fn make_engine_or_skip() -> Option<Engine> {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn lstm_forward_matches_cpu_oracle() {
-    let Some(engine) = make_engine_or_skip() else { return };
+    let engine = make_engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let net = build_known_net();
     let cfg = ControllerNeuralLstmConfig {
@@ -218,7 +218,7 @@ fn lstm_forward_matches_cpu_oracle() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn lstm_hidden_state_survives_across_substeps() {
-    let Some(engine) = make_engine_or_skip() else { return };
+    let engine = make_engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let net = build_known_net();
     let cfg = ControllerNeuralLstmConfig {
@@ -294,7 +294,7 @@ fn lstm_hidden_state_survives_across_substeps() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn lstm_reset_hidden_state_zeros_h_and_c() {
-    let Some(engine) = make_engine_or_skip() else { return };
+    let engine = make_engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let net = build_known_net();
     let cfg = ControllerNeuralLstmConfig {

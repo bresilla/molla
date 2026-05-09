@@ -49,10 +49,7 @@ fn camera_hits_sphere_centre_returns_correct_depth() {
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let Some((engine, model, state)) = setup(model) else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut cam = TiledCamera::new(&engine, tiny_config(), 1).unwrap();
     // Eye at (0, 0, 5), looking at the origin (so toward -Z, with +Y up).
@@ -89,9 +86,7 @@ fn shape_index_distinguishes_two_spheres() {
     let right_body = b.add_body(BodyParams::new().with_position(Vec3::new(1.0, 0.0, 0.0)));
     let _right = b.add_shape_sphere(right_body, 0.6, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut cam = TiledCamera::new(&engine, tiny_config(), 1).unwrap();
     // Eye on +Z looking at origin; the spheres span the horizontal FOV.
@@ -133,9 +128,7 @@ fn albedo_matches_set_color() {
     b.set_shape_visual_material(sphere, Vec3::new(1.0, 0.0, 0.0), 0.0, 0.5)
         .unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut cam = TiledCamera::new(&engine, tiny_config(), 1).unwrap();
     cam.set_camera_look_at(0, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y)
@@ -167,9 +160,7 @@ fn multi_camera_dispatches_in_one_call() {
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut cam = TiledCamera::new(&engine, tiny_config(), 4).unwrap();
     let r: Real = 5.0;

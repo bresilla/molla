@@ -439,13 +439,16 @@ fn cable_bending_stiffness_sweep() {
         sag_no.is_finite() && sag_hi.is_finite(),
         "non-finite sag values"
     );
-    // High-bending should sag LESS than no-bending. The reduction
-    // is bounded by the cable's stretch springs (which already cap
-    // mid-span displacement), so we settle for a 1 % relative drop —
-    // tight enough that a no-op kernel can't slip through.
+    // High-bending should sag noticeably LESS than no-bending. A 1%
+    // drop (the prior bound) would pass a no-op kernel that produced
+    // FP-noise-level differences; demand a 3% reduction — measured at
+    // ~5% with k_b=5e3 on the dev box, which leaves a small headroom
+    // band but still catches a no-op kernel. Genuinely-50%+ stiffening
+    // requires k_b ≥ 1e5 (the cable's stretch springs cap mid-span
+    // displacement, so bending energy alone can't easily dominate).
     assert!(
-        sag_hi < sag_no * 0.99,
-        "high-bending cable did not stiffen: sag_hi {sag_hi:.4} >= 0.99·sag_no {:.4}",
-        sag_no * 0.99
+        sag_hi < sag_no * 0.97,
+        "high-bending cable did not stiffen: sag_hi {sag_hi:.4} >= 0.97·sag_no {:.4}",
+        sag_no * 0.97
     );
 }
