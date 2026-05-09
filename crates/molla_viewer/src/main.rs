@@ -1197,6 +1197,15 @@ struct QuadrotorState {
     cached: bool,
     total_mass: f32,
     arm_length: f32,
+    /// Stage 17.1: enable the rigorous dense-Cholesky D solve. v1
+    /// uses sequential rank-1 deflation (exact when D is diagonal,
+    /// approximate but stable when not). For symmetric quadrotor
+    /// inertia the two paths agree closely; toggle on to demo the
+    /// asymmetric-inertia case (e.g. add a payload offset).
+    rigorous_d_solve: bool,
+    /// Last applied flag value (so we don't re-stamp the solver every
+    /// frame — only when the user flips the toggle).
+    rigorous_d_solve_applied: bool,
 }
 
 impl Default for QuadrotorState {
@@ -1213,6 +1222,8 @@ impl Default for QuadrotorState {
             cached: false,
             total_mass: 0.0,
             arm_length: 0.0,
+            rigorous_d_solve: false,
+            rigorous_d_solve_applied: false,
         }
     }
 }
@@ -5313,6 +5324,16 @@ fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
         state.cached = true;
     }
 
+    // Stage 17.1 — propagate the right-rail "rigorous" toggle into the
+    // active Featherstone solver. Only re-stamp on change so we don't
+    // touch the solver every frame.
+    if state.rigorous_d_solve != state.rigorous_d_solve_applied {
+        if let SolverBackend::Featherstone(s) = &mut sim.solver {
+            s.set_rigorous_d_solve(state.rigorous_d_solve);
+        }
+        state.rigorous_d_solve_applied = state.rigorous_d_solve;
+    }
+
     let device = sim.engine.device().unwrap().clone();
     let queue = sim.engine.queue().unwrap().clone();
 
@@ -6998,6 +7019,19 @@ fn quadrotor_pane(ui: &mut egui::Ui, state: &mut QuadrotorState) {
     ui.label("Attitude PD");
     ui.add(egui::Slider::new(&mut state.attitude_kp, 0.0..=20.0).text("kp"));
     ui.add(egui::Slider::new(&mut state.attitude_kd, 0.0..=4.0).text("kd"));
+    ui.separator();
+
+    // Stage 17.1 — rigorous toggle.
+    ui.label("Stage 17.1 polish");
+    ui.checkbox(&mut state.rigorous_d_solve, "rigorous dense-Cholesky D solve");
+    ui.small(
+        "v1 sequential rank-1 deflation is exact when the joint's D \
+         matrix is diagonal. For asymmetric inertias (e.g. rotor mass \
+         offset cross-coupling linear/angular DOFs) the rigorous path \
+         is force-correct. For this symmetric quadrotor the two paths \
+         agree closely; toggle to A/B against your own asymmetric \
+         payload.",
+    );
 
     ui.add_space(4.0);
     ui.small(

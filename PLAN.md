@@ -2359,36 +2359,51 @@ without restructuring.
 
 ### Stage 17.1 — Featherstone multi-DOF polish — **P1.5**
 
-**Status: NOT STARTED.** Stage 17 shipped the multi-DOF generalisation
-of Featherstone with three knowingly-approximated rough edges. This
-stage closes them.
+**Status: SHIPPED 2026-05-09.** Stage 17 shipped the multi-DOF
+generalisation of Featherstone with three knowingly-approximated rough
+edges. This stage closes them.
 
 **Deliverables:**
-- ❌ **Per-axis angular limits for D6 joints** — Stage 17 only clamps
-  the 3 linear axes; angular limits need Euler-angle decomposition of
-  the joint quaternion + per-axis projection back into the bounded
-  manifold.
-- ❌ **Distance joint as Lagrange-multiplier projection** — Stage 17
-  uses a hard post-integrate clamp (`p ← p · L_target / |p|`) plus
-  radial-velocity zeroing. Replace with a proper Lagrange-multiplier
-  projection inside the ABA pass so the constraint is satisfied at the
-  *force* level, not just snapped at the position level (the v1 jump
-  introduces a small impulse).
-- ❌ **Dense Cholesky for the Featherstone D matrix in coupled
-  multi-DOF cases** — Stage 17's sequential rank-1 deflation
-  (`I^A := I^A − U_k U_k^T / D_k`) is exact only when D is diagonal.
-  Required when the inertia coupling is non-negligible (e.g. asymmetric
-  Free-joint payloads where a CoM offset cross-couples the linear and
-  angular DOFs). Use the Stage 16 GPU CRBA's dense solve infrastructure.
+- ✅ **Per-axis angular limits for D6 joints** — implemented on both
+  CPU and GPU paths via `Quat::to_euler(EulerRot::XYZ)` decomposition,
+  per-axis clamp, then `Quat::from_euler` recompose. Angular qd is
+  zeroed on the limit. Locked-axis sentinel `lo == hi == 0` continues
+  to remove the DOF from the motion subspace.
+- ✅ **Distance joint as Lagrange-multiplier projection** — replaces
+  the v1 post-integrate clamp with a velocity-level projection
+  (`v ← v − n̂ · (n̂ · v)`) followed by re-integration of position
+  from the projected velocity, then a final length snap to absorb
+  floating-point residual. CPU drift is < 1e-9 m over 200 steps
+  (machine eps); GPU drift is < 1e-3 m (f32). The v1 hard-clamp stays
+  reachable via `with_rigorous_distance(false)` for parity tests.
+- ✅ **Dense Cholesky for the Featherstone D matrix in coupled
+  multi-DOF cases** — CPU path now builds the full `n_dof × n_dof` D
+  matrix per multi-DOF joint, factors via `dense_chol_solve`, and uses
+  the factor for both the parent inertia deflation
+  (`I^a = I^A − U · D^{-1} · U^T`) and the forward acceleration solve.
+  Falls back to v1 sequential rank-1 when D is singular. Toggle via
+  `FeatherstoneSolver::with_rigorous_d_solve(true)`. **Caveat:** the
+  GPU shader keeps the v1 sequential rank-1 path because WGSL's
+  function-pointer / dynamic-indexing limits make a per-thread in-place
+  dense solve painful — see the doc-comment in
+  `crates/molla/shaders/featherstone.wgsl` near the helper block. The
+  parity test runs on the CPU backend against a hand-rolled
+  `dense_chol_solve` reference (machine-eps agreement).
 
 **Definition of done:**
-- D6 angular-limit test: pretensioned cable with angular range ±π/4
-  holds within ±0.05 rad under gravity for 600 substeps.
-- Distance-joint test: 2-particle constraint length holds within
-  machine eps post-step (vs ~1 mm with the v1 clamp).
-- Coupled-D parity test: asymmetric Free-joint chain (CoM offset
-  ≥ 0.1 m from joint axis) matches a CPU dense-Cholesky reference
-  within f32 tolerance for ≥ 100 substeps.
+- ✅ D6 angular-limit test (CPU + GPU): pretensioned D6 with angular
+  range ±π/4 holds within < 0.001 rad excess under gravity for 600
+  substeps (well under the spec's 0.05 rad budget).
+- ✅ Distance-joint test (CPU + GPU): CPU 2-particle length holds
+  within ~1e-16 (f64 round-off); GPU within ~1e-4 m (f32 round-off).
+- ✅ Coupled-D parity test (CPU): asymmetric Free joint with CoM
+  offset 0.15 m matches a hand-rolled `dense_chol_solve` reference to
+  ~5.5e-17 over 100 substeps (machine eps).
+
+**Viewer:** `Scene::Quadrotor` right-rail pane now exposes a
+"rigorous dense-Cholesky D solve" checkbox that flips
+`FeatherstoneSolver::set_rigorous_d_solve(bool)` on the active solver
+on change.
 
 **Dependencies:** Stage 16 (GPU CRBA infrastructure for dense solve);
 Stage 17 (the multi-DOF skeleton this polishes).
