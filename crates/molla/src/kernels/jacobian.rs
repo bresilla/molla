@@ -15,8 +15,12 @@ use crate::sim::{Model, State};
 pub struct JacobianRequest {
     pub articulation: u32,
     pub target_body: u32,
+    /// Offset (in `f32` elements) into the output buffer where this
+    /// request's `6 × N` Jacobian column starts.
     pub output_offset: u32,
-    pub _pad: u32,
+    /// Offset (in transforms) into `body_q` where this request's FK
+    /// snapshot starts. Use 0 to bind the engine's primary state.
+    pub body_q_offset: u32,
     pub point_local: [f32; 4],
 }
 
@@ -172,13 +176,31 @@ impl JacobianKernel {
         })
     }
 
-    /// Dispatch a batch of Jacobian requests; results land in `jacobian_out`
-    /// at the offsets given in each request.
+    /// Dispatch a batch of Jacobian requests using `state.body_q` as the
+    /// FK source.
     pub fn dispatch(
         &self,
         engine: &Engine,
         model: &Model,
         state: &State,
+        requests: &[JacobianRequest],
+        jacobian_out: &wgpu::Buffer,
+    ) -> Result<()> {
+        let body_q = state.body_q.device_buffer().ok_or_else(|| {
+            Error::Gpu("jacobian: state.body_q has no device mirror".into())
+        })?;
+        self.dispatch_with_body_q(engine, model, body_q, requests, jacobian_out)
+    }
+
+    /// Dispatch a batch of Jacobian requests using a caller-supplied
+    /// `body_q` buffer (typically a multi-seed concatenation of FK
+    /// snapshots). Each request's `body_q_offset` indexes into that
+    /// buffer in transform-sized strides.
+    pub fn dispatch_with_body_q(
+        &self,
+        engine: &Engine,
+        model: &Model,
+        body_q: &wgpu::Buffer,
         requests: &[JacobianRequest],
         jacobian_out: &wgpu::Buffer,
     ) -> Result<()> {
@@ -219,7 +241,10 @@ impl JacobianKernel {
         let bg_state = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::jacobian state bg"),
             layout: &self.layout_state,
-            entries: &[buffer_entry(0, state.body_q.device_buffer())?],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: body_q.as_entire_binding(),
+            }],
         });
 
         let bg_arts = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -344,7 +369,7 @@ pub fn jacobian_gpu(
         articulation: articulation as u32,
         target_body: target_body as u32,
         output_offset: 0,
-        _pad: 0,
+        body_q_offset: 0,
         point_local: [
             point_local.x as f32,
             point_local.y as f32,

@@ -13,7 +13,7 @@ use molla::core::BodyId;
 use molla::kernels::{inverse_dynamics_gpu, jacobian_gpu, MassMatrixKernel};
 use molla::math::{Mat3, Real, SpatialInertia, Transform, Vec3 as V3};
 use molla::prelude::*;
-use molla::solvers::{inverse_dynamics, jacobian, mass_matrix};
+use molla::solvers::{inverse_dynamics, jacobian, mass_matrix, IkConfig, IkObjective, IkSolver};
 
 fn try_engine() -> Option<Engine> {
     match Engine::new(Backend::AutoGpu) {
@@ -52,6 +52,47 @@ fn build_pendulum() -> Model {
     )
     .unwrap();
     b.build().unwrap()
+}
+
+/// 7-DOF Franka-style serial arm. Mirrors `tests/ik_franka.rs::build_franka`
+/// — kept as a top-level helper so other tests / the viewer can re-use it.
+pub fn build_franka() -> (Model, usize) {
+    let mut b = ModelBuilder::new();
+    let half = V3::new(0.04, 0.04, 0.04);
+    let mass = 1.0_f64;
+    let h2 = half * half;
+    let m_third = mass / 3.0;
+    let inertia = Mat3::from_diagonal(V3::new(
+        m_third * (h2.y + h2.z),
+        m_third * (h2.x + h2.z),
+        m_third * (h2.x + h2.y),
+    ));
+    let make_link = |b: &mut ModelBuilder| {
+        b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass,
+            com: V3::ZERO,
+            inertia,
+        }))
+    };
+    b.begin_articulation();
+    let axes = [V3::Z, V3::Y, V3::Z, V3::Y, V3::Z, V3::Y, V3::Z];
+    let link_lens = [0.333, 0.0, 0.316, 0.0, 0.384, 0.0, 0.107];
+    let mut prev = molla::core::BodyId::NONE;
+    let mut last_body = 0usize;
+    for i in 0..7 {
+        let body = make_link(&mut b);
+        last_body = body.index();
+        let x_p = if i == 0 {
+            Transform::IDENTITY
+        } else {
+            Transform::from_translation(V3::new(0.0, 0.0, link_lens[i - 1]))
+        };
+        let x_c = Transform::IDENTITY;
+        b.add_joint_revolute(prev, body, x_p, x_c, axes[i]).unwrap();
+        prev = body;
+    }
+    let model = b.build().unwrap();
+    (model, last_body)
 }
 
 fn build_double_pendulum() -> Model {
@@ -277,5 +318,88 @@ fn gpu_crba_double_pendulum_symmetric() {
     for (i, (c, g)) in m_cpu.iter().zip(m_gpu.iter()).enumerate() {
         let diff = (*c as f32 - g).abs();
         assert!(diff < 1e-4, "M[{i}] CPU={c} GPU={g} |Δ|={diff}");
+    }
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn gpu_ik_franka_reaches_target() {
+    let Some(engine) = try_engine() else { return };
+    let (mut model, ee_body) = build_franka();
+    let mut state = model.state().unwrap();
+    molla::sim::eval_fk(&model, &mut state).unwrap();
+    let ee_at_zero = state.body_q.host().unwrap()[ee_body].position;
+    let target = ee_at_zero + V3::new(0.2, 0.1, -0.15);
+
+    upload_state(&mut model, &mut state, &engine);
+    let solver = IkSolver::new(vec![IkObjective::Position {
+        body: ee_body,
+        point_local: V3::ZERO,
+        target_world: target,
+        weight: 1.0,
+    }])
+    .with_config(IkConfig {
+        max_iter: 50,
+        ..IkConfig::default()
+    });
+    let q0 = vec![0.0; 7];
+    let t0 = std::time::Instant::now();
+    let r = solver.solve_gpu(&engine, &model, &mut state, &q0).unwrap();
+    let dt = t0.elapsed();
+    let achieved = state.body_q.host().unwrap()[ee_body].position;
+    let err = (achieved - target).length();
+    eprintln!(
+        "GPU Franka IK: iters={}, residual={:.5}, |Δ|={err:.4} m, took {:.2} ms",
+        r.iters, r.residual, dt.as_secs_f64() * 1e3
+    );
+    assert!(err < 5.0e-3, "IK missed target by {err:.4} m");
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn gpu_ik_multi_seed_runs_in_parallel() {
+    let Some(engine) = try_engine() else { return };
+    let (mut model, ee_body) = build_franka();
+    let mut state = model.state().unwrap();
+    molla::sim::eval_fk(&model, &mut state).unwrap();
+    let ee_at_zero = state.body_q.host().unwrap()[ee_body].position;
+    // A challenging-ish target — moderately offset.
+    let target = ee_at_zero + V3::new(0.25, -0.15, -0.1);
+
+    upload_state(&mut model, &mut state, &engine);
+    let solver = IkSolver::new(vec![IkObjective::Position {
+        body: ee_body,
+        point_local: V3::ZERO,
+        target_world: target,
+        weight: 1.0,
+    }])
+    .with_config(IkConfig {
+        max_iter: 30,
+        ..IkConfig::default()
+    });
+
+    // 32 deterministic seeds — slight angular jitter around q=0.
+    let mut seeds: Vec<Vec<Real>> = Vec::with_capacity(32);
+    for s in 0..32 {
+        let theta = 0.05 * (s as Real);
+        seeds.push(vec![theta, -theta, theta, -theta, theta, -theta, theta]);
+    }
+
+    let t0 = std::time::Instant::now();
+    let r = solver
+        .solve_gpu_with_seeds(&engine, &model, &mut state, &seeds)
+        .unwrap();
+    let dt = t0.elapsed();
+    let achieved = state.body_q.host().unwrap()[ee_body].position;
+    let err = (achieved - target).length();
+    eprintln!(
+        "GPU multi-seed IK (32 seeds): iters={}, residual={:.5}, |Δ|={err:.4} m, total {:.2} ms",
+        r.iters, r.residual, dt.as_secs_f64() * 1e3
+    );
+    assert!(err < 1.0e-2, "best-of-32 GPU IK missed by {err:.4} m");
+    // Soft runtime check — desktop GPUs hit this easily, CI VMs may not.
+    let ms = dt.as_secs_f64() * 1e3;
+    if ms > 500.0 {
+        eprintln!("warning: multi-seed IK took {ms:.2} ms (loose bound 500 ms)");
     }
 }

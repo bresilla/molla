@@ -15,12 +15,12 @@ struct Transform {
 };
 
 struct Request {
-    // 32 bytes total (vec4 alignment after the two u32s).
-    articulation:  u32,
-    target_body:   u32,
-    output_offset: u32,
-    _pad:          u32,
-    point_local:   vec4<f32>,
+    // 32 bytes total (vec4 alignment after the four u32s).
+    articulation:    u32,
+    target_body:     u32,
+    output_offset:   u32,
+    body_q_offset:   u32,
+    point_local:     vec4<f32>,
 };
 
 struct Uniforms {
@@ -89,11 +89,15 @@ fn jacobian_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (n_joints == 0u) { return; }
     if (n_joints > MAX_JOINTS_PER_ART) { return; }
 
-    // Target point in world.
-    let cw = body_q[req.target_body];
+    // Target point in world (body_q indexed via per-request slice offset
+    // so multiple seeds with distinct FK can share one dispatch).
+    let bq_off = req.body_q_offset;
+    let cw = body_q[bq_off + req.target_body];
     let target_world = cw.position.xyz + quat_rotate(cw.rotation, req.point_local.xyz);
 
-    // Walk parent chain from target_body to mark ancestor joints.
+    // Walk parent chain from target_body to mark ancestor joints. Note
+    // `joint_parent`/`joint_child` are GLOBAL body indices, not seed-local,
+    // so we use req.target_body unshifted here.
     var is_ancestor: array<u32, MAX_JOINTS_PER_ART>;
     for (var k = 0u; k < n_joints; k = k + 1u) { is_ancestor[k] = 0u; }
     var walker: i32 = i32(req.target_body);
@@ -135,7 +139,7 @@ fn jacobian_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             parent_world.position = vec4<f32>(0.0);
             parent_world.rotation = vec4<f32>(0.0, 0.0, 0.0, 1.0);
         } else {
-            parent_world = body_q[u32(parent_body)];
+            parent_world = body_q[bq_off + u32(parent_body)];
         }
         let xpw = transform_compose(parent_world, joint_x_p[j]);
         let origin_w = xpw.position.xyz;
