@@ -7,6 +7,7 @@
 pub mod dense3;
 pub mod dense_solve;
 pub mod gpu;
+pub mod iterative;
 pub mod robust_loss;
 mod spatial;
 pub mod sparse;
