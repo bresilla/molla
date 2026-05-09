@@ -39,7 +39,9 @@ use bevy::prelude::*;
 #[cfg(not(feature = "profile"))]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures};
-use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
+use bevy_frost::container::Normal;
+use bevy_frost::pane::{Pane2, PaneAnchor, PaneResize, RailZone};
+use bevy_frost::pod::Pod;
 use bevy_frost::prelude::*;
 use bevy_frost::ribbon::{
     draw_assembly, find_item, RibbonCluster, RibbonDef, RibbonDrag, RibbonEdge, RibbonGlyph,
@@ -1784,8 +1786,11 @@ fn build_imu_model() -> (mp::Model, Vec<BodyVisual>) {
 }
 
 // --- Camera scene (Stage 14 — multi-channel raytraced sensor) ------
-const CAMERA_IMG_W: u32 = 192;
-const CAMERA_IMG_H: u32 = 144;
+// 720p source resolution. Pane thumbnails downsample at draw time, but
+// the underlying camera renders at full HD-class resolution so the
+// "shape index = instance segmentation" channel is readable when zoomed.
+const CAMERA_IMG_W: u32 = 1280;
+const CAMERA_IMG_H: u32 = 720;
 const CAMERA_NUM_VIEWS: usize = 1;
 const CAMERA_ORBIT_RADIUS: f32 = 6.0;
 const CAMERA_ORBIT_HEIGHT: f32 = 2.5;
@@ -4143,25 +4148,24 @@ fn control_pane(
     };
     if let Some(title) = scene_pane_title {
         if is_open(PANE_SCENE) {
-            Pane2::new(
-                PANE_SCENE,
-                title,
-                PaneAnchor::RightRail(RailZone::Start),
-                accent_color,
-            )
-            .show(ctx, |ui| match scene {
-                Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
-                Scene::Imu => imu_pane(ui, &imu_state),
-                Scene::Contact => contact_pane(ui, &contact_state),
-                Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
-                Scene::Shapes => shapes_pane(ui, &sim),
-                Scene::GpuIkArm => gpu_ik_pane(ui, &mut gpu_ik_state, &sim),
-                Scene::GpuNarrowPhase => {
-                    gpu_np_pane(ui, &mut gpu_np_state, accent_color)
-                }
-                Scene::Camera => camera_pane(ui, &mut camera_state),
-                _ => {}
-            });
+            let anchor = PaneAnchor::RightRail(RailZone::Start);
+            Pane2::new(PANE_SCENE, title, anchor, accent_color)
+                .resize(PaneResize::BOTH)
+                .show(ctx, |ui| match scene {
+                    Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
+                    Scene::Imu => imu_pane(ui, &imu_state),
+                    Scene::Contact => contact_pane(ui, &contact_state),
+                    Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
+                    Scene::Shapes => shapes_pane(ui, &sim),
+                    Scene::GpuIkArm => gpu_ik_pane(ui, &mut gpu_ik_state, &sim),
+                    Scene::GpuNarrowPhase => {
+                        gpu_np_pane(ui, &mut gpu_np_state, accent_color)
+                    }
+                    Scene::Camera => {
+                        camera_pane(ui, &mut camera_state, anchor, accent_color)
+                    }
+                    _ => {}
+                });
         }
     }
 }
@@ -4516,10 +4520,20 @@ fn imu_pane(ui: &mut egui::Ui, state: &ImuExampleState) {
     );
 }
 
-/// Body for the right-rail pane in the Camera scene. Renders the
-/// 5 GPU output channels as live thumbnails, plus a FOV slider and
-/// camera-pose readout.
-fn camera_pane(ui: &mut egui::Ui, state: &mut CameraExampleState) {
+/// Body for the right-rail pane in the Camera scene. Each of the
+/// 5 GPU output channels lives in its own `bevy_frost::Normal`
+/// container so the user can fold/unfold them individually; the
+/// thumbnails inside use the pane's available width, so dragging
+/// the pane wider scales every thumbnail up live.
+fn camera_pane(
+    ui: &mut egui::Ui,
+    state: &mut CameraExampleState,
+    anchor: PaneAnchor,
+    accent: egui::Color32,
+) {
+    let pane_id = egui::Id::new(PANE_SCENE);
+    // Header readouts + FOV slider. These don't fold — they're always
+    // visible at the top of the pane body, above the channel containers.
     ui.add_space(2.0);
     readout(ui, "Sensor", "GPU TiledCamera");
     readout(ui, "Resolution", &format!("{}×{}", CAMERA_IMG_W, CAMERA_IMG_H));
@@ -4534,7 +4548,6 @@ fn camera_pane(ui: &mut egui::Ui, state: &mut CameraExampleState) {
         );
     }
     ui.separator();
-
     let mut fov_deg = state.fov_y.to_degrees();
     if ui
         .add(egui::Slider::new(&mut fov_deg, 20.0..=110.0).text("FOV° (vert)"))
@@ -4544,44 +4557,51 @@ fn camera_pane(ui: &mut egui::Ui, state: &mut CameraExampleState) {
     }
     ui.separator();
 
-    let h = CAMERA_IMG_H as f32;
-    let w = CAMERA_IMG_W as f32;
-    // Fixed thumbnail size — small enough to fit 5 in a default pane,
-    // big enough to read. 4:3 aspect to match the camera.
-    let thumb_w = 160.0_f32;
-    let thumb_h = thumb_w * (h / w);
-    let thumb = egui::vec2(thumb_w, thumb_h);
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false; 2])
-        .max_height(640.0)
-        .show(ui, |ui| {
-            if let Some(id) = state.tex_id_color {
-                ui.label("color (Lambertian)");
-                ui.image((id, thumb));
-            }
-            if let Some(id) = state.tex_id_depth {
-                let (lo, hi) = state.last_depth_range.unwrap_or((0.0, 1.0));
-                ui.label(format!("depth  [{lo:.2} .. {hi:.2}] m"));
-                ui.image((id, thumb));
-            }
-            if let Some(id) = state.tex_id_normal {
-                ui.label("normal (RGB = XYZ × 0.5 + 0.5)");
-                ui.image((id, thumb));
-            }
-            if let Some(id) = state.tex_id_albedo {
-                ui.label("albedo (raw material colour)");
-                ui.image((id, thumb));
-            }
-            if let Some(id) = state.tex_id_index {
-                ui.label("shape index (palette)");
-                ui.image((id, thumb));
-            }
-        });
-
     if state.tex_id_color.is_none() {
-        ui.add_space(8.0);
+        ui.add_space(6.0);
         ui.small("waiting for first GPU dispatch…");
+        return;
+    }
+
+    let img_w = CAMERA_IMG_W as f32;
+    let img_h = CAMERA_IMG_H as f32;
+    let aspect = img_h / img_w;
+    let mk_image_pod = move |slot: &str, tex: egui::TextureId| -> Pod {
+        Pod::new(pane_id.with(("cam_pod", slot))).with_custom(move |ui| {
+            // Scale the image to whatever width the container body
+            // gives us; height tracks the camera's aspect ratio so
+            // dragging the pane wider/taller grows the thumbnail.
+            let w = ui.available_width().max(64.0);
+            let h = w * aspect;
+            ui.image((tex, egui::vec2(w, h)));
+        })
+    };
+
+    if let Some(tex) = state.tex_id_color {
+        let cid = pane_id.with("cam_container_color");
+        Normal::new("Color", anchor, accent, cid)
+            .show(ui, vec![mk_image_pod("color", tex)]);
+    }
+    if let Some(tex) = state.tex_id_depth {
+        let cid = pane_id.with("cam_container_depth");
+        let (lo, hi) = state.last_depth_range.unwrap_or((0.0, 1.0));
+        Normal::new(format!("Depth [{lo:.2}..{hi:.2}m]").as_str(), anchor, accent, cid)
+            .show(ui, vec![mk_image_pod("depth", tex)]);
+    }
+    if let Some(tex) = state.tex_id_normal {
+        let cid = pane_id.with("cam_container_normal");
+        Normal::new("Normal", anchor, accent, cid)
+            .show(ui, vec![mk_image_pod("normal", tex)]);
+    }
+    if let Some(tex) = state.tex_id_albedo {
+        let cid = pane_id.with("cam_container_albedo");
+        Normal::new("Albedo", anchor, accent, cid)
+            .show(ui, vec![mk_image_pod("albedo", tex)]);
+    }
+    if let Some(tex) = state.tex_id_index {
+        let cid = pane_id.with("cam_container_index");
+        Normal::new("Shape index", anchor, accent, cid)
+            .show(ui, vec![mk_image_pod("index", tex)]);
     }
 }
 
