@@ -62,6 +62,14 @@ const MAX_DOFS_PER_JOINT: u32 = 6u;
 @group(1) @binding(5) var<storage, read_write> body_q:       array<Transform>;
 @group(1) @binding(6) var<storage, read_write> joint_q:      array<f32>;
 @group(1) @binding(7) var<storage, read_write> joint_qd:     array<f32>;
+// External wrench per body, at COM, world frame.
+// Layout matches `GpuSpatialVector`: 2 × vec4 (linear+pad, angular+pad).
+@group(1) @binding(8) var<storage, read>       body_f:       array<SpatialVecGpu>;
+
+struct SpatialVecGpu {
+    linear:  vec4<f32>,
+    angular: vec4<f32>,
+};
 
 @group(2) @binding(0) var<storage, read> joint_force:        array<f32>;
 @group(2) @binding(1) var<storage, read> joint_target_mode:  array<u32>;
@@ -402,9 +410,15 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let g = gravity[u32(world_idx)].xyz;
         let f_g_lin = g * body_mass[child];
         let f_g_ang = cross(com_world, f_g_lin);
+        // External wrench at COM (caller writes `state.body_f[child]`):
+        // re-express at world origin — linear unchanged, angular gets
+        // +r_com × F.
+        let ext = body_f[child];
+        let f_ext_lin = ext.linear.xyz;
+        let f_ext_ang = ext.angular.xyz + cross(com_world, ext.linear.xyz);
         i_a[k] = i_s;
-        p_lin[k] = bias_l - f_g_lin;
-        p_ang[k] = bias_a - f_g_ang;
+        p_lin[k] = bias_l - f_g_lin - f_ext_lin;
+        p_ang[k] = bias_a - f_g_ang - f_ext_ang;
     }
 
     // ── Pass 2 — backward articulated-inertia accumulation ───────

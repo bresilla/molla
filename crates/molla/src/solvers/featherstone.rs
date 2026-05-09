@@ -375,6 +375,7 @@ fn cpu_step(
     let art_count = model.articulation_count.max(1);
 
     let body_q = state_out.body_q.host()?.to_vec();
+    let body_f_in = state_in.body_f.host()?.to_vec();
     let body_mass = model.body_mass.host()?;
     let body_inertia = model.body_inertia.host()?;
     let body_com = model.body_com.host()?;
@@ -479,13 +480,23 @@ fn cpu_step(
         let i_s = SpatialMatrix6::from_body(body_mass[child], com_world, i_local_world);
 
         // Initial articulated inertia and bias.
+        // Bias = v ×* (I·v) − f_grav − f_ext, where f_ext is the
+        // user-applied wrench at COM (state.body_f, world frame),
+        // re-expressed at the world origin.
         let world_idx = body_world[child].max(0) as usize;
         let g = gravity[world_idx];
         let f_g_lin = g * body_mass[child];
         let f_g_ang = com_world.cross(f_g_lin);
         let f_grav = SpatialVector::new(f_g_lin, f_g_ang);
+        // External wrench at COM: caller fills `body_f[child]` with
+        // (force, torque_at_COM) in world frame. Re-express at world
+        // origin: linear unchanged, angular gets +r_com × F.
+        let ext_com = body_f_in.get(child).copied().unwrap_or(SpatialVector::ZERO);
+        let f_ext_lin = ext_com.linear;
+        let f_ext_ang = ext_com.angular + com_world.cross(ext_com.linear);
+        let f_ext = SpatialVector::new(f_ext_lin, f_ext_ang);
         let bias = spatial_cross_dual(v_i, i_s.mul_sv(v_i));
-        let p_init = bias - f_grav;
+        let p_init = bias - f_grav - f_ext;
         i_a[j] = i_s;
         p_a[j] = p_init;
     }
@@ -1525,6 +1536,42 @@ mod tests {
         assert!(
             max_y < 0.05,
             "ball pendulum gained energy: max_y={max_y:.4}"
+        );
+    }
+
+    /// External wrench at COM (`state.body_f`) cancels gravity for a
+    /// free body when `f_ext = m·g·ŷ`.
+    #[test]
+    fn body_f_external_wrench_cancels_gravity() {
+        let mut b = ModelBuilder::new();
+        let body = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 2.0,
+            com: V3::ZERO,
+            inertia: Mat3::IDENTITY * 0.1,
+        }));
+        b.add_joint_free(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
+            .unwrap();
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        // Apply +m·g upward to cancel gravity exactly.
+        let f = V3::new(0.0, 2.0 * crate::math::GRAVITY, 0.0);
+        s_a.body_f.host_mut().unwrap()[0] = SpatialVector::new(f, V3::ZERO);
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new();
+        for _ in 0..200 {
+            // body_f is zeroed at end of each step; re-apply.
+            s_a.body_f.host_mut().unwrap()[0] = SpatialVector::new(f, V3::ZERO);
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.001, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let y = s_a.joint_q.host().unwrap()[1];
+        assert!(
+            y.abs() < 1e-3,
+            "body_f cancel failed: y drifted to {y}"
         );
     }
 

@@ -188,6 +188,7 @@ impl FeatherstoneKernel {
                 buffer_entry(5, state_out.body_q.device_buffer())?,
                 buffer_entry(6, state_out.joint_q.device_buffer())?,
                 buffer_entry(7, state_out.joint_qd.device_buffer())?,
+                buffer_entry(8, state_in.body_f.device_buffer())?,
             ],
         });
 
@@ -294,10 +295,11 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
 fn state_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     let read = wgpu::BufferBindingType::Storage { read_only: true };
     let rw = wgpu::BufferBindingType::Storage { read_only: false };
-    (0..8u32)
+    (0..9u32)
         .map(|i| {
-            // 0..4: read-only model body data; 5..7: rw state
-            let ty = if i < 5 { read } else { rw };
+            // 0..4: read-only model body data; 5..7: rw state;
+            // 8: read-only body_f (external wrenches at COM, world).
+            let ty = if i < 5 || i == 8 { read } else { rw };
             wgpu::BindGroupLayoutEntry {
                 binding: i,
                 visibility: wgpu::ShaderStages::COMPUTE,
