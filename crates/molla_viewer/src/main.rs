@@ -8680,13 +8680,15 @@ fn draw_jelly_gizmos(
     state: Res<JellyExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Jelly {
+    if sim.scene != Scene::Jelly && sim.scene != Scene::SoftbodyDrop {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
         return;
     };
-    if !state.show_wireframe {
+    // For SoftbodyDrop the jelly tet wireframe is always shown — the
+    // demo's whole point is the cube colliding with cloth.
+    if sim.scene == Scene::Jelly && !state.show_wireframe {
         return;
     }
     let Ok(tet_idx) = sim.model.tet_indices.host() else {
@@ -11601,7 +11603,10 @@ fn pendulum_pane(ui: &mut egui::Ui, state: &PendulumExampleState) {
     ui.small("Reset (R) to restart from straight-down rest.");
 }
 
-// ── Stubs for other Newton-port scenes — implementations follow.
+// ── Newton-port scene builders (Group A-E). Each block defines its
+//    own constants near the top, the build_*_model() function, and
+//    (optionally) a state struct, an update_*_example() pre-step
+//    system, and a *_pane() right-rail panel.
 /// Joint-sampler scene: 3 columns side-by-side, each showing one joint
 /// kind in motion. Port of `xtra/newton/newton/examples/basic/example_basic_joints.py`.
 ///   * Column 0 (-2): revolute pendulum about +Z (rotating arm).
@@ -12566,14 +12571,103 @@ fn build_brick_wall_model() -> (mp::Model, Vec<BodyVisual>) {
 
     (b.build().expect("brick wall model"), visuals)
 }
-fn build_softbody_drop_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
-
-fn build_empty_scene() -> (mp::Model, Vec<BodyVisual>) {
+/// SoftbodyDrop scene — a 6×6×3 tet jelly cube dropped onto a hanging
+/// VBD cloth. Tests soft-on-soft contact at the engine layer. Port of
+/// `xtra/newton/newton/examples/multiphysics/example_softbody_dropping_to_cloth.py`.
+const SOFT_DROP_TET_NX: u32 = 6;
+const SOFT_DROP_TET_NY: u32 = 6;
+const SOFT_DROP_TET_NZ: u32 = 3;
+const SOFT_DROP_TET_DX: f64 = 0.10;
+const SOFT_DROP_CLOTH_NX: u32 = 24;
+const SOFT_DROP_CLOTH_W: f64 = 1.6;
+fn build_softbody_drop_model() -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.4);
+
+    // 1. Cloth grid hanging at Y ≈ 1.0, pinned at left + right edges.
+    let origin = MVec3::new(
+        -SOFT_DROP_CLOTH_W * 0.5,
+        1.0,
+        -SOFT_DROP_CLOTH_W * 0.5,
+    );
+    let u_axis = MVec3::new(SOFT_DROP_CLOTH_W, 0.0, 0.0);
+    let v_axis = MVec3::new(0.0, 0.0, SOFT_DROP_CLOTH_W);
+    let (cloth_first, _, _) = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        SOFT_DROP_CLOTH_NX,
+        SOFT_DROP_CLOTH_NX,
+        0.05,        // particle mass
+        0.04,        // particle radius (larger so contact lands)
+        5.0e-6,      // stretch compliance
+        0.05,        // max stretch
+        mp::WorldId(0),
+    );
+    // Pin two opposite edges (iy = 0 row and iy = NX-1 row).
+    for ix in 0..SOFT_DROP_CLOTH_NX {
+        b.pin_particle(cloth_first + ix);
+        b.pin_particle(cloth_first + (SOFT_DROP_CLOTH_NX - 1) * SOFT_DROP_CLOTH_NX + ix);
+    }
+
+    // 2. Tet jelly cube above the cloth at Y ≈ 2.5.
+    let cube_origin = MVec3::new(
+        -SOFT_DROP_TET_DX * (SOFT_DROP_TET_NX as f64 - 1.0) * 0.5,
+        2.5,
+        -SOFT_DROP_TET_DX * (SOFT_DROP_TET_NZ as f64 - 1.0) * 0.5,
+    );
+    for kk in 0..SOFT_DROP_TET_NZ {
+        for jj in 0..SOFT_DROP_TET_NY {
+            for ii in 0..SOFT_DROP_TET_NX {
+                let p = cube_origin
+                    + MVec3::new(
+                        ii as f64 * SOFT_DROP_TET_DX,
+                        jj as f64 * SOFT_DROP_TET_DX,
+                        kk as f64 * SOFT_DROP_TET_DX,
+                    );
+                b.add_particle(p, 0.05, SOFT_DROP_TET_DX * 0.5, mp::WorldId(0));
+            }
+        }
+    }
+    let v_at = |i: u32, j: u32, k: u32| -> u32 {
+        // Tet particle ids start AFTER the cloth's (cloth_first + nx² particles).
+        let cloth_n = SOFT_DROP_CLOTH_NX * SOFT_DROP_CLOTH_NX;
+        cloth_first + cloth_n + (k * SOFT_DROP_TET_NY + j) * SOFT_DROP_TET_NX + i
+    };
+    let mut tets = Vec::new();
+    for kk in 0..SOFT_DROP_TET_NZ - 1 {
+        for jj in 0..SOFT_DROP_TET_NY - 1 {
+            for ii in 0..SOFT_DROP_TET_NX - 1 {
+                let corners = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                let cell_tets = jelly_cube_to_six_tets(corners);
+                for tet in cell_tets {
+                    tets.push(tet);
+                }
+            }
+        }
+    }
+    let materials = vec![mp::MaterialNeoHookean::elastic(2.0e5, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; tets.len()];
+    let _ = b
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("add tet mesh");
+
+    // Floor.
     b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
         .expect("plane");
-    (b.build().expect("empty scene model"), Vec::new())
+
+    (b.build().expect("softbody drop model"), Vec::new())
 }
+
 
 // ── Per-scene state stubs for Newton-port scenes (defaults populated
 // once the scene is implemented). These are insert_resource'd in main()
