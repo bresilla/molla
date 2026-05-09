@@ -1062,6 +1062,76 @@ impl Default for DiffArmExampleState {
 const DIFF_ARM6_OPT_ITERS: usize = 250;
 const DIFF_ARM6_PLAYBACK_SPEED: f64 = 0.5;
 
+/// Stage 23.1.3 — joint kind selectable from the right-rail picker.
+/// Each variant maps to a `FeatherstoneRevoluteChain` constructor; the
+/// chain rebuilds when the user picks a different kind. Kept separate
+/// from `molla::autograd::JointKind` because that enum is per-link
+/// metadata; this enum is "which whole demo chain to run".
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum DiffArm6Kind {
+    /// 6-DOF revolute Franka (Stage 23.1 default).
+    Revolute,
+    /// 3-DoF Ball-joint spherical pendulum (Stage 23.1.1).
+    Ball,
+    /// 6-DoF Free-joint floating body (Stage 23.1.1).
+    Free,
+    /// 3-DoF Distance-joint tethered body (Stage 23.1.3).
+    Distance,
+    /// 6-DoF D6 joint with per-axis angular limits (Stage 23.1.3).
+    D6,
+}
+
+impl DiffArm6Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Revolute => "Revolute (6-DOF Franka)",
+            Self::Ball => "Ball (spherical pendulum)",
+            Self::Free => "Free (floating body)",
+            Self::Distance => "Distance (tethered)",
+            Self::D6 => "D6 (limited Free)",
+        }
+    }
+
+    /// Build the chain for this kind. All chains use `dt = 0.005` and a
+    /// 60-step horizon so the GD loop dynamics stay comparable across
+    /// variants.
+    fn build_chain(self) -> FeatherstoneRevoluteChain {
+        match self {
+            Self::Revolute => {
+                let mut c = FeatherstoneRevoluteChain::franka6(0.005, 60);
+                c.damping = 1.0;
+                c
+            }
+            Self::Ball => {
+                let mut c = FeatherstoneRevoluteChain::spherical_pendulum(0.5, 1.0, 0.005, 60);
+                c.damping = 0.5;
+                c
+            }
+            Self::Free => {
+                let mut c = FeatherstoneRevoluteChain::free_body(1.0, 0.05, 0.005, 60);
+                c.gravity = molla::math::Vec3::ZERO;
+                c.damping = 0.2;
+                c
+            }
+            Self::Distance => {
+                let mut c =
+                    FeatherstoneRevoluteChain::add_joint_distance(1.0, 0.5, 0.005, 60, 1.0e-3);
+                c.gravity = molla::math::Vec3::ZERO;
+                c.damping = 0.1;
+                c
+            }
+            Self::D6 => FeatherstoneRevoluteChain::add_joint_d6(
+                1.0,
+                0.05,
+                0.005,
+                60,
+                [(-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)],
+                [(-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5)],
+            ),
+        }
+    }
+}
+
 /// Stage-23.1 6-DOF Featherstone differentiable-arm runtime state.
 /// Mirrors [`DiffArmExampleState`] but for the
 /// [`FeatherstoneRevoluteChain::franka6`] chain. The pane drives the
@@ -1108,12 +1178,17 @@ struct DiffArm6ExampleState {
     /// from the last optimisation run. Demonstrates the closed-form
     /// vs FD perf win visually next to the iter counter.
     last_bwd_fwd_ratio: f64,
+    /// Stage 23.1.3 — which joint kind drives the chain. Picker on the
+    /// right-rail pane swaps between the Stage-23.1 6-DOF Franka, the
+    /// Stage-23.1.1 Ball / Free demos, and the Stage-23.1.3 Distance /
+    /// D6 demos so the user can verify the gradient flows for each.
+    kind: DiffArm6Kind,
 }
 
 impl Default for DiffArm6ExampleState {
     fn default() -> Self {
-        let mut chain = FeatherstoneRevoluteChain::franka6(0.005, 60);
-        chain.damping = 1.0;
+        let kind = DiffArm6Kind::Revolute;
+        let chain = kind.build_chain();
         let n = chain.links.len();
         let h = chain.horizon;
         // Target offset from rest in the X-Z plane (Y is hardest to
@@ -1138,6 +1213,7 @@ impl Default for DiffArm6ExampleState {
             playback_t: 0.0,
             use_gpu_adjoint: false,
             last_bwd_fwd_ratio: 0.0,
+            kind,
         }
     }
 }
@@ -9089,8 +9165,52 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
     readout(
         ui,
         "Chain",
-        &format!("6-DOF Franka, {} steps × {:.1} ms", state.chain.horizon, state.chain.dt * 1000.0),
+        &format!(
+            "{}, {} links × {} steps × {:.1} ms",
+            state.kind.label(),
+            state.chain.links.len(),
+            state.chain.horizon,
+            state.chain.dt * 1000.0,
+        ),
     );
+
+    // Stage 23.1.3 — joint kind picker. Swapping the kind rebuilds
+    // the chain, resets τ, and triggers a re-run so the user sees the
+    // gradient flow through each joint kind end-to-end.
+    let mut new_kind = state.kind;
+    egui::ComboBox::from_label("Joint kind")
+        .selected_text(state.kind.label())
+        .show_ui(ui, |ui| {
+            for kind in [
+                DiffArm6Kind::Revolute,
+                DiffArm6Kind::Ball,
+                DiffArm6Kind::Free,
+                DiffArm6Kind::Distance,
+                DiffArm6Kind::D6,
+            ] {
+                ui.selectable_value(&mut new_kind, kind, kind.label());
+            }
+        });
+    if new_kind != state.kind {
+        state.kind = new_kind;
+        state.chain = new_kind.build_chain();
+        let n = state.chain.links.len();
+        let h = state.chain.horizon;
+        state.scratch = JacobianScratch::new(n);
+        state.tau = vec![vec![0.0; n]; h];
+        state.iter_ee_trace.clear();
+        state.last_residual = f64::INFINITY;
+        state.converged_iter = None;
+        state.iters_run = 0;
+        // Re-pick a sensible target near the new chain's rest pose.
+        let rest_ee = state.chain.end_effector(&vec![0.0; n]);
+        state.target = MVec3::new(
+            rest_ee.x as f64 + 0.07,
+            rest_ee.y as f64 + DIFF_ARM6_BASE_HEIGHT,
+            rest_ee.z as f64 - 0.07,
+        );
+        state.rerun = true;
+    }
     ui.separator();
 
     ui.label("Optimisation");
