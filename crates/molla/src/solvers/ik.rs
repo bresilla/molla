@@ -24,6 +24,9 @@ use crate::math::{
 use crate::sim::{Model, State};
 use crate::solvers::jacobian::jacobian;
 
+#[cfg(feature = "gpu")]
+use crate::compute::Engine;
+
 /// One IK objective. Multiple objectives can be combined; LM stacks
 /// them into a single `J·dq = -e` system.
 #[derive(Clone, Debug)]
@@ -358,6 +361,445 @@ fn write_q(
         }
     }
     Ok(())
+}
+
+// ─── GPU LM solver ────────────────────────────────────────────────
+//
+// Per-iteration the GPU does the Jacobian assembly (the expensive
+// linear-in-DOFs piece, also the part that scales with seed count).
+// Trial-step scoring + dense_chol_solve stay on the CPU because they
+// touch a tiny `dof × dof` system.
+
+#[cfg(feature = "gpu")]
+impl IkSolver {
+    /// GPU IK solve. Mirrors [`IkSolver::solve`] but uses the GPU
+    /// `JacobianKernel` to assemble J at every iteration. Caller must
+    /// have uploaded `model` + `state` to the GPU beforehand
+    /// (`upload_to_device`).
+    pub fn solve_gpu(
+        &self,
+        engine: &Engine,
+        model: &Model,
+        state: &mut State,
+        q0: &[Real],
+    ) -> Result<IkResult> {
+        let cfg = &self.config;
+        let dof_total = articulation_dof_total(model, cfg.articulation)?;
+        if q0.len() != dof_total {
+            return Err(Error::Build(format!(
+                "ik::solve_gpu: q0 len {} != articulation DOFs {}",
+                q0.len(),
+                dof_total
+            )));
+        }
+
+        let kernel = crate::kernels::JacobianKernel::new(engine, model)?;
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("solve_gpu: no device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("solve_gpu: no queue".into()))?
+            .clone();
+
+        let mut q = q0.to_vec();
+        write_q(model, state, cfg.articulation, &q)?;
+        crate::sim::eval_fk(model, state)?;
+        let mut e = self.compute_residuals(model, state)?;
+        let mut e_norm = norm(&e);
+        let mut damping = cfg.damping_init;
+
+        // Pre-allocate Jacobian output (single seed; each Position
+        // objective owns one `6 × dof_total` block).
+        let n_pos = self.objectives.iter().filter(|o| matches!(o, IkObjective::Position { .. })).count();
+        let block_floats = 6 * dof_total;
+        let total_floats = block_floats * n_pos.max(1);
+        let j_buf = kernel.create_output_buffer(&device, total_floats);
+
+        for it in 0..cfg.max_iter {
+            if e_norm < cfg.residual_tol {
+                return Ok(IkResult { q, residual: e_norm, converged: true, iters: it });
+            }
+
+            // Push current FK to GPU then run the Jacobian batch.
+            state.body_q.upload(&queue)?;
+
+            let mut requests: Vec<crate::kernels::JacobianRequest> = Vec::with_capacity(n_pos);
+            let mut block_idx = 0u32;
+            for obj in &self.objectives {
+                if let IkObjective::Position { body, point_local, .. } = *obj {
+                    requests.push(crate::kernels::JacobianRequest {
+                        articulation: cfg.articulation as u32,
+                        target_body: body as u32,
+                        output_offset: block_idx * block_floats as u32,
+                        body_q_offset: 0,
+                        point_local: [
+                            point_local.x as f32,
+                            point_local.y as f32,
+                            point_local.z as f32,
+                            0.0,
+                        ],
+                    });
+                    block_idx += 1;
+                }
+            }
+            kernel.dispatch(engine, model, state, &requests, &j_buf)?;
+            let j_blocks = kernel.read_back(engine, &j_buf, total_floats)?;
+
+            // Assemble the stacked Jacobian into row-major `m × dof_total`.
+            let m = e.len();
+            let mut j = vec![0.0; m * dof_total];
+            let mut row = 0usize;
+            let mut block_idx = 0usize;
+            for obj in &self.objectives {
+                match *obj {
+                    IkObjective::Position { weight, .. } => {
+                        let off = block_idx * block_floats;
+                        for r in 0..3 {
+                            for k in 0..dof_total {
+                                j[(row + r) * dof_total + k] =
+                                    weight * (j_blocks[off + r * dof_total + k] as Real);
+                            }
+                        }
+                        row += 3;
+                        block_idx += 1;
+                    }
+                    IkObjective::JointLimit { dof, weight, .. } => {
+                        if dof < dof_total {
+                            j[row * dof_total + dof] = weight;
+                        }
+                        row += 1;
+                    }
+                }
+            }
+
+            // Normal equations.
+            let mut jtj = vec![0.0; dof_total * dof_total];
+            for i in 0..dof_total {
+                for k in 0..dof_total {
+                    let mut s = 0.0;
+                    for r in 0..m {
+                        s += j[r * dof_total + i] * j[r * dof_total + k];
+                    }
+                    jtj[i * dof_total + k] = s;
+                }
+                jtj[i * dof_total + i] += damping;
+            }
+            let mut rhs = vec![0.0; dof_total];
+            for i in 0..dof_total {
+                let mut s = 0.0;
+                for r in 0..m {
+                    s -= j[r * dof_total + i] * e[r];
+                }
+                rhs[i] = s;
+            }
+            let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+                Ok(x) => x,
+                Err(_) => {
+                    damping *= cfg.damping_grow;
+                    continue;
+                }
+            };
+            let dq_norm = norm(&dq);
+            if dq_norm < cfg.step_tol {
+                return Ok(IkResult {
+                    q,
+                    residual: e_norm,
+                    converged: e_norm < cfg.residual_tol,
+                    iters: it + 1,
+                });
+            }
+
+            // Trial step.
+            let mut q_trial = q.clone();
+            for i in 0..dof_total {
+                q_trial[i] += dq[i];
+            }
+            write_q(model, state, cfg.articulation, &q_trial)?;
+            crate::sim::eval_fk(model, state)?;
+            let e_trial = self.compute_residuals(model, state)?;
+            let e_trial_norm = norm(&e_trial);
+            if e_trial_norm < e_norm {
+                q = q_trial;
+                e = e_trial;
+                e_norm = e_trial_norm;
+                damping = (damping / cfg.damping_shrink).max(1.0e-12);
+            } else {
+                write_q(model, state, cfg.articulation, &q)?;
+                crate::sim::eval_fk(model, state)?;
+                damping *= cfg.damping_grow;
+                if damping > 1.0e12 {
+                    return Ok(IkResult {
+                        q,
+                        residual: e_norm,
+                        converged: false,
+                        iters: it + 1,
+                    });
+                }
+            }
+        }
+        Ok(IkResult {
+            q,
+            residual: e_norm,
+            converged: e_norm < cfg.residual_tol,
+            iters: cfg.max_iter,
+        })
+    }
+
+    /// Multi-seed GPU IK. Each LM iteration dispatches one batched
+    /// Jacobian call with all `seeds × position_objectives` requests,
+    /// scoring each seed's step on the GPU's parallel cost. Returns
+    /// the seed with the lowest final residual.
+    pub fn solve_gpu_with_seeds(
+        &self,
+        engine: &Engine,
+        model: &Model,
+        state: &mut State,
+        seeds: &[Vec<Real>],
+    ) -> Result<IkResult> {
+        if seeds.is_empty() {
+            return Err(Error::Build("ik::solve_gpu_with_seeds: no seeds".into()));
+        }
+        let cfg = &self.config;
+        let dof_total = articulation_dof_total(model, cfg.articulation)?;
+        for (i, s) in seeds.iter().enumerate() {
+            if s.len() != dof_total {
+                return Err(Error::Build(format!(
+                    "ik::solve_gpu_with_seeds: seed[{i}] len {} != articulation DOFs {dof_total}",
+                    s.len()
+                )));
+            }
+        }
+
+        let kernel = crate::kernels::JacobianKernel::new(engine, model)?;
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("solve_gpu_with_seeds: no device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("solve_gpu_with_seeds: no queue".into()))?
+            .clone();
+
+        let n_pos = self
+            .objectives
+            .iter()
+            .filter(|o| matches!(o, IkObjective::Position { .. }))
+            .count();
+        let block_floats = 6 * dof_total;
+        let n_seeds = seeds.len();
+        let n_bodies = model.body_count;
+        let total_floats = block_floats * n_pos.max(1) * n_seeds;
+        let j_buf = kernel.create_output_buffer(&device, total_floats);
+
+        // One concatenated body_q buffer holding `n_seeds * n_bodies`
+        // transforms; each seed owns `body_q[seed*n_bodies .. (seed+1)*n_bodies]`.
+        let bq_size = (n_seeds * n_bodies * core::mem::size_of::<crate::math::GpuTransform>()) as u64;
+        let bq_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::ik multi-seed body_q"),
+            size: bq_size.max(32),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Per-seed working state.
+        struct SeedState {
+            q: Vec<Real>,
+            e: Vec<Real>,
+            e_norm: Real,
+            damping: Real,
+            converged: bool,
+            iters: usize,
+            dead: bool,
+        }
+        let mut seeds_state: Vec<SeedState> = Vec::with_capacity(n_seeds);
+        for s in seeds {
+            // Initial residual via host FK.
+            write_q(model, state, cfg.articulation, s)?;
+            crate::sim::eval_fk(model, state)?;
+            let e = self.compute_residuals(model, state)?;
+            let e_n = norm(&e);
+            seeds_state.push(SeedState {
+                q: s.clone(),
+                e,
+                e_norm: e_n,
+                damping: cfg.damping_init,
+                converged: e_n < cfg.residual_tol,
+                iters: 0,
+                dead: false,
+            });
+        }
+
+        for it in 0..cfg.max_iter {
+            // 1) Pack body_q for every still-active seed.
+            let mut body_q_pack: Vec<crate::math::GpuTransform> =
+                vec![crate::math::GpuTransform::default(); n_seeds * n_bodies];
+            for (si, s) in seeds_state.iter().enumerate() {
+                if s.dead || s.converged {
+                    continue;
+                }
+                write_q(model, state, cfg.articulation, &s.q)?;
+                crate::sim::eval_fk(model, state)?;
+                let bq = state.body_q.host()?;
+                for (bi, t) in bq.iter().enumerate() {
+                    body_q_pack[si * n_bodies + bi] = (*t).into();
+                }
+            }
+            queue.write_buffer(&bq_buf, 0, bytemuck::cast_slice(&body_q_pack));
+
+            // 2) Build batched requests.
+            let mut requests: Vec<crate::kernels::JacobianRequest> = Vec::new();
+            let mut block_idx = 0u32;
+            for (si, s) in seeds_state.iter().enumerate() {
+                if s.dead || s.converged {
+                    // Still must allocate the same blocks per seed to
+                    // keep indexing consistent, but we won't read them.
+                    block_idx += n_pos as u32;
+                    continue;
+                }
+                for obj in &self.objectives {
+                    if let IkObjective::Position { body, point_local, .. } = *obj {
+                        requests.push(crate::kernels::JacobianRequest {
+                            articulation: cfg.articulation as u32,
+                            target_body: body as u32,
+                            output_offset: block_idx * block_floats as u32,
+                            body_q_offset: (si * n_bodies) as u32,
+                            point_local: [
+                                point_local.x as f32,
+                                point_local.y as f32,
+                                point_local.z as f32,
+                                0.0,
+                            ],
+                        });
+                        block_idx += 1;
+                    }
+                }
+            }
+            if !requests.is_empty() {
+                kernel.dispatch_with_body_q(engine, model, &bq_buf, &requests, &j_buf)?;
+            }
+            let j_blocks = kernel.read_back(engine, &j_buf, total_floats)?;
+
+            // 3) Per-seed CPU normal-eq solve + trial-step accept/reject.
+            let mut all_done = true;
+            for si in 0..n_seeds {
+                let seed_state = &mut seeds_state[si];
+                if seed_state.dead || seed_state.converged {
+                    continue;
+                }
+                all_done = false;
+
+                let m = seed_state.e.len();
+                let mut j_mat = vec![0.0; m * dof_total];
+                let mut row = 0usize;
+                let mut block_idx_local = (si * n_pos) as usize;
+                for obj in &self.objectives {
+                    match *obj {
+                        IkObjective::Position { weight, .. } => {
+                            let off = block_idx_local * block_floats;
+                            for r in 0..3 {
+                                for k in 0..dof_total {
+                                    j_mat[(row + r) * dof_total + k] =
+                                        weight * (j_blocks[off + r * dof_total + k] as Real);
+                                }
+                            }
+                            row += 3;
+                            block_idx_local += 1;
+                        }
+                        IkObjective::JointLimit { dof, weight, .. } => {
+                            if dof < dof_total {
+                                j_mat[row * dof_total + dof] = weight;
+                            }
+                            row += 1;
+                        }
+                    }
+                }
+                // Normal equations.
+                let mut jtj = vec![0.0; dof_total * dof_total];
+                for i in 0..dof_total {
+                    for k in 0..dof_total {
+                        let mut s_acc = 0.0;
+                        for r in 0..m {
+                            s_acc += j_mat[r * dof_total + i] * j_mat[r * dof_total + k];
+                        }
+                        jtj[i * dof_total + k] = s_acc;
+                    }
+                    jtj[i * dof_total + i] += seed_state.damping;
+                }
+                let mut rhs = vec![0.0; dof_total];
+                for i in 0..dof_total {
+                    let mut s_acc = 0.0;
+                    for r in 0..m {
+                        s_acc -= j_mat[r * dof_total + i] * seed_state.e[r];
+                    }
+                    rhs[i] = s_acc;
+                }
+                let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+                    Ok(x) => x,
+                    Err(_) => {
+                        seed_state.damping *= cfg.damping_grow;
+                        continue;
+                    }
+                };
+                let dq_norm = norm(&dq);
+                if dq_norm < cfg.step_tol {
+                    seed_state.iters = it + 1;
+                    seed_state.dead = true;
+                    continue;
+                }
+
+                let mut q_trial = seed_state.q.clone();
+                for i in 0..dof_total {
+                    q_trial[i] += dq[i];
+                }
+                // Score on host FK.
+                write_q(model, state, cfg.articulation, &q_trial)?;
+                crate::sim::eval_fk(model, state)?;
+                let e_trial = self.compute_residuals(model, state)?;
+                let e_trial_norm = norm(&e_trial);
+                if e_trial_norm < seed_state.e_norm {
+                    seed_state.q = q_trial;
+                    seed_state.e = e_trial;
+                    seed_state.e_norm = e_trial_norm;
+                    seed_state.damping = (seed_state.damping / cfg.damping_shrink).max(1.0e-12);
+                    if seed_state.e_norm < cfg.residual_tol {
+                        seed_state.converged = true;
+                        seed_state.iters = it + 1;
+                    }
+                } else {
+                    seed_state.damping *= cfg.damping_grow;
+                    if seed_state.damping > 1.0e12 {
+                        seed_state.dead = true;
+                        seed_state.iters = it + 1;
+                    }
+                }
+            }
+            if all_done {
+                break;
+            }
+        }
+
+        // Pick best seed.
+        let mut best_idx = 0usize;
+        let mut best_res = Real::INFINITY;
+        for (i, s) in seeds_state.iter().enumerate() {
+            if s.e_norm < best_res {
+                best_res = s.e_norm;
+                best_idx = i;
+            }
+        }
+        let best = &seeds_state[best_idx];
+        // Restore final pose for the winning seed.
+        write_q(model, state, cfg.articulation, &best.q)?;
+        crate::sim::eval_fk(model, state)?;
+        Ok(IkResult {
+            q: best.q.clone(),
+            residual: best.e_norm,
+            converged: best.converged,
+            iters: best.iters.max(1),
+        })
+    }
 }
 
 fn articulation_dof_total(model: &Model, articulation: usize) -> Result<usize> {

@@ -1873,6 +1873,48 @@ Deliverables:
   a future GPU port; the existing CPU SAP + per-mesh BVH cover all
   current scenes.
 
+### Stage 16 — GPU articulation math (CRBA + RNEA + Jacobian + IK) ✅ COMPLETE (2026-05-09)
+
+Per `GAP.md` §1, all four articulation-math primitives shipped CPU-only in
+Stage 10. Newton ships them on Warp; closing the gap unlocks GPU IK and
+computed-torque control.
+
+**Deliverables (all landed):**
+- `shaders/crba.wgsl` + `kernels/crba::MassMatrixKernel` — composite
+  rigid-body algorithm; one workgroup per articulation, `MAX_JOINTS_PER_ART
+  = 64` scratch. CSR-packed `Σ Nₐ²` output buffer.
+- `shaders/rnea.wgsl` + `kernels/rnea::InverseDynamicsKernel` +
+  `inverse_dynamics_gpu(...)` convenience — two-pass forward velocity /
+  backward force. CSR-packed `tau` output.
+- `shaders/jacobian.wgsl` + `kernels/jacobian::JacobianKernel` +
+  `jacobian_gpu(...)` — batched (articulation, target_body, body_q_offset)
+  request layout so multi-seed IK can dispatch every seed's column work in
+  one kernel call.
+- `solvers/ik::IkSolver::solve_gpu` + `solve_gpu_with_seeds` — LM trust
+  region + dense `(JᵀJ + λI) · dq = −Jᵀ · e` Cholesky stays on the CPU
+  (small dense system, no GPU win); the per-iteration Jacobian batch is
+  the GPU win and scales linearly with seed count.
+- `tests/articulation_gpu.rs` — 7 `#[ignore]`-marked tests (CRBA pendulum,
+  CRBA double-pendulum symmetry, RNEA gravity torque, RNEA decomposition,
+  Jacobian finite-diff, Franka IK reach, 32-seed batched IK). All pass on
+  the Vulkan adapter at f32 tolerance (≤ 1e-4 for matrix entries).
+- `crates/molla_viewer` `Scene::GpuIkArm` (hotkey `0`) — interactive demo:
+  7-DOF Franka-style arm chases an XYZ-slider target via `solve_gpu`,
+  right-rail pane reports iters / residual / ms-per-solve and toggles
+  CPU vs GPU LM at runtime.
+
+**Definition of done:** all CRBA/RNEA/Jacobian outputs match the CPU
+references within f32 tolerance; Franka EE reaches a 0.35 m target in
+≤ 8 LM iterations with < 5 mm residual on GPU; interactive viewer scene
+runs at frame rate with the slider-driven IK loop; existing CPU tests
+(stage-10 CRBA / RNEA / IK) still pass.
+
+**Out of scope:** computed-torque control wired into the viewer (uses GPU
+RNEA + GPU CRBA but as a separate downstream feature); GPU dense Cholesky
+(small enough that the CPU solve isn't the bottleneck); Ball/Free/D6
+joint support inside CRBA/RNEA — still revolute + prismatic only,
+matching the CPU implementations' current scope.
+
 ### Stage 14+ — Differentiability, advanced solvers, Python bindings
 
 Manual adjoints for XPBD; tape-style autograd for Featherstone.

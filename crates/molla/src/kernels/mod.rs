@@ -7,6 +7,8 @@ mod actuator_pid;
 #[cfg(feature = "gpu")]
 mod contact_sensor;
 #[cfg(feature = "gpu")]
+mod crba;
+#[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
 mod gjk;
@@ -17,7 +19,11 @@ mod imu;
 #[cfg(feature = "gpu")]
 mod integrate_bodies;
 #[cfg(feature = "gpu")]
+mod jacobian;
+#[cfg(feature = "gpu")]
 mod raycast;
+#[cfg(feature = "gpu")]
+mod rnea;
 #[cfg(feature = "gpu")]
 mod xpbd;
 #[cfg(feature = "gpu")]
@@ -32,6 +38,8 @@ pub use actuator_pid::ActuatorPidKernel;
 #[cfg(feature = "gpu")]
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
+pub use crba::MassMatrixKernel;
+#[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
 #[cfg(feature = "gpu")]
 pub use gjk::GjkKernel;
@@ -42,7 +50,11 @@ pub use imu::ImuKernel;
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
+pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
+#[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
+#[cfg(feature = "gpu")]
+pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]
