@@ -7,9 +7,9 @@
 //
 // Output: per-pair `overlap[i] = 1` if the two shapes overlap, `0`
 // otherwise. Caller (the host pipeline) feeds the overlapping subset
-// to CPU EPA for contact generation. This pass cuts narrow-phase
-// work for scenes where the broad phase emits many pairs that don't
-// actually overlap.
+// to GPU EPA (epa.wgsl) for contact generation. When overlap == 1 the
+// kernel also writes the 4-vertex Minkowski-difference simplex into
+// `gjk_simplex[i]` for EPA to bootstrap its initial polytope.
 
 struct Transform {
     position: vec4<f32>,
@@ -42,6 +42,11 @@ struct Uniforms {
 @group(1) @binding(1) var<storage, read>      pair_b:           array<u32>;
 
 @group(2) @binding(0) var<storage, read_write> overlap:         array<u32>;
+// Optional simplex output. Each pair writes 12 vec4<f32>: 4 vertices
+// × 3 vec3 (w, a, b). The kernel writes nothing when the host hasn't
+// bound a real buffer (see GjkKernel::dispatch_with_simplex). 12 ×
+// vec4 = 192 bytes per pair, well under typical storage limits.
+@group(2) @binding(1) var<storage, read_write> gjk_simplex:     array<vec4<f32>>;
 
 @group(3) @binding(0) var<uniform>             u: Uniforms;
 
@@ -147,6 +152,23 @@ fn minkowski_support(a: u32, b: u32, dir: vec3<f32>) -> vec3<f32> {
     return world_support(a, dir) - world_support(b, -dir);
 }
 
+// Variant that also returns the per-shape support points used for
+// Minkowski difference. EPA needs the (a, b) pair to recover contact
+// witnesses — boolean GJK only needed `w = a - b`.
+struct SupportPair {
+    w: vec3<f32>,
+    a: vec3<f32>,
+    b: vec3<f32>,
+};
+
+fn minkowski_support_pair(sa: u32, sb: u32, dir: vec3<f32>) -> SupportPair {
+    var out: SupportPair;
+    out.a = world_support(sa, dir);
+    out.b = world_support(sb, -dir);
+    out.w = out.a - out.b;
+    return out;
+}
+
 // ── Simplex update routines (Bullet-style). ──────────────────────
 //
 // Each `update_simplex_*` operates on a fixed 4-slot stack and
@@ -160,21 +182,28 @@ fn triple(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
 
 // Result encoding: w-component of return value is non-zero when the
 // simplex contains the origin (caller should report overlap). xyz =
-// new search direction.
+// new search direction. The per-vertex `a`/`b`/`c`/`d` slots carry
+// (w, sa, sb) triples so EPA can recover the original support points
+// without re-querying.
+struct SimplexVtx {
+    w: vec3<f32>,
+    a: vec3<f32>,
+    b: vec3<f32>,
+};
 struct SimplexStep {
     dir:           vec3<f32>,
     contains:      u32, // 1 = origin enclosed, 0 = continue
     new_count:     u32,
-    a: vec3<f32>,
-    b: vec3<f32>,
-    c: vec3<f32>,
-    d: vec3<f32>,
+    a: SimplexVtx,
+    b: SimplexVtx,
+    c: SimplexVtx,
+    d: SimplexVtx,
 };
 
-fn line_step(a: vec3<f32>, b: vec3<f32>) -> SimplexStep {
+fn line_step(a: SimplexVtx, b: SimplexVtx) -> SimplexStep {
     // Latest support is `a`, previous was `b`. Direction = ⊥AB toward origin.
-    let ab = b - a;
-    let ao = -a;
+    let ab = b.w - a.w;
+    let ao = -a.w;
     var out: SimplexStep;
     if (dot(ab, ao) > 0.0) {
         out.dir = triple(ab, ao, ab);
@@ -194,10 +223,10 @@ fn line_step(a: vec3<f32>, b: vec3<f32>) -> SimplexStep {
     return out;
 }
 
-fn triangle_step(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> SimplexStep {
-    let ab = b - a;
-    let ac = c - a;
-    let ao = -a;
+fn triangle_step(a: SimplexVtx, b: SimplexVtx, c: SimplexVtx) -> SimplexStep {
+    let ab = b.w - a.w;
+    let ac = c.w - a.w;
+    let ao = -a.w;
     let abc = cross(ab, ac);
     var out: SimplexStep;
     out.contains = 0u;
@@ -229,11 +258,11 @@ fn triangle_step(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> SimplexStep {
     return out;
 }
 
-fn tetra_step(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, d: vec3<f32>) -> SimplexStep {
-    let ab = b - a;
-    let ac = c - a;
-    let ad = d - a;
-    let ao = -a;
+fn tetra_step(a: SimplexVtx, b: SimplexVtx, c: SimplexVtx, d: SimplexVtx) -> SimplexStep {
+    let ab = b.w - a.w;
+    let ac = c.w - a.w;
+    let ad = d.w - a.w;
+    let ao = -a.w;
 
     let abc = cross(ab, ac);
     let acd = cross(ac, ad);
@@ -254,6 +283,35 @@ fn tetra_step(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, d: vec3<f32>) -> Simplex
     out.new_count = 4u;
     out.a = a; out.b = b; out.c = c; out.d = d;
     return out;
+}
+
+// Write a 4-vertex simplex into `gjk_simplex[i]`. Layout per pair:
+// 12 vec4<f32> = 4 vertices × 3 vec3 (w, a, b). The `.w` lane of each
+// vec4 is left as 0; EPA reads `.xyz`. The third vec4 of vertex 0
+// stores `count` in its `.w` lane so EPA knows how many simplex
+// vertices are valid.
+fn write_simplex(i: u32, count: u32, v0: SimplexVtx, v1: SimplexVtx, v2: SimplexVtx, v3: SimplexVtx) {
+    let base = i * 12u;
+    var verts: array<SimplexVtx, 4>;
+    verts[0] = v0;
+    if (count >= 2u) { verts[1] = v1; } else {
+        verts[1] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
+    if (count >= 3u) { verts[2] = v2; } else {
+        verts[2] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
+    if (count >= 4u) { verts[3] = v3; } else {
+        verts[3] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
+    for (var k: u32 = 0u; k < 4u; k = k + 1u) {
+        let v = verts[k];
+        gjk_simplex[base + k * 3u + 0u] = vec4<f32>(v.w, 0.0);
+        gjk_simplex[base + k * 3u + 1u] = vec4<f32>(v.a, 0.0);
+        // Stash the simplex-vertex count in vertex 0's .w lane (EPA
+        // reads vertex 0's third vec4 to recover it).
+        let pad = select(0.0, f32(count), k == 0u);
+        gjk_simplex[base + k * 3u + 2u] = vec4<f32>(v.b, pad);
+    }
 }
 
 // ── GJK kernel. ─────────────────────────────────────────────────
@@ -284,12 +342,13 @@ fn gjk_overlap(@builtin(global_invocation_id) gid: vec3<u32>) {
         dir = vec3<f32>(1.0, 0.0, 0.0);
     }
 
-    var sa1 = minkowski_support(sa, sb, dir);
-    var sa2 = vec3<f32>(0.0);
-    var sa3 = vec3<f32>(0.0);
-    var sa4 = vec3<f32>(0.0);
+    let p0 = minkowski_support_pair(sa, sb, dir);
+    var sv1: SimplexVtx = SimplexVtx(p0.w, p0.a, p0.b);
+    var sv2: SimplexVtx = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    var sv3: SimplexVtx = sv2;
+    var sv4: SimplexVtx = sv2;
     var count: u32 = 1u;
-    dir = -sa1;
+    dir = -sv1.w;
 
     let max_iters = 32u;
     for (var iter: u32 = 0u; iter < max_iters; iter = iter + 1u) {
@@ -297,36 +356,39 @@ fn gjk_overlap(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Search direction collapsed — origin is on the simplex
             // boundary. Treat as overlap.
             overlap[i] = 1u;
+            write_simplex(i, count, sv1, sv2, sv3, sv4);
             return;
         }
-        let new_p = minkowski_support(sa, sb, dir);
-        if (dot(new_p, dir) < 0.0) {
+        let new_pair = minkowski_support_pair(sa, sb, dir);
+        if (dot(new_pair.w, dir) < 0.0) {
             // No support past origin in this direction → disjoint.
             overlap[i] = 0u;
             return;
         }
+        let new_v: SimplexVtx = SimplexVtx(new_pair.w, new_pair.a, new_pair.b);
         // Push new point as the latest (`a`) and shift the old ones.
-        sa4 = sa3; sa3 = sa2; sa2 = sa1; sa1 = new_p;
+        sv4 = sv3; sv3 = sv2; sv2 = sv1; sv1 = new_v;
         count = min(count + 1u, 4u);
 
         var step: SimplexStep;
         if (count == 2u) {
-            step = line_step(sa1, sa2);
+            step = line_step(sv1, sv2);
         } else if (count == 3u) {
-            step = triangle_step(sa1, sa2, sa3);
+            step = triangle_step(sv1, sv2, sv3);
         } else {
-            step = tetra_step(sa1, sa2, sa3, sa4);
+            step = tetra_step(sv1, sv2, sv3, sv4);
         }
         if (step.contains == 1u) {
             overlap[i] = 1u;
+            write_simplex(i, step.new_count, step.a, step.b, step.c, step.d);
             return;
         }
         dir = step.dir;
         count = step.new_count;
-        sa1 = step.a;
-        if (count >= 2u) { sa2 = step.b; }
-        if (count >= 3u) { sa3 = step.c; }
-        if (count >= 4u) { sa4 = step.d; }
+        sv1 = step.a;
+        if (count >= 2u) { sv2 = step.b; }
+        if (count >= 3u) { sv3 = step.c; }
+        if (count >= 4u) { sv4 = step.d; }
     }
     // Hit iteration cap without converging → fall back to CPU.
     overlap[i] = 2u;

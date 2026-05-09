@@ -9,9 +9,13 @@ mod contact_sensor;
 #[cfg(feature = "gpu")]
 mod crba;
 #[cfg(feature = "gpu")]
+mod epa;
+#[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
 mod gjk;
+#[cfg(feature = "gpu")]
+mod mesh_bvh_raycast;
 #[cfg(feature = "gpu")]
 mod frame_transform;
 #[cfg(feature = "gpu")]
@@ -40,9 +44,16 @@ pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use crba::MassMatrixKernel;
 #[cfg(feature = "gpu")]
+pub use epa::{
+    decode_epa_out, EpaKernel, EpaPairResult, EPA_OUT_STRIDE, EPA_STATUS_FALLBACK, EPA_STATUS_NONE,
+    EPA_STATUS_OK,
+};
+#[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
 #[cfg(feature = "gpu")]
-pub use gjk::GjkKernel;
+pub use gjk::{GjkKernel, GJK_SIMPLEX_STRIDE};
+#[cfg(feature = "gpu")]
+pub use mesh_bvh_raycast::{MeshBvhGpu, MeshBvhRaycastKernel};
 #[cfg(feature = "gpu")]
 pub use frame_transform::FrameTransformKernel;
 #[cfg(feature = "gpu")]
