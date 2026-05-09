@@ -89,13 +89,19 @@ fn bvh_accelerates_sphere_on_grid_mesh() {
         "expected ≤4 contacts, got {}",
         contacts.count
     );
-    // Performance gate: with BVH, collide should be well under 200 µs
-    // per call even in debug mode. Without BVH it'd test all 2048
-    // triangles via GJK+EPA — easily 5-20× slower.
-    #[cfg(not(debug_assertions))]
+    // Performance gate: with BVH wired in, collide should be well
+    // under 200 µs per call in release. Debug builds carry roughly
+    // 10× more overhead from disabled inlining + bounds checks, so we
+    // multiply the threshold by 10× when running under
+    // `debug_assertions` rather than skipping the gate entirely (a
+    // skipped test is a lying test).
+    let budget_us = if cfg!(debug_assertions) {
+        2_000.0
+    } else {
+        200.0
+    };
     assert!(
-        dt_us < 200.0,
-        "narrow phase too slow ({dt_us:.1} µs); BVH may not be wired in"
+        dt_us < budget_us,
+        "narrow phase too slow ({dt_us:.1} µs > {budget_us} µs); BVH may not be wired in"
     );
-    let _ = dt_us;
 }
