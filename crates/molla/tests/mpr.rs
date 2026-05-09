@@ -117,11 +117,12 @@ fn mpr_handles_deep_penetration() {
     let mpr = mpr_collide(&a, &b, 1e-6, 64)
         .expect("MPR must return a manifold for deep penetration");
 
-    // Depth is bounded above by the box's diagonal (≈ 2√3) and
-    // below by 0; the analytic separation along any axis is 1.0.
+    // Analytic answer: cubes are 50% interpenetrating along +X, the
+    // separating distance along the +X axis is 1.0. MPR on a clean
+    // axis-aligned overlap should land within 5%.
     assert!(
-        mpr.depth > 0.5 && mpr.depth < 2.5,
-        "depth out of range: {}",
+        mpr.depth > 0.95 && mpr.depth < 1.05,
+        "depth out of range (expected ≈ 1.0 ±5%): {}",
         mpr.depth
     );
     // Normal must be unit-length and finite.
@@ -210,7 +211,24 @@ fn mpr_returns_none_on_grazing_contact() {
 #[test]
 fn mpr_works_on_rotated_capsule_box() {
     // Capsule rotated 30° about Y, box at origin; centres 0.5 apart
-    // along +X. They overlap; we just want a finite manifold.
+    // along +X. Capsule's axis is local +Y, and a Y-rotation leaves
+    // the central axis unchanged — the capsule is still vertical with
+    // radius 0.3 in the X-Z plane.
+    //
+    // Box (half=0.5) occupies [-0.5, 0.5]³. Capsule center at
+    // (0.5, 0, 0): the cylindrical body extends y∈[-0.5, 0.5] with
+    // radial sweep of 0.3 around (0.5, ·, 0); top/bottom hemispheres
+    // (radius 0.3) are centred at (0.5, ±0.5, 0). The box's right
+    // face is at x = +0.5, so the capsule's central axis is *on* that
+    // face: the capsule's body extends 0.3 m into the box's interior
+    // along -X (and 0.3 m out along +X). Analytic minimum-translation
+    // depth in the −X direction is 0.3 m.
+    //
+    // MPR's portal can pick a different separating direction (top of
+    // the box face vs the upper-cap's hemisphere intrudes ~0.6 m
+    // along the diagonal); empirically the algorithm returns ≈ 0.6
+    // for this configuration. Bound depth in [0.25, 0.7] so the test
+    // still catches a degenerate manifold or a no-op kernel.
     let xf_a = Transform::IDENTITY;
     let xf_b = Transform::new(
         Vec3::new(0.5, 0.0, 0.0),
@@ -223,7 +241,11 @@ fn mpr_works_on_rotated_capsule_box() {
     let b = ShapeSupport::new(cap_g, &xf_b);
     let m = mpr_collide(&a, &b, 1e-6, 64).expect("overlap expected");
 
-    assert!(m.depth > 0.0);
+    assert!(
+        m.depth > 0.25 && m.depth < 0.7,
+        "depth out of range [0.25, 0.7] (analytic min-translation 0.3, MPR-portal pick ≤ 0.6): {}",
+        m.depth
+    );
     assert!((m.normal.length() - 1.0).abs() < 1e-3);
     assert!(m.point_a.is_finite() && m.point_b.is_finite());
 }
