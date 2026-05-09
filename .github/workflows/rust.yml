@@ -1,5 +1,20 @@
 name: rust
 
+# CI matrix:
+#   - build-test:           cargo fmt + build + cargo test (default lane;
+#                           the operator-invoked `#[ignore]`d GPU/perf
+#                           tests are excluded — they need a wgpu adapter
+#                           which GitHub Actions ubuntu-latest doesn't
+#                           expose).
+#   - ignored-tests:        cargo test --workspace -- --ignored. Most
+#                           ignored tests panic without a GPU; this job
+#                           is allowed to fail (`continue-on-error`)
+#                           because the goal is *visibility* — a silently
+#                           skipped test is the bug we're guarding
+#                           against. When the project gets a GPU runner,
+#                           drop `continue-on-error` and let CI gate on
+#                           it.
+
 on:
   push:
     branches: [main, develop]
@@ -48,3 +63,39 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace
+
+  ignored-tests:
+    # Run the `#[ignore]`-gated suite (GPU + wall-clock perf tests). On
+    # a CPU-only runner the GPU tests will panic — that's the *intent*:
+    # a missing GPU adapter must be loud, not silent. Marked
+    # `continue-on-error: true` so a CPU-only runner can't gate merges
+    # on tests it physically can't run; promote to a hard gate once a
+    # GPU-equipped runner is wired in.
+    name: ignored tests (GPU/perf — visibility only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bevy Linux runtime deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libudev-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev
+
+      - name: cargo test --ignored
+        # `--ignored` runs *only* the gated tests (no overlap with
+        # build-test above). Failures here surface tests that the GPU
+        # path has silently bit-rotted, not just an absent adapter.
+        run: cargo test --workspace -- --ignored
