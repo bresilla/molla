@@ -1212,7 +1212,7 @@ struct DiffArm6ExampleState {
     scratch: JacobianScratch,
     /// Stage 23.1.1: kept around for back-compat. Stage 23.1.2 promoted
     /// the boolean to the 4-way `backend` picker below; this field now
-    /// just mirrors `backend == ForceGpu` so any pre-existing code reading
+    /// just mirrors `backend == GpuFallbackCpu` so any pre-existing code reading
     /// it stays correct.
     use_gpu_adjoint: bool,
     /// Stage 23.1.2 — 4-way backend picker (Auto / CPU CF / CPU AnalyticQd
@@ -1368,7 +1368,7 @@ impl Default for CableExampleState {
 /// triggers for the right-rail UI.
 ///
 /// Stage-24d.1 additions: `rheology_idx` (0 = sand, 1 = snow),
-/// `time_step_implicit` + `cg_iters` (semi-implicit toggle + iter
+/// `time_step_implicit` + `jacobi_iters` (semi-implicit toggle + iter
 /// slider), `add_rigid_sphere` button (drops a kinematic sphere to
 /// demonstrate two-way coupling), `pile_slope_deg` live readout
 /// (computed each frame from the particle positions).
@@ -1407,7 +1407,7 @@ struct MpmExampleState {
     /// Use the semi-implicit time-step.
     time_step_implicit: bool,
     /// Number of Jacobi sweeps per substep when `time_step_implicit`.
-    cg_iters: u32,
+    jacobi_iters: u32,
     /// "Add rigid sphere" button trigger — when true, the update
     /// system drops a kinematic sphere into the scene.
     add_rigid_sphere: bool,
@@ -1437,7 +1437,7 @@ impl Default for MpmExampleState {
             snow_theta_s: 7.5e-3,
             snow_hardening: 10.0,
             time_step_implicit: false,
-            cg_iters: 3,
+            jacobi_iters: 3,
             add_rigid_sphere: false,
             pile_slope_deg: 0.0,
             rigid_force_mag: 0.0,
@@ -6557,7 +6557,7 @@ fn update_diff_arm6(
         let backend_choice = state.backend;
         state.use_gpu_adjoint = matches!(
             backend_choice,
-            molla::kernels::AdjointBackend::ForceGpu
+            molla::kernels::AdjointBackend::GpuFallbackCpu
         );
 
         // Stage 23.1.2 — multi-articulation batch demo. Runs N parallel
@@ -10501,7 +10501,7 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
         molla::kernels::AdjointBackend::ForceCpuFiniteDiff => {
             "Featherstone, CPU FD (v1 oracle)"
         }
-        molla::kernels::AdjointBackend::ForceGpu => "Featherstone, GPU (single-chain → CPU AnalyticQd)",
+        molla::kernels::AdjointBackend::GpuFallbackCpu => "Featherstone, GPU (single-chain → CPU AnalyticQd)",
     };
     readout(ui, "Solver", solver_label);
     readout(
@@ -10601,7 +10601,7 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
                 molla::kernels::AdjointBackend::ForceCpuClosedForm,
                 molla::kernels::AdjointBackend::ForceCpuAnalyticQd,
                 molla::kernels::AdjointBackend::ForceCpuFiniteDiff,
-                molla::kernels::AdjointBackend::ForceGpu,
+                molla::kernels::AdjointBackend::GpuFallbackCpu,
             ] {
                 ui.selectable_value(&mut state.backend, b, b.label());
             }
@@ -10899,7 +10899,7 @@ fn update_mpm_example(
         m.set_rheology(rheology);
         let ts = if state.time_step_implicit {
             MpmTimeStep::Implicit {
-                cg_iters: state.cg_iters,
+                jacobi_iters: state.jacobi_iters,
             }
         } else {
             MpmTimeStep::Explicit
@@ -11073,8 +11073,8 @@ fn measure_pile_slope_for_viewer(positions: &[[f32; 3]]) -> f32 {
 }
 
 /// Right-rail pane for the MPM scene. Stage 24d.1 — adds rheology
-/// dropdown (Sand/Snow), implicit time-step toggle + cg_iters slider,
-/// "Add rigid sphere" button, live pile-slope + reaction-force
+/// dropdown (Sand/Snow), implicit time-step toggle + jacobi_iters
+/// slider, "Add rigid sphere" button, live pile-slope + reaction-force
 /// readouts.
 fn mpm_pane(
     ui: &mut egui::Ui,
@@ -11150,8 +11150,8 @@ fn mpm_pane(
         ui.selectable_value(&mut state.time_step_implicit, true, "Implicit");
     });
     if state.time_step_implicit {
-        ui.label("CG iterations");
-        ui.add(egui::Slider::new(&mut state.cg_iters, 1..=20));
+        ui.label("Jacobi iterations");
+        ui.add(egui::Slider::new(&mut state.jacobi_iters, 1..=20));
     }
 
     // Stage 24d.2: batched-dispatcher slider.  Drag this up and watch

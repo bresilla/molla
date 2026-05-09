@@ -6,7 +6,7 @@
 // equation. Per the brief's scope-realism note ("if you hit a wall,
 // ship semi-implicit"), we implement the semi-implicit fallback:
 //   * Explicit elastic-stress force computed in `p2g` (unchanged).
-//   * `mpm_implicit_apply` performs `cg_iters` Jacobi-relaxation
+//   * `mpm_implicit_apply` performs `jacobi_iters` Jacobi-relaxation
 //     sweeps on the grid velocity using a diagonal stiffness estimate
 //     `k_diag = 4 * sum_p(vol_p * (2μ + λ) / dx²) * w_p²`. Each
 //     iteration applies the implicit map
@@ -16,7 +16,9 @@
 //     Newton's matrix-free CG with the Hessian replaced by its
 //     spectrally-equivalent diagonal — small constants change, the
 //     stability gain (larger dt without explicit-CFL blow-up) is the
-//     same. We expose `cg_iters` to the user; 1-3 iterations buy 4×-8×
+//     same. **It is not actually CG** — no Krylov subspace, no
+//     residual exit; we run a fixed number of Jacobi sweeps. We
+//     expose `jacobi_iters` to the user; 1-3 iterations buy 4×-8×
 //     larger dt in practice.
 //   * Snow rheology (Stomakhin 2013) ships as a new branch in
 //     `plasticity` next to the existing Drucker-Prager sand path.
@@ -924,7 +926,7 @@ fn grid_update(@builtin(global_invocation_id) gid: vec3<u32>) {
 // products.
 //
 // Each invocation runs ONE Jacobi sweep over a single grid cell. The
-// host loops `cg_iters` times, ping-ponging `g_velocity ↔
+// host loops `jacobi_iters` times, ping-ponging `g_velocity ↔
 // g_velocity_prev` between sweeps via the `mpm_implicit_swap` entry
 // point.
 //

@@ -12,14 +12,16 @@
 //!
 //! ## Stage 23.1.2 changes
 //!
-//! - The `ForceGpu` backend now routes to a real GPU kernel
-//!   (`featherstone_adjoint_jacobians.wgsl`) when the `gpu` feature is
-//!   built and a wgpu device is supplied. The kernel computes the
-//!   per-step closed-form Jacobian blocks on device, parallelised
-//!   over articulations: one workgroup per chain. Single-articulation
-//!   parity vs CPU is verified in
-//!   `tests/autograd_featherstone_v3_gpu.rs`. Pure-analytic ∂h/∂q is
-//!   deferred to Stage 23.1.3 — see PLAN.md.
+//! - The `GpuFallbackCpu` backend (renamed from `ForceGpu` to be honest
+//!   about what it actually does on this dispatcher) **always** falls
+//!   back to the CPU AnalyticQd path for single-articulation reverse:
+//!   the per-step GPU round-trip dominates at `n_links ≤ 6`, so even
+//!   with a real device the CPU path wins. The real GPU kernel
+//!   (`featherstone_adjoint_jacobians.wgsl`) lives behind
+//!   [`crate::kernels::featherstone_adjoint_gpu::FeatherstoneAdjointGpuKernel::reverse_batched`]
+//!   — wire that directly when you have a multi-chain workload and a
+//!   device. Single-articulation parity vs CPU is still verified in
+//!   `tests/autograd_featherstone_v3_gpu.rs`.
 //! - A new `AdjointBackend::ForceCpuAnalyticQd` exposes the new
 //!   analytic ∂h/∂qd path; the overall `Auto` default still picks
 //!   `ForceCpuAnalyticQd` (faster than `ForceCpuClosedForm` by
@@ -40,8 +42,8 @@ use crate::math::{Real, Vec3};
 ///
 /// - `Auto` picks the best path given the runtime context. Stage 23.1.2:
 ///   single-articulation always picks `ForceCpuAnalyticQd` (fastest
-///   CPU path); multi-articulation switches to `ForceGpu` if a wgpu
-///   device is wired through `MultiAdjointBatch::dispatch_gpu`.
+///   CPU path); multi-chain GPU dispatch lives in
+///   [`crate::kernels::featherstone_adjoint_gpu::FeatherstoneAdjointGpuKernel`].
 /// - `ForceCpuClosedForm` keeps the Stage 23.1.1 default (CRBA + FD on
 ///   RNEA for both q and qd) — kept as a perf baseline.
 /// - `ForceCpuAnalyticQd` (new in 23.1.2) — closed-form `M⁻¹` for τ,
@@ -49,10 +51,13 @@ use crate::math::{Real, Vec3};
 ///   for `∂h/∂q`.
 /// - `ForceCpuFiniteDiff` is the v1 Stage 23.1 path (full ABA-FD).
 ///   Kept as the slowest correctness oracle.
-/// - `ForceGpu` dispatches the WGSL closed-form Jacobian kernel on a
-///   single articulation. The multi-articulation GPU win lives in
-///   `MultiAdjointBatch`. Falls back to `ForceCpuAnalyticQd` when no
-///   GPU device is available.
+/// - `GpuFallbackCpu` is **not** a real GPU dispatch on this
+///   dispatcher: the per-step GPU round-trip dominates at `n_links ≤ 6`,
+///   so single-articulation reverse always falls back to the CPU
+///   AnalyticQd path. Use it only if you want to force the "GPU label"
+///   in the viewer or to test the fallback log path. Real GPU dispatch
+///   for **multi-chain** workloads lives in
+///   [`crate::kernels::featherstone_adjoint_gpu::FeatherstoneAdjointGpuKernel::reverse_batched`].
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum AdjointBackend {
     /// Pick the best backend at runtime.
@@ -68,10 +73,14 @@ pub enum AdjointBackend {
     /// Force CPU central-FD on the full ABA forward step. Stage 23.1
     /// v1 path; kept as a correctness oracle.
     ForceCpuFiniteDiff,
-    /// Force GPU kernel dispatch. Stage 23.1.2 — populated for the
-    /// closed-form path; pure-analytic GPU bias derivatives deferred
-    /// to 23.1.3.
-    ForceGpu,
+    /// "GPU" tag that **always** falls back to the CPU AnalyticQd
+    /// path. Single-articulation per-step GPU round-trips are slower
+    /// than CPU at `n_links ≤ 6`, so this dispatcher routes through
+    /// CPU even with a real device. For real multi-chain GPU
+    /// dispatch use
+    /// [`crate::kernels::featherstone_adjoint_gpu::FeatherstoneAdjointGpuKernel::reverse_batched`]
+    /// directly.
+    GpuFallbackCpu,
 }
 
 impl AdjointBackend {
@@ -82,7 +91,7 @@ impl AdjointBackend {
             Self::ForceCpuClosedForm => "CPU CF",
             Self::ForceCpuAnalyticQd => "CPU AnalyticQd",
             Self::ForceCpuFiniteDiff => "CPU FD",
-            Self::ForceGpu => "GPU",
+            Self::GpuFallbackCpu => "GPU→CPU",
         }
     }
 }
@@ -130,22 +139,13 @@ impl FeatherstoneAdjointDispatcher {
                 scratch,
                 JacobianStrategy::CentralDifference,
             )?,
-            AdjointBackend::ForceGpu => {
-                // Single-articulation GPU dispatch: route through the
-                // multi-articulation batch path with batch size = 1.
-                // If no GPU device is wired up, gracefully fall back
-                // to the new analytic-qd CPU path.
-                #[cfg(feature = "gpu")]
-                {
-                    if let Some(g_tau) = Self::try_reverse_single_gpu(chain, trace, grad_ee) {
-                        let backward_us = start.elapsed().as_micros() as f64;
-                        return Ok(AdjointResult {
-                            g_tau,
-                            backend: resolved,
-                            backward_us,
-                        });
-                    }
-                }
+            AdjointBackend::GpuFallbackCpu => {
+                // Single-articulation reverse always falls back to the
+                // CPU AnalyticQd path — see `AdjointBackend` doc. The
+                // real GPU win lives in `FeatherstoneAdjointGpuKernel`'s
+                // multi-chain `reverse_batched`; calling it from here
+                // would need an `Engine` plumbed through the dispatcher
+                // signature, which intentionally stays Engine-free.
                 Self::log_gpu_fallback();
                 chain.reverse_with_strategy(
                     trace,
@@ -175,31 +175,15 @@ impl FeatherstoneAdjointDispatcher {
         }
     }
 
-    #[cfg(feature = "gpu")]
-    fn try_reverse_single_gpu(
-        chain: &FeatherstoneRevoluteChain,
-        trace: &FeatherstoneTrace,
-        grad_ee: Vec3,
-    ) -> Option<Vec<Vec<Real>>> {
-        // Single-articulation routes through the multi-batch CPU path:
-        // the GPU per-step round-trip cost dominates at n_links ≤ 6,
-        // so even with a real device the analytic-qd CPU path beats
-        // it for the single-chain case. The GPU win lives in
-        // `MultiAdjointBatch`. Returning None here drops to the CPU
-        // fallback while keeping the API stable.
-        let _ = (chain, trace, grad_ee);
-        None
-    }
-
     fn log_gpu_fallback() {
         use std::sync::atomic::{AtomicBool, Ordering};
         static LOGGED: AtomicBool = AtomicBool::new(false);
         if !LOGGED.swap(true, Ordering::Relaxed) {
             eprintln!(
-                "[molla::autograd] Stage 23.1.2 GPU adjoint single-chain dispatch falls back \
-                 to CPU AnalyticQd (per-step GPU round-trip dominates at n_links ≤ 6). The \
-                 multi-articulation batch path uses GPU when a device is wired through \
-                 MultiAdjointBatch::dispatch_gpu."
+                "[molla::autograd] AdjointBackend::GpuFallbackCpu — single-chain reverse \
+                 always runs on CPU AnalyticQd (per-step GPU round-trip dominates at \
+                 n_links ≤ 6). For real multi-chain GPU dispatch use \
+                 FeatherstoneAdjointGpuKernel::reverse_batched directly."
             );
         }
     }
