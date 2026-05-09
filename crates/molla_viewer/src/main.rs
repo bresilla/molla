@@ -1475,10 +1475,6 @@ struct JellyExampleState {
     /// Show the per-tet wireframe overlay (gizmo lines along tet
     /// edges, deduped at draw time).
     show_wireframe: bool,
-    /// Overlay a 12-particle CABLE so the user can compare the
-    /// volumetric soft body's behaviour against the bending-only
-    /// CABLE primitive in real time.
-    show_cable_comparison: bool,
 
     // ── Stage 20.3 — multi-material + plasticity ─────────────────
     /// Material preset index — Soft / Stiff / Rigid. Re-builds the
@@ -1565,7 +1561,6 @@ impl Default for JellyExampleState {
             contact_stiffness: JELLY_CONTACT_STIFFNESS,
             inner_iterations: 10,
             show_wireframe: true,
-            show_cable_comparison: false,
             material_preset: JellyMaterialPreset::Soft,
             yield_stress: 0.0, // 0 = "elastic only" (sentinel, see jelly_pane)
             hardening: 0.0,
@@ -9286,9 +9281,8 @@ fn cable_pane(
 
 /// Right-rail pane for the Stage-20.2 JELLY tetrahedral soft-body
 /// demo. Carries Young's-modulus + Poisson-ratio sliders (per-tet
-/// material), inner-iter / contact-stiffness sliders, a wireframe
-/// toggle (gizmos for tet edges), and a "show cable comparison"
-/// toggle for A/B against the bending CABLE primitive.
+/// material), inner-iter / contact-stiffness sliders, and a wireframe
+/// toggle (gizmos for tet edges).
 fn jelly_pane(
     ui: &mut egui::Ui,
     state: &mut JellyExampleState,
@@ -9340,10 +9334,6 @@ fn jelly_pane(
     ui.separator();
 
     ui.checkbox(&mut state.show_wireframe, "Show tet wireframe");
-    ui.checkbox(
-        &mut state.show_cable_comparison,
-        "Show CABLE comparison (informational)",
-    );
     ui.separator();
 
     // ── Stage 20.3 — multi-material picker ──────────────────────
