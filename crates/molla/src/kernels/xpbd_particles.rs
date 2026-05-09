@@ -23,10 +23,20 @@ struct Uniforms {
     linear_damping: f32,
     color_index: u32,
     work_count: u32,
-    _pad: u32,
+    hash_buckets: u32,
+    cell_inv_size: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
+/// Number of hash table buckets for self-collision. Power-of-two
+/// makes the modulus cheap. Sized so cloth-grade scenes
+/// (≤2 k particles) keep average bucket load ≪ MAX_PER_CELL.
+const HASH_BUCKETS: u32 = 4096;
+/// Per-bucket capacity. Must match the WGSL `MAX_PER_CELL` constant.
+const MAX_PER_CELL: u32 = 12;
 
 /// Owns the seven compute pipelines (all share one shader module) and
 /// the per-substep scratch buffers (λ accumulator + Jacobi
@@ -42,6 +52,9 @@ pub struct XpbdParticlesKernel {
     pipe_floor: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
     pipe_shapes: wgpu::ComputePipeline,
+    pipe_hash_clear: wgpu::ComputePipeline,
+    pipe_hash_insert: wgpu::ComputePipeline,
+    pipe_self_collide: wgpu::ComputePipeline,
 
     layout_state: wgpu::BindGroupLayout,
     layout_springs: wgpu::BindGroupLayout,
@@ -63,6 +76,15 @@ pub struct XpbdParticlesKernel {
     dummy_vec3: Buffer<Vec3>,
     dummy_i32: Buffer<i32>,
     dummy_xform: Buffer<crate::math::Transform>,
+
+    /// Per-bucket atomic hit count for the spatial hash (size =
+    /// `HASH_BUCKETS`). Cleared each substep by `hash_clear`.
+    hash_count: Buffer<u32>,
+    /// Flat `HASH_BUCKETS * MAX_PER_CELL` index list — bucket `b`
+    /// owns slots `b * MAX_PER_CELL .. (b+1) * MAX_PER_CELL`.
+    hash_indices: Buffer<u32>,
+    /// Inverse cell size (1 / cell_size). 0 disables self-collision.
+    cell_inv_size: f32,
 
     particle_count: u32,
     spring_count: u32,
@@ -111,13 +133,14 @@ impl XpbdParticlesKernel {
                 count: None,
             }],
         });
-        // Shapes group: 5 read-only inputs (geom_kind, geom_data,
-        // body, transform, body_q). Used only by the
-        // `particle_vs_shapes` entry; other entries get the same
-        // layout bound but never touch the resources.
+        // Shapes + hash group: 5 read-only inputs (geom_kind,
+        // geom_data, body, transform, body_q) + 2 read-write
+        // (hash_count, hash_indices). Used by `particle_vs_shapes`
+        // and the `hash_*` / `self_collide` passes; other entries
+        // get the same layout bound but never touch the resources.
         let layout_shapes = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("molla::xpbd_particles shapes"),
-            entries: &storage_entries(5, true),
+            label: Some("molla::xpbd_particles shapes+hash"),
+            entries: &mixed_entries(&[true, true, true, true, true, false, false]),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -152,6 +175,9 @@ impl XpbdParticlesKernel {
         let pipe_floor = make_pipeline("floor_clamp");
         let pipe_velocity = make_pipeline("velocity_recovery");
         let pipe_shapes = make_pipeline("particle_vs_shapes");
+        let pipe_hash_clear = make_pipeline("hash_clear");
+        let pipe_hash_insert = make_pipeline("hash_insert");
+        let pipe_self_collide = make_pipeline("self_collide");
 
         // Scratch buffers. wgpu requires nonzero sizes, so bump zero
         // counts to 1 — the kernel guards against out-of-range indices.
@@ -183,6 +209,20 @@ impl XpbdParticlesKernel {
         let _ = dummy_xform.ensure_device(device);
         let _ = dummy_xform.upload(queue);
 
+        // Spatial hash table for self-collision. 4096 buckets × 12
+        // slots = 48 k u32 entries (192 KB) — comfortably small.
+        // The bucket count is a constant of the kernel; bumping it
+        // means a rebuild.
+        let mut hash_count = Buffer::from_vec(vec![0u32; HASH_BUCKETS as usize], BufferUsage::StorageReadWrite);
+        let mut hash_indices = Buffer::from_vec(
+            vec![0u32; (HASH_BUCKETS * MAX_PER_CELL) as usize],
+            BufferUsage::StorageReadWrite,
+        );
+        let _ = hash_count.ensure_device(device);
+        let _ = hash_count.upload(queue);
+        let _ = hash_indices.ensure_device(device);
+        let _ = hash_indices.upload(queue);
+
         Self {
             pipe_predict,
             pipe_reset_lambdas,
@@ -193,6 +233,9 @@ impl XpbdParticlesKernel {
             pipe_floor,
             pipe_velocity,
             pipe_shapes,
+            pipe_hash_clear,
+            pipe_hash_insert,
+            pipe_self_collide,
             layout_state,
             layout_springs,
             layout_out,
@@ -206,9 +249,23 @@ impl XpbdParticlesKernel {
             dummy_vec3,
             dummy_i32,
             dummy_xform,
+            hash_count,
+            hash_indices,
+            cell_inv_size: 0.0,
             particle_count,
             spring_count,
         }
+    }
+
+    /// Set the spatial-hash cell size for self-collision. Pass
+    /// `2 * particle_radius * 1.1` for cloth grids; `0` disables
+    /// self-collision (default).
+    pub fn set_self_collision_cell_size(&mut self, cell_size: f32) {
+        self.cell_inv_size = if cell_size > 0.0 {
+            1.0 / cell_size
+        } else {
+            0.0
+        };
     }
 
     /// Run one particle substep: predict → λ-reset → distance solve
@@ -331,8 +388,16 @@ impl XpbdParticlesKernel {
             .body_q
             .device_buffer()
             .unwrap_or(dummy_xform_buf);
+        let hash_count_buf = self
+            .hash_count
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("hash_count missing".into()))?;
+        let hash_indices_buf = self
+            .hash_indices
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("hash_indices missing".into()))?;
         let bg_shapes = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::xpbd_particles shapes bg"),
+            label: Some("molla::xpbd_particles shapes+hash bg"),
             layout: &self.layout_shapes,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: kind_buf.as_entire_binding() },
@@ -340,9 +405,12 @@ impl XpbdParticlesKernel {
                 wgpu::BindGroupEntry { binding: 2, resource: body_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: xform_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: body_q_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: hash_count_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: hash_indices_buf.as_entire_binding() },
             ],
         });
         let shape_count_u = model.shape_count as u32;
+        let self_collide_enabled = self.cell_inv_size > 0.0;
 
         let particle_count_u = model.particle_count as u32;
         let spring_count_u = model.spring_count as u32;
@@ -377,6 +445,7 @@ impl XpbdParticlesKernel {
             bg_uniforms.push(bg);
         };
 
+        let cell_inv_size = self.cell_inv_size;
         let base_uniforms = |work_count: u32, color_index: u32| Uniforms {
             particle_count: particle_count_u,
             spring_count: spring_count_u,
@@ -385,7 +454,11 @@ impl XpbdParticlesKernel {
             linear_damping: model.linear_damping as f32,
             color_index,
             work_count,
-            _pad: 0,
+            hash_buckets: HASH_BUCKETS,
+            cell_inv_size,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         // Build the uniform list in dispatch order so we can index by
@@ -422,6 +495,13 @@ impl XpbdParticlesKernel {
         // `shape_count` so the kernel doesn't need a separate
         // uniform field. work_count = particle_count.
         push_uniforms(&base_uniforms(particle_count_u, shape_count_u));
+        // Self-collision pipeline: hash_clear (work=HASH_BUCKETS) →
+        // hash_insert (work=particle_count) → self_collide
+        // (work=particle_count) → strain_apply (work=particle_count).
+        push_uniforms(&base_uniforms(HASH_BUCKETS, 0));
+        push_uniforms(&base_uniforms(particle_count_u, 0));
+        push_uniforms(&base_uniforms(particle_count_u, 0));
+        push_uniforms(&base_uniforms(particle_count_u, 0));
         push_uniforms(&base_uniforms(particle_count_u, 0)); // velocity recovery
 
         // ── Encode every dispatch in a single pass. ───────────────
@@ -502,6 +582,22 @@ impl XpbdParticlesKernel {
                 dispatch_kernel(&mut pass, &self.pipe_shapes, idx, particle_count_u);
             }
             idx += 1;
+            // Self-collision: hash_clear → hash_insert →
+            // self_collide → strain_apply (reused — applies the
+            // averaged correction stored in `deltas`/`counts`).
+            // Disabled when cell_inv_size = 0.
+            if self_collide_enabled {
+                dispatch_kernel(&mut pass, &self.pipe_hash_clear, idx, HASH_BUCKETS);
+                idx += 1;
+                dispatch_kernel(&mut pass, &self.pipe_hash_insert, idx, particle_count_u);
+                idx += 1;
+                dispatch_kernel(&mut pass, &self.pipe_self_collide, idx, particle_count_u);
+                idx += 1;
+                dispatch_kernel(&mut pass, &self.pipe_strain_apply, idx, particle_count_u);
+                idx += 1;
+            } else {
+                idx += 4;
+            }
             // Velocity recovery.
             dispatch_kernel(&mut pass, &self.pipe_velocity, idx, particle_count_u);
             idx += 1;
@@ -516,11 +612,12 @@ impl XpbdParticlesKernel {
 
     fn uniform_count(&self, iterations: u32, color_count: u32) -> usize {
         // predict + reset_lambdas + iterations*K (distance) +
-        // strain_iters * (zero + K + apply) + floor + shapes + velocity.
+        // strain_iters * (zero + K + apply) + floor + shapes +
+        // self-collide(4) + velocity.
         let strain_iters = iterations * 4;
         let dist = iterations * color_count;
         let strain = strain_iters * (color_count + 2);
-        (2 + dist + strain + 3) as usize
+        (2 + dist + strain + 2 + 4 + 1) as usize
     }
 
     /// Number of particles the kernel was built for.
@@ -553,6 +650,26 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        })
+        .collect()
+}
+
+/// Like `storage_entries` but allows per-binding read/write flags
+/// — needed when one bind group mixes read-only model arrays with
+/// read-write scratch buffers (e.g. shapes + spatial-hash table).
+fn mixed_entries(read_only: &[bool]) -> Vec<wgpu::BindGroupLayoutEntry> {
+    read_only
+        .iter()
+        .enumerate()
+        .map(|(i, &ro)| wgpu::BindGroupLayoutEntry {
+            binding: i as u32,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: ro },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },

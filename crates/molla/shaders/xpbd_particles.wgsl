@@ -28,13 +28,23 @@ struct Uniforms {
     linear_damping:    f32,
     /// Slot in `spring_color_offsets` for the colour the current
     /// `solve_distance` / `strain_accumulate` dispatch is processing.
-    /// Number of springs in the colour = offsets[idx+1] - offsets[idx].
+    /// Repurposed as `shape_count` for the `particle_vs_shapes` pass.
     color_index:       u32,
     /// Number of valid uniform-write slots in this dispatch — equals
     /// the colour's spring count when running a colour pass, else
     /// `particle_count` for predict / floor / velocity dispatches.
     work_count:        u32,
-    _pad:              u32,
+    /// Number of buckets in the self-collision spatial hash. The
+    /// kernel hashes (cell.x, cell.y, cell.z) modulo this number.
+    hash_buckets:      u32,
+    /// Inverse cell size used by the hash. Cell size = 2 × particle
+    /// radius works well for cloth where every particle has the same
+    /// radius; multiply by a small slack (1.1×) so the 3×3×3 stencil
+    /// captures all overlapping pairs.
+    cell_inv_size:     f32,
+    _pad0:             f32,
+    _pad1:             f32,
+    _pad2:             f32,
 };
 
 const MAX_STRETCH_DISABLED: f32 = 1.0;
@@ -66,7 +76,7 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 // ── Group 3: per-dispatch uniforms ──────────────────────────────────
 @group(3) @binding(0) var<uniform>             u: Uniforms;
 
-// ── Group 4: rigid shape collision data ─────────────────────────────
+// ── Group 4: rigid shape collision data + self-collision hash ──────
 struct Transform {
     position: vec4<f32>,
     rotation: vec4<f32>,
@@ -76,6 +86,12 @@ struct Transform {
 @group(4) @binding(2) var<storage, read>       shape_body:       array<i32>;
 @group(4) @binding(3) var<storage, read>       shape_transform:  array<Transform>;
 @group(4) @binding(4) var<storage, read>       body_q:           array<Transform>;
+/// Spatial hash table: per-bucket count + fixed-capacity index list.
+/// Layout: `hash_indices[bucket * MAX_PER_CELL + slot]`. Hash
+/// collisions just produce extra distance checks (false positives),
+/// not incorrect results, so a relatively small bucket count is fine.
+@group(4) @binding(5) var<storage, read_write> hash_count:       array<atomic<u32>>;
+@group(4) @binding(6) var<storage, read_write> hash_indices:     array<u32>;
 
 const KIND_SPHERE:   u32 = 0u;
 const KIND_PLANE:    u32 = 1u;
@@ -419,6 +435,110 @@ fn particle_vs_shapes(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     particle_q[i] = vec4<f32>(p, 0.0);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Spatial-hash self-collision. Three passes per substep:
+//
+//   hash_clear     — zero `hash_count` (one thread per bucket).
+//   hash_insert    — atomically write the particle's index into its
+//                    bucket. work_count = particle_count.
+//   self_collide   — for each particle, scan the 3×3×3 cell stencil,
+//                    accumulate Jacobi-style position corrections
+//                    into `deltas[i]` / `counts[i]`.
+//   strain_apply   — reused (last pass) to apply the averaged delta.
+//
+// `hash_buckets` and `cell_inv_size` come from `Uniforms`. Bucket
+// capacity is the constant `MAX_PER_CELL` below.
+// ─────────────────────────────────────────────────────────────────
+const MAX_PER_CELL: u32 = 12u;
+const HASH_P1: u32 = 73856093u;
+const HASH_P2: u32 = 19349663u;
+const HASH_P3: u32 = 83492791u;
+
+fn cell_of(p: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(floor(p * u.cell_inv_size));
+}
+
+fn cell_hash(c: vec3<i32>) -> u32 {
+    let h = (u32(c.x) * HASH_P1) ^ (u32(c.y) * HASH_P2) ^ (u32(c.z) * HASH_P3);
+    return h % u.hash_buckets;
+}
+
+@compute @workgroup_size(64)
+fn hash_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    atomicStore(&hash_count[i], 0u);
+}
+
+@compute @workgroup_size(64)
+fn hash_insert(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    let p = particle_q[i].xyz;
+    let bucket = cell_hash(cell_of(p));
+    let slot = atomicAdd(&hash_count[bucket], 1u);
+    if (slot < MAX_PER_CELL) {
+        hash_indices[bucket * MAX_PER_CELL + slot] = i;
+    }
+    // Slots beyond MAX_PER_CELL are silently dropped — for cloth
+    // densities that means "extremely unlikely missed collision",
+    // not a crash. Bump MAX_PER_CELL if a scene ever hits this.
+}
+
+@compute @workgroup_size(64)
+fn self_collide(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    let inv_m_i = particle_inv_mass[i];
+    if (inv_m_i <= 0.0) {
+        deltas[i] = vec4<f32>(0.0);
+        counts[i] = 0u;
+        return;
+    }
+    let r_i = particle_radius[i];
+    let pos_i = particle_q[i].xyz;
+    let cell = cell_of(pos_i);
+    var dp = vec3<f32>(0.0);
+    var n_hits: u32 = 0u;
+    for (var dz = -1; dz <= 1; dz = dz + 1) {
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dx = -1; dx <= 1; dx = dx + 1) {
+                let nc = cell + vec3<i32>(dx, dy, dz);
+                let bucket = cell_hash(nc);
+                let raw = atomicLoad(&hash_count[bucket]);
+                let cnt = min(raw, MAX_PER_CELL);
+                for (var s: u32 = 0u; s < cnt; s = s + 1u) {
+                    let j = hash_indices[bucket * MAX_PER_CELL + s];
+                    if (j == i) { continue; }
+                    let pos_j = particle_q[j].xyz;
+                    let r_j = particle_radius[j];
+                    let inv_m_j = particle_inv_mass[j];
+                    let w_sum = inv_m_i + inv_m_j;
+                    if (w_sum <= 0.0) { continue; }
+                    let d = pos_j - pos_i;
+                    let len = length(d);
+                    let min_d = r_i + r_j;
+                    if (len < min_d && len > 1e-9) {
+                        // XPBD-style position projection: this thread
+                        // only writes its own correction, so there's
+                        // no race with neighbour threads (each writes
+                        // its own `deltas[j]` slot in its own
+                        // dispatch).
+                        let n = d / len;
+                        let pen = min_d - len;
+                        // Particle i moves opposite to `d` by its
+                        // mass-weighted share of the penetration.
+                        dp = dp - n * (pen * inv_m_i / w_sum);
+                        n_hits = n_hits + 1u;
+                    }
+                }
+            }
+        }
+    }
+    deltas[i] = vec4<f32>(dp, 0.0);
+    counts[i] = n_hits;
 }
 
 // ─────────────────────────────────────────────────────────────────

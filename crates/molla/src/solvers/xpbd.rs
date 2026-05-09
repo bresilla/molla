@@ -305,12 +305,27 @@ impl XpbdSolver {
                 // device with parallel work per pass.
                 if model.particle_count > 0 {
                     if particles_kernel.is_none() {
-                        *particles_kernel = Some(crate::kernels::XpbdParticlesKernel::new(
+                        let mut k = crate::kernels::XpbdParticlesKernel::new(
                             device,
                             queue,
                             model.particle_count as u32,
                             model.spring_count.max(1) as u32,
-                        ));
+                        );
+                        // Cell size = 2.2 × max particle radius. The
+                        // 1.1 slack lets the 3×3×3 stencil capture
+                        // collisions that straddle a cell boundary.
+                        let max_r = model
+                            .particle_radius
+                            .host()
+                            .ok()
+                            .and_then(|r| r.iter().copied().fold(None, |a, x| {
+                                Some(a.map_or(x, |y: Real| y.max(x)))
+                            }))
+                            .unwrap_or(0.0);
+                        if max_r > 0.0 {
+                            k.set_self_collision_cell_size((max_r * 2.2) as f32);
+                        }
+                        *particles_kernel = Some(k);
                     }
                     let kernel = particles_kernel.as_mut().expect("kernel just inserted");
                     kernel.dispatch(

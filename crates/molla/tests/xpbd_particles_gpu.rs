@@ -165,6 +165,61 @@ fn pinned_cloth_corners_stay_put() {
     }
 }
 
+/// Two particles spawned closer than `2 * radius` should separate
+/// to at least `2 * radius` apart after a few XPBD substeps. Tests
+/// the WGSL `hash_insert` + `self_collide` passes end-to-end.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+fn self_collision_pushes_overlapping_particles_apart() {
+    let Ok(engine) = Engine::new_gpu() else {
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let radius = 0.05_f64;
+    let mut b = ModelBuilder::new();
+    b.set_linear_damping(2.0);
+    // Two particles overlapping by 0.04 m (initial separation 0.06,
+    // sum of radii = 0.10).
+    let _p0 = b.add_particle(Vec3::new(-0.03, 1.0, 0.0), 0.05, radius, WorldId(0));
+    let _p1 = b.add_particle(Vec3::new(0.03, 1.0, 0.0), 0.05, radius, WorldId(0));
+    // Floor plane to keep them off the void.
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
+    let mut model = b.build().unwrap();
+    model.upload_to_device(&device, &queue).unwrap();
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let mut contacts = Contacts::with_capacity(8);
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    contacts.upload_to_device(&device, &queue).unwrap();
+
+    let mut solver = XpbdSolver::new_gpu(&engine, 1).unwrap().with_iterations(4);
+    let mut pipeline = molla::geometry::CollisionPipeline::new();
+    for _ in 0..40 {
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        contacts.upload_to_device(&device, &queue).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, 0.005, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    s_a.particle_q.download(&device, &queue).unwrap();
+    let q = s_a.particle_q.host().unwrap();
+    let dist = (q[0] - q[1]).length();
+    eprintln!("two-particle separation after 40 steps = {dist:.4} m");
+    let min_dist = 2.0 * radius;
+    // Tolerance: f32 + Jacobi residual + cell-boundary slack. ~2 mm.
+    assert!(
+        dist > min_dist - 2.0e-3,
+        "particles still overlapping: dist={dist:.4} m, expected ≥ {min_dist:.4}"
+    );
+}
+
 /// Drops a single particle straight onto each primitive shape with
 /// near-zero velocity and confirms the GPU `particle_vs_shapes`
 /// pass projects it out to the shape surface within tolerance.
