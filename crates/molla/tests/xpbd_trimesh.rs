@@ -10,6 +10,8 @@ fn sphere_settles_on_triangle() {
     // enough to catch a sphere dropped from height.
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.0);
+    b.set_default_friction(0.5).unwrap();
+    b.set_default_restitution(0.0).unwrap();
 
     let body = b.add_body(
         BodyParams::new()
@@ -29,9 +31,7 @@ fn sphere_settles_on_triangle() {
     )
     .unwrap();
 
-    let mut model = b.build().unwrap();
-    model.default_friction = 0.5;
-    model.default_restitution = 0.0;
+    let model = b.build().unwrap();
 
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();
@@ -64,6 +64,8 @@ fn sphere_on_trimesh_quad_floor() {
     // Floor as a 2-triangle quad, registered via TriMesh.
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.0);
+    b.set_default_friction(0.5).unwrap();
+    b.set_default_restitution(0.0).unwrap();
 
     let body = b.add_body(
         BodyParams::new()
@@ -84,9 +86,7 @@ fn sphere_on_trimesh_quad_floor() {
     b.add_shape_trimesh(BodyId::NONE, mesh_id, Transform::IDENTITY)
         .unwrap();
 
-    let mut model = b.build().unwrap();
-    model.default_friction = 0.5;
-    model.default_restitution = 0.0;
+    let model = b.build().unwrap();
 
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();

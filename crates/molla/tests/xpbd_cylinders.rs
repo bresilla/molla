@@ -30,12 +30,12 @@ fn cylinder_settles_on_plane() {
             })
             .with_position(Vec3::new(0.0, 4.0, 0.0)),
     );
+    b.set_default_friction(0.6).unwrap();
+    b.set_default_restitution(0.0).unwrap();
     b.add_shape_cylinder(body, half_h, radius, Transform::IDENTITY).unwrap();
     b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
 
     let mut model = b.build().unwrap();
-    model.default_friction = 0.6;
-    model.default_restitution = 0.0;
     model.contact_margin = 0.02;
 
     let mut s_a = model.state().unwrap();
@@ -96,11 +96,11 @@ fn capsule_on_box_via_gjk() {
                 Quat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
             )),
     );
+    b.set_default_friction(0.5).unwrap();
+    b.set_default_restitution(0.1).unwrap();
     b.add_shape_capsule(cap, half_h, radius, Transform::IDENTITY).unwrap();
 
-    let mut model = b.build().unwrap();
-    model.default_friction = 0.5;
-    model.default_restitution = 0.1;
+    let model = b.build().unwrap();
 
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();

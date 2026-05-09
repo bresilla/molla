@@ -2150,6 +2150,35 @@ impl ModelBuilder {
         self.linear_damping = damping;
     }
 
+    /// Set the model-wide default friction coefficient — used by
+    /// [`Self::push_shape`] when the per-shape friction was not
+    /// explicitly set via [`Self::set_shape_material`]. Must be set
+    /// **before** the shapes are added (or `build()` is called); the
+    /// finalize substitutes NaN-sentinel per-shape friction with this
+    /// value as a one-shot bake.
+    pub fn set_default_friction(&mut self, friction: Real) -> Result<()> {
+        if !friction.is_finite() {
+            return Err(Error::Build(format!(
+                "set_default_friction: must be finite, got {friction}"
+            )));
+        }
+        self.default_friction = friction;
+        Ok(())
+    }
+
+    /// Set the model-wide default coefficient of restitution — see
+    /// [`Self::set_default_friction`] for the bake-at-finalize
+    /// semantics.
+    pub fn set_default_restitution(&mut self, restitution: Real) -> Result<()> {
+        if !restitution.is_finite() {
+            return Err(Error::Build(format!(
+                "set_default_restitution: must be finite, got {restitution}"
+            )));
+        }
+        self.default_restitution = restitution;
+        Ok(())
+    }
+
     /// Number of bodies registered so far.
     #[must_use]
     pub fn body_count(&self) -> usize {
