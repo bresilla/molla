@@ -208,6 +208,8 @@ pub struct ModelBuilder {
     shape_geometry: Vec<ShapeGeometry>,
     shape_flags: Vec<u32>,
     shape_friction: Vec<Real>,
+    shape_rolling_friction: Vec<Real>,
+    shape_torsional_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
     meshes: Vec<super::TriMesh>,
     shape_collision_group: Vec<u32>,
@@ -794,6 +796,8 @@ impl ModelBuilder {
         self.shape_geometry.push(geom);
         self.shape_flags.push(super::flags::ShapeFlags::COLLIDES);
         self.shape_friction.push(Real::NAN);
+        self.shape_rolling_friction.push(Real::NAN);
+        self.shape_torsional_friction.push(Real::NAN);
         self.shape_restitution.push(Real::NAN);
         self.shape_collision_group.push(0xffff_ffff);
         id
@@ -845,6 +849,28 @@ impl ModelBuilder {
         }
         self.shape_friction[i] = friction;
         self.shape_restitution[i] = restitution;
+        Ok(())
+    }
+
+    /// Override the rolling / torsional friction for an
+    /// already-added shape. `NaN` (or zero) disables that mode.
+    /// Rolling friction opposes spin perpendicular to the contact
+    /// normal (wheel-on-ground); torsional opposes spin along the
+    /// normal (top spinning on a surface).
+    pub fn set_shape_friction_modes(
+        &mut self,
+        shape: ShapeId,
+        rolling: Real,
+        torsional: Real,
+    ) -> Result<()> {
+        let i = shape.index();
+        if i >= self.shape_geometry.len() {
+            return Err(Error::Build(format!(
+                "set_shape_friction_modes: shape id {shape:?} out of range"
+            )));
+        }
+        self.shape_rolling_friction[i] = rolling;
+        self.shape_torsional_friction[i] = torsional;
         Ok(())
     }
 
@@ -1465,6 +1491,8 @@ impl ModelBuilder {
             shape_geometry: self.shape_geometry,
             shape_flags: Buffer::from_vec(self.shape_flags, s),
             shape_friction: Buffer::from_vec(self.shape_friction, s),
+            shape_rolling_friction: Buffer::from_vec(self.shape_rolling_friction, s),
+            shape_torsional_friction: Buffer::from_vec(self.shape_torsional_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
             meshes: self.meshes,
             shape_collision_group: Buffer::from_vec(self.shape_collision_group, s),

@@ -35,6 +35,12 @@ pub struct Contacts {
     pub depth: Buffer<Real>,
     /// Friction coefficient at this contact.
     pub friction: Buffer<Real>,
+    /// Rolling friction (μ_rolling) at this contact — opposes the
+    /// angular velocity component perpendicular to the normal.
+    pub rolling_friction: Buffer<Real>,
+    /// Torsional friction (μ_torsional) at this contact — opposes
+    /// the angular velocity component ALONG the normal (spinning).
+    pub torsional_friction: Buffer<Real>,
     /// Restitution coefficient at this contact.
     pub restitution: Buffer<Real>,
 
@@ -76,6 +82,8 @@ impl Contacts {
             normal: Buffer::from_vec(vec![Vec3::ZERO; capacity], StorageReadWrite),
             depth: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
+            rolling_friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
+            torsional_friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             restitution: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             body_contact_offsets: Buffer::from_vec(Vec::new(), StorageReadWrite),
             body_contact_indices: Buffer::from_vec(Vec::new(), StorageReadWrite),
@@ -108,6 +116,8 @@ impl Contacts {
         up!(normal);
         up!(depth);
         up!(friction);
+        up!(rolling_friction);
+        up!(torsional_friction);
         up!(restitution);
         up!(body_contact_offsets);
         up!(body_contact_indices);

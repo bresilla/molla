@@ -141,6 +141,16 @@ pub struct Model {
     /// `default_friction` model knob; otherwise the pair-rule is
     /// `max(μ_a, μ_b)` (matches Newton).
     pub shape_friction: Buffer<Real>,
+    /// Per-shape **rolling** friction (m·μ) — opposes the angular
+    /// velocity component perpendicular to the contact normal.
+    /// Without this, balls/cylinders roll forever on a flat plane.
+    /// Pair-rule: `max(μ_a, μ_b)`. `NaN` = `0.0` (no rolling damping).
+    pub shape_rolling_friction: Buffer<Real>,
+    /// Per-shape **torsional** friction — opposes the angular
+    /// velocity component ALONG the contact normal (spinning).
+    /// Stops a ball from spinning forever about the contact axis.
+    /// Same convention as `shape_rolling_friction`.
+    pub shape_torsional_friction: Buffer<Real>,
     /// Per-shape restitution. Same `NaN` sentinel + max-rule as friction.
     pub shape_restitution: Buffer<Real>,
     /// Triangle-mesh storage. `ShapeGeometry::TriMesh { mesh_id }`
@@ -339,6 +349,8 @@ impl Model {
             shape_geometry: Vec::new(),
             shape_flags: Buffer::from_vec(Vec::new(), s),
             shape_friction: Buffer::from_vec(Vec::new(), s),
+            shape_rolling_friction: Buffer::from_vec(Vec::new(), s),
+            shape_torsional_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),
             meshes: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),

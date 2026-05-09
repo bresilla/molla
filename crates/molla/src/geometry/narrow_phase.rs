@@ -27,6 +27,12 @@ pub struct ContactManifold {
     /// Penetration depth (m). Always non-negative on output.
     pub depth: Real,
     pub friction: Real,
+    /// Rolling friction (μ_rolling) — opposes angular velocity
+    /// component perpendicular to the normal.
+    pub rolling_friction: Real,
+    /// Torsional friction (μ_torsional) — opposes angular velocity
+    /// component along the normal (spinning).
+    pub torsional_friction: Real,
     pub restitution: Real,
 }
 
@@ -63,6 +69,19 @@ pub fn pair_contact(
         pair.a as usize,
         pair.b as usize,
         default_restitution,
+    );
+    // Rolling / torsional friction default to 0 — opt-in per shape.
+    let pair_rolling = pair_material(
+        model.shape_rolling_friction.host().expect("shape_rolling_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        0.0,
+    );
+    let pair_torsional = pair_material(
+        model.shape_torsional_friction.host().expect("shape_torsional_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        0.0,
     );
 
     let start = out.len();
@@ -243,6 +262,8 @@ pub fn pair_contact(
 
     for m in &mut out[start..] {
         m.friction = pair_friction;
+        m.rolling_friction = pair_rolling;
+        m.torsional_friction = pair_torsional;
         m.restitution = pair_restitution;
     }
 }
@@ -285,6 +306,8 @@ fn sphere_sphere(
         normal,
         depth,
         friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
         restitution: 0.0,
     })
 }
@@ -314,6 +337,8 @@ fn sphere_plane(
         normal,
         depth,
         friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
         restitution: 0.0,
     })
 }
@@ -378,6 +403,8 @@ fn sphere_box(
         normal: normal_world,
         depth,
         friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
         restitution: 0.0,
     })
 }
@@ -412,6 +439,8 @@ fn box_plane(
                 normal,
                 depth,
                 friction: 0.0,
+                rolling_friction: 0.0,
+                torsional_friction: 0.0,
                 restitution: 0.0,
             });
         }
@@ -739,6 +768,8 @@ fn emit_face_manifold(
             normal,
             depth: d,
             friction: 0.0,
+            rolling_friction: 0.0,
+            torsional_friction: 0.0,
             restitution: 0.0,
         });
     }
@@ -888,6 +919,8 @@ fn emit_edge_manifold(
         normal,
         depth,
         friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
         restitution: 0.0,
     });
 }
@@ -956,6 +989,8 @@ fn capsule_plane(
                 normal,
                 depth,
                 friction: 0.0,
+                rolling_friction: 0.0,
+                torsional_friction: 0.0,
                 restitution: 0.0,
             });
         }
@@ -1067,6 +1102,8 @@ fn gjk_epa_pair(
         normal: contact.normal,
         depth: contact.depth,
         friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
         restitution: 0.0,
     })
 }
@@ -1121,6 +1158,8 @@ fn trimesh_pair(
                         normal,
                         depth,
                         friction: 0.0,
+                        rolling_friction: 0.0,
+                        torsional_friction: 0.0,
                         restitution: 0.0,
                     });
                 }
@@ -1237,6 +1276,8 @@ fn cylinder_plane_fallback(
                 normal,
                 depth,
                 friction: 0.0,
+                rolling_friction: 0.0,
+                torsional_friction: 0.0,
                 restitution: 0.0,
             };
             out.push(if flip { flip_manifold(m) } else { m });

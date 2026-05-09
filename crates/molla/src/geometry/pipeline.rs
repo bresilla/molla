@@ -132,6 +132,8 @@ fn push_contacts_into(
         );
         contacts.depth = crate::storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
         contacts.friction = crate::storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
+        contacts.rolling_friction = crate::storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
+        contacts.torsional_friction = crate::storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
         contacts.restitution = crate::storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
     }
 
@@ -161,6 +163,14 @@ fn push_contacts_into(
     let fric = contacts.friction.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {
         fric[i] = m.friction;
+    }
+    let roll = contacts.rolling_friction.host_mut()?;
+    for (i, m) in manifolds.iter().enumerate() {
+        roll[i] = m.rolling_friction;
+    }
+    let tors = contacts.torsional_friction.host_mut()?;
+    for (i, m) in manifolds.iter().enumerate() {
+        tors[i] = m.torsional_friction;
     }
     let rest = contacts.restitution.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {

@@ -606,6 +606,8 @@ fn cpu_step(
         let normal = contacts.normal.host()?;
         let restitution_arr = contacts.restitution.host()?;
         let friction_arr = contacts.friction.host()?;
+        let rolling_arr = contacts.rolling_friction.host()?;
+        let torsional_arr = contacts.torsional_friction.host()?;
 
         let mut v_lin_delta = vec![Vec3::ZERO; n];
         let mut v_ang_delta = vec![Vec3::ZERO; n];
@@ -726,6 +728,70 @@ fn cpu_step(
                         if !kin_b && b < v_lin_delta.len() {
                             v_lin_delta[b] -= t_hat * lambda_t;
                             v_ang_delta[b] -= rb_x_t * lambda_t;
+                        }
+                    }
+                }
+            }
+
+            // Rolling friction: damp angular velocity component
+            // perpendicular to the contact normal. Cap is
+            // `μ_rolling · |λ_n|`. Treats both bodies' angular
+            // velocities at the contact (relative angular velocity
+            // = ω_b - ω_a). Newton/PhysX use the same impulse cap.
+            let mu_roll = rolling_arr[c];
+            if mu_roll > 0.0 {
+                let w_a = if kin_a { Vec3::ZERO } else { w_post[a] };
+                let w_b = if kin_b || b >= w_post.len() {
+                    Vec3::ZERO
+                } else {
+                    w_post[b]
+                };
+                let w_rel = w_b - w_a;
+                let w_n = w_rel.dot(n_ab);
+                let w_perp = w_rel - n_ab * w_n;
+                let w_perp_len = w_perp.length();
+                if w_perp_len > 1e-9 {
+                    let dir = w_perp / w_perp_len;
+                    let denom = dir.dot(i_inv_a * dir) + dir.dot(i_inv_b * dir);
+                    if denom > 0.0 {
+                        let impulse_cap = mu_roll * lambda_n.abs();
+                        let dw = w_perp_len.min(impulse_cap.max(0.0));
+                        let lambda_r = dw / denom;
+                        if !kin_a {
+                            v_ang_delta[a] += dir * lambda_r;
+                        }
+                        if !kin_b && b < v_lin_delta.len() {
+                            v_ang_delta[b] -= dir * lambda_r;
+                        }
+                    }
+                }
+            }
+
+            // Torsional friction: damp angular velocity component
+            // ALONG the normal (spinning).
+            let mu_tors = torsional_arr[c];
+            if mu_tors > 0.0 {
+                let w_a = if kin_a { Vec3::ZERO } else { w_post[a] };
+                let w_b = if kin_b || b >= w_post.len() {
+                    Vec3::ZERO
+                } else {
+                    w_post[b]
+                };
+                let w_rel = w_b - w_a;
+                let w_n = w_rel.dot(n_ab);
+                let w_n_abs = w_n.abs();
+                if w_n_abs > 1e-9 {
+                    let dir = n_ab * w_n.signum();
+                    let denom = dir.dot(i_inv_a * dir) + dir.dot(i_inv_b * dir);
+                    if denom > 0.0 {
+                        let impulse_cap = mu_tors * lambda_n.abs();
+                        let dw = w_n_abs.min(impulse_cap.max(0.0));
+                        let lambda_t = dw / denom;
+                        if !kin_a {
+                            v_ang_delta[a] += dir * lambda_t;
+                        }
+                        if !kin_b && b < v_lin_delta.len() {
+                            v_ang_delta[b] -= dir * lambda_t;
                         }
                     }
                 }
