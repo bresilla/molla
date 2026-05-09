@@ -19,6 +19,8 @@ mod contact_sensor;
 #[cfg(feature = "gpu")]
 mod crba;
 #[cfg(feature = "gpu")]
+mod dense3;
+#[cfg(feature = "gpu")]
 mod epa;
 #[cfg(feature = "gpu")]
 mod featherstone;
@@ -69,6 +71,8 @@ pub use clamping_position_based::ClampingPositionBasedKernel;
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use crba::MassMatrixKernel;
+#[cfg(feature = "gpu")]
+pub use dense3::{Dense3Kernel, Dense3Op, Dense3Result};
 #[cfg(feature = "gpu")]
 pub use epa::{
     decode_epa_out, EpaKernel, EpaPairResult, EPA_OUT_STRIDE, EPA_STATUS_FALLBACK, EPA_STATUS_NONE,
