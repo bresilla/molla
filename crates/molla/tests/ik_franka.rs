@@ -4,7 +4,7 @@
 use molla::core::BodyId;
 use molla::math::{Mat3, Real, SpatialInertia, Transform, Vec3 as V3};
 use molla::prelude::*;
-use molla::solvers::{jacobian, IkObjective, IkSolver};
+use molla::solvers::{ik_solver_health, jacobian, IkObjective, IkSolver};
 
 fn box_inertia(mass: Real, half: V3) -> Mat3 {
     let h2 = half * half;
@@ -195,4 +195,44 @@ fn ik_joint_limit_penalty_keeps_q_in_band() {
     eprintln!("constrained q[1] = {q1:.4} (target band [-0.1, 0.1])");
     // Soft penalty — allow small slack.
     assert!(q1.abs() < 0.15, "joint 1 escaped band: {q1}");
+}
+
+/// Stage 24a — observability: the SVD-pseudoinverse fallback should
+/// rarely trigger for well-conditioned IK problems. We run a fresh
+/// position-target solve, then assert the per-solve fallback rate
+/// (psd_fallbacks / chol_attempts) stays low.
+///
+/// This test depends on whatever runs before it for absolute counts;
+/// we work in deltas so it's robust to test ordering.
+#[test]
+fn ik_solver_health_fallback_rate_is_low() {
+    let (chol0, psd0) = ik_solver_health();
+
+    // Standard "reach a nearby target" — should be solvable cleanly.
+    let (model, ee_body) = build_franka();
+    let mut state = model.state().unwrap();
+    molla::sim::eval_fk(&model, &mut state).unwrap();
+    let ee_at_zero = state.body_q.host().unwrap()[ee_body].position;
+    let target = ee_at_zero + V3::new(0.2, 0.0, 0.0);
+    let solver = IkSolver::new(vec![IkObjective::Position {
+        body: ee_body,
+        point_local: V3::ZERO,
+        target_world: target,
+        weight: 1.0,
+    }]);
+    let _ = solver.solve(&model, &mut state, &[0.0; 7]).unwrap();
+
+    let (chol1, psd1) = ik_solver_health();
+    let dchol = chol1 - chol0;
+    let dpsd = psd1 - psd0;
+    eprintln!(
+        "IK fallback delta: chol_attempts={dchol}, psd_fallbacks={dpsd} \
+         (rate = {:.3}%)",
+        100.0 * (dpsd as f64) / (dchol.max(1) as f64)
+    );
+    // Healthy IK should never need the SVD fallback for a tame target.
+    assert!(
+        dpsd == 0,
+        "expected zero psd fallbacks on a well-conditioned solve, got {dpsd} of {dchol}"
+    );
 }

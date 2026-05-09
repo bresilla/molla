@@ -19,10 +19,54 @@
 
 use crate::core::{Error, Result};
 use crate::math::{
-    dense_solve::dense_chol_solve, robust_loss::norm_huber_grad, Real, Vec3,
+    dense_solve::{dense_chol_solve, dense_psd_pinv_solve},
+    robust_loss::norm_huber_grad,
+    Real, Vec3,
 };
 use crate::sim::{Model, State};
 use crate::solvers::jacobian::jacobian;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Process-wide counters tracking how often the IK solver had to fall
+/// back from the fast Cholesky pre-solve to the SVD-style pseudoinverse
+/// (Stage 24a). Mostly observability — automated tests in the IK suite
+/// poll these to verify the fallback rarely triggers.
+///
+/// Reads are advisory; the counters are updated by every IK solve in
+/// the process and never reset (callers compute deltas if they want a
+/// per-solve rate).
+pub static IK_CHOL_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static IK_PSD_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
+
+/// Snapshot of the global IK fallback counters. Returns
+/// `(chol_attempts, psd_fallbacks)`.
+pub fn ik_solver_health() -> (usize, usize) {
+    (
+        IK_CHOL_ATTEMPTS.load(Ordering::Relaxed),
+        IK_PSD_FALLBACKS.load(Ordering::Relaxed),
+    )
+}
+
+/// Solve `(JᵀJ + λI) · dq = rhs` with automatic fallback. Tries the
+/// existing Cholesky path first; on failure (non-SPD pivot caused by
+/// numerical breakdown) drops to a damped pseudoinverse computed from
+/// the symmetric eigendecomposition of `JᵀJ + λI`. Increments the
+/// process-wide [`IK_CHOL_ATTEMPTS`] / [`IK_PSD_FALLBACKS`] counters
+/// so callers can observe trigger rates.
+fn ik_solve_normal_eq(jtj: &mut [Real], rhs: &[Real], n: usize) -> Result<Vec<Real>> {
+    IK_CHOL_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    // Cholesky decomposes in place; keep a copy for the fallback.
+    let saved = jtj.to_vec();
+    match dense_chol_solve(jtj, rhs, n) {
+        Ok(x) => Ok(x),
+        Err(_) => {
+            IK_PSD_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+            // Cholesky may have partially written to `jtj`; restore from
+            // saved for the eigendecomposition.
+            dense_psd_pinv_solve(&saved, rhs, n)
+        }
+    }
+}
 
 #[cfg(feature = "gpu")]
 use crate::compute::Engine;
@@ -177,10 +221,10 @@ impl IkSolver {
                 }
                 rhs[i] = s;
             }
-            let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+            let dq = match ik_solve_normal_eq(&mut jtj, &rhs, dof_total) {
                 Ok(x) => x,
                 Err(_) => {
-                    // Singular even with damping — bump damping and retry next iter.
+                    // Even SVD-based fallback failed — bump damping and retry.
                     damping *= cfg.damping_grow;
                     continue;
                 }
@@ -494,7 +538,7 @@ impl IkSolver {
                 }
                 rhs[i] = s;
             }
-            let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+            let dq = match ik_solve_normal_eq(&mut jtj, &rhs, dof_total) {
                 Ok(x) => x,
                 Err(_) => {
                     damping *= cfg.damping_grow;
@@ -735,7 +779,7 @@ impl IkSolver {
                     }
                     rhs[i] = s_acc;
                 }
-                let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+                let dq = match ik_solve_normal_eq(&mut jtj, &rhs, dof_total) {
                     Ok(x) => x,
                     Err(_) => {
                         seed_state.damping *= cfg.damping_grow;
