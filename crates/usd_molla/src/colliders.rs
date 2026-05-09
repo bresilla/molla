@@ -19,31 +19,35 @@ use anyhow::Result;
 use molla::core::BodyId;
 use molla::math::{Real, Transform, Vec3};
 use molla::sim::{ModelBuilder, TriMesh};
-use openusd::physics::{self, PhysicsPrims};
+use openusd::physics::PhysicsPrims;
 use openusd::sdf;
 use openusd::Stage;
 
+use crate::resolvers::ResolverChain;
 use crate::ImportInfo;
 
-/// Find every prim with `CollisionAPI` applied and emit a
-/// matching molla shape. The shape is attached to the nearest
-/// ancestor with `RigidBodyAPI` applied (or the static world frame
-/// if no such ancestor exists).
+/// Find every prim that the resolver chain claims as a collider
+/// (standard `CollisionAPI` plus PhysX / MJC namespaced collider
+/// opinions) and emit a matching molla shape. The shape is attached
+/// to the nearest ancestor with a known body (or the static world
+/// frame if no such ancestor exists).
 pub fn import_colliders(
     stage: &Stage,
     prims: &PhysicsPrims,
     builder: &mut ModelBuilder,
     info: &mut ImportInfo,
+    resolvers: &ResolverChain,
 ) -> Result<()> {
     let body_lookup = crate::bodies::body_lookup(info);
 
     for path_str in &prims.colliders {
         let path = sdf::path(path_str)?;
-        let coll = match physics::read_collision_shape(stage, &path)? {
+        let coll = match resolvers.resolve_shape(stage, &path)? {
             Some(c) => c,
             None => continue,
         };
-        if !coll.collision_enabled {
+        // Default to enabled when the resolver doesn't author the flag.
+        if matches!(coll.collision_enabled, Some(false)) {
             continue;
         }
 

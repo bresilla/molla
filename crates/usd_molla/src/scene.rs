@@ -9,13 +9,15 @@
 use anyhow::Result;
 use molla::math::Vec3;
 use molla::sim::ModelBuilder;
-use openusd::physics::{self, PhysicsPrims};
+use openusd::physics::PhysicsPrims;
 use openusd::sdf;
 use openusd::Stage;
 
+use crate::resolvers::ResolverChain;
 use crate::{ImportInfo, ImportOptions};
 
-/// Process every `UsdPhysicsScene` prim and populate per-world
+/// Process every `UsdPhysicsScene` (or PhysX / MJC scene-equivalent)
+/// prim discovered by the resolver chain and populate per-world
 /// gravity in the builder.
 pub fn import_scenes(
     stage: &Stage,
@@ -23,6 +25,7 @@ pub fn import_scenes(
     builder: &mut ModelBuilder,
     info: &mut ImportInfo,
     options: &ImportOptions,
+    resolvers: &ResolverChain,
 ) -> Result<()> {
     if prims.scenes.is_empty() {
         // No scene prim → caller gets the default world 0 with
@@ -35,8 +38,7 @@ pub fn import_scenes(
     for (idx, scene_path_str) in prims.scenes.iter().enumerate() {
         let world_idx = if merge { 0 } else { idx };
         let path = sdf::path(scene_path_str)?;
-        let scene = physics::read_physics_scene(stage, &path)?
-            .unwrap_or_default();
+        let scene = resolvers.resolve_scene(stage, &path)?.unwrap_or_default();
         let dir = scene
             .gravity_direction
             .map(|d| Vec3::new(d[0] as f64, d[1] as f64, d[2] as f64))

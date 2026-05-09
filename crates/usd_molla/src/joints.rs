@@ -10,10 +10,11 @@ use anyhow::Result;
 use molla::core::BodyId;
 use molla::math::{Quat, Real, Transform, Vec3};
 use molla::sim::{JointType, ModelBuilder};
-use openusd::physics::{self, JointKind, PhysicsPrims};
+use openusd::physics::{JointKind, PhysicsPrims};
 use openusd::sdf;
 use openusd::Stage;
 
+use crate::resolvers::ResolverChain;
 use crate::ImportInfo;
 
 pub fn import_joints(
@@ -21,10 +22,11 @@ pub fn import_joints(
     prims: &PhysicsPrims,
     builder: &mut ModelBuilder,
     info: &mut ImportInfo,
+    resolvers: &ResolverChain,
 ) -> Result<()> {
     for path_str in &prims.joints {
         let path = sdf::path(path_str)?;
-        let joint = match physics::read_joint(stage, &path)? {
+        let joint = match resolvers.resolve_joint(stage, &path)? {
             Some(j) => j,
             None => continue,
         };

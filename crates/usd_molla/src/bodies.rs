@@ -16,15 +16,18 @@ use glam::DVec3;
 use molla::core::{BodyId, WorldId};
 use molla::math::{Mat3, Quat, Real, SpatialInertia, Transform, Vec3};
 use molla::sim::{BodyFlags, BodyParams, ModelBuilder};
-use openusd::physics::{self, PhysicsPrims};
+use openusd::physics::PhysicsPrims;
 use openusd::sdf;
 use openusd::Stage;
 use std::collections::HashMap;
 
+use crate::resolvers::{BodyAttrs, ResolverChain};
 use crate::ImportInfo;
 
-/// Iterate every prim with `RigidBodyAPI` applied, decode mass /
-/// inertia / pose, and call `builder.add_body`.
+/// Iterate every prim that the resolver chain claims as a rigid body
+/// (the standard `RigidBodyAPI` plus any extras the PhysX / MJC
+/// resolvers contributed via `extend_prims_via_resolvers`), decode
+/// mass / inertia / pose, and call `builder.add_body`.
 ///
 /// Returns a path → `BodyId` map via `info.body_paths` (caller can
 /// resolve via `info.body_paths.iter().position(|p| p == &path)`).
@@ -33,13 +36,38 @@ pub fn import_bodies(
     prims: &PhysicsPrims,
     builder: &mut ModelBuilder,
     info: &mut ImportInfo,
+    resolvers: &ResolverChain,
 ) -> Result<()> {
     for path_str in &prims.rigid_bodies {
         let path = sdf::path(path_str)?;
-        let body = physics::read_rigid_body(stage, &path)?
+        // Walk the resolver chain — first one that returns Some wins.
+        let attrs: BodyAttrs = resolvers
+            .resolve_body(stage, &path)?
             .unwrap_or_default();
-        let mass = physics::read_mass(stage, &path)?
+        // Re-extract body / mass via the legacy structure for fields
+        // the resolver doesn't surface (kinematic fallback, etc).
+        let body = openusd::physics::read_rigid_body(stage, &path)?
             .unwrap_or_default();
+        let mass = openusd::physics::read_mass(stage, &path)?
+            .unwrap_or_default();
+        // Resolver's authored fields take precedence over legacy
+        // reads. The resolver may itself defer to the standard reader
+        // (SchemaResolverDefault) so values agree by construction.
+        let mass = openusd::physics::ReadMass {
+            mass: attrs.mass.or(mass.mass),
+            center_of_mass: attrs.center_of_mass.or(mass.center_of_mass),
+            diagonal_inertia: attrs.diagonal_inertia.or(mass.diagonal_inertia),
+            principal_axes: mass.principal_axes,
+            density: mass.density,
+        };
+        let body = openusd::physics::ReadRigidBody {
+            rigid_body_enabled: attrs.rigid_body_enabled.unwrap_or(body.rigid_body_enabled),
+            kinematic_enabled: attrs.kinematic_enabled.unwrap_or(body.kinematic_enabled),
+            starts_asleep: attrs.starts_asleep.unwrap_or(body.starts_asleep),
+            velocity: attrs.linear_velocity.or(body.velocity),
+            angular_velocity: attrs.angular_velocity.or(body.angular_velocity),
+            simulation_owner: attrs.simulation_owner.or(body.simulation_owner),
+        };
 
         // World pose from Xform stack. usd_schema's xform helper
         // composes the prim's xformOp stack; for an isolated test

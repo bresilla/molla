@@ -4645,6 +4645,101 @@ this stage adds the closure-driven public API expected by ad-hoc
 matrix-free consumers and ships the standalone `JacobiPreconditioner`
 helper.
 
+### Stage 29 — Multi-schema USD readers — **SHIPPED v1 2026-05-09**
+
+USD physics opinions can land in three different attribute namespaces
+depending on the authoring tool: standard `physics:*` (Pixar /
+OpenUSD), `physxRigidBody:*` / `physxJoint:*` / `physxCollision:*`
+(NVIDIA PhysX extension), and `mjc:*` (Newton's MuJoCo extension).
+Real-world USDs in the wild mix all three; up to Stage 28 `usd_molla`
+read only the standard namespace.
+
+**v1 deliverables:**
+
+- New `crates/usd_molla/src/resolvers.rs` with the `SchemaResolver`
+  trait — `fn resolve_body / resolve_joint / resolve_shape /
+  resolve_scene(&self, &Stage, &Path) -> Result<Option<Attrs>>`.
+  Default impls return `Ok(None)` so concrete resolvers opt in to
+  the categories they care about.
+- Three concrete resolvers shipping in the same module:
+  - `SchemaResolverDefault` — reuses `openusd::physics::read_*`
+    helpers; the historical pre-stage-29 reader is now expressed as
+    this resolver. Behaviour preserved exactly so existing tests
+    pass without changes.
+  - `SchemaResolverPhysx` — `physxRigidBody:*`, `physxJoint:*`,
+    `physxCollision:*`, `physxScene:*`, `physxMaterial:*`. Mapped
+    fields: `mass`, `kinematicEnabled`, `rigidBodyEnabled`,
+    `centerOfMass`, `diagonalInertia`, `linear/angularVelocity`;
+    joint `axis`, `lowerLimit`, `upperLimit`, `breakForce`,
+    `breakTorque`, `jointEnabled`; collision `restOffset` →
+    contact margin, friction / restitution / density via
+    `physxMaterial:*`; scene gravity. Skipped (no molla equivalent
+    in v1): `linearDamping`, `angularDamping`, `maxLinearVelocity`,
+    `armature`, articulation self-collision, CCD toggle, solver
+    type.
+  - `SchemaResolverMjc` — `mjc:body:*`, `mjc:joint:*`, `mjc:geom:*`,
+    `mjc:option:*`. Mapped fields: body `mass`, `diaginertia`,
+    `ipos` (COM), `mocap` → kinematic; joint `axis` (vec3, mapped
+    to nearest principal axis token), `range:min/max`; geom
+    `friction[0]` (slide) → static + dynamic friction, `density`,
+    `margin` → contact margin; scene `gravity` (vec3) split into
+    direction + magnitude. Skipped: `solreflimit`/`solref` profiles,
+    `armature`, `frictionloss`, `damping`, solver iteration counts,
+    actuators, tendons.
+- `ImportOptions::with_resolvers(Vec<Box<dyn SchemaResolver>>)`
+  builder; default behaviour (empty `resolvers`) constructs the
+  standard `[SchemaResolverDefault]` chain so callers that never
+  set the field see no behavioural change.
+- Resolution chain: try each resolver in order; first to return
+  `Ok(Some(_))` wins. Reflected by `ResolverChain::resolve_*`
+  wrappers in `resolvers.rs`.
+- `extend_prims_via_resolvers` walks the stage once when a non-
+  default resolver is present and pulls in PhysX-only / MJC-only
+  prims (no `PhysicsRigidBodyAPI` applied) into the per-category
+  lists `find_physics_prims` would otherwise miss. The standard
+  reader's single-pass discovery stays the fast path when only
+  `SchemaResolverDefault` is in the chain.
+
+**Tests** (`crates/usd_molla/tests/multi_schema.rs`, CPU-only, no
+`#[ignore]`):
+- `physx_rigid_body_round_trips_via_resolver` — PhysX-only sphere
+  (`physxRigidBody:mass = 2.5`, no `PhysicsRigidBodyAPI`) imports
+  through `[Physx, Default]` chain with mass + pose preserved.
+- `mjc_joint_round_trips_via_resolver` — `PhysicsRevoluteJoint`
+  with `mjc:joint:axis` + `mjc:joint:range:min/max` decodes to
+  the right axis token and limits in radians.
+- `default_resolver_back_compat` — standard `UsdPhysics` sphere
+  works both with the implicit default chain (empty `resolvers`)
+  and explicit `[Default]` chain.
+- `multi_resolver_dispatches_per_prim` — mixed scene with one
+  standard body + one PhysX-only body, both end up in the model
+  with the right mass per prim.
+- `resolver_priority_first_wins` — prim with both `physics:mass =
+  1.0` and `physxRigidBody:mass = 7.5` resolves to the first
+  chain entry's value (7.5 with `[Physx, Default]`, 1.0 with
+  `[Default, Physx]`).
+
+**Caveats:**
+- USD authoring of PhysX / MJC opinions in the wild is rare — the
+  test fixtures are hand-written `.usda`. Real PhysX-USD exports
+  from Omniverse, when available, will be a useful corpus for
+  Stage 29.1 follow-up validation.
+- `SchemaResolverPhysx::resolve_joint` and
+  `SchemaResolverMjc::resolve_joint` still rely on the standard
+  `Physics*Joint` typeName for joint kind / body refs / pose; the
+  resolver only overrides axis / limits / break thresholds. A
+  hierarchy-flattening MJC resolver that derives joints from
+  `<body><joint>` parent-child structure is Stage 29.1 work.
+- `ImportOptions` lost its `Clone` + `Debug` derives because
+  `Box<dyn SchemaResolver>` isn't `Clone`. Existing call-sites all
+  build options inline so no migration needed.
+- `with_resolvers` does **not** auto-append the default resolver —
+  callers wanting fallback semantics must include
+  `Box::new(SchemaResolverDefault)` as the last entry. This keeps
+  the chain ordering transparent ("what you list is what you
+  get") and lets advanced callers omit the default to enforce
+  strict-schema readers.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
