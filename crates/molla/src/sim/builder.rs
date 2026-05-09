@@ -233,6 +233,15 @@ pub struct ModelBuilder {
     // Triangle topology — flat `tri_count*3` u32 array.
     tri_indices: Vec<u32>,
 
+    // Cable polylines (Stage 20.1) — book-keeping over groups of CABLE
+    // particles + segment springs that the builder also pushes into the
+    // generic spring arrays above. CSR-encoded so a model can hold many
+    // independent cables without allocating per-cable Vecs.
+    cable_particle_offsets: Vec<u32>,
+    cable_particles: Vec<u32>,
+    cable_rest_length: Vec<Real>,
+    cable_stiffness: Vec<Real>,
+
     // Body arrays.
     body_mass: Vec<Real>,
     body_inv_mass: Vec<Real>,
@@ -426,6 +435,98 @@ impl ModelBuilder {
         self.spring_compliance.push(compliance);
         self.spring_max_stretch.push(max_stretch);
         id
+    }
+
+    /// Build a CABLE polyline through the given particle indices.
+    ///
+    /// Wires a chain of [`Self::add_distance_constraint`] segments
+    /// between consecutive particles, derives each segment's rest
+    /// length from the current particle positions, and registers the
+    /// polyline as cable `cable_id`. Cable bookkeeping (rest length,
+    /// stiffness, polyline indices) is stored on the Model so the
+    /// VBD solver / Dahl friction kernel / viewer can address "the
+    /// i-th cable" as one logical unit.
+    ///
+    /// The CABLE primitive in Stage 20.1 is **stretch-only**: the
+    /// individual segment springs handle inextensibility via XPBD
+    /// compliance (`α = 1/stiffness`). Bending is deferred to
+    /// Stage 20.2 (it needs an extra angle-pair adjacency that the
+    /// per-vertex VBD block already supports but the builder doesn't
+    /// emit yet).
+    ///
+    /// * `particles` — polyline indices, in order. Must have ≥ 2 entries.
+    /// * `stiffness` — per-segment stretch stiffness (N/m). Mapped onto
+    ///   XPBD compliance as `α = 1 / max(stiffness, 1.0)`.
+    /// * `max_stretch` — per-segment hard stretch cap (ratio of rest
+    ///   length). 0.0 = perfectly inextensible after the soft pass.
+    ///
+    /// Returns the new cable id (0-based index).
+    pub fn add_cable(
+        &mut self,
+        particles: &[u32],
+        stiffness: Real,
+        max_stretch: Real,
+    ) -> usize {
+        assert!(
+            particles.len() >= 2,
+            "add_cable: polyline needs >= 2 particle indices"
+        );
+        let cable_id = self.cable_rest_length.len();
+        let compliance = if stiffness > 1.0 { 1.0 / stiffness } else { 1.0 };
+        let mut total_rest = 0.0_f64;
+        for win in particles.windows(2) {
+            let a = win[0];
+            let b = win[1];
+            let pa = self.particle_q0[a as usize];
+            let pb = self.particle_q0[b as usize];
+            let rest = (pa - pb).length();
+            total_rest += rest;
+            self.add_distance_constraint(a, b, rest, compliance, max_stretch);
+        }
+        let off_lo = self.cable_particles.len() as u32;
+        for &p in particles {
+            self.cable_particles.push(p);
+        }
+        let off_hi = self.cable_particles.len() as u32;
+        // Lazily seed the offsets array with the leading 0 sentinel.
+        if self.cable_particle_offsets.is_empty() {
+            self.cable_particle_offsets.push(0);
+        }
+        debug_assert_eq!(*self.cable_particle_offsets.last().unwrap(), off_lo);
+        self.cable_particle_offsets.push(off_hi);
+        self.cable_rest_length.push(total_rest);
+        self.cable_stiffness.push(stiffness);
+        cable_id
+    }
+
+    /// Convenience: add a straight-line CABLE polyline of `n` particles
+    /// from `start` to `end` with uniform spacing, masses, and radius.
+    /// All particles are unpinned by default — call [`Self::pin_particle`]
+    /// on the returned indices to anchor end points.
+    ///
+    /// Returns `(first_particle, n, cable_id)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_cable_polyline(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        n: u32,
+        particle_mass: Real,
+        particle_radius: Real,
+        stiffness: Real,
+        max_stretch: Real,
+        world: WorldId,
+    ) -> (u32, u32, usize) {
+        let n = n.max(2);
+        let first = self.particle_mass.len() as u32;
+        for i in 0..n {
+            let t = (i as Real) / ((n - 1) as Real);
+            let p = start + (end - start) * t;
+            self.add_particle(p, particle_mass, particle_radius, world);
+        }
+        let ids: Vec<u32> = (first..first + n).collect();
+        let cable_id = self.add_cable(&ids, stiffness, max_stretch);
+        (first, n, cable_id)
     }
 
     /// Add a triangle (CCW) referencing three particles. Used for
@@ -1643,6 +1744,19 @@ impl ModelBuilder {
 
             tri_count,
             tri_indices: Buffer::from_vec(self.tri_indices, s),
+
+            cable_count: self.cable_rest_length.len(),
+            cable_particle_offsets: Buffer::from_vec(
+                if self.cable_particle_offsets.is_empty() {
+                    vec![0u32]
+                } else {
+                    self.cable_particle_offsets
+                },
+                s,
+            ),
+            cable_particles: Buffer::from_vec(self.cable_particles, s),
+            cable_rest_length: Buffer::from_vec(self.cable_rest_length, s),
+            cable_stiffness: Buffer::from_vec(self.cable_stiffness, s),
 
             body_count,
             body_mass: Buffer::from_vec(self.body_mass, s),

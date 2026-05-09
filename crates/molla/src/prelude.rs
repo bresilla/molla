@@ -12,7 +12,7 @@ pub use crate::sim::{
 };
 pub use crate::geometry::collide;
 pub use crate::solvers::{
-    FeatherstoneSolver, MuJoCoSolver, SemiImplicitSolver, Solver, VbdSolver, XpbdSolver,
+    FeatherstoneSolver, MuJoCoSolver, SemiImplicitSolver, Solver, VbdMode, VbdSolver, XpbdSolver,
 };
 pub use crate::storage::{Buffer, BufferUsage};
 

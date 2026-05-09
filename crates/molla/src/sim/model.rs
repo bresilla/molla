@@ -226,6 +226,30 @@ pub struct Model {
     /// Flat `tri_count * 3` array of particle indices (CCW winding).
     pub tri_indices: Buffer<u32>,
 
+    // ── Cable joints (Stage 20.1) ───────────────────────────────────
+    // A cable is a polyline of CABLE particles linked by per-segment
+    // distance constraints. The springs that enforce inextensibility
+    // are already in the spring arrays above (added by `add_cable` at
+    // build time); these arrays just record the polyline grouping so
+    // the viewer/tests/Dahl friction kernel can address "the i-th
+    // cable" as one logical unit.
+    /// Number of cable polylines.
+    pub cable_count: usize,
+    /// CSR offsets into `cable_particles` — cable `c` owns particles
+    /// in range `[cable_particle_offsets[c], cable_particle_offsets[c+1])`.
+    /// Length `cable_count + 1`.
+    pub cable_particle_offsets: Buffer<u32>,
+    /// Flat list of particle indices grouped by cable. Length is the
+    /// sum of per-cable particle counts.
+    pub cable_particles: Buffer<u32>,
+    /// Per-cable rest length of the whole polyline (m). Computed at
+    /// build time as the sum of segment rest lengths.
+    pub cable_rest_length: Buffer<Real>,
+    /// Per-cable stretch stiffness (N/m). The builder converts to the
+    /// per-segment XPBD compliance `α = 1/k`. Stored here so the
+    /// solver / viewer can introspect cable tuning.
+    pub cable_stiffness: Buffer<Real>,
+
     // ── Rigid bodies ────────────────────────────────────────────────
     /// Number of rigid bodies.
     pub body_count: usize,
@@ -503,6 +527,12 @@ impl Model {
             tri_count: 0,
             tri_indices: Buffer::from_vec(Vec::new(), s),
 
+            cable_count: 0,
+            cable_particle_offsets: Buffer::from_vec(vec![0u32], s),
+            cable_particles: Buffer::from_vec(Vec::new(), s),
+            cable_rest_length: Buffer::from_vec(Vec::new(), s),
+            cable_stiffness: Buffer::from_vec(Vec::new(), s),
+
             body_count: 0,
             body_mass: Buffer::from_vec(Vec::new(), s),
             body_inv_mass: Buffer::from_vec(Vec::new(), s),
@@ -632,6 +662,10 @@ impl Model {
         up!(particle_color_offsets);
         up!(particle_indices_by_color);
         up!(tri_indices);
+        up!(cable_particle_offsets);
+        up!(cable_particles);
+        up!(cable_rest_length);
+        up!(cable_stiffness);
         up!(body_mass);
         up!(body_inv_mass);
         up!(body_inertia);

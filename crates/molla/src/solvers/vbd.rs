@@ -94,6 +94,26 @@ pub struct GpuBackend {
     pub(crate) kernel: crate::kernels::VbdClothKernel,
 }
 
+/// AVBD contact treatment. **Soft** is the Stage-20 v1 quadratic
+/// penalty: a single per-iteration `½ k_c · pen²` term, no dual
+/// variable. **Hard** layers an augmented-Lagrangian update on top —
+/// each outer iteration accumulates a per-particle multiplier `λ`
+/// from the residual penetration, which drives `pen → 0` even at
+/// modest contact stiffness. Hard mode is what no-slip / no-penetration
+/// cloth-on-rigid demos need.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub enum VbdMode {
+    /// Stage-20 v1 quadratic penalty. Cheap, allows ~1mm penetration
+    /// for typical stiffnesses but never overshoots on the way out.
+    #[default]
+    Soft,
+    /// Augmented-Lagrangian dual updates per outer iteration. Drives
+    /// penetration toward zero independent of `contact_stiffness`,
+    /// at the cost of one extra per-particle scratch buffer (`λ`)
+    /// and a residual-evaluation pass per outer iteration.
+    Hard,
+}
+
 /// Vertex Block Descent cloth + soft-on-rigid solver. Use for
 /// high-stiffness cloth where XPBD compliance produces visible jelly
 /// behaviour, and for cloth that drapes over rigid kinematic bodies.
@@ -117,6 +137,9 @@ pub struct VbdSolver {
     /// to avoid pathological Hessian conditioning when the user
     /// passes near-zero compliance.
     pub max_spring_stiffness: f64,
+    /// Contact-mode selector. Defaults to [`VbdMode::Soft`] for
+    /// back-compat with Stage 20.
+    pub vbd_mode: VbdMode,
     backend: VbdBackend,
 }
 
@@ -136,6 +159,7 @@ impl VbdSolver {
             substeps: 1,
             contact_stiffness: 1.0e5,
             max_spring_stiffness: 1.0e7,
+            vbd_mode: VbdMode::Soft,
             backend: VbdBackend::Cpu,
         }
     }
@@ -169,6 +193,7 @@ impl VbdSolver {
             substeps: 1,
             contact_stiffness: 1.0e5,
             max_spring_stiffness: max_k,
+            vbd_mode: VbdMode::Soft,
             backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
     }
@@ -192,6 +217,18 @@ impl VbdSolver {
     pub fn with_max_spring_stiffness(mut self, k: f64) -> Self {
         self.max_spring_stiffness = k.max(1.0);
         self
+    }
+    /// Pick the AVBD contact treatment. See [`VbdMode`].
+    #[must_use]
+    pub fn with_mode(mut self, mode: VbdMode) -> Self {
+        self.vbd_mode = mode;
+        self
+    }
+    /// Equivalent to `with_mode(VbdMode::Hard)`. Sugar for the
+    /// no-penetration use case.
+    #[must_use]
+    pub fn with_hard_mode(self) -> Self {
+        self.with_mode(VbdMode::Hard)
     }
 
     /// Refresh the per-spring stiffness table from `model`. Call
@@ -259,6 +296,7 @@ impl Solver for VbdSolver {
                         self.iterations,
                         self.contact_stiffness,
                         self.max_spring_stiffness,
+                        self.vbd_mode,
                         &mut p_out,
                         &mut v_out,
                     )?;
@@ -288,6 +326,7 @@ impl Solver for VbdSolver {
 
                 let GpuBackend { device, queue, kernel } = gpu;
                 let contact_k = self.contact_stiffness as f32;
+                let hard = matches!(self.vbd_mode, VbdMode::Hard);
                 // Single substep — straight kernel dispatch. Multi-
                 // substep ping-pong is implemented by dispatching N
                 // times with a chain of state_in → state_out swaps
@@ -301,6 +340,7 @@ impl Solver for VbdSolver {
                     dt_sub,
                     self.iterations as u32,
                     contact_k,
+                    hard,
                 )?;
                 if n_sub > 1 {
                     // Subsequent substeps: alternate buffers using a
@@ -365,6 +405,7 @@ pub(crate) fn cpu_step(
     iterations: usize,
     contact_stiffness: f64,
     max_spring_stiffness: f64,
+    mode: VbdMode,
     particle_q_out: &mut [Vec3],
     particle_qd_out: &mut [Vec3],
 ) -> Result<()> {
@@ -418,6 +459,15 @@ pub(crate) fn cpu_step(
         .collect();
 
     let dt2 = dt * dt;
+
+    // Hard-mode AVBD scratch: per-particle augmented-Lagrangian
+    // multiplier `λ` (one per particle, scalar — applied along the
+    // most-penetrating contact normal). Updated at the end of every
+    // outer iteration as `λ ← max(λ + k_c · pen, 0)`. Soft mode
+    // leaves λ at zero — the contribution `(λ + k_c · pen) · n`
+    // collapses back to the Stage-20 v1 quadratic penalty.
+    let mut lambda = vec![0.0_f64; n];
+    let hard = matches!(mode, VbdMode::Hard);
 
     // Pre-compute world-frame shape transforms once per substep.
     let body_q = state_body_transforms(model, n)?;
@@ -491,9 +541,17 @@ pub(crate) fn cpu_step(
                     h = mat3_add(h, h_self);
                 }
 
-                // Soft rigid contact penalty (AVBD soft path).
+                // Rigid contact term. Soft-mode = quadratic penalty
+                // (Stage-20 v1). Hard-mode = augmented-Lagrangian:
+                // adds `λ · n` to the force where `λ` is the per-
+                // particle dual variable updated at the end of the
+                // outer iteration. Per Giles, Diaz & Yuksel (2025,
+                // §4.2), the per-iteration block residual is
+                //   f_c = (λ + k_c · pen) · n,
+                //   H_c = k_c · n nᵀ.
                 if contact_stiffness > 0.0 && model.shape_count > 0 {
                     let pr = radius[v];
+                    let lam = lambda[v];
                     for s in 0..model.shape_count {
                         let kind = shape_kind[s];
                         if kind == 0xff {
@@ -504,11 +562,13 @@ pub(crate) fn cpu_step(
                         let nd = shape_signed_distance(kind, xf, data, x[v]);
                         let pen = pr - nd.1;
                         if pen > 0.0 {
-                            // Quadratic penalty: ½ k_c · pen² along
-                            // outward normal `nd.0`.
                             let normal = nd.0;
-                            f += normal * (contact_stiffness * pen);
-                            // Hessian contribution: k_c · nnᵀ.
+                            let mag = if hard {
+                                lam + contact_stiffness * pen
+                            } else {
+                                contact_stiffness * pen
+                            };
+                            f += normal * mag;
                             let n_outer = mat3_outer(normal, normal);
                             h = mat3_add(h, mat3_scale(n_outer, contact_stiffness));
                         }
@@ -519,6 +579,35 @@ pub(crate) fn cpu_step(
                 if let Some(dx) = solve_3x3(h, f) {
                     x[v] += dx;
                 }
+            }
+        }
+
+        // Hard-mode AVBD dual update — once per outer iteration,
+        // bump `λ` by the residual penetration. Negative λ would
+        // pull the particle into the surface, so we clamp at zero
+        // (unilateral contact). Soft mode leaves `λ` untouched.
+        if hard && contact_stiffness > 0.0 && model.shape_count > 0 {
+            for v in 0..n {
+                if inv_mass[v] <= 0.0 {
+                    continue;
+                }
+                let pr = radius[v];
+                let mut max_pen = 0.0_f64;
+                for s in 0..model.shape_count {
+                    let kind = shape_kind[s];
+                    if kind == 0xff {
+                        continue;
+                    }
+                    let xf = shape_xforms[s];
+                    let data = shape_data[s];
+                    let nd = shape_signed_distance(kind, xf, data, x[v]);
+                    let pen = pr - nd.1;
+                    if pen > max_pen {
+                        max_pen = pen;
+                    }
+                }
+                let new_lam = lambda[v] + contact_stiffness * max_pen;
+                lambda[v] = new_lam.max(0.0);
             }
         }
     }

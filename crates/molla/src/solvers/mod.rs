@@ -17,7 +17,7 @@ pub use jacobian::jacobian;
 pub use mujoco::MuJoCoSolver;
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
-pub use vbd::VbdSolver;
+pub use vbd::{VbdMode, VbdSolver};
 pub use xpbd::XpbdSolver;
 
 use crate::core::Result;

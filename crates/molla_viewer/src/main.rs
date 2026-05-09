@@ -241,6 +241,31 @@ const VBD_CLOTH_SPHERE_Y: f32 = 1.6;
 /// without producing visible jitter. Tuneable from the right-rail.
 const VBD_CLOTH_CONTACT_STIFFNESS: f64 = 5.0e4;
 
+// --- Stage-20.1 CABLE scene ----------------------------------------
+// 32-particle polyline pinned at one end + an orbiting kinematic
+// "puller" body at the other. A static cylinder sits between them so
+// the cable can drape over it, exercising VBD soft-on-rigid contact +
+// the new Dahl friction kernel.
+const CABLE_PARTICLES: u32 = 32;
+const CABLE_PINNED_AT: bevy::math::Vec3 = bevy::math::Vec3::new(-1.2, 1.8, 0.0);
+const CABLE_PARTICLE_MASS: f64 = 0.04;
+const CABLE_PARTICLE_RADIUS: f64 = 0.022;
+/// Cable stretch stiffness (N/m). At 1e6 N/m the cable is effectively
+/// inextensible — XPBD compliance `α = 1/k` < 1e-6.
+const CABLE_STIFFNESS: f64 = 1.0e6;
+/// Soft-contact stiffness against the static cylinder + the orbiting
+/// puller. Tuneable.
+const CABLE_CONTACT_STIFFNESS: f64 = 5.0e4;
+/// Static cylinder pose — the cable drapes over its top edge.
+const CABLE_CYLINDER_RADIUS: f32 = 0.30;
+const CABLE_CYLINDER_HALF_HEIGHT: f32 = 0.50;
+const CABLE_CYLINDER_POS: bevy::math::Vec3 = bevy::math::Vec3::new(0.0, 1.2, 0.0);
+/// Puller orbit radius and rate (rad/s).
+const CABLE_PULLER_ORBIT_R: f32 = 1.1;
+const CABLE_PULLER_ORBIT_RATE: f32 = 0.4;
+const CABLE_PULLER_HEIGHT: f32 = 1.6;
+const CABLE_PULLER_RADIUS: f32 = 0.08;
+
 // --- Differentiable arm (Stage 23) -------------------------------
 /// World-space anchor height of the planar arm's shoulder. The arm
 /// hangs in the world XY plane (Z = 0) so the existing camera works.
@@ -340,6 +365,7 @@ fn main() {
         .insert_resource(DiffArmExampleState::default())
         .insert_resource(MeshToolsExampleState::default())
         .insert_resource(NeuralPolicyExampleState::default())
+        .insert_resource(CableExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -385,6 +411,7 @@ fn main() {
                     update_quadrotor,
                     update_mujoco_example,
                     update_diff_arm,
+                    update_cable_example,
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -402,6 +429,7 @@ fn main() {
                     draw_lidar_gizmos,
                     draw_contact_gizmos,
                     draw_diff_arm_gizmos,
+                    draw_cable_gizmos,
                 )
                     .chain(),
             )
@@ -470,6 +498,8 @@ struct SceneStates<'w> {
     /// avoids pushing `apply_scene_switch` past Bevy's 16-tuple
     /// SystemParam ceiling.
     neural: ResMut<'w, NeuralPolicyExampleState>,
+    /// Stage-20.1 CABLE demo state. Same bundling rationale.
+    cable: ResMut<'w, CableExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -496,6 +526,8 @@ struct PaneSceneStates<'w> {
     mesh: ResMut<'w, MeshToolsExampleState>,
     /// Stage-18.1 neural-policy demo state. Same rationale.
     neural: ResMut<'w, NeuralPolicyExampleState>,
+    /// Stage-20.1 CABLE demo state. Same rationale.
+    cable: ResMut<'w, CableExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -667,6 +699,12 @@ enum Scene {
     /// on-device via `ControllerNeuralMlp`. Right-rail pane shows
     /// the live MLP I/O readout. Hotkey `N`.
     NeuralPolicy,
+    /// Stage-20.1 CABLE polyline demo. A 32-particle pinned cable is
+    /// yanked by an orbiting kinematic puller body, draping over a
+    /// static cylinder so soft-on-rigid contact + Dahl friction +
+    /// hard-mode AVBD (toggleable) come into play. Right-rail pane
+    /// carries stretch / friction / mode sliders. Hotkey `C`.
+    Cable,
 }
 
 impl Scene {
@@ -692,6 +730,7 @@ impl Scene {
         Scene::DiffArm,
         Scene::MeshTools,
         Scene::NeuralPolicy,
+        Scene::Cable,
     ];
 
     fn label(self) -> &'static str {
@@ -716,6 +755,7 @@ impl Scene {
             Scene::DiffArm => "Differentiable arm (Stage 23)",
             Scene::MeshTools => "Mesh tools (Stage 21)",
             Scene::NeuralPolicy => "Neural policy (Stage 18.1)",
+            Scene::Cable => "Cable (Stage 20.1)",
         }
     }
 
@@ -735,7 +775,7 @@ impl Scene {
             | Scene::Actuator
             | Scene::Quadrotor
             | Scene::NeuralPolicy => SolverKind::Featherstone,
-            Scene::VbdCloth => SolverKind::Vbd,
+            Scene::VbdCloth | Scene::Cable => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm is purely host-driven (the optimiser writes
             // body_q each frame); pick the cheap-to-construct XPBD
@@ -965,6 +1005,49 @@ impl Default for VbdClothExampleState {
             contact_stiffness: VBD_CLOTH_CONTACT_STIFFNESS as f32,
             inner_iterations: 10,
             use_vbd: true,
+        }
+    }
+}
+
+/// Stage-20.1 CABLE polyline demo runtime state. Driven by the
+/// right-rail sliders; applied to the active solver each frame in
+/// `update_cable_example`. Lazy-initialised on entry to `Scene::Cable`;
+/// survives scene switches so the user's tuning persists.
+#[derive(Resource)]
+struct CableExampleState {
+    /// Cable stretch stiffness (N/m). Re-applied to the per-spring
+    /// XPBD compliance buffer when the user drags the slider.
+    stretch_stiffness: f64,
+    /// Friction coefficient μ at the cable ↔ static-cylinder contact.
+    /// Surfaced via the Dahl friction pane (which doesn't actually
+    /// affect the VBD step today — the kernel is shipped but consumed
+    /// by Stage 22.1 for hydroelastic; see PLAN.md).
+    friction_mu: f64,
+    /// Soft-contact stiffness against the cylinder + puller (N/m).
+    contact_stiffness: f64,
+    /// VBD outer-iteration count per substep.
+    inner_iterations: u32,
+    /// AVBD contact-mode toggle: hard mode = augmented-Lagrangian
+    /// dual updates, soft mode = quadratic penalty (Stage 20).
+    use_hard_mode: bool,
+    /// Show the pinned-particle marker as a yellow gizmo.
+    show_pinned: bool,
+    /// Internal sim-time accumulator so the puller orbits at a steady
+    /// rate (we can't read SimRunState here without bringing it into
+    /// the system param tuple).
+    sim_time: f32,
+}
+
+impl Default for CableExampleState {
+    fn default() -> Self {
+        Self {
+            stretch_stiffness: CABLE_STIFFNESS,
+            friction_mu: 0.4,
+            contact_stiffness: CABLE_CONTACT_STIFFNESS,
+            inner_iterations: 12,
+            use_hard_mode: true,
+            show_pinned: true,
+            sim_time: 0.0,
         }
     }
 }
@@ -1456,6 +1539,7 @@ impl Sim {
             Scene::MuJoCo => build_mujoco_model(),
             Scene::DiffArm => build_diff_arm_model(),
             Scene::NeuralPolicy => build_neural_policy_model(),
+            Scene::Cable => build_cable_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1902,6 +1986,83 @@ fn build_vbd_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
 
     let model = b.build().expect("model");
     (model, Vec::new())
+}
+
+/// Stage-20.1 CABLE polyline demo. A 32-particle cable pinned at one
+/// end, the other end driven kinematically by `update_cable_example`.
+/// A static cylinder sits between the pin and the puller so the cable
+/// drapes over it (soft-on-rigid AVBD + Dahl friction territory).
+///
+/// The puller body is a kinematic sphere so it shows up in the
+/// renderer's body list (we want the user to see what's pulling the
+/// cable). The cable itself isn't a body — it's particles + springs,
+/// rendered as a gizmo polyline by `draw_cable_gizmos`.
+fn build_cable_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.6);
+
+    let pin_pos = MVec3::new(
+        CABLE_PINNED_AT.x as f64,
+        CABLE_PINNED_AT.y as f64,
+        CABLE_PINNED_AT.z as f64,
+    );
+    // Initial puller position — start at the +X side of the orbit.
+    let puller_pos = MVec3::new(
+        CABLE_PULLER_ORBIT_R as f64,
+        CABLE_PULLER_HEIGHT as f64,
+        0.0,
+    );
+    let (first, n, _cable_id) = b.add_cable_polyline(
+        pin_pos,
+        puller_pos,
+        CABLE_PARTICLES,
+        CABLE_PARTICLE_MASS,
+        CABLE_PARTICLE_RADIUS,
+        CABLE_STIFFNESS,
+        // Hard cap on per-segment stretch — 0 means inextensible
+        // after the soft pass. We rely on VBD's stiffness for the
+        // soft pass, so the cap mainly catches numerical drift.
+        0.02,
+        mp::WorldId(0),
+    );
+    // Pin both endpoints. The puller end is "kinematic-pinned": its
+    // mass stays at zero (so the integrator skips it) and the system
+    // `update_cable_example` rewrites its position each frame.
+    b.pin_particle(first);
+    b.pin_particle(first + n - 1);
+
+    // Static cylinder between pin and puller (the drape obstacle).
+    b.add_shape_cylinder(
+        mp::BodyId::NONE,
+        CABLE_CYLINDER_HALF_HEIGHT as f64,
+        CABLE_CYLINDER_RADIUS as f64,
+        mp::Transform::from_translation(MVec3::new(
+            CABLE_CYLINDER_POS.x as f64,
+            CABLE_CYLINDER_POS.y as f64,
+            CABLE_CYLINDER_POS.z as f64,
+        )),
+    )
+    .expect("cable cylinder shape");
+
+    // Kinematic puller body — a small sphere we can render. Its
+    // pose is overwritten by `update_cable_example` each frame.
+    let puller = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(0.1, CABLE_PULLER_RADIUS as f64))
+            .with_position(puller_pos)
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(puller, CABLE_PULLER_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("puller shape");
+
+    // Floor catch-all so the cable doesn't fall forever if the user
+    // pulls too hard and a particle escapes.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("floor plane");
+
+    let model = b.build().expect("cable model");
+    let visuals = vec![BodyVisual::Sphere(CABLE_PULLER_RADIUS)];
+    (model, visuals)
 }
 
 /// Stage-21 mesh-tools demo. The "model" is empty (no physics step
@@ -3410,6 +3571,34 @@ fn spawn_body_entities(
         ));
     }
 
+    // Stage-20.1 CABLE scene — render the static drape-cylinder
+    // obstacle. The orbiting puller body is rendered through the
+    // generic body-visual loop above; the cable polyline itself is
+    // rendered via gizmos by `draw_cable_gizmos`.
+    if sim.scene == Scene::Cable {
+        let mesh = meshes.add(
+            Cylinder::new(CABLE_CYLINDER_RADIUS, CABLE_CYLINDER_HALF_HEIGHT * 2.0)
+                .mesh()
+                .resolution(48),
+        );
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.62, 0.75),
+            metallic: 0.10,
+            perceptual_roughness: 0.55,
+            ..default()
+        });
+        commands.spawn((
+            ClothObstacle,
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::from_xyz(
+                CABLE_CYLINDER_POS.x,
+                CABLE_CYLINDER_POS.y,
+                CABLE_CYLINDER_POS.z,
+            ),
+        ));
+    }
+
     // Shapes-scene static visuals: heightfield (deforming triangle
     // strip from the model's heights) + torus mesh.
     if sim.scene == Scene::Shapes {
@@ -3879,6 +4068,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyN) && sim.scene != Scene::NeuralPolicy {
         pending.0 = Some(Scene::NeuralPolicy);
     }
+    if keys.just_pressed(KeyCode::KeyC) && sim.scene != Scene::Cable {
+        pending.0 = Some(Scene::Cable);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -3960,6 +4152,10 @@ fn apply_scene_switch(
     gpu_bp.smoothed_ms = 0.0;
     gpu_bp.last_cpu_ms = 0.0;
     gpu_bp.last_gpu_ms = 0.0;
+
+    // Stage 20.1 cable scene: reset the orbit time so the puller
+    // starts from the same place each entry.
+    scene_states.cable.sim_time = 0.0;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5774,6 +5970,62 @@ fn ms_to_substeps(ms: f32) -> u32 {
 /// frame body pose + velocity, computes per-rotor thrusts, writes
 /// world-frame thrust forces into `state.body_f` on each rotor body.
 /// Featherstone GPU consumes them via the bias term.
+/// Drive the kinematic puller body + the puller-pinned cable particle
+/// in `Scene::Cable` along a circular orbit. Also keeps the active
+/// VBD solver's `vbd_mode` / `contact_stiffness` / `iterations` in
+/// sync with the right-rail sliders.
+fn update_cable_example(
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<CableExampleState>,
+    time: Res<Time>,
+    run: Res<SimRunState>,
+) {
+    if sim.scene != Scene::Cable {
+        return;
+    }
+    if !run.paused {
+        state.sim_time += time.delta_secs();
+    }
+    let t = state.sim_time;
+    let theta = t * CABLE_PULLER_ORBIT_RATE;
+    let puller_pos = MVec3::new(
+        (CABLE_PULLER_ORBIT_R * theta.cos()) as f64,
+        CABLE_PULLER_HEIGHT as f64,
+        (CABLE_PULLER_ORBIT_R * theta.sin()) as f64,
+    );
+
+    // Update the kinematic puller body's pose. body 0 is the puller
+    // (added via `BodyParams::new().with_flags(KINEMATIC)` in
+    // `build_cable_model` after the cable particles).
+    if sim.model.body_count > 0 {
+        if let Ok(bq) = sim.state_a.body_q.host_mut() {
+            if let Some(body) = bq.last_mut() {
+                *body = mp::Transform::from_translation(puller_pos);
+            }
+        }
+    }
+
+    // Update the puller-pinned cable particle. It's the LAST particle
+    // pushed by `add_cable_polyline`, so index = particle_count - 1.
+    let idx = sim.model.particle_count;
+    if idx > 0 {
+        if let Ok(pq) = sim.state_a.particle_q.host_mut() {
+            pq[idx - 1] = puller_pos;
+        }
+    }
+
+    // Apply the right-rail solver tunings.
+    if let SolverBackend::Vbd(s) = &mut sim.solver {
+        s.contact_stiffness = state.contact_stiffness;
+        s.iterations = state.inner_iterations as usize;
+        s.vbd_mode = if state.use_hard_mode {
+            mp::VbdMode::Hard
+        } else {
+            mp::VbdMode::Soft
+        };
+    }
+}
+
 fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
     if sim.scene != Scene::Quadrotor {
         return;
@@ -6395,6 +6647,53 @@ fn draw_lidar_gizmos(
     }
 }
 
+/// Render the CABLE polyline as a connected gizmo line strip. The
+/// physics representation is just particles + segment springs — no
+/// triangle mesh — so we draw it directly each frame from the host
+/// `particle_q` mirror that `step_simulation` keeps fresh.
+///
+/// Colours: orange line strip for the cable; yellow markers on pinned
+/// particles when `state.show_pinned` is on.
+fn draw_cable_gizmos(
+    sim: Res<Sim>,
+    state: Res<CableExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::Cable {
+        return;
+    }
+    let Ok(pq) = sim.state_a.particle_q.host() else {
+        return;
+    };
+    let n = sim.model.particle_count;
+    if n < 2 {
+        return;
+    }
+    let cable_color = if state.use_hard_mode {
+        Color::srgb(0.95, 0.55, 0.20) // hard mode = warm orange
+    } else {
+        Color::srgb(0.40, 0.70, 0.95) // soft mode = cool blue
+    };
+    for i in 0..n - 1 {
+        let a = pq[i];
+        let b = pq[i + 1];
+        gizmos.line(
+            Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+            Vec3::new(b.x as f32, b.y as f32, b.z as f32),
+            cable_color,
+        );
+    }
+    if state.show_pinned {
+        // First and last particles are the pin anchors.
+        let pin_color = Color::srgb(1.0, 0.95, 0.20);
+        for &i in [0_usize, n - 1].iter() {
+            let p = pq[i];
+            let pos = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+            gizmos.sphere(pos, 0.04, pin_color);
+        }
+    }
+}
+
 /// While dragging, draw a yellow line from the picked anchor (body or
 /// cloth particle) to the cursor target so the user can see what
 /// they're holding.
@@ -6509,6 +6808,7 @@ fn control_pane(
                     | Scene::DiffArm
                     | Scene::MeshTools
                     | Scene::NeuralPolicy
+                    | Scene::Cable
             ),
             _ => false,
         },
@@ -6632,6 +6932,7 @@ fn control_pane(
         Scene::DiffArm => Some("Diff arm (Stage 23)"),
         Scene::MeshTools => Some("Mesh tools (Stage 21)"),
         Scene::NeuralPolicy => Some("Neural policy (Stage 18.1)"),
+        Scene::Cable => Some("Cable (Stage 20.1)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -6680,6 +6981,9 @@ fn control_pane(
                     }
                     Scene::NeuralPolicy => {
                         neural_policy_pane(ui, &mut pane_states.neural)
+                    }
+                    Scene::Cable => {
+                        cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
                     }
                     _ => {}
                 });
@@ -6873,6 +7177,110 @@ fn vbd_cloth_pane(
     ui.small("Hotkey: V");
     ui.small("Compare: toggle VBD off → XPBD baseline.");
     ui.small("XPBD wobbles at high stiffness; VBD settles.");
+}
+
+/// Right-rail pane for the Stage-20.1 CABLE demo. Carries the
+/// stretch + friction + contact-stiffness sliders, the AVBD
+/// soft↔hard mode toggle, and a "show pinned points" gizmo toggle.
+fn cable_pane(
+    ui: &mut egui::Ui,
+    state: &mut CableExampleState,
+    sim: &mut Sim,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Springs", &format!("{}", sim.model.spring_count));
+    readout(ui, "Cables", &format!("{}", sim.model.cable_count));
+    if sim.model.cable_count > 0 {
+        if let Ok(rl) = sim.model.cable_rest_length.host() {
+            readout(ui, "Rest length", &format!("{:.3} m", rl[0]));
+        }
+    }
+    ui.separator();
+
+    ui.label("Stretch stiffness (N/m)");
+    if ui
+        .add(
+            egui::Slider::new(&mut state.stretch_stiffness, 1.0e3..=1.0e7)
+                .logarithmic(true),
+        )
+        .changed()
+    {
+        // Mirror the new stiffness into the per-spring compliance
+        // buffer so VBD's `refresh_stiffness` (called below) picks it
+        // up. The model's compliance buffer is host-mut-friendly
+        // because we own it; any GPU re-upload happens inside
+        // `refresh_stiffness` on the solver.
+        let alpha = if state.stretch_stiffness > 1.0 {
+            1.0 / state.stretch_stiffness
+        } else {
+            1.0
+        };
+        if let Ok(comp) = sim.model.spring_compliance.host_mut() {
+            for c in comp.iter_mut() {
+                *c = alpha;
+            }
+        }
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            let _ = s.refresh_stiffness(&sim.model);
+        }
+    }
+
+    ui.label("Friction coefficient μ");
+    let _ = ui.add(egui::Slider::new(&mut state.friction_mu, 0.0..=1.5));
+    ui.label("Soft contact stiffness (N/m)");
+    if ui
+        .add(
+            egui::Slider::new(&mut state.contact_stiffness, 1.0e3..=1.0e6)
+                .logarithmic(true),
+        )
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.contact_stiffness = state.contact_stiffness;
+        }
+    }
+    ui.label("Inner iterations");
+    if ui
+        .add(egui::Slider::new(&mut state.inner_iterations, 1..=30))
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.iterations = state.inner_iterations as usize;
+        }
+    }
+    ui.separator();
+
+    if ui
+        .checkbox(&mut state.use_hard_mode, "Hard-mode AVBD (no penetration)")
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.vbd_mode = if state.use_hard_mode {
+                mp::VbdMode::Hard
+            } else {
+                mp::VbdMode::Soft
+            };
+        }
+    }
+    ui.checkbox(&mut state.show_pinned, "Show pinned points");
+    ui.separator();
+
+    if ui
+        .add_sized(
+            [ui.available_width(), 28.0],
+            button_widget("Reset cable", accent),
+        )
+        .clicked()
+    {
+        sim.reset();
+        state.sim_time = 0.0;
+    }
+    ui.add_space(6.0);
+    ui.small("Hotkey: C");
+    ui.small("Friction kernel ships here; consumed by Stage 22.1");
+    ui.small("for hydroelastic. Slider is informational in v1.");
 }
 
 /// Tiny helper that returns an egui Button styled the same as the
