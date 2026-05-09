@@ -1870,7 +1870,9 @@ impl ModelBuilder {
         Ok(())
     }
 
-    /// Set per-DOF effort cap (N·m or N). `NaN` = unlimited.
+    /// Set per-DOF effort cap (N·m or N). Pass `Real::INFINITY` (or
+    /// `NaN` as a back-compat alias — substituted at finalize) for
+    /// unlimited; finite values must be ≥ 0.
     pub fn set_joint_effort_limit(
         &mut self,
         joint: JointId,
@@ -1883,6 +1885,13 @@ impl ModelBuilder {
                 "set_joint_effort_limit: joint {joint:?} has {n} DOFs, got {}",
                 effort.len()
             )));
+        }
+        for (k, &e) in effort.iter().enumerate() {
+            if !e.is_nan() && e.is_finite() && e < 0.0 {
+                return Err(Error::Build(format!(
+                    "set_joint_effort_limit: joint {joint:?} dof {k} effort cap {e} < 0"
+                )));
+            }
         }
         self.joint_effort_limit[start..end].copy_from_slice(effort);
         Ok(())
@@ -1915,7 +1924,9 @@ impl ModelBuilder {
         Ok(())
     }
 
-    /// Set per-DOF velocity cap (rad/s or m/s). `NaN` = unlimited.
+    /// Set per-DOF velocity cap (rad/s or m/s). Pass `Real::INFINITY`
+    /// (or `NaN` as a back-compat alias — substituted at finalize)
+    /// for unlimited; finite values must be ≥ 0.
     pub fn set_joint_velocity_limit(
         &mut self,
         joint: JointId,
@@ -1928,6 +1939,13 @@ impl ModelBuilder {
                 "set_joint_velocity_limit: joint {joint:?} has {n} DOFs, got {}",
                 velocity.len()
             )));
+        }
+        for (k, &v) in velocity.iter().enumerate() {
+            if !v.is_nan() && v.is_finite() && v < 0.0 {
+                return Err(Error::Build(format!(
+                    "set_joint_velocity_limit: joint {joint:?} dof {k} velocity cap {v} < 0"
+                )));
+            }
         }
         self.joint_velocity_limit[start..end].copy_from_slice(velocity);
         Ok(())
@@ -2211,6 +2229,19 @@ impl ModelBuilder {
             }
         }
         for v in &mut self.joint_limit_upper {
+            if v.is_nan() {
+                *v = Real::INFINITY;
+            }
+        }
+        // Effort / velocity limits feed `clamp_or_passthrough(x, limit)`
+        // — `Real::INFINITY` makes the clamp a no-op, expressing
+        // "unlimited" without a runtime NaN check.
+        for v in &mut self.joint_effort_limit {
+            if v.is_nan() {
+                *v = Real::INFINITY;
+            }
+        }
+        for v in &mut self.joint_velocity_limit {
             if v.is_nan() {
                 *v = Real::INFINITY;
             }
