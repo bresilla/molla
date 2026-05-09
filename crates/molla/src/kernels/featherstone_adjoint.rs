@@ -2,13 +2,13 @@
 //! kernels.
 //!
 //! Mirrors the per-sweep `TapeOp` granularity from
-//! `crate::autograd::tape` so each Featherstone sweep maps onto its
-//! own kernel (`featherstone_adjoint_fwd.wgsl`,
-//! `featherstone_adjoint_upward.wgsl`,
-//! `featherstone_adjoint_downward.wgsl`). The dispatcher decides at
-//! runtime whether to route to the WGSL pipeline or fall back to one
-//! of the CPU adjoint paths in
-//! `crate::autograd::featherstone_adjoint`.
+//! `crate::autograd::tape`. The real GPU dispatch is the per-step
+//! closed-form Jacobian kernel `featherstone_adjoint_jacobians.wgsl`
+//! (wrapped by [`crate::kernels::featherstone_adjoint_gpu::FeatherstoneAdjointGpuKernel`]).
+//! The dispatcher routes to one of the CPU adjoint paths in
+//! `crate::autograd::featherstone_adjoint`; per-sweep WGSL scaffolds
+//! never landed (the closed-form-Jacobian batched dispatch was the
+//! winning shape) and were removed.
 //!
 //! ## Stage 23.1.2 changes
 //!
