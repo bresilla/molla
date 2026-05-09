@@ -7928,7 +7928,7 @@ fn quat_to_rpy(q: MQuat) -> (f64, f64, f64) {
 /// current `Contacts` and stashes the readings. No-op for any other
 /// scene.
 fn update_contact_example(
-    mut sim: ResMut<Sim>,
+    sim: ResMut<Sim>,
     mut state: ResMut<ContactExampleState>,
 ) {
     if sim.scene != Scene::Contact {
@@ -7968,7 +7968,7 @@ fn update_contact_example(
 #[allow(clippy::too_many_arguments)]
 fn update_camera_example(
     time: Res<Time>,
-    mut sim: ResMut<Sim>,
+    sim: ResMut<Sim>,
     mut state: ResMut<CameraExampleState>,
     mut images: ResMut<Assets<Image>>,
     mut user_textures: ResMut<EguiUserTextures>,
