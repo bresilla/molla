@@ -112,6 +112,39 @@ struct Transform {
 @group(4) @binding(3) var<storage, read>       shape_transform:  array<Transform>;
 @group(4) @binding(4) var<storage, read>       body_q:           array<Transform>;
 
+// ── Group 5: tetrahedra (Stage 20.2 volumetric soft bodies) ────────
+// All arrays length-1 dummies when `tet_count == 0` so the bind
+// group always has 8 entries; the per-vertex tet loop bails out
+// immediately on an empty CSR.
+//
+// `tet_indices` is flat 4 u32s per tet (matching the host model).
+// `tet_dm_inv_x/y/z` are the columns of the inverse rest-state basis.
+// `tet_rest_volume / tet_mu / tet_lambda` carry the per-element
+// material params.
+// `vertex_adj_tets_offsets / vertex_adj_tets` are the per-vertex CSR
+// of (tet_id, v_order) pairs.
+// Mat3 stored as three padded columns (matches `GpuMat3`, same
+// layout as `body_inertia` in `integrate_bodies.wgsl`).
+struct Mat3Cols {
+    col0: vec4<f32>,
+    col1: vec4<f32>,
+    col2: vec4<f32>,
+};
+@group(5) @binding(0) var<storage, read>       tet_indices:                  array<u32>;
+@group(5) @binding(1) var<storage, read>       tet_dm_inv:                   array<Mat3Cols>;
+@group(5) @binding(2) var<storage, read>       tet_rest_volume:              array<f32>;
+@group(5) @binding(3) var<storage, read>       tet_mu:                       array<f32>;
+@group(5) @binding(4) var<storage, read>       tet_lambda:                   array<f32>;
+@group(5) @binding(5) var<storage, read>       vertex_adj_tets_offsets:      array<u32>;
+@group(5) @binding(6) var<storage, read>       vertex_adj_tets:              array<u32>;
+// Stage 20.2 — per-vertex CABLE bending CSR. Each entry is 4 u32s
+// `(v_prev, v_mid, v_next, role)` packed flat; per-entry stiffness
+// is stored in the parallel `vertex_cable_bending_k` array. Empty
+// when no cable has a positive bending stiffness.
+@group(5) @binding(7) var<storage, read>       vertex_cable_bend_offsets:    array<u32>;
+@group(5) @binding(8) var<storage, read>       vertex_cable_bend_entries:    array<u32>;
+@group(5) @binding(9) var<storage, read>       vertex_cable_bend_k:          array<f32>;
+
 const KIND_SPHERE:   u32 = 0u;
 const KIND_PLANE:    u32 = 1u;
 const KIND_BOX:      u32 = 2u;
@@ -288,6 +321,138 @@ fn mat3_inverse(m: mat3x3<f32>) -> mat3x3<f32> {
     );
 }
 
+// Cofactor (adjugate) of a 3×3 — numerically stable when det ≈ 0.
+fn cofactor3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let a11 = m[0].x; let a21 = m[0].y; let a31 = m[0].z;
+    let a12 = m[1].x; let a22 = m[1].y; let a32 = m[1].z;
+    let a13 = m[2].x; let a23 = m[2].y; let a33 = m[2].z;
+    return mat3x3<f32>(
+        vec3<f32>(
+            a22 * a33 - a23 * a32,
+            a23 * a31 - a21 * a33,
+            a21 * a32 - a22 * a31,
+        ),
+        vec3<f32>(
+            a13 * a32 - a12 * a33,
+            a11 * a33 - a13 * a31,
+            a12 * a31 - a11 * a32,
+        ),
+        vec3<f32>(
+            a12 * a23 - a13 * a22,
+            a13 * a21 - a11 * a23,
+            a11 * a22 - a12 * a21,
+        ),
+    );
+}
+
+// Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
+// vertex order `v_order ∈ {0..3}`. Mirrors the CPU
+// `neo_hookean_vertex_block`. Uses the Smith et al. 2018 stable-NH
+// reparameterisation `μ_NH = μ`, `λ_NH = λ + μ` and drops the
+// `s · ∂²J/∂F²` term from the Hessian (zero by Levi-Civita
+// antisymmetry on the per-vertex 3×3 projection).
+fn tet_neo_hookean_block(
+    tet_id: u32,
+    v_order: u32,
+    out_force: ptr<function, vec3<f32>>,
+    out_hess:  ptr<function, mat3x3<f32>>,
+) {
+    let i0 = tet_indices[tet_id * 4u];
+    let i1 = tet_indices[tet_id * 4u + 1u];
+    let i2 = tet_indices[tet_id * 4u + 2u];
+    let i3 = tet_indices[tet_id * 4u + 3u];
+    let v0 = particle_q[i0].xyz;
+    let v1 = particle_q[i1].xyz;
+    let v2 = particle_q[i2].xyz;
+    let v3 = particle_q[i3].xyz;
+
+    // Inverse rest-state basis: stored as 3 padded vec4 columns
+    // (Mat3Cols / GpuMat3 layout, same as body_inertia uploads).
+    let dm_inv_raw = tet_dm_inv[tet_id];
+    let dm_inv = mat3x3<f32>(dm_inv_raw.col0.xyz, dm_inv_raw.col1.xyz, dm_inv_raw.col2.xyz);
+
+    let rest_vol = tet_rest_volume[tet_id];
+    let mu_l = tet_mu[tet_id];
+    let lam_l = tet_lambda[tet_id];
+    let mu = mu_l;
+    let lam = lam_l + mu_l;
+
+    // Deformation gradient F = Ds · Dm⁻¹.
+    let ds = mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0);
+    let f_mat = ds * dm_inv;
+
+    let j = determinant(f_mat);
+    let lam_safe = select(sign(lam) * 1e-6, lam, abs(lam) > 1e-6);
+    let alpha = 1.0 + mu / lam_safe;
+
+    let cof = cofactor3(f_mat);
+    let s_scalar = lam * (j - alpha);
+
+    // First Piola-Kirchhoff stress P = μ·F + s·cof(F), scaled by rest
+    // volume.
+    let p_mat = mat3x3<f32>(
+        f_mat[0] * mu + cof[0] * s_scalar,
+        f_mat[1] * mu + cof[1] * s_scalar,
+        f_mat[2] * mu + cof[2] * s_scalar,
+    );
+    let p_vec = mat3x3<f32>(
+        p_mat[0] * rest_vol,
+        p_mat[1] * rest_vol,
+        p_mat[2] * rest_vol,
+    );
+
+    // Per-vertex gradient column `m` from `Dm⁻¹`. Translation of
+    // Newton's `compute_G_matrix` to WGSL's column-major mat3x3 — see
+    // the matching CPU comment in `solvers/vbd.rs`.
+    var m: vec3<f32>;
+    if (v_order == 0u) {
+        m = vec3<f32>(
+            -(dm_inv[0].x + dm_inv[0].y + dm_inv[0].z),
+            -(dm_inv[1].x + dm_inv[1].y + dm_inv[1].z),
+            -(dm_inv[2].x + dm_inv[2].y + dm_inv[2].z),
+        );
+    } else if (v_order == 1u) {
+        m = vec3<f32>(dm_inv[0].x, dm_inv[1].x, dm_inv[2].x);
+    } else if (v_order == 2u) {
+        m = vec3<f32>(dm_inv[0].y, dm_inv[1].y, dm_inv[2].y);
+    } else {
+        m = vec3<f32>(dm_inv[0].z, dm_inv[1].z, dm_inv[2].z);
+    }
+
+    // Force = -P · m (column-major reduction).
+    let f_clean = -(p_vec[0] * m.x + p_vec[1] * m.y + p_vec[2] * m.z);
+
+    // Hessian per-vertex 3×3 block: μ·|m|²·I + λ·(cof·m)·(cof·m)ᵀ,
+    // multiplied by rest volume.
+    let cof_m = cof[0] * m.x + cof[1] * m.y + cof[2] * m.z;
+    let mu_term = mat3x3<f32>(
+        vec3<f32>(mu * dot(m, m), 0.0, 0.0),
+        vec3<f32>(0.0, mu * dot(m, m), 0.0),
+        vec3<f32>(0.0, 0.0, mu * dot(m, m)),
+    );
+    let lam_term = mat3x3<f32>(
+        cof_m * cof_m.x,
+        cof_m * cof_m.y,
+        cof_m * cof_m.z,
+    );
+    var h_block = mat3x3<f32>(
+        (mu_term[0] + lam_term[0] * lam) * rest_vol,
+        (mu_term[1] + lam_term[1] * lam) * rest_vol,
+        (mu_term[2] + lam_term[2] * lam) * rest_vol,
+    );
+    // Tikhonov-like diagonal floor — keep the per-vertex block SPD
+    // even when an inverted tet would otherwise contribute a
+    // sign-indefinite term. Negligible vs the inertia diagonal in
+    // the outer assembly.
+    let h_floor = 1e-8 * max(rest_vol, 1e-12);
+    h_block[0].x = max(h_block[0].x, h_floor);
+    h_block[1].y = max(h_block[1].y, h_floor);
+    h_block[2].z = max(h_block[2].z, h_floor);
+
+    *out_force = f_clean;
+    *out_hess  = h_block;
+}
+
 // Spring contribution to a vertex's local force/hessian. Mirrors
 // Newton's `evaluate_spring_force_and_hessian_both_vertices` but
 // returns just the "self-vertex" side.
@@ -393,6 +558,54 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
         spring_force_hessian(v, spring_idx, x, &f_s, &h_s);
         f = f + f_s;
         h = mat3x3<f32>(h[0] + h_s[0], h[1] + h_s[1], h[2] + h_s[2]);
+    }
+
+    // Stage 20.2: per-tet Neo-Hookean contributions. The CSR
+    // entries are (tet_id, v_order) pairs — two u32s per tet. We
+    // skip the loop entirely when the per-vertex slice is empty
+    // (cloth-only models pay no GPU cost here).
+    let to_lo = vertex_adj_tets_offsets[v];
+    let to_hi = vertex_adj_tets_offsets[v + 1u];
+    for (var t = to_lo; t < to_hi; t = t + 2u) {
+        let tet_id = vertex_adj_tets[t];
+        let v_order = vertex_adj_tets[t + 1u];
+        var f_t: vec3<f32>;
+        var h_t: mat3x3<f32>;
+        tet_neo_hookean_block(tet_id, v_order, &f_t, &h_t);
+        f = f + f_t;
+        h = mat3x3<f32>(h[0] + h_t[0], h[1] + h_t[1], h[2] + h_t[2]);
+    }
+
+    // Stage 20.2: per-vertex CABLE bending. Each entry is 4 u32s
+    // `(v_prev, v_mid, v_next, role)` + a parallel `k_b`. The
+    // discrete hinge energy is `½·k_b·|κ|²` where
+    // `κ = v_prev + v_next - 2·v_mid`. Force per role:
+    //   role 0/2 (endpoint): -k_b · κ           Hessian: k_b · I
+    //   role 1   (mid):      +2·k_b · κ         Hessian: 4·k_b · I
+    let cb_lo = vertex_cable_bend_offsets[v];
+    let cb_hi = vertex_cable_bend_offsets[v + 1u];
+    for (var e = cb_lo; e < cb_hi; e = e + 4u) {
+        let i_prev = vertex_cable_bend_entries[e];
+        let i_mid = vertex_cable_bend_entries[e + 1u];
+        let i_next = vertex_cable_bend_entries[e + 2u];
+        let role = vertex_cable_bend_entries[e + 3u];
+        let kb = vertex_cable_bend_k[e / 4u];
+        let kappa = particle_q[i_prev].xyz + particle_q[i_next].xyz - 2.0 * particle_q[i_mid].xyz;
+        var f_b: vec3<f32>;
+        var h_diag: f32;
+        if (role == 1u) {
+            f_b = 2.0 * kb * kappa;
+            h_diag = 4.0 * kb;
+        } else {
+            f_b = -kb * kappa;
+            h_diag = kb;
+        }
+        f = f + f_b;
+        h = mat3x3<f32>(
+            h[0] + vec3<f32>(h_diag, 0.0, 0.0),
+            h[1] + vec3<f32>(0.0, h_diag, 0.0),
+            h[2] + vec3<f32>(0.0, 0.0, h_diag),
+        );
     }
 
     // Soft rigid-contact penalty (Augmented VBD soft-mode).
