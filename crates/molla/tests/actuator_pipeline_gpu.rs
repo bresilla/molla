@@ -7,8 +7,11 @@
 
 use molla::actuators::{
     Actuator, ClampingDcMotor, ClampingDcMotorConfig, ClampingMaxEffort,
-    ClampingMaxEffortConfig, ClampingStage, ControllerPd, ControllerPdConfig,
-    ControllerPipelinePd, ControllerPipelinePdConfig, ControllerStage, Delay, DelayConfig,
+    ClampingMaxEffortConfig, ClampingPositionBased, ClampingStage,
+    ControllerNeuralMlp, ControllerNeuralMlpConfig, ControllerPd, ControllerPdConfig,
+    ControllerPid, ControllerPidConfig, ControllerPipelinePd, ControllerPipelinePdConfig,
+    ControllerPipelinePid, ControllerPipelinePidConfig, ControllerStage, Delay, DelayConfig,
+    MlpWeights,
 };
 use molla::compute::Engine;
 use molla::math::{Real, Transform, Vec3};
@@ -339,3 +342,346 @@ fn delay_zero_steps_is_passthrough() {
         assert!((v - target).abs() < 1.0e-5, "passthrough: expected {target}, got {v}");
     }
 }
+
+// ── Stage 18.1 — PID pipeline parity ────────────────────────────────
+//
+// Standalone `ControllerPid { kp,ki,kd, integral_max, max_effort=cap }`
+// must produce the same effort sequence as
+// `Actuator { delay=0, ctrl=PipelinePid, clamp=MaxEffort(cap) }`
+// across a step-response history. Both controllers carry an integral
+// term so the test runs ≥ a few substeps to give the integral a
+// chance to wind up — single-shot parity is too easy.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+fn pid_pipeline_matches_standalone_pid() {
+    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
+        return;
+    };
+
+    let kp: Real = 50.0;
+    let ki: Real = 30.0;
+    let kd: Real = 6.0;
+    let imax: Real = 2.0;
+    let cap: Real = 25.0;
+    let dt: Real = 1.0e-3;
+
+    let mut pid = ControllerPid::new(
+        &engine,
+        &model,
+        &[ControllerPidConfig {
+            dof: 0,
+            kp,
+            ki,
+            kd,
+            integral_max: imax,
+            max_effort: cap,
+        }],
+    )
+    .unwrap();
+
+    let delay = Delay::new(
+        &engine,
+        &[DelayConfig {
+            dof: 0,
+            delay_steps: 0,
+        }],
+        1,
+    )
+    .unwrap();
+    let pipe_pid = ControllerPipelinePid::new(
+        &engine,
+        &[ControllerPipelinePidConfig {
+            dof: 0,
+            kp,
+            ki,
+            kd,
+            integral_max: imax,
+        }],
+    )
+    .unwrap();
+    let clamp = ClampingMaxEffort::new(
+        &engine,
+        &[ClampingMaxEffortConfig {
+            dof: 0,
+            max_effort: cap,
+        }],
+    )
+    .unwrap();
+    let mut act = Actuator::new(
+        delay,
+        ControllerStage::Pid(pipe_pid),
+        ClampingStage::MaxEffort(clamp),
+    );
+
+    // Step-response history: target ramp from 0.5 to 1.5, current
+    // joint state stays at zero (controller-only test, no integration).
+    let targets: [Real; 8] = [0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 1.5, 1.5];
+    for (i, &target) in targets.iter().enumerate() {
+        // Standalone — joint state stays zero, only target moves.
+        set_state(&engine, &mut state, &mut control, 0.0, 0.0, target, 0.0);
+        pid.step(&engine, &state, &mut control, dt).unwrap();
+        let f_standalone = read_force(&engine, &mut control);
+
+        // Pipeline.
+        set_state(&engine, &mut state, &mut control, 0.0, 0.0, target, 0.0);
+        act.step(&engine, &state, &mut control, dt).unwrap();
+        let f_pipeline = read_force(&engine, &mut control);
+
+        eprintln!(
+            "step {i}: target={target}, standalone={f_standalone}, pipeline={f_pipeline}"
+        );
+        assert!(
+            (f_standalone - f_pipeline).abs() < 1.0e-3,
+            "step {i}: standalone={f_standalone}, pipeline={f_pipeline}"
+        );
+    }
+}
+
+// ── Stage 18.1 — ClampingPositionBased smoothness + parity ──────────
+//
+// The kernel matches Newton's `_position_based_clamp_kernel`
+// line-for-line per the Stage-18 commit message but no test exercises
+// it. This test asserts:
+//   1. The clamp interpolates linearly between adjacent table points
+//      (smoothness — no hard cliff).
+//   2. Outside the table the clamp pins to the boundary.
+//
+// Setup: a 5-point lookup that drops effort from 10 N·m → 0 N·m over
+// the last 5° (≈ 0.0873 rad) before the joint limit at 1.0 rad. The
+// test sweeps `joint_q` across 0 → 1.1 rad and checks the per-step
+// torque envelope matches the analytic linear envelope.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+fn position_based_clamp_smooth_envelope() {
+    let Some((engine, _model, mut state, mut control)) = setup_one_joint() else {
+        return;
+    };
+
+    // Lookup: full effort at q ≤ 0.913 rad, ramps to zero at 1.0 rad.
+    let positions: Vec<Real> = vec![-1.0, 0.913, 1.0, 1.5];
+    let efforts: Vec<Real> = vec![10.0, 10.0, 0.0, 0.0];
+    use molla::actuators::Clamping;
+    let mut clamp =
+        ClampingPositionBased::new(&engine, &[0u32], &positions, &efforts).unwrap();
+
+    let queue = engine.queue().unwrap().clone();
+    // Sample joint angles bracketing the soft limit.
+    let samples: Vec<Real> = vec![
+        0.0,    // far below limit — full effort
+        0.5,    // still well below — full effort
+        0.913,  // exactly at the start of ramp — still 10
+        0.9565, // halfway through the ramp — analytic 5.0
+        0.9783, // 75% through — analytic 2.5
+        1.0,    // at the limit — 0.0
+        1.05,   // past limit — 0.0
+    ];
+
+    let mut last = f32::INFINITY;
+    for &q in &samples {
+        state.joint_q.host_mut().unwrap()[0] = q;
+        state.joint_q.upload(&queue).unwrap();
+        // Pre-load joint_force with a huge request — clamp drives it
+        // down to the envelope.
+        control.joint_force.host_mut().unwrap()[0] = 1.0e3;
+        control.joint_force.upload(&queue).unwrap();
+        clamp.step(&engine, &state, &mut control).unwrap();
+        let f = read_force(&engine, &mut control) as f32;
+
+        // Analytic envelope: linear interp between table points.
+        let expected = if q <= 0.913 {
+            10.0
+        } else if q >= 1.0 {
+            0.0
+        } else {
+            let t = (q - 0.913) / (1.0 - 0.913);
+            10.0 * (1.0 - t)
+        } as f32;
+        eprintln!("q={q}: clamped={f}, expected={expected}");
+        assert!(
+            (f - expected).abs() < 1.0e-2,
+            "q={q}: expected {expected}, got {f}"
+        );
+        // Smoothness: monotone non-increasing as q increases past the
+        // soft limit (no cliff — the ramp samples should produce a
+        // sequence of decreasing values).
+        if q >= 0.913 {
+            assert!(
+                f <= last + 1.0e-3,
+                "q={q}: torque jumped up from {last} to {f}"
+            );
+            last = f;
+        }
+    }
+}
+
+// ── Stage 18.1 — MLP forward-pass correctness ───────────────────────
+//
+// Build a small 3→4→4→2 net with hand-rolled weights, run the kernel,
+// and compare the output against the analytic CPU reference. Tests:
+//   • bias is added
+//   • tanh non-linearity on hidden layers
+//   • linear output
+//   • input → hidden → output dimension routing all match
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+fn mlp_forward_matches_cpu_reference() {
+    let Some((engine, _model, _state, _control)) = setup_one_joint() else {
+        return;
+    };
+
+    let cfg = ControllerNeuralMlpConfig {
+        input_dim: 3,
+        hidden_dim: 4,
+        output_dim: 2,
+    };
+    // dof_indices length must equal output_dim. For this pure-forward
+    // test we never call `step()` (which would scatter into
+    // `joint_force`), so the actual indices don't matter — they just
+    // have to be unique. Using {0,1} would race against
+    // setup_one_joint's 1-DOF model if scatter were called; that's
+    // safe here because we only call `forward()`.
+    let mut mlp =
+        ControllerNeuralMlp::new(&engine, cfg, &[0u32, 1u32]).expect("mlp ctor");
+
+    // Hand-rolled weights: simple identity-ish so the result is easy
+    // to predict.
+    // w1 = 4×3, b1 = 4
+    let w1: Vec<Real> = vec![
+        1.0, 0.0, 0.0,  // h1 = i0
+        0.0, 1.0, 0.0,  // h2 = i1
+        0.0, 0.0, 1.0,  // h3 = i2
+        1.0, 1.0, 1.0,  // h4 = i0+i1+i2
+    ];
+    let b1: Vec<Real> = vec![0.0, 0.0, 0.0, -0.5];
+    // w2 = 4×4, b2 = 4 — hidden→hidden, identity.
+    let w2: Vec<Real> = vec![
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    let b2: Vec<Real> = vec![0.0; 4];
+    // w3 = 2×4, b3 = 2 — first output sums hidden, second is h4.
+    let w3: Vec<Real> = vec![
+        1.0, 1.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    let b3: Vec<Real> = vec![0.1, -0.2];
+
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    mlp.set_weights(
+        &device,
+        &queue,
+        &MlpWeights {
+            w1: &w1,
+            b1: &b1,
+            w2: &w2,
+            b2: &b2,
+            w3: &w3,
+            b3: &b3,
+        },
+    )
+    .unwrap();
+
+    let inputs: Vec<Real> = vec![0.3, -0.1, 0.5];
+    mlp.set_inputs(&queue, &inputs).unwrap();
+    mlp.forward(&engine).unwrap();
+    let out = mlp.download_outputs(&device, &queue).unwrap();
+
+    // CPU reference.
+    let h1: Vec<Real> = vec![
+        (inputs[0] + b1[0]).tanh(),
+        (inputs[1] + b1[1]).tanh(),
+        (inputs[2] + b1[2]).tanh(),
+        (inputs[0] + inputs[1] + inputs[2] + b1[3]).tanh(),
+    ];
+    let h2: Vec<Real> = (0..4).map(|i| (h1[i] + b2[i]).tanh()).collect();
+    let expected: Vec<Real> = vec![
+        h2[0] + h2[1] + h2[2] + b3[0],
+        h2[3] + b3[1],
+    ];
+    eprintln!("mlp out: {out:?}, expected: {expected:?}");
+    for (i, (&a, &b)) in out.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1.0e-4,
+            "out[{i}]: got {a}, expected {b}"
+        );
+    }
+}
+
+// ── Stage 18.1 — MLP forward-pass timing on the 32→64→64→8 net ──────
+//
+// Log-only timing test. Repeated dispatches; we report the average
+// per-call wall-clock plus the GPU-queue submit. Don't fail on slow
+// machines — adapters vary 10× across the test fleet.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+fn mlp_forward_timing_log_only() {
+    use std::time::Instant;
+    let Some((engine, _model, _state, _control)) = setup_one_joint() else {
+        return;
+    };
+    let cfg = ControllerNeuralMlpConfig {
+        input_dim: 32,
+        hidden_dim: 64,
+        output_dim: 8,
+    };
+    let mut mlp = ControllerNeuralMlp::new(&engine, cfg, &(0..8).collect::<Vec<_>>())
+        .expect("mlp ctor failed (DOF range exceeds 1-joint setup, but only the kernel is exercised below)");
+
+    // Random-ish weights via deterministic LCG (no extra deps).
+    let mut rng_state: u32 = 0xC0FFEEu32;
+    let mut next_real = || -> Real {
+        rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
+        ((rng_state >> 16) as Real) / 32768.0 - 1.0
+    };
+    let (w1_n, b1_n, w2_n, b2_n, w3_n, b3_n) = mlp.expected_weight_dims();
+    let w1: Vec<Real> = (0..w1_n).map(|_| next_real() * 0.1).collect();
+    let b1: Vec<Real> = (0..b1_n).map(|_| next_real() * 0.05).collect();
+    let w2: Vec<Real> = (0..w2_n).map(|_| next_real() * 0.1).collect();
+    let b2: Vec<Real> = (0..b2_n).map(|_| next_real() * 0.05).collect();
+    let w3: Vec<Real> = (0..w3_n).map(|_| next_real() * 0.1).collect();
+    let b3: Vec<Real> = (0..b3_n).map(|_| next_real() * 0.05).collect();
+
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    mlp.set_weights(
+        &device,
+        &queue,
+        &MlpWeights {
+            w1: &w1,
+            b1: &b1,
+            w2: &w2,
+            b2: &b2,
+            w3: &w3,
+            b3: &b3,
+        },
+    )
+    .unwrap();
+    let inputs: Vec<Real> = (0..32).map(|_| next_real()).collect();
+    mlp.set_inputs(&queue, &inputs).unwrap();
+
+    // Warmup so pipeline caches are hot.
+    for _ in 0..8 {
+        mlp.forward(&engine).unwrap();
+    }
+    // Force a sync via a host download so the wall-clock includes
+    // GPU completion — without this we only measure queue submit.
+    let _ = mlp.download_outputs(&device, &queue);
+
+    let n_iters = 64;
+    let start = Instant::now();
+    for _ in 0..n_iters {
+        mlp.forward(&engine).unwrap();
+    }
+    // Sync for an honest end-of-loop time stamp.
+    let _ = mlp.download_outputs(&device, &queue);
+    let elapsed = start.elapsed();
+    let per_call_us = (elapsed.as_secs_f64() * 1.0e6) / (n_iters as f64);
+    eprintln!(
+        "mlp forward (32→64→64→8) avg over {n_iters} dispatches incl. final sync: {per_call_us:.2} µs"
+    );
+    // Log-only — don't assert.
+}
+
