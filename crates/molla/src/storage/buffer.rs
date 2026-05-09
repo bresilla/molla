@@ -1,7 +1,10 @@
 //! `Buffer<T>` — a host/device-mirrored array.
 //!
-//! At stage 0 the GPU half is stubbed with `todo!()`. The CPU half is fully
-//! functional and sufficient to write tests against the math + sim layer.
+//! Both halves are functional under the `gpu` feature: `ensure_device`
+//! allocates the wgpu buffer on demand, `upload` / `download`
+//! synchronise via `Queue::write_buffer` + `MAP_READ` round-trips.
+//! Without the `gpu` feature only the CPU half exists. All tests
+//! against the math + sim layer can drive the host-only path directly.
 
 use crate::core::{Error, Result};
 use crate::math::{
@@ -139,8 +142,8 @@ enum SyncState {
 
 /// A homogeneous array, mirrored across host and device.
 ///
-/// At stage 0, only the CPU half is functional. `ensure_device`,
-/// `upload`, `download` are stubbed and panic with `todo!()`.
+/// `ensure_device`, `upload`, `download` are all functional under the
+/// `gpu` feature; without it only the host half exists.
 pub struct Buffer<T: BufferElement> {
     host: Vec<T>,
     usage: BufferUsage,
