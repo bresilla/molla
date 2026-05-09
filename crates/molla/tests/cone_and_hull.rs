@@ -90,12 +90,14 @@ fn cone_settles_on_plane() {
     }
     let y = s_a.body_q.host().unwrap()[body.index()].position.y;
     eprintln!("cone settle y = {y:.4}");
-    // Expected: cone lying somewhere between half_h and -half_h
-    // depending on which side it tipped onto. Just assert it's
-    // bounded — no NaN, no escape.
+    // Expected: cone (half_h=0.3, radius=0.2) at rest on plane y=0.
+    // Standing on its base puts CoM at ~+half_h (~0.3); lying on its
+    // side puts CoM at ~+radius (~0.2). Plus contact margin (~0.01).
+    // y must be finite, above the plane (no tunneling), and well
+    // below the drop height — i.e. it actually landed.
     assert!(
-        y.abs() < 1.0,
-        "cone escaped or NaN'd: y={y}"
+        y.is_finite() && y > -0.1 && y < 0.6,
+        "cone did not settle on plane near y∈[0, 0.6]: y={y}"
     );
 }
 
@@ -147,7 +149,7 @@ fn convex_hull_settles_on_plane() {
 }
 
 #[test]
-fn cone_world_aabb_grows_with_radius() {
+fn cone_world_aabb_matches_radius() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
         mass: 1.0,
