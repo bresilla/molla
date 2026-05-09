@@ -38,17 +38,25 @@ impl Heightfield {
 
     /// Heightfield's local-frame AABB (min, max) — the range over
     /// the X/Z grid extents and the height sample range.
+    ///
+    /// Empty heightfields collapse to a zero-height degenerate AABB
+    /// (min == max along Y); non-empty heightfields are required to
+    /// contain only finite samples — a NaN height indicates an
+    /// upstream loader bug and is caught by `debug_assert!`.
     pub fn local_aabb(&self) -> (Vec3, Vec3) {
         let max_x = self.origin.x + (self.nx.saturating_sub(1) as Real) * self.cell_size;
         let max_z = self.origin.z + (self.nz.saturating_sub(1) as Real) * self.cell_size;
         let mut min_h = Real::INFINITY;
         let mut max_h = -Real::INFINITY;
         for &h in &self.heights {
+            debug_assert!(h.is_finite(), "Heightfield::local_aabb: non-finite height sample {h}");
             if h < min_h { min_h = h; }
             if h > max_h { max_h = h; }
         }
-        if !min_h.is_finite() { min_h = 0.0; }
-        if !max_h.is_finite() { max_h = 0.0; }
+        if self.heights.is_empty() {
+            min_h = 0.0;
+            max_h = 0.0;
+        }
         (
             Vec3::new(self.origin.x, min_h, self.origin.z),
             Vec3::new(max_x, max_h, max_z),

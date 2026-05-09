@@ -866,9 +866,13 @@ fn pair_material(
     b: usize,
     default: crate::math::Real,
 ) -> crate::math::Real {
-    let ma = arr.get(a).copied().unwrap_or(crate::math::Real::NAN);
-    let mb = arr.get(b).copied().unwrap_or(crate::math::Real::NAN);
-    let va = if ma.is_nan() { default } else { ma };
-    let vb = if mb.is_nan() { default } else { mb };
-    va.max(vb)
+    // Per-shape material arrays are guaranteed finite by `ModelBuilder`
+    // (NaN sentinels are substituted with defaults at finalize). A NaN
+    // here would corrupt the pair friction/restitution silently — let
+    // debug builds catch it.
+    let ma = arr.get(a).copied().unwrap_or(default);
+    let mb = arr.get(b).copied().unwrap_or(default);
+    debug_assert!(ma.is_finite(), "pair_material: shape {a} material is not finite ({ma})");
+    debug_assert!(mb.is_finite(), "pair_material: shape {b} material is not finite ({mb})");
+    ma.max(mb)
 }

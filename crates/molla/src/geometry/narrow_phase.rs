@@ -372,15 +372,18 @@ pub fn pair_contact(
     }
 }
 
-/// Pair-rule for per-shape materials: take `max` of the two when both
-/// are real, fall back to `default` for `NaN` shapes (same convention
-/// as Newton's `solve_body_contact_positions`).
+/// Pair-rule for per-shape materials: take `max` of the two. Per-shape
+/// material arrays are guaranteed finite at this point: the builder
+/// substitutes its NaN "use default" sentinels with the configured
+/// defaults at finalize time, and the public setters reject NaN.
+/// `default` is only used when a shape index is out of range (which
+/// itself indicates an upstream bug).
 fn pair_material(arr: &[Real], a: usize, b: usize, default: Real) -> Real {
-    let ma = arr.get(a).copied().unwrap_or(Real::NAN);
-    let mb = arr.get(b).copied().unwrap_or(Real::NAN);
-    let va = if ma.is_nan() { default } else { ma };
-    let vb = if mb.is_nan() { default } else { mb };
-    va.max(vb)
+    let ma = arr.get(a).copied().unwrap_or(default);
+    let mb = arr.get(b).copied().unwrap_or(default);
+    debug_assert!(ma.is_finite(), "pair_material: shape {a} material is not finite ({ma})");
+    debug_assert!(mb.is_finite(), "pair_material: shape {b} material is not finite ({mb})");
+    ma.max(mb)
 }
 
 // ─── Sphere-sphere ───────────────────────────────────────────────────

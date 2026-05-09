@@ -1392,29 +1392,34 @@ fn apply_rank1_backward(
     }
 }
 
-/// Clamp `x` to `[-limit, +limit]`. If `limit` is NaN, passthrough.
+/// Clamp `x` to `[-limit, +limit]`. `limit` must be finite (NaN
+/// indicates an upstream bug — the builder substitutes NaN sentinels
+/// with `Real::INFINITY` at finalize). `Real::INFINITY` makes the
+/// clamp a no-op, expressing "no limit" without a runtime branch.
 #[inline]
 fn clamp_or_passthrough(x: Real, limit: Real) -> Real {
-    if limit.is_nan() {
-        x
-    } else {
-        x.clamp(-limit, limit)
-    }
+    debug_assert!(!limit.is_nan(), "clamp_or_passthrough: limit must not be NaN");
+    x.clamp(-limit, limit)
 }
 
 /// Project a joint coordinate to its limits and zero its velocity at
-/// the boundary. Each bound is independently optional (NaN sentinel).
+/// the boundary. `lo` / `hi` must not be NaN (the builder substitutes
+/// `±Real::INFINITY` for the "unset" sentinel at finalize); infinite
+/// bounds make the corresponding branch unreachable, matching the
+/// "unbounded" semantics without a runtime NaN check.
 #[inline]
 fn clamp_joint_pos(q: Real, qd: Real, lo: Real, hi: Real) -> (Real, Real) {
+    debug_assert!(!lo.is_nan(), "clamp_joint_pos: lower bound must not be NaN");
+    debug_assert!(!hi.is_nan(), "clamp_joint_pos: upper bound must not be NaN");
     let mut q_out = q;
     let mut qd_out = qd;
-    if !lo.is_nan() && q_out < lo {
+    if q_out < lo {
         q_out = lo;
         if qd_out < 0.0 {
             qd_out = 0.0;
         }
     }
-    if !hi.is_nan() && q_out > hi {
+    if q_out > hi {
         q_out = hi;
         if qd_out > 0.0 {
             qd_out = 0.0;

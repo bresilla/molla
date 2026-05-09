@@ -430,19 +430,24 @@ impl LbvhBroadPhase {
         let mut gpu_aabbs: Vec<GpuAabb> = Vec::with_capacity(n);
         for (mn, mx) in prim_aabbs {
             let (mn3, mx3) = (mn.as_vec3(), mx.as_vec3());
-            // Replace ±inf with finite bounds — half-space planes have
-            // an infinite AABB; clamp them so they don't poison the
-            // Morton-bound calculation. They still land at the root
-            // and pair against everyone via the AABB overlap test.
+            // NaN bounds indicate a corrupted body pose / shape upstream
+            // — catch loudly in debug. ±∞ is legitimate (half-space
+            // planes have an infinite AABB); clamp those so they don't
+            // poison the Morton-bound calculation, but never silently
+            // remap NaN.
+            debug_assert!(!mn3.x.is_nan() && !mn3.y.is_nan() && !mn3.z.is_nan(),
+                "lbvh::dispatch: NaN primitive AABB min ({mn3:?})");
+            debug_assert!(!mx3.x.is_nan() && !mx3.y.is_nan() && !mx3.z.is_nan(),
+                "lbvh::dispatch: NaN primitive AABB max ({mx3:?})");
             let mn_clamped = [
-                if mn3.x.is_finite() { mn3.x } else { -1e6 },
-                if mn3.y.is_finite() { mn3.y } else { -1e6 },
-                if mn3.z.is_finite() { mn3.z } else { -1e6 },
+                if mn3.x == f32::NEG_INFINITY { -1e6 } else { mn3.x },
+                if mn3.y == f32::NEG_INFINITY { -1e6 } else { mn3.y },
+                if mn3.z == f32::NEG_INFINITY { -1e6 } else { mn3.z },
             ];
             let mx_clamped = [
-                if mx3.x.is_finite() { mx3.x } else { 1e6 },
-                if mx3.y.is_finite() { mx3.y } else { 1e6 },
-                if mx3.z.is_finite() { mx3.z } else { 1e6 },
+                if mx3.x == f32::INFINITY { 1e6 } else { mx3.x },
+                if mx3.y == f32::INFINITY { 1e6 } else { mx3.y },
+                if mx3.z == f32::INFINITY { 1e6 } else { mx3.z },
             ];
             let cx = (mn_clamped[0] + mx_clamped[0]) * 0.5;
             let cy = (mn_clamped[1] + mx_clamped[1]) * 0.5;
@@ -575,6 +580,13 @@ impl LbvhBroadPhase {
                         let cx = ((a.x + b.x) * 0.5) as f32;
                         let cy = ((a.y + b.y) * 0.5) as f32;
                         let cz = ((a.z + b.z) * 0.5) as f32;
+                        // NaN bounds are an upstream corruption — catch
+                        // in debug. Skip non-finite (±∞) coordinates
+                        // when growing the scene-extent estimate so
+                        // half-space planes don't dilate the bound to
+                        // infinity.
+                        debug_assert!(!cx.is_nan() && !cy.is_nan() && !cz.is_nan(),
+                            "lbvh::redispatch: NaN AABB centroid ({cx},{cy},{cz})");
                         if cx.is_finite() {
                             mn[0] = mn[0].min(cx);
                             mx[0] = mx[0].max(cx);
@@ -629,15 +641,21 @@ impl LbvhBroadPhase {
         for (mn, mx) in prim_aabbs {
             let mn3 = mn.as_vec3();
             let mx3 = mx.as_vec3();
+            // See `dispatch` — NaN is an upstream bug; ±∞ is legitimate
+            // for half-space planes and gets clamped to a finite cap.
+            debug_assert!(!mn3.x.is_nan() && !mn3.y.is_nan() && !mn3.z.is_nan(),
+                "lbvh::redispatch: NaN primitive AABB min ({mn3:?})");
+            debug_assert!(!mx3.x.is_nan() && !mx3.y.is_nan() && !mx3.z.is_nan(),
+                "lbvh::redispatch: NaN primitive AABB max ({mx3:?})");
             let mn_c = [
-                if mn3.x.is_finite() { mn3.x } else { -1e6 },
-                if mn3.y.is_finite() { mn3.y } else { -1e6 },
-                if mn3.z.is_finite() { mn3.z } else { -1e6 },
+                if mn3.x == f32::NEG_INFINITY { -1e6 } else { mn3.x },
+                if mn3.y == f32::NEG_INFINITY { -1e6 } else { mn3.y },
+                if mn3.z == f32::NEG_INFINITY { -1e6 } else { mn3.z },
             ];
             let mx_c = [
-                if mx3.x.is_finite() { mx3.x } else { 1e6 },
-                if mx3.y.is_finite() { mx3.y } else { 1e6 },
-                if mx3.z.is_finite() { mx3.z } else { 1e6 },
+                if mx3.x == f32::INFINITY { 1e6 } else { mx3.x },
+                if mx3.y == f32::INFINITY { 1e6 } else { mx3.y },
+                if mx3.z == f32::INFINITY { 1e6 } else { mx3.z },
             ];
             gpu_aabbs.push(GpuAabb {
                 min: [mn_c[0], mn_c[1], mn_c[2], 0.0],

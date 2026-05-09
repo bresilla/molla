@@ -1489,7 +1489,10 @@ impl ModelBuilder {
     }
 
     /// Override the friction/restitution for an already-added shape.
-    /// `NaN` falls back to `Model::default_*`.
+    /// Both values must be finite (no `NaN`, no `±Inf`); pass the
+    /// builder's `default_friction` / `default_restitution` explicitly
+    /// if you want the global default for one knob and an override for
+    /// the other.
     pub fn set_shape_material(
         &mut self,
         shape: ShapeId,
@@ -1502,16 +1505,26 @@ impl ModelBuilder {
                 "set_shape_material: shape id {shape:?} out of range"
             )));
         }
+        if !friction.is_finite() {
+            return Err(Error::Build(format!(
+                "set_shape_material: friction must be finite, got {friction}"
+            )));
+        }
+        if !restitution.is_finite() {
+            return Err(Error::Build(format!(
+                "set_shape_material: restitution must be finite, got {restitution}"
+            )));
+        }
         self.shape_friction[i] = friction;
         self.shape_restitution[i] = restitution;
         Ok(())
     }
 
     /// Override the rolling / torsional friction for an
-    /// already-added shape. `NaN` (or zero) disables that mode.
-    /// Rolling friction opposes spin perpendicular to the contact
-    /// normal (wheel-on-ground); torsional opposes spin along the
-    /// normal (top spinning on a surface).
+    /// already-added shape. Both values must be finite — pass `0.0` to
+    /// disable that mode. Rolling friction opposes spin perpendicular
+    /// to the contact normal (wheel-on-ground); torsional opposes spin
+    /// along the normal (top spinning on a surface).
     pub fn set_shape_friction_modes(
         &mut self,
         shape: ShapeId,
@@ -1522,6 +1535,16 @@ impl ModelBuilder {
         if i >= self.shape_geometry.len() {
             return Err(Error::Build(format!(
                 "set_shape_friction_modes: shape id {shape:?} out of range"
+            )));
+        }
+        if !rolling.is_finite() {
+            return Err(Error::Build(format!(
+                "set_shape_friction_modes: rolling friction must be finite, got {rolling}"
+            )));
+        }
+        if !torsional.is_finite() {
+            return Err(Error::Build(format!(
+                "set_shape_friction_modes: torsional friction must be finite, got {torsional}"
             )));
         }
         self.shape_rolling_friction[i] = rolling;
@@ -1782,8 +1805,10 @@ impl ModelBuilder {
         id
     }
 
-    /// Set the position limits for a joint's DOFs. Pass `NaN` to leave a
-    /// bound unset. For multi-DOF joints (e.g. `Free`, future ball/D6),
+    /// Set the position limits for a joint's DOFs. Pass
+    /// `Real::NEG_INFINITY` / `Real::INFINITY` (or `NaN` as a
+    /// back-compat alias — substituted at finalize) to leave a bound
+    /// unset. For multi-DOF joints (e.g. `Free`, future ball/D6),
     /// `lower` and `upper` must have length = `joint.dof_count()`.
     pub fn set_joint_limits(
         &mut self,
@@ -1799,6 +1824,28 @@ impl ModelBuilder {
                 lower.len(),
                 upper.len()
             )));
+        }
+        // Reject infinities-of-the-wrong-sign and reject ordering bugs
+        // up front. `NaN` stays accepted as the "unset" sentinel for
+        // back-compat; finalize substitutes ±∞.
+        for k in 0..n {
+            let lo = lower[k];
+            let hi = upper[k];
+            if !lo.is_nan() && lo == Real::INFINITY {
+                return Err(Error::Build(format!(
+                    "set_joint_limits: joint {joint:?} dof {k} lower bound is +∞"
+                )));
+            }
+            if !hi.is_nan() && hi == Real::NEG_INFINITY {
+                return Err(Error::Build(format!(
+                    "set_joint_limits: joint {joint:?} dof {k} upper bound is -∞"
+                )));
+            }
+            if !lo.is_nan() && !hi.is_nan() && lo > hi {
+                return Err(Error::Build(format!(
+                    "set_joint_limits: joint {joint:?} dof {k} lower {lo} > upper {hi}"
+                )));
+            }
         }
         self.joint_limit_lower[start..end].copy_from_slice(lower);
         self.joint_limit_upper[start..end].copy_from_slice(upper);
@@ -2125,6 +2172,47 @@ impl ModelBuilder {
                 return Err(Error::Build(format!(
                     "shape {i} references invalid body id {body}"
                 )));
+            }
+        }
+
+        // Substitute per-shape material NaN sentinels with the
+        // configured defaults so downstream consumers (narrow phase,
+        // GPU contact resolver) see only finite values. The "NaN means
+        // use default" convention is a builder-side authoring nicety;
+        // the solver should never witness it.
+        for v in &mut self.shape_friction {
+            if v.is_nan() {
+                *v = self.default_friction;
+            }
+        }
+        for v in &mut self.shape_rolling_friction {
+            if v.is_nan() {
+                *v = 0.0;
+            }
+        }
+        for v in &mut self.shape_torsional_friction {
+            if v.is_nan() {
+                *v = 0.0;
+            }
+        }
+        for v in &mut self.shape_restitution {
+            if v.is_nan() {
+                *v = self.default_restitution;
+            }
+        }
+
+        // Joint limits use NaN as the "unset" sentinel at the builder
+        // surface. Replace with ±∞ so the solver's clamp / projection
+        // can branch on `is_finite()` (or just use the value directly
+        // — `x.clamp(-INF, INF)` is a no-op).
+        for v in &mut self.joint_limit_lower {
+            if v.is_nan() {
+                *v = Real::NEG_INFINITY;
+            }
+        }
+        for v in &mut self.joint_limit_upper {
+            if v.is_nan() {
+                *v = Real::INFINITY;
             }
         }
 

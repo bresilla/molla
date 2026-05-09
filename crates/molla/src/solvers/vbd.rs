@@ -563,7 +563,9 @@ pub(crate) fn project_sdf_backings(
                     if sd >= pr {
                         continue;
                     }
-                    let n_local = sample_sdf_grid_gradient(grid, p_local);
+                    let Some(n_local) = sample_sdf_grid_gradient(grid, p_local) else {
+                        continue;
+                    };
                     if n_local.length_squared() < 1.0e-12 {
                         continue;
                     }
@@ -632,9 +634,11 @@ fn sample_sdf_grid_trilinear(grid: &crate::geometry::SdfGrid, p: Vec3) -> Real {
 }
 
 /// Central-difference gradient of [`sample_sdf_grid_trilinear`] at
-/// local position `p` (cell-spaced step). Falls back to `+Y` if the
-/// finite difference is degenerate (out-of-grid neighbours).
-fn sample_sdf_grid_gradient(grid: &crate::geometry::SdfGrid, p: Vec3) -> Vec3 {
+/// local position `p` (cell-spaced step). Returns `None` when the
+/// finite difference is degenerate (out-of-grid neighbours, or
+/// non-finite samples) so the caller can skip the contact instead of
+/// substituting a phantom `+Y` normal.
+fn sample_sdf_grid_gradient(grid: &crate::geometry::SdfGrid, p: Vec3) -> Option<Vec3> {
     let h = grid.cell_size;
     let dx = sample_sdf_grid_trilinear(grid, p + Vec3::new(h, 0.0, 0.0))
         - sample_sdf_grid_trilinear(grid, p - Vec3::new(h, 0.0, 0.0));
@@ -644,9 +648,26 @@ fn sample_sdf_grid_gradient(grid: &crate::geometry::SdfGrid, p: Vec3) -> Vec3 {
         - sample_sdf_grid_trilinear(grid, p - Vec3::new(0.0, 0.0, h));
     let g = Vec3::new(dx, dy, dz);
     if g.length_squared() > 1.0e-24 && g.x.is_finite() && g.y.is_finite() && g.z.is_finite() {
-        g.normalize_or_zero()
+        Some(g.normalize_or_zero())
     } else {
-        Vec3::Y
+        // Degenerate finite-difference window — at the grid boundary or
+        // sampling NaN/Inf cells. Caller decides how to handle the
+        // missing normal; the default is to skip the contact for this
+        // vertex this step. Logged once per process for visibility.
+        static LOGGED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!(
+                "[molla::vbd] sample_sdf_grid_gradient: degenerate gradient at \
+                 p={p:?} (length²={}, finite={}/{}/{}); skipping SDF contact for \
+                 this vertex (further occurrences silenced).",
+                g.length_squared(),
+                g.x.is_finite(),
+                g.y.is_finite(),
+                g.z.is_finite(),
+            );
+        }
+        None
     }
 }
 
@@ -1437,15 +1458,25 @@ pub(crate) fn neo_hookean_vertex_block(
     // tets F_p = I so the inverse is trivial; for plastic tets we do
     // a real inverse. The branch is on a determinant check (cheaper
     // than a full inverse + matrix multiply on the trivial path).
+    //
+    // F_p is maintained by the von-Mises return mapping, which clamps
+    // its singular values to `[0.5, 2.0]` — `det(F_p)` is therefore
+    // bounded in `[0.125, 8.0]` and always finite. A NaN / singular
+    // F_p here means the upstream return mapping accepted a bad step;
+    // catch it loudly in debug builds.
     let fp_det = fp.determinant();
-    let f_mat = if (fp_det - 1.0).abs() < 1.0e-9 && fp.x_axis.x.is_finite() {
+    debug_assert!(fp_det.is_finite(), "neo_hookean_plastic: non-finite det(F_p) ({fp_det})");
+    let f_mat = if (fp_det - 1.0).abs() < 1.0e-9 {
         // F_p = I (or numerically indistinguishable) — skip the inverse.
         f_full
     } else if fp_det.abs() > 1.0e-12 {
         f_full * fp.inverse()
     } else {
-        // Singular F_p: fall back to identity (no plastic effect this
-        // step). Should not happen with a sane return mapping.
+        // Singular F_p — should not happen with the singular-value
+        // clamp in `apply_vonmises_return_mapping`. Fall back to the
+        // pure-elastic gradient so the per-tet step doesn't blow up,
+        // but make this path loud in debug.
+        debug_assert!(false, "neo_hookean_plastic: singular F_p (det={fp_det})");
         f_full
     };
 
@@ -1645,6 +1676,18 @@ fn solve_3x3(h: crate::math::Mat3, f: Vec3) -> Option<Vec3> {
 ///   pathology (line-search is overkill; this is enough damping).
 /// - `F_p` clamped to `det(F_p) ∈ [0.05, 20]` so a misbehaving tet
 ///   doesn't propagate Inf into the next step.
+fn log_plasticity_dropped(reason: &'static str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::error!(
+            target: "molla::vbd",
+            reason,
+            "plastic flow dropped this substep — upstream NaN / overshoot in von-Mises return mapping (further occurrences silenced for this process)"
+        );
+    }
+}
+
 pub(crate) fn cpu_plasticity_return_map(
     model: &Model,
     particle_q: &[Vec3],
@@ -1690,8 +1733,15 @@ pub(crate) fn cpu_plasticity_return_map(
         let fp_old = fp[tet];
         let fp_det = fp_old.determinant();
         if !fp_det.is_finite() || fp_det.abs() < 1.0e-12 {
-            // Reset on degenerate F_p — should never happen with the
-            // clamp below but defensive.
+            // Degenerate F_p_prev. The singular-value clamp below
+            // bounds det(F_p) ∈ [0.125, 8] so reaching this branch
+            // means F_p was poisoned upstream — likely a non-finite
+            // particle position or a kernel that bypassed the clamp.
+            // Loud in debug; in release we reset F_p and emit a
+            // one-shot trace so the next step is well-defined.
+            debug_assert!(false,
+                "von_mises_return_mapping: degenerate F_p_prev (det={fp_det}) tet={tet}");
+            log_plasticity_dropped("F_p_prev degenerate");
             fp[tet] = Mat3::IDENTITY;
             continue;
         }
@@ -1802,6 +1852,13 @@ pub(crate) fn cpu_plasticity_return_map(
         let fe_new = u_mat * sigma_diag * v_mat.transpose();
         let fe_det = fe_new.determinant();
         if !fe_det.is_finite() || fe_det.abs() < 1.0e-12 {
+            // F_e_new collapsed to a degenerate (or NaN) state — the
+            // singular values were clamped to [0.05, 20] above so this
+            // requires a non-finite Δγ or u_mat / v_mat. Loud in debug;
+            // in release we skip the plastic update for this tet.
+            debug_assert!(false,
+                "von_mises_return_mapping: degenerate F_e_new (det={fe_det}) tet={tet}");
+            log_plasticity_dropped("F_e_new degenerate");
             continue;
         }
         // F = F_e · F_p ⇒ F_p_new = F_e_new⁻¹ · F.
@@ -1812,7 +1869,13 @@ pub(crate) fn cpu_plasticity_return_map(
         // construction; small drift is from the discrete return map).
         let fp_new_det = fp_new.determinant();
         if !fp_new_det.is_finite() || fp_new_det.abs() < 0.05 || fp_new_det.abs() > 20.0 {
-            // Reject this step's plastic update; keep F_p as-is.
+            // F_p drifted outside the volume-preserving envelope —
+            // either a NaN (upstream bug) or a return-mapping
+            // overshoot. Loud in debug; in release we keep the prior
+            // F_p so the next step is well-defined.
+            debug_assert!(false,
+                "von_mises_return_mapping: F_p_new det out of bounds ({fp_new_det}) tet={tet}");
+            log_plasticity_dropped("F_p_new det out of bounds");
             continue;
         }
         // Robust per-singular-value clamp on F_p_new: the next step's
@@ -1883,12 +1946,19 @@ pub(crate) fn cpu_plasticity_return_map(
                 mat3_add(alpha_world, alpha_world.transpose()),
                 0.5,
             );
-            // Final NaN sentinel.
-            if alpha_sym.x_axis.x.is_finite()
+            // Final sanity check on the back-stress diagonal: NaN here
+            // means the kinematic-hardening update derailed (e.g. a
+            // non-finite n_hat). Loud in debug; in release we skip the
+            // back-stress write so the next step uses the prior α.
+            let alpha_finite = alpha_sym.x_axis.x.is_finite()
                 && alpha_sym.y_axis.y.is_finite()
-                && alpha_sym.z_axis.z.is_finite()
-            {
+                && alpha_sym.z_axis.z.is_finite();
+            debug_assert!(alpha_finite,
+                "von_mises_return_mapping: non-finite back-stress diag at tet={tet}");
+            if alpha_finite {
                 alpha[tet] = alpha_sym;
+            } else {
+                log_plasticity_dropped("back-stress non-finite");
             }
         }
     }
