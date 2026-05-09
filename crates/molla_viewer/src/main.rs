@@ -1616,20 +1616,6 @@ struct MeshToolsExampleState {
     sparse_sdf_leaves: usize,
     sparse_sdf_active_voxels: u64,
     sparse_sdf_band: u32,
-    /// Stage-24e.1 — value type the sparse SDF stores. `f32` is the
-    /// default (and what the dense SDF carries); `f16` is a half-
-    /// precision quantisation; `vec3` stores the SDF normal as a
-    /// 3-channel field (cosmetic — the sphere panel doesn't use the
-    /// extra channels yet, this is a wiring smoke-test). The toggle
-    /// only affects the **GPU build path** (CPU build always
-    /// emits f32).
-    sparse_value_type: SparseValueType,
-    /// Stage-24e.1 — when `true` the sparse SDF is built via the
-    /// new GPU mutable-insert kernel (`SparseGridStorage` +
-    /// `SparseGridInsertKernel`). When `false` the v1 CPU bake is
-    /// used. The GPU build supports all three value types; the CPU
-    /// build is f32-only.
-    sparse_build_gpu: bool,
     /// Stage-24e.1 telemetry — root-table load factor + average
     /// probe length for the GPU root hash (filled in at scene-entry
     /// when the sparse SDF is built).
@@ -1643,26 +1629,6 @@ struct MeshToolsExampleState {
     /// doesn't lie about needing the user to re-press M (the hotkey
     /// is a no-op when the scene is already active).
     rebuild_pending: bool,
-}
-
-/// Stage 24e.1 — value-type dropdown options for the viewer's sparse
-/// SDF panel. Only `F32` matches the existing dense pipeline; the
-/// other two are wiring smoke-tests for the templated GPU storage.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum SparseValueType {
-    F32,
-    F16,
-    Vec3,
-}
-
-impl SparseValueType {
-    fn label(self) -> &'static str {
-        match self {
-            SparseValueType::F32 => "f32",
-            SparseValueType::F16 => "f16 (half-float)",
-            SparseValueType::Vec3 => "vec3<f32> (normals)",
-        }
-    }
 }
 
 impl Default for MeshToolsExampleState {
@@ -1683,8 +1649,6 @@ impl Default for MeshToolsExampleState {
             sparse_sdf_leaves: 0,
             sparse_sdf_active_voxels: 0,
             sparse_sdf_band: 4,
-            sparse_value_type: SparseValueType::F32,
-            sparse_build_gpu: false,
             sparse_root_table_capacity: 0,
             sparse_root_load_factor: 0.0,
             sparse_root_avg_probes: 0.0,
@@ -9037,37 +9001,6 @@ fn mesh_tools_pane(
     readout(ui, "Narrow band", &format!("{} voxels", state.sparse_sdf_band));
     ui.separator();
 
-    // Stage 24e.1 — value-type dropdown + GPU build-mode toggle.
-    // Both are wiring-only smoke tests in v1: the dense MC surface
-    // is always re-extracted in f32 (the only thing
-    // marching_cubes() consumes) so changing the value type doesn't
-    // affect what's drawn — but it does flow through the kernel
-    // pipeline-build path so the user can see the WGSL templating
-    // working without crashing.
-    ui.label("Stage 24e.1: value type");
-    egui::ComboBox::from_label("Value type")
-        .selected_text(state.sparse_value_type.label())
-        .show_ui(ui, |ui| {
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::F32,
-                SparseValueType::F32.label(),
-            );
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::F16,
-                SparseValueType::F16.label(),
-            );
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::Vec3,
-                SparseValueType::Vec3.label(),
-            );
-        });
-    ui.checkbox(
-        &mut state.sparse_build_gpu,
-        "Build mode: GPU mutable insert (re-enter scene to apply)",
-    );
     if state.sparse_root_table_capacity > 0 {
         readout(
             ui,
