@@ -397,7 +397,8 @@ pub struct Model {
     /// flatten it into two parallel arrays — kind discriminant +
     /// packed scalar parameters — so kernels can branch on it.
     /// Values: 0=Sphere · 1=Plane · 2=Box · 3=Capsule · 4=Cylinder ·
-    /// 5=Triangle · 6=TriMesh · 0xff=unsupported-on-gpu (skipped).
+    /// 5=Cone · 6=Ellipsoid · 0xff=unsupported-on-gpu (skipped, e.g.
+    /// Triangle / TriMesh / ConvexHull / Heightfield / Sdf).
     pub shape_geom_kind: Buffer<u32>,
     /// **GPU-side shape parameters**, parallel to `shape_geometry`.
     /// Per-kind packing:
@@ -406,6 +407,8 @@ pub struct Model {
     /// - Box       → `(hx, hy, hz)` (half-extents)
     /// - Capsule   → `(half_height, radius, 0)`
     /// - Cylinder  → `(half_height, radius, 0)`
+    /// - Cone      → `(half_height, radius, 0)`
+    /// - Ellipsoid → `(ax, ay, az)` (per-axis semi-axes)
     /// - Triangle  → `(0, 0, 0)` (vertices held host-side; see
     ///                `ShapeGeometry::Triangle`)
     /// - TriMesh   → `(mesh_id_as_f32, 0, 0)` (mesh BVH lives on host

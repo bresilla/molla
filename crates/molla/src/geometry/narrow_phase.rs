@@ -11,6 +11,7 @@ use super::broad_phase::ShapePair;
 use super::epa::epa_with_hulls;
 use super::gjk::{gjk_with_hulls, GjkResult};
 use super::shape_world::shape_world_transform;
+use super::support::support_ellipsoid;
 
 /// Output of the narrow phase. The contact normal points from `a` to
 /// `b`; `depth > 0` means penetration. Caller is responsible for
@@ -220,6 +221,73 @@ pub fn pair_contact(
             }
         }
 
+        // ── Ellipsoid fast paths ─────────────────────────────────
+        // Ellipsoid-vs-Sphere and Ellipsoid-vs-Plane are cheap
+        // closed-form (single Newton iteration / argmax-support).
+        // Ellipsoid-vs-Box / -Capsule / -Cylinder / -Cone / -Ellipsoid
+        // route through the GJK + EPA arm below (ellipsoid has a
+        // perfectly well-behaved support function).
+        (
+            ShapeGeometry::Sphere { radius },
+            ShapeGeometry::Ellipsoid { half_axes },
+        ) => {
+            if let Some(m) = ellipsoid_sphere(
+                &xf_b,
+                half_axes,
+                xf_a.position,
+                radius,
+                pair.b,
+                pair.a,
+            ) {
+                out.push(flip_manifold(m));
+            }
+        }
+        (
+            ShapeGeometry::Ellipsoid { half_axes },
+            ShapeGeometry::Sphere { radius },
+        ) => {
+            if let Some(m) = ellipsoid_sphere(
+                &xf_a,
+                half_axes,
+                xf_b.position,
+                radius,
+                pair.a,
+                pair.b,
+            ) {
+                out.push(m);
+            }
+        }
+        (
+            ShapeGeometry::Ellipsoid { half_axes },
+            ShapeGeometry::Plane { normal },
+        ) => {
+            if let Some(m) = ellipsoid_plane(
+                &xf_a,
+                half_axes,
+                xf_b.position,
+                xf_b.rotation * normal,
+                pair.a,
+                pair.b,
+            ) {
+                out.push(m);
+            }
+        }
+        (
+            ShapeGeometry::Plane { normal },
+            ShapeGeometry::Ellipsoid { half_axes },
+        ) => {
+            if let Some(m) = ellipsoid_plane(
+                &xf_b,
+                half_axes,
+                xf_a.position,
+                xf_a.rotation * normal,
+                pair.b,
+                pair.a,
+            ) {
+                out.push(flip_manifold(m));
+            }
+        }
+
         // ── GJK + EPA fallback (no closed-form path) ─────────────
         // Plane is a half-space — GJK isn't well-defined against it
         // (unbounded support). Pair-vs-plane uses a ray-test fast
@@ -263,7 +331,8 @@ pub fn pair_contact(
 
         // Convex-vs-convex via GJK + EPA. Covers capsule-box,
         // box-capsule, capsule-cylinder, cylinder-*, triangle-*,
-        // cone-*, hull-*.
+        // cone-*, hull-*, ellipsoid-{box, capsule, cylinder,
+        // ellipsoid}.
         (ShapeGeometry::Capsule { .. }, ShapeGeometry::Box { .. })
         | (ShapeGeometry::Box { .. }, ShapeGeometry::Capsule { .. })
         | (ShapeGeometry::Capsule { .. }, ShapeGeometry::Cylinder { .. })
@@ -278,7 +347,9 @@ pub fn pair_contact(
         | (ShapeGeometry::Cone { .. }, _)
         | (_, ShapeGeometry::Cone { .. })
         | (ShapeGeometry::ConvexHull { .. }, _)
-        | (_, ShapeGeometry::ConvexHull { .. }) => {
+        | (_, ShapeGeometry::ConvexHull { .. })
+        | (ShapeGeometry::Ellipsoid { .. }, _)
+        | (_, ShapeGeometry::Ellipsoid { .. }) => {
             if matches!(geom_a, ShapeGeometry::Plane { .. })
                 || matches!(geom_b, ShapeGeometry::Plane { .. })
             {
@@ -1105,6 +1176,191 @@ fn capsule_capsule(
     sphere_sphere(pa, a_radius, pb, b_radius, a_shape, b_shape)
 }
 
+// ─── Ellipsoid fast paths (closed-form) ─────────────────────────────
+
+/// Closest point on an axis-aligned ellipsoid surface (semi-axes
+/// `(a, b, c)` centred at origin) to query point `p`. Returns the
+/// surface point in the ellipsoid's local frame.
+///
+/// Iterative root-find for the projection — runs the standard
+/// Eberly closest-point-on-ellipsoid bisection. Converges in <30
+/// iterations for typical aspect ratios. For `p` strictly inside the
+/// ellipsoid we instead pick the surface point along the
+/// gradient-rescaled radial — it's a "best-effort" projection
+/// (the closest-point problem is ill-defined inside; molla just
+/// needs a stable normal direction for the contact).
+fn closest_point_on_ellipsoid(half: Vec3, p: Vec3) -> Vec3 {
+    // Mirror trick: reflect into the +octant, project, reflect back.
+    let signs = Vec3::new(
+        if p.x >= 0.0 { 1.0 } else { -1.0 },
+        if p.y >= 0.0 { 1.0 } else { -1.0 },
+        if p.z >= 0.0 { 1.0 } else { -1.0 },
+    );
+    let p_pos = Vec3::new(p.x.abs(), p.y.abs(), p.z.abs());
+    let q = closest_point_first_octant(half, p_pos);
+    Vec3::new(q.x * signs.x, q.y * signs.y, q.z * signs.z)
+}
+
+/// Project `p` (assumed in the +octant) onto the surface of an
+/// ellipsoid with semi-axes `half` centred at origin. Internal —
+/// callers go through `closest_point_on_ellipsoid`.
+fn closest_point_first_octant(half: Vec3, p: Vec3) -> Vec3 {
+    // Sphere fast path: proportional projection.
+    if (half.x - half.y).abs() < 1e-12 && (half.y - half.z).abs() < 1e-12 {
+        let r = half.x;
+        let len = p.length();
+        if len < 1e-12 {
+            return Vec3::new(r, 0.0, 0.0);
+        }
+        return p * (r / len);
+    }
+    // For points exactly on / past the surface in the +octant, run
+    // Eberly's bisection on `t ∈ [t0, t1]` such that:
+    //   f(t) = Σ (aᵢ·pᵢ / (t + aᵢ²))² − 1
+    // monotone decreasing → unique root for outside-points.
+    let a = half;
+    let a_sq = a * a;
+    // f(t) parameterised as above; the surface point is then
+    //   xᵢ = aᵢ²·pᵢ / (t + aᵢ²).
+    let max_a_sq = a_sq.x.max(a_sq.y).max(a_sq.z);
+    let pa = Vec3::new(a.x * p.x, a.y * p.y, a.z * p.z);
+    let pa_norm = pa.length();
+    // f(0) = (p/a)². If p is on/past the surface this is ≥ 1.
+    let f0 = (p.x / a.x).powi(2) + (p.y / a.y).powi(2) + (p.z / a.z).powi(2);
+    if f0 <= 1.0 + 1e-12 {
+        // Inside: pick surface intersection along the gradient.
+        // Solve s·(p/a)² = 1 → s = 1/sqrt((p/a)²); xᵢ = s·pᵢ.
+        if f0 < 1e-24 {
+            return Vec3::new(a.x, 0.0, 0.0);
+        }
+        let s = 1.0 / f0.sqrt();
+        return Vec3::new(p.x * s, p.y * s, p.z * s);
+    }
+    // Outside: bisect over t ≥ 0. Upper bound from the worst-case
+    // bound `t1 = max(aᵢ)·|p·aᵢ|`.
+    let mut t0: Real = 0.0;
+    let mut t1: Real = max_a_sq.sqrt() * pa_norm;
+    for _ in 0..60 {
+        let t = 0.5 * (t0 + t1);
+        let denom = Vec3::new(t + a_sq.x, t + a_sq.y, t + a_sq.z);
+        let f = (pa.x / denom.x).powi(2)
+            + (pa.y / denom.y).powi(2)
+            + (pa.z / denom.z).powi(2)
+            - 1.0;
+        if f > 0.0 {
+            t0 = t;
+        } else {
+            t1 = t;
+        }
+    }
+    let t = 0.5 * (t0 + t1);
+    let denom = Vec3::new(t + a_sq.x, t + a_sq.y, t + a_sq.z);
+    Vec3::new(
+        a_sq.x * p.x / denom.x,
+        a_sq.y * p.y / denom.y,
+        a_sq.z * p.z / denom.z,
+    )
+}
+
+/// Outward-pointing surface normal of an axis-aligned ellipsoid at
+/// surface point `q` (local frame). The ellipsoid's gradient at
+/// `q` is `(qx/a², qy/b², qz/c²)`, normalised.
+#[inline]
+fn ellipsoid_normal_at(half: Vec3, q: Vec3) -> Vec3 {
+    let g = Vec3::new(q.x / (half.x * half.x), q.y / (half.y * half.y), q.z / (half.z * half.z));
+    let len = g.length();
+    if len < 1e-12 {
+        Vec3::Y
+    } else {
+        g / len
+    }
+}
+
+/// Ellipsoid-vs-Sphere closed-form contact. Closest-point projects
+/// the sphere centre onto the ellipsoid surface (in ellipsoid-local
+/// frame); sphere overlaps when `|q − p_sphere| < r_sphere`. Normal
+/// is the ellipsoid's outward gradient at `q` (a → b convention,
+/// ellipsoid is `a`, sphere is `b`, so the normal points from
+/// ellipsoid surface OUT toward the sphere).
+fn ellipsoid_sphere(
+    ellipsoid_xf: &Transform,
+    half_axes: Vec3,
+    sphere_p: Vec3,
+    sphere_r: Real,
+    ellipsoid_shape: u32,
+    sphere_shape: u32,
+) -> Option<ContactManifold> {
+    // Sphere centre in ellipsoid-local frame.
+    let p_local = ellipsoid_xf.inverse_transform_point(sphere_p);
+    let q_local = closest_point_on_ellipsoid(half_axes, p_local);
+    let delta_local = p_local - q_local;
+    let dist = delta_local.length();
+    let inside = (p_local.x / half_axes.x).powi(2)
+        + (p_local.y / half_axes.y).powi(2)
+        + (p_local.z / half_axes.z).powi(2)
+        <= 1.0;
+    let depth = if inside {
+        sphere_r + dist
+    } else if dist < sphere_r {
+        sphere_r - dist
+    } else {
+        return None;
+    };
+    let n_local = ellipsoid_normal_at(half_axes, q_local);
+    // a→b: ellipsoid → sphere = +n_local (gradient points outward).
+    let n_world = ellipsoid_xf.transform_vector(n_local);
+    let q_world = ellipsoid_xf.transform_point(q_local);
+    let point = q_world + n_world * (0.5 * depth);
+    Some(ContactManifold {
+        a_shape: ellipsoid_shape,
+        b_shape: sphere_shape,
+        point,
+        normal: n_world,
+        depth,
+        friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
+        restitution: 0.0,
+    })
+}
+
+/// Ellipsoid-vs-Plane closed-form contact. Find the support point
+/// of the ellipsoid along `-plane_normal` (the lowest point); if it
+/// lies below the plane, that's our contact. Normal a→b points from
+/// ellipsoid into plane = -plane_normal.
+fn ellipsoid_plane(
+    ellipsoid_xf: &Transform,
+    half_axes: Vec3,
+    plane_p: Vec3,
+    plane_normal_world: Vec3,
+    ellipsoid_shape: u32,
+    plane_shape: u32,
+) -> Option<ContactManifold> {
+    // Express -plane_normal in ellipsoid-local frame, take support.
+    let inv_rot = ellipsoid_xf.rotation.conjugate();
+    let dir_local = inv_rot * (-plane_normal_world);
+    let support_local = support_ellipsoid(half_axes, dir_local);
+    let support_world = ellipsoid_xf.transform_point(support_local);
+    let signed = (support_world - plane_p).dot(plane_normal_world);
+    if signed >= 0.0 {
+        return None;
+    }
+    let depth = -signed;
+    let normal = -plane_normal_world; // a→b: ellipsoid → plane
+    let point = support_world + plane_normal_world * (0.5 * depth);
+    Some(ContactManifold {
+        a_shape: ellipsoid_shape,
+        b_shape: plane_shape,
+        point,
+        normal,
+        depth,
+        friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
+        restitution: 0.0,
+    })
+}
+
 // ─── Generic GJK + EPA narrow phase ─────────────────────────────────
 
 /// Run GJK on the pair, then EPA if overlapping, returning a single
@@ -1312,6 +1568,19 @@ fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
                 perp_scale.z.sqrt(),
             );
             let h = absax * half_height + perp * radius;
+            (xf.position - h, xf.position + h)
+        }
+        ShapeGeometry::Ellipsoid { half_axes } => {
+            let r = Mat3::from_quat(xf.rotation);
+            let row_x = Vec3::new(r.x_axis.x, r.y_axis.x, r.z_axis.x);
+            let row_y = Vec3::new(r.x_axis.y, r.y_axis.y, r.z_axis.y);
+            let row_z = Vec3::new(r.x_axis.z, r.y_axis.z, r.z_axis.z);
+            let h_sq = Vec3::new(
+                (row_x * half_axes).length_squared(),
+                (row_y * half_axes).length_squared(),
+                (row_z * half_axes).length_squared(),
+            );
+            let h = Vec3::new(h_sq.x.sqrt(), h_sq.y.sqrt(), h_sq.z.sqrt());
             (xf.position - h, xf.position + h)
         }
         ShapeGeometry::ConvexHull { .. }

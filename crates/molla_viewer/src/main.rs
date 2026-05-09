@@ -658,6 +658,26 @@ enum BodyVisual {
     Capsule { half_h: f32, radius: f32 },
     /// Cone with apex at +Y·half_h, base disc at -Y·half_h with `radius`.
     Cone { half_h: f32, radius: f32 },
+    /// Ellipsoid with per-axis semi-axes `(half_axes.x/y/z)` (m).
+    /// Rendered as a unit `Sphere` mesh with a non-uniform scale of
+    /// `2·half_axes` baked into the entity's transform.
+    Ellipsoid { half_axes: Vec3 },
+    /// Gaussian splat — render-only, never participates in
+    /// collision. Drawn as a billboarded sphere whose radius equals
+    /// the largest principal stddev derived from
+    /// `covariance_inv⁻¹`, tinted by `color` (RGBA, alpha = density).
+    /// Used by particle-cloud / point-cloud sensors.
+    /// Stage 30: stub — viewer renders as a fixed-size billboarded
+    /// sphere; full anisotropic-Gaussian rendering deferred.
+    #[allow(dead_code)]
+    GaussianSplat {
+        centre: Vec3,
+        /// Inverse covariance matrix (3 columns × 3 rows). Currently
+        /// the viewer only consumes its determinant magnitude as a
+        /// stand-in radius; full rendering deferred.
+        covariance_inv: [Vec3; 3],
+        color: bevy::prelude::Vec4,
+    },
 }
 
 #[derive(Resource)]
@@ -3773,6 +3793,42 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
         visuals.push(BodyVisual::Sphere(radius as f32));
     }
 
+    // ── Ellipsoid (Stage 30) — one tilted oblate body that lands on
+    // the wavy field and demonstrates the new Sphere/Plane and GJK
+    // pairs in action.
+    {
+        let half_axes = MVec3::new(0.45, 0.20, 0.35);
+        let mass = 0.9_f64;
+        let h2 = half_axes * half_axes;
+        let m_fifth = mass / 5.0;
+        let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+            m_fifth * (h2.y + h2.z),
+            m_fifth * (h2.x + h2.z),
+            m_fifth * (h2.x + h2.y),
+        ));
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_pose(mp::Transform::new(
+                    MVec3::new(1.2, 12.0, 1.2),
+                    MQuat::from_axis_angle(MVec3::Z, 0.6),
+                )),
+        );
+        b.add_shape_ellipsoid(body, half_axes, mp::Transform::IDENTITY)
+            .expect("ellipsoid shape");
+        visuals.push(BodyVisual::Ellipsoid {
+            half_axes: Vec3::new(
+                half_axes.x as f32,
+                half_axes.y as f32,
+                half_axes.z as f32,
+            ),
+        });
+    }
+
     (b.build().expect("shapes model"), visuals)
 }
 
@@ -4310,6 +4366,10 @@ fn spawn_body_entities(
 
     let body_q = sim.state_a.body_q.host().expect("body_q").to_vec();
     for (i, pose) in body_q.iter().enumerate() {
+        // Per-visual extra scale (Ellipsoid bakes its semi-axes into a
+        // non-uniform transform scale; GaussianSplat collapses to a
+        // billboard-radius scale for the stub renderer).
+        let mut extra_scale = Vec3::ONE;
         let mesh = match visuals.0[i] {
             // ico(3) → 1280 tris/sphere (vs 320 at ico(2)). Smooth at
             // grab range, still cheap at 144 spheres.
@@ -4332,19 +4392,42 @@ fn spawn_body_entities(
                 .resolution(32)
                 .build(),
             ),
+            // Ellipsoid: render a unit sphere mesh with non-uniform
+            // scale baked into the entity transform. Bevy's PBR
+            // pipeline handles anisotropic scales — wireframe still
+            // shows the deformed icosphere edges, so the stretched
+            // shape is obvious.
+            BodyVisual::Ellipsoid { half_axes } => {
+                extra_scale = half_axes;
+                meshes.add(Sphere::new(1.0).mesh().ico(4).expect("ico"))
+            }
+            // GaussianSplat stub: render as a small billboarded
+            // sphere. Real rendering (oriented anisotropic Gaussian
+            // disc) is deferred — this gives the viewer something
+            // visible without dragging in a custom shader.
+            BodyVisual::GaussianSplat { covariance_inv, .. } => {
+                // Use the (capped) inverse-determinant as a rough
+                // stddev proxy. Real splat rendering would want
+                // the eigenvectors of `covariance_inv⁻¹`.
+                let det = covariance_inv[0].x * covariance_inv[1].y * covariance_inv[2].z;
+                let r = (1.0 / det.abs().max(1e-3)).cbrt().clamp(0.05, 0.5);
+                meshes.add(Sphere::new(r).mesh().ico(2).expect("ico"))
+            }
         };
         let awake = mats[i % mats.len()].clone();
+        let mut t = Transform::from_xyz(
+            pose.position.x as f32,
+            pose.position.y as f32,
+            pose.position.z as f32,
+        );
+        t.scale = extra_scale;
         commands.spawn((
             MollaBody(mp::BodyId::from_index(i)),
             Mesh3d(mesh),
             MeshMaterial3d(awake.clone()),
             AwakeMaterial(awake),
             NotShadowCaster,
-            Transform::from_xyz(
-                pose.position.x as f32,
-                pose.position.y as f32,
-                pose.position.z as f32,
-            ),
+            t,
         ));
     }
 
@@ -5701,6 +5784,15 @@ fn pick_body(
                 ld,
                 MVec3::new(radius as f64, half_h as f64, radius as f64),
             ),
+            // Ellipsoid pick: bounding-sphere of `max(half_axes)` —
+            // ergonomic for grabbing without solving the quadratic.
+            BodyVisual::Ellipsoid { half_axes } => {
+                let r = half_axes.max_element() as f64;
+                ray_sphere_local(lo, ld, r)
+            }
+            // GaussianSplat pick: stub — fixed picking radius so the
+            // user can still drag a splat as a debug handle.
+            BodyVisual::GaussianSplat { .. } => ray_sphere_local(lo, ld, 0.25),
         };
         if let Some(t) = t {
             if t > 0.0 && best.is_none_or(|(bt, _, _)| t < bt) {

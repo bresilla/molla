@@ -19,13 +19,14 @@
 // Channel bitmask values mirror `CameraChannels` in Rust:
 //   COLOR=1, DEPTH=2, NORMAL=4, ALBEDO=8, SHAPE_INDEX=16
 
-const KIND_SPHERE:   u32 = 0u;
-const KIND_PLANE:    u32 = 1u;
-const KIND_BOX:      u32 = 2u;
-const KIND_CAPSULE:  u32 = 3u;
-const KIND_CYLINDER: u32 = 4u;
-const KIND_CONE:     u32 = 5u;
-const KIND_SKIP:     u32 = 0xffu;
+const KIND_SPHERE:    u32 = 0u;
+const KIND_PLANE:     u32 = 1u;
+const KIND_BOX:       u32 = 2u;
+const KIND_CAPSULE:   u32 = 3u;
+const KIND_CYLINDER:  u32 = 4u;
+const KIND_CONE:      u32 = 5u;
+const KIND_ELLIPSOID: u32 = 6u;
+const KIND_SKIP:      u32 = 0xffu;
 
 const CH_COLOR:       u32 = 1u;
 const CH_DEPTH:       u32 = 2u;
@@ -282,6 +283,26 @@ fn ray_cone_local(o: vec3<f32>, d: vec3<f32>, half_h: f32, r: f32) -> f32 {
     return best;
 }
 
+// ── Ellipsoid: axis-aligned in local frame, semi-axes data.xyz.
+// Scale-trick — turn into a unit sphere, intersect, return min t.
+fn ray_ellipsoid_local(o: vec3<f32>, d: vec3<f32>, half: vec3<f32>) -> f32 {
+    let inv = vec3<f32>(1.0 / max(half.x, EPS), 1.0 / max(half.y, EPS), 1.0 / max(half.z, EPS));
+    let o_s = o * inv;
+    let d_s = d * inv;
+    let a = dot(d_s, d_s);
+    if (a < 1e-24) { return NO_HIT_T; }
+    let b = dot(o_s, d_s);
+    let c = dot(o_s, o_s) - 1.0;
+    let disc = b * b - a * c;
+    if (disc < 0.0) { return NO_HIT_T; }
+    let sqd = sqrt(disc);
+    let t0 = (-b - sqd) / a;
+    let t1 = (-b + sqd) / a;
+    if (t0 > 0.0) { return t0; }
+    if (t1 > 0.0) { return t1; }
+    return NO_HIT_T;
+}
+
 // ── Outward normal at a shape-local hit point. ──
 fn shape_normal(kind: u32, data: vec3<f32>, p_local: vec3<f32>) -> vec3<f32> {
     if (kind == KIND_SPHERE) {
@@ -325,6 +346,12 @@ fn shape_normal(kind: u32, data: vec3<f32>, p_local: vec3<f32>) -> vec3<f32> {
         let l2 = dot(n, n);
         if (l2 > 1e-18) { return n / sqrt(l2); }
         return vec3<f32>(0.0, 1.0, 0.0);
+    } else if (kind == KIND_ELLIPSOID) {
+        return normalize(vec3<f32>(
+            p_local.x / max(data.x * data.x, EPS),
+            p_local.y / max(data.y * data.y, EPS),
+            p_local.z / max(data.z * data.z, EPS),
+        ));
     }
     return vec3<f32>(0.0, 1.0, 0.0);
 }
@@ -387,12 +414,13 @@ fn trace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let data = shape_geom_data[i].xyz;
         var t: f32 = NO_HIT_T;
-        if      (kind == KIND_SPHERE)   { t = ray_sphere_local(lo, ld, data.x); }
-        else if (kind == KIND_PLANE)    { t = ray_plane_local(lo, ld, data); }
-        else if (kind == KIND_BOX)      { t = ray_box_local(lo, ld, data); }
-        else if (kind == KIND_CAPSULE)  { t = ray_capsule_local(lo, ld, data.x, data.y); }
-        else if (kind == KIND_CYLINDER) { t = ray_cylinder_local(lo, ld, data.x, data.y); }
-        else if (kind == KIND_CONE)     { t = ray_cone_local(lo, ld, data.x, data.y); }
+        if      (kind == KIND_SPHERE)    { t = ray_sphere_local(lo, ld, data.x); }
+        else if (kind == KIND_PLANE)     { t = ray_plane_local(lo, ld, data); }
+        else if (kind == KIND_BOX)       { t = ray_box_local(lo, ld, data); }
+        else if (kind == KIND_CAPSULE)   { t = ray_capsule_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_CYLINDER)  { t = ray_cylinder_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_CONE)      { t = ray_cone_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_ELLIPSOID) { t = ray_ellipsoid_local(lo, ld, data); }
 
         if (t > 0.0 && t < best_t) {
             best_t = t;

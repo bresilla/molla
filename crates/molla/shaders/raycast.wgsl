@@ -24,12 +24,14 @@
 //   hit_normal       : per-ray world-space outward surface normal
 
 // ── Shape-kind constants (must match `Model::shape_geom_kind` doc). ──
-const KIND_SPHERE:   u32 = 0u;
-const KIND_PLANE:    u32 = 1u;
-const KIND_BOX:      u32 = 2u;
-const KIND_CAPSULE:  u32 = 3u;
-const KIND_CYLINDER: u32 = 4u;
-const KIND_SKIP:     u32 = 0xffu;
+const KIND_SPHERE:    u32 = 0u;
+const KIND_PLANE:     u32 = 1u;
+const KIND_BOX:       u32 = 2u;
+const KIND_CAPSULE:   u32 = 3u;
+const KIND_CYLINDER:  u32 = 4u;
+const KIND_CONE:      u32 = 5u;
+const KIND_ELLIPSOID: u32 = 6u;
+const KIND_SKIP:      u32 = 0xffu;
 
 const STATIC_BODY: i32 = -1;
 const NO_HIT_T: f32 = -1.0;
@@ -239,6 +241,27 @@ fn ray_cylinder_local(o: vec3<f32>, d: vec3<f32>, half_h: f32, r: f32) -> f32 {
     return best;
 }
 
+// ── Ellipsoid (per-axis semi-axes `data.xyz`). Scale space by
+// 1/half_axes so the surface becomes a unit sphere; intersect; the
+// ray-parameter t is preserved by the diagonal scale.
+fn ray_ellipsoid_local(o: vec3<f32>, d: vec3<f32>, half: vec3<f32>) -> f32 {
+    let inv = vec3<f32>(1.0 / half.x, 1.0 / half.y, 1.0 / half.z);
+    let o_s = o * inv;
+    let d_s = d * inv;
+    let a = dot(d_s, d_s);
+    if (a < 1e-24) { return 1e30; }
+    let b = dot(o_s, d_s);
+    let c = dot(o_s, o_s) - 1.0;
+    let disc = b * b - a * c;
+    if (disc < 0.0) { return 1e30; }
+    let sqd = sqrt(disc);
+    let t0 = (-b - sqd) / a;
+    let t1 = (-b + sqd) / a;
+    if (t0 > 0.0) { return t0; }
+    if (t1 > 0.0) { return t1; }
+    return 1e30;
+}
+
 // ── Outward normal at a shape-local hit point. ─────────────────
 fn shape_normal(kind: u32, data: vec3<f32>, p_local: vec3<f32>) -> vec3<f32> {
     if (kind == KIND_SPHERE) {
@@ -270,6 +293,14 @@ fn shape_normal(kind: u32, data: vec3<f32>, p_local: vec3<f32>) -> vec3<f32> {
         if (abs(p_local.y - half_h) < 1e-5) { return vec3<f32>(0.0, 1.0, 0.0); }
         if (abs(p_local.y + half_h) < 1e-5) { return vec3<f32>(0.0, -1.0, 0.0); }
         return normalize(vec3<f32>(p_local.x, 0.0, p_local.z));
+    } else if (kind == KIND_ELLIPSOID) {
+        // Normal at a surface point on an axis-aligned ellipsoid is
+        // gradient(p²/a²) = (px/a², py/b², pz/c²), normalised.
+        return normalize(vec3<f32>(
+            p_local.x / (data.x * data.x),
+            p_local.y / (data.y * data.y),
+            p_local.z / (data.z * data.z),
+        ));
     }
     return vec3<f32>(0.0, 1.0, 0.0);
 }
@@ -315,11 +346,12 @@ fn cast_rays(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let data = shape_geom_data[i].xyz;
         var t: f32 = NO_HIT_T;
-        if      (kind == KIND_SPHERE)   { t = ray_sphere_local(lo, ld, data.x); }
-        else if (kind == KIND_PLANE)    { t = ray_plane_local(lo, ld, data); }
-        else if (kind == KIND_BOX)      { t = ray_box_local(lo, ld, data); }
-        else if (kind == KIND_CAPSULE)  { t = ray_capsule_local(lo, ld, data.x, data.y); }
-        else if (kind == KIND_CYLINDER) { t = ray_cylinder_local(lo, ld, data.x, data.y); }
+        if      (kind == KIND_SPHERE)    { t = ray_sphere_local(lo, ld, data.x); }
+        else if (kind == KIND_PLANE)     { t = ray_plane_local(lo, ld, data); }
+        else if (kind == KIND_BOX)       { t = ray_box_local(lo, ld, data); }
+        else if (kind == KIND_CAPSULE)   { t = ray_capsule_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_CYLINDER)  { t = ray_cylinder_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_ELLIPSOID) { t = ray_ellipsoid_local(lo, ld, data); }
 
         if (t > 0.0 && t < best_t) {
             best_t = t;

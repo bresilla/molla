@@ -48,6 +48,7 @@ pub fn support_with_hulls(
             half_height,
             radius,
         } => support_cone(half_height, radius, dir_local),
+        ShapeGeometry::Ellipsoid { half_axes } => support_ellipsoid(half_axes, dir_local),
         ShapeGeometry::Triangle { v0, v1, v2 } => support_triangle(v0, v1, v2, dir_local),
         ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
         // Heightfield + Sdf use bespoke narrow-phase paths (per-cell
@@ -132,6 +133,28 @@ pub fn support_cone(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
     } else {
         Vec3::new(base_edge.x, -half_height, base_edge.z)
     }
+}
+
+/// Ellipsoid support along the local axes with semi-axes `(a, b, c)`.
+///
+/// Closed form: rescale the query direction by the semi-axes
+/// (`d' = (a·dx, b·dy, c·dz)`); the support point is
+/// `(a²·dx, b²·dy, c²·dz) / |d'|`. Reduces to a sphere when all
+/// three axes match. Mirrors Newton's `geometry/ellipsoid.py`.
+#[inline]
+pub fn support_ellipsoid(half_axes: Vec3, dir: Vec3) -> Vec3 {
+    let scaled = Vec3::new(half_axes.x * dir.x, half_axes.y * dir.y, half_axes.z * dir.z);
+    let len_sq = scaled.length_squared();
+    if len_sq < 1e-24 {
+        // Degenerate direction — pick the +X pole as a stable fallback.
+        return Vec3::new(half_axes.x, 0.0, 0.0);
+    }
+    let inv_len = 1.0 / len_sq.sqrt();
+    Vec3::new(
+        half_axes.x * scaled.x * inv_len,
+        half_axes.y * scaled.y * inv_len,
+        half_axes.z * scaled.z * inv_len,
+    )
 }
 
 /// Convex-hull support: linear scan over `vertices` for the one
@@ -270,6 +293,51 @@ mod tests {
         // picks +X corner → in world that's (0, 1, 0).
         let p = support(geom, &xf, Vec3::Y);
         assert!((p - Vec3::new(0.0, 1.0, 0.0)).length() < 1e-9, "got {p:?}");
+    }
+
+    #[test]
+    fn ellipsoid_support_axis_directions() {
+        // Ellipsoid with semi-axes (2, 1, 0.5) at origin. Support
+        // along each cardinal axis should land on the matching pole.
+        let xf = Transform::IDENTITY;
+        let geom = ShapeGeometry::Ellipsoid {
+            half_axes: Vec3::new(2.0, 1.0, 0.5),
+        };
+        for (dir, want) in &[
+            (Vec3::X, Vec3::new(2.0, 0.0, 0.0)),
+            (-Vec3::X, Vec3::new(-2.0, 0.0, 0.0)),
+            (Vec3::Y, Vec3::new(0.0, 1.0, 0.0)),
+            (-Vec3::Y, Vec3::new(0.0, -1.0, 0.0)),
+            (Vec3::Z, Vec3::new(0.0, 0.0, 0.5)),
+            (-Vec3::Z, Vec3::new(0.0, 0.0, -0.5)),
+        ] {
+            let p = support(geom, &xf, *dir);
+            assert!(
+                (p - *want).length() < 1e-9,
+                "support({dir:?}) = {p:?}, expected {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ellipsoid_support_lies_on_surface() {
+        // For any non-trivial direction, the resulting point must
+        // satisfy Σ(xᵢ/aᵢ)² = 1 (within ε). Quick spot-check on a
+        // batch of pseudo-random directions.
+        let xf = Transform::IDENTITY;
+        let half = Vec3::new(1.5, 0.7, 0.3);
+        let geom = ShapeGeometry::Ellipsoid { half_axes: half };
+        let dirs = [
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, 0.5, 0.25),
+            Vec3::new(0.1, -0.4, 0.7),
+            Vec3::new(2.0, -1.0, -3.0),
+        ];
+        for d in dirs {
+            let p = support(geom, &xf, d);
+            let v = (p.x / half.x).powi(2) + (p.y / half.y).powi(2) + (p.z / half.z).powi(2);
+            assert!((v - 1.0).abs() < 1e-9, "off-surface: v={v} for {d:?}");
+        }
     }
 
     #[test]

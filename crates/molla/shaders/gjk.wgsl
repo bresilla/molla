@@ -16,13 +16,14 @@ struct Transform {
     rotation: vec4<f32>,
 };
 
-const KIND_SPHERE:   u32 = 0u;
-const KIND_PLANE:    u32 = 1u;
-const KIND_BOX:      u32 = 2u;
-const KIND_CAPSULE:  u32 = 3u;
-const KIND_CYLINDER: u32 = 4u;
-const KIND_CONE:     u32 = 5u;
-const KIND_SKIP:     u32 = 0xffu;
+const KIND_SPHERE:    u32 = 0u;
+const KIND_PLANE:     u32 = 1u;
+const KIND_BOX:       u32 = 2u;
+const KIND_CAPSULE:   u32 = 3u;
+const KIND_CYLINDER:  u32 = 4u;
+const KIND_CONE:      u32 = 5u;
+const KIND_ELLIPSOID: u32 = 6u;
+const KIND_SKIP:      u32 = 0xffu;
 const STATIC_BODY: i32 = -1;
 
 struct Uniforms {
@@ -133,6 +134,26 @@ fn local_support(kind: u32, data: vec3<f32>, dir_local: vec3<f32>) -> vec3<f32> 
             return vec3<f32>(0.0, half_h, 0.0);
         }
         return vec3<f32>(edge.x, -half_h, edge.y);
+    }
+    if (kind == KIND_ELLIPSOID) {
+        // Ellipsoid support: rescale dir by per-axis semi-axes,
+        // normalise, then rescale again. See `support_ellipsoid` in
+        // crates/molla/src/geometry/support.rs.
+        let scaled = vec3<f32>(
+            data.x * dir_local.x,
+            data.y * dir_local.y,
+            data.z * dir_local.z,
+        );
+        let len_sq = dot(scaled, scaled);
+        if (len_sq < 1e-24) {
+            return vec3<f32>(data.x, 0.0, 0.0);
+        }
+        let inv_len = inverseSqrt(len_sq);
+        return vec3<f32>(
+            data.x * scaled.x * inv_len,
+            data.y * scaled.y * inv_len,
+            data.z * scaled.z * inv_len,
+        );
     }
     // KIND_PLANE / KIND_SKIP: caller filters before calling.
     return vec3<f32>(0.0);
