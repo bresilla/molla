@@ -211,6 +211,52 @@ impl Default for BodyParams {
     }
 }
 
+/// Per-tet Neo-Hookean material parameters (Stage 20.3 multi-material
+/// extension). One material applies to one or more tets via the
+/// `material_idx` slice passed to
+/// [`ModelBuilder::add_tet_mesh_per_material`]. Convert to the per-tet
+/// Lamé `(μ, λ)` pair via the standard formulas at build time.
+///
+/// `yield_stress` + `hardening` are the v1 plasticity knobs:
+/// - `yield_stress = Real::INFINITY` (or just `1e30`) → purely elastic
+///   (the return-mapping pass is a no-op for that tet).
+/// - `hardening = 0` → perfectly plastic (yield surface stays at the
+///   initial radius).
+/// - `hardening > 0` → linear isotropic hardening
+///   (`σ_y(ε_p) = σ_y0 + H · ε_p`).
+#[derive(Copy, Clone, Debug)]
+pub struct MaterialNeoHookean {
+    /// Young's modulus (Pa). Clamped to `[1, 1e9]` at build time.
+    pub youngs: Real,
+    /// Poisson ratio. Clamped to `[-0.49, 0.49]` to keep the Lamé
+    /// `λ` finite (ν → 0.5 is the incompressible limit).
+    pub poisson: Real,
+    /// von Mises yield stress `σ_y0` (Pa). Set to `Real::INFINITY` to
+    /// keep the material purely elastic.
+    pub yield_stress: Real,
+    /// Linear hardening modulus `H` (Pa). 0 = perfectly plastic.
+    pub hardening: Real,
+}
+
+impl MaterialNeoHookean {
+    /// Convenience for the elastic-only case (no plasticity).
+    #[must_use]
+    pub fn elastic(youngs: Real, poisson: Real) -> Self {
+        Self {
+            youngs,
+            poisson,
+            yield_stress: Real::INFINITY,
+            hardening: 0.0,
+        }
+    }
+}
+
+impl Default for MaterialNeoHookean {
+    fn default() -> Self {
+        Self::elastic(1.0e5, 0.4)
+    }
+}
+
 /// Stable identifier for a tetrahedral soft body added via
 /// [`ModelBuilder::add_tet_mesh`]. 0-based dense index into the
 /// model's `tet_mesh_offsets` CSR. Wrapped for type safety so a
@@ -268,6 +314,15 @@ pub struct ModelBuilder {
     tet_rest_volume: Vec<Real>,
     tet_mu: Vec<Real>,
     tet_lambda: Vec<Real>,
+    // Stage 20.3 plasticity. F_p starts as identity for every tet;
+    // accumulated plastic strain + per-tet yield/hardening stay zero
+    // for the back-compat path (yield_stress = INFINITY ⇒ purely
+    // elastic). The per-material API in `add_tet_mesh_per_material`
+    // surfaces both knobs.
+    tet_f_plastic: Vec<Mat3>,
+    tet_plastic_strain: Vec<Real>,
+    tet_yield_stress: Vec<Real>,
+    tet_hardening: Vec<Real>,
     tet_mesh_offsets: Vec<u32>,
 
     // Body arrays.
@@ -614,8 +669,48 @@ impl ModelBuilder {
         poisson_ratio: Real,
         rest_volume: Option<&[Real]>,
     ) -> Result<TetMeshId> {
+        // Single-material shim: every tet shares the same material slot.
+        let materials = [MaterialNeoHookean::elastic(youngs_modulus, poisson_ratio)];
+        let material_idx: Vec<u32> = vec![0; tets.len()];
+        self.add_tet_mesh_per_material(tets, &materials, &material_idx, rest_volume)
+    }
+
+    /// Multi-material extension of [`Self::add_tet_mesh`] (Stage 20.3).
+    ///
+    /// Each tet picks its material by indexing into `materials` via the
+    /// matching `material_idx[i]`. This lets a single `TetMeshId` mix
+    /// soft + stiff regions (jelly cube with stiff corners) and turn
+    /// plasticity on/off per element. Returns the new tet mesh id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Build` when:
+    /// - `tets.is_empty()`,
+    /// - `material_idx.len() != tets.len()`,
+    /// - any `material_idx[i] >= materials.len()`,
+    /// - any vertex index is out of range,
+    /// - the rest configuration produces a non-positive `det(Dm)`.
+    pub fn add_tet_mesh_per_material(
+        &mut self,
+        tets: &[[u32; 4]],
+        materials: &[MaterialNeoHookean],
+        material_idx: &[u32],
+        rest_volume: Option<&[Real]>,
+    ) -> Result<TetMeshId> {
         if tets.is_empty() {
             return Err(Error::Build("add_tet_mesh: tets must be non-empty".into()));
+        }
+        if materials.is_empty() {
+            return Err(Error::Build(
+                "add_tet_mesh_per_material: materials must be non-empty".into(),
+            ));
+        }
+        if material_idx.len() != tets.len() {
+            return Err(Error::Build(format!(
+                "add_tet_mesh_per_material: material_idx.len() = {} ≠ tets.len() = {}",
+                material_idx.len(),
+                tets.len()
+            )));
         }
         if let Some(rv) = rest_volume {
             if rv.len() != tets.len() {
@@ -628,18 +723,30 @@ impl ModelBuilder {
         }
         let n_particles = self.particle_mass.len() as u32;
 
-        // Convert (E, ν) → Lamé (μ, λ) once per call (one material per
-        // mesh in v1; per-element materials are Stage 20.3).
-        let nu = poisson_ratio.clamp(-0.49, 0.49);
-        let e = youngs_modulus.max(1.0).min(1.0e9);
-        let mu = e / (2.0 * (1.0 + nu));
-        let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+        // Pre-compute Lamé `(μ, λ)` for each material. Clamp ν to keep
+        // `(1+ν)(1-2ν)` finite; clamp E to a sane range.
+        let mut lame: Vec<(Real, Real, Real, Real)> = Vec::with_capacity(materials.len());
+        for m in materials {
+            let nu = m.poisson.clamp(-0.49, 0.49);
+            let e = m.youngs.max(1.0).min(1.0e9);
+            let mu = e / (2.0 * (1.0 + nu));
+            let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+            // Yield stress / hardening: keep INFINITY as the "purely
+            // elastic" sentinel; downstream kernels short-circuit when
+            // the trial deviator norm is below σ_y.
+            let yield_stress = if m.yield_stress.is_finite() {
+                m.yield_stress.max(0.0)
+            } else {
+                Real::INFINITY
+            };
+            let hardening = m.hardening.max(0.0);
+            lame.push((mu, lambda, yield_stress, hardening));
+        }
 
         let mesh_id = self.tet_mesh_offsets.len().saturating_sub(1).max(0);
         if self.tet_mesh_offsets.is_empty() {
             self.tet_mesh_offsets.push(0);
         }
-        let lo_tet = self.tet_indices.len() / 4;
         for (i, t) in tets.iter().enumerate() {
             for &v in t {
                 if v >= n_particles {
@@ -648,6 +755,13 @@ impl ModelBuilder {
                         i, v, n_particles
                     )));
                 }
+            }
+            let mi = material_idx[i] as usize;
+            if mi >= materials.len() {
+                return Err(Error::Build(format!(
+                    "add_tet_mesh_per_material: tet {i} material_idx {mi} ≥ materials.len() = {}",
+                    materials.len()
+                )));
             }
             let v0 = self.particle_q0[t[0] as usize];
             let v1 = self.particle_q0[t[1] as usize];
@@ -660,10 +774,6 @@ impl ModelBuilder {
                     "add_tet_mesh: tet {i} is degenerate (det(Dm) = {det:e})"
                 )));
             }
-            // Newton's reference Neo-Hookean kernel uses the rest-state
-            // basis "as-is"; an *inverted* rest tet (negative volume)
-            // would silently flip every per-vertex force sign. Reject
-            // it loudly — callers should fix the tet's vertex order.
             if det <= 0.0 {
                 return Err(Error::Build(format!(
                     "add_tet_mesh: tet {i} has non-positive rest volume \
@@ -680,10 +790,15 @@ impl ModelBuilder {
             }
             self.tet_dm_inv.push(dm_inv);
             self.tet_rest_volume.push(rest_vol);
+            let (mu, lambda, yield_s, hard) = lame[mi];
             self.tet_mu.push(mu);
             self.tet_lambda.push(lambda);
+            // Plasticity init: F_p = I, ε_p = 0, σ_y / H from material.
+            self.tet_f_plastic.push(Mat3::IDENTITY);
+            self.tet_plastic_strain.push(0.0);
+            self.tet_yield_stress.push(yield_s);
+            self.tet_hardening.push(hard);
         }
-        let _ = lo_tet;
         // Push the closing CSR offset (next mesh starts here).
         self.tet_mesh_offsets.push(self.tet_indices.len() as u32 / 4);
         Ok(TetMeshId(mesh_id as u32))
@@ -1951,6 +2066,10 @@ impl ModelBuilder {
             tet_rest_volume: Buffer::from_vec(self.tet_rest_volume, s),
             tet_mu: Buffer::from_vec(self.tet_mu, s),
             tet_lambda: Buffer::from_vec(self.tet_lambda, s),
+            tet_f_plastic: Buffer::from_vec(self.tet_f_plastic, s),
+            tet_plastic_strain: Buffer::from_vec(self.tet_plastic_strain, s),
+            tet_yield_stress: Buffer::from_vec(self.tet_yield_stress, s),
+            tet_hardening: Buffer::from_vec(self.tet_hardening, s),
             tet_mesh_count: self.tet_mesh_offsets.len().saturating_sub(1),
             tet_mesh_offsets: Buffer::from_vec(
                 if self.tet_mesh_offsets.is_empty() {

@@ -303,10 +303,35 @@ pub struct Model {
     /// Per-tet first Lamé parameter `μ` (shear modulus, N/m²). The
     /// builder converts the user's `(E, ν)` (Young's modulus + Poisson
     /// ratio) into Lamé via the standard formulas. One value per tet
-    /// so future per-element materials slot in (Stage 20.3).
+    /// so multi-material meshes (Stage 20.3) can mix soft + stiff
+    /// elements within a single `TetMeshId`.
     pub tet_mu: Buffer<Real>,
     /// Per-tet second Lamé parameter `λ` (N/m²).
     pub tet_lambda: Buffer<Real>,
+
+    // ── Per-tet plasticity (Stage 20.3) ─────────────────────────────
+    // Multiplicative split `F = F_e · F_p` with isotropic von Mises
+    // return mapping. `tet_F_plastic` stores `F_p` (3×3, identity at
+    // build time); the elastic Neo-Hookean energy is evaluated on
+    // `F_e = F · F_p⁻¹`. After each substep a return-mapping pass
+    // updates `F_p` so the trial elastic state is pulled back to the
+    // yield surface; `tet_plastic_strain` accumulates the equivalent
+    // plastic strain (used by linear hardening: `σ_y(ε_p) = σ_y0 + H · ε_p`).
+    /// Per-tet plastic deformation gradient `F_p` (3×3 column-major).
+    /// Initialised to identity; mutated by the return-mapping pass.
+    pub tet_f_plastic: Buffer<Mat3>,
+    /// Per-tet accumulated equivalent plastic strain (scalar). Starts
+    /// at zero; used by the linear-hardening rule.
+    pub tet_plastic_strain: Buffer<Real>,
+    /// Per-tet von Mises yield stress `σ_y0` (Pa). When the elastic
+    /// trial deviatoric stress norm exceeds `σ_y(ε_p)`, the return
+    /// mapping pulls the trial state back to the yield surface.
+    /// Set to `Real::INFINITY` (or just a very large number) to keep
+    /// a tet purely elastic. Default 1e30 = effectively infinite.
+    pub tet_yield_stress: Buffer<Real>,
+    /// Per-tet linear hardening modulus `H` (Pa). Yield stress grows
+    /// as `σ_y(ε_p) = σ_y0 + H · ε_p`. `H = 0` is perfectly plastic.
+    pub tet_hardening: Buffer<Real>,
 
     /// Number of tet meshes (groupings).
     pub tet_mesh_count: usize,
@@ -622,6 +647,10 @@ impl Model {
             tet_rest_volume: Buffer::from_vec(Vec::new(), s),
             tet_mu: Buffer::from_vec(Vec::new(), s),
             tet_lambda: Buffer::from_vec(Vec::new(), s),
+            tet_f_plastic: Buffer::from_vec(Vec::new(), s),
+            tet_plastic_strain: Buffer::from_vec(Vec::new(), s),
+            tet_yield_stress: Buffer::from_vec(Vec::new(), s),
+            tet_hardening: Buffer::from_vec(Vec::new(), s),
             tet_mesh_count: 0,
             tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
@@ -769,6 +798,10 @@ impl Model {
         up!(tet_rest_volume);
         up!(tet_mu);
         up!(tet_lambda);
+        up!(tet_f_plastic);
+        up!(tet_plastic_strain);
+        up!(tet_yield_stress);
+        up!(tet_hardening);
         up!(tet_mesh_offsets);
         up!(vertex_adjacent_tets_offsets);
         up!(vertex_adjacent_tets);

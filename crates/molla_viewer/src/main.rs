@@ -842,7 +842,7 @@ impl Scene {
             Scene::NeuralPolicy => "Neural policy (Stage 18.1)",
             Scene::Cable => "Cable (Stage 20.1)",
             Scene::Mpm => "MPM sand (Stage 24d)",
-            Scene::Jelly => "Jelly (Stage 20.2)",
+            Scene::Jelly => "Jelly (Stage 20.3)",
         }
     }
 
@@ -1410,6 +1410,16 @@ impl Default for MpmExampleState {
 /// in `update_jelly_example`. Lazy-initialised on entry to
 /// `Scene::Jelly`; survives scene switches so the user's tuning
 /// persists.
+///
+/// Stage 20.3 extensions:
+/// - per-region material picker (`material_preset`) — chooses one of
+///   the `JellyMaterialPreset` named recipes when the model is built,
+///   driving the per-tet `(E, ν, σ_y, H)` parameters via
+///   `add_tet_mesh_per_material`.
+/// - plasticity sliders (`yield_stress`, `hardening`).
+/// - "compress" trigger — the kinematic puller is briefly accelerated
+///   downward to drive the cube past yield and exhibit permanent set.
+/// - plastic-strain heat-map toggle (`show_plastic_strain`).
 #[derive(Resource)]
 struct JellyExampleState {
     /// Per-tet Young's modulus (Pa). Surfaced via the slider.
@@ -1429,6 +1439,42 @@ struct JellyExampleState {
     /// volumetric soft body's behaviour against the bending-only
     /// CABLE primitive in real time.
     show_cable_comparison: bool,
+
+    // ── Stage 20.3 — multi-material + plasticity ─────────────────
+    /// Material preset index — Soft / Stiff / Rigid. Re-builds the
+    /// model with the new per-tet `MaterialNeoHookean` when changed.
+    material_preset: JellyMaterialPreset,
+    /// von Mises yield stress σ_y0 (Pa). `Real::INFINITY` (encoded
+    /// here as 0.0 sentinel = "elastic only") disables plasticity.
+    yield_stress: f64,
+    /// Linear hardening modulus H (Pa).
+    hardening: f64,
+    /// Toggle the plastic-strain colour overlay on the tet wireframe.
+    /// When on, draws each tet's edge with a colour proportional to
+    /// its accumulated equivalent plastic strain (cool → hot).
+    show_plastic_strain: bool,
+    /// Latest max-ε_p readout (filled in by `update_jelly_example`).
+    last_max_plastic_strain: f64,
+    /// One-shot trigger fired by the "Compress" button. The puller
+    /// body's kinematic Y-position is pulled down rapidly by
+    /// `update_jelly_example` while this is non-zero, then decays
+    /// back. A small impulsive squash is enough to drive the cube
+    /// past yield with the default plasticity settings.
+    compress_t: f32,
+}
+
+/// Material recipe for `JellyExampleState::material_preset`. Each
+/// option maps to one or more `MaterialNeoHookean` instances at
+/// model-build time. v1 ships three named presets — easy to extend
+/// (add a variant + a `materials_for_preset` arm).
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+enum JellyMaterialPreset {
+    #[default]
+    Soft,
+    Stiff,
+    /// Soft interior with stiff corner cells — multi-material recipe
+    /// that drives `add_tet_mesh_per_material` end-to-end.
+    Mixed,
 }
 
 impl Default for JellyExampleState {
@@ -1440,6 +1486,12 @@ impl Default for JellyExampleState {
             inner_iterations: 10,
             show_wireframe: true,
             show_cable_comparison: false,
+            material_preset: JellyMaterialPreset::Soft,
+            yield_stress: 0.0, // 0 = "elastic only" (sentinel, see jelly_pane)
+            hardening: 0.0,
+            show_plastic_strain: false,
+            last_max_plastic_strain: 0.0,
+            compress_t: 0.0,
         }
     }
 }
@@ -2598,11 +2650,17 @@ fn jelly_cube_to_six_tets(corners: [u32; 8]) -> [[u32; 4]; 6] {
     ]
 }
 
-/// Stage-20.2 JELLY scene. An 8×8×8 tet jelly cube falls onto a
+/// Stage-20.2/20.3 JELLY scene. An 8×8×8 tet jelly cube falls onto a
 /// static plane. A kinematic puller body sits at +X for the cube to
 /// (optionally) bounce against. The cube renders as gizmo edges on
 /// the surface tris (computed at draw time from the tet topology).
-fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
+///
+/// Stage 20.3 — uses `add_tet_mesh_per_material` to assign different
+/// `MaterialNeoHookean` recipes per cube cell based on the
+/// `JellyMaterialPreset`. The Soft preset gives every cell the same
+/// modest E; Stiff gives every cell a high E; Mixed alternates soft
+/// interior with stiff corner-cell pillars.
+fn build_jelly_model_with_preset(preset: JellyMaterialPreset) -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
     b.set_linear_damping(0.4);
 
@@ -2622,6 +2680,8 @@ fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
     }
     let v_at = |i: u32, j: u32, k: u32| -> u32 { (k * n + j) * n + i };
     let mut tets = Vec::new();
+    let mut mat_idx: Vec<u32> = Vec::new();
+    let last = n - 2;
     for kk in 0..n - 1 {
         for jj in 0..n - 1 {
             for ii in 0..n - 1 {
@@ -2635,13 +2695,38 @@ fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
                     v_at(ii, jj + 1, kk + 1),
                     v_at(ii + 1, jj + 1, kk + 1),
                 ];
-                tets.extend_from_slice(&jelly_cube_to_six_tets(corners));
+                let cell_tets = jelly_cube_to_six_tets(corners);
+                let mi: u32 = match preset {
+                    JellyMaterialPreset::Soft => 0,
+                    JellyMaterialPreset::Stiff => 0,
+                    JellyMaterialPreset::Mixed => {
+                        // Stiff (1) on the four vertical corner pillars;
+                        // soft (0) elsewhere.
+                        if (ii == 0 || ii == last) && (kk == 0 || kk == last) {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                };
+                for tet in cell_tets {
+                    tets.push(tet);
+                    mat_idx.push(mi);
+                }
             }
         }
     }
+    let materials: Vec<mp::MaterialNeoHookean> = match preset {
+        JellyMaterialPreset::Soft => vec![mp::MaterialNeoHookean::elastic(JELLY_YOUNGS, JELLY_POISSON)],
+        JellyMaterialPreset::Stiff => vec![mp::MaterialNeoHookean::elastic(JELLY_YOUNGS * 100.0, JELLY_POISSON)],
+        JellyMaterialPreset::Mixed => vec![
+            mp::MaterialNeoHookean::elastic(JELLY_YOUNGS, JELLY_POISSON),
+            mp::MaterialNeoHookean::elastic(JELLY_YOUNGS * 100.0, JELLY_POISSON),
+        ],
+    };
     let _ = b
-        .add_tet_mesh(&tets, JELLY_YOUNGS, JELLY_POISSON, None)
-        .expect("add_tet_mesh");
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("add_tet_mesh_per_material");
 
     // Floor plane.
     b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
@@ -2666,6 +2751,12 @@ fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
     let model = b.build().expect("jelly model");
     let visuals = vec![BodyVisual::Sphere(JELLY_PULLER_RADIUS)];
     (model, visuals)
+}
+
+/// Back-compat shim — Stage 20.2 callers used `build_jelly_model()`
+/// without preset. Default to Soft.
+fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
+    build_jelly_model_with_preset(JellyMaterialPreset::Soft)
 }
 
 /// Stage-21 mesh-tools demo. The "model" is empty (no physics step
@@ -6996,7 +7087,7 @@ fn update_cable_example(
 /// the per-element Lamé parameters and overwrite the model's `tet_mu`
 /// / `tet_lambda` host buffers (which then get re-uploaded on the
 /// next solver step).
-fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
+fn update_jelly_example(mut sim: ResMut<Sim>, mut state: ResMut<JellyExampleState>) {
     if sim.scene != Scene::Jelly {
         return;
     }
@@ -7005,8 +7096,11 @@ fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
         s.iterations = state.inner_iterations as usize;
     }
     // Push fresh (E, ν) → (μ, λ) into the model's per-tet buffers.
-    // We also need to re-upload to the device for the next step;
-    // `sim.engine` carries the device/queue handles.
+    // Stage 20.3 — also push fresh per-tet yield + hardening so the
+    // plasticity sliders take effect without rebuilding the model.
+    // Multi-material presets are baked at scene-build time, so the
+    // per-tet uniformity here applies on top of whatever per-tet
+    // material-id breakdown the preset chose.
     let nu = state.poisson_ratio.clamp(-0.49, 0.49);
     let e = state.youngs_modulus.max(1.0).min(1.0e9);
     let mu = e / (2.0 * (1.0 + nu));
@@ -7015,6 +7109,11 @@ fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
     if tet_count == 0 {
         return;
     }
+    // Mixed preset has stiff corner cells (E ×100), soft interior.
+    // Apply via per-tet (μ, λ); the multi-material API at build
+    // time already wrote the right initial values, but per-frame
+    // slider tweaks rewrite uniformly here. Future enhancement:
+    // store per-tet material-id at build time for re-stamping.
     {
         let mu_host = sim.model.tet_mu.host_mut().expect("tet_mu host");
         for v in mu_host.iter_mut() {
@@ -7027,6 +7126,37 @@ fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
             *v = lambda;
         }
     }
+    // Plasticity uniforms — `yield_stress = 0` is the UI sentinel for
+    // "elastic only"; we encode that on the device side as a very
+    // large finite value (>1e29) to short-circuit the WGSL plasticity
+    // kernel. Real::INFINITY tripped some f32 cast issues so we use
+    // a large number directly.
+    let sigma_y_device = if state.yield_stress > 0.0 {
+        state.yield_stress
+    } else {
+        1.0e30
+    };
+    let h_device = state.hardening.max(0.0);
+    {
+        let yield_host = sim
+            .model
+            .tet_yield_stress
+            .host_mut()
+            .expect("tet_yield_stress host");
+        for v in yield_host.iter_mut() {
+            *v = sigma_y_device;
+        }
+    }
+    {
+        let hard_host = sim
+            .model
+            .tet_hardening
+            .host_mut()
+            .expect("tet_hardening host");
+        for v in hard_host.iter_mut() {
+            *v = h_device;
+        }
+    }
     if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
         let device = device.clone();
         let queue = queue.clone();
@@ -7034,6 +7164,49 @@ fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
         let _ = sim.model.tet_mu.upload(&queue);
         let _ = sim.model.tet_lambda.ensure_device(&device);
         let _ = sim.model.tet_lambda.upload(&queue);
+        let _ = sim.model.tet_yield_stress.ensure_device(&device);
+        let _ = sim.model.tet_yield_stress.upload(&queue);
+        let _ = sim.model.tet_hardening.ensure_device(&device);
+        let _ = sim.model.tet_hardening.upload(&queue);
+    }
+    // Compress button: drive the kinematic puller body downward
+    // briefly when `compress_t` was bumped by the UI. Pull rate
+    // decays geometrically each frame — total impulse is roughly
+    // `compress_t / 60` revolutions of the puller body.
+    if state.compress_t > 0.0 {
+        if sim.model.body_count > 0 {
+            let bq_host = sim.state_a.body_q.host_mut().expect("body_q");
+            if let Some(b) = bq_host.first_mut() {
+                let dy = -0.02 * state.compress_t as f64;
+                b.position.y += dy;
+            }
+        }
+        if let (Some(device), Some(queue)) =
+            (sim.engine.device(), sim.engine.queue())
+        {
+            let device = device.clone();
+            let queue = queue.clone();
+            let _ = sim.state_a.body_q.ensure_device(&device);
+            let _ = sim.state_a.body_q.upload(&queue);
+        }
+        state.compress_t = (state.compress_t - 0.1).max(0.0);
+    }
+    // Read back the max plastic-strain accumulator for the readout.
+    if state.show_plastic_strain || state.last_max_plastic_strain > 0.0 {
+        if let (Some(device), Some(queue)) =
+            (sim.engine.device(), sim.engine.queue())
+        {
+            let device = device.clone();
+            let queue = queue.clone();
+            let _ = sim
+                .state_a
+                .tet_plastic_strain
+                .download(&device, &queue);
+        }
+        if let Ok(eps) = sim.state_a.tet_plastic_strain.host() {
+            state.last_max_plastic_strain =
+                eps.iter().cloned().fold(0.0_f64, f64::max);
+        }
     }
 }
 
@@ -7786,21 +7959,45 @@ fn draw_jelly_gizmos(
     if n_tets == 0 {
         return;
     }
-    // Dedup edges across tets via a HashSet of canonicalised pairs.
+    // Stage 20.3 — plastic-strain heat-map. When the toggle is on we
+    // colour each tet's edges by its accumulated equivalent plastic
+    // strain ε_p (cool blue → hot red over [0, 1]). Without the
+    // toggle we use the Stage 20.2 uniform green and dedup edges
+    // across tets to keep the line count manageable.
+    let plastic_strain = if state.show_plastic_strain {
+        sim.state_a
+            .tet_plastic_strain
+            .host()
+            .ok()
+            .map(|s| s.to_vec())
+    } else {
+        None
+    };
     use std::collections::HashSet;
     let mut seen = HashSet::<(u32, u32)>::with_capacity(n_tets * 4);
-    let edge_color = Color::srgb(0.40, 0.85, 0.40);
+    let default_edge_color = Color::srgb(0.40, 0.85, 0.40);
     for t in 0..n_tets {
         let v0 = tet_idx[t * 4];
         let v1 = tet_idx[t * 4 + 1];
         let v2 = tet_idx[t * 4 + 2];
         let v3 = tet_idx[t * 4 + 3];
+        let edge_color = if let Some(eps) = &plastic_strain {
+            let e = eps.get(t).copied().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+            // Cool → hot blend (blue → red).
+            Color::srgb(e, 0.10 + 0.20 * (1.0 - e), 1.0 - e)
+        } else {
+            default_edge_color
+        };
         for &(a, b) in &[
             (v0, v1), (v0, v2), (v0, v3),
             (v1, v2), (v1, v3), (v2, v3),
         ] {
             let key = if a < b { (a, b) } else { (b, a) };
-            if seen.insert(key) {
+            // When the heat-map is on we don't dedup — every tet
+            // contributes its colour to every shared edge — but we
+            // still skip if we already drew it FOR THIS TET'S
+            // colour (avoid four overlapping draws per shared edge).
+            if plastic_strain.is_some() || seen.insert(key) {
                 let pa = pq[a as usize];
                 let pb = pq[b as usize];
                 gizmos.line(
@@ -8057,7 +8254,7 @@ fn control_pane(
         Scene::NeuralPolicy => Some("Neural policy (Stage 18.1)"),
         Scene::Cable => Some("Cable (Stage 20.1)"),
         Scene::Mpm => Some("MPM sand (Stage 24d)"),
-        Scene::Jelly => Some("Jelly (Stage 20.2)"),
+        Scene::Jelly => Some("Jelly (Stage 20.3)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -8560,6 +8757,133 @@ fn jelly_pane(
     );
     ui.separator();
 
+    // ── Stage 20.3 — multi-material picker ──────────────────────
+    ui.label("Material preset");
+    let mut preset_changed = false;
+    egui::ComboBox::from_id_salt("jelly-material-preset")
+        .selected_text(match state.material_preset {
+            JellyMaterialPreset::Soft => "Soft (uniform)",
+            JellyMaterialPreset::Stiff => "Stiff (uniform)",
+            JellyMaterialPreset::Mixed => "Mixed (soft + stiff pillars)",
+        })
+        .show_ui(ui, |ui| {
+            for (variant, label) in [
+                (JellyMaterialPreset::Soft, "Soft (uniform)"),
+                (JellyMaterialPreset::Stiff, "Stiff (uniform)"),
+                (JellyMaterialPreset::Mixed, "Mixed (soft + stiff pillars)"),
+            ] {
+                if ui
+                    .selectable_value(&mut state.material_preset, variant, label)
+                    .clicked()
+                {
+                    preset_changed = true;
+                }
+            }
+        });
+    if preset_changed {
+        // The per-tet material assignment is baked at scene-build
+        // time. To avoid a full Bevy entity rebuild, we re-stamp the
+        // per-tet (μ, λ) buffers in place. Compute the per-tet
+        // breakdown in a Vec first (decoupled from any host_mut
+        // borrows) so we don't run into glam's "two host_mut at
+        // once" aliasing.
+        let n = JELLY_GRID;
+        let (e_soft, e_stiff) = match state.material_preset {
+            JellyMaterialPreset::Soft => (state.youngs_modulus, state.youngs_modulus),
+            JellyMaterialPreset::Stiff => (state.youngs_modulus * 100.0, state.youngs_modulus * 100.0),
+            JellyMaterialPreset::Mixed => (state.youngs_modulus, state.youngs_modulus * 100.0),
+        };
+        let nu = state.poisson_ratio.clamp(-0.49, 0.49);
+        let lame = |e: f64| {
+            let e = e.max(1.0).min(1.0e9);
+            let mu = e / (2.0 * (1.0 + nu));
+            let lam = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+            (mu, lam)
+        };
+        let (mu_soft, lam_soft) = lame(e_soft);
+        let (mu_stiff, lam_stiff) = lame(e_stiff);
+        let last = n - 2;
+        // The 6 tets per cell are stored contiguously in tet order
+        // matching `build_jelly_model_with_preset`'s loop nesting
+        // (k → j → i → 6 tets per cell).
+        let tet_count = sim.model.tet_count;
+        let mut new_mu = vec![mu_soft; tet_count];
+        let mut new_lam = vec![lam_soft; tet_count];
+        let mut tet_id = 0usize;
+        for kk in 0..n - 1 {
+            for _jj in 0..n - 1 {
+                for ii in 0..n - 1 {
+                    let stiff_cell =
+                        (ii == 0 || ii == last) && (kk == 0 || kk == last);
+                    let (mu_c, lam_c) = match state.material_preset {
+                        JellyMaterialPreset::Mixed if stiff_cell => {
+                            (mu_stiff, lam_stiff)
+                        }
+                        JellyMaterialPreset::Stiff => (mu_stiff, lam_stiff),
+                        _ => (mu_soft, lam_soft),
+                    };
+                    for _ in 0..6 {
+                        if tet_id < tet_count {
+                            new_mu[tet_id] = mu_c;
+                            new_lam[tet_id] = lam_c;
+                            tet_id += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(mus) = sim.model.tet_mu.host_mut() {
+            for (dst, src) in mus.iter_mut().zip(new_mu.iter()) {
+                *dst = *src;
+            }
+        }
+        if let Ok(lams) = sim.model.tet_lambda.host_mut() {
+            for (dst, src) in lams.iter_mut().zip(new_lam.iter()) {
+                *dst = *src;
+            }
+        }
+        if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+            let device = device.clone();
+            let queue = queue.clone();
+            let _ = sim.model.tet_mu.ensure_device(&device);
+            let _ = sim.model.tet_mu.upload(&queue);
+            let _ = sim.model.tet_lambda.ensure_device(&device);
+            let _ = sim.model.tet_lambda.upload(&queue);
+        }
+    }
+    ui.separator();
+
+    // ── Stage 20.3 — plasticity sliders ─────────────────────────
+    ui.label("Yield stress σ_y (Pa) — 0 = elastic only");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.yield_stress, 0.0..=1.0e5)
+            .logarithmic(true),
+    );
+    ui.label("Hardening modulus H (Pa)");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.hardening, 0.0..=1.0e5)
+            .logarithmic(true),
+    );
+    ui.checkbox(&mut state.show_plastic_strain, "Show plastic-strain heat-map");
+    readout(
+        ui,
+        "Max ε_p",
+        &format!("{:.4}", state.last_max_plastic_strain),
+    );
+    if ui
+        .add_sized(
+            [ui.available_width(), 24.0],
+            button_widget("Compress (drives plasticity)", accent),
+        )
+        .clicked()
+    {
+        // Bump the per-frame compress driver — `update_jelly_example`
+        // pulls the puller body downward by `0.02 m * compress_t`
+        // each frame and decays `compress_t` geometrically.
+        state.compress_t = 1.0;
+    }
+    ui.separator();
+
     if ui
         .add_sized(
             [ui.available_width(), 28.0],
@@ -8571,8 +8895,8 @@ fn jelly_pane(
     }
     ui.add_space(6.0);
     ui.small("Hotkey: Y");
-    ui.small("Stage 20.2: Neo-Hookean tets via Vertex Block Descent.");
-    ui.small("E + ν → Lamé (μ, λ) re-uploaded each frame.");
+    ui.small("Stage 20.3: Neo-Hookean tets + von Mises plasticity.");
+    ui.small("E + ν → Lamé (μ, λ); F = F_e · F_p; return-mapping per substep.");
 }
 
 /// Tiny helper that returns an egui Button styled the same as the

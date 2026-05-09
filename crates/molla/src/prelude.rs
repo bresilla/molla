@@ -8,7 +8,8 @@ pub use crate::core::{BodyId, Error, JointId, ParticleId, Result, ShapeId, World
 pub use crate::math::{Mat3, Quat, Real, SpatialInertia, SpatialVector, Transform, Vec3};
 pub use crate::sim::{
     eval_fk, BodyFlags, BodyParams, Contacts, Control, Heightfield, JointTargetMode, JointType,
-    Model, ModelBuilder, ParticleFlags, SdfShape, ShapeFlags, ShapeGeometry, State, TetMeshId,
+    MaterialNeoHookean, Model, ModelBuilder, ParticleFlags, SdfShape, ShapeFlags, ShapeGeometry,
+    State, TetMeshId,
 };
 pub use crate::geometry::collide;
 pub use crate::solvers::{
