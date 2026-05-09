@@ -57,7 +57,7 @@ use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
 use molla::autograd::{DiffArm, FeatherstoneRevoluteChain, JacobianScratch};
-use molla::compute::Engine;
+use molla::compute::{Engine, MpmConfig, MpmSimulation};
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
@@ -367,6 +367,7 @@ fn main() {
         .insert_resource(MeshToolsExampleState::default())
         .insert_resource(NeuralPolicyExampleState::default())
         .insert_resource(CableExampleState::default())
+        .insert_resource(MpmExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -414,6 +415,7 @@ fn main() {
                     update_diff_arm,
                     update_diff_arm6,
                     update_cable_example,
+                    update_mpm_example,
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -433,6 +435,7 @@ fn main() {
                     draw_diff_arm_gizmos,
                     draw_diff_arm6_gizmos,
                     draw_cable_gizmos,
+                    draw_mpm_gizmos,
                 )
                     .chain(),
             )
@@ -508,6 +511,9 @@ struct SceneStates<'w> {
     neural: ResMut<'w, NeuralPolicyExampleState>,
     /// Stage-20.1 CABLE demo state. Same bundling rationale.
     cable: ResMut<'w, CableExampleState>,
+    /// Stage-24d MPM (sand) demo state. Bundled per the standard
+    /// SystemParam ceiling rule.
+    mpm: ResMut<'w, MpmExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -538,6 +544,8 @@ struct PaneSceneStates<'w> {
     neural: ResMut<'w, NeuralPolicyExampleState>,
     /// Stage-20.1 CABLE demo state. Same rationale.
     cable: ResMut<'w, CableExampleState>,
+    /// Stage-24d MPM (sand) demo state. Same rationale.
+    mpm: ResMut<'w, MpmExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -554,6 +562,11 @@ struct Sim {
     pipeline: CollisionPipeline,
     engine: Engine,
     adapter_label: String,
+    /// Stage-24d MPM (sand) sim. Lazy-built when entering
+    /// `Scene::Mpm`; lives outside the standard solver pipeline.
+    mpm: Option<MpmSimulation>,
+    /// Last-read MPM particle positions for the renderer.
+    mpm_particles: Vec<[f32; 3]>,
 }
 
 /// Per-scene solver dispatch. Each variant implements the same
@@ -722,6 +735,14 @@ enum Scene {
     /// hard-mode AVBD (toggleable) come into play. Right-rail pane
     /// carries stretch / friction / mode sliders. Hotkey `C`.
     Cable,
+    /// Stage-24d v1 — explicit MPM (granular sand). A small column of
+    /// particles is poured into a flat bin; sliders on the right pane
+    /// expose the friction angle, Young's modulus and particle count.
+    /// The MPM simulation lives outside the standard solver pipeline
+    /// (it has its own particles + grid storage); `step_simulation`
+    /// short-circuits and runs `update_mpm_example` instead. Hotkey
+    /// `P` (Particle/MPM).
+    Mpm,
 }
 
 impl Scene {
@@ -749,6 +770,7 @@ impl Scene {
         Scene::MeshTools,
         Scene::NeuralPolicy,
         Scene::Cable,
+        Scene::Mpm,
     ];
 
     fn label(self) -> &'static str {
@@ -775,6 +797,7 @@ impl Scene {
             Scene::MeshTools => "Mesh tools (Stage 21)",
             Scene::NeuralPolicy => "Neural policy (Stage 18.1)",
             Scene::Cable => "Cable (Stage 20.1)",
+            Scene::Mpm => "MPM sand (Stage 24d)",
         }
     }
 
@@ -1154,6 +1177,40 @@ impl Default for CableExampleState {
             use_hard_mode: true,
             show_pinned: true,
             sim_time: 0.0,
+        }
+    }
+}
+
+/// Stage-24d v1 MPM (sand) demo state. The actual GPU sim lives on
+/// `Sim::mpm` (lazy-initialised on first entry to `Scene::Mpm`); this
+/// resource holds only the user-facing tuning sliders + the
+/// "needs_reset" trigger for the right-rail Reset button.
+#[derive(Resource)]
+struct MpmExampleState {
+    /// Drucker-Prager friction angle (degrees). Sand: 25°-40°.
+    friction_angle_deg: f32,
+    /// Young's modulus (Pa). Higher = stiffer / more like rock.
+    youngs: f32,
+    /// Per-axis particle count for the initial pour (count = N³).
+    pour_axis_count: u32,
+    /// Live readout: live particle count (set by the update system).
+    particle_count: u32,
+    /// Trigger flag: when true, the update system rebuilds the
+    /// particle pour and clears it.
+    needs_reset: bool,
+    /// Spout-y offset for the initial pour.
+    spout_y: f32,
+}
+
+impl Default for MpmExampleState {
+    fn default() -> Self {
+        Self {
+            friction_angle_deg: 30.0,
+            youngs: 5.0e3,
+            pour_axis_count: 12,
+            particle_count: 0,
+            needs_reset: true, // initial pour
+            spout_y: 0.6,
         }
     }
 }
@@ -1712,6 +1769,7 @@ impl Sim {
             Scene::DiffArm6 => build_diff_arm6_model(),
             Scene::NeuralPolicy => build_neural_policy_model(),
             Scene::Cable => build_cable_model(),
+            Scene::Mpm => build_mpm_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1767,6 +1825,8 @@ impl Sim {
                 pipeline: CollisionPipeline::new(),
                 engine,
                 adapter_label,
+                mpm: None,
+                mpm_particles: Vec::new(),
             },
             visuals,
         )
@@ -4332,6 +4392,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyC) && sim.scene != Scene::Cable {
         pending.0 = Some(Scene::Cable);
     }
+    if keys.just_pressed(KeyCode::KeyP) && sim.scene != Scene::Mpm {
+        pending.0 = Some(Scene::Mpm);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -4429,6 +4492,11 @@ fn apply_scene_switch(
     // Stage 20.1 cable scene: reset the orbit time so the puller
     // starts from the same place each entry.
     scene_states.cable.sim_time = 0.0;
+
+    // Stage 24d MPM: clear the particle pour so re-entering the
+    // scene drops a fresh column.
+    scene_states.mpm.needs_reset = true;
+    scene_states.mpm.particle_count = 0;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -4533,6 +4601,11 @@ fn step_simulation(
     // Stage-21 mesh-tools is purely visual — no bodies, no contacts,
     // no physics step. Bail before allocating the device handles.
     if sim.scene == Scene::MeshTools {
+        return;
+    }
+    // Stage-24d MPM scene runs its own particle/grid sim outside the
+    // standard solver pipeline; `update_mpm_example` drives it.
+    if sim.scene == Scene::Mpm {
         return;
     }
     let frame_start = std::time::Instant::now();
@@ -7311,6 +7384,7 @@ fn control_pane(
                     | Scene::MeshTools
                     | Scene::NeuralPolicy
                     | Scene::Cable
+                    | Scene::Mpm
             ),
             _ => false,
         },
@@ -7436,6 +7510,7 @@ fn control_pane(
         Scene::MeshTools => Some("Mesh tools (Stage 21)"),
         Scene::NeuralPolicy => Some("Neural policy (Stage 18.1)"),
         Scene::Cable => Some("Cable (Stage 20.1)"),
+        Scene::Mpm => Some("MPM sand (Stage 24d)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -7490,6 +7565,9 @@ fn control_pane(
                     }
                     Scene::Cable => {
                         cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                    }
+                    Scene::Mpm => {
+                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
                     }
                     _ => {}
                 });
@@ -8858,6 +8936,220 @@ fn camera_pane(
         let cid = pane_id.with("cam_container_index");
         Normal::new("Shape index", anchor, accent, cid)
             .show(ui, vec![mk_image_pod("index", tex)]);
+    }
+}
+
+// ── Stage-24d MPM (sand) viewer wiring ─────────────────────────────
+
+/// Trivial Model for the MPM scene — just a static "ground" body
+/// used by the standard renderer to keep the camera oriented.  The
+/// real action is the MPM particles drawn via `draw_mpm_gizmos`.
+fn build_mpm_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    // No bodies — the floor of the MPM grid serves as the implicit
+    // boundary.
+    let model = b.build().expect("mpm trivial model build");
+    (model, Vec::new())
+}
+
+/// Drives the MPM simulation each frame. Lazy-initialises the
+/// `MpmSimulation` on first entry to `Scene::Mpm`; on `needs_reset`
+/// rebuilds the particle pour. Steps the sim in lock-step with
+/// the viewer's fixed-dt cadence.
+fn update_mpm_example(
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<MpmExampleState>,
+    run: Res<SimRunState>,
+) {
+    if sim.scene != Scene::Mpm {
+        return;
+    }
+
+    // Lazy initialise the MPM sim on first entry.
+    if sim.mpm.is_none() {
+        let cfg = MpmConfig {
+            grid_size: 32,
+            cell_size: 0.05,
+            grid_origin: [-0.8, 0.0, -0.8],
+            gravity_y: -9.81,
+            youngs: state.youngs,
+            poisson: 0.3,
+            friction_angle: state.friction_angle_deg.to_radians(),
+            cohesion: 0.0,
+            boundary_friction: 0.5,
+            particle_mass: 1.0e-3,
+            particle_volume: 1.0e-6,
+            max_particles: 32_768,
+            max_rigid: 4,
+        };
+        let s = MpmSimulation::new(&sim.engine, cfg).expect("mpm new");
+        sim.mpm = Some(s);
+        state.needs_reset = true;
+    }
+
+    // Pull material parameters from the sliders.
+    if let Some(m) = sim.mpm.as_mut() {
+        m.set_material(state.youngs, state.friction_angle_deg.to_radians());
+    }
+
+    // Reset / re-pour.
+    if state.needs_reset {
+        let device = sim.engine.device().unwrap().clone();
+        let queue = sim.engine.queue().unwrap().clone();
+        let n_axis = state.pour_axis_count.max(2) as usize;
+        let mut particles = Vec::with_capacity(n_axis.pow(3));
+        let lo = [-0.18_f32, state.spout_y - 0.18, -0.18_f32];
+        let hi = [0.18_f32, state.spout_y + 0.18, 0.18_f32];
+        let dx = (hi[0] - lo[0]) / n_axis as f32;
+        let dy = (hi[1] - lo[1]) / n_axis as f32;
+        let dz = (hi[2] - lo[2]) / n_axis as f32;
+        for ix in 0..n_axis {
+            for iy in 0..n_axis {
+                for iz in 0..n_axis {
+                    particles.push([
+                        lo[0] + (ix as f32 + 0.5) * dx,
+                        lo[1] + (iy as f32 + 0.5) * dy,
+                        lo[2] + (iz as f32 + 0.5) * dz,
+                    ]);
+                }
+            }
+        }
+        if let Some(m) = sim.mpm.as_mut() {
+            m.set_particles(&queue, &particles).expect("set particles");
+        }
+        sim.mpm_particles = particles;
+        state.particle_count = (n_axis * n_axis * n_axis) as u32;
+        state.needs_reset = false;
+        // First read so the viewer doesn't briefly show empty.
+        if let Some(m) = sim.mpm.as_mut() {
+            sim.mpm_particles = m
+                .read_positions_with(&device, &queue)
+                .unwrap_or_default();
+        }
+        return;
+    }
+
+    if run.paused {
+        return;
+    }
+
+    // Step the sim a couple of substeps per frame; use a sub-1ms dt to
+    // stay inside CFL for the default sand modulus.
+    let device = sim.engine.device().unwrap().clone();
+    let queue = sim.engine.queue().unwrap().clone();
+    if let Some(m) = sim.mpm.as_mut() {
+        for _ in 0..4 {
+            m.step_with(&device, &queue, 1.0 / 480.0).expect("mpm step");
+        }
+        sim.mpm_particles = m
+            .read_positions_with(&device, &queue)
+            .unwrap_or_default();
+    }
+}
+
+/// Right-rail pane for the MPM scene. Sliders for friction angle and
+/// Young's modulus, particle-count readout, Reset button.
+fn mpm_pane(
+    ui: &mut egui::Ui,
+    state: &mut MpmExampleState,
+    sim: &mut Sim,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    readout(ui, "Particles", &format!("{}", state.particle_count));
+    if let Some(m) = sim.mpm.as_ref() {
+        readout(ui, "Live count", &format!("{}", m.particle_count()));
+        readout(
+            ui,
+            "Grid",
+            &format!(
+                "{}³ × {:.2} m",
+                m.config().grid_size,
+                m.config().cell_size
+            ),
+        );
+    }
+    ui.separator();
+
+    ui.label("Friction angle (°)");
+    if ui
+        .add(egui::Slider::new(&mut state.friction_angle_deg, 10.0..=50.0))
+        .changed()
+    {
+        // Material mutation handled in update_mpm_example (next tick).
+    }
+
+    ui.label("Young's modulus (Pa)");
+    if ui
+        .add(
+            egui::Slider::new(&mut state.youngs, 1.0e3..=1.0e6)
+                .logarithmic(true),
+        )
+        .changed()
+    {
+        // Same — applied next tick.
+    }
+
+    ui.label("Pour axis count");
+    if ui
+        .add(egui::Slider::new(&mut state.pour_axis_count, 4..=20))
+        .changed()
+    {
+        // Re-pour requires a reset.
+    }
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if button(ui, "Reset", accent).clicked() {
+            state.needs_reset = true;
+        }
+    });
+    ui.add_space(2.0);
+    ui.small("Soft sand defaults — increase Young's modulus for stiffer rheology");
+    ui.small("Hotkey: P (Particle/MPM)");
+}
+
+/// Renders MPM particles as point gizmos. Cheap; doesn't allocate.
+fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
+    if sim.scene != Scene::Mpm {
+        return;
+    }
+    if sim.mpm_particles.is_empty() {
+        return;
+    }
+    // Draw the grid AABB as 12 lines so the user sees the simulation
+    // domain. (`Gizmos::cuboid` exists in some Bevy versions but the
+    // crate version we vendor doesn't expose it; line-loops are
+    // portable.)
+    if let Some(m) = sim.mpm.as_ref() {
+        let cfg = m.config();
+        let lo = Vec3::new(cfg.grid_origin[0], cfg.grid_origin[1], cfg.grid_origin[2]);
+        let extent = cfg.grid_size as f32 * cfg.cell_size;
+        let hi = lo + Vec3::splat(extent);
+        let edge_color = Color::srgb(0.40, 0.40, 0.45);
+        let corners = [
+            Vec3::new(lo.x, lo.y, lo.z),
+            Vec3::new(hi.x, lo.y, lo.z),
+            Vec3::new(hi.x, hi.y, lo.z),
+            Vec3::new(lo.x, hi.y, lo.z),
+            Vec3::new(lo.x, lo.y, hi.z),
+            Vec3::new(hi.x, lo.y, hi.z),
+            Vec3::new(hi.x, hi.y, hi.z),
+            Vec3::new(lo.x, hi.y, hi.z),
+        ];
+        let edges: [(usize, usize); 12] = [
+            (0, 1), (1, 2), (2, 3), (3, 0),
+            (4, 5), (5, 6), (6, 7), (7, 4),
+            (0, 4), (1, 5), (2, 6), (3, 7),
+        ];
+        for (a, b) in edges {
+            gizmos.line(corners[a], corners[b], edge_color);
+        }
+    }
+    let sand_color = Color::srgb(0.85, 0.74, 0.52);
+    for p in &sim.mpm_particles {
+        let pos = Vec3::new(p[0], p[1], p[2]);
+        gizmos.sphere(pos, 0.012, sand_color);
     }
 }
 

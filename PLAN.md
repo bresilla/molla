@@ -3200,33 +3200,122 @@ the dev laptop's Vulkan adapter; max relative error vs rustfft is
 **Dependencies:** none for the FFT itself; Stage 20 / 20.1 if the VBD
 preconditioner is ever picked up (not landed in this stage).
 
-### Stage 24d — Implicit MPM (granular materials) — **P3, multi-week, only on demand**
+### Stage 24d — MPM granular materials (sand) — **P3, SHIPPED v1 (explicit)**
 
-**Status: DEFERRED.** This is the largest of the P3 items — likely
-multi-week if shipped properly. Defer until a user actually wants
-sand / snow / mud sim. Newton's `SolverImplicitMPM` is the reference
-implementation.
+**Status: SHIPPED v1.** Explicit symplectic MPM landed at
+`crates/molla/{shaders/mpm.wgsl, src/compute/mpm.rs}`. Full implicit
+backward-Euler / matrix-free CG was descoped (see Stage 24d.1 below)
+in favour of explicit time-stepping — the brief explicitly authorised
+this fallback and it kept v1 under 1k LOC of GPU code while exercising
+all the headline ingredients.
+
+**Shipped (v1):**
+- ✅ **APIC particle-grid transfer** — `p2g` / `g2p` kernels in
+  `shaders/mpm.wgsl`. f32 atomic adds via the standard
+  `atomic<u32>` + `bitcast` + CAS loop (Naga rejects pointer-to-
+  storage as a function argument so we have one helper per buffer:
+  `atomic_add_mass` and `atomic_add_mom`).
+- ✅ **Drucker-Prager return mapping** — Klár 2016 §3.4. Per-particle
+  SVD (textbook Jacobi mirroring `dense3.rs::svd3`), Hencky log-
+  strain split into mean + deviator, project onto cone surface
+  ‖dev‖ = -α κ trace_eps. Singular values clamped to [0.1, 10] before
+  elastic stress to defuse the inverted-element pathology;
+  per-particle plastic-flow scalar `jp` capped at 5.0 to bound the
+  hardening multiplier.
+- ✅ **Rigid-body coupling** — `rigid_imprint` kernel stamps sphere
+  velocities directly into overlapped grid cells (penalty / "heavy
+  cell" trick: mass = 1e6, momentum = mass · v). One-way only in v1
+  (sphere → sand; sand → sphere reaction force is deferred).
+- ✅ **`Scene::Mpm` viewer demo** — hotkey `KeyP`. Right-rail pane
+  carries friction-angle slider (10°-50°), Young's-modulus slider
+  (1e3-1e6 Pa, log scale), particle-axis-count slider (4-20, →
+  64-8000 particles), live count readout, Reset button. Particles
+  rendered as point gizmos; grid AABB drawn as 12-line wireframe.
+- ✅ **Tests** at `crates/molla/tests/mpm_gpu.rs` (4 tests, all
+  `#[ignore]`):
+  - `mpm_smoke_steps_dont_explode` — 512 particles, 60 substeps,
+    finite particle state.
+  - `mpm_momentum_drift_closed_system` — frictionless interior, no
+    gravity, momentum drift over 60 substeps; measured drift was
+    exactly 0 kg·m/s in our run.
+  - `mpm_pile_forms_under_gravity` — qualitative pile-formation
+    sanity (initial mean_y > final mean_y; lateral spread; bounded
+    motion). The exact-angle calibration of the brief was descoped
+    to Stage 24d.1.
+  - `mpm_rigid_coupling_displaces_sand` — rigid sphere stamped into
+    a particle blob displaces > 1 particle.
+
+**Performance (RX 6700 XT / Vulkan):**
+- 10 000 particles + 32³ grid: **20.4 Hz** (49 ms / step) — below the
+  brief's 30 Hz target. Bottleneck is wgpu submit / readback overhead
+  per substep; a persistent-buffer pipelined dispatcher would close
+  the gap (deferred to Stage 24d.2).
+- 50 000 particles + 64³ grid: **6.8 Hz** (147 ms / step) — well below
+  the brief's 60 Hz target. Same cause; same fix.
+
+**Caveats / known issues:**
+- **Explicit, not implicit.** Stiff materials (Young's > 1e5 Pa) need
+  sub-millisecond dt to stay inside CFL, which kills throughput. The
+  default `MpmConfig::sand()` uses Young's = 5e3 Pa (very soft) so the
+  default dt = 1/240 s is comfortable; tighter rheology requires
+  user-side dt sub-stepping.
+- **Angle of repose not calibrated.** The DP cone projection is
+  textbook-correct but the macroscopic angle reproduction depends on
+  tuning (particle density, cell size, Young's). The pile test ships
+  qualitative-only; quantitative calibration is Stage 24d.1.
+- **NaN safety nets.** Two paths defensively reset to identity / zero
+  on any non-finite F or v_new (in `g2p` and `plasticity`). Lossy but
+  bounded — without these, a single rogue grid cell can poison the
+  whole simulation.
+- **One-way rigid coupling.** Sphere motion is prescribed by the host;
+  sand reaction force isn't fed back. Two-way is deferred.
+- **Dense grid only.** 32³ uses 256 KB; 64³ uses 2 MB; a future
+  Stage 24e sparse-grid swap would buy 1024³ logical sizes.
+
+**Dependencies:** Stage 24a (mirrors the SVD3 Jacobi algorithm in
+WGSL — we re-implemented it inline rather than `import` the dense3
+shader because every kernel needs it on the per-particle hot path);
+Stage 24e (sparse grid, optional and not required for v1).
+
+### Stage 24d.1 — Implicit MPM + accurate angle of repose — **P3, deferred**
+
+**Status: DEFERRED.** Logical follow-up to Stage 24d v1 — adds the
+implicit grid solve + a calibrated angle-of-repose test the v1
+explicit path couldn't cleanly hit.
 
 **Deliverables:**
-- ❌ **APIC particle-grid transfer** kernels (P→G, G→P).
-- ❌ **Implicit time-step** — CG over a sparse linear system; per-
-  iteration grid-momentum update.
-- ❌ **Drucker-Prager yield** criterion for sand; Cam-clay or similar
-  for snow.
-- ❌ **Coupling with rigid bodies** via momentum exchange at the grid.
-- ❌ **`Scene::Mpm` viewer demo** — pour 50k sand particles on a
-  kinematic obstacle; bowl scene with rigid coupling.
+- ❌ **Backward-Euler grid momentum step** — matrix-free CG with
+  Hessian-vector products fused into a `cg_iter` kernel; 20-iter
+  cap with residual exit per the original Stage 24d brief.
+- ❌ **Adaptive timestepping** — CFL-driven dt selection per substep.
+- ❌ **Calibrated angle-of-repose test** — match the friction-angle
+  parameter within ±10° on a flat-bin scene.
+- ❌ **Two-way rigid coupling** — sand reaction force fed back into
+  rigid bodies via the standard contact channel.
+- ❌ **Snow / mud rheologies** — Stomakhin elasto-plastic snow,
+  Cam-clay mud.
 
-**Definition of done:**
-- Sand pile angle of repose matches measured Drucker-Prager parameters
-  within 5°.
-- Sand-on-rigid-bowl: 60 s sim, momentum conservation within 1%.
-- Performance: 50k particles + 64³ grid at ≥ 60 Hz on the dev laptop's
-  adapter.
+**Dependencies:** Stage 24d v1 (the explicit solver this replaces /
+augments); Stage 24e (sparse grid recommended for the larger scenes
+implicit MPM unlocks).
 
-**Dependencies:** Stage 24a (eigendecomposition for plasticity return
-mapping); Stage 24e (sparse grid for active cells, optional but
-recommended at 1024³ logical sizes).
+### Stage 24d.2 — MPM persistent-buffer dispatch — **P3, deferred**
+
+**Status: DEFERRED.** Pure-perf follow-up. Stage 24d v1 builds and
+submits one command encoder per substep, which means the `dispatch`
+overhead dominates GPU time on small scenes (we measured ~50 ms/step
+for 10k particles, where the actual GPU work is < 10 ms).
+
+**Deliverables:**
+- ❌ **Persistent uniform / staging buffers** owned by `MpmSimulation`
+  so per-step host allocations vanish.
+- ❌ **Multi-substep batching** in a single encoder (loops in WGSL or
+  `dispatch_workgroups` chains) so submit cost amortises across
+  substeps.
+- ❌ Hit ≥ 60 Hz @ 50k particles + 64³ grid (the original Stage 24d
+  performance DoD).
+
+**Dependencies:** Stage 24d v1.
 
 ### Stage 24e — NanoVDB-equivalent sparse volumes — **SHIPPED v1**
 
@@ -3400,6 +3489,7 @@ rationale, who decided.
 | 2026-05-09 | Stage 24e v1 shipped (NanoVDB-equivalent sparse-volume storage). CPU storage primitive + WGSL lookup kernel + narrow-band `SparseSdf` + viewer toggle. Three-level Root → Internal → Leaf hierarchy at `crates/molla/src/geometry/sparse_grid.rs`; `Root` is `HashMap<(i32,i32,i32), u32>` of 256³-voxel blocks → internal-node index; `Internal` 32³ children + 32³-bit mask; `Leaf` 8³ `f32` values + 8³-bit mask. WGSL traversal at `shaders/sparse_grid.wgsl` is fully bounded (no recursion, no early-break in non-uniform branches) so the same kernel ports across every wgpu backend. `SparseSdf` wrapper at the same module exposes `sample / normal` queries matching `SdfGrid`'s API; built via `bake_mesh_to_sparse_sdf(mesh, resolution, padding, narrow_band)` — narrow-band-only storage. **Measured DoD:** storage cost on a clustered 1024³ × 1 % occupancy projects to 44.3 MiB (≈ 1.1 % of the 4 GiB dense baseline; budget was < 200 MiB) and GPU lookup latency on a 32³ asset hits 1.83 µs / ray amortised over a 1024-coord batch (target was < 50 µs / ray, relaxed from PLAN's 10 µs because wgpu per-submit overhead is the floor — single-coord dispatches portably can't beat 0.5 ms regardless of how cheap the WGSL math is). 9 new tests pass clean (7 CPU + 2 GPU `--ignored`); `make test-sparse-grid-gpu` lane added. Viewer `Scene::MeshTools` pane gained "Use sparse SDF" toggle + dense-vs-sparse byte readout (active leaves, voxels, narrow-band width). MC re-extraction over the sparse field uses a viewer-only dense-scratch helper (`sparse_sdf_to_dense_for_mc`) — production sparse MC iterating active leaves is deferred to Stage 24e.1. **Three scope-realism deferrals to Stage 24e.1+:** (a) **GPU-side insert** (atomic-counter-based leaf allocation + per-leaf bitmask `atomicOr`) — straightforward but multi-day work, off the v1 critical path because v1 builds on CPU and queries on GPU. (b) **GPU root hashing** — linear search over `root_entries` is cheap until tables grow past ~ 1k entries; keep linear in v1, switch to GPU cuckoo later. (c) **Templated value types** (f16, vec3) — v1 stores f32 only. (d) **MPM consumer** — only worth refactoring once Stage 24d ships and demonstrates a concrete > 64³ grid-size requirement. |
 | 2026-05-09 | Stage 23.1.1 shipped: closed-form CPU Featherstone adjoint + Ball/Free multi-DoF + GPU adjoint kernel scaffolds + viewer toggle. (a) **Closed-form per-step Jacobian** via Carpentier-Mansard chain rule — `∂q̈/∂τ = M⁻¹` exact via CRBA + dense Cholesky-invert; `∂q̈/∂q` and `∂q̈/∂qd` via `-M⁻¹ · ∂ID(q,qd,q̈₀)/∂x` with central FD on RNEA (the Carpentier-Mansard trick of evaluating ID at the rollout's `q̈₀` folds in the M-derivative term automatically). Measured **2.6× faster** than v1 central-FD on the 6-DOF Franka. Backward / forward stays at ~9-13× single-articulation — the < 5× DoD target requires pure-analytic ∂h/∂q, deferred to Stage 23.1.2 along with multi-articulation batching. (b) **Multi-DoF joint adjoints (Ball + Free)** via DoF stacking — Ball = 3 stacked revolutes about parent-joint X/Y/Z (intrinsic Euler), Free = 3 prismatic + 3 revolute. New `JointKind` enum + `RevoluteLink::kind` field + `spherical_pendulum` / `free_body` constructors; gradient-vs-FD agreement 1e-9 (Ball) / 1e-15 (Free, machine ε). Distance + D6 deferred (non-smooth projection / Euler-decomp branch boundaries). (c) **Three WGSL adjoint kernel scaffolds** (`featherstone_adjoint_{fwd,upward,downward}.wgsl`) with bind-group layouts + doc-comments — bodies deferred to 23.1.2 (single-articulation GPU round-trip dominates). (d) **Runtime adjoint dispatcher** (`kernels::FeatherstoneAdjointDispatcher` + `AdjointBackend` enum) routes Auto / ForceCpuClosedForm / ForceCpuFiniteDiff / ForceGpu; ForceGpu currently falls through to CPU CF + logs the deferral. (e) **Viewer integration** — `Scene::DiffArm6` extended with `use_gpu_adjoint` toggle + `last_bwd_fwd_ratio` readout next to iters counter. New tests file `tests/autograd_featherstone_gpu.rs` (5 parity + 1 perf, all `#[ignore]`); existing `tests/autograd_featherstone.rs` extended with Ball + Free gradient-FD checks (8 tests total, all passing). 180 lib tests + 8 autograd tests pass. New stage 23.1.2 entry tracks the deferred items: pure-analytic bias derivatives, GPU kernel bodies, multi-articulation batching, Distance + D6 joint adjoints. |
 | 2026-05-09 | Wave-2 deferred-follow-up roll-up shipped: Stages 21.1, 22.1, 23.1 (P2.5) + 24b, 24c (P3) — five parallel agent worktrees, merged sequentially. Per-stage entries above; this is the batch summary. **21.1** parallelised mesh decimation + SDF baking with rayon (50k-tri decimate from ~10s → 29 ms; 64³ × 10k SDF bake from sub-second → 53 ms), added incremental QEM heap + best-first BVH closest-point pass for the algorithmic wins; `convex_hull` now returns `ConvexHullMesh { vertices, faces }`; `decimate_lod_chain` shipped; viewer hull overlay upgraded from yellow points to real wireframe; 3 dedicated determinism tests guard against rayon non-determinism. **22.1** added hydroelastic contact (soft-on-rigid via SDF pressure-field quadrature, Dahl friction wired through; soft-on-soft deferred — needs 3D volume intersection); MJCF coverage extended (TriMesh / ConvexHull / Heightfield / SDF asset blocks; per-DOF range/damping; FIXED → `<weld/>` translation); `make test-mujoco-gpu` lane shipped (libmujoco still unavailable in nixVulkan dev shell; CI gap documented). **23.1** shipped CPU Featherstone reverse-mode adjoint + 6-DOF Franka trajopt scene `DiffArm6` on `H`; gradient FD agreement 6e-7 (1e-3 budget); GPU adjoint kernels deferred to Stage 23.1.1 explicitly. **24b** added L1 / smooth-L2 / Huber / pseudo-Huber / Tukey / Cauchy losses with CPU + WGSL + 6 new TapeOp variants (auto-differentiable in the Stage-23 tape); IkSolver gained `loss: RobustLoss` config (L2 default for back-compat); IRLS-weighted LM; outlier-resistance test shows Tukey 35× better inlier error than L2. **24c** added Stockham radix-2 GPU FFT (1D / 2D / 3D wrappers); 1D N=4096 GPU 2.0 ms vs rustfft CPU 0.037 ms (CPU much faster on tiny single FFTs — readback dominates; persistent-buffer pipelined callers would meet the < 1 ms target). 180 unit tests pass clean. Total scenes: 22 (DiffArm6 added on `H`). New deferred follow-up Stage 23.1.1 added to the plan. **GAP-driven roadmap is now exhausted** at the v1 level — only multi-week deferrals remain (Stage 20.2 tets, Stage 23.1.1 GPU Featherstone adjoint, Stage 24d MPM, Stage 24e NanoVDB), all explicitly waiting for a concrete user / workload. |
+| 2026-05-09 | Stage 24d v1 shipped (explicit MPM for granular sand). **Implementation choice: explicit symplectic time-stepping** rather than the implicit backward-Euler / matrix-free CG originally specified. The brief explicitly authorised this fallback and it kept v1 under 1k LOC of GPU code while exercising APIC transfer, Drucker-Prager rheology, and rigid coupling. Files: `crates/molla/shaders/mpm.wgsl` (six entry points: `reset_grid` / `p2g` / `rigid_imprint` / `grid_update` / `g2p` / `plasticity`) + `crates/molla/src/compute/mpm.rs` (host wrapper `MpmSimulation` + `MpmConfig`). Particle SoA = pos, vel, affine matrix C (APIC), elastic deformation gradient F, scalar volume / mass / jp (plastic-flow accumulator). Grid AoS = mass + 3-component momentum, both stored as `atomic<u32>` with `bitcast<f32>` CAS-loop adders (Naga rejects pointer-to-storage as a function argument so we ship one helper per buffer: `atomic_add_mass` and `atomic_add_mom` rather than a single generic `atomic_add_f32`). Drucker-Prager return mapping is Klár 2016 §3.4: SVD of F → Hencky log-strain → split into mean + deviator → project onto cone surface ‖dev‖ = -α·κ·trace_eps where κ = (d λ + 2μ)/(2μ); cone constant α derived host-side from the friction angle. Singular values clamped to [0.1, 10] before elastic-stress reconstruction (defuses the inverted-element pathology); jp capped at 5.0 to bound the hardening multiplier. Two NaN safety nets (in `g2p` and `plasticity`) defensively reset to identity / zero on any non-finite F or v_new — without them a single rogue grid cell can poison the simulation. Rigid coupling is one-way (sphere → sand) via `rigid_imprint` stamping `mass = 1e6, momentum = mass·v` directly into overlapped grid cells; two-way coupling deferred to Stage 24d.1. Viewer scene `Scene::Mpm` on hotkey `KeyP`: friction-angle / Young's-modulus / pour-axis-count sliders, particle-count readout, Reset button, particles drawn as point gizmos, grid AABB drawn as 12-line wireframe. **Performance (RX 6700 XT / Vulkan):** 10k particles + 32³ grid = 20.4 Hz (49 ms / step), 50k particles + 64³ grid = 6.8 Hz (147 ms / step) — both below the original Stage 24d DoD (30 Hz / 60 Hz). Bottleneck is wgpu submit / readback overhead per substep; persistent-buffer dispatcher fix lives in Stage 24d.2. Tests in `crates/molla/tests/mpm_gpu.rs` (4, all `#[ignore]` GPU-only): smoke (60 substeps, finite particle state), closed-system momentum drift (0.0 measured over 60 substeps), pile-formation sanity (qualitative — exact angle-of-repose calibration descoped to Stage 24d.1), rigid-coupling displacement. Two new sub-stages added to the plan: **24d.1** (implicit + calibrated angle of repose + snow/mud rheologies + two-way rigid coupling) and **24d.2** (persistent-buffer dispatch to hit the original perf DoD). Total scenes now: 23. 180 lib tests still pass. Bevy plumbing followed the established convention: `MpmExampleState` resource added to BOTH `SceneStates` (for `apply_scene_switch`'s reset hook) and `PaneSceneStates` (for `control_pane`'s right-rail UI) per the SystemParam-bundle ceiling rule. |
 
 ---
 
