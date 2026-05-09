@@ -338,6 +338,11 @@ fn spring_force_hessian(
 // ─────────────────────────────────────────────────────────────────
 // Per-colour vertex block solve. Race-free under vertex colouring:
 // no two particles in the same colour share a spring.
+//
+// Contact penalty is folded into the block (not a post-pass) so the
+// velocity recovery sees a balanced inertia + spring + contact state
+// — otherwise the per-iteration contact correction leaks straight
+// into velocity and the cloth flies upward.
 // ─────────────────────────────────────────────────────────────────
 @compute @workgroup_size(64)
 fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -378,13 +383,43 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
         h = mat3x3<f32>(h[0] + h_s[0], h[1] + h_s[1], h[2] + h_s[2]);
     }
 
-    // Soft rigid-contact penalty (Augmented VBD).
+    // Soft rigid-contact penalty (Augmented VBD soft-mode).
+    // For each rigid shape with sd(p) < pr (penetration), add a
+    // quadratic penalty `½ k_c · (pr - sd)²` along the outward
+    // normal. Contributes:
+    //   f_c = +k_c · (pr - sd) · n      (push outward)
+    //   H_c = +k_c · n nᵀ               (rank-1 outer product)
+    // We use the gradient at the current iterate `x`, which is
+    // a Gauss-Newton (rather than full Newton) approximation.
+    // u.color_index doubles as `shape_count` in the contact dispatch
+    // — but here in `solve_color` it's the colour index, so we read
+    // shape_count from u.work_count when contact_stiffness > 0?
+    // No — work_count is the colour size. Use a separate uniform
+    // field `contact_shape_count`? Avoid bloating the uniform by
+    // reading the global shape count from `arrayLength(&shape_geom_kind)`.
     if (u.contact_stiffness > 0.0) {
         let pr = particle_radius[v];
-        let shape_count = u.color_count; // stuffed via color_count when contacts pass uses solve_color? No — separate pass.
-        // (No-op here. Contact penalty lives in `apply_shape_contacts`
-        // dispatch; we avoid mixing the two so colour bookkeeping
-        // stays simple.)
+        let shape_count = arrayLength(&shape_geom_kind);
+        for (var s: u32 = 0u; s < shape_count; s = s + 1u) {
+            let kind = shape_geom_kind[s];
+            if (kind == KIND_SKIP) { continue; }
+            let nd = shape_sd(x, s);
+            let pen = pr - nd.w;
+            if (pen > 0.0) {
+                let n_dir = nd.xyz;
+                f = f + n_dir * (u.contact_stiffness * pen);
+                let outer = mat3x3<f32>(
+                    vec3<f32>(n_dir.x * n_dir.x, n_dir.y * n_dir.x, n_dir.z * n_dir.x),
+                    vec3<f32>(n_dir.x * n_dir.y, n_dir.y * n_dir.y, n_dir.z * n_dir.y),
+                    vec3<f32>(n_dir.x * n_dir.z, n_dir.y * n_dir.z, n_dir.z * n_dir.z),
+                );
+                h = mat3x3<f32>(
+                    h[0] + outer[0] * u.contact_stiffness,
+                    h[1] + outer[1] * u.contact_stiffness,
+                    h[2] + outer[2] * u.contact_stiffness,
+                );
+            }
+        }
     }
 
     // Newton-Raphson step in position space. Skip if the Hessian is

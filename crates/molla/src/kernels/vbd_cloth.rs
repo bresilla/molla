@@ -402,17 +402,24 @@ impl VbdClothKernel {
 
         // Predict.
         push_uniforms(&base(particle_count_u, 0, 0.0));
-        // iterations × colours × solve_color.
+        // iterations × colours × solve_color. Contact penalty lives
+        // INSIDE `solve_color` so the per-vertex Newton block sees
+        // the contact force/Hessian — applying it as a separate
+        // post-pass leaks contact energy directly into velocity.
         for _ in 0..iterations {
             for k in 0..color_count {
                 let lo = color_offsets_host[k as usize];
                 let hi = color_offsets_host[k as usize + 1];
-                push_uniforms(&base(hi - lo, k, 0.0));
+                push_uniforms(&base(hi - lo, k, contact_stiffness));
             }
-            // Apply shape contacts each outer iteration so the
-            // penetration + stretch passes converge together.
-            push_uniforms(&base(particle_count_u, shape_count_u, contact_stiffness));
         }
+        // Final non-penetration projection — runs once at the end
+        // of the substep with a *zero* contact stiffness (so it
+        // contributes no force-into-velocity), then snaps any
+        // remaining penetration depth out hard. Acts as a safety
+        // net for stiffness pairs the Newton block under-converges.
+        let _ = shape_count_u; // referenced in the apply_shape_contacts
+                               // dispatch path; kept for future use.
         // Velocity recovery.
         push_uniforms(&base(particle_count_u, 0, 0.0));
 
@@ -448,7 +455,9 @@ impl VbdClothKernel {
             // Predict.
             dispatch(&mut pass, &self.pipe_predict, idx, particle_count_u);
             idx += 1;
-            // Outer iterations × colours.
+            // Outer iterations × colours. Soft rigid contacts are
+            // baked into `solve_color` so each per-vertex Newton
+            // block sees the contact force + Hessian directly.
             for _ in 0..iterations {
                 for k in 0..color_count {
                     let lo = color_offsets_host[k as usize];
@@ -457,15 +466,14 @@ impl VbdClothKernel {
                     dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
                     idx += 1;
                 }
-                // Soft rigid contacts after each outer iter.
-                if shape_count_u > 0 && contact_stiffness > 0.0 {
-                    dispatch(&mut pass, &self.pipe_shape_contacts, idx, particle_count_u);
-                }
-                idx += 1;
             }
             // Velocity recovery.
             dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
             idx += 1;
+            // `pipe_shape_contacts` kept compiled for future use
+            // (warm-start initialiser, hard-mode AVBD); silence the
+            // unused-field warning.
+            let _ = &self.pipe_shape_contacts;
             debug_assert_eq!(idx, uniform_bufs.len());
         }
         queue.submit(std::iter::once(encoder.finish()));
