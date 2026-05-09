@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/molla",
     "crates/molla_viewer",
-    "crates/usd_molla",
 ]
 exclude = ["xtra"]
 
