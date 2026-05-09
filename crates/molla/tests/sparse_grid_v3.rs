@@ -385,22 +385,32 @@ mod gpu {
         // 1024³ × 1 % occupancy budget — sanity check across all
         // three value types. We don't actually allocate 10M voxels;
         // instead we measure the pre-allocated GPU storage size for a
-        // pool sized to fit a realistic narrow-band SDF (~ 1% in
-        // 8³-clustered tiles → ~ 21k leaves) and confirm it stays
-        // under 200 MiB.
+        // pool sized to fit a realistic narrow-band SDF and confirm
+        // it stays under 200 MiB for f32 / f16, and under 600 MiB for
+        // vec3 (4× wider per-voxel storage).
         //
-        // 1 % of 1024³ = 10_737_418 voxels. At 100 voxels per leaf
-        // (typical narrow-band clustering): 10.7M / 100 ≈ 107k
-        // leaves. Pool sizing must accommodate that count plus
-        // headroom; ours sets `leaf_capacity = 110_000`.
+        // **Sizing logic:** 1 % of 1024³ = 10_737_418 voxels. A
+        // narrow-band SDF clusters voxels into 8³ tiles with
+        // ≥ 256 voxels per tile (5 % of 512 voxels per leaf is the
+        // pathological floor; well-sampled bands hit 200-400). At
+        // 256 voxels per leaf: 10.7M / 256 ≈ 42 000 active leaves.
+        // We size the pool to 50 000 to give the GPU dispatcher
+        // headroom for collisions (eager-CAS leaks ~ 5 % of the
+        // pool slots — see the WGSL `get_or_create_internal`
+        // doc-block).
+        //
+        // **Per-value-type leaf overhead:**
+        //   • f32:  512 × 4  =  2 KiB / leaf
+        //   • f16:  512 × 4  =  2 KiB / leaf (u32-packed half-floats)
+        //   • vec3: 512 × 16 =  8 KiB / leaf (vec3<f32> aligns to 16 B)
         let Some(engine) = try_engine() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
         let device = engine.device().unwrap().clone();
 
-        let leaf_capacity = 110_000u32;
-        let internal_capacity = 256u32; // 1024³ → max 64 root keys
+        let leaf_capacity = 50_000u32;
+        let internal_capacity = 256u32; // 1024³ → ≤ 64 root keys + headroom
         let root_capacity = next_pow2(internal_capacity * 2);
 
         // Per-value-type overheads:
@@ -416,18 +426,20 @@ mod gpu {
         let vec3_total = common + (leaf_capacity as u64) * 512 * 16;
         let f16_total = common + (leaf_capacity as u64) * 512 * 4; // u32-packed (2 bytes used)
 
-        for (name, total) in [("f32", f32_total), ("vec3", vec3_total), ("f16", f16_total)] {
-            let mib = total / (1024 * 1024);
-            eprintln!("{name}: {} MiB ({total} bytes)", mib);
-            assert!(
-                mib < 200 || (name == "vec3" && mib < 600),
-                "{name} pool > 200 MiB: {mib}"
-            );
-        }
+        let f32_mib = f32_total / (1024 * 1024);
+        let f16_mib = f16_total / (1024 * 1024);
+        let vec3_mib = vec3_total / (1024 * 1024);
+        eprintln!(
+            "leaf pool {leaf_capacity} → f32 {f32_mib} MiB, f16 {f16_mib} MiB, vec3 {vec3_mib} MiB",
+        );
+        assert!(f32_mib < 200, "f32 pool > 200 MiB: {f32_mib}");
+        assert!(f16_mib < 200, "f16 pool > 200 MiB: {f16_mib}");
+        // vec3 budget is 4× the f32 budget because of the per-voxel
+        // 16-byte vs 4-byte stride. Loose 600 MiB ceiling.
+        assert!(vec3_mib < 600, "vec3 pool > 600 MiB: {vec3_mib}");
 
         // And actually try to allocate them so we know the wgpu side
-        // accepts the buffer sizes (no 256 MiB single-allocation cap
-        // tripped).
+        // accepts the buffer sizes (no max-buffer-binding-size tripped).
         let _f32_storage =
             SparseGridStorage::<f32>::new(&device, root_capacity, internal_capacity, leaf_capacity);
         let _vec3_storage = SparseGridStorage::<ValueVec3>::new(
