@@ -2343,23 +2343,406 @@ Deliverables:
   show off complex-arm dynamics — and it converges interactively,
   which means the viewer pane is responsive to slider drags.
 
-### Stage 24 — Specialty: Implicit MPM, NanoVDB, advanced linalg — **P3**
+## Deferred follow-ups (Stage X.1 series)
 
-**Status: DEFERRED** — only land any of these when a concrete user
-shows up.
+Each shipped P0 / P1 / P2 stage came with a "v1 ships, deferred to
+follow-up" list documented inside its own `### Stage N` section. This
+sub-section consolidates those follow-ups into actionable Stage `N.1`
+entries with their own deliverables + DoD + dependencies. They're
+ordered by parent stage number, NOT priority — pick by which existing
+shipped feature you most want to harden.
 
-Deliverables (each independent):
-- ❌ Implicit MPM solver for granular materials (sand, snow, mud).
-  Newton's `SolverImplicitMPM` is the reference.
-- ❌ NanoVDB-equivalent sparse-volume storage. wgpu doesn't have
-  native NanoVDB support; would need a clean-room WGSL port.
-- ❌ SVD3 / QR3 / eig3 in `math::dense_solve` (currently only
-  Cholesky). Useful for IK reorthogonalisation, polar decomposition
-  in soft-body solvers.
-- ❌ FFT on the GPU (Warp ships `tile_fft` via cuFFTDx; wgpu has no
-  equivalent — would need a hand-written FFT kernel).
-- ❌ Robust-loss extensions: `norm_l1`, `norm_l2_smooth`, custom user
-  losses for IK regularisation.
+Cross-cutting prerequisite already met for all of these: the `SceneStates`
++ `PaneSceneStates` SystemParam-bundle convention is in place, so
+adding a new viewer scene stays under Bevy's 16-system-param ceiling
+without restructuring.
+
+### Stage 17.1 — Featherstone multi-DOF polish — **P1.5**
+
+**Status: NOT STARTED.** Stage 17 shipped the multi-DOF generalisation
+of Featherstone with three knowingly-approximated rough edges. This
+stage closes them.
+
+**Deliverables:**
+- ❌ **Per-axis angular limits for D6 joints** — Stage 17 only clamps
+  the 3 linear axes; angular limits need Euler-angle decomposition of
+  the joint quaternion + per-axis projection back into the bounded
+  manifold.
+- ❌ **Distance joint as Lagrange-multiplier projection** — Stage 17
+  uses a hard post-integrate clamp (`p ← p · L_target / |p|`) plus
+  radial-velocity zeroing. Replace with a proper Lagrange-multiplier
+  projection inside the ABA pass so the constraint is satisfied at the
+  *force* level, not just snapped at the position level (the v1 jump
+  introduces a small impulse).
+- ❌ **Dense Cholesky for the Featherstone D matrix in coupled
+  multi-DOF cases** — Stage 17's sequential rank-1 deflation
+  (`I^A := I^A − U_k U_k^T / D_k`) is exact only when D is diagonal.
+  Required when the inertia coupling is non-negligible (e.g. asymmetric
+  Free-joint payloads where a CoM offset cross-couples the linear and
+  angular DOFs). Use the Stage 16 GPU CRBA's dense solve infrastructure.
+
+**Definition of done:**
+- D6 angular-limit test: pretensioned cable with angular range ±π/4
+  holds within ±0.05 rad under gravity for 600 substeps.
+- Distance-joint test: 2-particle constraint length holds within
+  machine eps post-step (vs ~1 mm with the v1 clamp).
+- Coupled-D parity test: asymmetric Free-joint chain (CoM offset
+  ≥ 0.1 m from joint axis) matches a CPU dense-Cholesky reference
+  within f32 tolerance for ≥ 100 substeps.
+
+**Dependencies:** Stage 16 (GPU CRBA infrastructure for dense solve);
+Stage 17 (the multi-DOF skeleton this polishes).
+
+### Stage 18.1 — PID + neural controllers in pipeline — **P1.5**
+
+**Status: NOT STARTED.** Stage 18 shipped the composable Actuator
+pipeline with a PD-only `ControllerStage::Pd` variant. This stage adds
+the missing PID variant, an end-to-end test for `ClampingPositionBased`
+(kernel exists but untested), and a small neural-policy controller for
+on-device inference.
+
+**Deliverables:**
+- ❌ **`ControllerPipelinePid`** variant + `shaders/actuator_pipeline_pid.wgsl`
+  mirroring the existing PD path. Integral term lives in a per-DOF
+  buffer that survives substep swapping (same trick as the Stage 17
+  `body_f` propagation).
+- ❌ **End-to-end GPU test for `ClampingPositionBased`** — the kernel
+  matches Newton's `_position_based_clamp_kernel` line-for-line per the
+  Stage 18 commit message but no test exercises it. Add the parity
+  + smoothness test.
+- ❌ **`ControllerNeuralMLP`** — fixed-architecture 3-layer MLP
+  (sizes configurable at construction) with a WGSL forward-pass kernel.
+  Trained-weight upload via `set_weights(device, queue, &[...])`.
+  Use case: pre-trained policy inference inside the sim loop without
+  leaving the device.
+- ⚠️ (Optional, defer further) `ControllerNeuralLSTM` — only land if a
+  user wants stateful policies. The MLP is the safe v1; LSTM adds
+  hidden-state buffers that survive substepping.
+
+**Definition of done:**
+- PID pipeline matches standalone `ControllerPid` byte-for-byte on a
+  step-response test (same parity guarantee Stage 18 provided for PD).
+- ClampingPositionBased softens the joint torque smoothly to zero
+  across the last 5° before the limit (no hard cliff in a torque-vs-
+  joint-angle plot).
+- MLP forward pass for a 32→64→32→8 net dispatches in < 50 µs on the
+  dev laptop's adapter; demo scene wires a pre-trained MLP into a
+  simple cart-pole swing-up.
+
+**Dependencies:** Stage 18 (the `Actuator { Delay → Controller →
+Clamping }` orchestrator that this hangs new stages off).
+
+### Stage 19.1 — GPU radix sort — **P1.5**
+
+**Status: NOT STARTED.** Stage 19's LBVH dispatcher uses a CPU
+radix-sort stop-gap on Morton codes — every frame uploads a sorted
+`(code, idx)` pair list. This stage replaces it with a GPU-resident
+sort, eliminating the per-frame upload bounce.
+
+**Deliverables:**
+- ❌ `shaders/radix_sort.wgsl` — multi-pass 8-bit-radix sort over
+  `(key=morton_u32, value=primitive_index)` pairs. Workgroup-local
+  prefix-sum + global block-bin transpose, 4 passes for a 32-bit key.
+- ❌ `kernels/radix_sort.rs` host dispatcher with double-buffer
+  ping-pong (read from buffer A, write to buffer B, swap each pass).
+- ❌ Wire into `kernels/lbvh.rs` so the morton → build path stays
+  GPU-resident end to end. Drop the CPU-sort code path with a
+  load-bearing comment so a future bisecter knows why it went away.
+- ❌ Document the choice (radix vs bitonic vs merge sort) in a
+  module-level doc-comment.
+
+**Definition of done:**
+- 10k-shape LBVH build wall-clock drops from 7-12 ms (Stage 19 v1) to
+  < 3 ms on the dev laptop's adapter.
+- Pair-set parity vs CPU SAP unchanged.
+- 100k-shape stress test (synthetic AABB shower, no contacts emitted)
+  builds in < 30 ms, demonstrating the dispatcher scales past where
+  Stage 19 v1 starts to wallclock-dominate.
+
+**Dependencies:** Stage 19 (the dispatcher this slots a new sort into).
+
+### Stage 20.1 — VBD CABLE + Dahl + AVBD hard mode + tets — **P1.5**
+
+**Status: NOT STARTED.** Stage 20 shipped Vertex Block Descent v1
+(stretch + bend springs + soft-mode contacts) with four follow-ups
+explicitly listed in its "Out of scope for v1" section. This stage
+ships them.
+
+**Deliverables:**
+- ❌ **CABLE joint** primitive — vertex-block-descent over a polyline
+  of CABLE particles + bending energy + length constraints. Slot into
+  `Model.joints` as a new joint variant; reuse the existing
+  greedy-coloured dispatch.
+- ❌ **Dahl friction** model — smooth stick-slip applied to
+  CABLE-vs-rigid contacts (the only consumer in v1). Mirror Newton's
+  `_dahl_friction_kernel`. Note: Stage 22.1 also wants this for
+  hydroelastic, so the kernel ships here and Stage 22.1 just consumes
+  it.
+- ❌ **Hard-mode AVBD** — full augmented-Lagrangian dual updates per
+  outer iteration (vs Stage 20's soft-mode penalty). Required for
+  no-slip contact on stiff cloth.
+- ❌ **Tetrahedral / volumetric soft bodies** — per-tet Neo-Hookean
+  Hessian, slotted into the existing per-vertex block solve. Adjacency
+  built at model-build time alongside the existing spring CSR.
+
+**Definition of done:**
+- CABLE pull-test demo: rope with one end pinned, the other yanked by
+  a kinematic body. Rope tracks without breaking; total length within
+  5% of reference over 600 substeps.
+- Dahl stick-slip test: CABLE on a static plane, friction-coefficient
+  sweep produces the textbook stick→slip transition curve (slope
+  matches the analytical Dahl model within 5%).
+- Hard-mode no-penetration test: 1k-particle cloth on a kinematic
+  sphere — every particle stays outside the sphere over 600 substeps
+  (soft-mode allows ~1 mm penetration).
+- Volumetric soft body: jelly-cube drop test, deformation energy
+  bounded for ≥ 10 s sim.
+
+**Dependencies:** Stage 20 (the VBD solver this extends).
+
+### Stage 21.1 — Mesh-utility hardening — **P2.5**
+
+**Status: NOT STARTED.** Stage 21 shipped the CPU mesh tools
+single-threaded with vertex-only hull output — fine for the demo, not
+fine for production asset pipelines.
+
+**Deliverables:**
+- ❌ **Rayon parallelisation** of `decimate` (per-collapse-candidate
+  evaluation) and `bake_mesh_to_sdf` (per-voxel SDF computation). Add
+  `rayon` to `crates/molla/Cargo.toml`.
+- ❌ **Hull face/wireframe output** from `convex_hull` — currently
+  returns vertices only; the viewer's hull overlay paints yellow point
+  markers because there's no face data to render. Return
+  `(Vec<Vec3>, Vec<[u32; 3]>)` with face indices.
+- ❌ **LOD chain** output: `decimate_lod_chain(mesh, factors: &[f64])
+  -> Vec<TriMesh>` — decimate to multiple simplification levels
+  sharing one QEM priority queue across levels (cheaper than running
+  the algorithm N times).
+- ❌ **Marching cubes adaptive resolution** — multi-resolution
+  refinement around the iso-surface for cleaner extraction at coarse
+  base resolutions. Optional polish.
+
+**Definition of done:**
+- 50k-tri mesh decimation finishes in < 1 s on the dev laptop's CPU
+  (vs ~10 s single-threaded today).
+- 64³ SDF bake of a 10k-tri mesh in < 500 ms.
+- Mesh-tools demo's hull overlay shows actual face triangles, not
+  yellow point markers.
+
+**Dependencies:** Stage 21 (the CPU mesh tools this hardens).
+
+### Stage 22.1 — Hydroelastic + MJCF coverage — **P2.5**
+
+**Status: NOT STARTED — now unblocked by Stage 21's `bake_mesh_to_sdf`.**
+Stage 22 shipped the MuJoCo wrapper but explicitly deferred
+hydroelastic contact (depended on Stage 21) and Dahl friction (depends
+on Stage 20.1). Hydroelastic is now actionable; Dahl needs Stage 20.1
+to land first or to be co-scheduled.
+
+**Deliverables:**
+- ❌ **Hydroelastic contact model** — pressure fields over overlapping
+  volumes via the new `SdfGrid`. Replace point contacts with
+  distributed pressure for soft-on-rigid and soft-on-soft pairs.
+  Drake's hydroelastic paper is the reference algorithm.
+- ❌ **Dahl friction integration** — consume the kernel that Stage
+  20.1 ships (or co-implement here if 20.1 hasn't landed yet).
+- ❌ **MJCF: TriMesh / ConvexHull / Heightfield / SDF asset blocks** —
+  Stage 22 v1 skips these with `tracing::warn`. Emit the right
+  `<asset><mesh.../></asset>` + `<geom mesh="..."/>` pairs so URDF /
+  USD imports with mesh collision actually round-trip into MuJoCo.
+- ❌ **MJCF: per-DOF joint limits, friction, armature** — emit from
+  molla's existing `JointLimits` + `JointDrives` storage.
+- ❌ **MJCF: FIXED → `<weld/>` translation** — Stage 22 v1 produces a
+  free 6-DoF body for FIXED joints; emit a proper `<equality><weld/>`
+  constraint instead.
+- ❌ **CI lane** that installs libmujoco and runs the
+  `#[ignore]`-marked Stage 22 tests, so we get ongoing parity
+  assurance instead of relying on the dev laptop having MuJoCo
+  installed.
+
+**Definition of done:**
+- Hydroelastic test: cloth-on-sphere drape with hydroelastic vs
+  point-contact — no penetration jitter; energy bounded over 10 s sim.
+- MJCF round-trip on a URDF-imported asset (mesh-collision + joint
+  limits + welds): identical-trajectory simulation in MuJoCo as in
+  Featherstone within 5 mm at 60 substeps.
+- CI green on a libmujoco-equipped runner.
+
+**Dependencies:** Stage 21 (mesh→SDF baking, now shipped); Stage 20.1
+(Dahl friction kernel, may co-ship).
+
+### Stage 23.1 — Featherstone reverse-mode adjoint — **P2.5**
+
+**Status: NOT STARTED.** Stage 23 shipped tape autograd + manual XPBD
+adjoint + a 2-link arm trajectory-opt demo, but the Featherstone
+adjoint was explicitly deferred ("multi-week derivation work, ship one
+working adjoint + a real demo beats two half-finished ones"). This
+stage ships it.
+
+**Deliverables:**
+- ❌ **Per-pass adjoints for Featherstone's three sweeps** — downward
+  kinematic (forward velocity), upward inertia (composite inertia),
+  downward acceleration (joint accelerations + body accelerations).
+  Each becomes its own `TapeOp` variant.
+- ❌ **Tape recording for Featherstone GPU** — tape-side records
+  inputs to each sweep; backward replay invokes the corresponding
+  adjoint kernel.
+- ❌ **Shared-Jacobian reuse** — the adjoint of `ABA::step` shares
+  structure with the Stage-16 GPU Jacobian kernel; reuse buffers and
+  avoid recomputation. The Featherstone (2008) §10 reverse-mode
+  derivation explicitly leans on this overlap.
+- ❌ **Featherstone gradient-vs-FD verification** in
+  `tests/autograd_featherstone.rs` — randomised joint configurations
+  + perturbations, cross-check ∂(EE position) / ∂(initial torques) vs
+  central-difference within 1e-3.
+- ❌ **Re-target the existing `Scene::DiffArm`** to use a 6-DOF arm
+  via Featherstone (or add a sibling `Scene::DiffArm6` if the 2-link
+  variant is worth keeping for pedagogy — recommend keeping both).
+
+**Definition of done:**
+- ∂(EE position) / ∂(initial joint torques) for a 6-DOF chain matches
+  FD within 1e-3.
+- 6-DOF arm reaches a target via gradient descent in ≤ 50 GD
+  iterations.
+- Backward pass < 5× the forward-pass cost on the dev laptop's
+  adapter — which justifies the GPU implementation over CPU autograd.
+
+**Dependencies:** Stage 23 (the tape infrastructure this extends);
+Stage 16 (GPU Jacobian kernel for shared-buffer reuse); Stage 17 (the
+multi-DOF Featherstone code this differentiates).
+
+### Stage 24 — Specialty primitives (P3) — broken into 24a–24e
+
+**Status: DEFERRED top-level.** The original PLAN listed five
+independent items under one Stage 24 heading; this revision splits
+them into separate sub-stages 24a–24e so each can be picked up
+independently. Sub-stages are ordered by **smallest-first / highest-
+reuse** so a partial pull-forward delivers value early.
+
+### Stage 24a — SVD3 / QR3 / eig3 (small-matrix decompositions) — **P3, ship first**
+
+**Status: DEFERRED.** Smallest of the P3 items; high reuse across IK
+regularisation (Stage 16), polar decomposition for VBD soft-body
+(Stage 20 / 20.1), and inertia-tensor eigendecomposition. Pull this
+forward first if any P3 work happens.
+
+**Deliverables:**
+- ❌ **3×3 SVD via Jacobi rotations** — CPU + WGSL.
+- ❌ **3×3 QR via Givens rotations** — CPU + WGSL.
+- ❌ **3×3 symmetric eigendecomposition via Jacobi sweeps** — CPU +
+  WGSL.
+- ❌ **Polar decomposition** `(R, S) = polar_decompose_3(M)` exposed
+  as a thin wrapper over SVD.
+- ❌ **Tests** vs nalgebra reference for randomised matrices.
+
+**Definition of done:**
+- All three decompositions correct to 1e-6 vs nalgebra reference for
+  10k random-matrix samples.
+- WGSL variants benchmark < 100 ns per matrix on the dev laptop
+  (single workgroup invocation).
+- IkSolver picks up SVD-based pseudoinverse fallback when the existing
+  Cholesky pre-solve flags ill-conditioning.
+
+**Dependencies:** none (slots into `math::dense_solve`).
+
+### Stage 24b — Robust-loss extensions — **P3, complements Stage 23.1**
+
+**Status: DEFERRED.** Smallest item after 24a; complements Stage 23 /
+23.1 by giving autograd more loss building blocks and IK more
+regularisation choices.
+
+**Deliverables:**
+- ❌ Loss + gradient pairs for L1, smooth-L2, **Huber** (Stage 23 doc
+  comment already stubs this), Tukey biweight, Cauchy. CPU + WGSL
+  (`shaders/robust_loss.wgsl`).
+- ❌ TapeOp variants for each (auto-differentiable inside the Stage
+  23 / 23.1 tape).
+- ❌ IkSolver: optional `loss: RobustLoss` parameter; default stays
+  Cholesky-+-L2 for back-compat.
+
+**Definition of done:**
+- Outlier-resistance test: IK target with 10% outlier targets
+  converges to inlier-aligned pose under Tukey; stays stuck under L2.
+- Gradient verification: each loss's gradient matches FD within 1e-4.
+
+**Dependencies:** Stage 23 (tape autograd) for the TapeOp variants;
+Stage 16 (IkSolver) for the IK integration.
+
+### Stage 24c — GPU FFT — **P3**
+
+**Status: DEFERRED.** Hand-written WGSL FFT for spectral analysis +
+preconditioning. Smaller than 24d/24e but harder to justify without a
+concrete user — the obvious internal consumer is VBD's per-vertex
+Newton step preconditioner (Stage 20 / 20.1), but VBD already ships
+without it.
+
+**Deliverables:**
+- ❌ **Stockham radix-2 FFT** in WGSL (`shaders/fft.wgsl`); 1D, 2D,
+  3D wrappers.
+- ❌ Inverse FFT + dispatch wrappers.
+- ❌ **2D FFT preconditioner** for VBD's per-vertex Newton step
+  (optional substitution — only land if it materially improves
+  convergence on a high-stiffness benchmark).
+
+**Definition of done:**
+- 1D FFT N=4096 matches `rustfft` to 1e-5.
+- 2D FFT 256×256 matches reference; runs in < 1 ms on the dev laptop.
+
+**Dependencies:** none for the FFT itself; Stage 20 / 20.1 if the VBD
+preconditioner actually lands.
+
+### Stage 24d — Implicit MPM (granular materials) — **P3, multi-week, only on demand**
+
+**Status: DEFERRED.** This is the largest of the P3 items — likely
+multi-week if shipped properly. Defer until a user actually wants
+sand / snow / mud sim. Newton's `SolverImplicitMPM` is the reference
+implementation.
+
+**Deliverables:**
+- ❌ **APIC particle-grid transfer** kernels (P→G, G→P).
+- ❌ **Implicit time-step** — CG over a sparse linear system; per-
+  iteration grid-momentum update.
+- ❌ **Drucker-Prager yield** criterion for sand; Cam-clay or similar
+  for snow.
+- ❌ **Coupling with rigid bodies** via momentum exchange at the grid.
+- ❌ **`Scene::Mpm` viewer demo** — pour 50k sand particles on a
+  kinematic obstacle; bowl scene with rigid coupling.
+
+**Definition of done:**
+- Sand pile angle of repose matches measured Drucker-Prager parameters
+  within 5°.
+- Sand-on-rigid-bowl: 60 s sim, momentum conservation within 1%.
+- Performance: 50k particles + 64³ grid at ≥ 60 Hz on the dev laptop's
+  adapter.
+
+**Dependencies:** Stage 24a (eigendecomposition for plasticity return
+mapping); Stage 24e (sparse grid for active cells, optional but
+recommended at 1024³ logical sizes).
+
+### Stage 24e — NanoVDB-equivalent sparse volumes — **P3, multi-week, depends on 24d**
+
+**Status: DEFERRED.** Only worth landing when there's a concrete
+storage problem at scale — most likely consumer is Stage 24d (MPM)
+once it grows past 256³ logical grids.
+
+**Deliverables:**
+- ❌ **3-level tree (root → internal → leaf)** in WGSL, mirroring
+  NanoVDB's layout but expressed in plain WGSL (no NanoVDB binary
+  dep).
+- ❌ **Insert / lookup / iterate** kernels.
+- ❌ **`SparseSdf`** type wrapping the structure + sample/normal
+  queries; usable by hydroelastic (Stage 22.1) for large-scene SDF
+  collision.
+- ❌ **Refactor Stage 24d MPM** to use the sparse grid for active cells
+  only.
+
+**Definition of done:**
+- 1024³ logical grid with 1% occupancy uses < 5% of dense storage.
+- SDF-collision query latency on a 1024³ logical asset < 10 µs per
+  ray.
+
+**Dependencies:** Stage 24d (the natural consumer); Stage 22.1 (the
+secondary consumer — hydroelastic on large SDF scenes).
 
 ### Stage 25+ — Out of scope / explicitly deferred
 
@@ -2416,6 +2799,7 @@ rationale, who decided.
 | 2026-05-09 | Stage 22 v1 partial: `MuJoCoSolver` (the wrapper) shipped; hydroelastic contact + Dahl friction explicitly DEFERRED. Wrapper lives at `crates/molla/src/solvers/mujoco.rs` behind the `mujoco` Cargo feature; uses `mujoco-rust 0.0.6` as the optional dep. The flow is: build a `Model`, emit MJCF via the in-crate `MjcfWriter`, hand it to `mj_loadXML`, then `mj_step` per substep with molla `joint_q/joint_qd` ↔ MuJoCo `qpos/qvel`. With the feature OFF the type, MJCF builder, `Solver` impl, viewer scene, and tests all still compile (the actual `mj_step` calls live behind `cfg(feature = "mujoco")`); the `Solver::step` then errors at runtime with a clear "feature off" message. With the feature ON, `mujoco-rust` requires libmujoco at link time — the agent's nixVulkan environment doesn't ship libmujoco or libstdc++ for libclang, so end-to-end MuJoCo tests can't be exercised here; the test file is `#[cfg(feature = "mujoco")]` + `#[ignore]` per the Stage-22 spec. v1 supports Sphere / Box / Capsule / Cylinder / Plane geoms; Revolute / Prismatic / Ball / Free joints; CONNECT + WELD equality constraints. TriMesh / ConvexHull / Heightfield / SDF shapes need MJCF `<asset>` blocks (deferred); FIXED → `<weld/>` translation deferred (FIXED currently produces a free body); per-DOF joint limits / friction / effort caps deferred (mappable to MJCF `<joint range="..." damping="..." armature="..."/>` later). Multi-world models collapse onto world 0 with a `tracing::warn`. Hydroelastic contact deferred because it depends on Stage 21 mesh→SDF baking (parallel stream). Dahl friction deferred because it has no consumer until VBD CABLE joints land (Stage 20 deferral). Bevy plumbing: `MuJoCoExampleState` resource added to both `SceneStates` and `PaneSceneStates` bundles to stay under the 16-system-param ceiling. New scene `Scene::MuJoCo` on hotkey `J` (for muJoco) renders a double pendulum; falls back to Featherstone when `mujoco` feature is off so the scene is still demoable without libmujoco installed. |
 | 2026-05-09 | Stage 23 v1 shipped (differentiable simulation, tape autograd + manual XPBD adjoint). Two architectural decisions: (a) **CPU-only autograd** is the GPU-first rule's exception — tape recording fundamentally needs heap allocation + dynamic graph structure that doesn't map onto wgpu's pipeline-state model; Newton + Warp solve the same problem with Python + CUDA-graph capture, neither of which we have. We use Rust + CPU and accept the perf hit (orders of magnitude vs hand-written adjoint kernels) in exchange for a working v1; the [`Tape`] / [`TapeOp`] structure is engine-agnostic so a GPU port stays open. (b) **Featherstone adjoint deferred to Stage 23.1.** Reverse-mode ABA per Featherstone (2008) §10 is multi-week derivation work; PLAN.md originally listed both XPBD and Featherstone adjoints as Stage 23 deliverables, but shipping one working adjoint + a real demo beats two half-finished ones. The trajectory-opt demo therefore uses a hand-rolled 2-link planar arm (`molla::autograd::DiffArm`) instead of the existing 6-DOF Stage-13 chain — same pedagogical value (closed-loop GD on torques) without needing the deferred adjoint. Demo converges to within 5 cm of the target in ~17 GD iterations and sub-mm by ~30; viewer scene `DiffArm` on hotkey `G` adds target XYZ sliders + EE-trajectory overlay. `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one new field; the per-frame system chain length stayed under the 16-param ceiling. |
 | 2026-05-09 | Stages 21, 22, 23 (the full GAP-driven P2 stack) shipped in one batch via three parallel agent worktrees, merged sequentially into `main`. Stage 21 added CPU-only mesh utilities — `convex_hull` (QuickHull), `decimate` (Garland-Heckbert QEM), `bake_mesh_to_sdf` (parity-counting voxeliser → new `SdfGrid` type), `marching_cubes` (Lorensen 256-case tables), and a public `SpatialHashGrid` extracted from cloth particle self-collision; viewer demo on hotkey `M`. Stage 22 shipped `MuJoCoSolver` behind the `mujoco` Cargo feature with feature-off fallback to Featherstone (libmujoco wasn't installable in the agent's nixVulkan env so the runtime path is gated but the wrapper structure + MJCF builder + tests all compile); hydroelastic + Dahl friction explicitly deferred to follow-up stages with documented dependency reasoning; viewer demo on hotkey `J`. Stage 23 shipped tape autograd + manual XPBD adjoint + a 2-link arm trajectory-opt demo (see prior entry); Featherstone reverse-mode ABA deferred to Stage 23.1. All three followed the established SystemParam-bundle convention (`SceneStates` / `PaneSceneStates`) so no merge introduced new top-level params. Total scenes now: 18 (Pile, Rope, Tower, Cloth, Lidar, Imu, Contact, Arm, Shapes, GpuIkArm, GpuNarrowPhase, Camera, Actuator, Quadrotor, BroadPhase, VbdCloth, MuJoCo, DiffArm, MeshTools). 150 unit tests pass clean. |
+| 2026-05-09 | Deferred-follow-ups + P3 plan written into PLAN.md. Seven new `### Stage X.1` sub-sections (17.1, 18.1, 19.1, 20.1, 21.1, 22.1, 23.1) consolidate every "deferred to follow-up" line previously buried inside parent-stage bodies; each gets explicit Deliverables, DoD, and Dependencies. The existing thin Stage 24 (P3) entry was expanded into five sub-stages 24a–24e, ordered smallest-first / highest-reuse so any partial pull-forward delivers value early: 24a (SVD3 / QR3 / eig3) → 24b (robust losses) → 24c (GPU FFT) → 24d (Implicit MPM, multi-week) → 24e (NanoVDB sparse volumes, multi-week, depends on 24d). All P3 sub-stages remain `Status: DEFERRED` until a concrete user / workload appears — the PLAN-side entries exist so a future contributor can pick one up without re-deriving scope + dependencies. No code changed in this entry; documentation only. Cross-cutting prerequisite (the `SceneStates` / `PaneSceneStates` SystemParam-bundle convention introduced during the P1 merges) is documented at the top of the deferred-follow-ups section so any new viewer scene avoids the 16-system-param ceiling without restructuring. |
 
 ---
 
