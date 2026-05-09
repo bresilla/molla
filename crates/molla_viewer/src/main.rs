@@ -5218,6 +5218,13 @@ fn apply_scene_switch(
     gpu_np.last_contacts = 0;
     gpu_np.last_pairs = 0;
     // Same for GPU broad-phase counters / pipeline-state cache.
+    // Reset `use_gpu` to match the freshly-cleared `gpu_enabled_now`
+    // so re-entering the BroadPhase scene doesn't trigger a one-frame
+    // pipeline rebuild from a stale-but-different toggle (the delta
+    // check at `step_simulation` rebuilds whenever `use_gpu !=
+    // gpu_enabled_now`). The user can flip the toggle back on from
+    // the pane to opt into the GPU path.
+    gpu_bp.use_gpu = false;
     gpu_bp.gpu_enabled_now = false;
     gpu_bp.last_pairs = 0;
     gpu_bp.smoothed_ms = 0.0;
