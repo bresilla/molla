@@ -7,6 +7,105 @@ use crate::storage::{Buffer, BufferUsage};
 /// A triangle mesh stored on the host. Vertices are in the mesh's
 /// local frame; world positioning comes from the shape's transform.
 /// Triangle indexing convention: `indices[t]` gives the three
+/// Regular grid of height samples (heightmap) — terrain primitive.
+/// Surface is sampled at `(origin.x + i·cell_size, height[i,j],
+/// origin.z + j·cell_size)` for `i ∈ [0, nx)`, `j ∈ [0, nz)`.
+/// Collision routing converts only the cells overlapping the
+/// query AABB into triangles, so heightmaps stay cheap even when
+/// the grid is large.
+#[derive(Clone, Debug, Default)]
+pub struct Heightfield {
+    /// Number of samples along the X axis.
+    pub nx: u32,
+    /// Number of samples along the Z axis.
+    pub nz: u32,
+    /// Distance between adjacent samples (m).
+    pub cell_size: Real,
+    /// Origin in shape-local frame: the `(0, 0)` sample sits at this point.
+    pub origin: Vec3,
+    /// Flat `nx · nz` array — row-major, `height[j*nx + i]`.
+    pub heights: Vec<Real>,
+}
+
+impl Heightfield {
+    /// Sample height at integer cell coords. Out-of-range returns 0.
+    pub fn sample(&self, i: u32, j: u32) -> Real {
+        if i >= self.nx || j >= self.nz {
+            return 0.0;
+        }
+        self.heights[(j * self.nx + i) as usize]
+    }
+
+    /// Heightfield's local-frame AABB (min, max) — the range over
+    /// the X/Z grid extents and the height sample range.
+    pub fn local_aabb(&self) -> (Vec3, Vec3) {
+        let max_x = self.origin.x + (self.nx.saturating_sub(1) as Real) * self.cell_size;
+        let max_z = self.origin.z + (self.nz.saturating_sub(1) as Real) * self.cell_size;
+        let mut min_h = Real::INFINITY;
+        let mut max_h = -Real::INFINITY;
+        for &h in &self.heights {
+            if h < min_h { min_h = h; }
+            if h > max_h { max_h = h; }
+        }
+        if !min_h.is_finite() { min_h = 0.0; }
+        if !max_h.is_finite() { max_h = 0.0; }
+        (
+            Vec3::new(self.origin.x, min_h, self.origin.z),
+            Vec3::new(max_x, max_h, max_z),
+        )
+    }
+}
+
+/// Analytic signed-distance shape descriptor. v1 ships built-in
+/// torus + sphere primitives; arbitrary user-defined SDFs need
+/// procedural callbacks (Stage 13 follow-up).
+#[derive(Copy, Clone, Debug)]
+pub enum SdfShape {
+    /// Torus along the local +Y axis.
+    Torus {
+        /// Distance from torus centre to ring centre (m).
+        major: Real,
+        /// Tube radius (m).
+        minor: Real,
+    },
+    /// Sphere of radius `r` — useful as a smoke test against the
+    /// existing analytic Sphere primitive.
+    Sphere { r: Real },
+}
+
+impl SdfShape {
+    /// Signed distance at point `p` in shape-local frame. `< 0` is
+    /// inside, `> 0` is outside, `0` is the surface.
+    pub fn signed_distance(self, p: Vec3) -> Real {
+        match self {
+            SdfShape::Torus { major, minor } => {
+                let r_xz = (p.x * p.x + p.z * p.z).sqrt();
+                let q = Vec3::new(r_xz - major, p.y, 0.0);
+                (q.x * q.x + q.y * q.y).sqrt() - minor
+            }
+            SdfShape::Sphere { r } => p.length() - r,
+        }
+    }
+
+    /// Outward-facing surface normal at `p` in shape-local frame
+    /// — finite-difference gradient of `signed_distance`.
+    pub fn normal(self, p: Vec3) -> Vec3 {
+        let h: Real = 1.0e-4;
+        let dx = self.signed_distance(p + Vec3::new(h, 0.0, 0.0))
+            - self.signed_distance(p - Vec3::new(h, 0.0, 0.0));
+        let dy = self.signed_distance(p + Vec3::new(0.0, h, 0.0))
+            - self.signed_distance(p - Vec3::new(0.0, h, 0.0));
+        let dz = self.signed_distance(p + Vec3::new(0.0, 0.0, h))
+            - self.signed_distance(p - Vec3::new(0.0, 0.0, h));
+        let n = Vec3::new(dx, dy, dz);
+        if n.length_squared() > 1.0e-24 {
+            n.normalize()
+        } else {
+            Vec3::Y
+        }
+    }
+}
+
 /// vertex indices forming triangle `t`, wound CCW when looking
 /// against the outward normal (right-hand rule).
 #[derive(Clone, Debug, Default)]
@@ -178,6 +277,12 @@ pub struct Model {
     /// vertex positions in the shape's local frame; the GJK support
     /// function scans them linearly.
     pub hulls: Vec<Vec<Vec3>>,
+    /// Heightfield storage. `ShapeGeometry::Heightfield { field_id }`
+    /// references entries here.
+    pub heightfields: Vec<Heightfield>,
+    /// SDF shape storage. `ShapeGeometry::Sdf { sdf_id }` references
+    /// entries here.
+    pub sdfs: Vec<SdfShape>,
     /// Per-shape collision group bitmask. Two shapes can collide
     /// only if `group_a & group_b != 0`. Default `0xffff_ffff` =
     /// "collides with every group". Length = `shape_count`.
@@ -376,6 +481,8 @@ impl Model {
             shape_restitution: Buffer::from_vec(Vec::new(), s),
             meshes: Vec::new(),
             hulls: Vec::new(),
+            heightfields: Vec::new(),
+            sdfs: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),
             shape_collision_filter_pairs: Vec::new(),
 

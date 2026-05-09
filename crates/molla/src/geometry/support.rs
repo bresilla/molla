@@ -50,6 +50,11 @@ pub fn support_with_hulls(
         } => support_cone(half_height, radius, dir_local),
         ShapeGeometry::Triangle { v0, v1, v2 } => support_triangle(v0, v1, v2, dir_local),
         ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
+        // Heightfield + Sdf use bespoke narrow-phase paths (per-cell
+        // triangle dispatch + ball-marching, respectively); a generic
+        // GJK support function isn't useful here.
+        ShapeGeometry::Heightfield { .. } => Vec3::ZERO,
+        ShapeGeometry::Sdf { .. } => Vec3::ZERO,
         ShapeGeometry::ConvexHull { hull_id } => {
             let id = hull_id as usize;
             if id < hulls.len() {

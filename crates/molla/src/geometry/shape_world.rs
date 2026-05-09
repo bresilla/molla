@@ -152,6 +152,52 @@ pub fn shape_world_aabb(
             }
             Aabb { min: lo, max: hi }.expanded(margin)
         }
+        ShapeGeometry::Heightfield { field_id } => {
+            let field = match model.heightfields.get(field_id as usize) {
+                Some(f) => f,
+                None => return Aabb::infinite(),
+            };
+            let (lo_local, hi_local) = field.local_aabb();
+            // Conservative world AABB: 8 local-AABB corners → world.
+            let corners = [
+                Vec3::new(lo_local.x, lo_local.y, lo_local.z),
+                Vec3::new(hi_local.x, lo_local.y, lo_local.z),
+                Vec3::new(lo_local.x, hi_local.y, lo_local.z),
+                Vec3::new(hi_local.x, hi_local.y, lo_local.z),
+                Vec3::new(lo_local.x, lo_local.y, hi_local.z),
+                Vec3::new(hi_local.x, lo_local.y, hi_local.z),
+                Vec3::new(lo_local.x, hi_local.y, hi_local.z),
+                Vec3::new(hi_local.x, hi_local.y, hi_local.z),
+            ];
+            let mut lo = Vec3::splat(crate::math::Real::INFINITY);
+            let mut hi = Vec3::splat(-crate::math::Real::INFINITY);
+            for c in corners {
+                let w = xf.transform_point(c);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+            Aabb { min: lo, max: hi }.expanded(margin)
+        }
+        ShapeGeometry::Sdf { sdf_id } => {
+            // Conservative AABB depending on the SDF type.
+            let sdf = match model.sdfs.get(sdf_id as usize) {
+                Some(s) => *s,
+                None => return Aabb::infinite(),
+            };
+            let h_local = match sdf {
+                crate::sim::SdfShape::Torus { major, minor } => {
+                    Vec3::new(major + minor, minor, major + minor)
+                }
+                crate::sim::SdfShape::Sphere { r } => Vec3::splat(r),
+            };
+            // Rotate the AABB into world (uses the box rotation trick).
+            let r = crate::math::Mat3::from_quat(xf.rotation);
+            let abs_x = Vec3::new(r.x_axis.x.abs(), r.x_axis.y.abs(), r.x_axis.z.abs());
+            let abs_y = Vec3::new(r.y_axis.x.abs(), r.y_axis.y.abs(), r.y_axis.z.abs());
+            let abs_z = Vec3::new(r.z_axis.x.abs(), r.z_axis.y.abs(), r.z_axis.z.abs());
+            let h = abs_x * h_local.x + abs_y * h_local.y + abs_z * h_local.z;
+            Aabb::centred(xf.position, h).expanded(margin)
+        }
     }
 }
 

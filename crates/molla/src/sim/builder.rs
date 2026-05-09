@@ -90,6 +90,28 @@ pub enum ShapeGeometry {
         /// Radius of the base disc (m).
         radius: Real,
     },
+    /// Heightfield (regular grid of height samples) — references
+    /// entry `field_id` in [`super::Model::heightfields`]. Surface
+    /// is defined by `height[i, j]` at grid coordinates
+    /// `(origin + i·cell_size·X, height, origin + j·cell_size·Z)`.
+    /// Each quad cell decomposes into 2 triangles on the fly during
+    /// narrow phase; collision queries route through the same
+    /// triangle-based GJK/EPA path as `TriMesh`.
+    Heightfield {
+        /// Index into [`super::Model::heightfields`].
+        field_id: u32,
+    },
+    /// Analytic signed-distance-field shape — referenced by
+    /// `sdf_id` in [`super::Model::sdfs`]. The current v1 ships
+    /// `SdfShape::Torus { major, minor }` and `SdfShape::Capped`
+    /// (sentinel for arbitrary callbacks); the support function
+    /// is approximated via finite-difference normals at the SDF's
+    /// surface ("ball-marching" approach used by Newton's
+    /// `geometry/sdf.py`).
+    Sdf {
+        /// Index into [`super::Model::sdfs`].
+        sdf_id: u32,
+    },
 }
 
 /// Parameters for [`ModelBuilder::add_body`].
@@ -232,6 +254,8 @@ pub struct ModelBuilder {
     shape_restitution: Vec<Real>,
     meshes: Vec<super::TriMesh>,
     hulls: Vec<Vec<Vec3>>,
+    heightfields: Vec<super::Heightfield>,
+    sdfs: Vec<super::SdfShape>,
     shape_collision_group: Vec<u32>,
     shape_collision_filter_pairs: Vec<(u32, u32)>,
 
@@ -813,6 +837,56 @@ impl ModelBuilder {
             )));
         }
         Ok(self.push_shape(body, local_pose, ShapeGeometry::Cone { half_height, radius }))
+    }
+
+    /// Register a heightfield (regular grid of height samples) and
+    /// return its `field_id`. The grid sits at `origin` in shape-local
+    /// frame with `nx · nz` samples spaced `cell_size` apart.
+    pub fn add_heightfield(&mut self, hf: super::Heightfield) -> u32 {
+        let id = self.heightfields.len() as u32;
+        self.heightfields.push(hf);
+        id
+    }
+
+    /// Attach a heightfield shape to `body`.
+    pub fn add_shape_heightfield(
+        &mut self,
+        body: BodyId,
+        field_id: u32,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_heightfield")?;
+        if (field_id as usize) >= self.heightfields.len() {
+            return Err(Error::Build(format!(
+                "add_shape_heightfield: field_id {field_id} not registered"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Heightfield { field_id }))
+    }
+
+    /// Register an analytic SDF shape and return its id. v1 ships
+    /// torus + sphere; user-defined SDFs need a procedural callback
+    /// path (TODO).
+    pub fn add_sdf(&mut self, sdf: super::SdfShape) -> u32 {
+        let id = self.sdfs.len() as u32;
+        self.sdfs.push(sdf);
+        id
+    }
+
+    /// Attach an SDF shape to `body`.
+    pub fn add_shape_sdf(
+        &mut self,
+        body: BodyId,
+        sdf_id: u32,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_sdf")?;
+        if (sdf_id as usize) >= self.sdfs.len() {
+            return Err(Error::Build(format!(
+                "add_shape_sdf: sdf_id {sdf_id} not registered"
+            )));
+        }
+        Ok(self.push_shape(body, local_pose, ShapeGeometry::Sdf { sdf_id }))
     }
 
     /// Attach a triangle shape to `body`. Standalone — for direct
@@ -1541,10 +1615,14 @@ impl ModelBuilder {
                         ShapeGeometry::Box { .. } => 2,
                         ShapeGeometry::Capsule { .. } => 3,
                         ShapeGeometry::Cylinder { .. } => 4,
-                        // Cone / ConvexHull are CPU-only for now —
-                        // sentinel 0xff so the GPU kernels skip them.
-                        ShapeGeometry::Cone { .. } => 0xff,
+                        // Cone (5) gets a real kind for GPU GJK;
+                        // ConvexHull/Heightfield/Sdf are CPU-only
+                        // for now — sentinel 0xff so the GPU
+                        // kernels skip them.
+                        ShapeGeometry::Cone { .. } => 5,
                         ShapeGeometry::ConvexHull { .. } => 0xff,
+                        ShapeGeometry::Heightfield { .. } => 0xff,
+                        ShapeGeometry::Sdf { .. } => 0xff,
                         ShapeGeometry::Triangle { .. } => 0xff,
                         ShapeGeometry::TriMesh { .. } => 0xff,
                     })
@@ -1570,6 +1648,8 @@ impl ModelBuilder {
                             Vec3::new(half_height, radius, 0.0)
                         }
                         ShapeGeometry::ConvexHull { .. } => Vec3::ZERO,
+                        ShapeGeometry::Heightfield { .. } => Vec3::ZERO,
+                        ShapeGeometry::Sdf { .. } => Vec3::ZERO,
                     })
                     .collect(),
                 s,
@@ -1583,6 +1663,8 @@ impl ModelBuilder {
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
             meshes: self.meshes,
             hulls: self.hulls,
+            heightfields: self.heightfields,
+            sdfs: self.sdfs,
             shape_collision_group: Buffer::from_vec(self.shape_collision_group, s),
             shape_collision_filter_pairs: {
                 let mut p = self.shape_collision_filter_pairs;

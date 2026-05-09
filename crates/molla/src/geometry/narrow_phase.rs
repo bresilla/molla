@@ -283,6 +283,25 @@ pub fn pair_contact(
             trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out);
         }
 
+        // ── Heightfield — iterate cells overlapping the other
+        // shape's local-frame AABB; each cell decomposes into 2
+        // triangles routed through the standard GJK+EPA path.
+        (ShapeGeometry::Heightfield { field_id }, _) => {
+            heightfield_pair(model, field_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::Heightfield { field_id }) => {
+            heightfield_pair(model, field_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
+
+        // ── SDF — sphere-vs-SDF fast path; everything else falls
+        // through to ball-marching the other shape's centre.
+        (ShapeGeometry::Sdf { sdf_id }, _) => {
+            sdf_pair(model, sdf_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::Sdf { sdf_id }) => {
+            sdf_pair(model, sdf_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
+
         (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => {}
     }
 
@@ -1307,12 +1326,13 @@ fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
             let h = absax * half_height + perp * radius;
             (xf.position - h, xf.position + h)
         }
-        ShapeGeometry::ConvexHull { .. } => {
-            // Conservative — caller (narrow_phase) doesn't have
-            // model.hulls handy here. Returning infinity makes the
-            // BVH-overlap check degenerate to "every triangle";
-            // ConvexHull-vs-trimesh narrow phase isn't a hot path
-            // in v1 anyway.
+        ShapeGeometry::ConvexHull { .. }
+        | ShapeGeometry::Heightfield { .. }
+        | ShapeGeometry::Sdf { .. } => {
+            // Conservative — these don't have an obvious analytic
+            // AABB without access to model storage. Falls back to
+            // visiting every BVH leaf, which is fine for non-hot
+            // paths (Heightfield-vs-trimesh is unusual anyway).
             (
                 Vec3::splat(-Real::INFINITY),
                 Vec3::splat(Real::INFINITY),
@@ -1573,6 +1593,153 @@ fn hull_plane_fallback(
     if out.len() - start > MAX_MANIFOLD_POINTS {
         keep_deepest_range(out, start, MAX_MANIFOLD_POINTS);
     }
+}
+
+/// Heightfield narrow phase: enumerate cells whose AABB overlaps
+/// the other shape's local-frame AABB, decompose each into 2 CCW
+/// triangles, and route through the generic GJK+EPA path. Local
+/// frames are converted via `mesh_xf` (the heightfield's transform).
+#[allow(clippy::too_many_arguments)]
+fn heightfield_pair(
+    model: &Model,
+    field_id: u32,
+    field_xf: &Transform,
+    other_geom: ShapeGeometry,
+    other_xf: &Transform,
+    pair: ShapePair,
+    flip_output: bool,
+    out: &mut Vec<ContactManifold>,
+) {
+    let field = match model.heightfields.get(field_id as usize) {
+        Some(f) => f,
+        None => return,
+    };
+    if field.nx < 2 || field.nz < 2 || field.cell_size <= 0.0 {
+        return;
+    }
+    // Other shape's AABB → field-local frame.
+    let (oa, ob) = shape_world_aabb_quick(other_geom, other_xf);
+    let local_min = field_xf.inverse_transform_point(oa.min(ob));
+    let local_max = field_xf.inverse_transform_point(oa.max(ob));
+    let lo = local_min.min(local_max);
+    let hi = local_min.max(local_max);
+
+    // Determine which cell range overlaps.
+    let inv_cell = 1.0 / field.cell_size;
+    let i0 = ((lo.x - field.origin.x) * inv_cell).floor() as i32;
+    let i1 = ((hi.x - field.origin.x) * inv_cell).ceil() as i32;
+    let j0 = ((lo.z - field.origin.z) * inv_cell).floor() as i32;
+    let j1 = ((hi.z - field.origin.z) * inv_cell).ceil() as i32;
+    let i0 = i0.clamp(0, field.nx as i32 - 1).max(0) as u32;
+    let i1 = (i1.clamp(0, field.nx as i32 - 1).max(0) as u32).min(field.nx - 1);
+    let j0 = j0.clamp(0, field.nz as i32 - 1).max(0) as u32;
+    let j1 = (j1.clamp(0, field.nz as i32 - 1).max(0) as u32).min(field.nz - 1);
+
+    let cs = field.cell_size;
+    let ox = field.origin.x;
+    let oy = field.origin.y;
+    let oz = field.origin.z;
+    for j in j0..j1 {
+        for i in i0..i1 {
+            // Quad corners in field-local frame (XZ plane + height).
+            let v00 = Vec3::new(
+                ox + i as Real * cs,
+                oy + field.sample(i, j),
+                oz + j as Real * cs,
+            );
+            let v10 = Vec3::new(
+                ox + (i + 1) as Real * cs,
+                oy + field.sample(i + 1, j),
+                oz + j as Real * cs,
+            );
+            let v01 = Vec3::new(
+                ox + i as Real * cs,
+                oy + field.sample(i, j + 1),
+                oz + (j + 1) as Real * cs,
+            );
+            let v11 = Vec3::new(
+                ox + (i + 1) as Real * cs,
+                oy + field.sample(i + 1, j + 1),
+                oz + (j + 1) as Real * cs,
+            );
+            for tri in [(v00, v10, v11), (v00, v11, v01)] {
+                let tri_geom = ShapeGeometry::Triangle {
+                    v0: tri.0,
+                    v1: tri.1,
+                    v2: tri.2,
+                };
+                let m = if flip_output {
+                    gjk_epa_pair_with_hulls(other_geom, other_xf, tri_geom, field_xf, pair, &model.hulls)
+                } else {
+                    gjk_epa_pair_with_hulls(tri_geom, field_xf, other_geom, other_xf, pair, &model.hulls)
+                };
+                if let Some(m) = m {
+                    out.push(m);
+                }
+            }
+        }
+    }
+}
+
+/// SDF narrow phase: ball-march the other shape's centre point
+/// against the SDF surface. v1 supports Sphere ↔ SDF (closest-point
+/// projection); other shapes get their support along the normal at
+/// the closest point. Adequate for the demo SDFs (torus, sphere).
+#[allow(clippy::too_many_arguments)]
+fn sdf_pair(
+    model: &Model,
+    sdf_id: u32,
+    sdf_xf: &Transform,
+    other_geom: ShapeGeometry,
+    other_xf: &Transform,
+    pair: ShapePair,
+    flip_output: bool,
+    out: &mut Vec<ContactManifold>,
+) {
+    let sdf = match model.sdfs.get(sdf_id as usize) {
+        Some(s) => *s,
+        None => return,
+    };
+    // Project the other shape's centre into the SDF's local frame.
+    let other_pos_local = sdf_xf.inverse_transform_point(other_xf.position);
+    let signed = sdf.signed_distance(other_pos_local);
+    // Other shape's "radius" along the SDF normal direction (used
+    // for sphere/box/etc.). Use the tightest analytic bound we have:
+    // sphere radius for spheres, max half-extent for boxes, otherwise
+    // an AABB-derived fallback.
+    let r_other = match other_geom {
+        ShapeGeometry::Sphere { radius } => radius,
+        ShapeGeometry::Box { half_extents } => {
+            half_extents.x.max(half_extents.y).max(half_extents.z)
+        }
+        ShapeGeometry::Capsule { half_height, radius } => half_height + radius,
+        ShapeGeometry::Cylinder { half_height, radius } => half_height.max(radius),
+        ShapeGeometry::Cone { half_height, radius } => half_height.max(radius),
+        _ => 0.0,
+    };
+    if signed >= r_other {
+        return;
+    }
+    let depth = r_other - signed;
+    let n_local = sdf.normal(other_pos_local);
+    let n_world = sdf_xf.rotation * n_local;
+    // Surface point in SDF-local frame: offset from `other_pos_local`
+    // by `signed` along the normal.
+    let surface_local = other_pos_local - n_local * signed;
+    let surface_world = sdf_xf.transform_point(surface_local);
+    let normal = if flip_output { n_world } else { -n_world };
+    let m = ContactManifold {
+        a_shape: pair.a,
+        b_shape: pair.b,
+        point: surface_world,
+        normal,
+        depth,
+        friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
+        restitution: 0.0,
+    };
+    out.push(if flip_output { flip_manifold(m) } else { m });
 }
 
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
