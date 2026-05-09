@@ -2190,25 +2190,41 @@ Out of scope for v1 (deferred to a follow-up):
 
 ### Stage 21 — Mesh utilities — **P2**
 
-**Status: NOT STARTED** — molla has `TriMesh` + per-mesh BVH; no
-authoring or processing tools. Per `GAP.md` §4, Newton ships hull
-generation, decimation, mesh→SDF baking, and marching cubes.
+**Status: SHIPPED** — every deliverable in this stage now lives under
+`crates/molla/src/geometry/` and is exercised by
+`crates/molla/tests/mesh_utils.rs`. The viewer carries a
+`Scene::MeshTools` (hotkey **M**) that bakes a noise-displaced
+icosphere through the full pipeline (decimate → bake → marching
+cubes → hull) and renders the four artefacts side-by-side.
 
 Deliverables:
-- ❌ **Convex hull builder** (QuickHull or chull3d port) — let users
-  pass an arbitrary mesh and get a hull suitable for the existing
-  `ConvexHull` shape. ~300 LOC, unblocks importing URDF mesh-collision
-  geometry without manual hull authoring.
-- ❌ **Mesh decimation** (quadric error metric) — produce LOD chains
-  for collision vs render meshes.
-- ❌ **Mesh → SDF baking** — voxelise a mesh and produce a 3D texture
-  / sparse grid suitable for SDF-based contact. Required for
-  hydroelastic (Stage 22) and for bigger SDF demos.
-- ❌ **Marching cubes** — SDF / volume → mesh extraction (mostly for
-  visualisation).
-- ❌ Public general-purpose **`SpatialHashGrid`** — extract the one
-  embedded in cloth particle self-collision (Stage 12) into a reusable
-  user-facing structure for proximity queries.
+- ✅ **Convex hull builder** (QuickHull) in `geometry/hull.rs`. Public
+  API: `convex_hull(&[Vec3]) -> Vec<Vec3>` returning the hull-vertex
+  set suitable for [`ModelBuilder::add_hull`]. Coplanar / colinear
+  inputs fall back to a 2D hull on the dominant plane.
+- ✅ **Mesh decimation** (Garland-Heckbert QEM) in
+  `geometry/decimate.rs`. Public API:
+  `decimate(&TriMesh, target_tri_count) -> TriMesh`. Topology guards
+  reject collapses that would flip a face normal or create a
+  non-manifold edge.
+- ✅ **Mesh → SDF baking** in `geometry/sdf_bake.rs`. Introduces a
+  new `SdfGrid` type (separate from the analytic `SdfShape` enum)
+  and `bake_mesh_to_sdf(&TriMesh, resolution, padding) -> SdfGrid`.
+  Sign comes from parity counting along an irrationally-nudged +X
+  ray to avoid edge-grazing double-counts on closed manifold meshes.
+- ✅ **Marching cubes** in `geometry/marching_cubes.rs`. Standard
+  256-case Lorensen tables. Public API:
+  `marching_cubes(&SdfGrid, iso) -> TriMesh`. Round-trips
+  bake → MC on a sphere recover the surface within ~2 voxels (test
+  `sdf_bake_then_marching_cubes_recovers_sphere_surface`).
+- ✅ Public general-purpose **`SpatialHashGrid`** in
+  `geometry/spatial_hash.rs`. CPU-side, hash-mapped grid with
+  `insert(id, point)`, `insert_aabb(id, min, max)`,
+  `query_aabb(min, max)`, and `query_neighbours(point)` — algorithm
+  matches the WGSL spatial hash embedded in
+  `shaders/xpbd_particles.wgsl` (cloth self-collision); the GPU
+  kernel keeps its inline implementation for now since CPU/GPU don't
+  share code, but the two agree on the cell-coord convention.
 
 ### Stage 22 — MuJoCo wrapper + hydroelastic contact — **P2**
 
