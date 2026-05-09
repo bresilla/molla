@@ -4541,6 +4541,110 @@ adaptive refinement, sparse MC, and MPM consumer.
 **Dependencies:** Stage 24e.1 (mutable insert + freelist counter
 slot live in the same `SparseGridStorage` struct).
 
+### Stage 27 — Iterative linear solvers (CG / BiCGSTAB / PCG) — **SHIPPED v1**
+
+**Status: SHIPPED v1.** Matrix-free CPU iterative Krylov solvers for
+the cases the existing direct solvers in `crates/molla/src/math/dense_solve.rs`
+can't reach (large systems, only-have-an-MV-product systems). Unblocks
+**Stage 24d.4 (full implicit MPM CG)** — that stage's spec calls for
+a matrix-free CG sweep against the implicit grid system, which can
+now be built directly on top of `cg_solve`. Also unblocks any future
+Style3D / projective-dynamics consumer (PCG with custom precond),
+Kamino-style PADMM (BiCGSTAB inner solve), or FEM-style assembled
+solver (PCG with diagonal-mass precond).
+
+**Deliverables (v1):**
+- ✅ **`cg_solve(op, b, x0, tol, max_iters) -> CgResult`** — Conjugate
+  Gradient for SPD systems. `op` is a closure `Fn(&[f64]) -> Vec<f64>`
+  returning `A · x`; the matrix is never materialised. Lives at
+  `crates/molla/src/math/iterative.rs` alongside the other two solvers.
+- ✅ **`bicgstab_solve(op, b, x0, tol, max_iters) -> CgResult`** —
+  Biconjugate Gradient Stabilised for general non-symmetric systems.
+  Same matrix-free interface. Includes restart heuristics on `|ρ|`
+  and `|ω|` collapse (textbook Saad §7.4 stability guards).
+- ✅ **`pcg_solve(op, precond, b, x0, tol, max_iters) -> CgResult`** —
+  Preconditioned CG; `precond` is also a closure returning
+  `M⁻¹ · r` as a fresh vector.
+- ✅ **`JacobiPreconditioner::new(diag)`** + `apply(r) -> Vec<f64>`
+  helper — diagonal-only (cheapest possible) preconditioner; SPD if
+  the input diagonal is positive, preserving PCG's symmetry guarantee.
+- ✅ **`CgResult { x, iters, residual }`** + `converged(tol)` helper
+  on the result struct.
+
+**Measured DoD (Stage 27):**
+- ✅ **CG on 100×100 SPD Laplacian** converges to **residual 3.15e-16
+  in 100 iters** (target: 1e-8 residual within 200 iters). Plain CG
+  hits machine precision well inside the iteration cap on this
+  well-conditioned tridiagonal.
+- ✅ **BiCGSTAB on 100×100 non-symmetric tridiag** `[-2, 5, -1]`
+  converges to **residual 1.22e-7 in 9 iters** (target: 1e-6
+  residual within 300 iters). Diagonally-dominant non-symmetric
+  systems converge fast without any restart firing.
+- ✅ **PCG-Jacobi vs plain CG on ill-conditioned (κ ≈ 1e4) SPD**:
+  PCG **4 iters** vs plain CG **282 iters** to reach 1e-6 residual
+  — Jacobi catches the geometric-eigenvalue distribution exactly,
+  collapsing the system to ~1 iter per coupling-residual term.
+- ✅ **Edge cases:** zero RHS produces zero solution (0 iters,
+  residual 0.0) for all three solvers; identity matrix returns RHS
+  unchanged within machine precision (1 iter for CG / PCG, 1 iter
+  for BiCGSTAB after the half-step accept-and-exit branch).
+
+**Caveats:**
+- **CPU only.** wgpu has no native sparse BLAS, and matrix-free
+  solvers want a callable per matvec — that's a per-consumer WGSL
+  kernel, not a generic primitive. GPU port deferred to Stage 27.1
+  once an actual implicit-MPM / FEM consumer ships and exposes its
+  matvec kernel.
+- **BiCGSTAB stagnation guard.** The textbook BiCGSTAB recurrence
+  can stall when `|ρ|` or `|ω|` collapses near zero (a known
+  algorithmic weakness, not a bug). We restart in two cases: (a)
+  `|rho_new| < 1e-30` after the dot product, or (b) `|omega| <
+  1e-30` after the line search. The restart re-seeds the shadow
+  residual `r̂ ← r` and resets `ρ = α = ω = 1`, `p = v = 0`. The
+  textbook safe-exit on `‖t‖² → 0` (preconditioned `s` lies in the
+  kernel of `A`) is also handled — accept the half-step and return.
+  Even with these guards, BiCGSTAB stays less robust than GMRES on
+  pathological non-symmetric systems; for those, `crate::math::sparse::gmres`
+  (already shipped at Stage 19+) remains the recommended fallback.
+- **No symmetry check in `cg_solve` / `pcg_solve`.** Passing a
+  non-symmetric `op` to CG/PCG silently produces undefined behaviour
+  (the recurrence assumes self-adjoint `A`); checking is the caller's
+  responsibility. This matches Newton/Eigen convention.
+- **`JacobiPreconditioner` zero-diagonal handling.** Zero entries map
+  to a *pass-through* (`z[i] = r[i]`) rather than `1`, since `1`
+  would scale through any non-zero RHS in a null-space row. Tested
+  in `tests::jacobi_preconditioner_zero_diag_passes_through`.
+- **No restart cap on BiCGSTAB.** A pathological system could in
+  principle restart every iteration, burning matvecs without
+  progress. We rely on `max_iters` as the ultimate budget; if a
+  consumer needs a tighter restart cap, it can wrap the solver and
+  count restarts externally via the residual trajectory. Not a v1
+  concern — every test system converges with at most 1 restart.
+
+**Tests** (`crates/molla/tests/iterative.rs`, 9 CPU-only, no `#[ignore]`):
+- `cg_converges_on_100x100_laplacian` — CG on 1D Laplacian, 1e-8 tol.
+- `bicgstab_converges_on_100x100_nonsymmetric` — BiCGSTAB on
+  diagonally-dominant tridiag, 1e-6 tol.
+- `pcg_jacobi_beats_cg_on_ill_conditioned_spd` — PCG-Jacobi
+  iteration count strictly less than plain CG on κ=1e4 SPD.
+- `cg_zero_rhs_zero_solution` / `bicgstab_zero_rhs_zero_solution` /
+  `pcg_zero_rhs_zero_solution`.
+- `cg_identity_returns_rhs_unchanged` /
+  `bicgstab_identity_returns_rhs_unchanged` /
+  `pcg_identity_returns_rhs_unchanged`.
+
+Plus 8 inline unit tests in `crates/molla/src/math/iterative.rs`
+exercising the `JacobiPreconditioner::new` zero-diagonal handling
+and the small-Laplacian edge cases.
+
+**Dependencies:** None — pure `f64` host code, slots in alongside
+`dense_solve.rs` and `sparse.rs` under `crates/molla/src/math/`. The
+existing `crates/molla/src/math/sparse.rs` already ships
+trait-driven (`LinearOperator`) versions of CG / BiCGSTAB / GMRES;
+this stage adds the closure-driven public API expected by ad-hoc
+matrix-free consumers and ships the standalone `JacobiPreconditioner`
+helper.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
@@ -4612,6 +4716,7 @@ rationale, who decided.
 | 2026-05-09 | Wave-4 sub-stage roll-up shipped: Stages 20.3, 23.1.2, 23.1.3, 24d.1, 24d.2, 24e.1 — six parallel agent worktrees, merged sequentially. Per-stage entries above; this is the batch summary. **20.3** added multi-material tets + von Mises plasticity (multiplicative split, SVD-based return mapping) + tet-vs-rigid SDF collision. **23.1.2** brought up analytic ∂h/∂qd + GPU multi-articulation closed-form Jacobian kernel + CPU rayon batching: bwd/fwd dropped from Stage 23.1.1's 9-13× to **5.9-7.6×** at single-articulation (still over the < 5× DoD — pure-analytic ∂h/∂q deferred to Stage 23.1.4); 3.36× parallel-batch speedup. **23.1.3** added Distance + D6 joint adjoints with Moreau-envelope smoothing for the kink + branch-aware projection for D6 angular limits; 6 gradient-FD tests pass at 1e-3 to machine-eps. **24d.1** shipped semi-implicit MPM (Jacobi sweeps) + Stomakhin snow rheology + impulse-based two-way rigid coupling — implicit CG + calibrated angle of repose deferred to Stage 24d.3 (semi-implicit Jacobi was the brief-authorised fallback). **24d.2** persistent-buffer MPM dispatcher: 10k particles + 32³ grid jumped from **20.4 Hz → 74.9 Hz** (6.9× speedup, hits the 30 Hz DoD); 50k case still bottlenecked on grid-side atomic-CAS contention (Stage 24d.3). **24e.1** shipped GPU mutable insert (atomic counter-pool allocation, single-CAS-install for root) + Murmur3-based GPU root hashing + templated value types (f32, vec3, f16-via-u32-pack); 22-37 kInsert/s, hash collision rate 1.29 avg probes at load 0.49. **194 unit tests pass clean. Total scenes: 24** (no new scenes; existing scenes extended with new toggles/sliders/pickers). New deferred stages added to PLAN.md: **20.4** (tet-vs-tet BVH, kinematic hardening, mesh authoring), **23.1.4** (pure-analytic ∂h/∂q to hit < 5× DoD), **24d.3** (full implicit CG + calibrated AoR + atomic-contention reduction at 50k+), **24e.2** (GPU delete + adaptive refinement + sparse MC + MPM consumer refactor). The pattern of "ship v1 with documented further deferrals" is now mature across the whole roadmap. |
 | 2026-05-09 | Stage 20.4 v1 shipped (VBD tet-vs-tet collision + kinematic hardening + GPU SDF rigid-shape backing). New `crates/molla/src/geometry/tet_bvh.rs` carrying `TetAabb` (16-byte-aligned, GPU-upload-ready), `recompute_tet_aabbs`, `tet_meshes_aabb_overlap`, `tet_closest_face` (canonical "max signed distance to outward face planes" SDF for a convex tet). New `MaterialNeoHookean::kinematic_hardening: Real` field + `::plastic_kinematic(...)` / `::plastic(...)` builders; new `Model.tet_kinematic_hardening` Buffer + `State.tet_back_stress` Buffer<Mat3> + WGSL bind-group entries 14 / 15 on group 5. New `VbdSdfBacking { Dense(Arc<SdfGrid>, Transform), Sparse(Arc<SparseSdf>, Transform) }` enum + `VbdSolver::with_sdf_grid(...)` / `with_sparse_sdf(...)` builders. Per the spec's documented fallback (GPU per-vertex traversal too risky in the time budget), the GPU path runs CPU host-side post-step projection: `particle_q.download` → `project_tet_tet_contacts` (8-sweep Jacobi with deepest-penetration tie-break) + `project_sdf_backings` (trilinear-sample + central-difference gradient) → `particle_q.upload`; ~10 µs/substep round-trip on the 200-particle demo workload, well under the test budget. Kinematic hardening evolves α via the closed-form Prager rule in the trial-strain principal frame (`α_local = Uᵀ·α·U`, then `α_p_new = α_p + (2/3)·c·Δγ·n̂`, then rotate back); the shifted-deviator yield function `f = ‖2μ·dev - α‖ - √(2/3)·σ_y` denominator gains a (2/3)·c term; `c == 0` short-circuits to Stage 20.3 isotropic-only path exactly. **3 new GPU + 0 new CPU tests** in `vbd_tets_v4_gpu.rs`: `two_jelly_cubes_dont_penetrate` (max pen 0 mm over 400 substeps, 1 cm budget), `kinematic_hardening_alpha_accumulates` (α-trajectory length grows monotonically through stretch / release / reverse-compress: 480 → 943 → 1360 in test units; ε_p hits 0.33), `tet_drops_onto_baked_sdf_torus` (max pen 0 mm into a `bake_mesh_to_sdf` sphere over 600 substeps, 5 mm budget). 200 lib tests + 9 GPU integration tests pass clean. Viewer's `Scene::Jelly` (label unchanged at "Stage 20.3" — Stage 20.5 will rebrand once second-cube/SDF rebuilds wire through `apply_scene_switch`) gained: "Second jelly cube" toggle (informational; Stage 20.5 wires the rebuild), "Kinematic hardening" toggle + `c` slider (in-place re-stamps `tet_kinematic_hardening` + re-uploads), `Max ‖α‖` readout (Frobenius-norm reduction over the per-tet back-stress array, downloaded only when the toggle is on), "Rigid SDF backing" combo (`None` / `BakedSphere` / `BakedTorus`; informational). **Deferred to Stage 20.5:** GPU per-vertex `tet_tet_contact` + `tet_sdf_contact` kernels (the `TetAabb` layout + closest-face SDF are GPU-ready; the WGSL pipeline is the remaining work — saves the per-substep `particle_q` round-trip), volumetric mesh authoring via `tetgen-rs` (skipped per spec; nixVulkan libstdc++/libclang setup is the same shape as the libmujoco issue from Stage 22), bilateral tet-vs-tet contact (current v1 is unilateral per Jacobi sweep), self-intersection within a single mesh, cyclic-load-correct kinematic hardening (current v1 projects α into the trial-principal frame each substep — under release-after-stretch the frame rotates 90° and α flips sign in the projection; the test's α-trajectory-length metric papers over this; full frame-correct evolution would track α as a rotating tensor). **Caveats:** (a) host-side round-trip is the central perf cost; ≥ 2 tet meshes or any registered SDF backing pays one full `particle_q` download per substep. (b) deepest-penetration tie-break is essential — first-found projection flip-flops vertices between adjacent tets sharing a face. (c) SDF gradient at narrow-band edges: `SdfGrid` returns +∞ outside its sample AABB; bake with enough padding. Total scenes: 24 (no new scenes; Jelly extended). |
 | 2026-05-09 | Wave-5 deepest-deferral roll-up shipped: Stages 20.4, 23.1.4, 24d.3, 24e.2 — four parallel agent worktrees; three of them stalled on initial-exploration watchdog and were respawned with single-deliverable focused briefs (the multi-deliverable original briefs were too large for the agents' initial-context budget — useful pattern data for future spawns). Per-stage entries above; this is the batch summary. **20.4** added tet-vs-tet collision (CPU oracle + host-side post-step Jacobi projection on GPU path; 0 mm penetration over 400 substeps) + kinematic hardening (Prager rule, back-stress trajectory grows monotonically through cyclic load) + GPU SDF rigid-shape backing (`VbdSdfBacking::Dense` / `Sparse` enum, host-side trilinear sampling). GPU per-vertex tet collision + tet-SDF kernels deferred to Stage 20.5. **23.1.4** shipped pure-analytic ∂h/∂q via per-column forward-mode tangent sweep through RNEA (Carpentier-Mansard algorithm 6 with constant-twist tangent generators); **bwd/fwd dropped from Stage 23.1.2's 5.9-7.6× to 2.72× release / 5.35× debug — the < 5× DoD is met at release**. GPU port + multi-DOF analytic adjoints deferred to Stage 23.1.5. **24d.3** shipped MPM workgroup-local two-pass `p2g_two_pass` kernel: **50k particles + 64³ grid jumped from 7.76 Hz → 46.70 Hz (6.02× speedup; the headline ≥ 30 Hz target met)**. Direct spatial slot mapping `(ix & 3) | ((iy & 3) << 2) | ((iz & 3) << 4)` won over a Knuth-multiplier hash by 5× (clustered MPM particles share slots cleanly). Implicit CG + calibrated AoR + mud rheology deferred to Stage 24d.4. **24e.2** shipped GPU sparse-grid delete + leaf reclamation (atomic `mark_inactive_voxel` + `reclaim_empty_leaves` + freelist pool reuse); 0 leaked leaves in 10k stress test; insert path picks freelist over fresh allocation (proven by `freelist_drop=100, pool_growth=0`). Adaptive refinement + sparse marching cubes + MPM consumer refactor + internal-node cascade reclamation deferred to Stage 24e.3. **200 unit tests pass clean. Total scenes: 24** (no new scenes; existing scenes extended). New deferred stages added to PLAN.md: **20.5** (GPU per-vertex tet collision, mesh authoring, bilateral contact, cyclic-load-correct hardening), **23.1.5** (GPU AnalyticFull port + multi-DOF analytic adjoints), **24d.4** (full implicit CG + calibrated AoR + mud + adaptive timestepping), **24e.3** (adaptive refinement + sparse MC + MPM consumer + internal-node reclamation). **The "ship v1, document deferrals" recursion has now bottomed out** — every remaining sub-stage is a "wait for a concrete user / workload" track per PLAN's stated discipline. Three layers deep (parent → .1 → .X → .Y) and every stage has working code with tests + every gap has a numbered owner. |
+| 2026-05-09 | Stage 27 v1 shipped (CPU iterative linear solvers — CG / BiCGSTAB / PCG). New `crates/molla/src/math/iterative.rs` exposes `cg_solve`, `bicgstab_solve`, `pcg_solve` with a closure-driven matrix-free API (`Fn(&[f64]) -> Vec<f64>`) plus a `JacobiPreconditioner::new(diag)` helper and a `CgResult { x, iters, residual }` struct. Sits alongside the existing trait-driven `LinearOperator` versions in `crates/molla/src/math/sparse.rs`; same algorithms, cleaner public surface for ad-hoc consumers (implicit MPM at 24d.4, future Style3D / FEM / PADMM). **Measured DoD:** CG on 100×100 SPD Laplacian hits **3.15e-16 in 100 iters** (target 1e-8 in 200); BiCGSTAB on 100×100 non-symmetric tridiag converges in **9 iters at 1.22e-7** (target 1e-6 in 300); PCG-Jacobi vs plain CG on κ≈1e4 SPD: **4 iters vs 282** (~70× speedup) — Jacobi exactly matches the geometric eigenvalue spread. **BiCGSTAB stagnation guard** ships textbook restart heuristics (Saad §7.4): `|ρ|<1e-30` or `|ω|<1e-30` re-seeds the shadow residual and resets the recurrence; `‖t‖²→0` accepts the half-step and exits. No restart cap (max_iters is the hard budget); GMRES at `crate::math::sparse::gmres` remains the fallback for pathological non-symmetric systems. CPU only — GPU port is Stage 27.1, deferred until a concrete consumer (24d.4 implicit MPM) materialises and exposes its WGSL matvec. **Tests:** 9 integration tests in `crates/molla/tests/iterative.rs` (all CPU, none `#[ignore]`) covering the three DoD cases + zero-RHS + identity edge cases for each solver; 8 inline unit tests for the preconditioner and small-Laplacian. 209 lib tests still pass clean (was 200 + 8 new inline + 1 from prior shipping = 209). **Unblocks Stage 24d.4** (full implicit MPM CG sweep). |
 
 ---
 
