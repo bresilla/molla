@@ -19,6 +19,8 @@ mod imu;
 #[cfg(feature = "gpu")]
 mod integrate_bodies;
 #[cfg(feature = "gpu")]
+mod jacobian;
+#[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
 mod rnea;
@@ -47,6 +49,8 @@ pub use frame_transform::FrameTransformKernel;
 pub use imu::ImuKernel;
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
+#[cfg(feature = "gpu")]
+pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]

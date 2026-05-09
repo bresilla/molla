@@ -10,10 +10,10 @@
 
 use molla::compute::{Backend, Engine};
 use molla::core::BodyId;
-use molla::kernels::{inverse_dynamics_gpu, MassMatrixKernel};
+use molla::kernels::{inverse_dynamics_gpu, jacobian_gpu, MassMatrixKernel};
 use molla::math::{Mat3, Real, SpatialInertia, Transform, Vec3 as V3};
 use molla::prelude::*;
-use molla::solvers::{inverse_dynamics, mass_matrix};
+use molla::solvers::{inverse_dynamics, jacobian, mass_matrix};
 
 fn try_engine() -> Option<Engine> {
     match Engine::new(Backend::AutoGpu) {
@@ -112,6 +112,56 @@ fn gpu_crba_pendulum_matches_cpu() {
     for (i, (c, g)) in m_cpu.iter().zip(m_gpu.iter()).enumerate() {
         let diff = (*c as f32 - g).abs();
         assert!(diff < 1e-4, "M[{i}] CPU={c} GPU={g} |Δ|={diff}");
+    }
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn gpu_jacobian_finite_difference_matches_analytical() {
+    // 1-link revolute pendulum, axis +Z, child anchor at -Y by L. Tip at
+    // local (0, L, 0) sits at world (0, 2L, 0). Jacobian linear column:
+    // ω×r = (0,0,1)×(0,2L,0) = (-2L, 0, 0).
+    let Some(engine) = try_engine() else { return };
+    let mass = 1.0_f64;
+    let l = 0.5_f64;
+    let mut b = ModelBuilder::new();
+    let link = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+        mass,
+        com: V3::ZERO,
+        inertia: Mat3::from_diagonal(V3::splat(0.1)),
+    }));
+    b.add_joint_revolute(
+        BodyId::NONE,
+        link,
+        Transform::IDENTITY,
+        Transform::from_translation(V3::new(0.0, -l, 0.0)),
+        V3::Z,
+    )
+    .unwrap();
+    let mut model = b.build().unwrap();
+    let mut state = model.state().unwrap();
+    molla::sim::eval_fk(&model, &mut state).unwrap();
+
+    let tip_local = V3::new(0.0, l, 0.0);
+    let j_cpu = jacobian(&model, &state, 0, link.index(), tip_local).unwrap();
+
+    upload_state(&mut model, &mut state, &engine);
+    let mut j_gpu = vec![0.0_f64; 6];
+    jacobian_gpu(&engine, &model, &state, 0, link.index(), tip_local, &mut j_gpu).unwrap();
+
+    eprintln!("Jacobian CPU: {j_cpu:?}");
+    eprintln!("Jacobian GPU: {j_gpu:?}");
+    let dof = 1;
+    let jx = j_gpu[0 * dof + 0];
+    let jy = j_gpu[1 * dof + 0];
+    let jz = j_gpu[2 * dof + 0];
+    eprintln!("GPU linear column: ({jx}, {jy}, {jz}); expected (~{:.3}, 0, 0)", -2.0 * l);
+    assert!((jx - (-2.0 * l)).abs() < 1e-4);
+    assert!(jy.abs() < 1e-4);
+    assert!(jz.abs() < 1e-4);
+    for (i, (c, g)) in j_cpu.iter().zip(j_gpu.iter()).enumerate() {
+        let diff = (c - g).abs();
+        assert!(diff < 1e-4, "J[{i}] cpu={c} gpu={g} |Δ|={diff}");
     }
 }
 
