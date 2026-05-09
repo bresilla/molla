@@ -345,6 +345,7 @@ struct SimStats {
     smoothed_collide_us: f64,
     smoothed_download_us: f64,
     last_contacts: u32,
+    arm_logged: bool,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -597,6 +598,9 @@ struct ArmExampleState {
     /// Per-joint target position [rad]. Driven by the right-rail
     /// sliders or by the auto-sine generator below.
     targets: [f32; ARM_LINKS],
+    /// Whether we've logged the first successful PD dispatch — saves
+    /// the user from "is this thing even running?" guesswork.
+    logged_init: bool,
     /// Auto-sine drive: when enabled, each joint follows
     /// `amplitude · sin(2π·frequency·t + phase[i])`. Disabled by
     /// default so the user can drag the sliders manually.
@@ -611,11 +615,15 @@ impl Default for ArmExampleState {
     fn default() -> Self {
         Self {
             controller: None,
-            targets: [0.6, -0.4, -0.2],
+            // 6-element initial target — the rest get clobbered by
+            // the auto-sine pass anyway, this is just for the manual
+            // slider mode.
+            targets: [0.0; ARM_LINKS],
             sine_enabled: true,
-            sine_amplitude: 0.7,
+            sine_amplitude: 0.5,
             sine_frequency: 0.3,
             elapsed: 0.0,
+            logged_init: false,
         }
     }
 }
@@ -1130,54 +1138,51 @@ fn build_lidar_model() -> (mp::Model, Vec<BodyVisual>) {
 }
 
 // --- Arm scene -----------------------------------------------------
-const ARM_LINKS: usize = 3;
-/// Length of each arm link (m). Three links of 1.0m make a ~3m arm.
-const ARM_LINK_LEN: f32 = 1.0;
-const ARM_LINK_RADIUS: f32 = 0.08;
-const ARM_BASE_HEIGHT: f32 = 3.0;
-/// PD gains. kp = 80 rad-stiff target tracking; kd = 8 critically
-/// damped for ~1.0kg-m² inertia at the joint axis. max_effort caps
-/// the torque so a step input doesn't crank the arm at infinite
-/// acceleration.
-const ARM_KP: f64 = 80.0;
-const ARM_KD: f64 = 8.0;
-const ARM_MAX_EFFORT: f64 = 200.0;
+const ARM_LINKS: usize = 6;
+/// Length of each arm link (m).
+const ARM_LINK_LEN: f32 = 0.6;
+const ARM_LINK_RADIUS: f32 = 0.06;
+const ARM_BASE_HEIGHT: f32 = 5.0;
+/// Per-link mass [kg]. Mass × kp dictate how snappy the arm looks;
+/// too low + high-kp diverges, too high + low-kp barely moves under
+/// the chained-inertia load at the shoulder. 0.5 kg with kp=120 is
+/// stable at 240 Hz substeps and produces visible swings.
+const ARM_LINK_MASS: f64 = 0.5;
+/// PD gains. `max_effort` caps a step's torque so a far-from-target
+/// joint can't accelerate to 10⁵ rad/s² in a single substep.
+const ARM_KP: f64 = 120.0;
+const ARM_KD: f64 = 12.0;
+const ARM_MAX_EFFORT: f64 = 80.0;
 
-/// 3-link revolute arm anchored at (0, ARM_BASE_HEIGHT, 0). All
-/// joints rotate around +X (so the arm sweeps in the YZ plane,
-/// camera-facing). Each link is a capsule with its long axis along
-/// +Y in the joint-local frame; the joint-X transforms place the
-/// next joint at the tip of the previous link.
+/// 6-link revolute arm anchored at `(0, ARM_BASE_HEIGHT, 0)`. The
+/// shoulder joint rotates around `+Z` and every elbow rotates around
+/// `+X`, which gives the arm two visible degrees of swing — a "wave"
+/// in the XY plane (shoulder) plus folding in YZ (elbows). Default
+/// joint orientation has each link extending along the world
+/// `-Y` direction, so the rest pose is a hanging arm; gravity adds
+/// to the PD torque to make swings dramatic.
 fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
-    b.set_angular_damping(0.05);
+    b.set_angular_damping(0.1);
 
     let mut visuals = Vec::with_capacity(ARM_LINKS);
     let half_h = (ARM_LINK_LEN as f64) * 0.5;
     let radius = ARM_LINK_RADIUS as f64;
 
-    let inertia = capsule_inertia(1.0, half_h, radius);
+    let inertia = capsule_inertia(ARM_LINK_MASS, half_h, radius);
 
-    // Begin a single articulation; subsequent revolute joints get
-    // chained via `parent` = previous link.
     b.begin_articulation();
 
-    // Base at the world anchor — Featherstone treats parent = NONE as
-    // a fixed world frame, so the first joint anchors the arm in
-    // space.
     let mut prev_body = mp::BodyId::NONE;
-    // Initial pose for body 0: COM at (0, base_height + half_h, 0) so
-    // the link extends DOWN from the base anchor in the rest pose.
-    // The Featherstone forward kinematics will recompute body_q from
-    // joint_q each step; this is just the baseline.
+    // Initial body_q is just a placeholder — Featherstone's Pass 4 FK
+    // overwrites these on the first step.
     let mut next_pos = MVec3::new(0.0, ARM_BASE_HEIGHT as f64 - half_h, 0.0);
 
     for i in 0..ARM_LINKS {
-        // Body — capsule along +Y in body frame.
         let body = b.add_body(
             mp::BodyParams::new()
                 .with_spatial_inertia(mp::SpatialInertia {
-                    mass: 1.0,
+                    mass: ARM_LINK_MASS,
                     com: MVec3::ZERO,
                     inertia,
                 })
@@ -1190,33 +1195,35 @@ fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
             radius: radius as f32,
         });
 
-        // Joint anchor in PARENT frame.
-        // For the first joint, the parent is the static world; the
-        // anchor is the world-space base position. For subsequent
-        // joints, the anchor is the *tip* of the previous link in
-        // the previous link's body frame (= +Y by half_h*2).
+        // Joint anchor in PARENT frame: world base for the shoulder,
+        // the +Y tip of the previous link for elbows. For the
+        // shoulder we also rotate the joint frame so axis +Z
+        // (camera-facing) gives a rest pose where body 0 hangs along
+        // world -Y. For elbows the parent's frame already has +Y
+        // pointing along the chain so no extra rotation is needed.
         let x_p = if i == 0 {
+            // 180° around X flips the joint-local +Y to world -Y, so
+            // a revolute joint with axis +Z + q=0 leaves the link
+            // hanging straight down from the shoulder.
+            let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
             mp::Transform::new(
                 MVec3::new(0.0, ARM_BASE_HEIGHT as f64, 0.0),
-                MQuat::IDENTITY,
+                flip,
             )
         } else {
-            // Tip of previous link in its body frame: +Y by full
-            // half-length plus radius (capsule cap).
             mp::Transform::from_translation(MVec3::new(0.0, half_h, 0.0))
         };
-        // Joint anchor in CHILD frame: the proximal end of the link
-        // (= -Y by half-length so the link extends from the joint).
         let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
 
-        b.add_joint_revolute(prev_body, body, x_p, x_c, MVec3::X)
+        // Shoulder swings in the world XY plane (axis +Z); the elbows
+        // bend in YZ (axis +X). Mixing axes gives the arm two
+        // independent "directions" of motion, which reads better
+        // than every joint sweeping the same plane.
+        let axis = if i == 0 { MVec3::Z } else { MVec3::X };
+        b.add_joint_revolute(prev_body, body, x_p, x_c, axis)
             .expect("arm joint");
 
         prev_body = body;
-        // Stack the next link below this one in the rest pose. (Real
-        // Featherstone FK will overwrite this — only the initial
-        // body_q matters for the very first frame's collision broad
-        // phase, which the arm scene doesn't exercise.)
         next_pos = next_pos - MVec3::new(0.0, ARM_LINK_LEN as f64, 0.0);
     }
 
@@ -1609,10 +1616,12 @@ fn apply_scene_switch(
     mut imu: ResMut<ImuExampleState>,
     mut contact: ResMut<ContactExampleState>,
     mut arm: ResMut<ArmExampleState>,
+    mut stats: ResMut<SimStats>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
     };
+    stats.arm_logged = false;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -1681,14 +1690,22 @@ fn step_simulation(
     let mut total_collide_us = 0.0_f64;
     let mut total_download_us = 0.0_f64;
     let solve_start = std::time::Instant::now();
+    // Featherstone keeps state on the GPU across substeps and writes
+    // body_q from forward kinematics — re-uploading from host would
+    // clobber that with stale (post-swap, pre-step) data. Only upload
+    // body buffers for XPBD scenes where the mouse-grab system writes
+    // body_qd on the host.
+    let solver_is_xpbd = matches!(solver, SolverBackend::Xpbd(_));
     for _ in 0..SUBSTEPS_PER_FRAME {
         let c0 = std::time::Instant::now();
         pipeline.collide(model, state_a, contacts).expect("collide");
         contacts.upload_to_device(&device, &queue).expect("contacts upload");
         total_collide_us += c0.elapsed().as_secs_f64() * 1_000_000.0;
 
-        let _ = state_a.body_q.upload(&queue);
-        let _ = state_a.body_qd.upload(&queue);
+        if solver_is_xpbd {
+            let _ = state_a.body_q.upload(&queue);
+            let _ = state_a.body_qd.upload(&queue);
+        }
 
         solver
             .step(model, state_a, control, contacts, FIXED_DT, state_b)
@@ -1698,10 +1715,6 @@ fn step_simulation(
         let d0 = std::time::Instant::now();
         let _ = state_a.body_q.download(&device, &queue);
         let _ = state_a.body_qd.download(&device, &queue);
-        // Featherstone scenes also need joint_q / joint_qd on the
-        // host so the PD controller (and right-rail panel) can read
-        // them. XPBD scenes have joint_*_total = 0 so download is a
-        // no-op.
         if model.joint_dof_total > 0 {
             let _ = state_a.joint_q.download(&device, &queue);
             let _ = state_a.joint_qd.download(&device, &queue);
@@ -1716,6 +1729,25 @@ fn step_simulation(
     stats.smoothed_collide_us = 0.9 * stats.smoothed_collide_us + 0.1 * total_collide_us;
     stats.smoothed_download_us = 0.9 * stats.smoothed_download_us + 0.1 * total_download_us;
     stats.last_contacts = contacts.count;
+
+    // One-shot debug dump after the first frame's substeps for the
+    // Arm scene — surfaces whether Featherstone's FK pass is actually
+    // touching `body_q` on the device. If body_q matches the initial
+    // build poses (4.7, 4.1, 3.5, ...), FK never landed; if it shows
+    // FK output (5.3, 5.9, 6.5, ...), the kernel is running and the
+    // visual issue is downstream (Bevy transforms, mesh orientation).
+    if sim.scene == Scene::Arm && !stats.arm_logged {
+        if let Ok(bq) = sim.state_a.body_q.host() {
+            let ys: Vec<f32> = bq.iter().map(|p| p.position.y as f32).collect();
+            if let Ok(q) = sim.state_a.joint_q.host() {
+                let qs: Vec<f32> = q.iter().map(|v| *v as f32).collect();
+                info!("arm: post-frame body.y = {ys:?}  joint_q = {qs:?}");
+            } else {
+                info!("arm: post-frame body.y = {ys:?}");
+            }
+        }
+        stats.arm_logged = true;
+    }
 }
 
 fn sync_transforms(sim: Res<Sim>, mut q: Query<(&MollaBody, &mut Transform)>) {
@@ -2479,7 +2511,7 @@ fn update_arm_example(
 
     if state.controller.is_none() {
         // 1 actuator per joint DOF. Featherstone's joint_dof_total
-        // covers all joint DOFs — for our 3-revolute arm, that's 3.
+        // covers all joint DOFs — for an N-revolute arm, that's N.
         let configs: Vec<ControllerPdConfig> = (0..ARM_LINKS)
             .map(|i| ControllerPdConfig {
                 dof: i as u32,
@@ -2489,7 +2521,13 @@ fn update_arm_example(
             })
             .collect();
         match ControllerPd::new(&sim.engine, &sim.model, &configs) {
-            Ok(c) => state.controller = Some(c),
+            Ok(c) => {
+                info!(
+                    "arm: ControllerPd online — {} actuators, kp={ARM_KP}, kd={ARM_KD}, max_effort={ARM_MAX_EFFORT}",
+                    configs.len(),
+                );
+                state.controller = Some(c);
+            }
             Err(e) => {
                 warn!("arm: controller init failed: {e}");
                 return;
@@ -2563,8 +2601,14 @@ fn update_arm_example(
         ..
     } = *sim;
     if let Some(controller) = state.controller.as_mut() {
-        if let Err(e) = controller.step(engine, state_a, control) {
-            warn!("arm: controller step failed: {e}");
+        match controller.step(engine, state_a, control) {
+            Ok(()) => {
+                if !state.logged_init {
+                    info!("arm: first PD dispatch OK");
+                    state.logged_init = true;
+                }
+            }
+            Err(e) => warn!("arm: controller step failed: {e}"),
         }
     }
 }
@@ -3065,6 +3109,24 @@ fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
         for i in 0..ARM_LINKS {
             if i < q.len() {
                 readout(ui, &format!("  q{i}"), &format!("{:.3} rad", q[i]));
+            }
+        }
+        ui.separator();
+    }
+
+    // Body world poses — FK output. If these stay frozen at the
+    // initial values from `build_arm_model` while joint_q is changing,
+    // Featherstone's FK pass isn't reaching the host (or the kernel's
+    // not writing to body_q at all).
+    if let Ok(bq) = sim.state_a.body_q.host() {
+        ui.label("Body Y positions (FK)");
+        for i in 0..ARM_LINKS {
+            if i < bq.len() {
+                readout(
+                    ui,
+                    &format!("  body{i}.y"),
+                    &format!("{:.3} m", bq[i].position.y),
+                );
             }
         }
         ui.separator();

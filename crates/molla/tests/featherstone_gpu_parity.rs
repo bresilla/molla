@@ -9,6 +9,7 @@
 
 #![cfg(feature = "gpu")]
 
+use molla::actuators::{ControllerPd, ControllerPdConfig};
 use molla::compute::{Backend, Engine};
 use molla::core::BodyId;
 use molla::math::{Mat3, SpatialInertia, Transform, Vec3 as V3};
@@ -535,5 +536,140 @@ fn joint_limits_clamp_on_gpu() {
     assert!(
         max_q <= 1.0 + 1e-3,
         "GPU joint exceeded upper limit: max_q={max_q}"
+    );
+}
+
+/// Six-link revolute arm anchored at the world frame with `+X` joint
+/// axis — the viewer's `Scene::Arm` setup exactly. ControllerPd writes
+/// `joint_force` from a constant non-zero target and Featherstone
+/// integrates the chain. We assert the joint coordinates AND the
+/// downloaded `body_q` poses both move noticeably away from initial
+/// values, which catches the bug class "kernel runs but FK doesn't
+/// reach `body_q.host()`".
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+fn arm_six_link_pd_drives_motion_on_gpu() {
+    let engine = match Engine::new(Backend::AutoGpu) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("skipping: no GPU adapter ({e})");
+            return;
+        }
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    const N: usize = 6;
+    const HALF_H: f64 = 0.3;
+    const RADIUS: f64 = 0.06;
+    const BASE_HEIGHT: f64 = 5.0;
+    const MASS: f64 = 0.5;
+
+    fn capsule_inertia(mass: f64, half_h: f64, r: f64) -> Mat3 {
+        let r2 = r * r;
+        let h2 = (half_h * 2.0).powi(2);
+        let i_xx = mass * (r2 * 0.25 + h2 / 12.0);
+        let i_yy = mass * (r2 * 0.5);
+        Mat3::from_diagonal(V3::new(i_xx, i_yy, i_xx))
+    }
+    let inertia = capsule_inertia(MASS, HALF_H, RADIUS);
+
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.1);
+    b.begin_articulation();
+    let mut prev_body = BodyId::NONE;
+    let mut next_pos = V3::new(0.0, BASE_HEIGHT - HALF_H, 0.0);
+    for i in 0..N {
+        let body = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia { mass: MASS, com: V3::ZERO, inertia })
+                .with_position(next_pos),
+        );
+        let x_p = if i == 0 {
+            // Flip joint-local +Y to world -Y so the rest pose hangs down.
+            let flip = molla::math::Quat::from_axis_angle(V3::X, std::f64::consts::PI);
+            Transform::new(V3::new(0.0, BASE_HEIGHT, 0.0), flip)
+        } else {
+            Transform::from_translation(V3::new(0.0, HALF_H, 0.0))
+        };
+        let x_c = Transform::from_translation(V3::new(0.0, -HALF_H, 0.0));
+        let axis = if i == 0 { V3::Z } else { V3::X };
+        b.add_joint_revolute(prev_body, body, x_p, x_c, axis).unwrap();
+        prev_body = body;
+        next_pos -= V3::new(0.0, HALF_H * 2.0, 0.0);
+    }
+    let mut model = b.build().unwrap();
+    model.upload_to_device(&device, &queue).unwrap();
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let initial_body_q = s_a.body_q.host().unwrap().to_vec();
+    let initial_joint_q = s_a.joint_q.host().unwrap().to_vec();
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+
+    let mut control = model.control();
+    // Constant non-zero target on every joint — drives the arm to bend.
+    let target = 0.5_f64;
+    for v in control.joint_target_pos.host_mut().unwrap() {
+        *v = target;
+    }
+    control.upload_to_device(&device, &queue).unwrap();
+
+    let configs: Vec<ControllerPdConfig> = (0..N)
+        .map(|i| ControllerPdConfig {
+            dof: i as u32,
+            kp: 120.0,
+            kd: 12.0,
+            max_effort: 80.0,
+        })
+        .collect();
+    let mut controller = ControllerPd::new(&engine, &model, &configs).unwrap();
+
+    let contacts = Contacts::with_capacity(0);
+    let mut solver = FeatherstoneSolver::new_gpu(&engine, &model).unwrap();
+    let dt = 1.0_f64 / 60.0 / 4.0; // viewer FIXED_DT / SUBSTEPS_PER_FRAME ≈ 0.0042 s
+
+    // 60 frames × 4 substeps = ~1 s of simulated time.
+    for _ in 0..240 {
+        controller.step(&engine, &s_a, &mut control).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+        let _ = s_a.body_q.download(&device, &queue);
+        let _ = s_a.joint_q.download(&device, &queue);
+    }
+
+    let final_body_q = s_a.body_q.host().unwrap();
+    let final_joint_q = s_a.joint_q.host().unwrap();
+
+    // Joint coords should have moved measurably toward the target.
+    let mut max_dq = 0.0_f64;
+    for (qf, qi) in final_joint_q.iter().zip(initial_joint_q.iter()) {
+        max_dq = max_dq.max((qf - qi).abs());
+    }
+    eprintln!(
+        "arm: joint_q final = {final_joint_q:?}  max |Δq| = {max_dq:.4}"
+    );
+    assert!(
+        max_dq > 0.05,
+        "controller didn't move any joint after 1 s: max |Δq|={max_dq}"
+    );
+
+    // Body world poses should differ from the initial poses too —
+    // catches FK-not-reaching-host bug.
+    let mut max_dp = 0.0_f64;
+    for (i, (pf, pi)) in final_body_q.iter().zip(initial_body_q.iter()).enumerate() {
+        let d = (pf.position - pi.position).length();
+        eprintln!(
+            "  body {i}: init y={:.3} → final y={:.3}  |Δ|={:.4}",
+            pi.position.y, pf.position.y, d
+        );
+        max_dp = max_dp.max(d);
+    }
+    assert!(
+        max_dp > 0.05,
+        "FK never updated body_q: max |Δpos|={max_dp}"
     );
 }
