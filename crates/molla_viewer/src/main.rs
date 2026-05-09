@@ -1637,6 +1637,12 @@ struct MeshToolsExampleState {
     sparse_root_load_factor: f32,
     sparse_root_avg_probes: f32,
     sparse_root_max_probes: u32,
+    /// Set to `true` when the user touches a control whose effect is
+    /// only realised on a scene rebuild (`use_sparse_sdf`). Cleared on
+    /// rebuild. Surfaces a "Rebuild mesh tools" button so the pane
+    /// doesn't lie about needing the user to re-press M (the hotkey
+    /// is a no-op when the scene is already active).
+    rebuild_pending: bool,
 }
 
 /// Stage 24e.1 — value-type dropdown options for the viewer's sparse
@@ -1683,6 +1689,7 @@ impl Default for MeshToolsExampleState {
             sparse_root_load_factor: 0.0,
             sparse_root_avg_probes: 0.0,
             sparse_root_max_probes: 0,
+            rebuild_pending: false,
         }
     }
 }
@@ -8918,7 +8925,7 @@ fn control_pane(
                         diff_arm6_pane(ui, &mut pane_states.diff_arm6)
                     }
                     Scene::MeshTools => {
-                        mesh_tools_pane(ui, &mut pane_states.mesh)
+                        mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
                     }
                     Scene::NeuralPolicy => {
                         neural_policy_pane(ui, &mut pane_states.neural)
@@ -8975,7 +8982,12 @@ fn shapes_pane(ui: &mut egui::Ui, sim: &Sim) {
 ///   1. Original (left)  / Decimated (centre)  side-by-side toggles.
 ///   2. Marching-cubes-from-SDF surface (right) toggle.
 ///   3. Hull overlay toggle on the original.
-fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
+fn mesh_tools_pane(
+    ui: &mut egui::Ui,
+    state: &mut MeshToolsExampleState,
+    pending: &mut PendingSceneSwitch,
+    scene: Scene,
+) {
     ui.label("Source: noise-displaced icosphere (3 subdivs)");
     ui.separator();
     readout(ui, "Original tris", &format!("{}", state.original_tris));
@@ -8997,10 +9009,15 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     // rebuild (press M to re-enter), which the small print below
     // calls out so the user isn't surprised.
     ui.label("Stage 24e: sparse vs dense SDF");
-    ui.checkbox(
-        &mut state.use_sparse_sdf,
-        "Use sparse SDF (re-extract MC) — re-enter scene to apply",
-    );
+    if ui
+        .checkbox(
+            &mut state.use_sparse_sdf,
+            "Use sparse SDF (re-extract MC) — rebuild to apply",
+        )
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
     let dense_kib = state.dense_sdf_bytes as f32 / 1024.0;
     let sparse_kib = state.sparse_sdf_bytes as f32 / 1024.0;
     let ratio = if state.dense_sdf_bytes > 0 {
@@ -9070,6 +9087,19 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
                 state.sparse_root_avg_probes, state.sparse_root_max_probes
             ),
         );
+    }
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply scene-build toggles.",
+        );
+        if ui.button("Rebuild mesh tools").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active.
+            pending.0 = Some(scene);
+            state.rebuild_pending = false;
+        }
     }
     ui.separator();
 
