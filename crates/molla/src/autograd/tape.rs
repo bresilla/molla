@@ -82,6 +82,39 @@ pub enum TapeOp {
     TukeyLoss { r: TapeId, c: Real, out: TapeId },
     /// `out = norm_cauchy(r, c)`.
     CauchyLoss { r: TapeId, c: Real, out: TapeId },
+    /// **Featherstone forward kinematics + body-velocity sweep**
+    /// (Stage 23.1) — pass 1 of the ABA. Inputs are tape ids for the
+    /// joint coordinates `q` and joint velocities `qd` at the start of
+    /// the step. The adjoint is implemented in
+    /// [`super::featherstone_adjoint::FeatherstoneRevoluteChain::reverse`]
+    /// rather than via the per-op dispatch in [`Self::backward`] —
+    /// the entire 3-sweep step is differentiated together (it has to,
+    /// because the inertia + acceleration sweeps depend on intermediate
+    /// quantities from this sweep) and the chunked TapeOp shape exists
+    /// so a future GPU port can swap each sweep for its own kernel
+    /// dispatch without touching the tape format.
+    FeatherstoneFwdKinematics { q: TapeId, qd: TapeId },
+    /// **Featherstone upward articulated-inertia sweep** (Stage 23.1)
+    /// — pass 2 of the ABA. Inputs include the joint torque vector
+    /// `tau` whose gradient is the primary interest of the trajectory-
+    /// optimisation use case.
+    FeatherstoneUpwardInertia {
+        q: TapeId,
+        qd: TapeId,
+        tau: TapeId,
+    },
+    /// **Featherstone downward acceleration sweep** (Stage 23.1) —
+    /// pass 3 of the ABA. Carries the post-step tape ids
+    /// `(q_new, qd_new, ee)` so downstream tape ops can chain off the
+    /// result without round-tripping through the host.
+    FeatherstoneDownwardAccel {
+        q: TapeId,
+        qd: TapeId,
+        tau: TapeId,
+        q_new: TapeId,
+        qd_new: TapeId,
+        ee: TapeId,
+    },
 }
 
 impl TapeOp {
@@ -161,6 +194,14 @@ impl TapeOp {
                 let o: Vec<Real> = rv.iter().map(|x| norm_cauchy(*x, c)).collect();
                 values.insert(out, o);
             }
+            // Featherstone sweeps are evaluated in
+            // `record_featherstone_step` outside this generic forward,
+            // because the three-sweep dependency chain crosses tape ids
+            // (the user pre-allocates the output ids and seeds them
+            // with the post-step values). No-op here.
+            TapeOp::FeatherstoneFwdKinematics { .. }
+            | TapeOp::FeatherstoneUpwardInertia { .. }
+            | TapeOp::FeatherstoneDownwardAccel { .. } => {}
         }
     }
 
@@ -282,6 +323,18 @@ impl TapeOp {
                 }
                 accumulate(grads, r, &gv, value_len(values, r));
             }
+            // Featherstone adjoints are NOT evaluated through the
+            // generic `Tape::backward` — the three sweeps form an
+            // inseparable unit (the inertia + acceleration sweeps need
+            // the kinematic intermediates), so the adjoint runs
+            // externally via
+            // `super::featherstone_adjoint::FeatherstoneRevoluteChain::reverse`.
+            // The op variants are recorded for tape inspection /
+            // determinism checks + so the GPU port can iterate the
+            // tape and dispatch one kernel per sweep.
+            TapeOp::FeatherstoneFwdKinematics { .. }
+            | TapeOp::FeatherstoneUpwardInertia { .. }
+            | TapeOp::FeatherstoneDownwardAccel { .. } => {}
         }
     }
 }
@@ -318,7 +371,13 @@ fn accumulate(
 #[derive(Default)]
 pub struct Tape {
     next_id: usize,
-    ops: Vec<TapeOp>,
+    /// Recorded ops in forward order. Public to the autograd module so
+    /// solver-specific recorders (e.g.
+    /// [`super::featherstone_adjoint::record_featherstone_step`]) can
+    /// push their own variant chunks without round-tripping through the
+    /// generic [`Self::record`] (which assumes a single output id per
+    /// op — Featherstone produces three).
+    pub(crate) ops: Vec<TapeOp>,
     /// Forward values keyed by [`TapeId`]. Inputs land here via
     /// [`Tape::alloc`]; intermediate outputs land here via
     /// [`Tape::record`].

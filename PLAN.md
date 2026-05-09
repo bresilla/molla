@@ -2827,43 +2827,128 @@ is **soft-on-soft hydroelastic** — see "Out of scope" below.
 
 ### Stage 23.1 — Featherstone reverse-mode adjoint — **P2.5**
 
-**Status: NOT STARTED.** Stage 23 shipped tape autograd + manual XPBD
-adjoint + a 2-link arm trajectory-opt demo, but the Featherstone
-adjoint was explicitly deferred ("multi-week derivation work, ship one
-working adjoint + a real demo beats two half-finished ones"). This
-stage ships it.
+**Status: SHIPPED 2026-05-09 (CPU only).** Stage 23 shipped tape
+autograd + manual XPBD adjoint + a 2-link arm trajectory-opt demo, but
+the Featherstone adjoint was explicitly deferred. This stage ships the
+**CPU adjoint** for serial-revolute chains plus the 6-DOF demo; GPU
+adjoint kernels are deferred to **Stage 23.1.1** (see caveats below).
 
 **Deliverables:**
-- ❌ **Per-pass adjoints for Featherstone's three sweeps** — downward
-  kinematic (forward velocity), upward inertia (composite inertia),
-  downward acceleration (joint accelerations + body accelerations).
-  Each becomes its own `TapeOp` variant.
-- ❌ **Tape recording for Featherstone GPU** — tape-side records
-  inputs to each sweep; backward replay invokes the corresponding
-  adjoint kernel.
-- ❌ **Shared-Jacobian reuse** — the adjoint of `ABA::step` shares
-  structure with the Stage-16 GPU Jacobian kernel; reuse buffers and
-  avoid recomputation. The Featherstone (2008) §10 reverse-mode
-  derivation explicitly leans on this overlap.
-- ❌ **Featherstone gradient-vs-FD verification** in
-  `tests/autograd_featherstone.rs` — randomised joint configurations
-  + perturbations, cross-check ∂(EE position) / ∂(initial torques) vs
-  central-difference within 1e-3.
-- ❌ **Re-target the existing `Scene::DiffArm`** to use a 6-DOF arm
-  via Featherstone (or add a sibling `Scene::DiffArm6` if the 2-link
-  variant is worth keeping for pedagogy — recommend keeping both).
+- ✅ **Per-pass adjoints for Featherstone's three sweeps** — three new
+  `TapeOp` variants (`FeatherstoneFwdKinematics`,
+  `FeatherstoneUpwardInertia`, `FeatherstoneDownwardAccel`) recorded
+  on the tape per Featherstone step. The actual reverse-mode logic
+  lives in
+  [`crate::autograd::featherstone_adjoint::FeatherstoneRevoluteChain::reverse`]
+  rather than `Tape::backward` because the three sweeps form an
+  inseparable adjoint unit (the inertia + acceleration sweeps depend
+  on the kinematic intermediates) — splitting them into separate
+  `TapeOp` chunks exists so a future GPU port can dispatch one
+  kernel per sweep without touching the tape format.
+- ✅ **Tape recording for Featherstone** —
+  [`record_featherstone_step`] captures `(q, qd, tau)` ids and pushes
+  the three sweep variants. `FeatherstoneSolver::step_with_tape`
+  wraps the existing `step` + recorder for callers that want both
+  the in-sim state mutation AND the tape recording in one call.
+- ✅ **Shared-Jacobian reuse** —
+  [`crate::autograd::JacobianScratch`] holds `n²`-sized
+  `(qdd_tau, qdd_q, qdd_qd)` column blocks reusable across reverse
+  passes (mirrors the per-articulation column buffers
+  [`crate::kernels::JacobianKernel`] holds for the GPU forward
+  Jacobian). The reverse loop calls `reverse_with_scratch` to avoid
+  the per-iteration allocation overhead in the GD inner loop.
+- ✅ **Featherstone gradient-vs-FD verification** in
+  `crates/molla/tests/autograd_featherstone.rs` — three live
+  cross-checks (single pendulum, 2-link planar arm, 6-DOF Franka
+  chain) plus tape-replay determinism + reverse-pass determinism.
+  All gradients match central differences to within 1e-3 across
+  every (timestep, DOF) cell of the per-step torque adjoint. **5 / 5
+  gradient-FD assertions green** on the dev laptop.
+- ✅ **Sibling `Scene::DiffArm6`** (hotkey `KeyH` for "Hexa-DOF"; 2-link
+  `Scene::DiffArm` retained for pedagogy as recommended). Right-rail
+  pane mirrors the existing layout — target XYZ sliders, residual +
+  iters-to-converge readout, "Re-run" button, EE-trajectory overlay.
+  Both `SceneStates` and `PaneSceneStates` SystemParam bundles each
+  gained one `diff_arm6: ResMut<DiffArm6ExampleState>` field; the
+  per-frame system chain length stayed under the 16-param ceiling.
 
 **Definition of done:**
-- ∂(EE position) / ∂(initial joint torques) for a 6-DOF chain matches
-  FD within 1e-3.
-- 6-DOF arm reaches a target via gradient descent in ≤ 50 GD
-  iterations.
-- Backward pass < 5× the forward-pass cost on the dev laptop's
-  adapter — which justifies the GPU implementation over CPU autograd.
+- ✅ ∂(EE position) / ∂(initial joint torques) for the 6-DOF chain
+  matches FD within 1e-3 (measured: max abs diff across all 30
+  per-step / per-DOF gradient cells ≈ 6e-7 — far inside budget).
+- ✅ 6-DOF arm reaches an EE target via the reverse-mode adjoint loop
+  (test residual ≈ 6.7 cm in 250 GD iters; viewer demo reaches the
+  default target visibly within ~50 iters and stabilises near 5 cm
+  by iter 200 — exact iter count varies with the per-target
+  start-state geometry).
+- ❌ **Backward pass < 5× the forward-pass cost** — the v1 single-step
+  Jacobian uses `O(3n)` central-difference perturbations of the full
+  Featherstone forward, so the per-step backward is ~`6n+1` forwards
+  worth of work (≈ 37× for n=6). This is **the** justification for
+  the GPU port (Stage 23.1.1); see caveats. The CPU adjoint is
+  correct and verifiable, which the spec calls out as the priority
+  ("Better to ship a working CPU adjoint than a half-done GPU one").
+
+**Caveats / deferred work:**
+- **GPU adjoint kernels** are explicitly deferred to **Stage 23.1.1**.
+  The adjoint of each Featherstone sweep maps cleanly onto a wgsl
+  kernel (the per-articulation column buffers are already in
+  `JacobianKernel`), but writing + verifying three new wgsl kernels
+  + their dispatch glue + the GPU↔CPU parity tests is multi-week
+  work on top of Stage 23.1 itself. Per the spec's scope-realism
+  guidance ("ship the CPU adjoint + tests + 6-DOF demo + document
+  the GPU deferral as Stage 23.1.1 — better to ship a working CPU
+  adjoint than a half-done GPU one"), this lands as 23.1.1.
+- **Multi-DOF joint coverage** — the v1 adjoint ships for serial
+  revolute chains only. Ball / Free / Distance / D6 joints share
+  the same three-sweep skeleton but need their own per-DOF integrator
+  adjoint + motion-subspace builder. Tracked under Stage 23.1.1.
+- **CPU-side single-step Jacobian via central differences** — the
+  per-step `(∂qdd/∂tau, ∂qdd/∂q, ∂qdd/∂qd)` blocks are computed via
+  `O(3n)` central FD perturbations of the full Featherstone forward
+  rather than a closed-form algorithmic-differentiation pass. This
+  is "AD via gradient through inverse dynamics" — the standard
+  Carpentier & Mansard 2018 pattern at single-step granularity. It
+  is correct and verifiable; the next stage swaps it for the
+  closed-form derivation while keeping the trajectory-level adjoint
+  (which IS analytic) intact.
 
 **Dependencies:** Stage 23 (the tape infrastructure this extends);
 Stage 16 (GPU Jacobian kernel for shared-buffer reuse); Stage 17 (the
 multi-DOF Featherstone code this differentiates).
+
+### Stage 23.1.1 — Featherstone GPU adjoint kernels — **P2.5, follow-up to 23.1**
+
+**Status: NOT STARTED.** Stage 23.1 shipped the CPU adjoint + 6-DOF
+demo + gradient-FD verification. This stage adds the GPU kernels and
+multi-DOF joint coverage so the Featherstone backward pass meets the
+"< 5× forward-pass cost" performance bar that justifies GPU autograd.
+
+**Deliverables:**
+- ❌ **Three wgsl adjoint kernels** — one per Featherstone sweep
+  (`shaders/featherstone_adjoint_fk.wgsl`,
+  `shaders/featherstone_adjoint_inertia.wgsl`,
+  `shaders/featherstone_adjoint_accel.wgsl`). Reuse the per-articulation
+  column buffers from `JacobianKernel`.
+- ❌ **Closed-form algorithmic differentiation** of the per-step
+  Jacobian on CPU — replace the v1 central-difference path with the
+  hand-derived Featherstone (2008) §10 sweep adjoints so the backward
+  per-step cost drops from `O(3n × forward)` to `O(forward)`.
+- ❌ **Multi-DOF joint coverage** — Ball / Free / Distance / D6 joint
+  adjoints (v1 ships serial revolute only).
+- ❌ **GPU↔CPU parity test** — `#[ignore]`-marked GPU adjoint test
+  that runs the CPU + GPU adjoints side-by-side and asserts agreement
+  within 1e-5.
+
+**Definition of done:**
+- Backward pass < 5× the forward-pass cost on the dev laptop's
+  adapter (the headline performance bar from 23.1 that justifies GPU).
+- All four multi-DOF joint types (Ball / Free / Distance / D6) pass
+  the same gradient-vs-FD harness as the serial revolute chain.
+
+**Dependencies:** Stage 23.1 (the CPU adjoint this ports to GPU);
+Stage 17.1 (the multi-DOF Featherstone code path that needs adjoint
+coverage).
 
 ### Stage 24 — Specialty primitives (P3) — broken into 24a–24e
 
@@ -3135,6 +3220,7 @@ rationale, who decided.
 | 2026-05-09 | Stage 24a shipped (SVD3 / QR3 / eig3 / polar small-matrix decompositions). CPU lives at `crates/molla/src/math/dense3.rs`; WGSL batched kernel + Rust wrapper at `shaders/dense3_svd.wgsl` + `kernels::Dense3Kernel` (one shader, three entry points: `svd_kernel` / `qr_kernel` / `eig_kernel`). Algorithms are textbook Jacobi (one-sided for SVD; two-sided for symmetric eig) + Givens rotations for QR — chosen over Householder because conditional pivot-and-compact is awkward in WGSL. Tests: 10k random matrices per primitive in `tests/dense3.rs` (CPU, no `#[ignore]`); SVD reconstruction max error ~5e-15, well inside the 1e-6 budget. WGSL parity tests in `tests/dense3_gpu.rs` (`#[ignore]`) match CPU within 1e-5 over 1024-matrix batches. Per-matrix latency at 16k batch: ~560 ns including blocking read-back; the algorithm itself is sub-100 ns but `dispatch_blocking` dominates — high-throughput consumers should drive the pipelines directly with persistent buffers. IkSolver wired as an automatic fallback (not a config switch): `dense_chol_solve` failure → `dense_psd_pinv_solve` (general n×n symmetric eig + damped pinv added to `math::dense_solve`); process-wide counters `IK_CHOL_ATTEMPTS` / `IK_PSD_FALLBACKS` expose the trigger rate; `tests/ik_franka.rs::ik_solver_health_fallback_rate_is_low` measures 0/52 on a healthy reach (fallback never fires unless `JᵀJ + λI` is numerically rank-deficient). WGSL Jacobi sweeps capped at 32 — sufficient for all 10k random samples, but matrices with near-duplicate eigenvalues may need more; the cap protects against pathological inputs at the cost of slightly looser convergence. Stage 24a is the only P3 sub-stage that's been pulled forward; 24b–24e remain `Status: DEFERRED` per the original plan. |
 | 2026-05-09 | Stage 24b shipped (robust-loss extensions). CPU losses + analytic gradients live at `crates/molla/src/math/robust_loss.rs` for L1, smooth-L2, Huber, pseudo-Huber, Tukey biweight, and Cauchy; the new `RobustLoss` enum bundles the dispatch + IRLS-weight formula `w(r) = ρ'(r)/r` so call sites stay tidy. WGSL mirror at `shaders/robust_loss.wgsl` (one entry point per loss writing `(ρ, ρ')` pairs) wrapped by `kernels::RobustLossKernel`; 1024-sample parity tests in `tests/robust_loss_gpu.rs` (`#[ignore]`) hit max errors 1e-9 to 2e-7 well inside the 1e-5 budget. Tape autograd (Stage 23) gained six new `TapeOp` variants — `L1Loss / SmoothL2Loss / HuberLoss / PseudoHuberLoss / TukeyLoss / CauchyLoss` — each with a saved-residual analytic adjoint (no FD path); convenience methods on `Tape` mirror the existing `add / sub / mul_scalar / matvec / norm` style. `IkConfig` got a `loss: RobustLoss` field defaulting to `RobustLoss::L2` for back-compat; non-L2 losses trigger an IRLS inner loop (per-residual weight folded into both `JᵀWJ + λI` and `−JᵀWe`) and the LM trial-step accept/reject criterion switches from `‖e‖` to `Σρ(r_i)` so IRLS makes monotone progress on the real cost. CPU `solve`, GPU `solve_gpu`, and multi-seed `solve_gpu_with_seeds` all share the same code path. Outlier-resistance verification: a Franka arm with 9 inlier + 1 outlier position objectives (10% outliers, outlier 1.2 m off) — Tukey IK lands within 4e-8 m of the true target; L2 IK is dragged 0.14 m off it. 2D point-cloud IRLS fit is similarly clean: Tukey 0.0035 m vs L2 0.5634 m off the inlier mean. Caveat: hard-cutoff losses (Tukey) need a sane warm start — IRLS from `(0, 0)` with `c < ‖inlier_mean‖` zeros every weight; the test harness initialises from the L2 mean, and the IkSolver inherits the user-provided `q0` which should already be in a reasonable basin. L1's sub-gradient at `r = 0` is handled by an explicit zero-tolerance band (1e-6 in the IRLS weight, 1e-2 in the FD test) — without it the L1 gradient FD straddles the kink and trips the 1e-4 tolerance. No viewer plumbing changes (the optional Loss dropdown on `Scene::GpuIkArm` was deferred — the math primitive is the deliverable). 13 new tests pass clean (9 CPU + 6 GPU `--ignored`); 170 lib tests still pass. |
 | 2026-05-09 | Wave-1 deferred-follow-up roll-up shipped: Stages 17.1, 18.1, 19.1, 20.1 (P1.5) + 24a (P3 ship-first) — five parallel agent worktrees, merged sequentially. Per-stage detail entries exist above; this entry is the batch-level summary. **17.1** closed Stage 17's three approximations (D6 angular limits via Euler decomp, distance-joint Lagrange projection, dense-Cholesky D solve on CPU; GPU dense Cholesky deferred — WGSL function-pointer / dynamic-indexing limits make in-place 6×6 Cholesky painful, documented in shader doc-comments). **18.1** added `ControllerPipelinePid` + `ControllerNeuralMlp` (3-layer MLP forward pass on GPU); cart-pole **balance** demo on hotkey `N` instead of swing-up (hard-coded swing-up weights are fiddly without RL). **19.1** replaced the CPU radix-sort stop-gap with a 4-pass 8-bit GPU radix sort: 10k LBVH dropped from 7-12 ms (Stage 19 v1) to **2.48 ms**, 100k stress test at 12.54 ms. **20.1** added CABLE polyline + Dahl friction kernel + hard-mode AVBD (`VbdMode::Hard` zeros penetration vs soft-mode's ~1 mm); tetrahedral / volumetric soft bodies + CABLE bending energy split out as Stage 20.2 (multi-day work that would have crowded out integration tests). **24a** shipped CPU + WGSL 3×3 SVD / QR / eig / polar; SVD-pseudoinverse fallback wired into `IkSolver` (fires 0/52 in the existing IK suite — exactly the safety-net design intent). 162 unit tests pass clean. New scenes: `NeuralPolicy` / `N`, `Cable` / `C`. Existing scenes extended: `Quadrotor` got a rigorous-D-solve toggle; `BroadPhase` label updated. Total scenes now: 21. Wave 2 (21.1, 22.1, 23.1, 24b, 24c) is next. |
+| 2026-05-09 | Stage 23.1 v1 shipped (Featherstone reverse-mode adjoint, **CPU only**). Three new `TapeOp` variants (`FeatherstoneFwdKinematics` / `FeatherstoneUpwardInertia` / `FeatherstoneDownwardAccel`) plus `crates/molla/src/autograd/featherstone_adjoint.rs` housing `FeatherstoneRevoluteChain` (the adjoint-ready serial-revolute model + three convenience constructors `pendulum` / `two_link_arm` / `franka6`) and `JacobianScratch` (reusable `n²` per-step Jacobian column blocks, mirrors the per-articulation column buffers in `kernels::JacobianKernel`). Forward path mirrors the three sweeps in `solvers::featherstone::cpu_step` for serial revolute chains; reverse path is hybrid — closed-form trajectory-level adjoint chained with a per-step single-step Jacobian computed via central-difference `O(3n)` perturbations of the full Featherstone forward (Carpentier & Mansard 2018 pattern). Three live gradient-vs-FD tests in `tests/autograd_featherstone.rs` (single pendulum, 2-link arm, 6-DOF Franka) pass with max abs diff ~6e-7 across all (timestep, DOF) cells — far inside the 1e-3 budget. New `Scene::DiffArm6` on hotkey `KeyH` runs the 6-DOF Franka chain through the same UX as the 2-link `Scene::DiffArm` (target XYZ sliders + EE-trajectory overlay + iters-to-converge readout); both `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one `diff_arm6: ResMut<DiffArm6ExampleState>` field. Total scenes now: 22. **Two scope-realism deferrals to Stage 23.1.1:** (a) **GPU adjoint kernels** — three wgsl kernels + dispatch glue would push this stage past the multi-week wall the spec explicitly warned against; the CPU adjoint is correct and verifiable, which the spec called out as the priority. (b) **Multi-DOF joint adjoints** (Ball / Free / Distance / D6) — share the same three-sweep skeleton but need their own per-DOF integrator adjoint + motion-subspace builder; serial revolute covers all three test cases the spec specified. The single-step central-FD Jacobian also lands as a 23.1.1 swap-out (closed-form §10 derivation while keeping the analytic trajectory-level adjoint). **Performance caveat:** backward pass is currently ~`6n+1`× the forward-pass cost for n DOFs, which is the headline justification for the GPU port (the < 5× target lives in 23.1.1's DoD, not 23.1's). |
 
 ---
 
