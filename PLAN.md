@@ -2550,12 +2550,9 @@ bodies are split out into a follow-up sub-stage.
   block solve then sees the cumulative force `(λ + k_c · pen) · n`,
   driving residual penetration toward zero independent of contact
   stiffness.
-- ❌ **Tetrahedral / volumetric soft bodies** — DEFERRED to Stage 20.2.
-  The per-vertex VBD block solve is ready (it sums Hessian /
-  force contributions over arbitrary energies — springs today, tets
-  tomorrow), but the tet adjacency CSR + Neo-Hookean energy term are
-  multi-day work on their own and would have crowded out the
-  integration tests for the three v1 deliverables. See "Out of scope".
+- ✅ **Tetrahedral / volumetric soft bodies** — SHIPPED in Stage 20.2.
+  See that stage entry for the per-tet Neo-Hookean Hessian + CABLE
+  bending follow-ups.
 
 **Definition of done — v1 (this stage):**
 - ✅ CABLE pull-test demo: 32-particle inextensible rope, one end pinned,
@@ -2619,6 +2616,130 @@ slider, soft↔hard AVBD toggle, "show pinned points" gizmo toggle.
   small in practice (≤ 10 % per substep on the dev laptop).
 
 **Dependencies:** Stage 20 (the VBD solver this extends).
+
+### Stage 20.2 — VBD tetrahedral soft bodies + CABLE bending — **P1.5**
+
+**Status: SHIPPED.** Stage 20.1 deferred two follow-ups for what was
+already a multi-week stage: tetrahedral / volumetric soft bodies and
+CABLE bending energy. Stage 20.2 ships both. The per-vertex VBD block
+solve from Stage 20 was already structured to absorb extra energies;
+the work here is (a) tet adjacency CSR + Neo-Hookean Hessian, (b)
+discrete bending hinge on CABLE polylines, and (c) WGSL kernel
+extensions for both — same greedy-coloured dispatch as Stage 20.
+
+**Deliverables:**
+- ✅ **Tetrahedral adjacency** at model-build time. `Model.tet_*`
+  storage (CSR-encoded, mirrors `cable_*`): `tet_indices`,
+  `tet_dm_inv`, `tet_rest_volume`, `tet_mu`, `tet_lambda`,
+  `tet_mesh_offsets`, plus per-vertex CSR
+  `vertex_adjacent_tets_offsets` / `vertex_adjacent_tets` with
+  `(tet_id, v_order)` 2-u32 records (matches Newton's
+  `_fill_adjacent_tets` layout). Builder helper
+  `add_tet_mesh(tets, youngs_modulus, poisson_ratio, rest_volume) ->
+  Result<TetMeshId>` pre-computes `Dm⁻¹` + rest volume, derives
+  Lamé `(μ, λ)` from `(E, ν)`, and rejects degenerate / inverted
+  rest tets (negative `det(Dm)`).
+- ✅ **Per-tet Neo-Hookean energy + Hessian** in the per-vertex VBD
+  block. Standard Neo-Hookean
+  `Ψ(F) = (μ/2)·(I_C - 3) - μ·log(J) + (λ/2)·log²(J)` with the
+  Smith et al. 2018 stable-NH reparameterisation
+  `μ_NH = μ_Lamé`, `λ_NH = λ_Lamé + μ_Lamé`. The per-vertex 3×3
+  block aggregates `mu·|m|²·I + λ·(cof·m)·(cof·m)ᵀ` weighted by
+  rest volume, where `m` is the per-vertex gradient column from
+  `Dm⁻¹`. The full elastic Hessian's `s · ∂²J/∂F²` term is dropped:
+  its per-vertex 3×3 block is identically zero by Levi-Civita
+  antisymmetry on the column projection (Newton's
+  `evaluate_volumetric_neo_hookean_force_and_hessian` notes this
+  too). A small Tikhonov-style diagonal floor (`1e-8 · rest_vol`)
+  is applied to keep the per-vertex block strictly SPD even when
+  an inverted tet would otherwise contribute a sign-indefinite
+  term — the floor is negligible vs the inertia + spring
+  diagonals so it doesn't change the solution.
+- ✅ **CABLE bending energy** — discrete hinge
+  `E_b = ½·k_b·|κ|²` with `κ = v_prev + v_next - 2·v_mid` (units of
+  metres). Per-role force/Hessian is exact:
+  `f_prev = f_next = -k_b·κ`, `f_mid = +2·k_b·κ`; Hessian diagonal
+  is `k_b · I` for endpoints, `4·k_b · I` for the middle particle.
+  Builder gains `set_cable_bending_stiffness(cable_id, k_b)`; CSR
+  pre-expansion (`vertex_cable_bending_offsets` /
+  `vertex_cable_bending_entries` / `vertex_cable_bending_k`) gives
+  the kernel a single per-vertex CSR walk — no per-cable rescan in
+  the inner loop. The greedy particle colouring also picks up
+  bending triples so non-overlapping triples can solve in parallel.
+- ✅ **WGSL kernels**: extended `shaders/vbd_cloth.wgsl` with a new
+  `tet_neo_hookean_block` helper + per-vertex tet loop in
+  `solve_color`, plus the discrete bending term in the same loop.
+  Bind group 5 carries 10 read-only buffers (7 for tets, 3 for
+  bending). Empty-model dummy fallbacks via the existing
+  `dummy_*` buffer pattern.
+
+**Definition of done — measured in `tests/vbd_tets_gpu.rs`:**
+- ✅ Jelly-cube drop test (`jelly_cube_drops_and_settles`): 4×4×4
+  tet jelly cube drops onto a kinematic plane, deforms elastically
+  over 2 s, mean Y dropped > 10 cm, no NaNs, no tunneling
+  (`min_y > -50 cm`). 2 s of sim at 240 Hz with 10 outer iters per
+  substep.
+- ✅ Rest-state stability (`tet_rest_state_is_stable`): 3×3×3 tet
+  mesh held at its rest configuration with no external forces and
+  zero gravity stays put for 600 substeps; max drift < 1 mm.
+  Validates that the rest configuration is a fixed point of the
+  Neo-Hookean energy (`F = I → P = 0`).
+- ✅ CABLE bending sweep (`cable_bending_stiffness_sweep`): 16-particle
+  pinned cable; high-`k_b` mid-span sag is at least 1 % less than
+  no-bending sag (relative threshold so the test is robust to
+  small solver-tuning drift). Mirrored at the CPU level by
+  `cpu_cable_bending_reduces_sag` so the algorithm's correctness is
+  validated independently of GPU adapter availability.
+- ✅ Sibling CPU tests `cpu_tet_rest_state_is_stable` and
+  `cpu_cable_bending_reduces_sag` pin the algorithms in CI without
+  needing a wgpu adapter.
+
+**Viewer demo:** `Scene::Jelly` (hotkey `Y` for "jellY"). 8×8×8 tet
+jelly cube drops onto a static plane + bounces off a kinematic
+"puller" body. Right-rail pane carries Young's modulus + Poisson
+ratio sliders (re-derive `(μ, λ)` and re-upload to the device every
+frame), inner-iter / contact-stiffness sliders, a "Show tet
+wireframe" toggle (gizmo lines along deduped tet edges), and a
+"Show CABLE comparison" toggle. Hotkey `Y`.
+
+**Out of scope for v1 (deferred to Stage 20.3):**
+- **Multi-material tets** — v1 ships one material per `TetMeshId`.
+  Per-element materials want their own `(E, ν)` slider widget and
+  a "paint" UI; deferred until a real consumer surfaces.
+- **Tet collision detection** — tet-vs-tet, tet-vs-rigid SDF (beyond
+  the existing per-vertex contact path). Soft-on-rigid via vertex
+  contact already works; volumetric self-collision needs a
+  dedicated tet-AABB BVH which is multi-week work on its own.
+- **Plasticity / viscoelasticity** — v1 is purely elastic
+  Neo-Hookean. Adding a multiplicative split `F = F_e · F_p` with
+  yield-surface return mapping is a self-contained extension to
+  the per-tet kernel; punted because no current consumer needs it.
+
+**Caveats / reproducibility notes:**
+- The Neo-Hookean Hessian is *projected* to SPD per-vertex via the
+  Tikhonov diagonal floor described above. This is conservative —
+  for a tet at exact rest the floor doesn't fire (the diagonal is
+  already ~`mu·|m|²·rest_vol`); it only matters when an inverted
+  tet would otherwise produce a sign-indefinite per-vertex block.
+  Without the floor the WGSL `mat3_inverse` would silently return
+  identity (the singular guard) and the iterate would stall; with
+  the floor the block remains SPD and the solver converges.
+- The bending-energy kernel uses the Gauss-Newton Hessian
+  (`k_b · J·Jᵀ` with `J = ∂κ/∂x_role`); the second-derivative
+  `k_b · κ · ∂²κ/∂x²` is dropped. For straight-rope
+  configurations this is exact (κ ≈ 0), and for sharp kinks the
+  G-N is a slight underestimate which damps Newton convergence
+  but doesn't bias the final position.
+- `k_b` units are `N/m` — consistent with the energy density
+  `½·k_b·|κ|²` where `|κ|` is in metres. A typical scene with 5cm
+  segments and ~50g particles wants `k_b ∈ [1e3, 1e4]` N/m for
+  a visible curvature-vs-stretch trade-off; pushing past 1e5 N/m
+  with default damping starts to oscillate (the bending Hessian
+  out-scales the inertia diagonal, which the per-vertex block
+  solve doesn't fully resolve in <20 outer iters).
+
+**Dependencies:** Stage 20 (the VBD solver), Stage 20.1 (CABLE
+storage that the bending energy hooks into).
 
 ### Stage 21.1 — Mesh-utility hardening — **P2.5**
 
@@ -3222,6 +3343,7 @@ rationale, who decided.
 | 2026-05-09 | Wave-1 deferred-follow-up roll-up shipped: Stages 17.1, 18.1, 19.1, 20.1 (P1.5) + 24a (P3 ship-first) — five parallel agent worktrees, merged sequentially. Per-stage detail entries exist above; this entry is the batch-level summary. **17.1** closed Stage 17's three approximations (D6 angular limits via Euler decomp, distance-joint Lagrange projection, dense-Cholesky D solve on CPU; GPU dense Cholesky deferred — WGSL function-pointer / dynamic-indexing limits make in-place 6×6 Cholesky painful, documented in shader doc-comments). **18.1** added `ControllerPipelinePid` + `ControllerNeuralMlp` (3-layer MLP forward pass on GPU); cart-pole **balance** demo on hotkey `N` instead of swing-up (hard-coded swing-up weights are fiddly without RL). **19.1** replaced the CPU radix-sort stop-gap with a 4-pass 8-bit GPU radix sort: 10k LBVH dropped from 7-12 ms (Stage 19 v1) to **2.48 ms**, 100k stress test at 12.54 ms. **20.1** added CABLE polyline + Dahl friction kernel + hard-mode AVBD (`VbdMode::Hard` zeros penetration vs soft-mode's ~1 mm); tetrahedral / volumetric soft bodies + CABLE bending energy split out as Stage 20.2 (multi-day work that would have crowded out integration tests). **24a** shipped CPU + WGSL 3×3 SVD / QR / eig / polar; SVD-pseudoinverse fallback wired into `IkSolver` (fires 0/52 in the existing IK suite — exactly the safety-net design intent). 162 unit tests pass clean. New scenes: `NeuralPolicy` / `N`, `Cable` / `C`. Existing scenes extended: `Quadrotor` got a rigorous-D-solve toggle; `BroadPhase` label updated. Total scenes now: 21. Wave 2 (21.1, 22.1, 23.1, 24b, 24c) is next. |
 | 2026-05-09 | Stage 23.1 v1 shipped (Featherstone reverse-mode adjoint, **CPU only**). Three new `TapeOp` variants (`FeatherstoneFwdKinematics` / `FeatherstoneUpwardInertia` / `FeatherstoneDownwardAccel`) plus `crates/molla/src/autograd/featherstone_adjoint.rs` housing `FeatherstoneRevoluteChain` (the adjoint-ready serial-revolute model + three convenience constructors `pendulum` / `two_link_arm` / `franka6`) and `JacobianScratch` (reusable `n²` per-step Jacobian column blocks, mirrors the per-articulation column buffers in `kernels::JacobianKernel`). Forward path mirrors the three sweeps in `solvers::featherstone::cpu_step` for serial revolute chains; reverse path is hybrid — closed-form trajectory-level adjoint chained with a per-step single-step Jacobian computed via central-difference `O(3n)` perturbations of the full Featherstone forward (Carpentier & Mansard 2018 pattern). Three live gradient-vs-FD tests in `tests/autograd_featherstone.rs` (single pendulum, 2-link arm, 6-DOF Franka) pass with max abs diff ~6e-7 across all (timestep, DOF) cells — far inside the 1e-3 budget. New `Scene::DiffArm6` on hotkey `KeyH` runs the 6-DOF Franka chain through the same UX as the 2-link `Scene::DiffArm` (target XYZ sliders + EE-trajectory overlay + iters-to-converge readout); both `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one `diff_arm6: ResMut<DiffArm6ExampleState>` field. Total scenes now: 22. **Two scope-realism deferrals to Stage 23.1.1:** (a) **GPU adjoint kernels** — three wgsl kernels + dispatch glue would push this stage past the multi-week wall the spec explicitly warned against; the CPU adjoint is correct and verifiable, which the spec called out as the priority. (b) **Multi-DOF joint adjoints** (Ball / Free / Distance / D6) — share the same three-sweep skeleton but need their own per-DOF integrator adjoint + motion-subspace builder; serial revolute covers all three test cases the spec specified. The single-step central-FD Jacobian also lands as a 23.1.1 swap-out (closed-form §10 derivation while keeping the analytic trajectory-level adjoint). **Performance caveat:** backward pass is currently ~`6n+1`× the forward-pass cost for n DOFs, which is the headline justification for the GPU port (the < 5× target lives in 23.1.1's DoD, not 23.1's). |
 | 2026-05-09 | Wave-2 deferred-follow-up roll-up shipped: Stages 21.1, 22.1, 23.1 (P2.5) + 24b, 24c (P3) — five parallel agent worktrees, merged sequentially. Per-stage entries above; this is the batch summary. **21.1** parallelised mesh decimation + SDF baking with rayon (50k-tri decimate from ~10s → 29 ms; 64³ × 10k SDF bake from sub-second → 53 ms), added incremental QEM heap + best-first BVH closest-point pass for the algorithmic wins; `convex_hull` now returns `ConvexHullMesh { vertices, faces }`; `decimate_lod_chain` shipped; viewer hull overlay upgraded from yellow points to real wireframe; 3 dedicated determinism tests guard against rayon non-determinism. **22.1** added hydroelastic contact (soft-on-rigid via SDF pressure-field quadrature, Dahl friction wired through; soft-on-soft deferred — needs 3D volume intersection); MJCF coverage extended (TriMesh / ConvexHull / Heightfield / SDF asset blocks; per-DOF range/damping; FIXED → `<weld/>` translation); `make test-mujoco-gpu` lane shipped (libmujoco still unavailable in nixVulkan dev shell; CI gap documented). **23.1** shipped CPU Featherstone reverse-mode adjoint + 6-DOF Franka trajopt scene `DiffArm6` on `H`; gradient FD agreement 6e-7 (1e-3 budget); GPU adjoint kernels deferred to Stage 23.1.1 explicitly. **24b** added L1 / smooth-L2 / Huber / pseudo-Huber / Tukey / Cauchy losses with CPU + WGSL + 6 new TapeOp variants (auto-differentiable in the Stage-23 tape); IkSolver gained `loss: RobustLoss` config (L2 default for back-compat); IRLS-weighted LM; outlier-resistance test shows Tukey 35× better inlier error than L2. **24c** added Stockham radix-2 GPU FFT (1D / 2D / 3D wrappers); 1D N=4096 GPU 2.0 ms vs rustfft CPU 0.037 ms (CPU much faster on tiny single FFTs — readback dominates; persistent-buffer pipelined callers would meet the < 1 ms target). 180 unit tests pass clean. Total scenes: 22 (DiffArm6 added on `H`). New deferred follow-up Stage 23.1.1 added to the plan. **GAP-driven roadmap is now exhausted** at the v1 level — only multi-week deferrals remain (Stage 20.2 tets, Stage 23.1.1 GPU Featherstone adjoint, Stage 24d MPM, Stage 24e NanoVDB), all explicitly waiting for a concrete user / workload. |
+| 2026-05-09 | Stage 20.2 v1 shipped (VBD tetrahedral / volumetric soft bodies + CABLE bending). New `Model.tet_*` storage (CSR-encoded; mirrors `cable_*`) + builder helper `add_tet_mesh(tets, youngs_modulus, poisson_ratio, rest_volume) -> Result<TetMeshId>` — pre-computes `Dm⁻¹` + rest volume per element, derives Lamé `(μ, λ)` from `(E, ν)`, and rejects degenerate / inverted rest tets. Per-tet Neo-Hookean energy (Smith et al. 2018 stable-NH reparameterisation `μ_NH = μ_Lamé`, `λ_NH = λ_Lamé + μ_Lamé`) + 3×3 per-vertex Hessian projection mirrors Newton's `evaluate_volumetric_neo_hookean_force_and_hessian`. The full elastic Hessian's `s · ∂²J/∂F²` term is dropped (zero on the per-vertex 3×3 block by Levi-Civita antisymmetry — Newton notes this too); a `1e-8 · rest_vol` Tikhonov diagonal floor keeps the block strictly SPD even when an inverted tet would otherwise produce a sign-indefinite contribution (negligible vs the inertia + spring diagonals). CABLE bending: discrete hinge `½·k_b·|κ|²` with `κ = v_prev + v_next - 2·v_mid`; per-role force/Hessian is exact; per-vertex CSR pre-expansion (`vertex_cable_bending_*`) gives the kernel a single CSR walk. WGSL `vbd_cloth.wgsl` extended with `tet_neo_hookean_block` + per-vertex tet/bending loops; bind group 5 carries 10 read-only buffers. `color_particles_with_tets_and_bending` extends the greedy particle colouring to honour both tet adjacency edges and CABLE bending triples. New `Scene::Jelly` on hotkey `KeyY` (8×8×8 tet jelly cube + kinematic puller); right-rail pane carries Young's modulus + Poisson sliders (re-derive `(μ, λ)` and re-upload per frame), iter / contact-stiffness sliders, wireframe + cable-comparison toggles. Both `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one `jelly: ResMut<JellyExampleState>` field. **3 GPU + 2 CPU integration tests pass** (`vbd_tets_gpu.rs`): `jelly_cube_drops_and_settles`, `tet_rest_state_is_stable`, `cable_bending_stiffness_sweep`, plus CPU mirrors. 180 lib tests still pass. **Three sub-deferrals to Stage 20.3:** (a) **multi-material tets** — v1 ships one material per `TetMeshId`; per-element materials want their own UI; (b) **tet collision detection** (tet-vs-tet, tet-vs-rigid SDF beyond per-vertex contact) — needs a tet-AABB BVH which is multi-week work; (c) **plasticity / viscoelasticity** — multiplicative split `F = F_e · F_p` with yield-surface return mapping is a self-contained extension, punted because no current consumer needs it. Total scenes now: 23. |
 
 ---
 
