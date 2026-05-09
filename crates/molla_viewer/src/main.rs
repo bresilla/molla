@@ -12400,7 +12400,46 @@ fn build_fourbar_model() -> (mp::Model, Vec<BodyVisual>) {
 
     (b.build().expect("fourbar model"), visuals)
 }
-fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+/// DiffBall scene — a kinematic projectile + a target hoop. The host
+/// optimises `(v, angle)` via closed-form gradient on miss distance.
+/// Differs from Newton's `example_diffsim_ball.py` in that we don't
+/// run a particle simulation (molla's tape autograd targets rigid
+/// XPBD); we use the analytical projectile equations directly. The
+/// pedagogy — "diffsim finds the right initial conditions" — is the
+/// same.
+fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+
+    // Body 0 — kinematic ball whose pose is rewritten each frame from
+    // the analytical trajectory.
+    let ball = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(0.0, 0.5, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(ball, 0.10, mp::Transform::IDENTITY)
+        .expect("ball");
+
+    // Body 1 — kinematic target indicator (small sphere) drawn at the
+    // current target position.
+    let target = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(3.0, 1.5, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(target, 0.08, mp::Transform::IDENTITY)
+        .expect("target");
+
+    let visuals = vec![BodyVisual::Sphere(0.10), BodyVisual::Sphere(0.08)];
+    // Static plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("diff ball model"), visuals)
+}
 fn build_diff_spring_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 /// BrickWall scene — a wide, low brick wall struck by a heavy
 /// projectile from one side. Geometry-only port of
@@ -12921,7 +12960,111 @@ fn update_fourbar_example(
     let _ = sim.state_a.joint_qd.upload(&queue);
 }
 
-fn update_diff_ball_example(_time: Res<Time>, _sim: ResMut<Sim>, _state: ResMut<DiffBallExampleState>) {
+fn update_diff_ball_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<DiffBallExampleState>,
+) {
+    if sim.scene != Scene::DiffBall {
+        return;
+    }
+    if sim.model.body_count < 2 {
+        return;
+    }
+
+    // Re-optimise (v, angle) when triggered by a slider change.
+    if state.rerun {
+        // Closed-form projectile under gravity (no air drag).
+        // Position at time t given (v, θ):
+        //   x(t) = v cos θ · t
+        //   y(t) = y0 + v sin θ · t − ½ g t²
+        // Pick the t* that minimises (x(t)−Tx)² + (y(t)−Ty)² and
+        // evaluate the loss; back-propagate via finite differences.
+        let target_x = state.target[0] as f64;
+        let target_y = state.target[1] as f64;
+        let g = 9.81;
+        let y0 = 0.5;
+        // Sample a coarse grid of t to find the closest approach.
+        let trajectory_for = |v: f64, ang: f64| -> Vec<[f32; 2]> {
+            let cos_a = ang.cos();
+            let sin_a = ang.sin();
+            let mut pts = Vec::with_capacity(64);
+            for k in 0..64 {
+                let t = (k as f64) * 0.04;
+                let x = v * cos_a * t;
+                let y = y0 + v * sin_a * t - 0.5 * g * t * t;
+                if y < 0.0 && k > 1 {
+                    break;
+                }
+                pts.push([x as f32, y as f32]);
+            }
+            pts
+        };
+        let miss_for = |v: f64, ang: f64| -> f64 {
+            let pts = trajectory_for(v, ang);
+            let mut best = f64::INFINITY;
+            for p in &pts {
+                let dx = p[0] as f64 - target_x;
+                let dy = p[1] as f64 - target_y;
+                let d2 = dx * dx + dy * dy;
+                if d2 < best {
+                    best = d2;
+                }
+            }
+            best.sqrt()
+        };
+        let mut v = state.v as f64;
+        let mut ang = (state.angle_deg as f64).to_radians();
+        let lr_v = 0.3_f64;
+        let lr_a = 0.3_f64;
+        let mut history = Vec::new();
+        for _it in 0..40 {
+            history.push([v as f32, ang.to_degrees() as f32]);
+            let m0 = miss_for(v, ang);
+            let dv = (miss_for(v + 0.01, ang) - m0) / 0.01;
+            let da = (miss_for(v, ang + 0.01) - m0) / 0.01;
+            v -= lr_v * dv;
+            ang -= lr_a * da;
+            v = v.clamp(0.5, 20.0);
+            ang = ang.clamp(0.05, 1.55);
+            if m0 < 0.05 {
+                break;
+            }
+        }
+        state.v = v as f32;
+        state.angle_deg = ang.to_degrees() as f32;
+        state.miss = miss_for(v, ang) as f32;
+        state.iters_run = history.len() as u32;
+        state.history = history;
+        state.trajectory = trajectory_for(v, ang);
+        state.playback_t = 0.0;
+        state.rerun = false;
+    }
+
+    // Playback: animate the ball along the trajectory.
+    state.playback_t += time.delta_secs() * 0.5;
+    if state.playback_t > 2.0 {
+        state.playback_t = 0.0;
+    }
+    if state.trajectory.is_empty() {
+        return;
+    }
+    let frac = (state.playback_t / 2.0).clamp(0.0, 1.0);
+    let idx = ((frac * (state.trajectory.len() - 1) as f32).floor() as usize)
+        .min(state.trajectory.len() - 1);
+    let p = state.trajectory[idx];
+    let body_q = match sim.state_a.body_q.host_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    body_q[0] = mp::Transform::from_translation(MVec3::new(p[0] as f64, p[1] as f64, 0.0));
+    body_q[1] = mp::Transform::from_translation(MVec3::new(
+        state.target[0] as f64,
+        state.target[1] as f64,
+        0.0,
+    ));
+    let queue = sim.engine.queue().expect("queue").clone();
+    let _ = sim.state_a.body_q.upload(&queue);
 }
 
 fn update_diff_spring_example(_sim: ResMut<Sim>, _state: ResMut<DiffSpringExampleState>) {}
