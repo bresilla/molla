@@ -397,6 +397,8 @@ enum BodyVisual {
     /// Box half-extents along x/y/z (m).
     Box(Vec3),
     Capsule { half_h: f32, radius: f32 },
+    /// Cone with apex at +Y·half_h, base disc at -Y·half_h with `radius`.
+    Cone { half_h: f32, radius: f32 },
 }
 
 #[derive(Resource)]
@@ -426,6 +428,11 @@ enum Scene {
     /// per-joint target sliders and an auto-sine toggle so you can
     /// see the controller chase a moving target.
     Arm,
+    /// Stage-13 specialty-shapes demo — drops cones, convex hulls,
+    /// and spheres onto a wavy heightfield with a static torus
+    /// (SDF) sticking out of the middle. Exercises every primitive
+    /// shipped in Stage 13 in a single scene.
+    Shapes,
 }
 
 impl Scene {
@@ -439,6 +446,7 @@ impl Scene {
         Scene::Imu,
         Scene::Contact,
         Scene::Arm,
+        Scene::Shapes,
     ];
 
     fn label(self) -> &'static str {
@@ -451,6 +459,7 @@ impl Scene {
             Scene::Imu => "IMU (accel + gyro)",
             Scene::Contact => "Contact (per-body)",
             Scene::Arm => "Arm (PD actuator)",
+            Scene::Shapes => "Shapes (cone / hull / heightfield / SDF)",
         }
     }
 
@@ -667,6 +676,7 @@ impl Sim {
             Scene::Imu => build_imu_model(),
             Scene::Contact => build_contact_model(),
             Scene::Arm => build_arm_model(),
+            Scene::Shapes => build_shapes_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1240,6 +1250,181 @@ fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("arm model"), visuals)
 }
 
+// --- Stage-13 specialty-shapes scene --------------------------------
+const SHAPES_FIELD_N: u32 = 16;
+const SHAPES_FIELD_CELL: f32 = 0.6;
+const SHAPES_TORUS_MAJOR: f32 = 1.0;
+const SHAPES_TORUS_MINOR: f32 = 0.25;
+const SHAPES_TORUS_Y: f32 = 3.5;
+
+/// Stage-13 demo scene — drops cones, convex hulls, and spheres
+/// onto a wavy heightfield with a static torus (SDF) sticking out
+/// of the middle. Single scene exercises every primitive shipped
+/// in Stage 13: Cone, ConvexHull, Heightfield, Sdf.
+fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.2);
+
+    let mut visuals: Vec<BodyVisual> = Vec::new();
+
+    // ── Heightfield (wavy terrain) — static, no body. ───────────
+    let n = SHAPES_FIELD_N;
+    let cell = SHAPES_FIELD_CELL as f64;
+    let half = (n as f64 - 1.0) * cell * 0.5;
+    let mut heights = Vec::with_capacity((n * n) as usize);
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f64 - (n as f64 - 1.0) * 0.5) * cell;
+            let z = (j as f64 - (n as f64 - 1.0) * 0.5) * cell;
+            // Two-frequency sine wave — looks more interesting than
+            // a flat plane and gives the cones somewhere to roll.
+            let h = 0.4 * ((x * 0.6).sin() + (z * 0.6).cos())
+                + 0.15 * ((x * 1.5 + 0.7).sin() * (z * 1.3).cos());
+            heights.push(h);
+        }
+    }
+    let hf = mp::Heightfield {
+        nx: n,
+        nz: n,
+        cell_size: cell,
+        origin: MVec3::new(-half, 0.0, -half),
+        heights,
+    };
+    let field_id = b.add_heightfield(hf);
+    b.add_shape_heightfield(mp::BodyId::NONE, field_id, mp::Transform::IDENTITY)
+        .expect("heightfield shape");
+
+    // ── Static torus (SDF) embedded in the terrain centre. ──────
+    let sdf_id = b.add_sdf(mp::SdfShape::Torus {
+        major: SHAPES_TORUS_MAJOR as f64,
+        minor: SHAPES_TORUS_MINOR as f64,
+    });
+    b.add_shape_sdf(
+        mp::BodyId::NONE,
+        sdf_id,
+        mp::Transform::from_translation(MVec3::new(0.0, SHAPES_TORUS_Y as f64, 0.0)),
+    )
+    .expect("torus sdf");
+
+    // ── Falling cones (3 of them, scattered above the field). ───
+    for (i, pos) in [
+        MVec3::new(-1.5, 8.0, -1.0),
+        MVec3::new(0.5, 9.0, 0.5),
+        MVec3::new(1.8, 8.5, -0.5),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let half_h = 0.35_f64;
+        let radius = 0.25_f64;
+        let mass = 0.8_f64;
+        let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+            mass * (radius * radius * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+            mass * radius * radius * 0.5,
+            mass * (radius * radius * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+        ));
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                .with_pose(mp::Transform::new(
+                    *pos,
+                    // Tilt each cone a bit so they tumble.
+                    MQuat::from_axis_angle(MVec3::Z, (i as f64) * 0.3 + 0.4),
+                )),
+        );
+        b.add_shape_cone(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("cone shape");
+        visuals.push(BodyVisual::Cone {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+    }
+
+    // ── Falling convex hulls (3 — irregular tetra-pyramid). ─────
+    for (i, pos) in [
+        MVec3::new(-2.5, 10.0, 1.5),
+        MVec3::new(0.0, 10.5, -2.0),
+        MVec3::new(2.5, 9.5, 1.5),
+    ]
+    .iter()
+    .enumerate()
+    {
+        // Irregular hull — 6 vertices forming a stretched octahedron.
+        let s = 0.35;
+        let verts = vec![
+            MVec3::new(s, 0.0, 0.0),
+            MVec3::new(-s, 0.0, 0.0),
+            MVec3::new(0.0, s * 1.5, 0.0),
+            MVec3::new(0.0, -s * 1.5, 0.0),
+            MVec3::new(0.0, 0.0, s),
+            MVec3::new(0.0, 0.0, -s),
+        ];
+        let mass = 0.6;
+        // Approx inertia via bounding box.
+        let half = MVec3::new(s, s * 1.5, s);
+        let h2 = half * half;
+        let m_third = mass / 3.0;
+        let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+            m_third * (h2.y + h2.z),
+            m_third * (h2.x + h2.z),
+            m_third * (h2.x + h2.y),
+        ));
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                .with_pose(mp::Transform::new(
+                    *pos,
+                    MQuat::from_axis_angle(MVec3::X, (i as f64) * 0.5),
+                )),
+        );
+        let hull_id = b.add_hull(verts);
+        b.add_shape_convex_hull(body, hull_id, mp::Transform::IDENTITY)
+            .expect("hull shape");
+        // Render as a box approximation (Bevy doesn't have a hull mesh
+        // primitive; we'd need to feed in the actual triangle list).
+        visuals.push(BodyVisual::Box(Vec3::new(
+            half.x as f32,
+            half.y as f32,
+            half.z as f32,
+        )));
+    }
+
+    // ── Falling spheres for variety. ────────────────────────────
+    for (i, pos) in [
+        MVec3::new(-0.8, 11.0, 0.0),
+        MVec3::new(0.8, 11.5, 1.5),
+        MVec3::new(-1.5, 11.5, -1.5),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let _ = i;
+        let radius = 0.3;
+        let mass = 1.0;
+        let i_v = (2.0 / 5.0) * mass * radius * radius;
+        let inertia = molla::math::Mat3::from_diagonal(MVec3::new(i_v, i_v, i_v));
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                .with_position(*pos),
+        );
+        b.add_shape_sphere(body, radius, mp::Transform::IDENTITY)
+            .expect("sphere shape");
+        // Rolling friction so spheres come to rest on the wavy
+        // heightfield instead of rolling forever.
+        b.set_shape_friction_modes(
+            mp::ShapeId::from_index(b.shape_count() - 1),
+            0.05,
+            0.02,
+        )
+        .ok();
+        visuals.push(BodyVisual::Sphere(radius as f32));
+    }
+
+    (b.build().expect("shapes model"), visuals)
+}
+
 /// Contact-sensor example — a small stack of bodies settling on the
 /// plane. The GPU `ContactSensor` runs every frame and the right-rail
 /// pane shows per-body contact counts + max depth + net push
@@ -1477,6 +1662,15 @@ fn spawn_body_entities(
                     .longitudes(32)
                     .latitudes(16),
             ),
+            BodyVisual::Cone { half_h, radius } => meshes.add(
+                Cone {
+                    radius,
+                    height: half_h * 2.0,
+                }
+                .mesh()
+                .resolution(32)
+                .build(),
+            ),
         };
         let awake = mats[i % mats.len()].clone();
         commands.spawn((
@@ -1536,6 +1730,98 @@ fn spawn_body_entities(
             Transform::from_xyz(0.0, CLOTH_SPHERE_Y, 0.0),
         ));
     }
+
+    // Shapes-scene static visuals: heightfield (deforming triangle
+    // strip from the model's heights) + torus mesh.
+    if sim.scene == Scene::Shapes {
+        if let Some(hf) = sim.model.heightfields.first() {
+            let mesh = build_heightfield_mesh(hf);
+            let mat = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.45, 0.55, 0.40),
+                metallic: 0.05,
+                perceptual_roughness: 0.85,
+                cull_mode: None,
+                ..default()
+            });
+            commands.spawn((
+                ClothObstacle, // reuse the despawn tag
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(mat),
+                Transform::default(),
+            ));
+        }
+        // Torus visual at the SDF position.
+        let torus = Torus {
+            major_radius: SHAPES_TORUS_MAJOR,
+            minor_radius: SHAPES_TORUS_MINOR,
+        };
+        let torus_mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.65, 0.30),
+            metallic: 0.10,
+            perceptual_roughness: 0.45,
+            ..default()
+        });
+        commands.spawn((
+            ClothObstacle,
+            Mesh3d(meshes.add(torus.mesh().major_resolution(64).minor_resolution(24))),
+            MeshMaterial3d(torus_mat),
+            Transform::from_xyz(0.0, SHAPES_TORUS_Y, 0.0),
+        ));
+    }
+}
+
+/// Build a Bevy mesh from a molla `Heightfield` for visualisation.
+fn build_heightfield_mesh(hf: &mp::Heightfield) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    let nx = hf.nx as usize;
+    let nz = hf.nz as usize;
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(nx * nz);
+    let mut normals: Vec<[f32; 3]> = vec![[0.0, 1.0, 0.0]; nx * nz];
+    for j in 0..nz {
+        for i in 0..nx {
+            let x = hf.origin.x + i as f64 * hf.cell_size;
+            let z = hf.origin.z + j as f64 * hf.cell_size;
+            let y = hf.heights[j * nx + i];
+            positions.push([x as f32, y as f32, z as f32]);
+        }
+    }
+    let mut indices: Vec<u32> = Vec::with_capacity((nx - 1) * (nz - 1) * 6);
+    for j in 0..nz - 1 {
+        for i in 0..nx - 1 {
+            let v00 = (j * nx + i) as u32;
+            let v10 = (j * nx + i + 1) as u32;
+            let v01 = ((j + 1) * nx + i) as u32;
+            let v11 = ((j + 1) * nx + i + 1) as u32;
+            indices.extend_from_slice(&[v00, v10, v11, v00, v11, v01]);
+        }
+    }
+    // Compute per-vertex normals via face-normal averaging.
+    for chunk in indices.chunks(3) {
+        let i0 = chunk[0] as usize;
+        let i1 = chunk[1] as usize;
+        let i2 = chunk[2] as usize;
+        let p0 = Vec3::from_array(positions[i0]);
+        let p1 = Vec3::from_array(positions[i1]);
+        let p2 = Vec3::from_array(positions[i2]);
+        let n = (p1 - p0).cross(p2 - p0).normalize_or_zero();
+        for &k in &[i0, i1, i2] {
+            let cur = normals[k];
+            normals[k] = [cur[0] + n.x, cur[1] + n.y, cur[2] + n.z];
+        }
+    }
+    for n in normals.iter_mut() {
+        let v = Vec3::from_array(*n).normalize_or_zero();
+        *n = [v.x, v.y, v.z];
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 /// Build a single Bevy `Mesh` from molla's particle positions and
@@ -1629,6 +1915,9 @@ fn handle_input(
     }
     if keys.just_pressed(KeyCode::Digit8) && sim.scene != Scene::Arm {
         pending.0 = Some(Scene::Arm);
+    }
+    if keys.just_pressed(KeyCode::Digit9) && sim.scene != Scene::Shapes {
+        pending.0 = Some(Scene::Shapes);
     }
 }
 
@@ -2117,6 +2406,12 @@ fn pick_body(
                 lo,
                 ld,
                 MVec3::new(radius as f64, (half_h + radius) as f64, radius as f64),
+            ),
+            // Cone pick: tight AABB approximation in body frame.
+            BodyVisual::Cone { half_h, radius } => ray_box_local(
+                lo,
+                ld,
+                MVec3::new(radius as f64, half_h as f64, radius as f64),
             ),
         };
         if let Some(t) = t {
@@ -2992,6 +3287,7 @@ fn control_pane(
         Scene::Imu => Some("IMU"),
         Scene::Contact => Some("Contacts"),
         Scene::Arm => Some("Arm (PD)"),
+        Scene::Shapes => Some("Shapes (Stage 13)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -3007,10 +3303,34 @@ fn control_pane(
                 Scene::Imu => imu_pane(ui, &imu_state),
                 Scene::Contact => contact_pane(ui, &contact_state),
                 Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
+                Scene::Shapes => shapes_pane(ui, &sim),
                 _ => {}
             });
         }
     }
+}
+
+/// Right-rail pane for the Stage-13 shapes demo. Lists the
+/// primitives in the scene and the live body count.
+fn shapes_pane(ui: &mut egui::Ui, sim: &Sim) {
+    ui.label("Stage 13 primitives:");
+    ui.separator();
+    readout(ui, "Heightfield", &format!("{}×{} grid", SHAPES_FIELD_N, SHAPES_FIELD_N));
+    readout(
+        ui,
+        "Torus (SDF)",
+        &format!(
+            "major {:.2} m, minor {:.2} m",
+            SHAPES_TORUS_MAJOR, SHAPES_TORUS_MINOR
+        ),
+    );
+    ui.separator();
+    readout(ui, "Bodies", &format!("{}", sim.model.body_count));
+    readout(ui, "Shapes", &format!("{}", sim.model.shape_count));
+    ui.label("");
+    ui.label("Drop test: cones, hulls, spheres rain");
+    ui.label("onto the wavy heightfield. Static");
+    ui.label("torus sticks out of the middle.");
 }
 
 /// Body for the right-rail pane in the Lidar scene.
