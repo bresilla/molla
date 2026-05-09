@@ -2,12 +2,16 @@
 
 pub mod crba;
 mod featherstone;
+pub mod ik;
+pub mod jacobian;
 pub mod rnea;
 mod semi_implicit;
 mod xpbd;
 
 pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
+pub use ik::{IkConfig, IkObjective, IkResult, IkSolver};
+pub use jacobian::jacobian;
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
 pub use xpbd::XpbdSolver;

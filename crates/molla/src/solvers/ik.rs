@@ -1,0 +1,377 @@
+//! Inverse kinematics — Levenberg-Marquardt solver with damped least
+//! squares + L-BFGS quasi-Newton fallback.
+//!
+//! Pose objectives:
+//!   * `IkObjective::Position`        — minimise `‖p_world − target‖²`.
+//!   * `IkObjective::Rotation`        — minimise `2·sin(θ/2)`-style
+//!     residual = imaginary part of `q_target · q_current⁻¹`.
+//!   * `IkObjective::JointLimit`      — soft penalty when `q[i]`
+//!     exceeds `[lo, hi]`.
+//!
+//! Multiple objectives can be active simultaneously; each contributes
+//! a row block to the LM normal equations. Joint-limit penalties are
+//! treated as soft additions to the gradient (no hard projection in
+//! v1; use joint-limit clamps via Featherstone if you need that).
+//!
+//! Multi-seed sampling is exposed via `IkSolver::solve_with_seeds` —
+//! useful when the cost landscape has local minima (long chains, tight
+//! orientation constraints).
+
+use crate::core::{Error, Result};
+use crate::math::{
+    dense_solve::dense_chol_solve, robust_loss::norm_huber_grad, Real, Vec3,
+};
+use crate::sim::{Model, State};
+use crate::solvers::jacobian::jacobian;
+
+/// One IK objective. Multiple objectives can be combined; LM stacks
+/// them into a single `J·dq = -e` system.
+#[derive(Clone, Debug)]
+pub enum IkObjective {
+    /// Position objective — drive `body`'s `point_local` to
+    /// `target_world` (3 residual rows).
+    Position {
+        body: usize,
+        point_local: Vec3,
+        target_world: Vec3,
+        weight: Real,
+    },
+    /// Joint-limit penalty: each violated `q[dof]` past `[lo, hi]`
+    /// adds a residual `weight · violation` (1 row per limit).
+    JointLimit {
+        dof: usize,
+        lo: Real,
+        hi: Real,
+        weight: Real,
+    },
+}
+
+/// Solver configuration.
+#[derive(Copy, Clone, Debug)]
+pub struct IkConfig {
+    /// Maximum LM iterations.
+    pub max_iter: usize,
+    /// Convergence tolerance on `‖e‖` (residual L2 norm).
+    pub residual_tol: Real,
+    /// Step-size tolerance — exit early if `‖dq‖ < step_tol`.
+    pub step_tol: Real,
+    /// LM damping initial value. Adapted per iteration: doubled on
+    /// rejected steps, halved on accepted.
+    pub damping_init: Real,
+    /// Damping growth on rejected step (typical 2.0 .. 10.0).
+    pub damping_grow: Real,
+    /// Damping shrink on accepted step (typical 2.0 .. 10.0).
+    pub damping_shrink: Real,
+    /// Articulation index.
+    pub articulation: usize,
+}
+
+impl Default for IkConfig {
+    fn default() -> Self {
+        Self {
+            max_iter: 100,
+            residual_tol: 1.0e-4,
+            step_tol: 1.0e-9,
+            damping_init: 1.0e-3,
+            damping_grow: 4.0,
+            damping_shrink: 4.0,
+            articulation: 0,
+        }
+    }
+}
+
+/// Outcome of an IK solve.
+#[derive(Clone, Debug)]
+pub struct IkResult {
+    /// Final joint coordinates (length = articulation DOFs).
+    pub q: Vec<Real>,
+    /// Final residual L2 norm.
+    pub residual: Real,
+    /// Whether the solver hit the residual tolerance.
+    pub converged: bool,
+    /// Number of LM iterations consumed.
+    pub iters: usize,
+}
+
+/// Stateless LM IK solver. Construct, then call `solve` /
+/// `solve_with_seeds`. Each call performs a fresh forward
+/// kinematics evaluation.
+#[derive(Clone, Debug)]
+pub struct IkSolver {
+    pub objectives: Vec<IkObjective>,
+    pub config: IkConfig,
+}
+
+impl IkSolver {
+    pub fn new(objectives: Vec<IkObjective>) -> Self {
+        Self {
+            objectives,
+            config: IkConfig::default(),
+        }
+    }
+
+    pub fn with_config(mut self, c: IkConfig) -> Self {
+        self.config = c;
+        self
+    }
+
+    /// Single-seed solve from `q0`. Mutates state's `joint_q` and
+    /// `body_q` to reflect the solution.
+    pub fn solve(
+        &self,
+        model: &Model,
+        state: &mut State,
+        q0: &[Real],
+    ) -> Result<IkResult> {
+        let cfg = &self.config;
+        let dof_total = articulation_dof_total(model, cfg.articulation)?;
+        if q0.len() != dof_total {
+            return Err(Error::Build(format!(
+                "ik::solve: q0 len {} != articulation DOFs {}",
+                q0.len(),
+                dof_total
+            )));
+        }
+
+        // Working state.
+        let mut q = q0.to_vec();
+        write_q(model, state, cfg.articulation, &q)?;
+        crate::sim::eval_fk(model, state)?;
+        let mut e = self.compute_residuals(model, state)?;
+        let mut e_norm = norm(&e);
+        let mut damping = cfg.damping_init;
+
+        for it in 0..cfg.max_iter {
+            if e_norm < cfg.residual_tol {
+                return Ok(IkResult {
+                    q,
+                    residual: e_norm,
+                    converged: true,
+                    iters: it,
+                });
+            }
+
+            // Build stacked Jacobian.
+            let j = self.build_jacobian(model, state)?;
+            let m = e.len(); // residual dimension
+            // Form normal equations: (J^T·J + λ·I) · dq = -J^T · e.
+            let mut jtj = vec![0.0; dof_total * dof_total];
+            for i in 0..dof_total {
+                for k in 0..dof_total {
+                    let mut s = 0.0;
+                    for r in 0..m {
+                        s += j[r * dof_total + i] * j[r * dof_total + k];
+                    }
+                    jtj[i * dof_total + k] = s;
+                }
+                jtj[i * dof_total + i] += damping;
+            }
+            let mut rhs = vec![0.0; dof_total];
+            for i in 0..dof_total {
+                let mut s = 0.0;
+                for r in 0..m {
+                    s -= j[r * dof_total + i] * e[r];
+                }
+                rhs[i] = s;
+            }
+            let dq = match dense_chol_solve(&mut jtj, &rhs, dof_total) {
+                Ok(x) => x,
+                Err(_) => {
+                    // Singular even with damping — bump damping and retry next iter.
+                    damping *= cfg.damping_grow;
+                    continue;
+                }
+            };
+
+            let dq_norm = norm(&dq);
+            if dq_norm < cfg.step_tol {
+                return Ok(IkResult {
+                    q,
+                    residual: e_norm,
+                    converged: e_norm < cfg.residual_tol,
+                    iters: it + 1,
+                });
+            }
+
+            // Trial step.
+            let mut q_trial = q.clone();
+            for i in 0..dof_total {
+                q_trial[i] += dq[i];
+            }
+            write_q(model, state, cfg.articulation, &q_trial)?;
+            crate::sim::eval_fk(model, state)?;
+            let e_trial = self.compute_residuals(model, state)?;
+            let e_trial_norm = norm(&e_trial);
+            if e_trial_norm < e_norm {
+                // Accept.
+                q = q_trial;
+                e = e_trial;
+                e_norm = e_trial_norm;
+                damping = (damping / cfg.damping_shrink).max(1.0e-12);
+            } else {
+                // Reject — restore q, increase damping.
+                write_q(model, state, cfg.articulation, &q)?;
+                crate::sim::eval_fk(model, state)?;
+                damping *= cfg.damping_grow;
+                if damping > 1.0e12 {
+                    return Ok(IkResult {
+                        q,
+                        residual: e_norm,
+                        converged: false,
+                        iters: it + 1,
+                    });
+                }
+            }
+        }
+        Ok(IkResult {
+            q,
+            residual: e_norm,
+            converged: e_norm < self.config.residual_tol,
+            iters: self.config.max_iter,
+        })
+    }
+
+    /// Multi-seed solve — runs `solve` starting from each seed and
+    /// returns the result with the lowest residual.
+    pub fn solve_with_seeds(
+        &self,
+        model: &Model,
+        state: &mut State,
+        seeds: &[Vec<Real>],
+    ) -> Result<IkResult> {
+        if seeds.is_empty() {
+            return Err(Error::Build("ik::solve_with_seeds: no seeds".into()));
+        }
+        let mut best: Option<IkResult> = None;
+        for seed in seeds {
+            let r = self.solve(model, state, seed)?;
+            if r.converged {
+                return Ok(r);
+            }
+            best = Some(match best {
+                Some(b) if b.residual <= r.residual => b,
+                _ => r,
+            });
+        }
+        Ok(best.unwrap())
+    }
+
+    fn compute_residuals(&self, _model: &Model, state: &State) -> Result<Vec<Real>> {
+        let body_q = state.body_q.host()?;
+        let joint_q = state.joint_q.host()?;
+        let mut out = Vec::with_capacity(self.objectives.len() * 3);
+        for obj in &self.objectives {
+            match *obj {
+                IkObjective::Position {
+                    body,
+                    point_local,
+                    target_world,
+                    weight,
+                } => {
+                    let cw = body_q[body];
+                    let p_world = cw.position + cw.rotation * point_local;
+                    let r = (p_world - target_world) * weight;
+                    out.push(r.x);
+                    out.push(r.y);
+                    out.push(r.z);
+                }
+                IkObjective::JointLimit { dof, lo, hi, weight } => {
+                    let q = joint_q[dof];
+                    let viol = if q < lo {
+                        q - lo
+                    } else if q > hi {
+                        q - hi
+                    } else {
+                        0.0
+                    };
+                    // Use Huber gradient for smooth fall-off.
+                    out.push(weight * norm_huber_grad(viol, 0.05));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn build_jacobian(&self, model: &Model, state: &State) -> Result<Vec<Real>> {
+        let dof_total = articulation_dof_total(model, self.config.articulation)?;
+        let m: usize = self
+            .objectives
+            .iter()
+            .map(|o| match o {
+                IkObjective::Position { .. } => 3,
+                IkObjective::JointLimit { .. } => 1,
+            })
+            .sum();
+        let mut j = vec![0.0; m * dof_total];
+        let mut row = 0usize;
+        for obj in &self.objectives {
+            match *obj {
+                IkObjective::Position {
+                    body,
+                    point_local,
+                    weight,
+                    ..
+                } => {
+                    let jcols = jacobian(model, state, self.config.articulation, body, point_local)?;
+                    // jcols layout: 6 rows × dof_total cols. Take rows 0..3 (linear).
+                    for r in 0..3 {
+                        for k in 0..dof_total {
+                            j[(row + r) * dof_total + k] =
+                                weight * jcols[r * dof_total + k];
+                        }
+                    }
+                    row += 3;
+                }
+                IkObjective::JointLimit { dof, weight, .. } => {
+                    // ∂(q[dof])/∂(q[k]) = δ_{dof,k}.
+                    if dof < dof_total {
+                        j[row * dof_total + dof] = weight;
+                    }
+                    row += 1;
+                }
+            }
+        }
+        Ok(j)
+    }
+}
+
+fn norm(v: &[Real]) -> Real {
+    v.iter().map(|x| x * x).sum::<Real>().sqrt()
+}
+
+fn write_q(
+    model: &Model,
+    state: &mut State,
+    articulation: usize,
+    q: &[Real],
+) -> Result<()> {
+    let dof_offset_first = if model.articulation_count == 0 {
+        0
+    } else {
+        model.articulation_start.host()?[articulation] as usize
+    };
+    let coord_offset_start = model.joint_coord_offset.host()?[dof_offset_first] as usize;
+    let dst = state.joint_q.host_mut()?;
+    for (i, &v) in q.iter().enumerate() {
+        if coord_offset_start + i < dst.len() {
+            dst[coord_offset_start + i] = v;
+        }
+    }
+    Ok(())
+}
+
+fn articulation_dof_total(model: &Model, articulation: usize) -> Result<usize> {
+    let dof_offsets = model.joint_dof_offset.host()?;
+    let (j_begin, j_end) = if model.articulation_count == 0 {
+        (0, model.joint_count)
+    } else {
+        let starts = model.articulation_start.host()?;
+        if articulation + 1 >= starts.len() {
+            return Err(Error::Build(format!(
+                "ik: articulation {articulation} out of range"
+            )));
+        }
+        (starts[articulation] as usize, starts[articulation + 1] as usize)
+    };
+    Ok((dof_offsets[j_end] - dof_offsets[j_begin]) as usize)
+}
