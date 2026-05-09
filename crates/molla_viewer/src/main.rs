@@ -6646,7 +6646,8 @@ fn gpu_bp_pane(
 ) {
     ui.add_space(2.0);
     let mode_label = if state.gpu_enabled_now {
-        "GPU LBVH (Stage 19)"
+        // Stage 19.1 — Morton sort moved to GPU (was CPU stop-gap).
+        "GPU LBVH (radix v2)"
     } else {
         "CPU SAP"
     };
