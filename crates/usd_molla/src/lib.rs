@@ -38,15 +38,27 @@ pub mod attrs;
 pub mod bodies;
 pub mod colliders;
 pub mod joints;
+pub mod resolvers;
 pub mod scene;
 pub mod write_back;
+
+pub use resolvers::{
+    BodyAttrs, JointAttrs, ResolverChain, SceneAttrs, SchemaResolver, SchemaResolverDefault,
+    SchemaResolverMjc, SchemaResolverPhysx, ShapeAttrs,
+};
 
 use anyhow::Result;
 use molla::sim::Model;
 use openusd::Stage;
 
 /// Per-call options for [`build_model_from_stage`].
-#[derive(Debug, Clone, Default)]
+///
+/// `resolvers` controls multi-schema support (Stage 29). The default
+/// chain is `[SchemaResolverDefault]` — i.e. the historical
+/// pre-stage-29 behaviour reading only standard `physics:*` opinions.
+/// Use [`ImportOptions::with_resolvers`] to inject extra resolvers
+/// (PhysX, MJC) ahead of the default fallback.
+#[derive(Default)]
 pub struct ImportOptions {
     /// If `true`, every joint without an explicit `physics:simulationOwner`
     /// is folded into world 0 even when multiple `PhysicsScene`s exist.
@@ -57,6 +69,41 @@ pub struct ImportOptions {
     /// — the default `1.0` (combined with metersPerUnit) is the right
     /// behaviour for almost all USDs.
     pub linear_scale_override: Option<f64>,
+    /// Schema-resolver chain. Empty means "use the standard default
+    /// chain `[SchemaResolverDefault]`". Provide a custom chain via
+    /// [`Self::with_resolvers`] to layer PhysX or MJC schema readers
+    /// on top of the default.
+    pub resolvers: ResolverChain,
+}
+
+impl ImportOptions {
+    /// Replace the resolver chain, returning `self` for builder use.
+    /// The default fallback is **not** appended automatically — callers
+    /// that want it must include [`SchemaResolverDefault`] themselves
+    /// (typically as the last entry).
+    #[must_use]
+    pub fn with_resolvers(mut self, resolvers: Vec<Box<dyn SchemaResolver>>) -> Self {
+        let mut chain = ResolverChain::empty();
+        for r in resolvers {
+            chain.push(r);
+        }
+        self.resolvers = chain;
+        self
+    }
+}
+
+/// Borrow the active resolver chain from `opts`, falling back to a
+/// transient default `[SchemaResolverDefault]` chain when the
+/// caller's chain is empty.
+fn resolver_chain_for<'a>(
+    opts: &'a ImportOptions,
+    fallback: &'a ResolverChain,
+) -> &'a ResolverChain {
+    if opts.resolvers.is_empty() {
+        fallback
+    } else {
+        &opts.resolvers
+    }
 }
 
 /// Bookkeeping returned from [`build_model_from_stage`] so callers
@@ -84,17 +131,79 @@ pub fn build_model_from_stage(
 ) -> Result<(Model, ImportInfo)> {
     use openusd::physics;
 
-    let prims = physics::find_physics_prims(stage)?;
+    let mut prims = physics::find_physics_prims(stage)?;
     let mut info = ImportInfo::default();
     let mut builder = molla::sim::ModelBuilder::new();
 
-    scene::import_scenes(stage, &prims, &mut builder, &mut info, options)?;
-    bodies::import_bodies(stage, &prims, &mut builder, &mut info)?;
-    colliders::import_colliders(stage, &prims, &mut builder, &mut info)?;
-    joints::import_joints(stage, &prims, &mut builder, &mut info)?;
+    let fallback = ResolverChain::standard();
+    let chain = resolver_chain_for(options, &fallback);
+
+    // Multi-schema prim discovery: when a non-default resolver is in
+    // the chain, pull in prims that carry only the resolver's
+    // namespace (e.g. PhysX-only bodies that don't apply
+    // `PhysicsRigidBodyAPI`). This keeps the standard reader's
+    // single-pass `find_physics_prims` call as the fast path.
+    extend_prims_via_resolvers(stage, chain, &mut prims)?;
+
+    scene::import_scenes(stage, &prims, &mut builder, &mut info, options, chain)?;
+    bodies::import_bodies(stage, &prims, &mut builder, &mut info, chain)?;
+    colliders::import_colliders(stage, &prims, &mut builder, &mut info, chain)?;
+    joints::import_joints(stage, &prims, &mut builder, &mut info, chain)?;
 
     let model = builder.build().map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok((model, info))
+}
+
+/// Walk the stage once and append any prim that the resolver chain
+/// claims (via `resolve_*`) to the matching `PhysicsPrims` bucket.
+/// Standard-schema prims discovered by `find_physics_prims` are not
+/// re-added (we dedup by path).
+fn extend_prims_via_resolvers(
+    stage: &Stage,
+    chain: &ResolverChain,
+    prims: &mut openusd::physics::PhysicsPrims,
+) -> Result<()> {
+    // Skip the cost of a stage walk when only the default resolver
+    // is active — `find_physics_prims` already covered everything.
+    let names = chain.names();
+    if names.len() == 1 && names[0] == "UsdPhysics" {
+        return Ok(());
+    }
+
+    let mut new_bodies: Vec<String> = Vec::new();
+    let mut new_joints: Vec<String> = Vec::new();
+    let mut new_shapes: Vec<String> = Vec::new();
+    let mut new_scenes: Vec<String> = Vec::new();
+    stage.traverse(|path| {
+        let p = path.as_str().to_string();
+        // Use the chain's `resolve_*` calls — any `Some(_)` return
+        // means a resolver claimed this prim.
+        if let Ok(Some(_)) = chain.resolve_body(stage, path) {
+            if !prims.rigid_bodies.iter().any(|x| x == &p) {
+                new_bodies.push(p.clone());
+            }
+        }
+        if let Ok(Some(_)) = chain.resolve_joint(stage, path) {
+            if !prims.joints.iter().any(|x| x == &p) {
+                new_joints.push(p.clone());
+            }
+        }
+        if let Ok(Some(_)) = chain.resolve_shape(stage, path) {
+            if !prims.colliders.iter().any(|x| x == &p) {
+                new_shapes.push(p.clone());
+            }
+        }
+        if let Ok(Some(_)) = chain.resolve_scene(stage, path) {
+            if !prims.scenes.iter().any(|x| x == &p) {
+                new_scenes.push(p.clone());
+            }
+        }
+    })?;
+    prims.rigid_bodies.extend(new_bodies);
+    prims.joints.extend(new_joints);
+    prims.colliders.extend(new_shapes);
+    prims.scenes.extend(new_scenes);
+    Ok(())
 }
 
 /// Write `state` back to `stage` as time samples at `time` seconds
