@@ -56,6 +56,9 @@ mujoco-rust = { version = "0.0.6", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+# Stage 24c — CPU oracle for the GPU FFT kernel. Test-only; never
+# pulled into the runtime crate.
+rustfft = "6"
 
 [[bench]]
 name = "step_cpu"
