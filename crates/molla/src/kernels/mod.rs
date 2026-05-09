@@ -47,6 +47,8 @@ mod radix_sort;
 #[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
+mod robust_loss;
+#[cfg(feature = "gpu")]
 mod rnea;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
@@ -110,6 +112,8 @@ pub use lbvh::{collect_shape_aabbs, LbvhBroadPhase, LbvhPairs};
 pub use radix_sort::{radix_sort_pairs, RadixSortKernel};
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
+#[cfg(feature = "gpu")]
+pub use robust_loss::{LossPair, RobustLossKernel};
 #[cfg(feature = "gpu")]
 pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
 #[cfg(feature = "gpu")]
