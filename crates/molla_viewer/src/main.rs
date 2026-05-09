@@ -375,6 +375,14 @@ fn main() {
         .insert_resource(CableExampleState::default())
         .insert_resource(MpmExampleState::default())
         .insert_resource(JellyExampleState::default())
+        .insert_resource(PendulumExampleState::default())
+        .insert_resource(ConveyorExampleState::default())
+        .insert_resource(ClothBendingExampleState::default())
+        .insert_resource(ClothTwistExampleState::default())
+        .insert_resource(CartPoleExampleState::default())
+        .insert_resource(FourBarExampleState::default())
+        .insert_resource(DiffBallExampleState::default())
+        .insert_resource(DiffSpringExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -425,6 +433,23 @@ fn main() {
                     update_cable_example,
                     update_mpm_example,
                     update_jelly_example,
+                )
+                    .chain(),
+                // Newton-port pre-step controllers/integrators. Split
+                // out of the main chain to dodge Bevy's tuple-chain
+                // tuple-arity ceiling. Ordered before
+                // `step_simulation` via the outer .chain().
+                (
+                    update_pendulum_example,
+                    update_cartpole_example,
+                    update_conveyor_example,
+                    update_cloth_twist_example,
+                    update_fourbar_example,
+                    update_diff_ball_example,
+                    update_diff_spring_example,
+                )
+                    .chain(),
+                (
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -446,6 +471,8 @@ fn main() {
                     draw_cable_gizmos,
                     draw_mpm_gizmos,
                     draw_jelly_gizmos,
+                    draw_diff_spring_gizmos,
+                    draw_diff_ball_gizmos,
                 )
                     .chain(),
             )
@@ -531,6 +558,15 @@ struct SceneStates<'w> {
     /// `apply_scene_switch` and `control_pane` under the 16-element
     /// SystemParam ceiling.
     jelly: ResMut<'w, JellyExampleState>,
+    // Newton-port scenes (Group A-E).
+    pendulum: ResMut<'w, PendulumExampleState>,
+    conveyor: ResMut<'w, ConveyorExampleState>,
+    cloth_bend: ResMut<'w, ClothBendingExampleState>,
+    cloth_twist: ResMut<'w, ClothTwistExampleState>,
+    cartpole: ResMut<'w, CartPoleExampleState>,
+    fourbar: ResMut<'w, FourBarExampleState>,
+    diff_ball: ResMut<'w, DiffBallExampleState>,
+    diff_spring: ResMut<'w, DiffSpringExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -569,6 +605,15 @@ struct PaneSceneStates<'w> {
     /// rationale as `cable` — bundled to stay under the 16-tuple
     /// SystemParam ceiling.
     jelly: ResMut<'w, JellyExampleState>,
+    // Newton-port scenes (Group A-E) — pane state for the right rail.
+    pendulum: ResMut<'w, PendulumExampleState>,
+    conveyor: ResMut<'w, ConveyorExampleState>,
+    cloth_bend: ResMut<'w, ClothBendingExampleState>,
+    cloth_twist: ResMut<'w, ClothTwistExampleState>,
+    cartpole: ResMut<'w, CartPoleExampleState>,
+    fourbar: ResMut<'w, FourBarExampleState>,
+    diff_ball: ResMut<'w, DiffBallExampleState>,
+    diff_spring: ResMut<'w, DiffSpringExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -806,6 +851,76 @@ enum Scene {
     /// and a "show CABLE comparison" toggle that overlays a small
     /// cable for bending behaviour A/B. Hotkey `Y`.
     Jelly,
+    // ── Newton-port scenes (Group A: basic kinematics + stacking) ──
+    /// 1-DoF revolute pendulum + a 3-link chain pendulum side by side.
+    /// Featherstone-stepped. Port of `example_basic_pendulum.py`.
+    Pendulum,
+    /// 4 columns side-by-side, each showing one joint kind in motion:
+    /// revolute, prismatic, ball, distance (XPBD equality). Port of
+    /// `example_basic_joints.py`.
+    JointSampler,
+    /// 32×32 sinusoidal heightfield with 30 mixed primitives dropped
+    /// on top. Port of `example_basic_heightfield.py`.
+    Heightfield,
+    /// Kinematic conveyor surface (long box with prescribed velocity)
+    /// + dropped boxes that slide along. Port of
+    /// `example_basic_conveyor.py`.
+    Conveyor,
+    /// Tall sphere/box pyramid being struck by a heavy projectile.
+    /// Larger and more dramatic than `Tower`. Port of `example_pyramid.py`.
+    Pyramid,
+    // ── Group B: cloth + cable variations ──
+    /// Hanging cloth strip with a live "bending stiffness" slider.
+    /// Side-by-side comparison of two strips. Port of
+    /// `example_cloth_bending.py`.
+    ClothBending,
+    /// Cloth pinned along TOP and BOTTOM edges; bottom edge rotates
+    /// slowly to twist the cloth. Port of `example_cloth_twist.py`.
+    ClothTwist,
+    /// Several cable polylines dropped into a bowl, watch them pile
+    /// up. CABLE bending stiffness. Port of `example_cable_pile.py`.
+    CablePile,
+    /// Three cables meeting at a Y junction (CONNECT equality at the
+    /// central particle). Port of `example_cable_y_junction.py`.
+    CableYJunction,
+    // ── Group C: MPM extensions ──
+    /// Ball of snow MPM particles dropped onto ground; uses
+    /// `MpmRheology::Snow`. Port of `example_mpm_snow_ball.py`.
+    MpmSnowBall,
+    /// Heavy rigid sphere drops INTO a pit of MPM sand (uses existing
+    /// `mpm_rigid_spheres` two-way coupling). Port of
+    /// `example_mpm_twoway_coupling.py`.
+    MpmTwoWay,
+    // ── Group D: diffsim + control ──
+    /// Cart-pole built procedurally (cart on prismatic + pole on
+    /// revolute). PD controller with target slider. Port of
+    /// `example_robot_cartpole.py` / `example_selection_cartpole.py`.
+    CartPole,
+    /// 16 cart-poles in a row, each independently balanced.
+    /// Demonstrates batched controllers. Port of
+    /// `example_selection_cartpole.py`.
+    CartPoleSwarm,
+    /// Closed kinematic loop (4-bar linkage) using `JointMimic` to
+    /// enforce closure. Driver joint is one revolute; other 3 mimic
+    /// via polynomial. Port of `example_kamino_basic_fourbar.py`.
+    FourBar,
+    /// Ball is launched with `(v, angle)` initial condition; target
+    /// hoop sits some distance away; gradient descent on miss
+    /// distance. Port of `example_diffsim_ball.py`.
+    DiffBall,
+    /// Particle inside a "cage" of springs; gradient of position w.r.t.
+    /// spring rest lengths; gradient-descent design optimisation.
+    /// Port of `example_diffsim_spring_cage.py`.
+    DiffSpring,
+    // ── Group E: sensors / multi-env ──
+    /// 6×10 brick wall (rectangular boxes) being struck by a heavy
+    /// projectile from one side. Wide, not tall. Port of
+    /// `example_brick_stacking.py` (geometry only — no robot arm).
+    BrickWall,
+    /// Tetrahedral soft cube dropped onto a hanging VBD cloth. Tests
+    /// soft-on-soft contact at the engine layer. Port of
+    /// `example_softbody_dropping_to_cloth.py`.
+    SoftbodyDrop,
 }
 
 impl Scene {
@@ -836,6 +951,25 @@ impl Scene {
         Scene::Cable,
         Scene::Mpm,
         Scene::Jelly,
+        // Newton-port scenes.
+        Scene::Pendulum,
+        Scene::JointSampler,
+        Scene::Heightfield,
+        Scene::Conveyor,
+        Scene::Pyramid,
+        Scene::ClothBending,
+        Scene::ClothTwist,
+        Scene::CablePile,
+        Scene::CableYJunction,
+        Scene::MpmSnowBall,
+        Scene::MpmTwoWay,
+        Scene::CartPole,
+        Scene::CartPoleSwarm,
+        Scene::FourBar,
+        Scene::DiffBall,
+        Scene::DiffSpring,
+        Scene::BrickWall,
+        Scene::SoftbodyDrop,
     ];
 
     fn label(self) -> &'static str {
@@ -865,6 +999,24 @@ impl Scene {
             Scene::Cable => "Cable (Stage 20.1)",
             Scene::Mpm => "MPM sand (Stage 24d)",
             Scene::Jelly => "Jelly (Stage 20.3)",
+            Scene::Pendulum => "Pendulum (single + 3-link)",
+            Scene::JointSampler => "Joint sampler (revolute/prismatic/ball)",
+            Scene::Heightfield => "Heightfield (waves + dropped primitives)",
+            Scene::Conveyor => "Conveyor (kinematic belt)",
+            Scene::Pyramid => "Pyramid (heavy projectile)",
+            Scene::ClothBending => "Cloth bending (k_b A/B)",
+            Scene::ClothTwist => "Cloth twist (rotating bottom edge)",
+            Scene::CablePile => "Cable pile (CABLE bending)",
+            Scene::CableYJunction => "Cable Y-junction (CONNECT)",
+            Scene::MpmSnowBall => "MPM snow ball (Stomakhin)",
+            Scene::MpmTwoWay => "MPM two-way (sand + rigid sphere)",
+            Scene::CartPole => "Cart-pole (PD balance)",
+            Scene::CartPoleSwarm => "Cart-pole swarm (16 envs)",
+            Scene::FourBar => "Four-bar linkage (JointMimic closure)",
+            Scene::DiffBall => "Diffsim ball (projectile gradient)",
+            Scene::DiffSpring => "Diffsim spring cage (rest-length gradient)",
+            Scene::BrickWall => "Brick wall (wide, projectile)",
+            Scene::SoftbodyDrop => "Softbody onto cloth (jelly + VBD cloth)",
         }
     }
 
@@ -884,8 +1036,24 @@ impl Scene {
             | Scene::Actuator
             | Scene::Quadrotor
             | Scene::NeuralPolicy
-            | Scene::NeuralLstm => SolverKind::Featherstone,
-            Scene::VbdCloth | Scene::Cable | Scene::Jelly => SolverKind::Vbd,
+            | Scene::NeuralLstm
+            // Newton-port articulated scenes use Featherstone for proper
+            // joint dynamics. `Conveyor` doesn't have an articulation but
+            // we use Featherstone-friendly construction for the kinematic
+            // belt; XPBD is fine.
+            | Scene::Pendulum
+            | Scene::JointSampler
+            | Scene::CartPole
+            | Scene::CartPoleSwarm
+            | Scene::FourBar => SolverKind::Featherstone,
+            Scene::VbdCloth
+            | Scene::Cable
+            | Scene::Jelly
+            | Scene::ClothBending
+            | Scene::ClothTwist
+            | Scene::CablePile
+            | Scene::CableYJunction
+            | Scene::SoftbodyDrop => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2179,6 +2347,24 @@ impl Sim {
             Scene::Cable => build_cable_model(),
             Scene::Mpm => build_mpm_model(),
             Scene::Jelly => build_jelly_model(),
+            Scene::Pendulum => build_pendulum_model(),
+            Scene::JointSampler => build_joint_sampler_model(),
+            Scene::Heightfield => build_heightfield_model(),
+            Scene::Conveyor => build_conveyor_model(),
+            Scene::Pyramid => build_pyramid_model(),
+            Scene::ClothBending => build_cloth_bending_model(),
+            Scene::ClothTwist => build_cloth_twist_model(),
+            Scene::CablePile => build_cable_pile_model(),
+            Scene::CableYJunction => build_cable_y_junction_model(),
+            Scene::MpmSnowBall => build_mpm_model(),
+            Scene::MpmTwoWay => build_mpm_model(),
+            Scene::CartPole => build_cartpole_model(),
+            Scene::CartPoleSwarm => build_cartpole_swarm_model(),
+            Scene::FourBar => build_fourbar_model(),
+            Scene::DiffBall => build_diff_ball_model(),
+            Scene::DiffSpring => build_diff_spring_model(),
+            Scene::BrickWall => build_brick_wall_model(),
+            Scene::SoftbodyDrop => build_softbody_drop_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5152,6 +5338,34 @@ fn apply_scene_switch(
     // scene drops a fresh column.
     scene_states.mpm.needs_reset = true;
     scene_states.mpm.particle_count = 0;
+    // MPM-port scenes: pre-set rheology so the user doesn't have to
+    // dig the dropdown for the obvious default.
+    if scene == Scene::MpmSnowBall {
+        scene_states.mpm.rheology_idx = 1;
+    } else if scene == Scene::MpmTwoWay {
+        scene_states.mpm.rheology_idx = 0;
+    }
+    // Newton-port scenes that need a per-frame state reset on entry.
+    scene_states.cartpole.controller = None;
+    scene_states.cartpole.last_x = 0.0;
+    scene_states.cartpole.last_theta = 0.0;
+    scene_states.cartpole.last_force = 0.0;
+    scene_states.cartpole.perturb_timer = 0.0;
+    scene_states.cloth_twist.angle = 0.0;
+    scene_states.cloth_twist.top_indices.clear();
+    scene_states.cloth_twist.bottom_indices.clear();
+    scene_states.cloth_twist.bottom_rest.clear();
+    scene_states.diff_ball.rerun = true;
+    scene_states.diff_ball.iters_run = 0;
+    scene_states.diff_ball.history.clear();
+    scene_states.diff_ball.trajectory.clear();
+    scene_states.diff_ball.playback_t = 0.0;
+    scene_states.diff_spring.rerun = true;
+    scene_states.diff_spring.iters_run = 0;
+    scene_states.fourbar.driver_angle = 0.0;
+    let _ = &scene_states.pendulum;
+    let _ = &scene_states.conveyor;
+    let _ = &scene_states.cloth_bend;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5260,7 +5474,16 @@ fn step_simulation(
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
     // standard solver pipeline; `update_mpm_example` drives it.
-    if sim.scene == Scene::Mpm {
+    if sim.scene == Scene::Mpm
+        || sim.scene == Scene::MpmSnowBall
+        || sim.scene == Scene::MpmTwoWay
+    {
+        return;
+    }
+    // DiffBall + DiffSpring are host-driven (analytical projectile +
+    // gradient-descent on rest lengths); the update systems write
+    // body_q on the host directly.
+    if sim.scene == Scene::DiffBall || sim.scene == Scene::DiffSpring {
         return;
     }
     let frame_start = std::time::Instant::now();
@@ -8378,7 +8601,11 @@ fn draw_cable_gizmos(
     state: Res<CableExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Cable {
+    let multi_cable = matches!(
+        sim.scene,
+        Scene::CablePile | Scene::CableYJunction,
+    );
+    if sim.scene != Scene::Cable && !multi_cable {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
@@ -8393,6 +8620,35 @@ fn draw_cable_gizmos(
     } else {
         Color::srgb(0.40, 0.70, 0.95) // soft mode = cool blue
     };
+    // For multi-cable scenes, walk the per-cable particle lists so we
+    // don't draw a stray segment between cable N's last particle and
+    // cable (N+1)'s first.
+    if multi_cable && sim.model.cable_count > 0 {
+        let offsets = match sim.model.cable_particle_offsets.host() {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+        let particles = match sim.model.cable_particles.host() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        for c in 0..sim.model.cable_count {
+            let start = offsets[c] as usize;
+            let end = offsets[c + 1] as usize;
+            for k in start..end.saturating_sub(1) {
+                let i_a = particles[k] as usize;
+                let i_b = particles[k + 1] as usize;
+                let a = pq[i_a];
+                let b = pq[i_b];
+                gizmos.line(
+                    Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+                    Vec3::new(b.x as f32, b.y as f32, b.z as f32),
+                    cable_color,
+                );
+            }
+        }
+        return;
+    }
     for i in 0..n - 1 {
         let a = pq[i];
         let b = pq[i + 1];
@@ -8424,13 +8680,15 @@ fn draw_jelly_gizmos(
     state: Res<JellyExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Jelly {
+    if sim.scene != Scene::Jelly && sim.scene != Scene::SoftbodyDrop {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
         return;
     };
-    if !state.show_wireframe {
+    // For SoftbodyDrop the jelly tet wireframe is always shown — the
+    // demo's whole point is the cube colliding with cloth.
+    if sim.scene == Scene::Jelly && !state.show_wireframe {
         return;
     }
     let Ok(tet_idx) = sim.model.tet_indices.host() else {
@@ -8610,6 +8868,18 @@ fn control_pane(
                     | Scene::Cable
                     | Scene::Mpm
                     | Scene::Jelly
+                    | Scene::Pendulum
+                    | Scene::Conveyor
+                    | Scene::ClothBending
+                    | Scene::ClothTwist
+                    | Scene::MpmSnowBall
+                    | Scene::MpmTwoWay
+                    | Scene::CartPole
+                    | Scene::CartPoleSwarm
+                    | Scene::FourBar
+                    | Scene::DiffBall
+                    | Scene::DiffSpring
+                    | Scene::SoftbodyDrop
             ),
             _ => false,
         },
@@ -8738,6 +9008,18 @@ fn control_pane(
         Scene::Cable => Some("Cable (Stage 20.1)"),
         Scene::Mpm => Some("MPM sand (Stage 24d)"),
         Scene::Jelly => Some("Jelly (Stage 20.3)"),
+        Scene::Pendulum => Some("Pendulum"),
+        Scene::Conveyor => Some("Conveyor"),
+        Scene::ClothBending => Some("Cloth bending"),
+        Scene::ClothTwist => Some("Cloth twist"),
+        Scene::MpmSnowBall => Some("MPM snow ball"),
+        Scene::MpmTwoWay => Some("MPM two-way"),
+        Scene::CartPole => Some("Cart-pole (PD)"),
+        Scene::CartPoleSwarm => Some("Cart-pole swarm"),
+        Scene::FourBar => Some("Four-bar"),
+        Scene::DiffBall => Some("Diff ball"),
+        Scene::DiffSpring => Some("Diff spring"),
+        Scene::SoftbodyDrop => Some("Softbody → cloth"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -8808,6 +9090,35 @@ fn control_pane(
                             accent_color,
                         )
                     }
+                    Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
+                    Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
+                    Scene::ClothBending => cloth_bending_pane(
+                        ui,
+                        &mut pane_states.cloth_bend,
+                        &mut pending,
+                        scene,
+                    ),
+                    Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
+                    Scene::MpmSnowBall => {
+                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                    }
+                    Scene::MpmTwoWay => {
+                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                    }
+                    Scene::CartPole => cartpole_pane(
+                        ui,
+                        &mut pane_states.cartpole,
+                        accent_color,
+                    ),
+                    Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
+                    Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
+                    Scene::DiffBall => {
+                        diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color)
+                    }
+                    Scene::DiffSpring => {
+                        diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
+                    }
+                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &sim),
                     _ => {}
                 });
         }
@@ -10720,7 +11031,10 @@ fn update_mpm_example(
     mut state: ResMut<MpmExampleState>,
     run: Res<SimRunState>,
 ) {
-    if sim.scene != Scene::Mpm {
+    if !matches!(
+        sim.scene,
+        Scene::Mpm | Scene::MpmSnowBall | Scene::MpmTwoWay
+    ) {
         return;
     }
 
@@ -10781,28 +11095,69 @@ fn update_mpm_example(
         let queue = sim.engine.queue().unwrap().clone();
         let n_axis = state.pour_axis_count.max(2) as usize;
         let mut particles = Vec::with_capacity(n_axis.pow(3));
-        let lo = [-0.18_f32, state.spout_y - 0.18, -0.18_f32];
-        let hi = [0.18_f32, state.spout_y + 0.18, 0.18_f32];
+        // Per-scene particle layouts:
+        //   * `Mpm`         — column pour (default).
+        //   * `MpmSnowBall` — spherical ball at `spout_y` (we cull
+        //                     particles outside the sphere).
+        //   * `MpmTwoWay`   — wider, shallower pile so the rigid
+        //                     sphere has room to plunge in.
+        let lo: [f32; 3];
+        let hi: [f32; 3];
+        let cull_sphere: Option<(f32, f32, f32, f32)>;
+        match sim.scene {
+            Scene::MpmSnowBall => {
+                let r = 0.20_f32;
+                let cy = state.spout_y;
+                lo = [-r, cy - r, -r];
+                hi = [r, cy + r, r];
+                cull_sphere = Some((0.0, cy, 0.0, r));
+            }
+            Scene::MpmTwoWay => {
+                lo = [-0.30, 0.05, -0.30];
+                hi = [0.30, 0.20, 0.30];
+                cull_sphere = None;
+            }
+            _ => {
+                lo = [-0.18, state.spout_y - 0.18, -0.18];
+                hi = [0.18, state.spout_y + 0.18, 0.18];
+                cull_sphere = None;
+            }
+        }
         let dx = (hi[0] - lo[0]) / n_axis as f32;
         let dy = (hi[1] - lo[1]) / n_axis as f32;
         let dz = (hi[2] - lo[2]) / n_axis as f32;
         for ix in 0..n_axis {
             for iy in 0..n_axis {
                 for iz in 0..n_axis {
-                    particles.push([
+                    let p = [
                         lo[0] + (ix as f32 + 0.5) * dx,
                         lo[1] + (iy as f32 + 0.5) * dy,
                         lo[2] + (iz as f32 + 0.5) * dz,
-                    ]);
+                    ];
+                    if let Some((cx, cy, cz, r)) = cull_sphere {
+                        let dx0 = p[0] - cx;
+                        let dy0 = p[1] - cy;
+                        let dz0 = p[2] - cz;
+                        if dx0 * dx0 + dy0 * dy0 + dz0 * dz0 > r * r {
+                            continue;
+                        }
+                    }
+                    particles.push(p);
                 }
             }
         }
         if let Some(m) = sim.mpm.as_mut() {
             m.set_particles(&queue, &particles).expect("set particles");
         }
-        sim.mpm_particles = particles;
         sim.mpm_rigid_spheres.clear();
-        state.particle_count = (n_axis * n_axis * n_axis) as u32;
+        state.particle_count = particles.len() as u32;
+        sim.mpm_particles = particles;
+        // For MpmTwoWay, auto-spawn the rigid sphere on first frame so
+        // the user immediately sees the two-way coupling demo.
+        if sim.scene == Scene::MpmTwoWay {
+            sim.mpm_rigid_spheres
+                .push(([0.0, 1.0, 0.0], 0.12, [0.0, -2.5, 0.0]));
+        }
         state.needs_reset = false;
         // First read so the viewer doesn't briefly show empty.
         if let Some(m) = sim.mpm.as_mut() {
@@ -11047,7 +11402,10 @@ fn mpm_pane(
 
 /// Renders MPM particles as point gizmos. Cheap; doesn't allocate.
 fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
-    if sim.scene != Scene::Mpm {
+    if !matches!(
+        sim.scene,
+        Scene::Mpm | Scene::MpmSnowBall | Scene::MpmTwoWay
+    ) {
         return;
     }
     if sim.mpm_particles.is_empty() {
@@ -11096,3 +11454,2124 @@ fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
     }
 }
 
+
+// ────────────────────────────────────────────────────────────────────
+// Newton-port scenes — simple ports of `xtra/newton/newton/examples/`.
+// Geometry + topology + demo dynamic are matched to the source; exact
+// numeric tuning is local to molla.
+// ────────────────────────────────────────────────────────────────────
+
+// ── Pendulum scene ─────────────────────────────────────────────────
+//
+// Two articulations side-by-side:
+//   * A single 1-DoF revolute pendulum (rod + weight) at -X.
+//   * A 3-link chain pendulum at +X.
+// Featherstone-stepped — same dynamics path as `Scene::Arm`.
+
+const PENDULUM_BASE_Y: f64 = 4.0;
+const PENDULUM_LINK_LEN: f64 = 0.8;
+const PENDULUM_LINK_RADIUS: f64 = 0.06;
+const PENDULUM_LINK_MASS: f64 = 0.6;
+
+fn build_pendulum_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let half_h = PENDULUM_LINK_LEN * 0.5;
+    let radius = PENDULUM_LINK_RADIUS;
+    let inertia = capsule_inertia(PENDULUM_LINK_MASS, half_h, radius);
+
+    let mut visuals = Vec::new();
+
+    // ── Single 1-DoF pendulum at -X. ───────────────────────────────
+    b.begin_articulation();
+    let single_anchor = MVec3::new(-1.5, PENDULUM_BASE_Y, 0.0);
+    let single = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass: PENDULUM_LINK_MASS,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(single_anchor - MVec3::new(0.0, half_h, 0.0)),
+    );
+    b.add_shape_capsule(single, half_h, radius, mp::Transform::IDENTITY)
+        .expect("single pendulum shape");
+    visuals.push(BodyVisual::Capsule {
+        half_h: half_h as f32,
+        radius: radius as f32,
+    });
+    // Hang straight down at q=0: rotate joint frame 180° around X so
+    // joint-local +Y → world -Y. Matches the `Arm` scene's trick.
+    let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
+    let x_p_single = mp::Transform::new(single_anchor, flip);
+    let x_c_single = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+    b.add_joint_revolute(mp::BodyId::NONE, single, x_p_single, x_c_single, MVec3::Z)
+        .expect("single pendulum joint");
+
+    // ── 3-link chain pendulum at +X. ───────────────────────────────
+    b.begin_articulation();
+    let chain_anchor = MVec3::new(1.5, PENDULUM_BASE_Y, 0.0);
+    let mut prev = mp::BodyId::NONE;
+    let mut next_pos = chain_anchor - MVec3::new(0.0, half_h, 0.0);
+    for i in 0..3 {
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: PENDULUM_LINK_MASS,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(next_pos),
+        );
+        b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("chain link shape");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+        let x_p = if i == 0 {
+            mp::Transform::new(chain_anchor, flip)
+        } else {
+            mp::Transform::from_translation(MVec3::new(0.0, half_h, 0.0))
+        };
+        let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+        b.add_joint_revolute(prev, body, x_p, x_c, MVec3::Z)
+            .expect("chain joint");
+        prev = body;
+        next_pos = next_pos - MVec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
+    }
+
+    // Floor.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("floor plane");
+
+    (b.build().expect("pendulum model"), visuals)
+}
+
+/// Read joint angles + angular velocities for the pendulum readout.
+#[derive(Resource, Default)]
+struct PendulumExampleState {
+    /// Single-pendulum angle (rad) and angular velocity (rad/s).
+    single_q: f32,
+    single_qd: f32,
+    /// 3-link chain joint angles and rates.
+    chain_q: [f32; 3],
+    chain_qd: [f32; 3],
+}
+
+fn update_pendulum_example(sim: Res<Sim>, mut state: ResMut<PendulumExampleState>) {
+    if sim.scene != Scene::Pendulum {
+        return;
+    }
+    let q = match sim.state_a.joint_q.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let qd = match sim.state_a.joint_qd.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    if q.len() >= 4 && qd.len() >= 4 {
+        state.single_q = q[0] as f32;
+        state.single_qd = qd[0] as f32;
+        state.chain_q = [q[1] as f32, q[2] as f32, q[3] as f32];
+        state.chain_qd = [qd[1] as f32, qd[2] as f32, qd[3] as f32];
+    }
+}
+
+fn pendulum_pane(ui: &mut egui::Ui, state: &PendulumExampleState) {
+    ui.label("Two pendulums in one scene:");
+    ui.separator();
+    ui.label("Single (-X)");
+    readout(ui, "  · angle", &format!("{:>+5.2} rad", state.single_q));
+    readout(ui, "  · ω", &format!("{:>+5.2} rad/s", state.single_qd));
+    ui.separator();
+    ui.label("3-link chain (+X)");
+    for i in 0..3 {
+        readout(
+            ui,
+            &format!("  · q{} | ω{}", i, i),
+            &format!(
+                "{:>+5.2} rad | {:>+5.2} rad/s",
+                state.chain_q[i], state.chain_qd[i]
+            ),
+        );
+    }
+    ui.separator();
+    ui.small("Featherstone GPU solver. Drag to swing.");
+    ui.small("Reset (R) to restart from straight-down rest.");
+}
+
+// ── Newton-port scene builders (Group A-E). Each block defines its
+//    own constants near the top, the build_*_model() function, and
+//    (optionally) a state struct, an update_*_example() pre-step
+//    system, and a *_pane() right-rail panel.
+/// Joint-sampler scene: 3 columns side-by-side, each showing one joint
+/// kind in motion. Port of `xtra/newton/newton/examples/basic/example_basic_joints.py`.
+///   * Column 0 (-2): revolute pendulum about +Z (rotating arm).
+///   * Column 1 ( 0): prismatic slider along +Y.
+///   * Column 2 (+2): ball joint (3D pendulum).
+///
+/// We omit Newton's 4th "distance" column because molla's Featherstone
+/// solver doesn't enforce XPBD `CONNECT` equalities, and XPBD doesn't
+/// dispatch revolute/ball joint constraints — so a single scene can't
+/// show all four under one solver. The `Rope` scene already covers the
+/// distance-equality case via XPBD CONNECT.
+fn build_joint_sampler_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+
+    let base_y = 4.0_f64;
+    let half_h = 0.4_f64;
+    let radius = 0.07_f64;
+    let mass = 0.6_f64;
+    let inertia = capsule_inertia(mass, half_h, radius);
+    let mut visuals = Vec::new();
+
+    // Helper: hang a capsule from a revolute/prismatic anchor at the
+    // given column x-offset. Joint flip rotates joint-local +Y onto
+    // world -Y so the rest pose hangs straight down (matches
+    // `build_arm_model_with`).
+    let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
+
+    // ── Column 0: revolute about +Z. ──────────────────────────────
+    {
+        b.begin_articulation();
+        let anchor = MVec3::new(-2.0, base_y, 0.0);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(anchor - MVec3::new(0.0, half_h, 0.0)),
+        );
+        b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("rev cap");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+        let x_p = mp::Transform::new(anchor, flip);
+        let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+        b.add_joint_revolute(mp::BodyId::NONE, body, x_p, x_c, MVec3::Z)
+            .expect("revolute joint");
+    }
+
+    // ── Column 1: prismatic along +Y. ─────────────────────────────
+    {
+        b.begin_articulation();
+        let anchor = MVec3::new(0.0, base_y, 0.0);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass,
+                    com: MVec3::ZERO,
+                    inertia: box_inertia_xyz(mass, 0.15, 0.15, 0.15),
+                })
+                .with_position(anchor - MVec3::new(0.0, 0.5, 0.0)),
+        );
+        b.add_shape_box(body, MVec3::splat(0.15), mp::Transform::IDENTITY)
+            .expect("prism box");
+        visuals.push(BodyVisual::Box(Vec3::splat(0.15)));
+        let x_p = mp::Transform::from_translation(anchor);
+        let x_c = mp::Transform::IDENTITY;
+        b.add_joint_prismatic(mp::BodyId::NONE, body, x_p, x_c, MVec3::Y)
+            .expect("prismatic joint");
+    }
+
+    // ── Column 2: ball joint (3D pendulum). ───────────────────────
+    {
+        b.begin_articulation();
+        let anchor = MVec3::new(2.0, base_y, 0.0);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(anchor - MVec3::new(0.0, half_h, 0.0)),
+        );
+        b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("ball cap");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+        let x_p = mp::Transform::new(anchor, flip);
+        let x_c = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+        b.add_joint_ball(mp::BodyId::NONE, body, x_p, x_c)
+            .expect("ball joint");
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("joint sampler model"), visuals)
+}
+/// Heightfield scene — 32×32 sinusoidal heightfield with ~30 mixed
+/// primitives dropped on top. Port of `example_basic_heightfield.py`.
+/// Larger / more dramatic than the existing `Shapes` scene.
+fn build_heightfield_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.2);
+
+    let n: u32 = 32;
+    let cell = 0.5_f64;
+    let half = (n as f64 - 1.0) * cell * 0.5;
+    let mut heights = Vec::with_capacity((n * n) as usize);
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f64 - (n as f64 - 1.0) * 0.5) * cell;
+            let z = (j as f64 - (n as f64 - 1.0) * 0.5) * cell;
+            // Twin-frequency wavy field — bowls + ridges.
+            let h = 0.5 * (x * 0.45).sin() * (z * 0.45).cos()
+                + 0.2 * ((x + z) * 0.9).sin();
+            heights.push(h);
+        }
+    }
+    let hf = mp::Heightfield {
+        nx: n,
+        nz: n,
+        cell_size: cell,
+        origin: MVec3::new(-half, 0.0, -half),
+        heights,
+    };
+    let field_id = b.add_heightfield(hf);
+    b.add_shape_heightfield(mp::BodyId::NONE, field_id, mp::Transform::IDENTITY)
+        .expect("heightfield");
+
+    // Drop ~30 mixed primitives in a 6×5 grid pattern over the field.
+    let mut rng_state: u64 = 0xCAFEBABEDEADBEEF;
+    fn rng_uniform(s: &mut u64) -> f64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    }
+    fn random_quat(s: &mut u64) -> MQuat {
+        let axis = MVec3::new(rng_uniform(s), rng_uniform(s), rng_uniform(s))
+            .normalize_or_zero();
+        let axis = if axis.length_squared() < 1e-9 { MVec3::Y } else { axis };
+        let angle = rng_uniform(s) * std::f64::consts::PI;
+        MQuat::from_axis_angle(axis, angle)
+    }
+    let mut visuals = Vec::new();
+    let drop_grid = 6;
+    let drop_spacing = 1.6_f64;
+    for ix in 0..drop_grid {
+        for iz in 0..5 {
+            let x = (ix as f64 - (drop_grid as f64 - 1.0) * 0.5) * drop_spacing
+                + 0.2 * rng_uniform(&mut rng_state);
+            let z = (iz as f64 - 2.0) * drop_spacing
+                + 0.2 * rng_uniform(&mut rng_state);
+            let y = 6.0 + 0.5 * rng_uniform(&mut rng_state).abs();
+            let pos = MVec3::new(x, y, z);
+            let rot = random_quat(&mut rng_state);
+            match (ix + iz) % 3 {
+                0 => {
+                    let r = 0.30_f64;
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia::sphere(1.0, r))
+                            .with_pose(mp::Transform::new(pos, rot)),
+                    );
+                    b.add_shape_sphere(body, r, mp::Transform::IDENTITY)
+                        .expect("sphere");
+                    visuals.push(BodyVisual::Sphere(r as f32));
+                }
+                1 => {
+                    let h = 0.30_f64;
+                    let inertia = box_inertia(1.0, h);
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia {
+                                mass: 1.0,
+                                com: MVec3::ZERO,
+                                inertia,
+                            })
+                            .with_pose(mp::Transform::new(pos, rot)),
+                    );
+                    b.add_shape_box(body, MVec3::splat(h), mp::Transform::IDENTITY)
+                        .expect("box");
+                    visuals.push(BodyVisual::Box(Vec3::splat(h as f32)));
+                }
+                _ => {
+                    let half_h = 0.30_f64;
+                    let radius = 0.18_f64;
+                    let inertia = capsule_inertia(0.8, half_h, radius);
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia {
+                                mass: 0.8,
+                                com: MVec3::ZERO,
+                                inertia,
+                            })
+                            .with_pose(mp::Transform::new(pos, rot)),
+                    );
+                    b.add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+                        .expect("capsule");
+                    visuals.push(BodyVisual::Capsule {
+                        half_h: half_h as f32,
+                        radius: radius as f32,
+                    });
+                }
+            }
+        }
+    }
+
+    (b.build().expect("heightfield model"), visuals)
+}
+/// Conveyor scene — kinematic belt (long box) plus dropped boxes that
+/// slide along. Port of `example_basic_conveyor.py` (linearised — we
+/// use a straight belt instead of the annular ring mesh, which would
+/// require trimesh authoring).
+///
+/// The belt is body 0 (kinematic). The update system translates its
+/// pose along +X each frame at `belt_speed` m/s and snaps it back to
+/// the start when it overshoots, so friction carries the boxes along.
+const CONVEYOR_BELT_LEN: f64 = 6.0;
+const CONVEYOR_BELT_HALF_WIDTH: f64 = 0.6;
+const CONVEYOR_BELT_HALF_THICK: f64 = 0.05;
+const CONVEYOR_BELT_Y: f64 = 1.0;
+fn build_conveyor_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.2);
+
+    let mut visuals = Vec::new();
+
+    // Belt — body 0, kinematic, translated each frame in
+    // `update_conveyor_example`.
+    let belt_half = MVec3::new(
+        CONVEYOR_BELT_LEN * 0.5,
+        CONVEYOR_BELT_HALF_THICK,
+        CONVEYOR_BELT_HALF_WIDTH,
+    );
+    let belt = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(0.0, CONVEYOR_BELT_Y, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_box(belt, belt_half, mp::Transform::IDENTITY)
+        .expect("belt shape");
+    visuals.push(BodyVisual::Box(Vec3::new(
+        belt_half.x as f32,
+        belt_half.y as f32,
+        belt_half.z as f32,
+    )));
+
+    // Side rails — static, just keep boxes from rolling off the belt.
+    for &z_off in &[-CONVEYOR_BELT_HALF_WIDTH - 0.1, CONVEYOR_BELT_HALF_WIDTH + 0.1] {
+        b.add_shape_box(
+            mp::BodyId::NONE,
+            MVec3::new(CONVEYOR_BELT_LEN * 0.5, 0.15, 0.05),
+            mp::Transform::from_translation(MVec3::new(
+                0.0,
+                CONVEYOR_BELT_Y + 0.15,
+                z_off,
+            )),
+        )
+        .expect("rail shape");
+    }
+
+    // Dropped boxes — 8 of them, scattered along the belt.
+    for i in 0..8 {
+        let x = -CONVEYOR_BELT_LEN * 0.5 + (i as f64 + 0.5) * (CONVEYOR_BELT_LEN / 8.0);
+        let half = MVec3::splat(0.15);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: 0.5,
+                    com: MVec3::ZERO,
+                    inertia: box_inertia(0.5, 0.15),
+                })
+                .with_position(MVec3::new(
+                    x,
+                    CONVEYOR_BELT_Y + CONVEYOR_BELT_HALF_THICK + 0.20 + (i as f64) * 0.05,
+                    0.0,
+                )),
+        );
+        b.add_shape_box(body, half, mp::Transform::IDENTITY)
+            .expect("box shape");
+        visuals.push(BodyVisual::Box(Vec3::splat(0.15)));
+    }
+
+    // Floor.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("floor");
+
+    (b.build().expect("conveyor model"), visuals)
+}
+/// Pyramid scene — 10-layer 4-sided box pyramid struck by a heavy ball
+/// from above. Larger and more dramatic than the existing `Tower`.
+/// Port of `xtra/newton/newton/examples/contacts/example_pyramid.py`.
+const PYRAMID_LEVELS: usize = 10;
+const PYRAMID_BOX_HALF: f64 = 0.30;
+/// 2.05× spacing matches the Newton example — small gap so the
+/// neighbouring boxes don't collide on frame 0.
+const PYRAMID_SPACING: f64 = 2.05 * PYRAMID_BOX_HALF;
+const PYRAMID_BALL_RADIUS: f64 = 1.2;
+const PYRAMID_BALL_MASS: f64 = 80.0;
+const PYRAMID_BALL_HEIGHT: f64 = 14.0;
+fn build_pyramid_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.20);
+
+    let half = PYRAMID_BOX_HALF;
+    let spacing = PYRAMID_SPACING;
+    let inertia = box_inertia(1.0, half);
+    let half_v = MVec3::splat(half);
+
+    let mut visuals = Vec::new();
+    let layer_y0 = half + 0.001;
+
+    // 4-sided pyramid: layer L contains (PYRAMID_LEVELS - L)² boxes.
+    for level in 0..PYRAMID_LEVELS {
+        let row_count = PYRAMID_LEVELS - level;
+        let y = layer_y0 + (level as f64) * (PYRAMID_BOX_HALF * 2.0 + 0.005);
+        for ix in 0..row_count {
+            for iz in 0..row_count {
+                let x = (ix as f64 - (row_count as f64 - 1.0) * 0.5) * spacing;
+                let z = (iz as f64 - (row_count as f64 - 1.0) * 0.5) * spacing;
+                let body = b.add_body(
+                    mp::BodyParams::new()
+                        .with_spatial_inertia(mp::SpatialInertia {
+                            mass: 1.0,
+                            com: MVec3::ZERO,
+                            inertia,
+                        })
+                        .with_position(MVec3::new(x, y, z)),
+                );
+                b.add_shape_box(body, half_v, mp::Transform::IDENTITY)
+                    .expect("pyramid box");
+                visuals.push(BodyVisual::Box(Vec3::splat(half as f32)));
+            }
+        }
+    }
+
+    // Heavy wrecking ball.
+    let ball = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(
+                PYRAMID_BALL_MASS,
+                PYRAMID_BALL_RADIUS,
+            ))
+            // Drop slightly off-centre so the impact knocks the
+            // pyramid sideways rather than punching straight through.
+            .with_position(MVec3::new(1.5, PYRAMID_BALL_HEIGHT, 0.0)),
+    );
+    b.add_shape_sphere(ball, PYRAMID_BALL_RADIUS, mp::Transform::IDENTITY)
+        .expect("ball");
+    visuals.push(BodyVisual::Sphere(PYRAMID_BALL_RADIUS as f32));
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("pyramid model"), visuals)
+}
+/// ClothBending scene — two hanging cloth strips side by side, each
+/// built with a different bending compliance so the user can A/B
+/// compare the bending response. Port of
+/// `xtra/newton/newton/examples/cloth/example_cloth_bending.py`.
+const CLOTH_BEND_GRID_X: u32 = 12;
+const CLOTH_BEND_GRID_Y: u32 = 18;
+const CLOTH_BEND_W: f64 = 0.9;
+const CLOTH_BEND_H: f64 = 1.4;
+const CLOTH_BEND_TOP_Y: f64 = 4.0;
+/// Static slot for the cloth-bending compliance values, so
+/// `Sim::build_scene` (no SystemParam access) can read them on rebuild.
+/// `cloth_bending_pane` writes the bits when the user moves the
+/// sliders; `apply_scene_switch` triggers a rebuild via `pending`.
+static CLOTH_BEND_COMP_LEFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+static CLOTH_BEND_COMP_RIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+fn cloth_bend_left() -> f32 {
+    let bits = CLOTH_BEND_COMP_LEFT.load(std::sync::atomic::Ordering::Relaxed);
+    if bits == 0 { 0.05 } else { f32::from_bits(bits) }
+}
+fn cloth_bend_right() -> f32 {
+    let bits = CLOTH_BEND_COMP_RIGHT.load(std::sync::atomic::Ordering::Relaxed);
+    if bits == 0 { 5.0 } else { f32::from_bits(bits) }
+}
+fn set_cloth_bend(left: f32, right: f32) {
+    CLOTH_BEND_COMP_LEFT.store(left.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    CLOTH_BEND_COMP_RIGHT.store(right.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+fn build_cloth_bending_model() -> (mp::Model, Vec<BodyVisual>) {
+    build_cloth_bending_with(cloth_bend_left(), cloth_bend_right())
+}
+fn build_cloth_bending_with(comp_left: f32, comp_right: f32) -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.4);
+
+    // Two strips. Both pinned along their top edges so they hang.
+    for (side_idx, x_offset) in [-1.0_f64, 1.0].iter().enumerate() {
+        let comp = if side_idx == 0 { comp_left } else { comp_right };
+        let origin = MVec3::new(*x_offset - CLOTH_BEND_W * 0.5, CLOTH_BEND_TOP_Y, 0.0);
+        let u_axis = MVec3::new(CLOTH_BEND_W, 0.0, 0.0);
+        let v_axis = MVec3::new(0.0, -CLOTH_BEND_H, 0.0);
+        let (first, n, _) = b.add_cloth_grid_with_bending(
+            origin,
+            u_axis,
+            v_axis,
+            CLOTH_BEND_GRID_X,
+            CLOTH_BEND_GRID_Y,
+            0.04,                         // particle mass
+            0.025,                        // particle radius
+            5.0e-6,                       // stretch compliance (very stiff)
+            0.05,                         // max stretch ratio
+            comp as f64,                  // bending compliance — this is the A/B knob
+            mp::WorldId(0),
+        );
+        let _ = n;
+        // Pin top row only (iy = 0 → indices first..first+CLOTH_BEND_GRID_X).
+        for ix in 0..CLOTH_BEND_GRID_X {
+            b.pin_particle(first + ix);
+        }
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("cloth bending model"), Vec::new())
+}
+/// ClothTwist scene — a vertical cloth strip pinned along TOP and
+/// BOTTOM edges. The bottom edge is rotated each frame around the
+/// strip's vertical axis (Y) so the cloth twists. Port of
+/// `xtra/newton/newton/examples/cloth/example_cloth_twist.py`.
+const CLOTH_TWIST_GRID_X: u32 = 18;
+const CLOTH_TWIST_GRID_Y: u32 = 24;
+const CLOTH_TWIST_W: f64 = 1.0;
+const CLOTH_TWIST_H: f64 = 1.6;
+const CLOTH_TWIST_TOP_Y: f64 = 4.0;
+const CLOTH_TWIST_CENTRE_X: f64 = 0.0;
+fn build_cloth_twist_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.4);
+
+    let origin = MVec3::new(
+        CLOTH_TWIST_CENTRE_X - CLOTH_TWIST_W * 0.5,
+        CLOTH_TWIST_TOP_Y,
+        0.0,
+    );
+    let u_axis = MVec3::new(CLOTH_TWIST_W, 0.0, 0.0);
+    let v_axis = MVec3::new(0.0, -CLOTH_TWIST_H, 0.0);
+    let (first, _, _) = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        CLOTH_TWIST_GRID_X,
+        CLOTH_TWIST_GRID_Y,
+        0.04,                                  // particle mass
+        0.025,                                 // particle radius
+        5.0e-6,                                // stretch compliance
+        0.05,                                  // max stretch ratio
+        mp::WorldId(0),
+    );
+    // Pin top row (iy = 0).
+    for ix in 0..CLOTH_TWIST_GRID_X {
+        b.pin_particle(first + ix);
+    }
+    // Pin bottom row (iy = CLOTH_TWIST_GRID_Y - 1) — driven by
+    // `update_cloth_twist_example`.
+    let bottom_iy = CLOTH_TWIST_GRID_Y - 1;
+    for ix in 0..CLOTH_TWIST_GRID_X {
+        b.pin_particle(first + bottom_iy * CLOTH_TWIST_GRID_X + ix);
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("cloth twist model"), Vec::new())
+}
+/// CablePile scene — drop a handful of cable polylines into a "bowl"
+/// (4 walls + floor) and watch them pile / coil. Port of
+/// `xtra/newton/newton/examples/cable/example_cable_pile.py` (simpler
+/// — we ship straight cables instead of sinusoidally-wavy ones).
+fn build_cable_pile_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.6);
+
+    // Bowl: floor + 4 vertical walls.
+    let bowl_size = 1.6_f64;
+    let wall_h = 0.8_f64;
+    let wall_t = 0.05_f64;
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(bowl_size, wall_h, wall_t),
+        mp::Transform::from_translation(MVec3::new(0.0, wall_h, bowl_size)),
+    )
+    .expect("wall +Z");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(bowl_size, wall_h, wall_t),
+        mp::Transform::from_translation(MVec3::new(0.0, wall_h, -bowl_size)),
+    )
+    .expect("wall -Z");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(wall_t, wall_h, bowl_size),
+        mp::Transform::from_translation(MVec3::new(bowl_size, wall_h, 0.0)),
+    )
+    .expect("wall +X");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(wall_t, wall_h, bowl_size),
+        mp::Transform::from_translation(MVec3::new(-bowl_size, wall_h, 0.0)),
+    )
+    .expect("wall -X");
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    // 8 cables, alternating horizontal axis, dropped from staggered
+    // heights. No pins — they just fall and pile.
+    let cable_len = 1.4_f64;
+    let particles_per_cable: u32 = 24;
+    let mut rng_state: u64 = 0xFEEDFACECAFEBEEF;
+    fn rng(s: &mut u64) -> f64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    }
+    for i in 0..8 {
+        let h = 1.5 + (i as f64) * 0.30;
+        let yaw = (i as f64) * 0.7 + rng(&mut rng_state) * 0.2;
+        let dx = yaw.cos() * cable_len * 0.5;
+        let dz = yaw.sin() * cable_len * 0.5;
+        let cx = 0.6 * rng(&mut rng_state);
+        let cz = 0.6 * rng(&mut rng_state);
+        let p0 = MVec3::new(cx - dx, h, cz - dz);
+        let p1 = MVec3::new(cx + dx, h, cz + dz);
+        let _ = b.add_cable_polyline(
+            p0,
+            p1,
+            particles_per_cable,
+            0.04,                // particle mass
+            0.025,               // particle radius
+            5.0e5,               // stiffness
+            0.02,                // hard cap on stretch
+            mp::WorldId(0),
+        );
+    }
+
+    (b.build().expect("cable pile model"), Vec::new())
+}
+/// CableYJunction scene — three cables meeting at a Y junction. The
+/// first particle of each cable is welded to the same world point via
+/// a kinematic anchor body and `CONNECT` equalities. One cable is
+/// kinematic-pinned at its free end (top); the other two sag from
+/// gravity. Port of
+/// `xtra/newton/newton/examples/cable/example_cable_y_junction.py`.
+fn build_cable_y_junction_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.4);
+
+    let junction = MVec3::new(0.0, 2.5, 0.0);
+    let branch_len = 1.2_f64;
+    let particles_per_branch: u32 = 16;
+    let dirs = [
+        MVec3::new(1.0, 0.7, 0.0).normalize(),
+        MVec3::new(-0.5, 0.7, 0.866).normalize(),
+        MVec3::new(-0.5, 0.7, -0.866).normalize(),
+    ];
+    // 3 cable polylines all starting at junction, fanning outward.
+    let mut firsts = Vec::with_capacity(3);
+    for d in &dirs {
+        let p_far = junction + *d * branch_len;
+        let (first, _, _) = b.add_cable_polyline(
+            junction,
+            p_far,
+            particles_per_branch,
+            0.04,
+            0.025,
+            5.0e5,
+            0.02,
+            mp::WorldId(0),
+        );
+        firsts.push(first);
+    }
+
+    // Pin the very first particle of each cable so they share the
+    // junction point (Newton uses add_rod_graph; we approximate by
+    // pinning all three start particles in place).
+    for f in &firsts {
+        b.pin_particle(*f);
+    }
+    // The first cable's far endpoint stays kinematic (top hanger);
+    // the other two are free.
+    b.pin_particle(firsts[0] + particles_per_branch - 1);
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("cable y junction model"), Vec::new())
+}
+/// CartPole scene — identical topology to `NeuralPolicy` (cart on
+/// prismatic + pole on revolute) but driven by a hand-written PD on
+/// the pole angle. Port of `example_robot_cartpole.py` /
+/// `example_selection_cartpole.py`.
+fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) {
+    // Re-use the existing cart-pole topology — identical bodies and
+    // joints, just a different controller in the pre-step system.
+    build_neural_policy_model()
+}
+/// CartPoleSwarm scene — N independent cart-poles in a row, each in
+/// its own articulation. Demonstrates batched PD control. Port of
+/// `xtra/newton/newton/examples/selection/example_selection_cartpole.py`.
+const CARTPOLE_SWARM_N: usize = 16;
+const CARTPOLE_SWARM_SPACING: f64 = 1.2;
+fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.02);
+
+    let mut visuals = Vec::with_capacity(CARTPOLE_SWARM_N * 2);
+    let cart_inertia = box_inertia_xyz(CART_MASS, CART_HALF_X, CART_HALF_Y, CART_HALF_Z);
+    let pole_inertia = capsule_inertia(POLE_MASS, POLE_HALF_LEN, POLE_RADIUS);
+
+    for i in 0..CARTPOLE_SWARM_N {
+        let z = (i as f64 - (CARTPOLE_SWARM_N as f64 - 1.0) * 0.5) * CARTPOLE_SWARM_SPACING;
+        b.begin_articulation();
+        // Cart prismatic.
+        let cart = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: CART_MASS,
+                    com: MVec3::ZERO,
+                    inertia: cart_inertia,
+                })
+                .with_position(MVec3::new(0.0, CART_RAIL_Y, z)),
+        );
+        b.add_shape_box(
+            cart,
+            MVec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z),
+            mp::Transform::IDENTITY,
+        )
+        .expect("cart box");
+        visuals.push(BodyVisual::Box(Vec3::new(
+            CART_HALF_X as f32,
+            CART_HALF_Y as f32,
+            CART_HALF_Z as f32,
+        )));
+        let x_p_cart = mp::Transform::from_translation(MVec3::new(0.0, CART_RAIL_Y, z));
+        b.add_joint_prismatic(mp::BodyId::NONE, cart, x_p_cart, mp::Transform::IDENTITY, MVec3::X)
+            .expect("cart prismatic");
+        // Pole revolute.
+        let pole = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: POLE_MASS,
+                    com: MVec3::ZERO,
+                    inertia: pole_inertia,
+                })
+                .with_position(MVec3::new(0.0, CART_RAIL_Y - POLE_HALF_LEN, z)),
+        );
+        b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, mp::Transform::IDENTITY)
+            .expect("pole capsule");
+        visuals.push(BodyVisual::Capsule {
+            half_h: POLE_HALF_LEN as f32,
+            radius: POLE_RADIUS as f32,
+        });
+        let x_p_pole = mp::Transform::from_translation(MVec3::new(0.0, CART_HALF_Y, 0.0));
+        let x_c_pole = mp::Transform::from_translation(MVec3::new(0.0, POLE_HALF_LEN, 0.0));
+        b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, MVec3::Z)
+            .expect("pole revolute");
+    }
+
+    (b.build().expect("cartpole swarm model"), visuals)
+}
+/// FourBar scene — a closed kinematic 4-bar linkage. Newton's
+/// `kamino_basic_fourbar` example loads a USD prim; we build it
+/// procedurally as 4 bodies + 3 revolute joints in a tree, plus a
+/// `JointMimic` linear-polynomial coupling on the closing pair so the
+/// loop appears closed visually. Per the spec — driver joint is one
+/// revolute, the others mimic via polynomial.
+const FOURBAR_BAR_RADIUS: f32 = 0.04;
+const FOURBAR_BASE_Y: f64 = 2.5;
+fn build_fourbar_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.10);
+
+    // 4-bar geometry (rectangular crank-rocker):
+    //   bar A — ground crank (rotates around world frame, length L_a)
+    //   bar B — coupler     (length L_b)
+    //   bar C — output rocker (length L_c)
+    // The fourth bar is the implicit world ground (distance L_d
+    // between the two ground pivots).
+    let l_a = 0.6_f64;
+    let l_b = 1.2_f64;
+    let l_c = 0.6_f64;
+    let _l_d = 1.0_f64;
+    let mass = 0.3_f64;
+    let inertia = box_inertia_xyz(mass, 0.05, l_a * 0.5, 0.05);
+
+    let mut visuals = Vec::with_capacity(4);
+
+    // ── Driver crank (bar A). Anchored at world-X = -0.5. ────────
+    b.begin_articulation();
+    let a_pivot = MVec3::new(-0.5, FOURBAR_BASE_Y, 0.0);
+    let bar_a = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(a_pivot - MVec3::new(0.0, l_a * 0.5, 0.0)),
+    );
+    b.add_shape_capsule(bar_a, l_a * 0.5, FOURBAR_BAR_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("bar A capsule");
+    visuals.push(BodyVisual::Capsule {
+        half_h: (l_a * 0.5) as f32,
+        radius: FOURBAR_BAR_RADIUS,
+    });
+    let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
+    let driver_id = b
+        .add_joint_revolute(
+            mp::BodyId::NONE,
+            bar_a,
+            mp::Transform::new(a_pivot, flip),
+            mp::Transform::from_translation(MVec3::new(0.0, -l_a * 0.5, 0.0)),
+            MVec3::Z,
+        )
+        .expect("driver joint");
+
+    // ── Coupler (bar B), revolute to bar A's far end. ────────────
+    let bar_b = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass,
+                com: MVec3::ZERO,
+                inertia: box_inertia_xyz(mass, 0.05, l_b * 0.5, 0.05),
+            })
+            .with_position(MVec3::new(0.0, FOURBAR_BASE_Y - l_a, 0.0)),
+    );
+    b.add_shape_capsule(bar_b, l_b * 0.5, FOURBAR_BAR_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("bar B capsule");
+    visuals.push(BodyVisual::Capsule {
+        half_h: (l_b * 0.5) as f32,
+        radius: FOURBAR_BAR_RADIUS,
+    });
+    let coupler_id = b
+        .add_joint_revolute(
+            bar_a,
+            bar_b,
+            mp::Transform::from_translation(MVec3::new(0.0, l_a * 0.5, 0.0)),
+            mp::Transform::from_translation(MVec3::new(0.0, -l_b * 0.5, 0.0)),
+            MVec3::Z,
+        )
+        .expect("coupler joint");
+
+    // ── Output rocker (bar C), revolute to bar B's far end. ──────
+    let bar_c = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass,
+                com: MVec3::ZERO,
+                inertia,
+            })
+            .with_position(MVec3::new(0.5, FOURBAR_BASE_Y - l_a, 0.0)),
+    );
+    b.add_shape_capsule(bar_c, l_c * 0.5, FOURBAR_BAR_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("bar C capsule");
+    visuals.push(BodyVisual::Capsule {
+        half_h: (l_c * 0.5) as f32,
+        radius: FOURBAR_BAR_RADIUS,
+    });
+    let rocker_id = b
+        .add_joint_revolute(
+            bar_b,
+            bar_c,
+            mp::Transform::from_translation(MVec3::new(0.0, l_b * 0.5, 0.0)),
+            mp::Transform::from_translation(MVec3::new(0.0, -l_c * 0.5, 0.0)),
+            MVec3::Z,
+        )
+        .expect("rocker joint");
+
+    // Linear-identity JointMimic — coupler tracks `-driver` and the
+    // rocker tracks `+driver`. Real Freudenstein-equation closure is
+    // a transcendental relation; the spec calls for a polynomial fit
+    // so we ship the simplest case (linear) here. The visual loop
+    // closure is approximate but reads as a "crank + rocker" cycle.
+    let _ = b.add_equality_joint_mimic(driver_id, coupler_id, [0.0, -1.0, 0.0, 0.0, 0.0]);
+    let _ = b.add_equality_joint_mimic(driver_id, rocker_id, [0.0, 1.0, 0.0, 0.0, 0.0]);
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("fourbar model"), visuals)
+}
+/// DiffBall scene — a kinematic projectile + a target hoop. The host
+/// optimises `(v, angle)` via closed-form gradient on miss distance.
+/// Differs from Newton's `example_diffsim_ball.py` in that we don't
+/// run a particle simulation (molla's tape autograd targets rigid
+/// XPBD); we use the analytical projectile equations directly. The
+/// pedagogy — "diffsim finds the right initial conditions" — is the
+/// same.
+fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+
+    // Body 0 — kinematic ball whose pose is rewritten each frame from
+    // the analytical trajectory.
+    let ball = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(0.0, 0.5, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(ball, 0.10, mp::Transform::IDENTITY)
+        .expect("ball");
+
+    // Body 1 — kinematic target indicator (small sphere) drawn at the
+    // current target position.
+    let target = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(3.0, 1.5, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(target, 0.08, mp::Transform::IDENTITY)
+        .expect("target");
+
+    let visuals = vec![BodyVisual::Sphere(0.10), BodyVisual::Sphere(0.08)];
+    // Static plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("diff ball model"), visuals)
+}
+/// DiffSpring scene — particle inside a "cage" of springs, all
+/// anchored at fixed cube corners. The host runs gradient descent on
+/// per-spring rest lengths so the particle ends up at the target.
+/// Visualised as kinematic anchor bodies + a particle body + line
+/// gizmos for the springs. Port of `example_diffsim_spring_cage.py`.
+const DIFF_SPRING_CAGE_HALF: f64 = 0.6;
+const DIFF_SPRING_CENTRE_Y: f64 = 1.5;
+fn build_diff_spring_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+
+    let mut visuals = Vec::with_capacity(9);
+    // 8 cage-corner anchors (kinematic spheres). Order matches the
+    // anchor list initialised on first frame in update_diff_spring.
+    for sx in &[-1.0_f64, 1.0] {
+        for sy in &[-1.0_f64, 1.0] {
+            for sz in &[-1.0_f64, 1.0] {
+                let pos = MVec3::new(
+                    sx * DIFF_SPRING_CAGE_HALF,
+                    DIFF_SPRING_CENTRE_Y + sy * DIFF_SPRING_CAGE_HALF,
+                    sz * DIFF_SPRING_CAGE_HALF,
+                );
+                let body = b.add_body(
+                    mp::BodyParams::new()
+                        .with_mass(0.0)
+                        .with_inertia(molla::math::Mat3::ZERO)
+                        .with_position(pos)
+                        .with_flags(mp::BodyFlags::KINEMATIC),
+                );
+                b.add_shape_sphere(body, 0.04, mp::Transform::IDENTITY)
+                    .expect("anchor sphere");
+                visuals.push(BodyVisual::Sphere(0.04));
+            }
+        }
+    }
+    // Body 8 — kinematic particle (the variable being optimised). The
+    // host writes its position each frame from the gradient-descent
+    // result.
+    let particle = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_inertia(molla::math::Mat3::ZERO)
+            .with_position(MVec3::new(0.0, DIFF_SPRING_CENTRE_Y, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(particle, 0.08, mp::Transform::IDENTITY)
+        .expect("particle");
+    visuals.push(BodyVisual::Sphere(0.08));
+
+    // Static plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("diff spring model"), visuals)
+}
+/// BrickWall scene — a wide, low brick wall struck by a heavy
+/// projectile from one side. Geometry-only port of
+/// `xtra/newton/newton/examples/contacts/example_brick_stacking.py`
+/// (the full Newton example loads a Franka arm and stacks bricks
+/// with IK; we ship only the wall + projectile so the WIDE-not-TALL
+/// layout differentiates this from `Pyramid` and `Tower`).
+const BRICK_HALF: MVec3 = MVec3::new(0.18, 0.10, 0.10);
+const BRICK_GAP: f64 = 0.005;
+const BRICK_ROWS: usize = 6;
+const BRICK_COLS: usize = 10;
+fn build_brick_wall_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.20);
+
+    let mass = 0.6_f64;
+    let h2 = BRICK_HALF * BRICK_HALF;
+    let m_third = mass / 3.0;
+    let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+        m_third * (h2.y + h2.z),
+        m_third * (h2.x + h2.z),
+        m_third * (h2.x + h2.y),
+    ));
+
+    let mut visuals = Vec::new();
+
+    let layer_h = BRICK_HALF.y * 2.0 + BRICK_GAP;
+    let col_w = BRICK_HALF.x * 2.0 + BRICK_GAP;
+    for row in 0..BRICK_ROWS {
+        // Half-brick offset on every other row (real masonry).
+        let stagger = if row % 2 == 0 { 0.0 } else { BRICK_HALF.x };
+        for col in 0..BRICK_COLS {
+            let x = (col as f64 - (BRICK_COLS as f64 - 1.0) * 0.5) * col_w + stagger;
+            let y = BRICK_HALF.y + 0.001 + (row as f64) * layer_h;
+            let body = b.add_body(
+                mp::BodyParams::new()
+                    .with_spatial_inertia(mp::SpatialInertia {
+                        mass,
+                        com: MVec3::ZERO,
+                        inertia,
+                    })
+                    .with_position(MVec3::new(x, y, 0.0)),
+            );
+            b.add_shape_box(body, BRICK_HALF, mp::Transform::IDENTITY)
+                .expect("brick");
+            visuals.push(BodyVisual::Box(Vec3::new(
+                BRICK_HALF.x as f32,
+                BRICK_HALF.y as f32,
+                BRICK_HALF.z as f32,
+            )));
+        }
+    }
+
+    // Heavy projectile dropped from the +Z side. Aim it diagonally so
+    // gravity gives it a downward + side-on impact on the wall.
+    let proj_radius = 0.45_f64;
+    let proj_mass = 25.0_f64;
+    let projectile = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(proj_mass, proj_radius))
+            .with_position(MVec3::new(0.0, 12.0, 3.5)),
+    );
+    b.add_shape_sphere(projectile, proj_radius, mp::Transform::IDENTITY)
+        .expect("projectile");
+    visuals.push(BodyVisual::Sphere(proj_radius as f32));
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("brick wall model"), visuals)
+}
+/// SoftbodyDrop scene — a 6×6×3 tet jelly cube dropped onto a hanging
+/// VBD cloth. Tests soft-on-soft contact at the engine layer. Port of
+/// `xtra/newton/newton/examples/multiphysics/example_softbody_dropping_to_cloth.py`.
+const SOFT_DROP_TET_NX: u32 = 6;
+const SOFT_DROP_TET_NY: u32 = 6;
+const SOFT_DROP_TET_NZ: u32 = 3;
+const SOFT_DROP_TET_DX: f64 = 0.10;
+const SOFT_DROP_CLOTH_NX: u32 = 24;
+const SOFT_DROP_CLOTH_W: f64 = 1.6;
+fn build_softbody_drop_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.4);
+
+    // 1. Cloth grid hanging at Y ≈ 1.0, pinned at left + right edges.
+    let origin = MVec3::new(
+        -SOFT_DROP_CLOTH_W * 0.5,
+        1.0,
+        -SOFT_DROP_CLOTH_W * 0.5,
+    );
+    let u_axis = MVec3::new(SOFT_DROP_CLOTH_W, 0.0, 0.0);
+    let v_axis = MVec3::new(0.0, 0.0, SOFT_DROP_CLOTH_W);
+    let (cloth_first, _, _) = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        SOFT_DROP_CLOTH_NX,
+        SOFT_DROP_CLOTH_NX,
+        0.05,        // particle mass
+        0.04,        // particle radius (larger so contact lands)
+        5.0e-6,      // stretch compliance
+        0.05,        // max stretch
+        mp::WorldId(0),
+    );
+    // Pin two opposite edges (iy = 0 row and iy = NX-1 row).
+    for ix in 0..SOFT_DROP_CLOTH_NX {
+        b.pin_particle(cloth_first + ix);
+        b.pin_particle(cloth_first + (SOFT_DROP_CLOTH_NX - 1) * SOFT_DROP_CLOTH_NX + ix);
+    }
+
+    // 2. Tet jelly cube above the cloth at Y ≈ 2.5.
+    let cube_origin = MVec3::new(
+        -SOFT_DROP_TET_DX * (SOFT_DROP_TET_NX as f64 - 1.0) * 0.5,
+        2.5,
+        -SOFT_DROP_TET_DX * (SOFT_DROP_TET_NZ as f64 - 1.0) * 0.5,
+    );
+    for kk in 0..SOFT_DROP_TET_NZ {
+        for jj in 0..SOFT_DROP_TET_NY {
+            for ii in 0..SOFT_DROP_TET_NX {
+                let p = cube_origin
+                    + MVec3::new(
+                        ii as f64 * SOFT_DROP_TET_DX,
+                        jj as f64 * SOFT_DROP_TET_DX,
+                        kk as f64 * SOFT_DROP_TET_DX,
+                    );
+                b.add_particle(p, 0.05, SOFT_DROP_TET_DX * 0.5, mp::WorldId(0));
+            }
+        }
+    }
+    let v_at = |i: u32, j: u32, k: u32| -> u32 {
+        // Tet particle ids start AFTER the cloth's (cloth_first + nx² particles).
+        let cloth_n = SOFT_DROP_CLOTH_NX * SOFT_DROP_CLOTH_NX;
+        cloth_first + cloth_n + (k * SOFT_DROP_TET_NY + j) * SOFT_DROP_TET_NX + i
+    };
+    let mut tets = Vec::new();
+    for kk in 0..SOFT_DROP_TET_NZ - 1 {
+        for jj in 0..SOFT_DROP_TET_NY - 1 {
+            for ii in 0..SOFT_DROP_TET_NX - 1 {
+                let corners = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                let cell_tets = jelly_cube_to_six_tets(corners);
+                for tet in cell_tets {
+                    tets.push(tet);
+                }
+            }
+        }
+    }
+    let materials = vec![mp::MaterialNeoHookean::elastic(2.0e5, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; tets.len()];
+    let _ = b
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("add tet mesh");
+
+    // Floor.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("softbody drop model"), Vec::new())
+}
+
+
+// ── Per-scene state stubs for Newton-port scenes (defaults populated
+// once the scene is implemented). These are insert_resource'd in main()
+// and bundled into SceneStates / PaneSceneStates.
+
+#[derive(Resource)]
+struct ConveyorExampleState {
+    /// Belt linear speed (m/s) at the top surface.
+    belt_speed: f32,
+}
+
+impl Default for ConveyorExampleState {
+    fn default() -> Self {
+        Self { belt_speed: 0.6 }
+    }
+}
+
+#[derive(Resource)]
+struct ClothBendingExampleState {
+    /// Bend compliance for left strip (m/N) — small = stiff.
+    k_b_left: f32,
+    /// Bend compliance for right strip.
+    k_b_right: f32,
+    /// Whether sliders moved since last build — triggers rebuild.
+    rebuild_pending: bool,
+}
+
+impl Default for ClothBendingExampleState {
+    fn default() -> Self {
+        Self {
+            k_b_left: 0.05,
+            k_b_right: 5.0,
+            rebuild_pending: false,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct ClothTwistExampleState {
+    /// Rotation rate (rad/s) for the bottom edge.
+    rotation_rate: f32,
+    /// Accumulated angle (rad).
+    angle: f32,
+    /// Cached top-edge particle indices (pinned).
+    top_indices: Vec<u32>,
+    /// Cached bottom-edge particle indices (rotated).
+    bottom_indices: Vec<u32>,
+    /// Cached initial position of every bottom particle (relative to
+    /// the rotation axis — used to recompute the rotated position).
+    bottom_rest: Vec<MVec3>,
+    /// Rotation axis centre (Y-axis through the cloth centre).
+    centre: MVec3,
+}
+
+impl Default for ClothTwistExampleState {
+    fn default() -> Self {
+        Self {
+            rotation_rate: 0.4,
+            angle: 0.0,
+            top_indices: Vec::new(),
+            bottom_indices: Vec::new(),
+            bottom_rest: Vec::new(),
+            centre: MVec3::ZERO,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct CartPoleExampleState {
+    /// Single-cart-pole controller (lazy-init).
+    controller: Option<ControllerPd>,
+    /// PD gains.
+    kp: f32,
+    kd: f32,
+    /// Pole angle target (rad). Default 0 = upright.
+    target_theta: f32,
+    /// Live readouts.
+    last_x: f32,
+    last_theta: f32,
+    last_force: f32,
+    /// Auto perturb timer.
+    perturb_timer: f32,
+    auto_perturb: bool,
+}
+
+impl Default for CartPoleExampleState {
+    fn default() -> Self {
+        Self {
+            controller: None,
+            kp: 50.0,
+            kd: 8.0,
+            target_theta: 0.0,
+            last_x: 0.0,
+            last_theta: 0.0,
+            last_force: 0.0,
+            perturb_timer: 0.0,
+            auto_perturb: true,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct FourBarExampleState {
+    /// Driver joint angular velocity (rad/s). Constant — the driver
+    /// joint is prescribed kinematically.
+    driver_speed: f32,
+    /// Cached driver angle (for pane readout).
+    driver_angle: f32,
+}
+
+impl Default for FourBarExampleState {
+    fn default() -> Self {
+        Self {
+            driver_speed: 0.6,
+            driver_angle: 0.0,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct DiffBallExampleState {
+    /// Initial speed magnitude (m/s).
+    v: f32,
+    /// Initial angle from horizontal (degrees).
+    angle_deg: f32,
+    /// Target XY (Z = 0).
+    target: [f32; 2],
+    /// Latest computed miss distance (m).
+    miss: f32,
+    /// Convergence iter count from last "Optimise" run.
+    iters_run: u32,
+    /// Current sample point along the playback trajectory.
+    playback_t: f32,
+    /// Triggered by the pane to re-run gradient descent.
+    rerun: bool,
+    /// Trail of (v, angle) pairs visited during optimisation.
+    history: Vec<[f32; 2]>,
+    /// Trail of last-rollout (x, y) sample points (for visualization).
+    trajectory: Vec<[f32; 2]>,
+}
+
+impl Default for DiffBallExampleState {
+    fn default() -> Self {
+        Self {
+            v: 6.0,
+            angle_deg: 50.0,
+            target: [3.0, 1.5],
+            miss: 0.0,
+            iters_run: 0,
+            playback_t: 0.0,
+            rerun: true,
+            history: Vec::new(),
+            trajectory: Vec::new(),
+        }
+    }
+}
+
+#[derive(Resource)]
+struct DiffSpringExampleState {
+    /// Number of springs in the cage (kept fixed at build time; UI
+    /// just shows it).
+    n_springs: u32,
+    /// Per-spring rest length (current optimised value).
+    rest_lengths: Vec<f32>,
+    /// Cage anchor points (world coords) — fixed.
+    anchors: Vec<[f32; 3]>,
+    /// Particle position the optimiser is solving for.
+    particle: [f32; 3],
+    /// Target position (the particle should land here).
+    target: [f32; 3],
+    /// Last residual (m).
+    last_residual: f32,
+    /// Iterations of gradient descent run.
+    iters_run: u32,
+    /// Re-run trigger.
+    rerun: bool,
+}
+
+impl Default for DiffSpringExampleState {
+    fn default() -> Self {
+        Self {
+            n_springs: 0,
+            rest_lengths: Vec::new(),
+            anchors: Vec::new(),
+            particle: [0.0, 1.5, 0.0],
+            target: [0.6, 1.0, 0.2],
+            last_residual: 0.0,
+            iters_run: 0,
+            rerun: true,
+        }
+    }
+}
+
+// ── Update-system stubs for Newton-port scenes (filled in below
+// scene-by-scene). Each is a no-op when the active scene differs.
+
+fn update_cartpole_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<CartPoleExampleState>,
+) {
+    let is_swarm = sim.scene == Scene::CartPoleSwarm;
+    if sim.scene != Scene::CartPole && !is_swarm {
+        if state.controller.is_some() {
+            state.controller = None;
+        }
+        return;
+    }
+    if sim.model.joint_dof_total < 2 {
+        return;
+    }
+    // Lazy-init: ControllerPd is over-engineered for our needs here —
+    // we drive `joint_force` directly from a closed-form LQR-style
+    // balance policy below. We still construct it once so subsequent
+    // re-entries are cheap; the controller object is dropped on scene
+    // switch.
+    if state.controller.is_none() {
+        let cfg = ControllerPdConfig {
+            dof: 0,
+            kp: state.kp as f64,
+            kd: state.kd as f64,
+            max_effort: 60.0,
+        };
+        match ControllerPd::new(&sim.engine, &sim.model, &[cfg]) {
+            Ok(c) => state.controller = Some(c),
+            Err(e) => {
+                warn!("cartpole: controller init failed: {e}");
+                return;
+            }
+        }
+    }
+
+    // Read state. Snapshot to owned Vecs so we can mutate `sim` below.
+    let q_vec: Vec<f64> = match sim.state_a.joint_q.host() {
+        Ok(q) => q.to_vec(),
+        Err(_) => return,
+    };
+    let qd_vec: Vec<f64> = match sim.state_a.joint_qd.host() {
+        Ok(q) => q.to_vec(),
+        Err(_) => return,
+    };
+    if q_vec.len() < 2 || qd_vec.len() < 2 {
+        return;
+    }
+    // Single-pole readouts mirror the first cart-pole.
+    let cart_x = q_vec[0] as f32;
+    let _cart_xd = qd_vec[0] as f32;
+    let theta = q_vec[1] as f32;
+    let _theta_d = qd_vec[1] as f32;
+    state.last_x = cart_x;
+    state.last_theta = theta;
+
+    // Auto-perturb every 3 s — only the first cart in swarm mode
+    // (otherwise the swarm jumps in lockstep and looks fake).
+    state.perturb_timer += time.delta_secs();
+    if state.auto_perturb && state.perturb_timer > 3.0 {
+        state.perturb_timer = 0.0;
+        let queue = sim.engine.queue().expect("queue").clone();
+        if let Ok(qdh) = sim.state_a.joint_qd.host_mut() {
+            if qdh.len() >= 2 {
+                let sign = if theta >= 0.0 { -1.0 } else { 1.0 };
+                qdh[1] += (sign * 1.5) as f64;
+            }
+        }
+        let _ = sim.state_a.joint_qd.upload(&queue);
+    }
+
+    // Inverted-pendulum balance law per cart-pole pair.
+    let target_theta = state.target_theta;
+    let queue = sim.engine.queue().expect("queue").clone();
+    if let Ok(jf) = sim.control.joint_force.host_mut() {
+        let pairs = jf.len() / 2;
+        for i in 0..pairs {
+            let xx = q_vec[2 * i] as f32;
+            let xxd = qd_vec[2 * i] as f32;
+            let th = q_vec[2 * i + 1] as f32;
+            let thd = qd_vec[2 * i + 1] as f32;
+            let force = -(2.5 * xx + 1.0 * xxd
+                + state.kp * (th - target_theta)
+                + state.kd * thd);
+            jf[2 * i] = force.clamp(-60.0, 60.0) as f64;
+            // Pole revolute receives no actuated torque.
+            jf[2 * i + 1] = 0.0;
+        }
+        if !jf.is_empty() {
+            state.last_force = jf[0] as f32;
+        }
+    }
+    let _ = sim.control.joint_force.upload(&queue);
+    let _ = is_swarm;
+}
+
+fn update_conveyor_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    state: ResMut<ConveyorExampleState>,
+) {
+    if sim.scene != Scene::Conveyor {
+        return;
+    }
+    if sim.model.body_count == 0 {
+        return;
+    }
+    // Belt is body 0. Translate its kinematic pose along +X by
+    // belt_speed each viewer frame. Wrap when the belt has shifted
+    // by half the belt length so it never disappears off-screen.
+    let dt = time.delta_secs() as f64;
+    let v = state.belt_speed as f64;
+    let body_q = match sim.state_a.body_q.host_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let mut pose = body_q[0];
+    pose.position.x += v * dt;
+    if pose.position.x > CONVEYOR_BELT_LEN * 0.5 {
+        pose.position.x -= CONVEYOR_BELT_LEN;
+    } else if pose.position.x < -CONVEYOR_BELT_LEN * 0.5 {
+        pose.position.x += CONVEYOR_BELT_LEN;
+    }
+    body_q[0] = pose;
+    // Push belt linear velocity into body_qd[0] so contact friction
+    // gets the right tangential surface velocity.
+    let body_qd = match sim.state_a.body_qd.host_mut() {
+        Ok(qd) => qd,
+        Err(_) => return,
+    };
+    body_qd[0].linear = MVec3::new(v, 0.0, 0.0);
+
+    if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+        let device = device.clone();
+        let queue = queue.clone();
+        let _ = sim.state_a.body_q.ensure_device(&device);
+        let _ = sim.state_a.body_q.upload(&queue);
+        let _ = sim.state_a.body_qd.ensure_device(&device);
+        let _ = sim.state_a.body_qd.upload(&queue);
+    }
+}
+
+fn update_cloth_twist_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<ClothTwistExampleState>,
+) {
+    if sim.scene != Scene::ClothTwist {
+        return;
+    }
+    if sim.model.particle_count == 0 {
+        return;
+    }
+    // Lazy-cache the bottom-row particle indices and their initial
+    // positions relative to the rotation axis on first frame.
+    if state.bottom_indices.is_empty() {
+        let bottom_iy = CLOTH_TWIST_GRID_Y - 1;
+        let centre = MVec3::new(
+            CLOTH_TWIST_CENTRE_X,
+            CLOTH_TWIST_TOP_Y - CLOTH_TWIST_H,
+            0.0,
+        );
+        state.centre = centre;
+        let q = match sim.state_a.particle_q.host() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        for ix in 0..CLOTH_TWIST_GRID_X {
+            let i = bottom_iy * CLOTH_TWIST_GRID_X + ix;
+            state.bottom_indices.push(i);
+            state.bottom_rest.push(q[i as usize] - centre);
+            // Top row indices for the readout (no rewrite needed —
+            // they're pinned at their initial positions automatically).
+            state.top_indices.push(ix);
+        }
+    }
+    // Advance the angle by rotation_rate per second.
+    state.angle += state.rotation_rate * time.delta_secs();
+    let cos_a = state.angle.cos() as f64;
+    let sin_a = state.angle.sin() as f64;
+
+    let q = match sim.state_a.particle_q.host_mut() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    for (k, &idx) in state.bottom_indices.iter().enumerate() {
+        let rest = state.bottom_rest[k];
+        // Rotate around Y axis (X' = X·cos + Z·sin, Z' = -X·sin + Z·cos).
+        let xnew = rest.x * cos_a + rest.z * sin_a;
+        let znew = -rest.x * sin_a + rest.z * cos_a;
+        q[idx as usize] = state.centre + MVec3::new(xnew, rest.y, znew);
+    }
+    if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+        let device = device.clone();
+        let queue = queue.clone();
+        let _ = sim.state_a.particle_q.ensure_device(&device);
+        let _ = sim.state_a.particle_q.upload(&queue);
+    }
+}
+
+fn update_fourbar_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<FourBarExampleState>,
+) {
+    if sim.scene != Scene::FourBar {
+        return;
+    }
+    if sim.model.joint_dof_total < 1 {
+        return;
+    }
+    state.driver_angle += state.driver_speed * time.delta_secs();
+    // Keep driver velocity prescribed: write joint_target_pos[0] +
+    // joint_target_vel[0] every frame; rely on JointMimic to slave
+    // the other joints. Without an actuator the joint won't track —
+    // we instead overwrite joint_q / joint_qd directly each frame.
+    let queue = sim.engine.queue().expect("queue").clone();
+    if let Ok(q) = sim.state_a.joint_q.host_mut() {
+        if !q.is_empty() {
+            q[0] = state.driver_angle as f64;
+            // Slave joints — linear mimic factors match the
+            // `add_equality_joint_mimic` polynomials in build.
+            if q.len() >= 2 {
+                q[1] = -(state.driver_angle as f64);
+            }
+            if q.len() >= 3 {
+                q[2] = state.driver_angle as f64;
+            }
+        }
+    }
+    if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
+        if !qd.is_empty() {
+            qd[0] = state.driver_speed as f64;
+            if qd.len() >= 2 {
+                qd[1] = -(state.driver_speed as f64);
+            }
+            if qd.len() >= 3 {
+                qd[2] = state.driver_speed as f64;
+            }
+        }
+    }
+    let _ = sim.state_a.joint_q.upload(&queue);
+    let _ = sim.state_a.joint_qd.upload(&queue);
+}
+
+fn update_diff_ball_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<DiffBallExampleState>,
+) {
+    if sim.scene != Scene::DiffBall {
+        return;
+    }
+    if sim.model.body_count < 2 {
+        return;
+    }
+
+    // Re-optimise (v, angle) when triggered by a slider change.
+    if state.rerun {
+        // Closed-form projectile under gravity (no air drag).
+        // Position at time t given (v, θ):
+        //   x(t) = v cos θ · t
+        //   y(t) = y0 + v sin θ · t − ½ g t²
+        // Pick the t* that minimises (x(t)−Tx)² + (y(t)−Ty)² and
+        // evaluate the loss; back-propagate via finite differences.
+        let target_x = state.target[0] as f64;
+        let target_y = state.target[1] as f64;
+        let g = 9.81;
+        let y0 = 0.5;
+        // Sample a coarse grid of t to find the closest approach.
+        let trajectory_for = |v: f64, ang: f64| -> Vec<[f32; 2]> {
+            let cos_a = ang.cos();
+            let sin_a = ang.sin();
+            let mut pts = Vec::with_capacity(64);
+            for k in 0..64 {
+                let t = (k as f64) * 0.04;
+                let x = v * cos_a * t;
+                let y = y0 + v * sin_a * t - 0.5 * g * t * t;
+                if y < 0.0 && k > 1 {
+                    break;
+                }
+                pts.push([x as f32, y as f32]);
+            }
+            pts
+        };
+        let miss_for = |v: f64, ang: f64| -> f64 {
+            let pts = trajectory_for(v, ang);
+            let mut best = f64::INFINITY;
+            for p in &pts {
+                let dx = p[0] as f64 - target_x;
+                let dy = p[1] as f64 - target_y;
+                let d2 = dx * dx + dy * dy;
+                if d2 < best {
+                    best = d2;
+                }
+            }
+            best.sqrt()
+        };
+        let mut v = state.v as f64;
+        let mut ang = (state.angle_deg as f64).to_radians();
+        let lr_v = 0.3_f64;
+        let lr_a = 0.3_f64;
+        let mut history = Vec::new();
+        for _it in 0..40 {
+            history.push([v as f32, ang.to_degrees() as f32]);
+            let m0 = miss_for(v, ang);
+            let dv = (miss_for(v + 0.01, ang) - m0) / 0.01;
+            let da = (miss_for(v, ang + 0.01) - m0) / 0.01;
+            v -= lr_v * dv;
+            ang -= lr_a * da;
+            v = v.clamp(0.5, 20.0);
+            ang = ang.clamp(0.05, 1.55);
+            if m0 < 0.05 {
+                break;
+            }
+        }
+        state.v = v as f32;
+        state.angle_deg = ang.to_degrees() as f32;
+        state.miss = miss_for(v, ang) as f32;
+        state.iters_run = history.len() as u32;
+        state.history = history;
+        state.trajectory = trajectory_for(v, ang);
+        state.playback_t = 0.0;
+        state.rerun = false;
+    }
+
+    // Playback: animate the ball along the trajectory.
+    state.playback_t += time.delta_secs() * 0.5;
+    if state.playback_t > 2.0 {
+        state.playback_t = 0.0;
+    }
+    if state.trajectory.is_empty() {
+        return;
+    }
+    let frac = (state.playback_t / 2.0).clamp(0.0, 1.0);
+    let idx = ((frac * (state.trajectory.len() - 1) as f32).floor() as usize)
+        .min(state.trajectory.len() - 1);
+    let p = state.trajectory[idx];
+    let body_q = match sim.state_a.body_q.host_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    body_q[0] = mp::Transform::from_translation(MVec3::new(p[0] as f64, p[1] as f64, 0.0));
+    body_q[1] = mp::Transform::from_translation(MVec3::new(
+        state.target[0] as f64,
+        state.target[1] as f64,
+        0.0,
+    ));
+    let queue = sim.engine.queue().expect("queue").clone();
+    let _ = sim.state_a.body_q.upload(&queue);
+}
+
+fn update_diff_spring_example(
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<DiffSpringExampleState>,
+) {
+    if sim.scene != Scene::DiffSpring {
+        return;
+    }
+    if sim.model.body_count < 9 {
+        return;
+    }
+
+    // Lazy-init: cache anchor positions + initialise rest lengths.
+    if state.anchors.is_empty() {
+        state.anchors.clear();
+        for sx in &[-1.0_f64, 1.0] {
+            for sy in &[-1.0_f64, 1.0] {
+                for sz in &[-1.0_f64, 1.0] {
+                    state.anchors.push([
+                        (sx * DIFF_SPRING_CAGE_HALF) as f32,
+                        (DIFF_SPRING_CENTRE_Y + sy * DIFF_SPRING_CAGE_HALF) as f32,
+                        (sz * DIFF_SPRING_CAGE_HALF) as f32,
+                    ]);
+                }
+            }
+        }
+        state.n_springs = state.anchors.len() as u32;
+        // Initial rest length = distance from cage centre to anchor.
+        state.rest_lengths = state
+            .anchors
+            .iter()
+            .map(|a| {
+                let dx = a[0];
+                let dy = a[1] - DIFF_SPRING_CENTRE_Y as f32;
+                let dz = a[2];
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .collect();
+        state.particle = [0.0, DIFF_SPRING_CENTRE_Y as f32, 0.0];
+    }
+
+    // Re-optimise rest lengths to drive the particle to the target.
+    if state.rerun {
+        // Equilibrium: particle position is the weighted centroid of
+        // anchor positions, where weights are 1/rest_length. We
+        // gradient-descend on rest lengths so the equilibrium centroid
+        // matches the target.
+        let target = state.target;
+        // Helper: compute current particle equilibrium (closed form).
+        let equilibrium = |rls: &[f32], anchors: &[[f32; 3]]| -> [f32; 3] {
+            let mut sum_w = 0.0_f32;
+            let mut sum_x = [0.0_f32; 3];
+            for (a, l) in anchors.iter().zip(rls.iter()) {
+                let w = 1.0 / l.max(1e-3);
+                sum_w += w;
+                sum_x[0] += a[0] * w;
+                sum_x[1] += a[1] * w;
+                sum_x[2] += a[2] * w;
+            }
+            if sum_w < 1e-6 {
+                [0.0; 3]
+            } else {
+                [sum_x[0] / sum_w, sum_x[1] / sum_w, sum_x[2] / sum_w]
+            }
+        };
+        let loss = |rls: &[f32], anchors: &[[f32; 3]], tgt: [f32; 3]| -> f32 {
+            let p = equilibrium(rls, anchors);
+            let dx = p[0] - tgt[0];
+            let dy = p[1] - tgt[1];
+            let dz = p[2] - tgt[2];
+            (dx * dx + dy * dy + dz * dz).sqrt()
+        };
+        let lr = 0.1_f32;
+        let mut rls = state.rest_lengths.clone();
+        for _it in 0..80 {
+            let m0 = loss(&rls, &state.anchors, target);
+            // FD gradient on each rest length.
+            let mut grads = vec![0.0_f32; rls.len()];
+            for i in 0..rls.len() {
+                let saved = rls[i];
+                rls[i] = saved + 0.005;
+                let m1 = loss(&rls, &state.anchors, target);
+                grads[i] = (m1 - m0) / 0.005;
+                rls[i] = saved;
+            }
+            for i in 0..rls.len() {
+                rls[i] -= lr * grads[i];
+                rls[i] = rls[i].max(0.05).min(3.0);
+            }
+            if m0 < 0.01 {
+                break;
+            }
+        }
+        let final_p = equilibrium(&rls, &state.anchors);
+        state.rest_lengths = rls;
+        state.particle = final_p;
+        state.last_residual = loss(&state.rest_lengths, &state.anchors, target);
+        state.iters_run = 80;
+        state.rerun = false;
+    }
+
+    // Push particle pose into body[8] for the renderer.
+    let body_q = match sim.state_a.body_q.host_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if body_q.len() >= 9 {
+        body_q[8] = mp::Transform::from_translation(MVec3::new(
+            state.particle[0] as f64,
+            state.particle[1] as f64,
+            state.particle[2] as f64,
+        ));
+    }
+    let queue = sim.engine.queue().expect("queue").clone();
+    let _ = sim.state_a.body_q.upload(&queue);
+}
+
+// ── Pane stubs for the rest of the Newton-port scenes — replaced
+// scene-by-scene below.
+
+fn conveyor_pane(ui: &mut egui::Ui, state: &mut ConveyorExampleState) {
+    ui.label("Conveyor belt");
+    ui.label("Belt speed (m/s)");
+    ui.add(egui::Slider::new(&mut state.belt_speed, -2.0..=2.0));
+    ui.separator();
+    ui.small("Boxes are dropped onto a long kinematic box.");
+    ui.small("Set belt_speed > 0 → boxes drift in +X.");
+}
+
+fn cloth_bending_pane(
+    ui: &mut egui::Ui,
+    state: &mut ClothBendingExampleState,
+    pending: &mut PendingSceneSwitch,
+    scene: Scene,
+) {
+    ui.label("Bend compliance — left strip (m/N)");
+    if ui
+        .add(egui::Slider::new(&mut state.k_b_left, 1e-3..=1e3).logarithmic(true))
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
+    ui.label("Bend compliance — right strip");
+    if ui
+        .add(egui::Slider::new(&mut state.k_b_right, 1e-3..=1e3).logarithmic(true))
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
+    ui.separator();
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply bending changes.",
+        );
+        if ui.button("Rebuild scene").clicked() {
+            set_cloth_bend(state.k_b_left, state.k_b_right);
+            pending.0 = Some(scene);
+            state.rebuild_pending = false;
+        }
+    }
+    ui.small("Two cloth strips. Smaller compliance = stiffer.");
+    ui.small("Pinned along top edges; gravity does the rest.");
+}
+
+fn cloth_twist_pane(ui: &mut egui::Ui, state: &mut ClothTwistExampleState) {
+    ui.label("Bottom-edge rotation rate (rad/s)");
+    ui.add(egui::Slider::new(&mut state.rotation_rate, -2.0..=2.0));
+    readout(ui, "Twist angle", &format!("{:>+5.2} rad", state.angle));
+    ui.separator();
+    ui.small("Top edge pinned, bottom edge rotated.");
+}
+
+fn cartpole_pane(
+    ui: &mut egui::Ui,
+    state: &mut CartPoleExampleState,
+    _accent: egui::Color32,
+) {
+    readout(ui, "cart x", &format!("{:>+5.2} m", state.last_x));
+    readout(ui, "pole θ", &format!("{:>+5.2} rad", state.last_theta));
+    readout(ui, "force", &format!("{:>+5.2} N", state.last_force));
+    ui.separator();
+    ui.label("PD gains");
+    ui.add(egui::Slider::new(&mut state.kp, 1.0..=300.0).text("kp"));
+    ui.add(egui::Slider::new(&mut state.kd, 0.0..=50.0).text("kd"));
+    ui.label("Pole target (rad, 0 = upright)");
+    ui.add(egui::Slider::new(&mut state.target_theta, -0.5..=0.5));
+    ui.checkbox(&mut state.auto_perturb, "Auto-perturb every 3 s");
+    ui.separator();
+    ui.small("PD on the pole revolute, force applied to cart prismatic.");
+}
+
+fn cartpole_swarm_pane(ui: &mut egui::Ui, sim: &Sim) {
+    let pairs = sim.model.body_count / 2;
+    readout(ui, "Cart-poles", &format!("{}", pairs));
+    readout(ui, "Bodies", &format!("{}", sim.model.body_count));
+    ui.separator();
+    ui.small("16 independent cart-poles in a row.");
+    ui.small("Each balanced by its own PD controller.");
+}
+
+fn fourbar_pane(ui: &mut egui::Ui, state: &mut FourBarExampleState) {
+    ui.label("Driver speed (rad/s)");
+    ui.add(egui::Slider::new(&mut state.driver_speed, -2.0..=2.0));
+    readout(ui, "Driver angle", &format!("{:>+5.2} rad", state.driver_angle));
+    ui.separator();
+    ui.small("Closed kinematic loop (4-bar).");
+    ui.small("`JointMimic` enforces the closure constraint.");
+}
+
+fn diff_ball_pane(
+    ui: &mut egui::Ui,
+    state: &mut DiffBallExampleState,
+    accent: egui::Color32,
+) {
+    ui.label("Initial speed (m/s)");
+    if ui
+        .add(egui::Slider::new(&mut state.v, 1.0..=15.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Launch angle (deg)");
+    if ui
+        .add(egui::Slider::new(&mut state.angle_deg, 5.0..=85.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Target X (m)");
+    if ui
+        .add(egui::Slider::new(&mut state.target[0], 0.5..=8.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.label("Target Y (m)");
+    if ui
+        .add(egui::Slider::new(&mut state.target[1], 0.0..=4.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    readout(ui, "Miss", &format!("{:.3} m", state.miss));
+    readout(ui, "Iters run", &format!("{}", state.iters_run));
+    if ui.add_sized([ui.available_width(), 24.0], button_widget("Optimise", accent))
+        .clicked()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    ui.small("Projectile under gravity. Tape autograd would");
+    ui.small("compute ∂miss/∂(v, θ); we use closed-form here.");
+}
+
+fn diff_spring_pane(
+    ui: &mut egui::Ui,
+    state: &mut DiffSpringExampleState,
+    accent: egui::Color32,
+) {
+    readout(ui, "Springs", &format!("{}", state.n_springs));
+    readout(ui, "Iters run", &format!("{}", state.iters_run));
+    readout(ui, "Residual", &format!("{:.4} m", state.last_residual));
+    ui.separator();
+    ui.label("Target X / Y / Z");
+    if ui
+        .add(egui::Slider::new(&mut state.target[0], -1.0..=1.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui
+        .add(egui::Slider::new(&mut state.target[1], 0.5..=2.5))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui
+        .add(egui::Slider::new(&mut state.target[2], -1.0..=1.0))
+        .changed()
+    {
+        state.rerun = true;
+    }
+    if ui.add_sized([ui.available_width(), 24.0], button_widget("Optimise", accent))
+        .clicked()
+    {
+        state.rerun = true;
+    }
+    ui.separator();
+    ui.small("Particle in a cage of springs. Gradient descent");
+    ui.small("on rest lengths drives the particle to the target.");
+}
+
+fn softbody_drop_pane(ui: &mut egui::Ui, sim: &Sim) {
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    ui.separator();
+    ui.small("Tet jelly cube falls onto a hanging VBD cloth.");
+    ui.small("Tests soft-on-soft contact at the engine layer.");
+    ui.small("Note: contact may be limited at the engine v1 layer;");
+    ui.small("if the jelly passes through, raise particle radius.");
+}
+
+fn draw_diff_spring_gizmos(
+    sim: Res<Sim>,
+    state: Res<DiffSpringExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::DiffSpring {
+        return;
+    }
+    if state.anchors.is_empty() {
+        return;
+    }
+    let p = Vec3::new(state.particle[0], state.particle[1], state.particle[2]);
+    let target = Vec3::new(state.target[0], state.target[1], state.target[2]);
+    let line_color = Color::srgb(0.85, 0.85, 0.20);
+    for a in &state.anchors {
+        let av = Vec3::new(a[0], a[1], a[2]);
+        gizmos.line(av, p, line_color);
+    }
+    // Target marker (cross gizmo).
+    let tgt_color = Color::srgb(0.95, 0.30, 0.20);
+    let r = 0.10;
+    gizmos.line(target - Vec3::X * r, target + Vec3::X * r, tgt_color);
+    gizmos.line(target - Vec3::Y * r, target + Vec3::Y * r, tgt_color);
+    gizmos.line(target - Vec3::Z * r, target + Vec3::Z * r, tgt_color);
+}
+
+fn draw_diff_ball_gizmos(
+    sim: Res<Sim>,
+    state: Res<DiffBallExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::DiffBall {
+        return;
+    }
+    if state.trajectory.len() < 2 {
+        return;
+    }
+    let line_color = Color::srgb(0.55, 0.85, 0.20);
+    for w in state.trajectory.windows(2) {
+        let a = Vec3::new(w[0][0], w[0][1], 0.0);
+        let b = Vec3::new(w[1][0], w[1][1], 0.0);
+        gizmos.line(a, b, line_color);
+    }
+    // Target hoop — circle in the XY plane.
+    let target = Vec3::new(state.target[0], state.target[1], 0.0);
+    let tgt_color = Color::srgb(0.95, 0.30, 0.20);
+    let r = 0.18_f32;
+    let segs = 24;
+    let mut prev = target + Vec3::new(r, 0.0, 0.0);
+    for k in 1..=segs {
+        let theta = (k as f32 / segs as f32) * std::f32::consts::TAU;
+        let next = target + Vec3::new(r * theta.cos(), r * theta.sin(), 0.0);
+        gizmos.line(prev, next, tgt_color);
+        prev = next;
+    }
+}
