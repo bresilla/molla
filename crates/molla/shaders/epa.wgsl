@@ -370,7 +370,7 @@ fn epa_solve(@builtin(global_invocation_id) gid: vec3<u32>) {
         let w = gjk_simplex_in[off + 0u].xyz;
         let a = gjk_simplex_in[off + 1u].xyz;
         let b = gjk_simplex_in[off + 2u].xyz;
-        let _ = add_vertex(w, a, b);
+        _ = add_vertex(w, a, b);
     }
 
     // Pad to a 4-vertex tetra if needed by querying cardinal-axis
@@ -388,7 +388,7 @@ fn epa_solve(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
         for (var k: u32 = 0u; k < 4u; k = k + 1u) {
             let p = minkowski_support_pair(sa, sb, dirs[k]);
-            let _ = add_vertex(p.w, p.a, p.b);
+            _ = add_vertex(p.w, p.a, p.b);
         }
     }
 
@@ -405,7 +405,7 @@ fn epa_solve(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
         for (var k: u32 = 0u; k < 4u; k = k + 1u) {
             let p = minkowski_support_pair(sa, sb, dirs[k]);
-            let _ = add_vertex(p.w, p.a, p.b);
+            _ = add_vertex(p.w, p.a, p.b);
         }
         let init2 = build_initial_tetra();
         if (init2 != 0) {
@@ -453,9 +453,9 @@ fn epa_solve(@builtin(global_invocation_id) gid: vec3<u32>) {
                 any_visible = true;
                 f_alive[k] = 0u;
                 let i0 = f_i0[k]; let i1 = f_i1[k]; let i2 = f_i2[k];
-                let _ = push_edge(i0, i1);
-                let _ = push_edge(i1, i2);
-                let _ = push_edge(i2, i0);
+                _ = push_edge(i0, i1);
+                _ = push_edge(i1, i2);
+                _ = push_edge(i2, i0);
             }
         }
         if (!any_visible) {

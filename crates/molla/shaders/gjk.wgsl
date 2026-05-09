@@ -287,20 +287,30 @@ fn tetra_step(a: SimplexVtx, b: SimplexVtx, c: SimplexVtx, d: SimplexVtx) -> Sim
 
 // Write a 4-vertex simplex into `gjk_simplex[i]`. Layout per pair:
 // 12 vec4<f32> = 4 vertices × 3 vec3 (w, a, b). The `.w` lane of each
-// vec4 is left as 0; EPA reads `.xyz`.
+// vec4 is left as 0; EPA reads `.xyz`. The third vec4 of vertex 0
+// stores `count` in its `.w` lane so EPA knows how many simplex
+// vertices are valid.
 fn write_simplex(i: u32, count: u32, v0: SimplexVtx, v1: SimplexVtx, v2: SimplexVtx, v3: SimplexVtx) {
     let base = i * 12u;
-    let zero: SimplexVtx = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     var verts: array<SimplexVtx, 4>;
     verts[0] = v0;
-    verts[1] = select(zero, v1, count >= 2u);
-    verts[2] = select(zero, v2, count >= 3u);
-    verts[3] = select(zero, v3, count >= 4u);
+    if (count >= 2u) { verts[1] = v1; } else {
+        verts[1] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
+    if (count >= 3u) { verts[2] = v2; } else {
+        verts[2] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
+    if (count >= 4u) { verts[3] = v3; } else {
+        verts[3] = SimplexVtx(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    }
     for (var k: u32 = 0u; k < 4u; k = k + 1u) {
         let v = verts[k];
         gjk_simplex[base + k * 3u + 0u] = vec4<f32>(v.w, 0.0);
         gjk_simplex[base + k * 3u + 1u] = vec4<f32>(v.a, 0.0);
-        gjk_simplex[base + k * 3u + 2u] = vec4<f32>(v.b, f32(count));
+        // Stash the simplex-vertex count in vertex 0's .w lane (EPA
+        // reads vertex 0's third vec4 to recover it).
+        let pad = select(0.0, f32(count), k == 0u);
+        gjk_simplex[base + k * 3u + 2u] = vec4<f32>(v.b, pad);
     }
 }
 

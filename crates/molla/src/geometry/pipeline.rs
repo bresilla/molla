@@ -19,6 +19,13 @@ pub struct CollisionPipeline {
     manifolds: Vec<ContactManifold>,
     #[cfg(feature = "gpu")]
     gpu_prefilter: Option<GpuPrefilterState>,
+    #[cfg(feature = "gpu")]
+    gpu_full_np: Option<GpuFullNarrowPhase>,
+    /// Number of times the CPU narrow-phase `pair_contact` was
+    /// invoked on the most recent `collide` call. Useful for
+    /// asserting that a fully-GPU pipeline doesn't fall back to CPU
+    /// in steady state.
+    last_cpu_np_calls: usize,
 }
 
 #[cfg(feature = "gpu")]
@@ -34,10 +41,35 @@ struct GpuPrefilterState {
     capacity: usize,
 }
 
+#[cfg(feature = "gpu")]
+struct GpuFullNarrowPhase {
+    device: std::sync::Arc<wgpu::Device>,
+    queue: std::sync::Arc<wgpu::Queue>,
+    gjk: crate::kernels::GjkKernel,
+    epa: crate::kernels::EpaKernel,
+    body_q: crate::storage::Buffer<crate::math::Transform>,
+    pair_a: crate::storage::Buffer<u32>,
+    pair_b: crate::storage::Buffer<u32>,
+    overlap: crate::storage::Buffer<u32>,
+    simplex: crate::storage::Buffer<crate::math::Vec3>,
+    epa_out: crate::storage::Buffer<crate::math::Real>,
+    capacity: usize,
+}
+
 impl CollisionPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Number of pairs that fell back to the CPU narrow phase on the
+    /// most recent `collide` call. With `enable_full_gpu_narrow_phase`
+    /// active and a fully GPU-supported scene, this should be 0
+    /// (Plane / TriMesh / Heightfield / SDF and any iter-cap or
+    /// polytope-cap fallbacks bump it).
+    #[must_use]
+    pub fn last_cpu_narrow_phase_calls(&self) -> usize {
+        self.last_cpu_np_calls
     }
 
     /// Enable the GPU GJK pre-filter for the broad-phase candidate
@@ -85,6 +117,56 @@ impl CollisionPipeline {
         Ok(())
     }
 
+    /// Enable the **full GPU narrow phase**: GJK + EPA on the device
+    /// produce contact manifolds for every Sphere/Box/Capsule/Cylinder/
+    /// Cone pair. Plane, TriMesh, Heightfield, SDF, ConvexHull, and
+    /// Triangle pairs still flow through the CPU narrow phase (the
+    /// device-side support functions don't cover them). When this is
+    /// active, `enable_gpu_prefilter` is irrelevant — the GJK pass run
+    /// here doubles as the prefilter.
+    #[cfg(feature = "gpu")]
+    pub fn enable_full_gpu_narrow_phase(
+        &mut self,
+        engine: &crate::compute::Engine,
+        initial_capacity: usize,
+    ) -> Result<()> {
+        let device = engine
+            .device()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU queue".into()))?
+            .clone();
+        let gjk = crate::kernels::GjkKernel::new(&device);
+        let epa = crate::kernels::EpaKernel::new(&device);
+        let cap = initial_capacity.max(1);
+        let (pair_a, pair_b, overlap) =
+            crate::kernels::GjkKernel::alloc_io(&device, &queue, cap)?;
+        let simplex = crate::kernels::GjkKernel::alloc_simplex(&device, &queue, cap)?;
+        let epa_out = crate::kernels::EpaKernel::alloc_out(&device, &queue, cap)?;
+        let mut body_q = crate::storage::Buffer::from_vec(
+            vec![crate::math::Transform::IDENTITY; 1],
+            BufferUsage::Storage,
+        );
+        body_q.ensure_device(&device)?;
+        body_q.upload(&queue)?;
+        self.gpu_full_np = Some(GpuFullNarrowPhase {
+            device,
+            queue,
+            gjk,
+            epa,
+            body_q,
+            pair_a,
+            pair_b,
+            overlap,
+            simplex,
+            epa_out,
+            capacity: cap,
+        });
+        Ok(())
+    }
+
     /// Run the SAP broad phase + narrow phase, write into `contacts`.
     /// Returns the contact count.
     pub fn collide(
@@ -94,6 +176,7 @@ impl CollisionPipeline {
         contacts: &mut Contacts,
     ) -> Result<usize> {
         contacts.clear();
+        self.last_cpu_np_calls = 0;
         if model.shape_count < 2 {
             // No pairs possible; still write an empty body-contact
             // CSR so `body_contact_offsets` / `body_contact_indices`
@@ -106,6 +189,15 @@ impl CollisionPipeline {
 
         self.broad
             .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+
+        // Full GPU narrow phase takes precedence over the prefilter.
+        #[cfg(feature = "gpu")]
+        if self.gpu_full_np.is_some() {
+            self.manifolds.clear();
+            self.run_gpu_full_narrow_phase(model, state)?;
+            push_contacts_into(contacts, &self.manifolds, model)?;
+            return Ok(self.manifolds.len());
+        }
 
         // Optional GPU GJK pre-filter — kicks pairs the kernel can
         // definitely resolve (Sphere/Box/Capsule/Cylinder/Cone) out
@@ -133,10 +225,207 @@ impl CollisionPipeline {
                 model.default_restitution,
                 &mut self.manifolds,
             );
+            self.last_cpu_np_calls += 1;
         }
 
         push_contacts_into(contacts, &self.manifolds, model)?;
         Ok(self.manifolds.len())
+    }
+
+    /// Run the full GPU narrow phase. Splits pairs into:
+    ///   * **GPU-eligible** — both shapes are Sphere/Box/Capsule/
+    ///     Cylinder/Cone. GJK + EPA on device produces manifolds
+    ///     directly. EPA fallbacks (status==2) are re-run on CPU.
+    ///   * **CPU-only** — at least one shape is Plane / TriMesh /
+    ///     Heightfield / SDF / ConvexHull / Triangle. Routed to the
+    ///     existing CPU `pair_contact`.
+    #[cfg(feature = "gpu")]
+    fn run_gpu_full_narrow_phase(
+        &mut self,
+        model: &Model,
+        state: &State,
+    ) -> Result<()> {
+        // Partition pair indices into GPU vs CPU. Borrow the buffer
+        // before taking a mutable reference into `gpu_full_np`.
+        let mut gpu_indices: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
+        let mut cpu_indices: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
+        for (i, p) in self.pair_buf.iter().enumerate() {
+            let ka = model.shape_geometry[p.a as usize];
+            let kb = model.shape_geometry[p.b as usize];
+            if is_gpu_eligible(ka) && is_gpu_eligible(kb) {
+                gpu_indices.push(i);
+            } else {
+                cpu_indices.push(i);
+            }
+        }
+
+        // CPU-only pairs run first (cheap; many bound to fall through
+        // sphere/box fast paths). Tracks the call counter.
+        for &i in &cpu_indices {
+            let pair = self.pair_buf[i];
+            pair_contact(
+                model,
+                state,
+                pair,
+                model.default_friction,
+                model.default_restitution,
+                &mut self.manifolds,
+            );
+            self.last_cpu_np_calls += 1;
+        }
+
+        // GPU pairs: dispatch GJK with simplex + EPA, then translate
+        // each device contact back into a `ContactManifold` and push.
+        if gpu_indices.is_empty() {
+            return Ok(());
+        }
+        let n = gpu_indices.len();
+        let pf = self.gpu_full_np.as_mut().expect("gpu_full_np");
+        if n > pf.capacity {
+            let cap = (n * 2).max(64);
+            let (pa, pb, ov) =
+                crate::kernels::GjkKernel::alloc_io(&pf.device, &pf.queue, cap)?;
+            pf.pair_a = pa;
+            pf.pair_b = pb;
+            pf.overlap = ov;
+            pf.simplex =
+                crate::kernels::GjkKernel::alloc_simplex(&pf.device, &pf.queue, cap)?;
+            pf.epa_out = crate::kernels::EpaKernel::alloc_out(&pf.device, &pf.queue, cap)?;
+            pf.capacity = cap;
+        }
+        {
+            let pa_h = pf.pair_a.host_mut()?;
+            let pb_h = pf.pair_b.host_mut()?;
+            for (slot, &i) in gpu_indices.iter().enumerate() {
+                let p = self.pair_buf[i];
+                pa_h[slot] = p.a;
+                pb_h[slot] = p.b;
+            }
+        }
+        pf.pair_a.upload(&pf.queue)?;
+        pf.pair_b.upload(&pf.queue)?;
+
+        // Mirror state.body_q.
+        let body_count = state.body_q.host()?.len();
+        if pf.body_q.host()?.len() < body_count {
+            pf.body_q = crate::storage::Buffer::from_vec(
+                vec![crate::math::Transform::IDENTITY; body_count.max(1)],
+                BufferUsage::Storage,
+            );
+            pf.body_q.ensure_device(&pf.device)?;
+        }
+        {
+            let dst = pf.body_q.host_mut()?;
+            let src = state.body_q.host()?;
+            dst[..src.len()].copy_from_slice(src);
+        }
+        pf.body_q.upload(&pf.queue)?;
+
+        let body_q_buf = pf
+            .body_q
+            .device_buffer()
+            .ok_or_else(|| crate::core::Error::Gpu("body_q device_buffer".into()))?;
+
+        pf.gjk.dispatch_with_simplex(
+            &pf.device,
+            &pf.queue,
+            model,
+            body_q_buf,
+            &pf.pair_a,
+            &pf.pair_b,
+            &mut pf.overlap,
+            &mut pf.simplex,
+            n as u32,
+        )?;
+        pf.epa.dispatch(
+            &pf.device,
+            &pf.queue,
+            model,
+            body_q_buf,
+            &pf.pair_a,
+            &pf.pair_b,
+            &pf.overlap,
+            &pf.simplex,
+            &mut pf.epa_out,
+            n as u32,
+        )?;
+        pf.overlap.download(&pf.device, &pf.queue)?;
+        pf.epa_out.download(&pf.device, &pf.queue)?;
+
+        let overlap = pf.overlap.host()?[..n].to_vec();
+        let epa_host = pf.epa_out.host()?;
+        let results = crate::kernels::decode_epa_out(epa_host, n);
+
+        for (slot, &i) in gpu_indices.iter().enumerate() {
+            let pair = self.pair_buf[i];
+            let ov = overlap[slot];
+            let res = results[slot];
+            if ov == 0 {
+                continue; // disjoint
+            }
+            // Either ov == 2 (GJK fell back) or status == FALLBACK
+            // (EPA polytope cap / iter cap). Re-run on CPU.
+            if ov == 2
+                || res.status == crate::kernels::EPA_STATUS_FALLBACK
+                || res.status == crate::kernels::EPA_STATUS_NONE
+            {
+                pair_contact(
+                    model,
+                    state,
+                    pair,
+                    model.default_friction,
+                    model.default_restitution,
+                    &mut self.manifolds,
+                );
+                self.last_cpu_np_calls += 1;
+                continue;
+            }
+            // Build a `ContactManifold` from the GPU EPA result. The
+            // contact-point convention matches CPU EPA: midpoint
+            // between point_a and point_b.
+            let pair_friction = pair_material(
+                model.shape_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                model.default_friction,
+            );
+            let pair_restitution = pair_material(
+                model.shape_restitution.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                model.default_restitution,
+            );
+            let pair_rolling = pair_material(
+                model.shape_rolling_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                0.0,
+            );
+            let pair_torsional = pair_material(
+                model.shape_torsional_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                0.0,
+            );
+            let normal_len_sq = res.normal.length_squared();
+            if normal_len_sq < 1e-12 {
+                continue;
+            }
+            let normal = res.normal.normalize();
+            let point = (res.point_a + res.point_b) * 0.5;
+            self.manifolds.push(ContactManifold {
+                a_shape: pair.a,
+                b_shape: pair.b,
+                point,
+                normal,
+                depth: res.depth as crate::math::Real,
+                friction: pair_friction,
+                rolling_friction: pair_rolling,
+                torsional_friction: pair_torsional,
+                restitution: pair_restitution,
+            });
+        }
+        Ok(())
     }
 
     #[cfg(feature = "gpu")]
@@ -427,3 +716,30 @@ pub const STATIC_BODY: u32 = u32::MAX;
 
 #[allow(unused_imports)]
 use crate::storage::Buffer; // referenced via fully-qualified paths above
+
+#[cfg(feature = "gpu")]
+fn is_gpu_eligible(g: crate::sim::ShapeGeometry) -> bool {
+    use crate::sim::ShapeGeometry as G;
+    matches!(
+        g,
+        G::Sphere { .. }
+            | G::Box { .. }
+            | G::Capsule { .. }
+            | G::Cylinder { .. }
+            | G::Cone { .. }
+    )
+}
+
+#[cfg(feature = "gpu")]
+fn pair_material(
+    arr: &[crate::math::Real],
+    a: usize,
+    b: usize,
+    default: crate::math::Real,
+) -> crate::math::Real {
+    let ma = arr.get(a).copied().unwrap_or(crate::math::Real::NAN);
+    let mb = arr.get(b).copied().unwrap_or(crate::math::Real::NAN);
+    let va = if ma.is_nan() { default } else { ma };
+    let vb = if mb.is_nan() { default } else { mb };
+    va.max(vb)
+}
