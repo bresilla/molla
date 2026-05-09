@@ -1328,11 +1328,6 @@ struct CableExampleState {
     /// Cable stretch stiffness (N/m). Re-applied to the per-spring
     /// XPBD compliance buffer when the user drags the slider.
     stretch_stiffness: f64,
-    /// Friction coefficient μ at the cable ↔ static-cylinder contact.
-    /// Surfaced via the Dahl friction pane (which doesn't actually
-    /// affect the VBD step today — the kernel is shipped but consumed
-    /// by Stage 22.1 for hydroelastic; see PLAN.md).
-    friction_mu: f64,
     /// Soft-contact stiffness against the cylinder + puller (N/m).
     contact_stiffness: f64,
     /// VBD outer-iteration count per substep.
@@ -1352,7 +1347,6 @@ impl Default for CableExampleState {
     fn default() -> Self {
         Self {
             stretch_stiffness: CABLE_STIFFNESS,
-            friction_mu: 0.4,
             contact_stiffness: CABLE_CONTACT_STIFFNESS,
             inner_iterations: 12,
             use_hard_mode: true,
@@ -1475,10 +1469,6 @@ struct JellyExampleState {
     /// Show the per-tet wireframe overlay (gizmo lines along tet
     /// edges, deduped at draw time).
     show_wireframe: bool,
-    /// Overlay a 12-particle CABLE so the user can compare the
-    /// volumetric soft body's behaviour against the bending-only
-    /// CABLE primitive in real time.
-    show_cable_comparison: bool,
 
     // ── Stage 20.3 — multi-material + plasticity ─────────────────
     /// Material preset index — Soft / Stiff / Rigid. Re-builds the
@@ -1520,6 +1510,12 @@ struct JellyExampleState {
     /// puller sphere; the other variants register a baked / sparse
     /// SDF on solver re-creation.
     sdf_shape: JellySdfShape,
+    /// Set to `true` when the user touches a control whose effect is
+    /// only realised on a scene rebuild (`second_cube`, `sdf_shape`).
+    /// Cleared on rebuild. Surfaces a "Rebuild jelly" button so the
+    /// pane doesn't lie about needing the user to re-press Y (the
+    /// hotkey is a no-op when the scene is already active).
+    rebuild_pending: bool,
 }
 
 /// Stage 20.4 — picks which `SdfGrid` (or none) to register with the
@@ -1559,7 +1555,6 @@ impl Default for JellyExampleState {
             contact_stiffness: JELLY_CONTACT_STIFFNESS,
             inner_iterations: 10,
             show_wireframe: true,
-            show_cable_comparison: false,
             material_preset: JellyMaterialPreset::Soft,
             yield_stress: 0.0, // 0 = "elastic only" (sentinel, see jelly_pane)
             hardening: 0.0,
@@ -1571,6 +1566,7 @@ impl Default for JellyExampleState {
             kinematic_hardening_modulus: 5.0e3,
             last_max_back_stress: 0.0,
             sdf_shape: JellySdfShape::None,
+            rebuild_pending: false,
         }
     }
 }
@@ -1609,20 +1605,6 @@ struct MeshToolsExampleState {
     sparse_sdf_leaves: usize,
     sparse_sdf_active_voxels: u64,
     sparse_sdf_band: u32,
-    /// Stage-24e.1 — value type the sparse SDF stores. `f32` is the
-    /// default (and what the dense SDF carries); `f16` is a half-
-    /// precision quantisation; `vec3` stores the SDF normal as a
-    /// 3-channel field (cosmetic — the sphere panel doesn't use the
-    /// extra channels yet, this is a wiring smoke-test). The toggle
-    /// only affects the **GPU build path** (CPU build always
-    /// emits f32).
-    sparse_value_type: SparseValueType,
-    /// Stage-24e.1 — when `true` the sparse SDF is built via the
-    /// new GPU mutable-insert kernel (`SparseGridStorage` +
-    /// `SparseGridInsertKernel`). When `false` the v1 CPU bake is
-    /// used. The GPU build supports all three value types; the CPU
-    /// build is f32-only.
-    sparse_build_gpu: bool,
     /// Stage-24e.1 telemetry — root-table load factor + average
     /// probe length for the GPU root hash (filled in at scene-entry
     /// when the sparse SDF is built).
@@ -1630,26 +1612,12 @@ struct MeshToolsExampleState {
     sparse_root_load_factor: f32,
     sparse_root_avg_probes: f32,
     sparse_root_max_probes: u32,
-}
-
-/// Stage 24e.1 — value-type dropdown options for the viewer's sparse
-/// SDF panel. Only `F32` matches the existing dense pipeline; the
-/// other two are wiring smoke-tests for the templated GPU storage.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum SparseValueType {
-    F32,
-    F16,
-    Vec3,
-}
-
-impl SparseValueType {
-    fn label(self) -> &'static str {
-        match self {
-            SparseValueType::F32 => "f32",
-            SparseValueType::F16 => "f16 (half-float)",
-            SparseValueType::Vec3 => "vec3<f32> (normals)",
-        }
-    }
+    /// Set to `true` when the user touches a control whose effect is
+    /// only realised on a scene rebuild (`use_sparse_sdf`). Cleared on
+    /// rebuild. Surfaces a "Rebuild mesh tools" button so the pane
+    /// doesn't lie about needing the user to re-press M (the hotkey
+    /// is a no-op when the scene is already active).
+    rebuild_pending: bool,
 }
 
 impl Default for MeshToolsExampleState {
@@ -1670,12 +1638,11 @@ impl Default for MeshToolsExampleState {
             sparse_sdf_leaves: 0,
             sparse_sdf_active_voxels: 0,
             sparse_sdf_band: 4,
-            sparse_value_type: SparseValueType::F32,
-            sparse_build_gpu: false,
             sparse_root_table_capacity: 0,
             sparse_root_load_factor: 0.0,
             sparse_root_avg_probes: 0.0,
             sparse_root_max_probes: 0,
+            rebuild_pending: false,
         }
     }
 }
@@ -2068,17 +2035,6 @@ struct MuJoCoExampleState {
     /// Cached info-style status string for the right-rail pane. Built
     /// the first time the scene is entered.
     status: String,
-    /// Stage 22.1 — toggle between MuJoCo's native point-contact
-    /// resolution and molla's hydroelastic distributed-pressure
-    /// contact. When `true`, the viewer would route the contact
-    /// manifold through `molla::geometry::hydroelastic`; when
-    /// `false`, MuJoCo handles contacts internally. The actual
-    /// routing happens at the solver step level — for v1 this flag
-    /// is **informational** in the viewer (the MuJoCo backend always
-    /// uses its native solver), and the toggle exists so a future
-    /// contributor wiring molla→MuJoCo contact injection can flip
-    /// it without an API change. See PLAN.md Stage 22.1.
-    use_hydroelastic: bool,
 }
 
 impl Default for MuJoCoExampleState {
@@ -2092,7 +2048,6 @@ impl Default for MuJoCoExampleState {
             smoothed_step_us: 0.0,
             notified_unavailable: false,
             status,
-            use_hydroelastic: false,
         }
     }
 }
@@ -5263,6 +5218,13 @@ fn apply_scene_switch(
     gpu_np.last_contacts = 0;
     gpu_np.last_pairs = 0;
     // Same for GPU broad-phase counters / pipeline-state cache.
+    // Reset `use_gpu` to match the freshly-cleared `gpu_enabled_now`
+    // so re-entering the BroadPhase scene doesn't trigger a one-frame
+    // pipeline rebuild from a stale-but-different toggle (the delta
+    // check at `step_simulation` rebuilds whenever `use_gpu !=
+    // gpu_enabled_now`). The user can flip the toggle back on from
+    // the pane to opt into the GPU path.
+    gpu_bp.use_gpu = false;
     gpu_bp.gpu_enabled_now = false;
     gpu_bp.last_pairs = 0;
     gpu_bp.smoothed_ms = 0.0;
@@ -7973,7 +7935,7 @@ fn quat_to_rpy(q: MQuat) -> (f64, f64, f64) {
 /// current `Contacts` and stashes the readings. No-op for any other
 /// scene.
 fn update_contact_example(
-    mut sim: ResMut<Sim>,
+    sim: ResMut<Sim>,
     mut state: ResMut<ContactExampleState>,
 ) {
     if sim.scene != Scene::Contact {
@@ -8013,7 +7975,7 @@ fn update_contact_example(
 #[allow(clippy::too_many_arguments)]
 fn update_camera_example(
     time: Res<Time>,
-    mut sim: ResMut<Sim>,
+    sim: ResMut<Sim>,
     mut state: ResMut<CameraExampleState>,
     mut images: ResMut<Assets<Image>>,
     mut user_textures: ResMut<EguiUserTextures>,
@@ -8875,7 +8837,7 @@ fn control_pane(
                     Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
                     Scene::Imu => imu_pane(ui, &imu_state),
                     Scene::Contact => contact_pane(ui, &contact_state),
-                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim),
+                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
                     Scene::Shapes => shapes_pane(ui, &sim),
                     Scene::GpuIkArm => {
                         gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim)
@@ -8911,7 +8873,7 @@ fn control_pane(
                         diff_arm6_pane(ui, &mut pane_states.diff_arm6)
                     }
                     Scene::MeshTools => {
-                        mesh_tools_pane(ui, &mut pane_states.mesh)
+                        mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
                     }
                     Scene::NeuralPolicy => {
                         neural_policy_pane(ui, &mut pane_states.neural)
@@ -8926,7 +8888,13 @@ fn control_pane(
                         mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
                     }
                     Scene::Jelly => {
-                        jelly_pane(ui, &mut pane_states.jelly, &mut sim, accent_color)
+                        jelly_pane(
+                            ui,
+                            &mut pane_states.jelly,
+                            &mut sim,
+                            &mut pending,
+                            accent_color,
+                        )
                     }
                     _ => {}
                 });
@@ -8962,7 +8930,12 @@ fn shapes_pane(ui: &mut egui::Ui, sim: &Sim) {
 ///   1. Original (left)  / Decimated (centre)  side-by-side toggles.
 ///   2. Marching-cubes-from-SDF surface (right) toggle.
 ///   3. Hull overlay toggle on the original.
-fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
+fn mesh_tools_pane(
+    ui: &mut egui::Ui,
+    state: &mut MeshToolsExampleState,
+    pending: &mut PendingSceneSwitch,
+    scene: Scene,
+) {
     ui.label("Source: noise-displaced icosphere (3 subdivs)");
     ui.separator();
     readout(ui, "Original tris", &format!("{}", state.original_tris));
@@ -8984,10 +8957,15 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     // rebuild (press M to re-enter), which the small print below
     // calls out so the user isn't surprised.
     ui.label("Stage 24e: sparse vs dense SDF");
-    ui.checkbox(
-        &mut state.use_sparse_sdf,
-        "Use sparse SDF (re-extract MC) — re-enter scene to apply",
-    );
+    if ui
+        .checkbox(
+            &mut state.use_sparse_sdf,
+            "Use sparse SDF (re-extract MC) — rebuild to apply",
+        )
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
     let dense_kib = state.dense_sdf_bytes as f32 / 1024.0;
     let sparse_kib = state.sparse_sdf_bytes as f32 / 1024.0;
     let ratio = if state.dense_sdf_bytes > 0 {
@@ -9007,37 +8985,6 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     readout(ui, "Narrow band", &format!("{} voxels", state.sparse_sdf_band));
     ui.separator();
 
-    // Stage 24e.1 — value-type dropdown + GPU build-mode toggle.
-    // Both are wiring-only smoke tests in v1: the dense MC surface
-    // is always re-extracted in f32 (the only thing
-    // marching_cubes() consumes) so changing the value type doesn't
-    // affect what's drawn — but it does flow through the kernel
-    // pipeline-build path so the user can see the WGSL templating
-    // working without crashing.
-    ui.label("Stage 24e.1: value type");
-    egui::ComboBox::from_label("Value type")
-        .selected_text(state.sparse_value_type.label())
-        .show_ui(ui, |ui| {
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::F32,
-                SparseValueType::F32.label(),
-            );
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::F16,
-                SparseValueType::F16.label(),
-            );
-            ui.selectable_value(
-                &mut state.sparse_value_type,
-                SparseValueType::Vec3,
-                SparseValueType::Vec3.label(),
-            );
-        });
-    ui.checkbox(
-        &mut state.sparse_build_gpu,
-        "Build mode: GPU mutable insert (re-enter scene to apply)",
-    );
     if state.sparse_root_table_capacity > 0 {
         readout(
             ui,
@@ -9057,6 +9004,19 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
                 state.sparse_root_avg_probes, state.sparse_root_max_probes
             ),
         );
+    }
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply scene-build toggles.",
+        );
+        if ui.button("Rebuild mesh tools").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active.
+            pending.0 = Some(scene);
+            state.rebuild_pending = false;
+        }
     }
     ui.separator();
 
@@ -9252,8 +9212,6 @@ fn cable_pane(
         }
     }
 
-    ui.label("Friction coefficient μ");
-    let _ = ui.add(egui::Slider::new(&mut state.friction_mu, 0.0..=1.5));
     ui.label("Soft contact stiffness (N/m)");
     if ui
         .add(
@@ -9304,19 +9262,17 @@ fn cable_pane(
     }
     ui.add_space(6.0);
     ui.small("Hotkey: C");
-    ui.small("Friction kernel ships here; consumed by Stage 22.1");
-    ui.small("for hydroelastic. Slider is informational in v1.");
 }
 
 /// Right-rail pane for the Stage-20.2 JELLY tetrahedral soft-body
 /// demo. Carries Young's-modulus + Poisson-ratio sliders (per-tet
-/// material), inner-iter / contact-stiffness sliders, a wireframe
-/// toggle (gizmos for tet edges), and a "show cable comparison"
-/// toggle for A/B against the bending CABLE primitive.
+/// material), inner-iter / contact-stiffness sliders, and a wireframe
+/// toggle (gizmos for tet edges).
 fn jelly_pane(
     ui: &mut egui::Ui,
     state: &mut JellyExampleState,
     sim: &mut Sim,
+    pending: &mut PendingSceneSwitch,
     accent: egui::Color32,
 ) {
     ui.add_space(2.0);
@@ -9363,10 +9319,6 @@ fn jelly_pane(
     ui.separator();
 
     ui.checkbox(&mut state.show_wireframe, "Show tet wireframe");
-    ui.checkbox(
-        &mut state.show_cable_comparison,
-        "Show CABLE comparison (informational)",
-    );
     ui.separator();
 
     // ── Stage 20.3 — multi-material picker ──────────────────────
@@ -9501,7 +9453,12 @@ fn jelly_pane(
     // Stage 20.5 will wire the second-cube + SDF rebuilds through
     // apply_scene_switch; v1 surfaces them as informational toggles
     // (changes require a scene re-entry via Y to apply).
-    let _ = ui.checkbox(&mut state.second_cube, "Second jelly cube (re-enter Y to apply)");
+    if ui
+        .checkbox(&mut state.second_cube, "Second jelly cube (rebuild to apply)")
+        .changed()
+    {
+        state.rebuild_pending = true;
+    }
     let mut kin_changed = false;
     if ui
         .checkbox(
@@ -9558,7 +9515,7 @@ fn jelly_pane(
             let _ = sim.model.tet_kinematic_hardening.upload(&queue);
         }
     }
-    ui.label("Rigid SDF backing (re-enter Y to apply)");
+    ui.label("Rigid SDF backing (rebuild to apply)");
     egui::ComboBox::from_id_salt("jelly-sdf-shape")
         .selected_text(match state.sdf_shape {
             JellySdfShape::None => "None",
@@ -9571,9 +9528,27 @@ fn jelly_pane(
                 (JellySdfShape::BakedSphere, "Baked sphere SDF"),
                 (JellySdfShape::BakedTorus, "Baked torus SDF"),
             ] {
-                let _ = ui.selectable_value(&mut state.sdf_shape, variant, label);
+                if ui
+                    .selectable_value(&mut state.sdf_shape, variant, label)
+                    .clicked()
+                {
+                    state.rebuild_pending = true;
+                }
             }
         });
+    if state.rebuild_pending {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Rebuild required to apply scene-build toggles.",
+        );
+        if ui.button("Rebuild jelly").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active.
+            pending.0 = Some(sim.scene);
+            state.rebuild_pending = false;
+        }
+    }
     ui.separator();
 
     if ui
@@ -9631,33 +9606,6 @@ fn mujoco_pane(ui: &mut egui::Ui, state: &mut MuJoCoExampleState, sim: &Sim) {
         ui.label("  2. cargo run -p molla_viewer --features mujoco");
         ui.label("Currently using Featherstone as a fallback.");
     }
-    ui.separator();
-
-    // Stage 22.1 — hydroelastic contact toggle. Wired as an
-    // informational checkbox: MuJoCo's native contact path is the
-    // only one driving the simulation in v1; flipping the toggle
-    // logs an `info!` so a downstream contributor can spot when the
-    // hydroelastic injection should fire. Pattern matches the other
-    // Stage-22 toggles (substep slider, etc).
-    let label = if state.use_hydroelastic {
-        "Hydroelastic contact: ON (informational)"
-    } else {
-        "Hydroelastic contact: OFF (native MuJoCo)"
-    };
-    if ui.checkbox(&mut state.use_hydroelastic, label).changed() {
-        if state.use_hydroelastic {
-            info!(
-                "Stage 22.1 hydroelastic toggle ON — molla's distributed-pressure \
-                 contact would replace MuJoCo's native point-contact resolution. \
-                 v1 viewer routes contacts through MuJoCo regardless; the toggle \
-                 is the integration seam for a follow-up that injects molla's \
-                 manifold via mj_setConstraint."
-            );
-        } else {
-            info!("Stage 22.1 hydroelastic toggle OFF — MuJoCo native contacts");
-        }
-    }
-    ui.small("Stage 22.1 (P2.5) — see PLAN.md for the hydroelastic spec.");
     ui.separator();
 
     ui.small("Hotkey: J  ·  Stage 22 (P2)");
@@ -9936,7 +9884,12 @@ fn gpu_bp_pane(
 }
 
 /// Body for the right-rail pane in the Arm scene.
-fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
+fn arm_pane(
+    ui: &mut egui::Ui,
+    state: &mut ArmExampleState,
+    sim: &Sim,
+    pending: &mut PendingSceneSwitch,
+) {
     ui.add_space(2.0);
     readout(ui, "Solver", "Featherstone GPU");
     readout(ui, "Controller", "GPU PD");
@@ -10033,8 +9986,15 @@ fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
     if state.mimic_dirty {
         ui.colored_label(
             egui::Color32::YELLOW,
-            "Toggle changed — re-press 8 to rebuild the arm scene.",
+            "Toggle changed — rebuild the arm scene to apply.",
         );
+        if ui.button("Rebuild arm").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active, so the button is the only
+            // way to force a rebuild from the pane.
+            pending.0 = Some(sim.scene);
+        }
     }
 }
 
