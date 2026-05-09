@@ -5181,6 +5181,10 @@ fn update_actuator_example(
                         warn!("actuator: set_gains failed: {e}");
                     }
                 }
+                // The Stage-18 actuator pane only constructs a PD
+                // controller; PID / MLP variants (Stage 18.1) live in
+                // the dedicated `Scene::NeuralPolicy` demo.
+                ControllerStage::Pid(_) | ControllerStage::NeuralMlp(_) => {}
             }
             if let ClampingStage::DcMotor(clamp) = act.clamping_mut() {
                 if let Err(e) = clamp.set_params(
@@ -5263,7 +5267,7 @@ fn update_actuator_example(
         ..
     } = *sim;
     if let Some(act) = state.actuator.as_mut() {
-        if let Err(e) = act.step(engine, state_a, control) {
+        if let Err(e) = act.step(engine, state_a, control, FIXED_DT) {
             warn!("actuator: pipeline step failed: {e}");
         } else {
             // Read the delivered torque back off the GPU for the

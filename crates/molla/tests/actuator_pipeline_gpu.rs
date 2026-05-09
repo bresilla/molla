@@ -137,7 +137,7 @@ fn pipeline_matches_standalone_pd() {
     );
 
     set_state(&engine, &mut state, &mut control, 0.1, 0.2, 0.5, 0.0);
-    act.step(&engine, &state, &mut control).unwrap();
+    act.step(&engine, &state, &mut control, 1.0e-3).unwrap();
     let f_pipeline = read_force(&engine, &mut control);
 
     eprintln!("standalone PD: {f_standalone}, pipeline: {f_pipeline}");
@@ -151,7 +151,7 @@ fn pipeline_matches_standalone_pd() {
     pd.step(&engine, &state, &mut control).unwrap();
     let f_standalone_cap = read_force(&engine, &mut control);
     set_state(&engine, &mut state, &mut control, 0.0, 0.0, 5.0, 0.0);
-    act.step(&engine, &state, &mut control).unwrap();
+    act.step(&engine, &state, &mut control, 1.0e-3).unwrap();
     let f_pipeline_cap = read_force(&engine, &mut control);
     assert!(
         (f_standalone_cap - cap).abs() < 1.0e-3 && (f_pipeline_cap - cap).abs() < 1.0e-3,
