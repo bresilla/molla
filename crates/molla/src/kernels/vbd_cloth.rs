@@ -22,7 +22,9 @@ struct Uniforms {
     dt: f32,
     linear_damping: f32,
     contact_stiffness: f32,
-    _pad0: f32,
+    /// AVBD mode flag: 0 = soft (Stage 20), 1 = hard (Stage 20.1
+    /// augmented-Lagrangian dual updates).
+    is_hard: u32,
     _pad1: f32,
 }
 
@@ -35,6 +37,7 @@ pub struct VbdClothKernel {
     pipe_predict: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
     pipe_shape_contacts: wgpu::ComputePipeline,
+    pipe_update_dual: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
 
     layout_state: wgpu::BindGroupLayout,
@@ -53,6 +56,10 @@ pub struct VbdClothKernel {
     particle_q_prev: Buffer<Vec3>,
     /// Per-particle inertial target `y` scratch.
     inertia_y: Buffer<Vec3>,
+    /// Per-particle augmented-Lagrangian multiplier (Stage 20.1
+    /// hard-mode AVBD). Zero in soft mode. Stored as `Real` (host)
+    /// → `f32` (device) via the standard `BufferElement` projection.
+    contact_lambda: Buffer<Real>,
 
     /// 1-element placeholder buffers for any bind group whose model
     /// arrays may be empty (no springs / no shapes).
@@ -91,10 +98,11 @@ impl VbdClothKernel {
             label: Some("molla::vbd_cloth topo"),
             entries: &storage_entries(8, true),
         });
-        // Output / scratch group: 4 read-write.
+        // Output / scratch group: 5 read-write (added contact_lambda
+        // at binding 4 for Stage 20.1 hard-mode AVBD).
         let layout_out = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::vbd_cloth out"),
-            entries: &storage_entries(4, false),
+            entries: &storage_entries(5, false),
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::vbd_cloth uniforms"),
@@ -141,6 +149,7 @@ impl VbdClothKernel {
         let pipe_predict = make_pipeline("predict");
         let pipe_solve_color = make_pipeline("solve_color");
         let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
+        let pipe_update_dual = make_pipeline("update_dual");
         let pipe_velocity = make_pipeline("velocity_recovery");
 
         let pn = particle_count.max(1) as usize;
@@ -159,12 +168,16 @@ impl VbdClothKernel {
             Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut inertia_y =
             Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
+        let mut contact_lambda =
+            Buffer::from_vec(vec![0.0_f64; pn], BufferUsage::StorageReadWrite);
         let _ = spring_stiffness.ensure_device(device);
         let _ = spring_stiffness.upload(queue);
         let _ = particle_q_prev.ensure_device(device);
         let _ = particle_q_prev.upload(queue);
         let _ = inertia_y.ensure_device(device);
         let _ = inertia_y.upload(queue);
+        let _ = contact_lambda.ensure_device(device);
+        let _ = contact_lambda.upload(queue);
 
         let mut dummy_u32 = Buffer::from_vec(vec![0u32; 2], BufferUsage::Storage);
         let mut dummy_real = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::Storage);
@@ -189,6 +202,7 @@ impl VbdClothKernel {
             pipe_predict,
             pipe_solve_color,
             pipe_shape_contacts,
+            pipe_update_dual,
             pipe_velocity,
             layout_state,
             layout_topo,
@@ -198,6 +212,7 @@ impl VbdClothKernel {
             spring_stiffness,
             particle_q_prev,
             inertia_y,
+            contact_lambda,
             dummy_u32,
             dummy_real,
             dummy_vec3,
@@ -227,8 +242,16 @@ impl VbdClothKernel {
         Ok(())
     }
 
-    /// One VBD substep: predict → (iters × colours × `solve_color`)
-    /// → `apply_shape_contacts` → `velocity_recovery`.
+    /// One VBD substep: predict → (iters × colours × `solve_color`
+    /// [+ optional hard-mode `update_dual`]) → `velocity_recovery`.
+    ///
+    /// `hard_mode = true` enables Stage 20.1 augmented-Lagrangian dual
+    /// updates: after every outer iteration, an `update_dual` dispatch
+    /// bumps the per-particle multiplier `λ` by the residual penetration
+    /// so the next iteration's `solve_color` sees the cumulative force.
+    /// Soft mode (`false`) skips that pass entirely and keeps the
+    /// Stage-20 v1 quadratic-penalty behaviour.
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
         device: &wgpu::Device,
@@ -239,6 +262,7 @@ impl VbdClothKernel {
         dt: Real,
         iterations: u32,
         contact_stiffness: f32,
+        hard_mode: bool,
     ) -> Result<()> {
         if model.particle_count == 0 {
             return Ok(());
@@ -320,6 +344,7 @@ impl VbdClothKernel {
                 buffer_entry(1, state_out.particle_qd.device_buffer())?,
                 buffer_entry(2, self.particle_q_prev.device_buffer())?,
                 buffer_entry(3, self.inertia_y.device_buffer())?,
+                buffer_entry(4, self.contact_lambda.device_buffer())?,
             ],
         });
 
@@ -387,6 +412,7 @@ impl VbdClothKernel {
             bg_uniforms.push(bg);
         };
 
+        let is_hard_u: u32 = if hard_mode { 1 } else { 0 };
         let base = |work_count: u32, color_index: u32, contact_k: f32| Uniforms {
             particle_count: particle_count_u,
             spring_count: spring_count_u,
@@ -396,7 +422,7 @@ impl VbdClothKernel {
             dt: dt as f32,
             linear_damping: model.linear_damping as f32,
             contact_stiffness: contact_k,
-            _pad0: 0.0,
+            is_hard: is_hard_u,
             _pad1: 0.0,
         };
 
@@ -406,18 +432,18 @@ impl VbdClothKernel {
         // INSIDE `solve_color` so the per-vertex Newton block sees
         // the contact force/Hessian — applying it as a separate
         // post-pass leaks contact energy directly into velocity.
+        // In hard-mode we push an extra `update_dual` uniform after
+        // each outer iteration's colour sweep.
         for _ in 0..iterations {
             for k in 0..color_count {
                 let lo = color_offsets_host[k as usize];
                 let hi = color_offsets_host[k as usize + 1];
                 push_uniforms(&base(hi - lo, k, contact_stiffness));
             }
+            if hard_mode {
+                push_uniforms(&base(particle_count_u, 0, contact_stiffness));
+            }
         }
-        // Final non-penetration projection — runs once at the end
-        // of the substep with a *zero* contact stiffness (so it
-        // contributes no force-into-velocity), then snaps any
-        // remaining penetration depth out hard. Acts as a safety
-        // net for stiffness pairs the Newton block under-converges.
         let _ = shape_count_u; // referenced in the apply_shape_contacts
                                // dispatch path; kept for future use.
         // Velocity recovery.
@@ -457,7 +483,10 @@ impl VbdClothKernel {
             idx += 1;
             // Outer iterations × colours. Soft rigid contacts are
             // baked into `solve_color` so each per-vertex Newton
-            // block sees the contact force + Hessian directly.
+            // block sees the contact force + Hessian directly. In
+            // hard mode we follow each outer iteration with an
+            // `update_dual` dispatch that bumps the per-particle λ
+            // by the residual penetration.
             for _ in 0..iterations {
                 for k in 0..color_count {
                     let lo = color_offsets_host[k as usize];
@@ -466,13 +495,17 @@ impl VbdClothKernel {
                     dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
                     idx += 1;
                 }
+                if hard_mode {
+                    dispatch(&mut pass, &self.pipe_update_dual, idx, particle_count_u);
+                    idx += 1;
+                }
             }
             // Velocity recovery.
             dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
             idx += 1;
             // `pipe_shape_contacts` kept compiled for future use
-            // (warm-start initialiser, hard-mode AVBD); silence the
-            // unused-field warning.
+            // (warm-start initialiser, alternate AVBD safety pass);
+            // silence the unused-field warning.
             let _ = &self.pipe_shape_contacts;
             debug_assert_eq!(idx, uniform_bufs.len());
         }

@@ -49,7 +49,9 @@ struct Uniforms {
     /// 0 = disable contacts entirely. Recommended ~1e5 N/m for a
     /// 1cm particle radius cloth.
     contact_stiffness: f32,
-    _pad0:             f32,
+    /// AVBD mode: 0 = soft (Stage 20), 1 = hard (Stage 20.1
+    /// augmented-Lagrangian dual updates).
+    is_hard:           u32,
     _pad1:             f32,
 };
 
@@ -90,6 +92,11 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 /// Inertial target `y = x_n + dt·(v_n + dt·g)`. Held constant during
 /// the block iterations (the "right-hand side" of the implicit step).
 @group(2) @binding(3) var<storage, read_write> inertia_y:   array<vec4<f32>>;
+/// Hard-mode AVBD per-particle augmented-Lagrangian multiplier λ
+/// (one scalar per particle, applied along the most-penetrating
+/// contact normal). Updated once per outer iteration by
+/// `update_dual`. Soft mode leaves it untouched.
+@group(2) @binding(4) var<storage, read_write> contact_lambda: array<f32>;
 
 // ── Group 3: per-dispatch uniforms ──────────────────────────────────
 @group(3) @binding(0) var<uniform>             u: Uniforms;
@@ -125,6 +132,11 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let x = particle_q_in[i].xyz;
     particle_q_prev[i] = vec4<f32>(x, 0.0);
+    // Reset the AVBD dual variable at the start of each substep —
+    // contact lambdas are *substep*-local (they decay back through
+    // velocity recovery; persisting them across substeps over-pushes
+    // particles out of the surface).
+    contact_lambda[i] = 0.0;
 
     let inv_m = particle_inv_mass[i];
     if (inv_m <= 0.0) {
@@ -399,6 +411,10 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     // reading the global shape count from `arrayLength(&shape_geom_kind)`.
     if (u.contact_stiffness > 0.0) {
         let pr = particle_radius[v];
+        // Hard-mode AVBD adds the per-particle multiplier λ on top of
+        // the quadratic penalty. λ is updated once per outer iteration
+        // by `update_dual` and is always 0 in soft mode.
+        let lam = select(0.0, contact_lambda[v], u.is_hard == 1u);
         let shape_count = arrayLength(&shape_geom_kind);
         for (var s: u32 = 0u; s < shape_count; s = s + 1u) {
             let kind = shape_geom_kind[s];
@@ -407,7 +423,8 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
             let pen = pr - nd.w;
             if (pen > 0.0) {
                 let n_dir = nd.xyz;
-                f = f + n_dir * (u.contact_stiffness * pen);
+                let mag = lam + u.contact_stiffness * pen;
+                f = f + n_dir * mag;
                 let outer = mat3x3<f32>(
                     vec3<f32>(n_dir.x * n_dir.x, n_dir.y * n_dir.x, n_dir.z * n_dir.x),
                     vec3<f32>(n_dir.x * n_dir.y, n_dir.y * n_dir.y, n_dir.z * n_dir.y),
@@ -468,6 +485,35 @@ fn apply_shape_contacts(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     particle_q[i] = vec4<f32>(p, 0.0);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Hard-mode AVBD dual update — once per outer iteration.
+// For each particle, find the maximum residual penetration over all
+// shape SDFs and bump the per-particle multiplier:
+//   λ ← max(λ + k_c · pen, 0)     (unilateral contact: clamp at 0)
+// One thread per particle. Soft mode skips this dispatch entirely.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn update_dual(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    let inv_m = particle_inv_mass[i];
+    if (inv_m <= 0.0) { return; }
+    if (u.contact_stiffness <= 0.0) { return; }
+    let pr = particle_radius[i];
+    let p = particle_q[i].xyz;
+    var max_pen: f32 = 0.0;
+    let shape_count = arrayLength(&shape_geom_kind);
+    for (var s: u32 = 0u; s < shape_count; s = s + 1u) {
+        let kind = shape_geom_kind[s];
+        if (kind == KIND_SKIP) { continue; }
+        let nd = shape_sd(p, s);
+        let pen = pr - nd.w;
+        if (pen > max_pen) { max_pen = pen; }
+    }
+    let new_lam = contact_lambda[i] + u.contact_stiffness * max_pen;
+    contact_lambda[i] = max(new_lam, 0.0);
 }
 
 // ─────────────────────────────────────────────────────────────────
