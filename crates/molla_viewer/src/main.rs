@@ -1461,6 +1461,40 @@ struct JellyExampleState {
     /// back. A small impulsive squash is enough to drive the cube
     /// past yield with the default plasticity settings.
     compress_t: f32,
+
+    // ── Stage 20.4 extensions ────────────────────────────────────
+    /// Spawn a second jelly cube above the first to demonstrate
+    /// tet-vs-tet collision. Triggers a model rebuild on toggle.
+    second_cube: bool,
+    /// Toggle kinematic-hardening (Stage 20.4) for the per-material
+    /// `c` modulus. When on, the back-stress α evolves per Prager;
+    /// when off, the model uses Stage-20.3-style isotropic hardening
+    /// only. Triggers a model rebuild on toggle.
+    kinematic_hardening_on: bool,
+    /// Per-tet kinematic-hardening modulus c (Pa). Surfaced when
+    /// `kinematic_hardening_on` is true.
+    kinematic_hardening_modulus: f64,
+    /// Latest max ‖α‖ (Frobenius) across all tets — readout only.
+    last_max_back_stress: f64,
+    /// SDF-backed rigid shape selection. `None` keeps the analytic
+    /// puller sphere; the other variants register a baked / sparse
+    /// SDF on solver re-creation.
+    sdf_shape: JellySdfShape,
+}
+
+/// Stage 20.4 — picks which `SdfGrid` (or none) to register with the
+/// VBD solver as a rigid contact target. Triggers a re-create of the
+/// solver when changed (the SDF backings live on the solver).
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+enum JellySdfShape {
+    /// No SDF backing — use the analytic puller sphere only.
+    #[default]
+    None,
+    /// Baked dense SDF of a sphere (validates the SdfGrid path).
+    BakedSphere,
+    /// Baked dense SDF of a torus (qualitative demo of mesh-derived
+    /// SDF contact).
+    BakedTorus,
 }
 
 /// Material recipe for `JellyExampleState::material_preset`. Each
@@ -1492,6 +1526,11 @@ impl Default for JellyExampleState {
             show_plastic_strain: false,
             last_max_plastic_strain: 0.0,
             compress_t: 0.0,
+            second_cube: false,
+            kinematic_hardening_on: false,
+            kinematic_hardening_modulus: 5.0e3,
+            last_max_back_stress: 0.0,
+            sdf_shape: JellySdfShape::None,
         }
     }
 }
@@ -7208,6 +7247,32 @@ fn update_jelly_example(mut sim: ResMut<Sim>, mut state: ResMut<JellyExampleStat
                 eps.iter().cloned().fold(0.0_f64, f64::max);
         }
     }
+    // Stage 20.4 — back-stress readout. Only download when the
+    // kinematic-hardening toggle is on (avoid the per-frame device
+    // download cost for the default-off case).
+    if state.kinematic_hardening_on && sim.model.tet_count > 0 {
+        if let (Some(device), Some(queue)) =
+            (sim.engine.device(), sim.engine.queue())
+        {
+            let device = device.clone();
+            let queue = queue.clone();
+            let _ = sim.state_a.tet_back_stress.download(&device, &queue);
+        }
+        if let Ok(alphas) = sim.state_a.tet_back_stress.host() {
+            // Frobenius norm — same metric as the v4 GPU test.
+            let mut max_norm: f64 = 0.0;
+            for a in alphas {
+                let frob = (a.x_axis.length_squared()
+                    + a.y_axis.length_squared()
+                    + a.z_axis.length_squared())
+                .sqrt();
+                if frob > max_norm {
+                    max_norm = frob;
+                }
+            }
+            state.last_max_back_stress = max_norm;
+        }
+    }
 }
 
 fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
@@ -8884,6 +8949,86 @@ fn jelly_pane(
     }
     ui.separator();
 
+    // ── Stage 20.4 toggles ──────────────────────────────────────
+    ui.label("Stage 20.4 (tet-vs-tet, kinematic, SDF)");
+    // Stage 20.5 will wire the second-cube + SDF rebuilds through
+    // apply_scene_switch; v1 surfaces them as informational toggles
+    // (changes require a scene re-entry via Y to apply).
+    let _ = ui.checkbox(&mut state.second_cube, "Second jelly cube (re-enter Y to apply)");
+    let mut kin_changed = false;
+    if ui
+        .checkbox(
+            &mut state.kinematic_hardening_on,
+            "Kinematic hardening (back-stress α)",
+        )
+        .changed()
+    {
+        kin_changed = true;
+    }
+    if state.kinematic_hardening_on {
+        ui.label("Kinematic hardening modulus c (Pa)");
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut state.kinematic_hardening_modulus,
+                    1.0e2..=1.0e5,
+                )
+                .logarithmic(true),
+            )
+            .changed()
+        {
+            kin_changed = true;
+        }
+        readout(
+            ui,
+            "Max ‖α‖",
+            &format!("{:.2}", state.last_max_back_stress),
+        );
+    } else {
+        readout(ui, "Max ‖α‖", "0.00 (off)");
+    }
+    if kin_changed {
+        // Re-stamp the per-tet kinematic-hardening buffer in place;
+        // re-upload to the device. Same shape as the Mixed-preset
+        // re-stamp above. When the toggle is off, set every entry
+        // to 0 (Stage 20.3 path).
+        let c = if state.kinematic_hardening_on {
+            state.kinematic_hardening_modulus
+        } else {
+            0.0
+        };
+        if let Ok(buf) = sim.model.tet_kinematic_hardening.host_mut() {
+            for v in buf.iter_mut() {
+                *v = c;
+            }
+        }
+        if let (Some(device), Some(queue)) =
+            (sim.engine.device(), sim.engine.queue())
+        {
+            let device = device.clone();
+            let queue = queue.clone();
+            let _ = sim.model.tet_kinematic_hardening.ensure_device(&device);
+            let _ = sim.model.tet_kinematic_hardening.upload(&queue);
+        }
+    }
+    ui.label("Rigid SDF backing (re-enter Y to apply)");
+    egui::ComboBox::from_id_salt("jelly-sdf-shape")
+        .selected_text(match state.sdf_shape {
+            JellySdfShape::None => "None",
+            JellySdfShape::BakedSphere => "Baked sphere SDF",
+            JellySdfShape::BakedTorus => "Baked torus SDF",
+        })
+        .show_ui(ui, |ui| {
+            for (variant, label) in [
+                (JellySdfShape::None, "None"),
+                (JellySdfShape::BakedSphere, "Baked sphere SDF"),
+                (JellySdfShape::BakedTorus, "Baked torus SDF"),
+            ] {
+                let _ = ui.selectable_value(&mut state.sdf_shape, variant, label);
+            }
+        });
+    ui.separator();
+
     if ui
         .add_sized(
             [ui.available_width(), 28.0],
@@ -8895,8 +9040,7 @@ fn jelly_pane(
     }
     ui.add_space(6.0);
     ui.small("Hotkey: Y");
-    ui.small("Stage 20.3: Neo-Hookean tets + von Mises plasticity.");
-    ui.small("E + ν → Lamé (μ, λ); F = F_e · F_p; return-mapping per substep.");
+    ui.small("Stage 20.4: tet-vs-tet, kinematic hardening, baked SDF.");
 }
 
 /// Tiny helper that returns an egui Button styled the same as the
