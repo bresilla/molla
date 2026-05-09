@@ -1303,6 +1303,15 @@ impl ModelBuilder {
         let spring_count = self.spring_a.len();
         let tri_count = self.tri_indices.len() / 3;
 
+        // Greedy graph colouring of springs: edges are springs, nodes
+        // are particles. Two springs share a colour iff they don't
+        // share an endpoint. The GPU XPBD kernel then dispatches
+        // `K` parallel passes (one per colour); within a colour no
+        // two threads write to the same particle, so the per-spring
+        // read-modify-write of `particle_q` is race-free without atomics.
+        let (spring_color_count, spring_color_offsets, spring_indices_by_color) =
+            color_springs(particle_count, &self.spring_a, &self.spring_b);
+
         Ok(Model {
             particle_count,
             particle_mass: Buffer::from_vec(self.particle_mass, s),
@@ -1318,6 +1327,9 @@ impl ModelBuilder {
             spring_rest_length: Buffer::from_vec(self.spring_rest_length, s),
             spring_compliance: Buffer::from_vec(self.spring_compliance, s),
             spring_max_stretch: Buffer::from_vec(self.spring_max_stretch, s),
+            spring_color_count,
+            spring_color_offsets: Buffer::from_vec(spring_color_offsets, s),
+            spring_indices_by_color: Buffer::from_vec(spring_indices_by_color, s),
 
             tri_count,
             tri_indices: Buffer::from_vec(self.tri_indices, s),
@@ -1450,6 +1462,100 @@ impl ModelBuilder {
     }
 }
 
+/// Greedy graph colouring over the spring endpoint graph. Returns
+/// `(color_count, csr_offsets, indices_sorted_by_color)`.
+///
+/// For each spring in declaration order, picks the smallest colour
+/// that no neighbouring spring (sharing endpoint `a` or `b`) is
+/// already using. The "neighbouring" lookup uses two scratch arrays
+/// indexed by particle id, which makes the algorithm O(spring_count
+/// · max_degree) rather than O(spring_count²).
+///
+/// For an N×N cloth grid (4-neighbour stretch springs + diagonal
+/// shears), the natural colouring uses 6 colours and balances the
+/// per-colour spring count well — Newton's `solver_xpbd.cu` ships
+/// the same approach for the same reason.
+fn color_springs(
+    particle_count: usize,
+    spring_a: &[u32],
+    spring_b: &[u32],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    let n = spring_a.len();
+    if n == 0 {
+        return (0, vec![0u32], Vec::new());
+    }
+    // Per-particle adjacency: list of (spring_idx, color) once we've
+    // assigned a spring's colour, store the colour against both
+    // endpoints. To pick the next spring's colour we scan its two
+    // endpoints' colour sets and find the smallest colour absent
+    // from the union.
+    let mut endpoint_colors: Vec<Vec<u32>> = vec![Vec::new(); particle_count];
+    let mut spring_color: Vec<u32> = vec![0u32; n];
+    let mut max_color: u32 = 0;
+
+    let mut used = Vec::<bool>::with_capacity(8);
+    for i in 0..n {
+        let a = spring_a[i] as usize;
+        let b = spring_b[i] as usize;
+        let in_bounds = a < particle_count && b < particle_count;
+        let neighbour_max = if in_bounds {
+            endpoint_colors[a].iter().chain(endpoint_colors[b].iter()).copied().max()
+        } else {
+            None
+        };
+        let need_size = neighbour_max.map_or(0, |c| c as usize + 2);
+        if used.len() < need_size {
+            used.resize(need_size, false);
+        }
+        for u in used.iter_mut() {
+            *u = false;
+        }
+        if in_bounds {
+            for &c in &endpoint_colors[a] {
+                if (c as usize) < used.len() {
+                    used[c as usize] = true;
+                }
+            }
+            for &c in &endpoint_colors[b] {
+                if (c as usize) < used.len() {
+                    used[c as usize] = true;
+                }
+            }
+        }
+        let mut chosen: u32 = 0;
+        while (chosen as usize) < used.len() && used[chosen as usize] {
+            chosen += 1;
+        }
+        spring_color[i] = chosen;
+        if chosen > max_color {
+            max_color = chosen;
+        }
+        if in_bounds {
+            endpoint_colors[a].push(chosen);
+            endpoint_colors[b].push(chosen);
+        }
+    }
+
+    let color_count = (max_color as usize) + 1;
+    // Build CSR: count per colour, prefix-sum to offsets, then place.
+    let mut counts = vec![0u32; color_count];
+    for &c in &spring_color {
+        counts[c as usize] += 1;
+    }
+    let mut offsets = vec![0u32; color_count + 1];
+    for k in 0..color_count {
+        offsets[k + 1] = offsets[k] + counts[k];
+    }
+    let mut cursors = offsets[..color_count].to_vec();
+    let mut indices = vec![0u32; n];
+    for (i, &c) in spring_color.iter().enumerate() {
+        let slot = cursors[c as usize];
+        indices[slot as usize] = i as u32;
+        cursors[c as usize] += 1;
+    }
+    (color_count, offsets, indices)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1521,5 +1627,71 @@ mod tests {
         assert_eq!(aw, &[0i32, 2]);
         let jw = m.joint_world.host().unwrap();
         assert_eq!(jw, &[0i32, 2]);
+    }
+
+    #[test]
+    fn graph_color_no_endpoint_conflicts() {
+        // Triangle springs (0-1, 1-2, 2-0) — every spring shares an
+        // endpoint with both others, so the colouring needs 3 colours.
+        let a = vec![0u32, 1, 2];
+        let b = vec![1u32, 2, 0];
+        let (k, offsets, indices) = color_springs(3, &a, &b);
+        assert_eq!(k, 3);
+        assert_eq!(indices.len(), 3);
+        assert_eq!(offsets[k], 3);
+
+        // Within each colour, no two springs share a particle.
+        for c in 0..k {
+            let lo = offsets[c] as usize;
+            let hi = offsets[c + 1] as usize;
+            let mut seen = std::collections::HashSet::new();
+            for &si in &indices[lo..hi] {
+                let pa = a[si as usize];
+                let pb = b[si as usize];
+                assert!(seen.insert(pa), "color {c} repeats particle {pa}");
+                assert!(seen.insert(pb), "color {c} repeats particle {pb}");
+            }
+        }
+    }
+
+    #[test]
+    fn graph_color_disjoint_springs_share_color() {
+        // Three springs over disjoint particle pairs — all in colour 0.
+        let a = vec![0u32, 2, 4];
+        let b = vec![1u32, 3, 5];
+        let (k, offsets, _indices) = color_springs(6, &a, &b);
+        assert_eq!(k, 1);
+        assert_eq!(offsets, vec![0u32, 3]);
+    }
+
+    #[test]
+    fn graph_color_cloth_grid_few_colors() {
+        // Tiny 4×4 grid with the standard cloth springs (4-neighbour
+        // stretch + diagonal shears). The grid is regular so we should
+        // get a single-digit colour count, not anywhere near
+        // `spring_count`.
+        let mut b = ModelBuilder::new();
+        b.add_cloth_grid(
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Z,
+            4,
+            4,
+            0.05,
+            0.02,
+            1.0e-5,
+            0.1,
+            crate::core::WorldId(0),
+        );
+        let m = b.build().unwrap();
+        assert!(
+            m.spring_color_count <= 8,
+            "cloth colouring blew up: {} colours",
+            m.spring_color_count
+        );
+        assert_eq!(
+            m.spring_indices_by_color.host().unwrap().len(),
+            m.spring_count
+        );
     }
 }

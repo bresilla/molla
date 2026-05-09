@@ -1,26 +1,24 @@
-// XPBD particle step — predict + distance constraint projection +
-// strain limit + plane collision + velocity recovery, all in one
-// single-threaded GPU dispatch. Replaces the host-side
-// `apply_particles_post_gpu` shim with a true GPU kernel so the cloth
-// scene runs end-to-end on the device.
+// Parallel particle XPBD step.
 //
-// Algorithm: faithful 1:1 port of `solvers::xpbd::step_particles`.
-// Single-threaded — particle XPBD's distance-constraint projection
-// is inherently Gauss-Seidel sequential (with a per-spring λ
-// accumulator), and the strain limit uses Jacobi-style accumulation
-// with deltas/counts that read-modify-write per-particle scratch
-// buffers. Doing this with a single thread avoids needing
-// atomic_add<f32> (unsupported in WGSL) at the cost of GPU
-// parallelism. The win is eliminating the CPU↔GPU round-trip on
-// every substep.
+// Replaces the original single-thread `step_particles_kernel`, which
+// hung the OS via Timeout-Detection-and-Recovery on cloth scenes
+// (≈600 k sequential ops per substep). Now split into six kernels,
+// each parallel over either particles or springs in a single colour:
 //
-// Performance: 36×36 cloth (1296 particles, ~5000 springs) at 20 XPBD
-// iters + 80 strain iters = ~600k single-thread GPU ops, well under a
-// millisecond on any compute-capable adapter. Future optimisation:
-// split into parallel passes for predict / floor / recover and keep
-// the constraint loops single-threaded.
+//   predict             — one thread per particle.
+//   solve_distance      — one thread per spring in the current colour.
+//                         Dispatched K times per XPBD iter, where K
+//                         is `spring_color_count`. No two threads in
+//                         a colour write the same particle, so no
+//                         atomics or races.
+//   strain_zero_scratch — one thread per particle (zeros deltas/counts).
+//   strain_accumulate   — one thread per spring in the current colour.
+//   strain_apply        — one thread per particle (averaged correction).
+//   floor               — one thread per particle (Y=0 plane).
+//   velocity_recovery   — one thread per particle.
 //
-// Workgroup size 1, single dispatch.
+// The host (`XpbdParticlesKernel::dispatch`) drives the encoder,
+// alternating colours and looping over iteration counts.
 
 struct Uniforms {
     particle_count:    u32,
@@ -28,181 +26,208 @@ struct Uniforms {
     iterations:        u32,
     dt:                f32,
     linear_damping:    f32,
-    _pad0:             f32,
-    _pad1:             f32,
-    _pad2:             f32,
+    /// Slot in `spring_color_offsets` for the colour the current
+    /// `solve_distance` / `strain_accumulate` dispatch is processing.
+    /// Number of springs in the colour = offsets[idx+1] - offsets[idx].
+    color_index:       u32,
+    /// Number of valid uniform-write slots in this dispatch — equals
+    /// the colour's spring count when running a colour pass, else
+    /// `particle_count` for predict / floor / velocity dispatches.
+    work_count:        u32,
+    _pad:              u32,
 };
 
 const MAX_STRETCH_DISABLED: f32 = 1.0;
 
-@group(0) @binding(0) var<storage, read> particle_q_in:    array<vec4<f32>>;
-@group(0) @binding(1) var<storage, read> particle_qd_in:   array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read> particle_inv_mass: array<f32>;
-@group(0) @binding(3) var<storage, read> particle_radius:  array<f32>;
-@group(0) @binding(4) var<storage, read> particle_world:   array<i32>;
-@group(0) @binding(5) var<storage, read> gravity:          array<vec4<f32>>;
+// ── Group 0: read-only model + state-in ─────────────────────────────
+@group(0) @binding(0) var<storage, read>      particle_q_in:    array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read>      particle_qd_in:   array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read>      particle_inv_mass: array<f32>;
+@group(0) @binding(3) var<storage, read>      particle_radius:  array<f32>;
+@group(0) @binding(4) var<storage, read>      particle_world:   array<i32>;
+@group(0) @binding(5) var<storage, read>      gravity:          array<vec4<f32>>;
 
-@group(1) @binding(0) var<storage, read> spring_a:           array<u32>;
-@group(1) @binding(1) var<storage, read> spring_b:           array<u32>;
-@group(1) @binding(2) var<storage, read> spring_rest_length: array<f32>;
-@group(1) @binding(3) var<storage, read> spring_compliance:  array<f32>;
-@group(1) @binding(4) var<storage, read> spring_max_stretch: array<f32>;
+// ── Group 1: read-only spring topology + colouring ──────────────────
+@group(1) @binding(0) var<storage, read>      spring_a:                array<u32>;
+@group(1) @binding(1) var<storage, read>      spring_b:                array<u32>;
+@group(1) @binding(2) var<storage, read>      spring_rest_length:      array<f32>;
+@group(1) @binding(3) var<storage, read>      spring_compliance:       array<f32>;
+@group(1) @binding(4) var<storage, read>      spring_max_stretch:      array<f32>;
+@group(1) @binding(5) var<storage, read>      spring_color_offsets:    array<u32>;
+@group(1) @binding(6) var<storage, read>      spring_indices_by_color: array<u32>;
 
+// ── Group 2: read/write working state ───────────────────────────────
 @group(2) @binding(0) var<storage, read_write> particle_q:  array<vec4<f32>>;
 @group(2) @binding(1) var<storage, read_write> particle_qd: array<vec4<f32>>;
-/// Per-spring λ accumulator (size = spring_count). Caller zeroes
-/// this once before each substep.
 @group(2) @binding(2) var<storage, read_write> lambdas:     array<f32>;
-/// Per-particle scratch deltas for the Jacobi strain pass.
 @group(2) @binding(3) var<storage, read_write> deltas:      array<vec4<f32>>;
-/// Per-particle violation count for the Jacobi average.
 @group(2) @binding(4) var<storage, read_write> counts:      array<u32>;
 
-@group(3) @binding(0) var<uniform> u: Uniforms;
+// ── Group 3: per-dispatch uniforms ──────────────────────────────────
+@group(3) @binding(0) var<uniform>             u: Uniforms;
 
-@compute @workgroup_size(1)
-fn step_particles_kernel() {
-    if (u.particle_count == 0u) { return; }
+// ─────────────────────────────────────────────────────────────────
+// Predict: gravity + linear damping + integrate position by dt.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
 
-    // ── 1. Predict (sequential per particle). ────────────────────
-    for (var i: u32 = 0u; i < u.particle_count; i = i + 1u) {
-        let inv_m = particle_inv_mass[i];
-        if (inv_m <= 0.0) {
-            // Pinned: pass through, zero velocity. Final write happens
-            // in the velocity-recovery loop below.
-            particle_q[i] = particle_q_in[i];
-            particle_qd[i] = vec4<f32>(0.0);
-            continue;
-        }
-        let world = max(particle_world[i], 0);
-        let g = gravity[u32(world)].xyz;
-        var v = particle_qd_in[i].xyz + g * u.dt;
-        if (u.linear_damping > 0.0) {
-            v = v * max(0.0, 1.0 - u.linear_damping * u.dt);
-        }
-        let p = particle_q_in[i].xyz + v * u.dt;
-        particle_q[i] = vec4<f32>(p, 0.0);
-        // Stash the predicted v in particle_qd so the strain limit
-        // sees current values; final velocity is recomputed in step 4.
-        particle_qd[i] = vec4<f32>(v, 0.0);
+    let inv_m = particle_inv_mass[i];
+    if (inv_m <= 0.0) {
+        // Pinned: pass through.
+        particle_q[i] = particle_q_in[i];
+        particle_qd[i] = vec4<f32>(0.0);
+        return;
     }
+    let world = max(particle_world[i], 0);
+    let g = gravity[u32(world)].xyz;
+    var v = particle_qd_in[i].xyz + g * u.dt;
+    if (u.linear_damping > 0.0) {
+        v = v * max(0.0, 1.0 - u.linear_damping * u.dt);
+    }
+    let p = particle_q_in[i].xyz + v * u.dt;
+    particle_q[i] = vec4<f32>(p, 0.0);
+    particle_qd[i] = vec4<f32>(v, 0.0);
+}
 
-    // ── 2. Distance constraint projection (XPBD λ accumulator). ──
+// ─────────────────────────────────────────────────────────────────
+// Reset the per-spring λ accumulator at the start of each substep.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn reset_lambdas(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    lambdas[i] = 0.0;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// XPBD distance constraint, one colour pass. Race-free under
+// graph colouring: no two springs in `color_index` share a particle.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn solve_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let slot = gid.x;
+    if (slot >= u.work_count) { return; }
+    let base = spring_color_offsets[u.color_index];
+    let c = spring_indices_by_color[base + slot];
+
+    let a = spring_a[c];
+    let b = spring_b[c];
+    if (a >= u.particle_count || b >= u.particle_count) { return; }
+    let wa = particle_inv_mass[a];
+    let wb = particle_inv_mass[b];
+    let w_sum = wa + wb;
+    if (w_sum <= 0.0) { return; }
+
+    let pa = particle_q[a].xyz;
+    let pb = particle_q[b].xyz;
+    let delta = pb - pa;
+    let len = length(delta);
+    if (len < 1e-9) { return; }
+
+    let n_dir = delta / len;
+    let c_val = len - spring_rest_length[c];
     let dt2 = u.dt * u.dt;
-    if (u.spring_count > 0u) {
-        // Reset λ accumulator (caller pre-zeroed it; redundant but
-        // cheap and matches the CPU semantics that always starts at 0
-        // each substep).
-        for (var c: u32 = 0u; c < u.spring_count; c = c + 1u) {
-            lambdas[c] = 0.0;
-        }
-        for (var iter: u32 = 0u; iter < u.iterations; iter = iter + 1u) {
-            for (var c: u32 = 0u; c < u.spring_count; c = c + 1u) {
-                let a = spring_a[c];
-                let b = spring_b[c];
-                if (a >= u.particle_count || b >= u.particle_count) {
-                    continue;
-                }
-                let wa = particle_inv_mass[a];
-                let wb = particle_inv_mass[b];
-                let w_sum = wa + wb;
-                if (w_sum <= 0.0) {
-                    continue;
-                }
-                let pb = particle_q[b].xyz;
-                let pa = particle_q[a].xyz;
-                let delta = pb - pa;
-                let len = length(delta);
-                if (len < 1e-9) {
-                    continue;
-                }
-                let n_dir = delta / len;
-                let c_val = len - spring_rest_length[c];
-                let alpha = spring_compliance[c] / dt2;
-                let dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
-                lambdas[c] = lambdas[c] + dlambda;
-                let dp = n_dir * dlambda;
-                particle_q[a] = vec4<f32>(pa - dp * wa, 0.0);
-                particle_q[b] = vec4<f32>(pb + dp * wb, 0.0);
-            }
-        }
+    let alpha = spring_compliance[c] / dt2;
+    let dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+    lambdas[c] = lambdas[c] + dlambda;
+    let dp = n_dir * dlambda;
+    particle_q[a] = vec4<f32>(pa - dp * wa, 0.0);
+    particle_q[b] = vec4<f32>(pb + dp * wb, 0.0);
+}
 
-        // ── 2b. Hard strain limit (Jacobi over multiple iters). ──
-        let strain_max_iters = u.iterations * 4u;
-        for (var iter: u32 = 0u; iter < strain_max_iters; iter = iter + 1u) {
-            // Reset Jacobi scratch.
-            for (var i: u32 = 0u; i < u.particle_count; i = i + 1u) {
-                deltas[i] = vec4<f32>(0.0);
-                counts[i] = 0u;
-            }
-            var violated: bool = false;
-            for (var c: u32 = 0u; c < u.spring_count; c = c + 1u) {
-                let ms = spring_max_stretch[c];
-                if (ms >= MAX_STRETCH_DISABLED) {
-                    continue;
-                }
-                let a = spring_a[c];
-                let b = spring_b[c];
-                if (a >= u.particle_count || b >= u.particle_count) {
-                    continue;
-                }
-                let wa = particle_inv_mass[a];
-                let wb = particle_inv_mass[b];
-                let w_sum = wa + wb;
-                if (w_sum <= 0.0) {
-                    continue;
-                }
-                let max_len = spring_rest_length[c] * (1.0 + ms);
-                let pb = particle_q[b].xyz;
-                let pa = particle_q[a].xyz;
-                let delta = pb - pa;
-                let len = length(delta);
-                if (len > max_len && len > 1e-9) {
-                    violated = true;
-                    let n_dir = delta / len;
-                    let excess = len - max_len;
-                    let dp = n_dir * (excess / w_sum);
-                    deltas[a] = vec4<f32>(deltas[a].xyz + dp * wa, 0.0);
-                    deltas[b] = vec4<f32>(deltas[b].xyz - dp * wb, 0.0);
-                    counts[a] = counts[a] + 1u;
-                    counts[b] = counts[b] + 1u;
-                }
-            }
-            if (!violated) {
-                break;
-            }
-            // Apply averaged deltas, skipping pinned particles.
-            for (var i: u32 = 0u; i < u.particle_count; i = i + 1u) {
-                if (particle_inv_mass[i] <= 0.0 || counts[i] == 0u) {
-                    continue;
-                }
-                let avg = deltas[i].xyz / f32(counts[i]);
-                particle_q[i] = vec4<f32>(particle_q[i].xyz + avg, 0.0);
-            }
-        }
+// ─────────────────────────────────────────────────────────────────
+// Strain limit: zero per-particle Jacobi scratch (deltas + counts).
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn strain_zero(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    deltas[i] = vec4<f32>(0.0);
+    counts[i] = 0u;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Strain limit: accumulate per-spring corrections into per-particle
+// scratch (one colour at a time, race-free under graph colouring).
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn strain_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let slot = gid.x;
+    if (slot >= u.work_count) { return; }
+    let base = spring_color_offsets[u.color_index];
+    let c = spring_indices_by_color[base + slot];
+
+    let ms = spring_max_stretch[c];
+    if (ms >= MAX_STRETCH_DISABLED) { return; }
+    let a = spring_a[c];
+    let b = spring_b[c];
+    if (a >= u.particle_count || b >= u.particle_count) { return; }
+    let wa = particle_inv_mass[a];
+    let wb = particle_inv_mass[b];
+    let w_sum = wa + wb;
+    if (w_sum <= 0.0) { return; }
+
+    let max_len = spring_rest_length[c] * (1.0 + ms);
+    let pa = particle_q[a].xyz;
+    let pb = particle_q[b].xyz;
+    let delta = pb - pa;
+    let len = length(delta);
+    if (len > max_len && len > 1e-9) {
+        let n_dir = delta / len;
+        let excess = len - max_len;
+        let dp = n_dir * (excess / w_sum);
+        deltas[a] = vec4<f32>(deltas[a].xyz + dp * wa, 0.0);
+        deltas[b] = vec4<f32>(deltas[b].xyz - dp * wb, 0.0);
+        counts[a] = counts[a] + 1u;
+        counts[b] = counts[b] + 1u;
     }
+}
 
-    // ── 3. Floor (Y=0 plane) collision. ──────────────────────────
-    for (var i: u32 = 0u; i < u.particle_count; i = i + 1u) {
-        if (particle_inv_mass[i] <= 0.0) {
-            continue;
-        }
-        let r = particle_radius[i];
-        if (particle_q[i].y < r) {
-            particle_q[i] = vec4<f32>(particle_q[i].x, r, particle_q[i].z, 0.0);
-        }
+// ─────────────────────────────────────────────────────────────────
+// Strain limit: apply averaged Jacobi correction to particles.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn strain_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    if (particle_inv_mass[i] <= 0.0 || counts[i] == 0u) { return; }
+    let avg = deltas[i].xyz / f32(counts[i]);
+    particle_q[i] = vec4<f32>(particle_q[i].xyz + avg, 0.0);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Y=0 plane floor collision.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn floor_clamp(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    if (particle_inv_mass[i] <= 0.0) { return; }
+    let r = particle_radius[i];
+    if (particle_q[i].y < r) {
+        particle_q[i] = vec4<f32>(particle_q[i].x, r, particle_q[i].z, 0.0);
     }
+}
 
-    // ── 4. Velocity recovery: v = (p_new - p_in) / dt. ───────────
+// ─────────────────────────────────────────────────────────────────
+// Velocity recovery: v = (p_new - p_in) / dt for free particles,
+// zero for pinned (and restore initial p so floor clamp doesn't
+// drift the pin).
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn velocity_recovery(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    if (particle_inv_mass[i] <= 0.0) {
+        particle_q[i] = particle_q_in[i];
+        particle_qd[i] = vec4<f32>(0.0);
+        return;
+    }
     let inv_dt = select(0.0, 1.0 / u.dt, u.dt > 1e-9);
-    for (var i: u32 = 0u; i < u.particle_count; i = i + 1u) {
-        if (particle_inv_mass[i] <= 0.0) {
-            particle_q[i] = particle_q_in[i];
-            particle_qd[i] = vec4<f32>(0.0);
-            continue;
-        }
-        let p_new = particle_q[i].xyz;
-        let p_in = particle_q_in[i].xyz;
-        particle_qd[i] = vec4<f32>((p_new - p_in) * inv_dt, 0.0);
-    }
+    let p_new = particle_q[i].xyz;
+    let p_in = particle_q_in[i].xyz;
+    particle_qd[i] = vec4<f32>((p_new - p_in) * inv_dt, 0.0);
 }

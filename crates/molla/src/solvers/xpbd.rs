@@ -297,27 +297,32 @@ impl XpbdSolver {
                 )?;
                 // Particle XPBD (cloth / rope / springs).
                 //
-                // The single-thread `XpbdParticlesKernel` exists in
-                // `kernels/xpbd_particles.rs` and `shaders/xpbd_particles.wgsl`
-                // and is parity-validated against the CPU oracle in
-                // `tests/xpbd_particles_gpu.rs`. **It is NOT used here**
-                // — for the 36×36 cloth scene, single-thread Gauss-
-                // Seidel on a wide GPU is slower than the CPU shim and
-                // can trip driver-level TDR. Re-enable once we add
-                // parallel passes (predict / floor / recover already
-                // map to per-particle threads; the constraint loops
-                // need Jacobi accumulation with atomic-f32 emulation
-                // for parallel scatter-add).
-                let _ = particles_kernel;
-                apply_particles_post_gpu(
-                    model,
-                    state_in,
-                    state_out,
-                    dt,
-                    self.position_iterations,
-                    device,
-                    queue,
-                )
+                // Parallel multi-pass kernel — uses graph-coloured
+                // distance + strain-limit dispatches so threads
+                // within a colour write disjoint particle slots.
+                // The earlier single-thread version tripped TDR on
+                // cloth grids; this dispatch keeps everything on the
+                // device with parallel work per pass.
+                if model.particle_count > 0 {
+                    if particles_kernel.is_none() {
+                        *particles_kernel = Some(crate::kernels::XpbdParticlesKernel::new(
+                            device,
+                            model.particle_count as u32,
+                            model.spring_count.max(1) as u32,
+                        ));
+                    }
+                    let kernel = particles_kernel.as_mut().expect("kernel just inserted");
+                    kernel.dispatch(
+                        device,
+                        queue,
+                        model,
+                        state_in,
+                        state_out,
+                        dt,
+                        self.position_iterations as u32,
+                    )?;
+                }
+                Ok(())
             }
         }
     }
@@ -1188,40 +1193,3 @@ pub(crate) fn step_particles(
     Ok(())
 }
 
-/// CPU shim: runs `step_particles` after the GPU rigid-body step.
-///
-/// **TEMPORARILY REINSTATED.** A true GPU port lives in
-/// `kernels/xpbd_particles.rs` + `shaders/xpbd_particles.wgsl` (and
-/// is parity-validated by `tests/xpbd_particles_gpu.rs`), but the
-/// current single-thread WGSL implementation is slower than this
-/// shim for cloth-scale workloads (1k+ particles, ~5k springs) and
-/// can trip GPU TDR on some drivers. Switch back to
-/// `XpbdParticlesKernel` once we add parallel passes for predict /
-/// floor / recover and Jacobi-accumulated constraint passes (atomic
-/// scatter-add via the f32-as-u32 CAS workaround).
-#[cfg(feature = "gpu")]
-pub(crate) fn apply_particles_post_gpu(
-    model: &Model,
-    state_in: &State,
-    state_out: &mut State,
-    dt: Real,
-    iterations: usize,
-    _device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> Result<()> {
-    if model.particle_count == 0 {
-        return Ok(());
-    }
-    let p_in = state_in.particle_q.host()?.to_vec();
-    let v_in = state_in.particle_qd.host()?.to_vec();
-
-    let mut p_out = vec![Vec3::ZERO; model.particle_count];
-    let mut v_out = vec![Vec3::ZERO; model.particle_count];
-    step_particles(model, &p_in, &v_in, &mut p_out, &mut v_out, dt, iterations)?;
-
-    state_out.particle_q.host_mut()?.copy_from_slice(&p_out);
-    state_out.particle_qd.host_mut()?.copy_from_slice(&v_out);
-    state_out.particle_q.upload(queue)?;
-    state_out.particle_qd.upload(queue)?;
-    Ok(())
-}

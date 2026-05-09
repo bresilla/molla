@@ -63,6 +63,22 @@ pub struct Model {
     /// stretchy linen. >= ~1.0 effectively disables the cap.
     pub spring_max_stretch: Buffer<Real>,
 
+    // ── Spring graph colouring ──────────────────────────────────────
+    // Computed once at build time so the GPU XPBD kernel can solve
+    // distance / strain-limit constraints in parallel: within a
+    // colour, no two springs share a particle, so threads can
+    // read-modify-write `particle_q` without races.
+    /// Number of colours used by the greedy graph coloring.
+    pub spring_color_count: usize,
+    /// CSR offsets over `spring_indices_by_color` — colour `k` owns
+    /// springs in range `[spring_color_offsets[k], spring_color_offsets[k+1])`.
+    /// Length `spring_color_count + 1`. Empty when `spring_count == 0`.
+    pub spring_color_offsets: Buffer<u32>,
+    /// Spring indices sorted by colour. Length `spring_count`. The
+    /// GPU kernel dispatches `spring_color_count` passes; pass `k`
+    /// reads slot `i` and looks up `spring = spring_indices_by_color[offset_k + i]`.
+    pub spring_indices_by_color: Buffer<u32>,
+
     // ── Triangle topology (cloth surfaces) ──────────────────────────
     /// Number of triangles. Used for rendering today; bending /
     /// area-preservation constraints will read this in stage 12.x.
@@ -296,6 +312,11 @@ impl Model {
             spring_rest_length: Buffer::from_vec(Vec::new(), s),
             spring_compliance: Buffer::from_vec(Vec::new(), s),
             spring_max_stretch: Buffer::from_vec(Vec::new(), s),
+            spring_color_count: 0,
+            // Single sentinel offset so empty models don't need a
+            // separate device-side branch.
+            spring_color_offsets: Buffer::from_vec(vec![0u32], s),
+            spring_indices_by_color: Buffer::from_vec(Vec::new(), s),
 
             tri_count: 0,
             tri_indices: Buffer::from_vec(Vec::new(), s),
@@ -414,6 +435,8 @@ impl Model {
         up!(spring_rest_length);
         up!(spring_compliance);
         up!(spring_max_stretch);
+        up!(spring_color_offsets);
+        up!(spring_indices_by_color);
         up!(tri_indices);
         up!(body_mass);
         up!(body_inv_mass);
