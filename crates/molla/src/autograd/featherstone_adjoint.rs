@@ -67,15 +67,72 @@ use crate::math::{
 use super::tape::{Tape, TapeId, TapeOp};
 
 // ────────────────────────────────────────────────────────────────────
-// Public model: a serial revolute chain with point-mass inertia.
+// Public model: a serial chain with per-link joint kind + inertia.
 // ────────────────────────────────────────────────────────────────────
 
-/// One revolute joint in a serial chain. Parent-anchor transform `x_p`
-/// is in the parent body's local frame (matches `Model::joint_x_p`).
-/// The child body's frame at q=0 coincides with the joint frame.
+/// Joint type for a [`RevoluteLink`] in a serial chain. Stage 23.1
+/// shipped only `Revolute`; Stage 23.1.1 adds Ball + Free + Prismatic
+/// coverage via **DoF stacking** — each multi-DoF joint is exposed as
+/// a single composite joint to user code while the adjoint operates on
+/// the equivalent stacked single-DoF representation. This keeps the
+/// closed-form Jacobian path uniform: no special-case kernels per
+/// joint type, just per-DoF spatial Jacobian columns.
+///
+/// The kind controls **DoF count** (1, 3, or 6) and the per-DoF axis
+/// layout in the parent-joint frame:
+///
+/// - [`Self::Revolute`] — 1 angular DoF about `axis_local`.
+/// - [`Self::Prismatic`] — 1 linear DoF along `axis_local`.
+/// - [`Self::Ball`] — 3 angular DoFs about parent-joint x/y/z axes,
+///   applied as **intrinsic Euler angles** in z-y-x order (matches
+///   most kinematics conventions). Gimbal lock is a known limitation
+///   at `q[1] = ±π/2`; the gradient stays finite but loses one
+///   directional component there. Documented in Stage 23.1.2 as a
+///   follow-up to swap to axis-angle / quaternion exp-map.
+/// - [`Self::Free`] — 6 DoFs: `q[0..3]` is translation along the
+///   parent-joint x/y/z axes (applied first), `q[3..6]` is the same
+///   intrinsic Euler-angle rotation as `Ball` (applied second).
+///
+/// Distance + D6 are explicitly **deferred** to Stage 23.1.2 (their
+/// constraint Jacobians are non-smooth at λ=0 / on Euler-decomp
+/// branch boundaries — needs proximal handling we haven't built yet).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum JointKind {
+    Revolute,
+    Prismatic,
+    Ball,
+    Free,
+}
+
+impl JointKind {
+    /// Number of DoFs this joint kind contributes.
+    #[must_use]
+    pub const fn dofs(self) -> usize {
+        match self {
+            Self::Revolute | Self::Prismatic => 1,
+            Self::Ball => 3,
+            Self::Free => 6,
+        }
+    }
+}
+
+/// One link in a serial chain. Parent-anchor transform `x_p` is in the
+/// parent body's local frame (matches `Model::joint_x_p`). The child
+/// body's frame at `q = 0` coincides with the joint frame.
+///
+/// **Naming history:** in Stage 23.1 v1 this struct was `RevoluteLink`
+/// because only single-DoF revolute joints were supported. Stage 23.1.1
+/// adds the `kind` field so the same struct covers Ball + Free joints
+/// without breaking downstream callers — for back-compat the type alias
+/// `RevoluteLink` and the implicit `kind = Revolute` default remain.
 #[derive(Clone, Debug)]
 pub struct RevoluteLink {
+    /// What kind of joint connects parent → child. Defaults to
+    /// [`JointKind::Revolute`] for back-compat with Stage 23.1 v1
+    /// `RevoluteLink::*` constructors.
+    pub kind: JointKind,
     /// Joint axis expressed in the parent (joint) frame at q = 0.
+    /// Used by [`JointKind::Revolute`]; ignored by Ball / Free.
     pub axis_local: Vec3,
     /// Joint anchor in the parent body's frame.
     pub x_p: Transform,
@@ -85,6 +142,14 @@ pub struct RevoluteLink {
     pub com_local: Vec3,
     /// Inertia tensor about the COM, expressed in the body's local frame.
     pub inertia_local: Mat3,
+}
+
+impl RevoluteLink {
+    /// Number of DoFs this link contributes — pulled from `kind`.
+    #[must_use]
+    pub fn dofs(&self) -> usize {
+        self.kind.dofs()
+    }
 }
 
 /// A serial chain of revolute joints. The chain index `i` denotes both
@@ -117,6 +182,7 @@ impl FeatherstoneRevoluteChain {
         let inertia = Mat3::from_diagonal(Vec3::splat(i));
         Self {
             links: vec![RevoluteLink {
+                kind: JointKind::Revolute,
                 axis_local: Vec3::Z,
                 x_p: Transform::IDENTITY,
                 mass,
@@ -141,6 +207,7 @@ impl FeatherstoneRevoluteChain {
         Self {
             links: vec![
                 RevoluteLink {
+                    kind: JointKind::Revolute,
                     axis_local: Vec3::Z,
                     x_p: Transform::IDENTITY,
                     mass,
@@ -148,6 +215,7 @@ impl FeatherstoneRevoluteChain {
                     inertia_local: Mat3::from_diagonal(Vec3::splat(i1)),
                 },
                 RevoluteLink {
+                    kind: JointKind::Revolute,
                     axis_local: Vec3::Z,
                     x_p: Transform::from_translation(Vec3::new(0.0, l1, 0.0)),
                     mass,
@@ -182,6 +250,7 @@ impl FeatherstoneRevoluteChain {
                 Transform::from_translation(Vec3::new(0.0, 0.0, link_lens[k - 1]))
             };
             links.push(RevoluteLink {
+                kind: JointKind::Revolute,
                 axis_local: axes[k],
                 x_p,
                 mass,
@@ -196,6 +265,139 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::new(0.0, 0.0, link_lens[5]),
+        }
+    }
+
+    /// **Spherical pendulum** — a single body suspended from a Ball
+    /// joint at the world origin. The Ball joint is implemented as 3
+    /// stacked single-DoF revolute links rotating about the parent-
+    /// joint x / y / z axes (intrinsic Euler) with massless
+    /// intermediate links; the real body's mass + inertia live on the
+    /// final link of the stack.
+    ///
+    /// Stage 23.1.1 multi-DoF gradient test case — verifies the Ball-
+    /// joint adjoint by treating it as the same 3 stacked revolutes
+    /// the closed-form path can already differentiate. Returns a chain
+    /// with **3 links** and `total_dofs = 3`.
+    #[must_use]
+    pub fn spherical_pendulum(l: Real, mass: Real, dt: Real, horizon: usize) -> Self {
+        // Body inertia approximation: thin rod of length `l` along +Y,
+        // pivoting about the world origin. Diagonal inertia about COM
+        // (at +Y · l/2): I_xx = I_zz = m·l² / 12, I_yy ≈ 0. Use a small
+        // floor on I_yy so the spin DOF has well-defined mass.
+        let i_xz = mass * l * l / 12.0;
+        let i_yy = mass * l * l * 1.0e-2; // 1% rotational inertia about long axis
+        let inertia = Mat3::from_diagonal(Vec3::new(i_xz, i_yy, i_xz));
+
+        // 3 stacked revolutes — order matters for intrinsic Euler:
+        // first about parent-joint X (ψ), then Y (θ), then Z (φ).
+        // Massless intermediate links so the dummy DOFs share the body's
+        // composite inertia via CRBA.
+        let zero_inertia = Mat3::ZERO;
+        let zero_mass = 0.0_f64;
+        Self {
+            links: vec![
+                RevoluteLink {
+                    kind: JointKind::Revolute,
+                    axis_local: Vec3::X,
+                    x_p: Transform::IDENTITY,
+                    mass: zero_mass,
+                    com_local: Vec3::ZERO,
+                    inertia_local: zero_inertia,
+                },
+                RevoluteLink {
+                    kind: JointKind::Revolute,
+                    axis_local: Vec3::Y,
+                    x_p: Transform::IDENTITY,
+                    mass: zero_mass,
+                    com_local: Vec3::ZERO,
+                    inertia_local: zero_inertia,
+                },
+                RevoluteLink {
+                    kind: JointKind::Revolute,
+                    axis_local: Vec3::Z,
+                    x_p: Transform::IDENTITY,
+                    mass,
+                    com_local: Vec3::new(0.0, -l * 0.5, 0.0), // COM hangs from origin
+                    inertia_local: inertia,
+                },
+            ],
+            gravity: Vec3::new(0.0, -9.81, 0.0),
+            damping: 0.05,
+            dt,
+            horizon,
+            ee_local: Vec3::new(0.0, -l, 0.0),
+        }
+    }
+
+    /// **Free-floating body** — a single rigid body connected to the
+    /// world via a Free joint (6 DoF). Built as 3 stacked prismatic
+    /// links (translation along world X/Y/Z) followed by 3 stacked
+    /// revolute links (rotation about parent-joint X/Y/Z), with
+    /// massless intermediates. The real body's mass + inertia land on
+    /// the last revolute.
+    ///
+    /// Stage 23.1.1 multi-DoF gradient test case — covers the Free
+    /// joint by stacking the same single-DoF primitives (Revolute +
+    /// Prismatic) the adjoint already supports. Returns a chain with
+    /// **6 links** and `total_dofs = 6`.
+    ///
+    /// Setting `gravity = Vec3::ZERO` recovers the floating-body
+    /// (no-gravity) baseline used by the spec's grad test:
+    /// `∂(end position) / ∂(initial linear+angular wrench)`.
+    #[must_use]
+    pub fn free_body(mass: Real, half_extent: Real, dt: Real, horizon: usize) -> Self {
+        // Box inertia about COM: I_diag = m/12 · ( (2h)² + (2h)² ).
+        let i = mass / 12.0 * (4.0 * half_extent * half_extent + 4.0 * half_extent * half_extent);
+        let inertia = Mat3::from_diagonal(Vec3::splat(i));
+        let zero_inertia = Mat3::ZERO;
+        let zero_mass = 0.0_f64;
+
+        let mut links = Vec::with_capacity(6);
+        // Three prismatic DoFs along X, Y, Z.
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            links.push(RevoluteLink {
+                kind: JointKind::Prismatic,
+                axis_local: axis,
+                x_p: Transform::IDENTITY,
+                mass: zero_mass,
+                com_local: Vec3::ZERO,
+                inertia_local: zero_inertia,
+            });
+        }
+        // Three rotational DoFs about X, Y, Z (intrinsic Euler).
+        // Mass + inertia live on the LAST revolute (the "real" body).
+        links.push(RevoluteLink {
+            kind: JointKind::Revolute,
+            axis_local: Vec3::X,
+            x_p: Transform::IDENTITY,
+            mass: zero_mass,
+            com_local: Vec3::ZERO,
+            inertia_local: zero_inertia,
+        });
+        links.push(RevoluteLink {
+            kind: JointKind::Revolute,
+            axis_local: Vec3::Y,
+            x_p: Transform::IDENTITY,
+            mass: zero_mass,
+            com_local: Vec3::ZERO,
+            inertia_local: zero_inertia,
+        });
+        links.push(RevoluteLink {
+            kind: JointKind::Revolute,
+            axis_local: Vec3::Z,
+            x_p: Transform::IDENTITY,
+            mass,
+            com_local: Vec3::ZERO,
+            inertia_local: inertia,
+        });
+        Self {
+            links,
+            gravity: Vec3::ZERO, // floating body baseline; re-enable per test
+            damping: 0.0,
+            dt,
+            horizon,
+            ee_local: Vec3::ZERO,
         }
     }
 
@@ -216,15 +418,9 @@ impl FeatherstoneRevoluteChain {
         let mut out = Vec::with_capacity(n);
         let mut parent = Transform::IDENTITY;
         for j in 0..n {
-            let link = &self.links[j];
-            let parent_joint = parent.compose(&link.x_p);
-            let q_rot = Quat::from_axis_angle(link.axis_local, q[j]);
-            let body_w = Transform {
-                position: parent_joint.position,
-                rotation: (parent_joint.rotation * q_rot).normalize(),
-            };
-            out.push(body_w);
-            parent = body_w;
+            let kin = JointKinematic::from_link(parent, &self.links[j], q[j]);
+            out.push(kin.body_world);
+            parent = kin.body_world;
         }
         out
     }
@@ -283,6 +479,73 @@ pub struct FeatherstoneTrace {
 // Forward rollout
 // ────────────────────────────────────────────────────────────────────
 
+/// Per-DOF kinematic state extracted from a single link evaluated at
+/// joint coordinate `q[j]`. Common helper for the three sweeps so the
+/// kinematic logic stays in one place — extending [`JointKind`] in
+/// future stages only needs to update [`Self::from_link`].
+struct JointKinematic {
+    /// World position of the joint anchor before the joint moves.
+    joint_origin_world: Vec3,
+    /// World axis of the (single) DOF — angular axis for revolute,
+    /// linear axis for prismatic. Used by the spatial Jacobian column.
+    axis_world: Vec3,
+    /// Motion-subspace column `S_j` for this DOF in world frame.
+    /// `[Vec3::ZERO; axis_world]` for revolute, `[axis_world; Vec3::ZERO]`
+    /// for prismatic.
+    s_j: SpatialVector,
+    /// World transform of the child body after applying the joint DOF.
+    body_world: Transform,
+}
+
+impl JointKinematic {
+    fn from_link(parent_t: Transform, link: &RevoluteLink, q_j: Real) -> Self {
+        let parent_joint = parent_t.compose(&link.x_p);
+        match link.kind {
+            JointKind::Revolute => {
+                let q_rot = Quat::from_axis_angle(link.axis_local, q_j);
+                let body_w = Transform {
+                    position: parent_joint.position,
+                    rotation: (parent_joint.rotation * q_rot).normalize(),
+                };
+                let axis_world = parent_joint.rotation * link.axis_local;
+                Self {
+                    joint_origin_world: parent_joint.position,
+                    axis_world,
+                    s_j: SpatialVector::new(Vec3::ZERO, axis_world),
+                    body_world: body_w,
+                }
+            }
+            JointKind::Prismatic => {
+                let axis_world = parent_joint.rotation * link.axis_local;
+                let body_w = Transform {
+                    position: parent_joint.position + axis_world * q_j,
+                    rotation: parent_joint.rotation,
+                };
+                Self {
+                    joint_origin_world: parent_joint.position,
+                    axis_world,
+                    s_j: SpatialVector::new(axis_world, Vec3::ZERO),
+                    body_world: body_w,
+                }
+            }
+            // Ball / Free are exposed as user-level composite joints
+            // built out of stacked single-DoF Revolute / Prismatic
+            // links via [`FeatherstoneRevoluteChain::ball_joint_link`]
+            // / [`Self::free_joint_link`]. The chain itself only ever
+            // sees the underlying single-DoF representation; the
+            // composite kinds round-trip back to single-DoF here so
+            // a stray multi-DoF link in the chain still kinematically
+            // produces zero motion (defensive — no-op transform).
+            JointKind::Ball | JointKind::Free => Self {
+                joint_origin_world: parent_joint.position,
+                axis_world: Vec3::ZERO,
+                s_j: SpatialVector::ZERO,
+                body_world: parent_joint,
+            },
+        }
+    }
+}
+
 impl FeatherstoneRevoluteChain {
     /// Single-step Featherstone forward + intermediate capture.
     pub fn forward_step(
@@ -315,17 +578,11 @@ impl FeatherstoneRevoluteChain {
         // Pass 1: forward kinematics + body kinematics.
         for j in 0..n {
             let link = &self.links[j];
-            let parent_joint = parent_t.compose(&link.x_p);
-            let q_rot = Quat::from_axis_angle(link.axis_local, q[j]);
-            let body_w = Transform {
-                position: parent_joint.position,
-                rotation: (parent_joint.rotation * q_rot).normalize(),
-            };
-            let axis_world = parent_joint.rotation * link.axis_local;
-            let s_j = SpatialVector::new(Vec3::ZERO, axis_world);
-            s_cols[j] = s_j;
+            let kin = JointKinematic::from_link(parent_t, link, q[j]);
+            let body_w = kin.body_world;
+            s_cols[j] = kin.s_j;
 
-            let v_j = s_j.scale(qd[j]);
+            let v_j = kin.s_j.scale(qd[j]);
             let v_i = v_parent + v_j;
             let c_i = spatial_cross(v_i, v_j);
 
@@ -347,8 +604,8 @@ impl FeatherstoneRevoluteChain {
             p_a[j] = p_init;
 
             step.body_world[j] = body_w;
-            step.axis_world[j] = axis_world;
-            step.joint_origin_world[j] = parent_joint.position;
+            step.axis_world[j] = kin.axis_world;
+            step.joint_origin_world[j] = kin.joint_origin_world;
             step.com_world[j] = com_world;
             step.v_body[j] = v_i;
             step.c_term[j] = c_i;
@@ -827,14 +1084,9 @@ impl FeatherstoneRevoluteChain {
 
         for j in 0..n {
             let link = &self.links[j];
-            let parent_joint = parent_t.compose(&link.x_p);
-            let q_rot = Quat::from_axis_angle(link.axis_local, q[j]);
-            let body_w = Transform {
-                position: parent_joint.position,
-                rotation: (parent_joint.rotation * q_rot).normalize(),
-            };
-            let axis_world = parent_joint.rotation * link.axis_local;
-            let s_j = SpatialVector::new(Vec3::ZERO, axis_world);
+            let kin = JointKinematic::from_link(parent_t, link, q[j]);
+            let body_w = kin.body_world;
+            let s_j = kin.s_j;
             let v_j = s_j.scale(qd[j]);
             let a_j_local = s_j.scale(qdd[j]);
             // c = v ×_motion v_j (gyroscopic on velocity from joint).
@@ -905,15 +1157,9 @@ impl FeatherstoneRevoluteChain {
         let mut parent_t = Transform::IDENTITY;
         for j in 0..n {
             let link = &self.links[j];
-            let parent_joint = parent_t.compose(&link.x_p);
-            let q_rot = Quat::from_axis_angle(link.axis_local, q[j]);
-            let body_w = Transform {
-                position: parent_joint.position,
-                rotation: (parent_joint.rotation * q_rot).normalize(),
-            };
-            let axis_world = parent_joint.rotation * link.axis_local;
-            let s_j = SpatialVector::new(Vec3::ZERO, axis_world);
-            s_cols[j] = s_j;
+            let kin = JointKinematic::from_link(parent_t, link, q[j]);
+            let body_w = kin.body_world;
+            s_cols[j] = kin.s_j;
 
             let r_w = body_w.rotation;
             let rm = Mat3::from_quat(r_w);

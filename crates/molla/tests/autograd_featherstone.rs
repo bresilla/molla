@@ -135,6 +135,41 @@ fn reverse_pass_is_deterministic() {
     assert_eq!(g2, g3);
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Stage 23.1.1 — multi-DoF joint gradient checks (Ball + Free).
+// ────────────────────────────────────────────────────────────────────
+
+/// Spherical pendulum: a single body suspended via a Ball joint
+/// (3 stacked revolute DoFs about the parent-joint X/Y/Z). Verifies
+/// `∂(EE position) / ∂(joint torques)` matches FD across all
+/// (step, dof) pairs — the spec's "Ball-joint gradient" DoD bullet.
+#[test]
+fn ball_joint_spherical_pendulum_grad_matches_fd() {
+    let chain = FeatherstoneRevoluteChain::spherical_pendulum(0.5, 1.0, 0.005, 5);
+    let q0 = vec![0.1_f64, 0.05, -0.1];
+    let qd0 = vec![0.0_f64; 3];
+    let tau0 = vec![vec![0.05_f64, 0.03, -0.02]; chain.horizon];
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    println!("ball joint max grad-FD diff: y={d_y:.3e}, x={d_x:.3e}");
+}
+
+/// Free body in vacuum: 6-DoF Free joint (3 prismatic + 3 revolute).
+/// Verifies `∂(EE position) / ∂(linear+angular wrench)` matches FD —
+/// the spec's "Free-joint gradient" DoD bullet.
+#[test]
+fn free_joint_floating_body_grad_matches_fd() {
+    let mut chain = FeatherstoneRevoluteChain::free_body(1.0, 0.05, 0.005, 4);
+    chain.gravity = Vec3::ZERO;
+    let q0 = vec![0.0_f64; 6];
+    let qd0 = vec![0.0_f64; 6];
+    let tau0 = vec![vec![0.05_f64, -0.03, 0.04, 0.01, 0.02, -0.015]; chain.horizon];
+    let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    let d_z = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Z);
+    println!("free body max grad-FD diff: x={d_x:.3e}, y={d_y:.3e}, z={d_z:.3e}");
+}
+
 /// 6-DOF arm trajectory optimisation: gradient-descent the open-loop
 /// torque sequence to drive the EE to a reachable target. Asserts
 /// convergence within a reasonable iteration budget — exact iter
