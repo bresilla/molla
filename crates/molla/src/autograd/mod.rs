@@ -48,9 +48,9 @@ pub mod xpbd_adjoint;
 
 pub use diff_arm::DiffArm;
 pub use featherstone_adjoint::{
-    record_featherstone_step, FeatherstoneRevoluteChain, FeatherstoneStepTrace,
-    FeatherstoneTrace, JacobianScratch, JacobianStrategy, JointKind, JointProjection,
-    RevoluteLink,
+    record_featherstone_step, AutogradError, FeatherstoneRevoluteChain,
+    FeatherstoneStepTrace, FeatherstoneTrace, JacobianScratch, JacobianStrategy, JointKind,
+    JointProjection, RevoluteLink,
 };
 pub use tape::{Tape, TapeId, TapeOp};
 pub use xpbd_adjoint::{

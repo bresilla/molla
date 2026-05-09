@@ -190,14 +190,16 @@ fn parity_check(
         grad_ee,
         &mut s_cpu,
         AdjointBackend::ForceCpuClosedForm,
-    );
+    )
+    .unwrap();
     let gpu = FeatherstoneAdjointDispatcher::reverse(
         chain,
         &trace,
         grad_ee,
         &mut s_gpu,
         AdjointBackend::ForceGpu,
-    );
+    )
+    .unwrap();
     let mut max_diff = 0.0_f64;
     for t in 0..chain.horizon {
         for k in 0..n {

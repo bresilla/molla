@@ -130,7 +130,9 @@ fn v3_gpu_full_reverse_matches_cpu_franka6() {
 
     // CPU oracle — closed-form path (matches the GPU kernel content).
     let mut scratch = JacobianScratch::new(n);
-    let g_cpu = chain.reverse_with_strategy(&trace, grad_ee, &mut scratch, JacobianStrategy::ClosedForm);
+    let g_cpu = chain
+        .reverse_with_strategy(&trace, grad_ee, &mut scratch, JacobianStrategy::ClosedForm)
+        .unwrap();
 
     // GPU batch path with batch size 1.
     let kernel = FeatherstoneAdjointGpuKernel::new(&engine).expect("kernel build");
@@ -193,6 +195,7 @@ fn v3_gpu_multi_articulation_batch_matches_cpu() {
         .map(|(c, tr)| {
             let mut scratch = JacobianScratch::new(n);
             c.reverse_with_strategy(tr, grad_ee[0], &mut scratch, JacobianStrategy::ClosedForm)
+                .expect("CPU adjoint should succeed for franka6 chain")
         })
         .collect();
 
@@ -245,7 +248,9 @@ fn v3_cpu_batch_per_chain_within_2x_single() {
     // Warmup.
     {
         let mut s = JacobianScratch::new(n);
-        let _ = chains[0].reverse_with_strategy(&traces[0], Vec3::Z, &mut s, JacobianStrategy::AnalyticBiasQd);
+        let _ = chains[0]
+            .reverse_with_strategy(&traces[0], Vec3::Z, &mut s, JacobianStrategy::AnalyticBiasQd)
+            .unwrap();
     }
 
     let runs = 5;
@@ -254,7 +259,9 @@ fn v3_cpu_batch_per_chain_within_2x_single() {
     let t_single = std::time::Instant::now();
     for _ in 0..runs {
         let mut s = JacobianScratch::new(n);
-        let _ = chains[0].reverse_with_strategy(&traces[0], Vec3::Z, &mut s, JacobianStrategy::AnalyticBiasQd);
+        let _ = chains[0]
+            .reverse_with_strategy(&traces[0], Vec3::Z, &mut s, JacobianStrategy::AnalyticBiasQd)
+            .unwrap();
     }
     let single_us = t_single.elapsed().as_micros() as f64 / runs as f64;
 
@@ -269,14 +276,14 @@ fn v3_cpu_batch_per_chain_within_2x_single() {
     let _t_batch = std::time::Instant::now();
     let mut wall_total = 0.0;
     for _ in 0..runs {
-        let (_out, wall_us) = MultiAdjointBatch::dispatch_cpu(&inputs);
+        let (_out, wall_us) = MultiAdjointBatch::dispatch_cpu(&inputs).unwrap();
         wall_total += wall_us;
     }
     let batch_wall_us = wall_total / runs as f64;
     let per_chain_us = batch_wall_us / N_CHAINS as f64;
     let serial_t = std::time::Instant::now();
     for _ in 0..runs {
-        let _ = MultiAdjointBatch::dispatch_cpu_serial(&inputs);
+        let _ = MultiAdjointBatch::dispatch_cpu_serial(&inputs).unwrap();
     }
     let serial_per_chain_us =
         serial_t.elapsed().as_micros() as f64 / (runs as f64 * N_CHAINS as f64);

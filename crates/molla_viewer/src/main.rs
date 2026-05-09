@@ -6590,9 +6590,12 @@ fn update_diff_arm6(
                 .collect();
             // Warm.
             let _ = molla::kernels::MultiAdjointBatch::dispatch_cpu(&inputs);
-            let (_par, par_wall_us) = molla::kernels::MultiAdjointBatch::dispatch_cpu(&inputs);
+            let (_par, par_wall_us) =
+                molla::kernels::MultiAdjointBatch::dispatch_cpu(&inputs)
+                    .expect("Stage 23.1 chains are single-DoF");
             let (_ser, ser_wall_us) =
-                molla::kernels::MultiAdjointBatch::dispatch_cpu_serial(&inputs);
+                molla::kernels::MultiAdjointBatch::dispatch_cpu_serial(&inputs)
+                    .expect("Stage 23.1 chains are single-DoF");
             state.last_per_chain_us = par_wall_us / batch_n as f64;
             state.last_parallel_speedup = if par_wall_us > 0.0 {
                 ser_wall_us / par_wall_us
@@ -6656,6 +6659,7 @@ fn update_diff_arm6(
                     scratch,
                     backend_choice,
                 )
+                .expect("Stage 23.1 single-DoF chain")
             };
             bwd_total_us += res.backward_us;
             let g = res.g_tau;

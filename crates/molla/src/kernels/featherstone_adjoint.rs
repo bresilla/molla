@@ -31,8 +31,8 @@
 //!   workgroups.
 
 use crate::autograd::{
-    featherstone_adjoint::JacobianStrategy, FeatherstoneRevoluteChain, FeatherstoneTrace,
-    JacobianScratch,
+    featherstone_adjoint::{AutogradError, JacobianStrategy},
+    FeatherstoneRevoluteChain, FeatherstoneTrace, JacobianScratch,
 };
 use crate::math::{Real, Vec3};
 
@@ -106,26 +106,30 @@ pub struct FeatherstoneAdjointDispatcher;
 impl FeatherstoneAdjointDispatcher {
     /// Run the adjoint reverse pass per `backend`, timing the wall
     /// clock so the caller can compute backward / forward ratios.
+    ///
+    /// Surfaces [`AutogradError::UnsupportedJoint`] verbatim if the
+    /// chain contains a composite multi-DoF joint kind — the per-link
+    /// math requires single-DoF Revolute / Prismatic decomposition.
     pub fn reverse(
         chain: &FeatherstoneRevoluteChain,
         trace: &FeatherstoneTrace,
         grad_ee: Vec3,
         scratch: &mut JacobianScratch,
         backend: AdjointBackend,
-    ) -> AdjointResult {
+    ) -> Result<AdjointResult, AutogradError> {
         let start = std::time::Instant::now();
         let resolved = Self::resolve(backend);
         let g_tau = match resolved {
             AdjointBackend::Auto | AdjointBackend::ForceCpuAnalyticQd => chain
-                .reverse_with_strategy(trace, grad_ee, scratch, JacobianStrategy::AnalyticBiasQd),
+                .reverse_with_strategy(trace, grad_ee, scratch, JacobianStrategy::AnalyticBiasQd)?,
             AdjointBackend::ForceCpuClosedForm => chain
-                .reverse_with_strategy(trace, grad_ee, scratch, JacobianStrategy::ClosedForm),
+                .reverse_with_strategy(trace, grad_ee, scratch, JacobianStrategy::ClosedForm)?,
             AdjointBackend::ForceCpuFiniteDiff => chain.reverse_with_strategy(
                 trace,
                 grad_ee,
                 scratch,
                 JacobianStrategy::CentralDifference,
-            ),
+            )?,
             AdjointBackend::ForceGpu => {
                 // Single-articulation GPU dispatch: route through the
                 // multi-articulation batch path with batch size = 1.
@@ -135,11 +139,11 @@ impl FeatherstoneAdjointDispatcher {
                 {
                     if let Some(g_tau) = Self::try_reverse_single_gpu(chain, trace, grad_ee) {
                         let backward_us = start.elapsed().as_micros() as f64;
-                        return AdjointResult {
+                        return Ok(AdjointResult {
                             g_tau,
                             backend: resolved,
                             backward_us,
-                        };
+                        });
                     }
                 }
                 Self::log_gpu_fallback();
@@ -148,15 +152,15 @@ impl FeatherstoneAdjointDispatcher {
                     grad_ee,
                     scratch,
                     JacobianStrategy::AnalyticBiasQd,
-                )
+                )?
             }
         };
         let backward_us = start.elapsed().as_micros() as f64;
-        AdjointResult {
+        Ok(AdjointResult {
             g_tau,
             backend: resolved,
             backward_us,
-        }
+        })
     }
 
     /// Resolve `Auto` to the concrete backend the dispatcher will use.
@@ -236,10 +240,10 @@ impl MultiAdjointBatch {
     /// core won't show the parallel win.
     pub fn dispatch_cpu(
         inputs: &[MultiAdjointInput<'_>],
-    ) -> (Vec<MultiAdjointOutput>, f64) {
+    ) -> Result<(Vec<MultiAdjointOutput>, f64), AutogradError> {
         use rayon::prelude::*;
         let start = std::time::Instant::now();
-        let outputs: Vec<MultiAdjointOutput> = inputs
+        let outputs: Result<Vec<MultiAdjointOutput>, AutogradError> = inputs
             .par_iter()
             .map(|inp| {
                 let n = inp.chain.links.len();
@@ -249,36 +253,34 @@ impl MultiAdjointBatch {
                     inp.grad_ee,
                     &mut scratch,
                     JacobianStrategy::AnalyticBiasQd,
-                );
-                MultiAdjointOutput { g_tau }
+                )?;
+                Ok(MultiAdjointOutput { g_tau })
             })
             .collect();
         let wall_us = start.elapsed().as_micros() as f64;
-        (outputs, wall_us)
+        Ok((outputs?, wall_us))
     }
 
     /// Sequential CPU multi-articulation adjoint — single-threaded
     /// baseline so the viewer / tests can A/B against `dispatch_cpu`.
     pub fn dispatch_cpu_serial(
         inputs: &[MultiAdjointInput<'_>],
-    ) -> (Vec<MultiAdjointOutput>, f64) {
+    ) -> Result<(Vec<MultiAdjointOutput>, f64), AutogradError> {
         let start = std::time::Instant::now();
-        let outputs: Vec<MultiAdjointOutput> = inputs
-            .iter()
-            .map(|inp| {
-                let n = inp.chain.links.len();
-                let mut scratch = JacobianScratch::new(n);
-                let g_tau = inp.chain.reverse_with_strategy(
-                    inp.trace,
-                    inp.grad_ee,
-                    &mut scratch,
-                    JacobianStrategy::AnalyticBiasQd,
-                );
-                MultiAdjointOutput { g_tau }
-            })
-            .collect();
+        let mut outputs: Vec<MultiAdjointOutput> = Vec::with_capacity(inputs.len());
+        for inp in inputs {
+            let n = inp.chain.links.len();
+            let mut scratch = JacobianScratch::new(n);
+            let g_tau = inp.chain.reverse_with_strategy(
+                inp.trace,
+                inp.grad_ee,
+                &mut scratch,
+                JacobianStrategy::AnalyticBiasQd,
+            )?;
+            outputs.push(MultiAdjointOutput { g_tau });
+        }
         let wall_us = start.elapsed().as_micros() as f64;
-        (outputs, wall_us)
+        Ok((outputs, wall_us))
     }
 }
 

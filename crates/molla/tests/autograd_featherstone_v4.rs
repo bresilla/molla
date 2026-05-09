@@ -41,8 +41,12 @@ fn analytic_full_matches_central_fd_pendulum() {
 
     let mut s_fd = JacobianScratch::new(n);
     let mut s_af = JacobianScratch::new(n);
-    let g_fd = chain.reverse_with_strategy(&trace, Vec3::Y, &mut s_fd, JacobianStrategy::CentralDifference);
-    let g_af = chain.reverse_with_strategy(&trace, Vec3::Y, &mut s_af, JacobianStrategy::AnalyticFull);
+    let g_fd = chain
+        .reverse_with_strategy(&trace, Vec3::Y, &mut s_fd, JacobianStrategy::CentralDifference)
+        .unwrap();
+    let g_af = chain
+        .reverse_with_strategy(&trace, Vec3::Y, &mut s_af, JacobianStrategy::AnalyticFull)
+        .unwrap();
     let d = max_grad_diff(&g_fd, &g_af);
     println!("pendulum AnalyticFull vs CentralFd: max diff = {d:.3e}");
     assert!(
@@ -62,11 +66,19 @@ fn analytic_full_matches_central_fd_franka6() {
 
     let mut s_fd = JacobianScratch::new(n);
     let mut s_af = JacobianScratch::new(n);
-    let g_fd = chain.reverse_with_strategy(&trace, Vec3::Z, &mut s_fd, JacobianStrategy::CentralDifference);
-    let g_af = chain.reverse_with_strategy(&trace, Vec3::Z, &mut s_af, JacobianStrategy::AnalyticFull);
+    let g_fd = chain
+        .reverse_with_strategy(&trace, Vec3::Z, &mut s_fd, JacobianStrategy::CentralDifference)
+        .unwrap();
+    let g_af = chain
+        .reverse_with_strategy(&trace, Vec3::Z, &mut s_af, JacobianStrategy::AnalyticFull)
+        .unwrap();
     let d_z = max_grad_diff(&g_fd, &g_af);
-    let g_fd_y = chain.reverse_with_strategy(&trace, Vec3::Y, &mut s_fd, JacobianStrategy::CentralDifference);
-    let g_af_y = chain.reverse_with_strategy(&trace, Vec3::Y, &mut s_af, JacobianStrategy::AnalyticFull);
+    let g_fd_y = chain
+        .reverse_with_strategy(&trace, Vec3::Y, &mut s_fd, JacobianStrategy::CentralDifference)
+        .unwrap();
+    let g_af_y = chain
+        .reverse_with_strategy(&trace, Vec3::Y, &mut s_af, JacobianStrategy::AnalyticFull)
+        .unwrap();
     let d_y = max_grad_diff(&g_fd_y, &g_af_y);
     println!(
         "franka6 AnalyticFull vs CentralFd: max diff z = {d_z:.3e}, y = {d_y:.3e}"

@@ -39,7 +39,7 @@ fn check_torque_grad_matches_fd(
     grad_ee: Vec3,
 ) -> Real {
     let trace = chain.rollout(q0, qd0, tau0);
-    let g_analytic = chain.reverse(&trace, grad_ee);
+    let g_analytic = chain.reverse(&trace, grad_ee).unwrap();
 
     let n = chain.links.len();
     let mut max_diff = 0.0_f64;
@@ -131,7 +131,9 @@ fn distance_kink_smoothed_gradient_continuous() {
         );
         chain.gravity = Vec3::ZERO;
         let tau0 = vec![vec![0.5_f64, 0.0, 0.0]; chain.horizon];
-        let g = chain.ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::X);
+        let g = chain
+            .ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::X)
+            .unwrap();
         // Take the magnitude of the first-step gradient as the proxy
         // for "smoothness witness".
         let g_mag: f64 = g[0].iter().map(|x| x * x).sum::<f64>().sqrt();
@@ -159,7 +161,9 @@ fn distance_kink_smoothed_gradient_continuous() {
     );
     chain_hard.gravity = Vec3::ZERO;
     let tau0 = vec![vec![0.5_f64, 0.0, 0.0]; chain_hard.horizon];
-    let g_hard = chain_hard.ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::X);
+    let g_hard = chain_hard
+        .ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::X)
+        .unwrap();
     let mag_hard: f64 = g_hard[0].iter().map(|x| x * x).sum::<f64>().sqrt();
     assert!(mag_hard.is_finite(), "hard-switch grad NaN");
     println!("distance kink hard-switch grad |g|: {mag_hard:.3e}");
@@ -234,7 +238,7 @@ fn d6_at_one_angular_limit_grad_matches_fd() {
     // first step where the dynamics can still propagate to the unlimited
     // axes through the CRBA inertia matrix coupling. Just check magnitude.
     let trace = chain.rollout(&q0, &qd0, &tau0);
-    let g = chain.reverse(&trace, Vec3::X);
+    let g = chain.reverse(&trace, Vec3::X).unwrap();
     let last_t = chain.horizon - 1;
     println!(
         "d6 single-limit g_tau[last][angular_X] = {:.3e} (clamped axis at last step)",
