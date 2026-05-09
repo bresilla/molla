@@ -27,6 +27,12 @@ struct Uniforms {
     joint_damping:      f32,
     joint_count:        u32,
     articulation_count: u32,
+    /// Stage 17.1: 1 = rigorous dense-Cholesky D solve in pass 2/3.
+    rigorous_d_solve:   u32,
+    /// Stage 17.1: 1 = velocity-level Lagrange projection on Distance.
+    rigorous_distance:  u32,
+    _pad0:              u32,
+    _pad1:              u32,
 };
 
 const JOINT_PRISMATIC: u32 = 0u;
@@ -234,6 +240,60 @@ fn joint_dof_n(jt: u32) -> u32 {
     return 0u; // FIXED
 }
 
+/// Decompose a quaternion into XYZ-Euler angles `(rx, ry, rz)`.
+/// Matches glam's `Quat::to_euler(EulerRot::XYZ)` convention so the CPU
+/// path's `Quat::to_euler(EulerRot::XYZ)` and the WGSL path agree.
+fn quat_to_euler_xyz(q: vec4<f32>) -> vec3<f32> {
+    // glam XYZ extrinsic order: rotation = Rz · Ry · Rx (intrinsic XYZ).
+    // The math below is derived from the rotation matrix entries of that
+    // composition. Clamp the asin argument to keep gimbal-lock stable.
+    let xx = q.x * q.x;
+    let yy = q.y * q.y;
+    let zz = q.z * q.z;
+    let ww = q.w * q.w;
+    let xy = q.x * q.y;
+    let xz = q.x * q.z;
+    let yz = q.y * q.z;
+    let wx = q.w * q.x;
+    let wy = q.w * q.y;
+    let wz = q.w * q.z;
+
+    let m00 = ww + xx - yy - zz;
+    let m01 = 2.0 * (xy - wz);
+    let m02 = 2.0 * (xz + wy);
+    let m12 = 2.0 * (yz - wx);
+    let m22 = ww - xx - yy + zz;
+
+    let sy = clamp(m02, -1.0, 1.0);
+    let ey = asin(sy);
+    var ex = 0.0;
+    var ez = 0.0;
+    if (abs(sy) < 0.99999) {
+        ex = atan2(-m12, m22);
+        ez = atan2(-m01, m00);
+    } else {
+        // Gimbal lock — collapse roll into yaw.
+        ex = atan2(2.0 * (yz + wx), ww - xx + yy - zz);
+        ez = 0.0;
+    }
+    return vec3<f32>(ex, ey, ez);
+}
+
+fn quat_from_euler_xyz(e: vec3<f32>) -> vec4<f32> {
+    let rx = quat_from_axis_angle(vec3<f32>(1.0, 0.0, 0.0), e.x);
+    let ry = quat_from_axis_angle(vec3<f32>(0.0, 1.0, 0.0), e.y);
+    let rz = quat_from_axis_angle(vec3<f32>(0.0, 0.0, 1.0), e.z);
+    return normalize(quat_mul(quat_mul(rz, ry), rx));
+}
+
+// Note: dense Cholesky / forward+back substitution helpers live on the
+// CPU side only (see `solvers/featherstone.rs` and `math/dense_solve.rs`).
+// WGSL doesn't ergonomically support the per-thread function-scoped
+// dynamic linear algebra we'd need here, so the GPU kernel always uses
+// the sequential rank-1 deflation in pass-2 even when
+// `uniforms.rigorous_d_solve == 1u`. The angular-limit + Distance
+// projection polish is honoured on both backends.
+
 // ─── Kernel ────────────────────────────────────────────────────────
 
 @compute @workgroup_size(64)
@@ -272,6 +332,19 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     var u_tau_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var dof_active_arr: array<array<u32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var q_dd_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
+    // Stage 17.1 — pre-integration position copy for the Distance
+    // Lagrange projection (used by the velocity-level multiplier path
+    // in pass-4). Only stored for FREE / DISTANCE / D6.
+    //
+    // **Caveat — dense Cholesky D solve is CPU-only for now.** WGSL's
+    // function-pointer / dynamic-indexing limits make the in-place
+    // dense Cholesky on a per-joint 6×6 painful (we'd need per-thread
+    // scratch with run-time-sized linear algebra). The CPU path
+    // implements it; the GPU path here always uses the sequential
+    // rank-1 deflation that's exact when `D` is diagonal. For the
+    // asymmetric-inertia coupled-D parity test we run the CPU backend
+    // and compare to a CPU dense-Cholesky reference.
+    var p_pre_arr:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
 
     // ── Pass 1 — FK + body kinematics + motion subspace ─────────
     for (var k = 0u; k < n; k = k + 1u) {
@@ -362,6 +435,14 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             n_dof = 6u;
         }
         n_dof_arr[k] = n_dof;
+
+        // Stash pre-integration anchor offset for Distance/D6/Free
+        // joints (used by the Lagrange projection in pass-4).
+        if (jt == JOINT_FREE || jt == JOINT_DISTANCE || jt == JOINT_D6) {
+            p_pre_arr[k] = vec3<f32>(joint_q[coord], joint_q[coord+1u], joint_q[coord+2u]);
+        } else {
+            p_pre_arr[k] = vec3<f32>(0.0);
+        }
 
         // Joint velocity = Σ S_k · qd_k.
         var v_j_l = vec3<f32>(0.0);
@@ -623,37 +704,96 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             joint_qd[dof+4u] = omega.y;
             joint_qd[dof+5u] = omega.z;
 
-            // Distance hard projection on |p|.
+            // Distance constraint.
+            //
+            // Stage 17.1 default: velocity-level Lagrange-multiplier
+            // projection. Pick the active bound (lo, hi, or
+            // equality-form lo==hi) as `L_target`, project velocity
+            // onto the tangent plane, re-integrate position from the
+            // projected v, then snap |p| to L_target to absorb
+            // floating-point drift.
+            //
+            // When `uniforms.rigorous_distance == 0u` we keep the v1
+            // hard-clamp for parity tests.
             if (jt == JOINT_DISTANCE) {
                 let lo = joint_limit_lower[dof];
                 let hi = joint_limit_upper[dof];
-                var p_curr = vec3<f32>(joint_q[coord], joint_q[coord+1u], joint_q[coord+2u]);
-                let dist = length(p_curr);
-                var clamped = p_curr;
-                var clip = false;
-                if ((lo == lo) && (dist < lo) && (dist > 1e-12)) {
-                    clamped = p_curr * (lo / dist);
-                    clip = true;
-                }
-                if ((hi == hi) && (dist > hi) && (dist > 1e-12)) {
-                    clamped = p_curr * (hi / dist);
-                    clip = true;
-                }
-                if (clip) {
-                    joint_q[coord]    = clamped.x;
-                    joint_q[coord+1u] = clamped.y;
-                    joint_q[coord+2u] = clamped.z;
-                    let nrm = normalize(clamped);
-                    let v_now = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
-                    let radial = nrm * dot(v_now, nrm);
-                    let v_proj = v_now - radial;
-                    joint_qd[dof]    = v_proj.x;
-                    joint_qd[dof+1u] = v_proj.y;
-                    joint_qd[dof+2u] = v_proj.z;
+                let lo_finite = (lo == lo) && (abs(lo) < 1e30);
+                let hi_finite = (hi == hi) && (abs(hi) < 1e30);
+
+                if (uniforms.rigorous_distance == 1u) {
+                    let p_pre = p_pre_arr[k];
+                    let dist_pre = length(p_pre);
+                    var l_target = -1.0;
+                    if (lo_finite && hi_finite && abs(hi - lo) < 1e-9) {
+                        l_target = lo;
+                    } else if (lo_finite && dist_pre <= lo + 1e-9) {
+                        l_target = lo;
+                    } else if (hi_finite && dist_pre >= hi - 1e-9) {
+                        l_target = hi;
+                    } else if (lo_finite && !hi_finite) {
+                        l_target = lo;
+                    } else if (hi_finite && !lo_finite) {
+                        l_target = hi;
+                    }
+                    if (l_target >= 0.0) {
+                        var n_hat = vec3<f32>(0.0, 1.0, 0.0);
+                        if (dist_pre > 1e-12) {
+                            n_hat = p_pre / dist_pre;
+                        }
+                        let v_int = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
+                        let v_proj = v_int - n_hat * dot(n_hat, v_int);
+                        let p_re = p_pre + v_proj * uniforms.dt;
+                        var p_final = p_re;
+                        let dist_re = length(p_re);
+                        if (dist_re > 1e-12) {
+                            p_final = p_re * (l_target / dist_re);
+                        }
+                        var n_hat_f = n_hat;
+                        if (l_target > 1e-12) { n_hat_f = p_final / l_target; }
+                        let v_final = v_proj - n_hat_f * dot(n_hat_f, v_proj);
+                        joint_q[coord]    = p_final.x;
+                        joint_q[coord+1u] = p_final.y;
+                        joint_q[coord+2u] = p_final.z;
+                        joint_qd[dof]    = v_final.x;
+                        joint_qd[dof+1u] = v_final.y;
+                        joint_qd[dof+2u] = v_final.z;
+                    }
+                } else {
+                    var p_curr = vec3<f32>(joint_q[coord], joint_q[coord+1u], joint_q[coord+2u]);
+                    let dist = length(p_curr);
+                    var clamped = p_curr;
+                    var clip = false;
+                    if (lo_finite && (dist < lo) && (dist > 1e-12)) {
+                        clamped = p_curr * (lo / dist);
+                        clip = true;
+                    }
+                    if (hi_finite && (dist > hi) && (dist > 1e-12)) {
+                        clamped = p_curr * (hi / dist);
+                        clip = true;
+                    }
+                    if (clip) {
+                        joint_q[coord]    = clamped.x;
+                        joint_q[coord+1u] = clamped.y;
+                        joint_q[coord+2u] = clamped.z;
+                        let nrm = normalize(clamped);
+                        let v_now = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
+                        let radial = nrm * dot(v_now, nrm);
+                        let v_proj = v_now - radial;
+                        joint_qd[dof]    = v_proj.x;
+                        joint_qd[dof+1u] = v_proj.y;
+                        joint_qd[dof+2u] = v_proj.z;
+                    }
                 }
             }
 
-            // D6 per-axis linear position clamping.
+            // D6 per-axis limits.
+            //
+            // Stage 17.1 polish:
+            //   - Linear axes 0..3 still clamp the per-axis position.
+            //   - Angular axes 3..6 decompose the integrated quaternion
+            //     into XYZ Euler angles and clamp each unlocked axis,
+            //     then recompose.
             if (jt == JOINT_D6) {
                 for (var d = 0u; d < 3u; d = d + 1u) {
                     let lo = joint_limit_lower[dof + d];
@@ -670,6 +810,48 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                     joint_q[coord + d] = p_k;
                     joint_qd[dof + d] = qd_k;
+                }
+
+                let r_now = vec4<f32>(
+                    joint_q[coord+3u],
+                    joint_q[coord+4u],
+                    joint_q[coord+5u],
+                    joint_q[coord+6u],
+                );
+                var ang = quat_to_euler_xyz(r_now);
+                var omega_arr = vec3<f32>(
+                    joint_qd[dof+3u],
+                    joint_qd[dof+4u],
+                    joint_qd[dof+5u],
+                );
+                var clamped = false;
+                for (var d = 0u; d < 3u; d = d + 1u) {
+                    let lo = joint_limit_lower[dof + 3u + d];
+                    let hi = joint_limit_upper[dof + 3u + d];
+                    var ad = ang[d];
+                    var od = omega_arr[d];
+                    if ((lo == lo) && (ad < lo)) {
+                        ad = lo;
+                        if (od < 0.0) { od = 0.0; }
+                        clamped = true;
+                    }
+                    if ((hi == hi) && (ad > hi)) {
+                        ad = hi;
+                        if (od > 0.0) { od = 0.0; }
+                        clamped = true;
+                    }
+                    ang[d] = ad;
+                    omega_arr[d] = od;
+                }
+                if (clamped) {
+                    let r_proj = quat_from_euler_xyz(ang);
+                    joint_q[coord+3u] = r_proj.x;
+                    joint_q[coord+4u] = r_proj.y;
+                    joint_q[coord+5u] = r_proj.z;
+                    joint_q[coord+6u] = r_proj.w;
+                    joint_qd[dof+3u] = omega_arr.x;
+                    joint_qd[dof+4u] = omega_arr.y;
+                    joint_qd[dof+5u] = omega_arr.z;
                 }
             }
         }

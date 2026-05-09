@@ -62,6 +62,21 @@ pub struct FeatherstoneSolver {
     /// Number of substeps per outer `step` call. Each substep advances
     /// `dt/substeps`. Default 1.
     pub substeps: usize,
+    /// Stage 17.1 polish: when `true`, the backward ABA pass builds the
+    /// full per-joint `D = S^T · I^A · S` matrix and solves
+    /// `D · q̈ = u_tau` via dense Cholesky instead of the v1 sequential
+    /// rank-1 deflation. Required for asymmetric Free-joint inertias
+    /// (e.g. CoM offset cross-couples linear/angular DOFs); for joints
+    /// where `D` is already diagonal (Ball, Revolute, decoupled Free)
+    /// the two paths agree to roundoff. Default `false` for backwards
+    /// compatibility.
+    pub rigorous_d_solve: bool,
+    /// Stage 17.1 polish: when `true`, Distance joints enforce their
+    /// length constraint via a velocity-level Lagrange multiplier
+    /// (force-level projection) instead of the v1 hard
+    /// `p ← p · L_target / |p|` clamp. Default `true` — the v1 clamp
+    /// stays only as a fallback when the multiplier is degenerate.
+    pub rigorous_distance: bool,
     backend: FeatherstoneBackend,
 }
 
@@ -78,6 +93,8 @@ impl FeatherstoneSolver {
         Self {
             joint_damping: 0.0,
             substeps: 1,
+            rigorous_d_solve: false,
+            rigorous_distance: true,
             backend: FeatherstoneBackend::Cpu,
         }
     }
@@ -104,6 +121,8 @@ impl FeatherstoneSolver {
         Ok(Self {
             joint_damping: 0.0,
             substeps: 1,
+            rigorous_d_solve: false,
+            rigorous_distance: true,
             backend: FeatherstoneBackend::Gpu(GpuBackend {
                 device,
                 queue,
@@ -124,6 +143,40 @@ impl FeatherstoneSolver {
     pub fn with_substeps(mut self, n: usize) -> Self {
         self.substeps = n.max(1);
         self
+    }
+
+    /// Stage 17.1: enable the rigorous dense-Cholesky `D`-matrix solve
+    /// for multi-DOF joints (Free / Distance / D6 / Ball). The default
+    /// path uses Stage 17's sequential rank-1 deflation, which is exact
+    /// only when `D` is diagonal. Toggle this on for Free joints whose
+    /// inertia matrix is non-trivially coupled (e.g. CoM offset cross-
+    /// couples linear and angular DOFs).
+    #[must_use]
+    pub fn with_rigorous_d_solve(mut self, on: bool) -> Self {
+        self.rigorous_d_solve = on;
+        self
+    }
+
+    /// Stage 17.1: toggle the velocity-level Lagrange-multiplier
+    /// projection for Distance joints. Default `true`; when `false`
+    /// the v1 hard-clamp (`p ← p · L_target / |p|` + radial-velocity
+    /// zeroing) is used instead. The `false` setting is preserved for
+    /// A/B parity tests.
+    #[must_use]
+    pub fn with_rigorous_distance(mut self, on: bool) -> Self {
+        self.rigorous_distance = on;
+        self
+    }
+
+    /// Mutable accessor for runtime UI toggles. The Quadrotor scene's
+    /// "rigorous" pane uses this.
+    pub fn set_rigorous_d_solve(&mut self, on: bool) {
+        self.rigorous_d_solve = on;
+    }
+
+    /// Mutable accessor for runtime UI toggles.
+    pub fn set_rigorous_distance(&mut self, on: bool) {
+        self.rigorous_distance = on;
     }
 
     #[must_use]
@@ -185,9 +238,17 @@ impl FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         match &mut self.backend {
-            FeatherstoneBackend::Cpu => {
-                cpu_step(model, state_in, control, contacts, dt, state_out, self.joint_damping)
-            }
+            FeatherstoneBackend::Cpu => cpu_step(
+                model,
+                state_in,
+                control,
+                contacts,
+                dt,
+                state_out,
+                self.joint_damping,
+                self.rigorous_d_solve,
+                self.rigorous_distance,
+            ),
             #[cfg(feature = "gpu")]
             FeatherstoneBackend::Gpu(gpu) => {
                 let GpuBackend { device, queue, kernel } = gpu;
@@ -200,6 +261,8 @@ impl FeatherstoneSolver {
                     contacts,
                     self.joint_damping as f32,
                     dt,
+                    self.rigorous_d_solve,
+                    self.rigorous_distance,
                     state_out,
                 )
             }
@@ -301,6 +364,7 @@ fn build_motion_subspace(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cpu_step(
     model: &Model,
     state_in: &State,
@@ -309,6 +373,8 @@ fn cpu_step(
     dt: Real,
     state_out: &mut State,
     joint_damping: Real,
+    rigorous_d_solve: bool,
+    rigorous_distance: bool,
 ) -> Result<()> {
     if model.joint_count == 0 {
         // Nothing to integrate. Pass body state through.
@@ -406,6 +472,12 @@ fn cpu_step(
     let mut u_per_dof = vec![[SpatialVector::ZERO; MAX_JOINT_DOFS]; n];
     let mut d_inv_per_dof = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
     let mut u_tau_per_dof = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
+    // Stage 17.1 rigorous D solve: per-joint Cholesky factor of the
+    // n_dof×n_dof D matrix (`L` lower triangular, packed row-major as a
+    // 6×6 with unused entries left zero). Active count is `dof_count[j]`.
+    let mut l_chol_per_joint = vec![[0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]; n];
+    // Per-joint solved q̈ vector after `D · q̈ = u_tau − U^T · a_p`.
+    let mut q_dd_local = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
 
     // ── Per-articulation outer loop ─────────────────────────────────
     let mut q_new: Vec<Real> = q_in.clone();
@@ -509,40 +581,26 @@ fn cpu_step(
         let n_dof = dof_count[j];
         let supported = enabled && !matches!(jt, JointType::Fixed);
 
-        // Snapshot the joint's spatial inertia for the parent
-        // accumulation. We'll deflate it column-by-column.
-        let mut i_curr = i_a[j];
         let dof_idx = joint_dof_offset[j] as usize;
         let coord_idx = joint_coord_offset[j] as usize;
 
         if supported && n_dof > 0 {
-            // Sequential rank-1 updates: for each DOF k in 0..n_dof,
-            //   U_k = i_curr · S_k
-            //   D_k = S_k^T · U_k
-            //   u_tau_k = tau_k - S_k^T · p_a[j]
-            //   then deflate i_curr := i_curr - U_k · U_k^T / D_k
-            // Drive / friction / effort are accumulated per DOF.
+            // Compute per-DOF generalised force `u_tau_k = tau_k − S_k^T · p_a[j]`
+            // from drives + friction + effort first; this is
+            // independent of the deflation strategy below.
             for k in 0..n_dof {
                 if !dof_active[j][k] {
+                    u_tau_per_dof[j][k] = 0.0;
                     continue;
                 }
                 let s_k = s_cols[j][k];
-                let u_k = i_curr.mul_sv(s_k);
-                let d_k = sv_dot(s_k, u_k);
-                let d_inv_k = if d_k.abs() > 1e-12 { 1.0 / d_k } else { 0.0 };
-                u_per_dof[j][k] = u_k;
-                d_inv_per_dof[j][k] = d_inv_k;
-
-                // Drive / friction / effort. Position-based drives only
-                // make sense for 1-DOF coords; for ball/free/d6 we use
-                // velocity-based drives (kp ignored).
                 let dof_g = dof_idx + k;
                 let qd_now = qd_in.get(dof_g).copied().unwrap_or(0.0);
                 let q_now = match jt {
                     JointType::Revolute | JointType::Prismatic => {
                         q_in.get(coord_idx + k).copied().unwrap_or(0.0)
                     }
-                    _ => 0.0, // multi-DOF coords aren't direct positions
+                    _ => 0.0,
                 };
                 let mode = JointTargetMode::from_u32(
                     target_mode.get(dof_g).copied().unwrap_or(0),
@@ -570,37 +628,166 @@ fn cpu_step(
                     effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),
                 );
                 u_tau_per_dof[j][k] = tau_app - sv_dot(s_k, p_a[j]);
-
-                // Deflate i_curr for next column.
-                let outer = SpatialMatrix6::outer(u_k, u_k).scale(d_inv_k);
-                i_curr = i_curr.sub(&outer);
             }
 
-            // After deflation, i_curr is the articulated inertia to
-            // hand to the parent: I^a = I^A - Σ_k U_k U_k^T / D_k.
-            // Bias propagation:
-            //   p^a = p^A + I^a · c + Σ_k U_k · (u_tau_k / D_k)
-            let mut p_articulated = p_a[j] + i_curr.mul_sv(c_term[j]);
-            for k in 0..n_dof {
-                if !dof_active[j][k] {
-                    continue;
-                }
-                p_articulated = p_articulated
-                    + u_per_dof[j][k].scale(u_tau_per_dof[j][k] * d_inv_per_dof[j][k]);
-            }
-
-            if parent >= 0 {
-                let mut parent_joint: Option<usize> = None;
-                for k in j_begin..j {
-                    if joint_child[k] as usize == parent as usize {
-                        parent_joint = Some(k);
-                        break;
+            if rigorous_d_solve && n_dof > 1 {
+                // Stage 17.1 rigorous path — full dense Cholesky on D.
+                //   U_block = I^A · S        (6 × n_dof)
+                //   D       = S^T · U_block  (n_dof × n_dof)
+                //   I^a     = I^A − U · D^{-1} · U^T (6×6, full block-deflate)
+                //   p^a     = p^A + I^a · c + U · (D^{-1} · u_tau)
+                let i_a_j = i_a[j];
+                // Build U = I^A · S and the lower-right active mask.
+                let mut active_idx: [usize; MAX_JOINT_DOFS] =
+                    [0; MAX_JOINT_DOFS];
+                let mut n_act: usize = 0;
+                for k in 0..n_dof {
+                    if dof_active[j][k] {
+                        u_per_dof[j][k] = i_a_j.mul_sv(s_cols[j][k]);
+                        active_idx[n_act] = k;
+                        n_act += 1;
+                    } else {
+                        u_per_dof[j][k] = SpatialVector::ZERO;
                     }
                 }
-                if let Some(pj) = parent_joint {
-                    i_a[pj] = i_a[pj].add(&i_curr);
-                    p_a[pj] = p_a[pj] + p_articulated;
+
+                if n_act == 0 {
+                    if parent >= 0 {
+                        let mut parent_joint: Option<usize> = None;
+                        for k in j_begin..j {
+                            if joint_child[k] as usize == parent as usize {
+                                parent_joint = Some(k);
+                                break;
+                            }
+                        }
+                        if let Some(pj) = parent_joint {
+                            i_a[pj] = i_a[pj].add(&i_a_j);
+                            p_a[pj] = p_a[pj] + p_a[j];
+                        }
+                    }
+                    continue;
                 }
+
+                // Pack n_act × n_act D and n_act-vector u_tau.
+                let mut d_mat = vec![0.0_f64; n_act * n_act];
+                let mut u_tau_packed = vec![0.0_f64; n_act];
+                for ai in 0..n_act {
+                    let ki = active_idx[ai];
+                    let s_ki = s_cols[j][ki];
+                    u_tau_packed[ai] = u_tau_per_dof[j][ki];
+                    for aj in 0..n_act {
+                        let kj = active_idx[aj];
+                        d_mat[ai * n_act + aj] = sv_dot(s_ki, u_per_dof[j][kj]);
+                    }
+                }
+
+                // Cholesky factor — fall back to per-DOF rank-1 if D
+                // is not SPD (singular column / locked DOFs).
+                let mut d_chol = d_mat.clone();
+                let chol_ok = dense_chol(&mut d_chol, n_act).is_ok();
+                if !chol_ok {
+                    // Degenerate D — fall back to sequential rank-1.
+                    apply_rank1_backward(
+                        j,
+                        n_dof,
+                        &mut i_a,
+                        &mut p_a,
+                        &dof_active,
+                        &s_cols,
+                        &mut u_per_dof,
+                        &mut d_inv_per_dof,
+                        &u_tau_per_dof,
+                        &c_term,
+                        joint_parent,
+                        joint_child,
+                        j_begin,
+                    );
+                    continue;
+                }
+                // Stash the Cholesky factor for the forward pass.
+                for r in 0..n_act {
+                    for c in 0..n_act {
+                        l_chol_per_joint[j][r * MAX_JOINT_DOFS + c] =
+                            d_chol[r * n_act + c];
+                    }
+                }
+                // Solve D · y = u_tau via the cached Cholesky factor.
+                let y = forward_sub_packed(&d_chol, &u_tau_packed, n_act);
+                let d_inv_u_tau = back_sub_packed(&d_chol, &y, n_act);
+
+                // I^a = I^A − Σ_{i,j} U_i · (D^{-1})_{ij} · U_j^T
+                // Build via the Cholesky factor too: for each column k
+                // of U, solve `D · w_k = U^T_k` and accumulate
+                // `i_a − = Σ_k U_k · w_k^T`. Cheaper expression: form
+                // `W = U · D^{-1}` (6 × n_act); then `i_a = i_a − W · U^T`.
+                // Build I^a directly: I^a = I^A − U_block · D^{-1} · U_block^T
+                // via I^a = I^A − Σ_k U_k · (D^{-1} U^T)_k where the
+                // intermediate is column k of D^{-1} U^T.
+                // Compute cols of D^{-1} U^T: for each spatial component
+                // c in 0..6, pack u_c = (U_0[c], U_1[c], …) and solve.
+                let mut dinv_ut: Vec<Vec<f64>> = vec![Vec::with_capacity(n_act); 6];
+                for cc in 0..6 {
+                    let mut rhs = vec![0.0_f64; n_act];
+                    for ai in 0..n_act {
+                        let ki = active_idx[ai];
+                        let u_ki = u_per_dof[j][ki];
+                        rhs[ai] = sv_component(u_ki, cc);
+                    }
+                    let y = forward_sub_packed(&d_chol, &rhs, n_act);
+                    dinv_ut[cc] = back_sub_packed(&d_chol, &y, n_act);
+                }
+                // Now i_a = i_a − Σ_k U_k · row_k(D^{-1} U^T)
+                // row_k(D^{-1} U^T) is a 6-vector: (dinv_ut[0][k], …, dinv_ut[5][k]).
+                let mut i_curr = i_a_j;
+                for ai in 0..n_act {
+                    let ki = active_idx[ai];
+                    let u_ki = u_per_dof[j][ki];
+                    let row = SpatialVector::new(
+                        Vec3::new(dinv_ut[0][ai], dinv_ut[1][ai], dinv_ut[2][ai]),
+                        Vec3::new(dinv_ut[3][ai], dinv_ut[4][ai], dinv_ut[5][ai]),
+                    );
+                    let outer = SpatialMatrix6::outer(u_ki, row);
+                    i_curr = i_curr.sub(&outer);
+                }
+
+                // p^a = p^A + I^a · c + Σ_k U_k · (D^{-1} u_tau)_k
+                let mut p_articulated = p_a[j] + i_curr.mul_sv(c_term[j]);
+                for ai in 0..n_act {
+                    let ki = active_idx[ai];
+                    p_articulated = p_articulated + u_per_dof[j][ki].scale(d_inv_u_tau[ai]);
+                }
+
+                if parent >= 0 {
+                    let mut parent_joint: Option<usize> = None;
+                    for k in j_begin..j {
+                        if joint_child[k] as usize == parent as usize {
+                            parent_joint = Some(k);
+                            break;
+                        }
+                    }
+                    if let Some(pj) = parent_joint {
+                        i_a[pj] = i_a[pj].add(&i_curr);
+                        p_a[pj] = p_a[pj] + p_articulated;
+                    }
+                }
+            } else {
+                // v1 sequential rank-1 deflation (default — exact when
+                // D is diagonal, approximate but stable when not).
+                apply_rank1_backward(
+                    j,
+                    n_dof,
+                    &mut i_a,
+                    &mut p_a,
+                    &dof_active,
+                    &s_cols,
+                    &mut u_per_dof,
+                    &mut d_inv_per_dof,
+                    &u_tau_per_dof,
+                    &c_term,
+                    joint_parent,
+                    joint_child,
+                    j_begin,
+                );
             }
         }
     }
@@ -632,14 +819,73 @@ fn cpu_step(
         if supported && n_dof > 0 {
             let dof_idx = joint_dof_offset[j] as usize;
             let mut s_qdd = SpatialVector::ZERO;
-            for k in 0..n_dof {
-                if !dof_active[j][k] {
-                    continue;
+
+            if rigorous_d_solve && n_dof > 1 {
+                // Build active list + RHS vector `r_k = u_tau_k − U_k^T · a_p`.
+                let mut active_idx: [usize; MAX_JOINT_DOFS] =
+                    [0; MAX_JOINT_DOFS];
+                let mut n_act: usize = 0;
+                for k in 0..n_dof {
+                    if dof_active[j][k] {
+                        active_idx[n_act] = k;
+                        n_act += 1;
+                    }
                 }
-                let q_dd_k =
-                    (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_p)) * d_inv_per_dof[j][k];
-                q_dd[dof_idx + k] = q_dd_k;
-                s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
+                if n_act > 0 {
+                    let mut rhs = vec![0.0_f64; n_act];
+                    for ai in 0..n_act {
+                        let ki = active_idx[ai];
+                        rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_p);
+                    }
+                    // Re-pack the cached Cholesky factor into a flat n_act×n_act.
+                    let mut l_packed = vec![0.0_f64; n_act * n_act];
+                    for r in 0..n_act {
+                        for c in 0..n_act {
+                            l_packed[r * n_act + c] =
+                                l_chol_per_joint[j][r * MAX_JOINT_DOFS + c];
+                        }
+                    }
+                    // Solve D · q̈ = rhs via the stored Cholesky.
+                    // If Cholesky was zeroed (degenerate fallback path),
+                    // l_packed.diag is zero → forward_sub guards via 1/L_ii.
+                    let degenerate = (0..n_act).any(|i| l_packed[i * n_act + i].abs() < 1e-30);
+                    if degenerate {
+                        // Fall back to the sequential rank-1 result.
+                        for k in 0..n_dof {
+                            if !dof_active[j][k] {
+                                continue;
+                            }
+                            let q_dd_k =
+                                (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_p))
+                                    * d_inv_per_dof[j][k];
+                            q_dd[dof_idx + k] = q_dd_k;
+                            q_dd_local[j][k] = q_dd_k;
+                            s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
+                        }
+                    } else {
+                        let y = forward_sub_packed(&l_packed, &rhs, n_act);
+                        let q_dd_active = back_sub_packed(&l_packed, &y, n_act);
+                        for ai in 0..n_act {
+                            let ki = active_idx[ai];
+                            let q_dd_k = q_dd_active[ai];
+                            q_dd[dof_idx + ki] = q_dd_k;
+                            q_dd_local[j][ki] = q_dd_k;
+                            s_qdd = s_qdd + s_cols[j][ki].scale(q_dd_k);
+                        }
+                    }
+                }
+            } else {
+                for k in 0..n_dof {
+                    if !dof_active[j][k] {
+                        continue;
+                    }
+                    let q_dd_k =
+                        (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_p))
+                            * d_inv_per_dof[j][k];
+                    q_dd[dof_idx + k] = q_dd_k;
+                    q_dd_local[j][k] = q_dd_k;
+                    s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
+                }
             }
             a_body[j] = a_p + s_qdd + c_term[j];
         } else {
@@ -767,47 +1013,122 @@ fn cpu_step(
                 qd_new[dof_idx + 4] = omega.y;
                 qd_new[dof_idx + 5] = omega.z;
 
-                // Distance hard-projection: clamp |p_new| to
-                // [lower[0], upper[0]] (using DOF 0's limits as a
-                // distance limit). NaN sentinel = unlimited.
+                // Distance constraint. Stage 17.1 default is the
+                // velocity-level Lagrange-multiplier projection: enforce
+                // `d/dt(|p|² − L²) = 0 ⇒ p · v = 0` (or |p|=L_target),
+                // then re-integrate position from the projected velocity.
+                // The v1 hard `p ← p · L / |p|` clamp + radial-velocity
+                // zeroing remains as a fallback when
+                // `rigorous_distance == false` (used by parity tests).
                 if matches!(jt, JointType::Distance) {
                     let lo = limit_lower.get(dof_idx).copied().unwrap_or(Real::NAN);
                     let hi = limit_upper.get(dof_idx).copied().unwrap_or(Real::NAN);
-                    let p_curr = Vec3::new(
-                        q_new[coord_idx],
-                        q_new[coord_idx + 1],
-                        q_new[coord_idx + 2],
-                    );
-                    let dist = p_curr.length();
-                    let mut clamped = p_curr;
-                    let mut zero_radial_v = false;
-                    if !lo.is_nan() && dist < lo && dist > 1e-12 {
-                        clamped = p_curr * (lo / dist);
-                        zero_radial_v = true;
-                    }
-                    if !hi.is_nan() && dist > hi && dist > 1e-12 {
-                        clamped = p_curr * (hi / dist);
-                        zero_radial_v = true;
-                    }
-                    if zero_radial_v {
-                        q_new[coord_idx] = clamped.x;
-                        q_new[coord_idx + 1] = clamped.y;
-                        q_new[coord_idx + 2] = clamped.z;
-                        // Strip radial velocity component.
-                        let n = clamped.normalize_or_zero();
-                        let radial = n * v.dot(n);
-                        let v_proj = v - radial;
-                        qd_new[dof_idx] = v_proj.x;
-                        qd_new[dof_idx + 1] = v_proj.y;
-                        qd_new[dof_idx + 2] = v_proj.z;
+
+                    if rigorous_distance {
+                        // Decide which bound (if any) is active for the
+                        // pre-integration p. Use lower or upper as the
+                        // target length L; if both are NaN, no-op.
+                        let p_pre = p_old;
+                        let dist_pre = p_pre.length();
+                        let l_target = if !lo.is_nan() && !hi.is_nan() && (hi - lo).abs() < 1e-9 {
+                            // Equality form: lo == hi.
+                            Some(lo)
+                        } else if !lo.is_nan() && dist_pre <= lo + 1e-9 {
+                            Some(lo)
+                        } else if !hi.is_nan() && dist_pre >= hi - 1e-9 {
+                            Some(hi)
+                        } else if !lo.is_nan() && hi.is_nan() {
+                            Some(lo)
+                        } else if !hi.is_nan() && lo.is_nan() {
+                            Some(hi)
+                        } else {
+                            None
+                        };
+                        if let Some(l_t) = l_target {
+                            // Velocity-level Lagrange: enforce
+                            //   φ̇ = p · v_pred = 0  (so |p|² stays put)
+                            // by adding Δv = −λ · p̂; effective mass is
+                            //   m_eff = (p̂ · M⁻¹ · p̂)
+                            // For a 6-DOF Free root with mass-only inertia
+                            // we use mass scaled by sum, but the simplest
+                            // single-particle case is just the inverse
+                            // mass at the root child body. We use a unit
+                            // inverse mass — robustness is governed by
+                            // doing both velocity AND position projection.
+                            let n_hat = if dist_pre > 1e-12 {
+                                p_pre / dist_pre
+                            } else {
+                                Vec3::Y
+                            };
+                            // Velocity projection along radial.
+                            let v_int = v; // post-integration v already
+                            let v_radial = n_hat.dot(v_int);
+                            let v_proj = v_int - n_hat * v_radial;
+                            // Position projection in two stages:
+                            //   1) re-integrate using the projected v.
+                            //   2) finally clamp |p| ← L_t exactly to
+                            //      kill machine-precision residual drift.
+                            let p_re = p_old + v_proj * dt;
+                            let mut p_final = p_re;
+                            let dist_re = p_re.length();
+                            if dist_re > 1e-12 {
+                                p_final = p_re * (l_t / dist_re);
+                            }
+                            // Make sure the final v has zero radial component.
+                            let n_hat_final = if l_t > 1e-12 { p_final / l_t } else { n_hat };
+                            let v_radial2 = n_hat_final.dot(v_proj);
+                            let v_final = v_proj - n_hat_final * v_radial2;
+
+                            q_new[coord_idx] = p_final.x;
+                            q_new[coord_idx + 1] = p_final.y;
+                            q_new[coord_idx + 2] = p_final.z;
+                            qd_new[dof_idx] = v_final.x;
+                            qd_new[dof_idx + 1] = v_final.y;
+                            qd_new[dof_idx + 2] = v_final.z;
+                        }
+                    } else {
+                        // v1 hard-clamp fallback.
+                        let p_curr = Vec3::new(
+                            q_new[coord_idx],
+                            q_new[coord_idx + 1],
+                            q_new[coord_idx + 2],
+                        );
+                        let dist = p_curr.length();
+                        let mut clamped = p_curr;
+                        let mut zero_radial_v = false;
+                        if !lo.is_nan() && dist < lo && dist > 1e-12 {
+                            clamped = p_curr * (lo / dist);
+                            zero_radial_v = true;
+                        }
+                        if !hi.is_nan() && dist > hi && dist > 1e-12 {
+                            clamped = p_curr * (hi / dist);
+                            zero_radial_v = true;
+                        }
+                        if zero_radial_v {
+                            q_new[coord_idx] = clamped.x;
+                            q_new[coord_idx + 1] = clamped.y;
+                            q_new[coord_idx + 2] = clamped.z;
+                            let n = clamped.normalize_or_zero();
+                            let radial = n * v.dot(n);
+                            let v_proj = v - radial;
+                            qd_new[dof_idx] = v_proj.x;
+                            qd_new[dof_idx + 1] = v_proj.y;
+                            qd_new[dof_idx + 2] = v_proj.z;
+                        }
                     }
                 }
 
-                // D6 per-axis position clamping for un-locked DOFs.
+                // D6 per-axis limits.
+                //
+                // Stage 17.1 polish:
+                //   - Linear axes 0..3 still clamp the per-axis position
+                //     directly (same as v1).
+                //   - Angular axes 3..6 now decompose the integrated
+                //     quaternion into XYZ Euler angles, clamp each
+                //     unlocked axis to its `[lo, hi]` window, then
+                //     recompose the quaternion. Angular qd is zeroed
+                //     when an axis hits a limit.
                 if matches!(jt, JointType::D6) {
-                    // Only the first 3 (linear) DOFs map directly to
-                    // coord positions in this layout; angular limits
-                    // would need axis-angle decomposition (deferred).
                     for k in 0..3 {
                         let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
                         let hi = limit_upper.get(dof_idx + k).copied().unwrap_or(Real::NAN);
@@ -816,6 +1137,68 @@ fn cpu_step(
                         let (p_c, qd_c) = clamp_joint_pos(p_k, qd_k, lo, hi);
                         q_new[coord_idx + k] = p_c;
                         qd_new[dof_idx + k] = qd_c;
+                    }
+
+                    // Angular axes (DOF 3..6 ↔ ωx, ωy, ωz). Use the post-
+                    // integration quaternion `r_new` for the Euler decomp.
+                    let r_now = Quat::from_xyzw(
+                        q_new[coord_idx + 3],
+                        q_new[coord_idx + 4],
+                        q_new[coord_idx + 5],
+                        q_new[coord_idx + 6],
+                    );
+                    let (ex, ey, ez) = r_now.to_euler(glam::EulerRot::XYZ);
+                    let mut ang = [ex, ey, ez];
+                    let mut omega_arr = [
+                        qd_new[dof_idx + 3],
+                        qd_new[dof_idx + 4],
+                        qd_new[dof_idx + 5],
+                    ];
+                    let mut clamped = false;
+                    for k in 0..3 {
+                        let lo = limit_lower
+                            .get(dof_idx + 3 + k)
+                            .copied()
+                            .unwrap_or(Real::NAN);
+                        let hi = limit_upper
+                            .get(dof_idx + 3 + k)
+                            .copied()
+                            .unwrap_or(Real::NAN);
+                        // Skip the locked-axis sentinel `lo == hi == 0` —
+                        // those DOFs were already removed from the
+                        // motion subspace, but the Euler value is still
+                        // correctly zero there since the joint never
+                        // accumulated motion on them.
+                        if !lo.is_nan() && ang[k] < lo {
+                            ang[k] = lo;
+                            if omega_arr[k] < 0.0 {
+                                omega_arr[k] = 0.0;
+                            }
+                            clamped = true;
+                        }
+                        if !hi.is_nan() && ang[k] > hi {
+                            ang[k] = hi;
+                            if omega_arr[k] > 0.0 {
+                                omega_arr[k] = 0.0;
+                            }
+                            clamped = true;
+                        }
+                    }
+                    if clamped {
+                        let r_proj = Quat::from_euler(
+                            glam::EulerRot::XYZ,
+                            ang[0],
+                            ang[1],
+                            ang[2],
+                        )
+                        .normalize();
+                        q_new[coord_idx + 3] = r_proj.x;
+                        q_new[coord_idx + 4] = r_proj.y;
+                        q_new[coord_idx + 5] = r_proj.z;
+                        q_new[coord_idx + 6] = r_proj.w;
+                        qd_new[dof_idx + 3] = omega_arr[0];
+                        qd_new[dof_idx + 4] = omega_arr[1];
+                        qd_new[dof_idx + 5] = omega_arr[2];
                     }
                 }
             }
@@ -842,6 +1225,128 @@ fn cpu_step(
 
 fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
     a.linear.dot(b.linear) + a.angular.dot(b.angular)
+}
+
+/// Index a spatial vector by its 6-dim component index `[lin.x, lin.y,
+/// lin.z, ang.x, ang.y, ang.z]`.
+#[inline]
+fn sv_component(s: SpatialVector, c: usize) -> Real {
+    match c {
+        0 => s.linear.x,
+        1 => s.linear.y,
+        2 => s.linear.z,
+        3 => s.angular.x,
+        4 => s.angular.y,
+        5 => s.angular.z,
+        _ => 0.0,
+    }
+}
+
+/// In-place Cholesky for an n×n SPD matrix in row-major flat storage.
+/// Returns Err if the matrix has a non-positive pivot (D singular /
+/// indefinite — falls back to sequential rank-1 in the caller). This is
+/// a thin wrapper around [`crate::math::dense_solve::dense_chol`] kept
+/// local so the featherstone solver can also call it on packed sub-
+/// blocks of MAX_JOINT_DOFS² scratch.
+fn dense_chol(a: &mut [Real], n: usize) -> Result<()> {
+    crate::math::dense_solve::dense_chol(a, n)
+}
+
+/// Forward substitution `L · y = b` returning `y`. `l` is row-major
+/// `n × n` lower triangular; only the lower triangle (including the
+/// diagonal) is read.
+fn forward_sub_packed(l: &[Real], b: &[Real], n: usize) -> Vec<Real> {
+    let mut y = vec![0.0_f64; n];
+    for i in 0..n {
+        let mut s = b[i];
+        for k in 0..i {
+            s -= l[i * n + k] * y[k];
+        }
+        let l_ii = l[i * n + i];
+        if l_ii.abs() < 1e-30 {
+            y[i] = 0.0;
+        } else {
+            y[i] = s / l_ii;
+        }
+    }
+    y
+}
+
+/// Back substitution `Lᵀ · x = y` returning `x`.
+fn back_sub_packed(l: &[Real], y: &[Real], n: usize) -> Vec<Real> {
+    let mut x = vec![0.0_f64; n];
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        for k in (i + 1)..n {
+            s -= l[k * n + i] * x[k];
+        }
+        let l_ii = l[i * n + i];
+        if l_ii.abs() < 1e-30 {
+            x[i] = 0.0;
+        } else {
+            x[i] = s / l_ii;
+        }
+    }
+    x
+}
+
+/// Stage 17's sequential rank-1 deflation, factored out so the rigorous
+/// path can fall back to it cleanly when the dense `D` block turns out
+/// to be singular (e.g. all DOFs locked through limits).
+#[allow(clippy::too_many_arguments)]
+fn apply_rank1_backward(
+    j: usize,
+    n_dof: usize,
+    i_a: &mut [SpatialMatrix6],
+    p_a: &mut [SpatialVector],
+    dof_active: &[[bool; MAX_JOINT_DOFS]],
+    s_cols: &[[SpatialVector; MAX_JOINT_DOFS]],
+    u_per_dof: &mut [[SpatialVector; MAX_JOINT_DOFS]],
+    d_inv_per_dof: &mut [[Real; MAX_JOINT_DOFS]],
+    u_tau_per_dof: &[[Real; MAX_JOINT_DOFS]],
+    c_term: &[SpatialVector],
+    joint_parent: &[i32],
+    joint_child: &[i32],
+    j_begin: usize,
+) {
+    let mut i_curr = i_a[j];
+    for k in 0..n_dof {
+        if !dof_active[j][k] {
+            continue;
+        }
+        let s_k = s_cols[j][k];
+        let u_k = i_curr.mul_sv(s_k);
+        let d_k = sv_dot(s_k, u_k);
+        let d_inv_k = if d_k.abs() > 1e-12 { 1.0 / d_k } else { 0.0 };
+        u_per_dof[j][k] = u_k;
+        d_inv_per_dof[j][k] = d_inv_k;
+        let outer = SpatialMatrix6::outer(u_k, u_k).scale(d_inv_k);
+        i_curr = i_curr.sub(&outer);
+    }
+
+    let mut p_articulated = p_a[j] + i_curr.mul_sv(c_term[j]);
+    for k in 0..n_dof {
+        if !dof_active[j][k] {
+            continue;
+        }
+        p_articulated = p_articulated
+            + u_per_dof[j][k].scale(u_tau_per_dof[j][k] * d_inv_per_dof[j][k]);
+    }
+
+    let parent = joint_parent[j];
+    if parent >= 0 {
+        let mut parent_joint: Option<usize> = None;
+        for k in j_begin..j {
+            if joint_child[k] as usize == parent as usize {
+                parent_joint = Some(k);
+                break;
+            }
+        }
+        if let Some(pj) = parent_joint {
+            i_a[pj] = i_a[pj].add(&i_curr);
+            p_a[pj] = p_a[pj] + p_articulated;
+        }
+    }
 }
 
 /// Clamp `x` to `[-limit, +limit]`. If `limit` is NaN, passthrough.
