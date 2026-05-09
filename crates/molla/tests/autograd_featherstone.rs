@@ -22,17 +22,19 @@ const GRAD_TOL: Real = 1e-3;
 /// central-FD estimate; assert both within `GRAD_TOL`. Walks every
 /// (step, dof) pair in the horizon — for the 6-DOF Franka with a
 /// 5-step horizon that's 30 partial-derivative comparisons.
+/// Returns the max absolute analytic-vs-FD gap so the caller can log it.
 fn check_torque_grad_matches_fd(
     chain: &FeatherstoneRevoluteChain,
     q0: &[Real],
     qd0: &[Real],
     tau0: &[Vec<Real>],
     grad_ee: Vec3,
-) {
+) -> Real {
     let trace = chain.rollout(q0, qd0, tau0);
     let g_analytic = chain.reverse(&trace, grad_ee);
 
     let n = chain.links.len();
+    let mut max_diff = 0.0_f64;
     for t in 0..chain.horizon {
         for k in 0..n {
             let mut tau_p = tau0.to_vec();
@@ -46,12 +48,14 @@ fn check_torque_grad_matches_fd(
             let fd = (ee_p.dot(grad_ee) - ee_m.dot(grad_ee)) / (2.0 * FD_EPS);
             let analytic = g_analytic[t][k];
             let diff = (analytic - fd).abs();
+            max_diff = max_diff.max(diff);
             assert!(
                 diff < GRAD_TOL,
                 "tau[{t}][{k}]: analytic={analytic:.6e}, fd={fd:.6e}, diff={diff:.6e}",
             );
         }
     }
+    max_diff
 }
 
 #[test]
@@ -61,9 +65,9 @@ fn single_pendulum_grad_matches_fd() {
     let qd0 = vec![-0.1_f64];
     let tau0 = vec![vec![0.05_f64]; chain.horizon];
     // Seed the EE-y direction (the pendulum swings in XY plane around Z).
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
-    // Also check X-direction seed.
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    println!("pendulum max grad-FD diff: y={d_y:.3e}, x={d_x:.3e}");
 }
 
 #[test]
@@ -72,8 +76,9 @@ fn two_link_arm_grad_matches_fd() {
     let q0 = vec![0.4_f64, -0.3_f64];
     let qd0 = vec![0.0_f64, 0.0_f64];
     let tau0 = vec![vec![0.1_f64, -0.05_f64]; chain.horizon];
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    println!("2-link arm max grad-FD diff: y={d_y:.3e}, x={d_x:.3e}");
 }
 
 #[test]
@@ -84,8 +89,9 @@ fn franka_6dof_grad_matches_fd() {
     let tau0 = vec![vec![0.02_f64; 6]; chain.horizon];
     // Z-direction is meaningful for the Franka chain (links extend
     // along +Z).
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Z);
-    check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    let d_z = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Z);
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
+    println!("Franka6 max grad-FD diff: z={d_z:.3e}, y={d_y:.3e}");
 }
 
 /// Tape determinism: same `(q0, qd0, tau)` rolled through
