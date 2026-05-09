@@ -22,10 +22,7 @@ use std::time::Instant;
 #[test]
 #[ignore = "perf measurement"]
 fn mpm_perf_10k_32grid() {
-    let Some(engine) = Engine::new_gpu().ok() else {
-        eprintln!("no GPU");
-        return;
-    };
+    let engine = Engine::new_gpu().ok().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::sand();
@@ -79,10 +76,7 @@ fn mpm_perf_10k_32grid() {
 #[test]
 #[ignore = "perf measurement"]
 fn mpm_perf_50k_64grid() {
-    let Some(engine) = Engine::new_gpu().ok() else {
-        eprintln!("no GPU");
-        return;
-    };
+    let engine = Engine::new_gpu().ok().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::sand();
@@ -142,10 +136,7 @@ fn mpm_perf_50k_64grid() {
 #[test]
 #[ignore = "perf measurement"]
 fn mpm_step_n_beats_individual_steps() {
-    let Some(engine) = Engine::new_gpu().ok() else {
-        eprintln!("no GPU");
-        return;
-    };
+    let engine = Engine::new_gpu().ok().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::sand();
@@ -225,10 +216,7 @@ fn mpm_step_n_beats_individual_steps() {
 #[test]
 #[ignore = "perf measurement"]
 fn mpm_perf_50k_64grid_atomic_reduction() {
-    let Some(engine) = Engine::new_gpu().ok() else {
-        eprintln!("no GPU");
-        return;
-    };
+    let engine = Engine::new_gpu().ok().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::sand();
@@ -318,10 +306,7 @@ fn mpm_perf_50k_64grid_atomic_reduction() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn mpm_p2g_parity_legacy_vs_two_pass() {
-    let Some(engine) = Engine::new_gpu().ok() else {
-        eprintln!("no GPU");
-        return;
-    };
+    let engine = Engine::new_gpu().ok().expect("GPU adapter required for this test (gated by #[ignore])");
     let queue = engine.queue().unwrap().clone();
     let mut cfg = MpmConfig::sand();
     cfg.grid_size = 32;

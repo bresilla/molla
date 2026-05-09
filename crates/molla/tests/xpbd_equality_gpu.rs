@@ -36,10 +36,7 @@ fn gpu_connect_pins_two_bodies_under_gravity() {
     b.add_equality_connect(anchor, free, Vec3::ZERO, Vec3::ZERO);
     let mut model = b.build().unwrap();
 
-    let Ok(engine) = Engine::new_gpu() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     model.upload_to_device(&device, &queue).unwrap();
@@ -114,9 +111,7 @@ fn gpu_weld_keeps_orientation_aligned() {
     // No gravity so the test stays deterministic.
     model.gravity.host_mut().unwrap()[0] = Vec3::ZERO;
 
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     model.upload_to_device(&device, &queue).unwrap();
@@ -191,9 +186,7 @@ fn gpu_equality_velocity_recovery_zeros_drift() {
     let mut model = b.build().unwrap();
     model.gravity.host_mut().unwrap()[0] = Vec3::ZERO; // no gravity → equilibrium
 
-    let Ok(engine) = Engine::new_gpu() else {
-        return;
-    };
+    let engine = Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     model.upload_to_device(&device, &queue).unwrap();

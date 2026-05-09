@@ -78,9 +78,7 @@ fn read_force(engine: &Engine, control: &mut Control) -> Real {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
 fn pd_basic_position_error() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut pd = ControllerPd::new(
         &engine,
         &model,
@@ -104,9 +102,7 @@ fn pd_basic_position_error() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
 fn pd_velocity_error() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut pd = ControllerPd::new(
         &engine,
         &model,
@@ -128,9 +124,7 @@ fn pd_velocity_error() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
 fn pd_effort_cap_clamps() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut pd = ControllerPd::new(
         &engine,
         &model,
@@ -167,9 +161,7 @@ fn pd_effort_cap_clamps() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
 fn pid_integral_accumulates() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut pid = ControllerPid::new(
         &engine,
         &model,
@@ -200,9 +192,7 @@ fn pid_integral_accumulates() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
 fn pid_anti_windup_clamp() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut pid = ControllerPid::new(
         &engine,
         &model,

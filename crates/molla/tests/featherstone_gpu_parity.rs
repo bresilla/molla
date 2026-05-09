@@ -38,13 +38,7 @@ fn build_pendulum() -> Model {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn pendulum_cpu_gpu_match_within_1e_3_rad() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     eprintln!("GPU adapter: {:?}", engine.adapter_info());
 
     let dt = 0.005_f64;
@@ -151,13 +145,7 @@ fn build_pd_pendulum_with_limits() -> (Model, molla::core::JointId) {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn pd_pendulum_with_limits_cpu_gpu_match() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     let dt = 0.005_f64;
     let n_steps = 400usize;
 
@@ -228,13 +216,7 @@ fn pd_pendulum_with_limits_cpu_gpu_match() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn double_pendulum_cpu_gpu_match() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     fn build() -> Model {
         let mut b = ModelBuilder::new();
         let l0 = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
@@ -318,13 +300,7 @@ fn double_pendulum_cpu_gpu_match() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn many_articulations_cpu_gpu_match() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     fn build(n: usize) -> Model {
         let mut b = ModelBuilder::new();
         for i in 0..n {
@@ -411,13 +387,7 @@ fn many_articulations_cpu_gpu_match() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn prismatic_pd_cpu_gpu_match() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     fn build() -> Model {
         let mut b = ModelBuilder::new();
         let body = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
@@ -497,13 +467,7 @@ fn prismatic_pd_cpu_gpu_match() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn joint_limits_clamp_on_gpu() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -549,13 +513,7 @@ fn joint_limits_clamp_on_gpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
 fn arm_six_link_pd_drives_motion_on_gpu() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: no GPU adapter ({e})");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

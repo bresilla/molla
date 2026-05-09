@@ -63,10 +63,7 @@ fn try_engine() -> Option<Engine> {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn svd_gpu_matches_cpu_reconstruction() {
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = Dense3Kernel::new(&device);
@@ -116,9 +113,7 @@ fn svd_gpu_matches_cpu_reconstruction() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn qr_gpu_matches_cpu() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = Dense3Kernel::new(&device);
@@ -159,9 +154,7 @@ fn qr_gpu_matches_cpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn eig_gpu_matches_cpu() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = Dense3Kernel::new(&device);
@@ -208,9 +201,7 @@ fn eig_gpu_matches_cpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter — wall-clock benchmark"]
 fn svd_gpu_latency_under_100ns_per_matrix() {
-    let Some(engine) = try_engine() else {
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let kernel = Dense3Kernel::new(&device);

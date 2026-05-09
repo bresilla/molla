@@ -196,10 +196,7 @@ mod gpu {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_mutable_insert_roundtrip_f32_1k() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 
@@ -251,10 +248,7 @@ mod gpu {
     fn gpu_mutable_insert_collision_synthetic() {
         // Insert into a deliberately small root table so most keys
         // collide. The kernel must still recover every value.
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 
@@ -288,10 +282,7 @@ mod gpu {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_mutable_insert_vec3() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 
@@ -331,10 +322,7 @@ mod gpu {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_mutable_insert_f16_within_quantisation_tolerance() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 
@@ -403,10 +391,7 @@ mod gpu {
         //   • f32:  512 × 4  =  2 KiB / leaf
         //   • f16:  512 × 4  =  2 KiB / leaf (u32-packed half-floats)
         //   • vec3: 512 × 16 =  8 KiB / leaf (vec3<f32> aligns to 16 B)
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
 
         let leaf_capacity = 50_000u32;

@@ -49,10 +49,7 @@ fn mpm_smoke_steps_dont_explode() {
     // Sanity: a small particle blob settles under gravity without
     // NaNs or runaway velocities. This is the workhorse smoke test —
     // if APIC transfer or the SVD is broken this trips first.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let cfg = MpmConfig::sand();
     let mut sim = MpmSimulation::new(&engine, cfg).expect("mpm new");
     let particles = fill_box([-0.2, 0.6, -0.2], [0.2, 1.0, 0.2], 8, 42);
@@ -88,10 +85,7 @@ fn mpm_momentum_drift_closed_system() {
     // grid interior. APIC transfer should conserve momentum to within
     // float roundoff over 60 substeps. We allow 1% drift per the task
     // brief; the actual measured drift is typically << 0.5%.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut cfg = MpmConfig::sand();
     cfg.gravity_y = 0.0;
     // Generous interior padding so no particle is near the boundary
@@ -159,10 +153,7 @@ fn mpm_pile_forms_under_gravity() {
     // careful per-scene Young's-modulus tuning. v1 ships the
     // qualitative behavior; we report the apparent slope but don't
     // gate on it.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut cfg = MpmConfig::sand();
     cfg.friction_angle = 35.0_f32.to_radians();
     cfg.grid_size = 48;
@@ -229,10 +220,7 @@ fn mpm_rigid_coupling_displaces_sand() {
     // This is a coarse sanity check on the rigid_imprint path; full
     // momentum-balance accounting (sphere + sand) is deferred to
     // Stage 24d.x once the coupling is two-way.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let cfg = MpmConfig::sand();
     let mut sim = MpmSimulation::new(&engine, cfg).expect("mpm new");
     // Bed of sand floating in mid-air — the sphere overlaps it

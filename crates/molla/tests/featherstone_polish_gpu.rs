@@ -47,7 +47,7 @@ fn try_engine() -> Option<Engine> {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn d6_angular_limit_holds_under_gravity_gpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -187,7 +187,7 @@ fn d6_angular_limit_holds_under_gravity_cpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn distance_joint_length_holds_within_eps_gpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

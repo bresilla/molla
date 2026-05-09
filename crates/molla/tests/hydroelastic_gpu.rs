@@ -264,10 +264,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a real wgpu adapter"]
     fn gpu_matches_cpu_pressure_field() {
-        let Some(engine) = try_engine() else {
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
         let device = engine.device().unwrap().clone();
         let queue = engine.queue().unwrap().clone();
 

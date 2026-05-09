@@ -57,7 +57,7 @@ fn engine_or_skip() -> Option<Engine> {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_per_step_jacobians_match_cpu_franka6() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 1);
     let n = chain.links.len();
     let q = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -119,7 +119,7 @@ fn v3_gpu_per_step_jacobians_match_cpu_franka6() {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_full_reverse_matches_cpu_franka6() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 5);
     let n = chain.links.len();
     let q0 = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -160,7 +160,7 @@ fn v3_gpu_full_reverse_matches_cpu_franka6() {
 #[test]
 #[ignore = "needs wgpu adapter"]
 fn v3_gpu_multi_articulation_batch_matches_cpu() {
-    let Some(engine) = engine_or_skip() else { return };
+    let engine = engine_or_skip().expect("GPU adapter required for this test (gated by #[ignore])");
     const N_CHAINS: usize = 10;
 
     // Build N chains with slightly different initial configs so the

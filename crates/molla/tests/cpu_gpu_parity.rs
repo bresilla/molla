@@ -105,13 +105,7 @@ fn clone_model_for_gpu(model: &Model) -> Model {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via `make test-gpu`"]
 fn parity_100_spheres_within_1e_3() {
-    let engine = match Engine::new(Backend::AutoGpu) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("skipping: {e}");
-            return;
-        }
-    };
+    let engine = Engine::new(Backend::AutoGpu).expect("GPU adapter required for this test (gated by #[ignore])");
     eprintln!("GPU adapter: {:?}", engine.adapter_info());
 
     let n = 100usize;

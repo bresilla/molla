@@ -85,9 +85,7 @@ fn read_force(engine: &Engine, control: &mut Control) -> Real {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn pipeline_matches_standalone_pd() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let kp: Real = 75.0;
     let kd: Real = 8.0;
@@ -169,9 +167,7 @@ fn pipeline_matches_standalone_pd() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn dc_motor_clamp_torque_speed_curve() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let stall: Real = 10.0; // N·m at zero velocity
     let no_load: Real = 5.0; // rad/s (zero-torque crossing)
@@ -248,9 +244,7 @@ fn dc_motor_clamp_torque_speed_curve() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn delay_holds_step_response_for_n_substeps() {
-    let Some((engine, _model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, _model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let _ = &mut state; // unused-mut suppression
 
     let delay_n: u32 = 5;
@@ -316,9 +310,7 @@ fn delay_holds_step_response_for_n_substeps() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn delay_zero_steps_is_passthrough() {
-    let Some((engine, _model, _state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, _model, _state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut delay = Delay::new(
         &engine,
         &[DelayConfig {
@@ -354,9 +346,7 @@ fn delay_zero_steps_is_passthrough() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn pid_pipeline_matches_standalone_pid() {
-    let Some((engine, model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let kp: Real = 50.0;
     let ki: Real = 30.0;
@@ -453,9 +443,7 @@ fn pid_pipeline_matches_standalone_pid() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn position_based_clamp_smooth_envelope() {
-    let Some((engine, _model, mut state, mut control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, _model, mut state, mut control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
 
     // Lookup: full effort at q ≤ 0.913 rad, ramps to zero at 1.0 rad.
     let positions: Vec<Real> = vec![-1.0, 0.913, 1.0, 1.5];
@@ -525,9 +513,7 @@ fn position_based_clamp_smooth_envelope() {
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn mlp_forward_matches_cpu_reference() {
-    let Some((engine, _model, _state, _control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, _model, _state, _control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
 
     let cfg = ControllerNeuralMlpConfig {
         input_dim: 3,
@@ -619,9 +605,7 @@ fn mlp_forward_matches_cpu_reference() {
 #[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
 fn mlp_forward_timing_log_only() {
     use std::time::Instant;
-    let Some((engine, _model, _state, _control)) = setup_one_joint() else {
-        return;
-    };
+    let (engine, _model, _state, _control) = setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
     let cfg = ControllerNeuralMlpConfig {
         input_dim: 32,
         hidden_dim: 64,

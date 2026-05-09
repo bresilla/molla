@@ -77,10 +77,7 @@ fn random_coords(n: usize, seed: u64, range: i32) -> Vec<[i32; 3]> {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn delete_marks_inactive_and_reclaims_leaves() {
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -163,10 +160,7 @@ fn delete_marks_inactive_and_reclaims_leaves() {
 fn reclamation_reuse_pops_from_freelist() {
     // Insert → delete → insert at fresh coords. The second insert
     // should drain the freelist before falling back to next_leaf.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -256,10 +250,7 @@ fn no_orphaned_leaves_after_random_50pct_delete() {
     // pending list overflowed or the duplicate-push race kicked in)
     // at < 5% — looser than zero because the v1 reclaim pass is
     // best-effort, not guaranteed.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
@@ -341,10 +332,7 @@ fn delete_then_insert_roundtrip_throughput() {
     // Measured DoD throughput: insert N, delete N, reclaim, insert N
     // again into reused slots. Reports per-pair µs for each phase so
     // the PLAN.md ledger can quote a number.
-    let Some(engine) = try_engine() else {
-        eprintln!("no GPU adapter; skipping");
-        return;
-    };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 

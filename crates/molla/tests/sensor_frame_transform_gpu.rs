@@ -32,9 +32,7 @@ fn world_pose_matches_body_pose() {
     )));
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = FrameTransformSensor::new(
         &engine,
@@ -69,9 +67,7 @@ fn local_offset_is_applied_in_world() {
     let body = b.add_body(BodyParams::new());
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = FrameTransformSensor::new(
         &engine,
@@ -104,9 +100,7 @@ fn relative_pose_subtracts_reference() {
     let b_body = b.add_body(BodyParams::new().with_position(Vec3::new(15.0, 0.0, 0.0)));
     b.add_shape_sphere(b_body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = FrameTransformSensor::new(
         &engine,
@@ -151,9 +145,7 @@ fn relative_pose_handles_reference_rotation() {
     let b_body = b.add_body(BodyParams::new().with_position(Vec3::new(1.0, 0.0, 0.0)));
     b.add_shape_sphere(b_body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
-    let Some((engine, model, state)) = setup(model) else {
-        return;
-    };
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = FrameTransformSensor::new(
         &engine,

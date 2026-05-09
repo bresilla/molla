@@ -133,7 +133,7 @@ fn build_double_pendulum() -> Model {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_crba_pendulum_matches_cpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut model = build_pendulum();
     let mut state = model.state().unwrap();
     state.joint_q.host_mut().unwrap()[0] = 0.3;
@@ -162,7 +162,7 @@ fn gpu_jacobian_finite_difference_matches_analytical() {
     // 1-link revolute pendulum, axis +Z, child anchor at -Y by L. Tip at
     // local (0, L, 0) sits at world (0, 2L, 0). Jacobian linear column:
     // ω×r = (0,0,1)×(0,2L,0) = (-2L, 0, 0).
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mass = 1.0_f64;
     let l = 0.5_f64;
     let mut b = ModelBuilder::new();
@@ -209,7 +209,7 @@ fn gpu_jacobian_finite_difference_matches_analytical() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_rnea_pendulum_gravity_torque_matches_cpu() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut model = build_pendulum();
     let mut state = model.state().unwrap();
     state.joint_q.host_mut().unwrap()[0] = std::f64::consts::FRAC_PI_4;
@@ -236,7 +236,7 @@ fn gpu_rnea_pendulum_gravity_torque_matches_cpu() {
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_rnea_decomposition_matches_cpu() {
     // Verify RNEA(q, qd, qdd) = M(q)·qdd + RNEA(q, qd, 0) on GPU.
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut model = build_double_pendulum();
     let mut state = model.state().unwrap();
     state.joint_q.host_mut().unwrap().copy_from_slice(&[0.3, -0.2]);
@@ -291,7 +291,7 @@ fn gpu_rnea_decomposition_matches_cpu() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_crba_double_pendulum_symmetric() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let mut model = build_double_pendulum();
     let mut state = model.state().unwrap();
     state.joint_q.host_mut().unwrap().copy_from_slice(&[0.4, -0.3]);
@@ -324,7 +324,7 @@ fn gpu_crba_double_pendulum_symmetric() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_ik_franka_reaches_target() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let (mut model, ee_body) = build_franka();
     let mut state = model.state().unwrap();
     molla::sim::eval_fk(&model, &mut state).unwrap();
@@ -358,7 +358,7 @@ fn gpu_ik_franka_reaches_target() {
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn gpu_ik_multi_seed_runs_in_parallel() {
-    let Some(engine) = try_engine() else { return };
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let (mut model, ee_body) = build_franka();
     let mut state = model.state().unwrap();
     molla::sim::eval_fk(&model, &mut state).unwrap();
