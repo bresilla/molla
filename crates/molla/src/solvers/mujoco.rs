@@ -1115,6 +1115,21 @@ impl<'a> MjcfWriter<'a> {
                         rz = r.z,
                     ));
                 }
+                EqualityType::JointMimic => {
+                    // Stage 32 polynomial joint-mimic. MuJoCo's
+                    // `<joint>` equality only supports a quartic
+                    // polynomial relating two joints, which is exactly
+                    // our shape — but the MJCF translation needs the
+                    // joint *names* (we don't track joint→name mapping
+                    // in the writer yet). Skipping with a warn keeps
+                    // the round-trip lossy-but-loud rather than silently
+                    // breaking the MuJoCo step. Future work: thread the
+                    // joint-name map through `MjcfWriter`.
+                    tracing::warn!(
+                        "MJCF writer: JointMimic equality dropped \
+                         (joint-name mapping not yet plumbed)"
+                    );
+                }
             }
         }
 

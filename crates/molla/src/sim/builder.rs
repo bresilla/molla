@@ -420,6 +420,13 @@ pub struct ModelBuilder {
     equality_relative_rotation: Vec<crate::math::Quat>,
     equality_enabled: Vec<u32>,
     equality_constraint_world: Vec<i32>,
+    // Joint-mimic side-tables (Stage 32) — per-equality driver/driven
+    // joint + 5-coeff polynomial. Length matches `equality_type`; the
+    // entries are only consulted when the constraint's type is
+    // `EqualityType::JointMimic`. Non-mimic slots store `(-1, -1, [0; 5])`.
+    equality_mimic_driver_joint: Vec<i32>,
+    equality_mimic_driven_joint: Vec<i32>,
+    equality_mimic_poly: Vec<Real>, // 5 entries per equality, flat
 
     // Mimic-constraint arrays.
     mimic_joint_a: Vec<i32>,
@@ -1930,6 +1937,13 @@ impl ModelBuilder {
             0
         };
         self.equality_constraint_world.push(world);
+        // Stage-32 joint-mimic side-tables stay length-aligned with the
+        // equality arrays. Non-mimic constraints get the sentinel
+        // `(-1, -1, [0; 5])` — the kernel branches on `equality_type`
+        // and never touches these for Connect / Weld.
+        self.equality_mimic_driver_joint.push(-1);
+        self.equality_mimic_driven_joint.push(-1);
+        self.equality_mimic_poly.extend_from_slice(&[0.0; 5]);
         id
     }
 
@@ -1948,6 +1962,71 @@ impl ModelBuilder {
         self.equality_type[id] = super::EqualityType::Weld as u32;
         self.equality_relative_rotation[id] = relative_rotation;
         id
+    }
+
+    /// Add a JOINT-mimic equality constraint (Newton's third equality
+    /// kind, Stage 32): force the driven joint's coordinate to be a
+    /// polynomial of the driver's coordinate,
+    ///
+    /// ```text
+    /// q_driven = poly[0] + poly[1]·q_dr + poly[2]·q_dr²
+    ///          + poly[3]·q_dr³ + poly[4]·q_dr⁴
+    /// ```
+    ///
+    /// Both joints must be 1-DoF (revolute or prismatic) — only the
+    /// joint's first coordinate is read / written. Use
+    /// `[0, 1, 0, 0, 0]` for an identity mimic (`q_driven = q_driver`),
+    /// `[0, -1, 0, 0, 0]` for an antisymmetric Robotiq-style coupling.
+    ///
+    /// The constraint is projected during XPBD's equality-projection
+    /// step (one scalar Lagrange-multiplier solve per pair) — see
+    /// [`crate::solvers::xpbd::equality_projection_pass`]. Joint limits
+    /// on the *driven* joint are NOT enforced by this constraint:
+    /// `q_driven` follows the polynomial verbatim, even past its own
+    /// limit. The driver's limits / friction / effort caps are still
+    /// applied by the joint subsystem.
+    ///
+    /// Returns the newly-allocated equality-constraint slot (same
+    /// numbering as `add_equality_connect` / `add_equality_weld`).
+    pub fn add_equality_joint_mimic(
+        &mut self,
+        driver_joint: JointId,
+        driven_joint: JointId,
+        polynomial: [Real; 5],
+    ) -> Result<usize> {
+        if driver_joint.index() >= self.joint_type.len()
+            || driven_joint.index() >= self.joint_type.len()
+        {
+            return Err(Error::Build(
+                "add_equality_joint_mimic: joint id out of range".to_string(),
+            ));
+        }
+        // Allocate the equality slot. Bodies / anchors / relrot are
+        // unused for JointMimic but the parallel arrays still need a
+        // length-matched entry so per-equality indexing stays valid.
+        let id = self.equality_type.len();
+        self.equality_type
+            .push(super::EqualityType::JointMimic as u32);
+        self.equality_body_a.push(-1);
+        self.equality_body_b.push(-1);
+        self.equality_anchor_a.push(Vec3::ZERO);
+        self.equality_anchor_b.push(Vec3::ZERO);
+        self.equality_relative_rotation
+            .push(crate::math::Quat::IDENTITY);
+        self.equality_enabled.push(1);
+        let world = self
+            .joint_world
+            .get(driver_joint.index())
+            .copied()
+            .unwrap_or(0);
+        self.equality_constraint_world.push(world);
+        // Mimic side-table.
+        self.equality_mimic_driver_joint
+            .push(driver_joint.0 as i32);
+        self.equality_mimic_driven_joint
+            .push(driven_joint.0 as i32);
+        self.equality_mimic_poly.extend_from_slice(&polynomial);
+        Ok(id)
     }
 
     /// Add a mimic constraint: forces `q_driven = c0 + c1 · q_driver`.
@@ -2284,6 +2363,15 @@ impl ModelBuilder {
                 self.equality_constraint_world,
                 s,
             ),
+            equality_mimic_driver_joint: Buffer::from_vec(
+                self.equality_mimic_driver_joint,
+                s,
+            ),
+            equality_mimic_driven_joint: Buffer::from_vec(
+                self.equality_mimic_driven_joint,
+                s,
+            ),
+            equality_mimic_poly: Buffer::from_vec(self.equality_mimic_poly, s),
 
             mimic_count: self.mimic_joint_a.len(),
             mimic_joint_a: Buffer::from_vec(self.mimic_joint_a, s),

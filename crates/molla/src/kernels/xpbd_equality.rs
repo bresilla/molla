@@ -26,9 +26,16 @@ const RECOVER_WORKGROUP_SIZE: u32 = 64;
 pub struct XpbdEqualityKernel {
     pipeline_project: wgpu::ComputePipeline,
     pipeline_recover: wgpu::ComputePipeline,
+    /// Joint-mimic projection (Stage 32). Dispatched after the body
+    /// equality pass so chained mimics see the post-equality joint
+    /// state. Uses an extended pipeline layout that adds bind group
+    /// 3 (joint_q / joint_qd / coord & dof offsets / mimic side-table).
+    pipeline_project_joint_mimic: wgpu::ComputePipeline,
     layout_body: wgpu::BindGroupLayout,
     layout_eq: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
+    /// Bind group 3 layout for the joint-mimic pipeline.
+    layout_joint_mimic: wgpu::BindGroupLayout,
 }
 
 impl XpbdEqualityKernel {
@@ -97,12 +104,50 @@ impl XpbdEqualityKernel {
             cache: None,
         });
 
+        // Joint-mimic group (Stage 32): joint_q (RW), joint_qd (RW),
+        // joint_coord_offset (R), joint_dof_offset (R), mimic
+        // driver / driven joint indices (R), and the 5-coeff
+        // polynomial buffer (R). 7 entries total.
+        let layout_joint_mimic = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::xpbd_equality joint_mimic"),
+            entries: &[
+                rw_storage_entry(0),
+                rw_storage_entry(1),
+                ro_storage_entry(2),
+                ro_storage_entry(3),
+                ro_storage_entry(4),
+                ro_storage_entry(5),
+                ro_storage_entry(6),
+            ],
+        });
+        let pipeline_layout_jm = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::xpbd_equality::project_joint_mimic layout"),
+            bind_group_layouts: &[
+                &layout_body,
+                &layout_eq,
+                &layout_uniforms,
+                &layout_joint_mimic,
+            ],
+            push_constant_ranges: &[],
+        });
+        let pipeline_project_joint_mimic =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::xpbd_equality::project_joint_mimic"),
+                layout: Some(&pipeline_layout_jm),
+                module: &shader,
+                entry_point: Some("project_joint_mimic"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         Self {
             pipeline_project,
             pipeline_recover,
+            pipeline_project_joint_mimic,
             layout_body,
             layout_eq,
             layout_uniforms,
+            layout_joint_mimic,
         }
     }
 
@@ -110,6 +155,11 @@ impl XpbdEqualityKernel {
     /// followed by a velocity-recovery pass that recomputes
     /// `state_out.body_qd` from `(state_out.body_q − state_in.body_q) / dt`.
     /// Replaces the host-side `apply_equality_post_gpu` shim.
+    /// **Stage 32:** also dispatches the JOINT-mimic projection pass
+    /// (`project_joint_mimic`) when the model carries any
+    /// `EqualityType::JointMimic` entries; the pass mutates
+    /// `state_out.joint_q` / `state_out.joint_qd` in place to enforce
+    /// `q_driven = poly(q_driver)` (driver-authoritative).
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -196,6 +246,12 @@ impl XpbdEqualityKernel {
             }],
         });
 
+        // Joint-mimic bind group (Stage 32). Built unconditionally
+        // when `equality_count > 0`; the WGSL kernel branches on
+        // `equality_type` so non-mimic models incur a single skip
+        // per slot and no work.
+        let bg_jm = self.try_build_joint_mimic_bg(device, model, state_out)?;
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::xpbd_equality encoder"),
         });
@@ -224,11 +280,79 @@ impl XpbdEqualityKernel {
             pass.set_bind_group(2, &bg_uniforms, &[]);
             pass.dispatch_workgroups(groups, 1, 1);
         }
+        // 3. Joint-mimic projection (Stage 32). Skipped if the
+        // joint state has no device-side mirror (model has no joints).
+        if let Some(bg_jm) = bg_jm.as_ref() {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::xpbd_equality::project_joint_mimic"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline_project_joint_mimic);
+            pass.set_bind_group(0, &bg_body, &[]);
+            pass.set_bind_group(1, &bg_eq, &[]);
+            pass.set_bind_group(2, &bg_uniforms, &[]);
+            pass.set_bind_group(3, bg_jm, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
         queue.submit(std::iter::once(encoder.finish()));
 
         state_out.body_q.mark_device_dirty();
         state_out.body_qd.mark_device_dirty();
+        if bg_jm.is_some() {
+            state_out.joint_q.mark_device_dirty();
+            state_out.joint_qd.mark_device_dirty();
+        }
         Ok(())
+    }
+
+    /// Build the joint-mimic bind group, or return `None` if any
+    /// required device buffer is missing (model has no joints, or the
+    /// joint state hasn't been uploaded). Returning `None` skips the
+    /// joint-mimic pipeline cleanly — non-jointed XPBD scenes (e.g.
+    /// box stacks) shouldn't pay any cost for Stage 32.
+    fn try_build_joint_mimic_bg(
+        &self,
+        device: &wgpu::Device,
+        model: &Model,
+        state_out: &State,
+    ) -> Result<Option<wgpu::BindGroup>> {
+        if model.joint_count == 0 {
+            return Ok(None);
+        }
+        let Some(joint_q_buf) = state_out.joint_q.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(joint_qd_buf) = state_out.joint_qd.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(coord_off_buf) = model.joint_coord_offset.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(dof_off_buf) = model.joint_dof_offset.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(driver_buf) = model.equality_mimic_driver_joint.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(driven_buf) = model.equality_mimic_driven_joint.device_buffer() else {
+            return Ok(None);
+        };
+        let Some(poly_buf) = model.equality_mimic_poly.device_buffer() else {
+            return Ok(None);
+        };
+        Ok(Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::xpbd_equality joint_mimic bg"),
+            layout: &self.layout_joint_mimic,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: joint_q_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: joint_qd_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: coord_off_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: dof_off_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: driver_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: driven_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: poly_buf.as_entire_binding() },
+            ],
+        })))
     }
 }
 

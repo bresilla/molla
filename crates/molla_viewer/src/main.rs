@@ -1825,6 +1825,16 @@ struct ArmExampleState {
     sine_frequency: f32,
     /// Wall-clock since the scene started, for the sine generator.
     elapsed: f32,
+    /// Stage-32 joint-mimic toggle: when on, the arm is rebuilt with
+    /// an additional auxiliary joint that mimics joint 0 via the
+    /// linear-identity polynomial `[0, 1, 0, 0, 0]`. The viewer
+    /// renders both joints' angles in the right rail so the user can
+    /// confirm the mimic stays tight under the same PD drive.
+    mimic_enabled: bool,
+    /// Set to `true` whenever `mimic_enabled` is toggled; consumed
+    /// by `apply_scene_switch` to know it must rebuild the arm
+    /// model. The toggle handler in `arm_pane` flips this.
+    pub mimic_dirty: bool,
 }
 
 impl Default for ArmExampleState {
@@ -1840,6 +1850,8 @@ impl Default for ArmExampleState {
             sine_frequency: 0.3,
             elapsed: 0.0,
             logged_init: false,
+            mimic_enabled: false,
+            mimic_dirty: false,
         }
     }
 }
@@ -2206,7 +2218,11 @@ impl Sim {
             Scene::Lidar => build_lidar_model(),
             Scene::Imu => build_imu_model(),
             Scene::Contact => build_contact_model(),
-            Scene::Arm => build_arm_model(),
+            // Stage 32: when the right-rail "Mimic joint" toggle is on
+            // (consumed via the global atomic flag set by `arm_pane`),
+            // append the mimic side-chain so the user can see the
+            // coupled joint move in lockstep with the shoulder.
+            Scene::Arm => build_arm_model_with(arm_mimic_flag()),
             Scene::Shapes => build_shapes_model(),
             Scene::GpuIkArm => build_gpu_ik_arm_model(),
             Scene::GpuNarrowPhase => build_gpu_narrow_phase_model(),
@@ -2994,7 +3010,35 @@ const ARM_MAX_EFFORT: f64 = 80.0;
 /// joint orientation has each link extending along the world
 /// `-Y` direction, so the rest pose is a hanging arm; gravity adds
 /// to the PD torque to make swings dramatic.
+///
+/// When `mimic` is true (Stage 32), a 7th body + revolute joint is
+/// appended in a *separate* articulation alongside the arm and
+/// coupled to joint 0 by a `JointMimic` equality with the linear-
+/// identity polynomial `[0, 1, 0, 0, 0]`. The mimic joint's link
+/// hangs visually offset along `+X` so the user can see both joints
+/// move in lockstep.
+#[allow(dead_code, reason = "kept as a back-compat shim — Stage 32 routed callers through `build_arm_model_with` to thread the mimic toggle")]
 fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
+    build_arm_model_with(false)
+}
+
+/// Stage-32 mimic-toggle accessor. The toggle lives in
+/// `ArmExampleState`; we mirror it into a static atomic so the
+/// `Sim::build_scene` (which has no SystemParam access) can read it
+/// when the scene is rebuilt. `arm_pane` is the only writer; the
+/// scene-switch handler reads + clears the dirty flag.
+static ARM_MIMIC_FLAG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn arm_mimic_flag() -> bool {
+    ARM_MIMIC_FLAG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_arm_mimic_flag(v: bool) {
+    ARM_MIMIC_FLAG.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn build_arm_model_with(mimic: bool) -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
     b.set_angular_damping(0.1);
 
@@ -3053,11 +3097,62 @@ fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
         // independent "directions" of motion, which reads better
         // than every joint sweeping the same plane.
         let axis = if i == 0 { MVec3::Z } else { MVec3::X };
-        b.add_joint_revolute(prev_body, body, x_p, x_c, axis)
+        let _jid = b
+            .add_joint_revolute(prev_body, body, x_p, x_c, axis)
             .expect("arm joint");
 
         prev_body = body;
         next_pos = next_pos - MVec3::new(0.0, ARM_LINK_LEN as f64, 0.0);
+    }
+
+    // Stage 32 — optional joint-mimic side chain. Append a single
+    // capsule body in a SECOND articulation that hangs offset along
+    // +X and is coupled to joint 0 (the shoulder) by a `JointMimic`
+    // equality with the linear-identity polynomial. Both joints
+    // remain dynamic at the Featherstone level; the XPBD equality
+    // pass enforces `q_mimic = q_shoulder` each substep when the
+    // XPBD path is active. With Featherstone-only solvers the
+    // existing `add_mimic_constraint` linear pre-step keeps it in
+    // sync (same effect, separate code path).
+    if mimic {
+        b.begin_articulation();
+        let offset = MVec3::new(1.5, ARM_BASE_HEIGHT as f64 - half_h, 0.0);
+        let mimic_body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: ARM_LINK_MASS,
+                    com: MVec3::ZERO,
+                    inertia,
+                })
+                .with_position(offset),
+        );
+        b.add_shape_capsule(mimic_body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("mimic link shape");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+        let flip = MQuat::from_axis_angle(MVec3::X, std::f64::consts::PI);
+        let x_p_m = mp::Transform::new(
+            MVec3::new(1.5, ARM_BASE_HEIGHT as f64, 0.0),
+            flip,
+        );
+        let x_c_m = mp::Transform::from_translation(MVec3::new(0.0, -half_h, 0.0));
+        let mimic_joint = b
+            .add_joint_revolute(mp::BodyId::NONE, mimic_body, x_p_m, x_c_m, MVec3::Z)
+            .expect("mimic joint");
+        // Driver = joint 0 (the shoulder). Identity linear mimic.
+        let shoulder = mp::JointId(0);
+        b.add_equality_joint_mimic(shoulder, mimic_joint, [0.0, 1.0, 0.0, 0.0, 0.0])
+            .expect("mimic equality");
+        // Also wire the legacy linear-mimic path so the Featherstone
+        // pre-step keeps the joint synced even when the XPBD
+        // equality pass isn't invoked (the arm scene runs on
+        // Featherstone GPU; the JointMimic projection lands when XPBD
+        // is in the loop). Both paths agree on the linear-identity
+        // case so the duplicate is harmless.
+        b.add_mimic_constraint(mimic_joint, shoulder, 0.0, 1.0)
+            .expect("mimic legacy");
     }
 
     (b.build().expect("arm model"), visuals)
@@ -5131,6 +5226,9 @@ fn apply_scene_switch(
     diff_arm6.playback_t = 0.0;
     diff_arm6.rerun = true;
     stats.arm_logged = false;
+    // Stage 32 — clear the mimic-toggle dirty bit so the rebuild
+    // notice in `arm_pane` disappears once the user has acted on it.
+    arm.mimic_dirty = false;
     // GPU IK: re-seed the target on next entry from the new arm's rest EE.
     *gpu_ik = GpuIkArmState::default();
     // Stage 18 actuator pipeline: drop the GPU pipeline so the next
@@ -9907,6 +10005,37 @@ fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
          Watch the arm settle on slider changes; at high gains it's stiff, \
          at low gains it overshoots.",
     );
+
+    // Stage 32 — joint-mimic toggle. Adds a 7th capsule body in a
+    // separate articulation, coupled to joint 0 (the shoulder) by a
+    // `JointMimic` equality with the linear-identity polynomial.
+    // Toggling forces a scene rebuild so the mimic body / joint /
+    // equality enter/exit the model cleanly.
+    ui.separator();
+    let prev = state.mimic_enabled;
+    if ui
+        .checkbox(&mut state.mimic_enabled, "Mimic joint (Stage 32)")
+        .changed()
+        && state.mimic_enabled != prev
+    {
+        state.mimic_dirty = true;
+        set_arm_mimic_flag(state.mimic_enabled);
+    }
+    if state.mimic_enabled {
+        ui.small(
+            "Linear-identity polynomial [0, 1, 0, 0, 0]. The 7th body \
+             on +X tracks the shoulder via JointMimic equality (XPBD \
+             projection) + Featherstone pre-step (legacy linear \
+             mimic). Watch the offset capsule mirror the shoulder's \
+             angle as the sine drive sweeps.",
+        );
+    }
+    if state.mimic_dirty {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Toggle changed — re-press 8 to rebuild the arm scene.",
+        );
+    }
 }
 
 /// Body for the right-rail pane in the Stage-18 actuator-pipeline scene.

@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -110,6 +110,12 @@ test-actuator-pipeline-gpu:
 
 test-equality-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_equality_gpu -- --ignored --test-threads=1
+
+# Stage 32 — joint-mimic equality constraint (`EqualityType::JointMimic`).
+# CPU portion runs in the default `cargo test` lane; this lane runs the
+# GPU parity tests against the WGSL `project_joint_mimic` kernel.
+test-equality-joint-mimic-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test equality_joint_mimic -- --ignored --test-threads=1
 
 test-particles-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_particles_gpu -- --ignored --test-threads=1
