@@ -1168,6 +1168,17 @@ struct MeshToolsExampleState {
     mc_tris: usize,
     hull_verts: usize,
     sdf_resolution: u32,
+    /// Stage-24e: when true, the right panel renders the marching-cubes
+    /// surface from a *sparse* SDF instead of the dense one. Both are
+    /// baked at scene-entry; the toggle picks which one the surface +
+    /// storage-cost readout reflects.
+    use_sparse_sdf: bool,
+    /// Stage-24e telemetry (filled in at scene-entry):
+    dense_sdf_bytes: usize,
+    sparse_sdf_bytes: usize,
+    sparse_sdf_leaves: usize,
+    sparse_sdf_active_voxels: u64,
+    sparse_sdf_band: u32,
 }
 
 impl Default for MeshToolsExampleState {
@@ -1182,7 +1193,49 @@ impl Default for MeshToolsExampleState {
             mc_tris: 0,
             hull_verts: 0,
             sdf_resolution: 32,
+            use_sparse_sdf: false,
+            dense_sdf_bytes: 0,
+            sparse_sdf_bytes: 0,
+            sparse_sdf_leaves: 0,
+            sparse_sdf_active_voxels: 0,
+            sparse_sdf_band: 4,
         }
+    }
+}
+
+impl MeshToolsExampleState {
+    /// Width of the sparse-SDF narrow band, in voxels. Centralised so
+    /// the bake function and the pane readout agree.
+    fn sdf_sparse_band(&self) -> u32 {
+        self.sparse_sdf_band
+    }
+}
+
+/// Stage-24e helper — sample the sparse SDF back into a dense grid so
+/// the existing `marching_cubes` consumer (which only takes
+/// `SdfGrid`) can re-extract the surface. Used only by the viewer's
+/// "use sparse SDF" toggle. Production MC over sparse SDFs should
+/// iterate active leaves directly (deferred to Stage 24e.1).
+fn sparse_sdf_to_dense_for_mc(
+    sparse: &molla::geometry::SparseSdf,
+    template: &molla::geometry::SdfGrid,
+) -> molla::geometry::SdfGrid {
+    let mut data = Vec::with_capacity(template.data.len());
+    for z in 0..template.nz {
+        for y in 0..template.ny {
+            for x in 0..template.nx {
+                let v = sparse.grid.lookup(x as i32, y as i32, z as i32) as f64;
+                data.push(v);
+            }
+        }
+    }
+    molla::geometry::SdfGrid {
+        nx: template.nx,
+        ny: template.ny,
+        nz: template.nz,
+        origin: template.origin,
+        cell_size: template.cell_size,
+        data,
     }
 }
 
@@ -3964,7 +4017,9 @@ fn spawn_mesh_tools_entities(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     mesh_state: &mut MeshToolsExampleState,
 ) {
-    use molla::geometry::{bake_mesh_to_sdf, convex_hull, decimate, marching_cubes};
+    use molla::geometry::{
+        bake_mesh_to_sdf, convex_hull, decimate, marching_cubes, sparse_sdf_from_dense,
+    };
 
     // Build the source mesh — a mildly noise-displaced icosphere
     // (3 subdivisions = 1280 tris). The noise breaks the icosphere's
@@ -3988,7 +4043,30 @@ fn spawn_mesh_tools_entities(
 
     let dec = decimate(&source, source.indices.len() / 4); // ~25 % LOD
     let sdf = bake_mesh_to_sdf(&source, mesh_state.sdf_resolution as usize, 0.15);
-    let mc = marching_cubes(&sdf, 0.0);
+
+    // Stage-24e: bake a sparse SDF in parallel — same dense bake →
+    // narrow-band filter. Cheap (re-uses the dense data we already
+    // have) and lets the user toggle between dense / sparse storage
+    // in the right-rail pane to see the byte delta on a real asset.
+    let sparse = sparse_sdf_from_dense(&sdf, mesh_state.sdf_sparse_band());
+    mesh_state.dense_sdf_bytes = sdf.data.len() * std::mem::size_of::<f64>();
+    mesh_state.sparse_sdf_bytes = sparse.grid.storage_bytes();
+    mesh_state.sparse_sdf_leaves = sparse.grid.leaf_count();
+    mesh_state.sparse_sdf_active_voxels = sparse.grid.active_voxel_count();
+
+    // The MC surface re-extracted from the sparse SDF needs a
+    // dense buffer (marching_cubes only consumes `SdfGrid`); for
+    // the toggle's "sparse" case we sample the sparse SDF back into
+    // a dense scratch grid so the MC consumer is agnostic. This is a
+    // viewer-only convenience — production MC over sparse SDFs would
+    // iterate active leaves directly (deferred to Stage 24e.1+).
+    let mc_source: molla::geometry::SdfGrid = if mesh_state.use_sparse_sdf {
+        sparse_sdf_to_dense_for_mc(&sparse, &sdf)
+    } else {
+        sdf.clone()
+    };
+    let mc = marching_cubes(&mc_source, 0.0);
+
     let hull = convex_hull(&source.vertices);
 
     mesh_state.original_tris = source.indices.len();
@@ -7424,10 +7502,39 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     ui.checkbox(&mut state.show_hull, "Hull overlay (yellow wireframe on original)");
     ui.separator();
 
+    // Stage-24e — sparse SDF storage delta. The toggle reflects what
+    // the MC surface currently shows; flipping it requires a scene
+    // rebuild (press M to re-enter), which the small print below
+    // calls out so the user isn't surprised.
+    ui.label("Stage 24e: sparse vs dense SDF");
+    ui.checkbox(
+        &mut state.use_sparse_sdf,
+        "Use sparse SDF (re-extract MC) — re-enter scene to apply",
+    );
+    let dense_kib = state.dense_sdf_bytes as f32 / 1024.0;
+    let sparse_kib = state.sparse_sdf_bytes as f32 / 1024.0;
+    let ratio = if state.dense_sdf_bytes > 0 {
+        sparse_kib / dense_kib
+    } else {
+        0.0
+    };
+    readout(ui, "Dense SDF", &format!("{dense_kib:.1} KiB"));
+    readout(ui, "Sparse SDF", &format!("{sparse_kib:.1} KiB"));
+    readout(ui, "Sparse / dense", &format!("{:.1} %", ratio * 100.0));
+    readout(ui, "Active leaves", &format!("{}", state.sparse_sdf_leaves));
+    readout(
+        ui,
+        "Active voxels",
+        &format!("{}", state.sparse_sdf_active_voxels),
+    );
+    readout(ui, "Narrow band", &format!("{} voxels", state.sparse_sdf_band));
+    ui.separator();
+
     ui.label("");
     ui.label("Pipeline runs once on scene entry:");
     ui.label("• decimate(): QEM edge collapses → 25 % LOD");
     ui.label("• bake_mesh_to_sdf(): voxelise + sign by parity");
+    ui.label("• sparse_sdf_from_dense(): drop voxels outside band");
     ui.label("• marching_cubes(): re-extract surface");
     ui.label("• convex_hull(): QuickHull from vertex cloud");
     ui.label("");

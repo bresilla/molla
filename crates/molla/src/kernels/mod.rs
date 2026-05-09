@@ -53,6 +53,8 @@ mod robust_loss;
 #[cfg(feature = "gpu")]
 mod rnea;
 #[cfg(feature = "gpu")]
+mod sparse_grid;
+#[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
 mod xpbd;
@@ -120,6 +122,8 @@ pub use raycast::RaycastKernel;
 pub use robust_loss::{LossPair, RobustLossKernel};
 #[cfg(feature = "gpu")]
 pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
+#[cfg(feature = "gpu")]
+pub use sparse_grid::SparseGridKernel;
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]

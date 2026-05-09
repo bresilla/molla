@@ -20,6 +20,7 @@ mod pipeline;
 pub mod sdf_bake;
 mod shape_world;
 mod spatial_hash;
+pub mod sparse_grid;
 mod support;
 
 pub use contact_extras::{
@@ -46,6 +47,13 @@ pub use hull::{convex_hull, ConvexHullMesh};
 pub use marching_cubes::marching_cubes;
 pub use sdf_bake::{bake_mesh_to_sdf, closest_point_on_triangle, SdfGrid};
 pub use spatial_hash::SpatialHashGrid;
+
+// ── Stage 24e: NanoVDB-equivalent sparse-volume storage ────────────
+pub use sparse_grid::{
+    bake_mesh_to_sparse_sdf, sparse_sdf_from_dense, InternalNode, Leaf, SparseGrid,
+    SparseGridGpu, SparseSdf, INTERNAL_DIM, INTERNAL_MASK_U32S, INTERNAL_SHIFT, LEAF_DIM,
+    LEAF_MASK_U32S, LEAF_SHIFT,
+};
 
 // ── Stage 22.1: hydroelastic contact ───────────────────────────────
 pub use hydroelastic::{

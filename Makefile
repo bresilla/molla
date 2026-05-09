@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -118,6 +118,13 @@ test-hydroelastic-gpu:
 # Stage 22.1 for the CI gap rationale.
 test-mujoco-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features mujoco --test mujoco_solver -- --ignored
+
+# Stage 24e — sparse-grid (NanoVDB-equivalent) tests. CPU portion
+# runs in the default lane via `cargo test -p molla --test sparse_grid`;
+# the GPU lookup-parity + latency tests are `--ignored` because they
+# need a real wgpu adapter.
+test-sparse-grid-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test sparse_grid -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
