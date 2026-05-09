@@ -7,6 +7,8 @@ mod actuator_pd;
 #[cfg(feature = "gpu")]
 mod actuator_pid;
 #[cfg(feature = "gpu")]
+mod actuator_neural_lstm;
+#[cfg(feature = "gpu")]
 mod actuator_neural_mlp;
 #[cfg(feature = "gpu")]
 mod actuator_pipeline_pd;
@@ -85,6 +87,8 @@ pub use actuator_delay::ActuatorDelayKernel;
 pub use actuator_pd::ActuatorPdKernel;
 #[cfg(feature = "gpu")]
 pub use actuator_pid::ActuatorPidKernel;
+#[cfg(feature = "gpu")]
+pub use actuator_neural_lstm::ActuatorNeuralLstmKernel;
 #[cfg(feature = "gpu")]
 pub use actuator_neural_mlp::ActuatorNeuralMlpKernel;
 #[cfg(feature = "gpu")]
