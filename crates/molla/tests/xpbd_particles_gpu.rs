@@ -94,7 +94,15 @@ fn cpu_gpu_cloth_match() {
 
     // Per-particle position parity. f32 GPU vs f64 CPU + Gauss-Seidel
     // ordering means we expect roughly mm-scale deviation per particle
-    // after 60 steps. Tighten if needed.
+    // after 60 steps. The intent is "tight enough that a no-op kernel
+    // can't pass"; 1 mm per particle is the right bar.
+    //
+    // TIGHTENING TO 1e-3 SHOWS GENUINE DIVERGENCE — the f32-vs-f64
+    // delta and Jacobi-vs-Gauss-Seidel iteration order accumulate
+    // beyond the mm budget after 60 substeps; the loose 5 cm bound is
+    // documented as a known parity gap until either the GPU runs in
+    // f64 or the CPU oracle switches to Jacobi sweeps. Do not relax
+    // further without re-examining the parity story.
     assert_eq!(cpu_positions.len(), gpu_positions.len());
     let mut max_err = 0.0_f64;
     for (i, (c, g)) in cpu_positions.iter().zip(gpu_positions.iter()).enumerate() {
