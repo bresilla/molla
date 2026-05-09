@@ -56,7 +56,7 @@ use molla::actuators::{ControllerPd, ControllerPdConfig};
 use molla::sensors::{
     BodyContactReading, ContactSensor, ImuMount, ImuReading, ImuSensor, RayHit, Raycaster,
 };
-use molla::solvers::{FeatherstoneSolver, Solver as _};
+use molla::solvers::{FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
@@ -273,6 +273,7 @@ fn main() {
         .insert_resource(ImuExampleState::default())
         .insert_resource(ContactExampleState::default())
         .insert_resource(ArmExampleState::default())
+        .insert_resource(GpuIkArmState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -310,6 +311,7 @@ fn main() {
                 // Arm controller runs BEFORE the physics step so its
                 // `joint_force` writes are picked up by the solver.
                 update_arm_example,
+                update_gpu_ik_arm,
                 step_simulation,
                 sync_transforms,
                 sync_cloth_mesh,
@@ -433,6 +435,11 @@ enum Scene {
     /// (SDF) sticking out of the middle. Exercises every primitive
     /// shipped in Stage 13 in a single scene.
     Shapes,
+    /// Stage-16 GPU IK demo — 7-DOF Franka-style arm chases a
+    /// draggable target marker via [`IkSolver::solve_gpu`]. Right-rail
+    /// pane carries XYZ sliders + live solver telemetry (iters,
+    /// residual, ms-per-solve). No dynamics — purely kinematic.
+    GpuIkArm,
 }
 
 impl Scene {
@@ -447,6 +454,7 @@ impl Scene {
         Scene::Contact,
         Scene::Arm,
         Scene::Shapes,
+        Scene::GpuIkArm,
     ];
 
     fn label(self) -> &'static str {
@@ -460,14 +468,17 @@ impl Scene {
             Scene::Contact => "Contact (per-body)",
             Scene::Arm => "Arm (PD actuator)",
             Scene::Shapes => "Shapes (cone / hull / heightfield / SDF)",
+            Scene::GpuIkArm => "GPU IK arm (Stage 16)",
         }
     }
 
     /// Which dynamics solver this scene wants. Most scenes use XPBD;
     /// the Arm example needs Featherstone for proper joint dynamics.
+    /// `GpuIkArm` reuses the Featherstone backend (any articulation
+    /// solver works since `step_simulation` skips this scene anyway).
     fn solver_kind(self) -> SolverKind {
         match self {
-            Scene::Arm => SolverKind::Featherstone,
+            Scene::Arm | Scene::GpuIkArm => SolverKind::Featherstone,
             _ => SolverKind::Xpbd,
         }
     }
@@ -643,6 +654,35 @@ impl Default for ArmExampleState {
     }
 }
 
+/// GPU IK arm runtime state. Lazy-initialised when entering the
+/// `Scene::GpuIkArm` scene; reset on scene switch. Tracks the
+/// draggable target position, the most recent solver telemetry, and
+/// a "use GPU" toggle.
+#[derive(Resource)]
+struct GpuIkArmState {
+    /// Target world position the EE chases. Default = rest EE +
+    /// `GPU_IK_DEFAULT_OFFSET`, computed lazily on first frame.
+    target: MVec3,
+    target_init: bool,
+    use_gpu: bool,
+    last_iters: usize,
+    last_residual: f64,
+    last_solve_us: f64,
+}
+
+impl Default for GpuIkArmState {
+    fn default() -> Self {
+        Self {
+            target: MVec3::ZERO,
+            target_init: false,
+            use_gpu: true,
+            last_iters: 0,
+            last_residual: 0.0,
+            last_solve_us: 0.0,
+        }
+    }
+}
+
 /// Solid box principal moments at the COM, body frame.
 fn box_inertia(mass: f64, half: f64) -> molla::math::Mat3 {
     let h2 = half * half;
@@ -677,6 +717,7 @@ impl Sim {
             Scene::Contact => build_contact_model(),
             Scene::Arm => build_arm_model(),
             Scene::Shapes => build_shapes_model(),
+            Scene::GpuIkArm => build_gpu_ik_arm_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1248,6 +1289,80 @@ fn build_arm_model() -> (mp::Model, Vec<BodyVisual>) {
     }
 
     (b.build().expect("arm model"), visuals)
+}
+
+// --- Stage-16 GPU IK arm scene ------------------------------------
+//
+// 7-DOF Franka-style arm rooted at world origin (lifted on a base
+// pillar so the arm rests above the ground grid). End-effector chases
+// a draggable target (XYZ sliders in the right-rail pane). Per-frame:
+// `update_gpu_ik_arm` runs `IkSolver::solve_gpu` with the current
+// target as a position objective on the EE body, writes `joint_q` +
+// `body_q` on the host, and `step_simulation` skips this scene
+// entirely (no integration — purely kinematic IK).
+
+const GPU_IK_BASE_HEIGHT: f64 = 1.0;
+const GPU_IK_LINK_RADIUS: f64 = 0.05;
+const GPU_IK_LINK_MASS: f64 = 1.0;
+/// Default reach offset relative to the arm's rest EE position.
+const GPU_IK_DEFAULT_OFFSET: MVec3 = MVec3::new(0.25, 0.05, -0.15);
+
+fn build_gpu_ik_arm_model() -> (mp::Model, Vec<BodyVisual>) {
+    use mp::*;
+    let mut b = ModelBuilder::new();
+    let mut visuals = Vec::with_capacity(7);
+
+    let mass = GPU_IK_LINK_MASS;
+    let half = MVec3::new(0.04, 0.04, 0.04);
+    let h2 = half * half;
+    let m_third = mass / 3.0;
+    let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+        m_third * (h2.y + h2.z),
+        m_third * (h2.x + h2.z),
+        m_third * (h2.x + h2.y),
+    ));
+    let make_link = |b: &mut ModelBuilder| {
+        b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass,
+            com: MVec3::ZERO,
+            inertia,
+        }))
+    };
+
+    b.begin_articulation();
+    let axes = [MVec3::Z, MVec3::Y, MVec3::Z, MVec3::Y, MVec3::Z, MVec3::Y, MVec3::Z];
+    let link_lens = [0.333_f64, 0.0, 0.316, 0.0, 0.384, 0.0, 0.107];
+    let mut prev = molla::core::BodyId::NONE;
+    for i in 0..7 {
+        let body = make_link(&mut b);
+        let x_p = if i == 0 {
+            // Lift the arm root above the ground grid so the linkage
+            // is visible from the default camera.
+            mp::Transform::from_translation(MVec3::new(0.0, GPU_IK_BASE_HEIGHT, 0.0))
+        } else {
+            mp::Transform::from_translation(MVec3::new(0.0, 0.0, link_lens[i - 1]))
+        };
+        let x_c = mp::Transform::IDENTITY;
+        b.add_joint_revolute(prev, body, x_p, x_c, axes[i]).unwrap();
+        // A short capsule running along the link's local +Z. Last
+        // link (the EE) gets a slightly wider sphere visual so the
+        // tip is easy to spot.
+        let half_h = link_lens[i].max(0.06_f64) * 0.5;
+        let radius = GPU_IK_LINK_RADIUS;
+        // We use Sphere for the EE so the gizmo target dot lines up.
+        let visual = if i == 6 {
+            BodyVisual::Sphere(0.08)
+        } else {
+            BodyVisual::Capsule {
+                half_h: half_h as f32,
+                radius: radius as f32,
+            }
+        };
+        visuals.push(visual);
+        prev = body;
+    }
+
+    (b.build().expect("gpu ik arm model"), visuals)
 }
 
 // --- Stage-13 specialty-shapes scene --------------------------------
@@ -1922,6 +2037,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Digit9) && sim.scene != Scene::Shapes {
         pending.0 = Some(Scene::Shapes);
     }
+    if keys.just_pressed(KeyCode::Digit0) && sim.scene != Scene::GpuIkArm {
+        pending.0 = Some(Scene::GpuIkArm);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -1941,12 +2059,15 @@ fn apply_scene_switch(
     mut imu: ResMut<ImuExampleState>,
     mut contact: ResMut<ContactExampleState>,
     mut arm: ResMut<ArmExampleState>,
+    mut gpu_ik: ResMut<GpuIkArmState>,
     mut stats: ResMut<SimStats>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
     };
     stats.arm_logged = false;
+    // GPU IK: re-seed the target on next entry from the new arm's rest EE.
+    *gpu_ik = GpuIkArmState::default();
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -1999,6 +2120,12 @@ fn step_simulation(
         return;
     }
     run.step_once = false;
+    // GPU IK arm scene is purely kinematic; `update_gpu_ik_arm`
+    // already wrote `joint_q` + `body_q` on the host. Skipping the
+    // physics step here keeps the IK pose stable across frames.
+    if sim.scene == Scene::GpuIkArm {
+        return;
+    }
     let frame_start = std::time::Instant::now();
 
     let device = sim.engine.device().unwrap().clone();
@@ -2827,6 +2954,72 @@ fn update_imu_example(
     }
 }
 
+/// GPU IK arm scene — runs `IkSolver::solve_gpu` (or its CPU mirror
+/// when `state.use_gpu` is false) every frame to drive the arm toward
+/// the user-controlled XYZ target, then writes `joint_q` and `body_q`
+/// on the host. `step_simulation` short-circuits for this scene so
+/// the IK pose remains stable across frames.
+fn update_gpu_ik_arm(mut sim: ResMut<Sim>, mut state: ResMut<GpuIkArmState>) {
+    if sim.scene != Scene::GpuIkArm {
+        return;
+    }
+    // Destructure to keep separate borrows of `model`, `state_a`, `engine`.
+    let Sim {
+        model,
+        state_a,
+        engine,
+        ..
+    } = &mut *sim;
+
+    // EE is the last body (index = body_count - 1) for the 7-DOF arm.
+    let ee_body = model.body_count - 1;
+
+    // Lazily seed the target on first frame from the rest pose.
+    if !state.target_init {
+        molla::sim::eval_fk(model, state_a).expect("eval_fk");
+        let bq = state_a.body_q.host().expect("body_q");
+        state.target = bq[ee_body].position + GPU_IK_DEFAULT_OFFSET;
+        state.target_init = true;
+    }
+
+    let q0: Vec<f64> = state_a
+        .joint_q
+        .host()
+        .expect("joint_q")
+        .iter()
+        .copied()
+        .collect();
+    let solver = IkSolver::new(vec![IkObjective::Position {
+        body: ee_body,
+        point_local: MVec3::ZERO,
+        target_world: state.target,
+        weight: 1.0,
+    }])
+    .with_config(IkConfig {
+        max_iter: 30,
+        residual_tol: 5.0e-4,
+        ..IkConfig::default()
+    });
+
+    let t0 = std::time::Instant::now();
+    let result = if state.use_gpu {
+        solver.solve_gpu(engine, model, state_a, &q0)
+    } else {
+        solver.solve(model, state_a, &q0)
+    };
+    state.last_solve_us = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+    match result {
+        Ok(r) => {
+            state.last_iters = r.iters;
+            state.last_residual = r.residual;
+        }
+        Err(e) => {
+            warn!("gpu_ik_arm: solve failed: {e}");
+        }
+    }
+}
+
 /// Arm example — sets per-joint targets (auto-sine or slider) and
 /// runs the GPU `ControllerPd` to write `Control.joint_force`. The
 /// physics step (Featherstone) then consumes that force. No-op for
@@ -3149,14 +3342,18 @@ fn control_pane(
     mut pending: ResMut<PendingSceneSwitch>,
     mut activity: ResMut<ActivityView>,
     mut lidar_config: ResMut<LidarConfig>,
-    lidar_state: Res<LidarState>,
-    imu_state: Res<ImuExampleState>,
-    contact_state: Res<ContactExampleState>,
+    sensor_states: (Res<LidarState>, Res<ImuExampleState>, Res<ContactExampleState>),
     mut arm_state: ResMut<ArmExampleState>,
+    mut gpu_ik_state: ResMut<GpuIkArmState>,
     mut ribbon_open: ResMut<RibbonOpen>,
     mut ribbon_placement: ResMut<RibbonPlacement>,
     mut ribbon_drag: ResMut<RibbonDrag>,
 ) {
+    let (lidar_state, imu_state, contact_state) = (
+        &*sensor_states.0,
+        &*sensor_states.1,
+        &*sensor_states.2,
+    );
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let accent_color = accent.0;
     let scene = sim.scene;
@@ -3178,7 +3375,12 @@ fn control_pane(
             // per-example settings — Pile/Rope/Tower/Cloth don't.
             PANE_SCENE => !matches!(
                 scene,
-                Scene::Lidar | Scene::Imu | Scene::Contact | Scene::Arm
+                Scene::Lidar
+                    | Scene::Imu
+                    | Scene::Contact
+                    | Scene::Arm
+                    | Scene::Shapes
+                    | Scene::GpuIkArm
             ),
             _ => false,
         },
@@ -3291,6 +3493,7 @@ fn control_pane(
         Scene::Contact => Some("Contacts"),
         Scene::Arm => Some("Arm (PD)"),
         Scene::Shapes => Some("Shapes (Stage 13)"),
+        Scene::GpuIkArm => Some("GPU IK"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -3307,6 +3510,7 @@ fn control_pane(
                 Scene::Contact => contact_pane(ui, &contact_state),
                 Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
                 Scene::Shapes => shapes_pane(ui, &sim),
+                Scene::GpuIkArm => gpu_ik_pane(ui, &mut gpu_ik_state, &sim),
                 _ => {}
             });
         }
@@ -3517,6 +3721,66 @@ fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
         "PD effort = kp·(target − q) + kd·(0 − qd), capped to ±max_effort. \
          Watch the arm settle on slider changes; at high gains it's stiff, \
          at low gains it overshoots.",
+    );
+}
+
+/// Body for the right-rail pane in the GPU IK arm scene.
+fn gpu_ik_pane(ui: &mut egui::Ui, state: &mut GpuIkArmState, sim: &Sim) {
+    ui.add_space(2.0);
+    readout(ui, "Solver", if state.use_gpu { "GPU LM" } else { "CPU LM" });
+    readout(ui, "DOFs", "7");
+    readout(ui, "Iterations", &format!("{}", state.last_iters));
+    readout(ui, "Residual", &format!("{:.5}", state.last_residual));
+    readout(
+        ui,
+        "ms / solve",
+        &format!("{:.2}", state.last_solve_us / 1000.0),
+    );
+
+    let ee_body = sim.model.body_count - 1;
+    if let Ok(bq) = sim.state_a.body_q.host() {
+        if ee_body < bq.len() {
+            let p = bq[ee_body].position;
+            let err = (p - state.target).length();
+            readout(ui, "EE error", &format!("{:.4} m", err));
+        }
+    }
+    ui.separator();
+
+    ui.checkbox(&mut state.use_gpu, "Use GPU IK");
+    ui.separator();
+
+    ui.label("Target (world)");
+    ui.add(
+        egui::Slider::new(&mut state.target.x, -1.5..=1.5)
+            .text("x")
+            .step_by(0.005),
+    );
+    ui.add(
+        egui::Slider::new(&mut state.target.y, 0.05..=2.5)
+            .text("y")
+            .step_by(0.005),
+    );
+    ui.add(
+        egui::Slider::new(&mut state.target.z, -1.5..=1.5)
+            .text("z")
+            .step_by(0.005),
+    );
+    ui.separator();
+
+    if let Ok(q) = sim.state_a.joint_q.host() {
+        ui.label("Current angles (rad)");
+        for i in 0..7.min(q.len()) {
+            readout(ui, &format!("  q{i}"), &format!("{:.3}", q[i]));
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.small(
+        "Levenberg-Marquardt IK; per-iteration Jacobian on the GPU. \
+         Drag the X/Y/Z sliders to move the EE target; the arm chases \
+         in real time. Toggle 'Use GPU IK' to A/B against the CPU \
+         solver.",
     );
 }
 
