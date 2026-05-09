@@ -522,6 +522,71 @@ pub(crate) fn cpu_step(
     let mut lambda = vec![0.0_f64; n];
     let hard = matches!(mode, VbdMode::Hard);
 
+    // Stage 20.4 — tet-vs-tet collision support (CPU oracle).
+    // Strategy: maintain a per-tet AABB that's refreshed once per
+    // outer-iteration (the per-vertex Newton block reads it; we don't
+    // refit between iterations to keep cost bounded). For each
+    // particle, walk every *other* tet mesh's AABB list looking for
+    // overlaps; a successful overlap triggers a per-vertex point-in-tet
+    // penalty using `tet_closest_face`.
+    //
+    // This collapses to a no-op when only one tet mesh is present (the
+    // canonical "single jelly cube" demo). For two cubes, the two-mesh
+    // overlap pair drives the per-vertex × per-other-tet quadratic loop;
+    // the top-level mesh-AABB cull skips the inner loop entirely when
+    // the cubes are spatially apart.
+    use crate::geometry::tet_bvh::{recompute_tet_aabbs, tet_closest_face, tet_meshes_aabb_overlap, TetAabb};
+    let tet_mesh_offsets = model.tet_mesh_offsets.host()?;
+    let n_tet_meshes = model.tet_mesh_count;
+    // Per-particle: which tet mesh (if any) it belongs to. -1 = no
+    // mesh (cloth particle / cable particle / unowned). When a
+    // particle is referenced by tets in multiple meshes (the user's
+    // model glued meshes together), we record the *first* mesh —
+    // tet-vs-tet contact then skips that particle as a degenerate case
+    // (it's already shared, so applying a separation force would tear
+    // the model apart). For the demo workload (two independent jelly
+    // cubes) every particle belongs to exactly one mesh.
+    let particle_mesh_id: Vec<i32> = if model.tet_count > 0 && n_tet_meshes >= 2 {
+        let mut owner = vec![-1_i32; n];
+        for m in 0..n_tet_meshes {
+            let lo_t = tet_mesh_offsets[m] as usize;
+            let hi_t = tet_mesh_offsets[m + 1] as usize;
+            for t in lo_t..hi_t {
+                for k in 0..4 {
+                    let v = tet_indices[t * 4 + k] as usize;
+                    if owner[v] == -1 {
+                        owner[v] = m as i32;
+                    } else if owner[v] != m as i32 {
+                        // Shared between meshes — flag with -2 so the
+                        // contact loop below skips the particle.
+                        owner[v] = -2;
+                    }
+                }
+            }
+        }
+        owner
+    } else {
+        Vec::new()
+    };
+    let tet_aabb_margin = 0.01_f64; // 1 cm — comfortable for 5–30 cm cubes.
+    let mut tet_aabbs: Vec<TetAabb> = if model.tet_count > 0 && n_tet_meshes >= 2 {
+        let mut v = vec![
+            TetAabb::from_corners(0, Vec3::ZERO, Vec3::ZERO);
+            model.tet_count
+        ];
+        recompute_tet_aabbs(tet_indices, &x, tet_aabb_margin, &mut v);
+        v
+    } else {
+        Vec::new()
+    };
+    // Pair table: for each tet mesh, the list of *other* tet meshes
+    // whose root AABB overlaps. Filled below.
+    let mut overlapping_pairs: Vec<Vec<u32>> = vec![Vec::new(); n_tet_meshes];
+    // Stage 20.4 — tet-vs-tet contact stiffness. Reuse the rigid-shape
+    // contact stiffness as the default; the user can scale this from
+    // the viewer pane independently in a future stage.
+    let tet_contact_stiffness = contact_stiffness * 0.5;
+
     // Pre-compute world-frame shape transforms once per substep.
     let body_q = state_body_transforms(model, n)?;
     let mut shape_xforms: Vec<Transform> = Vec::with_capacity(model.shape_count);
@@ -546,6 +611,39 @@ pub(crate) fn cpu_step(
 
     // Outer iterations × colours × per-vertex block solve.
     for _it in 0..iterations.max(1) {
+        // Stage 20.4 — refresh per-tet AABBs + mesh-pair overlap table
+        // once per outer iteration. Skipping intermediate iterations
+        // is fine: the per-vertex Newton step is small (sub-mm), so
+        // the AABBs change negligibly within an iteration. Doing this
+        // once per outer iteration (rather than once per substep)
+        // gives the contact path a fresh AABB after spring + tet
+        // forces have already pulled vertices toward each other.
+        if !tet_aabbs.is_empty() {
+            recompute_tet_aabbs(tet_indices, &x, tet_aabb_margin, &mut tet_aabbs);
+            for pairs in overlapping_pairs.iter_mut() {
+                pairs.clear();
+            }
+            for m_a in 0..n_tet_meshes {
+                let lo_a = tet_mesh_offsets[m_a] as usize;
+                let hi_a = tet_mesh_offsets[m_a + 1] as usize;
+                if hi_a == lo_a {
+                    continue;
+                }
+                let aabbs_a = &tet_aabbs[lo_a..hi_a];
+                for m_b in (m_a + 1)..n_tet_meshes {
+                    let lo_b = tet_mesh_offsets[m_b] as usize;
+                    let hi_b = tet_mesh_offsets[m_b + 1] as usize;
+                    if hi_b == lo_b {
+                        continue;
+                    }
+                    let aabbs_b = &tet_aabbs[lo_b..hi_b];
+                    if tet_meshes_aabb_overlap(aabbs_a, aabbs_b) {
+                        overlapping_pairs[m_a].push(m_b as u32);
+                        overlapping_pairs[m_b].push(m_a as u32);
+                    }
+                }
+            }
+        }
         for k in 0..color_count {
             let lo = pcol_off[k] as usize;
             let hi = pcol_off[k + 1] as usize;
@@ -658,6 +756,59 @@ pub(crate) fn cpu_step(
                                 );
                                 f += f_b;
                                 h = mat3_add(h, h_b);
+                            }
+                        }
+                    }
+                }
+
+                // Stage 20.4 — tet-vs-tet collision (per-vertex penalty).
+                // For each tet in any *other* tet mesh whose AABB
+                // contains `x[v]`, compute the signed distance to the
+                // tet's nearest face and apply a quadratic penalty:
+                //   f_c = +k_c · pen · n_outward
+                //   H_c = +k_c · n n^T
+                // where pen = -signed (positive when penetrating).
+                if !tet_aabbs.is_empty() && tet_contact_stiffness > 0.0 {
+                    let owner = particle_mesh_id.get(v).copied().unwrap_or(-1);
+                    if owner >= 0 {
+                        let pr = radius[v];
+                        let pos = x[v];
+                        for &m_other in &overlapping_pairs[owner as usize] {
+                            let lo_t = tet_mesh_offsets[m_other as usize] as usize;
+                            let hi_t = tet_mesh_offsets[m_other as usize + 1] as usize;
+                            // Skip if the broad AABB of mesh m_other
+                            // doesn't contain `pos` (with the radius
+                            // margin pre-baked into tet_aabb_margin).
+                            // We test individual tet AABBs in the inner
+                            // loop; the pair-list cull above already
+                            // ensures the meshes' root AABBs overlap.
+                            for t in lo_t..hi_t {
+                                let aabb = &tet_aabbs[t];
+                                // Inflate the AABB by `pr` so a vertex
+                                // touching (not yet penetrating) the tet
+                                // still triggers the closest-face test.
+                                let inflated = aabb.inflated(pr);
+                                if !inflated.contains_point(pos) {
+                                    continue;
+                                }
+                                let i0 = tet_indices[t * 4] as usize;
+                                let i1 = tet_indices[t * 4 + 1] as usize;
+                                let i2 = tet_indices[t * 4 + 2] as usize;
+                                let i3 = tet_indices[t * 4 + 3] as usize;
+                                if let Some((signed, n_dir)) = tet_closest_face(
+                                    pos, x[i0], x[i1], x[i2], x[i3],
+                                ) {
+                                    let pen = -signed; // positive when inside
+                                    if pen > 0.0 {
+                                        let mag = tet_contact_stiffness * pen;
+                                        f += n_dir * mag;
+                                        let n_outer = mat3_outer(n_dir, n_dir);
+                                        h = mat3_add(
+                                            h,
+                                            mat3_scale(n_outer, tet_contact_stiffness),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

@@ -22,6 +22,7 @@ mod shape_world;
 mod spatial_hash;
 pub mod sparse_grid;
 mod support;
+pub mod tet_bvh;
 
 pub use contact_extras::{
     build_contact_id_table, contact_id, match_contacts, reduce_contacts,
@@ -35,6 +36,11 @@ pub use bvh::{Bvh, BvhNode as BroadBvhNode};
 pub use epa::{epa, EpaContact};
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 pub use mesh_bvh::{BvhNode as MeshBvhNode, MeshBvh};
+// ── Stage 20.4: per-tet AABB for tet-vs-tet collision ──────────────
+pub use tet_bvh::{
+    recompute_tet_aabbs, tet_closest_face, tet_mesh_root_aabb,
+    tet_meshes_aabb_overlap, TetAabb,
+};
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use support::{
     support, support_box, support_capsule, support_cone, support_convex_hull,
