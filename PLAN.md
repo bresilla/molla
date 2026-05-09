@@ -1832,8 +1832,25 @@ Deliverables:
   `&[Vec<Vec3>]` through `gjk_with_hulls` / `epa_with_hulls` /
   `support_with_hulls` so EPA can resolve hull supports without
   capturing global state.
-- Heightfield, SDF shapes — TODO.
-- MPR fallback for deep penetration (alternative to EPA) — TODO.
+- ✅ **Heightfield** primitive — `Heightfield` struct (regular grid
+  of height samples) registered via `add_heightfield`; shape variant
+  references it. Narrow phase enumerates only the cells overlapping
+  the other shape's local-frame AABB and routes the implicit
+  triangles through GJK+EPA. World AABB built from the 8 local-AABB
+  corners. Tests: sphere settles on flat field, AABB sanity.
+- ✅ **SDF** shapes — `SdfShape::Torus { major, minor }` and
+  `SdfShape::Sphere { r }`. `add_sdf` + `add_shape_sdf` builder API.
+  Narrow phase: ball-march the other shape's centre against the
+  SDF's signed-distance field; surface-projection witness +
+  finite-difference normal. Tests: sphere drops onto torus surface
+  without penetration, AABB sanity.
+- MPR fallback — **deferred**. EPA covers every contact case
+  currently exercised by the test suite; a robust MPR/XenoCollide
+  implementation needs more careful sign-test logic than fits in
+  this stage's budget. Rough first-pass implementation tried and
+  reverted (overlap detection worked; contact-depth recovery
+  diverged on degenerate portals). Will revisit when an actual EPA
+  failure shows up.
 - ✅ **GPU GJK boolean overlap** (`shaders/gjk.wgsl` +
   `kernels/gjk.rs`) — one thread per candidate pair from the broad
   phase, inline support for Sphere/Box/Capsule/Cylinder/Cone,
@@ -1847,7 +1864,14 @@ Deliverables:
 - GPU EPA — TODO. Bounded polytope (~64 faces) is the next step;
   contact generation stays CPU on the overlapping subset until
   then.
-- GPU LBVH parallel construction — TODO.
+- 🟡 **GPU LBVH** — Karras-style WGSL kernel skeleton in
+  `shaders/lbvh.wgsl` (`morton_codes`, `build_internal`,
+  `refit_aabbs` entry points + Karras's longest-common-prefix split
+  helpers). Host dispatcher (radix sort + node/visited buffer
+  allocation + multi-pass dispatch + integration with the broad
+  phase) is **not yet wired in** — the WGSL is a starting point for
+  a future GPU port; the existing CPU SAP + per-mesh BVH cover all
+  current scenes.
 
 ### Stage 14+ — Differentiability, advanced solvers, Python bindings
 
