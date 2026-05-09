@@ -36,6 +36,13 @@ pub enum ControllerStage {
     /// Inputs are gathered host-side per substep via
     /// [`crate::actuators::ControllerNeuralMlp::set_inputs`].
     NeuralMlp(crate::actuators::ControllerNeuralMlp),
+    /// Stage 31 single-cell LSTM forward pass + linear projection.
+    /// Same input / output contract as `NeuralMlp`, but the cell
+    /// carries hidden + cell state across substeps so the controller
+    /// can express stateful (recurrent) policies. Reset both states
+    /// via [`crate::actuators::ControllerNeuralLstm::reset_hidden_state`]
+    /// on episode boundaries.
+    Lstm(crate::actuators::ControllerNeuralLstm),
 }
 
 /// Composable actuator pipeline.
@@ -125,6 +132,13 @@ impl Actuator {
                 // downstream stage can rely on `out_pos / out_vel`
                 // being fresh.
                 mlp.step(engine, control)?;
+            }
+            ControllerStage::Lstm(lstm) => {
+                // Same convention as NeuralMlp — observations are
+                // pushed by the host, the kernel handles the gate
+                // math + scatter. Hidden + cell state survive
+                // across substeps inside the controller.
+                lstm.step(engine, control)?;
             }
         }
 

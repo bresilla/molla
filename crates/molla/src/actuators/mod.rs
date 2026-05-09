@@ -18,6 +18,11 @@
 //! - [`Actuator`] — orchestrator that wires
 //!   `Delay → Controller → Clamping` per substep.
 //!
+//! Stage 31 deliverables:
+//! - [`ControllerNeuralLstm`] — single-cell LSTM forward pass + linear
+//!   projection. Hidden + cell state survive substepping. Plugs into
+//!   the orchestrator via `ControllerStage::Lstm`.
+//!
 //! # Single-DOF assumption
 //!
 //! These controllers read `state.joint_q[dof]` / `state.joint_qd[dof]`
@@ -36,6 +41,8 @@ pub mod clamping;
 pub mod controller_pd;
 #[cfg(feature = "gpu")]
 pub mod controller_pid;
+#[cfg(feature = "gpu")]
+pub mod controller_neural_lstm;
 #[cfg(feature = "gpu")]
 pub mod controller_neural_mlp;
 #[cfg(feature = "gpu")]
@@ -56,6 +63,10 @@ pub use clamping::{
 pub use controller_pd::{ControllerPd, ControllerPdConfig};
 #[cfg(feature = "gpu")]
 pub use controller_pid::{ControllerPid, ControllerPidConfig};
+#[cfg(feature = "gpu")]
+pub use controller_neural_lstm::{
+    ControllerNeuralLstm, ControllerNeuralLstmConfig, LstmWeightDims, LstmWeights,
+};
 #[cfg(feature = "gpu")]
 pub use controller_neural_mlp::{
     ControllerNeuralMlp, ControllerNeuralMlpConfig, MlpWeights,
