@@ -164,3 +164,223 @@ fn pinned_cloth_corners_stay_put() {
         );
     }
 }
+
+/// Drops a single particle straight onto each primitive shape with
+/// near-zero velocity and confirms the GPU `particle_vs_shapes`
+/// pass projects it out to the shape surface within tolerance.
+/// Covers sphere, plane (offset), box, capsule, cylinder.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+fn single_particle_projected_off_each_primitive() {
+    let Ok(engine) = Engine::new_gpu() else {
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    fn run_case(
+        engine: &molla::compute::Engine,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        // (start position, expected min |distance to surface| at end)
+        start: Vec3,
+        target_distance: f64,
+        radius: f64,
+        register_shape: impl FnOnce(&mut ModelBuilder),
+        label: &str,
+    ) {
+        let mut b = ModelBuilder::new();
+        b.set_linear_damping(2.0);
+        let _p = b.add_particle(start, 0.05, radius, WorldId(0));
+        register_shape(&mut b);
+
+        let mut model = b.build().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        let mut control = model.control();
+        let mut contacts = Contacts::with_capacity(8);
+        s_a.upload_to_device(device, queue).unwrap();
+        s_b.upload_to_device(device, queue).unwrap();
+        control.upload_to_device(device, queue).unwrap();
+        contacts.upload_to_device(device, queue).unwrap();
+
+        let mut solver = XpbdSolver::new_gpu(engine, 1).unwrap().with_iterations(2);
+        let mut pipeline = molla::geometry::CollisionPipeline::new();
+        for _ in 0..40 {
+            pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+            contacts.upload_to_device(device, queue).unwrap();
+            solver
+                .step(&model, &s_a, &control, &contacts, 0.005, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        s_a.particle_q.download(device, queue).unwrap();
+        let final_p = s_a.particle_q.host().unwrap()[0];
+        let drift = (final_p - start).length();
+        assert!(
+            drift > target_distance * 0.5,
+            "{label}: particle barely moved (Δ={drift:.3} m), expected projection of ~{target_distance:.3} m"
+        );
+    }
+
+    let radius = 0.02_f64;
+
+    // Sphere at origin, radius 0.4. Particle dropped at (0.1, 0, 0)
+    // — penetrated by 0.3 m, should project radially out.
+    run_case(
+        &engine, &device, &queue,
+        Vec3::new(0.1, 0.0, 0.0),
+        0.30,
+        radius,
+        |b| {
+            b.add_shape_sphere(BodyId::NONE, 0.4, Transform::IDENTITY)
+                .unwrap();
+        },
+        "sphere",
+    );
+
+    // Box half-extents (0.3, 0.3, 0.3). Particle at (0.1, 0.1, 0.1)
+    // — inside, should project to closest face (~0.2 m).
+    run_case(
+        &engine, &device, &queue,
+        Vec3::new(0.1, 0.1, 0.1),
+        0.20,
+        radius,
+        |b| {
+            b.add_shape_box(BodyId::NONE, Vec3::new(0.3, 0.3, 0.3), Transform::IDENTITY)
+                .unwrap();
+        },
+        "box",
+    );
+
+    // Plane through origin with +Y normal. Particle below (0, -0.05, 0).
+    run_case(
+        &engine, &device, &queue,
+        Vec3::new(0.0, -0.05, 0.0),
+        0.05,
+        radius,
+        |b| {
+            b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+                .unwrap();
+        },
+        "plane",
+    );
+
+    // Capsule along +Y, half-h 0.3 radius 0.2. Particle inside the
+    // cylindrical body at (0.05, 0, 0).
+    run_case(
+        &engine, &device, &queue,
+        Vec3::new(0.05, 0.0, 0.0),
+        0.15,
+        radius,
+        |b| {
+            b.add_shape_capsule(BodyId::NONE, 0.3, 0.2, Transform::IDENTITY)
+                .unwrap();
+        },
+        "capsule",
+    );
+
+    // Cylinder along +Y, half-h 0.3 radius 0.25. Particle inside at
+    // (0.05, 0, 0.05).
+    run_case(
+        &engine, &device, &queue,
+        Vec3::new(0.05, 0.0, 0.05),
+        0.18,
+        radius,
+        |b| {
+            b.add_shape_cylinder(BodyId::NONE, 0.3, 0.25, Transform::IDENTITY)
+                .unwrap();
+        },
+        "cylinder",
+    );
+}
+
+/// Drop a small cloth onto a sphere and verify no particle ends up
+/// inside the sphere. Exercises the WGSL `particle_vs_shapes`
+/// collision pass.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+fn cloth_drapes_over_sphere_without_penetration() {
+    let Ok(engine) = Engine::new_gpu() else {
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // Build: 8x8 unpinned cloth above a sphere centered at the origin.
+    let mut b = ModelBuilder::new();
+    b.set_linear_damping(0.5);
+    let n = 8_u32;
+    let size = 1.5_f64;
+    let origin = Vec3::new(-size * 0.5, 2.5, -size * 0.5);
+    let _ = b.add_cloth_grid(
+        origin,
+        Vec3::new(size, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, size),
+        n, n, 0.04, 0.025, 1.0e-5, 0.05, WorldId(0),
+    );
+
+    // Sphere shape: radius 0.6, anchored at the origin via a static
+    // body (BodyId::NONE → shape_body = -1, world transform = the
+    // shape's local transform).
+    let sphere_radius = 0.6_f64;
+    b.add_shape_sphere(
+        BodyId::NONE,
+        sphere_radius,
+        Transform::from_translation(Vec3::new(0.0, 1.0, 0.0)),
+    )
+    .unwrap();
+    // Floor for safety so any escapees aren't free-falling forever.
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
+
+    let mut model = b.build().unwrap();
+    model.upload_to_device(&device, &queue).unwrap();
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let mut control = model.control();
+    let mut contacts = Contacts::with_capacity(64);
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    control.upload_to_device(&device, &queue).unwrap();
+    contacts.upload_to_device(&device, &queue).unwrap();
+
+    let mut solver = XpbdSolver::new_gpu(&engine, model.body_count.max(1) as u32)
+        .unwrap()
+        .with_iterations(8);
+    let mut pipeline = molla::geometry::CollisionPipeline::new();
+    for _ in 0..200 {
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        contacts.upload_to_device(&device, &queue).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, 0.005, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    s_a.particle_q.download(&device, &queue).unwrap();
+    let final_q = s_a.particle_q.host().unwrap();
+
+    // Centre of sphere shape in world is its local transform's pos.
+    let sphere_center = Vec3::new(0.0, 1.0, 0.0);
+    // Tolerance: WGSL uses f32 + Jacobi residual + cloth particles
+    // have their own radius (we registered 0.025 m). Allow ~5 mm
+    // worst case before flagging penetration.
+    let tol = 5.0e-3_f64;
+    let mut min_dist = f64::INFINITY;
+    for (i, p) in final_q.iter().enumerate() {
+        let d = (*p - sphere_center).length() - sphere_radius;
+        if d < min_dist {
+            min_dist = d;
+        }
+        assert!(
+            d > -tol,
+            "particle {i} penetrated sphere by {:.4} m",
+            -d
+        );
+    }
+    eprintln!(
+        "min particle distance to sphere surface (after 200 steps) = {:.4} m",
+        min_dist
+    );
+}

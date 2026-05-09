@@ -307,6 +307,7 @@ impl XpbdSolver {
                     if particles_kernel.is_none() {
                         *particles_kernel = Some(crate::kernels::XpbdParticlesKernel::new(
                             device,
+                            queue,
                             model.particle_count as u32,
                             model.spring_count.max(1) as u32,
                         ));

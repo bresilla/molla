@@ -66,6 +66,25 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 // ── Group 3: per-dispatch uniforms ──────────────────────────────────
 @group(3) @binding(0) var<uniform>             u: Uniforms;
 
+// ── Group 4: rigid shape collision data ─────────────────────────────
+struct Transform {
+    position: vec4<f32>,
+    rotation: vec4<f32>,
+};
+@group(4) @binding(0) var<storage, read>       shape_geom_kind:  array<u32>;
+@group(4) @binding(1) var<storage, read>       shape_geom_data:  array<vec4<f32>>;
+@group(4) @binding(2) var<storage, read>       shape_body:       array<i32>;
+@group(4) @binding(3) var<storage, read>       shape_transform:  array<Transform>;
+@group(4) @binding(4) var<storage, read>       body_q:           array<Transform>;
+
+const KIND_SPHERE:   u32 = 0u;
+const KIND_PLANE:    u32 = 1u;
+const KIND_BOX:      u32 = 2u;
+const KIND_CAPSULE:  u32 = 3u;
+const KIND_CYLINDER: u32 = 4u;
+const KIND_SKIP:     u32 = 0xffu;
+const STATIC_BODY:   i32 = -1;
+
 // ─────────────────────────────────────────────────────────────────
 // Predict: gravity + linear damping + integrate position by dt.
 // ─────────────────────────────────────────────────────────────────
@@ -210,6 +229,196 @@ fn floor_clamp(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (particle_q[i].y < r) {
         particle_q[i] = vec4<f32>(particle_q[i].x, r, particle_q[i].z, 0.0);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Quaternion + transform helpers (mirrors raycast.wgsl).
+// ─────────────────────────────────────────────────────────────────
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let qv = q.xyz;
+    let t = 2.0 * cross(qv, v);
+    return v + q.w * t + cross(qv, t);
+}
+fn quat_conj(q: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(-q.x, -q.y, -q.z, q.w);
+}
+fn quat_mul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    );
+}
+fn xf_compose(parent: Transform, local: Transform) -> Transform {
+    var out: Transform;
+    out.position = vec4<f32>(parent.position.xyz + quat_rotate(parent.rotation, local.position.xyz), 0.0);
+    out.rotation = quat_mul(parent.rotation, local.rotation);
+    return out;
+}
+fn xf_inverse(xf: Transform) -> Transform {
+    let inv_rot = quat_conj(xf.rotation);
+    var out: Transform;
+    out.rotation = inv_rot;
+    out.position = vec4<f32>(-quat_rotate(inv_rot, xf.position.xyz), 0.0);
+    return out;
+}
+fn world_xf_of(shape: u32) -> Transform {
+    let body = shape_body[shape];
+    let local = shape_transform[shape];
+    if (body == STATIC_BODY) {
+        return local;
+    }
+    return xf_compose(body_q[u32(body)], local);
+}
+
+// Particle-vs-shape SDF + outward normal in WORLD frame. Returns
+// `(world_normal_xyz, signed_distance)` packed into a vec4 (xyz =
+// normal, w = sd). `sd > 0` outside, `sd < 0` inside.
+fn sd_sphere(p_world: vec3<f32>, xf: Transform, radius: f32) -> vec4<f32> {
+    let d = p_world - xf.position.xyz;
+    let len = length(d);
+    if (len < 1e-9) {
+        return vec4<f32>(0.0, 1.0, 0.0, -radius);
+    }
+    return vec4<f32>(d / len, len - radius);
+}
+
+fn sd_plane(p_world: vec3<f32>, xf: Transform, n_local: vec3<f32>) -> vec4<f32> {
+    let n_world = normalize(quat_rotate(xf.rotation, n_local));
+    let sd = dot(p_world - xf.position.xyz, n_world);
+    return vec4<f32>(n_world, sd);
+}
+
+fn sd_box(p_world: vec3<f32>, xf: Transform, half: vec3<f32>) -> vec4<f32> {
+    let inv = xf_inverse(xf);
+    let p_local = inv.position.xyz + quat_rotate(inv.rotation, p_world);
+    let q = abs(p_local) - half;
+    let outside = max(q, vec3<f32>(0.0));
+    let outside_len = length(outside);
+    let inside_d = min(max(q.x, max(q.y, q.z)), 0.0);
+    let sd = outside_len + inside_d;
+
+    var n_local: vec3<f32>;
+    if (outside_len > 1e-9) {
+        // Outside: normal points along the positive components of `q`.
+        n_local = sign(p_local) * (outside / outside_len);
+    } else {
+        // Inside: pick the axis whose face is closest. `q` is negative
+        // here, so we want max(q) which is the least-negative.
+        var n = vec3<f32>(0.0, 1.0, 0.0);
+        if (q.x >= q.y && q.x >= q.z) {
+            n = vec3<f32>(sign(p_local.x), 0.0, 0.0);
+        } else if (q.y >= q.z) {
+            n = vec3<f32>(0.0, sign(p_local.y), 0.0);
+        } else {
+            n = vec3<f32>(0.0, 0.0, sign(p_local.z));
+        }
+        n_local = n;
+    }
+    let n_world = normalize(quat_rotate(xf.rotation, n_local));
+    return vec4<f32>(n_world, sd);
+}
+
+fn sd_capsule(p_world: vec3<f32>, xf: Transform, half_h: f32, radius: f32) -> vec4<f32> {
+    // Capsule axis = +Y in shape frame, segment from (0,-h,0) to (0,+h,0).
+    let inv = xf_inverse(xf);
+    let p_local = inv.position.xyz + quat_rotate(inv.rotation, p_world);
+    var seg_t = clamp(p_local.y, -half_h, half_h);
+    let seg_pt = vec3<f32>(0.0, seg_t, 0.0);
+    let d_local = p_local - seg_pt;
+    let len = length(d_local);
+    var n_local: vec3<f32>;
+    if (len > 1e-9) {
+        n_local = d_local / len;
+    } else {
+        n_local = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    let n_world = normalize(quat_rotate(xf.rotation, n_local));
+    return vec4<f32>(n_world, len - radius);
+}
+
+fn sd_cylinder(p_world: vec3<f32>, xf: Transform, half_h: f32, radius: f32) -> vec4<f32> {
+    // Finite cylinder, axis +Y, height 2*half_h, radius `radius`.
+    let inv = xf_inverse(xf);
+    let p_local = inv.position.xyz + quat_rotate(inv.rotation, p_world);
+    let r_xz = length(vec2<f32>(p_local.x, p_local.z));
+    let dx = r_xz - radius;
+    let dy = abs(p_local.y) - half_h;
+    let outside = vec2<f32>(max(dx, 0.0), max(dy, 0.0));
+    let outside_len = length(outside);
+    let inside_d = min(max(dx, dy), 0.0);
+    let sd = outside_len + inside_d;
+    var n_local: vec3<f32>;
+    if (r_xz > 1e-9) {
+        let n_radial = vec3<f32>(p_local.x / r_xz, 0.0, p_local.z / r_xz);
+        if (outside_len > 1e-9) {
+            // Outside surface: pick the dominant axis of `outside`.
+            if (outside.x > outside.y) {
+                n_local = n_radial;
+            } else {
+                n_local = vec3<f32>(0.0, sign(p_local.y), 0.0);
+            }
+        } else {
+            // Inside: nearest face.
+            if (dx > dy) {
+                n_local = n_radial;
+            } else {
+                n_local = vec3<f32>(0.0, sign(p_local.y), 0.0);
+            }
+        }
+    } else {
+        // On the axis — pick the cap face direction.
+        n_local = vec3<f32>(0.0, sign(p_local.y), 0.0);
+        if (abs(p_local.y) < 1e-9) {
+            n_local = vec3<f32>(1.0, 0.0, 0.0);
+        }
+    }
+    let n_world = normalize(quat_rotate(xf.rotation, n_local));
+    return vec4<f32>(n_world, sd);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Particle-vs-rigid collision: project each particle out of every
+// shape it penetrates. `u.work_count` = particle_count; `u.spring_count`
+// is reused as `shape_count` so we don't need a new uniform field.
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn particle_vs_shapes(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.work_count) { return; }
+    if (particle_inv_mass[i] <= 0.0) { return; }
+
+    let pr = particle_radius[i];
+    var p = particle_q[i].xyz;
+    let shape_count = u.color_index; // stuffed via `color_index` field
+    for (var s: u32 = 0u; s < shape_count; s = s + 1u) {
+        let kind = shape_geom_kind[s];
+        if (kind == KIND_SKIP) { continue; }
+        let xf = world_xf_of(s);
+        let data = shape_geom_data[s].xyz;
+        var nd: vec4<f32>;
+        if (kind == KIND_SPHERE) {
+            nd = sd_sphere(p, xf, data.x);
+        } else if (kind == KIND_PLANE) {
+            nd = sd_plane(p, xf, data);
+        } else if (kind == KIND_BOX) {
+            nd = sd_box(p, xf, data);
+        } else if (kind == KIND_CAPSULE) {
+            nd = sd_capsule(p, xf, data.x, data.y);
+        } else if (kind == KIND_CYLINDER) {
+            nd = sd_cylinder(p, xf, data.x, data.y);
+        } else {
+            continue;
+        }
+        let pen = pr - nd.w;
+        if (pen > 0.0) {
+            // Project particle along outward normal so it sits exactly
+            // at distance `pr` outside the surface.
+            p = p + nd.xyz * pen;
+        }
+    }
+    particle_q[i] = vec4<f32>(p, 0.0);
 }
 
 // ─────────────────────────────────────────────────────────────────

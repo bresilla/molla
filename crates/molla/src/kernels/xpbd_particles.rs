@@ -41,11 +41,13 @@ pub struct XpbdParticlesKernel {
     pipe_strain_apply: wgpu::ComputePipeline,
     pipe_floor: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
+    pipe_shapes: wgpu::ComputePipeline,
 
     layout_state: wgpu::BindGroupLayout,
     layout_springs: wgpu::BindGroupLayout,
     layout_out: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
+    layout_shapes: wgpu::BindGroupLayout,
 
     /// Per-spring λ accumulator (size `spring_count.max(1)`).
     lambdas: Buffer<Real>,
@@ -53,6 +55,14 @@ pub struct XpbdParticlesKernel {
     deltas: Buffer<Vec3>,
     /// Per-particle Jacobi count scratch.
     counts: Buffer<u32>,
+    /// 1-element placeholder buffers used as fallbacks for any
+    /// bind group whose model arrays may be empty (no shapes / no
+    /// bodies / no springs) — wgpu still requires a non-null binding.
+    dummy_u32: Buffer<u32>,
+    dummy_real: Buffer<Real>,
+    dummy_vec3: Buffer<Vec3>,
+    dummy_i32: Buffer<i32>,
+    dummy_xform: Buffer<crate::math::Transform>,
 
     particle_count: u32,
     spring_count: u32,
@@ -61,6 +71,7 @@ pub struct XpbdParticlesKernel {
 impl XpbdParticlesKernel {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         particle_count: u32,
         spring_count: u32,
     ) -> Self {
@@ -100,6 +111,14 @@ impl XpbdParticlesKernel {
                 count: None,
             }],
         });
+        // Shapes group: 5 read-only inputs (geom_kind, geom_data,
+        // body, transform, body_q). Used only by the
+        // `particle_vs_shapes` entry; other entries get the same
+        // layout bound but never touch the resources.
+        let layout_shapes = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::xpbd_particles shapes"),
+            entries: &storage_entries(5, true),
+        });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::xpbd_particles layout"),
@@ -108,6 +127,7 @@ impl XpbdParticlesKernel {
                 &layout_springs,
                 &layout_out,
                 &layout_uniforms,
+                &layout_shapes,
             ],
             push_constant_ranges: &[],
         });
@@ -131,6 +151,7 @@ impl XpbdParticlesKernel {
         let pipe_strain_apply = make_pipeline("strain_apply");
         let pipe_floor = make_pipeline("floor_clamp");
         let pipe_velocity = make_pipeline("velocity_recovery");
+        let pipe_shapes = make_pipeline("particle_vs_shapes");
 
         // Scratch buffers. wgpu requires nonzero sizes, so bump zero
         // counts to 1 — the kernel guards against out-of-range indices.
@@ -143,6 +164,25 @@ impl XpbdParticlesKernel {
         let _ = deltas.ensure_device(device);
         let _ = counts.ensure_device(device);
 
+        let mut dummy_u32 = Buffer::from_vec(vec![0u32; 2], BufferUsage::Storage);
+        let mut dummy_real = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::Storage);
+        let mut dummy_vec3 = Buffer::from_vec(vec![Vec3::ZERO; 1], BufferUsage::Storage);
+        let mut dummy_i32 = Buffer::from_vec(vec![0i32; 1], BufferUsage::Storage);
+        let mut dummy_xform = Buffer::from_vec(
+            vec![crate::math::Transform::IDENTITY; 1],
+            BufferUsage::Storage,
+        );
+        let _ = dummy_u32.ensure_device(device);
+        let _ = dummy_u32.upload(queue);
+        let _ = dummy_real.ensure_device(device);
+        let _ = dummy_real.upload(queue);
+        let _ = dummy_vec3.ensure_device(device);
+        let _ = dummy_vec3.upload(queue);
+        let _ = dummy_i32.ensure_device(device);
+        let _ = dummy_i32.upload(queue);
+        let _ = dummy_xform.ensure_device(device);
+        let _ = dummy_xform.upload(queue);
+
         Self {
             pipe_predict,
             pipe_reset_lambdas,
@@ -152,13 +192,20 @@ impl XpbdParticlesKernel {
             pipe_strain_apply,
             pipe_floor,
             pipe_velocity,
+            pipe_shapes,
             layout_state,
             layout_springs,
             layout_out,
             layout_uniforms,
+            layout_shapes,
             lambdas,
             deltas,
             counts,
+            dummy_u32,
+            dummy_real,
+            dummy_vec3,
+            dummy_i32,
+            dummy_xform,
             particle_count,
             spring_count,
         }
@@ -193,17 +240,49 @@ impl XpbdParticlesKernel {
                 buffer_entry(5, model.gravity.device_buffer())?,
             ],
         });
+        // Springs bind group — falls back to dummy buffers when the
+        // model has zero springs so wgpu doesn't see an unbound slot.
+        let dummy_u32_buf = self
+            .dummy_u32
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_u32 missing".into()))?;
+        let dummy_real_buf = self
+            .dummy_real
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_real missing".into()))?;
+        let sa_buf = model.spring_a.device_buffer().unwrap_or(dummy_u32_buf);
+        let sb_buf = model.spring_b.device_buffer().unwrap_or(dummy_u32_buf);
+        let rest_buf = model
+            .spring_rest_length
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let comp_buf = model
+            .spring_compliance
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let stretch_buf = model
+            .spring_max_stretch
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let color_off_buf = model
+            .spring_color_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let color_idx_buf = model
+            .spring_indices_by_color
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
         let bg_springs = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::xpbd_particles springs bg"),
             layout: &self.layout_springs,
             entries: &[
-                buffer_entry(0, model.spring_a.device_buffer())?,
-                buffer_entry(1, model.spring_b.device_buffer())?,
-                buffer_entry(2, model.spring_rest_length.device_buffer())?,
-                buffer_entry(3, model.spring_compliance.device_buffer())?,
-                buffer_entry(4, model.spring_max_stretch.device_buffer())?,
-                buffer_entry(5, model.spring_color_offsets.device_buffer())?,
-                buffer_entry(6, model.spring_indices_by_color.device_buffer())?,
+                wgpu::BindGroupEntry { binding: 0, resource: sa_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: sb_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: rest_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: comp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: stretch_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: color_off_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: color_idx_buf.as_entire_binding() },
             ],
         });
         let bg_out = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -217,6 +296,53 @@ impl XpbdParticlesKernel {
                 buffer_entry(4, self.counts.device_buffer())?,
             ],
         });
+        // Shapes bind group — used by `particle_vs_shapes`. Bound
+        // for every dispatch (cheap; layout is fixed) so the
+        // pipeline's group-4 expectation is always satisfied.
+        // Empty model arrays (no shapes / no bodies) fall back to
+        // 1-element dummy buffers so wgpu doesn't trip on zero-sized
+        // bindings.
+        let dummy_vec3_buf = self
+            .dummy_vec3
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_vec3 missing".into()))?;
+        let dummy_i32_buf = self
+            .dummy_i32
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_i32 missing".into()))?;
+        let dummy_xform_buf = self
+            .dummy_xform
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_xform missing".into()))?;
+        let kind_buf = model
+            .shape_geom_kind
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let data_buf = model
+            .shape_geom_data
+            .device_buffer()
+            .unwrap_or(dummy_vec3_buf);
+        let body_buf = model.shape_body.device_buffer().unwrap_or(dummy_i32_buf);
+        let xform_buf = model
+            .shape_transform
+            .device_buffer()
+            .unwrap_or(dummy_xform_buf);
+        let body_q_buf = state_in
+            .body_q
+            .device_buffer()
+            .unwrap_or(dummy_xform_buf);
+        let bg_shapes = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::xpbd_particles shapes bg"),
+            layout: &self.layout_shapes,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: kind_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: data_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: body_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: xform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: body_q_buf.as_entire_binding() },
+            ],
+        });
+        let shape_count_u = model.shape_count as u32;
 
         let particle_count_u = model.particle_count as u32;
         let spring_count_u = model.spring_count as u32;
@@ -292,6 +418,10 @@ impl XpbdParticlesKernel {
         }
 
         push_uniforms(&base_uniforms(particle_count_u, 0)); // floor
+        // particle_vs_shapes — uses `color_index` field as
+        // `shape_count` so the kernel doesn't need a separate
+        // uniform field. work_count = particle_count.
+        push_uniforms(&base_uniforms(particle_count_u, shape_count_u));
         push_uniforms(&base_uniforms(particle_count_u, 0)); // velocity recovery
 
         // ── Encode every dispatch in a single pass. ───────────────
@@ -306,6 +436,7 @@ impl XpbdParticlesKernel {
             pass.set_bind_group(0, &bg_state, &[]);
             pass.set_bind_group(1, &bg_springs, &[]);
             pass.set_bind_group(2, &bg_out, &[]);
+            pass.set_bind_group(4, &bg_shapes, &[]);
 
             let dispatch_kernel =
                 |pass: &mut wgpu::ComputePass<'_>,
@@ -359,8 +490,17 @@ impl XpbdParticlesKernel {
                 dispatch_kernel(&mut pass, &self.pipe_strain_apply, idx, particle_count_u);
                 idx += 1;
             }
-            // Floor.
+            // Floor (Y=0 fallback — kept so scenes without an
+            // explicit Y-plane still don't drop their cloth into
+            // the void).
             dispatch_kernel(&mut pass, &self.pipe_floor, idx, particle_count_u);
+            idx += 1;
+            // Particle-vs-rigid: project particles out of every
+            // collision shape in the model. `shape_count` is
+            // smuggled via the `color_index` uniform field.
+            if shape_count_u > 0 {
+                dispatch_kernel(&mut pass, &self.pipe_shapes, idx, particle_count_u);
+            }
             idx += 1;
             // Velocity recovery.
             dispatch_kernel(&mut pass, &self.pipe_velocity, idx, particle_count_u);
@@ -376,11 +516,11 @@ impl XpbdParticlesKernel {
 
     fn uniform_count(&self, iterations: u32, color_count: u32) -> usize {
         // predict + reset_lambdas + iterations*K (distance) +
-        // strain_iters * (zero + K + apply) + floor + velocity.
+        // strain_iters * (zero + K + apply) + floor + shapes + velocity.
         let strain_iters = iterations * 4;
         let dist = iterations * color_count;
         let strain = strain_iters * (color_count + 2);
-        (2 + dist + strain + 2) as usize
+        (2 + dist + strain + 3) as usize
     }
 
     /// Number of particles the kernel was built for.

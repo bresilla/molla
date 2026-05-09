@@ -499,6 +499,12 @@ struct AwakeMaterial(Handle<StandardMaterial>);
 #[derive(Component)]
 struct ClothMesh;
 
+/// Tag for static obstacles in the cloth scene (the sphere the
+/// cloth drapes over). Rendered as a regular `Mesh3d` but doesn't
+/// participate in molla's body/state pipeline.
+#[derive(Component)]
+struct ClothObstacle;
+
 /// Whether to draw wireframes over the physics meshes (not the ground
 /// grid). Toggled by `W`. We use the per-entity `Wireframe` component
 /// rather than `WireframeConfig.global` so bevy_glacial's ground grid
@@ -1012,30 +1018,30 @@ fn build_tower_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), visuals)
 }
 
-/// Vertical hanging cloth pinned at its **two top corners only**.
+/// Horizontal cloth dropping onto a static sphere.
 ///
-/// Built in the XY plane (X horizontal, -Y the v-axis going downward).
-/// Gravity acts within the cloth plane, so the cloth hangs in
-/// equilibrium — but only the two top corners are anchored, so when
-/// the user grabs and drags any particle the rest of the sheet has
-/// 3-DoF freedom and the deformation is fully visible.
-///
-/// Stage-12 cloth, no rigid bodies in the scene apart from the static
-/// floor plane. Particle-particle self-collision isn't implemented yet
-/// (so the cloth can pass through itself), and particle-rigid contact
-/// is still TODO.
+/// The cloth starts a few metres above the sphere with no pins, so it
+/// falls under gravity and drapes around the sphere. Particle-vs-rigid
+/// collision (sphere SDF projection) is handled by the WGSL
+/// `particle_vs_shapes` pass in the GPU XPBD pipeline. Mouse grab still
+/// works — drag any particle to deform the drape.
+const CLOTH_SPHERE_RADIUS: f32 = 0.7;
+const CLOTH_SPHERE_Y: f32 = 1.2;
+
 fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
     b.set_angular_damping(0.05);
+    b.set_linear_damping(0.4);
 
     let nx = CLOTH_GRID;
     let ny = CLOTH_GRID;
     let size = CLOTH_SIZE as f64;
-    let origin = MVec3::new(-size * 0.5, CLOTH_TOP_Y as f64, 0.0);
+    // Cloth starts horizontal in the XZ plane, well above the sphere.
+    let origin = MVec3::new(-size * 0.5, CLOTH_TOP_Y as f64, -size * 0.5);
     let u_axis = MVec3::new(size, 0.0, 0.0);
-    let v_axis = MVec3::new(0.0, -size, 0.0);
+    let v_axis = MVec3::new(0.0, 0.0, size);
 
-    let (first, _, _) = b.add_cloth_grid(
+    let _ = b.add_cloth_grid(
         origin,
         u_axis,
         v_axis,
@@ -1048,19 +1054,23 @@ fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
         mp::WorldId(0),
     );
 
-    // Pin only top-left and top-right corners. Bottom corners and
-    // everything in between are dynamic — the cloth dangles like a
-    // banner and can be pulled / pushed out of the XY plane by
-    // grabbing any particle.
-    b.pin_particle(first); // top-left  (ix=0,    iy=0)
-    b.pin_particle(first + nx - 1); // top-right (ix=nx-1, iy=0)
-
+    // Static sphere obstacle. `BodyId::NONE` makes it world-anchored
+    // — the GPU `particle_vs_shapes` pass treats `shape_body == -1`
+    // as static and uses the shape's own transform as world pose.
+    b.add_shape_sphere(
+        mp::BodyId::NONE,
+        CLOTH_SPHERE_RADIUS as f64,
+        mp::Transform::from_translation(MVec3::new(0.0, CLOTH_SPHERE_Y as f64, 0.0)),
+    )
+    .expect("sphere shape");
+    // Floor plane so any escaped particle doesn't free-fall forever.
     b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
         .expect("plane shape");
 
     let model = b.build().expect("model");
-    // No rigid-body visuals — the cloth is rendered as a dedicated
-    // triangle mesh updated each frame by `sync_cloth_mesh`.
+    // No `BodyVisual` here — cloth renders via the dedicated triangle
+    // mesh + the sphere obstacle is spawned as a `ClothObstacle`
+    // entity by `apply_scene_switch` / `setup`.
     (model, Vec::new())
 }
 
@@ -1504,6 +1514,28 @@ fn spawn_body_entities(
             Transform::default(),
         ));
     }
+
+    // Cloth-scene static sphere obstacle.
+    if sim.scene == Scene::Cloth {
+        let mesh = meshes.add(
+            Sphere::new(CLOTH_SPHERE_RADIUS)
+                .mesh()
+                .ico(4)
+                .expect("ico"),
+        );
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.62, 0.75),
+            metallic: 0.10,
+            perceptual_roughness: 0.55,
+            ..default()
+        });
+        commands.spawn((
+            ClothObstacle,
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::from_xyz(0.0, CLOTH_SPHERE_Y, 0.0),
+        ));
+    }
 }
 
 /// Build a single Bevy `Mesh` from molla's particle positions and
@@ -1611,6 +1643,7 @@ fn apply_scene_switch(
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies_q: Query<Entity, With<MollaBody>>,
     cloth_q: Query<Entity, With<ClothMesh>>,
+    obstacle_q: Query<Entity, With<ClothObstacle>>,
     mut grab: ResMut<MouseGrab>,
     mut lidar: ResMut<LidarState>,
     mut imu: ResMut<ImuExampleState>,
@@ -1650,6 +1683,9 @@ fn apply_scene_switch(
         commands.entity(e).despawn();
     }
     for e in cloth_q.iter() {
+        commands.entity(e).despawn();
+    }
+    for e in obstacle_q.iter() {
         commands.entity(e).despawn();
     }
 
