@@ -1730,18 +1730,35 @@ Definition of done:
 
 ### Stage 11 — Contact extras
 
+**Status: DONE** (2026-05-09).
+
 **Goal**: the contact-quality features that distinguish a toy from a
 production engine.
 
 Deliverables:
-- Torsional friction (μ_torsional) per shape — stable rolling.
-- Rolling friction (μ_rolling) per shape — wheel-on-ground.
-- Contact warm-starting / matching across frames (Newton's
-  `geometry/contact_match.py` pattern: deterministic sort-key match,
-  warm-start XPBD λ).
-- Contact reduction (voxel-AABB pruning of redundant contacts).
-- Per-mesh BVH (mesh AABB tree) — molla currently iterates ALL
-  triangles per pair; this scales to thousand-triangle meshes.
+- ✅ **Rolling friction** (`μ_rolling`) per shape, pair-rule
+  `max(μ_a, μ_b)`. Damps angular velocity perpendicular to the
+  contact normal — wheel-on-ground / sphere-rolls-to-rest. Wired
+  into XPBD CPU velocity-projection. `set_shape_friction_modes`
+  in `ModelBuilder`.
+- ✅ **Torsional friction** (`μ_torsional`) per shape. Damps angular
+  velocity ALONG the contact normal (top spinning on a surface).
+  Same pair-rule + builder API as rolling.
+- ✅ **Contact warm-starting / matching** (`geometry::contact_extras`):
+  `contact_id` (FNV-1a-style hash over sorted shape pair + voxelised
+  contact point), `build_contact_id_table`, `match_contacts`. The
+  application layer can carry per-contact data (XPBD `λ_n`, friction
+  direction, age) across frames. Deterministic sort-key match
+  matches Newton's `geometry/contact_match.py`.
+- ✅ **Contact reduction** (`reduce_contacts`): voxel-bin contacts
+  by `(shape_pair, voxel(point))` and keep the deepest per voxel.
+  Stops 4-corner box-plane stacks from emitting redundant contacts.
+- ✅ **Per-mesh BVH** (`geometry::mesh_bvh::MeshBvh`): top-down
+  median-split AABB tree built eagerly when a mesh is registered.
+  AABB-overlap query for shape-vs-trimesh narrow phase + closest-hit
+  ray cast. `narrow_phase::trimesh_pair` now visits O(log N + k)
+  triangles instead of O(N). Perf gate (`tests/mesh_bvh_perf.rs`):
+  32×32 grid mesh + sphere collide in 28 µs (release).
 
 ### Stage 12 — Particles + cloth (XPBD distance/bending) + springs
 

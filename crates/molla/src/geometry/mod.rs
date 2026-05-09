@@ -7,6 +7,7 @@
 mod aabb;
 mod broad_phase;
 mod bvh;
+pub mod contact_extras;
 mod epa;
 mod gjk;
 pub mod mesh_bvh;
@@ -14,6 +15,10 @@ mod narrow_phase;
 mod pipeline;
 mod shape_world;
 mod support;
+
+pub use contact_extras::{
+    build_contact_id_table, contact_id, match_contacts, reduce_contacts,
+};
 
 pub use aabb::Aabb;
 pub use broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
