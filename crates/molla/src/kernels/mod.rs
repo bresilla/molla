@@ -37,6 +37,8 @@ mod jacobian;
 #[cfg(feature = "gpu")]
 mod lbvh;
 #[cfg(feature = "gpu")]
+mod radix_sort;
+#[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
 mod rnea;
@@ -90,6 +92,8 @@ pub use integrate_bodies::IntegrateBodiesKernel;
 pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
 #[cfg(feature = "gpu")]
 pub use lbvh::{collect_shape_aabbs, LbvhBroadPhase, LbvhPairs};
+#[cfg(feature = "gpu")]
+pub use radix_sort::{radix_sort_pairs, RadixSortKernel};
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]

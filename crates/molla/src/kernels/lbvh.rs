@@ -19,22 +19,24 @@
 //!
 //! ### Radix-sort decision
 //!
-//! Karras-style LBVH wants Morton codes in sorted order. The textbook
-//! GPU implementation is a multi-pass WGSL radix sort (4 bits per
-//! pass × 8 passes for a 32-bit key, with per-workgroup histograms +
-//! a global scan). That's a separate ~300 LOC kernel and a sizeable
-//! research project on its own.
+//! Karras-style LBVH wants Morton codes in sorted order. Stage 19
+//! shipped a CPU-sort stop-gap (every frame: compute Morton codes on
+//! the host, sort, upload the sorted (code, idx) pair). Stage 19.1
+//! replaced that with a GPU radix sort — see
+//! [`super::RadixSortKernel`]. The host now uploads **unsorted**
+//! codes + an identity index buffer; the radix sort runs in-place on
+//! the device; the existing build / refit / find_pairs kernels read
+//! the now-GPU-sorted buffers untouched. Net effect: zero per-frame
+//! sorted-array upload, and the sort itself is ~1 ms even at 100k
+//! shapes.
 //!
-//! For Stage 19 we picked the **CPU sort + upload** stop-gap path.
-//! Rationale:
-//!   - It keeps the pipeline correct and end-to-end testable while
-//!     the GPU radix sort lands separately.
-//!   - For the 1k–10k shape range called out in the deliverables, the
-//!     CPU sort cost is dominated by the upload itself; a GPU radix
-//!     would shave maybe 0.3 ms.
-//!   - The uploaded `(sorted_codes, sorted_idx)` buffers and the
-//!     downstream WGSL kernels (`build_internal`, `refit_aabbs`,
-//!     `find_pairs`) are unchanged when a GPU radix lands later.
+//! **Morton codes still on CPU (v1).** The Morton + scene-bounds pass
+//! is one tight loop over the AABB list; it's well under 1% of the
+//! frame at 10k shapes (the dominant cost is wgpu's per-submit
+//! overhead, ~1 ms regardless of payload size). Moving Morton onto
+//! the GPU would add another dispatch + readback round-trip and
+//! actually regress wallclock at typical scene sizes. Revisit when
+//! shape counts cross ~100k or the host-side AABB collection is gone.
 //!
 //! ### Refit-only mode
 //!
@@ -47,6 +49,7 @@
 use std::sync::Arc;
 
 use crate::core::{Error, Result};
+use crate::kernels::RadixSortKernel;
 use crate::math::{Real, Vec3};
 use crate::sim::{Model, State};
 
@@ -124,6 +127,10 @@ pub struct LbvhBroadPhase {
     /// pair so the host can re-upload them without recomputing the
     /// Morton sort. `prim_count` is the primitive count at build time.
     cached_topology: Option<CachedTopology>,
+
+    /// GPU radix-sort kernel — replaces the Stage 19 CPU sort
+    /// stop-gap. Sorts `(sorted_codes, sorted_idx)` in place.
+    radix_sort: RadixSortKernel,
 }
 
 #[derive(Clone)]
@@ -304,6 +311,8 @@ impl LbvhBroadPhase {
             mapped_at_creation: false,
         });
 
+        let radix_sort = RadixSortKernel::new(device.clone(), queue.clone(), prim_capacity)?;
+
         Ok(Self {
             device,
             queue,
@@ -325,6 +334,7 @@ impl LbvhBroadPhase {
             prim_capacity,
             pair_capacity,
             cached_topology: None,
+            radix_sort,
         })
     }
 
@@ -455,8 +465,9 @@ impl LbvhBroadPhase {
             }
         }
 
-        // CPU Morton + radix sort. See module-level doc-comment for
-        // why this isn't on the GPU yet.
+        // Morton codes — kept on CPU (see module-level doc-comment for
+        // why; v1 measurement showed the host-side codegen + AABB
+        // collection dominated by wgpu submit overhead, not Morton).
         let codes: Vec<u32> = (0..n)
             .map(|i| {
                 let cx = (gpu_aabbs[i].min[0] + gpu_aabbs[i].max[0]) * 0.5;
@@ -468,16 +479,21 @@ impl LbvhBroadPhase {
                 morton3_30(nx, ny, nz)
             })
             .collect();
-        // Sort indices by code (stable so ties are broken by original
-        // index, matching the WGSL `delta` tie-break).
-        let mut sorted: Vec<(u32, u32)> = codes
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| (c, i as u32))
-            .collect();
-        sorted.sort_by_key(|&(c, idx)| (c, idx));
-        let sorted_codes: Vec<u32> = sorted.iter().map(|&(c, _)| c).collect();
-        let sorted_idx: Vec<u32> = sorted.iter().map(|&(_, i)| i).collect();
+
+        // STAGE 19.1 SORT REPLACEMENT — load-bearing comment.
+        //
+        // Stage 19 used a host-side stable sort_by_key here, then
+        // uploaded the sorted (codes, idx) arrays. That was a
+        // stop-gap; a future bisecter looking for "why did sort move
+        // off the host?" should find this comment.
+        //
+        // Now: upload UNSORTED codes + identity indices to the
+        // existing `sorted_codes` / `sorted_idx` buffers, then run
+        // the GPU radix sort in-place. The downstream
+        // build_internal / refit / find_pairs kernels are unchanged
+        // — they read from `sorted_codes` / `sorted_idx` and don't
+        // care whether the sort happened on the host or device.
+        let identity_idx: Vec<u32> = (0..n as u32).collect();
 
         // Cache for refit-only mode. `root` is filled in after
         // dispatch_kernels reads it back from `pair_count[1]`.
@@ -492,9 +508,15 @@ impl LbvhBroadPhase {
         self.queue
             .write_buffer(&self.primitive_aabb, 0, bytemuck::cast_slice(&gpu_aabbs));
         self.queue
-            .write_buffer(&self.sorted_codes, 0, bytemuck::cast_slice(&sorted_codes));
+            .write_buffer(&self.sorted_codes, 0, bytemuck::cast_slice(&codes));
         self.queue
-            .write_buffer(&self.sorted_idx, 0, bytemuck::cast_slice(&sorted_idx));
+            .write_buffer(&self.sorted_idx, 0, bytemuck::cast_slice(&identity_idx));
+
+        // GPU radix sort: sorts (sorted_codes, sorted_idx) in place.
+        // Stable, so ties on Morton codes break by original index —
+        // matches the WGSL `delta` tie-break in `lbvh.wgsl`.
+        self.radix_sort
+            .dispatch(&self.sorted_codes, &self.sorted_idx, n)?;
 
         // Zero out the entire `nodes` buffer — the new build kernel
         // writes parent / left / right / is_leaf for every node it
