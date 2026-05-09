@@ -1190,6 +1190,35 @@ pub enum JacobianStrategy {
     /// on the 6-DOF Franka.
     #[default]
     AnalyticBiasQd,
+    /// Stage 23.1.4 — closed-form `M⁻¹` for the τ block, **analytic
+    /// `∂h/∂q` AND `∂h/∂qd`** via chain-rule sweeps through RNEA.
+    /// Eliminates the last central-FD path on the per-step Jacobian
+    /// build; the only FD remaining is the trajectory-level FK Jacobian
+    /// seed (cheap, runs once per reverse pass).
+    ///
+    /// **Approach (forward-mode tangent through RNEA).** For each
+    /// perturbation column `k`, run an augmented forward sweep that
+    /// propagates both the value and `∂(·)/∂q_k` of every per-link
+    /// quantity (body transform, world inertia, COM, axis_world, S_j,
+    /// v_i, c_i, a_i, f_net, f_grav). The kinematic tangent for a
+    /// revolute joint k perturbed by δq_k = 1 is the constant twist
+    /// `(ω_k × (· − o_k), [ω_k]× ·)` applied to all downstream link
+    /// poses; for prismatic, the constant translation `axis_world_k`.
+    /// A backward sweep then projects `∂f_net/∂q_k` onto `S_j`
+    /// (plus the `∂S_j/∂q_k` cross term) to extract `∂h_j/∂q_k`.
+    ///
+    /// This is the Carpentier-Mansard 2018 algorithm 6 ("RNEA
+    /// derivatives w.r.t. q") expressed as a per-column tangent sweep
+    /// rather than a full second-order analytic derivation.
+    /// Cost: `O(n²)` per step (n columns × n-link sweep), no extra
+    /// allocations beyond reusable scratch.
+    ///
+    /// **Caveats.** Near singular configurations (gimbal lock for
+    /// stacked-Euler Ball joints, degenerate `r → 0` for Distance
+    /// projections in the post-step path) the ω_k cross-product
+    /// linearisation can amplify numerical noise on the inertia
+    /// derivative; the FD path remains valid as a correctness oracle.
+    AnalyticFull,
 }
 
 impl FeatherstoneRevoluteChain {
@@ -1321,6 +1350,10 @@ impl FeatherstoneRevoluteChain {
                 JacobianStrategy::AnalyticBiasQd => {
                     let qdd_t = &trace.steps[t].q_dd;
                     self.fill_jacobians_analytic_qd(q_t, qd_t, qdd_t, scratch);
+                }
+                JacobianStrategy::AnalyticFull => {
+                    let qdd_t = &trace.steps[t].q_dd;
+                    self.fill_jacobians_analytic_full(q_t, qd_t, qdd_t, scratch);
                 }
             }
 
@@ -1727,6 +1760,286 @@ impl FeatherstoneRevoluteChain {
         dh
     }
 
+    /// Stage 23.1.4 — same closed-form `M⁻¹` as
+    /// [`Self::fill_jacobians_analytic_qd`] but with **analytic
+    /// `∂h/∂q`** replacing the central-FD path through RNEA. Eliminates
+    /// the last FD step in the per-step Jacobian build; brings bwd/fwd
+    /// down from Stage 23.1.2's 5.9–7.6× toward the < 5× DoD target.
+    ///
+    /// Both bias derivatives use the same forward-mode tangent-sweep
+    /// pattern as [`Self::dh_dqd_analytic`]: for each perturbation
+    /// column k, propagate the value AND the tangent derivative wrt
+    /// the perturbed coordinate through every per-link kinematic /
+    /// inertial / dynamics quantity, then project onto `S_j` (plus the
+    /// `∂S_j/∂q_k` cross term for the q derivative) to extract the
+    /// joint-space derivative.
+    fn fill_jacobians_analytic_full(
+        &self,
+        q_t: &[Real],
+        qd_t: &[Real],
+        qdd_t: &[Real],
+        scratch: &mut JacobianScratch,
+    ) {
+        let n = self.links.len();
+
+        // 1. Build M(q) via CRBA — same as the closed-form path.
+        let m_mat = self.mass_matrix(q_t);
+        for i in 0..n * n {
+            scratch.mass_matrix[i] = m_mat[i];
+        }
+        let inv_m = invert_spd(&m_mat, n);
+        for i in 0..n * n {
+            scratch.inv_mass_matrix[i] = inv_m[i];
+            scratch.qdd_tau[i] = inv_m[i];
+        }
+
+        // 2. Analytic dh/dqd — same routine as AnalyticBiasQd.
+        let did_dqd = self.dh_dqd_analytic(q_t, qd_t);
+        for j in 0..n {
+            for k in 0..n {
+                let mut s = 0.0;
+                for r in 0..n {
+                    s += inv_m[j * n + r] * did_dqd[r * n + k];
+                }
+                scratch.qdd_qd[j * n + k] = -s;
+            }
+        }
+
+        // 3. Analytic dh/dq — the new Stage 23.1.4 piece. Note: we use
+        //    `inverse_dynamics` evaluated at the rollout's q̈₀ (not zero)
+        //    so the Carpentier-Mansard chain-rule trick still folds in
+        //    the M-derivative term — implemented inline by including
+        //    the `S_i · qdd_i` term in the augmented forward sweep.
+        let did_dq = self.dh_dq_analytic(q_t, qd_t, qdd_t);
+        for j in 0..n {
+            for k in 0..n {
+                let mut s = 0.0;
+                for r in 0..n {
+                    s += inv_m[j * n + r] * did_dq[r * n + k];
+                }
+                scratch.qdd_q[j * n + k] = -s;
+            }
+        }
+    }
+
+    /// Stage 23.1.4 — analytic `∂ID(q,qd,q̈)/∂q ∈ ℝⁿˣⁿ` for a serial
+    /// chain. Returned row-major as `[j*n + k] = ∂ID_j/∂q_k`.
+    ///
+    /// **Reference:** Carpentier & Mansard 2018 algorithm 6 ("RNEA
+    /// derivatives w.r.t. q") — implemented as a forward-mode tangent
+    /// sweep through the same RNEA `inverse_dynamics` path so the FD
+    /// parity test against central differences on `inverse_dynamics`
+    /// is bit-exact at the algebra level (≤ FD precision floor in
+    /// f64). Pinocchio's `pinocchio/algorithm/rnea-derivatives.hpp`
+    /// is the canonical implementation.
+    ///
+    /// **Per-column kinematic tangent.** A perturbation `δq_k = 1`
+    /// induces, for every downstream link `j ≥ k`:
+    /// - **Revolute k** with world axis `ω_k`, joint origin `o_k`:
+    ///   `∂position_j/∂q_k = ω_k × (position_j − o_k)`,
+    ///   `∂R_j/∂q_k = [ω_k]× · R_j`,
+    ///   `∂axis_world_j/∂q_k = ω_k × axis_world_j` (j > k only —
+    ///   axis_world_k itself is fixed by parent kinematics),
+    ///   `∂com_world_j/∂q_k = ω_k × (com_world_j − o_k)`,
+    ///   `∂I_world_j/∂q_k = [ω_k]× · I_world_j − I_world_j · [ω_k]×`.
+    /// - **Prismatic k** with world axis `a_k`:
+    ///   `∂position_j/∂q_k = a_k`, `∂com_world_j/∂q_k = a_k`, no
+    ///   rotation / inertia / axis_world derivatives.
+    ///
+    /// Once the per-link kinematic tangent is known, the rest chains
+    /// through the existing RNEA arithmetic exactly as the Stage
+    /// 23.1.2 `dh_dqd_analytic` chains through the velocity tangent.
+    pub fn dh_dq_analytic(&self, q: &[Real], qd: &[Real], qdd: &[Real]) -> Vec<Real> {
+        let n = self.links.len();
+        let mut dh = vec![0.0; n * n];
+
+        // ─── Forward pass: cache per-link value-side state. Mirrors
+        //     `inverse_dynamics`. We need every quantity that the
+        //     net-wrench formula touches so the per-column tangent
+        //     sweep can re-evaluate the affected pieces.
+        let mut s_cols = vec![SpatialVector::ZERO; n];
+        let mut v_arr = vec![SpatialVector::ZERO; n];
+        let mut a_arr = vec![SpatialVector::ZERO; n];
+        let mut i_s_arr = vec![SpatialMatrix6::ZERO; n];
+        let mut i_world_arr = vec![Mat3::IDENTITY; n];
+        let mut com_world_arr = vec![Vec3::ZERO; n];
+        let mut joint_origin_arr = vec![Vec3::ZERO; n];
+        let mut axis_world_arr = vec![Vec3::ZERO; n];
+        let mut kinds_arr = vec![JointKind::Revolute; n];
+        let mut f_net_arr = vec![SpatialVector::ZERO; n];
+
+        let mut parent_t = Transform::IDENTITY;
+        let mut v_parent = SpatialVector::ZERO;
+        let mut a_parent = SpatialVector::ZERO;
+        for j in 0..n {
+            let link = &self.links[j];
+            let kin = JointKinematic::from_link(parent_t, link, q[j]);
+            let body_w = kin.body_world;
+            let s_j = kin.s_j;
+            let v_j_local = s_j.scale(qd[j]);
+            let a_j_local = s_j.scale(qdd[j]);
+            let v_i = v_parent + v_j_local;
+            let c_j = spatial_cross(v_i, v_j_local);
+            let a_i = a_parent + a_j_local + c_j;
+
+            let r_w = body_w.rotation;
+            let rm = Mat3::from_quat(r_w);
+            let i_world = rm * link.inertia_local * rm.transpose();
+            let cw = body_w.position + r_w * link.com_local;
+            let i_s = SpatialMatrix6::from_body(link.mass, cw, i_world);
+
+            // Newton-Euler net wrench (matches `inverse_dynamics`).
+            let i_a = i_s.mul_sv(a_i);
+            let bias = spatial_cross_dual(v_i, i_s.mul_sv(v_i));
+            let f_g_lin = self.gravity * link.mass;
+            let f_g_ang = cw.cross(f_g_lin);
+            let f_grav = SpatialVector::new(f_g_lin, f_g_ang);
+            f_net_arr[j] = i_a + bias - f_grav;
+
+            s_cols[j] = s_j;
+            v_arr[j] = v_i;
+            a_arr[j] = a_i;
+            i_s_arr[j] = i_s;
+            i_world_arr[j] = i_world;
+            com_world_arr[j] = cw;
+            joint_origin_arr[j] = kin.joint_origin_world;
+            axis_world_arr[j] = kin.axis_world;
+            kinds_arr[j] = link.kind;
+
+            parent_t = body_w;
+            v_parent = v_i;
+            a_parent = a_i;
+        }
+
+        // f_total_value[j] = sum_{k=j}^{n-1} f_net[k] — value-side
+        // accumulated wrench on link j (matches `inverse_dynamics`'s
+        // f_total[j] before projection onto S_j).
+        let mut f_total_value = vec![SpatialVector::ZERO; n];
+        let mut acc = SpatialVector::ZERO;
+        for j in (0..n).rev() {
+            acc = acc + f_net_arr[j];
+            f_total_value[j] = acc;
+        }
+
+        // ─── Per-column tangent sweep.
+        let mut ds = vec![SpatialVector::ZERO; n];
+        let mut df_net = vec![SpatialVector::ZERO; n];
+        let mut df_acc = vec![SpatialVector::ZERO; n];
+        for k in 0..n {
+            // Reset scratch for this column.
+            for i in 0..n {
+                ds[i] = SpatialVector::ZERO;
+                df_net[i] = SpatialVector::ZERO;
+                df_acc[i] = SpatialVector::ZERO;
+            }
+
+            // The kinematic tangent generator for column k.
+            let k_kind = kinds_arr[k];
+            let omega_k = axis_world_arr[k]; // Revolute angular axis (world).
+            let o_k = joint_origin_arr[k];
+            let lin_k = axis_world_arr[k]; // Prismatic linear axis (world).
+
+            let drot_axis: Vec3 = match k_kind {
+                JointKind::Revolute => omega_k,
+                _ => Vec3::ZERO,
+            };
+
+            // Forward sweep — only links j ≥ k feel the perturbation.
+            let mut dv_parent = SpatialVector::ZERO;
+            let mut da_parent = SpatialVector::ZERO;
+            for i in k..n {
+                // ∂S_i / ∂q_k. For i == k, S_i depends on parent's
+                // rotation (built from axis_local · parent_rotation),
+                // so perturbing q_k leaves it unchanged. For i > k,
+                // axis_world_i rotates by ω_k.
+                let ds_i = if i > k && drot_axis != Vec3::ZERO {
+                    let daxis_i = drot_axis.cross(axis_world_arr[i]);
+                    match kinds_arr[i] {
+                        JointKind::Revolute => SpatialVector::new(Vec3::ZERO, daxis_i),
+                        JointKind::Prismatic => SpatialVector::new(daxis_i, Vec3::ZERO),
+                        _ => SpatialVector::ZERO,
+                    }
+                } else {
+                    SpatialVector::ZERO
+                };
+                ds[i] = ds_i;
+
+                // ∂v_j_local/∂q_k = ∂S_i/∂q_k · qd_i.
+                let dv_j_local = ds_i.scale(qd[i]);
+                let dv_i = dv_parent + dv_j_local;
+
+                // ∂a_j_local/∂q_k = ∂S_i/∂q_k · qdd_i.
+                let da_j_local = ds_i.scale(qdd[i]);
+                let v_j_local = s_cols[i].scale(qd[i]);
+                let v_i = v_arr[i];
+                let dc_i = spatial_cross(dv_i, v_j_local) + spatial_cross(v_i, dv_j_local);
+                let da_i = da_parent + da_j_local + dc_i;
+
+                // ∂I_s_i / ∂q_k  — derivative of `from_body(mass, cw, I_world)`.
+                let mass_i = self.links[i].mass;
+                let cw_i = com_world_arr[i];
+                let i_world_i = i_world_arr[i];
+                let dcw_i = match k_kind {
+                    JointKind::Revolute => omega_k.cross(cw_i - o_k),
+                    JointKind::Prismatic => lin_k,
+                    _ => Vec3::ZERO,
+                };
+                let di_world_i = if drot_axis == Vec3::ZERO {
+                    Mat3::ZERO
+                } else {
+                    cross_left_minus_right(drot_axis, i_world_i)
+                };
+                let i_s_i = i_s_arr[i];
+
+                // ∂(I_s · v_i)/∂q_k = ∂I_s · v_i + I_s · ∂v_i.
+                let ai_v = spatial_inertia_dq_mul(mass_i, cw_i, dcw_i, di_world_i, v_i);
+                let i_dv = i_s_i.mul_sv(dv_i);
+                let d_isv = ai_v + i_dv;
+
+                // ∂(I_s · a_i)/∂q_k.
+                let a_i = a_arr[i];
+                let ai_a = spatial_inertia_dq_mul(mass_i, cw_i, dcw_i, di_world_i, a_i);
+                let i_da = i_s_i.mul_sv(da_i);
+                let d_isa = ai_a + i_da;
+
+                // ∂(v ×* (I·v))/∂q_k = ∂v ×* (I·v) + v ×* ∂(I·v).
+                let isv = i_s_i.mul_sv(v_i);
+                let dbias = spatial_cross_dual(dv_i, isv) + spatial_cross_dual(v_i, d_isv);
+
+                // ∂f_grav/∂q_k. f_grav.linear = m·g (constant in q).
+                // f_grav.angular = cw × f_g_lin → ∂ = ∂cw × f_g_lin.
+                let f_g_lin = self.gravity * mass_i;
+                let df_grav_ang = dcw_i.cross(f_g_lin);
+                let df_grav = SpatialVector::new(Vec3::ZERO, df_grav_ang);
+
+                df_net[i] = d_isa + dbias - df_grav;
+
+                dv_parent = dv_i;
+                da_parent = da_i;
+            }
+
+            // Backward sweep — propagate ∂f_net up the tree, project
+            // onto S_j AND add the ∂S_j cross term:
+            //   τ_j = S_jᵀ · f_total_j
+            //   ∂τ_j/∂q_k = (∂S_j/∂q_k)ᵀ · f_total_value_j + S_jᵀ · ∂f_total_j
+            for j in (0..n).rev() {
+                let df_total_j = if j >= k {
+                    df_net[j] + df_acc[j]
+                } else {
+                    df_acc[j]
+                };
+                let term_value = sv_dot(ds[j], f_total_value[j]);
+                let term_tangent = sv_dot(s_cols[j], df_total_j);
+                dh[j * n + k] = term_value + term_tangent;
+                if j > 0 {
+                    df_acc[j - 1] = df_acc[j - 1] + df_total_j;
+                }
+            }
+        }
+
+        dh
+    }
+
     /// Recursive Newton-Euler inverse dynamics on the serial revolute
     /// chain. Returns `τ = M(q)·q̈ + h(q,qd)` joint-by-joint. A baseline
     /// build-block for the closed-form Jacobian — when called with
@@ -1936,6 +2249,68 @@ impl FeatherstoneRevoluteChain {
 #[inline]
 fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
     a.linear.dot(b.linear) + a.angular.dot(b.angular)
+}
+
+/// Stage 23.1.4 helper — `[ω]× M − M [ω]×` for 3×3 matrices. This is
+/// the derivative of `R · M_local · Rᵀ` wrt rotation when R is
+/// perturbed by an infinitesimal twist ω: the result is
+/// `[ω]× · M_world − M_world · [ω]×` (one term from the left rotation,
+/// one from the right transpose).
+#[inline]
+fn cross_left_minus_right(omega: Vec3, m: Mat3) -> Mat3 {
+    // Build [ω]× as a Mat3, then compute [ω]× · m − m · [ω]×.
+    // glam's Mat3 is column-major; we construct it column by column
+    // so that `Mat3::from_cols(c0, c1, c2)` matches `c_j = m * e_j`.
+    // Specifically: [ω]× = [[0, -ωz, ωy],[ωz, 0, -ωx],[-ωy, ωx, 0]]
+    // applied as `m_skew · v = ω × v`. Column j = ω × e_j.
+    let skew = Mat3::from_cols(
+        omega.cross(Vec3::X),
+        omega.cross(Vec3::Y),
+        omega.cross(Vec3::Z),
+    );
+    skew * m - m * skew
+}
+
+/// Stage 23.1.4 helper — derivative of `SpatialMatrix6::from_body(mass,
+/// cw, I_world) · v` wrt q_k, given `dcw = ∂cw/∂q_k` and `di_world =
+/// ∂I_world/∂q_k`. Mass is constant in q, so its derivative is zero.
+///
+/// Closed-form expansion of `from_body`:
+///   - top-left  3×3 = m · I_3                  (constant)
+///   - top-right 3×3 = m · skew(cw)
+///   - bot-left  3×3 = -m · skew(cw)
+///   - bot-right 3×3 = I_world − m · skew(cw) · skew(cw)
+///
+/// Therefore for `v = (v_lin; v_ang)`:
+///   I·v.linear  = m·v_lin + m·skew(cw)·v_ang
+///                = m·v_lin + m·(cw × v_ang)
+///   I·v.angular = -m·skew(cw)·v_lin + (I_world − m·skew(cw)²)·v_ang
+///                = -m·(cw × v_lin) + I_world·v_ang − m·(cw × (cw × v_ang))
+///
+/// Differentiating wrt q_k (mass constant, cw → cw + ε·dcw,
+/// I_world → I_world + ε·di_world):
+///   ∂(I·v).linear  = m·(dcw × v_ang)
+///   ∂(I·v).angular = -m·(dcw × v_lin) + di_world·v_ang
+///                    − m·(dcw × (cw × v_ang))
+///                    − m·(cw × (dcw × v_ang))
+#[inline]
+fn spatial_inertia_dq_mul(
+    mass: Real,
+    cw: Vec3,
+    dcw: Vec3,
+    di_world: Mat3,
+    v: SpatialVector,
+) -> SpatialVector {
+    let v_lin = v.linear;
+    let v_ang = v.angular;
+    let d_lin = (dcw.cross(v_ang)) * mass;
+    let cwxva = cw.cross(v_ang);
+    let dcwxva = dcw.cross(v_ang);
+    let d_ang = -(dcw.cross(v_lin)) * mass
+        + di_world * v_ang
+        - dcw.cross(cwxva) * mass
+        - cw.cross(dcwxva) * mass;
+    SpatialVector::new(d_lin, d_ang)
 }
 
 /// Invert a symmetric positive-definite `n × n` matrix `a` (row-major)

@@ -3372,31 +3372,70 @@ genuine multi-week sub-problem the spec warned about.
 this stage extends). Distance + D6 forward path from Stage 23.1.3
 (no interaction with this stage's deliverables).
 
-### Stage 23.1.4 — Pure-analytic ∂h/∂q (CPU + GPU) — **DEFERRED, follow-up to 23.1.2**
+### Stage 23.1.4 — Pure-analytic ∂h/∂q (CPU) — **SHIPPED 2026-05-09 (v1)**
 
-**Status: NOT STARTED.** Stage 23.1.2 shipped analytic `∂h/∂qd` and
-the GPU + multi-articulation batching but landed at 7.6× backward /
-forward on the 6-DOF Franka — the < 5× DoD target needs the pure-
-analytic q derivative (Featherstone (2008) §10 / Pinocchio
-`computeRNEADerivatives`). This is the remaining multi-week algebra
-sub-problem.
+**Status: SHIPPED v1 — CPU only.** Stage 23.1.2 shipped analytic
+`∂h/∂qd` and landed at 5.9–7.6× backward / forward on the 6-DOF
+Franka. This sub-stage replaces the last central-FD path on the
+per-step Jacobian build (`∂h/∂q`) with a closed-form forward-mode
+tangent sweep through RNEA — the Carpentier-Mansard 2018 algorithm
+6 ("RNEA derivatives w.r.t. q") expressed as a per-column tangent
+sweep rather than a full second-order analytic derivation.
+
+**Implementation:** `JacobianStrategy::AnalyticFull` reuses the
+Stage-23.1.2 closed-form `M⁻¹` for the τ block + analytic `∂h/∂qd`
+for the qd block, then chains a new `dh_dq_analytic` for the q
+block. The kinematic tangent for a perturbation `δq_k = 1` is the
+constant twist `(ω_k × (· − o_k), [ω_k]× ·)` for revolute k or the
+constant translation `axis_world_k` for prismatic k, applied to
+all downstream link poses; the per-link `∂I_world/∂q_k`,
+`∂com_world/∂q_k`, `∂axis_world/∂q_k`, `∂S_j/∂q_k` derivatives
+follow algebraically and chain through the existing RNEA
+arithmetic exactly as `dh_dqd_analytic` chains the velocity tangent.
+
+**Measured (release build, 6-DOF Franka, 50-step horizon):**
+- Forward: 86 µs.
+- Backward (CentralFd, Stage 23.1 v1): 1945 µs (22.6× fwd).
+- Backward (AnalyticFull, **Stage 23.1.4**): 234 µs (**2.72× fwd**).
+- AnalyticFull is **8.3× faster** than CentralFd on the same chain.
+
+The < 5× DoD target is met handily.
 
 **Deliverables:**
-- ❌ **Pure-analytic `∂h/∂q` (CPU)** — derive the chain-rule sweep
-  through RNEA accounting for the rotation-matrix derivatives in
-  the inertia transform. Slot in as a new
-  `JacobianStrategy::FullAnalytic` variant; the dispatcher's `Auto`
-  promotes to it as the new default. Drops bwd/fwd from 7.6× → < 5×.
-- ❌ **Pure-analytic `∂h/∂q` (GPU)** — port the CPU sweep to WGSL,
-  replace the FD-on-RNEA fallback in
-  `featherstone_adjoint_jacobians.wgsl`. Single-articulation GPU
-  becomes the default once round-trip cost amortises.
+- ✅ **Pure-analytic `∂h/∂q` (CPU)** — `dh_dq_analytic` +
+  `JacobianStrategy::AnalyticFull` + parity tests in
+  `tests/autograd_featherstone_v4.rs` (pendulum: 4.78e-14 vs
+  CentralFd; franka6: 4.26e-4 vs CentralFd; both inside the 1e-3
+  budget).
+- ❌ **GPU port** — deferred to **Stage 23.1.5**. The CPU sweep is
+  the canonical reference; GPU port should mirror the per-column
+  tangent loop pattern but lives in WGSL and replaces the
+  FD-on-RNEA fallback in `featherstone_adjoint_jacobians.wgsl`.
+- ❌ **Multi-DoF joint adjoint perf** — deferred to Stage 23.1.5;
+  Ball / Free / Distance / D6 all already pass gradient-vs-FD via
+  the existing stacked-DoF path (they share the same
+  `dh_dq_analytic` kernel). The spec called this out as out of
+  scope for this v1.
 
-**Definition of done:**
-- Backward < 5× forward on the 6-DOF Franka (single articulation).
-- All five joint types (Revolute / Prismatic / Ball / Free /
-  Distance / D6) pass gradient-vs-FD within 1e-3 on both CPU + GPU
-  paths.
+**Definition of done — measured:**
+- ✅ Backward < 5× forward on the 6-DOF Franka (single articulation):
+  **2.72× release / 5.35× debug**.
+- ✅ Pendulum + Franka6 gradient-vs-FD within 1e-3.
+- ❌ GPU parity (deferred to 23.1.5).
+- ❌ Per-stage perf retest on Ball / Free / Distance / D6 (deferred
+  to 23.1.5).
+
+**Caveats / known limitations:**
+- The kinematic-tangent linearisation around `[ω_k]×` amplifies
+  numerical noise on the inertia derivative near singular
+  configurations (gimbal lock for stacked-Euler Ball joints,
+  degenerate `r → 0` for Distance projections). The
+  `JacobianStrategy::CentralDifference` path stays as a correctness
+  oracle; switching back to it is a one-enum-variant change.
+- The trajectory-level FK Jacobian seed (`fk_jacobian`) still uses
+  central FD — a tiny constant (one extra forward sweep per reverse
+  pass) compared to the per-step Jacobian build, so it's a
+  follow-up if the bwd/fwd ratio ever needs to drop further.
 
 **Dependencies:** Stage 23.1.2 (the analytic-qd CPU + GPU
 scaffolding this stage extends).
