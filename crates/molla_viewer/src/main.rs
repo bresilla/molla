@@ -1328,11 +1328,6 @@ struct CableExampleState {
     /// Cable stretch stiffness (N/m). Re-applied to the per-spring
     /// XPBD compliance buffer when the user drags the slider.
     stretch_stiffness: f64,
-    /// Friction coefficient μ at the cable ↔ static-cylinder contact.
-    /// Surfaced via the Dahl friction pane (which doesn't actually
-    /// affect the VBD step today — the kernel is shipped but consumed
-    /// by Stage 22.1 for hydroelastic; see PLAN.md).
-    friction_mu: f64,
     /// Soft-contact stiffness against the cylinder + puller (N/m).
     contact_stiffness: f64,
     /// VBD outer-iteration count per substep.
@@ -1352,7 +1347,6 @@ impl Default for CableExampleState {
     fn default() -> Self {
         Self {
             stretch_stiffness: CABLE_STIFFNESS,
-            friction_mu: 0.4,
             contact_stiffness: CABLE_CONTACT_STIFFNESS,
             inner_iterations: 12,
             use_hard_mode: true,
@@ -9223,8 +9217,6 @@ fn cable_pane(
         }
     }
 
-    ui.label("Friction coefficient μ");
-    let _ = ui.add(egui::Slider::new(&mut state.friction_mu, 0.0..=1.5));
     ui.label("Soft contact stiffness (N/m)");
     if ui
         .add(
@@ -9275,8 +9267,6 @@ fn cable_pane(
     }
     ui.add_space(6.0);
     ui.small("Hotkey: C");
-    ui.small("Friction kernel ships here; consumed by Stage 22.1");
-    ui.small("for hydroelastic. Slider is informational in v1.");
 }
 
 /// Right-rail pane for the Stage-20.2 JELLY tetrahedral soft-body
