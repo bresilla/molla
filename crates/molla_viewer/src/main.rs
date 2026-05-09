@@ -12215,7 +12215,70 @@ fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) {
     // joints, just a different controller in the pre-step system.
     build_neural_policy_model()
 }
-fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+/// CartPoleSwarm scene — N independent cart-poles in a row, each in
+/// its own articulation. Demonstrates batched PD control. Port of
+/// `xtra/newton/newton/examples/selection/example_selection_cartpole.py`.
+const CARTPOLE_SWARM_N: usize = 16;
+const CARTPOLE_SWARM_SPACING: f64 = 1.2;
+fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.02);
+
+    let mut visuals = Vec::with_capacity(CARTPOLE_SWARM_N * 2);
+    let cart_inertia = box_inertia_xyz(CART_MASS, CART_HALF_X, CART_HALF_Y, CART_HALF_Z);
+    let pole_inertia = capsule_inertia(POLE_MASS, POLE_HALF_LEN, POLE_RADIUS);
+
+    for i in 0..CARTPOLE_SWARM_N {
+        let z = (i as f64 - (CARTPOLE_SWARM_N as f64 - 1.0) * 0.5) * CARTPOLE_SWARM_SPACING;
+        b.begin_articulation();
+        // Cart prismatic.
+        let cart = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: CART_MASS,
+                    com: MVec3::ZERO,
+                    inertia: cart_inertia,
+                })
+                .with_position(MVec3::new(0.0, CART_RAIL_Y, z)),
+        );
+        b.add_shape_box(
+            cart,
+            MVec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z),
+            mp::Transform::IDENTITY,
+        )
+        .expect("cart box");
+        visuals.push(BodyVisual::Box(Vec3::new(
+            CART_HALF_X as f32,
+            CART_HALF_Y as f32,
+            CART_HALF_Z as f32,
+        )));
+        let x_p_cart = mp::Transform::from_translation(MVec3::new(0.0, CART_RAIL_Y, z));
+        b.add_joint_prismatic(mp::BodyId::NONE, cart, x_p_cart, mp::Transform::IDENTITY, MVec3::X)
+            .expect("cart prismatic");
+        // Pole revolute.
+        let pole = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: POLE_MASS,
+                    com: MVec3::ZERO,
+                    inertia: pole_inertia,
+                })
+                .with_position(MVec3::new(0.0, CART_RAIL_Y - POLE_HALF_LEN, z)),
+        );
+        b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, mp::Transform::IDENTITY)
+            .expect("pole capsule");
+        visuals.push(BodyVisual::Capsule {
+            half_h: POLE_HALF_LEN as f32,
+            radius: POLE_RADIUS as f32,
+        });
+        let x_p_pole = mp::Transform::from_translation(MVec3::new(0.0, CART_HALF_Y, 0.0));
+        let x_c_pole = mp::Transform::from_translation(MVec3::new(0.0, POLE_HALF_LEN, 0.0));
+        b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, MVec3::Z)
+            .expect("pole revolute");
+    }
+
+    (b.build().expect("cartpole swarm model"), visuals)
+}
 fn build_fourbar_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_diff_spring_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
@@ -12498,7 +12561,8 @@ fn update_cartpole_example(
     mut sim: ResMut<Sim>,
     mut state: ResMut<CartPoleExampleState>,
 ) {
-    if sim.scene != Scene::CartPole {
+    let is_swarm = sim.scene == Scene::CartPoleSwarm;
+    if sim.scene != Scene::CartPole && !is_swarm {
         if state.controller.is_some() {
             state.controller = None;
         }
@@ -12507,10 +12571,11 @@ fn update_cartpole_example(
     if sim.model.joint_dof_total < 2 {
         return;
     }
-    // Lazy-init: ControllerPd writes joint_force[dof]. We want force on
-    // the cart's prismatic joint (dof 0) — the controller will be
-    // commanded with a target derived from the pole angle (PD on
-    // theta, output goes to cart force).
+    // Lazy-init: ControllerPd is over-engineered for our needs here —
+    // we drive `joint_force` directly from a closed-form LQR-style
+    // balance policy below. We still construct it once so subsequent
+    // re-entries are cheap; the controller object is dropped on scene
+    // switch.
     if state.controller.is_none() {
         let cfg = ControllerPdConfig {
             dof: 0,
@@ -12527,59 +12592,64 @@ fn update_cartpole_example(
         }
     }
 
-    // Read state.
-    let q = match sim.state_a.joint_q.host() {
-        Ok(q) => q,
+    // Read state. Snapshot to owned Vecs so we can mutate `sim` below.
+    let q_vec: Vec<f64> = match sim.state_a.joint_q.host() {
+        Ok(q) => q.to_vec(),
         Err(_) => return,
     };
-    let qd = match sim.state_a.joint_qd.host() {
-        Ok(q) => q,
+    let qd_vec: Vec<f64> = match sim.state_a.joint_qd.host() {
+        Ok(q) => q.to_vec(),
         Err(_) => return,
     };
-    if q.len() < 2 || qd.len() < 2 {
+    if q_vec.len() < 2 || qd_vec.len() < 2 {
         return;
     }
-    let cart_x = q[0] as f32;
-    let cart_xd = qd[0] as f32;
-    let theta = q[1] as f32;
-    let theta_d = qd[1] as f32;
+    // Single-pole readouts mirror the first cart-pole.
+    let cart_x = q_vec[0] as f32;
+    let _cart_xd = qd_vec[0] as f32;
+    let theta = q_vec[1] as f32;
+    let _theta_d = qd_vec[1] as f32;
     state.last_x = cart_x;
     state.last_theta = theta;
 
-    // Auto-perturb every 3s.
+    // Auto-perturb every 3 s — only the first cart in swarm mode
+    // (otherwise the swarm jumps in lockstep and looks fake).
     state.perturb_timer += time.delta_secs();
     if state.auto_perturb && state.perturb_timer > 3.0 {
         state.perturb_timer = 0.0;
         let queue = sim.engine.queue().expect("queue").clone();
-        if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
-            if qd.len() >= 2 {
+        if let Ok(qdh) = sim.state_a.joint_qd.host_mut() {
+            if qdh.len() >= 2 {
                 let sign = if theta >= 0.0 { -1.0 } else { 1.0 };
-                qd[1] += (sign * 1.5) as f64;
+                qdh[1] += (sign * 1.5) as f64;
             }
         }
         let _ = sim.state_a.joint_qd.upload(&queue);
     }
 
-    // Inverted-pendulum balance law: force = -K * [x, xd, theta, thd].
-    // Keep things simple — use a closed-form linear policy and write
-    // joint_force[0] directly. (We bypass ControllerPd's joint-target
-    // path because we want the cart to track a pole-derived target,
-    // not a fixed cart x.)
+    // Inverted-pendulum balance law per cart-pole pair.
     let target_theta = state.target_theta;
-    let force = -(2.5 * cart_x + 1.0 * cart_xd
-        + (state.kp) * (theta - target_theta)
-        + (state.kd) * theta_d);
-    let force = force.clamp(-60.0, 60.0);
-    state.last_force = force;
-    {
-        let queue = sim.engine.queue().expect("queue").clone();
-        if let Ok(jf) = sim.control.joint_force.host_mut() {
-            if !jf.is_empty() {
-                jf[0] = force as f64;
-            }
+    let queue = sim.engine.queue().expect("queue").clone();
+    if let Ok(jf) = sim.control.joint_force.host_mut() {
+        let pairs = jf.len() / 2;
+        for i in 0..pairs {
+            let xx = q_vec[2 * i] as f32;
+            let xxd = qd_vec[2 * i] as f32;
+            let th = q_vec[2 * i + 1] as f32;
+            let thd = qd_vec[2 * i + 1] as f32;
+            let force = -(2.5 * xx + 1.0 * xxd
+                + state.kp * (th - target_theta)
+                + state.kd * thd);
+            jf[2 * i] = force.clamp(-60.0, 60.0) as f64;
+            // Pole revolute receives no actuated torque.
+            jf[2 * i + 1] = 0.0;
         }
-        let _ = sim.control.joint_force.upload(&queue);
+        if !jf.is_empty() {
+            state.last_force = jf[0] as f32;
+        }
     }
+    let _ = sim.control.joint_force.upload(&queue);
+    let _ = is_swarm;
 }
 
 fn update_conveyor_example(
