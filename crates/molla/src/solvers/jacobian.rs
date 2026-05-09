@@ -3,7 +3,9 @@
 //!
 //! For a serial chain articulation:
 //!
-//!     v_target = J(q) · q̇
+//! ```text
+//! v_target = J(q) · q̇
+//! ```
 //!
 //! where `J` is a `6 × N` matrix with one column per joint DOF, and
 //! `v_target = [v_linear; ω]` is the spatial velocity at

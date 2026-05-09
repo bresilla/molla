@@ -8,8 +8,10 @@ use crate::math::Real;
 /// Huber loss `ρ(r)`: quadratic when `|r| ≤ δ`, linear past that.
 /// Smooth at the transition (C¹).
 ///
-///     ρ(r) = ½ r²              if |r| ≤ δ
-///          = δ·(|r| - δ/2)     if |r| > δ
+/// ```text
+/// ρ(r) = ½ r²              if |r| ≤ δ
+///      = δ·(|r| - δ/2)     if |r| > δ
+/// ```
 #[must_use]
 pub fn norm_huber(r: Real, delta: Real) -> Real {
     let abs = r.abs();

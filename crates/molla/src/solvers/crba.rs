@@ -3,7 +3,9 @@
 //! Returns the symmetric `N×N` mass matrix where `N` = total joint
 //! DOFs in the requested articulation. M is the matrix that satisfies
 //!
-//!     τ = M(q)·q̈ + C(q, q̇) + G(q)
+//! ```text
+//! τ = M(q)·q̈ + C(q, q̇) + G(q)
+//! ```
 //!
 //! and is the linchpin for inverse dynamics (RNEA computes the
 //! right-hand side), impedance control, IK damping, and the operational-
@@ -218,8 +220,10 @@ fn spatial_dot(a: SpatialVector, b: SpatialVector) -> Real {
 /// Spatial inertia of a rigid body about world origin, in
 /// `[linear; angular]` convention.
 ///
-///     I_s = [   m · I_3       -m · [c]×        ]
-///           [   m · [c]×       I_C - m · [c]×² ]
+/// ```text
+/// I_s = [   m · I_3       -m · [c]×        ]
+///       [   m · [c]×       I_C - m · [c]×² ]
+/// ```
 ///
 /// `c` is the COM position in world. `i_world` is the inertia tensor
 /// at the COM, expressed in world axes. Mapping spatial velocity
