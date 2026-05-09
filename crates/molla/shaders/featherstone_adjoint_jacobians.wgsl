@@ -31,7 +31,7 @@
 
 const MAX_LINKS: u32 = 8u;
 const MAX_LINKS2: u32 = 64u;            // MAX_LINKS * MAX_LINKS
-const FD_EPS: f32 = 1.0e-4f;            // f32 sweet-spot for central FD
+const FD_EPS: f32 = 1.0e-3f;            // f32 sweet-spot for central FD on RNEA
 
 struct LinkParams {
     // 0 = Revolute, 1 = Prismatic.  (Ball / Free are stacked single-DoF

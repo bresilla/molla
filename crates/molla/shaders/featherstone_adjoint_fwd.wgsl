@@ -1,23 +1,17 @@
-// Stage 23.1.1 — adjoint kernel for Featherstone Pass 1 (forward
-// kinematics + body-velocity sweep).
+// Stage 23.1.1 / 23.1.2 — adjoint kernel for Featherstone Pass 1
+// (forward kinematics + body-velocity sweep).
 //
-// **Status: scaffold only.**
-//
-// The adjoint of Pass 1 produces, given `∂L/∂(body_world, v_body, c_term)`,
-// the corresponding `∂L/∂(q, qd)`. For a single chain at n_links ≤ 6 the
-// per-step FD-on-Pass-1 cost is ~7 µs on the dev laptop; the GPU
-// dispatch + readback adds ~20 µs of latency, so the closed-form CPU
-// path (`crate::autograd::featherstone_adjoint::fill_jacobians_closed_form`)
-// dominates. The kernel scaffold lives here so when **multi-articulation
-// batching** (Stage 23.1.2) lands, it slots in without a tape-format
-// change — the adjoint dispatcher already iterates the per-sweep
-// `TapeOp` variants and can swap `forward_step` for a GPU kernel call.
-//
-// This file is **not yet wired** into a pipeline; it documents the
-// kernel signature + bind-group layout the future GPU path will use.
-// See `crates/molla/src/kernels/featherstone_adjoint.rs` for the host-
-// side dispatcher that currently routes to the closed-form CPU path
-// and reports the GPU pipeline as `Status::DeferredScaffold`.
+// **Status: superseded scaffold.** Stage 23.1.2 ships the multi-
+// articulation closed-form Jacobian kernel in
+// `featherstone_adjoint_jacobians.wgsl` instead — that kernel folds
+// the three sweep adjoints into a single per-articulation workgroup
+// because the per-sweep round-trip cost dominated the wall time at
+// n_links ≤ 6. This file stays as documentation of the per-sweep
+// bind-group layout the **pure-analytic** Featherstone (2008) §10
+// adjoint will use when it lands in Stage 23.1.3 — the per-sweep
+// Pass-1 adjoint becomes useful when the upstream Pass-2 / Pass-3
+// adjoints are also analytic so each sweep's kernel does fixed-shape
+// O(n) work instead of FD perturbations.
 
 const MAX_LINKS: u32 = 64u;
 

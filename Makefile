@@ -76,6 +76,14 @@ test-featherstone-multidof-gpu:
 test-autograd-featherstone-gpu:
 	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test autograd_featherstone_gpu -- --ignored
 
+# Stage 23.1.2 — pure-analytic CPU adjoint, GPU multi-articulation
+# closed-form Jacobian kernel parity, and rayon-parallel batch perf.
+# All tests are `#[ignore]`-marked; run with --release for realistic
+# perf numbers (the AnalyticQd vs ClosedForm bwd/fwd ratios + the
+# parallel speedup measurements are sensitive to optimisation level).
+test-autograd-featherstone-v3-gpu:
+	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test autograd_featherstone_v3_gpu -- --ignored --nocapture
+
 test-xpbd-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_gpu_parity -- --ignored
 

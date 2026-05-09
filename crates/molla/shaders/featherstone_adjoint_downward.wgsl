@@ -1,18 +1,12 @@
-// Stage 23.1.1 — adjoint kernel for Featherstone Pass 3 (downward
-// acceleration solve).
+// Stage 23.1.1 / 23.1.2 — adjoint kernel for Featherstone Pass 3
+// (downward acceleration solve).
 //
-// **Status: scaffold only — see `featherstone_adjoint_fwd.wgsl` doc.**
-//
-// The Pass-3 adjoint walks root → leaf computing
-//   `∂L/∂(q̈_k) = (∂L/∂a_i · S_k - ∂L/∂a_p · U_k) / D_k`
-// and accumulates `∂L/∂a_p`. Mirrors the structure of
-// `crate::solvers::featherstone::cpu_step` Pass 3 with the kinematic
-// + inertia inputs supplied by the FWD + UPWARD adjoint kernels.
-//
-// As with the other two sweep kernels, the dispatcher currently routes
-// to the closed-form CPU path because the per-step round-trip cost
-// dominates at n_links ≤ 6. Multi-articulation batching (Stage 23.1.2)
-// is the GPU-favourable workload this kernel is scaffolded for.
+// **Status: superseded scaffold — see `featherstone_adjoint_fwd.wgsl`
+// for the rationale.** Stage 23.1.2's batched closed-form Jacobian
+// kernel (`featherstone_adjoint_jacobians.wgsl`) folds the per-sweep
+// adjoints together; the standalone Pass-3 adjoint becomes useful
+// once the pure-analytic Pass-1 / Pass-2 derivations land in Stage
+// 23.1.3.
 
 const MAX_LINKS: u32 = 64u;
 

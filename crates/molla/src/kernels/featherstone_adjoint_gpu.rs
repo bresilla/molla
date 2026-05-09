@@ -494,7 +494,7 @@ fn pack_link(link: &crate::autograd::featherstone_adjoint::RevoluteLink) -> GpuL
     let kind = match link.kind {
         JointKind::Revolute => 0u32,
         JointKind::Prismatic => 1u32,
-        JointKind::Ball | JointKind::Free => {
+        JointKind::Ball | JointKind::Free | JointKind::Distance | JointKind::D6 => {
             // Kernel never sees these — chain construction expands
             // them to stacked single-DoF links. Defensive: log + fall
             // back to revolute (no-op axis).

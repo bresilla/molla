@@ -1,22 +1,13 @@
-// Stage 23.1.1 — adjoint kernel for Featherstone Pass 2 (upward
-// articulated-inertia accumulation).
+// Stage 23.1.1 / 23.1.2 — adjoint kernel for Featherstone Pass 2
+// (upward articulated-inertia accumulation).
 //
-// **Status: scaffold only — see `featherstone_adjoint_fwd.wgsl` doc.**
-//
-// The Pass-2 adjoint walks the chain leaf → root accumulating the
-// child-block contributions to `∂L/∂(I^A_p, p^A_p)` from the parent's
-// rank-1 deflation `I^A := I^A − U·Uᵀ / D`. For a closed-form
-// implementation see Carpentier & Mansard 2018 — the per-step cost is
-// `O(n²)` matrix work which lines up well with WGSL's per-thread
-// register file budget at n ≤ 6.
-//
-// The current adjoint dispatcher routes through the closed-form CPU
-// path (CRBA + Cholesky-invert) which produces an exact `M⁻¹ = ∂q̈/∂τ`
-// directly — bypassing the per-sweep adjoint entirely. The GPU sweep
-// adjoints would be useful for **multi-articulation batching** (Stage
-// 23.1.2) where the per-step Jacobian is amortised across 32+ chains;
-// for the Stage-23.1 single-chain case the closed-form solve beats it
-// by ~3×.
+// **Status: superseded scaffold — see `featherstone_adjoint_fwd.wgsl`
+// for the rationale.** Stage 23.1.2 collapsed the three per-sweep
+// kernels into a single multi-articulation closed-form Jacobian
+// kernel (`featherstone_adjoint_jacobians.wgsl`) because the per-
+// sweep round-trip cost dominated the wall time at n_links ≤ 6. The
+// per-sweep bind-group layout here documents the API the Stage 23.1.3
+// pure-analytic path will use.
 
 const MAX_LINKS: u32 = 64u;
 
