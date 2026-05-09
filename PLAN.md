@@ -2622,32 +2622,68 @@ slider, soft↔hard AVBD toggle, "show pinned points" gizmo toggle.
 
 ### Stage 21.1 — Mesh-utility hardening — **P2.5**
 
-**Status: NOT STARTED.** Stage 21 shipped the CPU mesh tools
-single-threaded with vertex-only hull output — fine for the demo, not
-fine for production asset pipelines.
+**Status: SHIPPED.** Stage 21 shipped the CPU mesh tools
+single-threaded with vertex-only hull output — this stage hardens the
+algorithms for production asset pipelines: rayon-parallel hot loops,
+incremental QEM heap, BVH-pruned SDF closest-point, real hull face
+data, and shared-state LOD chain.
 
 **Deliverables:**
-- ❌ **Rayon parallelisation** of `decimate` (per-collapse-candidate
-  evaluation) and `bake_mesh_to_sdf` (per-voxel SDF computation). Add
-  `rayon` to `crates/molla/Cargo.toml`.
-- ❌ **Hull face/wireframe output** from `convex_hull` — currently
-  returns vertices only; the viewer's hull overlay paints yellow point
-  markers because there's no face data to render. Return
-  `(Vec<Vec3>, Vec<[u32; 3]>)` with face indices.
-- ❌ **LOD chain** output: `decimate_lod_chain(mesh, factors: &[f64])
-  -> Vec<TriMesh>` — decimate to multiple simplification levels
-  sharing one QEM priority queue across levels (cheaper than running
-  the algorithm N times).
-- ❌ **Marching cubes adaptive resolution** — multi-resolution
-  refinement around the iso-surface for cleaner extraction at coarse
-  base resolutions. Optional polish.
+- ✅ **Rayon parallelisation** of `decimate` (per-edge cost
+  evaluation in `seed_heap`) and `bake_mesh_to_sdf` (per-voxel
+  closest-point + per-row sign pass via `par_chunks_mut`). Added
+  `rayon = "1.10"` to `crates/molla/Cargo.toml`. Determinism guarded
+  by (a) sorted/canonicalised edge + neighbour iteration in the QEM
+  state machine, (b) tie-breaking the heap `Ord` impl on `(u, v)`
+  so cost-equal entries pop in a fixed order, and (c) per-voxel
+  parallel reductions read triangles in `mesh.indices` order so the
+  resulting `data` array is byte-identical run-to-run.
+- ✅ **Hull face/wireframe output** — `convex_hull` now returns
+  `ConvexHullMesh { vertices, faces }`. Faces are wound CCW from the
+  outside; the public `ConvexHullMesh::edges()` helper deduplicates
+  them for line-list rendering. Viewer's `Scene::MeshTools` swaps the
+  yellow-point markers for a real `LineList` wireframe overlay built
+  from the new face data.
+- ✅ **LOD chain** output: `decimate_lod_chain(mesh, factors: &[f64])
+  -> Vec<TriMesh>`. Targets are processed in descending order against
+  one shared `DecimateState`; intermediate meshes are snapshotted via
+  `snapshot_trimesh()` so we pay one decimation's worth of work for
+  the deepest factor instead of N independent runs.
+- ❌ **Marching cubes adaptive resolution** — DEFERRED. The
+  per-voxel BVH closest-point optimisation in `bake_mesh_to_sdf`
+  delivered the perf the multi-resolution refinement was meant to
+  enable (53 ms for 64³ × 10k tris, 10x under the 500 ms target),
+  so the polish is no longer load-bearing for the headline budget.
+  Skip until a real consumer of finer iso-surface fidelity surfaces.
 
-**Definition of done:**
-- 50k-tri mesh decimation finishes in < 1 s on the dev laptop's CPU
-  (vs ~10 s single-threaded today).
-- 64³ SDF bake of a 10k-tri mesh in < 500 ms.
-- Mesh-tools demo's hull overlay shows actual face triangles, not
-  yellow point markers.
+**Algorithmic changes beyond pure parallelisation:**
+- QEM made *incremental*: heap is seeded once via `seed_heap`, then
+  each collapse only re-inserts edges incident on the surviving
+  vertex. Stale entries (one of whose endpoints was modified by a
+  later collapse) are dropped on pop via per-vertex version
+  counters. ~100x speedup over the Stage 21 rebuild-every-call
+  loop.
+- SDF bake closest-point pass swapped from O(R³ × T) brute force to
+  best-first BVH traversal pruned by the running squared distance.
+  ~30x speedup on top of rayon for the 64³ × 10k-tri benchmark.
+
+**Definition of done — measured in `tests/mesh_utils_hardened.rs`:**
+- ✅ 50k-tri mesh decimation: **29 ms release / 273 ms debug** (PLAN
+  target < 1 s release; test budget 2 s release / 12 s debug).
+- ✅ 64³ × 10k-tri SDF bake: **53 ms release / 236 ms debug** (PLAN
+  target < 500 ms; test budget 1 s release / 6 s debug).
+- ✅ Hull face output: cube hull yields 12 outward-facing triangles
+  (test verifies `face_normal · (face_centre - hull_centroid) > 0`
+  for every face).
+- ✅ LOD chain `[0.5, 0.25, 0.1]`: 3 meshes with strictly decreasing
+  triangle + vertex counts; deeper-LOD vertices sit inside the
+  parent's padded AABB.
+- ✅ Determinism: `decimate`, `bake_mesh_to_sdf`, and `convex_hull`
+  each produce byte-identical output across 10 runs (regression
+  guard against rayon parallel-reduction non-determinism).
+- ✅ Mesh-tools demo's hull overlay renders a real LineList
+  wireframe (`build_hull_wireframe_mesh` in `molla_viewer/src/main.rs`)
+  instead of yellow point markers.
 
 **Dependencies:** Stage 21 (the CPU mesh tools this hardens).
 
