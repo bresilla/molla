@@ -9,13 +9,13 @@
 //! cargo test -p molla --features gpu --test autograd_featherstone_gpu -- --ignored
 //! ```
 //!
-//! **Stage 23.1.1 routing caveat:** the `AdjointBackend::ForceGpu`
-//! variant currently routes to the closed-form CPU path (the WGSL
-//! kernel bodies are deferred to Stage 23.1.2 — single-articulation GPU
-//! round-trip dominates the tiny per-step work). These tests therefore
-//! exercise the **dispatcher** + the closed-form CPU path; the parity
-//! assertions stay valid when the GPU bodies land in 23.1.2 because
-//! the dispatcher contract doesn't change.
+//! **Stage 23.1.1 routing caveat:** the `AdjointBackend::GpuFallbackCpu`
+//! variant always routes to the CPU AnalyticQd path on the dispatcher
+//! — single-articulation per-step GPU round-trip dominates the tiny
+//! per-step work, so the dispatcher chooses CPU even with a real
+//! device. These tests therefore exercise the **dispatcher** + the
+//! closed-form CPU path; real multi-chain GPU dispatch lives in
+//! `FeatherstoneAdjointGpuKernel::reverse_batched`.
 
 #![cfg(feature = "gpu")]
 
@@ -190,14 +190,16 @@ fn parity_check(
         grad_ee,
         &mut s_cpu,
         AdjointBackend::ForceCpuClosedForm,
-    );
+    )
+    .unwrap();
     let gpu = FeatherstoneAdjointDispatcher::reverse(
         chain,
         &trace,
         grad_ee,
         &mut s_gpu,
-        AdjointBackend::ForceGpu,
-    );
+        AdjointBackend::GpuFallbackCpu,
+    )
+    .unwrap();
     let mut max_diff = 0.0_f64;
     for t in 0..chain.horizon {
         for k in 0..n {

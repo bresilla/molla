@@ -31,7 +31,7 @@ fn check_torque_grad_matches_fd(
     grad_ee: Vec3,
 ) -> Real {
     let trace = chain.rollout(q0, qd0, tau0);
-    let g_analytic = chain.reverse(&trace, grad_ee);
+    let g_analytic = chain.reverse(&trace, grad_ee).unwrap();
 
     let n = chain.links.len();
     let mut max_diff = 0.0_f64;
@@ -224,7 +224,9 @@ fn franka_6dof_reaches_target() {
             lr = (lr * 1.05).min(lr_init);
         }
         prev = last;
-        let g = chain.reverse_with_scratch(&trace, d * 2.0, &mut scratch);
+        let g = chain
+            .reverse_with_scratch(&trace, d * 2.0, &mut scratch)
+            .unwrap();
         // Per-element clamp.
         for t in 0..chain.horizon {
             for k in 0..n {

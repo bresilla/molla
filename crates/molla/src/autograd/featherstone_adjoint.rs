@@ -67,6 +67,46 @@ use crate::math::{
 use super::tape::{Tape, TapeId, TapeOp};
 
 // ────────────────────────────────────────────────────────────────────
+// Error type — surfaces unsupported joint kinds explicitly instead of
+// silently returning zero gradients. Mirrors the "return Err" pattern
+// in `crate::solvers::crba::cpu_step` and `crate::solvers::rnea`.
+// ────────────────────────────────────────────────────────────────────
+
+/// Failure modes that the Featherstone autograd path can surface.
+///
+/// Multi-DoF joints (Ball / Free / Distance / D6) are exposed at the
+/// user level as composite joints built out of stacked single-DoF
+/// Revolute / Prismatic links — see the constructors on
+/// [`FeatherstoneRevoluteChain`]. The per-link math is **only**
+/// defined for single-DoF kinds; if a composite kind reaches the
+/// adjoint we return [`AutogradError::UnsupportedJoint`] instead of
+/// silently zeroing the gradient (which historically masked real
+/// configuration bugs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutogradError {
+    /// A composite [`JointKind`] (Ball / Free / Distance / D6) reached
+    /// the per-link autograd math. Decompose it into stacked single-DoF
+    /// links upstream — see e.g.
+    /// [`FeatherstoneRevoluteChain::spherical_pendulum`].
+    UnsupportedJoint(JointKind),
+}
+
+impl core::fmt::Display for AutogradError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnsupportedJoint(k) => write!(
+                f,
+                "Featherstone autograd: joint kind {k:?} is unsupported in the per-link \
+                 math (multi-DoF kinds must be decomposed into stacked single-DoF \
+                 Revolute / Prismatic links upstream of the adjoint)."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AutogradError {}
+
+// ────────────────────────────────────────────────────────────────────
 // Public model: a serial chain with per-link joint kind + inertia.
 // ────────────────────────────────────────────────────────────────────
 
@@ -729,6 +769,24 @@ impl JointKinematic {
 }
 
 impl FeatherstoneRevoluteChain {
+    /// Reject chains that contain composite multi-DoF joint kinds. The
+    /// per-link autograd math (in `dh_dq_analytic`,
+    /// `fill_jacobians_analytic_full`, etc.) is only defined for
+    /// single-DoF Revolute / Prismatic links — multi-DoF joints must
+    /// be decomposed into stacked single-DoF links upstream (see
+    /// [`Self::spherical_pendulum`] for an example). The reverse pass
+    /// calls this before doing any work; CRBA / RNEA do the equivalent
+    /// check (see `solvers/crba.rs::cpu_step`).
+    pub fn validate_for_autograd(&self) -> Result<(), AutogradError> {
+        for link in &self.links {
+            match link.kind {
+                JointKind::Revolute | JointKind::Prismatic => {}
+                k => return Err(AutogradError::UnsupportedJoint(k)),
+            }
+        }
+        Ok(())
+    }
+
     /// Single-step Featherstone forward + intermediate capture.
     pub fn forward_step(
         &self,
@@ -1233,7 +1291,11 @@ impl FeatherstoneRevoluteChain {
     /// Allocates a fresh [`JacobianScratch`] internally; for the
     /// optimisation loop where `reverse` runs every iteration prefer
     /// [`Self::reverse_with_scratch`].
-    pub fn reverse(&self, trace: &FeatherstoneTrace, grad_ee: Vec3) -> Vec<Vec<Real>> {
+    pub fn reverse(
+        &self,
+        trace: &FeatherstoneTrace,
+        grad_ee: Vec3,
+    ) -> Result<Vec<Vec<Real>>, AutogradError> {
         let n = self.links.len();
         let mut scratch = JacobianScratch::new(n);
         self.reverse_with_scratch(trace, grad_ee, &mut scratch)
@@ -1246,7 +1308,7 @@ impl FeatherstoneRevoluteChain {
         trace: &FeatherstoneTrace,
         grad_ee: Vec3,
         scratch: &mut JacobianScratch,
-    ) -> Vec<Vec<Real>> {
+    ) -> Result<Vec<Vec<Real>>, AutogradError> {
         self.reverse_with_strategy(trace, grad_ee, scratch, JacobianStrategy::default())
     }
 
@@ -1254,13 +1316,20 @@ impl FeatherstoneRevoluteChain {
     /// strategy. [`JacobianStrategy::ClosedForm`] is the default and
     /// the production path; [`JacobianStrategy::CentralDifference`]
     /// stays as a correctness oracle for the parity tests.
+    ///
+    /// Returns [`AutogradError::UnsupportedJoint`] if the chain
+    /// contains a composite multi-DoF joint kind (Ball / Free /
+    /// Distance / D6) — those are user-level shortcuts that must be
+    /// pre-decomposed into stacked single-DoF Revolute / Prismatic
+    /// links before reaching the reverse pass.
     pub fn reverse_with_strategy(
         &self,
         trace: &FeatherstoneTrace,
         grad_ee: Vec3,
         scratch: &mut JacobianScratch,
         strategy: JacobianStrategy,
-    ) -> Vec<Vec<Real>> {
+    ) -> Result<Vec<Vec<Real>>, AutogradError> {
+        self.validate_for_autograd()?;
         let n = self.links.len();
         let h = self.horizon;
         scratch.resize(n);
@@ -1353,7 +1422,7 @@ impl FeatherstoneRevoluteChain {
                 }
                 JacobianStrategy::AnalyticFull => {
                     let qdd_t = &trace.steps[t].q_dd;
-                    self.fill_jacobians_analytic_full(q_t, qd_t, qdd_t, scratch);
+                    self.fill_jacobians_analytic_full(q_t, qd_t, qdd_t, scratch)?;
                 }
             }
 
@@ -1386,7 +1455,7 @@ impl FeatherstoneRevoluteChain {
             }
         }
 
-        g_tau
+        Ok(g_tau)
     }
 
     /// Stage 23.1 v1 path — fill the three Jacobian blocks via central
@@ -1779,7 +1848,7 @@ impl FeatherstoneRevoluteChain {
         qd_t: &[Real],
         qdd_t: &[Real],
         scratch: &mut JacobianScratch,
-    ) {
+    ) -> Result<(), AutogradError> {
         let n = self.links.len();
 
         // 1. Build M(q) via CRBA — same as the closed-form path.
@@ -1810,7 +1879,7 @@ impl FeatherstoneRevoluteChain {
         //    so the Carpentier-Mansard chain-rule trick still folds in
         //    the M-derivative term — implemented inline by including
         //    the `S_i · qdd_i` term in the augmented forward sweep.
-        let did_dq = self.dh_dq_analytic(q_t, qd_t, qdd_t);
+        let did_dq = self.dh_dq_analytic(q_t, qd_t, qdd_t)?;
         for j in 0..n {
             for k in 0..n {
                 let mut s = 0.0;
@@ -1820,6 +1889,7 @@ impl FeatherstoneRevoluteChain {
                 scratch.qdd_q[j * n + k] = -s;
             }
         }
+        Ok(())
     }
 
     /// Stage 23.1.4 — analytic `∂ID(q,qd,q̈)/∂q ∈ ℝⁿˣⁿ` for a serial
@@ -1849,7 +1919,17 @@ impl FeatherstoneRevoluteChain {
     /// Once the per-link kinematic tangent is known, the rest chains
     /// through the existing RNEA arithmetic exactly as the Stage
     /// 23.1.2 `dh_dqd_analytic` chains through the velocity tangent.
-    pub fn dh_dq_analytic(&self, q: &[Real], qd: &[Real], qdd: &[Real]) -> Vec<Real> {
+    pub fn dh_dq_analytic(
+        &self,
+        q: &[Real],
+        qd: &[Real],
+        qdd: &[Real],
+    ) -> Result<Vec<Real>, AutogradError> {
+        // Per-link math below assumes single-DoF Revolute / Prismatic
+        // — composite kinds (Ball / Free / Distance / D6) must be
+        // pre-decomposed upstream. Fail loudly instead of silently
+        // returning zero gradients, matching CRBA / RNEA.
+        self.validate_for_autograd()?;
         let n = self.links.len();
         let mut dh = vec![0.0; n * n];
 
@@ -1939,9 +2019,14 @@ impl FeatherstoneRevoluteChain {
             let o_k = joint_origin_arr[k];
             let lin_k = axis_world_arr[k]; // Prismatic linear axis (world).
 
+            // Per-column rotational tangent. Validated upfront via
+            // `validate_for_autograd`, so only Revolute / Prismatic
+            // can show up here — composite kinds would have been
+            // rejected with `AutogradError::UnsupportedJoint`.
             let drot_axis: Vec3 = match k_kind {
                 JointKind::Revolute => omega_k,
-                _ => Vec3::ZERO,
+                JointKind::Prismatic => Vec3::ZERO,
+                kind => return Err(AutogradError::UnsupportedJoint(kind)),
             };
 
             // Forward sweep — only links j ≥ k feel the perturbation.
@@ -1957,7 +2042,7 @@ impl FeatherstoneRevoluteChain {
                     match kinds_arr[i] {
                         JointKind::Revolute => SpatialVector::new(Vec3::ZERO, daxis_i),
                         JointKind::Prismatic => SpatialVector::new(daxis_i, Vec3::ZERO),
-                        _ => SpatialVector::ZERO,
+                        kind => return Err(AutogradError::UnsupportedJoint(kind)),
                     }
                 } else {
                     SpatialVector::ZERO
@@ -1982,7 +2067,7 @@ impl FeatherstoneRevoluteChain {
                 let dcw_i = match k_kind {
                     JointKind::Revolute => omega_k.cross(cw_i - o_k),
                     JointKind::Prismatic => lin_k,
-                    _ => Vec3::ZERO,
+                    kind => return Err(AutogradError::UnsupportedJoint(kind)),
                 };
                 let di_world_i = if drot_axis == Vec3::ZERO {
                     Mat3::ZERO
@@ -2037,7 +2122,7 @@ impl FeatherstoneRevoluteChain {
             }
         }
 
-        dh
+        Ok(dh)
     }
 
     /// Recursive Newton-Euler inverse dynamics on the serial revolute
@@ -2205,14 +2290,16 @@ impl FeatherstoneRevoluteChain {
         qd0: &[Real],
         tau: &[Vec<Real>],
         grad_ee: Vec3,
-    ) -> Vec<Vec<Real>> {
+    ) -> Result<Vec<Vec<Real>>, AutogradError> {
         let trace = self.rollout(q0, qd0, tau);
         self.reverse(&trace, grad_ee)
     }
 
     /// Gradient-descent loop on the open-loop torque sequence `tau` to
     /// drive the EE to `target`. Mutates `tau` in place; returns
-    /// `(final_residual_m, iters_to_5cm)`.
+    /// `(final_residual_m, iters_to_5cm)`. Surfaces
+    /// [`AutogradError::UnsupportedJoint`] if the chain has a
+    /// composite multi-DoF joint kind.
     pub fn gradient_descent(
         &self,
         q0: &[Real],
@@ -2221,7 +2308,7 @@ impl FeatherstoneRevoluteChain {
         target: Vec3,
         lr: Real,
         iters: usize,
-    ) -> (Real, Option<usize>) {
+    ) -> Result<(Real, Option<usize>), AutogradError> {
         let mut last = Real::INFINITY;
         let mut converged: Option<usize> = None;
         let mut scratch = JacobianScratch::new(self.links.len());
@@ -2235,14 +2322,14 @@ impl FeatherstoneRevoluteChain {
                 converged = Some(it);
             }
             let grad_ee = d * 2.0;
-            let g = self.reverse_with_scratch(&trace, grad_ee, &mut scratch);
+            let g = self.reverse_with_scratch(&trace, grad_ee, &mut scratch)?;
             for t in 0..self.horizon {
                 for k in 0..self.links.len() {
                     tau[t][k] -= lr * g[t][k];
                 }
             }
         }
-        (last, converged)
+        Ok((last, converged))
     }
 }
 
@@ -2490,7 +2577,7 @@ mod tests {
         let qd0 = vec![0.0_f64];
         let tau = vec![vec![0.5_f64]; chain.horizon];
         let trace = chain.rollout(&q0, &qd0, &tau);
-        let g = chain.reverse(&trace, Vec3::Y);
+        let g = chain.reverse(&trace, Vec3::Y).unwrap();
         assert_eq!(g.len(), chain.horizon);
         assert_eq!(g[0].len(), 1);
     }
@@ -2503,7 +2590,9 @@ mod tests {
         let qd0 = vec![0.0_f64];
         let tau0 = vec![vec![0.1_f64]; chain.horizon];
 
-        let g = chain.ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::Y);
+        let g = chain
+            .ee_gradient_wrt_torques(&q0, &qd0, &tau0, Vec3::Y)
+            .unwrap();
 
         // FD on tau[0]
         let eps = 1e-5_f64;
@@ -2574,8 +2663,12 @@ mod tests {
         let trace = chain.rollout(&q0, &qd0, &tau);
         let mut s_cf = JacobianScratch::new(n);
         let mut s_aq = JacobianScratch::new(n);
-        let g_cf = chain.reverse_with_strategy(&trace, Vec3::Z, &mut s_cf, JacobianStrategy::ClosedForm);
-        let g_aq = chain.reverse_with_strategy(&trace, Vec3::Z, &mut s_aq, JacobianStrategy::AnalyticBiasQd);
+        let g_cf = chain
+            .reverse_with_strategy(&trace, Vec3::Z, &mut s_cf, JacobianStrategy::ClosedForm)
+            .unwrap();
+        let g_aq = chain
+            .reverse_with_strategy(&trace, Vec3::Z, &mut s_aq, JacobianStrategy::AnalyticBiasQd)
+            .unwrap();
         let mut max_diff = 0.0_f64;
         for t in 0..chain.horizon {
             for k in 0..n {

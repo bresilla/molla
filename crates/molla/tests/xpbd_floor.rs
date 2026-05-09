@@ -64,6 +64,12 @@ fn stack_settles_without_growing() {
     // the stack bounces ever higher instead of settling.
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.0);
+    // Restitution + friction must be set on the builder so that the
+    // finalize step bakes them into the per-shape NaN-sentinel slots.
+    // Setting `model.default_*` post-build no longer affects shapes
+    // (the substitution is one-shot at `build()`).
+    b.set_default_restitution(0.3).unwrap();
+    b.set_default_friction(0.5).unwrap();
 
     for i in 0..4 {
         let body = b.add_body(
@@ -76,9 +82,7 @@ fn stack_settles_without_growing() {
     b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
         .unwrap();
 
-    let mut model = b.build().unwrap();
-    model.default_restitution = 0.3;
-    model.default_friction = 0.5;
+    let model = b.build().unwrap();
 
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();

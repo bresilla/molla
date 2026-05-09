@@ -6,7 +6,8 @@
 //!    brief's scope-realism note ("if you hit a wall, ship semi-
 //!    implicit"), we ship the diagonal-preconditioned Jacobi
 //!    relaxation flavour rather than full matrix-free CG over the
-//!    grid Lagrangian. Each iteration applies
+//!    grid Lagrangian — see [`MpmTimeStep::Implicit::jacobi_iters`].
+//!    Each iteration applies
 //!       v_new = (m·v_explicit + dt² · k_diag · v_avg) /
 //!               (m + dt² · k_diag)
 //!    where `k_diag` is a particle-scattered diagonal estimate of the
@@ -51,7 +52,7 @@
 //! 4. `grid_update` — momentum / mass → velocity, gravity, boundary
 //!    friction. Output goes into `g_velocity`.
 //! 5. **Implicit loop** (only when [`MpmTimeStep::Implicit`]):
-//!    `cg_iters` × (`mpm_implicit_apply`, `mpm_implicit_swap`).
+//!    `jacobi_iters` × (`mpm_implicit_apply`, `mpm_implicit_swap`).
 //! 6. `mpm_rigid_wrench_reset` then `mpm_rigid_force_integrate` —
 //!    aggregate two-way coupling wrenches.
 //! 7. `g2p` — grid → particle gather; APIC affine matrix C; F update.
@@ -65,7 +66,7 @@
 //!
 //! let engine = Engine::new_gpu()?;
 //! let mut cfg = MpmConfig::sand_calibrated();
-//! cfg.time_step = MpmTimeStep::Implicit { cg_iters: 3 };
+//! cfg.time_step = MpmTimeStep::Implicit { jacobi_iters: 3 };
 //! cfg.rheology = MpmRheology::Sand { friction_angle: 30f32.to_radians() };
 //! let mut sim = MpmSimulation::new(&engine, cfg)?;
 //! sim.set_particles(queue, &positions)?;
@@ -176,31 +177,33 @@ impl Default for MpmRheology {
 /// Stage 24d.1 — time-step selection.
 ///
 /// `Explicit` reproduces the Stage 24d v1 path bit-exactly. `Implicit`
-/// adds a `cg_iters`-loop of diagonal-preconditioned Jacobi
-/// relaxation on the grid velocity — cheap (≈ 1 grid sweep per
+/// runs a fixed number of diagonal-preconditioned Jacobi relaxation
+/// sweeps on the grid velocity — cheap (≈ 1 grid sweep per
 /// iteration), unconditionally stable, and lets the caller raise dt
 /// 4×-6× without blow-up.
 ///
-/// **Caveat (CG convergence):** the Jacobi preconditioner is the
-/// diagonal of the stress-Hessian estimate scattered from the
-/// particles. On highly anisotropic strain states (e.g. very stiff
-/// snow under unilateral compression) it under-corrects and a few
-/// extra iterations are needed; if the user reports oscillations,
-/// raise `cg_iters` to 8-20 or fall back to `Explicit` with a
-/// smaller dt. The "20-iter cap with residual exit" in the original
-/// brief was for a full-CG plan; with Jacobi we simply run a fixed
-/// number of sweeps.
+/// **Caveat (Jacobi vs CG):** this is **not** Conjugate Gradient — no
+/// Krylov subspace, no residual-based early exit. The Jacobi
+/// preconditioner is the diagonal of the stress-Hessian estimate
+/// scattered from the particles. On highly anisotropic strain states
+/// (e.g. very stiff snow under unilateral compression) it
+/// under-corrects and a few extra iterations are needed; if the user
+/// reports oscillations, raise `jacobi_iters` to 8-20 or fall back to
+/// `Explicit` with a smaller dt. The "20-iter cap with residual exit"
+/// in the original brief was for a full-CG plan; with Jacobi we
+/// simply run a fixed number of sweeps.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MpmTimeStep {
     /// Stage 24d v1 explicit symplectic step.
     Explicit,
-    /// Semi-implicit step with `cg_iters` Jacobi sweeps. Typical
+    /// Semi-implicit step with `jacobi_iters` Jacobi sweeps. Typical
     /// 1-3 for sand at 1/240 s; 5-10 for snow / stiff materials.
     Implicit {
-        /// Number of Jacobi sweeps per substep (semi-implicit
-        /// fallback; the brief named the field `cg_iters` for the
-        /// full-CG plan, retained here for source-compat).
-        cg_iters: u32,
+        /// Number of diagonal-preconditioned Jacobi sweeps per
+        /// substep. The original brief named this `cg_iters` for a
+        /// full-CG plan that never landed; the actual implementation
+        /// is fixed-iteration Jacobi (no CG, no residual exit).
+        jacobi_iters: u32,
     },
 }
 
@@ -296,8 +299,8 @@ impl MpmConfig {
     ///   * boundary_friction = 0.3 (mostly-rough floor; full sticking
     ///     0.0 inhibits the column from collapsing outward at all,
     ///     full slip 1.0 lets the pile flow indefinitely).
-    ///   * `time_step = Implicit { cg_iters: 3 }` — required for the
-    ///     stiffer 1e5 Pa modulus to stay inside CFL at moderate dt.
+    ///   * `time_step = Implicit { jacobi_iters: 3 }` — required for
+    ///     the stiffer 1e5 Pa modulus to stay inside CFL at moderate dt.
     pub fn sand_calibrated() -> Self {
         Self {
             grid_size: 48,
@@ -316,7 +319,7 @@ impl MpmConfig {
             rheology: MpmRheology::Sand {
                 friction_angle: 30.0_f32.to_radians(),
             },
-            time_step: MpmTimeStep::Implicit { cg_iters: 3 },
+            time_step: MpmTimeStep::Implicit { jacobi_iters: 3 },
         }
     }
 
@@ -893,9 +896,9 @@ impl MpmSimulation {
         let groups_part = self.particle_count.div_ceil(WORKGROUP_SIZE);
         let groups_rigid = self.rigid_count.max(1).div_ceil(WORKGROUP_SIZE);
 
-        let cg_iters = match self.cfg.time_step {
+        let jacobi_iters = match self.cfg.time_step {
             MpmTimeStep::Explicit => 0,
-            MpmTimeStep::Implicit { cg_iters } => cg_iters,
+            MpmTimeStep::Implicit { jacobi_iters } => jacobi_iters,
         };
 
         let mut encoder = _device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -947,7 +950,7 @@ impl MpmSimulation {
                 pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
 
                 // 5. (optional) Implicit Jacobi sweeps.
-                for _ in 0..cg_iters {
+                for _ in 0..jacobi_iters {
                     pass.set_pipeline(&self.pipe_implicit_apply);
                     pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
                     // Ping-pong: copy g_velocity_prev → g_velocity.

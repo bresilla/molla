@@ -137,7 +137,7 @@ fn mpm_implicit_explicit_parity() {
 
     let mut cfg_i = MpmConfig::sand();
     cfg_i.youngs = 2.0e4;
-    cfg_i.time_step = MpmTimeStep::Implicit { cg_iters: 2 };
+    cfg_i.time_step = MpmTimeStep::Implicit { jacobi_iters: 2 };
     let mut sim_i = MpmSimulation::new(&engine, cfg_i).expect("implicit sim");
     sim_i.set_particles(&queue, &particles).expect("set");
 
@@ -211,7 +211,7 @@ fn mpm_implicit_allows_larger_dt() {
 
     let mut cfg_i = MpmConfig::sand();
     cfg_i.youngs = 5.0e5;
-    cfg_i.time_step = MpmTimeStep::Implicit { cg_iters: 5 };
+    cfg_i.time_step = MpmTimeStep::Implicit { jacobi_iters: 5 };
     let mut sim_i = MpmSimulation::new(&engine, cfg_i).expect("implicit sim");
     sim_i
         .set_particles_with_velocity(&queue, &particles, &initial_vel)
@@ -295,7 +295,7 @@ fn mpm_calibrated_aor_30deg() {
     cfg.particle_mass = 1.0e-3;
     cfg.particle_volume = 1.0e-6;
     cfg.max_particles = 32_768;
-    cfg.time_step = MpmTimeStep::Implicit { cg_iters: 3 };
+    cfg.time_step = MpmTimeStep::Implicit { jacobi_iters: 3 };
     let mut sim = MpmSimulation::new(&engine, cfg).expect("mpm new");
 
     let particles = fill_box([-0.10, 0.20, -0.10], [0.10, 0.40, 0.10], 8, 13);

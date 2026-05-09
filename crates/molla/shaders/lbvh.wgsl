@@ -60,35 +60,11 @@ struct Uniforms {
 @group(2) @binding(1) var<storage, read_write> pair_a:     array<u32>;
 @group(2) @binding(2) var<storage, read_write> pair_b:     array<u32>;
 
-// Spread the lower 10 bits of `v` across every 3rd bit slot.
-fn spread_bits(v: u32) -> u32 {
-    var x = v & 0x000003ffu;
-    x = (x | (x << 16u)) & 0x030000ffu;
-    x = (x | (x << 8u))  & 0x0300f00fu;
-    x = (x | (x << 4u))  & 0x030c30c3u;
-    x = (x | (x << 2u))  & 0x09249249u;
-    return x;
-}
-
-fn morton3(p: vec3<f32>) -> u32 {
-    let xi = u32(clamp(p.x, 0.0, 0.99999) * 1024.0);
-    let yi = u32(clamp(p.y, 0.0, 0.99999) * 1024.0);
-    let zi = u32(clamp(p.z, 0.0, 0.99999) * 1024.0);
-    return spread_bits(xi) | (spread_bits(yi) << 1u) | (spread_bits(zi) << 2u);
-}
-
-@compute @workgroup_size(64)
-fn morton_codes(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
-    if (i >= u.primitive_count) { return; }
-    let aabb = primitive_aabb[i];
-    let centroid = (aabb.min.xyz + aabb.max.xyz) * 0.5;
-    let extent = max(u.scene_max.xyz - u.scene_min.xyz, vec3<f32>(1e-9));
-    let normalized = (centroid - u.scene_min.xyz) / extent;
-    let code = morton3(normalized);
-    nodes[i].left = code;
-    nodes[i].right = i;
-}
+// Morton codes are computed CPU-side at `kernels/lbvh.rs::dispatch`
+// — host-side codegen + AABB collection dominate over wgpu submit
+// overhead at v1 scene sizes, so the on-device `morton_codes` /
+// `morton3` / `spread_bits` entry points were never wired up and have
+// been removed (see git log for the deleted scaffold).
 
 // `delta(i)` = longest common prefix between `sorted_codes[i]` and
 // `sorted_codes[i+1]`, with index-based tie-break for duplicate codes.
@@ -307,15 +283,8 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Old Karras top-down build kept for reference / testing parity.
-// Currently unused by the host dispatcher (which calls
-// `build_hierarchy` instead). Left in tree to make the side-by-side
-// comparison easy if anyone wants to revisit the top-down path.
-@compute @workgroup_size(64)
-fn build_internal(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // Stub: no-op. The original Karras top-down build had a
-    // long-standing parent-pointer race with our layout that the
-    // bottom-up `build_hierarchy` sidesteps entirely. Kept for
-    // backwards compat with anything still importing the entry point.
-    let _unused = gid.x;
-}
+// Old Karras top-down `build_internal` entry point removed: the
+// stub had a long-standing parent-pointer race with our layout that
+// the bottom-up `build_hierarchy` sidesteps entirely, and nothing on
+// the host dispatched it. See git log if you need to resurrect the
+// top-down side-by-side.

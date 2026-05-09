@@ -3967,12 +3967,14 @@ qualitative-with-measurement variant (the brief's exact ± 5° gate
 remains open and is moved to Stage 24d.3).
 
 **Shipped (v1):**
-- ✅ **Semi-implicit grid step** ([`MpmTimeStep::Implicit { cg_iters }`])
+- ✅ **Semi-implicit grid step** ([`MpmTimeStep::Implicit { jacobi_iters }`])
   — `mpm_implicit_apply` + `mpm_implicit_swap` WGSL kernels run
-  `cg_iters` Jacobi sweeps per substep using the velocity-Laplacian
-  proxy `v_new = (m·v_e + α·v_avg) / (m + α)` with
-  `α = dt²·m·c²/dx²` (wave-speed-based stiffness).
-  Unconditionally stable for any positive `α`.
+  `jacobi_iters` fixed Jacobi sweeps per substep using the
+  velocity-Laplacian proxy `v_new = (m·v_e + α·v_avg) / (m + α)`
+  with `α = dt²·m·c²/dx²` (wave-speed-based stiffness).
+  Unconditionally stable for any positive `α`. **This is fixed-iter
+  Jacobi, not CG** — no Krylov subspace, no residual exit; the field
+  was historically named `cg_iters` and has been renamed for honesty.
   **Caveat:** the Jacobi preconditioner under-corrects on highly
   anisotropic strain states; full matrix-free CG over the grid
   Lagrangian (the original brief deliverable) remains deferred to
