@@ -3123,13 +3123,15 @@ client (viewer + downstream) gets a stable backend-toggle API.
 Stage 17.1 (the multi-DOF Featherstone code path the joint adjoints
 mirror).
 
-### Stage 23.1.2 — Pure-analytic Featherstone adjoint + GPU kernels + Distance / D6 — **DEFERRED, follow-up to 23.1.1**
+### Stage 23.1.2 — Pure-analytic Featherstone adjoint + GPU kernels — **DEFERRED, follow-up to 23.1.1**
 
-**Status: NOT STARTED.** Stage 23.1.1 shipped closed-form CPU
-adjoint + Ball/Free joints + GPU kernel scaffolds. This stage
-populates the WGSL kernel bodies, derives the pure-analytic bias
-derivatives that hit the < 5× backward / forward DoD target, and
-extends multi-DoF coverage to Distance + D6.
+**Status: IN PROGRESS (parallel agent).** Stage 23.1.1 shipped
+closed-form CPU adjoint + Ball/Free joints + GPU kernel scaffolds.
+This stage populates the WGSL kernel bodies, derives the pure-
+analytic bias derivatives that hit the < 5× backward / forward DoD
+target, and adds multi-articulation batching. **Distance + D6 are
+broken out into Stage 23.1.3 below** so the multi-DoF coverage
+ships independently of the GPU-kernel + analytic-derivative work.
 
 **Deliverables:**
 - ❌ **Pure-analytic per-step Jacobian on CPU + GPU** — replace the
@@ -3146,22 +3148,71 @@ extends multi-DoF coverage to Distance + D6.
   kernels to dispatch many parallel articulations per workgroup.
   This is the workload where GPU autograd actually beats CPU; at
   single articulation the round-trip cost dominates.
-- ❌ **Distance joint adjoint** — needs proximal-style handling for
-  the non-smooth `λ = 0` projection. Stage 17.1 added the forward
-  path; reverse stays open.
-- ❌ **D6 joint angular-limits adjoint** — Stage 17.1's Euler-decomp
-  forward path has discontinuous Jacobian branches; reverse needs
-  smoothing or branch-aware AD.
 
 **Definition of done:**
 - Backward pass **< 5× forward** on the 6-DOF Franka (single chain).
-- All four multi-DoF joint types (Ball / Free / Distance / D6) pass
-  gradient-vs-FD within 1e-3.
 - 32+ parallel articulations show super-linear GPU speedup vs CPU
   closed-form path.
 
 **Dependencies:** Stage 23.1.1 (the CPU closed-form + GPU scaffold
 this stage extends).
+
+### Stage 23.1.3 — Distance + D6 joint adjoints (CPU) — **SHIPPED 2026-05-09**
+
+**Status: SHIPPED.** Stage 23.1.1 deferred Distance and D6 joints
+because their constraint Jacobians are non-smooth (Distance: kink
+at `λ = 0`; D6 angular limits: branch boundaries on the Euler
+decomposition). This stage ships the CPU adjoints for both via a
+**post-step joint-coord projection** layer wrapping the existing
+symplectic-Euler integrator + a matching projection-Jacobian
+transform on the reverse pass.
+
+**Deliverables (shipped):**
+- ✅ **Distance joint adjoint** — projection onto the sphere
+  `||p|| = L`, with Moreau-envelope-style smoothing (parameter
+  `eps_smooth`) across the activation kink. Hard switch (`eps = 0`)
+  available as the v1 fallback. Reverse pass applies
+  `(I - n·nᵀ)` along both q and qd channels.
+- ✅ **D6 joint angular-limits adjoint** — per-axis clamp on the
+  stacked Euler-angle revolutes; reverse pass zeros the
+  pull-past-limit gradient component while preserving the
+  pull-away-from-limit component.
+- ✅ **`add_joint_distance` / `add_joint_d6` constructors** —
+  build the underlying stacked-DoF chain + register the
+  `JointProjection` entries that drive the forward + adjoint
+  hooks.
+- ✅ **Six gradient-vs-FD tests** (CPU, no `#[ignore]`) in
+  `tests/autograd_featherstone_jointkinds.rs` — all within `1e-3`:
+  Distance inactive, Distance active, Distance smoothed-kink
+  continuity sweep, D6 strictly inside, D6 at one limit, D6 at
+  multiple limits.
+- ✅ **Viewer right-rail joint-kind picker** — Scene::DiffArm6
+  pane gains a Revolute / Ball / Free / Distance / D6 picker; the
+  optimisation respects the swap so the user can flip and verify
+  the gradient flows.
+
+**Caveats:**
+- The Distance adjoint drops a `∂n/∂q` cross-term from the velocity
+  projection `v - α(n·v)·n`; this is `O(α · ||v|| / r)` and the FD
+  test at the configured tolerances confirms agreement within
+  `1e-3` even at the kink. For very high-velocity active-Distance
+  configurations the cross-term may need to be put back.
+- The Moreau-envelope smoothing uses a `tanh`-shaped blend with
+  width `eps/3`. For `eps = 0` we fall back to the hard switch
+  (gradient is the one-sided limit on the active side); downstream
+  optimisers that are sensitive at the kink should set `eps` to a
+  small positive value (`~ 1e-3 · L`).
+- D6 multi-limit branches compose by **per-axis** zeroing (each
+  AngularLimit entry is independent). Cross-axis Euler-decomp
+  coupling at gimbal-lock-adjacent configurations is NOT handled
+  — those cases inherit the Stage 23.1.1 Ball / Free gimbal-lock
+  caveat. Real applications should bound angular limits well away
+  from `±π/2` on any axis.
+
+**Dependencies:** Stage 23.1.1 (the multi-DoF stacked-DoF
+infrastructure this stage extends); Stage 17.1 (the forward
+Distance Lagrange + D6 Euler-clamp code path the projection layer
+mirrors).
 
 ### Stage 24 — Specialty primitives (P3) — broken into 24a–24e
 
