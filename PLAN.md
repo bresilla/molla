@@ -10,6 +10,10 @@ This document is the source of truth for scope, architecture, decisions, and
 the staged delivery roadmap. It is intentionally long: skim the table of
 contents, jump to the section you need.
 
+**Companion doc**: [`GAP.md`](GAP.md) — gap analysis vs. the Newton + Warp
+reference, last refreshed 2026-05-09. Stages 14–25 below were added directly
+from that gap analysis; the priority tags (P0–P3) match what's in GAP §9.
+
 ---
 
 ## Table of contents
@@ -1906,6 +1910,52 @@ Out of scope: TriMesh / ConvexHull / Heightfield / SDF intersection
 on the GPU camera path — those carry the `0xff` skip sentinel until
 the GPU mesh BVH / SDF tracer lands.
 
+### Stage 15 — GPU narrow-phase pipeline (EPA + mesh BVH) ✅ COMPLETE (2026-05-09)
+
+Per `GAP.md` §1, the GPU GJK prefilter from Stage 13 only confirmed overlap;
+EPA, manifold generation and mesh-vs-mesh queries still ran on the CPU. This
+stage closes the bulk of the narrow-phase gap so a steady-state scene can
+clear the convex-pair pipeline without round-tripping to host.
+
+**Deliverables (all landed):**
+- `shaders/epa.wgsl` + `kernels/epa::EpaKernel` — bounded-polytope EPA
+  consuming the GJK simplex (`GJK_SIMPLEX_STRIDE`), emitting normal +
+  depth + closest points per pair. Output decoded via
+  `decode_epa_out`; `EPA_STATUS_FALLBACK` flags pairs the host should
+  retry on the CPU (degenerate polytopes, iteration cap).
+- `shaders/gjk.wgsl` + `kernels/gjk::GjkKernel::dispatch_with_simplex`
+  — extended to write the 4-vertex Minkowski-difference simplex so EPA
+  can chain off the same dispatch.
+- `shaders/mesh_bvh_raycast.wgsl` + `kernels/mesh_bvh_raycast::MeshBvhRaycastKernel`
+  + `MeshBvhGpu` upload helper — per-mesh BVH traversal on device,
+  shared by the Stage-14 camera sensor and the future
+  mesh-vs-mesh narrow phase.
+- `geometry/pipeline.rs::CollisionPipeline::enable_full_gpu_narrow_phase`
+  — runtime switch that routes all eligible convex pairs through the
+  GPU GJK→EPA chain; ineligible pairs (TriMesh / Heightfield / SDF /
+  iteration-cap) fall back to CPU and increment the per-frame
+  CPU-call counter.
+- `tests/gpu_narrow_phase.rs` — GJK+EPA parity harness that drives
+  random box / sphere / capsule / cylinder pairs through both
+  pipelines and asserts ≤ 5 mm normal/depth agreement at f32
+  tolerance.
+- `crates/molla_viewer` `Scene::GpuNarrowPhase` (hotkey `-`) — pile of
+  mixed primitives with a CPU↔GPU narrow-phase toggle; right-rail
+  pane reports per-frame SAP-pair count, contact count, and
+  CPU-fallback call count so the user can watch the GPU pipeline
+  take over.
+
+**Definition of done:** box-stack settling parity GPU vs CPU within 5 mm
+at 240 substeps; CPU-fallback counter holds at 0 in the viewer demo's
+steady state once the toggle is on; existing Stage-13 GPU-GJK
+boolean tests still pass.
+
+**Out of scope:** mesh-vs-mesh GPU narrow phase (BVH-vs-BVH traversal
+kernel — the building blocks shipped here, the dispatch loop lands
+in a follow-up); GPU box-box SAT clipping (still routed through CPU
+manifold generation when EPA's single-contact output isn't enough);
+MPR fallback (still deferred from Stage 13).
+
 ### Stage 16 — GPU articulation math (CRBA + RNEA + Jacobian + IK) ✅ COMPLETE (2026-05-09)
 
 Per `GAP.md` §1, all four articulation-math primitives shipped CPU-only in
@@ -1948,13 +1998,198 @@ RNEA + GPU CRBA but as a separate downstream feature); GPU dense Cholesky
 joint support inside CRBA/RNEA — still revolute + prismatic only,
 matching the CPU implementations' current scope.
 
-### Stage 17+ — Differentiability, advanced solvers, Python bindings
+### Stage 17 — Reduced-coord ABA for Ball / D6 / Distance — **P1**
 
-Manual adjoints for XPBD; tape-style autograd for Featherstone.
-MuJoCo solver wrapper as a validation oracle. VBD / Style3D / MPM
-when there's a concrete user. Python bindings (`pyo3`) only if
-explicitly requested — Newton's Python users stay on Python Newton;
-molla serves Rust.
+**Status: PARTIAL** — Ball, D6, Distance joints currently integrate
+**kinematically only** in the Featherstone solver; user-supplied
+`joint_qd` is integrated forward but no dynamics are applied. Per
+`GAP.md` §2, Newton's Featherstone supports them dynamically; this
+is needed before molla can claim "full Featherstone".
+
+Deliverables:
+- ❌ Multi-DOF motion-subspace generalisation in the WGSL Featherstone
+  pass (current code assumes 1-DOF revolute / prismatic).
+- ❌ Ball joint quaternion integration (already works kinematically;
+  needs `q̇` output from ABA pass coupled to quaternion update).
+- ❌ Free joint floating-base dynamics (gravity, applied wrenches at
+  COM via the FREE joint root).
+- ❌ D6 per-axis lock + drive — variable DOF count (locked axes drop
+  out of the joint motion subspace entirely).
+- ❌ Distance joint as a hard length constraint — currently XPBD-only;
+  add proper Lagrange-multiplier projection in Featherstone.
+
+Definition of done:
+- Quadrotor demo (FREE root + 4 prismatic rotors) flies under PD
+  control via Featherstone GPU.
+- Spherical pendulum (BALL joint) tracks analytical motion.
+- D6 pretensioned-cable test holds under gravity.
+
+### Stage 18 — Composable actuator pipeline — **P1**
+
+**Status: NOT STARTED** — molla currently has standalone PD + PID
+controllers (Stage 9) with effort cap baked in. Newton ships the
+composable `Delay → Controller → Clamping` stack (`GAP.md` §6).
+
+Deliverables:
+- ❌ `Actuator` orchestrator — owns a `Delay` stage, a `Controller`
+  trait object, and a `Clamping` trait object; calls them in order
+  per frame.
+- ❌ `Delay` stage — per-DOF ring buffer for sim-to-real lag (5–20 ms
+  typical). GPU kernel for the buffer rotate / read.
+- ❌ Promote effort cap out of the PD/PID kernels into a stand-alone
+  `ClampingMaxEffort` stage (no behaviour change; just refactor).
+- ❌ `ClampingDCMotor` — back-EMF + torque-constant + terminal
+  resistance model. Replaces the simple effort cap with a velocity-
+  dependent torque curve.
+- ❌ `ClampingPositionBased` — joint-limit-aware effort gating.
+- ⚠️ (Optional, P2) `ControllerNeuralMLP` / `ControllerNeuralLSTM` —
+  defer until a user wants neural-policy inference inside the sim
+  loop.
+
+Definition of done:
+- Same PD test result whether the user wires a stand-alone
+  `ControllerPd` or the new `Actuator { delay, ctrl: pd, clamp }`.
+- DC-motor clamp produces the textbook torque-vs-speed curve in a
+  free-spinning rotor test.
+- Delay stage holds a constant-input step response by exactly the
+  configured number of substeps.
+
+### Stage 19 — GPU LBVH broad phase — **P1**
+
+**Status: PARTIAL** — WGSL kernel skeleton (`shaders/lbvh.wgsl`) sits
+in tree from Stage 13; host dispatcher + pipeline integration TODO.
+Per `GAP.md` §1, only matters once scenes get past a few hundred
+shapes (current SAP is fine for cloth + arms).
+
+Deliverables:
+- ❌ GPU radix sort (or equivalent CPU sort + upload as a stop-gap).
+- ❌ Host dispatcher driving `morton_codes` → sort → `build_internal`
+  → `refit_aabbs` in sequence each frame.
+- ❌ Per-pair output buffer + integration with `CollisionPipeline`
+  alongside the existing CPU SAP / BVH paths.
+- ❌ Refit-only mode for scenes with deformable geometry where only
+  AABBs change, not topology.
+
+Definition of done:
+- 10 k-shape scene broad phase in < 2 ms on a desktop adapter
+  (vs ~20 ms for CPU SAP).
+- Pair output matches CPU SAP for the same scene within deterministic
+  ordering.
+
+### Stage 20 — Soft-body solver expansion (VBD or Style3D) — **P1**
+
+**Status: NOT STARTED** — XPBD covers cloth-on-sphere demos but
+struggles on high-iteration cloth (per `GAP.md` §2, Newton ships
+three specialised soft-body backends: VBD, Style3D, MPM). One
+specialised solver picks up real cloth scenes.
+
+Decision (deferred until first soft-body workload appears):
+- **Style3D** (projective dynamics) — cloth-only, smaller scope,
+  PCG-based linear solve. Pick this if the workload is "drape and
+  visualise garments".
+- **VBD** (Vertex Block Descent + Augmented VBD for rigid coupling)
+  — broader scope, includes CABLE joint, soft-body coupling. Pick
+  this if the workload is "soft robots / coupled rigid+soft systems".
+
+Deliverables (placeholder — finalise once direction is chosen):
+- New solver crate / module with a parallel solver path.
+- Cloth demo with significantly higher fidelity than current XPBD
+  cloth (more iterations, better bending stability).
+- Parity / regression suite vs the existing XPBD cloth.
+
+### Stage 21 — Mesh utilities — **P2**
+
+**Status: NOT STARTED** — molla has `TriMesh` + per-mesh BVH; no
+authoring or processing tools. Per `GAP.md` §4, Newton ships hull
+generation, decimation, mesh→SDF baking, and marching cubes.
+
+Deliverables:
+- ❌ **Convex hull builder** (QuickHull or chull3d port) — let users
+  pass an arbitrary mesh and get a hull suitable for the existing
+  `ConvexHull` shape. ~300 LOC, unblocks importing URDF mesh-collision
+  geometry without manual hull authoring.
+- ❌ **Mesh decimation** (quadric error metric) — produce LOD chains
+  for collision vs render meshes.
+- ❌ **Mesh → SDF baking** — voxelise a mesh and produce a 3D texture
+  / sparse grid suitable for SDF-based contact. Required for
+  hydroelastic (Stage 22) and for bigger SDF demos.
+- ❌ **Marching cubes** — SDF / volume → mesh extraction (mostly for
+  visualisation).
+- ❌ Public general-purpose **`SpatialHashGrid`** — extract the one
+  embedded in cloth particle self-collision (Stage 12) into a reusable
+  user-facing structure for proximity queries.
+
+### Stage 22 — MuJoCo wrapper + hydroelastic contact — **P2**
+
+**Status: NOT STARTED** — both items defer until a concrete user
+needs them.
+
+Deliverables:
+- ❌ **MuJoCo wrapper solver** (`SolverMuJoCo`) — wraps the upstream
+  MuJoCo C library as a Newton-style backend. Gives molla access to
+  MuJoCo's mature contact solver, equality constraints (CONNECT /
+  WELD / JOINT-coupling), and the broader MuJoCo ecosystem
+  (`mjcf` import, etc.). Per `GAP.md` §2 / §9, this is the
+  pragmatic path to closing the constrained-dynamics gap without
+  reimplementing PADMM (Newton's Kamino route).
+- ❌ **Hydroelastic contact** — Drake-style compliant contact via
+  pressure fields over overlapping volumes. Replaces point contacts
+  with distributed pressure for soft / deformable interactions.
+  Depends on Stage 21 mesh→SDF baking.
+- ❌ **`Dahl` friction** model — used by Newton VBD for cable joints
+  (smooth stick-slip); only relevant if the soft-body solver chosen
+  in Stage 20 is VBD.
+
+### Stage 23 — Differentiable simulation — **P2**
+
+**Status: NOT STARTED** — Newton + Warp ship a tape-based autograd
+through every solver (`GAP.md` §7.2). molla has nothing.
+
+Deliverables:
+- ❌ Tape-style autograd infrastructure (`molla::autograd::Tape`)
+  recording forward operations, replaying backward to compute
+  gradients.
+- ❌ Manual adjoints for the XPBD solver (constraint projection is
+  the hard piece).
+- ❌ Manual adjoints for the Featherstone solver (ABA reverses cleanly
+  per Featherstone (2008) §10).
+- ❌ Gradient verification harness (analytic vs finite-difference).
+- ❌ At least one non-trivial differentiable demo: trajectory
+  optimisation on the Stage 13 arm reaching a target via gradient
+  descent on initial joint torques.
+
+### Stage 24 — Specialty: Implicit MPM, NanoVDB, advanced linalg — **P3**
+
+**Status: DEFERRED** — only land any of these when a concrete user
+shows up.
+
+Deliverables (each independent):
+- ❌ Implicit MPM solver for granular materials (sand, snow, mud).
+  Newton's `SolverImplicitMPM` is the reference.
+- ❌ NanoVDB-equivalent sparse-volume storage. wgpu doesn't have
+  native NanoVDB support; would need a clean-room WGSL port.
+- ❌ SVD3 / QR3 / eig3 in `math::dense_solve` (currently only
+  Cholesky). Useful for IK reorthogonalisation, polar decomposition
+  in soft-body solvers.
+- ❌ FFT on the GPU (Warp ships `tile_fft` via cuFFTDx; wgpu has no
+  equivalent — would need a hand-written FFT kernel).
+- ❌ Robust-loss extensions: `norm_l1`, `norm_l2_smooth`, custom user
+  losses for IK regularisation.
+
+### Stage 25+ — Out of scope / explicitly deferred
+
+Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
+
+- **Python bindings** (`pyo3`) — Newton serves Python users; molla
+  serves Rust. Only revisit if a concrete user explicitly asks.
+- **TensorCore tile matmul** — wgpu doesn't expose the
+  `cooperative_matrix` extension portably.
+- **CUDA graphs** for command batching — wgpu has no equivalent
+  capture API.
+- **Multi-GPU peer access** — wgpu is single-device for the
+  foreseeable future.
+- **Kamino-style PADMM solver** — overlaps with the MuJoCo wrapper
+  for the constrained-dynamics use case; pick one, not both.
 
 ---
 
@@ -1989,6 +2224,8 @@ rationale, who decided.
 | 2026-05-08 | Stage 0 complete. 19 tests pass, 0 doc warnings, 0 clippy warnings. wgpu pinned at 23 (later upgrade tracked separately). Switched test asserts from `approx` to `(a-b).length() < eps` because `glam::DVec3` doesn't impl `AbsDiffEq`; dropped `approx` from dev-deps. SI unit annotations use `(unit)` parens not `[unit]` because rustdoc treats brackets as broken intra-doc links. |
 | 2026-05-08 | Stage 1 complete. 25 tests pass, 2 oracle tests ignored (require venv). `SemiImplicitSolver` (CPU) is a direct port of Newton's `integrate_rigid_body`. Free-fall trajectory matches the closed-form `g·dt²·n(n+1)/2` to within 1e-9. Bench: 4.92µs/step for 100 spheres (DoD target was <100µs; 20× under). `Engine::step` deferred to stage 2 — `Solver::step` is the canonical API and mirrors Newton; the Engine type is the GPU runtime, not a frontend wrapper. |
 | 2026-05-08 | Stage 2 complete. WGSL `integrate_bodies` kernel + Rust dispatch wrapper. CPU/GPU parity test passes (100 spheres × 100 steps, agreement within 1e-3 m). GPU bench on RTX 4080: 19.5µs/step for 1k spheres (DoD <1ms; 51× under). Kernel cost is dispatch-bound up to 10k bodies; CPU wins below ~500 bodies. wgpu device requested with `adapter.limits()` rather than `downlevel_defaults` — the latter caps storage buffers per stage at 4 and we use 13. `Engine::step` deferred again — Solver::step does the dispatch directly; no value in wrapping it. Viewer kept on CPU backend to dodge the wgpu version mismatch with Bevy's pinned wgpu; revisit when we want a single binary running GPU sim + Bevy render. |
+| 2026-05-09 | Stages 14–25 added to the roadmap from `GAP.md` (cross-validated scan of `xtra/warp/` + `xtra/newton/` vs the current molla codebase). The old single-line "Stage 14+ — Differentiability, advanced solvers, Python bindings" placeholder was replaced with concrete P0/P1/P2/P3 stages: TiledCamera (P0), GPU EPA + GPU mesh BVH (P0), GPU CRBA/RNEA/IK (P0), reduced-coord ABA for Ball/D6/Distance (P1), composable actuator pipeline (P1), GPU LBVH host dispatcher (P1), VBD-or-Style3D soft-body solver (P1), mesh utilities (P2), MuJoCo wrapper + hydroelastic (P2), differentiable simulation (P2), specialty MPM/SVD/FFT (P3). Explicitly out-of-scope: Python bindings, TensorCore, CUDA graphs, multi-GPU, Kamino-style PADMM (overlaps MuJoCo). The single biggest user-facing gap per the analysis is the camera sensor — molla has nothing comparable to Newton's `SensorTiledCamera` (RGB+depth+normal+albedo+`shape_index` for instance segmentation), and that's why it sits at the top of the new P0 list. |
+| 2026-05-09 | Stages 14, 15, 16 (the full GAP-driven P0 stack) shipped in one batch via three parallel agent worktrees, then merged sequentially into `main`. Stage 14 added `SensorTiledCamera` (5-channel raytraced camera) + per-shape material storage; viewer demo on hotkey `=`. Stage 15 added GPU EPA + GPU mesh-BVH ray-cast + extended GJK simplex output + `enable_full_gpu_narrow_phase` toggle; viewer demo on hotkey `-`. Stage 16 added GPU CRBA + GPU RNEA + GPU spatial Jacobian + `IkSolver::solve_gpu` (LM with multi-seed); viewer demo on hotkey `0`. Hotkey collisions resolved at merge time (all three agents independently picked `0`). `RibbonParams` SystemParam (introduced by both Stage 14 and Stage 15 to dodge Bevy's 16-system-param ceiling) deduplicated to a single definition during the Stage 14 merge. |
 
 ---
 
