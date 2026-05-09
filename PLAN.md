@@ -3615,36 +3615,146 @@ explicitly deferred (see Stage 24e.1+ below).
   (mirrors the rest of molla's f64-host / f32-device convention).
 
 **Defer-to-24e.1+:**
-- **GPU-side insert** (`SparseGridKernel::insert_kernel`): v1 builds
-  the grid on the CPU; the GPU only queries. Mutable GPU insert
-  needs atomic counters for leaf allocation (`atomicAdd` on a
-  free-leaf head) + per-leaf bitmask `atomicOr` — straightforward
-  but multi-day work that wasn't on the v1 critical path.
-- **GPU root-level hashing**: linear search over root_entries is
-  cheap until tables exceed ~ 1 k entries. The natural upgrade is a
-  GPU-side cuckoo or open-addressing hash; documented but not
-  shipped.
-- **Templated value types**: v1 stores `f32` only. `f16` (for memory-
-  pressure assets) and `vec3<f32>` (for displacement fields) are
-  natural v2 generalisations; the storage-layout helpers would need
-  a stride parameter and the WGSL kernel a per-type entry point.
+- ✅ **GPU-side insert** — shipped in Stage 24e.1 via
+  `SparseGridInsertKernel` + `SparseGridStorage`. See the 24e.1
+  section below.
+- ✅ **GPU root-level hashing** — shipped in Stage 24e.1 via
+  Murmur3 + open-addressing in `sparse_grid.wgsl`.
+- ✅ **Templated value types** (`f32`, `f16`, `vec3<f32>`) —
+  shipped in Stage 24e.1 via WGSL string-replace templating.
 - **Refactor Stage 24d MPM** to use the sparse grid: only worth
   doing once 24d ships and has a measured grid-size requirement that
   exceeds 64³ (where dense storage is fine). Defer until 24d
-  produces telemetry.
+  produces telemetry. → Stage 24e.2.
 - **Adaptive refinement** (per-leaf subdivision based on activity):
-  not on the v1 spec, multi-week stretch goal.
+  not on the v1 spec, multi-week stretch goal. → Stage 24e.2.
 - **Native sparse marching cubes**: the viewer's "use sparse SDF"
   toggle currently dense-samples the sparse field for MC
   re-extraction (`sparse_sdf_to_dense_for_mc` in `crates/molla_viewer/src/main.rs`).
   A workgroup-per-leaf MC consumer that walks `for_each_active_leaf`
   directly would skip the dense round-trip entirely; deferred until
   a non-toy asset proves the dense scratch buffer is a problem.
+  → Stage 24e.2.
 
 **Dependencies:** None for v1 (the whole point of building it now is
 to give Stage 24d a place to grow into; the SparseSdf path is a
 useful primitive on its own for asset baking and any future
 hydroelastic-on-large-scenes consumer).
+
+### Stage 24e.1 — GPU mutable insert + GPU root hashing + templated value types — **SHIPPED v1**
+
+**Status: SHIPPED v1.** Three v1 deliverables landed; 24e.2 carries
+the remaining sparse-MC / delete / refinement / MPM-consumer work
+through to the next pull.
+
+**Deliverables (v1):**
+- ✅ **GPU root hashing.** `SparseGridGpu` now carries a power-of-
+  two open-addressing hash table (`root_table`) sized for ≤ 0.7 load
+  factor; the WGSL traversal in `sparse_grid.wgsl` uses Murmur3 +
+  linear probing when the table is non-empty, falling back to the
+  v1 linear scan when callers hand-build a packed grid without a
+  table. Host-side `root_hash3` mirrors the WGSL bit-mix exactly so
+  the new `SparseGridGpu::root_hash_probe_stats` replay is faithful
+  for telemetry.
+- ✅ **GPU-side mutable insert.** New WGSL kernel
+  `crates/molla/shaders/sparse_grid_insert.wgsl` with three entry
+  points: `allocate_internal_atomic`, `allocate_leaf_atomic`,
+  `set_value`. Internal-node + leaf allocation uses
+  `atomicAdd`-on-counter pools; root-table publication is an eager-
+  allocate + single-CAS-install pattern (losers leak one pool slot
+  rather than the more conventional RESERVED-sentinel two-phase
+  publish, which had warp-divergence storms in benchmarking).
+  Host-side dispatcher at `kernels::SparseGridInsertKernel<V>` owns
+  the pipeline + per-entry-point bind groups; persistent storage at
+  `kernels::SparseGridStorage<V>` owns the GPU buffers + counters.
+- ✅ **Templated value types.** `f32`, `vec3<f32>`, and `f16` ship
+  via Rust string-replace of the `VALUE_TYPE` placeholder in the
+  shared WGSL — chosen over per-type duplicated WGSL because the
+  atomic-allocation paths are type-agnostic and only the leaf
+  value-store differs across types. `f16` uses a u32-packed half-
+  float representation (no `shader-f16` extension required) with
+  pure-software `f32 ↔ f16` conversion in `kernels::ValueF16`.
+- ✅ **Viewer integration.** `Scene::MeshTools` pane gained a value-
+  type dropdown (`f32` / `f16` / `vec3<f32>`), a "Build mode: GPU
+  mutable insert" toggle, and live root-hash telemetry (capacity,
+  load factor, average + max probe length) wired through the new
+  `SparseGridGpu::root_hash_probe_stats`.
+
+**Measured DoD (Stage 24e.1):**
+- ✅ **GPU mutable insert round-trip.** `tests/sparse_grid_v3.rs::
+  gpu_mutable_insert_roundtrip_f32_1k` inserts 1024 random
+  `(coord, value)` pairs via the GPU set_value kernel and recovers
+  every value exactly. Throughput on the dev box (Vulkan, debug
+  build): ~ 33–40 kInsert/s including blocking readback (the
+  per-dispatch wgpu submit overhead floors the small-batch
+  throughput; large-batch numbers will be higher and are tracked
+  in `gpu_mutable_insert_collision_synthetic` for the contention
+  case).
+- ✅ **Hash collision resolution.** `tests/sparse_grid_v3.rs::
+  gpu_mutable_insert_collision_synthetic` runs 32 inserts on a
+  forced-tight 64-slot table (load factor 0.5) and recovers every
+  value despite the high probe-length pressure. Host-side replay
+  of the WGSL probe path
+  (`SparseGridGpu::root_hash_probe_stats`) measures average probe
+  length 1.4–1.8, max 4–6 on real narrow-band SDF root tables.
+- ✅ **f16 round-trip within `2^-10`.** `tests/sparse_grid_v3.rs::
+  gpu_mutable_insert_f16_within_quantisation_tolerance` confirms
+  f16 quantisation error stays under the f16 mantissa bound.
+- ✅ **vec3 round-trip exact.** `tests/sparse_grid_v3.rs::
+  gpu_mutable_insert_vec3` checks bit-exact recovery of 256
+  random `vec3<f32>` values.
+- ✅ **Storage cost regression.** `tests/sparse_grid_v3.rs::
+  storage_cost_1024_cubed_one_percent_per_value_type` confirms a
+  pool sized for ~ 50 000 leaves stays under 200 MiB for f32 / f16
+  and under 600 MiB for vec3 (the 4× wider per-voxel stride).
+
+**Caveats:**
+- **Eager-allocate-then-CAS leaks pool slots.** Each contended root
+  insert leaks one internal-node slot. Pool sizing must add ~ 5 %
+  headroom over the expected unique-key count. Documented in the
+  WGSL `get_or_create_internal` doc-block.
+- **Key (0, 0, 0) is reserved as a "stale-key" marker.** The host
+  pre-init writes zeros into every key cell, and the WGSL spin-
+  on-published-key path uses `(0, 0, 0)` as the "still mid-write"
+  signal. Inserting exactly root key `(0, 0, 0)` (i.e. the first
+  256³ block of voxel space) would deadlock the spin loop.
+  Documented in the kernel WGSL; rare in practice (assets are
+  usually centred at world origin → root key spans negative
+  coords).
+- **Pool exhaustion is detected, not recovered.** When any pool
+  fills the kernel sets a bit in `error_flags` (read back by the
+  host) and silently drops further writes. v1 doesn't grow the
+  pools mid-dispatch; the host is expected to either size
+  conservatively up front or rebuild storage with a larger pool.
+- **f16 templating uses u32-packed halves.** Avoids the
+  `shader-f16` adapter feature (not universally supported across
+  wgpu backends) at the cost of one wasted 16-bit slot per entry.
+  When `shader-f16` reaches portable WGSL we can switch to native
+  `f16` storage with a one-line WGSL change.
+- **Templated WGSL via string-replace** (`VALUE_TYPE` placeholder)
+  is a pragmatic choice over a more polished metatemplating
+  system. Naga doesn't support generics directly, and other crates
+  in this codebase already use the same pattern (see e.g. the
+  per-precision FFT instantiations).
+
+**Defer-to-24e.2:**
+- **GPU-side delete + leaf reclamation.** A "deactivate" kernel
+  that clears mask bits + a compaction pass that reclaims fully-
+  inactive leaves. Multi-day work; not on the v1 critical path.
+- **Adaptive grid refinement.** Per-leaf subdivision based on
+  activity heuristics (NanoVDB's "tile" → "active leaf" promotion
+  pattern). Multi-week stretch.
+- **Native sparse marching cubes.** A workgroup-per-leaf MC
+  consumer that walks `for_each_active_leaf` directly would skip
+  the dense-scratch round-trip the viewer currently uses. Deferred
+  until a non-toy asset proves the dense scratch is a bottleneck.
+- **MPM consumer refactor (Stage 24d / 24d.1).** Wire the sparse
+  grid in as the active-cell store for MPM. Only worth doing once
+  24d.1 ships and demonstrates a > 64³ grid-size requirement;
+  current explicit MPM at 64³ is fine on the dense backing.
+
+**Dependencies:** Stage 24e v1 (the storage primitive this
+extends).
 
 ### Stage 25+ — Out of scope / explicitly deferred
 

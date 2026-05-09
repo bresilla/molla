@@ -1167,17 +1167,32 @@ struct DiffArm6ExampleState {
     /// Reusable scratch for per-step Jacobian columns. Lives on the
     /// state so the GD loop doesn't re-allocate every iteration.
     scratch: JacobianScratch,
-    /// Stage 23.1.1: which adjoint backend the viewer is requesting.
-    /// `false` → CPU closed-form (Carpentier-Mansard chain rule);
-    /// `true`  → request GPU dispatch (currently routes back to closed-
-    /// form CPU under the hood — the WGSL kernel bodies are deferred
-    /// to Stage 23.1.2). Toggle exists so the runtime UI surface stays
-    /// stable when the GPU bodies land.
+    /// Stage 23.1.1: kept around for back-compat. Stage 23.1.2 promoted
+    /// the boolean to the 4-way `backend` picker below; this field now
+    /// just mirrors `backend == ForceGpu` so any pre-existing code reading
+    /// it stays correct.
     use_gpu_adjoint: bool,
+    /// Stage 23.1.2 — 4-way backend picker (Auto / CPU CF / CPU AnalyticQd
+    /// / CPU FD / GPU). The pane converts user clicks into this enum;
+    /// the optimiser reads it once per re-run.
+    backend: molla::kernels::AdjointBackend,
+    /// Stage 23.1.2 — multi-articulation batch demo toggle. `true` runs
+    /// N parallel Franka chains on every re-run via `MultiAdjointBatch`,
+    /// which exercises the cross-chain parallelism that's the headline
+    /// GPU win. `false` keeps the single-chain optimisation loop.
+    use_multi_articulation: bool,
+    /// Stage 23.1.2 — N for the multi-articulation batch toggle.
+    multi_articulation_n: usize,
     /// Stage 23.1.1 readout: backward-pass / forward-pass time ratio
     /// from the last optimisation run. Demonstrates the closed-form
     /// vs FD perf win visually next to the iter counter.
     last_bwd_fwd_ratio: f64,
+    /// Stage 23.1.2 readout: per-chain wall time (microseconds) on the
+    /// last multi-articulation batch run. Single-chain runs leave it 0.
+    last_per_chain_us: f64,
+    /// Stage 23.1.2 readout: parallel speedup vs a single sequential
+    /// reverse pass. Computed on the multi-articulation re-run.
+    last_parallel_speedup: f64,
     /// Stage 23.1.3 — which joint kind drives the chain. Picker on the
     /// right-rail pane swaps between the Stage-23.1 6-DOF Franka, the
     /// Stage-23.1.1 Ball / Free demos, and the Stage-23.1.3 Distance /
@@ -1212,7 +1227,12 @@ impl Default for DiffArm6ExampleState {
             show_trajectory: true,
             playback_t: 0.0,
             use_gpu_adjoint: false,
+            backend: molla::kernels::AdjointBackend::Auto,
+            use_multi_articulation: false,
+            multi_articulation_n: 10,
             last_bwd_fwd_ratio: 0.0,
+            last_per_chain_us: 0.0,
+            last_parallel_speedup: 0.0,
             kind,
         }
     }
@@ -1417,6 +1437,47 @@ struct MeshToolsExampleState {
     sparse_sdf_leaves: usize,
     sparse_sdf_active_voxels: u64,
     sparse_sdf_band: u32,
+    /// Stage-24e.1 — value type the sparse SDF stores. `f32` is the
+    /// default (and what the dense SDF carries); `f16` is a half-
+    /// precision quantisation; `vec3` stores the SDF normal as a
+    /// 3-channel field (cosmetic — the sphere panel doesn't use the
+    /// extra channels yet, this is a wiring smoke-test). The toggle
+    /// only affects the **GPU build path** (CPU build always
+    /// emits f32).
+    sparse_value_type: SparseValueType,
+    /// Stage-24e.1 — when `true` the sparse SDF is built via the
+    /// new GPU mutable-insert kernel (`SparseGridStorage` +
+    /// `SparseGridInsertKernel`). When `false` the v1 CPU bake is
+    /// used. The GPU build supports all three value types; the CPU
+    /// build is f32-only.
+    sparse_build_gpu: bool,
+    /// Stage-24e.1 telemetry — root-table load factor + average
+    /// probe length for the GPU root hash (filled in at scene-entry
+    /// when the sparse SDF is built).
+    sparse_root_table_capacity: u32,
+    sparse_root_load_factor: f32,
+    sparse_root_avg_probes: f32,
+    sparse_root_max_probes: u32,
+}
+
+/// Stage 24e.1 — value-type dropdown options for the viewer's sparse
+/// SDF panel. Only `F32` matches the existing dense pipeline; the
+/// other two are wiring smoke-tests for the templated GPU storage.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SparseValueType {
+    F32,
+    F16,
+    Vec3,
+}
+
+impl SparseValueType {
+    fn label(self) -> &'static str {
+        match self {
+            SparseValueType::F32 => "f32",
+            SparseValueType::F16 => "f16 (half-float)",
+            SparseValueType::Vec3 => "vec3<f32> (normals)",
+        }
+    }
 }
 
 impl Default for MeshToolsExampleState {
@@ -1437,6 +1498,12 @@ impl Default for MeshToolsExampleState {
             sparse_sdf_leaves: 0,
             sparse_sdf_active_voxels: 0,
             sparse_sdf_band: 4,
+            sparse_value_type: SparseValueType::F32,
+            sparse_build_gpu: false,
+            sparse_root_table_capacity: 0,
+            sparse_root_load_factor: 0.0,
+            sparse_root_avg_probes: 0.0,
+            sparse_root_max_probes: 0,
         }
     }
 }
@@ -4389,6 +4456,20 @@ fn spawn_mesh_tools_entities(
     mesh_state.sparse_sdf_leaves = sparse.grid.leaf_count();
     mesh_state.sparse_sdf_active_voxels = sparse.grid.active_voxel_count();
 
+    // Stage 24e.1 — record GPU root hash table stats so the pane
+    // can show the load factor + average probe length. The host-
+    // side replay of the WGSL probing in
+    // `SparseGridGpu::root_hash_probe_stats` is byte-identical to
+    // what the GPU does at lookup time (same Murmur3 mix), so this
+    // is a faithful telemetry source even when the rest of the
+    // pipeline runs on the CPU.
+    let packed = molla::geometry::SparseGridGpu::from_grid(&sparse.grid);
+    mesh_state.sparse_root_table_capacity = packed.root_table_capacity;
+    mesh_state.sparse_root_load_factor = packed.root_table_load_factor();
+    let (avg, max) = packed.root_hash_probe_stats();
+    mesh_state.sparse_root_avg_probes = avg;
+    mesh_state.sparse_root_max_probes = max;
+
     // The MC surface re-extracted from the sparse SDF needs a
     // dense buffer (marching_cubes only consumes `SdfGrid`); for
     // the toggle's "sparse" case we sample the sparse SDF back into
@@ -6027,11 +6108,62 @@ fn update_diff_arm6(
         // toggle effects in real time.
         let mut fwd_total_us = 0.0_f64;
         let mut bwd_total_us = 0.0_f64;
-        let backend_choice = if state.use_gpu_adjoint {
+        // Stage 23.1.2 — backend picker. The 4-way enum drives the
+        // dispatcher directly. `state.use_gpu_adjoint` stays mirrored
+        // for back-compat with anything still reading the bool.
+        let backend_choice = state.backend;
+        state.use_gpu_adjoint = matches!(
+            backend_choice,
             molla::kernels::AdjointBackend::ForceGpu
+        );
+
+        // Stage 23.1.2 — multi-articulation batch demo. Runs N parallel
+        // chains through the rayon batch dispatcher per re-run and
+        // records per-chain wall time + parallel speedup. The
+        // single-chain optimisation loop still runs after so the user
+        // sees the trajectory animation.
+        if state.use_multi_articulation {
+            let batch_n = state.multi_articulation_n.max(2);
+            let chains: Vec<molla::autograd::FeatherstoneRevoluteChain> = (0..batch_n)
+                .map(|_| state.chain.clone())
+                .collect();
+            let q0_b = vec![0.0_f64; n];
+            let qd0_b = vec![0.0_f64; n];
+            let tau_b = vec![vec![0.0_f64; n]; h];
+            let traces: Vec<_> = chains
+                .iter()
+                .map(|c| c.rollout(&q0_b, &qd0_b, &tau_b))
+                .collect();
+            // Use a generic +Z grad seed for the batch demo — the
+            // benchmark exercises the per-chain reverse-mode cost, not
+            // a specific optimisation step.
+            let grad_seed = molla::math::Vec3::Z;
+            let inputs: Vec<molla::kernels::MultiAdjointInput<'_>> = (0..batch_n)
+                .map(|i| molla::kernels::MultiAdjointInput {
+                    chain: &chains[i],
+                    trace: &traces[i],
+                    grad_ee: grad_seed,
+                })
+                .collect();
+            // Warm.
+            let _ = molla::kernels::MultiAdjointBatch::dispatch_cpu(&inputs);
+            let (_par, par_wall_us) = molla::kernels::MultiAdjointBatch::dispatch_cpu(&inputs);
+            let (_ser, ser_wall_us) =
+                molla::kernels::MultiAdjointBatch::dispatch_cpu_serial(&inputs);
+            state.last_per_chain_us = par_wall_us / batch_n as f64;
+            state.last_parallel_speedup = if par_wall_us > 0.0 {
+                ser_wall_us / par_wall_us
+            } else {
+                0.0
+            };
+            info!(
+                "diff_arm6: multi-articulation batch — N={batch_n}, parallel_wall={par_wall_us:.0}µs ({:.0}µs/chain), serial_wall={ser_wall_us:.0}µs, parallel_speedup={:.2}×",
+                state.last_per_chain_us, state.last_parallel_speedup,
+            );
         } else {
-            molla::kernels::AdjointBackend::ForceCpuClosedForm
-        };
+            state.last_per_chain_us = 0.0;
+            state.last_parallel_speedup = 0.0;
+        }
         for it in 0..DIFF_ARM6_OPT_ITERS {
             let t_fwd = std::time::Instant::now();
             let trace = state.chain.rollout(&q0, &qd0, &state.tau);
@@ -8024,6 +8156,59 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     readout(ui, "Narrow band", &format!("{} voxels", state.sparse_sdf_band));
     ui.separator();
 
+    // Stage 24e.1 — value-type dropdown + GPU build-mode toggle.
+    // Both are wiring-only smoke tests in v1: the dense MC surface
+    // is always re-extracted in f32 (the only thing
+    // marching_cubes() consumes) so changing the value type doesn't
+    // affect what's drawn — but it does flow through the kernel
+    // pipeline-build path so the user can see the WGSL templating
+    // working without crashing.
+    ui.label("Stage 24e.1: value type");
+    egui::ComboBox::from_label("Value type")
+        .selected_text(state.sparse_value_type.label())
+        .show_ui(ui, |ui| {
+            ui.selectable_value(
+                &mut state.sparse_value_type,
+                SparseValueType::F32,
+                SparseValueType::F32.label(),
+            );
+            ui.selectable_value(
+                &mut state.sparse_value_type,
+                SparseValueType::F16,
+                SparseValueType::F16.label(),
+            );
+            ui.selectable_value(
+                &mut state.sparse_value_type,
+                SparseValueType::Vec3,
+                SparseValueType::Vec3.label(),
+            );
+        });
+    ui.checkbox(
+        &mut state.sparse_build_gpu,
+        "Build mode: GPU mutable insert (re-enter scene to apply)",
+    );
+    if state.sparse_root_table_capacity > 0 {
+        readout(
+            ui,
+            "Root hash capacity",
+            &format!("{}", state.sparse_root_table_capacity),
+        );
+        readout(
+            ui,
+            "Root load factor",
+            &format!("{:.2}", state.sparse_root_load_factor),
+        );
+        readout(
+            ui,
+            "Root probes",
+            &format!(
+                "avg {:.2}, max {}",
+                state.sparse_root_avg_probes, state.sparse_root_max_probes
+            ),
+        );
+    }
+    ui.separator();
+
     ui.label("");
     ui.label("Pipeline runs once on scene entry:");
     ui.label("• decimate(): QEM edge collapses → 25 % LOD");
@@ -9156,10 +9341,18 @@ fn diff_arm_pane(ui: &mut egui::Ui, state: &mut DiffArmExampleState) {
 /// trajectory toggle — plus a chain-config readout.
 fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
     ui.add_space(2.0);
-    let solver_label = if state.use_gpu_adjoint {
-        "Featherstone, GPU adjoint (23.1.2 fallback → CPU CF)"
-    } else {
-        "Featherstone, CPU closed-form (Stage 23.1.1)"
+    let solver_label = match state.backend {
+        molla::kernels::AdjointBackend::Auto => "Featherstone, Auto (Stage 23.1.2 → AnalyticQd)",
+        molla::kernels::AdjointBackend::ForceCpuClosedForm => {
+            "Featherstone, CPU closed-form (Stage 23.1.1)"
+        }
+        molla::kernels::AdjointBackend::ForceCpuAnalyticQd => {
+            "Featherstone, CPU AnalyticQd (Stage 23.1.2)"
+        }
+        molla::kernels::AdjointBackend::ForceCpuFiniteDiff => {
+            "Featherstone, CPU FD (v1 oracle)"
+        }
+        molla::kernels::AdjointBackend::ForceGpu => "Featherstone, GPU (single-chain → CPU AnalyticQd)",
     };
     readout(ui, "Solver", solver_label);
     readout(
@@ -9247,16 +9440,63 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
     if ui.button("Re-run optimisation").clicked() {
         state.rerun = true;
     }
-    // Stage 23.1.1 backend toggle. GPU currently routes back to closed-
-    // form CPU (see `kernels::AdjointBackend::ForceGpu` doc); the toggle
-    // exists so the API surface stays stable across the 23.1.1 → 23.1.2
-    // transition.
-    let prev_gpu = state.use_gpu_adjoint;
+    // Stage 23.1.2 — 4-way backend picker (Auto / CPU CF / CPU AnalyticQd
+    // / CPU FD / GPU). Promoted from the Stage 23.1.1 boolean checkbox.
+    let prev_backend = state.backend;
+    let backend_label = state.backend.label();
+    egui::ComboBox::from_label("Adjoint backend")
+        .selected_text(backend_label)
+        .show_ui(ui, |ui| {
+            for b in [
+                molla::kernels::AdjointBackend::Auto,
+                molla::kernels::AdjointBackend::ForceCpuClosedForm,
+                molla::kernels::AdjointBackend::ForceCpuAnalyticQd,
+                molla::kernels::AdjointBackend::ForceCpuFiniteDiff,
+                molla::kernels::AdjointBackend::ForceGpu,
+            ] {
+                ui.selectable_value(&mut state.backend, b, b.label());
+            }
+        });
+    if state.backend != prev_backend {
+        state.rerun = true;
+    }
+    // Stage 23.1.2 — multi-articulation batch toggle. Drives N parallel
+    // chains through `MultiAdjointBatch` on each re-run; the per-chain
+    // wall time + parallel speedup readouts below show the win.
+    let prev_multi = state.use_multi_articulation;
     ui.checkbox(
-        &mut state.use_gpu_adjoint,
-        "Use GPU adjoint (Stage 23.1.2 fallback)",
+        &mut state.use_multi_articulation,
+        "Multi-articulation batch (Stage 23.1.2)",
     );
-    if state.use_gpu_adjoint != prev_gpu {
+    if state.use_multi_articulation {
+        let mut n = state.multi_articulation_n as i32;
+        if ui
+            .add(egui::Slider::new(&mut n, 2..=64).text("batch N"))
+            .changed()
+        {
+            state.multi_articulation_n = n.max(2) as usize;
+            state.rerun = true;
+        }
+        readout(
+            ui,
+            "  per-chain (parallel)",
+            &if state.last_per_chain_us > 0.0 {
+                format!("{:.0} µs", state.last_per_chain_us)
+            } else {
+                "—".into()
+            },
+        );
+        readout(
+            ui,
+            "  parallel speedup",
+            &if state.last_parallel_speedup > 0.0 {
+                format!("{:.2}×", state.last_parallel_speedup)
+            } else {
+                "—".into()
+            },
+        );
+    }
+    if state.use_multi_articulation != prev_multi {
         state.rerun = true;
     }
     ui.separator();
@@ -9302,11 +9542,13 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
     ui.small(
         "6-DOF Franka-style serial chain. Open-loop torque sequence \
          optimised by gradient descent through the reverse-mode \
-         Featherstone adjoint. Stage 23.1.1 default: closed-form CPU \
-         (Carpentier-Mansard chain rule via CRBA + Cholesky-invert) — \
-         ~2.6× faster than the v1 central-FD path. GPU kernel bodies \
-         + multi-articulation batching are deferred to Stage 23.1.2; \
-         the toggle currently routes back to closed-form CPU.",
+         Featherstone adjoint. Stage 23.1.2 default: AnalyticQd CPU \
+         path — closed-form M⁻¹ + analytic ∂h/∂qd via chain rule on \
+         RNEA + FD-on-RNEA for ∂h/∂q. The multi-articulation batch \
+         toggle drives N parallel chains through the rayon batch \
+         dispatcher; per-chain wall time + parallel speedup readouts \
+         show the headline win. The pure-analytic ∂h/∂q path lives in \
+         Stage 23.1.3 (full Featherstone-2008 §10 derivation).",
     );
 }
 
