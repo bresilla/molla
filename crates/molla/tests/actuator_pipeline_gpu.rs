@@ -666,6 +666,13 @@ fn mlp_forward_timing_log_only() {
     eprintln!(
         "mlp forward (32→64→64→8) avg over {n_iters} dispatches incl. final sync: {per_call_us:.2} µs"
     );
-    // Log-only — don't assert.
+    // Regression gate: a 32→64→64→8 MLP forward (~10k FLOPs) should
+    // beat 5 ms wall-clock per call on any wgpu adapter — the budget
+    // is set generously to absorb dispatch + read-back overhead, while
+    // catching a no-op kernel or a missing pipeline cache.
+    assert!(
+        per_call_us < 5_000.0,
+        "MLP forward avg {per_call_us:.2} µs/call exceeds 5 ms regression budget"
+    );
 }
 
