@@ -8,12 +8,17 @@ mod aabb;
 mod broad_phase;
 mod bvh;
 pub mod contact_extras;
+mod decimate;
 mod epa;
 mod gjk;
+mod hull;
+mod marching_cubes;
 pub mod mesh_bvh;
 mod narrow_phase;
 mod pipeline;
+pub mod sdf_bake;
 mod shape_world;
+mod spatial_hash;
 mod support;
 
 pub use contact_extras::{
@@ -33,3 +38,10 @@ pub use support::{
     support, support_box, support_capsule, support_cone, support_convex_hull,
     support_cylinder, support_minkowski, support_sphere, support_with_hulls,
 };
+
+// ── Stage 21: mesh authoring tools ─────────────────────────────────
+pub use decimate::decimate;
+pub use hull::convex_hull;
+pub use marching_cubes::marching_cubes;
+pub use sdf_bake::{bake_mesh_to_sdf, closest_point_on_triangle, SdfGrid};
+pub use spatial_hash::SpatialHashGrid;
