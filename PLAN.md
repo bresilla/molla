@@ -1834,7 +1834,19 @@ Deliverables:
   capturing global state.
 - Heightfield, SDF shapes — TODO.
 - MPR fallback for deep penetration (alternative to EPA) — TODO.
-- GPU port of GJK + EPA + BVH (LBVH parallel construction) — TODO.
+- ✅ **GPU GJK boolean overlap** (`shaders/gjk.wgsl` +
+  `kernels/gjk.rs`) — one thread per candidate pair from the broad
+  phase, inline support for Sphere/Box/Capsule/Cylinder/Cone,
+  fixed-size 4-vertex simplex with line/triangle/tetrahedron-step
+  routines. Output: `0` (disjoint), `1` (overlap), `2` (host
+  fallback for Plane/TriMesh/iter-cap). Cuts CPU narrow-phase work
+  on scenes where the broad phase emits many false-positive pairs.
+  Tests in `tests/gjk_gpu.rs` confirm parity vs CPU GJK on
+  sphere/box/capsule pairs.
+- GPU EPA — TODO. Bounded polytope (~64 faces) is the next step;
+  contact generation stays CPU on the overlapping subset until
+  then.
+- GPU LBVH parallel construction — TODO.
 
 ### Stage 14+ — Differentiability, advanced solvers, Python bindings
 

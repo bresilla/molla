@@ -9,6 +9,8 @@ mod contact_sensor;
 #[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
+mod gjk;
+#[cfg(feature = "gpu")]
 mod frame_transform;
 #[cfg(feature = "gpu")]
 mod imu;
@@ -31,6 +33,8 @@ pub use actuator_pid::ActuatorPidKernel;
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
+#[cfg(feature = "gpu")]
+pub use gjk::GjkKernel;
 #[cfg(feature = "gpu")]
 pub use frame_transform::FrameTransformKernel;
 #[cfg(feature = "gpu")]
