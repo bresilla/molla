@@ -21,6 +21,8 @@ mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
+mod rnea;
+#[cfg(feature = "gpu")]
 mod xpbd;
 #[cfg(feature = "gpu")]
 mod xpbd_equality;
@@ -47,6 +49,8 @@ pub use imu::ImuKernel;
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
+#[cfg(feature = "gpu")]
+pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]
