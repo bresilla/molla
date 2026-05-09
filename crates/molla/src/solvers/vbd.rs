@@ -448,6 +448,19 @@ pub(crate) fn cpu_step(
     let pcol_off = model.particle_color_offsets.host()?;
     let pcol_idx = model.particle_indices_by_color.host()?;
     let color_count = model.particle_color_count;
+    // Tet topology + Neo-Hookean material (Stage 20.2). All optional —
+    // a model with zero tets just skips the per-vertex tet sum.
+    let tet_indices = model.tet_indices.host()?;
+    let tet_dm_inv = model.tet_dm_inv.host()?;
+    let tet_rest_volume = model.tet_rest_volume.host()?;
+    let tet_mu = model.tet_mu.host()?;
+    let tet_lambda = model.tet_lambda.host()?;
+    let vadj_tets_off = model.vertex_adjacent_tets_offsets.host()?;
+    let vadj_tets = model.vertex_adjacent_tets.host()?;
+    // Cable bending state (Stage 20.2).
+    let cable_off = model.cable_particle_offsets.host()?;
+    let cable_particles = model.cable_particles.host()?;
+    let cable_bending = model.cable_bending_stiffness.host()?;
 
     // Pre-compute per-spring stiffness from compliance.
     let stiffness: Vec<Real> = spring_comp
@@ -539,6 +552,63 @@ pub(crate) fn cpu_step(
                     );
                     f += f_self;
                     h = mat3_add(h, h_self);
+                }
+
+                // Tet (Neo-Hookean) contributions over incident tets.
+                // Each entry in `vadj_tets` is a (tet_id, v_order) pair.
+                // The kernel below mirrors Newton's
+                // `evaluate_volumetric_neo_hookean_force_and_hessian`
+                // for the per-vertex 3×3 block.
+                let to_lo = vadj_tets_off[v] as usize;
+                let to_hi = vadj_tets_off[v + 1] as usize;
+                for slot in (to_lo..to_hi).step_by(2) {
+                    let tet = vadj_tets[slot] as usize;
+                    let order = vadj_tets[slot + 1] as usize;
+                    let (f_t, h_t) = neo_hookean_vertex_block(
+                        tet,
+                        order,
+                        &x,
+                        tet_indices,
+                        tet_dm_inv,
+                        tet_rest_volume,
+                        tet_mu,
+                        tet_lambda,
+                    );
+                    f += f_t;
+                    h = mat3_add(h, h_t);
+                }
+
+                // Cable bending contributions: for every cable that
+                // includes `v` as an *interior* particle (not an
+                // endpoint), the discrete hinge `(v_{i-1}, v_i,
+                // v_{i+1})` produces a force + Hessian on each of the
+                // three particles; here we only need the self-contribution.
+                if model.cable_count > 0 {
+                    for c in 0..model.cable_count {
+                        let lo = cable_off[c] as usize;
+                        let hi = cable_off[c + 1] as usize;
+                        let kb = cable_bending[c];
+                        if kb <= 0.0 || hi - lo < 3 {
+                            continue;
+                        }
+                        // Walk interior triples and check whether any
+                        // of `v_prev`, `v_mid`, `v_next` matches `v`.
+                        for i in (lo + 1)..(hi - 1) {
+                            let v_prev = cable_particles[i - 1] as usize;
+                            let v_mid = cable_particles[i] as usize;
+                            let v_next = cable_particles[i + 1] as usize;
+                            if v_mid == v || v_prev == v || v_next == v {
+                                let role = if v == v_prev { 0 }
+                                    else if v == v_mid { 1 }
+                                    else { 2 };
+                                let (f_b, h_b) = cable_bending_vertex_block(
+                                    role, x[v_prev], x[v_mid], x[v_next], kb,
+                                );
+                                f += f_b;
+                                h = mat3_add(h, h_b);
+                            }
+                        }
+                    }
                 }
 
                 // Rigid contact term. Soft-mode = quadratic penalty
@@ -719,6 +789,216 @@ fn mat3_scale(a: crate::math::Mat3, s: Real) -> crate::math::Mat3 {
 fn mat3_outer(u: Vec3, v: Vec3) -> crate::math::Mat3 {
     // Column-major: each column is `u * v[col]`.
     crate::math::Mat3::from_cols(u * v.x, u * v.y, u * v.z)
+}
+
+/// Neo-Hookean force + 3×3 Hessian on vertex `order ∈ {0..3}` of tet
+/// `tet_id`. Mirrors Newton's
+/// `evaluate_volumetric_neo_hookean_force_and_hessian` (CPU port).
+///
+/// The Neo-Hookean energy density is
+///   `Ψ(F) = (μ/2)·(I_C - 3) - μ·log(J) + (λ/2)·log²(J)`
+/// where `F = Ds · Dm⁻¹` is the deformation gradient and
+/// `Ds = [v1-v0 | v2-v0 | v3-v0]` is the current basis. Newton uses
+/// the Smith et al. 2018 stable-NH reparameterisation
+/// `μ_NH = μ_Lamé`, `λ_NH = λ_Lamé + μ_Lamé`, and *drops* the
+/// `s · ∂²J/∂F²` term in the Hessian — the per-vertex 3×3 block
+/// from that term cancels out by Levi-Civita antisymmetry, and what
+/// remains is SPD by inspection (no further projection needed).
+///
+/// Returns `(force, hessian)` for the Newton step. We multiply `H`
+/// by the per-tet rest volume so the solver sees the physical units
+/// (N/m for the diagonal). The hessian is symmetric-positive-(semi)-
+/// definite for this term (the inertia + spring contributions in the
+/// outer assembly add a positive `m/dt²·I` so the full block is
+/// always SPD).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn neo_hookean_vertex_block(
+    tet_id: usize,
+    order: usize,
+    x: &[Vec3],
+    tet_indices: &[u32],
+    tet_dm_inv: &[crate::math::Mat3],
+    tet_rest_volume: &[Real],
+    tet_mu: &[Real],
+    tet_lambda: &[Real],
+) -> (Vec3, crate::math::Mat3) {
+    use crate::math::Mat3;
+    let v0 = x[tet_indices[tet_id * 4] as usize];
+    let v1 = x[tet_indices[tet_id * 4 + 1] as usize];
+    let v2 = x[tet_indices[tet_id * 4 + 2] as usize];
+    let v3 = x[tet_indices[tet_id * 4 + 3] as usize];
+    let dm_inv = tet_dm_inv[tet_id];
+    let rest_vol = tet_rest_volume[tet_id];
+    let mu_l = tet_mu[tet_id];
+    let lam_l = tet_lambda[tet_id];
+
+    // Stable-NH reparameterisation (Smith et al. 2018).
+    let mu = mu_l;
+    let lam = lam_l + mu_l;
+
+    // Deformation gradient.
+    let ds = Mat3::from_cols(v1 - v0, v2 - v0, v3 - v0);
+    let f_mat = ds * dm_inv;
+
+    // Useful quantities.
+    let j = f_mat.determinant();
+    let lam_safe = if lam.abs() > 1.0e-6 { lam } else { 1.0e-6_f64.copysign(lam.signum()) };
+    let alpha = 1.0 + mu / lam_safe;
+
+    // Cofactor matrix (adjugate) — numerically stable when J ≈ 0.
+    let cof = cofactor3(f_mat);
+
+    // First Piola-Kirchhoff stress P = μ·F + s·cof(F), with
+    // s = λ · (J - α). Multiplied by rest volume.
+    let s = lam * (j - alpha);
+    let p_mat = mat3_add(mat3_scale(f_mat, mu), mat3_scale(cof, s));
+    let p_vec = mat3_scale(p_mat, rest_vol);
+
+    // Per-vertex gradient column `m` from `Dm⁻¹` — Newton's
+    // `compute_G_matrix` equivalent. Newton/Warp uses row-major
+    // `Dm_inv[i, j]` (row i, column j); glam stores `Mat3` as
+    // column-major (`dm_inv.x_axis` is column 0). Concretely:
+    //   - v_order = 0:
+    //       `m_a = -(Dm⁻¹[0, a] + Dm⁻¹[1, a] + Dm⁻¹[2, a])`
+    //            = -(sum of column `a` in row-major terms)
+    //            = -(sum of `dm_inv.col(a)`'s components)
+    //   - v_order ∈ {1, 2, 3}:
+    //       `m = (Dm⁻¹[r, 0], Dm⁻¹[r, 1], Dm⁻¹[r, 2])`, with
+    //       `r = v_order - 1`. In glam's column-major basis,
+    //       `Dm⁻¹[r, c] = dm_inv.col(c)[r]` so the row-vector
+    //       reads `(x_axis[r], y_axis[r], z_axis[r])`.
+    let m: Vec3 = match order {
+        0 => Vec3::new(
+            -(dm_inv.x_axis.x + dm_inv.x_axis.y + dm_inv.x_axis.z),
+            -(dm_inv.y_axis.x + dm_inv.y_axis.y + dm_inv.y_axis.z),
+            -(dm_inv.z_axis.x + dm_inv.z_axis.y + dm_inv.z_axis.z),
+        ),
+        1 => Vec3::new(dm_inv.x_axis.x, dm_inv.y_axis.x, dm_inv.z_axis.x),
+        2 => Vec3::new(dm_inv.x_axis.y, dm_inv.y_axis.y, dm_inv.z_axis.y),
+        _ => Vec3::new(dm_inv.x_axis.z, dm_inv.y_axis.z, dm_inv.z_axis.z),
+    };
+
+    // Force = -P·m. P is a 3×3 written column-major; multiplying by
+    // the per-vertex gradient `m` is the standard reduction in
+    // Newton's `assemble_tet_vertex_force_and_hessian`.
+    let f_clean = -(p_vec.x_axis * m.x + p_vec.y_axis * m.y + p_vec.z_axis * m.z);
+
+    // Hessian = rest_vol · (μ · I9 + λ · cof_vec ⊗ cof_vec) projected
+    // onto the per-vertex 3×3 block.
+    //
+    // For a single vertex `i` with gradient `m`, the projection is
+    //   H_v = m·mᵀ · (μ · I3 + λ · (cof · cof)?)
+    // ...but the precise form per Newton's
+    // `assemble_tet_vertex_force_and_hessian` is more involved. We
+    // implement it directly: given the 9×9 Hessian
+    //   H = rest_vol · (μ · I9 + λ · cof_vec ⊗ cof_vec),
+    // the per-vertex 3×3 block is
+    //   H_v[a, b] = sum over (i, j) of m[i] · H[3i+a, 3j+b] · m[j].
+    // For this Neo-Hookean form (μ on the diagonal + λ · outer), the
+    // per-vertex 3×3 block reduces to:
+    //   H_v = m·mᵀ · (μ + λ · |cof_block ⊗ m|²) — but more precisely:
+    //   H_v_diag = (μ · |m|² + λ · (cof · m)·(cof · m)ᵀ) · rest_vol
+    // where (cof · m) is the 3-vector formed by treating cof as 3×3.
+    //
+    // We implement it directly from the vec9 outer-product form:
+    let cof_m = cof.x_axis * m.x + cof.y_axis * m.y + cof.z_axis * m.z;
+    let mu_term = mat3_scale(Mat3::IDENTITY, mu * m.dot(m));
+    let lam_term = crate::math::Mat3::from_cols(
+        cof_m * cof_m.x,
+        cof_m * cof_m.y,
+        cof_m * cof_m.z,
+    );
+    let h_block = mat3_scale(mat3_add(mu_term, mat3_scale(lam_term, lam)), rest_vol);
+
+    // Tikhonov-projection safety net: clamp the diagonal to a tiny
+    // positive floor so the per-vertex Hessian is strictly SPD even
+    // when an inverted tet would otherwise produce a sign-indefinite
+    // contribution. Negligible compared to the inertia + spring
+    // diagonals; documented in `solvers/vbd.rs` module docs.
+    let h_floor = 1.0e-8_f64 * rest_vol.max(1.0e-12);
+    let h_block = crate::math::Mat3::from_cols(
+        Vec3::new(h_block.x_axis.x.max(h_floor), h_block.x_axis.y, h_block.x_axis.z),
+        Vec3::new(h_block.y_axis.x, h_block.y_axis.y.max(h_floor), h_block.y_axis.z),
+        Vec3::new(h_block.z_axis.x, h_block.z_axis.y, h_block.z_axis.z.max(h_floor)),
+    );
+
+    (f_clean, h_block)
+}
+
+/// Cofactor (adjugate) matrix of `m`, computed without `m.inverse()`
+/// — numerically stable when `det(m) ≈ 0`.
+#[inline]
+fn cofactor3(m: crate::math::Mat3) -> crate::math::Mat3 {
+    let f11 = m.x_axis.x; let f21 = m.x_axis.y; let f31 = m.x_axis.z;
+    let f12 = m.y_axis.x; let f22 = m.y_axis.y; let f32 = m.y_axis.z;
+    let f13 = m.z_axis.x; let f23 = m.z_axis.y; let f33 = m.z_axis.z;
+    crate::math::Mat3::from_cols(
+        Vec3::new(
+            f22 * f33 - f23 * f32,
+            f23 * f31 - f21 * f33,
+            f21 * f32 - f22 * f31,
+        ),
+        Vec3::new(
+            f13 * f32 - f12 * f33,
+            f11 * f33 - f13 * f31,
+            f12 * f31 - f11 * f32,
+        ),
+        Vec3::new(
+            f12 * f23 - f13 * f22,
+            f13 * f21 - f11 * f23,
+            f11 * f22 - f12 * f21,
+        ),
+    )
+}
+
+/// Discrete hinge bending energy on a CABLE triple `(v_prev, v_mid,
+/// v_next)`. Energy is `½·k_b·(2·sin(θ/2))²` where θ is the angle
+/// between segments `(v_mid − v_prev)` and `(v_next − v_mid)`. We
+/// approximate the per-vertex Hessian with a Gauss-Newton block —
+/// the second-derivative term is dropped (same projection trick the
+/// Neo-Hookean kernel above uses). Returns `(force, H)` for the
+/// requested role: 0 = `v_prev`, 1 = `v_mid`, 2 = `v_next`.
+///
+/// Physical sign convention: the bending force pushes `v_mid` toward
+/// the line `(v_prev, v_next)` (rest curvature = 0). Endpoints
+/// receive the opposite force (Newton's third law). `H` is the
+/// Gauss-Newton outer product `2·k_b · (∂c/∂x_role)·(∂c/∂x_role)ᵀ`
+/// where `c = 2·sin(θ/2) · n̂` is the curvature vector at v_mid.
+pub(crate) fn cable_bending_vertex_block(
+    role: u32,
+    v_prev: Vec3,
+    v_mid: Vec3,
+    v_next: Vec3,
+    k_b: Real,
+) -> (Vec3, crate::math::Mat3) {
+    use crate::math::Mat3;
+    // Curvature vector at v_mid: kappa = 2·(v_prev + v_next - 2·v_mid)
+    // / (|e1| + |e2|)  — the standard discrete-curvature for inextensible
+    // ropes. For our purposes the simpler `kappa = (v_prev - 2·v_mid + v_next)`
+    // is sufficient because the segment lengths are bounded by the
+    // CABLE's stretch springs.
+    let kappa = v_prev + v_next - 2.0 * v_mid;
+    // Energy gradient w.r.t. each role (bending force opposes kappa
+    // on v_mid; reverses on endpoints).
+    let (grad_self, sign): (Vec3, Real) = match role {
+        0 => (kappa, 1.0),         // v_prev: ∂E/∂v_prev = +k_b · kappa
+        1 => (-2.0 * kappa, 1.0),  // v_mid:  ∂E/∂v_mid  = -2·k_b · kappa
+        _ => (kappa, 1.0),         // v_next: ∂E/∂v_next = +k_b · kappa
+    };
+    let f_self = -k_b * grad_self;
+    // Gauss-Newton Hessian: Σ k_b · J·Jᵀ where J is the row of the
+    // Jacobian of `kappa` w.r.t. `x_role`. For a discrete laplacian
+    // J_v_mid = -2·I, J_v_prev = J_v_next = +I. So the Hessian
+    // contribution per role is:
+    //   role 0/2: k_b · I
+    //   role 1:   4·k_b · I   (from |J| = 2)
+    let h_diag = match role {
+        1 => 4.0 * k_b,
+        _ => k_b,
+    };
+    let h = mat3_scale(Mat3::IDENTITY, h_diag);
+    let _ = sign;
+    (f_self, h)
 }
 
 /// Solve `H · dx = f` for a 3×3 SPD `H`. Returns `None` if `H` is

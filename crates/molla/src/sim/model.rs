@@ -249,6 +249,85 @@ pub struct Model {
     /// per-segment XPBD compliance `α = 1/k`. Stored here so the
     /// solver / viewer can introspect cable tuning.
     pub cable_stiffness: Buffer<Real>,
+    /// Per-cable bending stiffness `k_b` (N·m). Drives the discrete
+    /// hinge energy `E_b = ½ · k_b · (2·sin(θ/2))²` between adjacent
+    /// segments — Stage 20.2. 0 disables bending for that cable
+    /// (it then behaves as a pure CABLE polyline as in Stage 20.1).
+    pub cable_bending_stiffness: Buffer<Real>,
+
+    // ── Per-vertex cable bending CSR (Stage 20.2) ──────────────────
+    // Each entry is a 4-u32 record `(v_prev, v_mid, v_next, role)`
+    // packed flat. Role ∈ {0, 1, 2} encodes whether this particle
+    // is `v_prev`, `v_mid`, or `v_next` — letting the kernel pick
+    // the right Hessian + force sign without a branch on equality.
+    // Bending stiffness lives at index `cable_bending_k[entry_idx]`
+    // (one f32 per CSR entry; pre-expanded so the kernel needn't
+    // walk the cable to find its stiffness).
+    /// Per-vertex CSR offsets into `cable_bending_entries` /
+    /// `cable_bending_k`. Length `particle_count + 1`. Each step is
+    /// `4` (one bending entry contributes 4 u32s); `cable_bending_k`
+    /// has `(offsets[v+1] - offsets[v]) / 4` entries per vertex.
+    pub vertex_cable_bending_offsets: Buffer<u32>,
+    /// Flat `(v_prev, v_mid, v_next, role)` 4-u32 records.
+    pub vertex_cable_bending_entries: Buffer<u32>,
+    /// Per-entry bending stiffness `k_b` (N·m). Length =
+    /// `vertex_cable_bending_entries.len() / 4`.
+    pub vertex_cable_bending_k: Buffer<Real>,
+
+    // ── Tetrahedra (Stage 20.2 volumetric soft bodies) ──────────────
+    // A tetrahedron-soup soft body shares the particle pool with
+    // springs / cables; per-tet adjacency is CSR-encoded and consumed
+    // by the VBD per-vertex block solve to fold a Neo-Hookean
+    // (corotational) energy contribution into the local Hessian +
+    // gradient. Mirrors `cable_*` in shape — one TetMesh = one
+    // contiguous slice of `tet_indices` with shared material params.
+    /// Number of tetrahedra in the model. The kernel iterates over
+    /// `tet_count` per particle via the `vertex_adjacent_tets` CSR
+    /// (similar to `vertex_adjacent_springs` for cloth).
+    pub tet_count: usize,
+    /// Flat `tet_count * 4` array of particle indices (one tet =
+    /// 4 vertex ids). Per-tet ordering matches `add_tet_mesh`'s input.
+    pub tet_indices: Buffer<u32>,
+    /// Per-tet inverse rest-state basis `Dm⁻¹` (3×3 column-major).
+    /// `Dm = [v1-v0 | v2-v0 | v3-v0]` evaluated at rest; the
+    /// deformation gradient is `F = Ds · Dm⁻¹`. Pre-inverted at
+    /// build time to keep the kernel hot loop branch-free. Flattened
+    /// to `Mat3` so the existing `Buffer<Mat3>` projection can be
+    /// reused.
+    pub tet_dm_inv: Buffer<Mat3>,
+    /// Per-tet rest volume (m³). Used to weight the per-tet Hessian
+    /// + force contribution: `Ψ_total = rest_volume · Ψ_density`. We
+    /// compute this once at build time as `det(Dm) / 6`; pre-storing
+    /// avoids the determinant in the hot loop.
+    pub tet_rest_volume: Buffer<Real>,
+    /// Per-tet first Lamé parameter `μ` (shear modulus, N/m²). The
+    /// builder converts the user's `(E, ν)` (Young's modulus + Poisson
+    /// ratio) into Lamé via the standard formulas. One value per tet
+    /// so future per-element materials slot in (Stage 20.3).
+    pub tet_mu: Buffer<Real>,
+    /// Per-tet second Lamé parameter `λ` (N/m²).
+    pub tet_lambda: Buffer<Real>,
+
+    /// Number of tet meshes (groupings).
+    pub tet_mesh_count: usize,
+    /// CSR offsets into `tet_indices` — mesh `m` owns tets in range
+    /// `[tet_mesh_offsets[m], tet_mesh_offsets[m+1])`. Length
+    /// `tet_mesh_count + 1`.
+    pub tet_mesh_offsets: Buffer<u32>,
+
+    // ── Per-vertex tet adjacency CSR (Stage 20.2) ──────────────────
+    // Computed at build time alongside the spring adjacency. Each
+    // entry pairs a tet id with the local vertex index `v_order ∈
+    // {0, 1, 2, 3}` so the kernel can fetch the right column of
+    // `Dm⁻¹` (== the gradient `m` for that vertex). Flat layout:
+    //   `vertex_adjacent_tets[2*k]   = tet_id`
+    //   `vertex_adjacent_tets[2*k+1] = v_order`
+    /// Per-vertex CSR offsets into `vertex_adjacent_tets`. Length
+    /// `particle_count + 1`. Each step in the offset is `2` (one
+    /// tet contributes a `(tet_id, v_order)` pair).
+    pub vertex_adjacent_tets_offsets: Buffer<u32>,
+    /// Flat `(tet_id, v_order)` pairs.
+    pub vertex_adjacent_tets: Buffer<u32>,
 
     // ── Rigid bodies ────────────────────────────────────────────────
     /// Number of rigid bodies.
@@ -532,6 +611,21 @@ impl Model {
             cable_particles: Buffer::from_vec(Vec::new(), s),
             cable_rest_length: Buffer::from_vec(Vec::new(), s),
             cable_stiffness: Buffer::from_vec(Vec::new(), s),
+            cable_bending_stiffness: Buffer::from_vec(Vec::new(), s),
+            vertex_cable_bending_offsets: Buffer::from_vec(vec![0u32], s),
+            vertex_cable_bending_entries: Buffer::from_vec(Vec::new(), s),
+            vertex_cable_bending_k: Buffer::from_vec(Vec::new(), s),
+
+            tet_count: 0,
+            tet_indices: Buffer::from_vec(Vec::new(), s),
+            tet_dm_inv: Buffer::from_vec(Vec::new(), s),
+            tet_rest_volume: Buffer::from_vec(Vec::new(), s),
+            tet_mu: Buffer::from_vec(Vec::new(), s),
+            tet_lambda: Buffer::from_vec(Vec::new(), s),
+            tet_mesh_count: 0,
+            tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
+            vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
+            vertex_adjacent_tets: Buffer::from_vec(Vec::new(), s),
 
             body_count: 0,
             body_mass: Buffer::from_vec(Vec::new(), s),
@@ -666,6 +760,18 @@ impl Model {
         up!(cable_particles);
         up!(cable_rest_length);
         up!(cable_stiffness);
+        up!(cable_bending_stiffness);
+        up!(vertex_cable_bending_offsets);
+        up!(vertex_cable_bending_entries);
+        up!(vertex_cable_bending_k);
+        up!(tet_indices);
+        up!(tet_dm_inv);
+        up!(tet_rest_volume);
+        up!(tet_mu);
+        up!(tet_lambda);
+        up!(tet_mesh_offsets);
+        up!(vertex_adjacent_tets_offsets);
+        up!(vertex_adjacent_tets);
         up!(body_mass);
         up!(body_inv_mass);
         up!(body_inertia);

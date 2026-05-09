@@ -45,6 +45,9 @@ pub struct VbdClothKernel {
     layout_out: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
     layout_shapes: wgpu::BindGroupLayout,
+    /// Stage-20.2 tet bind-group layout (group 5). Always 7 bindings;
+    /// bound to dummy 1-element buffers when `tet_count == 0`.
+    layout_tets: wgpu::BindGroupLayout,
 
     /// Per-spring stiffness (N/m), derived from XPBD compliance at
     /// upload time as `k = 1 / max(α, ε)` and then capped to the
@@ -62,12 +65,13 @@ pub struct VbdClothKernel {
     contact_lambda: Buffer<Real>,
 
     /// 1-element placeholder buffers for any bind group whose model
-    /// arrays may be empty (no springs / no shapes).
+    /// arrays may be empty (no springs / no shapes / no tets).
     dummy_u32: Buffer<u32>,
     dummy_real: Buffer<Real>,
     dummy_vec3: Buffer<Vec3>,
     dummy_i32: Buffer<i32>,
     dummy_xform: Buffer<crate::math::Transform>,
+    dummy_mat3: Buffer<crate::math::Mat3>,
 
     particle_count: u32,
     spring_count: u32,
@@ -122,6 +126,14 @@ impl VbdClothKernel {
             label: Some("molla::vbd_cloth shapes"),
             entries: &storage_entries(5, true),
         });
+        // Stage 20.2 tet + cable-bending group: 10 read-only entries
+        // (7 for tets + 3 for cable bending). All buffers are non-empty
+        // — when the model has no tets / bending the host binds dummy
+        // 1-element placeholders.
+        let layout_tets = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth tets"),
+            entries: &storage_entries(10, true),
+        });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::vbd_cloth layout"),
@@ -131,6 +143,7 @@ impl VbdClothKernel {
                 &layout_out,
                 &layout_uniforms,
                 &layout_shapes,
+                &layout_tets,
             ],
             push_constant_ranges: &[],
         });
@@ -187,6 +200,10 @@ impl VbdClothKernel {
             vec![crate::math::Transform::IDENTITY; 1],
             BufferUsage::Storage,
         );
+        let mut dummy_mat3 = Buffer::from_vec(
+            vec![crate::math::Mat3::IDENTITY; 1],
+            BufferUsage::Storage,
+        );
         let _ = dummy_u32.ensure_device(device);
         let _ = dummy_u32.upload(queue);
         let _ = dummy_real.ensure_device(device);
@@ -197,6 +214,8 @@ impl VbdClothKernel {
         let _ = dummy_i32.upload(queue);
         let _ = dummy_xform.ensure_device(device);
         let _ = dummy_xform.upload(queue);
+        let _ = dummy_mat3.ensure_device(device);
+        let _ = dummy_mat3.upload(queue);
 
         Self {
             pipe_predict,
@@ -209,6 +228,7 @@ impl VbdClothKernel {
             layout_out,
             layout_uniforms,
             layout_shapes,
+            layout_tets,
             spring_stiffness,
             particle_q_prev,
             inertia_y,
@@ -218,6 +238,7 @@ impl VbdClothKernel {
             dummy_vec3,
             dummy_i32,
             dummy_xform,
+            dummy_mat3,
             particle_count,
             spring_count,
         }
@@ -387,6 +408,68 @@ impl VbdClothKernel {
             ],
         });
 
+        // Stage 20.2 — tet bind group. All buffers may be empty when
+        // the model has no tets; fall through to the dummy buffers in
+        // that case (the per-vertex CSR is zero-length, so the inner
+        // tet loop in WGSL bails out immediately).
+        let tet_indices_buf = model
+            .tet_indices
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let dummy_mat3_buf = self
+            .dummy_mat3
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_mat3 missing".into()))?;
+        let tet_dm_inv_buf = model
+            .tet_dm_inv
+            .device_buffer()
+            .unwrap_or(dummy_mat3_buf);
+        let tet_rest_buf = model
+            .tet_rest_volume
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let tet_mu_buf = model.tet_mu.device_buffer().unwrap_or(dummy_real_buf);
+        let tet_lambda_buf = model.tet_lambda.device_buffer().unwrap_or(dummy_real_buf);
+        let vat_off_buf = model
+            .vertex_adjacent_tets_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vat_buf = model
+            .vertex_adjacent_tets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        // Stage 20.2 — per-vertex CABLE bending CSR. Same dummy
+        // fallback as the tet buffers; the kernel reads only when
+        // `vertex_cable_bend_offsets[v + 1] - offsets[v] > 0`.
+        let vcb_off_buf = model
+            .vertex_cable_bending_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vcb_entries_buf = model
+            .vertex_cable_bending_entries
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vcb_k_buf = model
+            .vertex_cable_bending_k
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let bg_tets = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::vbd_cloth tets bg"),
+            layout: &self.layout_tets,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: tet_indices_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: tet_dm_inv_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: tet_rest_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: tet_mu_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: tet_lambda_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: vat_off_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: vat_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: vcb_off_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: vcb_entries_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: vcb_k_buf.as_entire_binding() },
+            ],
+        });
+
         // ── Uniforms (one per dispatch) ──────────────────────────
         let color_offsets_host = model.particle_color_offsets.host()?.to_vec();
 
@@ -462,6 +545,7 @@ impl VbdClothKernel {
             pass.set_bind_group(1, &bg_topo, &[]);
             pass.set_bind_group(2, &bg_out, &[]);
             pass.set_bind_group(4, &bg_shapes, &[]);
+            pass.set_bind_group(5, &bg_tets, &[]);
 
             let dispatch =
                 |pass: &mut wgpu::ComputePass<'_>,

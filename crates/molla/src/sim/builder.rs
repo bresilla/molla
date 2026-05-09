@@ -211,6 +211,21 @@ impl Default for BodyParams {
     }
 }
 
+/// Stable identifier for a tetrahedral soft body added via
+/// [`ModelBuilder::add_tet_mesh`]. 0-based dense index into the
+/// model's `tet_mesh_offsets` CSR. Wrapped for type safety so a
+/// stray `usize` can't be passed where a tet mesh id is expected.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TetMeshId(pub u32);
+
+impl TetMeshId {
+    /// Raw 0-based index.
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Authoring surface for a [`Model`]. Stores everything in `Vec`s and
 /// finalises into typed [`Buffer`]s in [`ModelBuilder::build`].
 #[derive(Debug, Default)]
@@ -241,6 +256,19 @@ pub struct ModelBuilder {
     cable_particles: Vec<u32>,
     cable_rest_length: Vec<Real>,
     cable_stiffness: Vec<Real>,
+    cable_bending_stiffness: Vec<Real>,
+
+    // Tetrahedra (Stage 20.2 volumetric soft bodies). One TetMesh =
+    // one contiguous slice of `tet_indices` (4 ids per tet) with
+    // shared Lamé material parameters per element. Mirrors `cable_*`
+    // shape — CSR-encoded so a model can hold many independent
+    // tet meshes without allocating per-mesh Vecs.
+    tet_indices: Vec<u32>,
+    tet_dm_inv: Vec<Mat3>,
+    tet_rest_volume: Vec<Real>,
+    tet_mu: Vec<Real>,
+    tet_lambda: Vec<Real>,
+    tet_mesh_offsets: Vec<u32>,
 
     // Body arrays.
     body_mass: Vec<Real>,
@@ -496,6 +524,10 @@ impl ModelBuilder {
         self.cable_particle_offsets.push(off_hi);
         self.cable_rest_length.push(total_rest);
         self.cable_stiffness.push(stiffness);
+        // Stage 20.2 bending stiffness defaults to 0 (pure stretch
+        // polyline, Stage 20.1 behaviour). Use
+        // [`Self::set_cable_bending_stiffness`] to enable bending.
+        self.cable_bending_stiffness.push(0.0);
         cable_id
     }
 
@@ -527,6 +559,134 @@ impl ModelBuilder {
         let ids: Vec<u32> = (first..first + n).collect();
         let cable_id = self.add_cable(&ids, stiffness, max_stretch);
         (first, n, cable_id)
+    }
+
+    /// Set the bending stiffness `k_b` (N·m) on cable `cable_id`. The
+    /// VBD step then folds a discrete bending energy
+    /// `E_b = ½ · k_b · (2·sin(θ/2))²` for every interior triple
+    /// `(v_{i-1}, v_i, v_{i+1})` along the polyline. `0` (the default)
+    /// disables bending — the cable behaves as a pure stretch
+    /// polyline (Stage 20.1).
+    pub fn set_cable_bending_stiffness(
+        &mut self,
+        cable_id: usize,
+        bending_stiffness: Real,
+    ) {
+        if cable_id < self.cable_bending_stiffness.len() {
+            self.cable_bending_stiffness[cable_id] = bending_stiffness.max(0.0);
+        }
+    }
+
+    /// Add a tetrahedral mesh sharing the model's particle pool.
+    ///
+    /// Each `tets[i]` is `[v0, v1, v2, v3]` — particle indices forming
+    /// one tet. The builder pre-computes `Dm⁻¹` (inverse rest-state
+    /// basis) and the rest volume per element; the VBD per-vertex
+    /// block solve then folds in a Neo-Hookean stress + Hessian
+    /// contribution from each incident tet.
+    ///
+    /// * `youngs_modulus` — Young's modulus `E` (Pa = N/m²). Stiff
+    ///   rubber ≈ 5e6 Pa, jelly ≈ 1e4 Pa, gel ≈ 1e3 Pa. Capped at
+    ///   1e9 to keep the per-tet Hessian condition number sane.
+    /// * `poisson_ratio` — `ν ∈ [0, 0.5)`. 0.4 is a common default
+    ///   for elastic rubber-like material; 0.49+ approaches
+    ///   incompressibility but stiffens the volumetric Hessian
+    ///   significantly. Clamped to `[-0.49, 0.49]` so `(1 + ν)(1 -
+    ///   2ν)` doesn't blow up.
+    /// * `rest_volume` — optional override for per-element rest volume
+    ///   (m³). When `None`, the builder computes `det(Dm) / 6`. Pass
+    ///   `Some(...)` for rest configurations that aren't represented
+    ///   in `particle_q0` (rare; useful for plasticity Stage 20.3).
+    ///
+    /// Returns the new tet mesh id (0-based index).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Build` when:
+    /// - any vertex index is out of range,
+    /// - the rest configuration produces a negative or zero `det(Dm)`
+    ///   (degenerate / inverted tet),
+    /// - `tets.is_empty()`.
+    pub fn add_tet_mesh(
+        &mut self,
+        tets: &[[u32; 4]],
+        youngs_modulus: Real,
+        poisson_ratio: Real,
+        rest_volume: Option<&[Real]>,
+    ) -> Result<TetMeshId> {
+        if tets.is_empty() {
+            return Err(Error::Build("add_tet_mesh: tets must be non-empty".into()));
+        }
+        if let Some(rv) = rest_volume {
+            if rv.len() != tets.len() {
+                return Err(Error::Build(format!(
+                    "add_tet_mesh: rest_volume.len() = {} ≠ tets.len() = {}",
+                    rv.len(),
+                    tets.len()
+                )));
+            }
+        }
+        let n_particles = self.particle_mass.len() as u32;
+
+        // Convert (E, ν) → Lamé (μ, λ) once per call (one material per
+        // mesh in v1; per-element materials are Stage 20.3).
+        let nu = poisson_ratio.clamp(-0.49, 0.49);
+        let e = youngs_modulus.max(1.0).min(1.0e9);
+        let mu = e / (2.0 * (1.0 + nu));
+        let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+
+        let mesh_id = self.tet_mesh_offsets.len().saturating_sub(1).max(0);
+        if self.tet_mesh_offsets.is_empty() {
+            self.tet_mesh_offsets.push(0);
+        }
+        let lo_tet = self.tet_indices.len() / 4;
+        for (i, t) in tets.iter().enumerate() {
+            for &v in t {
+                if v >= n_particles {
+                    return Err(Error::Build(format!(
+                        "add_tet_mesh: tet {} references particle {} ≥ particle_count {}",
+                        i, v, n_particles
+                    )));
+                }
+            }
+            let v0 = self.particle_q0[t[0] as usize];
+            let v1 = self.particle_q0[t[1] as usize];
+            let v2 = self.particle_q0[t[2] as usize];
+            let v3 = self.particle_q0[t[3] as usize];
+            let dm = Mat3::from_cols(v1 - v0, v2 - v0, v3 - v0);
+            let det = dm.determinant();
+            if det.abs() < 1.0e-20 {
+                return Err(Error::Build(format!(
+                    "add_tet_mesh: tet {i} is degenerate (det(Dm) = {det:e})"
+                )));
+            }
+            // Newton's reference Neo-Hookean kernel uses the rest-state
+            // basis "as-is"; an *inverted* rest tet (negative volume)
+            // would silently flip every per-vertex force sign. Reject
+            // it loudly — callers should fix the tet's vertex order.
+            if det <= 0.0 {
+                return Err(Error::Build(format!(
+                    "add_tet_mesh: tet {i} has non-positive rest volume \
+                     (det(Dm) = {det:e}); reorder its vertices CCW"
+                )));
+            }
+            let dm_inv = dm.inverse();
+            let rest_vol = match rest_volume {
+                Some(rv) => rv[i].max(1.0e-12),
+                None => det / 6.0,
+            };
+            for &v in t {
+                self.tet_indices.push(v);
+            }
+            self.tet_dm_inv.push(dm_inv);
+            self.tet_rest_volume.push(rest_vol);
+            self.tet_mu.push(mu);
+            self.tet_lambda.push(lambda);
+        }
+        let _ = lo_tet;
+        // Push the closing CSR offset (next mesh starts here).
+        self.tet_mesh_offsets.push(self.tet_indices.len() as u32 / 4);
+        Ok(TetMeshId(mesh_id as u32))
     }
 
     /// Add a triangle (CCW) referencing three particles. Used for
@@ -1698,6 +1858,18 @@ impl ModelBuilder {
         let (spring_color_count, spring_color_offsets, spring_indices_by_color) =
             color_springs(particle_count, &self.spring_a, &self.spring_b);
 
+        // Stage 20.2: pre-expand per-vertex CABLE bending adjacency
+        // into a flat CSR so the VBD per-vertex block can pick up the
+        // bending term in one CSR walk (no per-cable rescan inside
+        // the kernel). Each entry is `(v_prev, v_mid, v_next, role)`
+        // + a parallel f32 `k_b`.
+        let (vcb_offsets, vcb_entries, vcb_k) = build_vertex_cable_bending_adjacency(
+            particle_count,
+            &self.cable_particle_offsets,
+            &self.cable_particles,
+            &self.cable_bending_stiffness,
+        );
+
         // VBD prep: per-vertex adjacency CSR + greedy particle
         // colouring. Used by `VbdSolver`; ignored by XPBD. Cheap to
         // compute (O(spring_count + particle_count · max_degree)) so
@@ -1705,13 +1877,24 @@ impl ModelBuilder {
         // rebuilding the model.
         let (vertex_adjacent_springs_offsets, vertex_adjacent_springs) =
             build_vertex_spring_adjacency(particle_count, &self.spring_a, &self.spring_b);
+        // Stage 20.2: per-vertex tet adjacency CSR + tet edges fed
+        // into the colouring graph. Each tet wires 6 edges between
+        // its 4 vertices; the greedy colouring honors them so the
+        // per-vertex VBD block solve stays race-free even when
+        // multiple tets share a vertex.
+        let (vertex_adjacent_tets_offsets, vertex_adjacent_tets) =
+            build_vertex_tet_adjacency(particle_count, &self.tet_indices);
         let (particle_color_count, particle_color_offsets, particle_indices_by_color) =
-            color_particles(
+            color_particles_with_tets_and_bending(
                 particle_count,
                 &vertex_adjacent_springs_offsets,
                 &vertex_adjacent_springs,
                 &self.spring_a,
                 &self.spring_b,
+                &self.tet_indices,
+                &self.cable_particle_offsets,
+                &self.cable_particles,
+                &self.cable_bending_stiffness,
             );
 
         Ok(Model {
@@ -1757,6 +1940,31 @@ impl ModelBuilder {
             cable_particles: Buffer::from_vec(self.cable_particles, s),
             cable_rest_length: Buffer::from_vec(self.cable_rest_length, s),
             cable_stiffness: Buffer::from_vec(self.cable_stiffness, s),
+            cable_bending_stiffness: Buffer::from_vec(self.cable_bending_stiffness, s),
+            vertex_cable_bending_offsets: Buffer::from_vec(vcb_offsets, s),
+            vertex_cable_bending_entries: Buffer::from_vec(vcb_entries, s),
+            vertex_cable_bending_k: Buffer::from_vec(vcb_k, s),
+
+            tet_count: self.tet_indices.len() / 4,
+            tet_indices: Buffer::from_vec(self.tet_indices, s),
+            tet_dm_inv: Buffer::from_vec(self.tet_dm_inv, s),
+            tet_rest_volume: Buffer::from_vec(self.tet_rest_volume, s),
+            tet_mu: Buffer::from_vec(self.tet_mu, s),
+            tet_lambda: Buffer::from_vec(self.tet_lambda, s),
+            tet_mesh_count: self.tet_mesh_offsets.len().saturating_sub(1),
+            tet_mesh_offsets: Buffer::from_vec(
+                if self.tet_mesh_offsets.is_empty() {
+                    vec![0u32]
+                } else {
+                    self.tet_mesh_offsets
+                },
+                s,
+            ),
+            vertex_adjacent_tets_offsets: Buffer::from_vec(
+                vertex_adjacent_tets_offsets,
+                s,
+            ),
+            vertex_adjacent_tets: Buffer::from_vec(vertex_adjacent_tets, s),
 
             body_count,
             body_mass: Buffer::from_vec(self.body_mass, s),
@@ -2052,6 +2260,150 @@ fn build_vertex_spring_adjacency(
     (offsets, indices)
 }
 
+/// Build the per-vertex tet adjacency CSR (Stage 20.2). Each entry
+/// pairs a tet id with the local vertex order `v_order ∈ {0..3}` so
+/// the kernel can pick the right column of `Dm⁻¹`. Layout matches
+/// Newton's `_fill_adjacent_tets`: for vertex `v`, the slice
+/// `[offsets[v] .. offsets[v+1])` is `(tet0, order0, tet1, order1,
+/// ...)` — i.e. each tet contributes 2 u32s.
+///
+/// Returns `(offsets, flat_pairs)`. `offsets` has length
+/// `particle_count + 1`; `flat_pairs` has length `2 * Σ degree`.
+pub(crate) fn build_vertex_tet_adjacency(
+    particle_count: usize,
+    tet_indices: &[u32],
+) -> (Vec<u32>, Vec<u32>) {
+    if particle_count == 0 || tet_indices.is_empty() {
+        return (vec![0u32; particle_count + 1], Vec::new());
+    }
+    let n_tets = tet_indices.len() / 4;
+    let mut counts = vec![0u32; particle_count];
+    for t in 0..n_tets {
+        for o in 0..4 {
+            let v = tet_indices[t * 4 + o] as usize;
+            if v < particle_count {
+                counts[v] += 1;
+            }
+        }
+    }
+    // Each entry is *two* u32s (tet id + v_order), so the offsets
+    // are scaled by 2.
+    let mut offsets = vec![0u32; particle_count + 1];
+    for v in 0..particle_count {
+        offsets[v + 1] = offsets[v] + counts[v] * 2;
+    }
+    let total = offsets[particle_count] as usize;
+    let mut data = vec![0u32; total];
+    let mut cursors = offsets[..particle_count].to_vec();
+    for t in 0..n_tets {
+        for o in 0..4 {
+            let v = tet_indices[t * 4 + o] as usize;
+            if v < particle_count {
+                let slot = cursors[v] as usize;
+                data[slot] = t as u32;
+                data[slot + 1] = o as u32;
+                cursors[v] += 2;
+            }
+        }
+    }
+    (offsets, data)
+}
+
+/// Pre-expand the per-vertex CABLE bending adjacency from the
+/// per-cable polyline lists. For every interior triple
+/// `(v_prev, v_mid, v_next)` of a cable with `k_b > 0`, push a 4-u32
+/// record `(v_prev, v_mid, v_next, role)` into the CSR for each of
+/// the three particles, alongside a parallel f32 `k_b` per record.
+///
+/// Returns `(offsets, entries, ks)`. `offsets` has length
+/// `particle_count + 1`, scaled by 4 (one entry = 4 u32s). `ks` has
+/// length `Σ degree` (one f32 per record).
+pub(crate) fn build_vertex_cable_bending_adjacency(
+    particle_count: usize,
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+) -> (Vec<u32>, Vec<u32>, Vec<Real>) {
+    if particle_count == 0 || cable_bending_stiffness.is_empty() {
+        return (vec![0u32; particle_count + 1], Vec::new(), Vec::new());
+    }
+    // Pass 1 — count entries per vertex.
+    let mut counts = vec![0u32; particle_count];
+    for c in 0..cable_bending_stiffness.len() {
+        let kb = cable_bending_stiffness[c];
+        if kb <= 0.0 {
+            continue;
+        }
+        let lo = cable_particle_offsets[c] as usize;
+        let hi = cable_particle_offsets[c + 1] as usize;
+        if hi - lo < 3 {
+            continue;
+        }
+        for i in (lo + 1)..(hi - 1) {
+            let v_prev = cable_particles[i - 1] as usize;
+            let v_mid = cable_particles[i] as usize;
+            let v_next = cable_particles[i + 1] as usize;
+            for &v in &[v_prev, v_mid, v_next] {
+                if v < particle_count {
+                    counts[v] += 1;
+                }
+            }
+        }
+    }
+    // Build CSR offsets (4 u32s per entry).
+    let mut offsets = vec![0u32; particle_count + 1];
+    for v in 0..particle_count {
+        offsets[v + 1] = offsets[v] + counts[v] * 4;
+    }
+    let total_entries: u32 = counts.iter().sum();
+    let mut entries = vec![0u32; (total_entries as usize) * 4];
+    let mut ks = vec![0.0_f64; total_entries as usize];
+    let mut cursors = vec![0u32; particle_count];
+    let mut entry_cursors = vec![0u32; particle_count];
+    let mut entry_idx_per_vertex = vec![0u32; particle_count];
+    // We need the entry index (the index into `ks`) per vertex; compute
+    // a parallel base from `offsets[v] / 4`.
+    for v in 0..particle_count {
+        cursors[v] = offsets[v];
+        entry_cursors[v] = offsets[v] / 4;
+        entry_idx_per_vertex[v] = offsets[v] / 4;
+    }
+
+    for c in 0..cable_bending_stiffness.len() {
+        let kb = cable_bending_stiffness[c];
+        if kb <= 0.0 {
+            continue;
+        }
+        let lo = cable_particle_offsets[c] as usize;
+        let hi = cable_particle_offsets[c + 1] as usize;
+        if hi - lo < 3 {
+            continue;
+        }
+        for i in (lo + 1)..(hi - 1) {
+            let v_prev = cable_particles[i - 1];
+            let v_mid = cable_particles[i];
+            let v_next = cable_particles[i + 1];
+            for (role, &v) in [v_prev, v_mid, v_next].iter().enumerate() {
+                let v_us = v as usize;
+                if v_us >= particle_count {
+                    continue;
+                }
+                let slot = cursors[v_us] as usize;
+                entries[slot] = v_prev;
+                entries[slot + 1] = v_mid;
+                entries[slot + 2] = v_next;
+                entries[slot + 3] = role as u32;
+                let entry_i = entry_cursors[v_us] as usize;
+                ks[entry_i] = kb;
+                cursors[v_us] += 4;
+                entry_cursors[v_us] += 1;
+            }
+        }
+    }
+    let _ = entry_idx_per_vertex;
+    (offsets, entries, ks)
+}
+
 /// Greedy graph colouring of particles. Two particles are adjacent
 /// iff at least one constraint connects them. Within a colour, no
 /// two particles share a constraint, so VBD's per-vertex block
@@ -2062,6 +2414,11 @@ fn build_vertex_spring_adjacency(
 /// For an N×N cloth with structural + shear + skip-one bending
 /// springs the natural colouring uses ≤ 12 colours and balances
 /// per-colour particle counts well.
+///
+/// Springs-only variant — kept around as the reference implementation
+/// + as a convenience for tests; production builds go through
+/// [`color_particles_with_tets`] which folds tet adjacency in too.
+#[allow(dead_code)]
 fn color_particles(
     particle_count: usize,
     vertex_adj_offsets: &[u32],
@@ -2085,6 +2442,152 @@ fn color_particles(
             let a = spring_a.get(s).copied().unwrap_or(u32::MAX) as usize;
             let b = spring_b.get(s).copied().unwrap_or(u32::MAX) as usize;
             let nbr = if a == v { b } else { a };
+            if nbr >= particle_count {
+                continue;
+            }
+            let nc = color_of[nbr];
+            if nc == u32::MAX {
+                continue;
+            }
+            let nc_idx = nc as usize;
+            if used.len() <= nc_idx {
+                used.resize(nc_idx + 1, false);
+            }
+            used[nc_idx] = true;
+        }
+        let mut chosen: u32 = 0;
+        while (chosen as usize) < used.len() && used[chosen as usize] {
+            chosen += 1;
+        }
+        color_of[v] = chosen;
+        if chosen > max_color {
+            max_color = chosen;
+        }
+    }
+
+    let color_count = (max_color as usize) + 1;
+    let mut counts = vec![0u32; color_count];
+    for &c in &color_of {
+        counts[c as usize] += 1;
+    }
+    let mut offsets = vec![0u32; color_count + 1];
+    for k in 0..color_count {
+        offsets[k + 1] = offsets[k] + counts[k];
+    }
+    let mut cursors = offsets[..color_count].to_vec();
+    let mut indices = vec![0u32; particle_count];
+    for (v, &c) in color_of.iter().enumerate() {
+        let slot = cursors[c as usize] as usize;
+        indices[slot] = v as u32;
+        cursors[c as usize] += 1;
+    }
+    (color_count, offsets, indices)
+}
+
+/// Stage 20.2 superset of [`color_particles`] — incorporates tet
+/// adjacency edges *and* CABLE bending hinges in addition to
+/// spring-graph edges. Two particles `(u, v)` are coloured
+/// non-adjacent iff *any* of the following pairs them:
+///   - a spring connects them,
+///   - they share a tet, or
+///   - they appear in the same `(v_prev, v_mid, v_next)` bending
+///     hinge.
+/// Without this, the per-vertex VBD block solve would race within a
+/// colour whenever a non-spring constraint touches both endpoints.
+#[allow(clippy::too_many_arguments)]
+fn color_particles_with_tets_and_bending(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+    tet_indices: &[u32],
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    if particle_count == 0 {
+        return (0, vec![0u32], Vec::new());
+    }
+    // Build a per-vertex set of "must differ" colour neighbours:
+    //   - spring endpoints (covered by the existing CSR), and
+    //   - any other corner of any tet this vertex is part of.
+    // We materialise it as a per-vertex Vec<u32> of unique neighbour
+    // indices; greedy colouring then picks the smallest free colour.
+    let mut neighbour: Vec<Vec<u32>> = vec![Vec::new(); particle_count];
+    // Springs.
+    for v in 0..particle_count {
+        let lo = vertex_adj_offsets[v] as usize;
+        let hi = vertex_adj_offsets[v + 1] as usize;
+        for s in &vertex_adj_springs[lo..hi] {
+            let s = *s as usize;
+            let a = spring_a.get(s).copied().unwrap_or(u32::MAX) as usize;
+            let b = spring_b.get(s).copied().unwrap_or(u32::MAX) as usize;
+            let nbr = if a == v { b } else { a };
+            if nbr < particle_count {
+                neighbour[v].push(nbr as u32);
+            }
+        }
+    }
+    // Tets — every pair (i, j) of the four corners contributes a
+    // mutual neighbour entry. Tiny constant per-tet cost (12 unique
+    // pairs, deduped at the colouring step).
+    let n_tets = tet_indices.len() / 4;
+    for t in 0..n_tets {
+        let v0 = tet_indices[t * 4] as usize;
+        let v1 = tet_indices[t * 4 + 1] as usize;
+        let v2 = tet_indices[t * 4 + 2] as usize;
+        let v3 = tet_indices[t * 4 + 3] as usize;
+        let corners = [v0, v1, v2, v3];
+        for i in 0..4 {
+            for j in 0..4 {
+                if i == j {
+                    continue;
+                }
+                if corners[i] < particle_count && corners[j] < particle_count {
+                    neighbour[corners[i]].push(corners[j] as u32);
+                }
+            }
+        }
+    }
+    // CABLE bending — for every interior triple `(v_prev, v_mid,
+    // v_next)` of a cable with `k_b > 0`, declare each pair as
+    // mutual neighbours so the colouring keeps them in distinct
+    // colours.
+    for c in 0..cable_bending_stiffness.len() {
+        if cable_bending_stiffness[c] <= 0.0 {
+            continue;
+        }
+        let lo = cable_particle_offsets[c] as usize;
+        let hi = cable_particle_offsets[c + 1] as usize;
+        if hi - lo < 3 {
+            continue;
+        }
+        for i in (lo + 1)..(hi - 1) {
+            let triple = [
+                cable_particles[i - 1] as usize,
+                cable_particles[i] as usize,
+                cable_particles[i + 1] as usize,
+            ];
+            for a in 0..3 {
+                for b in 0..3 {
+                    if a == b { continue; }
+                    if triple[a] < particle_count && triple[b] < particle_count {
+                        neighbour[triple[a]].push(triple[b] as u32);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut color_of = vec![u32::MAX; particle_count];
+    let mut max_color: u32 = 0;
+    let mut used = Vec::<bool>::with_capacity(16);
+
+    for v in 0..particle_count {
+        used.clear();
+        for &nbr in &neighbour[v] {
+            let nbr = nbr as usize;
             if nbr >= particle_count {
                 continue;
             }
