@@ -101,13 +101,14 @@ fn hull_of_cube_corners_plus_interior_returns_eight_vertices() {
     }
     let hull = convex_hull(&points);
     assert_eq!(
-        hull.len(),
+        hull.vertices.len(),
         8,
-        "expected exactly 8 hull vertices (the 8 cube corners), got {}: {hull:?}",
-        hull.len()
+        "expected exactly 8 hull vertices (the 8 cube corners), got {}: {:?}",
+        hull.vertices.len(),
+        hull.vertices,
     );
     // Every vertex must be at a corner.
-    for h in &hull {
+    for h in &hull.vertices {
         assert!((h.x.abs() - 1.0).abs() < 1.0e-9, "non-corner x at {h:?}");
         assert!((h.y.abs() - 1.0).abs() < 1.0e-9, "non-corner y at {h:?}");
         assert!((h.z.abs() - 1.0).abs() < 1.0e-9, "non-corner z at {h:?}");
