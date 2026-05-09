@@ -40,8 +40,8 @@ pub use support::{
 };
 
 // ── Stage 21: mesh authoring tools ─────────────────────────────────
-pub use decimate::decimate;
-pub use hull::convex_hull;
+pub use decimate::{decimate, decimate_lod_chain};
+pub use hull::{convex_hull, ConvexHullMesh};
 pub use marching_cubes::marching_cubes;
 pub use sdf_bake::{bake_mesh_to_sdf, closest_point_on_triangle, SdfGrid};
 pub use spatial_hash::SpatialHashGrid;

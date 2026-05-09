@@ -24,20 +24,65 @@
 
 use crate::math::{Real, Vec3};
 
-/// Compute the convex hull of `points` and return the hull's
-/// vertex list. Vertex ordering is not specified beyond "every
-/// returned vertex sits on the hull surface and no interior point of
-/// the input is included".
+/// Output of [`convex_hull`] — vertex positions plus the triangle
+/// faces wound CCW from the outside. Face indices reference into
+/// `vertices` (compacted; not the input cloud's indices).
 ///
-/// The result is suitable to pass directly to
-/// [`crate::sim::ModelBuilder::add_hull`].
+/// Stage 21.1 changed the public signature from `Vec<Vec3>` to this
+/// struct so callers (e.g. the viewer's hull-overlay wireframe) can
+/// render real edges instead of dot markers. Construction order is
+/// not specified beyond "outward-facing" — `face[i]` may sit anywhere
+/// in `faces`.
+#[derive(Debug, Clone, Default)]
+pub struct ConvexHullMesh {
+    pub vertices: Vec<Vec3>,
+    pub faces: Vec<[u32; 3]>,
+}
+
+impl ConvexHullMesh {
+    /// True when there is no surface (degenerate inputs that only
+    /// yielded an interval or a 2D hull).
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+
+    /// Iterate the hull's edges as `(u, v)` index pairs with `u < v`,
+    /// each edge appearing exactly once. Useful for wireframe
+    /// rendering (a manifold closed hull has each edge shared by two
+    /// triangles).
+    pub fn edges(&self) -> Vec<(u32, u32)> {
+        use std::collections::HashSet;
+        let mut set: HashSet<(u32, u32)> = HashSet::with_capacity(self.faces.len() * 3 / 2);
+        for f in &self.faces {
+            for &(a, b) in &[(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                set.insert(key);
+            }
+        }
+        let mut out: Vec<(u32, u32)> = set.into_iter().collect();
+        out.sort();
+        out
+    }
+}
+
+/// Compute the convex hull of `points` and return the hull as a
+/// triangle mesh ([`ConvexHullMesh`]). Vertex ordering is not
+/// specified beyond "every returned vertex sits on the hull surface
+/// and no interior point of the input is included"; faces are wound
+/// CCW from the outside (face normal points away from the hull
+/// interior).
 ///
-/// Empty / single-point inputs round-trip; two-point and degenerate
-/// (colinear / coplanar) clouds fall back to whatever subset the
-/// algorithm can recover (an interval, a 2D hull). Callers that need
-/// to detect degeneracy should compare `points.len()` to the returned
-/// length.
-pub fn convex_hull(points: &[Vec3]) -> Vec<Vec3> {
+/// The vertex list is suitable to pass directly to
+/// [`crate::sim::ModelBuilder::add_hull`] — that builder consumes
+/// vertices only, so the face data is just for visualisation /
+/// callers that need topology.
+///
+/// Empty / single-point inputs round-trip (vertices only, no faces);
+/// two-point and degenerate (colinear / coplanar) clouds fall back
+/// to whatever subset the algorithm can recover (an interval, a 2D
+/// hull) — degenerate cases also yield no faces. Callers that need
+/// to detect degeneracy can check `result.faces.is_empty()`.
+pub fn convex_hull(points: &[Vec3]) -> ConvexHullMesh {
     let n = points.len();
     if n < 4 {
         // <4 points → not enough for a tetrahedron. Return the unique
@@ -48,7 +93,7 @@ pub fn convex_hull(points: &[Vec3]) -> Vec<Vec3> {
                 out.push(p);
             }
         }
-        return out;
+        return ConvexHullMesh { vertices: out, faces: Vec::new() };
     }
 
     // ── Diameter-scaled tolerance ─────────────────────────────────
@@ -63,8 +108,11 @@ pub fn convex_hull(points: &[Vec3]) -> Vec<Vec3> {
     let Some(seed) = seed_tetrahedron(points, eps) else {
         // Degenerate (coplanar). Fall back to a 2D hull on the
         // dominant axis-aligned projection so callers still get
-        // *something* sensible.
-        return planar_fallback(points, eps);
+        // *something* sensible. No 3D faces to report in this case.
+        return ConvexHullMesh {
+            vertices: planar_fallback(points, eps),
+            faces: Vec::new(),
+        };
     };
     // Build initial faces (4 of them, one per omitted vertex). Wind
     // each so its normal points away from the centroid → outward.
@@ -188,8 +236,11 @@ pub fn convex_hull(points: &[Vec3]) -> Vec<Vec3> {
         }
     }
 
-    // Collect every unique vertex on a surviving face — those are the
-    // hull vertices.
+    // Compact: collect every unique vertex on a surviving face into a
+    // dense list and rewrite the face table with the new indices.
+    // Walking in input-index order keeps the output deterministic
+    // (otherwise rayon-parallel callers would see a vertex shuffle on
+    // every run).
     let mut on_hull: Vec<bool> = vec![false; n];
     for f in &faces {
         if f.deleted {
@@ -199,13 +250,41 @@ pub fn convex_hull(points: &[Vec3]) -> Vec<Vec3> {
         on_hull[f.b] = true;
         on_hull[f.c] = true;
     }
-    let mut out = Vec::new();
+    let mut new_index_of: Vec<u32> = vec![u32::MAX; n];
+    let mut out_verts: Vec<Vec3> = Vec::new();
     for (i, &flag) in on_hull.iter().enumerate() {
         if flag {
-            out.push(points[i]);
+            new_index_of[i] = out_verts.len() as u32;
+            out_verts.push(points[i]);
         }
     }
-    out
+    // Build a face list in canonical order: rotate so the smallest
+    // index sits in slot 0 (preserves CCW winding) and sort the
+    // collection lexicographically. This is the determinism guard the
+    // PLAN calls out — without it, the face order depends on QuickHull
+    // expansion order, which is sensitive to hash-set iteration in the
+    // horizon code.
+    let mut out_faces: Vec<[u32; 3]> = Vec::new();
+    for f in &faces {
+        if f.deleted {
+            continue;
+        }
+        let a = new_index_of[f.a];
+        let b = new_index_of[f.b];
+        let c = new_index_of[f.c];
+        out_faces.push(rotate_smallest_first([a, b, c]));
+    }
+    out_faces.sort_unstable();
+    ConvexHullMesh { vertices: out_verts, faces: out_faces }
+}
+
+/// Rotate a CCW triangle so its smallest index sits in slot 0,
+/// preserving winding. Used to canonicalise hull face output.
+fn rotate_smallest_first(t: [u32; 3]) -> [u32; 3] {
+    let m = t[0].min(t[1]).min(t[2]);
+    if t[0] == m { t }
+    else if t[1] == m { [t[1], t[2], t[0]] }
+    else { [t[2], t[0], t[1]] }
 }
 
 #[derive(Debug, Clone)]
@@ -502,7 +581,12 @@ mod tests {
             })
             .collect();
         let hull = convex_hull(&v);
-        assert_eq!(hull.len(), 8, "hull of 8 cube corners must yield 8 vertices, got {hull:?}");
+        assert_eq!(
+            hull.vertices.len(),
+            8,
+            "hull of 8 cube corners must yield 8 vertices, got {:?}",
+            hull.vertices,
+        );
     }
 
     #[test]
@@ -527,13 +611,13 @@ mod tests {
         }
         let hull = convex_hull(&v);
         assert_eq!(
-            hull.len(),
+            hull.vertices.len(),
             8,
             "hull must be just the 8 corners — got {} vertices",
-            hull.len()
+            hull.vertices.len()
         );
         // Each hull vertex should sit at a corner of the cube.
-        for h in &hull {
+        for h in &hull.vertices {
             assert!((h.x.abs() - 1.0).abs() < 1e-9);
             assert!((h.y.abs() - 1.0).abs() < 1e-9);
             assert!((h.z.abs() - 1.0).abs() < 1e-9);
@@ -549,6 +633,8 @@ mod tests {
             Vec3::new(0.0, 0.0, 1.0),
         ];
         let hull = convex_hull(&v);
-        assert_eq!(hull.len(), 4);
+        assert_eq!(hull.vertices.len(), 4);
+        // Tetrahedron has 4 faces.
+        assert_eq!(hull.faces.len(), 4);
     }
 }
