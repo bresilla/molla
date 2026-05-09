@@ -21,11 +21,31 @@ pub struct CollisionPipeline {
     gpu_prefilter: Option<GpuPrefilterState>,
     #[cfg(feature = "gpu")]
     gpu_full_np: Option<GpuFullNarrowPhase>,
+    /// Stage-19 GPU LBVH broad phase. When set, replaces the CPU SAP
+    /// pair generator. Output flows into `pair_buf` exactly the same
+    /// way SAP would, and the rest of the pipeline (prefilter / full
+    /// narrow phase / CPU NP fallback) is unchanged.
+    #[cfg(feature = "gpu")]
+    gpu_broad: Option<GpuBroadPhaseState>,
     /// Number of times the CPU narrow-phase `pair_contact` was
     /// invoked on the most recent `collide` call. Useful for
     /// asserting that a fully-GPU pipeline doesn't fall back to CPU
     /// in steady state.
     last_cpu_np_calls: usize,
+    /// Number of pairs returned by the broad phase on the most
+    /// recent `collide` call (post-filter). Surfaces in the GPU
+    /// broad-phase demo so the user can compare CPU SAP vs GPU LBVH
+    /// pair counts side-by-side.
+    last_broad_phase_pairs: usize,
+}
+
+#[cfg(feature = "gpu")]
+struct GpuBroadPhaseState {
+    lbvh: crate::kernels::LbvhBroadPhase,
+    /// If `true`, reuse the previous frame's tree topology and only
+    /// re-run refit + pair-finder. Useful for cloth / soft-body
+    /// scenes where shape topology is fixed across frames.
+    refit_only: bool,
 }
 
 #[cfg(feature = "gpu")]
@@ -167,6 +187,62 @@ impl CollisionPipeline {
         Ok(())
     }
 
+    /// Enable the **full GPU broad phase** (Stage 19): replace the
+    /// CPU SAP pair generator with a GPU LBVH (Linear BVH) build +
+    /// pair-finder. The output (`pair_buf`) is identical in content
+    /// to SAP — same set of overlapping AABB pairs, just sorted in a
+    /// different order. The narrow phase / GPU prefilter / full GPU
+    /// narrow phase all consume the result transparently.
+    ///
+    /// Set `refit_only` to `true` for scenes where shape topology is
+    /// fixed but per-shape AABBs change every frame (cloth, soft
+    /// bodies, deformable particles) — saves the Morton-sort + tree
+    /// build cost.
+    #[cfg(feature = "gpu")]
+    pub fn enable_full_gpu_broad_phase(
+        &mut self,
+        engine: &crate::compute::Engine,
+        initial_prim_capacity: usize,
+        initial_pair_capacity: usize,
+        refit_only: bool,
+    ) -> Result<()> {
+        let device = engine
+            .device()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU queue".into()))?
+            .clone();
+        let lbvh = crate::kernels::LbvhBroadPhase::new(
+            device,
+            queue,
+            initial_prim_capacity,
+            initial_pair_capacity,
+        )?;
+        self.gpu_broad = Some(GpuBroadPhaseState { lbvh, refit_only });
+        Ok(())
+    }
+
+    /// Toggle the cached LBVH refit-only flag at runtime. No-op when
+    /// the GPU broad phase isn't enabled.
+    #[cfg(feature = "gpu")]
+    pub fn set_lbvh_refit_only(&mut self, refit_only: bool) {
+        if let Some(state) = self.gpu_broad.as_mut() {
+            state.refit_only = refit_only;
+        }
+    }
+
+    /// Number of pairs returned by the broad phase on the most
+    /// recent `collide` call (post pair-filter dedup, excluding the
+    /// plane-vs-everything implicit set when GPU broad phase is on,
+    /// which contributes to this count via the LBVH path's natural
+    /// pair output).
+    #[must_use]
+    pub fn last_broad_phase_pair_count(&self) -> usize {
+        self.last_broad_phase_pairs
+    }
+
     /// Run the SAP broad phase + narrow phase, write into `contacts`.
     /// Returns the contact count.
     pub fn collide(
@@ -177,6 +253,7 @@ impl CollisionPipeline {
     ) -> Result<usize> {
         contacts.clear();
         self.last_cpu_np_calls = 0;
+        self.last_broad_phase_pairs = 0;
         if model.shape_count < 2 {
             // No pairs possible; still write an empty body-contact
             // CSR so `body_contact_offsets` / `body_contact_indices`
@@ -187,8 +264,16 @@ impl CollisionPipeline {
             return Ok(0);
         }
 
-        self.broad
-            .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+        // Pick GPU LBVH broad phase if enabled, otherwise CPU SAP.
+        #[cfg(feature = "gpu")]
+        let used_gpu_broad = self.run_gpu_broad_phase(model, state)?;
+        #[cfg(not(feature = "gpu"))]
+        let used_gpu_broad = false;
+        if !used_gpu_broad {
+            self.broad
+                .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+        }
+        self.last_broad_phase_pairs = self.pair_buf.len();
 
         // Full GPU narrow phase takes precedence over the prefilter.
         #[cfg(feature = "gpu")]
@@ -500,6 +585,50 @@ impl CollisionPipeline {
         pf.overlap.download(&pf.device, &pf.queue)?;
         let mask = pf.overlap.host()?[..n].to_vec();
         Ok(Some(mask))
+    }
+
+    /// Stage-19 GPU LBVH broad phase. Runs the LBVH build (or refit)
+    /// + pair-finder, then post-filters the raw AABB pairs through
+    /// `pair_passes_filters` (collision groups, self-collision,
+    /// world-id partitioning) so the downstream narrow phase sees the
+    /// same set the CPU SAP would. Returns `true` if the GPU broad
+    /// phase ran (so the caller can skip CPU SAP).
+    #[cfg(feature = "gpu")]
+    fn run_gpu_broad_phase(&mut self, model: &Model, state: &State) -> Result<bool> {
+        let bp = match self.gpu_broad.as_mut() {
+            Some(b) => b,
+            None => return Ok(false),
+        };
+        let pairs = if bp.refit_only {
+            bp.lbvh
+                .refit_from_model(model, state, model.contact_margin)?
+        } else {
+            bp.lbvh
+                .dispatch_from_model(model, state, model.contact_margin)?
+        };
+
+        // Apply the same pair-level filters CPU SAP applies (collision
+        // groups, world-id partitioning, explicit exclusions, static-
+        // pair drop). Order pairs as `(min, max)` to match SAP output.
+        self.pair_buf.clear();
+        let shape_body = model.shape_body.host()?;
+        let body_world = model.body_world.host()?;
+        for k in 0..pairs.a.len() {
+            let i = pairs.a[k];
+            let j = pairs.b[k];
+            let (a, b) = if i < j { (i, j) } else { (j, i) };
+            if !super::broad_phase::pair_passes_filters(
+                model,
+                shape_body,
+                body_world,
+                a as usize,
+                b as usize,
+            ) {
+                continue;
+            }
+            self.pair_buf.push(super::ShapePair { a, b });
+        }
+        Ok(true)
     }
 }
 

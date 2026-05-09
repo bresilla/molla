@@ -49,6 +49,14 @@ struct Uniforms {
 @group(0) @binding(4) var<storage, read_write> visited:          array<atomic<u32>>;
 @group(1) @binding(0) var<uniform>             u: Uniforms;
 
+// Pair-output bind group — populated by `find_pairs`. `pair_count` is
+// an atomic counter; `pair_a` / `pair_b` are append-style arrays sized
+// to the host capacity (host re-issues a larger dispatch if it
+// overflowed). `pair_count[1]` is the high-water mark before clamp.
+@group(2) @binding(0) var<storage, read_write> pair_count: array<atomic<u32>>;
+@group(2) @binding(1) var<storage, read_write> pair_a:     array<u32>;
+@group(2) @binding(2) var<storage, read_write> pair_b:     array<u32>;
+
 // Spread the lower 10 bits of `v` across every 3rd bit slot.
 fn spread_bits(v: u32) -> u32 {
     var x = v & 0x000003ffu;
@@ -153,6 +161,85 @@ fn build_internal(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Children record this as their parent.
     nodes[left_child].parent  = me;
     nodes[right_child].parent = me;
+}
+
+// Per-leaf traversal: walk the LBVH from the root and emit any pair
+// (this leaf, other leaf) whose AABBs overlap. We only emit pairs
+// where `me_prim < other_prim` to keep the output deduplicated.
+//
+// `pair_a` / `pair_b` hold the result; `pair_count[0]` is an atomic
+// counter that doubles as a clamp index — appends past the host
+// capacity are dropped (host can detect via `pair_count[0] > cap` and
+// re-dispatch with a bigger buffer next frame).
+//
+// Iterative stack-based traversal — WGSL has no recursion. Stack
+// depth is bounded by `2*ceil(log2(n)) + 1` for the Karras layout;
+// 64 is enough for n up to ~2^31. Most adapters allow 32 KB local
+// memory per workgroup, but we keep the stack in registers (per
+// thread) to dodge cross-thread coordination.
+fn aabb_overlap(amin: vec3<f32>, amax: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) -> bool {
+    return all(amin <= bmax) && all(amax >= bmin);
+}
+
+@compute @workgroup_size(64)
+fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = u.primitive_count;
+    let leaf = gid.x;
+    if (leaf >= n) { return; }
+    let me_prim = sorted_idx[leaf];
+    let me_aabb = primitive_aabb[me_prim];
+    let me_min = me_aabb.min.xyz;
+    let me_max = me_aabb.max.xyz;
+
+    // No pairs in a 1-element scene.
+    if (n < 2u) { return; }
+
+    var stack: array<u32, 64>;
+    var sp: i32 = 0;
+    stack[0] = 0u; // root = internal node 0
+    sp = 1;
+
+    loop {
+        if (sp <= 0) { break; }
+        sp = sp - 1;
+        let node_idx = stack[sp];
+        let node = nodes[node_idx];
+        // Leaf?
+        if (node.is_leaf == 1u) {
+            // The internal-node `parent` field of leaves is set, but
+            // we identify "leaf" via `is_leaf`. The leaf's primitive
+            // is `sorted_idx[leaf_local]` where `leaf_local = node_idx - (n-1)`.
+            let leaf_local = node_idx - (n - 1u);
+            if (leaf_local == leaf) { continue; } // skip self
+            let other_prim = sorted_idx[leaf_local];
+            // Dedup: emit only when me < other.
+            if (me_prim >= other_prim) { continue; }
+            if (!aabb_overlap(me_min, me_max,
+                              primitive_aabb[other_prim].min.xyz,
+                              primitive_aabb[other_prim].max.xyz)) {
+                continue;
+            }
+            let slot = atomicAdd(&pair_count[0], 1u);
+            // Always bump the high-water mark; clamp the write.
+            let cap = arrayLength(&pair_a);
+            if (slot < cap) {
+                pair_a[slot] = me_prim;
+                pair_b[slot] = other_prim;
+            }
+            continue;
+        }
+        // Internal — test against the node's stored AABB and recurse.
+        if (!aabb_overlap(me_min, me_max, node.aabb_min.xyz, node.aabb_max.xyz)) {
+            continue;
+        }
+        // Push children.
+        if (sp + 2 <= 64) {
+            stack[sp] = node.left;
+            sp = sp + 1;
+            stack[sp] = node.right;
+            sp = sp + 1;
+        }
+    }
 }
 
 // Bottom-up AABB refit using `visited` atomic counters: each
