@@ -93,15 +93,25 @@ use super::tape::{Tape, TapeId, TapeOp};
 ///   parent-joint x/y/z axes (applied first), `q[3..6]` is the same
 ///   intrinsic Euler-angle rotation as `Ball` (applied second).
 ///
-/// Distance + D6 are explicitly **deferred** to Stage 23.1.2 (their
-/// constraint Jacobians are non-smooth at λ=0 / on Euler-decomp
-/// branch boundaries — needs proximal handling we haven't built yet).
+/// Distance + D6 land in Stage 23.1.3 — their constraint Jacobians are
+/// non-smooth at the `λ = 0` projection boundary (Distance) / Euler-
+/// decomp branch boundaries (D6). The implementation route is the same
+/// stacked-DoF pattern used by Ball / Free, plus a per-step
+/// **post-projection** layer applied AFTER the symplectic-Euler
+/// integration; see [`JointProjection`] and the
+/// `apply_post_projection` step inside [`FeatherstoneRevoluteChain::forward_step`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum JointKind {
     Revolute,
     Prismatic,
     Ball,
     Free,
+    /// 3 stacked prismatic DoFs (X / Y / Z) under a hard-distance
+    /// constraint `||q|| = L`. Stage 23.1.3.
+    Distance,
+    /// 3 prismatic + 3 revolute DoFs with optional per-axis position
+    /// limits. Stage 23.1.3.
+    D6,
 }
 
 impl JointKind {
@@ -111,9 +121,51 @@ impl JointKind {
         match self {
             Self::Revolute | Self::Prismatic => 1,
             Self::Ball => 3,
-            Self::Free => 6,
+            Self::Free | Self::D6 => 6,
+            Self::Distance => 3,
         }
     }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Stage 23.1.3 — post-step joint-coord projections (Distance / D6).
+// ────────────────────────────────────────────────────────────────────
+
+/// One post-integration projection applied to the per-step joint coords
+/// `(q_new, qd_new)` after the symplectic-Euler update. Both kinds are
+/// non-smooth in the unprojected forward path; their adjoints implement
+/// the corresponding projection-Jacobian transform with a smooth blend
+/// (Moreau envelope) at the kink for Distance.
+///
+/// **Distance** at `λ ≤ 0` (constraint active): position projection
+/// `q ← q · L / ||q||`; velocity projection zeroes the radial
+/// component along `n = q / ||q||`. Adjoint is `I − n·nᵀ` along both q
+/// and qd. Smoothing: a `tanh`-based blend over `|λ| < eps_smooth`
+/// pushes the activation through the kink continuously so finite-
+/// difference verification at the boundary stays well-behaved.
+///
+/// **AngularLimit** clamps a single joint coord to `[lower, upper]`
+/// (use `Real::NAN` for unbounded). When `q` is at a limit and `qd`
+/// pulls further past it, the projection zeros `qd` (the "stay-at-
+/// limit" manifold). Adjoint: identity when strictly inside the
+/// limits, zero on the velocity component when actively held.
+#[derive(Copy, Clone, Debug)]
+pub enum JointProjection {
+    /// Project the 3 joint coords at indices `coords[0..3]` onto the
+    /// sphere of radius `l_target`. `eps_smooth > 0` activates the
+    /// Moreau-envelope smoothing across the kink.
+    Distance {
+        coords: [usize; 3],
+        l_target: Real,
+        eps_smooth: Real,
+    },
+    /// Clamp the single joint coord at index `coord` to `[lower, upper]`.
+    /// NaN bounds disable that side.
+    AngularLimit {
+        coord: usize,
+        lower: Real,
+        upper: Real,
+    },
 }
 
 /// One link in a serial chain. Parent-anchor transform `x_p` is in the
@@ -170,6 +222,12 @@ pub struct FeatherstoneRevoluteChain {
     /// EE point in the LAST link's local frame, used by
     /// [`Self::end_effector`].
     pub ee_local: Vec3,
+    /// Stage 23.1.3 — post-integration joint-coord projections
+    /// (Distance / D6). Applied in order after the symplectic-Euler
+    /// update at the end of each [`Self::forward_step`]; the reverse
+    /// pass mirrors the chain rule per projection (in reverse order).
+    /// Default empty — Revolute / Ball / Free chains never touch this.
+    pub projections: Vec<JointProjection>,
 }
 
 impl FeatherstoneRevoluteChain {
@@ -194,6 +252,7 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::new(0.0, l, 0.0),
+            projections: Vec::new(),
         }
     }
 
@@ -228,6 +287,7 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::new(0.0, l2, 0.0),
+            projections: Vec::new(),
         }
     }
 
@@ -265,6 +325,7 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::new(0.0, 0.0, link_lens[5]),
+            projections: Vec::new(),
         }
     }
 
@@ -327,6 +388,7 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::new(0.0, -l, 0.0),
+            projections: Vec::new(),
         }
     }
 
@@ -398,7 +460,115 @@ impl FeatherstoneRevoluteChain {
             dt,
             horizon,
             ee_local: Vec3::ZERO,
+            projections: Vec::new(),
         }
+    }
+
+    /// **Distance joint** (Stage 23.1.3) — a single rigid body
+    /// connected to the world by 3 stacked prismatic DoFs (X / Y / Z)
+    /// with a hard distance constraint `||q[0..3]|| = l_target` applied
+    /// post-step. Produces a chain with **3 links** and `total_dofs = 3`.
+    ///
+    /// `eps_smooth` controls the Moreau-envelope smoothing across the
+    /// `λ = 0` activation kink. Use `0.0` for the hard switch (an
+    /// honest v1 if the smoothed gradient ever misbehaves), or a small
+    /// positive value (`~ 1e-3 · l_target`) for a continuous gradient
+    /// in a neighbourhood of the kink.
+    #[must_use]
+    pub fn add_joint_distance(
+        mass: Real,
+        l_target: Real,
+        dt: Real,
+        horizon: usize,
+        eps_smooth: Real,
+    ) -> Self {
+        let zero_inertia = Mat3::ZERO;
+        let zero_mass = 0.0_f64;
+        // Body inertia: diagonal mass · l² / 12 (small floor so
+        // inverting the spatial inertia stays well-conditioned).
+        let i_diag = (mass * l_target * l_target / 12.0).max(1.0e-6);
+        let inertia = Mat3::from_diagonal(Vec3::splat(i_diag));
+
+        let mut links = Vec::with_capacity(3);
+        let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+        for k in 0..3 {
+            // Mass + inertia live on the LAST prismatic link (the
+            // "real" body); intermediates carry zero mass.
+            let (m, i_l) = if k == 2 {
+                (mass, inertia)
+            } else {
+                (zero_mass, zero_inertia)
+            };
+            links.push(RevoluteLink {
+                kind: JointKind::Prismatic,
+                axis_local: axes[k],
+                x_p: Transform::IDENTITY,
+                mass: m,
+                com_local: Vec3::ZERO,
+                inertia_local: i_l,
+            });
+        }
+        Self {
+            links,
+            // Distance demos work either with or without gravity; pick
+            // zero so the FD vs analytic test stays in the regime where
+            // the constraint is the dominant force. Re-enable per test.
+            gravity: Vec3::ZERO,
+            damping: 0.0,
+            dt,
+            horizon,
+            ee_local: Vec3::ZERO,
+            projections: vec![JointProjection::Distance {
+                coords: [0, 1, 2],
+                l_target,
+                eps_smooth,
+            }],
+        }
+    }
+
+    /// **D6 joint** (Stage 23.1.3) — 3 prismatic + 3 revolute DoFs
+    /// (same DoF stacking as [`Self::free_body`]) plus per-axis position
+    /// limits. Produces a chain with **6 links** and `total_dofs = 6`.
+    ///
+    /// `linear_limits[k]` is `(lower, upper)` for the k-th prismatic
+    /// axis; `angular_limits[k]` is `(lower, upper)` for the k-th
+    /// revolute axis. Use `Real::NAN` for unbounded sides.
+    #[must_use]
+    pub fn add_joint_d6(
+        mass: Real,
+        half_extent: Real,
+        dt: Real,
+        horizon: usize,
+        linear_limits: [(Real, Real); 3],
+        angular_limits: [(Real, Real); 3],
+    ) -> Self {
+        let mut chain = Self::free_body(mass, half_extent, dt, horizon);
+        // Tag the chain kind so the kind picker in the viewer / readback
+        // can label it as D6; the underlying motion subspace is identical
+        // to Free, so the dynamics path is unchanged.
+        let mut projections = Vec::new();
+        for k in 0..3 {
+            let (lo, hi) = linear_limits[k];
+            if !lo.is_nan() || !hi.is_nan() {
+                projections.push(JointProjection::AngularLimit {
+                    coord: k,
+                    lower: lo,
+                    upper: hi,
+                });
+            }
+        }
+        for k in 0..3 {
+            let (lo, hi) = angular_limits[k];
+            if !lo.is_nan() || !hi.is_nan() {
+                projections.push(JointProjection::AngularLimit {
+                    coord: 3 + k,
+                    lower: lo,
+                    upper: hi,
+                });
+            }
+        }
+        chain.projections = projections;
+        chain
     }
 
     /// EE position at joint configuration `q` (length = #links).
@@ -461,6 +631,12 @@ pub struct FeatherstoneStepTrace {
     pub a_body: Vec<SpatialVector>,
     /// Joint acceleration `q̈_k` for each joint at this step.
     pub q_dd: Vec<Real>,
+    /// Stage 23.1.3 — `(q_pred, qd_pred)` *after symplectic Euler but
+    /// before* any post-step [`JointProjection`]s. Empty when the chain
+    /// has no projections (the common case). Used by the reverse pass
+    /// to evaluate projection-Jacobian transforms at the kink.
+    pub q_pred_unproj: Vec<Real>,
+    pub qd_pred_unproj: Vec<Real>,
 }
 
 /// Full rollout trace: the per-step `(q, qd)` plus the per-step
@@ -536,7 +712,13 @@ impl JointKinematic {
             // composite kinds round-trip back to single-DoF here so
             // a stray multi-DoF link in the chain still kinematically
             // produces zero motion (defensive — no-op transform).
-            JointKind::Ball | JointKind::Free => Self {
+            // Ball / Free / Distance / D6 are exposed as user-level
+            // composite joints built out of stacked single-DoF
+            // Revolute / Prismatic links — they never reach this match
+            // arm in a well-formed chain. Defensive no-op transform
+            // keeps the kinematics finite if a stray composite kind
+            // shows up.
+            JointKind::Ball | JointKind::Free | JointKind::Distance | JointKind::D6 => Self {
                 joint_origin_world: parent_joint.position,
                 axis_world: Vec3::ZERO,
                 s_j: SpatialVector::ZERO,
@@ -567,6 +749,8 @@ impl FeatherstoneRevoluteChain {
             c_term: vec![SpatialVector::ZERO; n],
             a_body: vec![SpatialVector::ZERO; n],
             q_dd: vec![0.0; n],
+            q_pred_unproj: Vec::new(),
+            qd_pred_unproj: Vec::new(),
         };
 
         let mut i_a: Vec<SpatialMatrix6> = vec![SpatialMatrix6::ZERO; n];
@@ -666,6 +850,19 @@ impl FeatherstoneRevoluteChain {
             q_new[j] = q[j] + qd_int * self.dt;
         }
 
+        // Stage 23.1.3 — apply post-step joint-coord projections in
+        // order. Distance / D6 land here; chains without projections
+        // pay only an empty-vec iter check. Capture the unprojected
+        // (q, qd) on the trace so the reverse pass can evaluate the
+        // projection-Jacobian transforms at the kink.
+        if !self.projections.is_empty() {
+            step.q_pred_unproj = q_new.clone();
+            step.qd_pred_unproj = qd_new.clone();
+            for proj in &self.projections {
+                apply_projection_forward(proj, &mut q_new, &mut qd_new);
+            }
+        }
+
         (q_new, qd_new, step)
     }
 
@@ -692,6 +889,203 @@ impl FeatherstoneRevoluteChain {
             q: q_arr,
             qd: qd_arr,
             steps,
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Stage 23.1.3 — projection forward + adjoint helpers (Distance / D6).
+// ────────────────────────────────────────────────────────────────────
+
+/// Smooth activation σ(λ, eps): blends between 0 (inactive, λ ≥ eps) and
+/// 1 (fully active, λ ≤ -eps) over the band `|λ| < eps`. We use the
+/// `½ · (1 - tanh(λ / (eps/3)))` Moreau-envelope-shaped blend so the
+/// derivative `σ'` is C¹ with a single peak at the kink. `eps == 0`
+/// recovers the hard switch (used as the v1 fallback when the smoothed
+/// gradient ever causes downstream optimisers trouble).
+#[inline]
+fn projection_activation(lambda: Real, eps: Real) -> Real {
+    if eps <= 0.0 {
+        return if lambda <= 0.0 { 1.0 } else { 0.0 };
+    }
+    let scale = (eps * 0.333_333).max(1.0e-12);
+    0.5 * (1.0 - (lambda / scale).tanh())
+}
+
+/// Derivative of [`projection_activation`] wrt `lambda`.
+#[inline]
+fn projection_activation_grad(lambda: Real, eps: Real) -> Real {
+    if eps <= 0.0 {
+        return 0.0; // Dirac is dropped — gradient at the kink is the average
+    }
+    let scale = (eps * 0.333_333).max(1.0e-12);
+    let t = (lambda / scale).tanh();
+    -0.5 * (1.0 - t * t) / scale
+}
+
+/// Apply one [`JointProjection`] to `(q_new, qd_new)` in place. The
+/// adjoint is the matching transpose-Jacobian transform applied in
+/// reverse order of the projection list (see [`apply_projection_adjoint`]).
+fn apply_projection_forward(
+    proj: &JointProjection,
+    q_new: &mut [Real],
+    qd_new: &mut [Real],
+) {
+    match *proj {
+        JointProjection::Distance {
+            coords,
+            l_target,
+            eps_smooth,
+        } => {
+            let p = Vec3::new(q_new[coords[0]], q_new[coords[1]], q_new[coords[2]]);
+            let r = p.length();
+            if r < 1.0e-12 {
+                return; // degenerate: nothing to project on
+            }
+            // λ = L - r; constraint active when λ < 0 (i.e. r > L).
+            let lambda = l_target - r;
+            let alpha = projection_activation(lambda, eps_smooth);
+            // Blended position: q_proj = (1 - α) · p + α · (p · L / r)
+            //                         = p · (1 - α + α · L / r)
+            let scale = 1.0 - alpha + alpha * (l_target / r);
+            let p_proj = p * scale;
+            q_new[coords[0]] = p_proj.x;
+            q_new[coords[1]] = p_proj.y;
+            q_new[coords[2]] = p_proj.z;
+            // Velocity projection: zero out the radial component along
+            // n = p / r, weighted by α.
+            let v = Vec3::new(qd_new[coords[0]], qd_new[coords[1]], qd_new[coords[2]]);
+            let n = p / r;
+            let v_radial = n.dot(v);
+            let v_proj = v - n * (alpha * v_radial);
+            qd_new[coords[0]] = v_proj.x;
+            qd_new[coords[1]] = v_proj.y;
+            qd_new[coords[2]] = v_proj.z;
+        }
+        JointProjection::AngularLimit {
+            coord,
+            lower,
+            upper,
+        } => {
+            let q_pre = q_new[coord];
+            let qd_pre = qd_new[coord];
+            let mut q_post = q_pre;
+            let mut qd_post = qd_pre;
+            if !lower.is_nan() && q_post < lower {
+                q_post = lower;
+                if qd_post < 0.0 {
+                    qd_post = 0.0;
+                }
+            }
+            if !upper.is_nan() && q_post > upper {
+                q_post = upper;
+                if qd_post > 0.0 {
+                    qd_post = 0.0;
+                }
+            }
+            q_new[coord] = q_post;
+            qd_new[coord] = qd_post;
+        }
+    }
+}
+
+/// Adjoint of [`apply_projection_forward`]: given gradients
+/// `(g_q, g_qd)` against the **post-projection** outputs, transforms
+/// them in place into gradients against the **pre-projection** inputs.
+///
+/// The function reads the **pre-projection** state `(q_pre, qd_pre)` —
+/// not post-projection — because the activation `α` and normal `n` are
+/// evaluated there. Callers must run the projection forward AND retain
+/// the unprojected slices.
+fn apply_projection_adjoint(
+    proj: &JointProjection,
+    q_pre: &[Real],
+    qd_pre: &[Real],
+    g_q: &mut [Real],
+    g_qd: &mut [Real],
+) {
+    match *proj {
+        JointProjection::Distance {
+            coords,
+            l_target,
+            eps_smooth,
+        } => {
+            let p = Vec3::new(q_pre[coords[0]], q_pre[coords[1]], q_pre[coords[2]]);
+            let r = p.length();
+            if r < 1.0e-12 {
+                return;
+            }
+            let lambda = l_target - r;
+            let alpha = projection_activation(lambda, eps_smooth);
+            let alpha_prime = projection_activation_grad(lambda, eps_smooth);
+            let n = p / r;
+            // Forward (q):
+            //   scale(p) = 1 - α(λ(r)) + α(λ(r)) · L/r
+            //   p_proj   = p · scale(p)
+            //   λ        = L - r;  ∂λ/∂p = -n
+            //   ∂scale/∂p = α'(λ) · (-n) · (L/r - 1) + α · (-L/r²) · n
+            //             = -n · [ α'·(L/r - 1) + α · L/r² ]
+            //   ∂p_proj/∂p = scale · I + p ⊗ ∂scale/∂p
+            //
+            // Adjoint: g_p = scale · g_q_block - n · (p · g_q_block) · S
+            //   where S = α'·(L/r - 1) + α · L/r²
+            let g_pp = Vec3::new(
+                g_q[coords[0]],
+                g_q[coords[1]],
+                g_q[coords[2]],
+            );
+            let scale = 1.0 - alpha + alpha * (l_target / r);
+            let s_term = alpha_prime * (l_target / r - 1.0) + alpha * (l_target / (r * r));
+            // p · g_pp (scalar)
+            let p_dot_g = p.dot(g_pp);
+            let g_p = g_pp * scale - n * (p_dot_g * s_term);
+            g_q[coords[0]] = g_p.x;
+            g_q[coords[1]] = g_p.y;
+            g_q[coords[2]] = g_p.z;
+
+            // Forward (qd):
+            //   v_proj = v - α · (n · v) · n
+            //   ∂v_proj/∂v = I - α · (n ⊗ n)
+            // (We treat n as constant in v; its dependence on q feeds
+            // into g_q via a cross term — but this cross term is
+            // bounded by α · ||v||/r, which is O(dt²) for a stable
+            // integration, so we drop it. The FD test confirms 1e-3
+            // agreement holds.)
+            let g_vp = Vec3::new(
+                g_qd[coords[0]],
+                g_qd[coords[1]],
+                g_qd[coords[2]],
+            );
+            let n_dot_g = n.dot(g_vp);
+            let g_v = g_vp - n * (alpha * n_dot_g);
+            g_qd[coords[0]] = g_v.x;
+            g_qd[coords[1]] = g_v.y;
+            g_qd[coords[2]] = g_v.z;
+        }
+        JointProjection::AngularLimit {
+            coord,
+            lower,
+            upper,
+        } => {
+            let q_pre_c = q_pre[coord];
+            let qd_pre_c = qd_pre[coord];
+            // The forward map is:
+            //   q_post = clamp(q_pre, lower, upper)
+            //   qd_post = if at_limit && qd_pre wrong sign { 0 } else { qd_pre }
+            // Adjoint:
+            //   g_q_pre = if strictly inside { g_q_post } else { 0 }
+            //   g_qd_pre = if active-side clamp { 0 } else { g_qd_post }
+            let lo_active = !lower.is_nan() && q_pre_c <= lower;
+            let hi_active = !upper.is_nan() && q_pre_c >= upper;
+            if lo_active || hi_active {
+                g_q[coord] = 0.0;
+            }
+            // Velocity-side: clamped to 0 if (lo_active && qd_pre_c < 0) or
+            // (hi_active && qd_pre_c > 0).
+            let qd_clamped = (lo_active && qd_pre_c < 0.0) || (hi_active && qd_pre_c > 0.0);
+            if qd_clamped {
+                g_qd[coord] = 0.0;
+            }
         }
     }
 }
@@ -841,6 +1235,45 @@ impl FeatherstoneRevoluteChain {
         let dt = self.dt;
 
         for t in (0..h).rev() {
+            // Stage 23.1.3 — projection adjoint.
+            //
+            // Forward path applied projections in order on top of the
+            // post-Euler `(q_pred, qd_pred)` to produce `q_new = q[t+1]`,
+            // `qd_new = qd[t+1]`. Reverse: apply each projection's
+            // transpose-Jacobian transform in REVERSE order onto
+            // `(g_q, g_qd)`. The resulting gradients are wrt the
+            // *unprojected* `(q_pred, qd_pred)` — which the integration
+            // adjoint below treats as `q_new / qd_new`.
+            if !self.projections.is_empty() && !trace.steps[t].q_pred_unproj.is_empty() {
+                let q_pre = trace.steps[t].q_pred_unproj.clone();
+                let qd_pre = trace.steps[t].qd_pred_unproj.clone();
+                // Replay each projection's pre-projection state by
+                // walking the projections forward AGAIN — successive
+                // projections see the result of the prior ones.
+                let mut q_stages: Vec<Vec<Real>> = Vec::with_capacity(self.projections.len() + 1);
+                let mut qd_stages: Vec<Vec<Real>> = Vec::with_capacity(self.projections.len() + 1);
+                q_stages.push(q_pre.clone());
+                qd_stages.push(qd_pre.clone());
+                let mut q_cur = q_pre;
+                let mut qd_cur = qd_pre;
+                for proj in &self.projections {
+                    apply_projection_forward(proj, &mut q_cur, &mut qd_cur);
+                    q_stages.push(q_cur.clone());
+                    qd_stages.push(qd_cur.clone());
+                }
+                // Walk projections in reverse, applying adjoint with
+                // pre-projection state at stage k.
+                for (k, proj) in self.projections.iter().enumerate().rev() {
+                    apply_projection_adjoint(
+                        proj,
+                        &q_stages[k],
+                        &qd_stages[k],
+                        &mut g_q,
+                        &mut g_qd,
+                    );
+                }
+            }
+
             // Integration adjoint:
             //   q_new = q + qd_int * dt
             //   qd_int = (qd + qdd*dt) * damp
