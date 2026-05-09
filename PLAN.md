@@ -1682,10 +1682,18 @@ Deliverables:
 
 ### Stage 10 — Inverse kinematics + mass matrix + RNEA + sparse linalg
 
+**Status: STARTED** (2026-05-09). CRBA done; rest TODO.
+
 **Goal**: differentiable & control-friendly articulation queries —
 plus the foundation everything in stage 12+ needs.
 
 Deliverables:
+- ✅ **CRBA mass-matrix construction** — `solvers::mass_matrix(model, state, articulation)`
+  returns the dense `N×N` joint-space mass matrix using the standard
+  composite-inertia algorithm (Featherstone 2008 §6.3). Revolute +
+  Prismatic only for now. CPU; GPU port deferred until a real
+  consumer exists. Tests: pendulum parallel-axis, double-pendulum
+  symmetric/SPD, Featherstone-consistency (`M·q̈ = τ_g`).
 - **Sparse linalg layer** (`crates/molla/src/math/sparse.rs`): `BsrMatrix<T>`
   block-sparse-row type, `bsr_zeros / from_triplets / mv / mm /
   set_transpose / get_diag / scale`. CPU first; GPU port when a
@@ -1697,15 +1705,14 @@ Deliverables:
   `dense_subs`) for CRBA mass-matrix solves on small articulations.
 - `sim/ik/` — Levenberg-Marquardt + L-BFGS optimisers.
   Position / rotation / joint-limit objectives, multi-seed sampling.
-- CRBA mass-matrix construction (composite rigid body algorithm).
 - RNEA inverse dynamics (recursive Newton-Euler).
 - Robust-loss math primitives (`norm_huber`, `norm_pseudo_huber`,
   `smooth_normalize`) for IK regularisation.
 
 Definition of done:
 - Sparse `cg` solves a 1000×1000 SPD system to 1e-6 in < 100 ms on CPU.
-- Pendulum CRBA mass matrix matches the analytical 1×1 value within
-  1e-9.
+- ✅ Pendulum CRBA mass matrix matches the analytical 1×1 value
+  within 1e-9.
 - IK on a 7-DOF Franka arm reaches a target pose within 5 mm.
 
 ### Stage 11 — Contact extras
