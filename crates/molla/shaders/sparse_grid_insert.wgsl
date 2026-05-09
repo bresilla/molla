@@ -45,11 +45,22 @@
 //                         per leaf slot (f32 / vec3<f32> / f16).
 //   group(0) binding(4) : leaf_masks        atomic<u32>[]  16 u32s
 //                         per leaf slot.
-//   group(1) binding(0) : counters          atomic<u32>[3] — [0] =
+//   group(0) binding(5) : freelist          atomic<u32>[]  Stage 24e.2
+//                         LIFO of reclaimed leaf indices; sized
+//                         leaf_capacity. The host reads `freelist_count`
+//                         (counters[3]) for telemetry; the kernel pops
+//                         from the top of the stack inside
+//                         `get_or_create_leaf` before falling back to
+//                         the next_leaf pool counter.
+//   group(1) binding(0) : counters          atomic<u32>[6] — [0] =
 //                         next-internal-index, [1] = next-leaf-index,
 //                         [2] = error_flags (bit 0 = internal pool
 //                         exhausted, bit 1 = leaf pool exhausted, bit
-//                         2 = root table full).
+//                         2 = root table full), [3] = freelist_count
+//                         (Stage 24e.2 — number of indices currently
+//                         in the freelist), [4] = pending_reclaim_count
+//                         (Stage 24e.2; used by the delete kernel),
+//                         [5] = reserved.
 //   group(1) binding(1) : query_coords      vec4<i32>[]    one query
 //                         per thread; .w unused.
 //   group(1) binding(2) : query_values      VALUE_TYPE[]   one value
@@ -88,6 +99,7 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read_write> internal_masks:    array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> leaf_values:       array<VALUE_TYPE>;
 @group(0) @binding(4) var<storage, read_write> leaf_masks:        array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read_write> freelist:          array<atomic<u32>>;
 
 @group(1) @binding(0) var<storage, read_write> counters:     array<atomic<u32>>;
 @group(1) @binding(1) var<storage, read>       query_coords: array<vec4<i32>>;
@@ -95,9 +107,13 @@ struct Uniforms {
 
 @group(2) @binding(0) var<uniform> uniforms: Uniforms;
 
-const COUNTER_NEXT_INTERNAL: u32 = 0u;
-const COUNTER_NEXT_LEAF:     u32 = 1u;
-const COUNTER_ERRORS:        u32 = 2u;
+const COUNTER_NEXT_INTERNAL:    u32 = 0u;
+const COUNTER_NEXT_LEAF:        u32 = 1u;
+const COUNTER_ERRORS:           u32 = 2u;
+// Stage 24e.2 — populated by the delete kernel; consumed here by
+// `pop_freelist` to recycle leaf slots.
+const COUNTER_FREELIST_COUNT:   u32 = 3u;
+const COUNTER_PENDING_RECLAIM:  u32 = 4u;
 
 const ERR_INTERNAL_FULL: u32 = 1u;
 const ERR_LEAF_FULL:     u32 = 2u;
@@ -261,11 +277,59 @@ fn get_or_create_internal(key: vec3<i32>) -> u32 {
     return INVALID_CHILD;
 }
 
+// Stage 24e.2 — pop a reclaimed leaf index off the freelist LIFO, or
+// return INVALID_CHILD when the stack is empty. The "decrement-if-
+// positive" path is a CAS loop on `freelist_count`: an unconditional
+// `atomicSub` would underflow when concurrent insertions race past
+// the last freelist entry. Index ordering inside the freelist is
+// LIFO so the most-recently-reclaimed slot wins (cache-friendlier
+// than FIFO when reclaim+reuse happens in tight bursts).
+fn pop_freelist() -> u32 {
+    loop {
+        let count = atomicLoad(&counters[COUNTER_FREELIST_COUNT]);
+        if (count == 0u) {
+            return INVALID_CHILD;
+        }
+        let cas = atomicCompareExchangeWeak(
+            &counters[COUNTER_FREELIST_COUNT],
+            count,
+            count - 1u,
+        );
+        if (cas.exchanged) {
+            // We own slot `count - 1`. Spin briefly on the entry —
+            // a concurrent push may not have landed its store yet
+            // (the push does `atomicAdd` then `atomicStore`, so the
+            // counter can advance ahead of the visible payload).
+            let slot = count - 1u;
+            var spin: u32 = 256u;
+            loop {
+                let v = atomicLoad(&freelist[slot]);
+                if (v != INVALID_CHILD) {
+                    // Mark the slot empty so future pops that race
+                    // ahead of a future push observe INVALID and spin.
+                    atomicStore(&freelist[slot], INVALID_CHILD);
+                    return v;
+                }
+                if (spin == 0u) {
+                    return INVALID_CHILD;
+                }
+                spin = spin - 1u;
+            }
+        }
+        // CAS lost — re-load and retry. The competing thread either
+        // popped or pushed; either way our `count` snapshot is stale.
+    }
+    // Unreachable — Naga still requires a return.
+    return INVALID_CHILD;
+}
+
 // Get-or-create the leaf index for the given coord under
 // `internal_idx`. Same CAS pattern: claim the activity bit; the
-// winner allocates a leaf and writes its index into
-// `internal_children[base + local]`, then atomicOrs the bit. Losers
-// observe the bit set and read back the index.
+// winner allocates a leaf (recycling from the Stage 24e.2 freelist
+// when it has entries, falling back to the next_leaf pool otherwise)
+// and writes its index into `internal_children[base + local]`, then
+// atomicOrs the bit. Losers observe the bit set and read back the
+// index.
 fn get_or_create_leaf(internal_idx: u32, p: vec3<i32>) -> u32 {
     let local = internal_local_of(p);
     let mask_base = internal_idx * INTERNAL_NODE_MASK_U32S;
@@ -287,12 +351,16 @@ fn get_or_create_leaf(internal_idx: u32, p: vec3<i32>) -> u32 {
         return INVALID_CHILD;
     }
 
-    // We won the race — allocate a fresh leaf and publish.
-    let new_leaf = allocate_pool_slot(
-        COUNTER_NEXT_LEAF,
-        uniforms.leaf_capacity,
-        ERR_LEAF_FULL,
-    );
+    // We won the race — recycle a freelist entry first; if the LIFO
+    // is empty fall back to the next_leaf pool counter.
+    var new_leaf = pop_freelist();
+    if (new_leaf == INVALID_CHILD) {
+        new_leaf = allocate_pool_slot(
+            COUNTER_NEXT_LEAF,
+            uniforms.leaf_capacity,
+            ERR_LEAF_FULL,
+        );
+    }
     atomicStore(&internal_children[child_slot], new_leaf);
     return new_leaf;
 }

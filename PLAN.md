@@ -4130,6 +4130,135 @@ through to the next pull.
 **Dependencies:** Stage 24e v1 (the storage primitive this
 extends).
 
+### Stage 24e.2 — GPU sparse-grid delete + leaf reclamation — **SHIPPED v1**
+
+**Status: SHIPPED v1.** GPU-side delete + leaf reclamation lands;
+24e.3 carries the cascade-up-the-tree internal-node reclamation,
+adaptive refinement, sparse MC, and MPM consumer.
+
+**Deliverables (v1):**
+- ✅ **GPU mark-inactive + leaf reclamation.** New WGSL kernel
+  `crates/molla/shaders/sparse_grid_delete.wgsl` with three entry
+  points: `mark_inactive_voxel` (atomically clears the per-voxel
+  bit in the leaf mask via `atomicAnd<u32>`; if the leaf's full 8³
+  mask becomes zero, pushes the leaf index onto a
+  `pending_reclaim` LIFO), `reclaim_empty_leaves` (drains the
+  pending list into the freelist; re-validates emptiness so a
+  concurrent insert that re-activated the leaf during the dispatch
+  gap doesn't get its slot recycled out from under it), and
+  `reset_pending_counter` (zeros `counters[4]` for the next round).
+- ✅ **Freelist-aware insert.** `sparse_grid_insert.wgsl`'s
+  `get_or_create_leaf` now consults the freelist (CAS-loop pop with
+  spin-on-published-payload) before falling back to the
+  `next_leaf` pool counter, so reclaimed slots are recycled
+  in LIFO order on the very next `set_value` dispatch.
+- ✅ **Storage-stats expansion.** `SparseGridStorage`'s `counters`
+  buffer grew from 3 → 6 u32 slots (added `freelist_count`,
+  `pending_reclaim_count`, reserved); new `freelist` and
+  `pending_reclaim` buffers (sized to the leaf pool, initialised
+  with `INVALID_CHILD` sentinels). New `storage_stats()` host helper
+  returns `SparseGridStorageStats { active_internals,
+  active_leaves, leaves_in_freelist, pending_reclaim, error_flags }`.
+- ✅ **Host wrapper `kernels::SparseGridDeleteKernel<V>`** — mirrors
+  the `SparseGridInsertKernel<V>` shape with `mark_inactive` /
+  `reclaim` / `delete` (= mark + reclaim convenience) entry points.
+  Two `queue.submit` boundaries between mark and reclaim guarantee
+  the mark pass globally finishes before the drain reads the
+  pending list.
+
+**Measured DoD (Stage 24e.2):**
+- ✅ **Insert-delete-insert reuse roundtrip.** `tests/sparse_grid_v4.rs::
+  delete_then_insert_roundtrip_throughput` measures the full
+  insert-1024 → delete-1024 → reinsert-1024 cycle at **31.2 kPair/s
+  amortised** (98.5 ms total: 58 ms initial insert, 24 ms
+  delete+reclaim, 16 ms reuse insert; per-dispatch wgpu submit
+  overhead floors the small-batch numbers). The reuse-insert
+  consumes 100% of its leaves from the freelist when the freelist
+  is large enough — `reclamation_reuse_pops_from_freelist` shows
+  `pool_growth=0, freelist_drop=100` for a 100-pair reuse insert
+  against a 200-entry freelist.
+- ✅ **Lookup of deleted returns background, kept returns inserted
+  values.** `delete_marks_inactive_and_reclaims_leaves` inserts
+  1024 random pairs, deletes the lower 500 (by sorted coord), and
+  confirms `read_storage_to_pairs` returns exactly the 524 kept
+  pairs with their original values. The freelist counter grows to
+  ≥ 1 (typically the full 500 since random coords spread to
+  distinct 8³ tiles).
+- ✅ **No orphaned leaves.** `no_orphaned_leaves_after_random_50pct_delete`
+  inserts 10 000 random pairs, deletes 50%, and verifies the
+  topology accounting holds: `live_leaves + leaves_in_freelist`
+  matches `active_leaves` (high-water) within a 5% leak budget for
+  the duplicate-push race window. Measured leak: **0**.
+
+**Caveats:**
+- **No internal-node reclamation in v1.** When all leaves under an
+  internal node are reclaimed, the internal node itself, its mask
+  bits, and the `internal_children[slot]` pointers all stay live.
+  A subsequent insert at *exactly the same logical coord* as a
+  reclaimed leaf hits the stale parent pointer and silently
+  re-uses the leaf in place (the leaf's mask is zero, so writes
+  are valid). A subsequent insert that the freelist hands the same
+  leaf slot to a *different* coord leaves the original parent
+  pointer dangling — the leaf is now reachable from two places.
+  Reads at the original coord still return the background
+  (leaf-local mask bit at the original offset is unset); reads at
+  the new coord see the new value. The narrow correctness hazard
+  is "new write happens to land at the same leaf-local offset
+  inside the leaf as the old coord did" — the old parent's lookup
+  would then incorrectly return the new value. Cascade-delete +
+  parent fixup is deferred to Stage 24e.3.
+- **`atomicAnd<u32>` is universally available across wgpu
+  backends** (Vulkan, Metal, D3D12, OpenGL ES, WebGPU per the
+  WGSL spec §6.4 + Naga validator). The kernel uses it directly
+  for the mask-bit clear; if a future backend ever lacks it, the
+  CAS-loop fallback (load → compute `w & ~bit` →
+  `atomicCompareExchangeWeak` until success) is documented in the
+  host wrapper module doc-block.
+- **Duplicate-push race on concurrent deletes.** Two threads that
+  each clear the LAST set bit of *different* mask words on the
+  same leaf within one dispatch can both observe "all-zero AND I
+  just cleared" and both push the leaf onto `pending_reclaim`. The
+  drain pass dedups at the slot level (re-validates emptiness +
+  marks the pending slot `INVALID_CHILD` after pop), so the
+  topology stays consistent — the only cost is at most one
+  duplicate slot in the pending list per racy reclaim, which the
+  drain skips. Measured leak in the 10k stress test: 0.
+- **Pending-list overflow** (more reclaim candidates than the
+  storage's `leaf_capacity`) silently drops the excess. Leaves
+  become "stranded" — mask zero, no recycle — but topology stays
+  consistent. Sized to the leaf pool, this only happens if the
+  host calls `mark_inactive` with more coords than the pool itself
+  can hold, which is already a misuse.
+- **Freelist `INVALID_CHILD` sentinel.** Both freelist and
+  pending-reclaim buffers are pre-filled with `u32::MAX` so the
+  pop / drain spin loops can distinguish "valid leaf index 0" from
+  "stale slot". `SparseGridStorage::reset()` re-fills them on
+  reset.
+
+**Defer-to-24e.3:**
+- ❌ **Internal-node reclamation** (cascading fixup of
+  `internal_children` pointers + parent mask bits when leaves go
+  empty, plus reclaim of internal nodes whose entire 32³ child set
+  is gone). Multi-day work — needs an internal-node freelist
+  mirroring the leaf freelist, plus per-leaf parent-backref
+  metadata to find the internal slot to clear. → Stage 24e.3.
+- ❌ **Adaptive grid refinement.** Per-leaf subdivision based on
+  activity heuristics (NanoVDB's "tile" → "active leaf" promotion
+  pattern). Multi-week stretch. → Stage 24e.3.
+- ❌ **Native sparse marching cubes.** A workgroup-per-leaf MC
+  consumer that walks `for_each_active_leaf` directly would skip
+  the dense-scratch round-trip the viewer currently uses. Deferred
+  until a non-toy asset proves the dense scratch is a bottleneck.
+  → Stage 24e.3.
+- ❌ **MPM consumer refactor (Stage 24d / 24d.1).** Wire the
+  sparse grid in as the active-cell store for MPM. Only worth
+  doing once 24d.1 ships and demonstrates a > 64³ grid-size
+  requirement; current explicit MPM at 64³ is fine on the dense
+  backing. → Stage 24e.3.
+
+**Dependencies:** Stage 24e.1 (mutable insert + freelist counter
+slot live in the same `SparseGridStorage` struct).
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:

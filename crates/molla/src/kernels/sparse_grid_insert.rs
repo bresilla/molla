@@ -220,9 +220,10 @@ struct InsertUniforms {
     leaf_capacity: u32,
 }
 
-/// Persistent GPU storage for the mutable sparse grid. Owns five
-/// `wgpu::Buffer`s (the topology buffers + counters) sized at
-/// construction. Re-usable across many insert / lookup dispatches.
+/// Persistent GPU storage for the mutable sparse grid. Owns the
+/// topology buffers + counters + (Stage 24e.2) freelist + pending-
+/// reclaim buffers, all sized at construction. Re-usable across many
+/// insert / delete / lookup dispatches.
 ///
 /// Sizing guidance:
 /// - `root_table_capacity`: round up `expected_root_keys / 0.7` to
@@ -232,7 +233,8 @@ struct InsertUniforms {
 ///   inserted set spans. For a 1024³ asset this is ≤ 64.
 /// - `leaf_capacity`: number of distinct 8³ tiles the inserts touch.
 ///   For a 1 % occupancy 1024³ asset this is ~ 16k–100k depending
-///   on clustering.
+///   on clustering. Doubles as the upper bound on simultaneously-
+///   pending-reclamation leaves and the freelist depth.
 pub struct SparseGridStorage<V: Value> {
     pub root_table: wgpu::Buffer,
     pub internal_children: wgpu::Buffer,
@@ -240,10 +242,40 @@ pub struct SparseGridStorage<V: Value> {
     pub leaf_values: wgpu::Buffer,
     pub leaf_masks: wgpu::Buffer,
     pub counters: wgpu::Buffer,
+    /// Stage 24e.2 — LIFO of reclaimed leaf indices, sized
+    /// `leaf_capacity` u32s. `counters[3]` is the live count.
+    pub freelist: wgpu::Buffer,
+    /// Stage 24e.2 — leaf indices marked-inactive but not yet
+    /// reclaimed. Drained by the `reclaim_empty_leaves` entry point
+    /// into `freelist`. Sized `leaf_capacity` u32s; `counters[4]` is
+    /// the live count.
+    pub pending_reclaim: wgpu::Buffer,
     pub root_table_capacity: u32,
     pub internal_capacity: u32,
     pub leaf_capacity: u32,
     _phantom: core::marker::PhantomData<V>,
+}
+
+/// Stage 24e.2 — readable storage telemetry. Mirrors the counter
+/// triples a host caller cares about for sparsity audits.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct SparseGridStorageStats {
+    /// `next_internal` counter (== high-water mark of allocated
+    /// internal nodes; not the live count, since v1 doesn't reclaim
+    /// internals).
+    pub active_internals: u32,
+    /// `next_leaf` counter (high-water mark of leaves drawn from the
+    /// pool, *including* reclaimed ones).
+    pub active_leaves: u32,
+    /// Number of leaf indices currently sitting in the freelist —
+    /// available for reuse on the next `set_value` dispatch.
+    pub leaves_in_freelist: u32,
+    /// Pending-reclaim list depth (entries waiting on the next
+    /// `reclaim_empty_leaves` dispatch).
+    pub pending_reclaim: u32,
+    /// Bit-mask of the per-dispatch error flags
+    /// (`1=internal_full | 2=leaf_full | 4=root_full`).
+    pub error_flags: u32,
 }
 
 const INTERNAL_NODE_VOXELS: u32 = 32_768; // 32³
@@ -251,6 +283,9 @@ const INTERNAL_NODE_MASK_U32S: u32 = 1024;
 const LEAF_NODE_VOXELS: u32 = 512;
 const LEAF_NODE_MASK_U32S: u32 = 16;
 const INVALID_CHILD: u32 = u32::MAX;
+/// Stage 24e.2 — total number of u32 counter slots: see
+/// `sparse_grid_insert.wgsl` for the slot layout.
+pub(crate) const COUNTER_SLOTS: u32 = 6;
 
 impl<V: Value> SparseGridStorage<V> {
     /// Allocate a fresh storage with the given pool sizes.
@@ -329,10 +364,40 @@ impl<V: Value> SparseGridStorage<V> {
             mapped_at_creation: false,
         });
 
-        // Counters: [next_internal=0, next_leaf=0, error_flags=0].
+        // Counters layout (Stage 24e.2 expanded to 6 slots):
+        //   [0] next_internal — atomicAdd-incremented allocator
+        //   [1] next_leaf     — same, for leaves
+        //   [2] error_flags   — pool/full bitmask
+        //   [3] freelist_count — live freelist depth
+        //   [4] pending_reclaim_count — pending list depth
+        //   [5] reserved (kept for alignment / future use)
         let counters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("molla::sparse_grid_storage counters"),
-            contents: bytemuck::cast_slice(&[0u32, 0u32, 0u32]),
+            contents: bytemuck::cast_slice(&[0u32; COUNTER_SLOTS as usize]),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Freelist + pending_reclaim — sized to the leaf pool because
+        // every leaf can in principle be reclaimed at most once
+        // before being recycled. Both buffers are initialised with
+        // `INVALID_CHILD` (u32::MAX) sentinels so the WGSL-side
+        // pop / drain spin loops can distinguish "stale slot" from
+        // "valid leaf index 0" — leaf index 0 is a perfectly legal
+        // entry, so plain zero-init wouldn't work as a sentinel.
+        let freelist_init: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
+        let freelist = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage freelist"),
+            contents: bytemuck::cast_slice(&freelist_init),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
+        let pending_init: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
+        let pending_reclaim = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage pending_reclaim"),
+            contents: bytemuck::cast_slice(&pending_init),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -345,6 +410,8 @@ impl<V: Value> SparseGridStorage<V> {
             leaf_values,
             leaf_masks,
             counters,
+            freelist,
+            pending_reclaim,
             root_table_capacity,
             internal_capacity,
             leaf_capacity,
@@ -360,7 +427,11 @@ impl<V: Value> SparseGridStorage<V> {
             root_init[i * 4 + 3] = -1;
         }
         queue.write_buffer(&self.root_table, 0, bytemuck::cast_slice(&root_init));
-        queue.write_buffer(&self.counters, 0, bytemuck::cast_slice(&[0u32, 0u32, 0u32]));
+        queue.write_buffer(
+            &self.counters,
+            0,
+            bytemuck::cast_slice(&[0u32; COUNTER_SLOTS as usize]),
+        );
         // Zero the masks — the values themselves can stay (the masks
         // gate them; reading an inactive value never returns it).
         let internal_masks_zero = vec![0u8; (self.internal_capacity * INTERNAL_NODE_MASK_U32S * 4) as usize];
@@ -375,21 +446,40 @@ impl<V: Value> SparseGridStorage<V> {
             0,
             bytemuck::cast_slice(&internal_children_init),
         );
+        // Wipe the freelist + pending_reclaim staging back to
+        // INVALID_CHILD (matches the constructor-time init).
+        let invalid_pool: Vec<u32> = vec![INVALID_CHILD; self.leaf_capacity as usize];
+        queue.write_buffer(&self.freelist, 0, bytemuck::cast_slice(&invalid_pool));
+        queue.write_buffer(&self.pending_reclaim, 0, bytemuck::cast_slice(&invalid_pool));
     }
 
-    /// Read back the current `[next_internal, next_leaf, error_flags]`
-    /// counter triple. Synchronous; uses a one-shot staging buffer.
+    /// Read back the first three counter slots
+    /// `[next_internal, next_leaf, error_flags]`. Kept as a
+    /// back-compat shim for callers that pre-date Stage 24e.2 — new
+    /// callers should reach for [`read_storage_stats`] which exposes
+    /// the freelist + pending-reclaim depths too.
     pub fn read_counters(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<[u32; 3]> {
+        let all = self.read_all_counters(device, queue)?;
+        Ok([all[0], all[1], all[2]])
+    }
+
+    /// Stage 24e.2 — read every counter slot.
+    pub fn read_all_counters(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<[u32; COUNTER_SLOTS as usize]> {
+        let bytes = (COUNTER_SLOTS as u64) * 4;
         let stage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::sparse_grid_storage counters stage"),
-            size: 12,
+            size: bytes,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::sparse_grid_storage counters encoder"),
         });
-        encoder.copy_buffer_to_buffer(&self.counters, 0, &stage, 0, 12);
+        encoder.copy_buffer_to_buffer(&self.counters, 0, &stage, 0, bytes);
         queue.submit(std::iter::once(encoder.finish()));
         let slice = stage.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
@@ -408,7 +498,26 @@ impl<V: Value> SparseGridStorage<V> {
         let v: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
-        Ok([v[0], v[1], v[2]])
+        let mut out = [0u32; COUNTER_SLOTS as usize];
+        out.copy_from_slice(&v[..(COUNTER_SLOTS as usize)]);
+        Ok(out)
+    }
+
+    /// Stage 24e.2 — packaged storage telemetry. One round-trip to
+    /// the device.
+    pub fn storage_stats(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<SparseGridStorageStats> {
+        let c = self.read_all_counters(device, queue)?;
+        Ok(SparseGridStorageStats {
+            active_internals: c[0],
+            active_leaves: c[1],
+            error_flags: c[2],
+            leaves_in_freelist: c[3],
+            pending_reclaim: c[4],
+        })
     }
 }
 
@@ -436,9 +545,10 @@ impl<V: Value> SparseGridInsertKernel<V> {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
 
+        // Stage 24e.2 — 6 storage entries (added freelist at binding 5).
         let layout_storage = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid_insert storage"),
-            entries: &storage_entries(5, false),
+            entries: &storage_entries(6, false),
         });
         let layout_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid_insert io"),
@@ -586,6 +696,8 @@ impl<V: Value> SparseGridInsertKernel<V> {
                 wgpu::BindGroupEntry { binding: 2, resource: storage.internal_masks.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: storage.leaf_values.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: storage.leaf_masks.as_entire_binding() },
+                // Stage 24e.2 — freelist for leaf-slot recycling.
+                wgpu::BindGroupEntry { binding: 5, resource: storage.freelist.as_entire_binding() },
             ],
         });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -701,6 +813,8 @@ impl<V: Value> SparseGridInsertKernel<V> {
                 wgpu::BindGroupEntry { binding: 2, resource: storage.internal_masks.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: storage.leaf_values.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: storage.leaf_masks.as_entire_binding() },
+                // Stage 24e.2 — freelist for leaf-slot recycling.
+                wgpu::BindGroupEntry { binding: 5, resource: storage.freelist.as_entire_binding() },
             ],
         });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {

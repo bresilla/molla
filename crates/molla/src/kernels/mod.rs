@@ -63,7 +63,9 @@ mod rnea;
 #[cfg(feature = "gpu")]
 mod sparse_grid;
 #[cfg(feature = "gpu")]
-mod sparse_grid_insert;
+mod sparse_grid_delete;
+#[cfg(feature = "gpu")]
+pub(crate) mod sparse_grid_insert;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
@@ -145,8 +147,11 @@ pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
 pub use sparse_grid::SparseGridKernel;
 #[cfg(feature = "gpu")]
 pub use sparse_grid_insert::{
-    read_storage_to_pairs, SparseGridInsertKernel, SparseGridStorage, Value, ValueF16, ValueVec3,
+    read_storage_to_pairs, SparseGridInsertKernel, SparseGridStorage, SparseGridStorageStats,
+    Value, ValueF16, ValueVec3,
 };
+#[cfg(feature = "gpu")]
+pub use sparse_grid_delete::SparseGridDeleteKernel;
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]
