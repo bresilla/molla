@@ -1268,7 +1268,7 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
 
     let mut visuals: Vec<BodyVisual> = Vec::new();
 
-    // ── Heightfield (wavy terrain) — static, no body. ───────────
+    // ── Heightfield (gently wavy terrain) — static, no body. ────
     let n = SHAPES_FIELD_N;
     let cell = SHAPES_FIELD_CELL as f64;
     let half = (n as f64 - 1.0) * cell * 0.5;
@@ -1277,10 +1277,9 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
         for i in 0..n {
             let x = (i as f64 - (n as f64 - 1.0) * 0.5) * cell;
             let z = (j as f64 - (n as f64 - 1.0) * 0.5) * cell;
-            // Two-frequency sine wave — looks more interesting than
-            // a flat plane and gives the cones somewhere to roll.
-            let h = 0.4 * ((x * 0.6).sin() + (z * 0.6).cos())
-                + 0.15 * ((x * 1.5 + 0.7).sin() * (z * 1.3).cos());
+            // Gentler waves than before — small amplitude so things
+            // settle visibly instead of rolling off into the abyss.
+            let h = 0.25 * ((x * 0.5).sin() + (z * 0.5).cos());
             heights.push(h);
         }
     }

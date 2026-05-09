@@ -237,6 +237,30 @@ pub fn pair_contact(
             hull_plane_fallback(model, geom_a, &xf_a, geom_b, &xf_b, pair, out);
         }
 
+        // ── TriMesh / Heightfield / SDF dispatched FIRST so they
+        // catch any pair involving them, regardless of the other
+        // shape's kind. (Putting the convex-vs-convex GJK arm above
+        // these would route e.g. Cone-vs-Heightfield into GJK with a
+        // broken Heightfield support function.)
+        (ShapeGeometry::TriMesh { mesh_id }, _) => {
+            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::TriMesh { mesh_id }) => {
+            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
+        (ShapeGeometry::Heightfield { field_id }, _) => {
+            heightfield_pair(model, field_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::Heightfield { field_id }) => {
+            heightfield_pair(model, field_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
+        (ShapeGeometry::Sdf { sdf_id }, _) => {
+            sdf_pair(model, sdf_id, &xf_a, geom_b, &xf_b, pair, false, out);
+        }
+        (_, ShapeGeometry::Sdf { sdf_id }) => {
+            sdf_pair(model, sdf_id, &xf_b, geom_a, &xf_a, pair, true, out);
+        }
+
         // Convex-vs-convex via GJK + EPA. Covers capsule-box,
         // box-capsule, capsule-cylinder, cylinder-*, triangle-*,
         // cone-*, hull-*.
@@ -255,51 +279,15 @@ pub fn pair_contact(
         | (_, ShapeGeometry::Cone { .. })
         | (ShapeGeometry::ConvexHull { .. }, _)
         | (_, ShapeGeometry::ConvexHull { .. }) => {
-            // Cone / ConvexHull need access to model.hulls for the
-            // support function. The `_with_hulls` variant falls back
-            // to the default for non-hull shapes.
-            if matches!(
-                geom_a,
-                ShapeGeometry::Plane { .. } | ShapeGeometry::TriMesh { .. }
-            ) || matches!(
-                geom_b,
-                ShapeGeometry::Plane { .. } | ShapeGeometry::TriMesh { .. }
-            ) {
-                // GJK doesn't handle Plane (unbounded support) and
-                // mesh-vs-* routes through trimesh_pair below. Fall
-                // through.
+            if matches!(geom_a, ShapeGeometry::Plane { .. })
+                || matches!(geom_b, ShapeGeometry::Plane { .. })
+            {
+                // Plane fallback dispatched separately below.
             } else if let Some(m) = gjk_epa_pair_with_hulls(
                 geom_a, &xf_a, geom_b, &xf_b, pair, &model.hulls,
             ) {
                 out.push(m);
             }
-        }
-
-        // ── TriMesh — iterate triangles ──────────────────────────
-        (ShapeGeometry::TriMesh { mesh_id }, _) => {
-            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out);
-        }
-        (_, ShapeGeometry::TriMesh { mesh_id }) => {
-            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out);
-        }
-
-        // ── Heightfield — iterate cells overlapping the other
-        // shape's local-frame AABB; each cell decomposes into 2
-        // triangles routed through the standard GJK+EPA path.
-        (ShapeGeometry::Heightfield { field_id }, _) => {
-            heightfield_pair(model, field_id, &xf_a, geom_b, &xf_b, pair, false, out);
-        }
-        (_, ShapeGeometry::Heightfield { field_id }) => {
-            heightfield_pair(model, field_id, &xf_b, geom_a, &xf_a, pair, true, out);
-        }
-
-        // ── SDF — sphere-vs-SDF fast path; everything else falls
-        // through to ball-marching the other shape's centre.
-        (ShapeGeometry::Sdf { sdf_id }, _) => {
-            sdf_pair(model, sdf_id, &xf_a, geom_b, &xf_b, pair, false, out);
-        }
-        (_, ShapeGeometry::Sdf { sdf_id }) => {
-            sdf_pair(model, sdf_id, &xf_b, geom_a, &xf_a, pair, true, out);
         }
 
         (ShapeGeometry::Plane { .. }, ShapeGeometry::Plane { .. }) => {}
@@ -1715,6 +1703,20 @@ fn sdf_pair(
         ShapeGeometry::Capsule { half_height, radius } => half_height + radius,
         ShapeGeometry::Cylinder { half_height, radius } => half_height.max(radius),
         ShapeGeometry::Cone { half_height, radius } => half_height.max(radius),
+        ShapeGeometry::ConvexHull { hull_id } => {
+            // Bounding-sphere radius (max |v|) of the hull's local
+            // vertex list. Conservative — gives an early-out radius
+            // big enough to catch all contacts.
+            model
+                .hulls
+                .get(hull_id as usize)
+                .map(|h| {
+                    h.iter()
+                        .map(|v| v.length())
+                        .fold(0.0_f64, |a, b| a.max(b))
+                })
+                .unwrap_or(0.0)
+        }
         _ => 0.0,
     };
     if signed >= r_other {
@@ -1727,8 +1729,13 @@ fn sdf_pair(
     // by `signed` along the normal.
     let surface_local = other_pos_local - n_local * signed;
     let surface_world = sdf_xf.transform_point(surface_local);
-    let normal = if flip_output { n_world } else { -n_world };
-    let m = ContactManifold {
+    // Convention: normal points pair.a → pair.b. When SDF is `a`
+    // (flip_output=false), normal goes outward from SDF surface
+    // toward the other shape = +n_world. When SDF is `b`
+    // (flip_output=true), normal goes from other shape toward SDF
+    // surface = −n_world.
+    let normal = if flip_output { -n_world } else { n_world };
+    out.push(ContactManifold {
         a_shape: pair.a,
         b_shape: pair.b,
         point: surface_world,
@@ -1738,8 +1745,7 @@ fn sdf_pair(
         rolling_friction: 0.0,
         torsional_friction: 0.0,
         restitution: 0.0,
-    };
-    out.push(if flip_output { flip_manifold(m) } else { m });
+    });
 }
 
 fn flip_manifold(mut m: ContactManifold) -> ContactManifold {
