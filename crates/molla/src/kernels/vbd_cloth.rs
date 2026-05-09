@@ -77,6 +77,13 @@ pub struct VbdClothKernel {
     dummy_i32: Buffer<i32>,
     dummy_xform: Buffer<crate::math::Transform>,
     dummy_mat3: Buffer<crate::math::Mat3>,
+    /// Stage 20.3 — separate `read_write` placeholders for the F_p /
+    /// ε_p bindings on bind group 5. wgpu refuses to bind the same
+    /// buffer with conflicting usages within a single dispatch
+    /// (read-only vs read-write), so we pre-allocate dedicated 1-elem
+    /// buffers used only when the model has no tets.
+    dummy_mat3_rw: Buffer<crate::math::Mat3>,
+    dummy_real_rw: Buffer<Real>,
 
     particle_count: u32,
     spring_count: u32,
@@ -224,6 +231,12 @@ impl VbdClothKernel {
             vec![crate::math::Mat3::IDENTITY; 1],
             BufferUsage::Storage,
         );
+        // Stage 20.3 — read-write dummies for F_p / ε_p bindings.
+        let mut dummy_mat3_rw = Buffer::from_vec(
+            vec![crate::math::Mat3::IDENTITY; 1],
+            BufferUsage::StorageReadWrite,
+        );
+        let mut dummy_real_rw = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::StorageReadWrite);
         let _ = dummy_u32.ensure_device(device);
         let _ = dummy_u32.upload(queue);
         let _ = dummy_real.ensure_device(device);
@@ -236,6 +249,10 @@ impl VbdClothKernel {
         let _ = dummy_xform.upload(queue);
         let _ = dummy_mat3.ensure_device(device);
         let _ = dummy_mat3.upload(queue);
+        let _ = dummy_mat3_rw.ensure_device(device);
+        let _ = dummy_mat3_rw.upload(queue);
+        let _ = dummy_real_rw.ensure_device(device);
+        let _ = dummy_real_rw.upload(queue);
 
         Self {
             pipe_predict,
@@ -260,6 +277,8 @@ impl VbdClothKernel {
             dummy_i32,
             dummy_xform,
             dummy_mat3,
+            dummy_mat3_rw,
+            dummy_real_rw,
             particle_count,
             spring_count,
         }
@@ -477,16 +496,26 @@ impl VbdClothKernel {
         // Stage 20.3 — plasticity buffers. F_p / ε_p live in `state_out`
         // so the return-mapping kernel can write them in place; yield +
         // hardening live on `model` (read-only material params). When a
-        // model has no tets, fall through to the dummy buffers (the
-        // plasticity dispatch is also skipped on the host side).
+        // model has no tets, fall through to dedicated read-write
+        // dummies (separate from the read-only `dummy_mat3_buf` /
+        // `dummy_real_buf` to avoid wgpu's "conflicting usages on the
+        // same buffer in a single dispatch" validation error).
+        let dummy_mat3_rw_buf = self
+            .dummy_mat3_rw
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_mat3_rw missing".into()))?;
+        let dummy_real_rw_buf = self
+            .dummy_real_rw
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_real_rw missing".into()))?;
         let fp_buf = state_out
             .tet_f_plastic
             .device_buffer()
-            .unwrap_or(dummy_mat3_buf);
+            .unwrap_or(dummy_mat3_rw_buf);
         let eps_p_buf = state_out
             .tet_plastic_strain
             .device_buffer()
-            .unwrap_or(dummy_real_buf);
+            .unwrap_or(dummy_real_rw_buf);
         let yield_buf = model
             .tet_yield_stress
             .device_buffer()
