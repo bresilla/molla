@@ -272,6 +272,7 @@ fn main() {
         .insert_resource(LidarState::default())
         .insert_resource(ImuExampleState::default())
         .insert_resource(ContactExampleState::default())
+        .insert_resource(GpuNpExampleState::default())
         .insert_resource(ArmExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
@@ -346,6 +347,15 @@ struct SimStats {
     smoothed_download_us: f64,
     last_contacts: u32,
     arm_logged: bool,
+}
+
+/// Bundle of the three ribbon resources so `control_pane` stays
+/// under Bevy's 16-system-param ceiling.
+#[derive(bevy::ecs::system::SystemParam)]
+struct RibbonParams<'w> {
+    open: ResMut<'w, RibbonOpen>,
+    placement: ResMut<'w, RibbonPlacement>,
+    drag: ResMut<'w, RibbonDrag>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -433,6 +443,11 @@ enum Scene {
     /// (SDF) sticking out of the middle. Exercises every primitive
     /// shipped in Stage 13 in a single scene.
     Shapes,
+    /// Stage-15 GPU narrow-phase demo — pile of mixed primitives
+    /// with a toggle between CPU and full-GPU narrow phase. Right
+    /// rail shows the per-frame breakdown of GPU vs CPU narrow-phase
+    /// calls so the user can see the GPU pipeline take over.
+    GpuNarrowPhase,
 }
 
 impl Scene {
@@ -447,6 +462,7 @@ impl Scene {
         Scene::Contact,
         Scene::Arm,
         Scene::Shapes,
+        Scene::GpuNarrowPhase,
     ];
 
     fn label(self) -> &'static str {
@@ -460,6 +476,7 @@ impl Scene {
             Scene::Contact => "Contact (per-body)",
             Scene::Arm => "Arm (PD actuator)",
             Scene::Shapes => "Shapes (cone / hull / heightfield / SDF)",
+            Scene::GpuNarrowPhase => "GPU narrow phase (Stage 15)",
         }
     }
 
@@ -605,6 +622,37 @@ struct ContactExampleState {
     readings: Vec<BodyContactReading>,
 }
 
+/// Stage-15 GPU narrow-phase demo state — toggle for the GPU pipeline
+/// and the most recent CPU-narrow-phase call count read from the
+/// pipeline. The toggle is applied each frame in `step_simulation`.
+#[derive(Resource)]
+struct GpuNpExampleState {
+    /// User-controlled: enable the full GPU narrow phase.
+    use_gpu: bool,
+    /// Whether the pipeline currently has GPU narrow phase enabled.
+    /// Used to detect when the user flips the toggle so we can
+    /// rebuild the pipeline.
+    gpu_enabled_now: bool,
+    /// Last frame's CPU narrow-phase call count.
+    last_cpu_calls: usize,
+    /// Last frame's contact count.
+    last_contacts: u32,
+    /// SAP candidate-pair count (per-frame, last seen).
+    last_pairs: usize,
+}
+
+impl Default for GpuNpExampleState {
+    fn default() -> Self {
+        Self {
+            use_gpu: true,
+            gpu_enabled_now: false,
+            last_cpu_calls: 0,
+            last_contacts: 0,
+            last_pairs: 0,
+        }
+    }
+}
+
 /// Arm example runtime state. Owns the GPU PD controller and the
 /// per-joint target inputs (slider value, optional auto-sine).
 #[derive(Resource)]
@@ -677,6 +725,7 @@ impl Sim {
             Scene::Contact => build_contact_model(),
             Scene::Arm => build_arm_model(),
             Scene::Shapes => build_shapes_model(),
+            Scene::GpuNarrowPhase => build_gpu_narrow_phase_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1428,6 +1477,100 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("shapes model"), visuals)
 }
 
+/// Stage-15 GPU-narrow-phase demo — pile of mixed boxes / cylinders /
+/// cones / spheres dropped onto a plane. Designed to exercise the
+/// Sphere/Box/Capsule/Cylinder/Cone branches of the GPU EPA kernel.
+/// The right-rail pane lets the user toggle full-GPU vs CPU narrow
+/// phase and watch the per-frame `last_cpu_narrow_phase_calls`
+/// counter drop to ~0 (the `Plane` pairs always stay on CPU).
+fn build_gpu_narrow_phase_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.2);
+
+    let mut visuals: Vec<BodyVisual> = Vec::new();
+    // Ground plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    // 16 mixed bodies in a 4x4 grid spaced 0.7 m, dropped from y ∈ [3, 6].
+    let n_side = 4i32;
+    for ix in 0..n_side {
+        for iz in 0..n_side {
+            let x = (ix as f64 - 1.5) * 0.7;
+            let z = (iz as f64 - 1.5) * 0.7;
+            let y = 3.0 + ((ix + iz) as f64) * 0.3;
+            let kind = ((ix * n_side + iz) % 4) as i32;
+            match kind {
+                0 => {
+                    let half = MVec3::splat(0.25);
+                    let mass = 0.8;
+                    let inertia = box_inertia(mass, 0.25);
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                            .with_position(MVec3::new(x, y, z)),
+                    );
+                    b.add_shape_box(body, half, mp::Transform::IDENTITY).unwrap();
+                    visuals.push(BodyVisual::Box(Vec3::splat(0.25)));
+                }
+                1 => {
+                    let r = 0.25;
+                    let mass = 1.0;
+                    let i_v = (2.0 / 5.0) * mass * r * r;
+                    let inertia = molla::math::Mat3::from_diagonal(MVec3::new(i_v, i_v, i_v));
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                            .with_position(MVec3::new(x, y, z)),
+                    );
+                    b.add_shape_sphere(body, r, mp::Transform::IDENTITY).unwrap();
+                    visuals.push(BodyVisual::Sphere(r as f32));
+                }
+                2 => {
+                    // Cylinder collision; render approximation as a capsule
+                    // (no Cylinder variant in `BodyVisual`, capsule is
+                    // close enough visually).
+                    let half_h: f64 = 0.30;
+                    let r: f64 = 0.20;
+                    let mass: f64 = 0.7;
+                    let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+                        mass * (r * r * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+                        mass * r * r * 0.5,
+                        mass * (r * r * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+                    ));
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                            .with_position(MVec3::new(x, y, z)),
+                    );
+                    b.add_shape_cylinder(body, half_h, r, mp::Transform::IDENTITY).unwrap();
+                    visuals.push(BodyVisual::Capsule { half_h: half_h as f32, radius: r as f32 });
+                }
+                _ => {
+                    let half_h: f64 = 0.30;
+                    let r: f64 = 0.20;
+                    let mass: f64 = 0.7;
+                    let inertia = molla::math::Mat3::from_diagonal(MVec3::new(
+                        mass * (r * r * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+                        mass * r * r * 0.5,
+                        mass * (r * r * 0.25 + (2.0 * half_h).powi(2) / 12.0),
+                    ));
+                    let body = b.add_body(
+                        mp::BodyParams::new()
+                            .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                            .with_position(MVec3::new(x, y, z)),
+                    );
+                    b.add_shape_cone(body, half_h, r, mp::Transform::IDENTITY).unwrap();
+                    visuals.push(BodyVisual::Cone { half_h: half_h as f32, radius: r as f32 });
+                }
+            }
+        }
+    }
+
+    (b.build().expect("gpu narrow phase model"), visuals)
+}
+
 /// Contact-sensor example — a small stack of bodies settling on the
 /// plane. The GPU `ContactSensor` runs every frame and the right-rail
 /// pane shows per-body contact counts + max depth + net push
@@ -1922,6 +2065,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Digit9) && sim.scene != Scene::Shapes {
         pending.0 = Some(Scene::Shapes);
     }
+    if keys.just_pressed(KeyCode::Digit0) && sim.scene != Scene::GpuNarrowPhase {
+        pending.0 = Some(Scene::GpuNarrowPhase);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -1942,11 +2088,18 @@ fn apply_scene_switch(
     mut contact: ResMut<ContactExampleState>,
     mut arm: ResMut<ArmExampleState>,
     mut stats: ResMut<SimStats>,
+    mut gpu_np: ResMut<GpuNpExampleState>,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
     };
     stats.arm_logged = false;
+    // Reset GPU narrow-phase counters on every scene switch — the
+    // pipeline that tracked them is rebuilt with the new Sim.
+    gpu_np.gpu_enabled_now = false;
+    gpu_np.last_cpu_calls = 0;
+    gpu_np.last_contacts = 0;
+    gpu_np.last_pairs = 0;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -1994,6 +2147,7 @@ fn step_simulation(
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
     mut stats: ResMut<SimStats>,
+    mut gpu_np: ResMut<GpuNpExampleState>,
 ) {
     if run.paused && !run.step_once {
         return;
@@ -2003,6 +2157,23 @@ fn step_simulation(
 
     let device = sim.engine.device().unwrap().clone();
     let queue = sim.engine.queue().unwrap().clone();
+
+    // Apply Stage-15 GPU narrow-phase toggle for the demo scene.
+    // Outside that scene, leave the pipeline configuration alone.
+    if sim.scene == Scene::GpuNarrowPhase && gpu_np.use_gpu != gpu_np.gpu_enabled_now {
+        // Need to call methods on `sim.pipeline` while borrowing
+        // `sim.engine`. Borrow them as separate mutable / immutable
+        // refs through pattern destructuring to keep the compiler
+        // happy.
+        let Sim { pipeline, engine, .. } = &mut *sim;
+        *pipeline = molla::geometry::CollisionPipeline::new();
+        if gpu_np.use_gpu {
+            pipeline
+                .enable_full_gpu_narrow_phase(engine, 256)
+                .expect("enable_full_gpu_narrow_phase");
+        }
+        gpu_np.gpu_enabled_now = gpu_np.use_gpu;
+    }
 
     let Sim {
         model,
@@ -2057,6 +2228,18 @@ fn step_simulation(
     stats.smoothed_collide_us = 0.9 * stats.smoothed_collide_us + 0.1 * total_collide_us;
     stats.smoothed_download_us = 0.9 * stats.smoothed_download_us + 0.1 * total_download_us;
     stats.last_contacts = contacts.count;
+
+    // Surface Stage-15 GPU narrow-phase counters for the right-rail
+    // pane (only meaningful for the GpuNarrowPhase scene; harmless
+    // elsewhere — `last_cpu_narrow_phase_calls()` returns the most
+    // recent invocation's count regardless of pipeline mode).
+    gpu_np.last_cpu_calls = sim.pipeline.last_cpu_narrow_phase_calls();
+    gpu_np.last_contacts = sim.contacts.count;
+    // Approx. SAP candidate count = CPU calls + contacts (close
+    // enough — every successful pair becomes either a contact or a
+    // CPU pair_contact call). The real count isn't exposed; this is
+    // a UI estimate.
+    gpu_np.last_pairs = gpu_np.last_cpu_calls + sim.contacts.count as usize;
 
     // One-shot debug dump after the first frame's substeps for the
     // Arm scene — surfaces whether Featherstone's FK pass is actually
@@ -3153,10 +3336,12 @@ fn control_pane(
     imu_state: Res<ImuExampleState>,
     contact_state: Res<ContactExampleState>,
     mut arm_state: ResMut<ArmExampleState>,
-    mut ribbon_open: ResMut<RibbonOpen>,
-    mut ribbon_placement: ResMut<RibbonPlacement>,
-    mut ribbon_drag: ResMut<RibbonDrag>,
+    mut gpu_np_state: ResMut<GpuNpExampleState>,
+    mut ribbons: RibbonParams,
 ) {
+    let mut ribbon_open = ribbons.open.reborrow();
+    let mut ribbon_placement = ribbons.placement.reborrow();
+    let mut ribbon_drag = ribbons.drag.reborrow();
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let accent_color = accent.0;
     let scene = sim.scene;
@@ -3178,7 +3363,11 @@ fn control_pane(
             // per-example settings — Pile/Rope/Tower/Cloth don't.
             PANE_SCENE => !matches!(
                 scene,
-                Scene::Lidar | Scene::Imu | Scene::Contact | Scene::Arm
+                Scene::Lidar
+                    | Scene::Imu
+                    | Scene::Contact
+                    | Scene::Arm
+                    | Scene::GpuNarrowPhase
             ),
             _ => false,
         },
@@ -3291,6 +3480,7 @@ fn control_pane(
         Scene::Contact => Some("Contacts"),
         Scene::Arm => Some("Arm (PD)"),
         Scene::Shapes => Some("Shapes (Stage 13)"),
+        Scene::GpuNarrowPhase => Some("GPU narrow phase"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -3307,6 +3497,9 @@ fn control_pane(
                 Scene::Contact => contact_pane(ui, &contact_state),
                 Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
                 Scene::Shapes => shapes_pane(ui, &sim),
+                Scene::GpuNarrowPhase => {
+                    gpu_np_pane(ui, &mut gpu_np_state, accent_color)
+                }
                 _ => {}
             });
         }
@@ -3445,6 +3638,49 @@ fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
         "Yellow arrows in the viewport point along the net push \
          direction at each body's contact centroid; length scales \
          with penetration depth.",
+    );
+}
+
+/// Body for the right-rail pane in the Stage-15 GPU narrow-phase scene.
+fn gpu_np_pane(
+    ui: &mut egui::Ui,
+    state: &mut GpuNpExampleState,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    let mode_label = if state.gpu_enabled_now {
+        "GPU (Stage 15)"
+    } else {
+        "CPU"
+    };
+    readout(ui, "Narrow phase", mode_label);
+    readout(ui, "SAP pairs", &format!("{}", state.last_pairs));
+    readout(ui, "Contacts", &format!("{}", state.last_contacts));
+    readout(
+        ui,
+        "CPU NP calls",
+        &format!("{}", state.last_cpu_calls),
+    );
+    let gpu_calls = state.last_pairs.saturating_sub(state.last_cpu_calls);
+    readout(ui, "GPU NP calls", &format!("{}", gpu_calls));
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        let label = if state.use_gpu {
+            "Disable GPU narrow phase"
+        } else {
+            "Enable GPU narrow phase"
+        };
+        if button(ui, label, accent).clicked() {
+            state.use_gpu = !state.use_gpu;
+        }
+    });
+    ui.separator();
+    ui.small(
+        "Toggles between CPU and full-GPU narrow phase. With GPU \
+         on, the Sphere/Box/Capsule/Cylinder/Cone pairs run through \
+         WGSL GJK + EPA on the device; only Plane pairs (and the few \
+         that hit the WGSL polytope cap) bump the CPU counter.",
     );
 }
 
