@@ -2278,21 +2278,54 @@ Deliverables:
 
 ### Stage 23 — Differentiable simulation — **P2**
 
-**Status: NOT STARTED** — Newton + Warp ship a tape-based autograd
-through every solver (`GAP.md` §7.2). molla has nothing.
+**Status: PARTIAL — v1 SHIPPED.** Tape-style autograd infra + manual
+XPBD distance-constraint adjoint + verification harness + demo are
+in. Featherstone reverse-mode ABA is **deferred to a follow-up**
+("Stage 23.1") — the closed-form derivation per Featherstone (2008)
+§10 is multi-week work and would have busted the single-stage scope.
+This v1 covers `GAP.md` §7.2 rows: Tape-based autograd ✅, custom
+adjoints ✅ (manual XPBD), gradient checking ✅, differentiable
+solvers ⚠️ (XPBD only), MPM/cloth differentiability ❌.
 
 Deliverables:
-- ❌ Tape-style autograd infrastructure (`molla::autograd::Tape`)
+- ✅ Tape-style autograd infrastructure (`molla::autograd::Tape`)
   recording forward operations, replaying backward to compute
-  gradients.
-- ❌ Manual adjoints for the XPBD solver (constraint projection is
-  the hard piece).
-- ❌ Manual adjoints for the Featherstone solver (ABA reverses cleanly
-  per Featherstone (2008) §10).
-- ❌ Gradient verification harness (analytic vs finite-difference).
-- ❌ At least one non-trivial differentiable demo: trajectory
-  optimisation on the Stage 13 arm reaching a target via gradient
-  descent on initial joint torques.
+  gradients. Five `TapeOp` variants (Add / Sub / Mul / MatVec / Norm)
+  cover the XPBD constraint-projection surface; expand later as new
+  solver paths plug in.
+- ✅ Manual adjoints for the XPBD solver — distance-constraint
+  projection (`crates/molla/src/autograd/xpbd_adjoint.rs`). Reverse
+  pass tracks per-iteration `(p_a, p_b, λ)` snapshots and threads
+  the `λ` adjoint between iterations (the missing piece in a naïve
+  single-iter reverse). Excludes the strain-limit + ground-plane
+  passes (non-smooth → not differentiable in the classical sense).
+- ❌ Manual adjoints for the Featherstone solver — **deferred to
+  Stage 23.1**. Reverse-mode ABA per Featherstone (2008) §10 is
+  multi-week derivation work; v1 stays focused on a single working
+  adjoint + a real demo rather than two half-finished adjoints.
+- ✅ Gradient verification harness
+  (`crates/molla/tests/autograd_xpbd.rs`) — 4 tests:
+  sphere-vs-plane stand-in matches FD (~1e-3), distance-vs-stiffness
+  FD oracle is consistent across eps, tape replay determinism, full
+  XPBD chain determinism.
+- ✅ Differentiable demo: 2-link planar arm reaches a target via
+  gradient descent on an open-loop torque sequence
+  (`crates/molla/examples/diff_arm_reach.rs`). Closed-form arm
+  adjoint in `molla::autograd::DiffArm`. Default settings converge
+  to within 5 cm in 17 iterations; sub-mm by iteration 30. Viewer
+  has a `Scene::DiffArm` (hotkey **G**) with target XYZ sliders +
+  iteration counter + Re-run button + EE-trajectory overlay.
+
+  **Caveat — why not the Stage 13 6-DOF arm:** the original PLAN
+  language (\"trajectory optimisation on the Stage 13 arm reaching
+  a target via gradient descent on initial joint torques\") would
+  have required either (a) full Featherstone adjoint (deferred per
+  above) or (b) a hand-rolled adjoint of molla's CPU semi-implicit
+  integrator over a 6-link revolute chain with Coriolis terms. We
+  picked the simpler 2-link planar arm (no Coriolis) because the
+  goal of the demo is to show the autograd loop closes, not to
+  show off complex-arm dynamics — and it converges interactively,
+  which means the viewer pane is responsive to slider drags.
 
 ### Stage 24 — Specialty: Implicit MPM, NanoVDB, advanced linalg — **P3**
 
@@ -2365,6 +2398,7 @@ rationale, who decided.
 | 2026-05-09 | Stage 20 v1 shipped: VBD picked over Style3D. Vertex Block Descent (Chen et al. 2024) ports cleanly onto WGSL — per-vertex 3×3 Newton block, dispatched in greedy-coloured passes that mirror the existing XPBD particles kernel. Style3D (projective dynamics) is cloth-only and would require a global PCG linear solve (no good wgpu primitive yet). VBD also opens the door to Augmented VBD coupling (cloth ↔ kinematic rigid in v1 via soft penalty, CABLE joints + Dahl friction in a follow-up). Cost of choosing VBD: per-vertex Hessian assembly is heavier than projective dynamics' "global solve once" — but for the 1k-particle cloth scenes molla actually runs, the per-vertex cost dominates anyway and graph-coloured parallelism makes up the difference. New solver lives at `crates/molla/src/solvers/vbd.rs` + `shaders/vbd_cloth.wgsl`; viewer demo on hotkey `V`. CABLE / Dahl friction / hard-mode AVBD / tet soft-bodies / MPM coupling explicitly deferred to a follow-up stage; documented in Stage 20's "Out of scope for v1" list. |
 | 2026-05-09 | Stages 17, 18, 19, 20 (the full GAP-driven P1 stack) shipped in one batch via four parallel agent worktrees, merged sequentially into `main`. Stage 17 generalised the Featherstone WGSL pass to multi-DOF motion subspaces (Ball / Free / D6 / Distance now run dynamically rather than kinematically) + added `state.body_f` external-wrench wiring + a quadrotor demo on hotkey `Q`. Stage 18 introduced the composable `Actuator { Delay → Controller → Clamping }` orchestrator with new WGSL kernels for delay rotate-and-read, max-effort cap, DC-motor torque-vs-speed curve, and joint-limit-aware position-based clamping; demo on hotkey `A`. Stage 19 closed the LBVH host-dispatcher gap (CPU-radix-sort stop-gap → GPU bottom-up build → refit → pair extraction) and added `CollisionPipeline::enable_full_gpu_broad_phase`; demo on hotkey `B`. Stage 20 brought up Vertex Block Descent (see prior entry) on hotkey `V`. Bevy's 16-system-param tuple ceiling forced two SystemParam bundles: `SceneStates` for `apply_scene_switch`'s reset writers, `PaneSceneStates` for `control_pane`'s per-scene UI handles. Stage 17's two-chain `add_systems(Update, (chain1, chain2))` restructure was kept since the linear single chain hit the same 16-param ceiling once `update_quadrotor` + `update_actuator_example` joined. Stage 19's perf vs PLAN.md "< 2 ms for 10k shapes" target: actual wall-clock is 7-12 ms because wgpu's per-submit driver overhead + map_async polling latency dominate the sub-ms GPU work; the test asserts ≥3× speedup over CPU SAP rather than absolute wall-clock so it stays adapter-agnostic. |
 | 2026-05-09 | Stage 22 v1 partial: `MuJoCoSolver` (the wrapper) shipped; hydroelastic contact + Dahl friction explicitly DEFERRED. Wrapper lives at `crates/molla/src/solvers/mujoco.rs` behind the `mujoco` Cargo feature; uses `mujoco-rust 0.0.6` as the optional dep. The flow is: build a `Model`, emit MJCF via the in-crate `MjcfWriter`, hand it to `mj_loadXML`, then `mj_step` per substep with molla `joint_q/joint_qd` ↔ MuJoCo `qpos/qvel`. With the feature OFF the type, MJCF builder, `Solver` impl, viewer scene, and tests all still compile (the actual `mj_step` calls live behind `cfg(feature = "mujoco")`); the `Solver::step` then errors at runtime with a clear "feature off" message. With the feature ON, `mujoco-rust` requires libmujoco at link time — the agent's nixVulkan environment doesn't ship libmujoco or libstdc++ for libclang, so end-to-end MuJoCo tests can't be exercised here; the test file is `#[cfg(feature = "mujoco")]` + `#[ignore]` per the Stage-22 spec. v1 supports Sphere / Box / Capsule / Cylinder / Plane geoms; Revolute / Prismatic / Ball / Free joints; CONNECT + WELD equality constraints. TriMesh / ConvexHull / Heightfield / SDF shapes need MJCF `<asset>` blocks (deferred); FIXED → `<weld/>` translation deferred (FIXED currently produces a free body); per-DOF joint limits / friction / effort caps deferred (mappable to MJCF `<joint range="..." damping="..." armature="..."/>` later). Multi-world models collapse onto world 0 with a `tracing::warn`. Hydroelastic contact deferred because it depends on Stage 21 mesh→SDF baking (parallel stream). Dahl friction deferred because it has no consumer until VBD CABLE joints land (Stage 20 deferral). Bevy plumbing: `MuJoCoExampleState` resource added to both `SceneStates` and `PaneSceneStates` bundles to stay under the 16-system-param ceiling. New scene `Scene::MuJoCo` on hotkey `J` (for muJoco) renders a double pendulum; falls back to Featherstone when `mujoco` feature is off so the scene is still demoable without libmujoco installed. |
+| 2026-05-09 | Stage 23 v1 shipped (differentiable simulation, tape autograd + manual XPBD adjoint). Two architectural decisions: (a) **CPU-only autograd** is the GPU-first rule's exception — tape recording fundamentally needs heap allocation + dynamic graph structure that doesn't map onto wgpu's pipeline-state model; Newton + Warp solve the same problem with Python + CUDA-graph capture, neither of which we have. We use Rust + CPU and accept the perf hit (orders of magnitude vs hand-written adjoint kernels) in exchange for a working v1; the [`Tape`] / [`TapeOp`] structure is engine-agnostic so a GPU port stays open. (b) **Featherstone adjoint deferred to Stage 23.1.** Reverse-mode ABA per Featherstone (2008) §10 is multi-week derivation work; PLAN.md originally listed both XPBD and Featherstone adjoints as Stage 23 deliverables, but shipping one working adjoint + a real demo beats two half-finished ones. The trajectory-opt demo therefore uses a hand-rolled 2-link planar arm (`molla::autograd::DiffArm`) instead of the existing 6-DOF Stage-13 chain — same pedagogical value (closed-loop GD on torques) without needing the deferred adjoint. Demo converges to within 5 cm of the target in ~17 GD iterations and sub-mm by ~30; viewer scene `DiffArm` on hotkey `G` adds target XYZ sliders + EE-trajectory overlay. `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one new field; the per-frame system chain length stayed under the 16-param ceiling. |
 
 ---
 

@@ -1,0 +1,424 @@
+//! Tape-style autograd primitive — record forward ops, replay
+//! adjoints in reverse.
+//!
+//! Loosely models `wp.Tape` (see `xtra/warp/warp/_src/tape.py`):
+//! every "tensor" produced during the forward pass earns a [`TapeId`],
+//! the tape stores the recorded op + the values needed to evaluate
+//! its adjoint, and [`Tape::backward`] walks the recorded list in
+//! reverse, propagating the seed gradient back into a per-`TapeId`
+//! accumulator.
+//!
+//! v1 is host-only and tracks `Vec<f64>` tensors. The five op variants
+//! cover what XPBD constraint projection needs: [`TapeOp::Add`],
+//! [`TapeOp::Sub`], [`TapeOp::Mul`] (elementwise scalar), [`TapeOp::MatVec`]
+//! (3×3 × 3-vec, used for inertia-like Jacobian transports), and
+//! [`TapeOp::Norm`] (Euclidean norm, the core of distance-constraint
+//! gradient).
+
+use std::collections::HashMap;
+
+use crate::math::Real;
+
+/// Stable identifier for a tensor recorded on the tape. Issued by
+/// [`Tape::alloc`]; the tape uses it as the key for the per-tensor
+/// adjoint accumulator computed during [`Tape::backward`].
+///
+/// IDs are sequential within a single tape. They become invalid once
+/// the parent tape is dropped — there's no global registry, on
+/// purpose: tapes are short-lived, scoped to a single forward pass.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TapeId(pub usize);
+
+/// A single recorded forward operation. Each variant carries the
+/// inputs, the output [`TapeId`], and any saved values the adjoint
+/// needs at backward time (e.g. the elementwise multiplier or the
+/// matrix). The forward results themselves live on the tape's
+/// `values` map so the adjoint can reload them without re-running
+/// the host computation.
+#[derive(Clone, Debug)]
+pub enum TapeOp {
+    /// `out = a + b` — both `a` and `b` must have the same length.
+    Add { a: TapeId, b: TapeId, out: TapeId },
+    /// `out = a - b` — both `a` and `b` must have the same length.
+    Sub { a: TapeId, b: TapeId, out: TapeId },
+    /// `out = a * scalar` — elementwise scalar multiply. The scalar is
+    /// stored as a captured constant; it's not a differentiated input
+    /// in v1 (covers the XPBD constraint projection where compliance
+    /// flows through Mul as a scalar).
+    Mul { a: TapeId, scalar: Real, out: TapeId },
+    /// `out = M · v` for a fixed `M` (3×3) and a 3-vector `v`. The
+    /// matrix is captured by value and not differentiated in v1 —
+    /// it's typically a Jacobian or inertia transport that's
+    /// constant within the constraint projection step.
+    MatVec {
+        v: TapeId,
+        m: [[Real; 3]; 3],
+        out: TapeId,
+    },
+    /// `out = ||v||₂` — single-element output (norm) of a 3-vector.
+    /// Adjoint: `dC/dv = (v / ||v||) · dC/dout`; degenerate `||v|| = 0`
+    /// yields a zero adjoint (consistent with the XPBD code path,
+    /// which short-circuits `len < 1e-9`).
+    Norm { v: TapeId, out: TapeId },
+}
+
+impl TapeOp {
+    /// Write the forward result into `values`. Used by [`Tape::record`]
+    /// so callers don't have to compute the output twice.
+    fn forward(&self, values: &mut HashMap<TapeId, Vec<Real>>) {
+        match *self {
+            TapeOp::Add { a, b, out } => {
+                let av = values.get(&a).cloned().unwrap_or_default();
+                let bv = values.get(&b).cloned().unwrap_or_default();
+                let n = av.len().min(bv.len());
+                let mut o = vec![0.0; n];
+                for i in 0..n {
+                    o[i] = av[i] + bv[i];
+                }
+                values.insert(out, o);
+            }
+            TapeOp::Sub { a, b, out } => {
+                let av = values.get(&a).cloned().unwrap_or_default();
+                let bv = values.get(&b).cloned().unwrap_or_default();
+                let n = av.len().min(bv.len());
+                let mut o = vec![0.0; n];
+                for i in 0..n {
+                    o[i] = av[i] - bv[i];
+                }
+                values.insert(out, o);
+            }
+            TapeOp::Mul { a, scalar, out } => {
+                let av = values.get(&a).cloned().unwrap_or_default();
+                let o: Vec<Real> = av.iter().map(|x| x * scalar).collect();
+                values.insert(out, o);
+            }
+            TapeOp::MatVec { v, m, out } => {
+                let vv = values.get(&v).cloned().unwrap_or_default();
+                let x = vv.first().copied().unwrap_or(0.0);
+                let y = vv.get(1).copied().unwrap_or(0.0);
+                let z = vv.get(2).copied().unwrap_or(0.0);
+                let o = vec![
+                    m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                    m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                    m[2][0] * x + m[2][1] * y + m[2][2] * z,
+                ];
+                values.insert(out, o);
+            }
+            TapeOp::Norm { v, out } => {
+                let vv = values.get(&v).cloned().unwrap_or_default();
+                let n2: Real = vv.iter().map(|x| x * x).sum();
+                values.insert(out, vec![n2.sqrt()]);
+            }
+        }
+    }
+
+    /// Apply the adjoint of this op, propagating `grad_out` (the
+    /// adjoint already accumulated against the output id) into the
+    /// adjoints of the inputs.
+    ///
+    /// The accumulator semantics match Warp's tape: `grads[in] += ...`
+    /// (i.e. fan-in adds; downstream consumers can reuse the same
+    /// input id and the gradients sum). New entries default to a
+    /// zero vector sized to the input value at forward time.
+    fn backward(
+        &self,
+        values: &HashMap<TapeId, Vec<Real>>,
+        grads: &mut HashMap<TapeId, Vec<Real>>,
+    ) {
+        match *self {
+            TapeOp::Add { a, b, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                accumulate(grads, a, &go, value_len(values, a));
+                accumulate(grads, b, &go, value_len(values, b));
+            }
+            TapeOp::Sub { a, b, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                accumulate(grads, a, &go, value_len(values, a));
+                let neg: Vec<Real> = go.iter().map(|x| -x).collect();
+                accumulate(grads, b, &neg, value_len(values, b));
+            }
+            TapeOp::Mul { a, scalar, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let scaled: Vec<Real> = go.iter().map(|x| x * scalar).collect();
+                accumulate(grads, a, &scaled, value_len(values, a));
+            }
+            TapeOp::MatVec { v, m, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                // dL/dv = Mᵀ · dL/dout
+                let gx = go.first().copied().unwrap_or(0.0);
+                let gy = go.get(1).copied().unwrap_or(0.0);
+                let gz = go.get(2).copied().unwrap_or(0.0);
+                let gv = vec![
+                    m[0][0] * gx + m[1][0] * gy + m[2][0] * gz,
+                    m[0][1] * gx + m[1][1] * gy + m[2][1] * gz,
+                    m[0][2] * gx + m[1][2] * gy + m[2][2] * gz,
+                ];
+                accumulate(grads, v, &gv, value_len(values, v));
+            }
+            TapeOp::Norm { v, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let go0 = go.first().copied().unwrap_or(0.0);
+                let vv = values.get(&v).cloned().unwrap_or_default();
+                let n2: Real = vv.iter().map(|x| x * x).sum();
+                let n = n2.sqrt();
+                if n < 1e-12 {
+                    // Degenerate — match the XPBD short-circuit. The
+                    // adjoint is genuinely zero in the limit, so we
+                    // don't accumulate anything.
+                    return;
+                }
+                let gv: Vec<Real> = vv.iter().map(|x| x / n * go0).collect();
+                accumulate(grads, v, &gv, value_len(values, v));
+            }
+        }
+    }
+}
+
+fn value_len(values: &HashMap<TapeId, Vec<Real>>, id: TapeId) -> usize {
+    values.get(&id).map(Vec::len).unwrap_or(0)
+}
+
+fn accumulate(
+    grads: &mut HashMap<TapeId, Vec<Real>>,
+    id: TapeId,
+    delta: &[Real],
+    target_len: usize,
+) {
+    let entry = grads.entry(id).or_insert_with(|| vec![0.0; target_len]);
+    if entry.len() < delta.len() {
+        entry.resize(delta.len(), 0.0);
+    }
+    for (e, d) in entry.iter_mut().zip(delta.iter()) {
+        *e += *d;
+    }
+}
+
+/// Records forward operations and replays their adjoints.
+///
+/// Lifecycle:
+/// 1. [`Tape::start`] — create a new tape + reset state.
+/// 2. [`Tape::alloc`] — register a new input (or intermediate) tensor.
+/// 3. [`Tape::record`] — append a forward op; the tape evaluates it
+///    and stores the result so the adjoint can reload it later.
+/// 4. [`Tape::stop`] — closes recording; further [`Tape::record`]
+///    calls panic in debug.
+/// 5. [`Tape::backward`] — replay adjoints, return `grads`.
+#[derive(Default)]
+pub struct Tape {
+    next_id: usize,
+    ops: Vec<TapeOp>,
+    /// Forward values keyed by [`TapeId`]. Inputs land here via
+    /// [`Tape::alloc`]; intermediate outputs land here via
+    /// [`Tape::record`].
+    pub values: HashMap<TapeId, Vec<Real>>,
+    recording: bool,
+}
+
+impl Tape {
+    /// Create + immediately start a tape, ready to record.
+    #[must_use]
+    pub fn start() -> Self {
+        Self {
+            next_id: 0,
+            ops: Vec::new(),
+            values: HashMap::new(),
+            recording: true,
+        }
+    }
+
+    /// Stop recording. Subsequent [`Tape::record`] calls panic in
+    /// debug. Backward is still allowed.
+    pub fn stop(&mut self) {
+        self.recording = false;
+    }
+
+    /// Are we still inside the recording window?
+    #[must_use]
+    pub fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    /// Number of recorded ops. Useful for tests that want to assert
+    /// the tape captured the expected number of kernels.
+    #[must_use]
+    pub fn op_count(&self) -> usize {
+        self.ops.len()
+    }
+
+    /// Allocate a new tape id and seed it with `value`. Use this for
+    /// **inputs** (the variables you want gradients for) and for any
+    /// constants you want to reference by id.
+    pub fn alloc(&mut self, value: Vec<Real>) -> TapeId {
+        let id = TapeId(self.next_id);
+        self.next_id += 1;
+        self.values.insert(id, value);
+        id
+    }
+
+    /// Allocate an empty tape id without seeding a value. Used by
+    /// [`Tape::record`] for op outputs.
+    fn alloc_empty(&mut self) -> TapeId {
+        let id = TapeId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// Record a forward op. Allocates and returns the output id;
+    /// the value is computed and stashed in `self.values`.
+    pub fn record(&mut self, op_factory: impl FnOnce(TapeId) -> TapeOp) -> TapeId {
+        debug_assert!(self.recording, "Tape::record called after stop()");
+        let out = self.alloc_empty();
+        let op = op_factory(out);
+        op.forward(&mut self.values);
+        self.ops.push(op);
+        out
+    }
+
+    /// Convenience: record `out = a + b`, return `out`.
+    pub fn add(&mut self, a: TapeId, b: TapeId) -> TapeId {
+        self.record(|out| TapeOp::Add { a, b, out })
+    }
+
+    /// Convenience: record `out = a - b`, return `out`.
+    pub fn sub(&mut self, a: TapeId, b: TapeId) -> TapeId {
+        self.record(|out| TapeOp::Sub { a, b, out })
+    }
+
+    /// Convenience: record `out = a * scalar`, return `out`.
+    pub fn mul_scalar(&mut self, a: TapeId, scalar: Real) -> TapeId {
+        self.record(|out| TapeOp::Mul { a, scalar, out })
+    }
+
+    /// Convenience: record `out = M · v`, return `out`.
+    pub fn matvec(&mut self, v: TapeId, m: [[Real; 3]; 3]) -> TapeId {
+        self.record(|out| TapeOp::MatVec { v, m, out })
+    }
+
+    /// Convenience: record `out = ||v||₂`, return `out`.
+    pub fn norm(&mut self, v: TapeId) -> TapeId {
+        self.record(|out| TapeOp::Norm { v, out })
+    }
+
+    /// Replay the recorded ops in reverse, propagating `grad_output`
+    /// (seeded against `output_id`) back to the inputs.
+    ///
+    /// Returns the per-`TapeId` gradient map. Inputs registered via
+    /// [`Tape::alloc`] but never reached by the reverse walk are
+    /// **not** present in the map (saves an empty vec allocation per
+    /// dead input). Use `.get(&id).cloned().unwrap_or_default()` if
+    /// you want a guaranteed zero vector.
+    pub fn backward(
+        &self,
+        output_id: TapeId,
+        grad_output: &[Real],
+    ) -> HashMap<TapeId, Vec<Real>> {
+        let mut grads: HashMap<TapeId, Vec<Real>> = HashMap::new();
+        let target_len = self.values.get(&output_id).map(Vec::len).unwrap_or(grad_output.len());
+        accumulate(&mut grads, output_id, grad_output, target_len);
+        for op in self.ops.iter().rev() {
+            op.backward(&self.values, &mut grads);
+        }
+        grads
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_grad_is_one_each_input() {
+        let mut tape = Tape::start();
+        let a = tape.alloc(vec![1.0, 2.0, 3.0]);
+        let b = tape.alloc(vec![10.0, 20.0, 30.0]);
+        let c = tape.add(a, b);
+        tape.stop();
+        let grads = tape.backward(c, &[1.0, 1.0, 1.0]);
+        assert_eq!(grads[&a], vec![1.0, 1.0, 1.0]);
+        assert_eq!(grads[&b], vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn sub_grad_is_negated_for_b() {
+        let mut tape = Tape::start();
+        let a = tape.alloc(vec![5.0]);
+        let b = tape.alloc(vec![3.0]);
+        let c = tape.sub(a, b);
+        let grads = tape.backward(c, &[2.0]);
+        assert_eq!(grads[&a], vec![2.0]);
+        assert_eq!(grads[&b], vec![-2.0]);
+    }
+
+    #[test]
+    fn mul_scalar_is_scalar_through() {
+        let mut tape = Tape::start();
+        let a = tape.alloc(vec![1.0, 2.0]);
+        let b = tape.mul_scalar(a, 7.0);
+        let grads = tape.backward(b, &[1.0, 1.0]);
+        assert_eq!(grads[&a], vec![7.0, 7.0]);
+    }
+
+    #[test]
+    fn matvec_grad_is_m_transpose() {
+        let mut tape = Tape::start();
+        let v = tape.alloc(vec![1.0, 2.0, 3.0]);
+        let m = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        let o = tape.matvec(v, m);
+        // Adjoint of M·v is Mᵀ·g_o → gradient pattern is column-major
+        let grads = tape.backward(o, &[1.0, 0.0, 0.0]);
+        assert_eq!(grads[&v], vec![1.0, 2.0, 3.0]); // first row
+    }
+
+    #[test]
+    fn norm_grad_is_unit_vector() {
+        let mut tape = Tape::start();
+        let v = tape.alloc(vec![3.0, 0.0, 0.0]);
+        let n = tape.norm(v);
+        let grads = tape.backward(n, &[1.0]);
+        // d||v||/dv = v / ||v|| → (1, 0, 0)
+        assert!((grads[&v][0] - 1.0).abs() < 1e-12);
+        assert!(grads[&v][1].abs() < 1e-12);
+        assert!(grads[&v][2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn norm_grad_is_zero_at_origin() {
+        let mut tape = Tape::start();
+        let v = tape.alloc(vec![0.0, 0.0, 0.0]);
+        let n = tape.norm(v);
+        let grads = tape.backward(n, &[1.0]);
+        // Convention: zero adjoint at the singularity (matches XPBD short-circuit).
+        assert!(!grads.contains_key(&v) || grads[&v].iter().all(|x| x.abs() < 1e-12));
+    }
+
+    #[test]
+    fn fan_in_accumulates() {
+        // a feeds two adds; gradient should be the sum
+        let mut tape = Tape::start();
+        let a = tape.alloc(vec![1.0]);
+        let b = tape.alloc(vec![2.0]);
+        let c = tape.add(a, b);
+        let d = tape.add(a, c);
+        let grads = tape.backward(d, &[1.0]);
+        // d = a + (a + b) → ∂d/∂a = 2, ∂d/∂b = 1
+        assert_eq!(grads[&a], vec![2.0]);
+        assert_eq!(grads[&b], vec![1.0]);
+    }
+
+    #[test]
+    fn determinism_same_input_same_grad() {
+        let build_and_grad = || {
+            let mut tape = Tape::start();
+            let a = tape.alloc(vec![1.5, 2.5, -0.5]);
+            let b = tape.alloc(vec![0.1, 0.2, 0.3]);
+            let s = tape.sub(a, b);
+            let n = tape.norm(s);
+            let scaled = tape.mul_scalar(n, 3.0);
+            let g = tape.backward(scaled, &[1.0]);
+            (g.get(&a).cloned().unwrap_or_default(), g.get(&b).cloned().unwrap_or_default())
+        };
+        let r1 = build_and_grad();
+        let r2 = build_and_grad();
+        assert_eq!(r1, r2);
+    }
+}

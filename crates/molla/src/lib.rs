@@ -16,6 +16,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub mod actuators;
+pub mod autograd;
 pub mod compute;
 pub mod core;
 pub mod geometry;
