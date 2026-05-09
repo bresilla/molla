@@ -1,15 +1,6 @@
 //! `molla_viewer` — Bevy app that runs a molla scene and visualises it.
 //!
-//! Four switchable demo scenes (hotkeys 1/2/3/4):
-//! * **1 Pile**   — 12×12 mixed sphere/box/capsule rain (collision +
-//!                  restitution + friction).
-//! * **2 Rope**   — chain of small spheres pinned by CONNECT equality
-//!                  constraints, top link held kinematic (stage 7).
-//! * **3 Tower**  — 8-layer 4×4 box pyramid getting smashed by a heavy
-//!                  sphere dropped from above (stacking + impact).
-//! * **4 Cloth**  — 24×24 hanging curtain pinned along its top edge,
-//!                  sags and swings via XPBD distance constraints
-//!                  (stage 12).
+//! Scenes are picked from the dropdown in the left rail (no hotkeys).
 //!
 //! Mouse:
 //!   * **LMB-click+drag**   grab a body and drag it (spring-pull force)
@@ -18,17 +9,9 @@
 //!   * LMB+RMB-drag         orbit yaw + pitch
 //!   * Scroll               zoom
 //!
-//! Keys:
-//!   * 1 / 2 / 3 / 4   switch demo scene
-//!   * Q           Quadrotor (Stage 17 multi-DOF Featherstone)
-//!   * V           VBD cloth (Stage 20) — high-fidelity drape over a
-//!                 kinematic sphere; right-rail toggles VBD ↔ XPBD.
-//!   * J           MuJoCo wrapper (Stage 22) — double pendulum stepped
-//!                 via `MuJoCoSolver`. Requires the `mujoco` Cargo
-//!                 feature; falls back to Featherstone otherwise.
-//!   * T           toggle "activity view" — sleeping bodies turn grey,
-//!                 only active (moving) bodies keep their colour
-//!   * W           toggle wireframe view (every mesh outlined)
+//! Global keys:
+//!   * T           toggle "activity view" — sleeping bodies turn grey
+//!   * W           toggle wireframe view
 //!   * Space       pause / resume the simulation
 //!   * R           reset poses to the initial drop
 //!   * Esc         quit
@@ -5022,7 +5005,7 @@ fn handle_input(
     mut exit: MessageWriter<AppExit>,
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
-    mut pending: ResMut<PendingSceneSwitch>,
+    _pending: ResMut<PendingSceneSwitch>,
     mut activity: ResMut<ActivityView>,
     mut wireframe: ResMut<WireframeOn>,
 ) {
@@ -5040,81 +5023,6 @@ fn handle_input(
     }
     if keys.just_pressed(KeyCode::KeyW) {
         wireframe.0 = !wireframe.0;
-    }
-    if keys.just_pressed(KeyCode::Digit1) && sim.scene != Scene::Pile {
-        pending.0 = Some(Scene::Pile);
-    }
-    if keys.just_pressed(KeyCode::Digit2) && sim.scene != Scene::Rope {
-        pending.0 = Some(Scene::Rope);
-    }
-    if keys.just_pressed(KeyCode::Digit3) && sim.scene != Scene::Tower {
-        pending.0 = Some(Scene::Tower);
-    }
-    if keys.just_pressed(KeyCode::Digit4) && sim.scene != Scene::Cloth {
-        pending.0 = Some(Scene::Cloth);
-    }
-    if keys.just_pressed(KeyCode::Digit5) && sim.scene != Scene::Lidar {
-        pending.0 = Some(Scene::Lidar);
-    }
-    if keys.just_pressed(KeyCode::Digit6) && sim.scene != Scene::Imu {
-        pending.0 = Some(Scene::Imu);
-    }
-    if keys.just_pressed(KeyCode::Digit7) && sim.scene != Scene::Contact {
-        pending.0 = Some(Scene::Contact);
-    }
-    if keys.just_pressed(KeyCode::Digit8) && sim.scene != Scene::Arm {
-        pending.0 = Some(Scene::Arm);
-    }
-    if keys.just_pressed(KeyCode::Digit9) && sim.scene != Scene::Shapes {
-        pending.0 = Some(Scene::Shapes);
-    }
-    if keys.just_pressed(KeyCode::Digit0) && sim.scene != Scene::GpuIkArm {
-        pending.0 = Some(Scene::GpuIkArm);
-    }
-    if keys.just_pressed(KeyCode::Minus) && sim.scene != Scene::GpuNarrowPhase {
-        pending.0 = Some(Scene::GpuNarrowPhase);
-    }
-    if keys.just_pressed(KeyCode::Equal) && sim.scene != Scene::Camera {
-        pending.0 = Some(Scene::Camera);
-    }
-    if keys.just_pressed(KeyCode::KeyA) && sim.scene != Scene::Actuator {
-        pending.0 = Some(Scene::Actuator);
-    }
-    if keys.just_pressed(KeyCode::KeyQ) && sim.scene != Scene::Quadrotor {
-        pending.0 = Some(Scene::Quadrotor);
-    }
-    if keys.just_pressed(KeyCode::KeyB) && sim.scene != Scene::BroadPhase {
-        pending.0 = Some(Scene::BroadPhase);
-    }
-    if keys.just_pressed(KeyCode::KeyV) && sim.scene != Scene::VbdCloth {
-        pending.0 = Some(Scene::VbdCloth);
-    }
-    if keys.just_pressed(KeyCode::KeyJ) && sim.scene != Scene::MuJoCo {
-        pending.0 = Some(Scene::MuJoCo);
-    }
-    if keys.just_pressed(KeyCode::KeyG) && sim.scene != Scene::DiffArm {
-        pending.0 = Some(Scene::DiffArm);
-    }
-    if keys.just_pressed(KeyCode::KeyH) && sim.scene != Scene::DiffArm6 {
-        pending.0 = Some(Scene::DiffArm6);
-    }
-    if keys.just_pressed(KeyCode::KeyM) && sim.scene != Scene::MeshTools {
-        pending.0 = Some(Scene::MeshTools);
-    }
-    if keys.just_pressed(KeyCode::KeyN) && sim.scene != Scene::NeuralPolicy {
-        pending.0 = Some(Scene::NeuralPolicy);
-    }
-    if keys.just_pressed(KeyCode::KeyL) && sim.scene != Scene::NeuralLstm {
-        pending.0 = Some(Scene::NeuralLstm);
-    }
-    if keys.just_pressed(KeyCode::KeyC) && sim.scene != Scene::Cable {
-        pending.0 = Some(Scene::Cable);
-    }
-    if keys.just_pressed(KeyCode::KeyP) && sim.scene != Scene::Mpm {
-        pending.0 = Some(Scene::Mpm);
-    }
-    if keys.just_pressed(KeyCode::KeyY) && sim.scene != Scene::Jelly {
-        pending.0 = Some(Scene::Jelly);
     }
 }
 
