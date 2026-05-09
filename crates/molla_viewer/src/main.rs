@@ -54,7 +54,8 @@ use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::actuators::{ControllerPd, ControllerPdConfig};
 use molla::sensors::{
-    BodyContactReading, ContactSensor, ImuMount, ImuReading, ImuSensor, RayHit, Raycaster,
+    BodyContactReading, CameraChannels, ContactSensor, ImuMount, ImuReading, ImuSensor, RayHit,
+    Raycaster, TiledCamera, TiledCameraConfig,
 };
 use molla::solvers::{FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _};
 
@@ -275,6 +276,7 @@ fn main() {
         .insert_resource(GpuNpExampleState::default())
         .insert_resource(ArmExampleState::default())
         .insert_resource(GpuIkArmState::default())
+        .insert_resource(CameraExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -319,6 +321,7 @@ fn main() {
                 update_lidar,
                 update_imu_example,
                 update_contact_example,
+                update_camera_example,
                 update_activity_colors,
                 apply_wireframe,
                 draw_grab_gizmo,
@@ -455,6 +458,12 @@ enum Scene {
     /// rail shows the per-frame breakdown of GPU vs CPU narrow-phase
     /// calls so the user can see the GPU pipeline take over.
     GpuNarrowPhase,
+    /// Stage-14 multi-channel raytraced camera sensor demo. A bowl
+    /// of vivid-coloured primitives sits on a plane; a `TiledCamera`
+    /// orbits around them. The right-rail pane shows all five
+    /// output channels (color / depth / normal / albedo / shape index)
+    /// as live thumbnails read back from the GPU each frame.
+    Camera,
 }
 
 impl Scene {
@@ -471,6 +480,7 @@ impl Scene {
         Scene::Shapes,
         Scene::GpuIkArm,
         Scene::GpuNarrowPhase,
+        Scene::Camera,
     ];
 
     fn label(self) -> &'static str {
@@ -486,6 +496,7 @@ impl Scene {
             Scene::Shapes => "Shapes (cone / hull / heightfield / SDF)",
             Scene::GpuIkArm => "GPU IK arm (Stage 16)",
             Scene::GpuNarrowPhase => "GPU narrow phase (Stage 15)",
+            Scene::Camera => "Camera (5-channel raytrace)",
         }
     }
 
@@ -767,6 +778,7 @@ impl Sim {
             Scene::Shapes => build_shapes_model(),
             Scene::GpuIkArm => build_gpu_ik_arm_model(),
             Scene::GpuNarrowPhase => build_gpu_narrow_phase_model(),
+            Scene::Camera => build_camera_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1771,6 +1783,155 @@ fn build_imu_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), vec![BodyVisual::Sphere(0.4)])
 }
 
+// --- Camera scene (Stage 14 — multi-channel raytraced sensor) ------
+const CAMERA_IMG_W: u32 = 192;
+const CAMERA_IMG_H: u32 = 144;
+const CAMERA_NUM_VIEWS: usize = 1;
+const CAMERA_ORBIT_RADIUS: f32 = 6.0;
+const CAMERA_ORBIT_HEIGHT: f32 = 2.5;
+const CAMERA_TARGET_HEIGHT: f32 = 1.0;
+
+/// Stage-14 camera scene — a "bowl" of vivid-coloured primitives
+/// dropped onto a plane. Each shape gets its own
+/// `set_shape_visual_material` colour so the right-rail thumbnails
+/// (color / albedo / shape index) read at a glance.
+fn build_camera_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.20);
+
+    let mut visuals: Vec<BodyVisual> = Vec::new();
+
+    // Static plane to settle on.
+    let plane = b
+        .add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    let _ = b.set_shape_visual_material(plane, MVec3::new(0.55, 0.55, 0.60), 0.0, 0.85);
+
+    // ── Three spheres in a row, vivid hues. ──
+    let sphere_specs = [
+        (MVec3::new(-1.6, 1.5, 0.0), 0.5, MVec3::new(0.95, 0.20, 0.20)), // red
+        (MVec3::new(0.0, 1.5, 0.0), 0.5, MVec3::new(0.20, 0.85, 0.30)),  // green
+        (MVec3::new(1.6, 1.5, 0.0), 0.5, MVec3::new(0.20, 0.40, 0.95)),  // blue
+    ];
+    for (pos, r, color) in sphere_specs {
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia::sphere(1.0, r))
+                .with_position(pos),
+        );
+        let shape = b
+            .add_shape_sphere(body, r, mp::Transform::IDENTITY)
+            .expect("sphere");
+        let _ = b.set_shape_visual_material(shape, color, 0.0, 0.4);
+        visuals.push(BodyVisual::Sphere(r as f32));
+    }
+
+    // ── A box behind, magenta. ──
+    {
+        let half = MVec3::new(0.55, 0.45, 0.55);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: 2.0,
+                    com: MVec3::ZERO,
+                    inertia: box_inertia(2.0, half.max_element()),
+                })
+                .with_position(MVec3::new(0.0, 1.0, -1.6)),
+        );
+        let shape = b
+            .add_shape_box(body, half, mp::Transform::IDENTITY)
+            .expect("box");
+        let _ = b.set_shape_visual_material(shape, MVec3::new(0.85, 0.20, 0.85), 0.0, 0.5);
+        visuals.push(BodyVisual::Box(Vec3::new(
+            half.x as f32,
+            half.y as f32,
+            half.z as f32,
+        )));
+    }
+
+    // ── A capsule on the left-front, yellow. ──
+    {
+        let half_h: f64 = 0.45;
+        let radius: f64 = 0.25;
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: 0.8,
+                    com: MVec3::ZERO,
+                    inertia: capsule_inertia(0.8, half_h, radius),
+                })
+                .with_position(MVec3::new(-2.4, 1.0, 1.6)),
+        );
+        let shape = b
+            .add_shape_capsule(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("capsule");
+        let _ = b.set_shape_visual_material(shape, MVec3::new(0.95, 0.85, 0.20), 0.0, 0.45);
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+    }
+
+    // ── A cone on the right-front, cyan. ──
+    {
+        let half_h: f64 = 0.6;
+        let radius: f64 = 0.45;
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: 1.2,
+                    com: MVec3::ZERO,
+                    inertia: capsule_inertia(1.2, half_h, radius),
+                })
+                .with_position(MVec3::new(2.4, 1.2, 1.6)),
+        );
+        let shape = b
+            .add_shape_cone(body, half_h, radius, mp::Transform::IDENTITY)
+            .expect("cone");
+        let _ = b.set_shape_visual_material(shape, MVec3::new(0.20, 0.85, 0.85), 0.0, 0.45);
+        visuals.push(BodyVisual::Cone {
+            half_h: half_h as f32,
+            radius: radius as f32,
+        });
+    }
+
+    (b.build().expect("camera scene model"), visuals)
+}
+
+/// Per-frame state for the camera-sensor demo. The `TiledCamera` is
+/// built lazily on first entry to the scene; the most recent CPU
+/// download of every channel is kept so the right-rail pane can paint
+/// thumbnails without re-downloading.
+#[derive(Resource, Default)]
+struct CameraExampleState {
+    sensor: Option<TiledCamera>,
+    /// Wall-clock seconds since the scene started; drives the orbit.
+    elapsed: f32,
+    /// FOV slider value (radians). Synchronised back into the sensor's
+    /// config every frame.
+    fov_y: f32,
+    /// Most recent camera world pose, for the readout.
+    last_pose: Option<mp::Transform>,
+    /// Last download of each channel. `None` until the first dispatch.
+    last_color: Option<Vec<u32>>,
+    last_depth: Option<Vec<molla::math::Real>>,
+    last_normal: Option<Vec<MVec3>>,
+    last_albedo: Option<Vec<u32>>,
+    last_shape_index: Option<Vec<u32>>,
+    /// Cached egui texture handles (one per channel) — re-uploaded
+    /// each frame from the latest channel buffer. None until the
+    /// first paint.
+    tex_color: Option<egui::TextureHandle>,
+    tex_depth: Option<egui::TextureHandle>,
+    tex_normal: Option<egui::TextureHandle>,
+    tex_albedo: Option<egui::TextureHandle>,
+    tex_shape_index: Option<egui::TextureHandle>,
+    /// Min / max depth observed last frame — used to scale the depth
+    /// thumbnail to a useful greyscale range.
+    last_depth_range: Option<(f32, f32)>,
+}
+
 // ---- Bevy systems -------------------------------------------------
 
 fn setup(
@@ -2186,6 +2347,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Minus) && sim.scene != Scene::GpuNarrowPhase {
         pending.0 = Some(Scene::GpuNarrowPhase);
     }
+    if keys.just_pressed(KeyCode::Equal) && sim.scene != Scene::Camera {
+        pending.0 = Some(Scene::Camera);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -2206,6 +2370,7 @@ fn apply_scene_switch(
     mut contact: ResMut<ContactExampleState>,
     mut arm: ResMut<ArmExampleState>,
     mut gpu_ik: ResMut<GpuIkArmState>,
+    mut camera: ResMut<CameraExampleState>,
     mut stats: ResMut<SimStats>,
     mut gpu_np: ResMut<GpuNpExampleState>,
 ) {
@@ -2244,6 +2409,23 @@ fn apply_scene_switch(
     // drop and rebuild on the next arm-scene step.
     arm.controller = None;
     arm.elapsed = 0.0;
+    // Camera sensor's TiledCamera owns wgpu pipelines + buffers tied
+    // to the previous Sim's device — drop it; the next
+    // `update_camera_example` will rebuild against the new sim.
+    camera.sensor = None;
+    camera.elapsed = 0.0;
+    camera.last_pose = None;
+    camera.last_color = None;
+    camera.last_depth = None;
+    camera.last_normal = None;
+    camera.last_albedo = None;
+    camera.last_shape_index = None;
+    camera.tex_color = None;
+    camera.tex_depth = None;
+    camera.tex_normal = None;
+    camera.tex_albedo = None;
+    camera.tex_shape_index = None;
+    camera.last_depth_range = None;
 
     for e in bodies_q.iter() {
         commands.entity(e).despawn();
@@ -3360,6 +3542,121 @@ fn update_contact_example(
     }
 }
 
+/// Camera-sensor demo — orbits a single `TiledCamera` around the
+/// scene each frame and downloads every channel. The right-rail pane
+/// (`camera_pane`) reads from the cached arrays. No-op when the
+/// scene isn't active.
+fn update_camera_example(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<CameraExampleState>,
+) {
+    if sim.scene != Scene::Camera {
+        return;
+    }
+    state.elapsed += time.delta_secs();
+
+    if state.sensor.is_none() {
+        let cfg = TiledCameraConfig {
+            width: CAMERA_IMG_W,
+            height: CAMERA_IMG_H,
+            fov_y_radians: 50f32.to_radians(),
+            channels: CameraChannels::ALL,
+            ambient: MVec3::new(0.18, 0.18, 0.22),
+            light_dir: MVec3::new(-0.4, -0.85, -0.35).normalize(),
+            light_color: MVec3::new(1.0, 0.96, 0.88),
+            max_distance: 100.0,
+            near: 0.05,
+        };
+        match TiledCamera::new(&sim.engine, cfg, CAMERA_NUM_VIEWS) {
+            Ok(s) => {
+                state.fov_y = cfg.fov_y_radians;
+                state.sensor = Some(s);
+            }
+            Err(e) => {
+                warn!("TiledCamera init failed: {e}");
+                return;
+            }
+        }
+    }
+
+    // Push the latest FOV slider into the sensor config (width/height
+    // can't change post-construction; everything else is per-dispatch).
+    {
+        let fov = state.fov_y;
+        let sensor = state.sensor.as_mut().unwrap();
+        let mut cfg = *sensor.config();
+        cfg.fov_y_radians = fov;
+        let _ = sensor.set_config(cfg);
+    }
+
+    // Orbit the camera around the scene at fixed radius / height.
+    let theta = state.elapsed * 0.5; // rad/s — slow circle.
+    let eye = MVec3::new(
+        (CAMERA_ORBIT_RADIUS as f64) * theta.cos() as f64,
+        CAMERA_ORBIT_HEIGHT as f64,
+        (CAMERA_ORBIT_RADIUS as f64) * theta.sin() as f64,
+    );
+    let target = MVec3::new(0.0, CAMERA_TARGET_HEIGHT as f64, 0.0);
+    {
+        let sensor = state.sensor.as_mut().unwrap();
+        if let Err(e) = sensor.set_camera_look_at(0, eye, target, MVec3::Y) {
+            warn!("set_camera_look_at: {e}");
+            return;
+        }
+    }
+
+    // Run both kernels and download every channel.
+    let Sim {
+        ref engine,
+        ref model,
+        ref state_a,
+        ..
+    } = *sim;
+    let (last_pose, snapshot_color, snapshot_depth, snapshot_normal, snapshot_albedo, snapshot_index) = {
+        let sensor = state.sensor.as_mut().unwrap();
+        if let Err(e) = sensor.dispatch(engine, model, state_a) {
+            warn!("TiledCamera::dispatch: {e}");
+            return;
+        }
+        let pose = sensor.poses_host().ok().and_then(|p| p.first().copied());
+        let c = sensor.download_color(engine).map(|s| s.to_vec());
+        let d = sensor.download_depth(engine).map(|s| s.to_vec());
+        let n = sensor.download_normal(engine).map(|s| s.to_vec());
+        let a = sensor.download_albedo(engine).map(|s| s.to_vec());
+        let i = sensor.download_shape_index(engine).map(|s| s.to_vec());
+        (pose, c, d, n, a, i)
+    };
+    state.last_pose = last_pose;
+    if let Ok(c) = snapshot_color {
+        state.last_color = Some(c);
+    }
+    if let Ok(d) = snapshot_depth {
+        // Find min/max of valid (positive) depths for thumbnail scaling.
+        let mut lo = f32::INFINITY;
+        let mut hi = 0.0_f32;
+        for &v in &d {
+            let f = v as f32;
+            if f > 0.0 {
+                if f < lo { lo = f; }
+                if f > hi { hi = f; }
+            }
+        }
+        if !lo.is_finite() || hi <= lo { lo = 0.0; hi = 1.0; }
+        state.last_depth = Some(d);
+        state.last_depth_range = Some((lo, hi));
+    }
+    if let Ok(n) = snapshot_normal {
+        state.last_normal = Some(n);
+    }
+    if let Ok(a) = snapshot_albedo {
+        state.last_albedo = Some(a);
+    }
+    if let Ok(i) = snapshot_index {
+        state.last_shape_index = Some(i);
+    }
+}
+
 /// Draw a yellow arrow at every body's contact centroid pointing
 /// along the net push direction (`normal_sum`). Length is scaled by
 /// `max_depth` so deeper penetrations get longer arrows. No-op when
@@ -3514,7 +3811,6 @@ fn draw_grab_gizmo(grab: Res<MouseGrab>, sim: Res<Sim>, mut gizmos: Gizmos) {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn control_pane(
     mut contexts: EguiContexts,
     accent: Res<AccentColor>,
@@ -3529,6 +3825,7 @@ fn control_pane(
     mut arm_state: ResMut<ArmExampleState>,
     mut gpu_ik_state: ResMut<GpuIkArmState>,
     mut gpu_np_state: ResMut<GpuNpExampleState>,
+    mut camera_state: ResMut<CameraExampleState>,
     mut ribbons: RibbonParams,
 ) {
     let (lidar_state, imu_state, contact_state) = (
@@ -3567,6 +3864,7 @@ fn control_pane(
                     | Scene::Shapes
                     | Scene::GpuIkArm
                     | Scene::GpuNarrowPhase
+                    | Scene::Camera
             ),
             _ => false,
         },
@@ -3681,6 +3979,7 @@ fn control_pane(
         Scene::Shapes => Some("Shapes (Stage 13)"),
         Scene::GpuIkArm => Some("GPU IK"),
         Scene::GpuNarrowPhase => Some("GPU narrow phase"),
+        Scene::Camera => Some("Camera"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -3701,6 +4000,7 @@ fn control_pane(
                 Scene::GpuNarrowPhase => {
                     gpu_np_pane(ui, &mut gpu_np_state, accent_color)
                 }
+                Scene::Camera => camera_pane(ui, &mut camera_state),
                 _ => {}
             });
         }
@@ -4055,4 +4355,193 @@ fn imu_pane(ui: &mut egui::Ui, state: &ImuExampleState) {
         "At rest: |a| ≈ 9.81. Free fall: |a| ≈ 0. Bounce impacts \
          produce sharp accel spikes.",
     );
+}
+
+/// Body for the right-rail pane in the Camera scene. Renders the
+/// 5 GPU output channels as live thumbnails, plus a FOV slider and
+/// camera-pose readout.
+fn camera_pane(ui: &mut egui::Ui, state: &mut CameraExampleState) {
+    ui.add_space(2.0);
+    readout(ui, "Sensor", "GPU TiledCamera");
+    readout(ui, "Resolution", &format!("{}×{}", CAMERA_IMG_W, CAMERA_IMG_H));
+    if let Some(p) = state.last_pose {
+        readout(
+            ui,
+            "Eye",
+            &format!(
+                "({:>5.2},{:>5.2},{:>5.2})",
+                p.position.x, p.position.y, p.position.z
+            ),
+        );
+    }
+    ui.separator();
+
+    let mut fov_deg = state.fov_y.to_degrees();
+    if ui
+        .add(egui::Slider::new(&mut fov_deg, 20.0..=110.0).text("FOV° (vert)"))
+        .changed()
+    {
+        state.fov_y = fov_deg.to_radians();
+    }
+    ui.separator();
+
+    let w = CAMERA_IMG_W as usize;
+    let h = CAMERA_IMG_H as usize;
+    let pixels = w * h;
+
+    // Thumbnail size — keep it compact so all 5 fit comfortably in
+    // the right-rail pane width.
+    let thumb_w = 180.0;
+    let thumb_h = thumb_w * (h as f32 / w as f32);
+
+    // ── COLOR ──
+    if let Some(buf) = state.last_color.as_ref() {
+        if buf.len() == pixels {
+            let img = rgba_u32_to_color_image(buf, w, h);
+            let tex = state
+                .tex_color
+                .get_or_insert_with(|| ui.ctx().load_texture("camera_color", img.clone(), egui::TextureOptions::NEAREST));
+            tex.set(img, egui::TextureOptions::NEAREST);
+            ui.label("color (Lambertian)");
+            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
+        }
+    }
+
+    // ── DEPTH ──
+    if let Some(buf) = state.last_depth.as_ref() {
+        if buf.len() == pixels {
+            let (lo, hi) = state.last_depth_range.unwrap_or((0.0, 1.0));
+            let img = depth_to_color_image(buf, w, h, lo, hi);
+            let tex = state
+                .tex_depth
+                .get_or_insert_with(|| ui.ctx().load_texture("camera_depth", img.clone(), egui::TextureOptions::NEAREST));
+            tex.set(img, egui::TextureOptions::NEAREST);
+            ui.label(format!("depth  [{lo:.2} .. {hi:.2}] m"));
+            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
+        }
+    }
+
+    // ── NORMAL ──
+    if let Some(buf) = state.last_normal.as_ref() {
+        if buf.len() == pixels {
+            let img = normal_to_color_image(buf, w, h);
+            let tex = state
+                .tex_normal
+                .get_or_insert_with(|| ui.ctx().load_texture("camera_normal", img.clone(), egui::TextureOptions::NEAREST));
+            tex.set(img, egui::TextureOptions::NEAREST);
+            ui.label("normal (RGB = XYZ × 0.5 + 0.5)");
+            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
+        }
+    }
+
+    // ── ALBEDO ──
+    if let Some(buf) = state.last_albedo.as_ref() {
+        if buf.len() == pixels {
+            let img = rgba_u32_to_color_image(buf, w, h);
+            let tex = state
+                .tex_albedo
+                .get_or_insert_with(|| ui.ctx().load_texture("camera_albedo", img.clone(), egui::TextureOptions::NEAREST));
+            tex.set(img, egui::TextureOptions::NEAREST);
+            ui.label("albedo (raw material colour)");
+            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
+        }
+    }
+
+    // ── SHAPE INDEX ──
+    if let Some(buf) = state.last_shape_index.as_ref() {
+        if buf.len() == pixels {
+            let img = shape_index_to_color_image(buf, w, h);
+            let tex = state
+                .tex_shape_index
+                .get_or_insert_with(|| ui.ctx().load_texture("camera_shape_index", img.clone(), egui::TextureOptions::NEAREST));
+            tex.set(img, egui::TextureOptions::NEAREST);
+            ui.label("shape index (palette)");
+            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
+        }
+    }
+
+    if state.last_color.is_none() {
+        ui.add_space(8.0);
+        ui.small("waiting for first GPU dispatch…");
+    }
+}
+
+// ── Channel-buffer → egui::ColorImage helpers (Camera scene) ──
+
+fn rgba_u32_to_color_image(buf: &[u32], w: usize, h: usize) -> egui::ColorImage {
+    let mut pixels = Vec::with_capacity(w * h);
+    for &p in buf {
+        let r = (p & 0xff) as u8;
+        let g = ((p >> 8) & 0xff) as u8;
+        let b = ((p >> 16) & 0xff) as u8;
+        let a = ((p >> 24) & 0xff) as u8;
+        pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
+    }
+    egui::ColorImage::new([w, h], pixels)
+}
+
+fn depth_to_color_image(buf: &[f64], w: usize, h: usize, lo: f32, hi: f32) -> egui::ColorImage {
+    let mut pixels = Vec::with_capacity(w * h);
+    let span = (hi - lo).max(1e-6);
+    for &v in buf {
+        let f = v as f32;
+        let c = if f <= 0.0 {
+            // Miss → black with low alpha so it reads as background.
+            egui::Color32::from_rgb(0, 0, 0)
+        } else {
+            // Linear remap to [0,1], invert so close = bright (more
+            // intuitive for a depth map).
+            let t = ((f - lo) / span).clamp(0.0, 1.0);
+            let g = ((1.0 - t) * 255.0) as u8;
+            egui::Color32::from_rgb(g, g, g)
+        };
+        pixels.push(c);
+    }
+    egui::ColorImage::new([w, h], pixels)
+}
+
+fn normal_to_color_image(buf: &[MVec3], w: usize, h: usize) -> egui::ColorImage {
+    let mut pixels = Vec::with_capacity(w * h);
+    for v in buf {
+        let len2 = v.length_squared();
+        let c = if len2 < 1e-9 {
+            egui::Color32::from_rgb(0, 0, 0)
+        } else {
+            let r = ((v.x as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            let g = ((v.y as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            let b = ((v.z as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            egui::Color32::from_rgb(r, g, b)
+        };
+        pixels.push(c);
+    }
+    egui::ColorImage::new([w, h], pixels)
+}
+
+fn shape_index_to_color_image(buf: &[u32], w: usize, h: usize) -> egui::ColorImage {
+    // 12-colour palette (vivid, repeats past 11 — fine for the demo).
+    const PALETTE: &[(u8, u8, u8)] = &[
+        (231, 76, 60),
+        (52, 152, 219),
+        (46, 204, 113),
+        (241, 196, 15),
+        (155, 89, 182),
+        (26, 188, 156),
+        (230, 126, 34),
+        (192, 57, 43),
+        (41, 128, 185),
+        (39, 174, 96),
+        (211, 84, 0),
+        (142, 68, 173),
+    ];
+    let mut pixels = Vec::with_capacity(w * h);
+    for &i in buf {
+        let c = if i == 0xffff_ffff {
+            egui::Color32::from_rgb(0, 0, 0)
+        } else {
+            let (r, g, b) = PALETTE[(i as usize) % PALETTE.len()];
+            egui::Color32::from_rgb(r, g, b)
+        };
+        pixels.push(c);
+    }
+    egui::ColorImage::new([w, h], pixels)
 }

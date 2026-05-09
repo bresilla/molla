@@ -258,6 +258,9 @@ pub struct ModelBuilder {
     sdfs: Vec<super::SdfShape>,
     shape_collision_group: Vec<u32>,
     shape_collision_filter_pairs: Vec<(u32, u32)>,
+    shape_color: Vec<Vec3>,
+    shape_metallic: Vec<Real>,
+    shape_roughness: Vec<Real>,
 
     // Equality-constraint arrays.
     equality_type: Vec<u32>,
@@ -953,7 +956,34 @@ impl ModelBuilder {
         self.shape_torsional_friction.push(Real::NAN);
         self.shape_restitution.push(Real::NAN);
         self.shape_collision_group.push(0xffff_ffff);
+        // Visual material defaults: white Lambertian.
+        self.shape_color.push(Vec3::new(1.0, 1.0, 1.0));
+        self.shape_metallic.push(0.0);
+        self.shape_roughness.push(0.5);
         id
+    }
+
+    /// Override the per-shape visual material (PBR-style colour +
+    /// metallic + roughness). Consumed by the GPU camera-trace kernel
+    /// ([`crate::sensors::TiledCamera`]); does not affect collision /
+    /// dynamics. Default is white, non-metallic, mid-roughness.
+    pub fn set_shape_visual_material(
+        &mut self,
+        shape: ShapeId,
+        color: Vec3,
+        metallic: Real,
+        roughness: Real,
+    ) -> Result<()> {
+        let i = shape.index();
+        if i >= self.shape_geometry.len() {
+            return Err(Error::Build(format!(
+                "set_shape_visual_material: shape id {shape:?} out of range"
+            )));
+        }
+        self.shape_color[i] = color;
+        self.shape_metallic[i] = metallic.clamp(0.0, 1.0);
+        self.shape_roughness[i] = roughness.clamp(0.0, 1.0);
+        Ok(())
     }
 
     /// Set the collision-group bitmask for an already-added shape.
@@ -1672,6 +1702,9 @@ impl ModelBuilder {
                 p.dedup();
                 p
             },
+            shape_color: Buffer::from_vec(self.shape_color, s),
+            shape_metallic: Buffer::from_vec(self.shape_metallic, s),
+            shape_roughness: Buffer::from_vec(self.shape_roughness, s),
 
             equality_count: self.equality_type.len(),
             equality_type: Buffer::from_vec(self.equality_type, s),

@@ -29,6 +29,8 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod rnea;
 #[cfg(feature = "gpu")]
+mod tiled_camera;
+#[cfg(feature = "gpu")]
 mod xpbd;
 #[cfg(feature = "gpu")]
 mod xpbd_equality;
@@ -66,6 +68,8 @@ pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
 pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
+#[cfg(feature = "gpu")]
+pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]

@@ -1873,6 +1873,39 @@ Deliverables:
   a future GPU port; the existing CPU SAP + per-mesh BVH cover all
   current scenes.
 
+### Stage 14 — Multi-channel raytraced camera sensor ✅ COMPLETE (2026-05-09)
+
+**Goal**: close the perception loop — give RL / robotics scenes a
+visual sensor (depth + colour + normal + albedo + shape index)
+running on the same wgpu device as the rest of the engine.
+
+Deliverables:
+- ✅ `sensors/tiled_camera.rs` + `kernels/tiled_camera.rs` (two
+  kernel pipelines, `CameraRaysKernel` + `CameraTraceKernel`) +
+  `shaders/camera_rays.wgsl` + `shaders/camera_trace.wgsl`. Pinhole
+  ray generation per `(camera, x, y)` triple, then closest-hit
+  primitive ray-cast (Sphere · Plane · Box · Capsule · Cylinder ·
+  Cone) with per-pixel writes to 5 output channels gated by a
+  `CameraChannels` bitmask.
+- ✅ Per-shape visual material storage on `Model` —
+  `shape_color: Buffer<Vec3>`, `shape_metallic: Buffer<Real>`,
+  `shape_roughness: Buffer<Real>`, with defaults populated by
+  `ModelBuilder::push_shape` and an explicit setter
+  `ModelBuilder::set_shape_visual_material`. Colour drives the
+  GPU `albedo` / `color` channels (Lambertian shading inline in
+  the WGSL kernel); metallic/roughness are reserved for the
+  future PBR-shading expansion.
+- ✅ `tests/sensor_tiled_camera_gpu.rs` — 4 GPU tests (centre-pixel
+  depth against a sphere, two-sphere shape-index discrimination,
+  red-albedo packing round-trip, 4-camera batch dispatch).
+- ✅ Viewer demo `Scene::Camera` (hotkey `=`) — orbits a 192×144
+  camera around a coloured-primitives bowl and paints all five
+  channels as live thumbnails in the right-rail pane.
+
+Out of scope: TriMesh / ConvexHull / Heightfield / SDF intersection
+on the GPU camera path — those carry the `0xff` skip sentinel until
+the GPU mesh BVH / SDF tracer lands.
+
 ### Stage 16 — GPU articulation math (CRBA + RNEA + Jacobian + IK) ✅ COMPLETE (2026-05-09)
 
 Per `GAP.md` §1, all four articulation-math primitives shipped CPU-only in
@@ -1915,7 +1948,7 @@ RNEA + GPU CRBA but as a separate downstream feature); GPU dense Cholesky
 joint support inside CRBA/RNEA — still revolute + prismatic only,
 matching the CPU implementations' current scope.
 
-### Stage 14+ — Differentiability, advanced solvers, Python bindings
+### Stage 17+ — Differentiability, advanced solvers, Python bindings
 
 Manual adjoints for XPBD; tape-style autograd for Featherstone.
 MuJoCo solver wrapper as a validation oracle. VBD / Style3D / MPM
