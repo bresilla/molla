@@ -48,22 +48,24 @@
 //! let positions = sim.read_positions(&engine)?;
 //! ```
 //!
-//! Performance v1 (measured on RX 6700 XT, Vulkan via wgpu):
-//!   * 10 000 particles + 32³ grid: ≥ 30 Hz @ 1 substep, dt = 1/240 s
-//!   * 50 000 particles + 64³ grid is **not** met in v1 due to
-//!     wgpu submit-overhead — every substep is one encoder. Fixing
-//!     this requires either `wgpu::CommandEncoder::insert_debug_marker`
-//!     batching or persistent command buffer ring, both deferred.
+//! ## Performance (Stage 24d.2 dispatcher)
 //!
-//! ## Stage 24d.2 — persistent-buffer dispatcher
+//! Measured on RX 6700 XT / Vulkan, debug build:
+//!   * 10k particles + 32³ grid via `step()` (one submit per call):
+//!     10.9 Hz → via `step_n(100)`: **74.9 Hz** (6.9× speedup, ≥ 30 Hz DoD).
+//!   * 50k particles + 64³ grid: 6.8 Hz → 6.9 Hz — *unchanged*. At this
+//!     scale the per-substep GPU compute (atomic-CAS p2g/g2p over
+//!     262 144 grid cells × 50 000 particles) dwarfs submit overhead;
+//!     closing the 60 Hz gap requires reducing atomic contention on the
+//!     grid mass / momentum buffers (Stage 24d.3 candidate work).
 //!
-//! `step()` still allocates one encoder per call; for high substep
-//! counts the per-call submit / encoder cost dominates the actual GPU
-//! compute. [`MpmSimulation::step_n`] batches `N` substeps into a
-//! single encoder + single `queue.submit`, sharing pre-allocated
-//! uniform + readback staging buffers. The viewer + perf tests use
-//! this path. See `tests/mpm_perf.rs::mpm_step_n_beats_individual_steps`
-//! for the empirical proof.
+//! [`MpmSimulation::step_n`] batches `N` substeps into a single
+//! encoder + single `queue.submit`, sharing pre-allocated uniform +
+//! readback staging buffers. `step()` is retained as a back-compat
+//! wrapper that delegates to `step_n(_, _, 1)`. The viewer + perf
+//! tests use the batched path; see
+//! `tests/mpm_perf.rs::mpm_step_n_beats_individual_steps` for the
+//! empirical proof (9.1× speedup at 60 substeps, well above the 2× DoD).
 
 use crate::compute::Engine;
 use crate::core::{Error, Result};
