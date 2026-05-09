@@ -11027,7 +11027,10 @@ fn update_mpm_example(
     mut state: ResMut<MpmExampleState>,
     run: Res<SimRunState>,
 ) {
-    if sim.scene != Scene::Mpm {
+    if !matches!(
+        sim.scene,
+        Scene::Mpm | Scene::MpmSnowBall | Scene::MpmTwoWay
+    ) {
         return;
     }
 
@@ -11088,28 +11091,69 @@ fn update_mpm_example(
         let queue = sim.engine.queue().unwrap().clone();
         let n_axis = state.pour_axis_count.max(2) as usize;
         let mut particles = Vec::with_capacity(n_axis.pow(3));
-        let lo = [-0.18_f32, state.spout_y - 0.18, -0.18_f32];
-        let hi = [0.18_f32, state.spout_y + 0.18, 0.18_f32];
+        // Per-scene particle layouts:
+        //   * `Mpm`         — column pour (default).
+        //   * `MpmSnowBall` — spherical ball at `spout_y` (we cull
+        //                     particles outside the sphere).
+        //   * `MpmTwoWay`   — wider, shallower pile so the rigid
+        //                     sphere has room to plunge in.
+        let lo: [f32; 3];
+        let hi: [f32; 3];
+        let cull_sphere: Option<(f32, f32, f32, f32)>;
+        match sim.scene {
+            Scene::MpmSnowBall => {
+                let r = 0.20_f32;
+                let cy = state.spout_y;
+                lo = [-r, cy - r, -r];
+                hi = [r, cy + r, r];
+                cull_sphere = Some((0.0, cy, 0.0, r));
+            }
+            Scene::MpmTwoWay => {
+                lo = [-0.30, 0.05, -0.30];
+                hi = [0.30, 0.20, 0.30];
+                cull_sphere = None;
+            }
+            _ => {
+                lo = [-0.18, state.spout_y - 0.18, -0.18];
+                hi = [0.18, state.spout_y + 0.18, 0.18];
+                cull_sphere = None;
+            }
+        }
         let dx = (hi[0] - lo[0]) / n_axis as f32;
         let dy = (hi[1] - lo[1]) / n_axis as f32;
         let dz = (hi[2] - lo[2]) / n_axis as f32;
         for ix in 0..n_axis {
             for iy in 0..n_axis {
                 for iz in 0..n_axis {
-                    particles.push([
+                    let p = [
                         lo[0] + (ix as f32 + 0.5) * dx,
                         lo[1] + (iy as f32 + 0.5) * dy,
                         lo[2] + (iz as f32 + 0.5) * dz,
-                    ]);
+                    ];
+                    if let Some((cx, cy, cz, r)) = cull_sphere {
+                        let dx0 = p[0] - cx;
+                        let dy0 = p[1] - cy;
+                        let dz0 = p[2] - cz;
+                        if dx0 * dx0 + dy0 * dy0 + dz0 * dz0 > r * r {
+                            continue;
+                        }
+                    }
+                    particles.push(p);
                 }
             }
         }
         if let Some(m) = sim.mpm.as_mut() {
             m.set_particles(&queue, &particles).expect("set particles");
         }
-        sim.mpm_particles = particles;
         sim.mpm_rigid_spheres.clear();
-        state.particle_count = (n_axis * n_axis * n_axis) as u32;
+        state.particle_count = particles.len() as u32;
+        sim.mpm_particles = particles;
+        // For MpmTwoWay, auto-spawn the rigid sphere on first frame so
+        // the user immediately sees the two-way coupling demo.
+        if sim.scene == Scene::MpmTwoWay {
+            sim.mpm_rigid_spheres
+                .push(([0.0, 1.0, 0.0], 0.12, [0.0, -2.5, 0.0]));
+        }
         state.needs_reset = false;
         // First read so the viewer doesn't briefly show empty.
         if let Some(m) = sim.mpm.as_mut() {
@@ -11354,7 +11398,10 @@ fn mpm_pane(
 
 /// Renders MPM particles as point gizmos. Cheap; doesn't allocate.
 fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
-    if sim.scene != Scene::Mpm {
+    if !matches!(
+        sim.scene,
+        Scene::Mpm | Scene::MpmSnowBall | Scene::MpmTwoWay
+    ) {
         return;
     }
     if sim.mpm_particles.is_empty() {
