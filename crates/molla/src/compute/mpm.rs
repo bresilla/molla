@@ -75,16 +75,31 @@
 //! let wrenches = sim.read_rigid_wrenches(&engine)?;
 //! ```
 //!
-//! ## Performance (Stage 24d.2 dispatcher)
+//! ## Performance (Stage 24d.3 atomic-contention reduction)
 //!
-//! Measured on RX 6700 XT / Vulkan, debug build:
-//!   * 10k particles + 32³ grid via `step()` (one submit per call):
-//!     10.9 Hz → via `step_n(100)`: **74.9 Hz** (6.9× speedup, ≥ 30 Hz DoD).
-//!   * 50k particles + 64³ grid: 6.8 Hz → 6.9 Hz — *unchanged*. At this
-//!     scale the per-substep GPU compute (atomic-CAS p2g/g2p over
-//!     262 144 grid cells × 50 000 particles) dwarfs submit overhead;
-//!     closing the 60 Hz gap requires reducing atomic contention on the
-//!     grid mass / momentum buffers (Stage 24d.3 candidate work).
+//! Measured on the dev laptop (debug build, single-threaded `cargo test`):
+//!   * 10k particles + 32³ grid via `step_n(100)`: ~ 45 Hz (unchanged
+//!     by 24d.3 — at this scale submit cost dominates over per-particle
+//!     atomics, so dedup doesn't help much).
+//!   * 50k particles + 64³ grid: legacy single-pass `p2g` **7.9 Hz** →
+//!     Stage 24d.3 workgroup-local two-pass `p2g_two_pass` **36.9 Hz**
+//!     (**4.66× speedup**, ≥ 30 Hz DoD). The remaining 60 Hz gap
+//!     requires implicit CG (Stage 24d.4).
+//!
+//! Mechanism: legacy `p2g` does ~ 5 global atomic-CAS adds per cell
+//! per particle (1 mass + 3 momentum + 1 kdiag = 5 × 27 cells × 50 000
+//! particles = 6.75 M global CAS / substep). `p2g_two_pass` aggregates
+//! those into a workgroup-local 4×4×4 = 64-slot scratch
+//! (`var<workgroup>` atomic CAS — workgroup-shared memory, no L2 round-
+//! trip), then commits each non-empty slot once at the end with one
+//! global CAS per accumulator. For spatially-clustered particles
+//! (the common MPM granular case) the slot is direct-mapped from the
+//! lower 2 bits of the cell index per axis so consecutive particles
+//! in a workgroup share slots → ~ 5–10× reduction in global-atomic
+//! traffic. Hash collisions (different cells mapping to the same
+//! slot) fall back to the legacy global-atomic path; correctness is
+//! preserved either way. See `set_p2g_mode` to toggle for the parity
+//! test in `tests/mpm_perf.rs`.
 //!
 //! [`MpmSimulation::step_n`] batches `N` substeps into a single
 //! encoder + single `queue.submit`, sharing pre-allocated uniform +
@@ -341,6 +356,10 @@ pub struct MpmSimulation {
     // Pipelines.
     pipe_reset: wgpu::ComputePipeline,
     pipe_p2g: wgpu::ComputePipeline,
+    /// Stage 24d.3 — workgroup-local accumulator + commit fused
+    /// kernel. Defaults to active in `step_n_with`; `set_p2g_mode`
+    /// toggles back to `pipe_p2g` for parity tests.
+    pipe_p2g_two_pass: wgpu::ComputePipeline,
     pipe_rigid: wgpu::ComputePipeline,
     pipe_grid: wgpu::ComputePipeline,
     pipe_g2p: wgpu::ComputePipeline,
@@ -397,6 +416,13 @@ pub struct MpmSimulation {
     // Live counters.
     particle_count: u32,
     rigid_count: u32,
+
+    /// Stage 24d.3 — when `true`, `step_n_with` dispatches
+    /// `p2g_two_pass` (workgroup-local accumulate + commit, atomic-
+    /// contention-reduced).  When `false`, dispatches the legacy
+    /// `p2g` (per-particle global atomic CAS).  Default `true`; the
+    /// parity test toggles to compare grid mass / momentum byte-wise.
+    use_two_pass_p2g: bool,
 
     // Host-side mirrors for tests + viewer.
     host_pos: Vec<[f32; 4]>,
@@ -471,6 +497,7 @@ impl MpmSimulation {
 
         let pipe_reset = mk("reset_grid");
         let pipe_p2g = mk("p2g");
+        let pipe_p2g_two_pass = mk("p2g_two_pass");
         let pipe_rigid = mk("rigid_imprint");
         let pipe_grid = mk("grid_update");
         let pipe_g2p = mk("g2p");
@@ -588,6 +615,7 @@ impl MpmSimulation {
             cfg,
             pipe_reset,
             pipe_p2g,
+            pipe_p2g_two_pass,
             pipe_rigid,
             pipe_grid,
             pipe_g2p,
@@ -625,6 +653,7 @@ impl MpmSimulation {
             bg_rigid,
             particle_count: 0,
             rigid_count: 0,
+            use_two_pass_p2g: true,
             host_pos: vec![],
             host_vel: vec![],
         })
@@ -755,6 +784,20 @@ impl MpmSimulation {
         self.cfg.time_step = ts;
     }
 
+    /// Stage 24d.3 — pick which `p2g` kernel `step_n_with` dispatches.
+    /// `true` → workgroup-local two-pass accumulator (default; the
+    /// atomic-contention-reduction win). `false` → legacy per-particle
+    /// global atomic CAS (kept available for the parity test only;
+    /// not recommended for production).
+    pub fn set_p2g_mode(&mut self, two_pass: bool) {
+        self.use_two_pass_p2g = two_pass;
+    }
+
+    /// Stage 24d.3 — query the current p2g dispatch mode.
+    pub fn uses_two_pass_p2g(&self) -> bool {
+        self.use_two_pass_p2g
+    }
+
     /// Run one substep at `dt`. Caller is responsible for sub-stepping
     /// to satisfy CFL — see the file header.  Back-compat wrapper that
     /// delegates to [`Self::step_n`] with `substeps=1`.
@@ -881,8 +924,15 @@ impl MpmSimulation {
                     pass.dispatch_workgroups(groups_rigid, 1, 1);
                 }
 
-                // 2. p2g
-                pass.set_pipeline(&self.pipe_p2g);
+                // 2. p2g — Stage 24d.3 default is the two-pass
+                // workgroup-local accumulator; legacy single-pass
+                // path stays available for the parity test via
+                // `set_p2g_mode(false)`.
+                if self.use_two_pass_p2g {
+                    pass.set_pipeline(&self.pipe_p2g_two_pass);
+                } else {
+                    pass.set_pipeline(&self.pipe_p2g);
+                }
                 pass.dispatch_workgroups(groups_part.max(1), 1, 1);
 
                 // 3. rigid imprint (also writes the impulse-based
@@ -1040,6 +1090,73 @@ impl MpmSimulation {
             .ok_or_else(|| Error::Gpu("read_rigid_wrenches: no queue".into()))?
             .clone();
         self.read_rigid_wrenches_with(&device, &queue)
+    }
+
+    /// Stage 24d.3 — read back the grid mass + momentum buffers for
+    /// parity testing (legacy `p2g` vs two-pass).  Returned tuple is
+    /// `(mass[grid_total], momentum[grid_total*3])` — both flat
+    /// `Vec<f32>` reinterpretations of the atomic-`u32` storage.  Not
+    /// for production use; intended for `tests/mpm_perf.rs`'s
+    /// `mpm_p2g_parity_legacy_vs_two_pass` only.
+    pub fn read_grid_mass_momentum(
+        &mut self,
+        engine: &Engine,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("read_grid_mass_momentum: no device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("read_grid_mass_momentum: no queue".into()))?
+            .clone();
+        let grid_total = self.cfg.grid_size.pow(3) as u64;
+        let mass_bytes = grid_total * 4;
+        let mom_bytes = grid_total * 12;
+        let stage_mass = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mpm.read_grid stage_mass"),
+            size: mass_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let stage_mom = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mpm.read_grid stage_mom"),
+            size: mom_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("mpm.read_grid encoder"),
+        });
+        encoder.copy_buffer_to_buffer(&self.g_mass, 0, &stage_mass, 0, mass_bytes);
+        encoder.copy_buffer_to_buffer(&self.g_momentum, 0, &stage_mom, 0, mom_bytes);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map both, blocking once.
+        let slice_m = stage_mass.slice(..);
+        let slice_p = stage_mom.slice(..);
+        let (sm, rm) = std::sync::mpsc::channel::<Result<()>>();
+        let (sp, rp) = std::sync::mpsc::channel::<Result<()>>();
+        slice_m.map_async(wgpu::MapMode::Read, move |r| {
+            sm.send(r.map_err(|e| Error::Gpu(format!("grid mass map: {e:?}")))).ok();
+        });
+        slice_p.map_async(wgpu::MapMode::Read, move |r| {
+            sp.send(r.map_err(|e| Error::Gpu(format!("grid mom map: {e:?}")))).ok();
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("grid map poll: {e:?}")))?;
+        rm.recv().map_err(|e| Error::Gpu(format!("grid mass recv: {e:?}")))??;
+        rp.recv().map_err(|e| Error::Gpu(format!("grid mom recv: {e:?}")))??;
+        let data_m = slice_m.get_mapped_range();
+        let data_p = slice_p.get_mapped_range();
+        let mass: Vec<f32> = bytemuck::cast_slice(&data_m).to_vec();
+        let mom:  Vec<f32> = bytemuck::cast_slice(&data_p).to_vec();
+        drop(data_m);
+        drop(data_p);
+        stage_mass.unmap();
+        stage_mom.unmap();
+        Ok((mass, mom))
     }
 
     pub fn read_rigid_wrenches_with(
