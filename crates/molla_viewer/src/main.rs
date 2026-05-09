@@ -57,7 +57,7 @@ use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
 use molla::autograd::{DiffArm, FeatherstoneRevoluteChain, JacobianScratch};
-use molla::compute::{Engine, MpmConfig, MpmSimulation};
+use molla::compute::{Engine, MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep};
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
@@ -600,6 +600,9 @@ struct Sim {
     mpm: Option<MpmSimulation>,
     /// Last-read MPM particle positions for the renderer.
     mpm_particles: Vec<[f32; 3]>,
+    /// Stage-24d.1 — kinematic rigid sphere(s) for two-way coupling
+    /// demo. Each entry is `(center_xyz, radius, velocity_xyz)`.
+    mpm_rigid_spheres: Vec<([f32; 3], f32, [f32; 3])>,
 }
 
 /// Per-scene solver dispatch. Each variant implements the same
@@ -1319,10 +1322,16 @@ impl Default for CableExampleState {
     }
 }
 
-/// Stage-24d v1 MPM (sand) demo state. The actual GPU sim lives on
-/// `Sim::mpm` (lazy-initialised on first entry to `Scene::Mpm`); this
-/// resource holds only the user-facing tuning sliders + the
-/// "needs_reset" trigger for the right-rail Reset button.
+/// Stage-24d.1 MPM (sand / snow) demo state. The actual GPU sim lives
+/// on `Sim::mpm` (lazy-initialised on first entry to `Scene::Mpm`);
+/// this resource holds only the user-facing tuning sliders + reset
+/// triggers for the right-rail UI.
+///
+/// Stage-24d.1 additions: `rheology_idx` (0 = sand, 1 = snow),
+/// `time_step_implicit` + `cg_iters` (semi-implicit toggle + iter
+/// slider), `add_rigid_sphere` button (drops a kinematic sphere to
+/// demonstrate two-way coupling), `pile_slope_deg` live readout
+/// (computed each frame from the particle positions).
 #[derive(Resource)]
 struct MpmExampleState {
     /// Drucker-Prager friction angle (degrees). Sand: 25°-40°.
@@ -1345,6 +1354,29 @@ struct MpmExampleState {
     /// Live readout (ms): wall-clock for the most recent `step_n`
     /// dispatch + frame-end readback.
     last_frame_ms: f32,
+
+    // Stage 24d.1.
+    /// 0 = sand (Drucker-Prager), 1 = snow (Stomakhin).
+    rheology_idx: u32,
+    /// Snow critical compression (only used when `rheology_idx = 1`).
+    snow_theta_c: f32,
+    /// Snow critical stretch.
+    snow_theta_s: f32,
+    /// Snow hardening exponent.
+    snow_hardening: f32,
+    /// Use the semi-implicit time-step.
+    time_step_implicit: bool,
+    /// Number of Jacobi sweeps per substep when `time_step_implicit`.
+    cg_iters: u32,
+    /// "Add rigid sphere" button trigger — when true, the update
+    /// system drops a kinematic sphere into the scene.
+    add_rigid_sphere: bool,
+    /// Live readout: equilibrium pile slope, measured from the
+    /// particle positions each frame.
+    pile_slope_deg: f32,
+    /// Live readout: max-magnitude two-way wrench |F| (N) on the
+    /// rigid sphere, when one exists.
+    rigid_force_mag: f32,
 }
 
 impl Default for MpmExampleState {
@@ -1360,6 +1392,15 @@ impl Default for MpmExampleState {
             // higher values exercise the batched dispatcher.
             substeps_per_frame: 4,
             last_frame_ms: 0.0,
+            rheology_idx: 0,
+            snow_theta_c: 2.5e-2,
+            snow_theta_s: 7.5e-3,
+            snow_hardening: 10.0,
+            time_step_implicit: false,
+            cg_iters: 3,
+            add_rigid_sphere: false,
+            pile_slope_deg: 0.0,
+            rigid_force_mag: 0.0,
         }
     }
 }
@@ -2063,6 +2104,7 @@ impl Sim {
                 adapter_label,
                 mpm: None,
                 mpm_particles: Vec::new(),
+                mpm_rigid_spheres: Vec::new(),
             },
             visuals,
         )
@@ -9694,6 +9736,10 @@ fn build_mpm_model() -> (mp::Model, Vec<BodyVisual>) {
 /// `MpmSimulation` on first entry to `Scene::Mpm`; on `needs_reset`
 /// rebuilds the particle pour. Steps the sim in lock-step with
 /// the viewer's fixed-dt cadence.
+///
+/// Stage 24d.1 — also pushes rheology + time-step + rigid-sphere
+/// state from the right-rail UI, and reads back the per-rigid wrench
+/// for the live `rigid_force_mag` readout.
 fn update_mpm_example(
     mut sim: ResMut<Sim>,
     mut state: ResMut<MpmExampleState>,
@@ -9719,15 +9765,39 @@ fn update_mpm_example(
             particle_volume: 1.0e-6,
             max_particles: 32_768,
             max_rigid: 4,
+            rheology: MpmRheology::Sand {
+                friction_angle: state.friction_angle_deg.to_radians(),
+            },
+            time_step: MpmTimeStep::Explicit,
         };
         let s = MpmSimulation::new(&sim.engine, cfg).expect("mpm new");
         sim.mpm = Some(s);
         state.needs_reset = true;
     }
 
-    // Pull material parameters from the sliders.
+    // Pull material parameters + rheology + time-step from sliders.
     if let Some(m) = sim.mpm.as_mut() {
         m.set_material(state.youngs, state.friction_angle_deg.to_radians());
+        let rheology = if state.rheology_idx == 1 {
+            MpmRheology::Snow {
+                theta_c: state.snow_theta_c,
+                theta_s: state.snow_theta_s,
+                hardening: state.snow_hardening,
+            }
+        } else {
+            MpmRheology::Sand {
+                friction_angle: state.friction_angle_deg.to_radians(),
+            }
+        };
+        m.set_rheology(rheology);
+        let ts = if state.time_step_implicit {
+            MpmTimeStep::Implicit {
+                cg_iters: state.cg_iters,
+            }
+        } else {
+            MpmTimeStep::Explicit
+        };
+        m.set_time_step(ts);
     }
 
     // Reset / re-pour.
@@ -9756,6 +9826,7 @@ fn update_mpm_example(
             m.set_particles(&queue, &particles).expect("set particles");
         }
         sim.mpm_particles = particles;
+        sim.mpm_rigid_spheres.clear();
         state.particle_count = (n_axis * n_axis * n_axis) as u32;
         state.needs_reset = false;
         // First read so the viewer doesn't briefly show empty.
@@ -9767,34 +9838,137 @@ fn update_mpm_example(
         return;
     }
 
+    // "Add rigid sphere" button — drop a kinematic sphere from above.
+    if state.add_rigid_sphere {
+        state.add_rigid_sphere = false;
+        sim.mpm_rigid_spheres
+            .push(([0.0, 0.7, 0.0], 0.10, [0.0, -2.0, 0.0]));
+    }
+
     if run.paused {
         return;
     }
 
     // Stage 24d.2: batch the substeps into a single `step_n` call
-    // (one wgpu submit + one frame-end readback).  The slider
-    // `substeps_per_frame` lets the user dial the throughput up
-    // directly — increasing it is essentially free until the GPU
-    // pipeline is the bottleneck (usually 30-60 substeps on the dev
-    // box at 10k particles).
+    // (one wgpu submit + one frame-end readback). Stage 24d.1 added
+    // rigid-sphere integration + two-way wrench readback for the
+    // demo path. Combined here.
     let device = sim.engine.device().unwrap().clone();
     let queue = sim.engine.queue().unwrap().clone();
+
+    // Integrate kinematic-sphere positions forward (purely host-side
+    // since we don't have a full rigid-body backend wired here; this
+    // is the v1 demo path so the viewer shows the rigid sphere
+    // descending into the sand). The two-way wrench read-back lets
+    // the user observe the reaction force the sand applies.
+    if !sim.mpm_rigid_spheres.is_empty() {
+        let dt_total = 1.0 / 60.0; // viewer-cadence
+        for sph in sim.mpm_rigid_spheres.iter_mut() {
+            sph.0[0] += sph.2[0] * dt_total;
+            sph.0[1] += sph.2[1] * dt_total;
+            sph.0[2] += sph.2[2] * dt_total;
+        }
+        // Push to the GPU.
+        let spheres_snapshot: Vec<_> = sim.mpm_rigid_spheres.clone();
+        if let Some(m) = sim.mpm.as_mut() {
+            let _ = m.set_rigid_spheres(&queue, &spheres_snapshot);
+        }
+    }
+
     let substeps = state.substeps_per_frame.max(1) as usize;
     let t_frame = std::time::Instant::now();
-    if let Some(m) = sim.mpm.as_mut() {
+    let has_rigid = !sim.mpm_rigid_spheres.is_empty();
+    let (new_pos, new_rigid_force_mag) = if let Some(m) = sim.mpm.as_mut() {
         m.step_n_with(&device, &queue, 1.0 / 480.0, substeps)
             .expect("mpm step_n");
         // Single frame-end readback; the viewer only needs particle
         // positions for the gizmo draw, not the intermediate substeps.
-        sim.mpm_particles = m
+        let positions = m
             .read_positions_with(&device, &queue)
             .unwrap_or_default();
-    }
+        let force_mag = if has_rigid {
+            m.read_rigid_wrenches_with(&device, &queue)
+                .map(|wrenches| {
+                    wrenches
+                        .iter()
+                        .map(|(f, _)| (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt())
+                        .fold(0.0_f32, f32::max)
+                })
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        (positions, force_mag)
+    } else {
+        (sim.mpm_particles.clone(), 0.0)
+    };
+    sim.mpm_particles = new_pos;
     state.last_frame_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+    state.rigid_force_mag = new_rigid_force_mag;
+
+    // Update the live pile-slope readout.
+    state.pile_slope_deg = measure_pile_slope_for_viewer(&sim.mpm_particles);
 }
 
-/// Right-rail pane for the MPM scene. Sliders for friction angle and
-/// Young's modulus, particle-count readout, Reset button.
+/// Stage 24d.1 — quick-and-dirty pile-slope estimator for the viewer.
+/// Same algorithm as the test-side `measure_pile_slope_deg` but
+/// inlined here to avoid pulling tests/ into the lib build path.
+fn measure_pile_slope_for_viewer(positions: &[[f32; 3]]) -> f32 {
+    if positions.len() < 16 {
+        return 0.0;
+    }
+    let mut ys: Vec<f32> = positions.iter().map(|p| p[1]).collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let floor_y = ys[ys.len() / 20];
+    let radial: Vec<(f32, f32)> = positions
+        .iter()
+        .map(|p| {
+            let r = (p[0] * p[0] + p[2] * p[2]).sqrt();
+            ((p[1] - floor_y).max(0.0), r)
+        })
+        .collect();
+    let r_max = radial.iter().map(|(_, r)| *r).fold(0.0_f32, f32::max);
+    if r_max < 1.0e-3 {
+        return 0.0;
+    }
+    let n_bins = 8;
+    let mut bin_max_h = vec![0.0_f32; n_bins];
+    let mut bin_count = vec![0u32; n_bins];
+    for (h, r) in &radial {
+        let bin = ((*r / r_max) * n_bins as f32).floor() as usize;
+        let bin = bin.min(n_bins - 1);
+        if *h > bin_max_h[bin] {
+            bin_max_h[bin] = *h;
+        }
+        bin_count[bin] += 1;
+    }
+    let mut inner: Option<(f32, f32)> = None;
+    let mut outer: Option<(f32, f32)> = None;
+    for b in 0..n_bins {
+        if bin_count[b] < 2 {
+            continue;
+        }
+        let r_centre = (b as f32 + 0.5) / n_bins as f32 * r_max;
+        let entry = (r_centre, bin_max_h[b]);
+        if inner.is_none() {
+            inner = Some(entry);
+        }
+        outer = Some(entry);
+    }
+    match (inner, outer) {
+        (Some((r_in, h_in)), Some((r_out, h_out))) if r_out > r_in + 1.0e-4 => {
+            let dh = (h_in - h_out).max(0.0);
+            let dr = r_out - r_in;
+            dh.atan2(dr).to_degrees()
+        }
+        _ => 0.0,
+    }
+}
+
+/// Right-rail pane for the MPM scene. Stage 24d.1 — adds rheology
+/// dropdown (Sand/Snow), implicit time-step toggle + cg_iters slider,
+/// "Add rigid sphere" button, live pile-slope + reaction-force
+/// readouts.
 fn mpm_pane(
     ui: &mut egui::Ui,
     state: &mut MpmExampleState,
@@ -9815,33 +9989,62 @@ fn mpm_pane(
             ),
         );
     }
+    readout(ui, "Pile slope", &format!("{:.1}°", state.pile_slope_deg));
+    if !sim.mpm_rigid_spheres.is_empty() {
+        readout(
+            ui,
+            "Reaction |F|",
+            &format!("{:.2} N", state.rigid_force_mag),
+        );
+    }
     ui.separator();
 
-    ui.label("Friction angle (°)");
-    if ui
-        .add(egui::Slider::new(&mut state.friction_angle_deg, 10.0..=50.0))
-        .changed()
-    {
-        // Material mutation handled in update_mpm_example (next tick).
+    // Rheology dropdown (Sand / Snow).
+    ui.label("Rheology");
+    egui::ComboBox::from_id_salt("mpm_rheology_combo")
+        .selected_text(if state.rheology_idx == 1 { "Snow" } else { "Sand" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut state.rheology_idx, 0, "Sand (Drucker-Prager)");
+            ui.selectable_value(&mut state.rheology_idx, 1, "Snow (Stomakhin)");
+        });
+
+    if state.rheology_idx == 0 {
+        ui.label("Friction angle (°)");
+        ui.add(egui::Slider::new(&mut state.friction_angle_deg, 10.0..=50.0));
+    } else {
+        ui.label("Snow θ_c (critical compression)");
+        ui.add(
+            egui::Slider::new(&mut state.snow_theta_c, 1.0e-3..=1.0e-1)
+                .logarithmic(true),
+        );
+        ui.label("Snow θ_s (critical stretch)");
+        ui.add(
+            egui::Slider::new(&mut state.snow_theta_s, 1.0e-3..=5.0e-2)
+                .logarithmic(true),
+        );
+        ui.label("Snow hardening exponent");
+        ui.add(egui::Slider::new(&mut state.snow_hardening, 0.0..=20.0));
     }
 
     ui.label("Young's modulus (Pa)");
-    if ui
-        .add(
-            egui::Slider::new(&mut state.youngs, 1.0e3..=1.0e6)
-                .logarithmic(true),
-        )
-        .changed()
-    {
-        // Same — applied next tick.
-    }
+    ui.add(
+        egui::Slider::new(&mut state.youngs, 1.0e3..=1.0e6)
+            .logarithmic(true),
+    );
 
     ui.label("Pour axis count");
-    if ui
-        .add(egui::Slider::new(&mut state.pour_axis_count, 4..=20))
-        .changed()
-    {
-        // Re-pour requires a reset.
+    ui.add(egui::Slider::new(&mut state.pour_axis_count, 4..=20));
+
+    ui.separator();
+    // Time-step picker.
+    ui.label("Time step");
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut state.time_step_implicit, false, "Explicit");
+        ui.selectable_value(&mut state.time_step_implicit, true, "Implicit");
+    });
+    if state.time_step_implicit {
+        ui.label("CG iterations");
+        ui.add(egui::Slider::new(&mut state.cg_iters, 1..=20));
     }
 
     // Stage 24d.2: batched-dispatcher slider.  Drag this up and watch
@@ -9856,9 +10059,14 @@ fn mpm_pane(
         if button(ui, "Reset", accent).clicked() {
             state.needs_reset = true;
         }
+        if button(ui, "Add rigid sphere", accent).clicked() {
+            state.add_rigid_sphere = true;
+        }
     });
     ui.add_space(2.0);
-    ui.small("Soft sand defaults — increase Young's modulus for stiffer rheology");
+    ui.small("Sand: Drucker-Prager friction-cone projection.");
+    ui.small("Snow: Stomakhin elastic-envelope clamping.");
+    ui.small("Implicit: Jacobi-relaxation grid step (semi-implicit fallback).");
     ui.small("Hotkey: P (Particle/MPM)");
 }
 
@@ -9903,6 +10111,13 @@ fn draw_mpm_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
     for p in &sim.mpm_particles {
         let pos = Vec3::new(p[0], p[1], p[2]);
         gizmos.sphere(pos, 0.012, sand_color);
+    }
+    // Stage 24d.1 — render kinematic rigid spheres for the two-way
+    // coupling demo as wireframe spheres.
+    let sphere_color = Color::srgb(0.20, 0.55, 0.95);
+    for (centre, radius, _vel) in &sim.mpm_rigid_spheres {
+        let p = Vec3::new(centre[0], centre[1], centre[2]);
+        gizmos.sphere(p, *radius, sphere_color);
     }
 }
 

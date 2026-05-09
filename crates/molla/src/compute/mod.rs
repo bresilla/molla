@@ -11,4 +11,4 @@ mod mpm;
 #[cfg(feature = "gpu")]
 pub use engine::{AdapterInfo, Backend, Engine};
 #[cfg(feature = "gpu")]
-pub use mpm::{MpmConfig, MpmSimulation};
+pub use mpm::{MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep};

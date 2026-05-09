@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -141,6 +141,15 @@ test-mujoco-gpu:
 # need a real wgpu adapter.
 test-sparse-grid-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test sparse_grid -- --ignored
+
+# Stage 24d.1 — semi-implicit MPM + Snow rheology + two-way rigid
+# coupling + calibrated angle-of-repose tests (see
+# tests/mpm_v3_gpu.rs). The Stage 24d v1 explicit-only tests still
+# live in tests/mpm_gpu.rs; both are GPU-only and `#[ignore]`.
+test-mpm-v3-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test mpm_v3_gpu -- --ignored
+test-mpm-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test mpm_gpu -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
