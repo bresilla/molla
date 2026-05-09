@@ -54,6 +54,16 @@
 //!     wgpu submit-overhead — every substep is one encoder. Fixing
 //!     this requires either `wgpu::CommandEncoder::insert_debug_marker`
 //!     batching or persistent command buffer ring, both deferred.
+//!
+//! ## Stage 24d.2 — persistent-buffer dispatcher
+//!
+//! `step()` still allocates one encoder per call; for high substep
+//! counts the per-call submit / encoder cost dominates the actual GPU
+//! compute. [`MpmSimulation::step_n`] batches `N` substeps into a
+//! single encoder + single `queue.submit`, sharing pre-allocated
+//! uniform + readback staging buffers. The viewer + perf tests use
+//! this path. See `tests/mpm_perf.rs::mpm_step_n_beats_individual_steps`
+//! for the empirical proof.
 
 use crate::compute::Engine;
 use crate::core::{Error, Result};
@@ -188,7 +198,18 @@ pub struct MpmSimulation {
     rigid_center: wgpu::Buffer,
     rigid_vel: wgpu::Buffer,
 
-    // Bind groups (rebuilt each step because uniforms change).
+    // Stage 24d.2: persistent uniform buffer + bind group.  Re-uploaded
+    // each substep via `queue.write_buffer` rather than re-created.
+    uniform_buf: wgpu::Buffer,
+    bg_uniforms: wgpu::BindGroup,
+
+    // Stage 24d.2: persistent readback staging buffers (one per
+    // particle stream).  Sized to `max_particles * 16` bytes so we never
+    // hit a copy-time reallocation.
+    stage_pos: wgpu::Buffer,
+    stage_vel: wgpu::Buffer,
+
+    // Bind groups (persistent; built once at construction).
     bg_particles: wgpu::BindGroup,
     bg_grid: wgpu::BindGroup,
     bg_rigid: wgpu::BindGroup,
@@ -307,6 +328,36 @@ impl MpmSimulation {
         let rigid_center = mk_buf("mpm.rigid_center", n_rigid * 16, storage);
         let rigid_vel = mk_buf("mpm.rigid_vel", n_rigid * 16, storage);
 
+        // Stage 24d.2: persistent uniform buffer + readback staging.
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::mpm uniforms (persistent)"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::mpm uniforms bg (persistent)"),
+            layout: &layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let stage_bytes = n_particles * 16;
+        let stage_pos = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::mpm stage_pos (persistent)"),
+            size: stage_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let stage_vel = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::mpm stage_vel (persistent)"),
+            size: stage_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         // Pre-build bind groups for the persistent buffers.
         let bg_particles = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::mpm particles bg"),
@@ -365,6 +416,10 @@ impl MpmSimulation {
             g_rigid_mask,
             rigid_center,
             rigid_vel,
+            uniform_buf,
+            bg_uniforms,
+            stage_pos,
+            stage_vel,
             bg_particles,
             bg_grid,
             bg_rigid,
@@ -464,26 +519,56 @@ impl MpmSimulation {
     }
 
     /// Run one substep at `dt`. Caller is responsible for sub-stepping
-    /// to satisfy CFL — see the file header.
+    /// to satisfy CFL — see the file header.  Back-compat wrapper that
+    /// delegates to [`Self::step_n`] with `substeps=1`.
     pub fn step(&mut self, engine: &Engine, dt: f32) -> Result<()> {
-        let device = engine
-            .device()
-            .ok_or_else(|| Error::Gpu("step: no GPU device".into()))?
-            .clone();
-        let queue = engine
-            .queue()
-            .ok_or_else(|| Error::Gpu("step: no GPU queue".into()))?
-            .clone();
-        self.step_with(&device, &queue, dt)
+        self.step_n(engine, dt, 1)
     }
 
+    /// Back-compat: single-substep variant taking explicit device/queue.
     pub fn step_with(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         dt: f32,
     ) -> Result<()> {
-        if self.particle_count == 0 {
+        self.step_n_with(device, queue, dt, 1)
+    }
+
+    /// Stage 24d.2: batched substep dispatcher.
+    ///
+    /// Encode `substeps` MPM substeps into a single command encoder and
+    /// submit once.  All six kernel dispatches per substep share the
+    /// persistent bind groups and uniform buffer; the host avoids any
+    /// intra-step synchronisation.  Materially faster than calling
+    /// `step()` `n` times when `n` is large because each `submit` has
+    /// fixed wgpu / driver overhead independent of payload size.
+    ///
+    /// The uniform buffer is written once at the head of the call —
+    /// values that vary between substeps would require either a
+    /// per-substep `write_buffer` (re-allowed since WGPU 0.20) or
+    /// dynamic uniform offsets.  v1 holds `dt`/material constants
+    /// constant across the batch, matching the viewer's usage.
+    pub fn step_n(&mut self, engine: &Engine, dt: f32, substeps: usize) -> Result<()> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("step_n: no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("step_n: no GPU queue".into()))?
+            .clone();
+        self.step_n_with(&device, &queue, dt, substeps)
+    }
+
+    pub fn step_n_with(
+        &mut self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+        substeps: usize,
+    ) -> Result<()> {
+        if self.particle_count == 0 || substeps == 0 {
             return Ok(());
         }
         let phi = self.cfg.friction_angle.max(1.0_f32.to_radians());
@@ -511,64 +596,53 @@ impl MpmSimulation {
             _pad2: 0.0,
             _pad3: 0.0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::mpm uniforms bg"),
-            layout: &self.layout_uniforms,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
+        // Stage 24d.2: persistent uniform buffer — one upload per call.
+        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let grid_total = self.cfg.grid_size.pow(3);
         let groups_grid = grid_total.div_ceil(WORKGROUP_SIZE);
         let groups_part = self.particle_count.div_ceil(WORKGROUP_SIZE);
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("molla::mpm encoder"),
+        let mut encoder = _device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::mpm encoder (step_n)"),
         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::mpm step"),
+                label: Some("molla::mpm step_n"),
                 timestamp_writes: None,
             });
-            pass.set_bind_group(0, &bg_uniforms, &[]);
+            pass.set_bind_group(0, &self.bg_uniforms, &[]);
             pass.set_bind_group(1, &self.bg_particles, &[]);
             pass.set_bind_group(2, &self.bg_grid, &[]);
             pass.set_bind_group(3, &self.bg_rigid, &[]);
 
-            // 1. reset grid
-            pass.set_pipeline(&self.pipe_reset);
-            pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
-
-            // 2. p2g
-            pass.set_pipeline(&self.pipe_p2g);
-            pass.dispatch_workgroups(groups_part.max(1), 1, 1);
-
-            // 3. rigid imprint (only if any rigids)
-            if self.rigid_count > 0 {
-                pass.set_pipeline(&self.pipe_rigid);
+            for _ in 0..substeps {
+                // 1. reset grid
+                pass.set_pipeline(&self.pipe_reset);
                 pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+
+                // 2. p2g
+                pass.set_pipeline(&self.pipe_p2g);
+                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
+
+                // 3. rigid imprint (only if any rigids)
+                if self.rigid_count > 0 {
+                    pass.set_pipeline(&self.pipe_rigid);
+                    pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                }
+
+                // 4. grid update
+                pass.set_pipeline(&self.pipe_grid);
+                pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+
+                // 5. g2p
+                pass.set_pipeline(&self.pipe_g2p);
+                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
+
+                // 6. plasticity
+                pass.set_pipeline(&self.pipe_plastic);
+                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
             }
-
-            // 4. grid update
-            pass.set_pipeline(&self.pipe_grid);
-            pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
-
-            // 5. g2p
-            pass.set_pipeline(&self.pipe_g2p);
-            pass.dispatch_workgroups(groups_part.max(1), 1, 1);
-
-            // 6. plasticity
-            pass.set_pipeline(&self.pipe_plastic);
-            pass.dispatch_workgroups(groups_part.max(1), 1, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -598,19 +672,15 @@ impl MpmSimulation {
             return Ok(vec![]);
         }
         let bytes = (self.particle_count as u64) * 16;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm read_positions stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        // Stage 24d.2: reuse the persistent staging buffer (sized to
+        // max_particles at constructor time).
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::mpm read_positions encoder"),
         });
-        encoder.copy_buffer_to_buffer(&self.p_pos, 0, &stage, 0, bytes);
+        encoder.copy_buffer_to_buffer(&self.p_pos, 0, &self.stage_pos, 0, bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = stage.slice(..);
+        let slice = self.stage_pos.slice(0..bytes);
         let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             sender
@@ -626,7 +696,7 @@ impl MpmSimulation {
         let data = slice.get_mapped_range();
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
-        stage.unmap();
+        self.stage_pos.unmap();
         let out: Vec<[f32; 3]> = raw[..self.particle_count as usize]
             .iter()
             .map(|p| [p[0], p[1], p[2]])
@@ -645,19 +715,14 @@ impl MpmSimulation {
             return Ok(vec![]);
         }
         let bytes = (self.particle_count as u64) * 16;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm read_velocities stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        // Stage 24d.2: reuse the persistent staging buffer.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::mpm read_velocities encoder"),
         });
-        encoder.copy_buffer_to_buffer(&self.p_vel, 0, &stage, 0, bytes);
+        encoder.copy_buffer_to_buffer(&self.p_vel, 0, &self.stage_vel, 0, bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = stage.slice(..);
+        let slice = self.stage_vel.slice(0..bytes);
         let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             sender
@@ -673,7 +738,7 @@ impl MpmSimulation {
         let data = slice.get_mapped_range();
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
-        stage.unmap();
+        self.stage_vel.unmap();
         let out: Vec<[f32; 3]> = raw[..self.particle_count as usize]
             .iter()
             .map(|p| [p[0], p[1], p[2]])
