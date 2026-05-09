@@ -16,6 +16,14 @@ struct Uniforms {
     joint_damping: f32,
     joint_count: u32,
     articulation_count: u32,
+    /// Stage 17.1: 1 if the WGSL kernel should use the rigorous
+    /// dense-Cholesky D solve (v.s. v1 sequential rank-1).
+    rigorous_d_solve: u32,
+    /// Stage 17.1: 1 if Distance joints should use velocity-level
+    /// Lagrange-multiplier projection instead of the v1 hard-clamp.
+    rigorous_distance: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -143,6 +151,8 @@ impl FeatherstoneKernel {
         _contacts: &Contacts,
         joint_damping: f32,
         dt: f64,
+        rigorous_d_solve: bool,
+        rigorous_distance: bool,
         state_out: &mut State,
     ) -> Result<()> {
         if model.joint_count == 0 {
@@ -222,6 +232,10 @@ impl FeatherstoneKernel {
             joint_damping,
             joint_count: self.joint_count,
             articulation_count: self.articulation_count,
+            rigorous_d_solve: u32::from(rigorous_d_solve),
+            rigorous_distance: u32::from(rigorous_distance),
+            _pad0: 0,
+            _pad1: 0,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::featherstone uniforms"),
