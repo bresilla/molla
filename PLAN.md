@@ -4541,6 +4541,101 @@ adaptive refinement, sparse MC, and MPM consumer.
 **Dependencies:** Stage 24e.1 (mutable insert + freelist counter
 slot live in the same `SparseGridStorage` struct).
 
+### Stage 31 — `ControllerNeuralLstm` (single-cell LSTM) — **SHIPPED v1**
+
+**Status: SHIPPED 2026-05-09.** Stage 18.1 shipped `ControllerNeuralMlp`
+(feedforward 3-layer MLP, GPU forward pass) and explicitly deferred the
+LSTM variant. This stage adds a single-cell LSTM controller mirroring
+the MLP's composable-pipeline integration, with hidden + cell state
+buffers that survive substepping (mirroring Stage 17's `body_f`
+propagation pattern).
+
+**Deliverables:**
+- ✅ **`ControllerNeuralLstm`** + `ControllerNeuralLstmConfig` /
+  `LstmWeights` / `LstmWeightDims` at
+  `crates/molla/src/actuators/controller_neural_lstm.rs`. Same
+  construction / `set_weights` / `set_inputs` / `download_outputs`
+  API as the MLP, plus `reset_hidden_state`, `download_hidden_state`,
+  `download_cell_state` for episode-boundary control + diagnostic UIs.
+- ✅ **WGSL shader** `crates/molla/shaders/actuator_neural_lstm.wgsl`
+  — single-workgroup forward pass implementing the standard LSTM
+  recurrence:
+    - `i_t = σ(W_i · x_t + U_i · h_{t-1} + b_i)`
+    - `f_t = σ(W_f · x_t + U_f · h_{t-1} + b_f)`
+    - `g_t = tanh(W_g · x_t + U_g · h_{t-1} + b_g)`
+    - `o_t = σ(W_o · x_t + U_o · h_{t-1} + b_o)`
+    - `c_t = f_t ⊙ c_{t-1} + i_t ⊙ g_t`
+    - `h_t = o_t ⊙ tanh(c_t)`
+    - `y_t = W_y · h_t + b_y`
+  Hidden + cell state are `read_write` storage buffers — the kernel
+  reads previous-step values, stores next-step values in place, the
+  host owns the buffer across substeps. Workgroup-scratch staging
+  pattern avoids intra-step races between threads writing and reading
+  hidden state. Reuses `actuator_neural_mlp_scatter.wgsl` for the
+  output-to-`joint_force` pass (identical contract — no need to fork).
+- ✅ **Kernel dispatcher** `crates/molla/src/kernels/actuator_neural_lstm.rs`
+  — `ActuatorNeuralLstmKernel { dispatch_forward, dispatch_scatter }`
+  with four bind groups (io, gate-weights-ifg, gate-weights-oy,
+  uniforms) — the 14-buffer weight set doesn't fit in one bind group
+  on the typical wgpu adapter limit (8 storage buffers per group), so
+  the gate weights are split.
+- ✅ **`ControllerStage::Lstm`** variant on the existing `Actuator`
+  orchestrator (`crates/molla/src/actuators/actuator.rs`).
+- ✅ **GPU tests** `crates/molla/tests/actuator_neural_lstm_gpu.rs`
+  (all `#[ignore]`):
+    1. `lstm_forward_matches_cpu_oracle` — known weights + known
+       input, GPU matches CPU oracle within 1e-4 (h, c, y all tested).
+    2. `lstm_hidden_state_survives_across_substeps` — 10-step rollout
+       with the same input matches CPU; verifies `h_10` differs
+       meaningfully from `h_1` (max diff > 1e-3) so we'd catch a
+       silent reset of the recurrence.
+    3. `lstm_reset_hidden_state_zeros_h_and_c` — drives h, c
+       non-zero, calls `reset_hidden_state`, confirms both buffers
+       are zero on-device.
+- ✅ **Viewer demo** `Scene::NeuralLstm` (hotkey `L`). Reuses the
+  cart-pole topology from `Scene::NeuralPolicy`, swaps the MLP for a
+  `ControllerNeuralLstm` (4 → 16 → 1). Right-rail pane shows the
+  4-element input vector, the live 16-element hidden-state grid (it
+  visibly evolves between substeps), the network output, and the
+  post-clamp delivered force. Per the task brief's constraint, the
+  bundled weights are hand-rolled — random init won't balance the
+  pole and there's no offline training pipeline yet, so v1 saturates
+  the recurrent gates (i ≈ 1, f ≈ 0, o ≈ 1) so the cell behaves like
+  `c_t = tanh(W_g · x_t)` and the linear projection then applies the
+  same LQR-style state-feedback gains the MLP demo uses. `h_t` and
+  `c_t` still evolve and persist across substeps — the recurrence
+  buffer plumbing is exercised end-to-end — but the control law is
+  effectively memoryless. A genuinely-trained recurrent policy would
+  need offline training + weight import (out of scope for v1).
+- ✅ **Bevy plumbing**: `NeuralLstmExampleState` registered in BOTH
+  `SceneStates` and `PaneSceneStates` system-param bundles; reset on
+  scene switch (drops the `Actuator`, clearing the on-device hidden /
+  cell buffers). `update_neural_lstm_example` system in the standard
+  pre-step chain.
+
+**Definition of done:**
+- ✅ All three GPU tests pass on the dev laptop's adapter.
+- ✅ Cart-pole demo balances on hotkey `L`; `h_t` readout in the
+  right-rail pane changes every substep.
+- ✅ `nixVulkan cargo check -p molla --features gpu` and
+  `nixVulkan cargo check -p molla_viewer` are clean (only pre-existing
+  unrelated warnings).
+- ✅ `nixVulkan cargo test -p molla --lib` — 200 passed.
+
+**Caveats:**
+- The bundled v1 weights bypass the recurrence — cf. the doc-block on
+  `build_neural_lstm_weights` and the right-rail pane caveat. The
+  forward-pass plumbing, hidden-state persistence, scatter, and reset
+  paths are all exercised regardless; what's missing is a trained
+  recurrent policy that *uses* the memory.
+- `hidden_dim ≤ 256` (capped via the WGSL `MAX_HIDDEN` constant +
+  validated at construction). Bumping requires touching the shader's
+  workgroup-scratch arrays.
+
+**Dependencies:** Stage 18.1 (`ControllerNeuralMlp` API + scatter
+shader the LSTM reuses verbatim), Stage 18 (`Actuator { Delay →
+Controller → Clamping }` orchestrator).
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
