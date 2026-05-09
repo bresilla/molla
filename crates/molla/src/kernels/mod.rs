@@ -7,6 +7,8 @@ mod actuator_pid;
 #[cfg(feature = "gpu")]
 mod contact_sensor;
 #[cfg(feature = "gpu")]
+mod crba;
+#[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
 mod gjk;
@@ -31,6 +33,8 @@ pub use actuator_pd::ActuatorPdKernel;
 pub use actuator_pid::ActuatorPidKernel;
 #[cfg(feature = "gpu")]
 pub use contact_sensor::ContactAggregateKernel;
+#[cfg(feature = "gpu")]
+pub use crba::MassMatrixKernel;
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
 #[cfg(feature = "gpu")]
