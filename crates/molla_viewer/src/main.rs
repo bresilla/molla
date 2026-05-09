@@ -56,7 +56,7 @@ use bevy_frost::ribbon::{
 use bevy_frost::style::AccentColor;
 use bevy_frost::widget::{button, readout};
 use bevy_glacial::prelude::*;
-use molla::autograd::DiffArm;
+use molla::autograd::{DiffArm, FeatherstoneRevoluteChain, JacobianScratch};
 use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
@@ -363,6 +363,7 @@ fn main() {
         .insert_resource(VbdClothExampleState::default())
         .insert_resource(MuJoCoExampleState::default())
         .insert_resource(DiffArmExampleState::default())
+        .insert_resource(DiffArm6ExampleState::default())
         .insert_resource(MeshToolsExampleState::default())
         .insert_resource(NeuralPolicyExampleState::default())
         .insert_resource(CableExampleState::default())
@@ -411,6 +412,7 @@ fn main() {
                     update_quadrotor,
                     update_mujoco_example,
                     update_diff_arm,
+                    update_diff_arm6,
                     update_cable_example,
                     step_simulation,
                     sync_transforms,
@@ -429,6 +431,7 @@ fn main() {
                     draw_lidar_gizmos,
                     draw_contact_gizmos,
                     draw_diff_arm_gizmos,
+                    draw_diff_arm6_gizmos,
                     draw_cable_gizmos,
                 )
                     .chain(),
@@ -492,6 +495,11 @@ struct SceneStates<'w> {
     mujoco: ResMut<'w, MuJoCoExampleState>,
     /// Stage-23 differentiable-arm demo state. Same bundling rationale.
     diff_arm: ResMut<'w, DiffArmExampleState>,
+    /// Stage-23.1 differentiable-Featherstone (6-DOF) demo state.
+    /// Bundled here for the same reason as `diff_arm` — keeps both
+    /// `apply_scene_switch` and `control_pane` under the 16-element
+    /// SystemParam ceiling.
+    diff_arm6: ResMut<'w, DiffArm6ExampleState>,
     /// Stage-21 mesh-tools demo state. Same bundling rationale.
     mesh: ResMut<'w, MeshToolsExampleState>,
     /// Stage-18.1 neural-policy demo state. Same bundling rationale —
@@ -522,6 +530,8 @@ struct PaneSceneStates<'w> {
     mujoco: ResMut<'w, MuJoCoExampleState>,
     /// Stage-23 differentiable-arm demo state. Same rationale.
     diff_arm: ResMut<'w, DiffArmExampleState>,
+    /// Stage-23.1 differentiable-Featherstone demo state. Same rationale.
+    diff_arm6: ResMut<'w, DiffArm6ExampleState>,
     /// Stage-21 mesh-tools demo state. Same rationale.
     mesh: ResMut<'w, MeshToolsExampleState>,
     /// Stage-18.1 neural-policy demo state. Same rationale.
@@ -682,6 +692,13 @@ enum Scene {
     /// "Re-run optimisation" button, and a toggle that overlays an
     /// arrow-trace of EE positions across iterations. Hotkey `G`.
     DiffArm,
+    /// Stage-23.1 differentiable-Featherstone demo. A 6-DOF Franka-style
+    /// serial arm reaches a draggable XYZ target via reverse-mode AD
+    /// through Featherstone's three sweeps. Right-rail pane mirrors
+    /// `DiffArm`'s layout — target XYZ sliders, residual readout, EE
+    /// trajectory overlay — plus an "iters to converge" telemetry row.
+    /// Hotkey `H` (for "Hexa-DOF").
+    DiffArm6,
     /// Stage-21 mesh-utility showcase. Pure visualisation — no
     /// physics step. Right-rail pane has three panels:
     ///   * **Decimate** — original icosphere vs QEM-decimated LOD
@@ -728,6 +745,7 @@ impl Scene {
         Scene::VbdCloth,
         Scene::MuJoCo,
         Scene::DiffArm,
+        Scene::DiffArm6,
         Scene::MeshTools,
         Scene::NeuralPolicy,
         Scene::Cable,
@@ -753,6 +771,7 @@ impl Scene {
             Scene::VbdCloth => "VBD cloth (Stage 20)",
             Scene::MuJoCo => "MuJoCo wrapper (Stage 22)",
             Scene::DiffArm => "Differentiable arm (Stage 23)",
+            Scene::DiffArm6 => "Differentiable Featherstone (Stage 23.1)",
             Scene::MeshTools => "Mesh tools (Stage 21)",
             Scene::NeuralPolicy => "Neural policy (Stage 18.1)",
             Scene::Cable => "Cable (Stage 20.1)",
@@ -777,9 +796,9 @@ impl Scene {
             | Scene::NeuralPolicy => SolverKind::Featherstone,
             Scene::VbdCloth | Scene::Cable => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
-            // DiffArm is purely host-driven (the optimiser writes
-            // body_q each frame); pick the cheap-to-construct XPBD
-            // solver, `step_simulation` skips this scene anyway.
+            // DiffArm / DiffArm6 are purely host-driven (the optimiser
+            // writes body_q each frame); pick the cheap-to-construct
+            // XPBD solver — `step_simulation` skips these scenes anyway.
             _ => SolverKind::Xpbd,
         }
     }
@@ -964,6 +983,80 @@ impl Default for DiffArmExampleState {
             // Re-run on first entry so the user sees the optimisation
             // happen immediately rather than starting from a dead-zero
             // arm.
+            rerun: true,
+            show_trajectory: true,
+            playback_t: 0.0,
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Stage-23.1 differentiable-Featherstone scene state
+// ────────────────────────────────────────────────────────────────────
+
+const DIFF_ARM6_OPT_ITERS: usize = 250;
+const DIFF_ARM6_PLAYBACK_SPEED: f64 = 0.5;
+
+/// Stage-23.1 6-DOF Featherstone differentiable-arm runtime state.
+/// Mirrors [`DiffArmExampleState`] but for the
+/// [`FeatherstoneRevoluteChain::franka6`] chain. The pane drives the
+/// EE target XYZ, displays residual + iters-to-converge, and lets the
+/// user toggle the EE trajectory overlay.
+#[derive(Resource)]
+struct DiffArm6ExampleState {
+    chain: FeatherstoneRevoluteChain,
+    /// Target end-effector position in world coordinates. Default sits
+    /// just off the rest pose so the optimiser does meaningful work
+    /// the first frame.
+    target: MVec3,
+    /// Current optimised torque sequence. Length = `chain.horizon`.
+    tau: Vec<Vec<f64>>,
+    /// EE positions across all optimisation iterations — used for the
+    /// "show optimisation trajectory" overlay. Cleared on re-run.
+    iter_ee_trace: Vec<MVec3>,
+    /// Final residual after the last optimisation pass.
+    last_residual: f64,
+    /// Iteration count at which the optimisation reached 5 cm of the
+    /// target (`None` if it never did).
+    converged_iter: Option<usize>,
+    /// Total optimisation iterations actually run (for the readout).
+    iters_run: usize,
+    /// Re-run pending? Toggled by the pane's "Re-run optimisation"
+    /// button or by a target slider change. Consumed by
+    /// `update_diff_arm6` next frame.
+    rerun: bool,
+    /// Show the iteration trail of EE positions as a gizmo.
+    show_trajectory: bool,
+    /// Wall-clock since scene entry — used to animate playback.
+    playback_t: f64,
+    /// Reusable scratch for per-step Jacobian columns. Lives on the
+    /// state so the GD loop doesn't re-allocate every iteration.
+    scratch: JacobianScratch,
+}
+
+impl Default for DiffArm6ExampleState {
+    fn default() -> Self {
+        let mut chain = FeatherstoneRevoluteChain::franka6(0.005, 60);
+        chain.damping = 1.0;
+        let n = chain.links.len();
+        let h = chain.horizon;
+        // Target offset from rest in the X-Z plane (Y is hardest to
+        // reach because gravity acts there).
+        let rest_ee = chain.end_effector(&vec![0.0; n]);
+        let target_world = MVec3::new(
+            rest_ee.x as f64 + 0.07,
+            rest_ee.y as f64 + DIFF_ARM6_BASE_HEIGHT,
+            rest_ee.z as f64 - 0.07,
+        );
+        Self {
+            scratch: JacobianScratch::new(n),
+            chain,
+            target: target_world,
+            tau: vec![vec![0.0; n]; h],
+            iter_ee_trace: Vec::new(),
+            last_residual: f64::INFINITY,
+            converged_iter: None,
+            iters_run: 0,
             rerun: true,
             show_trajectory: true,
             playback_t: 0.0,
@@ -1538,6 +1631,7 @@ impl Sim {
             Scene::VbdCloth => build_vbd_cloth_model(),
             Scene::MuJoCo => build_mujoco_model(),
             Scene::DiffArm => build_diff_arm_model(),
+            Scene::DiffArm6 => build_diff_arm6_model(),
             Scene::NeuralPolicy => build_neural_policy_model(),
             Scene::Cable => build_cable_model(),
         };
@@ -2382,6 +2476,51 @@ fn build_diff_arm_model() -> (mp::Model, Vec<BodyVisual>) {
         .expect("plane");
 
     (b.build().expect("diff arm model"), visuals)
+}
+
+// --- Stage-23.1 differentiable Featherstone arm scene ---------------
+//
+// Six kinematic capsule bodies representing the links of a 6-DOF
+// Franka-style serial chain. Same playback model as `DiffArm`: the
+// dynamics live entirely host-side in `update_diff_arm6` via
+// [`FeatherstoneRevoluteChain`]; here we just declare six kinematic
+// bodies whose `body_q` will be rewritten each frame from the
+// optimisation playback.
+const DIFF_ARM6_BASE_HEIGHT: f64 = 0.5;
+const DIFF_ARM6_LINK_RADIUS: f32 = 0.04;
+
+fn build_diff_arm6_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let chain = FeatherstoneRevoluteChain::franka6(0.005, 60);
+    let mut visuals = Vec::with_capacity(6);
+    for link in &chain.links {
+        let len = (link.com_local.length() * 2.0).max(0.06);
+        let body = b.add_body(
+            mp::BodyParams::new()
+                .with_mass(0.0)
+                .with_pose(mp::Transform::new(
+                    MVec3::new(0.0, DIFF_ARM6_BASE_HEIGHT, 0.0),
+                    MQuat::IDENTITY,
+                ))
+                .with_flags(mp::BodyFlags::KINEMATIC),
+        );
+        let half_h = (len * 0.5).max(0.04);
+        b.add_shape_capsule(
+            body,
+            half_h,
+            DIFF_ARM6_LINK_RADIUS as f64,
+            mp::Transform::IDENTITY,
+        )
+        .expect("diff arm6 link shape");
+        visuals.push(BodyVisual::Capsule {
+            half_h: half_h as f32,
+            radius: DIFF_ARM6_LINK_RADIUS,
+        });
+    }
+    // Static plane so the camera has a ground reference.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("diff arm6 model"), visuals)
 }
 
 // --- Stage-18 composable actuator pipeline scene ------------------
@@ -4062,6 +4201,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyG) && sim.scene != Scene::DiffArm {
         pending.0 = Some(Scene::DiffArm);
     }
+    if keys.just_pressed(KeyCode::KeyH) && sim.scene != Scene::DiffArm6 {
+        pending.0 = Some(Scene::DiffArm6);
+    }
     if keys.just_pressed(KeyCode::KeyM) && sim.scene != Scene::MeshTools {
         pending.0 = Some(Scene::MeshTools);
     }
@@ -4123,6 +4265,18 @@ fn apply_scene_switch(
     // Schedule a re-run on the next frame so the user immediately
     // sees the optimised motion when entering the scene.
     diff_arm.rerun = true;
+    // DiffArm6: same reset on entry — fresh tau, clear iter trace,
+    // schedule re-run.
+    let diff_arm6 = &mut *scene_states.diff_arm6;
+    let n6 = diff_arm6.chain.links.len();
+    let h6 = diff_arm6.chain.horizon;
+    diff_arm6.tau = vec![vec![0.0; n6]; h6];
+    diff_arm6.iter_ee_trace.clear();
+    diff_arm6.last_residual = f64::INFINITY;
+    diff_arm6.converged_iter = None;
+    diff_arm6.iters_run = 0;
+    diff_arm6.playback_t = 0.0;
+    diff_arm6.rerun = true;
     stats.arm_logged = false;
     // GPU IK: re-seed the target on next entry from the new arm's rest EE.
     *gpu_ik = GpuIkArmState::default();
@@ -4251,6 +4405,10 @@ fn step_simulation(
     // DiffArm replays the optimised trajectory in `update_diff_arm`
     // (host-side; writes body_q directly). Same skip as GpuIkArm.
     if sim.scene == Scene::DiffArm {
+        return;
+    }
+    // Stage-23.1 DiffArm6 — same host-driven playback model.
+    if sim.scene == Scene::DiffArm6 {
         return;
     }
     // Stage-21 mesh-tools is purely visual — no bodies, no contacts,
@@ -5354,6 +5512,149 @@ fn update_diff_arm(
     if body_q.len() >= 2 {
         body_q[0] = mp::Transform::new(p1, r1);
         body_q[1] = mp::Transform::new(p2, r2);
+    }
+}
+
+/// Stage-23.1 6-DOF Featherstone diff-arm pre-step. Same shape as
+/// `update_diff_arm`, but the chain is the [`FeatherstoneRevoluteChain::franka6`]
+/// 6-DOF Franka stand-in driven by the reverse-mode adjoint from
+/// [`molla::autograd::featherstone_adjoint`].
+fn update_diff_arm6(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<DiffArm6ExampleState>,
+) {
+    if sim.scene != Scene::DiffArm6 {
+        state.playback_t = 0.0;
+        return;
+    }
+
+    let n = state.chain.links.len();
+    let h = state.chain.horizon;
+
+    // 1. (Re)run optimisation if requested.
+    if state.rerun {
+        // Reset torque baseline so each re-run starts fresh.
+        state.tau = vec![vec![0.0; n]; h];
+        state.iter_ee_trace.clear();
+
+        // Target in chain-local coordinates: shift down by the base
+        // height, since the chain's root is at the world origin in its
+        // local frame.
+        let target_local = MVec3::new(
+            state.target.x,
+            state.target.y - DIFF_ARM6_BASE_HEIGHT,
+            state.target.z,
+        );
+        let target_chain = molla::math::Vec3::new(
+            target_local.x,
+            target_local.y,
+            target_local.z,
+        );
+
+        let q0 = vec![0.0_f64; n];
+        let qd0 = vec![0.0_f64; n];
+        let lr_init = 0.05_f64;
+        let mut lr = lr_init;
+        let mut prev = f64::INFINITY;
+        let mut last_residual = f64::INFINITY;
+        let mut converged: Option<usize> = None;
+        for it in 0..DIFF_ARM6_OPT_ITERS {
+            let trace = state.chain.rollout(&q0, &qd0, &state.tau);
+            let q_final = &trace.q[h];
+            let ee = state.chain.end_effector(q_final);
+            let d = ee - target_chain;
+            last_residual = d.length();
+
+            // Trail point in WORLD coords.
+            state.iter_ee_trace.push(MVec3::new(
+                ee.x,
+                ee.y + DIFF_ARM6_BASE_HEIGHT,
+                ee.z,
+            ));
+
+            if !last_residual.is_finite() {
+                warn!("diff_arm6: residual diverged at iter {it} — backing off");
+                break;
+            }
+            if converged.is_none() && last_residual < 0.05 {
+                converged = Some(it);
+            }
+            if last_residual < 0.01 {
+                state.iters_run = it;
+                break;
+            }
+
+            // Backoff lr if loss went up (cheap line search).
+            if last_residual > prev * 1.05 {
+                lr *= 0.5;
+            } else if last_residual < prev * 0.99 {
+                lr = (lr * 1.05).min(lr_init);
+            }
+            prev = last_residual;
+
+            // Borrow chain + scratch as disjoint fields so the same
+            // struct's immutable + mutable references coexist; the
+            // returned `g` outlives the disjoint borrows.
+            let g = {
+                let DiffArm6ExampleState { chain, scratch, .. } = &mut *state;
+                (&*chain).reverse_with_scratch(&trace, d * 2.0, scratch)
+            };
+            for t in 0..h {
+                for k in 0..n {
+                    let delta = -lr * g[t][k];
+                    let clamped = delta.clamp(-0.2, 0.2);
+                    state.tau[t][k] += clamped;
+                    state.tau[t][k] = state.tau[t][k].clamp(-3.0, 3.0);
+                }
+            }
+            state.iters_run = it + 1;
+        }
+        state.last_residual = last_residual;
+        state.converged_iter = converged;
+        state.rerun = false;
+        state.playback_t = 0.0;
+        info!(
+            "diff_arm6: optimisation done — residual {:.4} m, converged at iter {:?}",
+            state.last_residual, state.converged_iter,
+        );
+    }
+
+    // 2. Playback. Advance wall clock + roll out to current playback time.
+    let dt = time.delta_secs_f64();
+    state.playback_t += dt * DIFF_ARM6_PLAYBACK_SPEED;
+    let total = h as f64 * state.chain.dt;
+    let t = if total > 0.0 {
+        state.playback_t % total
+    } else {
+        0.0
+    };
+    let step = ((t / state.chain.dt).floor() as usize).min(h.saturating_sub(1));
+    let q0 = vec![0.0_f64; n];
+    let qd0 = vec![0.0_f64; n];
+    let trace = state.chain.rollout(&q0, &qd0, &state.tau);
+    let q = &trace.q[step];
+
+    // FK on the chain → world poses for each link.
+    let body_world = state.chain.forward_kinematics(q);
+    let body_q = match sim.state_a.body_q.host_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let base_lift = MVec3::new(0.0, DIFF_ARM6_BASE_HEIGHT, 0.0);
+    for (j, link_t) in body_world.iter().enumerate().take(body_q.len()) {
+        let p = MVec3::new(
+            link_t.position.x,
+            link_t.position.y,
+            link_t.position.z,
+        ) + base_lift;
+        let r = MQuat::from_xyzw(
+            link_t.rotation.x,
+            link_t.rotation.y,
+            link_t.rotation.z,
+            link_t.rotation.w,
+        );
+        body_q[j] = mp::Transform::new(p, r);
     }
 }
 
@@ -6594,6 +6895,60 @@ fn draw_diff_arm_gizmos(
     }
 }
 
+/// Stage-23.1 differentiable Featherstone arm gizmos. Same content as
+/// `draw_diff_arm_gizmos` — target marker + EE trajectory polyline.
+fn draw_diff_arm6_gizmos(
+    sim: Res<Sim>,
+    state: Res<DiffArm6ExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::DiffArm6 {
+        return;
+    }
+    let target = Vec3::new(
+        state.target.x as f32,
+        state.target.y as f32,
+        state.target.z as f32,
+    );
+    let target_color = Color::srgb(1.0, 0.95, 0.20);
+    gizmos.sphere(target, 0.04, target_color);
+    let cross = 0.08;
+    gizmos.line(
+        target - Vec3::X * cross,
+        target + Vec3::X * cross,
+        target_color,
+    );
+    gizmos.line(
+        target - Vec3::Y * cross,
+        target + Vec3::Y * cross,
+        target_color,
+    );
+    gizmos.line(
+        target - Vec3::Z * cross,
+        target + Vec3::Z * cross,
+        target_color,
+    );
+    if state.show_trajectory && state.iter_ee_trace.len() >= 2 {
+        let n = state.iter_ee_trace.len();
+        for window in state.iter_ee_trace.windows(2).enumerate() {
+            let (i, pair) = window;
+            let t = i as f32 / (n - 1).max(1) as f32;
+            let r = 0.20 + 0.75 * t;
+            let g = 0.40 + 0.10 * (1.0 - t);
+            let b = 0.95 - 0.85 * t;
+            let color = Color::srgb(r, g, b);
+            let a = Vec3::new(pair[0].x as f32, pair[0].y as f32, pair[0].z as f32);
+            let b_ = Vec3::new(pair[1].x as f32, pair[1].y as f32, pair[1].z as f32);
+            gizmos.line(a, b_, color);
+            gizmos.sphere(a, 0.01, color);
+        }
+        if let Some(last) = state.iter_ee_trace.last() {
+            let p = Vec3::new(last.x as f32, last.y as f32, last.z as f32);
+            gizmos.sphere(p, 0.018, Color::srgb(0.95, 0.55, 0.15));
+        }
+    }
+}
+
 fn hit_to_world(hit: &RayHit) -> Option<Vec3> {
     if hit.shape_id.is_some() {
         Some(Vec3::new(
@@ -6806,6 +7161,7 @@ fn control_pane(
                     | Scene::VbdCloth
                     | Scene::MuJoCo
                     | Scene::DiffArm
+                    | Scene::DiffArm6
                     | Scene::MeshTools
                     | Scene::NeuralPolicy
                     | Scene::Cable
@@ -6930,6 +7286,7 @@ fn control_pane(
         Scene::VbdCloth => Some("VBD cloth (Stage 20)"),
         Scene::MuJoCo => Some("MuJoCo (Stage 22)"),
         Scene::DiffArm => Some("Diff arm (Stage 23)"),
+        Scene::DiffArm6 => Some("Diff Featherstone (Stage 23.1)"),
         Scene::MeshTools => Some("Mesh tools (Stage 21)"),
         Scene::NeuralPolicy => Some("Neural policy (Stage 18.1)"),
         Scene::Cable => Some("Cable (Stage 20.1)"),
@@ -6975,6 +7332,9 @@ fn control_pane(
                     }
                     Scene::DiffArm => {
                         diff_arm_pane(ui, &mut pane_states.diff_arm)
+                    }
+                    Scene::DiffArm6 => {
+                        diff_arm6_pane(ui, &mut pane_states.diff_arm6)
                     }
                     Scene::MeshTools => {
                         mesh_tools_pane(ui, &mut pane_states.mesh)
@@ -8055,6 +8415,92 @@ fn diff_arm_pane(ui: &mut egui::Ui, state: &mut DiffArmExampleState) {
          gradient descent (closed-form adjoint) to drive the EE to \
          the target. The trajectory overlay shows the EE's location \
          at every optimisation iteration so you can see GD converge.",
+    );
+}
+
+/// Body for the right-rail pane in the Differentiable-Featherstone
+/// (Stage 23.1) scene. Same shape as [`diff_arm_pane`] — target XYZ
+/// sliders, residual + iters-to-converge readout, "re-run" button,
+/// trajectory toggle — plus a chain-config readout.
+fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
+    ui.add_space(2.0);
+    readout(ui, "Solver", "CPU autograd, Featherstone (Stage 23.1)");
+    readout(
+        ui,
+        "Chain",
+        &format!("6-DOF Franka, {} steps × {:.1} ms", state.chain.horizon, state.chain.dt * 1000.0),
+    );
+    ui.separator();
+
+    ui.label("Optimisation");
+    readout(ui, "  iters run", &format!("{}", state.iters_run));
+    readout(
+        ui,
+        "  residual",
+        &if state.last_residual.is_finite() {
+            format!("{:.4} m", state.last_residual)
+        } else {
+            "—".into()
+        },
+    );
+    readout(
+        ui,
+        "  converged",
+        &match state.converged_iter {
+            Some(it) => format!("at iter {it} (≤ 5 cm)"),
+            None if state.iters_run == 0 => "(idle)".into(),
+            None => "did NOT converge ≤ 5 cm".into(),
+        },
+    );
+    if ui.button("Re-run optimisation").clicked() {
+        state.rerun = true;
+    }
+    ui.separator();
+
+    ui.label("Target (world XYZ)");
+    let mut tx = state.target.x as f32;
+    let mut ty = state.target.y as f32;
+    let mut tz = state.target.z as f32;
+    let mut changed = false;
+    let lift = DIFF_ARM6_BASE_HEIGHT as f32;
+    if ui
+        .add(egui::Slider::new(&mut tx, -1.2_f32..=1.2_f32).text("x").step_by(0.01))
+        .changed()
+    {
+        state.target.x = tx as f64;
+        changed = true;
+    }
+    if ui
+        .add(
+            egui::Slider::new(&mut ty, lift..=(lift + 1.5))
+                .text("y")
+                .step_by(0.01),
+        )
+        .changed()
+    {
+        state.target.y = ty as f64;
+        changed = true;
+    }
+    if ui
+        .add(egui::Slider::new(&mut tz, -1.2_f32..=1.2_f32).text("z").step_by(0.01))
+        .changed()
+    {
+        state.target.z = tz as f64;
+        changed = true;
+    }
+    if changed {
+        state.rerun = true;
+    }
+    ui.separator();
+
+    ui.checkbox(&mut state.show_trajectory, "Show optimisation trajectory");
+    ui.add_space(4.0);
+    ui.small(
+        "6-DOF Franka-style serial chain. Open-loop torque sequence \
+         optimised by gradient descent through the reverse-mode \
+         Featherstone adjoint (CPU). The 'iters run' line shows total \
+         GD steps; 'converged' reports the iteration at which the EE \
+         first crossed the 5 cm threshold.",
     );
 }
 

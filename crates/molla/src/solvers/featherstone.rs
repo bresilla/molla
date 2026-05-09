@@ -190,6 +190,49 @@ impl FeatherstoneSolver {
             false
         }
     }
+
+    /// Stage 23.1 — same as [`Self::step`], but records the per-step
+    /// inputs on a [`crate::autograd::Tape`] for later backward replay
+    /// against [`crate::autograd::FeatherstoneRevoluteChain::reverse`].
+    /// `chain` must mirror the model's articulation 0 (a serial revolute
+    /// chain — multi-DOF joints aren't supported by the v1 adjoint, see
+    /// [`crate::autograd::featherstone_adjoint`] doc).
+    ///
+    /// `q_id` / `qd_id` / `tau_id` must be tape ids whose values were
+    /// seeded from the corresponding host buffers via
+    /// [`crate::autograd::Tape::alloc`]. The function evaluates the
+    /// step on the host (so `state_out` ends up populated for the
+    /// downstream rendering / sensors), then emits the three TapeOp
+    /// chunks via
+    /// [`crate::autograd::record_featherstone_step`].
+    ///
+    /// Returns `(q_new_id, qd_new_id, ee_id)` — the tape ids the caller
+    /// can chain into a downstream loss.
+    pub fn step_with_tape(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        contacts: &Contacts,
+        dt: Real,
+        state_out: &mut State,
+        tape: &mut crate::autograd::Tape,
+        chain: &crate::autograd::FeatherstoneRevoluteChain,
+        q_id: crate::autograd::TapeId,
+        qd_id: crate::autograd::TapeId,
+        tau_id: crate::autograd::TapeId,
+    ) -> Result<(
+        crate::autograd::TapeId,
+        crate::autograd::TapeId,
+        crate::autograd::TapeId,
+    )> {
+        // Forward step into state_out for the downstream sim consumers
+        // (rendering, sensors). The tape recorder runs the adjoint-side
+        // forward independently against the captured chain.
+        self.step(model, state_in, control, contacts, dt, state_out)?;
+        let ids = crate::autograd::record_featherstone_step(tape, chain, q_id, qd_id, tau_id);
+        Ok(ids)
+    }
 }
 
 impl Solver for FeatherstoneSolver {
