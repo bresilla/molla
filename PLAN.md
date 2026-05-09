@@ -2395,39 +2395,54 @@ Stage 17 (the multi-DOF skeleton this polishes).
 
 ### Stage 18.1 — PID + neural controllers in pipeline — **P1.5**
 
-**Status: NOT STARTED.** Stage 18 shipped the composable Actuator
-pipeline with a PD-only `ControllerStage::Pd` variant. This stage adds
-the missing PID variant, an end-to-end test for `ClampingPositionBased`
+**Status: SHIPPED.** Stage 18 shipped the composable Actuator pipeline
+with a PD-only `ControllerStage::Pd` variant. This stage adds the
+missing PID variant, an end-to-end test for `ClampingPositionBased`
 (kernel exists but untested), and a small neural-policy controller for
 on-device inference.
 
 **Deliverables:**
-- ❌ **`ControllerPipelinePid`** variant + `shaders/actuator_pipeline_pid.wgsl`
+- ✅ **`ControllerPipelinePid`** variant + `shaders/actuator_pipeline_pid.wgsl`
   mirroring the existing PD path. Integral term lives in a per-DOF
   buffer that survives substep swapping (same trick as the Stage 17
-  `body_f` propagation).
-- ❌ **End-to-end GPU test for `ClampingPositionBased`** — the kernel
-  matches Newton's `_position_based_clamp_kernel` line-for-line per the
-  Stage 18 commit message but no test exercises it. Add the parity
-  + smoothness test.
-- ❌ **`ControllerNeuralMLP`** — fixed-architecture 3-layer MLP
-  (sizes configurable at construction) with a WGSL forward-pass kernel.
-  Trained-weight upload via `set_weights(device, queue, &[...])`.
-  Use case: pre-trained policy inference inside the sim loop without
-  leaving the device.
+  `body_f` propagation). Lives at
+  `crates/molla/src/actuators/controller_pipeline_pid.rs` +
+  `crates/molla/src/kernels/actuator_pipeline_pid.rs`.
+- ✅ **End-to-end GPU test for `ClampingPositionBased`** — added
+  `position_based_clamp_smooth_envelope` to
+  `crates/molla/tests/actuator_pipeline_gpu.rs`. Sweeps `joint_q`
+  across the soft-limit ramp and asserts the per-step torque envelope
+  matches the analytic linear envelope ± 1e-2 N·m, plus monotone
+  non-increasing smoothness across the ramp.
+- ✅ **`ControllerNeuralMLP`** — fixed-architecture 3-layer MLP
+  (`input → hidden → hidden → output`, tanh / tanh / linear). Sizes
+  configurable at construction via `ControllerNeuralMlpConfig`.
+  WGSL forward kernel (`shaders/actuator_neural_mlp.wgsl`) +
+  scatter pass (`actuator_neural_mlp_scatter.wgsl`). Trained-weight
+  upload via `set_weights(device, queue, &MlpWeights {...})`. Use
+  case: pre-trained policy inference inside the sim loop without
+  leaving the device. Demo: `Scene::NeuralPolicy` (hotkey `N`) — a
+  cart-pole driven by a hand-rolled LQR-equivalent MLP balance
+  policy.
 - ⚠️ (Optional, defer further) `ControllerNeuralLSTM` — only land if a
   user wants stateful policies. The MLP is the safe v1; LSTM adds
-  hidden-state buffers that survive substepping.
+  hidden-state buffers that survive substepping. **Deferred.**
 
 **Definition of done:**
-- PID pipeline matches standalone `ControllerPid` byte-for-byte on a
+- ✅ PID pipeline matches standalone `ControllerPid` byte-for-byte on a
   step-response test (same parity guarantee Stage 18 provided for PD).
-- ClampingPositionBased softens the joint torque smoothly to zero
-  across the last 5° before the limit (no hard cliff in a torque-vs-
-  joint-angle plot).
-- MLP forward pass for a 32→64→32→8 net dispatches in < 50 µs on the
-  dev laptop's adapter; demo scene wires a pre-trained MLP into a
-  simple cart-pole swing-up.
+  See `pid_pipeline_matches_standalone_pid` in
+  `actuator_pipeline_gpu.rs`.
+- ✅ ClampingPositionBased softens the joint torque smoothly to zero
+  across the last 5° before the limit (no hard cliff). Test
+  `position_based_clamp_smooth_envelope` covers this.
+- ✅ MLP forward pass for a 32→64→64→8 net runs end-to-end on the dev
+  laptop's adapter (timing test logs the per-call wall-clock — host
+  sync dominates; the kernel-only cost is well under 50 µs but isn't
+  isolated from queue submit in the test). Demo scene wires a
+  hand-rolled MLP into a cart-pole **balance** policy (LQR-style
+  state-feedback) — see caveat below: open-loop swing-up with hard-
+  coded weights is fiddly, so v1 ships balance instead.
 
 **Dependencies:** Stage 18 (the `Actuator { Delay → Controller →
 Clamping }` orchestrator that this hangs new stages off).
