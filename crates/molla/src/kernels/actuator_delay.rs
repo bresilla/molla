@@ -41,17 +41,21 @@ impl ActuatorDelayKernel {
             ),
         });
 
+        // Group 0: read-only inputs (target_pos, target_vel,
+        // dof_indices, delay_steps). `read_write = false`.
         let layout_in = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::actuator_delay in"),
-            entries: &storage_entries(4, true),
-        });
-        let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("molla::actuator_delay state"),
             entries: &storage_entries(4, false),
         });
+        // Group 1: read-write circular-buffer state.
+        let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::actuator_delay state"),
+            entries: &storage_entries(4, true),
+        });
+        // Group 2: read-write delayed outputs (consumed by controller).
         let layout_out = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::actuator_delay out"),
-            entries: &storage_entries(2, false),
+            entries: &storage_entries(2, true),
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::actuator_delay uniforms"),
