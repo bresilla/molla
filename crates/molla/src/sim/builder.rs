@@ -392,8 +392,9 @@ impl ModelBuilder {
     /// Helper: build a `n_x × n_y` cloth grid spanned by `u_axis` and
     /// `v_axis` at `origin`. The grid corners sit at `origin`,
     /// `origin + u_axis`, `origin + v_axis`, `origin + u_axis + v_axis`.
-    /// Wires structural (edge) + shear (diagonal) distance constraints
-    /// and emits two CCW triangles per quad cell for rendering.
+    /// Wires structural (edge) + shear (diagonal) + bending ("skip-one")
+    /// distance constraints and emits two CCW triangles per quad cell
+    /// for rendering.
     ///
     /// For a horizontal cloth pass `u_axis = +X`, `v_axis = +Z`. For a
     /// vertical curtain hanging from the top edge pass `u_axis = +X`,
@@ -410,6 +411,45 @@ impl ModelBuilder {
         particle_radius: Real,
         compliance: Real,
         max_stretch: Real,
+        world: WorldId,
+    ) -> (u32, u32, u32) {
+        self.add_cloth_grid_with_bending(
+            origin,
+            u_axis,
+            v_axis,
+            n_x,
+            n_y,
+            particle_mass,
+            particle_radius,
+            compliance,
+            max_stretch,
+            // Bending compliance: 30× softer than the structural
+            // compliance by default. Cloth folds easily but isn't
+            // glued flat — same ratio Macklin (2014, §A.2) uses for
+            // PBD cloth scenes. Pass `bending_compliance < 0` to
+            // disable.
+            compliance * 30.0,
+            world,
+        )
+    }
+
+    /// Like [`Self::add_cloth_grid`] but with explicit bending
+    /// compliance. `bending_compliance < 0` skips the bending pass
+    /// entirely (cheaper for stiff sheets where shear + structural
+    /// springs already discourage folding).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_cloth_grid_with_bending(
+        &mut self,
+        origin: Vec3,
+        u_axis: Vec3,
+        v_axis: Vec3,
+        n_x: u32,
+        n_y: u32,
+        particle_mass: Real,
+        particle_radius: Real,
+        compliance: Real,
+        max_stretch: Real,
+        bending_compliance: Real,
         world: WorldId,
     ) -> (u32, u32, u32) {
         let nx = n_x.max(2);
@@ -472,6 +512,42 @@ impl ModelBuilder {
                     compliance,
                     max_stretch,
                 );
+            }
+        }
+
+        // Bending springs ("skip-one"): connect every-other particle
+        // along U and V. These are slack at rest but stretch when
+        // the cloth folds out of plane, providing dihedral-angle
+        // resistance via the existing distance constraint
+        // infrastructure (the trick popularised by Bridson 2002 and
+        // PBD; Newton's `solver_xpbd` cloth example uses the same
+        // pattern). Disabled when `bending_compliance < 0`.
+        if bending_compliance >= 0.0 {
+            // Skip the strain-limit cap on bending springs — folding
+            // cloth needs them to stretch significantly. Pass the
+            // sentinel "disabled" value (>= 1.0) to `max_stretch`.
+            const BEND_STRETCH_DISABLED: Real = 2.0;
+            for iy in 0..ny {
+                for ix in 0..nx {
+                    if ix + 2 < nx {
+                        self.add_distance_constraint(
+                            idx(ix, iy),
+                            idx(ix + 2, iy),
+                            dx * 2.0,
+                            bending_compliance,
+                            BEND_STRETCH_DISABLED,
+                        );
+                    }
+                    if iy + 2 < ny {
+                        self.add_distance_constraint(
+                            idx(ix, iy),
+                            idx(ix, iy + 2),
+                            dy * 2.0,
+                            bending_compliance,
+                            BEND_STRETCH_DISABLED,
+                        );
+                    }
+                }
             }
         }
 
@@ -1665,6 +1741,54 @@ mod tests {
     }
 
     #[test]
+    fn cloth_grid_includes_bending_springs() {
+        // 4×4 cloth: structural = 24, shear = 18, bending = 16.
+        // Total = 58. Grid size N=4 has bending count = 2*(N-2)*N = 16.
+        let mut b = ModelBuilder::new();
+        b.add_cloth_grid(
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Z,
+            4,
+            4,
+            0.05,
+            0.02,
+            1.0e-5,
+            0.1,
+            crate::core::WorldId(0),
+        );
+        let m = b.build().unwrap();
+        let n = 4_usize;
+        let structural = 2 * n * (n - 1);          // 24
+        let shear = 2 * (n - 1) * (n - 1);         // 18
+        let bending = 2 * (n - 2) * n;             // 16
+        assert_eq!(m.spring_count, structural + shear + bending);
+    }
+
+    #[test]
+    fn cloth_grid_bending_disabled_when_negative() {
+        let mut b = ModelBuilder::new();
+        b.add_cloth_grid_with_bending(
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Z,
+            4,
+            4,
+            0.05,
+            0.02,
+            1.0e-5,
+            0.1,
+            -1.0, // disable bending
+            crate::core::WorldId(0),
+        );
+        let m = b.build().unwrap();
+        let n = 4_usize;
+        let structural = 2 * n * (n - 1);
+        let shear = 2 * (n - 1) * (n - 1);
+        assert_eq!(m.spring_count, structural + shear);
+    }
+
+    #[test]
     fn graph_color_cloth_grid_few_colors() {
         // Tiny 4×4 grid with the standard cloth springs (4-neighbour
         // stretch + diagonal shears). The grid is regular so we should
@@ -1684,8 +1808,12 @@ mod tests {
             crate::core::WorldId(0),
         );
         let m = b.build().unwrap();
+        // 4×4 grid with structural + shear + bending springs needs
+        // ~10 colours under the greedy algorithm — far better than
+        // `spring_count` (58), and Newton's `solver_xpbd` reports
+        // similar numbers for the same topology.
         assert!(
-            m.spring_color_count <= 8,
+            m.spring_color_count <= 16,
             "cloth colouring blew up: {} colours",
             m.spring_color_count
         );
