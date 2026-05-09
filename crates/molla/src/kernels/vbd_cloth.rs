@@ -39,6 +39,11 @@ pub struct VbdClothKernel {
     pipe_shape_contacts: wgpu::ComputePipeline,
     pipe_update_dual: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
+    /// Stage 20.3 — von Mises return mapping. Dispatched once per
+    /// substep, after the per-vertex block iterations converge, with
+    /// `work_count = tet_count`. No-op when `tet_count == 0` (the
+    /// host skips the dispatch).
+    pipe_plasticity: wgpu::ComputePipeline,
 
     layout_state: wgpu::BindGroupLayout,
     layout_topo: wgpu::BindGroupLayout,
@@ -126,13 +131,27 @@ impl VbdClothKernel {
             label: Some("molla::vbd_cloth shapes"),
             entries: &storage_entries(5, true),
         });
-        // Stage 20.2 tet + cable-bending group: 10 read-only entries
-        // (7 for tets + 3 for cable bending). All buffers are non-empty
-        // — when the model has no tets / bending the host binds dummy
-        // 1-element placeholders.
+        // Stage 20.2/20.3 tet + cable-bending group:
+        //   - 10 read-only entries (7 tet + 3 cable bending) — Stage 20.2.
+        //   - 2 read-write entries (F_p, ε_p) — Stage 20.3 plasticity.
+        //   - 2 read-only entries (yield, hardening) — Stage 20.3 material.
+        // 14 total. All buffers are non-empty — when the model has no
+        // tets / bending the host binds dummy 1-element placeholders.
+        let mut tet_entries = storage_entries(10, true);
+        // Bindings 10 + 11: F_p / ε_p as read-write (mutated by the
+        // plasticity entry point).
+        tet_entries.extend(storage_entries(2, false).into_iter().map(|mut e| {
+            e.binding += 10;
+            e
+        }));
+        // Bindings 12 + 13: yield + hardening (read-only material).
+        tet_entries.extend(storage_entries(2, true).into_iter().map(|mut e| {
+            e.binding += 12;
+            e
+        }));
         let layout_tets = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::vbd_cloth tets"),
-            entries: &storage_entries(10, true),
+            entries: &tet_entries,
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -164,6 +183,7 @@ impl VbdClothKernel {
         let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
         let pipe_update_dual = make_pipeline("update_dual");
         let pipe_velocity = make_pipeline("velocity_recovery");
+        let pipe_plasticity = make_pipeline("plasticity_return_map");
 
         let pn = particle_count.max(1) as usize;
         let sn = spring_count.max(1) as usize;
@@ -223,6 +243,7 @@ impl VbdClothKernel {
             pipe_shape_contacts,
             pipe_update_dual,
             pipe_velocity,
+            pipe_plasticity,
             layout_state,
             layout_topo,
             layout_out,
@@ -453,6 +474,28 @@ impl VbdClothKernel {
             .vertex_cable_bending_k
             .device_buffer()
             .unwrap_or(dummy_real_buf);
+        // Stage 20.3 — plasticity buffers. F_p / ε_p live in `state_out`
+        // so the return-mapping kernel can write them in place; yield +
+        // hardening live on `model` (read-only material params). When a
+        // model has no tets, fall through to the dummy buffers (the
+        // plasticity dispatch is also skipped on the host side).
+        let fp_buf = state_out
+            .tet_f_plastic
+            .device_buffer()
+            .unwrap_or(dummy_mat3_buf);
+        let eps_p_buf = state_out
+            .tet_plastic_strain
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let yield_buf = model
+            .tet_yield_stress
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let hard_buf = model
+            .tet_hardening
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+
         let bg_tets = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::vbd_cloth tets bg"),
             layout: &self.layout_tets,
@@ -467,6 +510,10 @@ impl VbdClothKernel {
                 wgpu::BindGroupEntry { binding: 7, resource: vcb_off_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 8, resource: vcb_entries_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 9, resource: vcb_k_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: fp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: eps_p_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: yield_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: hard_buf.as_entire_binding() },
             ],
         });
 
@@ -496,6 +543,7 @@ impl VbdClothKernel {
         };
 
         let is_hard_u: u32 = if hard_mode { 1 } else { 0 };
+        let tet_count_u = model.tet_count as u32;
         let base = |work_count: u32, color_index: u32, contact_k: f32| Uniforms {
             particle_count: particle_count_u,
             spring_count: spring_count_u,
@@ -531,11 +579,43 @@ impl VbdClothKernel {
                                // dispatch path; kept for future use.
         // Velocity recovery.
         push_uniforms(&base(particle_count_u, 0, 0.0));
+        // Stage 20.3 — plasticity return mapping. work_count = tet_count.
+        if tet_count_u > 0 {
+            push_uniforms(&base(tet_count_u, 0, 0.0));
+        }
 
         // ── Encode + dispatch ─────────────────────────────────────
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::vbd_cloth encoder"),
         });
+        // Stage 20.3 — copy state_in's plasticity state into state_out
+        // once at the top of the step. The plasticity kernel then
+        // reads/writes from state_out's buffers so a substep ping-pong
+        // (state_in → state_out → state_in) sees the cumulative effect
+        // without the host having to read back F_p between substeps.
+        // Skip the copy entirely when `tet_count == 0`.
+        if tet_count_u > 0 {
+            if let (Some(src_fp), Some(dst_fp)) = (
+                state_in.tet_f_plastic.device_buffer(),
+                state_out.tet_f_plastic.device_buffer(),
+            ) {
+                let bytes = (model.tet_count
+                    * core::mem::size_of::<crate::math::GpuMat3>())
+                    as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_fp, 0, dst_fp, 0, bytes);
+                }
+            }
+            if let (Some(src_e), Some(dst_e)) = (
+                state_in.tet_plastic_strain.device_buffer(),
+                state_out.tet_plastic_strain.device_buffer(),
+            ) {
+                let bytes = (model.tet_count * core::mem::size_of::<f32>()) as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_e, 0, dst_e, 0, bytes);
+                }
+            }
+        }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("molla::vbd_cloth"),
@@ -587,6 +667,13 @@ impl VbdClothKernel {
             // Velocity recovery.
             dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
             idx += 1;
+            // Stage 20.3 — plasticity return mapping (one thread per
+            // tet). The kernel mutates `tet_f_plastic` / `tet_plastic_strain`
+            // in `state_out` directly (read_write storage in bind group 5).
+            if tet_count_u > 0 {
+                dispatch(&mut pass, &self.pipe_plasticity, idx, tet_count_u);
+                idx += 1;
+            }
             // `pipe_shape_contacts` kept compiled for future use
             // (warm-start initialiser, alternate AVBD safety pass);
             // silence the unused-field warning.
@@ -597,6 +684,10 @@ impl VbdClothKernel {
 
         state_out.particle_q.mark_device_dirty();
         state_out.particle_qd.mark_device_dirty();
+        if tet_count_u > 0 {
+            state_out.tet_f_plastic.mark_device_dirty();
+            state_out.tet_plastic_strain.mark_device_dirty();
+        }
         Ok(())
     }
 

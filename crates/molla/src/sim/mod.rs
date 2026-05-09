@@ -12,7 +12,7 @@ mod model;
 mod state;
 
 pub use articulation::eval_fk;
-pub use builder::{BodyParams, ModelBuilder, ShapeGeometry, TetMeshId};
+pub use builder::{BodyParams, MaterialNeoHookean, ModelBuilder, ShapeGeometry, TetMeshId};
 pub use contacts::Contacts;
 pub use control::Control;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};

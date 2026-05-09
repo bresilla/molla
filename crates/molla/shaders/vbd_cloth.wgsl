@@ -144,6 +144,15 @@ struct Mat3Cols {
 @group(5) @binding(7) var<storage, read>       vertex_cable_bend_offsets:    array<u32>;
 @group(5) @binding(8) var<storage, read>       vertex_cable_bend_entries:    array<u32>;
 @group(5) @binding(9) var<storage, read>       vertex_cable_bend_k:          array<f32>;
+// Stage 20.3 — per-tet plasticity state. F_p and ε_p are read-write
+// because the `plasticity_return_map` entry point mutates them in
+// place once per substep; `solve_color` only reads F_p (for the
+// elastic Neo-Hookean computation). Yield + hardening are read-only
+// material params.
+@group(5) @binding(10) var<storage, read_write> tet_f_plastic:                array<Mat3Cols>;
+@group(5) @binding(11) var<storage, read_write> tet_plastic_strain:           array<f32>;
+@group(5) @binding(12) var<storage, read>       tet_yield_stress:             array<f32>;
+@group(5) @binding(13) var<storage, read>       tet_hardening:                array<f32>;
 
 const KIND_SPHERE:   u32 = 0u;
 const KIND_PLANE:    u32 = 1u;
@@ -345,6 +354,108 @@ fn cofactor3(m: mat3x3<f32>) -> mat3x3<f32> {
     );
 }
 
+// Stage 20.3 — 3×3 SVD via cyclic one-sided Jacobi (mirrors
+// `mpm.wgsl`'s `svd3_jacobi` and the CPU oracle in `dense3.rs::svd3`).
+// Returns `(U, σ, V)` such that `M = U · diag(σ) · Vᵀ`.
+struct Svd3 { u: mat3x3<f32>, s: vec3<f32>, v: mat3x3<f32> };
+
+fn svd3_jacobi(m_in: mat3x3<f32>) -> Svd3 {
+    var v = mat3x3<f32>(
+        vec3<f32>(1.0, 0.0, 0.0),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+    );
+    var a = transpose(m_in) * m_in;
+    let max_sweeps: u32 = 16u;
+    for (var sweep: u32 = 0u; sweep < max_sweeps; sweep = sweep + 1u) {
+        var max_off: f32 = 0.0;
+        for (var p: u32 = 0u; p < 3u; p = p + 1u) {
+            for (var q: u32 = p + 1u; q < 3u; q = q + 1u) {
+                let apq = a[q][p];
+                if (abs(apq) > max_off) { max_off = abs(apq); }
+                if (abs(apq) < 1.0e-7) { continue; }
+                let app = a[p][p];
+                let aqq = a[q][q];
+                let theta = (aqq - app) / (2.0 * apq);
+                var t: f32;
+                if (theta >= 0.0) {
+                    t = 1.0 / (theta + sqrt(1.0 + theta * theta));
+                } else {
+                    t = 1.0 / (theta - sqrt(1.0 + theta * theta));
+                }
+                let c = 1.0 / sqrt(1.0 + t * t);
+                let s = t * c;
+                let app_new = app - t * apq;
+                let aqq_new = aqq + t * apq;
+                a[p][p] = app_new;
+                a[q][q] = aqq_new;
+                a[q][p] = 0.0;
+                a[p][q] = 0.0;
+                for (var k: u32 = 0u; k < 3u; k = k + 1u) {
+                    if (k != p && k != q) {
+                        let akp = a[p][k];
+                        let akq = a[q][k];
+                        a[p][k] = c * akp - s * akq;
+                        a[q][k] = s * akp + c * akq;
+                        a[k][p] = a[p][k];
+                        a[k][q] = a[q][k];
+                    }
+                }
+                for (var k: u32 = 0u; k < 3u; k = k + 1u) {
+                    let vkp = v[p][k];
+                    let vkq = v[q][k];
+                    v[p][k] = c * vkp - s * vkq;
+                    v[q][k] = s * vkp + c * vkq;
+                }
+            }
+        }
+        if (max_off < 1.0e-7) { break; }
+    }
+    var sigma: vec3<f32>;
+    var u_out = mat3x3<f32>(
+        vec3<f32>(0.0, 0.0, 0.0),
+        vec3<f32>(0.0, 0.0, 0.0),
+        vec3<f32>(0.0, 0.0, 0.0),
+    );
+    for (var i: u32 = 0u; i < 3u; i = i + 1u) {
+        let vi = vec3<f32>(v[i][0], v[i][1], v[i][2]);
+        let mvi = m_in * vi;
+        let s_norm = length(mvi);
+        sigma[i] = s_norm;
+        if (s_norm > 1.0e-12) {
+            let col = mvi / s_norm;
+            u_out[i][0] = col.x;
+            u_out[i][1] = col.y;
+            u_out[i][2] = col.z;
+        } else {
+            u_out[i][0] = select(0.0, 1.0, i == 0u);
+            u_out[i][1] = select(0.0, 1.0, i == 1u);
+            u_out[i][2] = select(0.0, 1.0, i == 2u);
+        }
+    }
+    let detu = determinant(u_out);
+    if (detu < 0.0) {
+        var min_i: u32 = 0u;
+        if (sigma[1] < sigma[min_i]) { min_i = 1u; }
+        if (sigma[2] < sigma[min_i]) { min_i = 2u; }
+        u_out[min_i][0] = -u_out[min_i][0];
+        u_out[min_i][1] = -u_out[min_i][1];
+        u_out[min_i][2] = -u_out[min_i][2];
+        sigma[min_i] = -sigma[min_i];
+    }
+    let detv = determinant(v);
+    if (detv < 0.0) {
+        var min_i: u32 = 0u;
+        if (abs(sigma[1]) < abs(sigma[min_i])) { min_i = 1u; }
+        if (abs(sigma[2]) < abs(sigma[min_i])) { min_i = 2u; }
+        v[min_i][0] = -v[min_i][0];
+        v[min_i][1] = -v[min_i][1];
+        v[min_i][2] = -v[min_i][2];
+        sigma[min_i] = -sigma[min_i];
+    }
+    return Svd3(u_out, sigma, v);
+}
+
 // Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
 // vertex order `v_order ∈ {0..3}`. Mirrors the CPU
 // `neo_hookean_vertex_block`. Uses the Smith et al. 2018 stable-NH
@@ -377,9 +488,20 @@ fn tet_neo_hookean_block(
     let mu = mu_l;
     let lam = lam_l + mu_l;
 
-    // Deformation gradient F = Ds · Dm⁻¹.
+    // Deformation gradient F = Ds · Dm⁻¹. Stage 20.3 — for plastic
+    // tets the elastic Neo-Hookean energy is evaluated on
+    // `F_e = F · F_p⁻¹` (multiplicative split). Pure-elastic path
+    // (F_p = I) short-circuits the inverse + multiply.
     let ds = mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0);
-    let f_mat = ds * dm_inv;
+    let f_full = ds * dm_inv;
+    let fp_raw = tet_f_plastic[tet_id];
+    let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
+    let fp_det = determinant(fp_mat);
+    var f_mat = f_full;
+    if (abs(fp_det - 1.0) > 1e-6 && abs(fp_det) > 1e-6) {
+        // Real plastic deformation — multiply by F_p⁻¹ (3×3 inverse).
+        f_mat = f_full * mat3_inverse(fp_mat);
+    }
 
     let j = determinant(f_mat);
     let lam_safe = select(sign(lam) * 1e-6, lam, abs(lam) > 1e-6);
@@ -742,4 +864,118 @@ fn velocity_recovery(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let dx = particle_q[i].xyz - particle_q_prev[i].xyz;
     particle_qd[i] = vec4<f32>(dx / u.dt, 0.0);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Stage 20.3 — von Mises return mapping (one thread per tet).
+//
+// Reads the post-step positions to evaluate the trial elastic
+// gradient `F_e_trial = F · F_p⁻¹`. SVD into `U·Σ·Vᵀ`, take Hencky
+// log strains, split into mean + deviator. Trial Kirchhoff deviator
+// magnitude `‖s‖ = 2μ · ‖dev_ε‖` checked against `√(2/3)·σ_y(ε_p)`.
+// If yielding, project deviator back along its trial direction by
+// `Δγ = f_yield / (2μ + (2/3)·H)` (consistent return mapping for
+// linear isotropic hardening). Reconstruct `F_e_new = U · Σ_e · Vᵀ`,
+// set `F_p_new = F_e_new⁻¹ · F`, accumulate `ε_p`.
+//
+// Damping: cap the plastic strain increment at half the trial
+// deviator norm to defuse overshoot oscillations (the discrete
+// implicit-Euler step can pull the trial state past the yield
+// surface; halving the increment keeps the iteration stable without
+// the cost of a full line search).
+// ─────────────────────────────────────────────────────────────────
+@compute @workgroup_size(64)
+fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tet = gid.x;
+    if (tet >= u.work_count) { return; }
+    let sigma_y0 = tet_yield_stress[tet];
+    // Pure-elastic short-circuit: σ_y₀ = INFINITY (encoded as a
+    // very large finite number on upload to avoid f32 inf-bit
+    // surprises).
+    if (sigma_y0 > 1.0e29) { return; }
+    let mu_l = tet_mu[tet];
+    let h_mod = tet_hardening[tet];
+
+    let i0 = tet_indices[tet * 4u];
+    let i1 = tet_indices[tet * 4u + 1u];
+    let i2 = tet_indices[tet * 4u + 2u];
+    let i3 = tet_indices[tet * 4u + 3u];
+    let p0 = particle_q[i0].xyz;
+    let p1 = particle_q[i1].xyz;
+    let p2 = particle_q[i2].xyz;
+    let p3 = particle_q[i3].xyz;
+
+    let dm_inv_raw = tet_dm_inv[tet];
+    let dm_inv = mat3x3<f32>(dm_inv_raw.col0.xyz, dm_inv_raw.col1.xyz, dm_inv_raw.col2.xyz);
+    let ds = mat3x3<f32>(p1 - p0, p2 - p0, p3 - p0);
+    let f_full = ds * dm_inv;
+
+    let fp_raw = tet_f_plastic[tet];
+    let fp_old = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
+    let fp_det = determinant(fp_old);
+    if (!(fp_det == fp_det) || abs(fp_det) < 1e-12) {
+        // Reset on degenerate F_p.
+        tet_f_plastic[tet] = Mat3Cols(
+            vec4<f32>(1.0, 0.0, 0.0, 0.0),
+            vec4<f32>(0.0, 1.0, 0.0, 0.0),
+            vec4<f32>(0.0, 0.0, 1.0, 0.0),
+        );
+        return;
+    }
+    let fe_trial = f_full * mat3_inverse(fp_old);
+
+    let svd = svd3_jacobi(fe_trial);
+    let sigma = vec3<f32>(
+        clamp(svd.s.x, 1e-3, 1e3),
+        clamp(svd.s.y, 1e-3, 1e3),
+        clamp(svd.s.z, 1e-3, 1e3),
+    );
+    let eps = vec3<f32>(log(sigma.x), log(sigma.y), log(sigma.z));
+    let trace_eps = eps.x + eps.y + eps.z;
+    let mean = trace_eps / 3.0;
+    let dev = eps - vec3<f32>(mean, mean, mean);
+    let dev_norm = length(dev);
+
+    let s_trial = 2.0 * mu_l * dev_norm;
+    let sigma_y = sigma_y0 + h_mod * tet_plastic_strain[tet];
+    let sqrt_2_3: f32 = 0.81649658;
+    let f_yield = s_trial - sqrt_2_3 * sigma_y;
+    if (f_yield <= 0.0 || dev_norm < 1e-12) {
+        return;
+    }
+    let denom = 2.0 * mu_l + (2.0 / 3.0) * h_mod;
+    let dgamma_raw = max(f_yield / denom, 0.0);
+    // Damping cap (overshoot defuse).
+    let dgamma = min(dgamma_raw, 0.5 * dev_norm);
+    let scale = (dev_norm - dgamma) / dev_norm;
+    let new_dev = dev * scale;
+    let new_eps = new_dev + vec3<f32>(mean, mean, mean);
+    let new_sigma = vec3<f32>(
+        clamp(exp(new_eps.x), 0.05, 20.0),
+        clamp(exp(new_eps.y), 0.05, 20.0),
+        clamp(exp(new_eps.z), 0.05, 20.0),
+    );
+    let sigma_diag = mat3x3<f32>(
+        vec3<f32>(new_sigma.x, 0.0, 0.0),
+        vec3<f32>(0.0, new_sigma.y, 0.0),
+        vec3<f32>(0.0, 0.0, new_sigma.z),
+    );
+    let fe_new = svd.u * sigma_diag * transpose(svd.v);
+    let fe_det = determinant(fe_new);
+    if (!(fe_det == fe_det) || abs(fe_det) < 1e-12) {
+        return;
+    }
+    let fp_new = mat3_inverse(fe_new) * f_full;
+    let fp_new_det = determinant(fp_new);
+    if (!(fp_new_det == fp_new_det) || abs(fp_new_det) < 0.05 || abs(fp_new_det) > 20.0) {
+        // Sanity-clamp: skip the update if F_p_new is degenerate. The
+        // CPU oracle does the same.
+        return;
+    }
+    tet_f_plastic[tet] = Mat3Cols(
+        vec4<f32>(fp_new[0], 0.0),
+        vec4<f32>(fp_new[1], 0.0),
+        vec4<f32>(fp_new[2], 0.0),
+    );
+    tet_plastic_strain[tet] = min(tet_plastic_strain[tet] + sqrt_2_3 * dgamma, 10.0);
 }

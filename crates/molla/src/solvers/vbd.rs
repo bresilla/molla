@@ -287,11 +287,26 @@ impl Solver for VbdSolver {
                 let mut v_in = state_in.particle_qd.host()?.to_vec();
                 let mut p_out = vec![Vec3::ZERO; p_in.len()];
                 let mut v_out = vec![Vec3::ZERO; v_in.len()];
+                // Stage 20.3 — copy the plasticity state in/out around
+                // the substep loop so each substep's return mapping
+                // sees the previous substep's update. State lives
+                // host-side on CPU; on GPU it stays device-resident.
+                let mut fp = if model.tet_count > 0 {
+                    state_in.tet_f_plastic.host()?.to_vec()
+                } else {
+                    Vec::new()
+                };
+                let mut eps_p = if model.tet_count > 0 {
+                    state_in.tet_plastic_strain.host()?.to_vec()
+                } else {
+                    Vec::new()
+                };
                 for _ in 0..n_sub {
                     cpu_step(
                         model,
                         &p_in,
                         &v_in,
+                        &fp,
                         dt_sub,
                         self.iterations,
                         self.contact_stiffness,
@@ -300,11 +315,23 @@ impl Solver for VbdSolver {
                         &mut p_out,
                         &mut v_out,
                     )?;
+                    // Plasticity return-mapping pass per tet (uses the
+                    // post-step positions). Mutates `fp` + `eps_p`.
+                    if model.tet_count > 0 {
+                        cpu_plasticity_return_map(model, &p_out, &mut fp, &mut eps_p)?;
+                    }
                     std::mem::swap(&mut p_in, &mut p_out);
                     std::mem::swap(&mut v_in, &mut v_out);
                 }
                 state_out.particle_q.host_mut()?.copy_from_slice(&p_in);
                 state_out.particle_qd.host_mut()?.copy_from_slice(&v_in);
+                if model.tet_count > 0 {
+                    state_out.tet_f_plastic.host_mut()?.copy_from_slice(&fp);
+                    state_out
+                        .tet_plastic_strain
+                        .host_mut()?
+                        .copy_from_slice(&eps_p);
+                }
                 // Body state passes through.
                 let q_in = state_in.body_q.host()?.to_vec();
                 let qd_in = state_in.body_qd.host()?.to_vec();
@@ -401,6 +428,7 @@ pub(crate) fn cpu_step(
     model: &Model,
     particle_q_in: &[Vec3],
     particle_qd_in: &[Vec3],
+    tet_f_plastic: &[crate::math::Mat3],
     dt: Real,
     iterations: usize,
     contact_stiffness: f64,
@@ -564,6 +592,17 @@ pub(crate) fn cpu_step(
                 for slot in (to_lo..to_hi).step_by(2) {
                     let tet = vadj_tets[slot] as usize;
                     let order = vadj_tets[slot + 1] as usize;
+                    // Stage 20.3 — F_p reference. When a tet has been
+                    // unloaded after plastic flow, F_p is non-identity
+                    // and the elastic energy is evaluated on
+                    // `F_e = F · F_p⁻¹` so the tet wants to return to
+                    // its plastically-deformed configuration rather
+                    // than the original rest state.
+                    let fp_tet = if tet_f_plastic.is_empty() {
+                        crate::math::Mat3::IDENTITY
+                    } else {
+                        tet_f_plastic[tet]
+                    };
                     let (f_t, h_t) = neo_hookean_vertex_block(
                         tet,
                         order,
@@ -573,6 +612,7 @@ pub(crate) fn cpu_step(
                         tet_rest_volume,
                         tet_mu,
                         tet_lambda,
+                        fp_tet,
                     );
                     f += f_t;
                     h = mat3_add(h, h_t);
@@ -821,6 +861,7 @@ pub(crate) fn neo_hookean_vertex_block(
     tet_rest_volume: &[Real],
     tet_mu: &[Real],
     tet_lambda: &[Real],
+    fp: crate::math::Mat3,
 ) -> (Vec3, crate::math::Mat3) {
     use crate::math::Mat3;
     let v0 = x[tet_indices[tet_id * 4] as usize];
@@ -836,9 +877,28 @@ pub(crate) fn neo_hookean_vertex_block(
     let mu = mu_l;
     let lam = lam_l + mu_l;
 
-    // Deformation gradient.
+    // Deformation gradient F = Ds · Dm⁻¹. The *elastic* deformation
+    // gradient is F_e = F · F_p⁻¹ (multiplicative split). For purely
+    // elastic tets, F_p = I so F_e = F. The Neo-Hookean kernel below
+    // is identical to Stage 20.2 except it evaluates the energy on
+    // F_e instead of F.
     let ds = Mat3::from_cols(v1 - v0, v2 - v0, v3 - v0);
-    let f_mat = ds * dm_inv;
+    let f_full = ds * dm_inv;
+    // Compute F_p⁻¹. We *could* invert each call, but for elastic-only
+    // tets F_p = I so the inverse is trivial; for plastic tets we do
+    // a real inverse. The branch is on a determinant check (cheaper
+    // than a full inverse + matrix multiply on the trivial path).
+    let fp_det = fp.determinant();
+    let f_mat = if (fp_det - 1.0).abs() < 1.0e-9 && fp.x_axis.x.is_finite() {
+        // F_p = I (or numerically indistinguishable) — skip the inverse.
+        f_full
+    } else if fp_det.abs() > 1.0e-12 {
+        f_full * fp.inverse()
+    } else {
+        // Singular F_p: fall back to identity (no plastic effect this
+        // step). Should not happen with a sane return mapping.
+        f_full
+    };
 
     // Useful quantities.
     let j = f_mat.determinant();
@@ -1009,6 +1069,146 @@ fn solve_3x3(h: crate::math::Mat3, f: Vec3) -> Option<Vec3> {
         return None;
     }
     Some(h.inverse() * f)
+}
+
+/// Stage 20.3 — per-tet von Mises return-mapping pass (CPU oracle).
+///
+/// For each tet:
+///  1. Compute trial `F = Ds · Dm⁻¹` from the post-step positions.
+///  2. Compute trial elastic gradient `F_e_trial = F · F_p⁻¹` and SVD
+///     it: `F_e_trial = U · Σ · Vᵀ`.
+///  3. Take Hencky log strains `ε = log(σ)`, split into mean +
+///     deviator, and form the trial deviatoric Kirchhoff stress
+///     `s = 2μ · dev(ε)`.
+///  4. Check yield: `f = ‖s‖ - sqrt(2/3) · σ_y(ε_p)` with
+///     `σ_y(ε_p) = σ_y0 + H · ε_p`. If `f ≤ 0` → elastic, no update.
+///  5. Else: compute plastic multiplier
+///     `Δγ = f / (2μ + (2/3)·H)`; pull dev_ε back along the trial
+///     direction by `Δγ`; reconstruct `Σ_e = exp(ε_new)` and
+///     `F_e_new = U · Σ_e · Vᵀ`; set `F_p_new = F_e_new⁻¹ · F` and
+///     `ε_p ← ε_p + sqrt(2/3)·Δγ`.
+///
+/// Numerical guards:
+/// - Singular values clamped to `[1e-3, 1e3]` to keep `log(σ)` finite
+///   on a near-pancaked tet.
+/// - Plastic multiplier capped to half the trial deviator norm to
+///   avoid the classic "overshoot the yield surface and oscillate"
+///   pathology (line-search is overkill; this is enough damping).
+/// - `F_p` clamped to `det(F_p) ∈ [0.05, 20]` so a misbehaving tet
+///   doesn't propagate Inf into the next step.
+pub(crate) fn cpu_plasticity_return_map(
+    model: &Model,
+    particle_q: &[Vec3],
+    fp: &mut [crate::math::Mat3],
+    eps_p: &mut [Real],
+) -> Result<()> {
+    use crate::math::{dense3::svd3, Mat3};
+    let tet_indices = model.tet_indices.host()?;
+    let tet_dm_inv = model.tet_dm_inv.host()?;
+    let tet_mu = model.tet_mu.host()?;
+    let tet_yield = model.tet_yield_stress.host()?;
+    let tet_hard = model.tet_hardening.host()?;
+    let n_tets = model.tet_count;
+
+    let sqrt_2_3 = (2.0_f64 / 3.0).sqrt();
+    for tet in 0..n_tets {
+        let sigma_y0 = tet_yield[tet];
+        // Pure-elastic short-circuit (back-compat path; F_p stays I).
+        if !sigma_y0.is_finite() || sigma_y0 > 1.0e29 {
+            continue;
+        }
+        let mu = tet_mu[tet];
+        let h = tet_hard[tet];
+
+        let v0 = particle_q[tet_indices[tet * 4] as usize];
+        let v1 = particle_q[tet_indices[tet * 4 + 1] as usize];
+        let v2 = particle_q[tet_indices[tet * 4 + 2] as usize];
+        let v3 = particle_q[tet_indices[tet * 4 + 3] as usize];
+        let dm_inv = tet_dm_inv[tet];
+        let ds = Mat3::from_cols(v1 - v0, v2 - v0, v3 - v0);
+        let f_full = ds * dm_inv;
+
+        let fp_old = fp[tet];
+        let fp_det = fp_old.determinant();
+        if !fp_det.is_finite() || fp_det.abs() < 1.0e-12 {
+            // Reset on degenerate F_p — should never happen with the
+            // clamp below but defensive.
+            fp[tet] = Mat3::IDENTITY;
+            continue;
+        }
+        let fe_trial = f_full * fp_old.inverse();
+
+        let (u_mat, sigma_raw, v_mat) = svd3(fe_trial);
+        // Clamp singular values to keep log finite. A pancaked tet
+        // (σ near 0) would otherwise drive trace_eps → -∞ and the
+        // return mapping would project back to a degenerate state.
+        let sigma = crate::math::Vec3::new(
+            sigma_raw.x.clamp(1.0e-3, 1.0e3),
+            sigma_raw.y.clamp(1.0e-3, 1.0e3),
+            sigma_raw.z.clamp(1.0e-3, 1.0e3),
+        );
+        let eps = crate::math::Vec3::new(sigma.x.ln(), sigma.y.ln(), sigma.z.ln());
+        let trace_eps = eps.x + eps.y + eps.z;
+        let mean = trace_eps / 3.0;
+        let dev = crate::math::Vec3::new(eps.x - mean, eps.y - mean, eps.z - mean);
+        let dev_norm = dev.length();
+
+        // Trial Kirchhoff deviator norm (von Mises): ‖s‖ = 2μ · ‖dev_ε‖.
+        let s_trial = 2.0 * mu * dev_norm;
+        let sigma_y = sigma_y0 + h * eps_p[tet];
+        // von Mises yield condition: f = ‖s‖ - √(2/3)·σ_y.
+        let f_yield = s_trial - sqrt_2_3 * sigma_y;
+        if f_yield <= 0.0 || dev_norm < 1.0e-12 {
+            continue;
+        }
+        // Closed-form plastic multiplier for linear isotropic
+        // hardening (consistent return mapping):
+        //   Δγ = f_yield / (2μ + (2/3)·H)
+        let denom = 2.0 * mu + (2.0 / 3.0) * h;
+        let dgamma = (f_yield / denom).max(0.0);
+        // Damping cap to defuse the "overshoot the cylinder and
+        // oscillate" pathology. Capping at half the trial deviator
+        // strain (≈ pulling the trial state half-way back to the
+        // surface in the worst case) keeps the iteration stable
+        // without a full line search.
+        let dev_strain_increment = dgamma.min(0.5 * dev_norm);
+        // Pull the deviator back along its trial direction.
+        let scale = (dev_norm - dev_strain_increment) / dev_norm;
+        let new_dev = dev * scale;
+        let new_eps =
+            crate::math::Vec3::new(new_dev.x + mean, new_dev.y + mean, new_dev.z + mean);
+        let new_sigma = crate::math::Vec3::new(
+            new_eps.x.exp().clamp(0.05, 20.0),
+            new_eps.y.exp().clamp(0.05, 20.0),
+            new_eps.z.exp().clamp(0.05, 20.0),
+        );
+        let sigma_diag =
+            Mat3::from_cols(
+                Vec3::new(new_sigma.x, 0.0, 0.0),
+                Vec3::new(0.0, new_sigma.y, 0.0),
+                Vec3::new(0.0, 0.0, new_sigma.z),
+            );
+        let fe_new = u_mat * sigma_diag * v_mat.transpose();
+        let fe_det = fe_new.determinant();
+        if !fe_det.is_finite() || fe_det.abs() < 1.0e-12 {
+            continue;
+        }
+        // F = F_e · F_p ⇒ F_p_new = F_e_new⁻¹ · F.
+        let fp_new = fe_new.inverse() * f_full;
+        // Sanity-clamp det(F_p) so a misbehaving step doesn't poison
+        // the next one. det(F_p) ≈ 1 corresponds to volume-preserving
+        // plastic flow (the von Mises model is volume-preserving by
+        // construction; small drift is from the discrete return map).
+        let fp_new_det = fp_new.determinant();
+        if !fp_new_det.is_finite() || fp_new_det.abs() < 0.05 || fp_new_det.abs() > 20.0 {
+            // Reject this step's plastic update; keep F_p as-is.
+            continue;
+        }
+        fp[tet] = fp_new;
+        // Equivalent plastic strain accumulator: classic √(2/3)·Δγ.
+        eps_p[tet] = (eps_p[tet] + sqrt_2_3 * dev_strain_increment).min(10.0);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
