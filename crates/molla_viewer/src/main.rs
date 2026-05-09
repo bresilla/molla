@@ -38,7 +38,7 @@ use bevy::pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin};
 use bevy::prelude::*;
 #[cfg(not(feature = "profile"))]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures};
 use bevy_frost::pane::{Pane2, PaneAnchor, RailZone};
 use bevy_frost::prelude::*;
 use bevy_frost::ribbon::{
@@ -1900,9 +1900,9 @@ fn build_camera_model() -> (mp::Model, Vec<BodyVisual>) {
 }
 
 /// Per-frame state for the camera-sensor demo. The `TiledCamera` is
-/// built lazily on first entry to the scene; the most recent CPU
-/// download of every channel is kept so the right-rail pane can paint
-/// thumbnails without re-downloading.
+/// built lazily on first entry to the scene; pixel bytes for every
+/// channel get written into Bevy `Image` assets each frame and the
+/// right-rail pane displays them via `bevy_egui`'s user-texture path.
 #[derive(Resource, Default)]
 struct CameraExampleState {
     sensor: Option<TiledCamera>,
@@ -1913,20 +1913,20 @@ struct CameraExampleState {
     fov_y: f32,
     /// Most recent camera world pose, for the readout.
     last_pose: Option<mp::Transform>,
-    /// Last download of each channel. `None` until the first dispatch.
-    last_color: Option<Vec<u32>>,
-    last_depth: Option<Vec<molla::math::Real>>,
-    last_normal: Option<Vec<MVec3>>,
-    last_albedo: Option<Vec<u32>>,
-    last_shape_index: Option<Vec<u32>>,
-    /// Cached egui texture handles (one per channel) — re-uploaded
-    /// each frame from the latest channel buffer. None until the
-    /// first paint.
-    tex_color: Option<egui::TextureHandle>,
-    tex_depth: Option<egui::TextureHandle>,
-    tex_normal: Option<egui::TextureHandle>,
-    tex_albedo: Option<egui::TextureHandle>,
-    tex_shape_index: Option<egui::TextureHandle>,
+    /// Bevy `Image` assets backing each channel thumbnail. Allocated
+    /// once on first dispatch and rewritten in-place each frame; the
+    /// matching `egui::TextureId` is cached after registering the
+    /// handle with `EguiUserTextures`.
+    image_color: Option<Handle<Image>>,
+    image_depth: Option<Handle<Image>>,
+    image_normal: Option<Handle<Image>>,
+    image_albedo: Option<Handle<Image>>,
+    image_index: Option<Handle<Image>>,
+    tex_id_color: Option<egui::TextureId>,
+    tex_id_depth: Option<egui::TextureId>,
+    tex_id_normal: Option<egui::TextureId>,
+    tex_id_albedo: Option<egui::TextureId>,
+    tex_id_index: Option<egui::TextureId>,
     /// Min / max depth observed last frame — used to scale the depth
     /// thumbnail to a useful greyscale range.
     last_depth_range: Option<(f32, f32)>,
@@ -2415,16 +2415,20 @@ fn apply_scene_switch(
     camera.sensor = None;
     camera.elapsed = 0.0;
     camera.last_pose = None;
-    camera.last_color = None;
-    camera.last_depth = None;
-    camera.last_normal = None;
-    camera.last_albedo = None;
-    camera.last_shape_index = None;
-    camera.tex_color = None;
-    camera.tex_depth = None;
-    camera.tex_normal = None;
-    camera.tex_albedo = None;
-    camera.tex_shape_index = None;
+    // Drop the per-channel Bevy Image handles + cached egui texture
+    // ids — the next `update_camera_example` will reallocate against
+    // the new sim. `bevy_egui::free_egui_textures_system` cleans up the
+    // egui-side mapping when the strong handle drops.
+    camera.image_color = None;
+    camera.image_depth = None;
+    camera.image_normal = None;
+    camera.image_albedo = None;
+    camera.image_index = None;
+    camera.tex_id_color = None;
+    camera.tex_id_depth = None;
+    camera.tex_id_normal = None;
+    camera.tex_id_albedo = None;
+    camera.tex_id_index = None;
     camera.last_depth_range = None;
 
     for e in bodies_q.iter() {
@@ -3546,10 +3550,13 @@ fn update_contact_example(
 /// scene each frame and downloads every channel. The right-rail pane
 /// (`camera_pane`) reads from the cached arrays. No-op when the
 /// scene isn't active.
+#[allow(clippy::too_many_arguments)]
 fn update_camera_example(
     time: Res<Time>,
     mut sim: ResMut<Sim>,
     mut state: ResMut<CameraExampleState>,
+    mut images: ResMut<Assets<Image>>,
+    mut user_textures: ResMut<EguiUserTextures>,
 ) {
     if sim.scene != Scene::Camera {
         return;
@@ -3578,6 +3585,26 @@ fn update_camera_example(
                 return;
             }
         }
+    }
+
+    // Lazily allocate one Bevy `Image` asset per channel + register it
+    // with `EguiUserTextures` so the pane can address it via TextureId.
+    if state.image_color.is_none() {
+        let (h_color, id_color) = alloc_thumb_image(&mut images, &mut user_textures);
+        let (h_depth, id_depth) = alloc_thumb_image(&mut images, &mut user_textures);
+        let (h_normal, id_normal) = alloc_thumb_image(&mut images, &mut user_textures);
+        let (h_albedo, id_albedo) = alloc_thumb_image(&mut images, &mut user_textures);
+        let (h_index, id_index) = alloc_thumb_image(&mut images, &mut user_textures);
+        state.image_color = Some(h_color);
+        state.image_depth = Some(h_depth);
+        state.image_normal = Some(h_normal);
+        state.image_albedo = Some(h_albedo);
+        state.image_index = Some(h_index);
+        state.tex_id_color = Some(id_color);
+        state.tex_id_depth = Some(id_depth);
+        state.tex_id_normal = Some(id_normal);
+        state.tex_id_albedo = Some(id_albedo);
+        state.tex_id_index = Some(id_index);
     }
 
     // Push the latest FOV slider into the sensor config (width/height
@@ -3628,14 +3655,16 @@ fn update_camera_example(
         (pose, c, d, n, a, i)
     };
     state.last_pose = last_pose;
-    if let Ok(c) = snapshot_color {
-        state.last_color = Some(c);
+
+    if let (Ok(c), Some(handle)) = (snapshot_color.as_ref(), state.image_color.as_ref()) {
+        if let Some(img) = images.get_mut(handle) {
+            write_rgba_u32_into_image(img, c);
+        }
     }
-    if let Ok(d) = snapshot_depth {
-        // Find min/max of valid (positive) depths for thumbnail scaling.
+    if let Ok(d) = snapshot_depth.as_ref() {
         let mut lo = f32::INFINITY;
         let mut hi = 0.0_f32;
-        for &v in &d {
+        for &v in d {
             let f = v as f32;
             if f > 0.0 {
                 if f < lo { lo = f; }
@@ -3643,17 +3672,147 @@ fn update_camera_example(
             }
         }
         if !lo.is_finite() || hi <= lo { lo = 0.0; hi = 1.0; }
-        state.last_depth = Some(d);
         state.last_depth_range = Some((lo, hi));
+        if let Some(handle) = state.image_depth.as_ref() {
+            if let Some(img) = images.get_mut(handle) {
+                write_depth_into_image(img, d, lo, hi);
+            }
+        }
     }
-    if let Ok(n) = snapshot_normal {
-        state.last_normal = Some(n);
+    if let (Ok(n), Some(handle)) = (snapshot_normal.as_ref(), state.image_normal.as_ref()) {
+        if let Some(img) = images.get_mut(handle) {
+            write_normal_into_image(img, n);
+        }
     }
-    if let Ok(a) = snapshot_albedo {
-        state.last_albedo = Some(a);
+    if let (Ok(a), Some(handle)) = (snapshot_albedo.as_ref(), state.image_albedo.as_ref()) {
+        if let Some(img) = images.get_mut(handle) {
+            write_rgba_u32_into_image(img, a);
+        }
     }
-    if let Ok(i) = snapshot_index {
-        state.last_shape_index = Some(i);
+    if let (Ok(i), Some(handle)) = (snapshot_index.as_ref(), state.image_index.as_ref()) {
+        if let Some(img) = images.get_mut(handle) {
+            write_shape_index_into_image(img, i);
+        }
+    }
+}
+
+/// Allocate a `CAMERA_IMG_W × CAMERA_IMG_H` RGBA8 Bevy image and
+/// register it with bevy_egui's user-texture map. The image data
+/// starts black; subsequent frames mutate the bytes in place.
+fn alloc_thumb_image(
+    images: &mut Assets<Image>,
+    user_textures: &mut EguiUserTextures,
+) -> (Handle<Image>, egui::TextureId) {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let size = Extent3d {
+        width: CAMERA_IMG_W,
+        height: CAMERA_IMG_H,
+        depth_or_array_layers: 1,
+    };
+    let img = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    let handle = images.add(img);
+    let id = user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
+    (handle, id)
+}
+
+fn write_rgba_u32_into_image(img: &mut Image, src: &[u32]) {
+    let Some(data) = img.data.as_mut() else { return };
+    if data.len() != src.len() * 4 {
+        return;
+    }
+    for (i, &p) in src.iter().enumerate() {
+        let r = (p & 0xff) as u8;
+        let g = ((p >> 8) & 0xff) as u8;
+        let b = ((p >> 16) & 0xff) as u8;
+        let a = ((p >> 24) & 0xff) as u8;
+        let off = i * 4;
+        data[off] = r;
+        data[off + 1] = g;
+        data[off + 2] = b;
+        data[off + 3] = a;
+    }
+}
+
+fn write_depth_into_image(img: &mut Image, src: &[molla::math::Real], lo: f32, hi: f32) {
+    let Some(data) = img.data.as_mut() else { return };
+    if data.len() != src.len() * 4 {
+        return;
+    }
+    let span = (hi - lo).max(1e-6);
+    for (i, &v) in src.iter().enumerate() {
+        let off = i * 4;
+        let f = v as f32;
+        let g = if f <= 0.0 {
+            0
+        } else {
+            let t = ((f - lo) / span).clamp(0.0, 1.0);
+            ((1.0 - t) * 255.0) as u8
+        };
+        data[off] = g;
+        data[off + 1] = g;
+        data[off + 2] = g;
+        data[off + 3] = 255;
+    }
+}
+
+fn write_normal_into_image(img: &mut Image, src: &[MVec3]) {
+    let Some(data) = img.data.as_mut() else { return };
+    if data.len() != src.len() * 4 {
+        return;
+    }
+    for (i, v) in src.iter().enumerate() {
+        let off = i * 4;
+        let len2 = v.length_squared();
+        if len2 < 1e-9 {
+            data[off] = 0;
+            data[off + 1] = 0;
+            data[off + 2] = 0;
+        } else {
+            data[off] = ((v.x as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            data[off + 1] = ((v.y as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            data[off + 2] = ((v.z as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+        }
+        data[off + 3] = 255;
+    }
+}
+
+fn write_shape_index_into_image(img: &mut Image, src: &[u32]) {
+    let Some(data) = img.data.as_mut() else { return };
+    if data.len() != src.len() * 4 {
+        return;
+    }
+    const PALETTE: &[(u8, u8, u8)] = &[
+        (231, 76, 60),
+        (52, 152, 219),
+        (46, 204, 113),
+        (241, 196, 15),
+        (155, 89, 182),
+        (26, 188, 156),
+        (230, 126, 34),
+        (192, 57, 43),
+        (41, 128, 185),
+        (39, 174, 96),
+        (211, 84, 0),
+        (142, 68, 173),
+    ];
+    for (i, &idx) in src.iter().enumerate() {
+        let off = i * 4;
+        let (r, g, b) = if idx == 0xffff_ffff {
+            (0, 0, 0)
+        } else {
+            PALETTE[(idx as usize) % PALETTE.len()]
+        };
+        data[off] = r;
+        data[off + 1] = g;
+        data[off + 2] = b;
+        data[off + 3] = 255;
     }
 }
 
@@ -4385,163 +4544,44 @@ fn camera_pane(ui: &mut egui::Ui, state: &mut CameraExampleState) {
     }
     ui.separator();
 
-    let w = CAMERA_IMG_W as usize;
-    let h = CAMERA_IMG_H as usize;
-    let pixels = w * h;
+    let h = CAMERA_IMG_H as f32;
+    let w = CAMERA_IMG_W as f32;
+    // Fixed thumbnail size — small enough to fit 5 in a default pane,
+    // big enough to read. 4:3 aspect to match the camera.
+    let thumb_w = 160.0_f32;
+    let thumb_h = thumb_w * (h / w);
+    let thumb = egui::vec2(thumb_w, thumb_h);
 
-    // Thumbnail size — keep it compact so all 5 fit comfortably in
-    // the right-rail pane width.
-    let thumb_w = 180.0;
-    let thumb_h = thumb_w * (h as f32 / w as f32);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .max_height(640.0)
+        .show(ui, |ui| {
+            if let Some(id) = state.tex_id_color {
+                ui.label("color (Lambertian)");
+                ui.image((id, thumb));
+            }
+            if let Some(id) = state.tex_id_depth {
+                let (lo, hi) = state.last_depth_range.unwrap_or((0.0, 1.0));
+                ui.label(format!("depth  [{lo:.2} .. {hi:.2}] m"));
+                ui.image((id, thumb));
+            }
+            if let Some(id) = state.tex_id_normal {
+                ui.label("normal (RGB = XYZ × 0.5 + 0.5)");
+                ui.image((id, thumb));
+            }
+            if let Some(id) = state.tex_id_albedo {
+                ui.label("albedo (raw material colour)");
+                ui.image((id, thumb));
+            }
+            if let Some(id) = state.tex_id_index {
+                ui.label("shape index (palette)");
+                ui.image((id, thumb));
+            }
+        });
 
-    // ── COLOR ──
-    if let Some(buf) = state.last_color.as_ref() {
-        if buf.len() == pixels {
-            let img = rgba_u32_to_color_image(buf, w, h);
-            let tex = state
-                .tex_color
-                .get_or_insert_with(|| ui.ctx().load_texture("camera_color", img.clone(), egui::TextureOptions::NEAREST));
-            tex.set(img, egui::TextureOptions::NEAREST);
-            ui.label("color (Lambertian)");
-            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
-        }
-    }
-
-    // ── DEPTH ──
-    if let Some(buf) = state.last_depth.as_ref() {
-        if buf.len() == pixels {
-            let (lo, hi) = state.last_depth_range.unwrap_or((0.0, 1.0));
-            let img = depth_to_color_image(buf, w, h, lo, hi);
-            let tex = state
-                .tex_depth
-                .get_or_insert_with(|| ui.ctx().load_texture("camera_depth", img.clone(), egui::TextureOptions::NEAREST));
-            tex.set(img, egui::TextureOptions::NEAREST);
-            ui.label(format!("depth  [{lo:.2} .. {hi:.2}] m"));
-            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
-        }
-    }
-
-    // ── NORMAL ──
-    if let Some(buf) = state.last_normal.as_ref() {
-        if buf.len() == pixels {
-            let img = normal_to_color_image(buf, w, h);
-            let tex = state
-                .tex_normal
-                .get_or_insert_with(|| ui.ctx().load_texture("camera_normal", img.clone(), egui::TextureOptions::NEAREST));
-            tex.set(img, egui::TextureOptions::NEAREST);
-            ui.label("normal (RGB = XYZ × 0.5 + 0.5)");
-            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
-        }
-    }
-
-    // ── ALBEDO ──
-    if let Some(buf) = state.last_albedo.as_ref() {
-        if buf.len() == pixels {
-            let img = rgba_u32_to_color_image(buf, w, h);
-            let tex = state
-                .tex_albedo
-                .get_or_insert_with(|| ui.ctx().load_texture("camera_albedo", img.clone(), egui::TextureOptions::NEAREST));
-            tex.set(img, egui::TextureOptions::NEAREST);
-            ui.label("albedo (raw material colour)");
-            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
-        }
-    }
-
-    // ── SHAPE INDEX ──
-    if let Some(buf) = state.last_shape_index.as_ref() {
-        if buf.len() == pixels {
-            let img = shape_index_to_color_image(buf, w, h);
-            let tex = state
-                .tex_shape_index
-                .get_or_insert_with(|| ui.ctx().load_texture("camera_shape_index", img.clone(), egui::TextureOptions::NEAREST));
-            tex.set(img, egui::TextureOptions::NEAREST);
-            ui.label("shape index (palette)");
-            ui.add(egui::Image::from_texture(&*tex).fit_to_exact_size(egui::vec2(thumb_w, thumb_h)));
-        }
-    }
-
-    if state.last_color.is_none() {
+    if state.tex_id_color.is_none() {
         ui.add_space(8.0);
         ui.small("waiting for first GPU dispatch…");
     }
 }
 
-// ── Channel-buffer → egui::ColorImage helpers (Camera scene) ──
-
-fn rgba_u32_to_color_image(buf: &[u32], w: usize, h: usize) -> egui::ColorImage {
-    let mut pixels = Vec::with_capacity(w * h);
-    for &p in buf {
-        let r = (p & 0xff) as u8;
-        let g = ((p >> 8) & 0xff) as u8;
-        let b = ((p >> 16) & 0xff) as u8;
-        let a = ((p >> 24) & 0xff) as u8;
-        pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
-    }
-    egui::ColorImage::new([w, h], pixels)
-}
-
-fn depth_to_color_image(buf: &[f64], w: usize, h: usize, lo: f32, hi: f32) -> egui::ColorImage {
-    let mut pixels = Vec::with_capacity(w * h);
-    let span = (hi - lo).max(1e-6);
-    for &v in buf {
-        let f = v as f32;
-        let c = if f <= 0.0 {
-            // Miss → black with low alpha so it reads as background.
-            egui::Color32::from_rgb(0, 0, 0)
-        } else {
-            // Linear remap to [0,1], invert so close = bright (more
-            // intuitive for a depth map).
-            let t = ((f - lo) / span).clamp(0.0, 1.0);
-            let g = ((1.0 - t) * 255.0) as u8;
-            egui::Color32::from_rgb(g, g, g)
-        };
-        pixels.push(c);
-    }
-    egui::ColorImage::new([w, h], pixels)
-}
-
-fn normal_to_color_image(buf: &[MVec3], w: usize, h: usize) -> egui::ColorImage {
-    let mut pixels = Vec::with_capacity(w * h);
-    for v in buf {
-        let len2 = v.length_squared();
-        let c = if len2 < 1e-9 {
-            egui::Color32::from_rgb(0, 0, 0)
-        } else {
-            let r = ((v.x as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
-            let g = ((v.y as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
-            let b = ((v.z as f32 * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
-            egui::Color32::from_rgb(r, g, b)
-        };
-        pixels.push(c);
-    }
-    egui::ColorImage::new([w, h], pixels)
-}
-
-fn shape_index_to_color_image(buf: &[u32], w: usize, h: usize) -> egui::ColorImage {
-    // 12-colour palette (vivid, repeats past 11 — fine for the demo).
-    const PALETTE: &[(u8, u8, u8)] = &[
-        (231, 76, 60),
-        (52, 152, 219),
-        (46, 204, 113),
-        (241, 196, 15),
-        (155, 89, 182),
-        (26, 188, 156),
-        (230, 126, 34),
-        (192, 57, 43),
-        (41, 128, 185),
-        (39, 174, 96),
-        (211, 84, 0),
-        (142, 68, 173),
-    ];
-    let mut pixels = Vec::with_capacity(w * h);
-    for &i in buf {
-        let c = if i == 0xffff_ffff {
-            egui::Color32::from_rgb(0, 0, 0)
-        } else {
-            let (r, g, b) = PALETTE[(i as usize) % PALETTE.len()];
-            egui::Color32::from_rgb(r, g, b)
-        };
-        pixels.push(c);
-    }
-    egui::ColorImage::new([w, h], pixels)
-}
