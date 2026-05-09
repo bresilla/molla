@@ -12206,7 +12206,15 @@ fn build_cable_y_junction_model() -> (mp::Model, Vec<BodyVisual>) {
 
     (b.build().expect("cable y junction model"), Vec::new())
 }
-fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+/// CartPole scene — identical topology to `NeuralPolicy` (cart on
+/// prismatic + pole on revolute) but driven by a hand-written PD on
+/// the pole angle. Port of `example_robot_cartpole.py` /
+/// `example_selection_cartpole.py`.
+fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) {
+    // Re-use the existing cart-pole topology — identical bodies and
+    // joints, just a different controller in the pre-step system.
+    build_neural_policy_model()
+}
 fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_fourbar_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_diff_ball_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
@@ -12486,11 +12494,92 @@ impl Default for DiffSpringExampleState {
 // scene-by-scene). Each is a no-op when the active scene differs.
 
 fn update_cartpole_example(
-    _time: Res<Time>,
-    _sim: ResMut<Sim>,
-    _state: ResMut<CartPoleExampleState>,
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut state: ResMut<CartPoleExampleState>,
 ) {
-    // Implemented below in the cart-pole section.
+    if sim.scene != Scene::CartPole {
+        if state.controller.is_some() {
+            state.controller = None;
+        }
+        return;
+    }
+    if sim.model.joint_dof_total < 2 {
+        return;
+    }
+    // Lazy-init: ControllerPd writes joint_force[dof]. We want force on
+    // the cart's prismatic joint (dof 0) — the controller will be
+    // commanded with a target derived from the pole angle (PD on
+    // theta, output goes to cart force).
+    if state.controller.is_none() {
+        let cfg = ControllerPdConfig {
+            dof: 0,
+            kp: state.kp as f64,
+            kd: state.kd as f64,
+            max_effort: 60.0,
+        };
+        match ControllerPd::new(&sim.engine, &sim.model, &[cfg]) {
+            Ok(c) => state.controller = Some(c),
+            Err(e) => {
+                warn!("cartpole: controller init failed: {e}");
+                return;
+            }
+        }
+    }
+
+    // Read state.
+    let q = match sim.state_a.joint_q.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let qd = match sim.state_a.joint_qd.host() {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    if q.len() < 2 || qd.len() < 2 {
+        return;
+    }
+    let cart_x = q[0] as f32;
+    let cart_xd = qd[0] as f32;
+    let theta = q[1] as f32;
+    let theta_d = qd[1] as f32;
+    state.last_x = cart_x;
+    state.last_theta = theta;
+
+    // Auto-perturb every 3s.
+    state.perturb_timer += time.delta_secs();
+    if state.auto_perturb && state.perturb_timer > 3.0 {
+        state.perturb_timer = 0.0;
+        let queue = sim.engine.queue().expect("queue").clone();
+        if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
+            if qd.len() >= 2 {
+                let sign = if theta >= 0.0 { -1.0 } else { 1.0 };
+                qd[1] += (sign * 1.5) as f64;
+            }
+        }
+        let _ = sim.state_a.joint_qd.upload(&queue);
+    }
+
+    // Inverted-pendulum balance law: force = -K * [x, xd, theta, thd].
+    // Keep things simple — use a closed-form linear policy and write
+    // joint_force[0] directly. (We bypass ControllerPd's joint-target
+    // path because we want the cart to track a pole-derived target,
+    // not a fixed cart x.)
+    let target_theta = state.target_theta;
+    let force = -(2.5 * cart_x + 1.0 * cart_xd
+        + (state.kp) * (theta - target_theta)
+        + (state.kd) * theta_d);
+    let force = force.clamp(-60.0, 60.0);
+    state.last_force = force;
+    {
+        let queue = sim.engine.queue().expect("queue").clone();
+        if let Ok(jf) = sim.control.joint_force.host_mut() {
+            if !jf.is_empty() {
+                jf[0] = force as f64;
+            }
+        }
+        let _ = sim.control.joint_force.upload(&queue);
+    }
 }
 
 fn update_conveyor_example(
