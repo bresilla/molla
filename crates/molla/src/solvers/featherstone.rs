@@ -830,9 +830,13 @@ fn cpu_step(
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
     eval_fk(model, state_out)?;
 
-    for f in state_out.body_f.host_mut()? {
-        *f = SpatialVector::ZERO;
-    }
+    // Propagate input body_f to output so substepping (which swaps
+    // state_a / state_b each iteration) sees the same external wrench
+    // each substep until the caller overwrites it.
+    state_out
+        .body_f
+        .host_mut()?
+        .copy_from_slice(&body_f_in);
     Ok(())
 }
 

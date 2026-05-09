@@ -151,10 +151,13 @@ impl FeatherstoneKernel {
 
         // Copy state_in's body_q + joint coords into state_out so the
         // kernel mutates state_out's device buffers in place — same
-        // pattern as the XPBD GPU dispatch.
+        // pattern as the XPBD GPU dispatch. body_f is also propagated
+        // so substepping callers see the same external wrench across
+        // every substep (until they overwrite it).
         copy_buffer(device, queue, &state_in.body_q, &state_out.body_q)?;
         copy_buffer(device, queue, &state_in.joint_q, &state_out.joint_q)?;
         copy_buffer(device, queue, &state_in.joint_qd, &state_out.joint_qd)?;
+        copy_buffer(device, queue, &state_in.body_f, &state_out.body_f)?;
 
         let bg_model = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::featherstone model bg"),
