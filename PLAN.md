@@ -2212,24 +2212,69 @@ Deliverables:
 
 ### Stage 22 — MuJoCo wrapper + hydroelastic contact — **P2**
 
-**Status: NOT STARTED** — both items defer until a concrete user
-needs them.
+**Status: PARTIAL** — MuJoCo wrapper v1 shipped; hydroelastic +
+Dahl friction explicitly deferred to follow-up stages.
 
 Deliverables:
-- ❌ **MuJoCo wrapper solver** (`SolverMuJoCo`) — wraps the upstream
+- ✅ **MuJoCo wrapper solver** (`MuJoCoSolver`) — wraps the upstream
   MuJoCo C library as a Newton-style backend. Gives molla access to
   MuJoCo's mature contact solver, equality constraints (CONNECT /
   WELD / JOINT-coupling), and the broader MuJoCo ecosystem
   (`mjcf` import, etc.). Per `GAP.md` §2 / §9, this is the
   pragmatic path to closing the constrained-dynamics gap without
-  reimplementing PADMM (Newton's Kamino route).
-- ❌ **Hydroelastic contact** — Drake-style compliant contact via
-  pressure fields over overlapping volumes. Replaces point contacts
-  with distributed pressure for soft / deformable interactions.
-  Depends on Stage 21 mesh→SDF baking.
-- ❌ **`Dahl` friction** model — used by Newton VBD for cable joints
-  (smooth stick-slip); only relevant if the soft-body solver chosen
-  in Stage 20 is VBD.
+  reimplementing PADMM (Newton's Kamino route). Lives at
+  `crates/molla/src/solvers/mujoco.rs` behind the `mujoco` Cargo
+  feature; viewer demo on hotkey `J` (`Scene::MuJoCo`).
+- ❌ **Hydroelastic contact** — see "Deferred to follow-up" below.
+- ❌ **`Dahl` friction** model — see "Deferred to follow-up" below.
+
+**Deferred to follow-up:**
+
+- **Hydroelastic contact** — Drake-style compliant contact via
+  pressure fields over overlapping volumes. Depends on Stage 21
+  mesh→SDF baking; that's the foundational piece (~1,800 LOC in
+  Newton's `sdf_hydroelastic.py`) and is being implemented in a
+  parallel stream. Hydroelastic itself is best landed AFTER
+  Stage 21 is complete and validated, so we have a working SDF
+  pipeline to build pressure integrals on top of. Track via
+  Stage 21 + a follow-up dedicated stage.
+
+- **Dahl friction** — smooth stick-slip friction model, only
+  meaningful for VBD CABLE joints (Newton's primary use). molla's
+  Stage 20 explicitly deferred CABLE joints to a follow-up; until
+  CABLE lands, Dahl friction has no consumer. Re-evaluate when a
+  user surfaces a need for cable/rope dynamics.
+
+**v1 scope notes for the MuJoCo wrapper:**
+
+- **Joints translated**: Revolute → MJCF `<joint type="hinge">`;
+  Prismatic → `slide`; Ball → `ball`; Free / Distance / D6 → MJCF
+  `<freejoint/>` (D6 per-axis locks NOT yet round-tripped — the
+  body becomes a free 6-DoF body in MuJoCo's view); Fixed → no
+  joint emitted, body becomes a free root (limitation for v1; a
+  proper FIXED → MuJoCo `<weld/>` translation comes in a follow-up).
+- **Shapes translated**: Sphere, Box, Capsule, Cylinder, Plane.
+  Triangle meshes / convex hulls / heightfields / SDFs need MJCF
+  `<asset>` blocks and are skipped with a `tracing::warn` in v1.
+- **Equality constraints**: CONNECT and WELD round-trip through
+  MJCF `<connect>` / `<weld>` exactly. Mimic constraints not yet.
+- **Multi-world**: collapsed onto world 0 with a warning. MuJoCo
+  is single-world; multi-env dispatch would require running N
+  parallel `Simulation` instances — feasible but not in v1.
+- **Pragmatic build gating**: the `mujoco` Cargo feature pulls
+  `mujoco-rust` (which links against system `libmujoco`). With
+  the feature OFF, `MuJoCoSolver` compiles to a stub that errors
+  at runtime — the type, MJCF builder, `Solver` impl, viewer
+  scene, and tests all compile without MuJoCo, so users without
+  the system library can still build the rest of the project.
+  When the feature is ON but `libmujoco` is missing, the build
+  fails with a clear linker error from `mujoco-rust`.
+- **Tests**: `crates/molla/tests/mujoco_solver.rs` covers the
+  three bench targets from this stage's spec — free-fall sphere
+  vs analytic (5 mm tol), double pendulum energy bound, CONNECT
+  equality drift (1 mm tol). All gated `#[cfg(feature = "mujoco")]`
+  + `#[ignore]` per the Stage-22 plan; the lib's MJCF-builder
+  unit tests run on every CI invocation.
 
 ### Stage 23 — Differentiable simulation — **P2**
 
@@ -2319,6 +2364,7 @@ rationale, who decided.
 | 2026-05-09 | Stages 14, 15, 16 (the full GAP-driven P0 stack) shipped in one batch via three parallel agent worktrees, then merged sequentially into `main`. Stage 14 added `SensorTiledCamera` (5-channel raytraced camera) + per-shape material storage; viewer demo on hotkey `=`. Stage 15 added GPU EPA + GPU mesh-BVH ray-cast + extended GJK simplex output + `enable_full_gpu_narrow_phase` toggle; viewer demo on hotkey `-`. Stage 16 added GPU CRBA + GPU RNEA + GPU spatial Jacobian + `IkSolver::solve_gpu` (LM with multi-seed); viewer demo on hotkey `0`. Hotkey collisions resolved at merge time (all three agents independently picked `0`). `RibbonParams` SystemParam (introduced by both Stage 14 and Stage 15 to dodge Bevy's 16-system-param ceiling) deduplicated to a single definition during the Stage 14 merge. |
 | 2026-05-09 | Stage 20 v1 shipped: VBD picked over Style3D. Vertex Block Descent (Chen et al. 2024) ports cleanly onto WGSL — per-vertex 3×3 Newton block, dispatched in greedy-coloured passes that mirror the existing XPBD particles kernel. Style3D (projective dynamics) is cloth-only and would require a global PCG linear solve (no good wgpu primitive yet). VBD also opens the door to Augmented VBD coupling (cloth ↔ kinematic rigid in v1 via soft penalty, CABLE joints + Dahl friction in a follow-up). Cost of choosing VBD: per-vertex Hessian assembly is heavier than projective dynamics' "global solve once" — but for the 1k-particle cloth scenes molla actually runs, the per-vertex cost dominates anyway and graph-coloured parallelism makes up the difference. New solver lives at `crates/molla/src/solvers/vbd.rs` + `shaders/vbd_cloth.wgsl`; viewer demo on hotkey `V`. CABLE / Dahl friction / hard-mode AVBD / tet soft-bodies / MPM coupling explicitly deferred to a follow-up stage; documented in Stage 20's "Out of scope for v1" list. |
 | 2026-05-09 | Stages 17, 18, 19, 20 (the full GAP-driven P1 stack) shipped in one batch via four parallel agent worktrees, merged sequentially into `main`. Stage 17 generalised the Featherstone WGSL pass to multi-DOF motion subspaces (Ball / Free / D6 / Distance now run dynamically rather than kinematically) + added `state.body_f` external-wrench wiring + a quadrotor demo on hotkey `Q`. Stage 18 introduced the composable `Actuator { Delay → Controller → Clamping }` orchestrator with new WGSL kernels for delay rotate-and-read, max-effort cap, DC-motor torque-vs-speed curve, and joint-limit-aware position-based clamping; demo on hotkey `A`. Stage 19 closed the LBVH host-dispatcher gap (CPU-radix-sort stop-gap → GPU bottom-up build → refit → pair extraction) and added `CollisionPipeline::enable_full_gpu_broad_phase`; demo on hotkey `B`. Stage 20 brought up Vertex Block Descent (see prior entry) on hotkey `V`. Bevy's 16-system-param tuple ceiling forced two SystemParam bundles: `SceneStates` for `apply_scene_switch`'s reset writers, `PaneSceneStates` for `control_pane`'s per-scene UI handles. Stage 17's two-chain `add_systems(Update, (chain1, chain2))` restructure was kept since the linear single chain hit the same 16-param ceiling once `update_quadrotor` + `update_actuator_example` joined. Stage 19's perf vs PLAN.md "< 2 ms for 10k shapes" target: actual wall-clock is 7-12 ms because wgpu's per-submit driver overhead + map_async polling latency dominate the sub-ms GPU work; the test asserts ≥3× speedup over CPU SAP rather than absolute wall-clock so it stays adapter-agnostic. |
+| 2026-05-09 | Stage 22 v1 partial: `MuJoCoSolver` (the wrapper) shipped; hydroelastic contact + Dahl friction explicitly DEFERRED. Wrapper lives at `crates/molla/src/solvers/mujoco.rs` behind the `mujoco` Cargo feature; uses `mujoco-rust 0.0.6` as the optional dep. The flow is: build a `Model`, emit MJCF via the in-crate `MjcfWriter`, hand it to `mj_loadXML`, then `mj_step` per substep with molla `joint_q/joint_qd` ↔ MuJoCo `qpos/qvel`. With the feature OFF the type, MJCF builder, `Solver` impl, viewer scene, and tests all still compile (the actual `mj_step` calls live behind `cfg(feature = "mujoco")`); the `Solver::step` then errors at runtime with a clear "feature off" message. With the feature ON, `mujoco-rust` requires libmujoco at link time — the agent's nixVulkan environment doesn't ship libmujoco or libstdc++ for libclang, so end-to-end MuJoCo tests can't be exercised here; the test file is `#[cfg(feature = "mujoco")]` + `#[ignore]` per the Stage-22 spec. v1 supports Sphere / Box / Capsule / Cylinder / Plane geoms; Revolute / Prismatic / Ball / Free joints; CONNECT + WELD equality constraints. TriMesh / ConvexHull / Heightfield / SDF shapes need MJCF `<asset>` blocks (deferred); FIXED → `<weld/>` translation deferred (FIXED currently produces a free body); per-DOF joint limits / friction / effort caps deferred (mappable to MJCF `<joint range="..." damping="..." armature="..."/>` later). Multi-world models collapse onto world 0 with a `tracing::warn`. Hydroelastic contact deferred because it depends on Stage 21 mesh→SDF baking (parallel stream). Dahl friction deferred because it has no consumer until VBD CABLE joints land (Stage 20 deferral). Bevy plumbing: `MuJoCoExampleState` resource added to both `SceneStates` and `PaneSceneStates` bundles to stay under the 16-system-param ceiling. New scene `Scene::MuJoCo` on hotkey `J` (for muJoco) renders a double pendulum; falls back to Featherstone when `mujoco` feature is off so the scene is still demoable without libmujoco installed. |
 
 ---
 
