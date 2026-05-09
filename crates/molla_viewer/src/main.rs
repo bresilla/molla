@@ -3090,20 +3090,22 @@ fn spawn_mesh_tools_entities(
 ) {
     use molla::geometry::{bake_mesh_to_sdf, convex_hull, decimate, marching_cubes};
 
-    // Build the source mesh — a noise-displaced icosphere for visual
-    // interest (a smooth icosphere doesn't show off the tools as
-    // dramatically). 2 subdivisions = 320 tris; the noise breaks the
-    // symmetry so decimation has to make non-trivial choices.
+    // Build the source mesh — a mildly noise-displaced icosphere
+    // (3 subdivisions = 1280 tris). The noise breaks the icosphere's
+    // perfect symmetry so decimation has to make non-trivial choices,
+    // but stays small enough that the mesh is still recognisably
+    // spherical (and the SDF bake doesn't run away).
     let mut source = icosphere_mesh(3, 1.0); // 1280 tris
-    // Cheap noise displacement — preserves the mesh's manifoldness.
     let mut s: u32 = 0xA5A5_BEEF;
     let mut next_noise = || {
         s = s.wrapping_mul(2654435761).wrapping_add(0x12345678);
-        ((s as f64) / (u32::MAX as f64)) * 0.12 - 0.06
+        ((s as f64) / (u32::MAX as f64)) * 2.0 - 1.0
     };
     for v in source.vertices.iter_mut() {
-        let n = v.normalize_or_zero();
-        let r = 1.0 + next_noise() * 0.4;
+        // glam's f64 DVec3 has `.normalize()` not `.normalize_or_zero()` —
+        // safe here since vertex magnitudes are all ~1.0 by construction.
+        let n = *v / v.length();
+        let r = 1.0 + next_noise() * 0.10;
         *v = n * r;
     }
     source.build_bvh(4);
