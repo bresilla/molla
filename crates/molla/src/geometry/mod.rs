@@ -8,6 +8,7 @@ mod aabb;
 mod broad_phase;
 mod bvh;
 pub mod contact_extras;
+pub mod contact_reduction;
 mod decimate;
 mod epa;
 mod gjk;
@@ -15,6 +16,7 @@ mod hull;
 pub mod hydroelastic;
 mod marching_cubes;
 pub mod mesh_bvh;
+pub mod mpr;
 mod narrow_phase;
 mod pipeline;
 pub mod sdf_bake;
@@ -27,6 +29,11 @@ pub mod tet_bvh;
 pub use contact_extras::{
     build_contact_id_table, contact_id, match_contacts, reduce_contacts,
 };
+// Stage 28: alternative narrow-phase + standalone contact-reduction primitive.
+pub use contact_reduction::{
+    reduce_contacts as reduce_contacts_per_pair, reduce_with_history, Contact as ReducedContact,
+};
+pub use mpr::{mpr_collide, Manifold as MprManifold, ShapeSupport, SupportFn};
 
 pub use aabb::Aabb;
 pub use broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
