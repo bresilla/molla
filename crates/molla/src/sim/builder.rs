@@ -1597,6 +1597,22 @@ impl ModelBuilder {
         let (spring_color_count, spring_color_offsets, spring_indices_by_color) =
             color_springs(particle_count, &self.spring_a, &self.spring_b);
 
+        // VBD prep: per-vertex adjacency CSR + greedy particle
+        // colouring. Used by `VbdSolver`; ignored by XPBD. Cheap to
+        // compute (O(spring_count + particle_count · max_degree)) so
+        // we always run it — picking a solver should not require
+        // rebuilding the model.
+        let (vertex_adjacent_springs_offsets, vertex_adjacent_springs) =
+            build_vertex_spring_adjacency(particle_count, &self.spring_a, &self.spring_b);
+        let (particle_color_count, particle_color_offsets, particle_indices_by_color) =
+            color_particles(
+                particle_count,
+                &vertex_adjacent_springs_offsets,
+                &vertex_adjacent_springs,
+                &self.spring_a,
+                &self.spring_b,
+            );
+
         Ok(Model {
             particle_count,
             particle_mass: Buffer::from_vec(self.particle_mass, s),
@@ -1615,6 +1631,15 @@ impl ModelBuilder {
             spring_color_count,
             spring_color_offsets: Buffer::from_vec(spring_color_offsets, s),
             spring_indices_by_color: Buffer::from_vec(spring_indices_by_color, s),
+
+            vertex_adjacent_springs_offsets: Buffer::from_vec(
+                vertex_adjacent_springs_offsets,
+                s,
+            ),
+            vertex_adjacent_springs: Buffer::from_vec(vertex_adjacent_springs, s),
+            particle_color_count,
+            particle_color_offsets: Buffer::from_vec(particle_color_offsets, s),
+            particle_indices_by_color: Buffer::from_vec(particle_indices_by_color, s),
 
             tri_count,
             tri_indices: Buffer::from_vec(self.tri_indices, s),
@@ -1858,6 +1883,131 @@ fn color_springs(
     for (i, &c) in spring_color.iter().enumerate() {
         let slot = cursors[c as usize];
         indices[slot as usize] = i as u32;
+        cursors[c as usize] += 1;
+    }
+    (color_count, offsets, indices)
+}
+
+/// Build a per-vertex CSR table of incident springs.
+/// Returns `(offsets, flat_indices)` where vertex `v` owns
+/// `flat_indices[offsets[v] .. offsets[v + 1]]`.
+///
+/// Used by [`crate::solvers::VbdSolver`]: each VBD vertex block
+/// solve sums forces + Hessians over all incident constraints,
+/// which the CSR makes O(degree) per vertex.
+fn build_vertex_spring_adjacency(
+    particle_count: usize,
+    spring_a: &[u32],
+    spring_b: &[u32],
+) -> (Vec<u32>, Vec<u32>) {
+    if particle_count == 0 || spring_a.is_empty() {
+        return (vec![0u32; particle_count + 1], Vec::new());
+    }
+    let mut counts = vec![0u32; particle_count];
+    for i in 0..spring_a.len() {
+        let a = spring_a[i] as usize;
+        let b = spring_b[i] as usize;
+        if a < particle_count {
+            counts[a] += 1;
+        }
+        if b < particle_count {
+            counts[b] += 1;
+        }
+    }
+    let mut offsets = vec![0u32; particle_count + 1];
+    for v in 0..particle_count {
+        offsets[v + 1] = offsets[v] + counts[v];
+    }
+    let total = offsets[particle_count] as usize;
+    let mut indices = vec![0u32; total];
+    let mut cursors = offsets[..particle_count].to_vec();
+    for i in 0..spring_a.len() {
+        let a = spring_a[i] as usize;
+        let b = spring_b[i] as usize;
+        if a < particle_count {
+            let slot = cursors[a] as usize;
+            indices[slot] = i as u32;
+            cursors[a] += 1;
+        }
+        if b < particle_count {
+            let slot = cursors[b] as usize;
+            indices[slot] = i as u32;
+            cursors[b] += 1;
+        }
+    }
+    (offsets, indices)
+}
+
+/// Greedy graph colouring of particles. Two particles are adjacent
+/// iff at least one constraint connects them. Within a colour, no
+/// two particles share a constraint, so VBD's per-vertex block
+/// solve can be dispatched in parallel without races.
+///
+/// Returns `(color_count, csr_offsets, indices_sorted_by_color)`.
+///
+/// For an N×N cloth with structural + shear + skip-one bending
+/// springs the natural colouring uses ≤ 12 colours and balances
+/// per-colour particle counts well.
+fn color_particles(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    if particle_count == 0 {
+        return (0, vec![0u32], Vec::new());
+    }
+    let mut color_of = vec![u32::MAX; particle_count];
+    let mut max_color: u32 = 0;
+    let mut used = Vec::<bool>::with_capacity(16);
+
+    for v in 0..particle_count {
+        used.clear();
+        let lo = vertex_adj_offsets[v] as usize;
+        let hi = vertex_adj_offsets[v + 1] as usize;
+        for s in &vertex_adj_springs[lo..hi] {
+            let s = *s as usize;
+            let a = spring_a.get(s).copied().unwrap_or(u32::MAX) as usize;
+            let b = spring_b.get(s).copied().unwrap_or(u32::MAX) as usize;
+            let nbr = if a == v { b } else { a };
+            if nbr >= particle_count {
+                continue;
+            }
+            let nc = color_of[nbr];
+            if nc == u32::MAX {
+                continue;
+            }
+            let nc_idx = nc as usize;
+            if used.len() <= nc_idx {
+                used.resize(nc_idx + 1, false);
+            }
+            used[nc_idx] = true;
+        }
+        let mut chosen: u32 = 0;
+        while (chosen as usize) < used.len() && used[chosen as usize] {
+            chosen += 1;
+        }
+        color_of[v] = chosen;
+        if chosen > max_color {
+            max_color = chosen;
+        }
+    }
+
+    let color_count = (max_color as usize) + 1;
+    let mut counts = vec![0u32; color_count];
+    for &c in &color_of {
+        counts[c as usize] += 1;
+    }
+    let mut offsets = vec![0u32; color_count + 1];
+    for k in 0..color_count {
+        offsets[k + 1] = offsets[k] + counts[k];
+    }
+    let mut cursors = offsets[..color_count].to_vec();
+    let mut indices = vec![0u32; particle_count];
+    for (v, &c) in color_of.iter().enumerate() {
+        let slot = cursors[c as usize] as usize;
+        indices[slot] = v as u32;
         cursors[c as usize] += 1;
     }
     (color_count, offsets, indices)

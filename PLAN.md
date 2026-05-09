@@ -2133,26 +2133,60 @@ Definition of done:
   isn't adapter-flaky.
 - Pair output matches CPU SAP for the same scene (post-sort).
 
-### Stage 20 — Soft-body solver expansion (VBD or Style3D) — **P1**
+### Stage 20 — Soft-body solver expansion (VBD) — **P1**
 
-**Status: NOT STARTED** — XPBD covers cloth-on-sphere demos but
-struggles on high-iteration cloth (per `GAP.md` §2, Newton ships
-three specialised soft-body backends: VBD, Style3D, MPM). One
-specialised solver picks up real cloth scenes.
+**Status: SHIPPED (v1)** — Vertex Block Descent (VBD) + simple
+Augmented-VBD soft-on-rigid coupling. XPBD remains the default cloth
+solver; VBD is the high-fidelity opt-in for stiff cloth and for any
+workload where the user needs cloth to drape over rigid kinematics
+without jelly artefacts.
 
-Decision (deferred until first soft-body workload appears):
-- **Style3D** (projective dynamics) — cloth-only, smaller scope,
-  PCG-based linear solve. Pick this if the workload is "drape and
-  visualise garments".
-- **VBD** (Vertex Block Descent + Augmented VBD for rigid coupling)
-  — broader scope, includes CABLE joint, soft-body coupling. Pick
-  this if the workload is "soft robots / coupled rigid+soft systems".
+Decision: picked **VBD** over Style3D. Style3D is cloth-only with a
+global PCG linear solve; VBD's per-vertex Gauss-Seidel block solve
+parallelises naturally onto WGSL (one workgroup invocation per
+particle in a colour, mirrors the existing XPBD particles kernel)
+and the Augmented-VBD path opens the door to CABLE joints + soft-on-
+rigid coupling, which Style3D can't do. Recorded in §22 decision log.
 
-Deliverables (placeholder — finalise once direction is chosen):
-- New solver crate / module with a parallel solver path.
-- Cloth demo with significantly higher fidelity than current XPBD
-  cloth (more iterations, better bending stability).
-- Parity / regression suite vs the existing XPBD cloth.
+Deliverables:
+- ✅ **New solver module** `molla::solvers::VbdSolver` — CPU oracle +
+  GPU backend (`VbdClothKernel`, `shaders/vbd_cloth.wgsl`). Slots
+  into the same `Solver` trait as XPBD; viewer's `SolverBackend`
+  enum gained a `Vbd(VbdSolver)` variant.
+- ✅ **Per-vertex CSR adjacency + greedy particle colouring** built
+  at model-build time (`build_vertex_spring_adjacency` /
+  `color_particles` in `sim::builder`); both stored on `Model` so
+  the choice of solver doesn't require rebuilding the model.
+- ✅ **High-fidelity cloth demo** — `Scene::VbdCloth` (hotkey **V**),
+  32×32 cloth (1024 particles, ~4k springs) draping over a kinematic
+  rigid sphere. Right-rail pane has stretch / bend / contact
+  stiffness sliders, inner-iteration count, and a VBD ↔ XPBD
+  toggle for side-by-side comparison.
+- ✅ **GPU regression suite** at
+  `crates/molla/tests/vbd_cloth_gpu.rs` (`#[ignore]`):
+  - `vbd_matches_xpbd_low_stiffness` — VBD steady-state drape COM
+    is within 30 cm of XPBD on a soft 8×8 cloth.
+  - `vbd_high_stiffness_does_not_explode` — k = 1e7 N/m cloth
+    settles in 60 substeps without NaN escape.
+  - `vbd_wraps_kinematic_sphere` — Augmented VBD soft-mode keeps
+    every particle outside the sphere, drives the cloth COM down
+    by ≥ 50 cm, and parks ≥ 5 % of particles in the contact band.
+- ✅ **Decision-log entry** below.
+
+Out of scope for v1 (deferred to a follow-up):
+- ❌ **CABLE joint** (rope + bend on rigid bodies, the second
+  Augmented-VBD use case beyond cloth-on-rigid). Hooks for the
+  Hessian assembly are in place but the joint type isn't wired
+  through `Model`.
+- ❌ **Dahl friction** (smooth stick-slip cable bending; needed
+  alongside CABLE).
+- ❌ **Hard-mode AVBD** (augmented-Lagrangian dual updates for
+  contact + joint). Soft-penalty mode is sufficient for the demo
+  + tests; hard mode lands when a user needs no-slip contact.
+- ❌ **Tetrahedral / volumetric soft bodies**. Per-vertex block is
+  ready (only stretch + bend springs in v1) but tet adjacency and
+  the volumetric Neo-Hookean Hessian aren't implemented.
+- ❌ **MPM coupling**.
 
 ### Stage 21 — Mesh utilities — **P2**
 
@@ -2283,6 +2317,7 @@ rationale, who decided.
 | 2026-05-08 | Stage 2 complete. WGSL `integrate_bodies` kernel + Rust dispatch wrapper. CPU/GPU parity test passes (100 spheres × 100 steps, agreement within 1e-3 m). GPU bench on RTX 4080: 19.5µs/step for 1k spheres (DoD <1ms; 51× under). Kernel cost is dispatch-bound up to 10k bodies; CPU wins below ~500 bodies. wgpu device requested with `adapter.limits()` rather than `downlevel_defaults` — the latter caps storage buffers per stage at 4 and we use 13. `Engine::step` deferred again — Solver::step does the dispatch directly; no value in wrapping it. Viewer kept on CPU backend to dodge the wgpu version mismatch with Bevy's pinned wgpu; revisit when we want a single binary running GPU sim + Bevy render. |
 | 2026-05-09 | Stages 14–25 added to the roadmap from `GAP.md` (cross-validated scan of `xtra/warp/` + `xtra/newton/` vs the current molla codebase). The old single-line "Stage 14+ — Differentiability, advanced solvers, Python bindings" placeholder was replaced with concrete P0/P1/P2/P3 stages: TiledCamera (P0), GPU EPA + GPU mesh BVH (P0), GPU CRBA/RNEA/IK (P0), reduced-coord ABA for Ball/D6/Distance (P1), composable actuator pipeline (P1), GPU LBVH host dispatcher (P1), VBD-or-Style3D soft-body solver (P1), mesh utilities (P2), MuJoCo wrapper + hydroelastic (P2), differentiable simulation (P2), specialty MPM/SVD/FFT (P3). Explicitly out-of-scope: Python bindings, TensorCore, CUDA graphs, multi-GPU, Kamino-style PADMM (overlaps MuJoCo). The single biggest user-facing gap per the analysis is the camera sensor — molla has nothing comparable to Newton's `SensorTiledCamera` (RGB+depth+normal+albedo+`shape_index` for instance segmentation), and that's why it sits at the top of the new P0 list. |
 | 2026-05-09 | Stages 14, 15, 16 (the full GAP-driven P0 stack) shipped in one batch via three parallel agent worktrees, then merged sequentially into `main`. Stage 14 added `SensorTiledCamera` (5-channel raytraced camera) + per-shape material storage; viewer demo on hotkey `=`. Stage 15 added GPU EPA + GPU mesh-BVH ray-cast + extended GJK simplex output + `enable_full_gpu_narrow_phase` toggle; viewer demo on hotkey `-`. Stage 16 added GPU CRBA + GPU RNEA + GPU spatial Jacobian + `IkSolver::solve_gpu` (LM with multi-seed); viewer demo on hotkey `0`. Hotkey collisions resolved at merge time (all three agents independently picked `0`). `RibbonParams` SystemParam (introduced by both Stage 14 and Stage 15 to dodge Bevy's 16-system-param ceiling) deduplicated to a single definition during the Stage 14 merge. |
+| 2026-05-09 | Stage 20 v1 shipped: VBD picked over Style3D. Vertex Block Descent (Chen et al. 2024) ports cleanly onto WGSL — per-vertex 3×3 Newton block, dispatched in greedy-coloured passes that mirror the existing XPBD particles kernel. Style3D (projective dynamics) is cloth-only and would require a global PCG linear solve (no good wgpu primitive yet). VBD also opens the door to Augmented VBD coupling (cloth ↔ kinematic rigid in v1 via soft penalty, CABLE joints + Dahl friction in a follow-up). Cost of choosing VBD: per-vertex Hessian assembly is heavier than projective dynamics' "global solve once" — but for the 1k-particle cloth scenes molla actually runs, the per-vertex cost dominates anyway and graph-coloured parallelism makes up the difference. New solver lives at `crates/molla/src/solvers/vbd.rs` + `shaders/vbd_cloth.wgsl`; viewer demo on hotkey `V`. CABLE / Dahl friction / hard-mode AVBD / tet soft-bodies / MPM coupling explicitly deferred to a follow-up stage; documented in Stage 20's "Out of scope for v1" list. |
 
 ---
 

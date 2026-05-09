@@ -21,6 +21,8 @@
 //! Keys:
 //!   * 1 / 2 / 3 / 4   switch demo scene
 //!   * Q           Quadrotor (Stage 17 multi-DOF Featherstone)
+//!   * V           VBD cloth (Stage 20) — high-fidelity drape over a
+//!                 kinematic sphere; right-rail toggles VBD ↔ XPBD.
 //!   * T           toggle "activity view" — sleeping bodies turn grey,
 //!                 only active (moving) bodies keep their colour
 //!   * W           toggle wireframe view (every mesh outlined)
@@ -211,6 +213,27 @@ const CLOTH_COMPLIANCE: f64 = 1.5e-5;
 /// 1.0  → effectively no cap
 const CLOTH_MAX_STRETCH: f64 = 0.05;
 
+// --- Stage-20 VBD cloth scene ---------------------------------------
+// Higher resolution than the XPBD demo + tighter compliance — this
+// is exactly the regime where XPBD wobbles and VBD shines.
+const VBD_CLOTH_GRID: u32 = 32;
+const VBD_CLOTH_SIZE: f32 = 1.8;
+const VBD_CLOTH_TOP_Y: f32 = 4.5;
+const VBD_CLOTH_PARTICLE_MASS: f64 = 0.04;
+const VBD_CLOTH_PARTICLE_RADIUS: f64 = 0.025;
+/// XPBD compliance for the underlying cloth model (= 1 / k for
+/// stretch springs). VBD reads this and inverts to a per-spring
+/// stiffness (see `derive_stiffness_table`); the smaller the value
+/// the stiffer the cloth.
+const VBD_CLOTH_COMPLIANCE: f64 = 5.0e-6;
+const VBD_CLOTH_MAX_STRETCH: f64 = 0.10;
+const VBD_CLOTH_SPHERE_RADIUS: f32 = 0.6;
+const VBD_CLOTH_SPHERE_Y: f32 = 1.6;
+/// Soft-contact stiffness against the kinematic sphere. Stiff enough
+/// to stop a 4 cm/s falling cloth particle in ~3 substeps at 480 Hz
+/// without producing visible jitter. Tuneable from the right-rail.
+const VBD_CLOTH_CONTACT_STIFFNESS: f64 = 5.0e4;
+
 // --- Tower scene ----------------------------------------------------
 const TOWER_LAYERS: usize = 8;
 const TOWER_GRID: usize = 4;
@@ -287,6 +310,7 @@ fn main() {
         .insert_resource(CameraExampleState::default())
         .insert_resource(ActuatorExampleState::default())
         .insert_resource(QuadrotorState::default())
+        .insert_resource(VbdClothExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -413,6 +437,7 @@ struct PaneSceneStates<'w> {
     camera: ResMut<'w, CameraExampleState>,
     actuator: ResMut<'w, ActuatorExampleState>,
     quad: ResMut<'w, QuadrotorState>,
+    vbd: ResMut<'w, VbdClothExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -437,6 +462,9 @@ struct Sim {
 enum SolverBackend {
     Xpbd(mp::XpbdSolver),
     Featherstone(FeatherstoneSolver),
+    /// Stage-20 Vertex Block Descent solver. Used by `Scene::VbdCloth`
+    /// for high-fidelity cloth + soft-on-rigid coupling.
+    Vbd(mp::VbdSolver),
 }
 
 impl SolverBackend {
@@ -454,6 +482,7 @@ impl SolverBackend {
             Self::Featherstone(s) => {
                 s.step(model, state_in, control, contacts, dt, state_out)
             }
+            Self::Vbd(s) => s.step(model, state_in, control, contacts, dt, state_out),
         }
     }
 }
@@ -532,6 +561,14 @@ enum Scene {
     /// pane and live readouts of pair count + ms/frame for the
     /// active backend.
     BroadPhase,
+    /// Stage-20 high-resolution VBD cloth demo. 32×32 cloth drapes
+    /// over a kinematic sphere using Vertex Block Descent (VBD) +
+    /// Augmented VBD soft contacts. Right-rail pane carries
+    /// stretch / bend / contact stiffness sliders, an inner-iter
+    /// count slider, and a toggle to swap between VBD and the
+    /// Stage-12 XPBD baseline for side-by-side comparison.
+    /// Hotkey `V`.
+    VbdCloth,
 }
 
 impl Scene {
@@ -552,6 +589,7 @@ impl Scene {
         Scene::Actuator,
         Scene::Quadrotor,
         Scene::BroadPhase,
+        Scene::VbdCloth,
     ];
 
     fn label(self) -> &'static str {
@@ -571,6 +609,7 @@ impl Scene {
             Scene::Actuator => "Actuator pipeline (Stage 18)",
             Scene::Quadrotor => "Quadrotor (Stage 17 multi-DOF)",
             Scene::BroadPhase => "GPU broad phase (Stage 19)",
+            Scene::VbdCloth => "VBD cloth (Stage 20)",
         }
     }
 
@@ -578,11 +617,13 @@ impl Scene {
     /// the Arm example needs Featherstone for proper joint dynamics.
     /// `GpuIkArm` reuses the Featherstone backend (any articulation
     /// solver works since `step_simulation` skips this scene anyway).
+    /// `VbdCloth` uses the Stage-20 Vertex Block Descent solver.
     fn solver_kind(self) -> SolverKind {
         match self {
             Scene::Arm | Scene::GpuIkArm | Scene::Actuator | Scene::Quadrotor => {
                 SolverKind::Featherstone
             }
+            Scene::VbdCloth => SolverKind::Vbd,
             _ => SolverKind::Xpbd,
         }
     }
@@ -592,6 +633,7 @@ impl Scene {
 enum SolverKind {
     Xpbd,
     Featherstone,
+    Vbd,
 }
 
 #[derive(Resource)]
@@ -709,6 +751,44 @@ struct ImuExampleState {
     /// Smoothed magnitude (for the simple bar visualization).
     smoothed_accel_mag: f32,
     smoothed_gyro_mag: f32,
+}
+
+/// Stage-20 VBD cloth runtime state. Driven by the right-rail sliders;
+/// applied to the active solver each frame in `apply_vbd_settings`.
+/// Lazy-initialised on entry to `Scene::VbdCloth`; survives scene
+/// switches so the user's tuning persists when they jump out and back.
+#[derive(Resource)]
+struct VbdClothExampleState {
+    /// Per-spring stretch stiffness (N/m). Mapped onto VBD via
+    /// `1 / k = compliance` then re-uploaded.
+    stretch_stiffness: f32,
+    /// Per-spring bend stiffness (N/m). The cloth builder lays down
+    /// "skip-one" bending springs at compliance = 30 × stretch_compliance
+    /// by default; we use the same ratio when the user drags this
+    /// slider.
+    bend_stiffness: f32,
+    /// Soft-contact stiffness against the rigid sphere (N/m).
+    contact_stiffness: f32,
+    /// Per-substep VBD outer-iteration count. More = tighter Newton
+    /// convergence, more compute per substep.
+    inner_iterations: u32,
+    /// True → use VBD, false → use the Stage-12 XPBD solver. Toggling
+    /// hot-swaps the solver in place (model + state are unchanged) so
+    /// the user can A/B compare the two without losing the drape.
+    use_vbd: bool,
+}
+
+impl Default for VbdClothExampleState {
+    fn default() -> Self {
+        let stretch = 1.0 / VBD_CLOTH_COMPLIANCE as f32;
+        Self {
+            stretch_stiffness: stretch,
+            bend_stiffness: stretch / 30.0,
+            contact_stiffness: VBD_CLOTH_CONTACT_STIFFNESS as f32,
+            inner_iterations: 10,
+            use_vbd: true,
+        }
+    }
 }
 
 /// Contact example runtime state. Lazy-initialised when entering the
@@ -991,6 +1071,7 @@ impl Sim {
             Scene::Actuator => build_actuator_model(),
             Scene::Quadrotor => build_quadrotor_model(),
             Scene::BroadPhase => build_broad_phase_model(),
+            Scene::VbdCloth => build_vbd_cloth_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1042,6 +1123,12 @@ impl Sim {
                 FeatherstoneSolver::new_gpu(&engine, &model)
                     .expect("Featherstone GPU solver init"),
             ),
+            SolverKind::Vbd => SolverBackend::Vbd(
+                mp::VbdSolver::new_gpu(&engine, &model)
+                    .expect("VBD GPU solver init")
+                    .with_iterations(10)
+                    .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
+            ),
         };
 
         (
@@ -1059,6 +1146,28 @@ impl Sim {
             },
             visuals,
         )
+    }
+
+    /// Replace the active solver while keeping the same model + state
+    /// — used by the VBD-cloth toggle for side-by-side comparison.
+    fn swap_solver_to(&mut self, kind: SolverKind) {
+        self.solver = match kind {
+            SolverKind::Xpbd => SolverBackend::Xpbd(
+                mp::XpbdSolver::new_gpu(&self.engine, self.model.body_count.max(1) as u32)
+                    .expect("XPBD GPU solver init")
+                    .with_iterations(10),
+            ),
+            SolverKind::Featherstone => SolverBackend::Featherstone(
+                FeatherstoneSolver::new_gpu(&self.engine, &self.model)
+                    .expect("Featherstone GPU solver init"),
+            ),
+            SolverKind::Vbd => SolverBackend::Vbd(
+                mp::VbdSolver::new_gpu(&self.engine, &self.model)
+                    .expect("VBD GPU solver init")
+                    .with_iterations(10)
+                    .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
+            ),
+        };
     }
 
     fn reset(&mut self) {
@@ -1395,6 +1504,51 @@ fn build_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
     // No `BodyVisual` here — cloth renders via the dedicated triangle
     // mesh + the sphere obstacle is spawned as a `ClothObstacle`
     // entity by `apply_scene_switch` / `setup`.
+    (model, Vec::new())
+}
+
+/// Stage-20 high-resolution VBD cloth — 32×32 sheet falling onto a
+/// kinematic sphere, solved with `VbdSolver` instead of `XpbdSolver`.
+/// The model topology is identical to `build_cloth_model` (the same
+/// `add_cloth_grid` builder); only the solver differs at runtime.
+/// That's by design — the user can flip between VBD and XPBD on the
+/// same scene via the right-rail toggle and get a side-by-side feel
+/// for the difference (XPBD wobbles, VBD settles).
+fn build_vbd_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.4);
+
+    let nx = VBD_CLOTH_GRID;
+    let ny = VBD_CLOTH_GRID;
+    let size = VBD_CLOTH_SIZE as f64;
+    let origin = MVec3::new(-size * 0.5, VBD_CLOTH_TOP_Y as f64, -size * 0.5);
+    let u_axis = MVec3::new(size, 0.0, 0.0);
+    let v_axis = MVec3::new(0.0, 0.0, size);
+
+    let _ = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        nx,
+        ny,
+        VBD_CLOTH_PARTICLE_MASS,
+        VBD_CLOTH_PARTICLE_RADIUS,
+        VBD_CLOTH_COMPLIANCE,
+        VBD_CLOTH_MAX_STRETCH,
+        mp::WorldId(0),
+    );
+
+    b.add_shape_sphere(
+        mp::BodyId::NONE,
+        VBD_CLOTH_SPHERE_RADIUS as f64,
+        mp::Transform::from_translation(MVec3::new(0.0, VBD_CLOTH_SPHERE_Y as f64, 0.0)),
+    )
+    .expect("sphere shape");
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    let model = b.build().expect("model");
     (model, Vec::new())
 }
 
@@ -2610,6 +2764,30 @@ fn spawn_body_entities(
         ));
     }
 
+    // Stage-20 VBD cloth scene — same kinematic-sphere obstacle
+    // pattern as the XPBD scene but with the larger sphere from the
+    // VBD constants.
+    if sim.scene == Scene::VbdCloth {
+        let mesh = meshes.add(
+            Sphere::new(VBD_CLOTH_SPHERE_RADIUS)
+                .mesh()
+                .ico(5)
+                .expect("ico"),
+        );
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.45, 0.55, 0.70),
+            metallic: 0.15,
+            perceptual_roughness: 0.50,
+            ..default()
+        });
+        commands.spawn((
+            ClothObstacle,
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::from_xyz(0.0, VBD_CLOTH_SPHERE_Y, 0.0),
+        ));
+    }
+
     // Shapes-scene static visuals: heightfield (deforming triangle
     // strip from the model's heights) + torus mesh.
     if sim.scene == Scene::Shapes {
@@ -2815,6 +2993,9 @@ fn handle_input(
     }
     if keys.just_pressed(KeyCode::KeyB) && sim.scene != Scene::BroadPhase {
         pending.0 = Some(Scene::BroadPhase);
+    }
+    if keys.just_pressed(KeyCode::KeyV) && sim.scene != Scene::VbdCloth {
+        pending.0 = Some(Scene::VbdCloth);
     }
 }
 
@@ -3026,6 +3207,14 @@ fn step_simulation(
         if model.joint_dof_total > 0 {
             let _ = state_a.joint_q.download(&device, &queue);
             let _ = state_a.joint_qd.download(&device, &queue);
+        }
+        // Cloth scenes (XPBD or VBD) write `particle_q` on the device
+        // and the renderer reads `particle_q.host()` in
+        // `sync_cloth_mesh`. Download per-substep so the visualisation
+        // tracks every solver iteration.
+        if model.particle_count > 0 {
+            let _ = state_a.particle_q.download(&device, &queue);
+            let _ = state_a.particle_qd.download(&device, &queue);
         }
         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
     }
@@ -4869,6 +5058,7 @@ fn control_pane(
                     | Scene::Actuator
                     | Scene::Quadrotor
                     | Scene::BroadPhase
+                    | Scene::VbdCloth
             ),
             _ => false,
         },
@@ -4987,6 +5177,7 @@ fn control_pane(
         Scene::Actuator => Some("Actuator (Stage 18)"),
         Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
         Scene::BroadPhase => Some("GPU broad phase"),
+        Scene::VbdCloth => Some("VBD cloth (Stage 20)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -5021,6 +5212,9 @@ fn control_pane(
                     Scene::BroadPhase => {
                         gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color)
                     }
+                    Scene::VbdCloth => {
+                        vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+                    }
                     _ => {}
                 });
         }
@@ -5048,6 +5242,170 @@ fn shapes_pane(ui: &mut egui::Ui, sim: &Sim) {
     ui.label("Drop test: cones, hulls, spheres rain");
     ui.label("onto the wavy heightfield. Static");
     ui.label("torus sticks out of the middle.");
+}
+
+/// Body for the right-rail pane in the VBD-cloth scene. Sliders for
+/// stretch / bend / contact stiffness + iteration count, plus a
+/// VBD ↔ XPBD toggle for side-by-side comparison.
+fn vbd_cloth_pane(
+    ui: &mut egui::Ui,
+    state: &mut VbdClothExampleState,
+    sim: &mut Sim,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    let active_solver = match &sim.solver {
+        SolverBackend::Vbd(_) => "VBD",
+        SolverBackend::Xpbd(_) => "XPBD (Stage 12 baseline)",
+        _ => "(unknown)",
+    };
+    readout(ui, "Solver", active_solver);
+    readout(
+        ui,
+        "Cloth",
+        &format!(
+            "{}² ({} particles, {} springs)",
+            VBD_CLOTH_GRID,
+            sim.model.particle_count,
+            sim.model.spring_count,
+        ),
+    );
+    readout(
+        ui,
+        "Colours",
+        &format!(
+            "{} (particle), {} (spring)",
+            sim.model.particle_color_count, sim.model.spring_color_count,
+        ),
+    );
+    ui.separator();
+
+    // VBD ↔ XPBD toggle.
+    let mut want_vbd = state.use_vbd;
+    if ui.checkbox(&mut want_vbd, "Use VBD (uncheck for XPBD)").changed() {
+        state.use_vbd = want_vbd;
+        let kind = if want_vbd { SolverKind::Vbd } else { SolverKind::Xpbd };
+        sim.swap_solver_to(kind);
+        sim.reset();
+    }
+    ui.separator();
+
+    let mut dirty = false;
+
+    ui.label("Stretch stiffness (N/m)");
+    if ui
+        .add(egui::Slider::new(&mut state.stretch_stiffness, 1.0e3..=1.0e7).logarithmic(true))
+        .changed()
+    {
+        dirty = true;
+    }
+    ui.label("Bend stiffness (N/m)");
+    if ui
+        .add(egui::Slider::new(&mut state.bend_stiffness, 1.0e1..=1.0e6).logarithmic(true))
+        .changed()
+    {
+        dirty = true;
+    }
+    ui.label("Soft contact stiffness (N/m)");
+    if ui
+        .add(egui::Slider::new(&mut state.contact_stiffness, 1.0e3..=1.0e6).logarithmic(true))
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.contact_stiffness = state.contact_stiffness as f64;
+        }
+    }
+    ui.label("Inner iterations");
+    if ui
+        .add(egui::Slider::new(&mut state.inner_iterations, 1..=30))
+        .changed()
+    {
+        match &mut sim.solver {
+            SolverBackend::Vbd(s) => s.iterations = state.inner_iterations as usize,
+            SolverBackend::Xpbd(s) => s.position_iterations = state.inner_iterations as usize,
+            _ => {}
+        }
+    }
+    ui.separator();
+
+    if dirty {
+        // Stretch / bend stiffness changes need to be reflected in
+        // the per-spring compliance buffer the kernel reads. We
+        // mutate the model directly (it's immutable from a borrow-
+        // checker perspective but the compliance buffer is fine to
+        // overwrite — VBD reads it once at upload time and again
+        // when we call refresh_stiffness).
+        apply_vbd_stiffness(sim, state);
+    }
+
+    if ui.add_sized([ui.available_width(), 28.0], button_widget("Reset cloth", accent))
+        .clicked()
+    {
+        sim.reset();
+    }
+
+    ui.add_space(6.0);
+    ui.small("Hotkey: V");
+    ui.small("Compare: toggle VBD off → XPBD baseline.");
+    ui.small("XPBD wobbles at high stiffness; VBD settles.");
+}
+
+/// Tiny helper that returns an egui Button styled the same as the
+/// global `button` widget — needed because the existing `button`
+/// helper's API takes the ui directly, but we want a sized button.
+fn button_widget(text: &str, _accent: egui::Color32) -> egui::Button<'static> {
+    egui::Button::new(text.to_owned())
+}
+
+/// Re-derive per-spring compliance from the user-chosen stiffness
+/// sliders and re-upload to the solver. Cheap: spring count is O(few
+/// thousand) and the compliance buffer is a single device upload.
+fn apply_vbd_stiffness(sim: &mut Sim, state: &VbdClothExampleState) {
+    let spring_count = sim.model.spring_count;
+    if spring_count == 0 {
+        return;
+    }
+    let stretch_alpha = (1.0 / state.stretch_stiffness.max(1.0)) as f64;
+    let bend_alpha = (1.0 / state.bend_stiffness.max(1.0)) as f64;
+    // Compliance ordering: the cloth-grid builder appends springs in
+    // (structural, shear, bending) groups; bending springs are the
+    // "skip-one" entries with rest length = 2 × spacing. Round-tripping
+    // via the rest-length sentinel is fragile; instead we rebuild the
+    // distinction from the per-spring `max_stretch` flag (the builder
+    // sets `BEND_STRETCH_DISABLED ≈ 2.0` for bending springs and a
+    // user-facing value < 1.0 for the others).
+    let max_stretch = sim
+        .model
+        .spring_max_stretch
+        .host()
+        .ok()
+        .map(|s| s.to_vec())
+        .unwrap_or_default();
+    let comp_host = sim
+        .model
+        .spring_compliance
+        .host_mut()
+        .expect("spring_compliance host");
+    for (i, c) in comp_host.iter_mut().enumerate() {
+        let is_bend = max_stretch.get(i).is_some_and(|s| *s >= 1.0);
+        *c = if is_bend { bend_alpha } else { stretch_alpha };
+    }
+    // Push the new compliance to the device + refresh the VBD
+    // kernel's stiffness mirror.
+    let device = sim.engine.device().unwrap().clone();
+    let queue = sim.engine.queue().unwrap().clone();
+    sim.model
+        .spring_compliance
+        .ensure_device(&device)
+        .expect("ensure_device");
+    sim.model
+        .spring_compliance
+        .upload(&queue)
+        .expect("upload compliance");
+    // Re-derive VBD's stiffness mirror.
+    if let SolverBackend::Vbd(s) = &mut sim.solver {
+        let _ = s.refresh_stiffness(&sim.model);
+    }
 }
 
 /// Body for the right-rail pane in the Lidar scene.

@@ -48,6 +48,8 @@ mod xpbd;
 mod xpbd_equality;
 #[cfg(feature = "gpu")]
 mod xpbd_particles;
+#[cfg(feature = "gpu")]
+mod vbd_cloth;
 
 #[cfg(feature = "gpu")]
 pub use actuator_delay::ActuatorDelayKernel;
@@ -100,3 +102,5 @@ pub use xpbd::XpbdKernel;
 pub use xpbd_equality::XpbdEqualityKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd_particles::XpbdParticlesKernel;
+#[cfg(feature = "gpu")]
+pub use vbd_cloth::VbdClothKernel;
