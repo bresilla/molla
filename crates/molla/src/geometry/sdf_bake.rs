@@ -24,12 +24,18 @@
 //!    support); open meshes return ±d arbitrarily near the boundary.
 //!
 //! Performance: O(resolution³ × triangle_count). Fine for asset-load
-//! workloads (32³ × 1k tris ≈ 33M ops, ms-range). The implementation
-//! is single-threaded today; rayon-parallelisation is a one-line
-//! change if it becomes a bottleneck.
+//! workloads (32³ × 1k tris ≈ 33M ops, ms-range). Stage 21.1
+//! parallelises the closest-distance pass with rayon — voxels are
+//! independent so the fan-out is embarrassingly parallel and the
+//! resulting `data` array is byte-deterministic across runs (each
+//! voxel's `min` reduction sees the same triangles in the same order
+//! within its task). The sign pass remains sequential because it
+//! threads parity state along +X across cells in a row.
 
 use crate::math::{Real, Vec3};
 use crate::sim::TriMesh;
+use super::mesh_bvh::{BvhNode, MeshBvh};
+use rayon::prelude::*;
 
 /// Sampled signed-distance field on a regular 3D grid.
 ///
@@ -127,35 +133,43 @@ pub fn bake_mesh_to_sdf(mesh: &TriMesh, resolution: usize, padding: Real) -> Sdf
     let cell_size = max_extent / (res as Real - 1.0);
 
     let total = (res * res * res) as usize;
-    let mut data = vec![Real::INFINITY; total];
 
-    // ── Closest-distance pass ──────────────────────────────────────
-    for z in 0..res {
-        for y in 0..res {
-            for x in 0..res {
-                let p = mn
-                    + Vec3::new(
-                        (x as Real) * cell_size,
-                        (y as Real) * cell_size,
-                        (z as Real) * cell_size,
-                    );
-                let mut best = Real::INFINITY;
-                for tri in &mesh.indices {
-                    let v0 = mesh.vertices[tri[0] as usize];
-                    let v1 = mesh.vertices[tri[1] as usize];
-                    let v2 = mesh.vertices[tri[2] as usize];
-                    let d2 = closest_point_on_triangle(p, v0, v1, v2).0;
-                    if d2 < best {
-                        best = d2;
-                    }
-                }
-                let idx = (x as usize)
-                    + (y as usize) * (res as usize)
-                    + (z as usize) * (res as usize) * (res as usize);
-                data[idx] = best.sqrt();
-            }
-        }
-    }
+    // ── BVH-accelerated closest-distance pass ─────────────────────
+    // Without a BVH the closest-point pass is O(R³ × T) which kills
+    // 64³ × 10k-tri budgets (≥ 1.5 s even with rayon). With a BVH we
+    // prune sibling subtrees whose AABB is farther than the running
+    // best; in practice this drops the per-voxel triangle test count
+    // from O(T) to O(log T) once the running `best` shrinks below
+    // the bounding-box diagonal.
+    //
+    // `mesh.bvh` is the existing per-mesh AABB BVH built by
+    // `TriMesh::build_bvh`; we always seed our own here in case the
+    // caller forgot. Cheap (mesh sizes we target are ≤ 50k tris).
+    let local_bvh: MeshBvh;
+    let bvh: &MeshBvh = if !mesh.bvh.nodes.is_empty() {
+        &mesh.bvh
+    } else {
+        local_bvh = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
+        &local_bvh
+    };
+
+    let res_us = res as usize;
+    let mut data: Vec<Real> = (0..total)
+        .into_par_iter()
+        .map(|idx| {
+            let x = idx % res_us;
+            let y = (idx / res_us) % res_us;
+            let z = idx / (res_us * res_us);
+            let p = mn
+                + Vec3::new(
+                    (x as Real) * cell_size,
+                    (y as Real) * cell_size,
+                    (z as Real) * cell_size,
+                );
+            let best2 = closest_point_distance_squared_bvh(bvh, &mesh.vertices, &mesh.indices, p);
+            best2.sqrt()
+        })
+        .collect();
 
     // ── Sign pass — parity of axis-aligned ray intersections ─────
     // Cast +X for every (y, z) row and toggle sign whenever a
@@ -166,13 +180,21 @@ pub fn bake_mesh_to_sdf(mesh: &TriMesh, resolution: usize, padding: Real) -> Sdf
     // edge (which would double-count crossings in a manifold mesh).
     // This is the standard "shoot a ray off-axis" trick used in
     // GVDB / OpenVDB voxelisers.
+    //
+    // Stage 21.1: rows are independent; we fan out across (y, z) pairs
+    // with rayon and write directly into row-aligned slices of `data`
+    // with `par_chunks_mut(res)`. Each slice covers one (y, z) row of
+    // `res` x-cells, and the iteration is in flat-index order so the
+    // mapping back to (y, z) is `chunk_idx → (y = chunk_idx % res,
+    // z = chunk_idx / res)`.
     let ray_back: Real = 1.0e6;
     let nudge_y: Real = cell_size * 1.0e-3 * std::f64::consts::SQRT_2;
     let nudge_z: Real = cell_size * 1.0e-3 * std::f64::consts::PI / 4.0;
-    for z in 0..res {
-        for y in 0..res {
-            // Origin lives `ray_back` metres back in -X from the row's
-            // first sample so every triangle hit has a positive `t`.
+    data.par_chunks_mut(res_us)
+        .enumerate()
+        .for_each(|(chunk_idx, row)| {
+            let y = chunk_idx % res_us;
+            let z = chunk_idx / res_us;
             let row_y = mn.y + (y as Real) * cell_size + nudge_y;
             let row_z = mn.z + (z as Real) * cell_size + nudge_z;
             let p_origin = Vec3::new(mn.x - ray_back, row_y, row_z);
@@ -186,25 +208,19 @@ pub fn bake_mesh_to_sdf(mesh: &TriMesh, resolution: usize, padding: Real) -> Sdf
                 }
             }
             hits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            // Walk x cells; each hit ahead of the cell flips parity.
             let mut hit_idx = 0;
             let mut inside = false;
-            for x in 0..res {
-                // Distance along +X from `p_origin` to this sample.
+            for (x, cell) in row.iter_mut().enumerate() {
                 let p_x = ray_back + (x as Real) * cell_size;
                 while hit_idx < hits.len() && hits[hit_idx] <= p_x {
                     inside = !inside;
                     hit_idx += 1;
                 }
                 if inside {
-                    let idx = (x as usize)
-                        + (y as usize) * (res as usize)
-                        + (z as usize) * (res as usize) * (res as usize);
-                    data[idx] = -data[idx];
+                    *cell = -*cell;
                 }
             }
-        }
-    }
+        });
 
     SdfGrid {
         nx: res,
@@ -214,6 +230,83 @@ pub fn bake_mesh_to_sdf(mesh: &TriMesh, resolution: usize, padding: Real) -> Sdf
         cell_size,
         data,
     }
+}
+
+/// Squared distance from `p` to the closest point on the mesh,
+/// pruned via the per-mesh AABB BVH. Returns `+∞` for an empty mesh.
+///
+/// Standard "best-first" traversal: descend the BVH child whose AABB
+/// is closer to `p` first, skipping any node whose AABB-to-point
+/// distance exceeds the running best. The order in which sibling
+/// nodes are visited is fixed (closer first → if equal, child whose
+/// AABB has lower index first) so this routine is deterministic.
+fn closest_point_distance_squared_bvh(
+    bvh: &MeshBvh,
+    vertices: &[Vec3],
+    indices: &[[u32; 3]],
+    p: Vec3,
+) -> Real {
+    if bvh.nodes.is_empty() {
+        return Real::INFINITY;
+    }
+    let mut best2 = Real::INFINITY;
+    // Stack of (node_idx, aabb_dist²). Pruning skips entries whose
+    // bound is already worse than `best2`.
+    let mut stack: Vec<(u32, Real)> = Vec::with_capacity(64);
+    stack.push((0, aabb_point_distance_squared(bvh.nodes[0].aabb_min, bvh.nodes[0].aabb_max, p)));
+    while let Some((idx, dist2)) = stack.pop() {
+        if dist2 >= best2 {
+            continue;
+        }
+        let node: &BvhNode = &bvh.nodes[idx as usize];
+        if node.is_leaf == 1 {
+            let lo = node.prim_start as usize;
+            let hi = lo + node.tri_count as usize;
+            for &tri_idx in &bvh.triangle_order[lo..hi] {
+                let tri = indices[tri_idx as usize];
+                let v0 = vertices[tri[0] as usize];
+                let v1 = vertices[tri[1] as usize];
+                let v2 = vertices[tri[2] as usize];
+                let d2 = closest_point_on_triangle(p, v0, v1, v2).0;
+                if d2 < best2 {
+                    best2 = d2;
+                }
+            }
+        } else {
+            let l = node.left;
+            let r = node.right;
+            let dl = aabb_point_distance_squared(
+                bvh.nodes[l as usize].aabb_min,
+                bvh.nodes[l as usize].aabb_max,
+                p,
+            );
+            let dr = aabb_point_distance_squared(
+                bvh.nodes[r as usize].aabb_min,
+                bvh.nodes[r as usize].aabb_max,
+                p,
+            );
+            // Push the farther child first so the closer one pops
+            // next — this lets `best2` tighten as quickly as
+            // possible, maximising prune.
+            if dl < dr {
+                stack.push((r, dr));
+                stack.push((l, dl));
+            } else {
+                stack.push((l, dl));
+                stack.push((r, dr));
+            }
+        }
+    }
+    best2
+}
+
+/// Squared distance from `p` to the closest point on AABB
+/// `[mn, mx]`. Zero if `p` is inside.
+fn aabb_point_distance_squared(mn: Vec3, mx: Vec3, p: Vec3) -> Real {
+    let dx = (mn.x - p.x).max(0.0).max(p.x - mx.x);
+    let dy = (mn.y - p.y).max(0.0).max(p.y - mx.y);
+    let dz = (mn.z - p.z).max(0.0).max(p.z - mx.z);
+    dx * dx + dy * dy + dz * dz
 }
 
 /// Squared distance from `p` to the closest point on triangle

@@ -33,6 +33,11 @@ tracing = "0.1"
 slotmap = "1"
 bytemuck = { version = "1.18", features = ["derive"] }
 urdf-rs = "0.9"
+# Stage 21.1 — data-parallel mesh-utility tools (decimate / SDF bake).
+# Used only inside `crate::geometry` authoring code; not on the per-frame
+# hot path. Added in this stage so QEM cost evaluation and per-voxel
+# closest-point passes can fan out across cores deterministically.
+rayon = "1.10"
 
 # Optional GPU stack (gated behind `gpu` feature). Pinned to match the
 # wgpu version Bevy 0.18 ships so molla + Bevy can share one wgpu in

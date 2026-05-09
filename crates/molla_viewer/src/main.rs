@@ -3838,12 +3838,12 @@ fn spawn_mesh_tools_entities(
     let dec = decimate(&source, source.indices.len() / 4); // ~25 % LOD
     let sdf = bake_mesh_to_sdf(&source, mesh_state.sdf_resolution as usize, 0.15);
     let mc = marching_cubes(&sdf, 0.0);
-    let hull_verts: Vec<MVec3> = convex_hull(&source.vertices);
+    let hull = convex_hull(&source.vertices);
 
     mesh_state.original_tris = source.indices.len();
     mesh_state.decimated_tris = dec.indices.len();
     mesh_state.mc_tris = mc.indices.len();
-    mesh_state.hull_verts = hull_verts.len();
+    mesh_state.hull_verts = hull.vertices.len();
 
     // Lay the three primary panels out side-by-side along +X. The MC
     // overlay uses the same world position as the original so the
@@ -3913,31 +3913,47 @@ fn spawn_mesh_tools_entities(
         Visibility::Visible,
     ));
 
-    // Hull — built as a triangle mesh of the hull (we already have
-    // the vertex set; for a quick wireframe we pass the vertices
-    // through `convex_hull` again to recover faces would be cleaner,
-    // but the simplest visualisation is a sphere of points or a hull
-    // mesh from the same vertex set). For visual-only purposes we
-    // render the hull vertices as small spheres glued at their
-    // positions.
-    let hull_marker_mesh = meshes.add(Sphere::new(0.04).mesh().ico(2).expect("ico"));
-    for hv in &hull_verts {
-        commands.spawn((
-            ClothObstacle,
-            MeshToolHull,
-            Mesh3d(hull_marker_mesh.clone()),
-            MeshMaterial3d(mat_hull.clone()),
-            Transform::from_translation(
-                original_offset
-                    + Vec3::new(hv.x as f32, hv.y as f32, hv.z as f32),
-            ),
-            // Hull markers default OFF; toggled on via the right-rail
-            // pane. Using an explicit `Hidden` here means the user
-            // sees the original mesh first, then opts in to the hull
-            // overlay.
-            Visibility::Hidden,
-        ));
+    // Hull — Stage 21.1 swaps the previous yellow-point markers for a
+    // real LineList wireframe built from the hull's edge set. One
+    // entity covers the full overlay (cheap; tens of edges for the
+    // demo icosphere). Defaults to hidden — toggled on via the
+    // right-rail pane so the user sees the original first.
+    let hull_wire_mesh = meshes.add(build_hull_wireframe_mesh(&hull));
+    commands.spawn((
+        ClothObstacle,
+        MeshToolHull,
+        Mesh3d(hull_wire_mesh),
+        MeshMaterial3d(mat_hull),
+        Transform::from_translation(original_offset),
+        Visibility::Hidden,
+    ));
+}
+
+/// Build a Bevy `LineList` mesh tracing every unique edge of the
+/// hull. Uses the post-Stage-21.1 [`molla::geometry::ConvexHullMesh`]
+/// face data — without faces we'd be back to dot markers.
+fn build_hull_wireframe_mesh(hull: &molla::geometry::ConvexHullMesh) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+
+    let positions: Vec<[f32; 3]> = hull
+        .vertices
+        .iter()
+        .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+        .collect();
+    let edges = hull.edges();
+    let mut idx_flat: Vec<u32> = Vec::with_capacity(edges.len() * 2);
+    for (a, b) in edges {
+        idx_flat.push(a);
+        idx_flat.push(b);
     }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::LineList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(idx_flat));
+    mesh
 }
 
 /// Build a single Bevy `Mesh` from molla's particle positions and
@@ -7033,7 +7049,7 @@ fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
     ui.checkbox(&mut state.show_original, "Original (left, orange)");
     ui.checkbox(&mut state.show_decimated, "Decimated (centre, blue)");
     ui.checkbox(&mut state.show_marching_cubes, "Marching cubes (right, green)");
-    ui.checkbox(&mut state.show_hull, "Hull overlay (yellow markers on original)");
+    ui.checkbox(&mut state.show_hull, "Hull overlay (yellow wireframe on original)");
     ui.separator();
 
     ui.label("");
