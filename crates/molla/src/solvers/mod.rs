@@ -12,7 +12,7 @@ mod xpbd;
 
 pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
-pub use ik::{IkConfig, IkObjective, IkResult, IkSolver};
+pub use ik::{ik_solver_health, IkConfig, IkObjective, IkResult, IkSolver};
 pub use jacobian::jacobian;
 pub use mujoco::MuJoCoSolver;
 pub use rnea::inverse_dynamics;
