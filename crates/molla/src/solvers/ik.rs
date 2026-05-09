@@ -20,7 +20,7 @@
 use crate::core::{Error, Result};
 use crate::math::{
     dense_solve::{dense_chol_solve, dense_psd_pinv_solve},
-    robust_loss::norm_huber_grad,
+    robust_loss::{norm_huber_grad, RobustLoss},
     Real, Vec3,
 };
 use crate::sim::{Model, State};
@@ -111,6 +111,15 @@ pub struct IkConfig {
     pub damping_shrink: Real,
     /// Articulation index.
     pub articulation: usize,
+    /// Stage 24b — robust-loss selector. Default [`RobustLoss::L2`]
+    /// preserves the original Cholesky-+-L2 behaviour. When a non-L2
+    /// loss is selected the solver runs an iteratively re-weighted
+    /// least-squares (IRLS) inner loop: at each iteration the
+    /// per-residual weight `w_i = ρ'(r_i) / r_i` is folded into the
+    /// normal equations as `(JᵀWJ + λI)·dq = −JᵀWe`. Bounded-influence
+    /// losses (Tukey, Cauchy) reject or down-weight outlier targets;
+    /// Huber gives a milder gradient cap for noisy targets.
+    pub loss: RobustLoss,
 }
 
 impl Default for IkConfig {
@@ -123,6 +132,7 @@ impl Default for IkConfig {
             damping_grow: 4.0,
             damping_shrink: 4.0,
             articulation: 0,
+            loss: RobustLoss::L2,
         }
     }
 }
@@ -186,6 +196,7 @@ impl IkSolver {
         crate::sim::eval_fk(model, state)?;
         let mut e = self.compute_residuals(model, state)?;
         let mut e_norm = norm(&e);
+        let mut e_cost = loss_cost(cfg.loss, &e);
         let mut damping = cfg.damping_init;
 
         for it in 0..cfg.max_iter {
@@ -201,13 +212,19 @@ impl IkSolver {
             // Build stacked Jacobian.
             let j = self.build_jacobian(model, state)?;
             let m = e.len(); // residual dimension
-            // Form normal equations: (J^T·J + λ·I) · dq = -J^T · e.
+            // Stage 24b — per-residual IRLS weights. For L2 every
+            // weight is 1, so this collapses to the original normal
+            // equations. Bounded-influence losses (Tukey, Cauchy)
+            // shrink outlier rows; L1 / smooth-L2 turn the LM step
+            // into an IRLS step.
+            let weights = irls_weights(cfg.loss, &e);
+            // Form normal equations: (J^T · W · J + λ·I) · dq = -J^T · W · e.
             let mut jtj = vec![0.0; dof_total * dof_total];
             for i in 0..dof_total {
                 for k in 0..dof_total {
                     let mut s = 0.0;
                     for r in 0..m {
-                        s += j[r * dof_total + i] * j[r * dof_total + k];
+                        s += weights[r] * j[r * dof_total + i] * j[r * dof_total + k];
                     }
                     jtj[i * dof_total + k] = s;
                 }
@@ -217,7 +234,7 @@ impl IkSolver {
             for i in 0..dof_total {
                 let mut s = 0.0;
                 for r in 0..m {
-                    s -= j[r * dof_total + i] * e[r];
+                    s -= weights[r] * j[r * dof_total + i] * e[r];
                 }
                 rhs[i] = s;
             }
@@ -240,7 +257,11 @@ impl IkSolver {
                 });
             }
 
-            // Trial step.
+            // Trial step. Acceptance is judged on the *loss-equivalent
+            // cost* `Σρ(r_i)` so IRLS (Tukey / Cauchy / etc.) makes
+            // monotone progress on the actual optimisation surface;
+            // for L2 the cost is `½‖e‖²` and the comparison is
+            // equivalent to the historical `‖e‖` check.
             let mut q_trial = q.clone();
             for i in 0..dof_total {
                 q_trial[i] += dq[i];
@@ -249,11 +270,13 @@ impl IkSolver {
             crate::sim::eval_fk(model, state)?;
             let e_trial = self.compute_residuals(model, state)?;
             let e_trial_norm = norm(&e_trial);
-            if e_trial_norm < e_norm {
+            let e_trial_cost = loss_cost(cfg.loss, &e_trial);
+            if e_trial_cost < e_cost {
                 // Accept.
                 q = q_trial;
                 e = e_trial;
                 e_norm = e_trial_norm;
+                e_cost = e_trial_cost;
                 damping = (damping / cfg.damping_shrink).max(1.0e-12);
             } else {
                 // Reject — restore q, increase damping.
@@ -386,6 +409,26 @@ fn norm(v: &[Real]) -> Real {
     v.iter().map(|x| x * x).sum::<Real>().sqrt()
 }
 
+/// Stage 24b — per-residual IRLS weight vector for the configured
+/// robust loss. For [`RobustLoss::L2`] returns `[1; m]` (identity
+/// re-weighting) so the LM normal equation reduces to its original
+/// form. Always non-negative; bounded-influence losses zero out
+/// outlier rows.
+fn irls_weights(loss: RobustLoss, e: &[Real]) -> Vec<Real> {
+    match loss {
+        RobustLoss::L2 => vec![1.0; e.len()],
+        _ => e.iter().map(|r| loss.weight(*r).max(0.0)).collect(),
+    }
+}
+
+/// Stage 24b — total robust-loss cost `Σ ρ(r_i)`. Used as the LM
+/// trial-step acceptance criterion when a non-L2 loss is in play so
+/// the solver makes monotone progress on the real objective rather
+/// than on the L2 norm of the (un-weighted) residuals.
+fn loss_cost(loss: RobustLoss, e: &[Real]) -> Real {
+    e.iter().map(|r| loss.rho(*r)).sum()
+}
+
 fn write_q(
     model: &Model,
     state: &mut State,
@@ -452,6 +495,7 @@ impl IkSolver {
         crate::sim::eval_fk(model, state)?;
         let mut e = self.compute_residuals(model, state)?;
         let mut e_norm = norm(&e);
+        let mut e_cost = loss_cost(cfg.loss, &e);
         let mut damping = cfg.damping_init;
 
         // Pre-allocate Jacobian output (single seed; each Position
@@ -518,13 +562,14 @@ impl IkSolver {
                 }
             }
 
-            // Normal equations.
+            // Normal equations (Stage 24b — IRLS-weighted).
+            let weights = irls_weights(cfg.loss, &e);
             let mut jtj = vec![0.0; dof_total * dof_total];
             for i in 0..dof_total {
                 for k in 0..dof_total {
                     let mut s = 0.0;
                     for r in 0..m {
-                        s += j[r * dof_total + i] * j[r * dof_total + k];
+                        s += weights[r] * j[r * dof_total + i] * j[r * dof_total + k];
                     }
                     jtj[i * dof_total + k] = s;
                 }
@@ -534,7 +579,7 @@ impl IkSolver {
             for i in 0..dof_total {
                 let mut s = 0.0;
                 for r in 0..m {
-                    s -= j[r * dof_total + i] * e[r];
+                    s -= weights[r] * j[r * dof_total + i] * e[r];
                 }
                 rhs[i] = s;
             }
@@ -555,7 +600,7 @@ impl IkSolver {
                 });
             }
 
-            // Trial step.
+            // Trial step — accept on the IRLS cost (matches CPU path).
             let mut q_trial = q.clone();
             for i in 0..dof_total {
                 q_trial[i] += dq[i];
@@ -564,10 +609,12 @@ impl IkSolver {
             crate::sim::eval_fk(model, state)?;
             let e_trial = self.compute_residuals(model, state)?;
             let e_trial_norm = norm(&e_trial);
-            if e_trial_norm < e_norm {
+            let e_trial_cost = loss_cost(cfg.loss, &e_trial);
+            if e_trial_cost < e_cost {
                 q = q_trial;
                 e = e_trial;
                 e_norm = e_trial_norm;
+                e_cost = e_trial_cost;
                 damping = (damping / cfg.damping_shrink).max(1.0e-12);
             } else {
                 write_q(model, state, cfg.articulation, &q)?;
@@ -652,6 +699,7 @@ impl IkSolver {
             q: Vec<Real>,
             e: Vec<Real>,
             e_norm: Real,
+            e_cost: Real,
             damping: Real,
             converged: bool,
             iters: usize,
@@ -664,10 +712,12 @@ impl IkSolver {
             crate::sim::eval_fk(model, state)?;
             let e = self.compute_residuals(model, state)?;
             let e_n = norm(&e);
+            let e_c = loss_cost(cfg.loss, &e);
             seeds_state.push(SeedState {
                 q: s.clone(),
                 e,
                 e_norm: e_n,
+                e_cost: e_c,
                 damping: cfg.damping_init,
                 converged: e_n < cfg.residual_tol,
                 iters: 0,
@@ -759,13 +809,16 @@ impl IkSolver {
                         }
                     }
                 }
-                // Normal equations.
+                // Normal equations (Stage 24b — IRLS-weighted).
+                let weights = irls_weights(cfg.loss, &seed_state.e);
                 let mut jtj = vec![0.0; dof_total * dof_total];
                 for i in 0..dof_total {
                     for k in 0..dof_total {
                         let mut s_acc = 0.0;
                         for r in 0..m {
-                            s_acc += j_mat[r * dof_total + i] * j_mat[r * dof_total + k];
+                            s_acc += weights[r]
+                                * j_mat[r * dof_total + i]
+                                * j_mat[r * dof_total + k];
                         }
                         jtj[i * dof_total + k] = s_acc;
                     }
@@ -775,7 +828,7 @@ impl IkSolver {
                 for i in 0..dof_total {
                     let mut s_acc = 0.0;
                     for r in 0..m {
-                        s_acc -= j_mat[r * dof_total + i] * seed_state.e[r];
+                        s_acc -= weights[r] * j_mat[r * dof_total + i] * seed_state.e[r];
                     }
                     rhs[i] = s_acc;
                 }
@@ -802,10 +855,12 @@ impl IkSolver {
                 crate::sim::eval_fk(model, state)?;
                 let e_trial = self.compute_residuals(model, state)?;
                 let e_trial_norm = norm(&e_trial);
-                if e_trial_norm < seed_state.e_norm {
+                let e_trial_cost = loss_cost(cfg.loss, &e_trial);
+                if e_trial_cost < seed_state.e_cost {
                     seed_state.q = q_trial;
                     seed_state.e = e_trial;
                     seed_state.e_norm = e_trial_norm;
+                    seed_state.e_cost = e_trial_cost;
                     seed_state.damping = (seed_state.damping / cfg.damping_shrink).max(1.0e-12);
                     if seed_state.e_norm < cfg.residual_tol {
                         seed_state.converged = true;
