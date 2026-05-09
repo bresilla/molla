@@ -19,6 +19,8 @@ mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
+mod tiled_camera;
+#[cfg(feature = "gpu")]
 mod xpbd;
 #[cfg(feature = "gpu")]
 mod xpbd_equality;
@@ -43,6 +45,8 @@ pub use imu::ImuKernel;
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
+#[cfg(feature = "gpu")]
+pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]

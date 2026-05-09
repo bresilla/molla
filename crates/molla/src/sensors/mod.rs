@@ -23,6 +23,8 @@ pub mod frame_transform;
 pub mod imu;
 #[cfg(feature = "gpu")]
 pub mod raycast;
+#[cfg(feature = "gpu")]
+pub mod tiled_camera;
 
 #[cfg(feature = "gpu")]
 pub use contact::{BodyContactReading, ContactSensor};
@@ -32,3 +34,5 @@ pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 pub use imu::{ImuMount, ImuReading, ImuSensor};
 #[cfg(feature = "gpu")]
 pub use raycast::{RayHit, Raycaster};
+#[cfg(feature = "gpu")]
+pub use tiled_camera::{CameraChannels, TiledCamera, TiledCameraConfig};

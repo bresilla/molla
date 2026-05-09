@@ -293,6 +293,21 @@ pub struct Model {
     /// this set.
     pub shape_collision_filter_pairs: Vec<(u32, u32)>,
 
+    // ── Per-shape visual material (Stage 14 — camera sensors) ──────
+    /// Per-shape base RGB colour, in linear space. Default white
+    /// `(1, 1, 1)`. Consumed by the GPU camera-trace kernel
+    /// ([`crate::sensors::TiledCamera`]); ignored by collision /
+    /// dynamics. Length = `shape_count`.
+    pub shape_color: Buffer<Vec3>,
+    /// Per-shape PBR-style metallic factor in `[0, 1]`. Default `0`.
+    /// Reserved for future use by shading paths; the current
+    /// camera-trace kernel does Lambertian shading and only reads
+    /// `shape_color`. Length = `shape_count`.
+    pub shape_metallic: Buffer<Real>,
+    /// Per-shape PBR-style roughness factor in `[0, 1]`. Default
+    /// `0.5`. Same status as `shape_metallic`. Length = `shape_count`.
+    pub shape_roughness: Buffer<Real>,
+
     // ── Equality constraints (CONNECT / WELD) ──────────────────────
     /// Number of equality constraints.
     pub equality_count: usize,
@@ -485,6 +500,9 @@ impl Model {
             sdfs: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),
             shape_collision_filter_pairs: Vec::new(),
+            shape_color: Buffer::from_vec(Vec::new(), s),
+            shape_metallic: Buffer::from_vec(Vec::new(), s),
+            shape_roughness: Buffer::from_vec(Vec::new(), s),
 
             equality_count: 0,
             equality_type: Buffer::from_vec(Vec::new(), s),
@@ -614,6 +632,9 @@ impl Model {
         up!(joint_ancestor);
         up!(joint_target_ke);
         up!(shape_collision_group);
+        up!(shape_color);
+        up!(shape_metallic);
+        up!(shape_roughness);
         // Equality + mimic constraint arrays — added when the GPU
         // `XpbdEqualityKernel` replaced the host-side shim.
         up!(equality_type);
