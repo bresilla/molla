@@ -1389,6 +1389,17 @@ struct MuJoCoExampleState {
     /// Cached info-style status string for the right-rail pane. Built
     /// the first time the scene is entered.
     status: String,
+    /// Stage 22.1 — toggle between MuJoCo's native point-contact
+    /// resolution and molla's hydroelastic distributed-pressure
+    /// contact. When `true`, the viewer would route the contact
+    /// manifold through `molla::geometry::hydroelastic`; when
+    /// `false`, MuJoCo handles contacts internally. The actual
+    /// routing happens at the solver step level — for v1 this flag
+    /// is **informational** in the viewer (the MuJoCo backend always
+    /// uses its native solver), and the toggle exists so a future
+    /// contributor wiring molla→MuJoCo contact injection can flip
+    /// it without an API change. See PLAN.md Stage 22.1.
+    use_hydroelastic: bool,
 }
 
 impl Default for MuJoCoExampleState {
@@ -1402,6 +1413,7 @@ impl Default for MuJoCoExampleState {
             smoothed_step_us: 0.0,
             notified_unavailable: false,
             status,
+            use_hydroelastic: false,
         }
     }
 }
@@ -7324,6 +7336,33 @@ fn mujoco_pane(ui: &mut egui::Ui, state: &mut MuJoCoExampleState, sim: &Sim) {
         ui.label("  2. cargo run -p molla_viewer --features mujoco");
         ui.label("Currently using Featherstone as a fallback.");
     }
+    ui.separator();
+
+    // Stage 22.1 — hydroelastic contact toggle. Wired as an
+    // informational checkbox: MuJoCo's native contact path is the
+    // only one driving the simulation in v1; flipping the toggle
+    // logs an `info!` so a downstream contributor can spot when the
+    // hydroelastic injection should fire. Pattern matches the other
+    // Stage-22 toggles (substep slider, etc).
+    let label = if state.use_hydroelastic {
+        "Hydroelastic contact: ON (informational)"
+    } else {
+        "Hydroelastic contact: OFF (native MuJoCo)"
+    };
+    if ui.checkbox(&mut state.use_hydroelastic, label).changed() {
+        if state.use_hydroelastic {
+            info!(
+                "Stage 22.1 hydroelastic toggle ON — molla's distributed-pressure \
+                 contact would replace MuJoCo's native point-contact resolution. \
+                 v1 viewer routes contacts through MuJoCo regardless; the toggle \
+                 is the integration seam for a follow-up that injects molla's \
+                 manifold via mj_setConstraint."
+            );
+        } else {
+            info!("Stage 22.1 hydroelastic toggle OFF — MuJoCo native contacts");
+        }
+    }
+    ui.small("Stage 22.1 (P2.5) — see PLAN.md for the hydroelastic spec.");
     ui.separator();
 
     ui.small("Hotkey: J  ·  Stage 22 (P2)");
