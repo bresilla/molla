@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -67,6 +67,14 @@ test-featherstone-gpu:
 
 test-featherstone-multidof-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test featherstone_multidof_gpu -- --ignored
+
+# Stage 23.1.1 — GPU adjoint dispatcher parity + closed-form perf check.
+# The dispatcher currently routes through CPU closed-form; will become a
+# real CPU-vs-GPU test when Stage 23.1.2 populates the WGSL kernel
+# bodies. Run in `--release` so the perf check (closed-form vs FD
+# speedup) reflects optimised code.
+test-autograd-featherstone-gpu:
+	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test autograd_featherstone_gpu -- --ignored
 
 test-xpbd-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_gpu_parity -- --ignored
