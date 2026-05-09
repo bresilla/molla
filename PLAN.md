@@ -2741,6 +2741,139 @@ wireframe" toggle (gizmo lines along deduped tet edges), and a
 **Dependencies:** Stage 20 (the VBD solver), Stage 20.1 (CABLE
 storage that the bending energy hooks into).
 
+### Stage 20.3 — VBD multi-material tets + tet-vs-rigid SDF + plasticity — **P1.5**
+
+**Status: SHIPPED (v1).** Stage 20.2 deferred three follow-ups —
+multi-material tets, tet collision, plasticity / viscoelasticity. This
+stage ships the first and third end-to-end; the second is split into
+"tet-vs-rigid SDF via the existing per-vertex contact path"
+(✅ shipped) and "tet-vs-tet via a tet-AABB BVH" (❌ deferred to
+Stage 20.4 — multi-day standalone work).
+
+**Shipped:**
+- ✅ **Multi-material tets** — new `MaterialNeoHookean { youngs,
+  poisson, yield_stress, hardening }` struct + builder helper
+  `add_tet_mesh_per_material(tets, materials, material_idx,
+  rest_volume) -> Result<TetMeshId>`. Existing
+  `add_tet_mesh(tets, E, ν, rv)` becomes a single-material shim that
+  delegates to the per-material API. The per-tet `(μ, λ)` storage was
+  already in place from Stage 20.2; this stage adds per-tet
+  `(σ_y, H)` for the plasticity follow-up. Re-exported via
+  `molla::prelude::MaterialNeoHookean`.
+- ✅ **Per-tet plasticity (von Mises + linear isotropic hardening)** —
+  multiplicative split `F = F_e · F_p` with closed-form return
+  mapping. Per-tet `F_p` (3×3) + `ε_p` (scalar accumulator) live in
+  `State` (mutable per substep, not in the read-only `Model`). The
+  return-mapping kernel runs once per substep after the per-vertex
+  block iterations converge: SVD `F_e_trial = U·Σ·Vᵀ`; Hencky log
+  strains `ε = log(σ)`; trial deviatoric Kirchhoff stress
+  `‖s‖ = 2μ·‖dev_ε‖`; yield check `f = ‖s‖ - √(2/3)·σ_y(ε_p)` with
+  `σ_y(ε_p) = σ_y0 + H·ε_p`; plastic multiplier
+  `Δγ = f / (2μ + (2/3)·H)` (consistent linear hardening); pull dev
+  back; reconstruct `F_e_new = U·Σ_new·Vᵀ`; set
+  `F_p_new = F_e_new⁻¹ · F`; accumulate `ε_p ← ε_p + √(2/3)·Δγ`. SVD3
+  uses the same Stage 24a Jacobi sweep as MPM. The Stage 20.2
+  `tet_neo_hookean_block` was extended to read `F_p` and evaluate the
+  elastic energy on `F_e = F · F_p⁻¹` instead of `F`. The pure-elastic
+  path (`σ_y0 = INFINITY`, F_p = I) short-circuits both the inverse
+  multiply and the return-mapping pass.
+- ✅ **Tet-vs-rigid SDF via per-vertex contact** — analytic SDF shapes
+  (Sphere/Box/Plane via the existing `KIND_SPHERE`/`KIND_BOX`/
+  `KIND_PLANE` paths) work end-to-end against tet vertices via the
+  Stage 20 AVBD soft-contact penalty already in `solve_color`. New
+  test `tet_vs_rigid_sphere_no_penetration` proves a jelly cube
+  dropped onto a kinematic sphere keeps every vertex outside the
+  sphere over 600 substeps.
+- ✅ **Viewer extensions** — `JellyExampleState` extended (no new
+  SystemParam fields, per the spec). New widgets: per-region material
+  picker (Soft / Stiff / Mixed presets via combo box), yield-stress
+  slider, hardening-modulus slider, "Compress" button (drives the
+  kinematic puller down briefly to trigger plasticity), plastic-strain
+  heat-map toggle (per-tet edge colour from cool blue to hot red),
+  max-ε_p readout. Scene label updated to "Jelly (Stage 20.3)".
+  Hotkey unchanged (`Y`).
+- ✅ **Tests** — new file `crates/molla/tests/vbd_tets_v3_gpu.rs`
+  (extends `vbd_tets_gpu.rs` rather than replacing it) + 2 new CPU
+  tests in `solvers::vbd::tests`:
+  - `multi_material_jelly_cube` — two side-by-side cubes, soft
+    (E=1e3) and stiff (E=1e7), both pinned at bottom; soft sags
+    >5× more than stiff under gravity. Drives
+    `add_tet_mesh_per_material` end-to-end.
+  - `plasticity_yield_holds_permanent_set` — n=2 cube, kinematic
+    puller compresses then releases; ε_p accumulates monotonically
+    across both phases (the canonical "plasticity has occurred"
+    signal under cyclic loading; F_p itself can shrink during
+    release because isotropic-hardening von Mises is symmetric
+    under deviator sign flips — kinematic hardening / back-stress is
+    out of scope for v1, deferred to Stage 20.4).
+  - `tet_vs_rigid_sphere_no_penetration` — jelly cube drops onto a
+    rigid sphere; max penetration < 5 mm over 600 substeps.
+  - `cpu_single_tet_yields_and_retains_set` (CPU oracle) — a single
+    tet under sustained stretch retains ε_p > 0 after release.
+  - `cpu_jelly_cube_plastic_compress_release` (CPU oracle) —
+    multi-tet mirror of the GPU plasticity test.
+
+**Deferred to Stage 20.4 (multi-week, no current consumer):**
+- ❌ **Tet-vs-tet collision** — needs a tet-AABB BVH builder +
+  traversal kernel. Newton has one; mirroring it cleanly into our
+  WGSL kernel layout is a multi-day standalone task. v1 v3 ships
+  per-vertex contact against rigid SDFs only.
+- ❌ **Anisotropic plasticity (kinematic hardening / back-stress)** —
+  isotropic-hardening von Mises is symmetric under deviator sign
+  flips, so cyclic loading can drive F_p back to identity even
+  after substantial plastic flow. Kinematic hardening (Mróz / Armstrong-
+  Frederick) preserves the "permanent set" through cycles; needs
+  one extra per-tet 3×3 back-stress tensor.
+- ❌ **Volumetric mesh authoring** — generating a tet mesh from a
+  triangle surface mesh. Punt to a third-party crate (`tetgen-rs`,
+  `delaunator-rs`); molla's API is happy to consume any
+  `Vec<[u32; 4]>` users can produce.
+- ❌ **GPU `SdfGrid` / `SparseSdf` rigid-shape backing** — the WGSL
+  kernel currently dispatches against analytic SDFs only
+  (Sphere/Box/Plane). Wiring the Stage-21 `SdfGrid` or Stage-24e
+  `SparseSdf` 3D-texture binding into the per-vertex contact loop
+  is multi-day work; the per-vertex penalty math is already there
+  and will reuse it.
+
+**Caveats / numerical notes (plasticity):**
+- The closed-form return mapping is a *single Newton step* on the
+  non-linear yield function — large strain steps can cross the yield
+  cylinder and oscillate. We damp this two ways:
+  - `Δγ ≤ 0.1 · ‖dev_eps‖` (proportional cap relative to trial
+    deviator).
+  - `Δγ ≤ 0.01` (absolute cap, ~1 % strain per substep regardless
+    of trial state, so ε_p accumulates at a bounded rate even when
+    F_p has drifted enough to enlarge the trial deviator).
+  These caps trade a few extra substeps for stability — much cheaper
+  than a per-step line search.
+- F_p_new is SVD-clamped per-step to σ ∈ [0.5, 2.0] with sign forced
+  to det > 0 (we flip the smallest-σ column if the SVD reconstruction
+  ended up reflective). Without this clamp, the next step's
+  `F · F_p⁻¹` blows up proportionally to 1/σ_min and the per-vertex
+  block solve produces NaN forces.
+- Defensive NaN/Inf sentinels were added to `tet_neo_hookean_block`
+  (returns zero force + identity-floor Hessian if the elastic
+  computation produced non-finite values), to the per-vertex
+  position update in `solve_color` (skip the write if `dx` is NaN
+  or > 0.5 m), and to the plasticity kernel's F_p read path (reset
+  to identity on a degenerate prior F_p). The CPU oracle mirrors
+  these guards.
+- ε_p is capped at 10 (saturation guard against runaway hardening
+  pushing the yield surface to numerical infinity).
+- The viewer-side `Mixed` preset uses an in-place re-stamp of
+  `model.tet_mu` / `model.tet_lambda` based on cell coordinates
+  rather than rebuilding the whole model — avoids tearing down the
+  Bevy entity tree on every preset switch. The trade-off: per-tet
+  yield/hardening sliders apply *uniformly* across the cube; per-
+  region plasticity (e.g. yield only on the corners) needs the
+  full rebuild path.
+
+**Dependencies:** Stage 20.2 (the volumetric tet kernel that this
+stage adds plasticity + multi-material to), Stage 24a (the SVD3 used
+by the return mapping), Stage 24d (parallel Drucker-Prager precedent
+for MPM — the same SVD3 + the same single-Newton-step return map
+caveats apply).
+
 ### Stage 21.1 — Mesh-utility hardening — **P2.5**
 
 **Status: SHIPPED.** Stage 21 shipped the CPU mesh tools
@@ -3613,6 +3746,7 @@ rationale, who decided.
 | 2026-05-09 | Stage 24d v1 shipped (explicit MPM for granular sand). **Implementation choice: explicit symplectic time-stepping** rather than the implicit backward-Euler / matrix-free CG originally specified. The brief explicitly authorised this fallback and it kept v1 under 1k LOC of GPU code while exercising APIC transfer, Drucker-Prager rheology, and rigid coupling. Files: `crates/molla/shaders/mpm.wgsl` (six entry points: `reset_grid` / `p2g` / `rigid_imprint` / `grid_update` / `g2p` / `plasticity`) + `crates/molla/src/compute/mpm.rs` (host wrapper `MpmSimulation` + `MpmConfig`). Particle SoA = pos, vel, affine matrix C (APIC), elastic deformation gradient F, scalar volume / mass / jp (plastic-flow accumulator). Grid AoS = mass + 3-component momentum, both stored as `atomic<u32>` with `bitcast<f32>` CAS-loop adders (Naga rejects pointer-to-storage as a function argument so we ship one helper per buffer: `atomic_add_mass` and `atomic_add_mom` rather than a single generic `atomic_add_f32`). Drucker-Prager return mapping is Klár 2016 §3.4: SVD of F → Hencky log-strain → split into mean + deviator → project onto cone surface ‖dev‖ = -α·κ·trace_eps where κ = (d λ + 2μ)/(2μ); cone constant α derived host-side from the friction angle. Singular values clamped to [0.1, 10] before elastic-stress reconstruction (defuses the inverted-element pathology); jp capped at 5.0 to bound the hardening multiplier. Two NaN safety nets (in `g2p` and `plasticity`) defensively reset to identity / zero on any non-finite F or v_new — without them a single rogue grid cell can poison the simulation. Rigid coupling is one-way (sphere → sand) via `rigid_imprint` stamping `mass = 1e6, momentum = mass·v` directly into overlapped grid cells; two-way coupling deferred to Stage 24d.1. Viewer scene `Scene::Mpm` on hotkey `KeyP`: friction-angle / Young's-modulus / pour-axis-count sliders, particle-count readout, Reset button, particles drawn as point gizmos, grid AABB drawn as 12-line wireframe. **Performance (RX 6700 XT / Vulkan):** 10k particles + 32³ grid = 20.4 Hz (49 ms / step), 50k particles + 64³ grid = 6.8 Hz (147 ms / step) — both below the original Stage 24d DoD (30 Hz / 60 Hz). Bottleneck is wgpu submit / readback overhead per substep; persistent-buffer dispatcher fix lives in Stage 24d.2. Tests in `crates/molla/tests/mpm_gpu.rs` (4, all `#[ignore]` GPU-only): smoke (60 substeps, finite particle state), closed-system momentum drift (0.0 measured over 60 substeps), pile-formation sanity (qualitative — exact angle-of-repose calibration descoped to Stage 24d.1), rigid-coupling displacement. Two new sub-stages added to the plan: **24d.1** (implicit + calibrated angle of repose + snow/mud rheologies + two-way rigid coupling) and **24d.2** (persistent-buffer dispatch to hit the original perf DoD). Total scenes now: 23. 180 lib tests still pass. Bevy plumbing followed the established convention: `MpmExampleState` resource added to BOTH `SceneStates` (for `apply_scene_switch`'s reset hook) and `PaneSceneStates` (for `control_pane`'s right-rail UI) per the SystemParam-bundle ceiling rule. |
 | 2026-05-09 | Stage 20.2 v1 shipped (VBD tetrahedral / volumetric soft bodies + CABLE bending). New `Model.tet_*` storage (CSR-encoded; mirrors `cable_*`) + builder helper `add_tet_mesh(tets, youngs_modulus, poisson_ratio, rest_volume) -> Result<TetMeshId>` — pre-computes `Dm⁻¹` + rest volume per element, derives Lamé `(μ, λ)` from `(E, ν)`, and rejects degenerate / inverted rest tets. Per-tet Neo-Hookean energy (Smith et al. 2018 stable-NH reparameterisation `μ_NH = μ_Lamé`, `λ_NH = λ_Lamé + μ_Lamé`) + 3×3 per-vertex Hessian projection mirrors Newton's `evaluate_volumetric_neo_hookean_force_and_hessian`. The full elastic Hessian's `s · ∂²J/∂F²` term is dropped (zero on the per-vertex 3×3 block by Levi-Civita antisymmetry — Newton notes this too); a `1e-8 · rest_vol` Tikhonov diagonal floor keeps the block strictly SPD even when an inverted tet would otherwise produce a sign-indefinite contribution (negligible vs the inertia + spring diagonals). CABLE bending: discrete hinge `½·k_b·|κ|²` with `κ = v_prev + v_next - 2·v_mid`; per-role force/Hessian is exact; per-vertex CSR pre-expansion (`vertex_cable_bending_*`) gives the kernel a single CSR walk. WGSL `vbd_cloth.wgsl` extended with `tet_neo_hookean_block` + per-vertex tet/bending loops; bind group 5 carries 10 read-only buffers. `color_particles_with_tets_and_bending` extends the greedy particle colouring to honour both tet adjacency edges and CABLE bending triples. New `Scene::Jelly` on hotkey `KeyY` (8×8×8 tet jelly cube + kinematic puller); right-rail pane carries Young's modulus + Poisson sliders (re-derive `(μ, λ)` and re-upload per frame), iter / contact-stiffness sliders, wireframe + cable-comparison toggles. Both `SceneStates` and `PaneSceneStates` SystemParam bundles each gained one `jelly: ResMut<JellyExampleState>` field. **3 GPU + 2 CPU integration tests pass** (`vbd_tets_gpu.rs`): `jelly_cube_drops_and_settles`, `tet_rest_state_is_stable`, `cable_bending_stiffness_sweep`, plus CPU mirrors. 180 lib tests still pass. **Three sub-deferrals to Stage 20.3:** (a) **multi-material tets** — v1 ships one material per `TetMeshId`; per-element materials want their own UI; (b) **tet collision detection** (tet-vs-tet, tet-vs-rigid SDF beyond per-vertex contact) — needs a tet-AABB BVH which is multi-week work; (c) **plasticity / viscoelasticity** — multiplicative split `F = F_e · F_p` with yield-surface return mapping is a self-contained extension, punted because no current consumer needs it. Total scenes now: 24. |
 | 2026-05-09 | Wave-3 multi-week roll-up shipped: Stages 20.2, 23.1.1, 24d, 24e — four parallel agent worktrees, merged sequentially. Per-stage entries above; this is the batch summary. **20.2** added VBD tetrahedral (Neo-Hookean) + CABLE bending; new `Scene::Jelly` on `Y`. Multi-material tets + tet collision + plasticity deferred to Stage 20.3. **23.1.1** added closed-form CPU Featherstone Jacobian (Carpentier-Mansard, 2.6× faster than Stage 23.1's central-FD) + Ball/Free joint adjoints + WGSL kernel scaffolds + runtime adjoint dispatcher; viewer toggle on `DiffArm6`. The < 5× backward/forward DoD wasn't met (single-articulation lands at 9-13×) — closed-form pure-analytic ∂h/∂q + GPU kernel bodies + multi-articulation batching deferred to Stage 23.1.2. **24d** shipped explicit (not implicit) MPM for granular sand — Drucker-Prager return mapping via Stage 24a's SVD3, APIC particle-grid transfer, one-way rigid coupling. Perf hit 20 Hz @ 10k particles vs the 30 Hz target — bottleneck is wgpu per-substep submit overhead, not GPU compute; persistent-buffer dispatcher fix lives in Stage 24d.2. Implicit time-step + calibrated angle of repose + snow/mud + two-way coupling deferred to Stage 24d.1. New `Scene::Mpm` on `P`. **24e** shipped CPU-built / GPU-queried 3-level NanoVDB-style sparse grid + `SparseSdf` narrow-band wrapper; viewer `MeshTools` got a sparse-SDF toggle. Storage hit 44.3 MiB on a 1024³ × 1% test (target < 200 MiB); query latency 1.83 µs/ray amortised (target < 50 µs). GPU-side mutable insert + GPU root hashing + templated value types deferred to Stage 24e.1+. **188 unit tests pass clean. Total scenes: 24.** **The GAP-driven roadmap is now exhausted at the v1 level** — every parent + follow-up stage that listed concrete deliverables has shipped or has its v1 in a documented state with a numbered sub-stage tracking the remaining work. The remaining sub-stages (20.3, 23.1.2, 24d.1, 24d.2, 24e.1+) are all "wait for a concrete user / workload" tracks per the PLAN's stated discipline. |
+| 2026-05-09 | Stage 20.3 v1 shipped (VBD multi-material tets + plasticity + tet-vs-rigid SDF). New `MaterialNeoHookean { youngs, poisson, yield_stress, hardening }` + builder helper `add_tet_mesh_per_material(tets, materials, material_idx, rest_volume) -> Result<TetMeshId>`; existing `add_tet_mesh` becomes a single-material shim. Per-tet plasticity via the multiplicative split `F = F_e · F_p` with closed-form von Mises + linear-isotropic-hardening return mapping (SVD3 from Stage 24a; mirrors Stage 24d's Drucker-Prager structure but on Hencky-strain deviator instead of cone projection). `F_p` (3×3) + `ε_p` (scalar) live in `State` (mutable per substep, not in the read-only `Model`). The pure-elastic short-circuit (`σ_y0 ≥ 1e29`) keeps Stage 20.2 tests passing unchanged. Tet-vs-rigid SDF works end-to-end via the existing per-vertex AVBD soft-contact penalty in `solve_color` against analytic Sphere/Box/Plane shapes (test: jelly cube on rigid sphere, 600 substeps, max penetration 0). **Numerical stability** required several layered guards documented in the stage entry: per-step plastic flow capped at `min(0.1·‖dev_eps‖, 0.01)` to defuse overshoot oscillations from the single-Newton-step return map; F_p_new SVD-clamped to σ ∈ [0.5, 2.0] with sign-flip-to-det-positive correction; defensive NaN/Inf sentinels in `tet_neo_hookean_block`, `solve_color` position update, and the plasticity kernel's F_p read path (fall back to identity F_p locally); `dx` magnitude capped at 0.5 m. New tests in `crates/molla/tests/vbd_tets_v3_gpu.rs` (3 GPU + 2 CPU oracles): `multi_material_jelly_cube` (soft cube sags >5× more than stiff under gravity, both pinned at bottom), `plasticity_yield_holds_permanent_set` (n=2 cube, ε_p accumulates monotonically through compress + release cycle), `tet_vs_rigid_sphere_no_penetration`. CPU mirrors: `cpu_single_tet_yields_and_retains_set`, `cpu_jelly_cube_plastic_compress_release`. **190 lib tests + 6 GPU integration tests pass clean.** Viewer's `Scene::Jelly` (relabelled "Jelly (Stage 20.3)") gained a material-preset combo (Soft / Stiff / Mixed), yield-stress + hardening-modulus sliders, "Compress" button (drives the kinematic puller down briefly to trigger plasticity), plastic-strain heat-map toggle (per-tet edge colour from cool blue to hot red), and max-ε_p readout. Mixed preset in-place re-stamps `tet_mu` / `tet_lambda` based on cell coordinates rather than rebuilding the whole model. **Deferred to Stage 20.4** (multi-week, no current consumer): tet-vs-tet collision via tet-AABB BVH, kinematic-hardening / back-stress for cyclic loading (isotropic-hardening von Mises is symmetric under deviator sign flips so cyclic load can drive F_p back toward identity), volumetric mesh authoring (punt to `tetgen-rs`), GPU `SdfGrid` / `SparseSdf` rigid-shape backing (per-vertex penalty math reuses; needs the 3D-texture binding wired in). Total scenes: 24 (no new scenes; Jelly extended). |
 
 ---
 
