@@ -42,10 +42,15 @@
 //! (`tests/autograd_xpbd.rs::tape_replay_is_deterministic`).
 
 pub mod diff_arm;
+pub mod featherstone_adjoint;
 pub mod tape;
 pub mod xpbd_adjoint;
 
 pub use diff_arm::DiffArm;
+pub use featherstone_adjoint::{
+    record_featherstone_step, FeatherstoneRevoluteChain, FeatherstoneStepTrace,
+    FeatherstoneTrace, JacobianScratch, RevoluteLink,
+};
 pub use tape::{Tape, TapeId, TapeOp};
 pub use xpbd_adjoint::{
     DistanceConstraintAdjoint, distance_chain_grad_initial_pos,
