@@ -12,6 +12,7 @@ mod xpbd;
 
 pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
+pub use crate::math::robust_loss::RobustLoss;
 pub use ik::{ik_solver_health, IkConfig, IkObjective, IkResult, IkSolver};
 pub use jacobian::jacobian;
 pub use mujoco::MuJoCoSolver;

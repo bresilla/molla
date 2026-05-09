@@ -2794,23 +2794,44 @@ soft-body (Stage 20 / 20.1), and inertia-tensor eigendecomposition.
 
 ### Stage 24b — Robust-loss extensions — **P3, complements Stage 23.1**
 
-**Status: DEFERRED.** Smallest item after 24a; complements Stage 23 /
+**Status: SHIPPED.** Smallest item after 24a; complements Stage 23 /
 23.1 by giving autograd more loss building blocks and IK more
 regularisation choices.
 
 **Deliverables:**
-- ❌ Loss + gradient pairs for L1, smooth-L2, **Huber** (Stage 23 doc
-  comment already stubs this), Tukey biweight, Cauchy. CPU + WGSL
-  (`shaders/robust_loss.wgsl`).
-- ❌ TapeOp variants for each (auto-differentiable inside the Stage
-  23 / 23.1 tape).
-- ❌ IkSolver: optional `loss: RobustLoss` parameter; default stays
-  Cholesky-+-L2 for back-compat.
+- ✅ Loss + gradient pairs for L1, smooth-L2, **Huber**, pseudo-Huber,
+  Tukey biweight, Cauchy. CPU at `crates/molla/src/math/robust_loss.rs`
+  (each loss exposes `pub fn norm_<name>` + `norm_<name>_grad`); WGSL
+  at `crates/molla/shaders/robust_loss.wgsl` (one entry point per
+  loss writing `(ρ, ρ')` pairs); GPU dispatch wrapper at
+  `crates/molla/src/kernels/robust_loss.rs::RobustLossKernel`.
+- ✅ TapeOp variants for each — `TapeOp::{L1Loss, SmoothL2Loss,
+  HuberLoss, PseudoHuberLoss, TukeyLoss, CauchyLoss}` plus matching
+  `Tape::{l1_loss, smooth_l2_loss, huber_loss, pseudo_huber_loss,
+  tukey_loss, cauchy_loss}` convenience methods. Auto-differentiable
+  inside the Stage-23 tape; saved residual + analytic gradient avoid
+  any FD path.
+- ✅ IkSolver: optional `loss: RobustLoss` field on `IkConfig`;
+  default stays `RobustLoss::L2` for back-compat. Non-L2 losses
+  trigger an IRLS inner loop — per-residual weight `w_i = ρ'(r_i)/r_i`
+  is folded into the LM normal equations as `(JᵀWJ + λI)·dq = −JᵀWe`,
+  and the trial-step accept/reject criterion switches from `‖e‖` to
+  `Σρ(r_i)` so IRLS makes monotone progress on the real cost. Wired
+  through CPU `solve`, GPU `solve_gpu`, and multi-seed `solve_gpu_with_seeds`.
 
 **Definition of done:**
-- Outlier-resistance test: IK target with 10% outlier targets
-  converges to inlier-aligned pose under Tukey; stays stuck under L2.
-- Gradient verification: each loss's gradient matches FD within 1e-4.
+- ✅ Outlier-resistance test: IK target with 10% outlier targets
+  converges to inlier-aligned pose under Tukey (4e-8 m inlier err);
+  L2 is pulled 0.14 m off true target by the same outlier
+  (`tests/robust_loss.rs::ik_tukey_beats_l2_on_outlier_targets`).
+- ✅ Gradient verification: each loss's gradient matches a 5-point
+  central-difference FD within 1e-4 over 1000 random samples per
+  loss; observed max errors are ~1e-12 (f64 round-off), well inside
+  the budget. L1 needs a small tolerance band around `r = 0` because
+  the FD stencil straddles the sub-gradient kink.
+- ✅ WGSL parity (`tests/robust_loss_gpu.rs`, `#[ignore]` since
+  needs adapter): 1024-sample batches per loss, max errors all
+  < 2e-7 vs the CPU reference (budget 1e-5).
 
 **Dependencies:** Stage 23 (tape autograd) for the TapeOp variants;
 Stage 16 (IkSolver) for the IK integration.

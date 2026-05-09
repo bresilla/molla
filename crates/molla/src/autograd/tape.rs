@@ -17,6 +17,11 @@
 
 use std::collections::HashMap;
 
+use crate::math::robust_loss::{
+    norm_cauchy, norm_cauchy_grad, norm_huber, norm_huber_grad, norm_l1, norm_l1_grad,
+    norm_l2_smooth, norm_l2_smooth_grad, norm_pseudo_huber, norm_pseudo_huber_grad, norm_tukey,
+    norm_tukey_grad,
+};
 use crate::math::Real;
 
 /// Stable identifier for a tensor recorded on the tape. Issued by
@@ -60,6 +65,23 @@ pub enum TapeOp {
     /// yields a zero adjoint (consistent with the XPBD code path,
     /// which short-circuits `len < 1e-9`).
     Norm { v: TapeId, out: TapeId },
+    /// `out_i = ρ(r_i)` — Stage 24b robust-loss elementwise application.
+    /// One adjoint variant per loss family so the backward pass can
+    /// dispatch the correct derivative without storing the loss type
+    /// behind a trait object. Inputs are always single-vector slices
+    /// (scalars or per-residual stacks); output dimensionality matches
+    /// input.
+    L1Loss { r: TapeId, out: TapeId },
+    /// `out = √(r² + ε²) − ε` (smooth L2/L1).
+    SmoothL2Loss { r: TapeId, eps: Real, out: TapeId },
+    /// `out = norm_huber(r, δ)`.
+    HuberLoss { r: TapeId, delta: Real, out: TapeId },
+    /// `out = norm_pseudo_huber(r, δ)`.
+    PseudoHuberLoss { r: TapeId, delta: Real, out: TapeId },
+    /// `out = norm_tukey(r, c)` (biweight; zero gradient outside `±c`).
+    TukeyLoss { r: TapeId, c: Real, out: TapeId },
+    /// `out = norm_cauchy(r, c)`.
+    CauchyLoss { r: TapeId, c: Real, out: TapeId },
 }
 
 impl TapeOp {
@@ -108,6 +130,36 @@ impl TapeOp {
                 let vv = values.get(&v).cloned().unwrap_or_default();
                 let n2: Real = vv.iter().map(|x| x * x).sum();
                 values.insert(out, vec![n2.sqrt()]);
+            }
+            TapeOp::L1Loss { r, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_l1(*x)).collect();
+                values.insert(out, o);
+            }
+            TapeOp::SmoothL2Loss { r, eps, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_l2_smooth(*x, eps)).collect();
+                values.insert(out, o);
+            }
+            TapeOp::HuberLoss { r, delta, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_huber(*x, delta)).collect();
+                values.insert(out, o);
+            }
+            TapeOp::PseudoHuberLoss { r, delta, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_pseudo_huber(*x, delta)).collect();
+                values.insert(out, o);
+            }
+            TapeOp::TukeyLoss { r, c, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_tukey(*x, c)).collect();
+                values.insert(out, o);
+            }
+            TapeOp::CauchyLoss { r, c, out } => {
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let o: Vec<Real> = rv.iter().map(|x| norm_cauchy(*x, c)).collect();
+                values.insert(out, o);
             }
         }
     }
@@ -169,6 +221,66 @@ impl TapeOp {
                 }
                 let gv: Vec<Real> = vv.iter().map(|x| x / n * go0).collect();
                 accumulate(grads, v, &gv, value_len(values, v));
+            }
+            TapeOp::L1Loss { r, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_l1_grad(rv[i]) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
+            }
+            TapeOp::SmoothL2Loss { r, eps, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_l2_smooth_grad(rv[i], eps) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
+            }
+            TapeOp::HuberLoss { r, delta, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_huber_grad(rv[i], delta) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
+            }
+            TapeOp::PseudoHuberLoss { r, delta, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_pseudo_huber_grad(rv[i], delta) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
+            }
+            TapeOp::TukeyLoss { r, c, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_tukey_grad(rv[i], c) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
+            }
+            TapeOp::CauchyLoss { r, c, out } => {
+                let go = grads.get(&out).cloned().unwrap_or_default();
+                let rv = values.get(&r).cloned().unwrap_or_default();
+                let n = go.len().min(rv.len());
+                let mut gv = vec![0.0; rv.len()];
+                for i in 0..n {
+                    gv[i] = norm_cauchy_grad(rv[i], c) * go[i];
+                }
+                accumulate(grads, r, &gv, value_len(values, r));
             }
         }
     }
@@ -299,6 +411,36 @@ impl Tape {
         self.record(|out| TapeOp::Norm { v, out })
     }
 
+    /// Convenience: record elementwise `out_i = |r_i|`. Stage 24b.
+    pub fn l1_loss(&mut self, r: TapeId) -> TapeId {
+        self.record(|out| TapeOp::L1Loss { r, out })
+    }
+
+    /// Convenience: record elementwise smooth-L2 loss. Stage 24b.
+    pub fn smooth_l2_loss(&mut self, r: TapeId, eps: Real) -> TapeId {
+        self.record(|out| TapeOp::SmoothL2Loss { r, eps, out })
+    }
+
+    /// Convenience: record elementwise Huber loss. Stage 24b.
+    pub fn huber_loss(&mut self, r: TapeId, delta: Real) -> TapeId {
+        self.record(|out| TapeOp::HuberLoss { r, delta, out })
+    }
+
+    /// Convenience: record elementwise pseudo-Huber loss. Stage 24b.
+    pub fn pseudo_huber_loss(&mut self, r: TapeId, delta: Real) -> TapeId {
+        self.record(|out| TapeOp::PseudoHuberLoss { r, delta, out })
+    }
+
+    /// Convenience: record elementwise Tukey biweight loss. Stage 24b.
+    pub fn tukey_loss(&mut self, r: TapeId, c: Real) -> TapeId {
+        self.record(|out| TapeOp::TukeyLoss { r, c, out })
+    }
+
+    /// Convenience: record elementwise Cauchy loss. Stage 24b.
+    pub fn cauchy_loss(&mut self, r: TapeId, c: Real) -> TapeId {
+        self.record(|out| TapeOp::CauchyLoss { r, c, out })
+    }
+
     /// Replay the recorded ops in reverse, propagating `grad_output`
     /// (seeded against `output_id`) back to the inputs.
     ///
@@ -403,6 +545,32 @@ mod tests {
         // d = a + (a + b) → ∂d/∂a = 2, ∂d/∂b = 1
         assert_eq!(grads[&a], vec![2.0]);
         assert_eq!(grads[&b], vec![1.0]);
+    }
+
+    #[test]
+    fn huber_loss_grad_matches_analytic() {
+        let mut tape = Tape::start();
+        let r = tape.alloc(vec![0.5, -2.0, 0.0]);
+        let l = tape.huber_loss(r, 1.0);
+        // Sum-reduction seed: gradient = ρ'(r_i).
+        let grads = tape.backward(l, &[1.0, 1.0, 1.0]);
+        let g = grads[&r].clone();
+        // Inside band → r; outside → δ·sign(r); kink at 0 → 0.
+        assert!((g[0] - 0.5).abs() < 1e-12);
+        assert!((g[1] + 1.0).abs() < 1e-12);
+        assert!(g[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn tukey_loss_zero_outside_band() {
+        let mut tape = Tape::start();
+        let r = tape.alloc(vec![0.5, 2.0]);
+        let l = tape.tukey_loss(r, 1.0);
+        let grads = tape.backward(l, &[1.0, 1.0]);
+        let g = grads[&r].clone();
+        // Inside the band → non-zero; outside → 0 (rejected).
+        assert!(g[0].abs() > 1e-6);
+        assert!(g[1].abs() < 1e-12);
     }
 
     #[test]
