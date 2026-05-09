@@ -1756,18 +1756,22 @@ Deliverables:
   out of every penetrated shape using the analytic SDF + outward
   normal. Demo: `Scene::Cloth` drapes a 36×36 sheet over a sphere
   obstacle.
-- ❌ Bending constraints (edge / dihedral angle) — without these the
-  cloth folds freely, which is fine for draping demos but won't hold
-  shape under wind / standing waves.
+- ✅ Bending springs (skip-one PBD pattern) — `add_cloth_grid` now
+  emits an extra distance constraint for every (i, i+2) pair along
+  U and V. `add_cloth_grid_with_bending` exposes the compliance knob;
+  `<0` disables. Default = 30× structural compliance.
+- ✅ Particle-particle (cloth self) collision — GPU spatial-hash
+  uniform grid (4096 buckets × 12 slots), atomic insert,
+  Jacobi-style position projection. WGSL passes
+  `hash_clear`/`hash_insert`/`self_collide`/`strain_apply`. Cell
+  size = 2.2 × max particle radius, set automatically on first
+  dispatch.
 - ❌ Area / triangle constraints — for self-area preservation under
-  large strain.
-- ❌ Particle-particle (cloth self) collision — needs spatial hash;
-  cloth still passes through itself.
-- ❌ Hash-grid spatial accel — same dependency as above; also unlocks
-  large-N rope/cable scenes.
+  large strain. Lower priority — bending springs already prevent the
+  most visible failure mode (cloth flattening unrealistically).
 
-The current implementation is good enough to demo a believable cloth
-on a sphere; bending + self-collision are the remaining quality gaps.
+Cloth is now production-grade enough for demos: drapes on shapes,
+folds onto itself without tunnelling, holds shape under bending.
 
 ### Stage 13 — Specialty shapes + GPU GJK
 
