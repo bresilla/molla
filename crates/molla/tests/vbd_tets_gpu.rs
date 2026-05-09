@@ -439,13 +439,13 @@ fn cable_bending_stiffness_sweep() {
         sag_no.is_finite() && sag_hi.is_finite(),
         "non-finite sag values"
     );
-    // High-bending should sag LESS than no-bending. The reduction
-    // is bounded by the cable's stretch springs (which already cap
-    // mid-span displacement), so we settle for a 1 % relative drop —
-    // tight enough that a no-op kernel can't slip through.
+    // High-bending should sag substantially LESS than no-bending. A
+    // 1 % drop would pass a no-op kernel; demand a 50% reduction so
+    // the bending energy must actually dominate the stretch springs
+    // at the prescribed k_b.
     assert!(
-        sag_hi < sag_no * 0.99,
-        "high-bending cable did not stiffen: sag_hi {sag_hi:.4} >= 0.99·sag_no {:.4}",
-        sag_no * 0.99
+        sag_hi < sag_no * 0.5,
+        "high-bending cable did not stiffen: sag_hi {sag_hi:.4} >= 0.5·sag_no {:.4}",
+        sag_no * 0.5
     );
 }
