@@ -84,7 +84,7 @@ impl XpbdKernel {
         });
         let layout_contacts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd contacts"),
-            entries: &storage_entries(9, true),
+            entries: &storage_entries(11, true),
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd uniforms"),
@@ -316,6 +316,8 @@ impl XpbdKernel {
                 buffer_entry(6, contacts.body_contact_offsets.device_buffer())?,
                 buffer_entry(7, contacts.body_contact_indices.device_buffer())?,
                 buffer_entry(8, contacts.point.device_buffer())?,
+                buffer_entry(9, contacts.rolling_friction.device_buffer())?,
+                buffer_entry(10, contacts.torsional_friction.device_buffer())?,
             ],
         });
 

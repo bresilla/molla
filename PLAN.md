@@ -1739,11 +1739,12 @@ Deliverables:
 - ✅ **Rolling friction** (`μ_rolling`) per shape, pair-rule
   `max(μ_a, μ_b)`. Damps angular velocity perpendicular to the
   contact normal — wheel-on-ground / sphere-rolls-to-rest. Wired
-  into XPBD CPU velocity-projection. `set_shape_friction_modes`
-  in `ModelBuilder`.
+  into XPBD **CPU and GPU** velocity-projection (`shaders/xpbd.wgsl`
+  bind group entry 9). `set_shape_friction_modes` in `ModelBuilder`.
 - ✅ **Torsional friction** (`μ_torsional`) per shape. Damps angular
   velocity ALONG the contact normal (top spinning on a surface).
-  Same pair-rule + builder API as rolling.
+  Same pair-rule + builder API as rolling, also on CPU + GPU
+  (bind group entry 10).
 - ✅ **Contact warm-starting / matching** (`geometry::contact_extras`):
   `contact_id` (FNV-1a-style hash over sorted shape pair + voxelised
   contact point), `build_contact_id_table`, `match_contacts`. The

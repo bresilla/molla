@@ -85,6 +85,8 @@ const B_SIDE_BIT:     u32 = 0x80000000u;
 @group(3) @binding(6) var<storage, read> body_contact_offsets: array<u32>;
 @group(3) @binding(7) var<storage, read> body_contact_indices: array<u32>;
 @group(3) @binding(8) var<storage, read> contact_point:    array<vec4<f32>>;
+@group(3) @binding(9) var<storage, read> contact_rolling_friction:   array<f32>;
+@group(3) @binding(10) var<storage, read> contact_torsional_friction: array<f32>;
 
 // ── Group 4 — Uniforms ───────────────────────────────────────────────
 @group(4) @binding(0) var<uniform> uniforms: Uniforms;
@@ -482,6 +484,67 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let lin_t_self = select(t_hat, -t_hat, is_b) * lambda_t;
                     let ang_t_self = select(ra_x_t, -rb_x_t, is_b) * lambda_t;
                     lin_acc = lin_acc + lin_t_self;
+                    ang_acc = ang_acc + ang_t_self;
+                }
+            }
+        }
+
+        // ── Rolling friction: damp angular velocity perpendicular ──
+        // to the contact normal. Cap = μ_rolling · |λ_n|. Per-body
+        // Jacobi: each thread accumulates only its own ang_acc.
+        let mu_roll = contact_rolling_friction[c];
+        if (mu_roll > 0.0) {
+            // w_a / w_b in global terms (kinematic = 0 for missing body).
+            var w_a_g = w_self;
+            var w_b_g = vec3<f32>(0.0);
+            if (!other_kin) {
+                w_b_g = body_w_post[other].xyz;
+            }
+            if (is_b) {
+                let tmp = w_a_g; w_a_g = w_b_g; w_b_g = tmp;
+            }
+            let w_rel = w_b_g - w_a_g;
+            let w_n = dot(w_rel, n_ab);
+            let w_perp = w_rel - n_ab * w_n;
+            let w_perp_len = length(w_perp);
+            if (w_perp_len > 1e-9) {
+                let dir = w_perp / w_perp_len;
+                let denom_r = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
+                if (denom_r > 0.0) {
+                    let cap_r = mu_roll * abs(lambda_n);
+                    let dw = min(w_perp_len, max(cap_r, 0.0));
+                    let lambda_r = dw / denom_r;
+                    // Self gets +dir if self == a, -dir if self == b
+                    // (relative velocity sign flips).
+                    let ang_r_self = select(dir, -dir, is_b) * lambda_r;
+                    ang_acc = ang_acc + ang_r_self;
+                }
+            }
+        }
+
+        // ── Torsional friction: damp angular velocity component ──
+        // ALONG the normal. Cap = μ_torsional · |λ_n|.
+        let mu_tors = contact_torsional_friction[c];
+        if (mu_tors > 0.0) {
+            var w_a_g = w_self;
+            var w_b_g = vec3<f32>(0.0);
+            if (!other_kin) {
+                w_b_g = body_w_post[other].xyz;
+            }
+            if (is_b) {
+                let tmp = w_a_g; w_a_g = w_b_g; w_b_g = tmp;
+            }
+            let w_rel = w_b_g - w_a_g;
+            let w_n = dot(w_rel, n_ab);
+            let w_n_abs = abs(w_n);
+            if (w_n_abs > 1e-9) {
+                let dir = n_ab * sign(w_n);
+                let denom_t = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
+                if (denom_t > 0.0) {
+                    let cap_t = mu_tors * abs(lambda_n);
+                    let dw = min(w_n_abs, max(cap_t, 0.0));
+                    let lambda_t = dw / denom_t;
+                    let ang_t_self = select(dir, -dir, is_b) * lambda_t;
                     ang_acc = ang_acc + ang_t_self;
                 }
             }
