@@ -2,11 +2,13 @@
 
 pub mod crba;
 mod featherstone;
+pub mod rnea;
 mod semi_implicit;
 mod xpbd;
 
 pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
+pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
 pub use xpbd::XpbdSolver;
 

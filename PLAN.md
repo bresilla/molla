@@ -1694,6 +1694,11 @@ Deliverables:
   Prismatic only for now. CPU; GPU port deferred until a real
   consumer exists. Tests: pendulum parallel-axis, double-pendulum
   symmetric/SPD, Featherstone-consistency (`M·q̈ = τ_g`).
+- ✅ **RNEA inverse dynamics** — `solvers::inverse_dynamics(model, state, articulation, qdd)`
+  returns the joint torques `τ = M(q)·q̈ + C(q,q̇)·q̇ + G(q)` via
+  forward velocity/acceleration sweep + backward force sweep.
+  Tests: pendulum-gravity torque (analytic match), CRBA + RNEA
+  decomposition (`τ_full = M·q̈ + RNEA(q, q̇, 0)` within ε).
 - **Sparse linalg layer** (`crates/molla/src/math/sparse.rs`): `BsrMatrix<T>`
   block-sparse-row type, `bsr_zeros / from_triplets / mv / mm /
   set_transpose / get_diag / scale`. CPU first; GPU port when a
@@ -1705,7 +1710,6 @@ Deliverables:
   `dense_subs`) for CRBA mass-matrix solves on small articulations.
 - `sim/ik/` — Levenberg-Marquardt + L-BFGS optimisers.
   Position / rotation / joint-limit objectives, multi-seed sampling.
-- RNEA inverse dynamics (recursive Newton-Euler).
 - Robust-loss math primitives (`norm_huber`, `norm_pseudo_huber`,
   `smooth_normalize`) for IK regularisation.
 
