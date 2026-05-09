@@ -8599,7 +8599,11 @@ fn draw_cable_gizmos(
     state: Res<CableExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Cable {
+    let multi_cable = matches!(
+        sim.scene,
+        Scene::CablePile | Scene::CableYJunction,
+    );
+    if sim.scene != Scene::Cable && !multi_cable {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
@@ -8614,6 +8618,35 @@ fn draw_cable_gizmos(
     } else {
         Color::srgb(0.40, 0.70, 0.95) // soft mode = cool blue
     };
+    // For multi-cable scenes, walk the per-cable particle lists so we
+    // don't draw a stray segment between cable N's last particle and
+    // cable (N+1)'s first.
+    if multi_cable && sim.model.cable_count > 0 {
+        let offsets = match sim.model.cable_particle_offsets.host() {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+        let particles = match sim.model.cable_particles.host() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        for c in 0..sim.model.cable_count {
+            let start = offsets[c] as usize;
+            let end = offsets[c + 1] as usize;
+            for k in start..end.saturating_sub(1) {
+                let i_a = particles[k] as usize;
+                let i_b = particles[k + 1] as usize;
+                let a = pq[i_a];
+                let b = pq[i_b];
+                gizmos.line(
+                    Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+                    Vec3::new(b.x as f32, b.y as f32, b.z as f32),
+                    cable_color,
+                );
+            }
+        }
+        return;
+    }
     for i in 0..n - 1 {
         let a = pq[i];
         let b = pq[i + 1];
@@ -12005,7 +12038,77 @@ fn build_cloth_twist_model() -> (mp::Model, Vec<BodyVisual>) {
 
     (b.build().expect("cloth twist model"), Vec::new())
 }
-fn build_cable_pile_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
+/// CablePile scene — drop a handful of cable polylines into a "bowl"
+/// (4 walls + floor) and watch them pile / coil. Port of
+/// `xtra/newton/newton/examples/cable/example_cable_pile.py` (simpler
+/// — we ship straight cables instead of sinusoidally-wavy ones).
+fn build_cable_pile_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.6);
+
+    // Bowl: floor + 4 vertical walls.
+    let bowl_size = 1.6_f64;
+    let wall_h = 0.8_f64;
+    let wall_t = 0.05_f64;
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(bowl_size, wall_h, wall_t),
+        mp::Transform::from_translation(MVec3::new(0.0, wall_h, bowl_size)),
+    )
+    .expect("wall +Z");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(bowl_size, wall_h, wall_t),
+        mp::Transform::from_translation(MVec3::new(0.0, wall_h, -bowl_size)),
+    )
+    .expect("wall -Z");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(wall_t, wall_h, bowl_size),
+        mp::Transform::from_translation(MVec3::new(bowl_size, wall_h, 0.0)),
+    )
+    .expect("wall +X");
+    b.add_shape_box(
+        mp::BodyId::NONE,
+        MVec3::new(wall_t, wall_h, bowl_size),
+        mp::Transform::from_translation(MVec3::new(-bowl_size, wall_h, 0.0)),
+    )
+    .expect("wall -X");
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    // 8 cables, alternating horizontal axis, dropped from staggered
+    // heights. No pins — they just fall and pile.
+    let cable_len = 1.4_f64;
+    let particles_per_cable: u32 = 24;
+    let mut rng_state: u64 = 0xFEEDFACECAFEBEEF;
+    fn rng(s: &mut u64) -> f64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    }
+    for i in 0..8 {
+        let h = 1.5 + (i as f64) * 0.30;
+        let yaw = (i as f64) * 0.7 + rng(&mut rng_state) * 0.2;
+        let dx = yaw.cos() * cable_len * 0.5;
+        let dz = yaw.sin() * cable_len * 0.5;
+        let cx = 0.6 * rng(&mut rng_state);
+        let cz = 0.6 * rng(&mut rng_state);
+        let p0 = MVec3::new(cx - dx, h, cz - dz);
+        let p1 = MVec3::new(cx + dx, h, cz + dz);
+        let _ = b.add_cable_polyline(
+            p0,
+            p1,
+            particles_per_cable,
+            0.04,                // particle mass
+            0.025,               // particle radius
+            5.0e5,               // stiffness
+            0.02,                // hard cap on stretch
+            mp::WorldId(0),
+        );
+    }
+
+    (b.build().expect("cable pile model"), Vec::new())
+}
 fn build_cable_y_junction_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_cartpole_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
 fn build_cartpole_swarm_model() -> (mp::Model, Vec<BodyVisual>) { build_empty_scene() }
