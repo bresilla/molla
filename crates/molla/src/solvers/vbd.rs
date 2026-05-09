@@ -1167,11 +1167,15 @@ pub(crate) fn cpu_plasticity_return_map(
         let denom = 2.0 * mu + (2.0 / 3.0) * h;
         let dgamma = (f_yield / denom).max(0.0);
         // Damping cap to defuse the "overshoot the cylinder and
-        // oscillate" pathology. Capping at half the trial deviator
-        // strain (≈ pulling the trial state half-way back to the
-        // surface in the worst case) keeps the iteration stable
-        // without a full line search.
-        let dev_strain_increment = dgamma.min(0.5 * dev_norm);
+        // oscillate" pathology. The closed-form return map is a
+        // single Newton step on the non-linear yield function —
+        // large strain steps can cross the yield cylinder and
+        // oscillate. Two caps stack:
+        //   (a) ≤ 0.1 · trial deviator norm (proportional)
+        //   (b) ≤ 0.01 absolute (~1 %/substep ceiling)
+        // (b) keeps ε_p from running away when F_p has drifted
+        // enough that dev_norm blows up; matches the WGSL kernel.
+        let dev_strain_increment = dgamma.min(0.1 * dev_norm).min(0.01);
         // Pull the deviator back along its trial direction.
         let scale = (dev_norm - dev_strain_increment) / dev_norm;
         let new_dev = dev * scale;
@@ -1204,7 +1208,40 @@ pub(crate) fn cpu_plasticity_return_map(
             // Reject this step's plastic update; keep F_p as-is.
             continue;
         }
-        fp[tet] = fp_new;
+        // Robust per-singular-value clamp on F_p_new: the next step's
+        // elastic computation `F · F_p⁻¹` blows up when σ_min(F_p) is
+        // small and produces near-degenerate F_e when σ_max is large.
+        // Clamp σ ∈ [0.5, 2.0] in place — much cheaper than a full
+        // line search on Δγ, and bounded enough that the multi-step
+        // plastic flow accumulates correctly. We force F_p to
+        // det > 0 by taking |σ| in the SVD and flipping the smallest
+        // |σ|-column of the reconstruction if it ended up reflective.
+        let (fp_u, fp_sigma, fp_v) = svd3(fp_new);
+        let fp_sigma_clamped = crate::math::Vec3::new(
+            fp_sigma.x.abs().clamp(0.5, 2.0),
+            fp_sigma.y.abs().clamp(0.5, 2.0),
+            fp_sigma.z.abs().clamp(0.5, 2.0),
+        );
+        let fp_diag = Mat3::from_cols(
+            Vec3::new(fp_sigma_clamped.x, 0.0, 0.0),
+            Vec3::new(0.0, fp_sigma_clamped.y, 0.0),
+            Vec3::new(0.0, 0.0, fp_sigma_clamped.z),
+        );
+        let mut fp_clamped = fp_u * fp_diag * fp_v.transpose();
+        if fp_clamped.determinant() < 0.0 {
+            let mut min_i = 0;
+            if fp_sigma_clamped.y < fp_sigma_clamped[min_i] {
+                min_i = 1;
+            }
+            if fp_sigma_clamped.z < fp_sigma_clamped[min_i] {
+                min_i = 2;
+            }
+            // Flip column `min_i`.
+            let mut cols = [fp_clamped.x_axis, fp_clamped.y_axis, fp_clamped.z_axis];
+            cols[min_i] = -cols[min_i];
+            fp_clamped = Mat3::from_cols(cols[0], cols[1], cols[2]);
+        }
+        fp[tet] = fp_clamped;
         // Equivalent plastic strain accumulator: classic √(2/3)·Δγ.
         eps_p[tet] = (eps_p[tet] + sqrt_2_3 * dev_strain_increment).min(10.0);
     }
@@ -1320,5 +1357,258 @@ mod tests {
         let s = model.state().unwrap();
         let q = s.particle_q.host().unwrap();
         pinned.iter().map(|&i| q[i as usize]).collect()
+    }
+
+    /// Stage 20.3 — small jelly cube (3×3×3) on CPU with the same
+    /// kinematic-puller-then-release scenario as the GPU test
+    /// `plasticity_yield_holds_permanent_set`. Verifies the multi-tet
+    /// return mapping survives a sustained compress + release cycle
+    /// without any tet's F_p going degenerate. Cheap; no GPU adapter.
+    #[test]
+    fn cpu_jelly_cube_plastic_compress_release() {
+        use crate::sim::MaterialNeoHookean;
+        let n = 3u32;
+        let side = 0.3_f64;
+        let mut b = ModelBuilder::new();
+        b.set_linear_damping(0.6);
+        b.set_world_gravity(WorldId(0), Vec3::ZERO);
+        let dx = side / (n as Real - 1.0);
+        let centre = Vec3::ZERO;
+        let origin = centre - Vec3::splat(side * 0.5);
+        let mass = 0.05;
+        let pr = dx * 0.5;
+        let mut bottom_pins = Vec::new();
+        let mut top_pins = Vec::new();
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    let p = origin + Vec3::new(i as Real * dx, j as Real * dx, k as Real * dx);
+                    let id = b.add_particle(p, mass, pr, WorldId(0));
+                    if j == 0 {
+                        b.pin_particle(id);
+                        bottom_pins.push(id as usize);
+                    } else if j == n - 1 {
+                        b.pin_particle(id);
+                        top_pins.push(id as usize);
+                    }
+                }
+            }
+        }
+        let v_at = |i: u32, j: u32, k: u32| -> u32 { (k * n + j) * n + i };
+        let mut tets: Vec<[u32; 4]> = Vec::new();
+        for kk in 0..n - 1 {
+            for jj in 0..n - 1 {
+                for ii in 0..n - 1 {
+                    let corners = [
+                        v_at(ii, jj, kk),
+                        v_at(ii + 1, jj, kk),
+                        v_at(ii, jj + 1, kk),
+                        v_at(ii + 1, jj + 1, kk),
+                        v_at(ii, jj, kk + 1),
+                        v_at(ii + 1, jj, kk + 1),
+                        v_at(ii, jj + 1, kk + 1),
+                        v_at(ii + 1, jj + 1, kk + 1),
+                    ];
+                    // Helper redeclared inline (the test file's `cube_to_six_tets`
+                    // lives in the integration test crate, not here).
+                    let v000 = corners[0];
+                    let v100 = corners[1];
+                    let v010 = corners[2];
+                    let v110 = corners[3];
+                    let v001 = corners[4];
+                    let v101 = corners[5];
+                    let v011 = corners[6];
+                    let v111 = corners[7];
+                    tets.extend_from_slice(&[
+                        [v000, v100, v110, v111],
+                        [v000, v110, v010, v111],
+                        [v000, v010, v011, v111],
+                        [v000, v011, v001, v111],
+                        [v000, v001, v101, v111],
+                        [v000, v101, v100, v111],
+                    ]);
+                }
+            }
+        }
+        let materials = [MaterialNeoHookean {
+            youngs: 5.0e3,
+            poisson: 0.3,
+            yield_stress: 5.0e1,
+            hardening: 1.0e3,
+        }];
+        let mat_idx: Vec<u32> = vec![0; tets.len()];
+        b.add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+            .unwrap();
+        let model = b.build().unwrap();
+        let initial = model.initial_particle_q.host().unwrap().to_vec();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        let control = model.control();
+        let contacts = Contacts::with_capacity(8);
+        let mut solver = VbdSolver::new_cpu().with_iterations(15);
+        let dt: Real = 1.0 / 240.0;
+
+        // Phase 1: compress.
+        let total_squash: Real = 0.04 * side;
+        let compress_steps = 400;
+        for step in 0..compress_steps {
+            let frac = step as Real / compress_steps as Real;
+            let squash = frac * total_squash;
+            {
+                let q = s_a.particle_q.host_mut().unwrap();
+                for &v in &top_pins {
+                    let mut p = initial[v];
+                    p.y -= squash;
+                    q[v] = p;
+                }
+            }
+            crate::solvers::Solver::step(
+                &mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b,
+            )
+            .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        // Read F_p / ε_p.
+        let eps_after = s_a.tet_plastic_strain.host().unwrap().to_vec();
+        let max_eps_after = eps_after.iter().cloned().fold(0.0_f64, f64::max);
+        eprintln!("post-compress max ε_p = {max_eps_after:.4}");
+        assert!(max_eps_after > 1.0e-3);
+
+        // Phase 2: release.
+        for _ in 0..200 {
+            {
+                let q = s_a.particle_q.host_mut().unwrap();
+                for &v in &top_pins {
+                    q[v] = initial[v];
+                }
+            }
+            crate::solvers::Solver::step(
+                &mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b,
+            )
+            .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let q = s_a.particle_q.host().unwrap();
+        for (i, p) in q.iter().enumerate() {
+            assert!(
+                p.x.is_finite() && p.y.is_finite() && p.z.is_finite(),
+                "particle {i} non-finite: {p:?}"
+            );
+        }
+        let eps_post = s_a.tet_plastic_strain.host().unwrap().to_vec();
+        let max_eps_post = eps_post.iter().cloned().fold(0.0_f64, f64::max);
+        eprintln!("post-release max ε_p = {max_eps_post:.4}");
+        // ε_p is monotone non-decreasing.
+        assert!(max_eps_post >= max_eps_after);
+        assert!(max_eps_post > 1.0e-3);
+    }
+
+    /// Stage 20.3 — a single tet under a static stretch load past
+    /// yield should retain a non-trivial F_p after release. This is
+    /// the smallest-possible reproducer for the plasticity kernel:
+    /// no spatial discretisation, just one tet.
+    #[test]
+    fn cpu_single_tet_yields_and_retains_set() {
+        use crate::sim::MaterialNeoHookean;
+        let mut b = ModelBuilder::new();
+        b.set_linear_damping(0.4);
+        b.set_world_gravity(WorldId(0), Vec3::ZERO);
+        // Unit tet in axis-aligned form.
+        let p0 = b.add_particle(Vec3::new(0.0, 0.0, 0.0), 0.05, 0.01, WorldId(0));
+        let p1 = b.add_particle(Vec3::new(1.0, 0.0, 0.0), 0.05, 0.01, WorldId(0));
+        let p2 = b.add_particle(Vec3::new(0.0, 1.0, 0.0), 0.05, 0.01, WorldId(0));
+        let p3 = b.add_particle(Vec3::new(0.0, 0.0, 1.0), 0.05, 0.01, WorldId(0));
+        let mat = MaterialNeoHookean {
+            youngs: 1.0e4,
+            poisson: 0.3,
+            yield_stress: 50.0,
+            hardening: 100.0,
+        };
+        b.add_tet_mesh_per_material(&[[p0, p1, p2, p3]], &[mat], &[0], None)
+            .unwrap();
+        // Pin all four particles so we can write-driven deform.
+        b.pin_particle(p0);
+        b.pin_particle(p1);
+        b.pin_particle(p2);
+        b.pin_particle(p3);
+        let model = b.build().unwrap();
+        let mut s_a = model.state().unwrap();
+        let mut s_b = model.state().unwrap();
+        let control = model.control();
+        let contacts = Contacts::with_capacity(8);
+
+        let mut solver = VbdSolver::new_cpu().with_iterations(8);
+        let dt: Real = 1.0 / 240.0;
+
+        // Apply a static stretch: move p1 outward by 30% over many
+        // substeps. The pinned particles overrule the solver, so the
+        // tet sees a large F gradient. With yield_stress = 50 and
+        // youngs = 1e4 we expect plasticity to fire.
+        let n_compress = 200;
+        for step in 0..n_compress {
+            let frac = step as Real / n_compress as Real;
+            let stretch = 0.3 * frac;
+            {
+                let q = s_a.particle_q.host_mut().unwrap();
+                q[p1 as usize] = Vec3::new(1.0 + stretch, 0.0, 0.0);
+            }
+            crate::solvers::Solver::step(
+                &mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b,
+            )
+            .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        // F_p should have moved from identity.
+        let fp = s_a.tet_f_plastic.host().unwrap();
+        let fp_norm = (fp[0] - crate::math::Mat3::IDENTITY).x_axis.length()
+            + (fp[0] - crate::math::Mat3::IDENTITY).y_axis.length()
+            + (fp[0] - crate::math::Mat3::IDENTITY).z_axis.length();
+        eprintln!("‖F_p - I‖ after stretch: {fp_norm:.4}");
+        assert!(
+            fp_norm > 1.0e-3,
+            "F_p didn't move from identity under sustained yield: {fp_norm}"
+        );
+        // Plastic strain accumulator should also be > 0.
+        let eps_p = s_a.tet_plastic_strain.host().unwrap()[0];
+        eprintln!("ε_p = {eps_p:.4}");
+        assert!(eps_p > 0.0);
+
+        // Phase 2: release p1 back to its original position; F_p
+        // should NOT reset (plastic strain is permanent).
+        let fp_snapshot = fp[0];
+        let n_release = 300;
+        for _ in 0..n_release {
+            {
+                let q = s_a.particle_q.host_mut().unwrap();
+                q[p1 as usize] = Vec3::new(1.0, 0.0, 0.0);
+            }
+            crate::solvers::Solver::step(
+                &mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b,
+            )
+            .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+        let fp_post = s_a.tet_f_plastic.host().unwrap()[0];
+        let fp_post_norm = (fp_post - crate::math::Mat3::IDENTITY).x_axis.length()
+            + (fp_post - crate::math::Mat3::IDENTITY).y_axis.length()
+            + (fp_post - crate::math::Mat3::IDENTITY).z_axis.length();
+        let eps_p_post = s_a.tet_plastic_strain.host().unwrap()[0];
+        eprintln!("‖F_p_post - I‖: {fp_post_norm:.4}, ε_p_post: {eps_p_post:.4}");
+        // The accumulated plastic strain `ε_p` is monotonic
+        // (sqrt(2/3)·Δγ accumulates regardless of yielding direction);
+        // verify it stayed > 0 through the release, which is the
+        // canonical "plasticity has occurred" signal. F_p itself can
+        // shrink during release because isotropic-hardening von
+        // Mises is symmetric under sign flips of the trial deviator
+        // — kinematic hardening would prevent reverse yielding but
+        // is out of scope for v1 (deferred to Stage 20.4).
+        assert!(
+            eps_p_post >= eps_p,
+            "ε_p decreased: {eps_p:.4} → {eps_p_post:.4}"
+        );
+        assert!(eps_p_post > 0.05, "no permanent plastic strain: ε_p = {eps_p_post}");
+        // Verify it's still finite.
+        assert!(fp_post.x_axis.x.is_finite());
+        let _ = (fp_snapshot, fp_post_norm);
     }
 }

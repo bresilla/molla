@@ -498,7 +498,14 @@ fn tet_neo_hookean_block(
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_mat);
     var f_mat = f_full;
-    if (abs(fp_det - 1.0) > 1e-6 && abs(fp_det) > 1e-6) {
+    // NaN/degenerate sentinel — bail to identity-F_p when the prior
+    // step wrote something we can't safely invert (defensive — the
+    // plasticity kernel clamps F_p, but a bug elsewhere shouldn't
+    // poison the per-vertex block solve).
+    let fp00 = fp_raw.col0.x;
+    if (!(fp00 == fp00) || abs(fp_det) < 1e-6) {
+        f_mat = f_full;
+    } else if (abs(fp_det - 1.0) > 1e-6) {
         // Real plastic deformation — multiply by F_p⁻¹ (3×3 inverse).
         f_mat = f_full * mat3_inverse(fp_mat);
     }
@@ -570,6 +577,29 @@ fn tet_neo_hookean_block(
     h_block[0].x = max(h_block[0].x, h_floor);
     h_block[1].y = max(h_block[1].y, h_floor);
     h_block[2].z = max(h_block[2].z, h_floor);
+
+    // Stage 20.3 — NaN/Inf sentinel. With plasticity in the loop,
+    // an exotic F_p combined with a degenerate F can produce a
+    // NaN in `f_clean`/`h_block`. Returning zero force + identity-
+    // multiplied Hessian for this tet's contribution makes the
+    // per-vertex block solve see "no contribution" — the inertia
+    // term dominates and the position update is sane (the particle
+    // won't move much, but at least it won't go NaN).
+    let any_nan = !(f_clean.x == f_clean.x)
+        || !(f_clean.y == f_clean.y)
+        || !(f_clean.z == f_clean.z)
+        || !(h_block[0].x == h_block[0].x)
+        || !(h_block[1].y == h_block[1].y)
+        || !(h_block[2].z == h_block[2].z);
+    if (any_nan) {
+        *out_force = vec3<f32>(0.0);
+        *out_hess = mat3x3<f32>(
+            vec3<f32>(h_floor, 0.0, 0.0),
+            vec3<f32>(0.0, h_floor, 0.0),
+            vec3<f32>(0.0, 0.0, h_floor),
+        );
+        return;
+    }
 
     *out_force = f_clean;
     *out_hess  = h_block;
@@ -777,8 +807,20 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Newton-Raphson step in position space. Skip if the Hessian is
     // numerically singular (mass/dt² guarantees it isn't, but floats).
     let h_inv = mat3_inverse(h);
-    let dx = h_inv * f;
-    particle_q[v] = vec4<f32>(x + dx, 0.0);
+    let dx_raw = h_inv * f;
+    // Stage 20.3 — NaN/Inf sentinel + magnitude clamp on the position
+    // update. With plasticity in the loop, an exotic per-tet F_p can
+    // poison the assembled `f`/`h` block in pathological cases
+    // despite the per-call guards in `tet_neo_hookean_block`. Refuse
+    // to write a non-finite update; cap |dx| at 0.5 m to defuse
+    // runaway geometric blow-ups (the per-substep dt is small so any
+    // physically-meaningful dx is much less than 0.5 m anyway).
+    let dx_ok = (dx_raw.x == dx_raw.x) && (dx_raw.y == dx_raw.y) && (dx_raw.z == dx_raw.z);
+    if (dx_ok) {
+        let dx_len = length(dx_raw);
+        let dx = select(dx_raw, dx_raw * (0.5 / dx_len), dx_len > 0.5);
+        particle_q[v] = vec4<f32>(x + dx, 0.0);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -911,16 +953,21 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let f_full = ds * dm_inv;
 
     let fp_raw = tet_f_plastic[tet];
-    let fp_old = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
+    var fp_old = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_old);
-    if (!(fp_det == fp_det) || abs(fp_det) < 1e-12) {
-        // Reset on degenerate F_p.
+    let fp00 = fp_raw.col0.x;
+    if (!(fp00 == fp00) || abs(fp_det) < 1e-12 || abs(fp_det) > 50.0) {
+        // Reset on degenerate / divergent F_p.
         tet_f_plastic[tet] = Mat3Cols(
             vec4<f32>(1.0, 0.0, 0.0, 0.0),
             vec4<f32>(0.0, 1.0, 0.0, 0.0),
             vec4<f32>(0.0, 0.0, 1.0, 0.0),
         );
-        return;
+        fp_old = mat3x3<f32>(
+            vec3<f32>(1.0, 0.0, 0.0),
+            vec3<f32>(0.0, 1.0, 0.0),
+            vec3<f32>(0.0, 0.0, 1.0),
+        );
     }
     let fe_trial = f_full * mat3_inverse(fp_old);
 
@@ -945,8 +992,18 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let denom = 2.0 * mu_l + (2.0 / 3.0) * h_mod;
     let dgamma_raw = max(f_yield / denom, 0.0);
-    // Damping cap (overshoot defuse).
-    let dgamma = min(dgamma_raw, 0.5 * dev_norm);
+    // Damping cap (overshoot defuse). The closed-form return map is a
+    // single Newton step on the non-linear yield function — large
+    // strain steps can cross the yield cylinder and oscillate.
+    // We cap two ways:
+    //   (a) dgamma ≤ 0.1 · ‖dev_eps‖ — proportional cap relative to
+    //       the trial deviator norm.
+    //   (b) dgamma ≤ 0.01           — absolute cap, ~1% strain per
+    //       substep regardless of trial state, so ε_p accumulates at
+    //       a bounded rate even when F_p has drifted enough that
+    //       dev_norm grows large (the multiplicative split feeds
+    //       back into itself).
+    let dgamma = min(min(dgamma_raw, 0.1 * dev_norm), 0.01);
     let scale = (dev_norm - dgamma) / dev_norm;
     let new_dev = dev * scale;
     let new_eps = new_dev + vec3<f32>(mean, mean, mean);
@@ -972,10 +1029,49 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         // CPU oracle does the same.
         return;
     }
+    // Robust SVD-based clamp on F_p_new's own singular values, in
+    // place. The closed-form return mapping with a single SVD per
+    // step can produce an F_p with σ ∈ [σ_min, σ_max] outside a
+    // useful range; clamping σ ∈ [0.5, 2.0] keeps the next step's
+    // elastic computation `F · F_p⁻¹` numerically sane (the inverse
+    // blows up proportionally to 1/σ_min). Documented in
+    // `solvers/vbd.rs` plasticity comments — this is the cheap
+    // alternative to a full per-step line search.
+    //
+    // Note: svd3_jacobi can return negative σ when it absorbs a
+    // det(U) < 0 sign flip. We force F_p to det > 0 by taking
+    // |σ| then absorbing any sign flip into U (flipping the
+    // smallest-σ U column if det(U·diag(σ)·Vᵀ) ends up negative).
+    let fp_svd = svd3_jacobi(fp_new);
+    let fp_sigma_clamped = vec3<f32>(
+        clamp(abs(fp_svd.s.x), 0.5, 2.0),
+        clamp(abs(fp_svd.s.y), 0.5, 2.0),
+        clamp(abs(fp_svd.s.z), 0.5, 2.0),
+    );
+    let fp_diag = mat3x3<f32>(
+        vec3<f32>(fp_sigma_clamped.x, 0.0, 0.0),
+        vec3<f32>(0.0, fp_sigma_clamped.y, 0.0),
+        vec3<f32>(0.0, 0.0, fp_sigma_clamped.z),
+    );
+    var fp_clamped = fp_svd.u * fp_diag * transpose(fp_svd.v);
+    // Flip the sign of one column of fp_clamped to get det(F_p) > 0
+    // if the SVD's sign convention flipped it negative. We pick the
+    // column with the smallest |σ| (the rotation impact is smallest).
+    if (determinant(fp_clamped) < 0.0) {
+        var min_i: u32 = 0u;
+        if (fp_sigma_clamped.y < fp_sigma_clamped[min_i]) { min_i = 1u; }
+        if (fp_sigma_clamped.z < fp_sigma_clamped[min_i]) { min_i = 2u; }
+        fp_clamped[min_i] = -fp_clamped[min_i];
+    }
+    // Final NaN sentinel — refuse to write a non-finite F_p.
+    let test_val = fp_clamped[0].x;
+    if (!(test_val == test_val)) {
+        return;
+    }
     tet_f_plastic[tet] = Mat3Cols(
-        vec4<f32>(fp_new[0], 0.0),
-        vec4<f32>(fp_new[1], 0.0),
-        vec4<f32>(fp_new[2], 0.0),
+        vec4<f32>(fp_clamped[0], 0.0),
+        vec4<f32>(fp_clamped[1], 0.0),
+        vec4<f32>(fp_clamped[2], 0.0),
     );
     tet_plastic_strain[tet] = min(tet_plastic_strain[tet] + sqrt_2_3 * dgamma, 10.0);
 }
