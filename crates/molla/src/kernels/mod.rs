@@ -29,6 +29,8 @@ mod epa;
 #[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
+mod fft;
+#[cfg(feature = "gpu")]
 mod gjk;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast;
@@ -92,6 +94,8 @@ pub use epa::{
 };
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
+#[cfg(feature = "gpu")]
+pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
 pub use gjk::{GjkKernel, GJK_SIMPLEX_STRIDE};
 #[cfg(feature = "gpu")]
