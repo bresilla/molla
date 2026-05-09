@@ -1725,11 +1725,8 @@ Deliverables:
 
 ### Stage 12 — Particles + cloth (XPBD distance/bending) + springs
 
-**Status: PARTIAL** (took an early swing during the visualization
-push to get a draggable cloth on screen — stretch limit, mouse pin,
-and Bevy mesh sync working in `molla_viewer`'s scene 4. The hard
-parts of full cloth — bending, area, particle-particle and
-particle-rigid contact — are still TODO.)
+**Status: MOSTLY DONE** (2026-05-09). GPU end-to-end. The remaining
+gaps are bending/area constraints and particle-particle self-collision.
 
 **Goal**: cloth on a sphere, rope dragging across boxes.
 
@@ -1747,23 +1744,30 @@ Deliverables:
   λ accumulator (Newton/Warp `solve_springs`) → per-spring hard
   strain limiter via Jacobi-style position projection
   (`Model.spring_max_stretch`) → particle vs Y=0 plane.
-- ✅ GPU shim (`apply_particles_post_gpu`) — host-side particle step
-  runs after the GPU rigid-body kernel; particle buffers download /
-  reupload around it like the equality-constraint shim.
+- ✅ GPU port — `kernels/xpbd_particles.rs` +
+  `shaders/xpbd_particles.wgsl`. Multi-pass: parallel `predict`,
+  graph-coloured `solve_distance` (K passes per iter, no atomics),
+  graph-coloured `strain_accumulate`, `floor_clamp`,
+  `particle_vs_shapes`, `velocity_recovery`. Greedy spring colouring
+  computed once at build time (`spring_color_count` /
+  `spring_color_offsets` / `spring_indices_by_color` in `Model`).
+- ✅ Particle-rigid SDF collision (sphere / plane / box / capsule /
+  cylinder) — `particle_vs_shapes` WGSL pass projects each particle
+  out of every penetrated shape using the analytic SDF + outward
+  normal. Demo: `Scene::Cloth` drapes a 36×36 sheet over a sphere
+  obstacle.
 - ❌ Bending constraints (edge / dihedral angle) — without these the
-  cloth folds freely, which is fine for hanging demos but won't hold
-  shape over a sphere or under wind.
+  cloth folds freely, which is fine for draping demos but won't hold
+  shape under wind / standing waves.
 - ❌ Area / triangle constraints — for self-area preservation under
   large strain.
-- ❌ Particle-rigid contact — cloth currently passes through every
-  rigid body. Plane is special-cased; sphere/box/capsule needed for
-  the "drape on a sphere" demo.
-- ❌ Hash-grid spatial accel — needed for particle-particle (cloth
-  self-collision) and large-N rope/cable scenes.
-- ❌ GPU port — particles still run on host via the shim.
+- ❌ Particle-particle (cloth self) collision — needs spatial hash;
+  cloth still passes through itself.
+- ❌ Hash-grid spatial accel — same dependency as above; also unlocks
+  large-N rope/cable scenes.
 
-The current implementation is enough to demo "interactive cloth"
-but stops short of being usable for production cloth scenes.
+The current implementation is good enough to demo a believable cloth
+on a sphere; bending + self-collision are the remaining quality gaps.
 
 ### Stage 13 — Specialty shapes + GPU GJK
 
