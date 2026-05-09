@@ -41,9 +41,11 @@
 //! op sequence. The verification harness exercises this directly
 //! (`tests/autograd_xpbd.rs::tape_replay_is_deterministic`).
 
+pub mod diff_arm;
 pub mod tape;
 pub mod xpbd_adjoint;
 
+pub use diff_arm::DiffArm;
 pub use tape::{Tape, TapeId, TapeOp};
 pub use xpbd_adjoint::{
     DistanceConstraintAdjoint, distance_chain_grad_initial_pos,
