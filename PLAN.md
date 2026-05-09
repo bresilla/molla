@@ -1839,10 +1839,11 @@ Deliverables:
   phase, inline support for Sphere/Box/Capsule/Cylinder/Cone,
   fixed-size 4-vertex simplex with line/triangle/tetrahedron-step
   routines. Output: `0` (disjoint), `1` (overlap), `2` (host
-  fallback for Plane/TriMesh/iter-cap). Cuts CPU narrow-phase work
-  on scenes where the broad phase emits many false-positive pairs.
-  Tests in `tests/gjk_gpu.rs` confirm parity vs CPU GJK on
-  sphere/box/capsule pairs.
+  fallback for Plane/TriMesh/iter-cap). Wired into
+  `CollisionPipeline::enable_gpu_prefilter` — pairs the kernel
+  reports as `0` skip the CPU narrow phase entirely. Tests in
+  `tests/gjk_gpu.rs` confirm parity vs CPU GJK + an end-to-end
+  pipeline test that the prefilter doesn't change contact counts.
 - GPU EPA — TODO. Bounded polytope (~64 faces) is the next step;
   contact generation stays CPU on the overlapping subset until
   then.

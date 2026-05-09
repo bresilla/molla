@@ -152,6 +152,53 @@ fn gpu_gjk_box_box_matches_cpu() {
     }
 }
 
+/// End-to-end pipeline test: GPU GJK pre-filter wired into the
+/// CollisionPipeline. With many far-apart spheres, the kernel
+/// rejects the disjoint pairs so CPU narrow phase only runs on the
+/// few overlapping ones.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu"]
+fn pipeline_with_gpu_prefilter_matches_baseline() {
+    let mut b = ModelBuilder::new();
+    let mass = 1.0;
+    let inertia = Mat3::IDENTITY;
+    // 5 spheres along +X. Spheres 0 and 1 overlap (centres 0.5 apart,
+    // r=0.5). Spheres 2/3/4 are isolated.
+    let mk = |b: &mut ModelBuilder, pos: V3| {
+        let body = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia { mass, com: V3::ZERO, inertia })
+                .with_position(pos),
+        );
+        b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
+    };
+    mk(&mut b, V3::ZERO);
+    mk(&mut b, V3::new(0.5, 0.0, 0.0));
+    mk(&mut b, V3::new(5.0, 0.0, 0.0));
+    mk(&mut b, V3::new(10.0, 0.0, 0.0));
+    mk(&mut b, V3::new(15.0, 0.0, 0.0));
+    let mut model = b.build().unwrap();
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model.upload_to_device(&device, &queue).unwrap();
+    let state = model.state().unwrap();
+
+    // Baseline (no prefilter).
+    let mut pl = molla::geometry::CollisionPipeline::new();
+    let mut contacts_a = molla::sim::Contacts::with_capacity(64);
+    let n_baseline = pl.collide(&model, &state, &mut contacts_a).unwrap();
+
+    // With GPU prefilter.
+    let mut pl_pf = molla::geometry::CollisionPipeline::new();
+    pl_pf.enable_gpu_prefilter(&engine, 32).unwrap();
+    let mut contacts_b = molla::sim::Contacts::with_capacity(64);
+    let n_pf = pl_pf.collide(&model, &state, &mut contacts_b).unwrap();
+    eprintln!("contacts: baseline={n_baseline}, prefilter={n_pf}");
+    assert_eq!(n_baseline, n_pf, "prefilter changed contact count");
+}
+
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-gpu"]
 fn gpu_gjk_capsule_capsule_overlap() {
