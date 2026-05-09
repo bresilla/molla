@@ -1,9 +1,11 @@
 //! Time-integration solvers.
 
+pub mod crba;
 mod featherstone;
 mod semi_implicit;
 mod xpbd;
 
+pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
 pub use semi_implicit::SemiImplicitSolver;
 pub use xpbd::XpbdSolver;
