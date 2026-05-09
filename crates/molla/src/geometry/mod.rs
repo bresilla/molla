@@ -49,10 +49,11 @@ pub use sdf_bake::{bake_mesh_to_sdf, closest_point_on_triangle, SdfGrid};
 pub use spatial_hash::SpatialHashGrid;
 
 // ── Stage 24e: NanoVDB-equivalent sparse-volume storage ────────────
+// ── Stage 24e.1: GPU root hashing (`root_hash3`) ───────────────────
 pub use sparse_grid::{
-    bake_mesh_to_sparse_sdf, sparse_sdf_from_dense, InternalNode, Leaf, SparseGrid,
-    SparseGridGpu, SparseSdf, INTERNAL_DIM, INTERNAL_MASK_U32S, INTERNAL_SHIFT, LEAF_DIM,
-    LEAF_MASK_U32S, LEAF_SHIFT,
+    bake_mesh_to_sparse_sdf, root_hash3, sparse_sdf_from_dense, InternalNode, Leaf,
+    SparseGrid, SparseGridGpu, SparseSdf, INTERNAL_DIM, INTERNAL_MASK_U32S, INTERNAL_SHIFT,
+    LEAF_DIM, LEAF_MASK_U32S, LEAF_SHIFT,
 };
 
 // ── Stage 22.1: hydroelastic contact ───────────────────────────────

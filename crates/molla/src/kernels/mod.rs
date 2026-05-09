@@ -32,6 +32,10 @@ mod featherstone;
 // require GPU and is needed by the autograd CPU path + viewer
 // regardless of the `gpu` feature.
 mod featherstone_adjoint;
+// Stage 23.1.2 GPU multi-articulation Jacobian kernel — only compiled
+// when the gpu feature is on (needs wgpu for compile + dispatch).
+#[cfg(feature = "gpu")]
+mod featherstone_adjoint_gpu;
 #[cfg(feature = "gpu")]
 mod fft;
 #[cfg(feature = "gpu")]
@@ -58,6 +62,8 @@ mod robust_loss;
 mod rnea;
 #[cfg(feature = "gpu")]
 mod sparse_grid;
+#[cfg(feature = "gpu")]
+mod sparse_grid_insert;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
@@ -104,6 +110,12 @@ pub use epa::{
 pub use featherstone::FeatherstoneKernel;
 pub use featherstone_adjoint::{
     time_forward_us, AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher,
+    MultiAdjointBatch, MultiAdjointInput, MultiAdjointOutput,
+};
+#[cfg(feature = "gpu")]
+pub use featherstone_adjoint_gpu::{
+    FeatherstoneAdjointGpuKernel, GpuChainInput, GpuChainJacobian, MAX_LINKS as ADJ_MAX_LINKS,
+    OUT_STRIDE as ADJ_OUT_STRIDE,
 };
 #[cfg(feature = "gpu")]
 pub use fft::{Complex32, FftKernel};
@@ -131,6 +143,10 @@ pub use robust_loss::{LossPair, RobustLossKernel};
 pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
 #[cfg(feature = "gpu")]
 pub use sparse_grid::SparseGridKernel;
+#[cfg(feature = "gpu")]
+pub use sparse_grid_insert::{
+    read_storage_to_pairs, SparseGridInsertKernel, SparseGridStorage, Value, ValueF16, ValueVec3,
+};
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]
