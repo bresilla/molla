@@ -281,6 +281,7 @@ fn main() {
         .insert_resource(ImuExampleState::default())
         .insert_resource(ContactExampleState::default())
         .insert_resource(GpuNpExampleState::default())
+        .insert_resource(GpuBpExampleState::default())
         .insert_resource(ArmExampleState::default())
         .insert_resource(GpuIkArmState::default())
         .insert_resource(CameraExampleState::default())
@@ -395,6 +396,7 @@ struct SceneStates<'w> {
     camera: ResMut<'w, CameraExampleState>,
     stats: ResMut<'w, SimStats>,
     gpu_np: ResMut<'w, GpuNpExampleState>,
+    gpu_bp: ResMut<'w, GpuBpExampleState>,
     quad: ResMut<'w, QuadrotorState>,
 }
 
@@ -407,6 +409,7 @@ struct PaneSceneStates<'w> {
     arm: ResMut<'w, ArmExampleState>,
     gpu_ik: ResMut<'w, GpuIkArmState>,
     gpu_np: ResMut<'w, GpuNpExampleState>,
+    gpu_bp: ResMut<'w, GpuBpExampleState>,
     camera: ResMut<'w, CameraExampleState>,
     actuator: ResMut<'w, ActuatorExampleState>,
     quad: ResMut<'w, QuadrotorState>,
@@ -524,6 +527,11 @@ enum Scene {
     /// control writes per-rotor thrusts that flow into Featherstone
     /// via `state.body_f` (external wrenches). Hotkey: `Q`.
     Quadrotor,
+    /// Stage-19 GPU LBVH broad-phase demo — a 32×32×4 = 4096 sphere
+    /// shower, with a CPU-SAP ↔ GPU-LBVH toggle in the right-rail
+    /// pane and live readouts of pair count + ms/frame for the
+    /// active backend.
+    BroadPhase,
 }
 
 impl Scene {
@@ -543,6 +551,7 @@ impl Scene {
         Scene::Camera,
         Scene::Actuator,
         Scene::Quadrotor,
+        Scene::BroadPhase,
     ];
 
     fn label(self) -> &'static str {
@@ -561,6 +570,7 @@ impl Scene {
             Scene::Camera => "Camera (5-channel raytrace)",
             Scene::Actuator => "Actuator pipeline (Stage 18)",
             Scene::Quadrotor => "Quadrotor (Stage 17 multi-DOF)",
+            Scene::BroadPhase => "GPU broad phase (Stage 19)",
         }
     }
 
@@ -737,6 +747,40 @@ impl Default for GpuNpExampleState {
             last_cpu_calls: 0,
             last_contacts: 0,
             last_pairs: 0,
+        }
+    }
+}
+
+/// Stage-19 GPU broad-phase demo state — toggle for the LBVH path
+/// + per-backend ms/frame counters. The toggle is applied each
+/// frame in `step_simulation` (mirrors `GpuNpExampleState`).
+#[derive(Resource)]
+struct GpuBpExampleState {
+    /// User-controlled: enable the GPU LBVH broad phase. False ⇒ CPU SAP.
+    use_gpu: bool,
+    /// Whether the pipeline currently has GPU broad phase enabled.
+    /// Tracks a delta between user toggle and pipeline state so we
+    /// only rebuild the pipeline when the user flips it.
+    gpu_enabled_now: bool,
+    /// Last frame's broad-phase pair count.
+    last_pairs: usize,
+    /// Smoothed ms/frame for the active backend (whichever is on).
+    smoothed_ms: f64,
+    /// Most recent per-backend ms/frame snapshot — kept across
+    /// toggles so the user can compare CPU vs GPU at a glance.
+    last_cpu_ms: f64,
+    last_gpu_ms: f64,
+}
+
+impl Default for GpuBpExampleState {
+    fn default() -> Self {
+        Self {
+            use_gpu: true,
+            gpu_enabled_now: false,
+            last_pairs: 0,
+            smoothed_ms: 0.0,
+            last_cpu_ms: 0.0,
+            last_gpu_ms: 0.0,
         }
     }
 }
@@ -946,6 +990,7 @@ impl Sim {
             Scene::Camera => build_camera_model(),
             Scene::Actuator => build_actuator_model(),
             Scene::Quadrotor => build_quadrotor_model(),
+            Scene::BroadPhase => build_broad_phase_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -2043,6 +2088,70 @@ fn build_gpu_narrow_phase_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("gpu narrow phase model"), visuals)
 }
 
+/// Stage-19 GPU broad-phase scene — a 32×32×4 = 4096-sphere shower
+/// dropped onto a plane. Sphere radii are deterministically jittered
+/// so the AABB sizes vary (more representative workload for the
+/// LBVH pair-finder than uniform-radius spheres). The right-rail
+/// pane toggles between CPU SAP and GPU LBVH and shows live ms/frame
+/// + pair count for both.
+fn build_broad_phase_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.20);
+
+    let mut visuals: Vec<BodyVisual> = Vec::new();
+
+    // Ground plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane shape");
+
+    // 32 × 32 × 4 = 4096 spheres on a regular grid, dropped from
+    // a few metres up. Spacing is wide enough that the initial
+    // configuration is mostly disjoint — the broad phase still has
+    // O(n) work even when no pairs overlap, so this stresses the
+    // build path. As the spheres settle the pair count climbs.
+    let nx: i32 = 32;
+    let nz: i32 = 32;
+    let ny: i32 = 4;
+    let spacing: f64 = 0.8;
+    let drop_height: f64 = 6.0;
+
+    // Cheap deterministic RNG (Wang hash-style) for radius jitter
+    // — keeps the scene reproducible across runs without pulling
+    // in a `rand` dep.
+    let mut h: u32 = 0x9E37_79B9;
+    let mut next = || {
+        h = h.wrapping_mul(2654435761).wrapping_add(0x12345678);
+        h
+    };
+
+    for ix in 0..nx {
+        for iz in 0..nz {
+            for iy in 0..ny {
+                let x = (ix as f64 - (nx as f64 - 1.0) * 0.5) * spacing;
+                let z = (iz as f64 - (nz as f64 - 1.0) * 0.5) * spacing;
+                let y = drop_height + iy as f64 * (spacing * 0.9);
+                // Radius in [0.18, 0.32] — small enough to fit grid
+                // spacing, large enough to overlap as the spheres
+                // settle and pile up.
+                let r = 0.18 + (next() as f64 / u32::MAX as f64) * 0.14;
+                let mass = 1.0;
+                let i_v = (2.0 / 5.0) * mass * r * r;
+                let inertia = molla::math::Mat3::from_diagonal(MVec3::new(i_v, i_v, i_v));
+                let body = b.add_body(
+                    mp::BodyParams::new()
+                        .with_spatial_inertia(mp::SpatialInertia { mass, com: MVec3::ZERO, inertia })
+                        .with_position(MVec3::new(x, y, z)),
+                );
+                b.add_shape_sphere(body, r, mp::Transform::IDENTITY).unwrap();
+                visuals.push(BodyVisual::Sphere(r as f32));
+            }
+        }
+    }
+
+    (b.build().expect("broad phase model"), visuals)
+}
+
 /// Contact-sensor example — a small stack of bodies settling on the
 /// plane. The GPU `ContactSensor` runs every frame and the right-rail
 /// pane shows per-body contact counts + max depth + net push
@@ -2704,6 +2813,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyQ) && sim.scene != Scene::Quadrotor {
         pending.0 = Some(Scene::Quadrotor);
     }
+    if keys.just_pressed(KeyCode::KeyB) && sim.scene != Scene::BroadPhase {
+        pending.0 = Some(Scene::BroadPhase);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -2735,6 +2847,7 @@ fn apply_scene_switch(
     let camera = &mut *scene_states.camera;
     let stats = &mut *scene_states.stats;
     let gpu_np = &mut *scene_states.gpu_np;
+    let gpu_bp = &mut *scene_states.gpu_bp;
     let quad = &mut *scene_states.quad;
     stats.arm_logged = false;
     // GPU IK: re-seed the target on next entry from the new arm's rest EE.
@@ -2751,6 +2864,12 @@ fn apply_scene_switch(
     gpu_np.last_cpu_calls = 0;
     gpu_np.last_contacts = 0;
     gpu_np.last_pairs = 0;
+    // Same for GPU broad-phase counters / pipeline-state cache.
+    gpu_bp.gpu_enabled_now = false;
+    gpu_bp.last_pairs = 0;
+    gpu_bp.smoothed_ms = 0.0;
+    gpu_bp.last_cpu_ms = 0.0;
+    gpu_bp.last_gpu_ms = 0.0;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -2819,8 +2938,9 @@ fn step_simulation(
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
     mut stats: ResMut<SimStats>,
-    mut gpu_np: ResMut<GpuNpExampleState>,
+    mut gpu_toggles: (ResMut<GpuNpExampleState>, ResMut<GpuBpExampleState>),
 ) {
+    let (gpu_np, gpu_bp) = (&mut gpu_toggles.0, &mut gpu_toggles.1);
     if run.paused && !run.step_once {
         return;
     }
@@ -2851,6 +2971,17 @@ fn step_simulation(
                 .expect("enable_full_gpu_narrow_phase");
         }
         gpu_np.gpu_enabled_now = gpu_np.use_gpu;
+    }
+    // Apply Stage-19 GPU broad-phase toggle.
+    if sim.scene == Scene::BroadPhase && gpu_bp.use_gpu != gpu_bp.gpu_enabled_now {
+        let Sim { pipeline, engine, .. } = &mut *sim;
+        *pipeline = molla::geometry::CollisionPipeline::new();
+        if gpu_bp.use_gpu {
+            pipeline
+                .enable_full_gpu_broad_phase(engine, 8192, 65_536, false)
+                .expect("enable_full_gpu_broad_phase");
+        }
+        gpu_bp.gpu_enabled_now = gpu_bp.use_gpu;
     }
 
     let Sim {
@@ -2918,6 +3049,21 @@ fn step_simulation(
     // CPU pair_contact call). The real count isn't exposed; this is
     // a UI estimate.
     gpu_np.last_pairs = gpu_np.last_cpu_calls + sim.contacts.count as usize;
+
+    // Surface Stage-19 broad-phase counters. `last_broad_phase_pair_count`
+    // is the post-filter pair list size — same metric for CPU SAP and
+    // GPU LBVH. The smoothed ms/frame mirrors `smoothed_collide_us` but
+    // re-baselines on toggle so the user sees "current backend" timing.
+    if sim.scene == Scene::BroadPhase {
+        gpu_bp.last_pairs = sim.pipeline.last_broad_phase_pair_count();
+        let collide_ms = stats.smoothed_collide_us / 1000.0;
+        gpu_bp.smoothed_ms = 0.9 * gpu_bp.smoothed_ms + 0.1 * collide_ms;
+        if gpu_bp.gpu_enabled_now {
+            gpu_bp.last_gpu_ms = gpu_bp.smoothed_ms;
+        } else {
+            gpu_bp.last_cpu_ms = gpu_bp.smoothed_ms;
+        }
+    }
 
     // One-shot debug dump after the first frame's substeps for the
     // Arm scene — surfaces whether Featherstone's FK pass is actually
@@ -4722,6 +4868,7 @@ fn control_pane(
                     | Scene::Camera
                     | Scene::Actuator
                     | Scene::Quadrotor
+                    | Scene::BroadPhase
             ),
             _ => false,
         },
@@ -4839,6 +4986,7 @@ fn control_pane(
         Scene::Camera => Some("Camera"),
         Scene::Actuator => Some("Actuator (Stage 18)"),
         Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
+        Scene::BroadPhase => Some("GPU broad phase"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -4869,6 +5017,9 @@ fn control_pane(
                     }
                     Scene::Quadrotor => {
                         quadrotor_pane(ui, &mut pane_states.quad)
+                    }
+                    Scene::BroadPhase => {
+                        gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color)
                     }
                     _ => {}
                 });
@@ -5051,6 +5202,68 @@ fn gpu_np_pane(
          on, the Sphere/Box/Capsule/Cylinder/Cone pairs run through \
          WGSL GJK + EPA on the device; only Plane pairs (and the few \
          that hit the WGSL polytope cap) bump the CPU counter.",
+    );
+}
+
+/// Body for the right-rail pane in the Stage-19 GPU broad-phase scene.
+fn gpu_bp_pane(
+    ui: &mut egui::Ui,
+    state: &mut GpuBpExampleState,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    let mode_label = if state.gpu_enabled_now {
+        "GPU LBVH (Stage 19)"
+    } else {
+        "CPU SAP"
+    };
+    readout(ui, "Broad phase", mode_label);
+    readout(ui, "Pairs", &format!("{}", state.last_pairs));
+    readout(
+        ui,
+        "Active ms/frame",
+        &format!("{:>5.2} ms", state.smoothed_ms),
+    );
+    ui.separator();
+
+    // Side-by-side per-backend memory of the last seen ms/frame —
+    // updated whenever that backend was the active one. The user
+    // toggles, waits a few frames, toggles back, and reads off the
+    // speedup directly.
+    readout(
+        ui,
+        "Last CPU SAP",
+        &format!("{:>5.2} ms", state.last_cpu_ms),
+    );
+    readout(
+        ui,
+        "Last GPU LBVH",
+        &format!("{:>5.2} ms", state.last_gpu_ms),
+    );
+    if state.last_cpu_ms > 0.0 && state.last_gpu_ms > 0.0 {
+        let speedup = state.last_cpu_ms / state.last_gpu_ms.max(0.001);
+        readout(ui, "Speedup", &format!("{:>5.2}x", speedup));
+    }
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        let label = if state.use_gpu {
+            "Switch to CPU SAP"
+        } else {
+            "Switch to GPU LBVH"
+        };
+        if button(ui, label, accent).clicked() {
+            state.use_gpu = !state.use_gpu;
+        }
+    });
+    ui.separator();
+    ui.small(
+        "Stage 19 — toggle between CPU sweep-and-prune and the GPU \
+         LBVH (Karras-style Linear BVH) broad phase. Both produce \
+         the same overlapping-AABB pair list; the GPU path runs the \
+         build + tree traversal on the device. The pair list flows \
+         into the same CPU narrow phase regardless of toggle, so \
+         only the 'collide' phase ms-time changes.",
     );
 }
 

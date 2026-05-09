@@ -35,6 +35,8 @@ mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod jacobian;
 #[cfg(feature = "gpu")]
+mod lbvh;
+#[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
 mod rnea;
@@ -84,6 +86,8 @@ pub use imu::ImuKernel;
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
 pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
+#[cfg(feature = "gpu")]
+pub use lbvh::{collect_shape_aabbs, LbvhBroadPhase, LbvhPairs};
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
