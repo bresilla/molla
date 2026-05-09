@@ -8875,7 +8875,7 @@ fn control_pane(
                     Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
                     Scene::Imu => imu_pane(ui, &imu_state),
                     Scene::Contact => contact_pane(ui, &contact_state),
-                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim),
+                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
                     Scene::Shapes => shapes_pane(ui, &sim),
                     Scene::GpuIkArm => {
                         gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim)
@@ -9936,7 +9936,12 @@ fn gpu_bp_pane(
 }
 
 /// Body for the right-rail pane in the Arm scene.
-fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
+fn arm_pane(
+    ui: &mut egui::Ui,
+    state: &mut ArmExampleState,
+    sim: &Sim,
+    pending: &mut PendingSceneSwitch,
+) {
     ui.add_space(2.0);
     readout(ui, "Solver", "Featherstone GPU");
     readout(ui, "Controller", "GPU PD");
@@ -10033,8 +10038,15 @@ fn arm_pane(ui: &mut egui::Ui, state: &mut ArmExampleState, sim: &Sim) {
     if state.mimic_dirty {
         ui.colored_label(
             egui::Color32::YELLOW,
-            "Toggle changed — re-press 8 to rebuild the arm scene.",
+            "Toggle changed — rebuild the arm scene to apply.",
         );
+        if ui.button("Rebuild arm").clicked() {
+            // Re-enter the current scene unconditionally; the
+            // hotkey path (`handle_input`) skips this when the
+            // scene is already active, so the button is the only
+            // way to force a rebuild from the pane.
+            pending.0 = Some(sim.scene);
+        }
     }
 }
 
