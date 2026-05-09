@@ -320,10 +320,29 @@ impl SparseGrid {
 /// All arrays are u32 / f32 sized so they pack into wgpu storage buffers
 /// without f64 ↔ f32 conversion shenanigans (the host already stores
 /// `f32` values in the leaves).
+///
+/// **Stage 24e.1 — GPU root hashing.** In addition to the back-compat
+/// `root_entries` (used by a linear-scan WGSL fallback), we also build
+/// a power-of-two open-addressing hash table (`root_table`) so the GPU
+/// can find an internal node in O(1) average. `root_table_capacity` is
+/// always a power of two (so `& (cap-1)` slot wrap is cheap on the
+/// GPU), and we resize host-side if load factor exceeds 0.7. The empty
+/// sentinel for a slot is `internal_idx == u32::MAX` (encoded as `-1`
+/// in the i32 layout). The kernel picks the hash path automatically
+/// when `root_table_capacity > 0`; older callers that don't set it up
+/// transparently fall through to the linear scan.
 #[derive(Debug, Clone)]
 pub struct SparseGridGpu {
     /// `[key_x, key_y, key_z, internal_idx]` per root entry.
     pub root_entries: Vec<i32>,
+    /// **Stage 24e.1.** Open-addressing hash table for the GPU root.
+    /// Size is `4 * root_table_capacity` (i32s). Each slot is
+    /// `[key_x, key_y, key_z, internal_idx]`; `internal_idx = -1`
+    /// (i.e. `u32::MAX` cast) marks an empty slot.
+    pub root_table: Vec<i32>,
+    /// Power-of-two slot capacity of `root_table` (0 = use linear
+    /// `root_entries` fallback).
+    pub root_table_capacity: u32,
     /// Flat children — one block of `32³` u32 indices per internal
     /// node. `u32::MAX` marks empty children.
     pub internal_children: Vec<u32>,
@@ -374,8 +393,16 @@ impl SparseGridGpu {
             leaf_masks.extend_from_slice(leaf.mask.as_slice());
         }
 
+        // Build the hash table for the GPU root. Sized to the next
+        // power of two ≥ root_count / 0.7 (load factor 0.7), with a
+        // minimum capacity of 4 so the WGSL doesn't have to special-
+        // case empty grids.
+        let (root_table, root_table_capacity) = build_root_hash_table(&keys);
+
         Self {
             root_entries,
+            root_table,
+            root_table_capacity,
             internal_children,
             internal_masks,
             leaf_values,
@@ -389,6 +416,132 @@ impl SparseGridGpu {
     pub fn root_entry_count(&self) -> u32 {
         (self.root_entries.len() / 4) as u32
     }
+
+    /// **Stage 24e.1** — measure the current root-table load factor.
+    /// Used by the regression tests to confirm the resize logic keeps
+    /// us under 0.7.
+    pub fn root_table_load_factor(&self) -> f32 {
+        if self.root_table_capacity == 0 {
+            0.0
+        } else {
+            self.root_entry_count() as f32 / self.root_table_capacity as f32
+        }
+    }
+
+    /// **Stage 24e.1** — host-side replay of the WGSL hash probing,
+    /// used by tests to compute the average probe count without
+    /// having to instrument the GPU. Returns the average and the
+    /// maximum probe length over all currently-live root entries.
+    pub fn root_hash_probe_stats(&self) -> (f32, u32) {
+        if self.root_table_capacity == 0 {
+            return (0.0, 0);
+        }
+        let cap = self.root_table_capacity;
+        let mask = cap - 1;
+        let mut total_probes: u64 = 0;
+        let mut max_probes: u32 = 0;
+        let mut count: u64 = 0;
+        for chunk in self.root_entries.chunks_exact(4) {
+            let key = [chunk[0], chunk[1], chunk[2]];
+            let target = chunk[3] as u32;
+            let mut probes = 1u32;
+            let mut slot = root_hash3(key) & mask;
+            loop {
+                let base = (slot as usize) * 4;
+                let stored_idx = self.root_table[base + 3] as u32;
+                let stored_key = [
+                    self.root_table[base + 0],
+                    self.root_table[base + 1],
+                    self.root_table[base + 2],
+                ];
+                if stored_idx == target && stored_key == key {
+                    break;
+                }
+                probes += 1;
+                slot = (slot + 1) & mask;
+                if probes > cap {
+                    // Sanity guard — shouldn't be hit because the
+                    // load factor stays under 1.0 by construction.
+                    break;
+                }
+            }
+            total_probes += probes as u64;
+            if probes > max_probes {
+                max_probes = probes;
+            }
+            count += 1;
+        }
+        let avg = if count > 0 {
+            total_probes as f32 / count as f32
+        } else {
+            0.0
+        };
+        (avg, max_probes)
+    }
+}
+
+/// **Stage 24e.1** — Murmur-style mix of three i32 root keys → u32.
+/// Picked so the same bit-mix runs in both Rust and WGSL with no
+/// f64 conversions and no shifts wider than 32 bits (WGSL u32 wraps
+/// modulo 2^32 just like Rust `wrapping_*` arithmetic, so the two
+/// implementations agree byte-for-byte). The constants are the
+/// MurmurHash3 finalizer; a single round per key plus the
+/// inter-key xor-mix is enough to spread sequential coords (the
+/// dominant pattern for narrow-band SDFs) across the whole table.
+#[inline]
+pub fn root_hash3(key: [i32; 3]) -> u32 {
+    let mut h: u32 = 0x9E37_79B9; // golden-ratio seed
+    for &k in &key {
+        let mut k = k as u32;
+        k = k.wrapping_mul(0xCC9E_2D51);
+        k = k.rotate_left(15);
+        k = k.wrapping_mul(0x1B87_3593);
+        h ^= k;
+        h = h.rotate_left(13);
+        h = h.wrapping_mul(5).wrapping_add(0xE654_6B64);
+    }
+    // Murmur3 finalizer.
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h
+}
+
+/// Build the open-addressing hash table for the GPU root. Returns
+/// `(table_data, capacity)` where `table_data.len() == 4 * capacity`.
+/// Empty slots store `internal_idx = -1` (i.e. `u32::MAX as i32`).
+fn build_root_hash_table(keys: &[([i32; 3], u32)]) -> (Vec<i32>, u32) {
+    // Load factor target: 0.7. Round up to the next power of two,
+    // minimum 4 (so the WGSL kernel never has to special-case
+    // empty grids — the `mask = cap - 1` slot-wrap stays valid).
+    let n = keys.len() as u32;
+    let mut cap: u32 = 4;
+    while (n as f32) / (cap as f32) > 0.7 {
+        cap *= 2;
+    }
+    let mask = cap - 1;
+    let mut table: Vec<i32> = vec![0; (cap as usize) * 4];
+    // Initialise every internal_idx slot to -1 (empty).
+    for slot in 0..(cap as usize) {
+        table[slot * 4 + 3] = -1;
+    }
+    for (key, internal_idx) in keys {
+        let mut slot = root_hash3(*key) & mask;
+        loop {
+            let base = (slot as usize) * 4;
+            if (table[base + 3] as u32) == u32::MAX {
+                table[base + 0] = key[0];
+                table[base + 1] = key[1];
+                table[base + 2] = key[2];
+                table[base + 3] = *internal_idx as i32;
+                break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    (table, cap)
 }
 
 // ── Sparse SDF wrapper ────────────────────────────────────────────

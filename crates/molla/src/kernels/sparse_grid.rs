@@ -25,7 +25,9 @@ struct Uniforms {
     query_count: u32,
     root_entry_count: u32,
     background: f32,
-    _pad: u32,
+    /// **Stage 24e.1.** Power-of-two capacity of the root hash table
+    /// — 0 falls through to the linear-scan path.
+    root_table_capacity: u32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -52,7 +54,9 @@ impl SparseGridKernel {
 
         let layout_grid = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid grid"),
-            entries: &storage_entries(5, true),
+            // 6 storage buffers: root_entries, internal_children,
+            // internal_masks, leaf_values, leaf_masks, root_table.
+            entries: &storage_entries(6, true),
         });
         let layout_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid io"),
@@ -189,6 +193,13 @@ impl SparseGridKernel {
             bytemuck::cast_slice(&packed.leaf_masks),
             usage_storage,
         );
+        let buf_root_table = create_storage_with_data(
+            device,
+            queue,
+            "molla::sparse_grid root_table",
+            bytemuck::cast_slice(&packed.root_table),
+            usage_storage,
+        );
 
         // ── IO buffers ────────────────────────────────────────────
         let buf_coords = device.create_buffer(&wgpu::BufferDescriptor {
@@ -216,6 +227,7 @@ impl SparseGridKernel {
                 wgpu::BindGroupEntry { binding: 2, resource: buf_internal_masks.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: buf_leaf_values.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: buf_leaf_masks.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: buf_root_table.as_entire_binding() },
             ],
         });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -231,7 +243,7 @@ impl SparseGridKernel {
             query_count: n as u32,
             root_entry_count: packed.root_entry_count(),
             background: packed.background,
-            _pad: 0,
+            root_table_capacity: packed.root_table_capacity,
         };
         let buf_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::sparse_grid uniforms"),
