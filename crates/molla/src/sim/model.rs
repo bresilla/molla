@@ -332,6 +332,18 @@ pub struct Model {
     /// Per-tet linear hardening modulus `H` (Pa). Yield stress grows
     /// as `σ_y(ε_p) = σ_y0 + H · ε_p`. `H = 0` is perfectly plastic.
     pub tet_hardening: Buffer<Real>,
+    /// Per-tet kinematic-hardening (Ziegler / Prager) back-stress
+    /// modulus `c` (Pa) — Stage 20.4. The yield function shifts from
+    /// `‖dev(τ)‖ - √(2/3)·σ_y` to `‖dev(τ) - α‖ - √(2/3)·σ_y` where
+    /// `α` is the per-tet symmetric back-stress tensor (in `State`).
+    /// The Prager evolution rule for α is `Δα = c · (2/3) · n̂ · Δγ`
+    /// where `n̂ = (dev(τ) - α) / ‖dev(τ) - α‖` is the deviator-aligned
+    /// flow direction. `c = 0` reduces to pure isotropic hardening
+    /// (back-compat with Stage 20.3); a small positive `c` produces the
+    /// canonical Bauschinger effect (lower yield in the reverse direction
+    /// after forward yielding) so cyclic loading accumulates `‖α‖`
+    /// monotonically rather than driving `F_p` back to identity.
+    pub tet_kinematic_hardening: Buffer<Real>,
 
     /// Number of tet meshes (groupings).
     pub tet_mesh_count: usize,
@@ -651,6 +663,7 @@ impl Model {
             tet_plastic_strain: Buffer::from_vec(Vec::new(), s),
             tet_yield_stress: Buffer::from_vec(Vec::new(), s),
             tet_hardening: Buffer::from_vec(Vec::new(), s),
+            tet_kinematic_hardening: Buffer::from_vec(Vec::new(), s),
             tet_mesh_count: 0,
             tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
@@ -802,6 +815,7 @@ impl Model {
         up!(tet_plastic_strain);
         up!(tet_yield_stress);
         up!(tet_hardening);
+        up!(tet_kinematic_hardening);
         up!(tet_mesh_offsets);
         up!(vertex_adjacent_tets_offsets);
         up!(vertex_adjacent_tets);

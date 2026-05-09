@@ -301,6 +301,12 @@ impl Solver for VbdSolver {
                 } else {
                     Vec::new()
                 };
+                // Stage 20.4 — kinematic-hardening back-stress α.
+                let mut alpha = if model.tet_count > 0 {
+                    state_in.tet_back_stress.host()?.to_vec()
+                } else {
+                    Vec::new()
+                };
                 for _ in 0..n_sub {
                     cpu_step(
                         model,
@@ -316,9 +322,11 @@ impl Solver for VbdSolver {
                         &mut v_out,
                     )?;
                     // Plasticity return-mapping pass per tet (uses the
-                    // post-step positions). Mutates `fp` + `eps_p`.
+                    // post-step positions). Mutates `fp`, `eps_p`, `alpha`.
                     if model.tet_count > 0 {
-                        cpu_plasticity_return_map(model, &p_out, &mut fp, &mut eps_p)?;
+                        cpu_plasticity_return_map(
+                            model, &p_out, &mut fp, &mut eps_p, &mut alpha,
+                        )?;
                     }
                     std::mem::swap(&mut p_in, &mut p_out);
                     std::mem::swap(&mut v_in, &mut v_out);
@@ -331,6 +339,10 @@ impl Solver for VbdSolver {
                         .tet_plastic_strain
                         .host_mut()?
                         .copy_from_slice(&eps_p);
+                    state_out
+                        .tet_back_stress
+                        .host_mut()?
+                        .copy_from_slice(&alpha);
                 }
                 // Body state passes through.
                 let q_in = state_in.body_q.host()?.to_vec();
@@ -1101,6 +1113,7 @@ pub(crate) fn cpu_plasticity_return_map(
     particle_q: &[Vec3],
     fp: &mut [crate::math::Mat3],
     eps_p: &mut [Real],
+    alpha: &mut [crate::math::Mat3],
 ) -> Result<()> {
     use crate::math::{dense3::svd3, Mat3};
     let tet_indices = model.tet_indices.host()?;
@@ -1108,6 +1121,10 @@ pub(crate) fn cpu_plasticity_return_map(
     let tet_mu = model.tet_mu.host()?;
     let tet_yield = model.tet_yield_stress.host()?;
     let tet_hard = model.tet_hardening.host()?;
+    // Stage 20.4 — kinematic-hardening modulus c (Pa). When 0, the
+    // back-stress α stays at zero throughout (the per-tet update
+    // collapses to Stage 20.3's pure isotropic-hardening return map).
+    let tet_kin_hard = model.tet_kinematic_hardening.host()?;
     let n_tets = model.tet_count;
 
     let sqrt_2_3 = (2.0_f64 / 3.0).sqrt();
@@ -1119,6 +1136,11 @@ pub(crate) fn cpu_plasticity_return_map(
         }
         let mu = tet_mu[tet];
         let h = tet_hard[tet];
+        // Stage 20.4 — per-tet kinematic-hardening modulus c. When the
+        // material was added with `MaterialNeoHookean::plastic` (no
+        // kinematic field), this stays 0 and the back-stress evolution
+        // is a no-op (Stage 20.3 back-compat).
+        let c_kin = tet_kin_hard.get(tet).copied().unwrap_or(0.0);
 
         let v0 = particle_q[tet_indices[tet * 4] as usize];
         let v1 = particle_q[tet_indices[tet * 4 + 1] as usize];
@@ -1151,34 +1173,82 @@ pub(crate) fn cpu_plasticity_return_map(
         let trace_eps = eps.x + eps.y + eps.z;
         let mean = trace_eps / 3.0;
         let dev = crate::math::Vec3::new(eps.x - mean, eps.y - mean, eps.z - mean);
-        let dev_norm = dev.length();
 
-        // Trial Kirchhoff deviator norm (von Mises): ‖s‖ = 2μ · ‖dev_ε‖.
-        let s_trial = 2.0 * mu * dev_norm;
+        // Stage 20.4 — kinematic-hardening (Prager / Ziegler) back-stress.
+        //
+        // The yield function shifts from `‖dev(τ)‖` (Stage 20.3) to
+        // `‖dev(τ) - α‖` where `α` is a 3×3 symmetric tensor evolved
+        // per Prager. We work in the trial-strain principal frame
+        // (the SVD's `U` rotation, equivalently `Vᵀ` for symmetric
+        // strain): project `α` into that frame as `α_local = Uᵀ·α·U`,
+        // take the diagonal as the principal back-stress vector
+        // (off-diagonals are physically zero in the principal frame
+        // for an aligned load; non-zero only when the load axis
+        // rotates between substeps — small dt keeps that bounded).
+        // After the return mapping updates the principal back-stress
+        // diagonal we rotate it back: `α_new = U·diag(α_local_diag)·Uᵀ`,
+        // preserving symmetry by construction.
+        //
+        // Trial Kirchhoff deviator (principal): `s_p = 2μ · dev`.
+        // Project α into the principal frame.
+        let alpha_old = alpha[tet];
+        // α_local = Uᵀ · α · U. In glam (column-major) `m.transpose()`
+        // gives Uᵀ, so `Uᵀ · α · U` reads `u_mat.transpose() * α * u_mat`.
+        let alpha_local: Mat3 = u_mat.transpose() * alpha_old * u_mat;
+        // Principal back-stress vector (diagonal). Symmetrise via
+        // diag-only — the off-diagonals carry no useful physical
+        // information for the von-Mises projection.
+        let alpha_p = crate::math::Vec3::new(
+            alpha_local.x_axis.x,
+            alpha_local.y_axis.y,
+            alpha_local.z_axis.z,
+        );
+        // Shifted principal deviator: ξ = 2μ·dev - α_p.
+        let two_mu = 2.0 * mu;
+        let xi = crate::math::Vec3::new(
+            two_mu * dev.x - alpha_p.x,
+            two_mu * dev.y - alpha_p.y,
+            two_mu * dev.z - alpha_p.z,
+        );
+        let xi_norm = xi.length();
+        // Trial state norm reused below for damping (unused after the
+        // back-stress refactor; kept for the existing two-tier
+        // plasticity damping call signature).
+        let _dev_norm = dev.length();
+
+        // von Mises yield: f = ‖ξ‖ - √(2/3)·σ_y. Note ξ already
+        // carries 2μ·dev so the test is in stress units.
         let sigma_y = sigma_y0 + h * eps_p[tet];
-        // von Mises yield condition: f = ‖s‖ - √(2/3)·σ_y.
-        let f_yield = s_trial - sqrt_2_3 * sigma_y;
-        if f_yield <= 0.0 || dev_norm < 1.0e-12 {
+        let f_yield = xi_norm - sqrt_2_3 * sigma_y;
+        if f_yield <= 0.0 || xi_norm < 1.0e-12 {
             continue;
         }
-        // Closed-form plastic multiplier for linear isotropic
-        // hardening (consistent return mapping):
-        //   Δγ = f_yield / (2μ + (2/3)·H)
-        let denom = 2.0 * mu + (2.0 / 3.0) * h;
+        // Closed-form plastic multiplier for linear isotropic +
+        // kinematic hardening (consistent return mapping):
+        //   Δγ = f_yield / (2μ + (2/3)·H + (2/3)·c)
+        // Notes:
+        // - The kinematic-hardening contribution (2/3)·c grows the
+        //   denominator the same way `H` does, so any positive `c`
+        //   shrinks the per-step plastic flow — desirable, this is
+        //   what makes back-stress "well-behaved" under cyclic loading.
+        // - When c = 0 the expression collapses to Stage 20.3.
+        let denom = two_mu + (2.0 / 3.0) * h + (2.0 / 3.0) * c_kin;
         let dgamma = (f_yield / denom).max(0.0);
-        // Damping cap to defuse the "overshoot the cylinder and
-        // oscillate" pathology. The closed-form return map is a
-        // single Newton step on the non-linear yield function —
-        // large strain steps can cross the yield cylinder and
-        // oscillate. Two caps stack:
-        //   (a) ≤ 0.1 · trial deviator norm (proportional)
-        //   (b) ≤ 0.01 absolute (~1 %/substep ceiling)
-        // (b) keeps ε_p from running away when F_p has drifted
-        // enough that dev_norm blows up; matches the WGSL kernel.
-        let dev_strain_increment = dgamma.min(0.1 * dev_norm).min(0.01);
-        // Pull the deviator back along its trial direction.
-        let scale = (dev_norm - dev_strain_increment) / dev_norm;
-        let new_dev = dev * scale;
+        // Damping caps (overshoot defuse). Same two-tier cap structure
+        // as Stage 20.3 — the closed-form return map is a single Newton
+        // step on the non-linear yield function and can oscillate.
+        //   (a) Δγ ≤ 0.1 · ‖ξ‖ / (2μ)  — proportional to trial.
+        //   (b) Δγ ≤ 0.01 (abs absolute strain-rate cap).
+        let dgamma = dgamma.min(0.1 * xi_norm / two_mu.max(1.0)).min(0.01);
+        // Plastic strain increment (the actual logarithmic-strain
+        // pull-back along the shifted-deviator direction).
+        let dev_strain_increment = dgamma;
+        // Plastic flow direction in the principal frame: n̂ = ξ / ‖ξ‖.
+        let n_hat = xi / xi_norm;
+        // Pull the *shifted* deviator back: dev ← dev - Δγ · n̂.
+        // (Equivalent to `2μ·dev - 2μ·Δγ·n̂` then re-divide by 2μ;
+        // the back-stress evolves separately.)
+        let new_dev = dev - n_hat * dev_strain_increment;
         let new_eps =
             crate::math::Vec3::new(new_dev.x + mean, new_dev.y + mean, new_dev.z + mean);
         let new_sigma = crate::math::Vec3::new(
@@ -1244,6 +1314,46 @@ pub(crate) fn cpu_plasticity_return_map(
         fp[tet] = fp_clamped;
         // Equivalent plastic strain accumulator: classic √(2/3)·Δγ.
         eps_p[tet] = (eps_p[tet] + sqrt_2_3 * dev_strain_increment).min(10.0);
+
+        // ── Stage 20.4 — back-stress evolution (Prager rule) ─────
+        // `α_p_new = α_p + (2/3)·c·Δγ·n̂` in the principal frame,
+        // then rotate back to world via `α = U·diag(α_p_new)·Uᵀ`.
+        // No-op when c == 0 (Stage 20.3 path: α stays 0).
+        if c_kin > 0.0 {
+            let dalpha_p = n_hat * ((2.0 / 3.0) * c_kin * dev_strain_increment);
+            let alpha_p_new = alpha_p + dalpha_p;
+            // Cap the magnitude of α to prevent runaway accumulation
+            // (the yield surface itself is bounded by the
+            // Tikhonov-style F_p clamp upstream; back-stress doesn't
+            // need to exceed the absolute material strength). Cap is
+            // generous — `100·σ_y0` lets the canonical Bauschinger
+            // demo accumulate without saturation.
+            let alpha_cap = (100.0 * sigma_y0).max(1.0e6);
+            let alpha_p_clamped = crate::math::Vec3::new(
+                alpha_p_new.x.clamp(-alpha_cap, alpha_cap),
+                alpha_p_new.y.clamp(-alpha_cap, alpha_cap),
+                alpha_p_new.z.clamp(-alpha_cap, alpha_cap),
+            );
+            let alpha_diag = Mat3::from_cols(
+                Vec3::new(alpha_p_clamped.x, 0.0, 0.0),
+                Vec3::new(0.0, alpha_p_clamped.y, 0.0),
+                Vec3::new(0.0, 0.0, alpha_p_clamped.z),
+            );
+            let alpha_world = u_mat * alpha_diag * u_mat.transpose();
+            // Symmetrise — guard against numerical drift introducing
+            // antisymmetric components.
+            let alpha_sym = mat3_scale(
+                mat3_add(alpha_world, alpha_world.transpose()),
+                0.5,
+            );
+            // Final NaN sentinel.
+            if alpha_sym.x_axis.x.is_finite()
+                && alpha_sym.y_axis.y.is_finite()
+                && alpha_sym.z_axis.z.is_finite()
+            {
+                alpha[tet] = alpha_sym;
+            }
+        }
     }
     Ok(())
 }
@@ -1435,6 +1545,7 @@ mod tests {
             poisson: 0.3,
             yield_stress: 5.0e1,
             hardening: 1.0e3,
+            kinematic_hardening: 0.0,
         }];
         let mat_idx: Vec<u32> = vec![0; tets.len()];
         b.add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
@@ -1523,6 +1634,7 @@ mod tests {
             poisson: 0.3,
             yield_stress: 50.0,
             hardening: 100.0,
+            kinematic_hardening: 0.0,
         };
         b.add_tet_mesh_per_material(&[[p0, p1, p2, p3]], &[mat], &[0], None)
             .unwrap();

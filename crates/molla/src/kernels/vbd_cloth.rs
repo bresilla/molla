@@ -138,11 +138,13 @@ impl VbdClothKernel {
             label: Some("molla::vbd_cloth shapes"),
             entries: &storage_entries(5, true),
         });
-        // Stage 20.2/20.3 tet + cable-bending group:
+        // Stage 20.2/20.3/20.4 tet + cable-bending group:
         //   - 10 read-only entries (7 tet + 3 cable bending) — Stage 20.2.
         //   - 2 read-write entries (F_p, ε_p) — Stage 20.3 plasticity.
         //   - 2 read-only entries (yield, hardening) — Stage 20.3 material.
-        // 14 total. All buffers are non-empty — when the model has no
+        //   - 1 read-write entry (back-stress α) — Stage 20.4.
+        //   - 1 read-only entry (kinematic-hardening modulus c) — Stage 20.4.
+        // 16 total. All buffers are non-empty — when the model has no
         // tets / bending the host binds dummy 1-element placeholders.
         let mut tet_entries = storage_entries(10, true);
         // Bindings 10 + 11: F_p / ε_p as read-write (mutated by the
@@ -154,6 +156,16 @@ impl VbdClothKernel {
         // Bindings 12 + 13: yield + hardening (read-only material).
         tet_entries.extend(storage_entries(2, true).into_iter().map(|mut e| {
             e.binding += 12;
+            e
+        }));
+        // Binding 14: back-stress α (read-write, Stage 20.4).
+        tet_entries.extend(storage_entries(1, false).into_iter().map(|mut e| {
+            e.binding += 14;
+            e
+        }));
+        // Binding 15: kinematic-hardening modulus c (read-only, Stage 20.4).
+        tet_entries.extend(storage_entries(1, true).into_iter().map(|mut e| {
+            e.binding += 15;
             e
         }));
         let layout_tets = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -524,6 +536,15 @@ impl VbdClothKernel {
             .tet_hardening
             .device_buffer()
             .unwrap_or(dummy_real_buf);
+        // Stage 20.4 — back-stress α + kinematic-hardening modulus c.
+        let alpha_buf = state_out
+            .tet_back_stress
+            .device_buffer()
+            .unwrap_or(dummy_mat3_rw_buf);
+        let kin_hard_buf = model
+            .tet_kinematic_hardening
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
 
         let bg_tets = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::vbd_cloth tets bg"),
@@ -543,6 +564,8 @@ impl VbdClothKernel {
                 wgpu::BindGroupEntry { binding: 11, resource: eps_p_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: yield_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: hard_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: alpha_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: kin_hard_buf.as_entire_binding() },
             ],
         });
 
@@ -644,6 +667,20 @@ impl VbdClothKernel {
                     encoder.copy_buffer_to_buffer(src_e, 0, dst_e, 0, bytes);
                 }
             }
+            // Stage 20.4 — back-stress α: same in→out copy as F_p so the
+            // kinematic-hardening kernel can mutate state_out's α in
+            // place across substeps.
+            if let (Some(src_a), Some(dst_a)) = (
+                state_in.tet_back_stress.device_buffer(),
+                state_out.tet_back_stress.device_buffer(),
+            ) {
+                let bytes = (model.tet_count
+                    * core::mem::size_of::<crate::math::GpuMat3>())
+                    as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_a, 0, dst_a, 0, bytes);
+                }
+            }
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -716,6 +753,7 @@ impl VbdClothKernel {
         if tet_count_u > 0 {
             state_out.tet_f_plastic.mark_device_dirty();
             state_out.tet_plastic_strain.mark_device_dirty();
+            state_out.tet_back_stress.mark_device_dirty();
         }
         Ok(())
     }

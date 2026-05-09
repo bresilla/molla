@@ -345,6 +345,7 @@ fn plasticity_yield_holds_permanent_set() {
         poisson: 0.3,
         yield_stress: 5.0e1,
         hardening: 1.0e3,
+        kinematic_hardening: 0.0,
     }];
     let mat_idx: Vec<u32> = vec![0; tets.len()];
     b.add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
