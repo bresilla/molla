@@ -1242,6 +1242,13 @@ struct MpmExampleState {
     needs_reset: bool,
     /// Spout-y offset for the initial pour.
     spout_y: f32,
+    /// Stage 24d.2: substeps batched into a single `step_n` call per
+    /// frame.  Higher = more physical fidelity per visible frame +
+    /// directly demonstrates the batched-dispatcher throughput win.
+    substeps_per_frame: u32,
+    /// Live readout (ms): wall-clock for the most recent `step_n`
+    /// dispatch + frame-end readback.
+    last_frame_ms: f32,
 }
 
 impl Default for MpmExampleState {
@@ -1253,6 +1260,10 @@ impl Default for MpmExampleState {
             particle_count: 0,
             needs_reset: true, // initial pour
             spout_y: 0.6,
+            // 4 substeps was the pre-24d.2 default (loop of `step()`);
+            // higher values exercise the batched dispatcher.
+            substeps_per_frame: 4,
+            last_frame_ms: 0.0,
         }
     }
 }
@@ -9398,18 +9409,26 @@ fn update_mpm_example(
         return;
     }
 
-    // Step the sim a couple of substeps per frame; use a sub-1ms dt to
-    // stay inside CFL for the default sand modulus.
+    // Stage 24d.2: batch the substeps into a single `step_n` call
+    // (one wgpu submit + one frame-end readback).  The slider
+    // `substeps_per_frame` lets the user dial the throughput up
+    // directly — increasing it is essentially free until the GPU
+    // pipeline is the bottleneck (usually 30-60 substeps on the dev
+    // box at 10k particles).
     let device = sim.engine.device().unwrap().clone();
     let queue = sim.engine.queue().unwrap().clone();
+    let substeps = state.substeps_per_frame.max(1) as usize;
+    let t_frame = std::time::Instant::now();
     if let Some(m) = sim.mpm.as_mut() {
-        for _ in 0..4 {
-            m.step_with(&device, &queue, 1.0 / 480.0).expect("mpm step");
-        }
+        m.step_n_with(&device, &queue, 1.0 / 480.0, substeps)
+            .expect("mpm step_n");
+        // Single frame-end readback; the viewer only needs particle
+        // positions for the gizmo draw, not the intermediate substeps.
         sim.mpm_particles = m
             .read_positions_with(&device, &queue)
             .unwrap_or_default();
     }
+    state.last_frame_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
 }
 
 /// Right-rail pane for the MPM scene. Sliders for friction angle and
@@ -9462,6 +9481,13 @@ fn mpm_pane(
     {
         // Re-pour requires a reset.
     }
+
+    // Stage 24d.2: batched-dispatcher slider.  Drag this up and watch
+    // `Frame` stay relatively flat — that's the win from collapsing N
+    // submits into one.
+    ui.label("Substeps / frame (Stage 24d.2)");
+    ui.add(egui::Slider::new(&mut state.substeps_per_frame, 1..=120));
+    readout(ui, "Frame (ms)", &format!("{:.2}", state.last_frame_ms));
 
     ui.separator();
     ui.horizontal(|ui| {
