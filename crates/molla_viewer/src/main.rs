@@ -20,6 +20,8 @@
 //!
 //! Keys:
 //!   * 1 / 2 / 3 / 4   switch demo scene
+//!   * V           VBD cloth (Stage 20) — high-fidelity drape over a
+//!                 kinematic sphere; right-rail toggles VBD ↔ XPBD.
 //!   * T           toggle "activity view" — sleeping bodies turn grey,
 //!                 only active (moving) bodies keep their colour
 //!   * W           toggle wireframe view (every mesh outlined)
