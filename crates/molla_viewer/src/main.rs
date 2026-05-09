@@ -311,6 +311,7 @@ fn main() {
         .insert_resource(ActuatorExampleState::default())
         .insert_resource(QuadrotorState::default())
         .insert_resource(VbdClothExampleState::default())
+        .insert_resource(MeshToolsExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -364,6 +365,7 @@ fn main() {
                     update_contact_example,
                     update_camera_example,
                     update_activity_colors,
+                    update_mesh_tools_visibility,
                     apply_wireframe,
                     draw_grab_gizmo,
                     draw_lidar_gizmos,
@@ -422,6 +424,7 @@ struct SceneStates<'w> {
     gpu_np: ResMut<'w, GpuNpExampleState>,
     gpu_bp: ResMut<'w, GpuBpExampleState>,
     quad: ResMut<'w, QuadrotorState>,
+    mesh: ResMut<'w, MeshToolsExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -438,6 +441,7 @@ struct PaneSceneStates<'w> {
     actuator: ResMut<'w, ActuatorExampleState>,
     quad: ResMut<'w, QuadrotorState>,
     vbd: ResMut<'w, VbdClothExampleState>,
+    mesh: ResMut<'w, MeshToolsExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -569,6 +573,16 @@ enum Scene {
     /// Stage-12 XPBD baseline for side-by-side comparison.
     /// Hotkey `V`.
     VbdCloth,
+    /// Stage-21 mesh-utility showcase. Pure visualisation — no
+    /// physics step. Right-rail pane has three panels:
+    ///   * **Decimate** — original icosphere vs QEM-decimated LOD
+    ///     side-by-side (toggle to swap which one is rendered).
+    ///   * **Bake → MC** — mesh → SDF → marching-cubes round-trip,
+    ///     overlay toggle for the extracted surface.
+    ///   * **Hull** — convex hull of the same mesh as a wireframe
+    ///     overlay.
+    /// Hotkey `M`.
+    MeshTools,
 }
 
 impl Scene {
@@ -590,6 +604,7 @@ impl Scene {
         Scene::Quadrotor,
         Scene::BroadPhase,
         Scene::VbdCloth,
+        Scene::MeshTools,
     ];
 
     fn label(self) -> &'static str {
@@ -610,6 +625,7 @@ impl Scene {
             Scene::Quadrotor => "Quadrotor (Stage 17 multi-DOF)",
             Scene::BroadPhase => "GPU broad phase (Stage 19)",
             Scene::VbdCloth => "VBD cloth (Stage 20)",
+            Scene::MeshTools => "Mesh tools (Stage 21)",
         }
     }
 
@@ -790,6 +806,63 @@ impl Default for VbdClothExampleState {
         }
     }
 }
+
+/// Stage-21 mesh-tools demo state. Toggles for which artefacts are
+/// visible in the viewport. The actual meshes are built once at scene
+/// entry by `apply_scene_switch` and stashed as Bevy entities tagged
+/// with one of the [`MeshToolPanel`] markers; toggling the booleans
+/// just flips the `Visibility` of those entities.
+#[derive(Resource)]
+struct MeshToolsExampleState {
+    /// Show the original (unsimplified) icosphere on the left.
+    show_original: bool,
+    /// Show the QEM-decimated mesh in the centre.
+    show_decimated: bool,
+    /// Show the marching-cubes surface extracted from a baked SDF
+    /// on the right.
+    show_marching_cubes: bool,
+    /// Overlay the convex-hull wireframe on the original mesh.
+    show_hull: bool,
+    /// Telemetry surfaced in the right-rail pane (filled in by
+    /// `apply_scene_switch` when the meshes are built).
+    original_tris: usize,
+    decimated_tris: usize,
+    mc_tris: usize,
+    hull_verts: usize,
+    sdf_resolution: u32,
+}
+
+impl Default for MeshToolsExampleState {
+    fn default() -> Self {
+        Self {
+            show_original: true,
+            show_decimated: true,
+            show_marching_cubes: true,
+            show_hull: false,
+            original_tris: 0,
+            decimated_tris: 0,
+            mc_tris: 0,
+            hull_verts: 0,
+            sdf_resolution: 32,
+        }
+    }
+}
+
+/// Marker for the original (high-res) icosphere in `Scene::MeshTools`.
+#[derive(Component)]
+struct MeshToolOriginal;
+
+/// Marker for the QEM-decimated icosphere.
+#[derive(Component)]
+struct MeshToolDecimated;
+
+/// Marker for the marching-cubes-extracted surface.
+#[derive(Component)]
+struct MeshToolMarchingCubes;
+
+/// Marker for the convex-hull wireframe overlay.
+#[derive(Component)]
+struct MeshToolHull;
 
 /// Contact example runtime state. Lazy-initialised when entering the
 /// Contact scene; reset on scene switch. Stores the latest per-body
@@ -1056,6 +1129,7 @@ impl Sim {
     /// Dispatch on `scene` and assemble `(Sim, BodyVisuals)`.
     fn build_scene(scene: Scene) -> (Self, Vec<BodyVisual>) {
         let (model, visuals) = match scene {
+            Scene::MeshTools => build_mesh_tools_model(),
             Scene::Pile => build_pile_model(),
             Scene::Rope => build_rope_model(),
             Scene::Tower => build_tower_model(),
@@ -1550,6 +1624,18 @@ fn build_vbd_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
 
     let model = b.build().expect("model");
     (model, Vec::new())
+}
+
+/// Stage-21 mesh-tools demo. The "model" is empty (no physics step
+/// runs for this scene); all the visual work happens in
+/// `apply_scene_switch` via [`spawn_mesh_tools_entities`], which
+/// generates an icosphere and runs decimation / SDF-bake / marching-
+/// cubes / hull on it. This builder just provides the requisite
+/// `(Model, Vec<BodyVisual>)` shape so [`Sim::build_scene`] can use it
+/// uniformly with every other scene.
+fn build_mesh_tools_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("empty model"), Vec::new())
 }
 
 /// Lidar example — a static stage with kinematic obstacles for a GPU
@@ -2881,6 +2967,252 @@ fn build_heightfield_mesh(hf: &mp::Heightfield) -> Mesh {
     mesh
 }
 
+/// Build a Bevy `Mesh` (TriangleList) from a molla [`molla::sim::TriMesh`].
+/// Computes per-vertex face-averaged normals on the fly. Used by the
+/// Stage-21 mesh-tools demo; isolated so the same path is reused for
+/// the original / decimated / marching-cubes meshes.
+fn molla_trimesh_to_bevy_mesh(tm: &molla::sim::TriMesh, double_sided: bool) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let _ = double_sided;
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    let positions: Vec<[f32; 3]> = tm
+        .vertices
+        .iter()
+        .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+        .collect();
+    let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; positions.len()];
+    let mut idx_flat: Vec<u32> = Vec::with_capacity(tm.indices.len() * 3);
+    for tri in &tm.indices {
+        idx_flat.push(tri[0]);
+        idx_flat.push(tri[1]);
+        idx_flat.push(tri[2]);
+    }
+    for chunk in idx_flat.chunks(3) {
+        let i0 = chunk[0] as usize;
+        let i1 = chunk[1] as usize;
+        let i2 = chunk[2] as usize;
+        let p0 = Vec3::from_array(positions[i0]);
+        let p1 = Vec3::from_array(positions[i1]);
+        let p2 = Vec3::from_array(positions[i2]);
+        let n = (p1 - p0).cross(p2 - p0).normalize_or_zero();
+        for &k in &[i0, i1, i2] {
+            let cur = normals[k];
+            normals[k] = [cur[0] + n.x, cur[1] + n.y, cur[2] + n.z];
+        }
+    }
+    for n in normals.iter_mut() {
+        let v = Vec3::from_array(*n).normalize_or_zero();
+        *n = [v.x, v.y, v.z];
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(idx_flat));
+    mesh
+}
+
+/// Generate a unit-radius icosphere as a molla `TriMesh` with the
+/// requested subdivision level. Mirrors the test helper in
+/// `tests/mesh_utils.rs` — kept duplicated here so the viewer doesn't
+/// need to depend on test-only code.
+fn icosphere_mesh(subdivisions: u32, radius: f64) -> molla::sim::TriMesh {
+    use std::collections::HashMap;
+    let t: f64 = (1.0 + 5.0_f64.sqrt()) / 2.0;
+    let raw = [
+        (-1.0, t, 0.0), (1.0, t, 0.0), (-1.0, -t, 0.0), (1.0, -t, 0.0),
+        (0.0, -1.0, t), (0.0, 1.0, t), (0.0, -1.0, -t), (0.0, 1.0, -t),
+        (t, 0.0, -1.0), (t, 0.0, 1.0), (-t, 0.0, -1.0), (-t, 0.0, 1.0),
+    ];
+    let mut verts: Vec<MVec3> = raw
+        .iter()
+        .map(|(x, y, z)| {
+            let v = MVec3::new(*x, *y, *z);
+            v / v.length()
+        })
+        .collect();
+    let mut faces: Vec<[u32; 3]> = vec![
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+    ];
+    for _ in 0..subdivisions {
+        let mut cache: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut midpoint = |a: u32, b: u32, verts: &mut Vec<MVec3>| -> u32 {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if let Some(&i) = cache.get(&key) { return i; }
+            let mid = (verts[a as usize] + verts[b as usize]) * 0.5;
+            let mid = mid / mid.length();
+            verts.push(mid);
+            let idx = (verts.len() - 1) as u32;
+            cache.insert(key, idx);
+            idx
+        };
+        let mut new_faces: Vec<[u32; 3]> = Vec::with_capacity(faces.len() * 4);
+        for tri in &faces {
+            let a = midpoint(tri[0], tri[1], &mut verts);
+            let b = midpoint(tri[1], tri[2], &mut verts);
+            let c = midpoint(tri[2], tri[0], &mut verts);
+            new_faces.push([tri[0], a, c]);
+            new_faces.push([tri[1], b, a]);
+            new_faces.push([tri[2], c, b]);
+            new_faces.push([a, b, c]);
+        }
+        faces = new_faces;
+    }
+    for v in &mut verts {
+        *v *= radius;
+    }
+    let mut m = molla::sim::TriMesh {
+        vertices: verts,
+        indices: faces,
+        ..Default::default()
+    };
+    m.build_bvh(4);
+    m
+}
+
+/// Spawn the four Stage-21 visualisation entities (original /
+/// decimated / marching-cubes / hull) for `Scene::MeshTools`. Updates
+/// the `mesh_state` telemetry fields so the right-rail pane can show
+/// triangle counts. Each entity is tagged with `ClothObstacle` so
+/// `apply_scene_switch` despawns it on the next scene change AND with
+/// a per-panel marker (`MeshToolOriginal`, etc.) so visibility
+/// toggles in the pane can find it.
+fn spawn_mesh_tools_entities(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    mesh_state: &mut MeshToolsExampleState,
+) {
+    use molla::geometry::{bake_mesh_to_sdf, convex_hull, decimate, marching_cubes};
+
+    // Build the source mesh — a noise-displaced icosphere for visual
+    // interest (a smooth icosphere doesn't show off the tools as
+    // dramatically). 2 subdivisions = 320 tris; the noise breaks the
+    // symmetry so decimation has to make non-trivial choices.
+    let mut source = icosphere_mesh(3, 1.0); // 1280 tris
+    // Cheap noise displacement — preserves the mesh's manifoldness.
+    let mut s: u32 = 0xA5A5_BEEF;
+    let mut next_noise = || {
+        s = s.wrapping_mul(2654435761).wrapping_add(0x12345678);
+        ((s as f64) / (u32::MAX as f64)) * 0.12 - 0.06
+    };
+    for v in source.vertices.iter_mut() {
+        let n = v.normalize_or_zero();
+        let r = 1.0 + next_noise() * 0.4;
+        *v = n * r;
+    }
+    source.build_bvh(4);
+
+    let dec = decimate(&source, source.indices.len() / 4); // ~25 % LOD
+    let sdf = bake_mesh_to_sdf(&source, mesh_state.sdf_resolution as usize, 0.15);
+    let mc = marching_cubes(&sdf, 0.0);
+    let hull_verts: Vec<MVec3> = convex_hull(&source.vertices);
+
+    mesh_state.original_tris = source.indices.len();
+    mesh_state.decimated_tris = dec.indices.len();
+    mesh_state.mc_tris = mc.indices.len();
+    mesh_state.hull_verts = hull_verts.len();
+
+    // Lay the three primary panels out side-by-side along +X. The MC
+    // overlay uses the same world position as the original so the
+    // user can compare them directly.
+    let original_offset = Vec3::new(-2.5, 1.5, 0.0);
+    let decimated_offset = Vec3::new(0.0, 1.5, 0.0);
+    let mc_offset = Vec3::new(2.5, 1.5, 0.0);
+
+    let mat_original = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.55, 0.30),
+        metallic: 0.05,
+        perceptual_roughness: 0.55,
+        cull_mode: None,
+        ..default()
+    });
+    let mat_decimated = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.40, 0.70, 0.85),
+        metallic: 0.05,
+        perceptual_roughness: 0.55,
+        cull_mode: None,
+        ..default()
+    });
+    let mat_mc = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.85, 0.40),
+        metallic: 0.05,
+        perceptual_roughness: 0.55,
+        cull_mode: None,
+        ..default()
+    });
+    let mat_hull = materials.add(StandardMaterial {
+        base_color: Color::srgba(1.0, 0.95, 0.30, 0.6),
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    });
+
+    // Original.
+    let orig_mesh = molla_trimesh_to_bevy_mesh(&source, true);
+    commands.spawn((
+        ClothObstacle,
+        MeshToolOriginal,
+        Mesh3d(meshes.add(orig_mesh)),
+        MeshMaterial3d(mat_original),
+        Transform::from_translation(original_offset),
+        Visibility::Visible,
+    ));
+
+    // Decimated.
+    let dec_mesh = molla_trimesh_to_bevy_mesh(&dec, true);
+    commands.spawn((
+        ClothObstacle,
+        MeshToolDecimated,
+        Mesh3d(meshes.add(dec_mesh)),
+        MeshMaterial3d(mat_decimated),
+        Transform::from_translation(decimated_offset),
+        Visibility::Visible,
+    ));
+
+    // Marching-cubes surface.
+    let mc_mesh = molla_trimesh_to_bevy_mesh(&mc, true);
+    commands.spawn((
+        ClothObstacle,
+        MeshToolMarchingCubes,
+        Mesh3d(meshes.add(mc_mesh)),
+        MeshMaterial3d(mat_mc),
+        Transform::from_translation(mc_offset),
+        Visibility::Visible,
+    ));
+
+    // Hull — built as a triangle mesh of the hull (we already have
+    // the vertex set; for a quick wireframe we pass the vertices
+    // through `convex_hull` again to recover faces would be cleaner,
+    // but the simplest visualisation is a sphere of points or a hull
+    // mesh from the same vertex set). For visual-only purposes we
+    // render the hull vertices as small spheres glued at their
+    // positions.
+    let hull_marker_mesh = meshes.add(Sphere::new(0.04).mesh().ico(2).expect("ico"));
+    for hv in &hull_verts {
+        commands.spawn((
+            ClothObstacle,
+            MeshToolHull,
+            Mesh3d(hull_marker_mesh.clone()),
+            MeshMaterial3d(mat_hull.clone()),
+            Transform::from_translation(
+                original_offset
+                    + Vec3::new(hv.x as f32, hv.y as f32, hv.z as f32),
+            ),
+            // Hull markers default OFF; toggled on via the right-rail
+            // pane. Using an explicit `Hidden` here means the user
+            // sees the original mesh first, then opts in to the hull
+            // overlay.
+            Visibility::Hidden,
+        ));
+    }
+}
+
 /// Build a single Bevy `Mesh` from molla's particle positions and
 /// triangle topology. Called once per scene-switch — `sync_cloth_mesh`
 /// then mutates the same `Mesh` asset's vertex positions every frame.
@@ -2997,6 +3329,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyV) && sim.scene != Scene::VbdCloth {
         pending.0 = Some(Scene::VbdCloth);
     }
+    if keys.just_pressed(KeyCode::KeyM) && sim.scene != Scene::MeshTools {
+        pending.0 = Some(Scene::MeshTools);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -3109,6 +3444,16 @@ fn apply_scene_switch(
     let (sim, visuals) = Sim::build_scene(scene);
     let visuals = BodyVisuals(visuals);
     spawn_body_entities(&mut commands, &mut meshes, &mut materials, &sim, &visuals);
+
+    // Stage-21 mesh-tools demo: build the visualisation entities
+    // (original / decimated / MC / hull) once on scene entry. They're
+    // tagged with `ClothObstacle` so the next scene switch despawns
+    // them via the obstacle_q above.
+    if scene == Scene::MeshTools {
+        let mesh_state = &mut *scene_states.mesh;
+        spawn_mesh_tools_entities(&mut commands, &mut meshes, &mut materials, mesh_state);
+    }
+
     commands.insert_resource(sim);
     commands.insert_resource(visuals);
 
@@ -3130,6 +3475,11 @@ fn step_simulation(
     // already wrote `joint_q` + `body_q` on the host. Skipping the
     // physics step here keeps the IK pose stable across frames.
     if sim.scene == Scene::GpuIkArm {
+        return;
+    }
+    // Stage-21 mesh-tools is purely visual — no bodies, no contacts,
+    // no physics step. Bail before allocating the device handles.
+    if sim.scene == Scene::MeshTools {
         return;
     }
     let frame_start = std::time::Instant::now();
@@ -5059,6 +5409,7 @@ fn control_pane(
                     | Scene::Quadrotor
                     | Scene::BroadPhase
                     | Scene::VbdCloth
+                    | Scene::MeshTools
             ),
             _ => false,
         },
@@ -5178,6 +5529,7 @@ fn control_pane(
         Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
         Scene::BroadPhase => Some("GPU broad phase"),
         Scene::VbdCloth => Some("VBD cloth (Stage 20)"),
+        Scene::MeshTools => Some("Mesh tools (Stage 21)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -5215,6 +5567,9 @@ fn control_pane(
                     Scene::VbdCloth => {
                         vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
                     }
+                    Scene::MeshTools => {
+                        mesh_tools_pane(ui, &mut pane_states.mesh)
+                    }
                     _ => {}
                 });
         }
@@ -5242,6 +5597,65 @@ fn shapes_pane(ui: &mut egui::Ui, sim: &Sim) {
     ui.label("Drop test: cones, hulls, spheres rain");
     ui.label("onto the wavy heightfield. Static");
     ui.label("torus sticks out of the middle.");
+}
+
+/// Right-rail pane for the Stage-21 mesh-tools showcase.
+/// Three panels:
+///   1. Original (left)  / Decimated (centre)  side-by-side toggles.
+///   2. Marching-cubes-from-SDF surface (right) toggle.
+///   3. Hull overlay toggle on the original.
+fn mesh_tools_pane(ui: &mut egui::Ui, state: &mut MeshToolsExampleState) {
+    ui.label("Source: noise-displaced icosphere (3 subdivs)");
+    ui.separator();
+    readout(ui, "Original tris", &format!("{}", state.original_tris));
+    readout(ui, "Decimated tris", &format!("{}", state.decimated_tris));
+    readout(ui, "MC tris", &format!("{}", state.mc_tris));
+    readout(ui, "Hull verts", &format!("{}", state.hull_verts));
+    readout(ui, "SDF resolution", &format!("{}³", state.sdf_resolution));
+    ui.separator();
+
+    ui.label("Visibility:");
+    ui.checkbox(&mut state.show_original, "Original (left, orange)");
+    ui.checkbox(&mut state.show_decimated, "Decimated (centre, blue)");
+    ui.checkbox(&mut state.show_marching_cubes, "Marching cubes (right, green)");
+    ui.checkbox(&mut state.show_hull, "Hull overlay (yellow markers on original)");
+    ui.separator();
+
+    ui.label("");
+    ui.label("Pipeline runs once on scene entry:");
+    ui.label("• decimate(): QEM edge collapses → 25 % LOD");
+    ui.label("• bake_mesh_to_sdf(): voxelise + sign by parity");
+    ui.label("• marching_cubes(): re-extract surface");
+    ui.label("• convex_hull(): QuickHull from vertex cloud");
+    ui.label("");
+    ui.small("Hotkey: M");
+}
+
+/// Per-frame system: read [`MeshToolsExampleState`] and flip the
+/// `Visibility` of every entity tagged with one of the
+/// `MeshTool*` markers. Cheap (≤ a few hundred entities); skipping
+/// the marker queries when `show_*` flags are unchanged would be a
+/// premature optimisation.
+fn update_mesh_tools_visibility(
+    state: Res<MeshToolsExampleState>,
+    mut q_orig: Query<&mut Visibility, (With<MeshToolOriginal>, Without<MeshToolDecimated>, Without<MeshToolMarchingCubes>, Without<MeshToolHull>)>,
+    mut q_dec: Query<&mut Visibility, (With<MeshToolDecimated>, Without<MeshToolOriginal>, Without<MeshToolMarchingCubes>, Without<MeshToolHull>)>,
+    mut q_mc: Query<&mut Visibility, (With<MeshToolMarchingCubes>, Without<MeshToolOriginal>, Without<MeshToolDecimated>, Without<MeshToolHull>)>,
+    mut q_hull: Query<&mut Visibility, (With<MeshToolHull>, Without<MeshToolOriginal>, Without<MeshToolDecimated>, Without<MeshToolMarchingCubes>)>,
+) {
+    let v = |on: bool| if on { Visibility::Visible } else { Visibility::Hidden };
+    for mut vis in q_orig.iter_mut() {
+        *vis = v(state.show_original);
+    }
+    for mut vis in q_dec.iter_mut() {
+        *vis = v(state.show_decimated);
+    }
+    for mut vis in q_mc.iter_mut() {
+        *vis = v(state.show_marching_cubes);
+    }
+    for mut vis in q_hull.iter_mut() {
+        *vis = v(state.show_hull);
+    }
 }
 
 /// Body for the right-rail pane in the VBD-cloth scene. Sliders for
