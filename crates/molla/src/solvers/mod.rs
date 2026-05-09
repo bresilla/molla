@@ -6,6 +6,7 @@ pub mod ik;
 pub mod jacobian;
 pub mod rnea;
 mod semi_implicit;
+mod vbd;
 mod xpbd;
 
 pub use crba::mass_matrix;
@@ -14,6 +15,7 @@ pub use ik::{IkConfig, IkObjective, IkResult, IkSolver};
 pub use jacobian::jacobian;
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
+pub use vbd::VbdSolver;
 pub use xpbd::XpbdSolver;
 
 use crate::core::Result;

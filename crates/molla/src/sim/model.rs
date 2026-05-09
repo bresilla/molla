@@ -195,6 +195,30 @@ pub struct Model {
     /// reads slot `i` and looks up `spring = spring_indices_by_color[offset_k + i]`.
     pub spring_indices_by_color: Buffer<u32>,
 
+    // ── VBD adjacency + per-vertex coloring ─────────────────────────
+    // Computed at build time alongside the spring colouring above.
+    // Used by the Vertex Block Descent solver
+    // ([`crate::solvers::VbdSolver`]); the existing XPBD kernels
+    // ignore these fields entirely. Unlike the spring colouring
+    // (where two springs share a colour iff they don't share a
+    // particle), VBD colours **particles** so two same-colour
+    // particles never share a constraint — the per-vertex block
+    // solve then becomes embarrassingly parallel within a colour.
+    /// Per-vertex CSR offsets into `vertex_adjacent_springs` (length
+    /// `particle_count + 1`). Vertex `v` owns spring slots
+    /// `[vertex_adjacent_springs_offsets[v] .. v+1]`.
+    pub vertex_adjacent_springs_offsets: Buffer<u32>,
+    /// Flat list of spring indices keyed by vertex.
+    pub vertex_adjacent_springs: Buffer<u32>,
+    /// Number of particle colours.
+    pub particle_color_count: usize,
+    /// CSR offsets over `particle_indices_by_color` — colour `k`
+    /// owns particles in `[particle_color_offsets[k], k+1])`. Length
+    /// `particle_color_count + 1`.
+    pub particle_color_offsets: Buffer<u32>,
+    /// Particle indices sorted by colour. Length `particle_count`.
+    pub particle_indices_by_color: Buffer<u32>,
+
     // ── Triangle topology (cloth surfaces) ──────────────────────────
     /// Number of triangles. Used for rendering today; bending /
     /// area-preservation constraints will read this in stage 12.x.
@@ -470,6 +494,12 @@ impl Model {
             spring_color_offsets: Buffer::from_vec(vec![0u32], s),
             spring_indices_by_color: Buffer::from_vec(Vec::new(), s),
 
+            vertex_adjacent_springs_offsets: Buffer::from_vec(vec![0u32], s),
+            vertex_adjacent_springs: Buffer::from_vec(Vec::new(), s),
+            particle_color_count: 0,
+            particle_color_offsets: Buffer::from_vec(vec![0u32], s),
+            particle_indices_by_color: Buffer::from_vec(Vec::new(), s),
+
             tri_count: 0,
             tri_indices: Buffer::from_vec(Vec::new(), s),
 
@@ -597,6 +627,10 @@ impl Model {
         up!(spring_max_stretch);
         up!(spring_color_offsets);
         up!(spring_indices_by_color);
+        up!(vertex_adjacent_springs_offsets);
+        up!(vertex_adjacent_springs);
+        up!(particle_color_offsets);
+        up!(particle_indices_by_color);
         up!(tri_indices);
         up!(body_mass);
         up!(body_inv_mass);

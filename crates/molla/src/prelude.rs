@@ -11,7 +11,7 @@ pub use crate::sim::{
     Model, ModelBuilder, ParticleFlags, SdfShape, ShapeFlags, ShapeGeometry, State,
 };
 pub use crate::geometry::collide;
-pub use crate::solvers::{FeatherstoneSolver, SemiImplicitSolver, Solver, XpbdSolver};
+pub use crate::solvers::{FeatherstoneSolver, SemiImplicitSolver, Solver, VbdSolver, XpbdSolver};
 pub use crate::storage::{Buffer, BufferUsage};
 
 #[cfg(feature = "gpu")]
