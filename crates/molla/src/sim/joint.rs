@@ -17,6 +17,17 @@ pub enum EqualityType {
     Connect = 0,
     /// Fixed weld — pin position AND orientation. 6 constraints.
     Weld = 1,
+    /// Joint-mimic (Newton's `JOINT` equality kind) — constrains one
+    /// joint coordinate as a polynomial of another:
+    /// `q_driven = poly[0] + poly[1]·q_driver + poly[2]·q_driver²
+    /// + poly[3]·q_driver³ + poly[4]·q_driver⁴`.
+    /// Used for closed kinematic loops (4-bar linkage), gear
+    /// couplings, and mimic-axis grippers (e.g. Robotiq 2-finger).
+    /// The driver and driven joint indices + the polynomial live in
+    /// the parallel `Model.mimic_*` arrays (one slot per equality
+    /// constraint; only consulted when `equality_type == JointMimic`).
+    /// Stage 32.
+    JointMimic = 2,
 }
 
 impl EqualityType {
@@ -25,6 +36,7 @@ impl EqualityType {
     pub fn from_u32(v: u32) -> Self {
         match v {
             1 => Self::Weld,
+            2 => Self::JointMimic,
             _ => Self::Connect,
         }
     }

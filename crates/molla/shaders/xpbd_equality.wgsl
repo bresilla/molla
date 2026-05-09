@@ -19,8 +19,9 @@
 // equality correction shows up in the next-step velocity naturally.
 
 const FLAG_KINEMATIC: u32 = 1u;
-const EQ_TYPE_CONNECT: u32 = 0u;
-const EQ_TYPE_WELD: u32    = 1u;
+const EQ_TYPE_CONNECT: u32     = 0u;
+const EQ_TYPE_WELD: u32        = 1u;
+const EQ_TYPE_JOINT_MIMIC: u32 = 2u;
 
 struct Transform {
     position: vec4<f32>,
@@ -62,6 +63,19 @@ struct SpatialVec {
 @group(1) @binding(6) var<storage, read> eq_enabled:            array<u32>;
 
 @group(2) @binding(0) var<uniform> u: Uniforms;
+
+// ── Joint-mimic bind group (Stage 32) ─────────────────────────────
+// Distinct from the body-equality bind groups above so the existing
+// `project_equality` / `recover_velocity_after_equality` entry points
+// stay binding-layout-compatible with the pre-Stage-32 dispatcher.
+// `project_joint_mimic` is the only entry point that touches these.
+@group(3) @binding(0) var<storage, read_write> joint_q:                 array<f32>;
+@group(3) @binding(1) var<storage, read_write> joint_qd:                array<f32>;
+@group(3) @binding(2) var<storage, read>       joint_coord_offset:      array<u32>;
+@group(3) @binding(3) var<storage, read>       joint_dof_offset:        array<u32>;
+@group(3) @binding(4) var<storage, read>       eq_mimic_driver_joint:   array<i32>;
+@group(3) @binding(5) var<storage, read>       eq_mimic_driven_joint:   array<i32>;
+@group(3) @binding(6) var<storage, read>       eq_mimic_poly:           array<f32>;
 
 // ── Quaternion + matrix helpers ──────────────────────────────────
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -269,5 +283,52 @@ fn recover_velocity_after_equality(@builtin(global_invocation_id) gid: vec3<u32>
     qd.linear = vec4<f32>(dp, 0.0);
     qd.angular = vec4<f32>(omega, 0.0);
     body_qd[tid] = qd;
+}
+
+// ── Joint-mimic projection (Stage 32). ───────────────────────────
+// Driver-authoritative: snap `joint_q[driven] = poly(joint_q[driver])`
+// for every JointMimic equality, then propagate the velocity
+// `joint_qd[driven] = poly'(driver) · joint_qd[driver]`. Single-thread
+// Gauss-Seidel iteration, like the body equality kernel — joint-mimic
+// counts are tiny (≤ a handful per articulation) and chains
+// propagate sequentially in WGSL's serial model anyway.
+//
+// `iterations` re-evaluates the polynomial at the latest driver value
+// so a CHAIN of mimics (driver → mid → tail) converges in
+// `chain_length` sweeps; for an isolated pair, one sweep is exact.
+@compute @workgroup_size(1)
+fn project_joint_mimic() {
+    if (u.equality_count == 0u) { return; }
+    for (var iter: u32 = 0u; iter < u.iterations; iter = iter + 1u) {
+        for (var c: u32 = 0u; c < u.equality_count; c = c + 1u) {
+            if (eq_type[c] != EQ_TYPE_JOINT_MIMIC) { continue; }
+            if (eq_enabled[c] == 0u) { continue; }
+            let dr_j_signed = eq_mimic_driver_joint[c];
+            let dn_j_signed = eq_mimic_driven_joint[c];
+            if (dr_j_signed < 0 || dn_j_signed < 0) { continue; }
+            let dr_j = u32(dr_j_signed);
+            let dn_j = u32(dn_j_signed);
+            let dr_q = joint_coord_offset[dr_j];
+            let dn_q = joint_coord_offset[dn_j];
+            let dr_dof = joint_dof_offset[dr_j];
+            let dn_dof = joint_dof_offset[dn_j];
+            // 5 polynomial coefficients per slot, flat layout.
+            let base = c * 5u;
+            let p0 = eq_mimic_poly[base];
+            let p1 = eq_mimic_poly[base + 1u];
+            let p2 = eq_mimic_poly[base + 2u];
+            let p3 = eq_mimic_poly[base + 3u];
+            let p4 = eq_mimic_poly[base + 4u];
+
+            let q_dr = joint_q[dr_q];
+            // Horner-form polynomial eval + derivative at q_dr.
+            let q_target = (((p4 * q_dr + p3) * q_dr + p2) * q_dr + p1) * q_dr + p0;
+            let dp       = ((4.0 * p4 * q_dr + 3.0 * p3) * q_dr + 2.0 * p2) * q_dr + p1;
+
+            joint_q[dn_q] = q_target;
+            let qd_dr = joint_qd[dr_dof];
+            joint_qd[dn_dof] = dp * qd_dr;
+        }
+    }
 }
 

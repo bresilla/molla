@@ -826,6 +826,32 @@ fn cpu_step(
         *f = SpatialVector::ZERO;
     }
 
+    // ── Joint-mimic equality projection (Stage 32) ──────────────
+    // Copy joint state forward then enforce `q_driven = poly(q_driver)`
+    // for every JointMimic equality. Linear mimics converge in one
+    // sweep; quadratic / quartic need a few. Mirrored on GPU by the
+    // `project_joint_mimic` entry point in `xpbd_equality.wgsl`.
+    if model.joint_coord_total > 0 {
+        let q_in_jq = state_in.joint_q.host()?.to_vec();
+        let qd_in_jq = state_in.joint_qd.host()?.to_vec();
+        {
+            let q_out = state_out.joint_q.host_mut()?;
+            q_out.copy_from_slice(&q_in_jq);
+        }
+        {
+            let qd_out = state_out.joint_qd.host_mut()?;
+            qd_out.copy_from_slice(&qd_in_jq);
+        }
+        let q_out = state_out.joint_q.host_mut()?;
+        // Borrow-checker: split joint_q + joint_qd accesses by
+        // pulling joint_qd into a scratch slice for the projection
+        // call. The pass mutates both arrays in place.
+        let mut qd_scratch = qd_in_jq;
+        joint_mimic_projection_pass(model, q_out, &mut qd_scratch, position_iterations)?;
+        let qd_out = state_out.joint_qd.host_mut()?;
+        qd_out.copy_from_slice(&qd_scratch);
+    }
+
     // Particle XPBD pass — separate from rigid bodies for now.
     if model.particle_count > 0 {
         let p_in = state_in.particle_q.host()?.to_vec();
@@ -1068,6 +1094,122 @@ pub(crate) fn equality_projection_pass(
 // with a true GPU dispatch. The CPU `equality_projection_pass`
 // above is kept — it's still used by the CPU `cpu_step` path and
 // by tests as the reference oracle for the WGSL port.
+
+/// Project the [`crate::sim::EqualityType::JointMimic`] equality
+/// constraints (Stage 32) over `joint_q` / `joint_qd`. For each pair
+/// `(driver, driven)` with polynomial coefficients
+/// `c = [c0, c1, c2, c3, c4]`, enforce
+///
+/// ```text
+/// C(q_dr, q_dn) = q_dn − (c0 + c1·q_dr + c2·q_dr² + c3·q_dr³ + c4·q_dr⁴) = 0
+/// ```
+///
+/// **Driver-authoritative semantics** (URDF / MJCF / Newton convention):
+/// the driver joint is treated as infinite-mass during the projection
+/// — the entire correction lands on the driven joint. This matches
+/// the user expectation that the driven joint *follows* the driver
+/// (e.g., the second Robotiq finger tracks the first; the gear
+/// mimics the input shaft). The full XPBD solve reduces to:
+///
+/// ```text
+/// q_dn ← poly(q_dr)
+/// qd_dn ← p′(q_dr) · qd_dr
+/// ```
+///
+/// `iterations` Gauss-Seidel sweeps re-evaluate at the latest `q`'s
+/// so a chain of mimics (driver → mid → tail) propagates across the
+/// chain in `iterations` sweeps (one per chain edge). For an isolated
+/// pair, one sweep is enough — the driver-fixed projection is exact.
+///
+/// Both joints must be 1-DoF — only the joint's first coord +
+/// first DOF velocity are touched. Driven-joint limits are NOT
+/// enforced; if the driver hits its own limit the driven coord
+/// continues to track `poly(driver)` past the driven joint's range
+/// (documented invariant of the constraint — Stage 32 caveat).
+pub(crate) fn joint_mimic_projection_pass(
+    model: &Model,
+    joint_q: &mut [Real],
+    joint_qd: &mut [Real],
+    iterations: usize,
+) -> Result<()> {
+    if model.equality_count == 0 {
+        return Ok(());
+    }
+    let eq_type = model.equality_type.host()?;
+    let eq_enabled = model.equality_enabled.host()?;
+    let driver = model.equality_mimic_driver_joint.host()?;
+    let driven = model.equality_mimic_driven_joint.host()?;
+    let poly = model.equality_mimic_poly.host()?;
+    let coord_off = model.joint_coord_offset.host()?;
+    let dof_off = model.joint_dof_offset.host()?;
+
+    for _ in 0..iterations.max(1) {
+        for c in 0..model.equality_count {
+            if eq_type[c] != crate::sim::EqualityType::JointMimic as u32 {
+                continue;
+            }
+            if eq_enabled[c] == 0 {
+                continue;
+            }
+            let dr_j = driver[c];
+            let dn_j = driven[c];
+            if dr_j < 0 || dn_j < 0 {
+                continue;
+            }
+            let dr_j = dr_j as usize;
+            let dn_j = dn_j as usize;
+            if dr_j >= model.joint_count || dn_j >= model.joint_count {
+                continue;
+            }
+            let dr_q = coord_off[dr_j] as usize;
+            let dn_q = coord_off[dn_j] as usize;
+            let dr_dof = dof_off[dr_j] as usize;
+            let dn_dof = dof_off[dn_j] as usize;
+            // 5 coefficients per slot, flat layout.
+            let p0 = poly[c * 5];
+            let p1 = poly[c * 5 + 1];
+            let p2 = poly[c * 5 + 2];
+            let p3 = poly[c * 5 + 3];
+            let p4 = poly[c * 5 + 4];
+
+            let q_dr = joint_q.get(dr_q).copied().unwrap_or(0.0);
+            // Driver-authoritative: snap driven directly onto the
+            // polynomial (the driver acts as infinite-mass). Equivalent
+            // to a Lagrange solve with `1/m_driver = 0`, where the
+            // entire correction `λ = poly(q_dr) − q_dn` lands on the
+            // driven coord.
+            let target = poly_eval(p0, p1, p2, p3, p4, q_dr);
+            if let Some(q) = joint_q.get_mut(dn_q) {
+                *q = target;
+            }
+            // Velocity-level coupling: `qd_driven = p'(q_dr) · qd_driver`.
+            // Same driver-authoritative reasoning — driver's qd is
+            // untouched, driven's qd is overwritten. This matches
+            // Newton's mimic semantics (`qd_a = c1 · qd_b` linear case)
+            // and propagates analytically through quadratic / quartic
+            // couplings via the chain rule.
+            let dp = poly_deriv(p1, p2, p3, p4, q_dr);
+            let qd_dr = joint_qd.get(dr_dof).copied().unwrap_or(0.0);
+            if let Some(qd) = joint_qd.get_mut(dn_dof) {
+                *qd = dp * qd_dr;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn poly_eval(c0: Real, c1: Real, c2: Real, c3: Real, c4: Real, q: Real) -> Real {
+    // Horner form keeps the multiply chain short.
+    (((c4 * q + c3) * q + c2) * q + c1) * q + c0
+}
+
+#[inline]
+fn poly_deriv(c1: Real, c2: Real, c3: Real, c4: Real, q: Real) -> Real {
+    // d/dq (c0 + c1·q + c2·q² + c3·q³ + c4·q⁴)
+    //   = c1 + 2·c2·q + 3·c3·q² + 4·c4·q³
+    ((4.0 * c4 * q + 3.0 * c3) * q + 2.0 * c2) * q + c1
+}
 
 /// Run one full XPBD particle step on host:
 /// 1. Predict: `p_new = p + dt·v + dt²·g`, with linear damping.

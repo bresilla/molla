@@ -492,6 +492,21 @@ pub struct Model {
     pub equality_enabled: Buffer<u32>,
     /// Per-constraint world index (defaults to body A's world).
     pub equality_constraint_world: Buffer<i32>,
+    /// Per-constraint driver joint index — only consulted when
+    /// `equality_type[c] == EqualityType::JointMimic` (Stage 32).
+    /// `-1` for non-mimic constraints. Length = `equality_count`.
+    pub equality_mimic_driver_joint: Buffer<i32>,
+    /// Per-constraint driven joint index — see
+    /// [`Self::equality_mimic_driver_joint`]. Length = `equality_count`.
+    pub equality_mimic_driven_joint: Buffer<i32>,
+    /// Per-constraint polynomial coefficients (5 per slot; flat layout)
+    /// — `q_driven = poly[0] + poly[1]·q_dr + poly[2]·q_dr²
+    /// + poly[3]·q_dr³ + poly[4]·q_dr⁴`. Only consulted when
+    /// `equality_type[c] == EqualityType::JointMimic`. Length =
+    /// `equality_count * 5`. Linear-mimic (gripper) is `[0, 1, 0, 0, 0]`
+    /// after offset; linear with bias `c0 + c1·q` is `[c0, c1, 0, 0, 0]`.
+    /// Stage 32.
+    pub equality_mimic_poly: Buffer<Real>,
 
     // ── Mimic constraints (q_a = c0 + c1 · q_b) ────────────────────
     /// Number of mimic constraints.
@@ -709,6 +724,9 @@ impl Model {
             equality_relative_rotation: Buffer::from_vec(Vec::new(), s),
             equality_enabled: Buffer::from_vec(Vec::new(), s),
             equality_constraint_world: Buffer::from_vec(Vec::new(), s),
+            equality_mimic_driver_joint: Buffer::from_vec(Vec::new(), s),
+            equality_mimic_driven_joint: Buffer::from_vec(Vec::new(), s),
+            equality_mimic_poly: Buffer::from_vec(Vec::new(), s),
 
             mimic_count: 0,
             mimic_joint_a: Buffer::from_vec(Vec::new(), s),
@@ -865,6 +883,14 @@ impl Model {
         up!(equality_anchor_b);
         up!(equality_relative_rotation);
         up!(equality_enabled);
+        // Joint-mimic (Stage 32): per-equality driver/driven joint
+        // indices + 5-coeff polynomial. Only consulted by the GPU
+        // `project_joint_mimic` entry point when the slot's
+        // `equality_type == JointMimic`. The joint coord/dof offsets
+        // were already uploaded above as part of the joint section.
+        up!(equality_mimic_driver_joint);
+        up!(equality_mimic_driven_joint);
+        up!(equality_mimic_poly);
         up!(gravity);
         Ok(())
     }
