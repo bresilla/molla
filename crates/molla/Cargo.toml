@@ -16,6 +16,15 @@ default = ["gpu"]
 # without it, which is useful for pure-CPU CI runners and for users that only
 # want the data model and importers.
 gpu = ["dep:wgpu", "dep:pollster"]
+# Enable the MuJoCo wrapper solver (`SolverMuJoCo`). Off by default because
+# it requires the upstream MuJoCo C library to be system-installed (the
+# `mujoco-rust` build script looks for `libmujoco` at `~/.local/mujoco` or
+# in the standard system search paths). With the feature off, `mujoco.rs`
+# compiles to an empty module so users without MuJoCo can still build the
+# rest of the project. When the feature is on but `libmujoco` is missing
+# at link time, the build fails with a clear linker error from
+# `mujoco-rust`. See PLAN.md Stage 22 for scope notes.
+mujoco = ["dep:mujoco-rust"]
 
 [dependencies]
 glam = { version = "0.30", features = ["bytemuck"] }
@@ -37,6 +46,13 @@ wgpu = { version = "27", optional = true, default-features = false, features = [
     "std",
 ] }
 pollster = { version = "0.4", optional = true }
+
+# Optional MuJoCo wrapper. Pinned to a known-good 0.0.x release; the
+# upstream API surface is small and stable enough that this isn't risky.
+# `default-features = false` skips the optional `mj-render` feature
+# which would pull in OpenGL deps molla doesn't need (we render via
+# Bevy in the viewer crate instead).
+mujoco-rust = { version = "0.0.6", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
