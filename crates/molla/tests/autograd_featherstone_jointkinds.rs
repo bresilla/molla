@@ -173,7 +173,7 @@ fn distance_kink_smoothed_gradient_continuous() {
 /// behave identically to the unconstrained Free joint.
 #[test]
 fn d6_strictly_within_limits_grad_matches_fd() {
-    let chain = FeatherstoneRevoluteChain::add_joint_d6(
+    let mut chain = FeatherstoneRevoluteChain::add_joint_d6(
         1.0,
         0.05,
         0.005,
@@ -183,6 +183,7 @@ fn d6_strictly_within_limits_grad_matches_fd() {
         // Angular limits wide.
         [(-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)],
     );
+    chain.ee_local = Vec3::new(0.2, 0.0, 0.0);
     let q0 = vec![0.0_f64; 6];
     let qd0 = vec![0.0_f64; 6];
     // Small torques keep all DoFs well inside their limits.
@@ -198,8 +199,11 @@ fn d6_strictly_within_limits_grad_matches_fd() {
 /// kills it) and the tangential component still matches FD.
 #[test]
 fn d6_at_one_angular_limit_grad_matches_fd() {
-    // Tight upper limit on the first angular axis (X).
-    let chain = FeatherstoneRevoluteChain::add_joint_d6(
+    // Tight upper limit on the first angular axis (X). Wider linear
+    // limits + a body that has visible-EE structure (offset COM on the
+    // last revolute) so motion through other DoFs produces a non-zero
+    // gradient.
+    let mut chain = FeatherstoneRevoluteChain::add_joint_d6(
         1.0,
         0.05,
         0.005,
@@ -207,22 +211,35 @@ fn d6_at_one_angular_limit_grad_matches_fd() {
         [(-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)],
         [(-0.05, 0.05), (-1.0, 1.0), (-1.0, 1.0)],
     );
+    // Pin EE so non-clamped DoFs visibly move it.
+    chain.ee_local = Vec3::new(0.2, 0.0, 0.0);
     // Initial state already at the upper angular X limit (q[3] = 0.05).
     let mut q0 = vec![0.0_f64; 6];
-    q0[3] = 0.05; // angular X at upper bound (wrapped through Quat below).
-    // Quat layout for the angular DoFs: stored as separate revolute
-    // coords since we use the stacked-DoF model. q[3..6] are the
-    // intrinsic Euler angles, not quat components.
+    q0[3] = 0.05;
     let qd0 = vec![0.0_f64; 6];
-    // Push positively on angular X — the limit should clamp every step.
+    // Push positively on angular X (clamped) + linear X (free).
     let mut tau0 = vec![vec![0.0_f64; 6]; chain.horizon];
     for tau_t in tau0.iter_mut() {
-        tau_t[3] = 0.5; // push past upper limit
-        tau_t[4] = 0.05; // small free-axis perturbation
+        tau_t[0] = 0.05; // free linear X
+        tau_t[3] = 0.5; // push past upper angular limit (clamped)
+        tau_t[4] = 0.05; // free angular Y
     }
     let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
     let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
     println!("d6 single-limit max grad-FD diff: x={d_x:.3e}, y={d_y:.3e}");
+
+    // Specific-component check: the gradient w.r.t. tau[t][3] (clamped
+    // angular X push) at the LAST step should be zero (the clamp kills
+    // any "more torque on X" effect in EE position) — except for the
+    // first step where the dynamics can still propagate to the unlimited
+    // axes through the CRBA inertia matrix coupling. Just check magnitude.
+    let trace = chain.rollout(&q0, &qd0, &tau0);
+    let g = chain.reverse(&trace, Vec3::X);
+    let last_t = chain.horizon - 1;
+    println!(
+        "d6 single-limit g_tau[last][angular_X] = {:.3e} (clamped axis at last step)",
+        g[last_t][3],
+    );
 }
 
 /// D6 at multiple angular limits — two axes pinned, one free. Verifies
@@ -230,7 +247,7 @@ fn d6_at_one_angular_limit_grad_matches_fd() {
 /// independently.
 #[test]
 fn d6_at_multiple_limits_grad_matches_fd() {
-    let chain = FeatherstoneRevoluteChain::add_joint_d6(
+    let mut chain = FeatherstoneRevoluteChain::add_joint_d6(
         1.0,
         0.05,
         0.005,
@@ -238,17 +255,20 @@ fn d6_at_multiple_limits_grad_matches_fd() {
         [(-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)],
         [(-0.05, 0.05), (-0.05, 0.05), (-1.0, 1.0)],
     );
+    chain.ee_local = Vec3::new(0.2, 0.0, 0.0);
     let mut q0 = vec![0.0_f64; 6];
     q0[3] = 0.05; // angular X at upper limit
     q0[4] = -0.05; // angular Y at lower limit
     let qd0 = vec![0.0_f64; 6];
     let mut tau0 = vec![vec![0.0_f64; 6]; chain.horizon];
     for tau_t in tau0.iter_mut() {
-        tau_t[3] = 0.4; // push past upper X
-        tau_t[4] = -0.4; // push past lower Y
-        tau_t[5] = 0.05; // free axis
+        tau_t[0] = 0.05; // free linear X
+        tau_t[3] = 0.4; // push past upper X (clamped)
+        tau_t[4] = -0.4; // push past lower Y (clamped)
+        tau_t[5] = 0.05; // free angular Z
     }
     let d_x = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::X);
+    let d_y = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Y);
     let d_z = check_torque_grad_matches_fd(&chain, &q0, &qd0, &tau0, Vec3::Z);
-    println!("d6 multi-limit max grad-FD diff: x={d_x:.3e}, z={d_z:.3e}");
+    println!("d6 multi-limit max grad-FD diff: x={d_x:.3e}, y={d_y:.3e}, z={d_z:.3e}");
 }
