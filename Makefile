@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-particles-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -64,6 +64,9 @@ test-gpu:
 
 test-featherstone-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test featherstone_gpu_parity -- --ignored
+
+test-featherstone-multidof-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test featherstone_multidof_gpu -- --ignored
 
 test-xpbd-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test xpbd_gpu_parity -- --ignored

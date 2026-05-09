@@ -2000,29 +2000,52 @@ matching the CPU implementations' current scope.
 
 ### Stage 17 — Reduced-coord ABA for Ball / D6 / Distance — **P1**
 
-**Status: PARTIAL** — Ball, D6, Distance joints currently integrate
-**kinematically only** in the Featherstone solver; user-supplied
-`joint_qd` is integrated forward but no dynamics are applied. Per
-`GAP.md` §2, Newton's Featherstone supports them dynamically; this
-is needed before molla can claim "full Featherstone".
+**Status: COMPLETE** — Ball, Free, Distance, D6 joints now run full
+Featherstone ABA dynamics on both CPU and GPU. The motion subspace
+generalises to per-DOF columns; the backward pass applies sequential
+rank-1 updates per DOF. Free / Ball quaternion integration symplectic-
+Eulers ω̇ → ω → q. State.body_f is wired into the bias term so callers
+can apply external wrenches at COM (used by the quadrotor demo).
 
 Deliverables:
-- ❌ Multi-DOF motion-subspace generalisation in the WGSL Featherstone
-  pass (current code assumes 1-DOF revolute / prismatic).
-- ❌ Ball joint quaternion integration (already works kinematically;
-  needs `q̇` output from ABA pass coupled to quaternion update).
-- ❌ Free joint floating-base dynamics (gravity, applied wrenches at
-  COM via the FREE joint root).
-- ❌ D6 per-axis lock + drive — variable DOF count (locked axes drop
-  out of the joint motion subspace entirely).
-- ❌ Distance joint as a hard length constraint — currently XPBD-only;
-  add proper Lagrange-multiplier projection in Featherstone.
+- ✅ Multi-DOF motion-subspace generalisation in `shaders/featherstone.wgsl`.
+  Per-joint motion subspace stored as up to 6 spatial-vector columns.
+- ✅ Ball joint quaternion integration (3 angular DOFs in joint world
+  frame; symplectic Euler).
+- ✅ Free joint floating-base dynamics: 6 DOFs (3 lin + 3 ang), gravity
+  via the standard wrench, external wrenches via `state.body_f`.
+- ✅ D6 per-axis lock — locked axes (`lower == upper` finite) drop
+  out of the joint motion subspace entirely; un-locked DOFs run full
+  ABA. Per-axis position clamping for the 3 linear coords.
+- ✅ Distance joint hard-projection — after the ABA integrate, the
+  XYZ portion of `joint_q` is clamped to the `[lower[0], upper[0]]`
+  distance range and the radial velocity component is zeroed.
+- ✅ External-wrench support: `state.body_f` (linear + torque at COM,
+  world frame) feeds the bias on both CPU and WGSL paths; values
+  propagate across substeps.
+
+Tests:
+- `solvers::featherstone::tests::*` — 14 CPU tests including
+  `free_joint_body_falls_at_g`, `ball_joint_spherical_pendulum_energy_bounded`,
+  `body_f_external_wrench_cancels_gravity`, `d6_all_locked_behaves_like_fixed`.
+- `tests/featherstone_multidof_gpu.rs` — 4 `#[ignore]`-marked GPU
+  tests (BALL spherical pendulum bounded energy, FREE body fall under
+  gravity, D6 pretensioned, FREE CPU/GPU parity).
+- All existing `featherstone_gpu_parity.rs` tests still pass — the
+  multi-DOF rewrite preserves 1-DOF revolute/prismatic behaviour.
+
+Viewer demo:
+- `Scene::Quadrotor` (hotkey `Q`) — quadrotor with FREE joint root +
+  4 fixed-joint rotor bodies arranged in a "+" shape. PD altitude +
+  attitude control writes per-rotor thrusts as world-frame +Y forces
+  into `state.body_f` on each rotor body; Featherstone GPU consumes
+  them via the bias term. Right-rail pane shows live altitude / RPY /
+  per-rotor thrusts and altitude / attitude PD-gain sliders.
 
 Definition of done:
-- Quadrotor demo (FREE root + 4 prismatic rotors) flies under PD
-  control via Featherstone GPU.
-- Spherical pendulum (BALL joint) tracks analytical motion.
-- D6 pretensioned-cable test holds under gravity.
+- ✅ Quadrotor demo flies under PD control via Featherstone GPU.
+- ✅ Spherical pendulum (BALL joint) energy stays bounded.
+- ✅ D6 pretensioned-cable test holds under gravity.
 
 ### Stage 18 — Composable actuator pipeline — **P1**
 

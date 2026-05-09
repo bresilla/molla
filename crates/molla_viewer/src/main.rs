@@ -20,6 +20,7 @@
 //!
 //! Keys:
 //!   * 1 / 2 / 3 / 4   switch demo scene
+//!   * Q           Quadrotor (Stage 17 multi-DOF Featherstone)
 //!   * T           toggle "activity view" — sleeping bodies turn grey,
 //!                 only active (moving) bodies keep their colour
 //!   * W           toggle wireframe view (every mesh outlined)
@@ -284,6 +285,7 @@ fn main() {
         .insert_resource(GpuIkArmState::default())
         .insert_resource(CameraExampleState::default())
         .insert_resource(ActuatorExampleState::default())
+        .insert_resource(QuadrotorState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -315,26 +317,34 @@ fn main() {
         .add_systems(
             Update,
             (
-                handle_input,
-                apply_scene_switch,
-                update_mouse_grab,
-                // Arm controller runs BEFORE the physics step so its
-                // `joint_force` writes are picked up by the solver.
-                update_arm_example,
-                update_actuator_example,
-                update_gpu_ik_arm,
-                step_simulation,
-                sync_transforms,
-                sync_cloth_mesh,
-                update_lidar,
-                update_imu_example,
-                update_contact_example,
-                update_camera_example,
-                update_activity_colors,
-                apply_wireframe,
-                draw_grab_gizmo,
-                draw_lidar_gizmos,
-                draw_contact_gizmos,
+                (
+                    handle_input,
+                    apply_scene_switch,
+                    update_mouse_grab,
+                    // Pre-step controllers run BEFORE step_simulation
+                    // so their joint_force / body_f writes are picked
+                    // up by the solver.
+                    update_arm_example,
+                    update_actuator_example,
+                    update_gpu_ik_arm,
+                    update_quadrotor,
+                    step_simulation,
+                    sync_transforms,
+                    sync_cloth_mesh,
+                )
+                    .chain(),
+                (
+                    update_lidar,
+                    update_imu_example,
+                    update_contact_example,
+                    update_camera_example,
+                    update_activity_colors,
+                    apply_wireframe,
+                    draw_grab_gizmo,
+                    draw_lidar_gizmos,
+                    draw_contact_gizmos,
+                )
+                    .chain(),
             )
                 .chain(),
         )
@@ -369,6 +379,37 @@ struct RibbonParams<'w> {
     open: ResMut<'w, RibbonOpen>,
     placement: ResMut<'w, RibbonPlacement>,
     drag: ResMut<'w, RibbonDrag>,
+}
+
+/// Bundle of every per-scene runtime resource. `apply_scene_switch`
+/// resets each one on a scene change; bundling keeps the system under
+/// Bevy's 16-system-param tuple ceiling.
+#[derive(bevy::ecs::system::SystemParam)]
+struct SceneStates<'w> {
+    lidar: ResMut<'w, LidarState>,
+    imu: ResMut<'w, ImuExampleState>,
+    contact: ResMut<'w, ContactExampleState>,
+    arm: ResMut<'w, ArmExampleState>,
+    actuator: ResMut<'w, ActuatorExampleState>,
+    gpu_ik: ResMut<'w, GpuIkArmState>,
+    camera: ResMut<'w, CameraExampleState>,
+    stats: ResMut<'w, SimStats>,
+    gpu_np: ResMut<'w, GpuNpExampleState>,
+    quad: ResMut<'w, QuadrotorState>,
+}
+
+/// Bundle of per-scene mutable state used by `control_pane`. Same
+/// resources `SceneStates` exposes for `apply_scene_switch`, but
+/// reborrowed independently because Bevy's SystemParam tuple has a
+/// hard 16-element ceiling and `control_pane` already runs near it.
+#[derive(bevy::ecs::system::SystemParam)]
+struct PaneSceneStates<'w> {
+    arm: ResMut<'w, ArmExampleState>,
+    gpu_ik: ResMut<'w, GpuIkArmState>,
+    gpu_np: ResMut<'w, GpuNpExampleState>,
+    camera: ResMut<'w, CameraExampleState>,
+    actuator: ResMut<'w, ActuatorExampleState>,
+    quad: ResMut<'w, QuadrotorState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -478,6 +519,11 @@ enum Scene {
     /// motor stall torque, motor no-load speed, and joint target;
     /// shows commanded torque vs delivered torque live.
     Actuator,
+    /// Stage-17 multi-DOF Featherstone demo — quadrotor with a FREE
+    /// joint root + 4 fixed rotor bodies. PD altitude + attitude
+    /// control writes per-rotor thrusts that flow into Featherstone
+    /// via `state.body_f` (external wrenches). Hotkey: `Q`.
+    Quadrotor,
 }
 
 impl Scene {
@@ -496,6 +542,7 @@ impl Scene {
         Scene::GpuNarrowPhase,
         Scene::Camera,
         Scene::Actuator,
+        Scene::Quadrotor,
     ];
 
     fn label(self) -> &'static str {
@@ -513,6 +560,7 @@ impl Scene {
             Scene::GpuNarrowPhase => "GPU narrow phase (Stage 15)",
             Scene::Camera => "Camera (5-channel raytrace)",
             Scene::Actuator => "Actuator pipeline (Stage 18)",
+            Scene::Quadrotor => "Quadrotor (Stage 17 multi-DOF)",
         }
     }
 
@@ -522,7 +570,9 @@ impl Scene {
     /// solver works since `step_simulation` skips this scene anyway).
     fn solver_kind(self) -> SolverKind {
         match self {
-            Scene::Arm | Scene::GpuIkArm | Scene::Actuator => SolverKind::Featherstone,
+            Scene::Arm | Scene::GpuIkArm | Scene::Actuator | Scene::Quadrotor => {
+                SolverKind::Featherstone
+            }
             _ => SolverKind::Xpbd,
         }
     }
@@ -785,6 +835,49 @@ impl Default for ActuatorExampleState {
     }
 }
 
+/// Quadrotor demo runtime state. Tracks PD-control gains, target
+/// hover altitude, and per-rotor thrust readouts. Reset on scene
+/// switch.
+#[derive(Resource)]
+struct QuadrotorState {
+    /// Target hover altitude (m).
+    target_altitude: f32,
+    /// PD altitude loop gains (force/m, force·s/m).
+    altitude_kp: f32,
+    altitude_kd: f32,
+    /// PD attitude loop gains (torque/rad, torque·s/rad).
+    attitude_kp: f32,
+    attitude_kd: f32,
+    /// Most recent per-rotor thrust commands (N), for UI readout.
+    last_thrusts: [f32; 4],
+    /// Most recent altitude (m).
+    last_altitude: f32,
+    /// Most recent attitude angles (roll, pitch, yaw) in radians.
+    last_attitude: [f32; 3],
+    /// Whether we've initialised the body-mass / arm-length cache.
+    cached: bool,
+    total_mass: f32,
+    arm_length: f32,
+}
+
+impl Default for QuadrotorState {
+    fn default() -> Self {
+        Self {
+            target_altitude: 1.5,
+            altitude_kp: 30.0,
+            altitude_kd: 8.0,
+            attitude_kp: 4.0,
+            attitude_kd: 0.6,
+            last_thrusts: [0.0; 4],
+            last_altitude: 0.0,
+            last_attitude: [0.0; 3],
+            cached: false,
+            total_mass: 0.0,
+            arm_length: 0.0,
+        }
+    }
+}
+
 /// GPU IK arm runtime state. Lazy-initialised when entering the
 /// `Scene::GpuIkArm` scene; reset on scene switch. Tracks the
 /// draggable target position, the most recent solver telemetry, and
@@ -852,6 +945,7 @@ impl Sim {
             Scene::GpuNarrowPhase => build_gpu_narrow_phase_model(),
             Scene::Camera => build_camera_model(),
             Scene::Actuator => build_actuator_model(),
+            Scene::Quadrotor => build_quadrotor_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -1571,6 +1665,110 @@ fn build_gpu_ik_arm_model() -> (mp::Model, Vec<BodyVisual>) {
     }
 
     (b.build().expect("gpu ik arm model"), visuals)
+}
+
+// --- Stage-17 quadrotor scene --------------------------------------
+//
+// FREE joint root + 4 fixed-joint rotor bodies at ±arm × {X, Z}.
+// PD altitude + attitude control writes per-rotor thrusts as world-
+// frame vertical forces into `state.body_f` on each rotor body —
+// Featherstone consumes them via the bias term, producing both
+// translation (sum of thrusts) and rotation (asymmetric thrusts).
+//
+// The four rotors are arranged in a "+" shape: rotor 0 = +X, rotor 1
+// = -X, rotor 2 = +Z, rotor 3 = -Z. Roll = thrust differential between
+// rotors 2/3 (+Z vs -Z); pitch = differential between rotors 0/1.
+
+const QUAD_ARM: f64 = 0.25;
+const QUAD_FRAME_MASS: f64 = 1.0;
+const QUAD_ROTOR_MASS: f64 = 0.05;
+const QUAD_FRAME_HALF: MVec3 = MVec3::new(0.18, 0.04, 0.18);
+const QUAD_ROTOR_RADIUS: f64 = 0.06;
+const QUAD_INITIAL_HEIGHT: f64 = 1.0;
+
+fn build_quadrotor_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.4);
+    b.set_angular_damping(0.6);
+    b.begin_articulation();
+
+    let mut visuals = Vec::with_capacity(5);
+
+    // Frame body — central cuboid; FREE joint to world.
+    let half = QUAD_FRAME_HALF;
+    let m = QUAD_FRAME_MASS;
+    let i_frame = molla::math::Mat3::from_diagonal(MVec3::new(
+        m * (half.y * half.y + half.z * half.z) / 3.0,
+        m * (half.x * half.x + half.z * half.z) / 3.0,
+        m * (half.x * half.x + half.y * half.y) / 3.0,
+    ));
+    let frame = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia {
+                mass: m,
+                com: MVec3::ZERO,
+                inertia: i_frame,
+            })
+            .with_position(MVec3::new(0.0, QUAD_INITIAL_HEIGHT, 0.0)),
+    );
+    b.add_shape_box(frame, half, mp::Transform::IDENTITY)
+        .expect("frame box");
+    visuals.push(BodyVisual::Box(Vec3::new(
+        half.x as f32,
+        half.y as f32,
+        half.z as f32,
+    )));
+    // FREE joint anchored at world origin; child anchor at frame origin.
+    b.add_joint_free(
+        mp::BodyId::NONE,
+        frame,
+        mp::Transform::IDENTITY,
+        mp::Transform::IDENTITY,
+    )
+    .expect("free root");
+
+    // Rotor offsets in body frame (at ±arm along X and Z).
+    let rotor_offsets = [
+        MVec3::new(QUAD_ARM, 0.0, 0.0),  // 0: +X
+        MVec3::new(-QUAD_ARM, 0.0, 0.0), // 1: -X
+        MVec3::new(0.0, 0.0, QUAD_ARM),  // 2: +Z
+        MVec3::new(0.0, 0.0, -QUAD_ARM), // 3: -Z
+    ];
+    let rotor_mass = QUAD_ROTOR_MASS;
+    let r2 = QUAD_ROTOR_RADIUS * QUAD_ROTOR_RADIUS;
+    let i_rotor = molla::math::Mat3::from_diagonal(MVec3::new(
+        rotor_mass * r2 * 0.25,
+        rotor_mass * r2 * 0.5,
+        rotor_mass * r2 * 0.25,
+    ));
+    for off in rotor_offsets.iter() {
+        let rotor = b.add_body(
+            mp::BodyParams::new()
+                .with_spatial_inertia(mp::SpatialInertia {
+                    mass: rotor_mass,
+                    com: MVec3::ZERO,
+                    inertia: i_rotor,
+                })
+                .with_position(MVec3::new(
+                    off.x,
+                    QUAD_INITIAL_HEIGHT + 0.02,
+                    off.z,
+                )),
+        );
+        b.add_shape_sphere(rotor, QUAD_ROTOR_RADIUS, mp::Transform::IDENTITY)
+            .expect("rotor sphere");
+        visuals.push(BodyVisual::Sphere(QUAD_ROTOR_RADIUS as f32));
+        // Fixed joint to the frame at the rotor's offset.
+        b.add_joint_fixed(
+            frame,
+            rotor,
+            mp::Transform::from_translation(*off + MVec3::Y * 0.02),
+            mp::Transform::IDENTITY,
+        )
+        .expect("rotor fixed joint");
+    }
+
+    (b.build().expect("quadrotor model"), visuals)
 }
 
 // --- Stage-13 specialty-shapes scene --------------------------------
@@ -2503,6 +2701,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyA) && sim.scene != Scene::Actuator {
         pending.0 = Some(Scene::Actuator);
     }
+    if keys.just_pressed(KeyCode::KeyQ) && sim.scene != Scene::Quadrotor {
+        pending.0 = Some(Scene::Quadrotor);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -2518,21 +2719,32 @@ fn apply_scene_switch(
     cloth_q: Query<Entity, With<ClothMesh>>,
     obstacle_q: Query<Entity, With<ClothObstacle>>,
     mut grab: ResMut<MouseGrab>,
-    mut lidar: ResMut<LidarState>,
-    mut imu: ResMut<ImuExampleState>,
-    mut contact: ResMut<ContactExampleState>,
-    mut arm: ResMut<ArmExampleState>,
-    mut gpu_ik: ResMut<GpuIkArmState>,
-    mut camera: ResMut<CameraExampleState>,
-    mut stats: ResMut<SimStats>,
-    mut gpu_np: ResMut<GpuNpExampleState>,
+    mut scene_states: SceneStates,
 ) {
     let Some(scene) = pending.0.take() else {
         return;
     };
+    // Aliases for ergonomics — the SceneStates SystemParam keeps us
+    // under Bevy's 16-system-param tuple ceiling.
+    let lidar = &mut *scene_states.lidar;
+    let imu = &mut *scene_states.imu;
+    let contact = &mut *scene_states.contact;
+    let arm = &mut *scene_states.arm;
+    let actuator = &mut *scene_states.actuator;
+    let gpu_ik = &mut *scene_states.gpu_ik;
+    let camera = &mut *scene_states.camera;
+    let stats = &mut *scene_states.stats;
+    let gpu_np = &mut *scene_states.gpu_np;
+    let quad = &mut *scene_states.quad;
     stats.arm_logged = false;
     // GPU IK: re-seed the target on next entry from the new arm's rest EE.
     *gpu_ik = GpuIkArmState::default();
+    // Stage 18 actuator pipeline: drop the GPU pipeline so the next
+    // entry rebuilds against the new sim. `update_actuator_example`
+    // also clears it on scene exit; this is belt-and-braces.
+    actuator.actuator = None;
+    // Quadrotor: reset cached mass / arm-length on every scene switch.
+    *quad = QuadrotorState::default();
     // Reset GPU narrow-phase counters on every scene switch — the
     // pipeline that tracked them is rebuilt with the new Sim.
     gpu_np.gpu_enabled_now = false;
@@ -3874,6 +4086,128 @@ fn ms_to_substeps(ms: f32) -> u32 {
     (ms / dt_ms).round().max(0.0) as u32
 }
 
+/// Quadrotor demo — PD altitude + attitude control. Reads the current
+/// frame body pose + velocity, computes per-rotor thrusts, writes
+/// world-frame thrust forces into `state.body_f` on each rotor body.
+/// Featherstone GPU consumes them via the bias term.
+fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
+    if sim.scene != Scene::Quadrotor {
+        return;
+    }
+    if sim.model.body_count < 5 {
+        return;
+    }
+    // Cache per-scene mass + arm length once on entry.
+    if !state.cached {
+        let masses = sim.model.body_mass.host().expect("body_mass");
+        let total: f64 = masses.iter().take(5).sum();
+        state.total_mass = total as f32;
+        state.arm_length = QUAD_ARM as f32;
+        state.cached = true;
+    }
+
+    let device = sim.engine.device().unwrap().clone();
+    let queue = sim.engine.queue().unwrap().clone();
+
+    // Frame body = body 0; rotors = 1..=4.
+    // Pull the latest frame pose + twist from the host. After every
+    // frame, `step_simulation` downloads `body_q` + `body_qd` from the
+    // device, so this is a fresh read.
+    let (frame_pos, frame_rot, frame_v, frame_w) = {
+        let bq = sim.state_a.body_q.host().expect("body_q");
+        let bqd = sim.state_a.body_qd.host().expect("body_qd");
+        (bq[0].position, bq[0].rotation, bqd[0].linear, bqd[0].angular)
+    };
+
+    // Altitude PD: total thrust = m·g + kp·(z_t − z) + kd·(0 − vy).
+    let g = molla::math::GRAVITY;
+    let alt_err = state.target_altitude as f64 - frame_pos.y;
+    let alt_kp = state.altitude_kp as f64;
+    let alt_kd = state.altitude_kd as f64;
+    let total_thrust =
+        (state.total_mass as f64) * g + alt_kp * alt_err - alt_kd * frame_v.y;
+    // Distribute equally as the hover baseline.
+    let baseline = (total_thrust / 4.0).max(0.0);
+
+    // Attitude PD: drive roll (rotation about world +X) + pitch (about
+    // world +Z) toward zero. Yaw is intentionally left alone — a real
+    // quadrotor mixes yaw via reaction torque from spinning rotors;
+    // this single-axis-thrust model can't generate yaw, so we accept
+    // free yaw drift.
+    //
+    // Convert the frame's body-frame "up" axis to world; deviation from
+    // world +Y gives roll/pitch errors via the cross product.
+    let body_y_world = frame_rot * MVec3::Y;
+    let tilt = body_y_world.cross(MVec3::Y); // small-angle: ~(roll, _, pitch) error
+    let roll_err = tilt.x; // rotation about world +X
+    let pitch_err = tilt.z; // rotation about world +Z (note sign)
+    let att_kp = state.attitude_kp as f64;
+    let att_kd = state.attitude_kd as f64;
+    // Damping uses world-frame angular velocity components.
+    let roll_cmd = att_kp * roll_err - att_kd * frame_w.x;
+    let pitch_cmd = att_kp * pitch_err - att_kd * frame_w.z;
+
+    // Per-rotor thrust = baseline ± control offsets at arm length L.
+    // Roll (about +X axis) torque = L·(thrust_+Z − thrust_−Z) — affects
+    // rotors 2/3.
+    // Pitch (about +Z axis) torque = L·(thrust_+X − thrust_−X) — affects
+    // rotors 0/1.
+    let l = state.arm_length as f64;
+    let mut thrusts = [
+        baseline + 0.5 * pitch_cmd / l, // rotor 0 (+X)
+        baseline - 0.5 * pitch_cmd / l, // rotor 1 (-X)
+        baseline + 0.5 * roll_cmd / l,  // rotor 2 (+Z)
+        baseline - 0.5 * roll_cmd / l,  // rotor 3 (-Z)
+    ];
+    for t in thrusts.iter_mut() {
+        if *t < 0.0 {
+            *t = 0.0; // can't pull down with rotors
+        }
+    }
+
+    // Update UI state.
+    for i in 0..4 {
+        state.last_thrusts[i] = thrusts[i] as f32;
+    }
+    state.last_altitude = frame_pos.y as f32;
+    let (roll, pitch, yaw) = quat_to_rpy(frame_rot);
+    state.last_attitude = [roll as f32, pitch as f32, yaw as f32];
+
+    // Write thrust as world-frame +Y force on each rotor body. The
+    // FREE root + fixed-rotor topology means each rotor's wrench is
+    // transmitted into the frame via its joint constraint.
+    {
+        let bf = sim.state_a.body_f.host_mut().expect("body_f");
+        // Frame body: zero (we drive via the rotors).
+        bf[0] = mp::SpatialVector::ZERO;
+        for i in 0..4 {
+            let f = mp::SpatialVector::new(
+                MVec3::new(0.0, thrusts[i], 0.0),
+                MVec3::ZERO,
+            );
+            bf[1 + i] = f;
+        }
+        // Upload to device so Featherstone reads it.
+        sim.state_a
+            .body_f
+            .upload(&queue)
+            .expect("body_f upload");
+    }
+
+    // Touch device so future downloads see the host write.
+    let _ = device;
+}
+
+/// Convert a quaternion to YXZ Euler (yaw about Y, pitch about X, roll
+/// about Z). Used by the quadrotor pane for a human-readable readout
+/// of the attitude error.
+fn quat_to_rpy(q: MQuat) -> (f64, f64, f64) {
+    // glam (re-exported via molla::math) lives at bevy::math too,
+    // but we go through the molla shim to avoid pulling glam directly.
+    let (yaw, pitch, roll) = q.to_euler(bevy::math::EulerRot::YXZ);
+    (roll, pitch, yaw)
+}
+
 /// Contact example — runs the GPU `ContactSensor` against the
 /// current `Contacts` and stashes the readings. No-op for any other
 /// scene.
@@ -4346,11 +4680,7 @@ fn control_pane(
     mut activity: ResMut<ActivityView>,
     mut lidar_config: ResMut<LidarConfig>,
     sensor_states: (Res<LidarState>, Res<ImuExampleState>, Res<ContactExampleState>),
-    mut arm_state: ResMut<ArmExampleState>,
-    mut gpu_ik_state: ResMut<GpuIkArmState>,
-    mut gpu_np_state: ResMut<GpuNpExampleState>,
-    mut camera_state: ResMut<CameraExampleState>,
-    mut actuator_state: ResMut<ActuatorExampleState>,
+    mut pane_states: PaneSceneStates,
     mut ribbons: RibbonParams,
 ) {
     let (lidar_state, imu_state, contact_state) = (
@@ -4391,6 +4721,7 @@ fn control_pane(
                     | Scene::GpuNarrowPhase
                     | Scene::Camera
                     | Scene::Actuator
+                    | Scene::Quadrotor
             ),
             _ => false,
         },
@@ -4507,6 +4838,7 @@ fn control_pane(
         Scene::GpuNarrowPhase => Some("GPU narrow phase"),
         Scene::Camera => Some("Camera"),
         Scene::Actuator => Some("Actuator (Stage 18)"),
+        Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -4518,16 +4850,26 @@ fn control_pane(
                     Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
                     Scene::Imu => imu_pane(ui, &imu_state),
                     Scene::Contact => contact_pane(ui, &contact_state),
-                    Scene::Arm => arm_pane(ui, &mut arm_state, &sim),
+                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim),
                     Scene::Shapes => shapes_pane(ui, &sim),
-                    Scene::GpuIkArm => gpu_ik_pane(ui, &mut gpu_ik_state, &sim),
+                    Scene::GpuIkArm => {
+                        gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim)
+                    }
                     Scene::GpuNarrowPhase => {
-                        gpu_np_pane(ui, &mut gpu_np_state, accent_color)
+                        gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color)
                     }
-                    Scene::Camera => {
-                        camera_pane(ui, &mut camera_state, anchor, accent_color)
+                    Scene::Camera => camera_pane(
+                        ui,
+                        &mut pane_states.camera,
+                        anchor,
+                        accent_color,
+                    ),
+                    Scene::Actuator => {
+                        actuator_pane(ui, &mut pane_states.actuator)
                     }
-                    Scene::Actuator => actuator_pane(ui, &mut actuator_state),
+                    Scene::Quadrotor => {
+                        quadrotor_pane(ui, &mut pane_states.quad)
+                    }
                     _ => {}
                 });
         }
@@ -4955,6 +5297,68 @@ fn gpu_ik_pane(ui: &mut egui::Ui, state: &mut GpuIkArmState, sim: &Sim) {
          Drag the X/Y/Z sliders to move the EE target; the arm chases \
          in real time. Toggle 'Use GPU IK' to A/B against the CPU \
          solver.",
+    );
+}
+
+/// Body for the right-rail pane in the Quadrotor scene.
+fn quadrotor_pane(ui: &mut egui::Ui, state: &mut QuadrotorState) {
+    ui.add_space(2.0);
+    readout(ui, "Solver", "Featherstone-GPU (Stage 17)");
+    readout(ui, "Mass", &format!("{:.3} kg", state.total_mass));
+    readout(ui, "Arm", &format!("{:.3} m", state.arm_length));
+    ui.separator();
+
+    ui.label("Live state");
+    readout(ui, "  altitude", &format!("{:>6.3} m", state.last_altitude));
+    readout(
+        ui,
+        "  roll",
+        &format!("{:>6.2}°", state.last_attitude[0].to_degrees()),
+    );
+    readout(
+        ui,
+        "  pitch",
+        &format!("{:>6.2}°", state.last_attitude[1].to_degrees()),
+    );
+    readout(
+        ui,
+        "  yaw",
+        &format!("{:>6.2}°", state.last_attitude[2].to_degrees()),
+    );
+    ui.separator();
+
+    ui.label("Per-rotor thrust (N)");
+    readout(ui, "  rotor +X", &format!("{:>6.2}", state.last_thrusts[0]));
+    readout(ui, "  rotor -X", &format!("{:>6.2}", state.last_thrusts[1]));
+    readout(ui, "  rotor +Z", &format!("{:>6.2}", state.last_thrusts[2]));
+    readout(ui, "  rotor -Z", &format!("{:>6.2}", state.last_thrusts[3]));
+    let total: f32 = state.last_thrusts.iter().sum();
+    readout(ui, "  Σ thrust", &format!("{:>6.2}", total));
+    ui.separator();
+
+    ui.label("Target altitude (m)");
+    ui.add(
+        egui::Slider::new(&mut state.target_altitude, 0.2..=4.0)
+            .text("z_t")
+            .step_by(0.05),
+    );
+    ui.separator();
+
+    ui.label("Altitude PD");
+    ui.add(egui::Slider::new(&mut state.altitude_kp, 0.0..=120.0).text("kp"));
+    ui.add(egui::Slider::new(&mut state.altitude_kd, 0.0..=40.0).text("kd"));
+    ui.separator();
+
+    ui.label("Attitude PD");
+    ui.add(egui::Slider::new(&mut state.attitude_kp, 0.0..=20.0).text("kp"));
+    ui.add(egui::Slider::new(&mut state.attitude_kd, 0.0..=4.0).text("kd"));
+
+    ui.add_space(4.0);
+    ui.small(
+        "FREE root + 4 fixed-rotor bodies. Per-rotor thrust commanded \
+         via state.body_f world-frame +Y forces; Featherstone GPU \
+         solves the 6-DOF base + 4 rigid attachments. Yaw is free \
+         (single-axis thrust can't generate yaw torque).",
     );
 }
 
