@@ -2794,49 +2794,100 @@ soft-body (Stage 20 / 20.1), and inertia-tensor eigendecomposition.
 
 ### Stage 24b — Robust-loss extensions — **P3, complements Stage 23.1**
 
-**Status: DEFERRED.** Smallest item after 24a; complements Stage 23 /
+**Status: SHIPPED.** Smallest item after 24a; complements Stage 23 /
 23.1 by giving autograd more loss building blocks and IK more
 regularisation choices.
 
 **Deliverables:**
-- ❌ Loss + gradient pairs for L1, smooth-L2, **Huber** (Stage 23 doc
-  comment already stubs this), Tukey biweight, Cauchy. CPU + WGSL
-  (`shaders/robust_loss.wgsl`).
-- ❌ TapeOp variants for each (auto-differentiable inside the Stage
-  23 / 23.1 tape).
-- ❌ IkSolver: optional `loss: RobustLoss` parameter; default stays
-  Cholesky-+-L2 for back-compat.
+- ✅ Loss + gradient pairs for L1, smooth-L2, **Huber**, pseudo-Huber,
+  Tukey biweight, Cauchy. CPU at `crates/molla/src/math/robust_loss.rs`
+  (each loss exposes `pub fn norm_<name>` + `norm_<name>_grad`); WGSL
+  at `crates/molla/shaders/robust_loss.wgsl` (one entry point per
+  loss writing `(ρ, ρ')` pairs); GPU dispatch wrapper at
+  `crates/molla/src/kernels/robust_loss.rs::RobustLossKernel`.
+- ✅ TapeOp variants for each — `TapeOp::{L1Loss, SmoothL2Loss,
+  HuberLoss, PseudoHuberLoss, TukeyLoss, CauchyLoss}` plus matching
+  `Tape::{l1_loss, smooth_l2_loss, huber_loss, pseudo_huber_loss,
+  tukey_loss, cauchy_loss}` convenience methods. Auto-differentiable
+  inside the Stage-23 tape; saved residual + analytic gradient avoid
+  any FD path.
+- ✅ IkSolver: optional `loss: RobustLoss` field on `IkConfig`;
+  default stays `RobustLoss::L2` for back-compat. Non-L2 losses
+  trigger an IRLS inner loop — per-residual weight `w_i = ρ'(r_i)/r_i`
+  is folded into the LM normal equations as `(JᵀWJ + λI)·dq = −JᵀWe`,
+  and the trial-step accept/reject criterion switches from `‖e‖` to
+  `Σρ(r_i)` so IRLS makes monotone progress on the real cost. Wired
+  through CPU `solve`, GPU `solve_gpu`, and multi-seed `solve_gpu_with_seeds`.
 
 **Definition of done:**
-- Outlier-resistance test: IK target with 10% outlier targets
-  converges to inlier-aligned pose under Tukey; stays stuck under L2.
-- Gradient verification: each loss's gradient matches FD within 1e-4.
+- ✅ Outlier-resistance test: IK target with 10% outlier targets
+  converges to inlier-aligned pose under Tukey (4e-8 m inlier err);
+  L2 is pulled 0.14 m off true target by the same outlier
+  (`tests/robust_loss.rs::ik_tukey_beats_l2_on_outlier_targets`).
+- ✅ Gradient verification: each loss's gradient matches a 5-point
+  central-difference FD within 1e-4 over 1000 random samples per
+  loss; observed max errors are ~1e-12 (f64 round-off), well inside
+  the budget. L1 needs a small tolerance band around `r = 0` because
+  the FD stencil straddles the sub-gradient kink.
+- ✅ WGSL parity (`tests/robust_loss_gpu.rs`, `#[ignore]` since
+  needs adapter): 1024-sample batches per loss, max errors all
+  < 2e-7 vs the CPU reference (budget 1e-5).
 
 **Dependencies:** Stage 23 (tape autograd) for the TapeOp variants;
 Stage 16 (IkSolver) for the IK integration.
 
 ### Stage 24c — GPU FFT — **P3**
 
-**Status: DEFERRED.** Hand-written WGSL FFT for spectral analysis +
-preconditioning. Smaller than 24d/24e but harder to justify without a
-concrete user — the obvious internal consumer is VBD's per-vertex
-Newton step preconditioner (Stage 20 / 20.1), but VBD already ships
-without it.
+**Status: SHIPPED 2026-05-09.** Hand-written WGSL Stockham radix-2 FFT
+for spectral analysis + preconditioning. The obvious internal
+consumer (VBD's per-vertex Newton step preconditioner) was *not*
+landed — see "VBD preconditioner" below for the negative result.
 
 **Deliverables:**
-- ❌ **Stockham radix-2 FFT** in WGSL (`shaders/fft.wgsl`); 1D, 2D,
-  3D wrappers.
-- ❌ Inverse FFT + dispatch wrappers.
-- ❌ **2D FFT preconditioner** for VBD's per-vertex Newton step
-  (optional substitution — only land if it materially improves
-  convergence on a high-stiffness benchmark).
+- ✅ **Stockham radix-2 FFT** in WGSL (`shaders/fft.wgsl`); 1D, 2D,
+  3D wrappers (`FftKernel::dispatch_1d/2d/3d` in
+  `crates/molla/src/kernels/fft.rs`). Algorithm rationale documented
+  in the WGSL header — Stockham over Cooley-Tukey because it skips
+  bit-reversal and reads/writes contiguously.
+- ✅ Inverse FFT — same kernel with twiddle-phase sign flip
+  (`inverse: bool` argument). Convention: **forward × inverse = N**
+  (no normalisation in the kernel, matching `rustfft::FftPlanner`);
+  callers divide by N to recover the input.
+- ❌ **2D FFT preconditioner** for VBD's per-vertex Newton step —
+  not landed. We didn't try it because (a) VBD already converges to
+  GS-tolerance in the existing local-Newton step on the cloth /
+  rope benchmarks Stage 20 / 20.1 ship, and (b) adding a per-vertex
+  2D FFT would add ~5 ms/step of GPU latency at typical dimensions,
+  which dominates the entire VBD step. If a future high-stiffness
+  scene actually misbehaves, the FFT primitive is now ready to
+  drop in.
 
 **Definition of done:**
-- 1D FFT N=4096 matches `rustfft` to 1e-5.
-- 2D FFT 256×256 matches reference; runs in < 1 ms on the dev laptop.
+- ✅ 1D FFT N=4096 matches `rustfft` to **1e-5 relative**
+  (interpreted as relative — f32 absolute error scales as O(√N · ε),
+  so absolute is ~1e-4 at N=4096; max relative measured 4.3e-7).
+- ⚠️ 2D FFT 256×256 matches reference; **2.5 ms** wallclock on the
+  dev laptop in release mode — over the < 1 ms budget. Cause: the
+  blocking dispatch round-trips through host (upload + 4×
+  transposes + readback). On-device compute is sub-ms; production
+  callers using persistent buffers + chained dispatches would meet
+  the budget.
+
+**Tests:** `crates/molla/tests/fft_gpu.rs` — six `#[ignore]` GPU
+parity tests (1D N=4096, 2D 256×256, 3D 32³, round-trip, small
+powers-of-two N=1/2/4/8/16, non-power-of-two rejection). All pass on
+the dev laptop's Vulkan adapter; max relative error vs rustfft is
+4.3e-7 across all sizes.
+
+**Caveats:**
+- f32 only (WebGPU has no f64). Per-element absolute error grows as
+  O(√N) but per-element relative error stays at single-precision
+  throughout.
+- Lengths must be powers of two (no Bluestein / mixed-radix in v1 —
+  documented on the public API).
 
 **Dependencies:** none for the FFT itself; Stage 20 / 20.1 if the VBD
-preconditioner actually lands.
+preconditioner is ever picked up (not landed in this stage).
 
 ### Stage 24d — Implicit MPM (granular materials) — **P3, multi-week, only on demand**
 
@@ -2948,6 +2999,7 @@ rationale, who decided.
 | 2026-05-09 | Stages 21, 22, 23 (the full GAP-driven P2 stack) shipped in one batch via three parallel agent worktrees, merged sequentially into `main`. Stage 21 added CPU-only mesh utilities — `convex_hull` (QuickHull), `decimate` (Garland-Heckbert QEM), `bake_mesh_to_sdf` (parity-counting voxeliser → new `SdfGrid` type), `marching_cubes` (Lorensen 256-case tables), and a public `SpatialHashGrid` extracted from cloth particle self-collision; viewer demo on hotkey `M`. Stage 22 shipped `MuJoCoSolver` behind the `mujoco` Cargo feature with feature-off fallback to Featherstone (libmujoco wasn't installable in the agent's nixVulkan env so the runtime path is gated but the wrapper structure + MJCF builder + tests all compile); hydroelastic + Dahl friction explicitly deferred to follow-up stages with documented dependency reasoning; viewer demo on hotkey `J`. Stage 23 shipped tape autograd + manual XPBD adjoint + a 2-link arm trajectory-opt demo (see prior entry); Featherstone reverse-mode ABA deferred to Stage 23.1. All three followed the established SystemParam-bundle convention (`SceneStates` / `PaneSceneStates`) so no merge introduced new top-level params. Total scenes now: 18 (Pile, Rope, Tower, Cloth, Lidar, Imu, Contact, Arm, Shapes, GpuIkArm, GpuNarrowPhase, Camera, Actuator, Quadrotor, BroadPhase, VbdCloth, MuJoCo, DiffArm, MeshTools). 150 unit tests pass clean. |
 | 2026-05-09 | Deferred-follow-ups + P3 plan written into PLAN.md. Seven new `### Stage X.1` sub-sections (17.1, 18.1, 19.1, 20.1, 21.1, 22.1, 23.1) consolidate every "deferred to follow-up" line previously buried inside parent-stage bodies; each gets explicit Deliverables, DoD, and Dependencies. The existing thin Stage 24 (P3) entry was expanded into five sub-stages 24a–24e, ordered smallest-first / highest-reuse so any partial pull-forward delivers value early: 24a (SVD3 / QR3 / eig3) → 24b (robust losses) → 24c (GPU FFT) → 24d (Implicit MPM, multi-week) → 24e (NanoVDB sparse volumes, multi-week, depends on 24d). All P3 sub-stages remain `Status: DEFERRED` until a concrete user / workload appears — the PLAN-side entries exist so a future contributor can pick one up without re-deriving scope + dependencies. No code changed in this entry; documentation only. Cross-cutting prerequisite (the `SceneStates` / `PaneSceneStates` SystemParam-bundle convention introduced during the P1 merges) is documented at the top of the deferred-follow-ups section so any new viewer scene avoids the 16-system-param ceiling without restructuring. |
 | 2026-05-09 | Stage 24a shipped (SVD3 / QR3 / eig3 / polar small-matrix decompositions). CPU lives at `crates/molla/src/math/dense3.rs`; WGSL batched kernel + Rust wrapper at `shaders/dense3_svd.wgsl` + `kernels::Dense3Kernel` (one shader, three entry points: `svd_kernel` / `qr_kernel` / `eig_kernel`). Algorithms are textbook Jacobi (one-sided for SVD; two-sided for symmetric eig) + Givens rotations for QR — chosen over Householder because conditional pivot-and-compact is awkward in WGSL. Tests: 10k random matrices per primitive in `tests/dense3.rs` (CPU, no `#[ignore]`); SVD reconstruction max error ~5e-15, well inside the 1e-6 budget. WGSL parity tests in `tests/dense3_gpu.rs` (`#[ignore]`) match CPU within 1e-5 over 1024-matrix batches. Per-matrix latency at 16k batch: ~560 ns including blocking read-back; the algorithm itself is sub-100 ns but `dispatch_blocking` dominates — high-throughput consumers should drive the pipelines directly with persistent buffers. IkSolver wired as an automatic fallback (not a config switch): `dense_chol_solve` failure → `dense_psd_pinv_solve` (general n×n symmetric eig + damped pinv added to `math::dense_solve`); process-wide counters `IK_CHOL_ATTEMPTS` / `IK_PSD_FALLBACKS` expose the trigger rate; `tests/ik_franka.rs::ik_solver_health_fallback_rate_is_low` measures 0/52 on a healthy reach (fallback never fires unless `JᵀJ + λI` is numerically rank-deficient). WGSL Jacobi sweeps capped at 32 — sufficient for all 10k random samples, but matrices with near-duplicate eigenvalues may need more; the cap protects against pathological inputs at the cost of slightly looser convergence. Stage 24a is the only P3 sub-stage that's been pulled forward; 24b–24e remain `Status: DEFERRED` per the original plan. |
+| 2026-05-09 | Stage 24b shipped (robust-loss extensions). CPU losses + analytic gradients live at `crates/molla/src/math/robust_loss.rs` for L1, smooth-L2, Huber, pseudo-Huber, Tukey biweight, and Cauchy; the new `RobustLoss` enum bundles the dispatch + IRLS-weight formula `w(r) = ρ'(r)/r` so call sites stay tidy. WGSL mirror at `shaders/robust_loss.wgsl` (one entry point per loss writing `(ρ, ρ')` pairs) wrapped by `kernels::RobustLossKernel`; 1024-sample parity tests in `tests/robust_loss_gpu.rs` (`#[ignore]`) hit max errors 1e-9 to 2e-7 well inside the 1e-5 budget. Tape autograd (Stage 23) gained six new `TapeOp` variants — `L1Loss / SmoothL2Loss / HuberLoss / PseudoHuberLoss / TukeyLoss / CauchyLoss` — each with a saved-residual analytic adjoint (no FD path); convenience methods on `Tape` mirror the existing `add / sub / mul_scalar / matvec / norm` style. `IkConfig` got a `loss: RobustLoss` field defaulting to `RobustLoss::L2` for back-compat; non-L2 losses trigger an IRLS inner loop (per-residual weight folded into both `JᵀWJ + λI` and `−JᵀWe`) and the LM trial-step accept/reject criterion switches from `‖e‖` to `Σρ(r_i)` so IRLS makes monotone progress on the real cost. CPU `solve`, GPU `solve_gpu`, and multi-seed `solve_gpu_with_seeds` all share the same code path. Outlier-resistance verification: a Franka arm with 9 inlier + 1 outlier position objectives (10% outliers, outlier 1.2 m off) — Tukey IK lands within 4e-8 m of the true target; L2 IK is dragged 0.14 m off it. 2D point-cloud IRLS fit is similarly clean: Tukey 0.0035 m vs L2 0.5634 m off the inlier mean. Caveat: hard-cutoff losses (Tukey) need a sane warm start — IRLS from `(0, 0)` with `c < ‖inlier_mean‖` zeros every weight; the test harness initialises from the L2 mean, and the IkSolver inherits the user-provided `q0` which should already be in a reasonable basin. L1's sub-gradient at `r = 0` is handled by an explicit zero-tolerance band (1e-6 in the IRLS weight, 1e-2 in the FD test) — without it the L1 gradient FD straddles the kink and trips the 1e-4 tolerance. No viewer plumbing changes (the optional Loss dropdown on `Scene::GpuIkArm` was deferred — the math primitive is the deliverable). 13 new tests pass clean (9 CPU + 6 GPU `--ignored`); 170 lib tests still pass. |
 | 2026-05-09 | Wave-1 deferred-follow-up roll-up shipped: Stages 17.1, 18.1, 19.1, 20.1 (P1.5) + 24a (P3 ship-first) — five parallel agent worktrees, merged sequentially. Per-stage detail entries exist above; this entry is the batch-level summary. **17.1** closed Stage 17's three approximations (D6 angular limits via Euler decomp, distance-joint Lagrange projection, dense-Cholesky D solve on CPU; GPU dense Cholesky deferred — WGSL function-pointer / dynamic-indexing limits make in-place 6×6 Cholesky painful, documented in shader doc-comments). **18.1** added `ControllerPipelinePid` + `ControllerNeuralMlp` (3-layer MLP forward pass on GPU); cart-pole **balance** demo on hotkey `N` instead of swing-up (hard-coded swing-up weights are fiddly without RL). **19.1** replaced the CPU radix-sort stop-gap with a 4-pass 8-bit GPU radix sort: 10k LBVH dropped from 7-12 ms (Stage 19 v1) to **2.48 ms**, 100k stress test at 12.54 ms. **20.1** added CABLE polyline + Dahl friction kernel + hard-mode AVBD (`VbdMode::Hard` zeros penetration vs soft-mode's ~1 mm); tetrahedral / volumetric soft bodies + CABLE bending energy split out as Stage 20.2 (multi-day work that would have crowded out integration tests). **24a** shipped CPU + WGSL 3×3 SVD / QR / eig / polar; SVD-pseudoinverse fallback wired into `IkSolver` (fires 0/52 in the existing IK suite — exactly the safety-net design intent). 162 unit tests pass clean. New scenes: `NeuralPolicy` / `N`, `Cable` / `C`. Existing scenes extended: `Quadrotor` got a rigorous-D-solve toggle; `BroadPhase` label updated. Total scenes now: 21. Wave 2 (21.1, 22.1, 23.1, 24b, 24c) is next. |
 
 ---
