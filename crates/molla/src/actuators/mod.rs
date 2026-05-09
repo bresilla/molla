@@ -5,18 +5,18 @@
 //! in WGSL (`shaders/actuator_*.wgsl`); these orchestrators own the
 //! per-actuator parameter buffers and the dispatch wrapper.
 //!
-//! Stage 9 deliverables:
+//! Stage 9 deliverables (still here for backward compat):
 //! - [`ControllerPd`] — stateless proportional-derivative controller
-//!   with effort cap. Mirrors Newton's `ControllerPD` minus the
-//!   feed-forward / const-effort plumbing (added back when an
-//!   example needs them).
+//!   with effort cap baked in. Mirrors Newton's `ControllerPD` minus
+//!   the feed-forward / const-effort plumbing.
 //! - [`ControllerPid`] — adds an integral term with anti-windup.
-//!   Stateful: owns its own `integral` buffer.
-//! - **TODO**: clamping (max-effort lives in PD/PID for now;
-//!   velocity-saturation + DC-motor curves arrive when an example
-//!   needs them), **delay** (ring buffer for sim-to-real transport
-//!   lag), composable `Actuator` (delay → controller → clamping)
-//!   matching Newton's full pipeline.
+//!
+//! Stage 18 deliverables (composable pipeline):
+//! - [`Delay`] — per-DOF circular-buffer command-input lag.
+//! - [`ClampingMaxEffort`], [`ClampingDcMotor`],
+//!   [`ClampingPositionBased`] — actuator-physics clamps.
+//! - [`Actuator`] — orchestrator that wires
+//!   `Delay → Controller → Clamping` per substep.
 //!
 //! # Single-DOF assumption
 //!
@@ -29,11 +29,30 @@
 //! cases use an external orientation-error controller.
 
 #[cfg(feature = "gpu")]
+pub mod actuator;
+#[cfg(feature = "gpu")]
+pub mod clamping;
+#[cfg(feature = "gpu")]
 pub mod controller_pd;
 #[cfg(feature = "gpu")]
 pub mod controller_pid;
+#[cfg(feature = "gpu")]
+pub mod controller_pipeline_pd;
+#[cfg(feature = "gpu")]
+pub mod delay;
 
+#[cfg(feature = "gpu")]
+pub use actuator::{Actuator, ControllerStage};
+#[cfg(feature = "gpu")]
+pub use clamping::{
+    Clamping, ClampingDcMotor, ClampingDcMotorConfig, ClampingMaxEffort,
+    ClampingMaxEffortConfig, ClampingPositionBased, ClampingStage,
+};
 #[cfg(feature = "gpu")]
 pub use controller_pd::{ControllerPd, ControllerPdConfig};
 #[cfg(feature = "gpu")]
 pub use controller_pid::{ControllerPid, ControllerPidConfig};
+#[cfg(feature = "gpu")]
+pub use controller_pipeline_pd::{ControllerPipelinePd, ControllerPipelinePdConfig};
+#[cfg(feature = "gpu")]
+pub use delay::{Delay, DelayConfig};

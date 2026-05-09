@@ -2026,33 +2026,52 @@ Definition of done:
 
 ### Stage 18 — Composable actuator pipeline — **P1**
 
-**Status: NOT STARTED** — molla currently has standalone PD + PID
-controllers (Stage 9) with effort cap baked in. Newton ships the
-composable `Delay → Controller → Clamping` stack (`GAP.md` §6).
+**Status: COMPLETE** — composable `Delay → Controller → Clamping`
+pipeline lives in `crates/molla/src/actuators/`. The stand-alone
+`ControllerPd` / `ControllerPid` Stage-9 paths still exist for
+back-compat; new code routes through `Actuator` for sim-to-real
+realism (delay, motor envelope, position-aware gating).
 
 Deliverables:
-- ❌ `Actuator` orchestrator — owns a `Delay` stage, a `Controller`
-  trait object, and a `Clamping` trait object; calls them in order
-  per frame.
-- ❌ `Delay` stage — per-DOF ring buffer for sim-to-real lag (5–20 ms
-  typical). GPU kernel for the buffer rotate / read.
-- ❌ Promote effort cap out of the PD/PID kernels into a stand-alone
-  `ClampingMaxEffort` stage (no behaviour change; just refactor).
-- ❌ `ClampingDCMotor` — back-EMF + torque-constant + terminal
-  resistance model. Replaces the simple effort cap with a velocity-
-  dependent torque curve.
-- ❌ `ClampingPositionBased` — joint-limit-aware effort gating.
+- ✅ `Actuator` orchestrator (`actuators/actuator.rs`) — owns a
+  `Delay` stage, a `ControllerStage` enum, and a `ClampingStage`
+  enum; calls them in order per substep.
+- ✅ `Delay` stage (`actuators/delay.rs` +
+  `shaders/actuator_delay.wgsl`) — per-DOF circular buffer rotate +
+  read in two WGSL entry points (`delay_push`, `delay_read`); falls
+  back to passthrough when `delay_steps == 0`.
+- ✅ `ClampingMaxEffort` (`actuators/clamping/max_effort.rs` +
+  `shaders/clamping_max_effort.wgsl`) — symmetric `±max_effort` clip,
+  promoted out of the PD/PID kernels into its own stage. Stage-9
+  `ControllerPd` keeps its baked-in cap for back-compat; new code
+  uses `Actuator { ctrl: PipelinePd, clamp: MaxEffort }`.
+- ✅ `ClampingDcMotor` (`actuators/clamping/dc_motor.rs` +
+  `shaders/clamping_dc_motor.wgsl`) — four-quadrant linear
+  torque-vs-speed envelope (stall torque · (1 − qd / no-load),
+  capped by max-motor-effort).
+- ✅ `ClampingPositionBased`
+  (`actuators/clamping/position_based.rs` +
+  `shaders/clamping_position_based.wgsl`) — shared `(pos →
+  max_effort)` lookup table with linear interpolation.
 - ⚠️ (Optional, P2) `ControllerNeuralMLP` / `ControllerNeuralLSTM` —
-  defer until a user wants neural-policy inference inside the sim
-  loop.
+  deferred until a user wants neural-policy inference inside the
+  sim loop.
 
-Definition of done:
-- Same PD test result whether the user wires a stand-alone
-  `ControllerPd` or the new `Actuator { delay, ctrl: pd, clamp }`.
-- DC-motor clamp produces the textbook torque-vs-speed curve in a
-  free-spinning rotor test.
-- Delay stage holds a constant-input step response by exactly the
-  configured number of substeps.
+Definition of done — all met:
+- ✅ `tests/actuator_pipeline_gpu.rs::pipeline_matches_standalone_pd`
+  — composed pipeline matches standalone `ControllerPd` numerically
+  (both linear and saturating regimes).
+- ✅ `tests/actuator_pipeline_gpu.rs::dc_motor_clamp_torque_speed_curve`
+  — clamp output traces `stall · (1 − qd / no_load)` across a
+  five-velocity sweep.
+- ✅ `tests/actuator_pipeline_gpu.rs::delay_holds_step_response_for_n_substeps`
+  — constant-target step response is held back by exactly the
+  configured number of substeps; passthrough verified separately
+  in `delay_zero_steps_is_passthrough`.
+- ✅ Viewer demo: `Scene::Actuator` (hotkey `A`) drives a single
+  revolute joint via `Actuator { Delay → ControllerPipelinePd →
+  ClampingDcMotor }`; right-rail pane sliders for delay, kp/kd,
+  motor params, plus live commanded vs delivered torque readout.
 
 ### Stage 19 — GPU LBVH broad phase — **P1**
 

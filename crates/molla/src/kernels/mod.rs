@@ -1,9 +1,19 @@
 //! WGSL compute kernels and their Rust dispatch wrappers.
 
 #[cfg(feature = "gpu")]
+mod actuator_delay;
+#[cfg(feature = "gpu")]
 mod actuator_pd;
 #[cfg(feature = "gpu")]
 mod actuator_pid;
+#[cfg(feature = "gpu")]
+mod actuator_pipeline_pd;
+#[cfg(feature = "gpu")]
+mod clamping_dc_motor;
+#[cfg(feature = "gpu")]
+mod clamping_max_effort;
+#[cfg(feature = "gpu")]
+mod clamping_position_based;
 #[cfg(feature = "gpu")]
 mod contact_sensor;
 #[cfg(feature = "gpu")]
@@ -38,9 +48,19 @@ mod xpbd_equality;
 mod xpbd_particles;
 
 #[cfg(feature = "gpu")]
+pub use actuator_delay::ActuatorDelayKernel;
+#[cfg(feature = "gpu")]
 pub use actuator_pd::ActuatorPdKernel;
 #[cfg(feature = "gpu")]
 pub use actuator_pid::ActuatorPidKernel;
+#[cfg(feature = "gpu")]
+pub use actuator_pipeline_pd::ActuatorPipelinePdKernel;
+#[cfg(feature = "gpu")]
+pub use clamping_dc_motor::ClampingDcMotorKernel;
+#[cfg(feature = "gpu")]
+pub use clamping_max_effort::ClampingMaxEffortKernel;
+#[cfg(feature = "gpu")]
+pub use clamping_position_based::ClampingPositionBasedKernel;
 #[cfg(feature = "gpu")]
 pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
