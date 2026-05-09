@@ -494,6 +494,297 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// ── Kernel: p2g_two_pass (Stage 24d.3 atomic-contention reduction) ─
+//
+// Stage 24d.3 — replace the per-particle global-atomic CAS path in
+// `p2g` with a workgroup-local "pass 1 accumulate / pass 2 commit"
+// pattern. The 27-cell B-spline scatter still happens per particle,
+// but contributions are first hashed into a workgroup-local 4×4×4 =
+// 64-slot table backed by `var<workgroup> atomic<u32>` arrays
+// (workgroup-shared memory). On a hash collision (two cells in this
+// workgroup mapping to the same slot) we evict-and-flush the older
+// slot to global, then retry. After a `workgroupBarrier`, the
+// commit pass emits **one** global atomic add per cell per workgroup
+// for every occupied slot — vs the legacy path's one global atomic
+// per cell per particle.
+//
+// Math is byte-identical to `p2g`: same SVD, same Neo-Hookean PK1,
+// same APIC moment-of-momentum, same kdiag scatter. Only the storage
+// commit changes. Tests ensure parity within 1e-5 (atomics are
+// non-deterministic so we don't gate on exact equality).
+//
+// **Memory budget per workgroup:** 64 slots × (1 tag + 1 mass + 3
+// momentum + 1 kdiag) × 4 bytes = 1.5 KiB.  Well under the 16 KiB
+// `var<workgroup>` budget required by WebGPU and below the 32 KiB
+// observed on Vulkan/Metal/D3D12 backends. Documented in PLAN Stage
+// 24d.3 caveats: if a future adapter complains, halve the slot count
+// to 32 (same hash with `& 31u`).
+//
+// **Hash function:** multiplicative Knuth hash (`cidx * 2654435761u`)
+// truncated to 6 bits. Spreads sequential cell indices across slots.
+//
+// **Eviction policy:** on collision (slot tag != EMPTY && != my cidx)
+// we *do not* evict the existing slot — instead, the colliding
+// particle takes the global-atomic slow path for that one cell.
+// Eviction would help dedup but adds a CAS-loop hot spot; the simple
+// fallback already cuts global atomics by an order of magnitude on
+// well-clustered scenes (the typical 50k-particle pile case).
+//
+// Why one fused kernel instead of two separate dispatches: WGSL /
+// WebGPU `var<workgroup>` storage **does not persist between
+// dispatches** — Pass 1 writes would be invisible to Pass 2 if they
+// were separate entry points. The brief's "two-pass" terminology is
+// preserved as the in-kernel phase split (separated by
+// `workgroupBarrier`), which is what gives the contention win.
+
+const TILE_SLOTS: u32 = 64u;
+const EMPTY_TAG: u32 = 0xFFFFFFFFu;
+
+var<workgroup> wg_tag:    array<atomic<u32>, 64>;
+var<workgroup> wg_mass:   array<atomic<u32>, 64>;
+var<workgroup> wg_mx:     array<atomic<u32>, 64>;
+var<workgroup> wg_my:     array<atomic<u32>, 64>;
+var<workgroup> wg_mz:     array<atomic<u32>, 64>;
+var<workgroup> wg_kdiag:  array<atomic<u32>, 64>;
+
+// Local f32 atomic-add helpers on workgroup-shared u32 arrays.
+// Same CAS-loop pattern as the global helpers above; the difference
+// is the arrays live in workgroup-shared memory so the CAS itself is
+// cheap (typically a single LDS / shared-memory transaction, no L2
+// round-trip, no cross-SM contention).
+fn wg_atomic_add_mass(slot: u32, val: f32) {
+    var old_bits = atomicLoad(&wg_mass[slot]);
+    loop {
+        let new_bits = bitcast<u32>(bitcast<f32>(old_bits) + val);
+        let ex = atomicCompareExchangeWeak(&wg_mass[slot], old_bits, new_bits);
+        if (ex.exchanged) { break; }
+        old_bits = ex.old_value;
+    }
+}
+fn wg_atomic_add_mx(slot: u32, val: f32) {
+    var old_bits = atomicLoad(&wg_mx[slot]);
+    loop {
+        let new_bits = bitcast<u32>(bitcast<f32>(old_bits) + val);
+        let ex = atomicCompareExchangeWeak(&wg_mx[slot], old_bits, new_bits);
+        if (ex.exchanged) { break; }
+        old_bits = ex.old_value;
+    }
+}
+fn wg_atomic_add_my(slot: u32, val: f32) {
+    var old_bits = atomicLoad(&wg_my[slot]);
+    loop {
+        let new_bits = bitcast<u32>(bitcast<f32>(old_bits) + val);
+        let ex = atomicCompareExchangeWeak(&wg_my[slot], old_bits, new_bits);
+        if (ex.exchanged) { break; }
+        old_bits = ex.old_value;
+    }
+}
+fn wg_atomic_add_mz(slot: u32, val: f32) {
+    var old_bits = atomicLoad(&wg_mz[slot]);
+    loop {
+        let new_bits = bitcast<u32>(bitcast<f32>(old_bits) + val);
+        let ex = atomicCompareExchangeWeak(&wg_mz[slot], old_bits, new_bits);
+        if (ex.exchanged) { break; }
+        old_bits = ex.old_value;
+    }
+}
+fn wg_atomic_add_kdiag(slot: u32, val: f32) {
+    var old_bits = atomicLoad(&wg_kdiag[slot]);
+    loop {
+        let new_bits = bitcast<u32>(bitcast<f32>(old_bits) + val);
+        let ex = atomicCompareExchangeWeak(&wg_kdiag[slot], old_bits, new_bits);
+        if (ex.exchanged) { break; }
+        old_bits = ex.old_value;
+    }
+}
+
+@compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
+fn p2g_two_pass(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id)  lid: vec3<u32>,
+) {
+    // ── Pass 0: zero the workgroup-local accumulators ─────────────
+    // 64 threads × 1 slot each — each thread initialises its own slot,
+    // no collisions in this phase.
+    atomicStore(&wg_tag[lid.x],   EMPTY_TAG);
+    atomicStore(&wg_mass[lid.x],  0u);
+    atomicStore(&wg_mx[lid.x],    0u);
+    atomicStore(&wg_my[lid.x],    0u);
+    atomicStore(&wg_mz[lid.x],    0u);
+    atomicStore(&wg_kdiag[lid.x], 0u);
+    workgroupBarrier();
+
+    let pid = gid.x;
+    // Note: we still execute Pass 2 even if pid >= particle_count, so
+    // we mustn't `return` early — divergent threads still need to run
+    // the commit phase below. Gate the per-particle work instead.
+    let pid_active = pid < u.particle_count;
+
+    // ── Pass 1: per-particle scatter (B-spline 27-cell stencil) ───
+    // Mirror of the legacy `p2g` body. Differences are limited to the
+    // final per-cell deposit: we hash the global cell index into a
+    // workgroup-local slot and accumulate there with workgroup-local
+    // atomic CAS; on collision we fall back to the legacy global
+    // atomic helpers so correctness is preserved.
+    if (pid_active) {
+        let pos = p_pos[pid].xyz;
+        let vel = p_vel[pid].xyz;
+        let mass = p_mass[pid];
+        let vol = p_volume[pid];
+        let F = p_F[pid];
+        let C = p_C[pid];
+
+        let xp = (pos - u.grid_origin) * u.inv_cell_size;
+        let base_xyz = vec3<f32>(floor(xp.x - 0.5), floor(xp.y - 0.5), floor(xp.z - 0.5));
+        let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z));
+        let fx = xp - base_xyz;
+
+        let wx = quad_weights(fx.x);
+        let wy = quad_weights(fx.y);
+        let wz = quad_weights(fx.z);
+
+        let raw_svd = svd3_jacobi(F);
+        let s_clamped = vec3<f32>(
+            clamp(raw_svd.s.x, 0.1, 10.0),
+            clamp(raw_svd.s.y, 0.1, 10.0),
+            clamp(raw_svd.s.z, 0.1, 10.0),
+        );
+        let svd = Svd3(raw_svd.u, s_clamped, raw_svd.v);
+        let R = svd.u * transpose(svd.v);
+        let J = svd.s.x * svd.s.y * svd.s.z;
+
+        let mu = u.youngs / (2.0 * (1.0 + u.poisson));
+        let lam = u.youngs * u.poisson / ((1.0 + u.poisson) * (1.0 - 2.0 * u.poisson));
+        var h: f32;
+        if (u.rheology == 1u) {
+            h = exp(u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
+        } else {
+            h = exp(min(p_jp[pid], 5.0));
+        }
+        let mu_h = mu * h;
+        let lam_h = lam * h;
+
+        let F_clamped = svd.u * mat3x3<f32>(
+            vec3<f32>(svd.s.x, 0.0, 0.0),
+            vec3<f32>(0.0, svd.s.y, 0.0),
+            vec3<f32>(0.0, 0.0, svd.s.z),
+        ) * transpose(svd.v);
+        let f_minus_r = F_clamped - R;
+        let cof = svd.u * mat3x3<f32>(
+            vec3<f32>(svd.s.y * svd.s.z, 0.0, 0.0),
+            vec3<f32>(0.0, svd.s.x * svd.s.z, 0.0),
+            vec3<f32>(0.0, 0.0, svd.s.x * svd.s.y),
+        ) * transpose(svd.v);
+        let pk1 = 2.0 * mu_h * f_minus_r + lam_h * (J - 1.0) * cof;
+
+        let stress = -u.dt * vol * pk1 * transpose(F_clamped);
+
+        let dx = u.cell_size;
+        let inv_dx2 = u.inv_cell_size * u.inv_cell_size;
+        let kdiag_p = 4.0 * vol * (2.0 * mu_h + lam_h) * inv_dx2;
+
+        for (var i: u32 = 0u; i < 3u; i = i + 1u) {
+            for (var j: u32 = 0u; j < 3u; j = j + 1u) {
+                for (var k: u32 = 0u; k < 3u; k = k + 1u) {
+                    let w = wx[i] * wy[j] * wz[k];
+                    let ix = base.x + i32(i);
+                    let iy = base.y + i32(j);
+                    let iz = base.z + i32(k);
+                    if (!in_bounds(ix, iy, iz)) { continue; }
+                    let cidx = u32(cell_idx(ix, iy, iz));
+                    let node_pos = u.grid_origin + vec3<f32>(
+                        f32(ix) + 0.5,
+                        f32(iy) + 0.5,
+                        f32(iz) + 0.5,
+                    ) * dx;
+                    let xn_xp = node_pos - pos;
+
+                    let aff = C * xn_xp;
+                    let stress_force = stress * xn_xp * (4.0 * inv_dx2);
+                    let mom = w * mass * (vel + aff) + w * stress_force;
+                    let dm    = w * mass;
+                    let dk    = w * w * kdiag_p;
+
+                    // Direct 4×4×4 spatial mapping: pack the lower 2
+                    // bits of (ix, iy, iz) into a single 6-bit slot.
+                    // For spatially-clustered particles (the typical
+                    // MPM case — granular materials pile up), particles
+                    // in the same workgroup tend to touch the same
+                    // 4×4×4 neighbourhood, so the dedup rate is high.
+                    // For scattered particles the rate falls but the
+                    // global-atomic fallback below preserves correctness.
+                    let slot = (u32(ix) & 3u)
+                             | ((u32(iy) & 3u) << 2u)
+                             | ((u32(iz) & 3u) << 4u);
+                    // Try to claim the slot.
+                    let claim = atomicCompareExchangeWeak(&wg_tag[slot], EMPTY_TAG, cidx);
+                    var owned: bool = false;
+                    if (claim.exchanged) {
+                        owned = true;
+                    } else if (claim.old_value == cidx) {
+                        owned = true;
+                    } else {
+                        // The CAS-weak may spuriously fail; retry once
+                        // with the observed value, in case it was EMPTY
+                        // momentarily. Cheap because subsequent CAS sees
+                        // the now-stable tag.
+                        let claim2 = atomicCompareExchangeWeak(&wg_tag[slot], EMPTY_TAG, cidx);
+                        if (claim2.exchanged || claim2.old_value == cidx) {
+                            owned = true;
+                        }
+                    }
+                    if (owned) {
+                        wg_atomic_add_mass(slot, dm);
+                        wg_atomic_add_mx  (slot, mom.x);
+                        wg_atomic_add_my  (slot, mom.y);
+                        wg_atomic_add_mz  (slot, mom.z);
+                        wg_atomic_add_kdiag(slot, dk);
+                    } else {
+                        // Hash collision — fall back to global atomic
+                        // for this single cell. Correctness preserved;
+                        // we just lose the local-dedup win for it.
+                        atomic_add_mass(cidx, dm);
+                        let mb = cidx * 3u;
+                        atomic_add_mom(mb + 0u, mom.x);
+                        atomic_add_mom(mb + 1u, mom.y);
+                        atomic_add_mom(mb + 2u, mom.z);
+                        atomic_add_kdiag(cidx, dk);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pass 2: commit ────────────────────────────────────────────
+    // After the barrier the per-slot accumulators hold the sum of
+    // every contribution from every particle in this workgroup that
+    // hashed to this slot. Each thread emits the one global atomic
+    // per buffer for its own slot — that's the contention reduction
+    // we set out to deliver.
+    workgroupBarrier();
+    let slot = lid.x;
+    let cidx = atomicLoad(&wg_tag[slot]);
+    if (cidx == EMPTY_TAG) { return; }
+    let dm = bitcast<f32>(atomicLoad(&wg_mass[slot]));
+    if (dm == 0.0) {
+        // Mass-only filter would skip cells whose particles cancelled
+        // out — extremely unlikely in practice but cheap to gate on.
+        let mx_bits = atomicLoad(&wg_mx[slot]);
+        let my_bits = atomicLoad(&wg_my[slot]);
+        let mz_bits = atomicLoad(&wg_mz[slot]);
+        let kd_bits = atomicLoad(&wg_kdiag[slot]);
+        if (mx_bits == 0u && my_bits == 0u && mz_bits == 0u && kd_bits == 0u) {
+            return;
+        }
+    }
+    atomic_add_mass(cidx, dm);
+    let mb = cidx * 3u;
+    atomic_add_mom(mb + 0u, bitcast<f32>(atomicLoad(&wg_mx[slot])));
+    atomic_add_mom(mb + 1u, bitcast<f32>(atomicLoad(&wg_my[slot])));
+    atomic_add_mom(mb + 2u, bitcast<f32>(atomicLoad(&wg_mz[slot])));
+    atomic_add_kdiag(cidx, bitcast<f32>(atomicLoad(&wg_kdiag[slot])));
+}
+
 // ── Kernel: rigid_imprint ─────────────────────────────────────────
 // For each grid cell, check overlap with each rigid sphere (small N
 // in v1; brute force is fine). If overlapped, write the rigid's

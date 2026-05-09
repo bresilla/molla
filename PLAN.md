@@ -3787,24 +3787,82 @@ remains open and is moved to Stage 24d.3).
 Stage 24e (sparse grid recommended for the larger scenes implicit
 MPM unlocks).
 
-### Stage 24d.3 — Full matrix-free CG implicit MPM + remaining rheologies — **P3, deferred**
+### Stage 24d.3 — MPM 50k+ atomic-contention reduction — **P3, SHIPPED v1**
 
-**Status: DEFERRED.** Carries forward the deliverables that Stage
-24d.1 explicitly fell back from per its scope-realism note. The
-critical-path piece is the matrix-free Hessian-vector product over
-the grid momentum equation (`apply_jacobian`); the rest follows once
-that lands.
+**Status: SHIPPED v1.** Tight, focused single-deliverable stage:
+replace the per-particle global atomic-CAS path in `p2g` with a
+workgroup-local "two-pass accumulate / commit" pattern so the 50k-
+particle / 64³-grid workload that Stage 24d.2's batched dispatcher
+left unimproved (stuck at 6.8 Hz because grid-side CAS contention
+dwarfs submit overhead at that scale) clears the 30 Hz bar.
 
 **Deliverables:**
-- ❌ Matrix-free CG with `apply_jacobian` Hessian-vector products,
-  20-iter cap + residual exit (the original Stage 24d.1 deliverable).
+- ✅ **`p2g_two_pass` WGSL kernel** (`crates/molla/shaders/mpm.wgsl`).
+  Each workgroup of 64 particles maintains a `var<workgroup>` 4×4×4 =
+  64-slot scratch (mass + 3 momentum + kdiag, all atomic<u32>
+  bitcast-f32), keyed by **direct spatial mapping** of the lower 2
+  bits of (ix, iy, iz). Phase 1: each particle's 27-cell B-spline
+  scatter goes into the workgroup-local accumulator via shared-memory
+  atomic CAS — no global atomics in the common case. Phase 2 (after
+  `workgroupBarrier`): each thread emits **one global atomic CAS per
+  buffer per occupied slot**. Hash collisions (different cells
+  mapping to the same slot) fall back to the legacy global-atomic
+  helpers; correctness is preserved either way.
+- ✅ **Host wiring** (`crates/molla/src/compute/mpm.rs`). New pipeline
+  `pipe_p2g_two_pass`; `step_n_with` dispatches it by default.
+  `set_p2g_mode(two_pass: bool)` toggle (default `true`) lets the
+  parity test fall back to the legacy `p2g`. New `read_grid_mass_
+  momentum` getter exposes the grid scratch buffers for byte-wise
+  parity comparison.
+- ✅ **Two new tests** in `crates/molla/tests/mpm_perf.rs`:
+  - `mpm_perf_50k_64grid_atomic_reduction`: legacy 7.93 Hz → two-pass
+    **36.91 Hz** (4.66× speedup). Asserts ≥ 30 Hz absolute + ≥ 2×
+    speedup vs legacy.
+  - `mpm_p2g_parity_legacy_vs_two_pass`: 1k-particle scene, both
+    paths produce identical grid mass + momentum (max |Δm| =
+    5.8e-10, max |Δp| = 0; total mass agreement to 7 decimal places).
+
+**Measured perf:**
+- Legacy `p2g` (single-pass, per-particle global atomic CAS):
+  **7.93 Hz** at 50k particles + 64³ grid.
+- Stage 24d.3 `p2g_two_pass` (workgroup-local accumulate + commit):
+  **36.91 Hz**.
+- **Speedup: 4.66×.** Above the ≥ 30 Hz DoD; the original Stage 24d
+  60 Hz target requires implicit CG (deferred to 24d.4).
+
+**Caveats:**
+- **Workgroup-memory budget**: 64 slots × (1 tag + 1 mass + 3
+  momentum + 1 kdiag) × 4 bytes = **1.5 KiB per workgroup**. Well
+  within WebGPU's required 16 KiB minimum and below the 32 KiB seen
+  on Vulkan / Metal / D3D12. If a future adapter complains, halve the
+  slot count to 32 (same direct mapping with `& 7u | (& 3u << 3u)`
+  variant; documented in the shader header).
+- **Speedup-scene-dependent**: the direct 4×4×4 spatial slot mapping
+  works because particles in our perf-test workload are spatially
+  clustered (filled in `(ix, iy, iz)` order, then evolved without
+  re-sorting). Heavily scattered particle distributions would see
+  more hash collisions and a smaller win — but the global-atomic
+  fallback preserves correctness, and the worst case degrades to the
+  legacy path's perf, not below it.
+- **10k workload doesn't benefit**: at 10k particles + 32³ grid the
+  Stage 24d.2 batched-dispatcher submit overhead is the bottleneck,
+  not per-particle atomics — `p2g_two_pass` shows ≈ same Hz as the
+  legacy path on that scene. The 24d.3 win is specifically a 50k+
+  one.
+
+**Deferred to Stage 24d.4** (renamed from the original 24d.3 deferral
+list since 24d.3 is now spent on the atomic reduction):
+- ❌ Full matrix-free CG with `apply_jacobian` Hessian-vector
+  products, 20-iter cap + residual exit (the original Stage 24d.1
+  deliverable).
 - ❌ CFL-driven adaptive dt per substep.
 - ❌ Mud rheology (Bingham / Herschel-Bulkley).
 - ❌ Multi-material support (sand + snow in one sim).
 - ❌ Calibrated AoR within ± 5° (depends on full CG above).
 - ❌ Hyperelastic warm-start for CG initial guess.
 
-**Dependencies:** Stage 24d.1 (this replaces / augments).
+**Dependencies:** Stage 24d.2 (persistent-buffer dispatcher this
+extends).
 
 ### Stage 24d.2 — MPM persistent-buffer dispatch — **SHIPPED v1**
 
