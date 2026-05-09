@@ -18,15 +18,24 @@
 
 use crate::actuators::clamping::ClampingStage;
 use crate::actuators::controller_pipeline_pd::ControllerPipelinePd;
+use crate::actuators::controller_pipeline_pid::ControllerPipelinePid;
 use crate::actuators::delay::Delay;
 use crate::compute::Engine;
 use crate::core::Result;
+use crate::math::Real;
 use crate::sim::{Control, State};
 
 /// Concrete enum for the controller stage of the pipeline. Other
-/// controller flavours (PID, neural MLP, neural LSTM) plug in here.
+/// controller flavours (neural MLP, neural LSTM) plug in here.
 pub enum ControllerStage {
     Pd(ControllerPipelinePd),
+    Pid(ControllerPipelinePid),
+    /// Stage 18.1 fixed-architecture 3-layer MLP forward pass.
+    /// The controller writes its output directly into
+    /// `Control.joint_force[dof]`, one MLP output per registered DOF.
+    /// Inputs are gathered host-side per substep via
+    /// [`crate::actuators::ControllerNeuralMlp::set_inputs`].
+    NeuralMlp(crate::actuators::ControllerNeuralMlp),
 }
 
 /// Composable actuator pipeline.
@@ -73,11 +82,17 @@ impl Actuator {
     }
 
     /// Run one substep of the pipeline.
+    ///
+    /// `dt` is the substep duration; it's consumed by the integral
+    /// term of [`ControllerStage::Pid`] and ignored by the PD / MLP
+    /// variants. Caller-supplied so the pipeline doesn't have to
+    /// pin its own opinion about the host's timestep.
     pub fn step(
         &mut self,
         engine: &Engine,
         state: &State,
         control: &mut Control,
+        dt: Real,
     ) -> Result<()> {
         // Stage 1 — push & read delayed targets.
         self.delay.step(engine, control)?;
@@ -92,6 +107,24 @@ impl Actuator {
                     self.delay.out_pos(),
                     self.delay.out_vel(),
                 )?;
+            }
+            ControllerStage::Pid(pid) => {
+                pid.step(
+                    engine,
+                    state,
+                    control,
+                    self.delay.out_pos(),
+                    self.delay.out_vel(),
+                    dt,
+                )?;
+            }
+            ControllerStage::NeuralMlp(mlp) => {
+                // The MLP doesn't read the delay outputs (its inputs
+                // are pushed by the host via `set_inputs`); but for
+                // future-proofing we still tick the delay so a
+                // downstream stage can rely on `out_pos / out_vel`
+                // being fresh.
+                mlp.step(engine, control)?;
             }
         }
 

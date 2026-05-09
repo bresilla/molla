@@ -7,7 +7,11 @@ mod actuator_pd;
 #[cfg(feature = "gpu")]
 mod actuator_pid;
 #[cfg(feature = "gpu")]
+mod actuator_neural_mlp;
+#[cfg(feature = "gpu")]
 mod actuator_pipeline_pd;
+#[cfg(feature = "gpu")]
+mod actuator_pipeline_pid;
 #[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
@@ -62,7 +66,11 @@ pub use actuator_pd::ActuatorPdKernel;
 #[cfg(feature = "gpu")]
 pub use actuator_pid::ActuatorPidKernel;
 #[cfg(feature = "gpu")]
+pub use actuator_neural_mlp::ActuatorNeuralMlpKernel;
+#[cfg(feature = "gpu")]
 pub use actuator_pipeline_pd::ActuatorPipelinePdKernel;
+#[cfg(feature = "gpu")]
+pub use actuator_pipeline_pid::ActuatorPipelinePidKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
