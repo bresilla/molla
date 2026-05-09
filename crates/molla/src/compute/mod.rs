@@ -5,6 +5,10 @@
 
 #[cfg(feature = "gpu")]
 mod engine;
+#[cfg(feature = "gpu")]
+mod mpm;
 
 #[cfg(feature = "gpu")]
 pub use engine::{AdapterInfo, Backend, Engine};
+#[cfg(feature = "gpu")]
+pub use mpm::{MpmConfig, MpmSimulation};
