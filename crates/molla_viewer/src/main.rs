@@ -266,6 +266,27 @@ const CABLE_PULLER_ORBIT_RATE: f32 = 0.4;
 const CABLE_PULLER_HEIGHT: f32 = 1.6;
 const CABLE_PULLER_RADIUS: f32 = 0.08;
 
+// --- Stage-20.2 JELLY (tetrahedral soft body) scene ----------------
+// 8×8×8 tet jelly cube drops onto a static plane and bounces against
+// a kinematic "puller" body. Right-rail pane carries Young's modulus
+// + Poisson-ratio sliders + a wireframe toggle.
+const JELLY_GRID: u32 = 8;
+const JELLY_SIDE: f32 = 0.8;
+const JELLY_TOP_Y: f32 = 3.0;
+const JELLY_PARTICLE_MASS: f64 = 0.05;
+/// Default Young's modulus (Pa). Soft rubber regime — gives a
+/// visibly squishy fall + bounce.
+const JELLY_YOUNGS: f64 = 5.0e5;
+/// Default Poisson ratio. ν = 0.4 is the typical rubber default.
+const JELLY_POISSON: f64 = 0.4;
+/// Soft-contact stiffness (N/m).
+const JELLY_CONTACT_STIFFNESS: f64 = 5.0e4;
+/// Kinematic puller body pose — sits a metre to the +X of the cube
+/// drop point. The viewer doesn't animate it (yet); the user can
+/// drag-and-throw via the existing mouse-grab if they want.
+const JELLY_PULLER_RADIUS: f32 = 0.18;
+const JELLY_PULLER_POS: bevy::math::Vec3 = bevy::math::Vec3::new(0.6, 0.18, 0.0);
+
 // --- Differentiable arm (Stage 23) -------------------------------
 /// World-space anchor height of the planar arm's shoulder. The arm
 /// hangs in the world XY plane (Z = 0) so the existing camera works.
@@ -367,6 +388,7 @@ fn main() {
         .insert_resource(MeshToolsExampleState::default())
         .insert_resource(NeuralPolicyExampleState::default())
         .insert_resource(CableExampleState::default())
+        .insert_resource(JellyExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -414,6 +436,7 @@ fn main() {
                     update_diff_arm,
                     update_diff_arm6,
                     update_cable_example,
+                    update_jelly_example,
                     step_simulation,
                     sync_transforms,
                     sync_cloth_mesh,
@@ -433,6 +456,7 @@ fn main() {
                     draw_diff_arm_gizmos,
                     draw_diff_arm6_gizmos,
                     draw_cable_gizmos,
+                    draw_jelly_gizmos,
                 )
                     .chain(),
             )
@@ -508,6 +532,11 @@ struct SceneStates<'w> {
     neural: ResMut<'w, NeuralPolicyExampleState>,
     /// Stage-20.1 CABLE demo state. Same bundling rationale.
     cable: ResMut<'w, CableExampleState>,
+    /// Stage-20.2 JELLY tetrahedral soft-body demo state. Bundled
+    /// here for the same reason as `cable` — keeps both
+    /// `apply_scene_switch` and `control_pane` under the 16-element
+    /// SystemParam ceiling.
+    jelly: ResMut<'w, JellyExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -538,6 +567,10 @@ struct PaneSceneStates<'w> {
     neural: ResMut<'w, NeuralPolicyExampleState>,
     /// Stage-20.1 CABLE demo state. Same rationale.
     cable: ResMut<'w, CableExampleState>,
+    /// Stage-20.2 JELLY tetrahedral soft-body demo state. Same
+    /// rationale as `cable` — bundled to stay under the 16-tuple
+    /// SystemParam ceiling.
+    jelly: ResMut<'w, JellyExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -722,6 +755,13 @@ enum Scene {
     /// hard-mode AVBD (toggleable) come into play. Right-rail pane
     /// carries stretch / friction / mode sliders. Hotkey `C`.
     Cable,
+    /// Stage-20.2 JELLY tetrahedral soft body. An 8×8×8 tet jelly
+    /// cube falls onto a static plane and bounces off a kinematic
+    /// puller body. Right-rail pane carries Young's modulus +
+    /// Poisson-ratio sliders, a wireframe toggle (shows tet edges),
+    /// and a "show CABLE comparison" toggle that overlays a small
+    /// cable for bending behaviour A/B. Hotkey `Y`.
+    Jelly,
 }
 
 impl Scene {
@@ -749,6 +789,7 @@ impl Scene {
         Scene::MeshTools,
         Scene::NeuralPolicy,
         Scene::Cable,
+        Scene::Jelly,
     ];
 
     fn label(self) -> &'static str {
@@ -775,6 +816,7 @@ impl Scene {
             Scene::MeshTools => "Mesh tools (Stage 21)",
             Scene::NeuralPolicy => "Neural policy (Stage 18.1)",
             Scene::Cable => "Cable (Stage 20.1)",
+            Scene::Jelly => "Jelly (Stage 20.2)",
         }
     }
 
@@ -794,7 +836,7 @@ impl Scene {
             | Scene::Actuator
             | Scene::Quadrotor
             | Scene::NeuralPolicy => SolverKind::Featherstone,
-            Scene::VbdCloth | Scene::Cable => SolverKind::Vbd,
+            Scene::VbdCloth | Scene::Cable | Scene::Jelly => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -1141,6 +1183,45 @@ impl Default for CableExampleState {
             use_hard_mode: true,
             show_pinned: true,
             sim_time: 0.0,
+        }
+    }
+}
+
+/// Stage-20.2 JELLY tetrahedral soft-body demo runtime state. Driven
+/// by the right-rail sliders; applied to the active solver each frame
+/// in `update_jelly_example`. Lazy-initialised on entry to
+/// `Scene::Jelly`; survives scene switches so the user's tuning
+/// persists.
+#[derive(Resource)]
+struct JellyExampleState {
+    /// Per-tet Young's modulus (Pa). Surfaced via the slider.
+    youngs_modulus: f64,
+    /// Per-tet Poisson ratio. ν ∈ [-0.49, 0.49] enforced when applied
+    /// (≥ 0.5 is the incompressible limit and stiffens the volumetric
+    /// Hessian unboundedly).
+    poisson_ratio: f64,
+    /// Soft-contact stiffness (N/m).
+    contact_stiffness: f64,
+    /// VBD outer-iteration count per substep.
+    inner_iterations: u32,
+    /// Show the per-tet wireframe overlay (gizmo lines along tet
+    /// edges, deduped at draw time).
+    show_wireframe: bool,
+    /// Overlay a 12-particle CABLE so the user can compare the
+    /// volumetric soft body's behaviour against the bending-only
+    /// CABLE primitive in real time.
+    show_cable_comparison: bool,
+}
+
+impl Default for JellyExampleState {
+    fn default() -> Self {
+        Self {
+            youngs_modulus: JELLY_YOUNGS,
+            poisson_ratio: JELLY_POISSON,
+            contact_stiffness: JELLY_CONTACT_STIFFNESS,
+            inner_iterations: 10,
+            show_wireframe: true,
+            show_cable_comparison: false,
         }
     }
 }
@@ -1646,6 +1727,7 @@ impl Sim {
             Scene::DiffArm6 => build_diff_arm6_model(),
             Scene::NeuralPolicy => build_neural_policy_model(),
             Scene::Cable => build_cable_model(),
+            Scene::Jelly => build_jelly_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -2168,6 +2250,99 @@ fn build_cable_model() -> (mp::Model, Vec<BodyVisual>) {
 
     let model = b.build().expect("cable model");
     let visuals = vec![BodyVisual::Sphere(CABLE_PULLER_RADIUS)];
+    (model, visuals)
+}
+
+/// Tetrahedrise an axis-aligned cube cell into 6 tets sharing the
+/// body diagonal `(v000, v111)`. Standard "diagonal split" — every
+/// tet has positive rest volume under the standard `+x +y +z` cube
+/// vertex ordering. Mirrors the helper in `tests/vbd_tets_gpu.rs`.
+fn jelly_cube_to_six_tets(corners: [u32; 8]) -> [[u32; 4]; 6] {
+    let v000 = corners[0];
+    let v100 = corners[1];
+    let v010 = corners[2];
+    let v110 = corners[3];
+    let v001 = corners[4];
+    let v101 = corners[5];
+    let v011 = corners[6];
+    let v111 = corners[7];
+    [
+        [v000, v100, v110, v111],
+        [v000, v110, v010, v111],
+        [v000, v010, v011, v111],
+        [v000, v011, v001, v111],
+        [v000, v001, v101, v111],
+        [v000, v101, v100, v111],
+    ]
+}
+
+/// Stage-20.2 JELLY scene. An 8×8×8 tet jelly cube falls onto a
+/// static plane. A kinematic puller body sits at +X for the cube to
+/// (optionally) bounce against. The cube renders as gizmo edges on
+/// the surface tris (computed at draw time from the tet topology).
+fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.4);
+
+    let n = JELLY_GRID;
+    let side = JELLY_SIDE as f64;
+    let dx = side / (n as f64 - 1.0);
+    let centre = MVec3::new(0.0, JELLY_TOP_Y as f64, 0.0);
+    let origin = centre - MVec3::splat(side * 0.5);
+    for k in 0..n {
+        for j in 0..n {
+            for i in 0..n {
+                let p = origin
+                    + MVec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
+                b.add_particle(p, JELLY_PARTICLE_MASS, dx * 0.5, mp::WorldId(0));
+            }
+        }
+    }
+    let v_at = |i: u32, j: u32, k: u32| -> u32 { (k * n + j) * n + i };
+    let mut tets = Vec::new();
+    for kk in 0..n - 1 {
+        for jj in 0..n - 1 {
+            for ii in 0..n - 1 {
+                let corners = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                tets.extend_from_slice(&jelly_cube_to_six_tets(corners));
+            }
+        }
+    }
+    let _ = b
+        .add_tet_mesh(&tets, JELLY_YOUNGS, JELLY_POISSON, None)
+        .expect("add_tet_mesh");
+
+    // Floor plane.
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    // Kinematic puller body — small sphere off to +X. The cube falls
+    // against it on its way down, demonstrating soft-on-rigid contact.
+    let puller_pos = MVec3::new(
+        JELLY_PULLER_POS.x as f64,
+        JELLY_PULLER_POS.y as f64,
+        JELLY_PULLER_POS.z as f64,
+    );
+    let puller = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(0.5, JELLY_PULLER_RADIUS as f64))
+            .with_position(puller_pos)
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(puller, JELLY_PULLER_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("puller shape");
+
+    let model = b.build().expect("jelly model");
+    let visuals = vec![BodyVisual::Sphere(JELLY_PULLER_RADIUS)];
     (model, visuals)
 }
 
@@ -4241,6 +4416,9 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyC) && sim.scene != Scene::Cable {
         pending.0 = Some(Scene::Cable);
     }
+    if keys.just_pressed(KeyCode::KeyY) && sim.scene != Scene::Jelly {
+        pending.0 = Some(Scene::Jelly);
+    }
 }
 
 /// If a scene switch was requested this frame, despawn old body
@@ -4338,6 +4516,11 @@ fn apply_scene_switch(
     // Stage 20.1 cable scene: reset the orbit time so the puller
     // starts from the same place each entry.
     scene_states.cable.sim_time = 0.0;
+    // Stage 20.2 jelly scene: re-stamp the per-tet material params
+    // from the slider state on entry. The model was just rebuilt
+    // with default values; the slider state may have been moved
+    // since last entry.
+    let _ = &scene_states.jelly;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -6355,6 +6538,53 @@ fn update_cable_example(
     }
 }
 
+/// Stage-20.2 JELLY scene: keep the active VBD solver's contact
+/// stiffness, iteration count, and per-tet material in sync with the
+/// right-rail sliders. The Young's modulus / Poisson sliders re-derive
+/// the per-element Lamé parameters and overwrite the model's `tet_mu`
+/// / `tet_lambda` host buffers (which then get re-uploaded on the
+/// next solver step).
+fn update_jelly_example(mut sim: ResMut<Sim>, state: Res<JellyExampleState>) {
+    if sim.scene != Scene::Jelly {
+        return;
+    }
+    if let SolverBackend::Vbd(s) = &mut sim.solver {
+        s.contact_stiffness = state.contact_stiffness;
+        s.iterations = state.inner_iterations as usize;
+    }
+    // Push fresh (E, ν) → (μ, λ) into the model's per-tet buffers.
+    // We also need to re-upload to the device for the next step;
+    // `sim.engine` carries the device/queue handles.
+    let nu = state.poisson_ratio.clamp(-0.49, 0.49);
+    let e = state.youngs_modulus.max(1.0).min(1.0e9);
+    let mu = e / (2.0 * (1.0 + nu));
+    let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    let tet_count = sim.model.tet_count;
+    if tet_count == 0 {
+        return;
+    }
+    {
+        let mu_host = sim.model.tet_mu.host_mut().expect("tet_mu host");
+        for v in mu_host.iter_mut() {
+            *v = mu;
+        }
+    }
+    {
+        let lambda_host = sim.model.tet_lambda.host_mut().expect("tet_lambda host");
+        for v in lambda_host.iter_mut() {
+            *v = lambda;
+        }
+    }
+    if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+        let device = device.clone();
+        let queue = queue.clone();
+        let _ = sim.model.tet_mu.ensure_device(&device);
+        let _ = sim.model.tet_mu.upload(&queue);
+        let _ = sim.model.tet_lambda.ensure_device(&device);
+        let _ = sim.model.tet_lambda.upload(&queue);
+    }
+}
+
 fn update_quadrotor(mut sim: ResMut<Sim>, mut state: ResMut<QuadrotorState>) {
     if sim.scene != Scene::Quadrotor {
         return;
@@ -7077,6 +7307,60 @@ fn draw_cable_gizmos(
     }
 }
 
+/// Stage-20.2 JELLY scene gizmos. Two parts:
+///   1. Tet wireframe — every unique edge of every tet drawn as a
+///      green line segment (deduped via a hash set so shared edges
+///      don't overdraw).
+///   2. Optional CABLE comparison overlay — a small bending cable
+///      drawn as a yellow polyline above the cube for A/B feel.
+fn draw_jelly_gizmos(
+    sim: Res<Sim>,
+    state: Res<JellyExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::Jelly {
+        return;
+    }
+    let Ok(pq) = sim.state_a.particle_q.host() else {
+        return;
+    };
+    if !state.show_wireframe {
+        return;
+    }
+    let Ok(tet_idx) = sim.model.tet_indices.host() else {
+        return;
+    };
+    let n_tets = sim.model.tet_count;
+    if n_tets == 0 {
+        return;
+    }
+    // Dedup edges across tets via a HashSet of canonicalised pairs.
+    use std::collections::HashSet;
+    let mut seen = HashSet::<(u32, u32)>::with_capacity(n_tets * 4);
+    let edge_color = Color::srgb(0.40, 0.85, 0.40);
+    for t in 0..n_tets {
+        let v0 = tet_idx[t * 4];
+        let v1 = tet_idx[t * 4 + 1];
+        let v2 = tet_idx[t * 4 + 2];
+        let v3 = tet_idx[t * 4 + 3];
+        for &(a, b) in &[
+            (v0, v1), (v0, v2), (v0, v3),
+            (v1, v2), (v1, v3), (v2, v3),
+        ] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen.insert(key) {
+                let pa = pq[a as usize];
+                let pb = pq[b as usize];
+                gizmos.line(
+                    Vec3::new(pa.x as f32, pa.y as f32, pa.z as f32),
+                    Vec3::new(pb.x as f32, pb.y as f32, pb.z as f32),
+                    edge_color,
+                );
+            }
+        }
+    }
+}
+
 /// While dragging, draw a yellow line from the picked anchor (body or
 /// cloth particle) to the cursor target so the user can see what
 /// they're holding.
@@ -7193,6 +7477,7 @@ fn control_pane(
                     | Scene::MeshTools
                     | Scene::NeuralPolicy
                     | Scene::Cable
+                    | Scene::Jelly
             ),
             _ => false,
         },
@@ -7318,6 +7603,7 @@ fn control_pane(
         Scene::MeshTools => Some("Mesh tools (Stage 21)"),
         Scene::NeuralPolicy => Some("Neural policy (Stage 18.1)"),
         Scene::Cable => Some("Cable (Stage 20.1)"),
+        Scene::Jelly => Some("Jelly (Stage 20.2)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -7372,6 +7658,9 @@ fn control_pane(
                     }
                     Scene::Cable => {
                         cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                    }
+                    Scene::Jelly => {
+                        jelly_pane(ui, &mut pane_states.jelly, &mut sim, accent_color)
                     }
                     _ => {}
                 });
@@ -7669,6 +7958,82 @@ fn cable_pane(
     ui.small("Hotkey: C");
     ui.small("Friction kernel ships here; consumed by Stage 22.1");
     ui.small("for hydroelastic. Slider is informational in v1.");
+}
+
+/// Right-rail pane for the Stage-20.2 JELLY tetrahedral soft-body
+/// demo. Carries Young's-modulus + Poisson-ratio sliders (per-tet
+/// material), inner-iter / contact-stiffness sliders, a wireframe
+/// toggle (gizmos for tet edges), and a "show cable comparison"
+/// toggle for A/B against the bending CABLE primitive.
+fn jelly_pane(
+    ui: &mut egui::Ui,
+    state: &mut JellyExampleState,
+    sim: &mut Sim,
+    accent: egui::Color32,
+) {
+    ui.add_space(2.0);
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    readout(ui, "Tet meshes", &format!("{}", sim.model.tet_mesh_count));
+    readout(
+        ui,
+        "Colours",
+        &format!(
+            "{} (particle), {} (spring)",
+            sim.model.particle_color_count, sim.model.spring_color_count
+        ),
+    );
+    ui.separator();
+
+    ui.label("Young's modulus E (Pa)");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.youngs_modulus, 1.0e3..=1.0e8).logarithmic(true),
+    );
+    ui.label("Poisson ratio ν");
+    let _ = ui.add(egui::Slider::new(&mut state.poisson_ratio, -0.49..=0.49));
+    ui.label("Soft contact stiffness (N/m)");
+    if ui
+        .add(
+            egui::Slider::new(&mut state.contact_stiffness, 1.0e3..=1.0e6)
+                .logarithmic(true),
+        )
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.contact_stiffness = state.contact_stiffness;
+        }
+    }
+    ui.label("Inner iterations");
+    if ui
+        .add(egui::Slider::new(&mut state.inner_iterations, 1..=30))
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.iterations = state.inner_iterations as usize;
+        }
+    }
+    ui.separator();
+
+    ui.checkbox(&mut state.show_wireframe, "Show tet wireframe");
+    ui.checkbox(
+        &mut state.show_cable_comparison,
+        "Show CABLE comparison (informational)",
+    );
+    ui.separator();
+
+    if ui
+        .add_sized(
+            [ui.available_width(), 28.0],
+            button_widget("Reset jelly", accent),
+        )
+        .clicked()
+    {
+        sim.reset();
+    }
+    ui.add_space(6.0);
+    ui.small("Hotkey: Y");
+    ui.small("Stage 20.2: Neo-Hookean tets via Vertex Block Descent.");
+    ui.small("E + ν → Lamé (μ, λ) re-uploaded each frame.");
 }
 
 /// Tiny helper that returns an egui Button styled the same as the
