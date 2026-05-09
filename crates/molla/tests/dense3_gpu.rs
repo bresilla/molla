@@ -200,7 +200,7 @@ fn eig_gpu_matches_cpu() {
 
 #[test]
 #[ignore = "needs a real wgpu adapter — wall-clock benchmark"]
-fn svd_gpu_latency_under_100ns_per_matrix() {
+fn svd_gpu_latency_under_1us_per_matrix() {
     let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
