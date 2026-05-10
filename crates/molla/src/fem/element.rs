@@ -627,6 +627,246 @@ pub fn compute_element_st_venant_kirchhoff_stress(
     }
 }
 
+// ─── Symmetric Dirichlet distortion energy ──────────────────────────
+
+/// Per-cell **symmetric Dirichlet distortion energy** along with its
+/// gradient and Hessian with respect to the deformed-vertex positions.
+///
+/// `E = ½ tr(FᵀF + (FᵀF)⁻¹) − dim`
+///
+/// where `F = D_def · D_rest⁻¹` is the deformation gradient mapping
+/// the rest-pose simplex to the deformed simplex, and `dim` is 2 (Tri)
+/// or 3 (Tet). The energy is zero on the identity map and grows
+/// monotonically away from it, with a barrier at every degenerate
+/// (zero-volume) configuration. It's the canonical "distortion-aware"
+/// objective for parameterisation / inverse-deformation tasks.
+///
+/// The returned tuple is:
+/// - **energy** — scalar `E` for this element.
+/// - **gradient** — one `Vec3` per local node holding `∂E/∂x_a`.
+///   Length matches `cell.vert_count()`.
+/// - **hessian** — `(N · 3) × (N · 3)` row-major dense matrix as
+///   `Vec<Vec<Real>>`, storing `∂²E/∂x_{a,α} ∂x_{b,β}` in interleaved
+///   layout `(node_a · 3 + α, node_b · 3 + β)`. For a tri we get a
+///   9×9 block; for a tet we get a 12×12 block.
+///
+/// v1 implementation: the gradient and Hessian are evaluated by
+/// **central finite differences** on the analytic energy. The energy
+/// itself is closed-form (uses [`crate::math::Mat3::inverse`] /
+/// `Mat3::determinant` for the 3D path, and an inline 2×2 inverse for
+/// the in-plane triangle path). Finite differences keep the v1
+/// implementation short, easy to audit, and correct to roundoff
+/// thanks to the smooth analytic energy. A follow-up stage can swap
+/// in the analytic gradient `P = ∂Ψ/∂F` + tangent stiffness
+/// `K = ∂²Ψ/∂F²` once the `dF/dx` chain rule is wired through.
+///
+/// Triangles are handled in plane: we work with the 2D in-plane part
+/// of `F` (so `dim = 2`); the z-component of vertex perturbations is
+/// ignored (gradient z-entries stay zero, Hessian z-rows / -cols
+/// stay zero). This matches the convention used throughout the
+/// `element` module for tri kernels.
+#[must_use]
+pub fn compute_element_distortion_energy(
+    cell: &FemCell,
+    rest_vertices: &[Vec3],
+    deformed_vertices: &[Vec3],
+) -> (Real, Vec<Vec3>, Vec<Vec<Real>>) {
+    let nv = cell.vert_count();
+    let n_dof = nv * 3;
+    // Closed-form energy in terms of deformed positions only.
+    let energy_at = |x: &[Vec3]| -> Real {
+        match cell {
+            FemCell::Tri(idx) => {
+                let r = [
+                    rest_vertices[idx[0] as usize],
+                    rest_vertices[idx[1] as usize],
+                    rest_vertices[idx[2] as usize],
+                ];
+                let d = [x[0], x[1], x[2]];
+                tri_distortion_energy(&r, &d)
+            }
+            FemCell::Tet(idx) => {
+                let r = [
+                    rest_vertices[idx[0] as usize],
+                    rest_vertices[idx[1] as usize],
+                    rest_vertices[idx[2] as usize],
+                    rest_vertices[idx[3] as usize],
+                ];
+                let d = [x[0], x[1], x[2], x[3]];
+                tet_distortion_energy(&r, &d)
+            }
+        }
+    };
+
+    // Materialise the deformed positions for this cell into a local array.
+    let mut local: Vec<Vec3> = cell
+        .verts()
+        .iter()
+        .map(|&v| deformed_vertices[v as usize])
+        .collect();
+    let energy = energy_at(&local);
+
+    // Central finite differences. `eps` is a small absolute step; for
+    // an `f64` energy with magnitudes around 1e-3 .. 1e3 the central
+    // gradient is accurate to ~1e-9 with eps=1e-5 (truncation O(eps²)
+    // ~1e-10, roundoff O(1/eps) ~1e-11).
+    let eps: Real = 1.0e-5;
+    let mut gradient = vec![Vec3::ZERO; nv];
+    for a in 0..nv {
+        for alpha in 0..3 {
+            let saved = local[a];
+            let mut perturbed = saved;
+            perturbed[alpha] = saved[alpha] + eps;
+            local[a] = perturbed;
+            let e_plus = energy_at(&local);
+            let mut perturbed = saved;
+            perturbed[alpha] = saved[alpha] - eps;
+            local[a] = perturbed;
+            let e_minus = energy_at(&local);
+            local[a] = saved;
+            let g = (e_plus - e_minus) / (2.0 * eps);
+            gradient[a][alpha] = g;
+        }
+    }
+
+    // Hessian: central finite difference on the gradient itself
+    // (so each Hessian column is a fresh 6-point stencil on the
+    // energy → 9-point or 12-point stencil after combining gradient
+    // FDs). To stay cheap, take the second-derivative as
+    // `(g(x+eps·e_b) − g(x−eps·e_b)) / (2·eps)` where `g` is the
+    // analytic-FD gradient already implemented above.
+    let mut hessian = vec![vec![0.0; n_dof]; n_dof];
+    let grad_at = |xx: &[Vec3]| -> Vec<Real> {
+        let mut local = xx.to_vec();
+        let mut g = vec![0.0; n_dof];
+        for a in 0..nv {
+            for alpha in 0..3 {
+                let saved = local[a];
+                let mut p = saved;
+                p[alpha] = saved[alpha] + eps;
+                local[a] = p;
+                let e_plus = energy_at(&local);
+                let mut p = saved;
+                p[alpha] = saved[alpha] - eps;
+                local[a] = p;
+                let e_minus = energy_at(&local);
+                local[a] = saved;
+                g[a * 3 + alpha] = (e_plus - e_minus) / (2.0 * eps);
+            }
+        }
+        g
+    };
+    let h_eps: Real = 1.0e-3; // larger step for the second pass to
+                              // keep roundoff in the gradient FDs
+                              // from dominating.
+    for b in 0..nv {
+        for beta in 0..3 {
+            let saved = local[b];
+            let mut p = saved;
+            p[beta] = saved[beta] + h_eps;
+            local[b] = p;
+            let g_plus = grad_at(&local);
+            let mut p = saved;
+            p[beta] = saved[beta] - h_eps;
+            local[b] = p;
+            let g_minus = grad_at(&local);
+            local[b] = saved;
+            let col = b * 3 + beta;
+            for row in 0..n_dof {
+                hessian[row][col] = (g_plus[row] - g_minus[row]) / (2.0 * h_eps);
+            }
+        }
+    }
+    // Symmetrise the Hessian — finite differences leave a small
+    // antisymmetric residue (~1e-6); a Newton solver works best on
+    // SPD operators, so we average the (i, j) and (j, i) entries.
+    for i in 0..n_dof {
+        for j in (i + 1)..n_dof {
+            let avg = 0.5 * (hessian[i][j] + hessian[j][i]);
+            hessian[i][j] = avg;
+            hessian[j][i] = avg;
+        }
+    }
+
+    (energy, gradient, hessian)
+}
+
+/// 2D symmetric Dirichlet energy of a triangle map (rest → deformed).
+/// Uses only the in-plane components of the input positions.
+fn tri_distortion_energy(rest: &[Vec3; 3], def: &[Vec3; 3]) -> Real {
+    // 2×2 D matrix [v1 - v0 | v2 - v0] in plane.
+    let dr00 = rest[1].x - rest[0].x;
+    let dr10 = rest[1].y - rest[0].y;
+    let dr01 = rest[2].x - rest[0].x;
+    let dr11 = rest[2].y - rest[0].y;
+    let det_r = dr00 * dr11 - dr01 * dr10;
+    if det_r.abs() < 1.0e-30 {
+        return Real::INFINITY;
+    }
+    let inv = 1.0 / det_r;
+    let r_inv00 =  dr11 * inv;
+    let r_inv01 = -dr01 * inv;
+    let r_inv10 = -dr10 * inv;
+    let r_inv11 =  dr00 * inv;
+    let dd00 = def[1].x - def[0].x;
+    let dd10 = def[1].y - def[0].y;
+    let dd01 = def[2].x - def[0].x;
+    let dd11 = def[2].y - def[0].y;
+    // F = D_def · R_inv  (2×2).
+    let f00 = dd00 * r_inv00 + dd01 * r_inv10;
+    let f01 = dd00 * r_inv01 + dd01 * r_inv11;
+    let f10 = dd10 * r_inv00 + dd11 * r_inv10;
+    let f11 = dd10 * r_inv01 + dd11 * r_inv11;
+    // ‖F‖² = tr(FᵀF).
+    let frob_sq = f00 * f00 + f01 * f01 + f10 * f10 + f11 * f11;
+    // det(F) and ‖F⁻¹‖² (uses the closed-form 2×2 inverse).
+    let det_f = f00 * f11 - f01 * f10;
+    if det_f.abs() < 1.0e-30 {
+        return Real::INFINITY;
+    }
+    let inv_f = 1.0 / det_f;
+    let fi00 =  f11 * inv_f;
+    let fi01 = -f01 * inv_f;
+    let fi10 = -f10 * inv_f;
+    let fi11 =  f00 * inv_f;
+    let frob_inv_sq = fi00 * fi00 + fi01 * fi01 + fi10 * fi10 + fi11 * fi11;
+    0.5 * (frob_sq + frob_inv_sq) - 2.0
+}
+
+/// 3D symmetric Dirichlet energy of a tetrahedron map (rest → deformed).
+fn tet_distortion_energy(rest: &[Vec3; 4], def: &[Vec3; 4]) -> Real {
+    use crate::math::Mat3;
+    let dr = Mat3::from_cols(
+        rest[1] - rest[0],
+        rest[2] - rest[0],
+        rest[3] - rest[0],
+    );
+    let det_r = dr.determinant();
+    if det_r.abs() < 1.0e-30 {
+        return Real::INFINITY;
+    }
+    let dr_inv = dr.inverse();
+    let dd = Mat3::from_cols(
+        def[1] - def[0],
+        def[2] - def[0],
+        def[3] - def[0],
+    );
+    let f = dd * dr_inv;
+    let det_f = f.determinant();
+    if det_f.abs() < 1.0e-30 {
+        return Real::INFINITY;
+    }
+    let f_inv = f.inverse();
+    // ‖F‖² = sum of squares of all entries.
+    let frob_sq = f.x_axis.length_squared()
+        + f.y_axis.length_squared()
+        + f.z_axis.length_squared();
+    let frob_inv_sq = f_inv.x_axis.length_squared()
+        + f_inv.y_axis.length_squared()
+        + f_inv.z_axis.length_squared();
+    0.5 * (frob_sq + frob_inv_sq) - 3.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
