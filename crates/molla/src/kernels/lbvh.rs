@@ -748,6 +748,87 @@ impl LbvhBroadPhase {
         (&self.pair_count, &self.pair_a, &self.pair_b)
     }
 
+    /// Borrow the LBVH `nodes` buffer for downstream traversal kernels
+    /// (Stage 33.2 VT contact gather). Layout matches the WGSL
+    /// `LbvhNode` struct: `aabb_min: vec4<f32>, aabb_max: vec4<f32>,
+    /// left: u32, right: u32, parent: u32, is_leaf: u32` — 64 bytes per
+    /// node. Total nodes = `2 * primitive_count - 1`.
+    pub fn nodes_buffer(&self) -> &wgpu::Buffer {
+        &self.nodes
+    }
+
+    /// Refit the LBVH using AABBs that the caller has **already
+    /// populated** in [`Self::primitive_aabb_buffer`] via a GPU kernel
+    /// (e.g. Stage 33.2's `compute_tri_aabbs`). Skips the host-side
+    /// AABB collection + `write_buffer` upload that
+    /// [`Self::refit_only`] performs.
+    ///
+    /// Requires a non-empty cached topology — the first call to refit
+    /// after construction must go through [`Self::dispatch`] (or
+    /// [`Self::refit_only`]) to seed the Morton codes + tree topology.
+    /// After that the topology is reused as long as `n` matches the
+    /// cached primitive count.
+    ///
+    /// `n` is the number of primitives the AABBs cover (must match
+    /// the cached `prim_count`). Returns `Err` if no cache is present
+    /// or the count drifted.
+    pub fn refit_in_place(&mut self, n: u32) -> Result<()> {
+        let cache = self.cached_topology.as_ref().ok_or_else(|| {
+            Error::Gpu(
+                "LbvhBroadPhase::refit_in_place: no cached topology — \
+                 call dispatch / refit_only at least once first"
+                    .into(),
+            )
+        })?;
+        if cache.prim_count != n {
+            return Err(Error::Gpu(format!(
+                "LbvhBroadPhase::refit_in_place: count drift ({} → {}) — \
+                 call dispatch to rebuild topology",
+                cache.prim_count, n
+            )));
+        }
+        let topo = cache.clone();
+        // Refresh uniforms from the cached scene bounds (the AABBs the
+        // caller wrote should fit these — if they grew >2x the caller
+        // is responsible for forcing a full rebuild).
+        let u = Uniforms {
+            primitive_count: n,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            scene_min: topo.scene_min,
+            scene_max: topo.scene_max,
+        };
+        self.queue
+            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        // Run refit + find_pairs (we still need the find_pairs slot
+        // because the caller might consume the pair output; cheap if
+        // they don't).
+        let _pairs = self.dispatch_kernels(n, /*do_build=*/ false)?;
+        Ok(())
+    }
+
+    /// Borrow the `sorted_idx` buffer — leaf `i` of the LBVH points to
+    /// primitive `sorted_idx[i]`. Downstream traversal kernels need
+    /// this to map leaf indices back to the original primitive ids.
+    pub fn sorted_idx_buffer(&self) -> &wgpu::Buffer {
+        &self.sorted_idx
+    }
+
+    /// Borrow the per-primitive AABB upload buffer. Same memory the
+    /// build / refit passes read; downstream kernels can re-read it
+    /// (e.g. for an inflated-AABB query).
+    pub fn primitive_aabb_buffer(&self) -> &wgpu::Buffer {
+        &self.primitive_aabb
+    }
+
+    /// Borrow the `pair_count` buffer; slot `[1]` is the root node
+    /// index (written by the build pass, re-stamped by `refit_only`).
+    /// Traversal kernels start their DFS from `pair_count[1]`.
+    pub fn pair_count_buffer(&self) -> &wgpu::Buffer {
+        &self.pair_count
+    }
+
     fn dispatch_kernels(&mut self, n: u32, do_build: bool) -> Result<LbvhPairs> {
         // Reset pair counter; if doing refit-only, re-stamp the
         // cached root into `pair_count[1]` so find_pairs can locate

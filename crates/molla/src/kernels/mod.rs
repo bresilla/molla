@@ -55,6 +55,10 @@ mod jacobian;
 #[cfg(feature = "gpu")]
 mod lbvh;
 #[cfg(feature = "gpu")]
+mod soft_bvh_gpu;
+#[cfg(feature = "gpu")]
+mod soft_vt_contact;
+#[cfg(feature = "gpu")]
 mod radix_sort;
 #[cfg(feature = "gpu")]
 mod raycast;
@@ -139,6 +143,10 @@ pub use integrate_bodies::IntegrateBodiesKernel;
 pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
 #[cfg(feature = "gpu")]
 pub use lbvh::{collect_shape_aabbs, LbvhBroadPhase, LbvhPairs};
+#[cfg(feature = "gpu")]
+pub use soft_bvh_gpu::SoftBvhGpu;
+#[cfg(feature = "gpu")]
+pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu};
 #[cfg(feature = "gpu")]
 pub use radix_sort::{radix_sort_pairs, RadixSortKernel};
 #[cfg(feature = "gpu")]
