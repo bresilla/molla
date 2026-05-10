@@ -53,6 +53,8 @@ pub mod apic_coupling;
 pub mod assembly;
 pub mod bc;
 pub mod element;
+#[cfg(feature = "gpu")]
+pub mod fft_ns;
 pub mod function_space;
 #[cfg(feature = "gpu")]
 pub mod gpu_data;
@@ -66,6 +68,11 @@ pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_a
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 pub use assembly::assemble_global;
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
+#[cfg(feature = "gpu")]
+pub use fft_ns::{
+    solve_navier_stokes_fractional_step, solve_pressure_poisson_fft,
+    FractionalStepConfig,
+};
 pub use element::{
     compute_element_elasticity_stiffness, compute_element_mass,
     compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
