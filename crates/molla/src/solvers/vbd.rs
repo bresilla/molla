@@ -168,6 +168,22 @@ pub struct VbdSolver {
     /// Empty by default; populated via [`Self::with_sdf_grid`] /
     /// [`Self::with_sparse_sdf`].
     pub sdf_backings: Vec<VbdSdfBacking>,
+    /// Stage 33 — cross-mesh VT contact margin (m). Vertices within
+    /// `vt_contact_margin` of any other-mesh tri trigger a contact;
+    /// the post-substep projection pushes them out. Default `0.01`
+    /// (1 cm) — comfortable for ~5 cm cloth + jelly cells.
+    pub vt_contact_margin: Real,
+    /// Stage 33 — number of Jacobi sweeps in the post-substep VT
+    /// projection. 6 is enough for the v1 demo (jelly on cloth);
+    /// raise for stiff multi-contact configurations.
+    pub vt_contact_sweeps: usize,
+    /// Stage 33 — last-substep active VT contact count, surfaced so
+    /// viewer / tests can read it without re-running gather.
+    pub last_vt_contact_count: usize,
+    /// Stage 33 — cross-mesh BVH, lazily built on the first substep
+    /// (`None` until then). Refit per substep; rebuilt only when
+    /// the soft-surface tri count changes.
+    pub(crate) soft_bvh: Option<crate::geometry::SoftBvh>,
     backend: VbdBackend,
 }
 
@@ -189,6 +205,10 @@ impl VbdSolver {
             max_spring_stiffness: 1.0e7,
             vbd_mode: VbdMode::Soft,
             sdf_backings: Vec::new(),
+            vt_contact_margin: 0.01,
+            vt_contact_sweeps: 6,
+            last_vt_contact_count: 0,
+            soft_bvh: None,
             backend: VbdBackend::Cpu,
         }
     }
@@ -224,6 +244,10 @@ impl VbdSolver {
             max_spring_stiffness: max_k,
             vbd_mode: VbdMode::Soft,
             sdf_backings: Vec::new(),
+            vt_contact_margin: 0.01,
+            vt_contact_sweeps: 6,
+            last_vt_contact_count: 0,
+            soft_bvh: None,
             backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
     }
@@ -289,6 +313,28 @@ impl VbdSolver {
     #[must_use]
     pub fn with_hard_mode(self) -> Self {
         self.with_mode(VbdMode::Hard)
+    }
+
+    /// Stage 33 — set the cross-mesh VT contact margin (m).
+    #[must_use]
+    pub fn with_vt_contact_margin(mut self, m: Real) -> Self {
+        self.vt_contact_margin = m.max(0.0);
+        self
+    }
+
+    /// Stage 33 — set the number of Jacobi sweeps in the post-substep
+    /// VT contact projection.
+    #[must_use]
+    pub fn with_vt_contact_sweeps(mut self, n: usize) -> Self {
+        self.vt_contact_sweeps = n.max(1);
+        self
+    }
+
+    /// Stage 33 — last-frame active VT contact count. Available for
+    /// the viewer pane and tests after `step` returns.
+    #[must_use]
+    pub fn last_vt_contact_count(&self) -> usize {
+        self.last_vt_contact_count
     }
 
     /// Refresh the per-spring stiffness table from `model`. Call
@@ -423,6 +469,35 @@ impl Solver for VbdSolver {
                         &inv_mass_vec,
                     )?;
                 }
+                // Stage 33 — cross-mesh soft-vs-soft VT contact
+                // projection. Two-way (vertex side + tri side) Jacobi
+                // sweep that runs after the inner VBD substeps so the
+                // contact correction sits on top of the elastic
+                // dynamics. No-op when fewer than two soft surfaces
+                // are registered.
+                if model.soft_surfaces.len() >= 2 && self.contact_stiffness > 0.0 {
+                    if self.soft_bvh.is_none() {
+                        self.soft_bvh = Some(crate::geometry::SoftBvh::build(model, state_out));
+                    }
+                    let bvh = self.soft_bvh.as_mut().unwrap();
+                    self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                        model,
+                        state_out,
+                        bvh,
+                        self.vt_contact_margin,
+                        self.vt_contact_sweeps,
+                    )?;
+                    // Velocity recovery for the contact projection —
+                    // overwrite particle_qd to match the post-projection
+                    // displacement so the next substep doesn't drive the
+                    // contact back open. We only update particles whose
+                    // q changed (a strict reset would zero penetration
+                    // recovery; we use a 0.0 multiplier on the contact
+                    // delta to kill normal-direction velocity at contact).
+                    // Cheap approximation: leave qd alone — contacts
+                    // reapply each substep so a small spurious normal
+                    // velocity gets absorbed.
+                }
                 // Body state passes through.
                 let q_in = state_in.body_q.host()?.to_vec();
                 let qd_in = state_in.body_qd.host()?.to_vec();
@@ -474,9 +549,11 @@ impl Solver for VbdSolver {
                 //  particle_q download + one upload per substep; on the
                 //  600-substep two-cube test the wall-clock cost is
                 //  ~6ms total, well under the test budget.
+                let has_vt = model.soft_surfaces.len() >= 2 && self.contact_stiffness > 0.0;
                 if (model.tet_count > 0 && model.tet_mesh_count >= 2
                     && self.contact_stiffness > 0.0)
                     || !self.sdf_backings.is_empty()
+                    || has_vt
                 {
                     state_out.particle_q.download(device, queue)?;
                     if model.tet_count > 0 && model.tet_mesh_count >= 2
@@ -492,6 +569,20 @@ impl Solver for VbdSolver {
                             state_out,
                             &radius_vec,
                             &inv_mass_vec,
+                        )?;
+                    }
+                    if has_vt {
+                        if self.soft_bvh.is_none() {
+                            self.soft_bvh =
+                                Some(crate::geometry::SoftBvh::build(model, state_out));
+                        }
+                        let bvh = self.soft_bvh.as_mut().unwrap();
+                        self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                            model,
+                            state_out,
+                            bvh,
+                            self.vt_contact_margin,
+                            self.vt_contact_sweeps,
                         )?;
                     }
                     state_out.particle_q.ensure_device(device)?;

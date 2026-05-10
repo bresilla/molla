@@ -2406,7 +2406,19 @@ impl Sim {
         // Pick the solver this scene wants. XPBD for everything but
         // the Arm scene; Featherstone for proper articulated dynamics
         // (joint_q, joint_qd, joint_force, etc.).
-        let solver = build_solver(&engine, &model, scene.solver_kind());
+        let mut solver = build_solver(&engine, &model, scene.solver_kind());
+        // Stage 33 — when multiple soft surfaces are registered (the
+        // SoftbodyDrop scene), tune the VT contact pipeline for the
+        // typical viewer cell size (~5cm). Without this the default
+        // 1cm margin can let fast-moving vertices skip over the
+        // contact.
+        if matches!(scene, Scene::SoftbodyDrop) {
+            if let SolverBackend::Vbd(s) = &mut solver {
+                s.vt_contact_margin = 0.05;
+                s.vt_contact_sweeps = 8;
+                s.contact_stiffness = 1.0e5;
+            }
+        }
 
         (
             Self {
@@ -9118,7 +9130,7 @@ fn control_pane(
                     Scene::DiffSpring => {
                         diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
                     }
-                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &sim),
+                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
                     _ => {}
                 });
         }
@@ -13509,14 +13521,49 @@ fn diff_spring_pane(
     ui.small("on rest lengths drives the particle to the target.");
 }
 
-fn softbody_drop_pane(ui: &mut egui::Ui, sim: &Sim) {
+fn softbody_drop_pane(ui: &mut egui::Ui, sim: &mut Sim) {
     readout(ui, "Particles", &format!("{}", sim.model.particle_count));
     readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    readout(
+        ui,
+        "Soft surfaces",
+        &format!("{}", sim.model.soft_surfaces.len()),
+    );
+    // Stage 33 — surface the live VT contact count + k_contact slider
+    // so users can verify the contact pipeline is engaged. Reads
+    // from the live VBD solver instance.
+    let mut k_contact: f64 = 0.0;
+    let mut vt_count: usize = 0;
+    let mut sweeps: i32 = 0;
+    if let SolverBackend::Vbd(s) = &sim.solver {
+        k_contact = s.contact_stiffness;
+        vt_count = s.last_vt_contact_count();
+        sweeps = s.vt_contact_sweeps as i32;
+    }
+    readout(ui, "VT contacts", &format!("{vt_count}"));
+    ui.separator();
+
+    ui.label("k_contact (N/m)");
+    if ui
+        .add(
+            egui::Slider::new(&mut k_contact, 1.0e3..=1.0e6).logarithmic(true),
+        )
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.contact_stiffness = k_contact;
+        }
+    }
+    ui.label("VT contact sweeps");
+    if ui.add(egui::Slider::new(&mut sweeps, 1..=16)).changed() {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.vt_contact_sweeps = sweeps.max(1) as usize;
+        }
+    }
     ui.separator();
     ui.small("Tet jelly cube falls onto a hanging VBD cloth.");
-    ui.small("Tests soft-on-soft contact at the engine layer.");
-    ui.small("Note: contact may be limited at the engine v1 layer;");
-    ui.small("if the jelly passes through, raise particle radius.");
+    ui.small("Stage 33 cross-mesh VT contact: the jelly should");
+    ui.small("rest on the cloth instead of passing through.");
 }
 
 fn draw_diff_spring_gizmos(

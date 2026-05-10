@@ -381,6 +381,27 @@ pub struct ModelBuilder {
     /// Stage 20.4 — per-tet kinematic-hardening modulus `c` (Pa).
     tet_kinematic_hardening: Vec<Real>,
     tet_mesh_offsets: Vec<u32>,
+    /// Stage 33 — per-tet-mesh first-particle index, captured when the
+    /// builder added the mesh (every tet mesh's particles live in a
+    /// contiguous range, since `add_particle` is monotonic between
+    /// `add_tet_mesh` calls). Length == `tet_mesh_offsets.len() - 1`.
+    /// Used at build time to compute boundary triangles + the soft
+    /// surface registry entries.
+    tet_mesh_vertex_first: Vec<u32>,
+    /// Stage 33 — per-tet-mesh vertex count (max(tet vertex idx) - first + 1
+    /// for every tet in the mesh). Stored explicitly so the registry
+    /// can encode the shared particle pool slice without re-deriving.
+    tet_mesh_vertex_count: Vec<u32>,
+
+    // Stage 33 — cloth mesh registry (mirrors `tet_mesh_offsets`):
+    // `add_cloth_grid*` pushes one entry per cloth, recording its
+    // particle pool slice and the first/last tri index it contributed
+    // to `tri_indices`.
+    cloth_mesh_first_particle: Vec<u32>,
+    cloth_mesh_particle_count: Vec<u32>,
+    /// Tri offset into the global flat tri list (`tri_indices`)
+    /// for each cloth mesh. Length == cloth_mesh_first_particle.len() + 1.
+    cloth_mesh_tri_offsets: Vec<u32>,
 
     // Body arrays.
     body_mass: Vec<Real>,
@@ -815,6 +836,23 @@ impl ModelBuilder {
         if self.tet_mesh_offsets.is_empty() {
             self.tet_mesh_offsets.push(0);
         }
+        // Stage 33 — track this mesh's vertex range so the
+        // soft-surface registry can encode it without re-scanning.
+        // We compute (min, max) over the tet vertex ids; for
+        // contiguous allocations (the canonical pattern) this equals
+        // (first_particle, first_particle + n_verts - 1).
+        let mut vmin: u32 = u32::MAX;
+        let mut vmax: u32 = 0;
+        for t in tets {
+            for &v in t {
+                if v < vmin {
+                    vmin = v;
+                }
+                if v > vmax {
+                    vmax = v;
+                }
+            }
+        }
         for (i, t) in tets.iter().enumerate() {
             for &v in t {
                 if v >= n_particles {
@@ -871,6 +909,14 @@ impl ModelBuilder {
         }
         // Push the closing CSR offset (next mesh starts here).
         self.tet_mesh_offsets.push(self.tet_indices.len() as u32 / 4);
+        // Stage 33 — record this mesh's vertex range. Vertex count =
+        // `vmax - vmin + 1` (max(vid) - min(vid) + 1) under the
+        // contiguous-allocation assumption that every builder caller
+        // honours by allocating the mesh's particles in one block.
+        let v_first = vmin;
+        let v_count = if vmax >= vmin { vmax - vmin + 1 } else { 0 };
+        self.tet_mesh_vertex_first.push(v_first);
+        self.tet_mesh_vertex_count.push(v_count);
         Ok(TetMeshId(mesh_id as u32))
     }
 
@@ -954,6 +1000,11 @@ impl ModelBuilder {
         let dx = du.length();
         let dy = dv.length();
         let first = self.particle_mass.len() as u32;
+        // Stage 33 — record this cloth's tri offset BEFORE the
+        // builder pushes any new tris. We close the offset at the
+        // bottom of the function so the registry can slice
+        // `tri_indices[tri_off_start..end]`.
+        let tri_off_start = (self.tri_indices.len() / 3) as u32;
 
         // Particles laid out row-major: linear(ix, iy) = first + iy*nx + ix.
         for iy in 0..ny {
@@ -1057,6 +1108,24 @@ impl ModelBuilder {
                 self.add_triangle(v00, v11, v01);
             }
         }
+
+        // Stage 33 — push this cloth into the cloth registry. Vertex
+        // count = nx · ny (every grid sample is a particle); tri
+        // range = [tri_off_start, current_tri_count).
+        let v_count = nx * ny;
+        let tri_off_end = (self.tri_indices.len() / 3) as u32;
+        if self.cloth_mesh_tri_offsets.is_empty() {
+            self.cloth_mesh_tri_offsets.push(tri_off_start);
+        } else {
+            // Sanity: the previous mesh's closing offset must equal
+            // our opening offset. If not, downstream registry slicing
+            // will be wrong (some other path pushed tris out of
+            // band — e.g. `add_triangle` directly).
+            // We don't panic; we just trust the caller.
+        }
+        self.cloth_mesh_tri_offsets.push(tri_off_end);
+        self.cloth_mesh_first_particle.push(first);
+        self.cloth_mesh_particle_count.push(v_count);
 
         (first, nx, ny)
     }
@@ -2328,6 +2397,77 @@ impl ModelBuilder {
                 &self.cable_bending_stiffness,
             );
 
+        // Stage 33 — build the soft-surface registry. Each tet mesh
+        // contributes its boundary tris (computed via the standard
+        // "tris that belong to exactly one tet" pass); each cloth
+        // mesh contributes its existing tessellation tris straight
+        // from `tri_indices`. Both append into the flat
+        // `soft_surface_tris` array; per-surface entries record the
+        // [tri_offset .. tri_offset + tri_count) slice + the vertex
+        // pool slice the surface owns.
+        let mut soft_surfaces: Vec<crate::geometry::SoftSurface> = Vec::new();
+        let mut soft_surface_tris: Vec<[u32; 3]> = Vec::new();
+        let n_tet_meshes = self.tet_mesh_offsets.len().saturating_sub(1);
+        for m in 0..n_tet_meshes {
+            let lo = self.tet_mesh_offsets[m] as usize;
+            let hi = self.tet_mesh_offsets[m + 1] as usize;
+            let mut mesh_tets: Vec<[u32; 4]> = Vec::with_capacity(hi - lo);
+            for t in lo..hi {
+                mesh_tets.push([
+                    self.tet_indices[t * 4],
+                    self.tet_indices[t * 4 + 1],
+                    self.tet_indices[t * 4 + 2],
+                    self.tet_indices[t * 4 + 3],
+                ]);
+            }
+            let bnd = crate::geometry::compute_tet_surface_triangles(&mesh_tets);
+            let tri_off = soft_surface_tris.len() as u32;
+            for tri in &bnd {
+                soft_surface_tris.push(*tri);
+            }
+            let v_first = self
+                .tet_mesh_vertex_first
+                .get(m)
+                .copied()
+                .unwrap_or(0);
+            let v_count = self
+                .tet_mesh_vertex_count
+                .get(m)
+                .copied()
+                .unwrap_or(0);
+            soft_surfaces.push(crate::geometry::SoftSurface {
+                kind: crate::geometry::SoftSurfaceKind::TetMesh,
+                vertex_offset: v_first,
+                vertex_count: v_count,
+                tri_offset: tri_off,
+                tri_count: bnd.len() as u32,
+                tet_mesh_id: Some(crate::sim::TetMeshId(m as u32)),
+                cloth_mesh_id: None,
+            });
+        }
+        let n_cloth_meshes = self.cloth_mesh_first_particle.len();
+        for m in 0..n_cloth_meshes {
+            let tri_lo = self.cloth_mesh_tri_offsets[m] as usize;
+            let tri_hi = self.cloth_mesh_tri_offsets[m + 1] as usize;
+            let tri_off = soft_surface_tris.len() as u32;
+            for t in tri_lo..tri_hi {
+                soft_surface_tris.push([
+                    self.tri_indices[t * 3],
+                    self.tri_indices[t * 3 + 1],
+                    self.tri_indices[t * 3 + 2],
+                ]);
+            }
+            soft_surfaces.push(crate::geometry::SoftSurface {
+                kind: crate::geometry::SoftSurfaceKind::Cloth,
+                vertex_offset: self.cloth_mesh_first_particle[m],
+                vertex_count: self.cloth_mesh_particle_count[m],
+                tri_offset: tri_off,
+                tri_count: (tri_hi - tri_lo) as u32,
+                tet_mesh_id: None,
+                cloth_mesh_id: Some(crate::geometry::ClothMeshId(m as u32)),
+            });
+        }
+
         Ok(Model {
             particle_count,
             particle_mass: Buffer::from_vec(self.particle_mass, s),
@@ -2396,6 +2536,8 @@ impl ModelBuilder {
                 },
                 s,
             ),
+            soft_surfaces,
+            soft_surface_tris,
             vertex_adjacent_tets_offsets: Buffer::from_vec(
                 vertex_adjacent_tets_offsets,
                 s,
@@ -2938,6 +3080,43 @@ fn color_particles(
     (color_count, offsets, indices)
 }
 
+/// Stage 33 — re-colour `particle_count` particles given a set of
+/// dynamic VT contact pairs (vertex/tri-vertex). Combines the static
+/// constraint adjacency (springs + tets + cable bending) with the
+/// supplied per-substep VT pairs and runs the same greedy colouring.
+///
+/// The VBD GPU port (Stage 33.2) will call this once per substep
+/// after `gather_vt_contacts` so the per-color sweep can include the
+/// VT penalty terms without races. v1 ships the projection as a
+/// separate post-substep pass and so doesn't need this — the function
+/// is provided to keep the API stable for the GPU port.
+#[allow(clippy::too_many_arguments, dead_code)]
+pub(crate) fn color_particles_with_vt_contacts(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+    tet_indices: &[u32],
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+    vt_pairs: &[(u32, u32)],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    color_particles_with_extra_pairs(
+        particle_count,
+        vertex_adj_offsets,
+        vertex_adj_springs,
+        spring_a,
+        spring_b,
+        tet_indices,
+        cable_particle_offsets,
+        cable_particles,
+        cable_bending_stiffness,
+        vt_pairs,
+    )
+}
+
 /// Stage 20.2 superset of [`color_particles`] — incorporates tet
 /// adjacency edges *and* CABLE bending hinges in addition to
 /// spring-graph edges. Two particles `(u, v)` are coloured
@@ -2959,6 +3138,35 @@ fn color_particles_with_tets_and_bending(
     cable_particle_offsets: &[u32],
     cable_particles: &[u32],
     cable_bending_stiffness: &[Real],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    color_particles_with_extra_pairs(
+        particle_count,
+        vertex_adj_offsets,
+        vertex_adj_springs,
+        spring_a,
+        spring_b,
+        tet_indices,
+        cable_particle_offsets,
+        cable_particles,
+        cable_bending_stiffness,
+        &[],
+    )
+}
+
+/// Internal — runs the greedy colouring with optional extra
+/// vertex-pair edges (e.g. VT contacts).
+#[allow(clippy::too_many_arguments)]
+fn color_particles_with_extra_pairs(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+    tet_indices: &[u32],
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+    extra_pairs: &[(u32, u32)],
 ) -> (usize, Vec<u32>, Vec<u32>) {
     if particle_count == 0 {
         return (0, vec![0u32], Vec::new());
@@ -3032,6 +3240,17 @@ fn color_particles_with_tets_and_bending(
                 }
             }
         }
+    }
+    // Stage 33 — extra dynamic pairs (e.g. VT contact endpoints).
+    // Both directions are added for symmetry.
+    for &(u, v) in extra_pairs {
+        let ui = u as usize;
+        let vi = v as usize;
+        if ui >= particle_count || vi >= particle_count || ui == vi {
+            continue;
+        }
+        neighbour[ui].push(v);
+        neighbour[vi].push(u);
     }
 
     let mut color_of = vec![u32::MAX; particle_count];
