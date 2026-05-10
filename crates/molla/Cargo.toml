@@ -129,3 +129,24 @@ name = "bench_vbd_cloth_gpu"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Stage D — VBD tets (soft body)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_vbd_tets"
+harness = false
+
+[[bench]]
+name = "bench_vbd_tets_gpu"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage E — Cable
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_cable_drop"
+harness = false
+
