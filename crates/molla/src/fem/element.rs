@@ -139,6 +139,31 @@ pub fn compute_element_stiffness(
     }
 }
 
+/// Per-cell **wave** stiffness matrix `Kₑ = c² · ∫ ∇φᵢ · ∇φⱼ dx`.
+///
+/// Stage 37.1 — symmetric Helmholtz operator used as the spatial
+/// operator of the second-order wave equation `∂²u/∂t² = c² ∇²u`. The
+/// math is identical to [`compute_element_stiffness`]; only the
+/// physical interpretation of the scaling factor differs (here `c²` is
+/// the squared wave speed instead of a thermal diffusivity). This is
+/// kept as a separate entry-point so callers reading the assembly
+/// visitor list can tell at a glance which PDE is being assembled.
+///
+/// Triangle elements project to the `(x, y)` plane; tetrahedral
+/// elements use the full 3D vertex positions.
+#[must_use]
+pub fn compute_element_wave_stiffness(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    c2: Real,
+) -> Vec<Vec<Real>> {
+    // Same math as the Laplacian — just rebadged with `c²` as the
+    // physical coefficient. Re-using the implementation keeps the two
+    // kernels bit-for-bit identical (see
+    // `wave_element_stiffness_proportional_to_laplacian`).
+    compute_element_stiffness(cell, vertices, c2)
+}
+
 // ─── Geometric helpers ───────────────────────────────────────────────
 
 /// 2D signed area of a triangle (positive when CCW), computed from

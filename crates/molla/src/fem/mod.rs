@@ -69,6 +69,7 @@ pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 pub use element::{
     compute_element_elasticity_stiffness, compute_element_mass,
     compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
+    compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, FunctionSpace};
 #[cfg(feature = "gpu")]
@@ -81,7 +82,8 @@ pub use p2_element::{
 };
 pub use solver::{
     solve_nonlinear_static, solve_steady_state, solve_steady_state_vector,
-    solve_transient,
+    solve_transient, solve_wave_transient, WaveStepResult,
+    NEWMARK_BETA_DEFAULT, NEWMARK_GAMMA_DEFAULT,
 };
 pub use stokes::{
     apply_stokes_velocity_bcs, assemble_div_block, assemble_velocity_block,
