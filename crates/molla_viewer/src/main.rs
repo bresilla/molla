@@ -2470,7 +2470,12 @@ impl Sim {
             }
         }
         // Stage 33.4 — FastSoftImpact uses CPU VBD because CCD is
-        // host-side only in v1 (CCD-aware GPU port deferred).
+        // host-side only in v1. Stage 33.2.1 ships GPU friction +
+        // restitution, but the CCD pass for soft contact is still
+        // CPU-only (TODO Stage 33.4.1). Without CCD the cube launched
+        // at 5 m/s would tunnel through the cloth on the very first
+        // substep, so we stay on the CPU backend until the GPU CCD
+        // lands.
         if matches!(scene, Scene::FastSoftImpact) {
             solver = SolverBackend::Vbd(
                 mp::VbdSolver::new_cpu()
@@ -2482,7 +2487,10 @@ impl Sim {
                     .with_ccd_velocity_threshold(0.5),
             );
         }
-        // Stage 33.5 — SoftBrake friction sweep.
+        // Stage 33.5 — SoftBrake friction sweep. Stage 33.2.1 brought
+        // Coulomb friction + restitution to the GPU kernel so the
+        // scene now runs on the default GPU VBD backend (no CPU
+        // override needed). Just tune the contact pipeline knobs.
         if matches!(scene, Scene::SoftBrake) {
             if let SolverBackend::Vbd(s) = &mut solver {
                 s.vt_contact_margin = 0.02;
