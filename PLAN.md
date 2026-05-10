@@ -5467,6 +5467,104 @@ contact, plus a restitution coefficient.
 
 **Dependencies:** Stage 33.
 
+### Stage 36 — FEM framework v1 (P1 nodal, CPU) — new continuum-physics axis
+
+NVIDIA Warp ships an extensive FEM library (`xtra/warp/warp/examples/fem/`
+— 22 examples across diffusion, elasticity, Stokes, Navier-Stokes,
+shallow water, magnetostatics, Burgers, etc.). molla today has zero
+FEM — a major gap blocking ~22 of the Warp example ports. Stage 36
+ships the v1 framework: enough machinery to express + solve a
+standard heat-equation demo, with an architecture that grows into
+Stages 36.1+ for the harder PDEs.
+
+**Scope discipline (LOAD-BEARING):** v1 is the FRAMEWORK + ONE END-
+TO-END DEMO (heat / Laplace + diffusion). It is NOT a Warp-FEM clone.
+The architecture must support — but Stage 36 does not ship — higher-
+order elements, mixed formulations, DG variants, adjoint sensitivity.
+Each of those is its own follow-up stage so we don't drown the v1.
+
+**v1 deliverables:**
+
+- New `crates/molla/src/fem/` module with:
+  - `mesh.rs` — `FemMesh { vertices: Vec<Vec3>, cells: Vec<FemCell> }`
+    where `FemCell::Tri([u32; 3])` (2D) or `FemCell::Tet([u32; 4])`
+    (3D). Reuses molla's existing `TriMesh` / tet-mesh types where
+    possible.
+  - `space.rs` — `FunctionSpace::P1Nodal` (one DoF per vertex). The
+    enum leaves room for `P0CellWise`, `P2`, `RaviartThomas` in
+    follow-ups.
+  - `quadrature.rs` — Gauss rules: 1-point + 3-point for triangles,
+    1-point + 4-point for tets. (Higher-order = Stage 36.3.)
+  - `element.rs` — `compute_element_mass(cell, vertices) -> Mat`
+    (3×3 for tri, 4×4 for tet); `compute_element_stiffness(cell,
+    vertices) -> Mat` (per-cell Laplacian operator). The "weak form"
+    visitor pattern lives here; Stage 36.1 adds elasticity, etc.
+  - `assembly.rs` — `assemble_global(mesh, space, element_visitor)
+    -> CsrMatrix` and the Dirichlet-BC enforcement helper. CSR sparse
+    matrix is implemented in `math/sparse.rs` (Stage 27 brought it up
+    for the iterative solvers).
+  - `bc.rs` — `BoundaryCondition::Dirichlet { vertex, value }` and
+    `BoundaryCondition::Neumann { face, flux }`.
+  - `solver.rs` — `solve_steady_state(K, f, bcs) -> Vec<Real>` using
+    the existing `cg_solve` / `pcg_solve` from Stage 27. Time-stepping
+    (`solve_transient`) for parabolic problems uses backward Euler:
+    `(M / dt + K) u_new = f + M u_old / dt`.
+
+- New `Scene::FemHeat` (#47) in `crates/molla_viewer/src/main.rs`:
+  - 16×16×16 tet mesh of a unit cube.
+  - Dirichlet BCs: top face at `T = 1.0`, bottom face at `T = 0.0`.
+  - Run heat equation `∂T/∂t = α∇²T` to steady state; render the
+    tet mesh with per-vertex colour from blue (cold) to red (hot).
+  - Pane: thermal diffusivity slider, time step slider, residual
+    norm readout, "Reset to T=0" button.
+
+**Tests** (`crates/molla/tests/fem_v1.rs`, CPU-only, no `#[ignore]`):
+- `p1_tri_mass_matrix_unit_triangle` — analytic check: mass matrix
+  for a unit-area triangle should be `(area/12) * [[2,1,1],[1,2,1],[1,1,2]]`.
+- `p1_tet_stiffness_constant_field` — apply a linear field over a
+  tet, verify the stiffness operator returns zero (∇²(linear) = 0).
+- `assemble_laplacian_2d_unit_square_solves_to_analytic` — Dirichlet
+  problem on `[0,1]²` with known harmonic boundary data; FEM
+  solution within 1e-3 of the analytic one at coarse mesh.
+- `heat_steady_state_3d_cube_matches_analytic` — Dirichlet
+  `T(top)=1, T(bottom)=0`, others insulating; steady state should be
+  `T(z) = z` to 1e-2 at 16×16×16.
+- `time_stepping_converges_to_steady_state` — same problem, backward
+  Euler; converges to the steady solution within 200 steps at
+  `dt = 0.01`.
+
+**Caveats (v1):**
+- CPU only. GPU port is Stage 36.5 (the assembly + sparse-matvec are
+  fine on CPU at moderate sizes; v2 mesh sizes need GPU).
+- P1 nodal only. Higher-order = Stage 36.3.
+- Scalar fields only (heat, diffusion). Vector-valued fields
+  (elasticity, Stokes, Navier-Stokes) = Stages 36.1, 36.2.
+- No mesh adaptivity (uniform refinement only).
+- No mixed formulations (no Raviart-Thomas, no Taylor-Hood).
+- No adjoint / autograd through FEM = Stage 36.4.
+
+**Dependencies:** Stage 27 (`cg_solve` / `pcg_solve`), existing
+TriMesh + tet-mesh types from VBD work.
+
+### Stage 36.1 — FEM elasticity (linear + St. Venant-Kirchhoff)
+Vector-valued P1 displacement field; element stiffness from linear
+elasticity strain energy. Demo: cantilever beam under load. Defers:
+plasticity, contact, dynamic.
+
+### Stage 36.2 — FEM Stokes + Navier-Stokes (Taylor-Hood / SIMPLE)
+Mixed velocity-pressure spaces, time-stepping. Demo: lid-driven cavity.
+
+### Stage 36.3 — Higher-order elements (P2, P3)
+Additional basis functions + quadrature rules. Demo: convection-
+diffusion DG.
+
+### Stage 36.4 — Adjoint / differentiable FEM
+Reverse-mode through assembly + solve. Demo: shape optimization.
+
+### Stage 36.5 — GPU port of FEM v1 framework
+WGSL kernels for assembly + sparse-matvec; reuse Stage 27 CG-as-
+matrix-free closure.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
