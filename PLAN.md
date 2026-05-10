@@ -5565,6 +5565,35 @@ Reverse-mode through assembly + solve. Demo: shape optimization.
 WGSL kernels for assembly + sparse-matvec; reuse Stage 27 CG-as-
 matrix-free closure.
 
+### Stage 36.6 — Gmsh mesh import via `mshio`
+
+Bring in the `mshio` crate (focused MSH-format parser, ~600 LOC, no
+heavy deps) so FEM scenes can load real CAD meshes instead of
+procedurally-generated cube-and-sphere primitives. Constructor:
+`FemMesh::from_gmsh(&str) -> Result<FemMesh>` reads MSH 4.1 (the
+ASCII + binary variants `mshio` ships).
+
+**Why now (vs. roll our own):** Gmsh MSH is a well-defined format
+with a maintained pure-Rust parser. Writing our own buys nothing.
+Defer to after Stage 36 v1 ships so we don't entangle the framework
+roll-out with parser edge cases.
+
+**Deferred:** alternative formats (.vtk, .obj for FEM, .ply with
+attributes) — add as users ask.
+
+**Dependencies:** Stage 36 v1.
+
+### Stage 36.7 — Heavyweight sparse direct solver (`russell_sparse`)
+
+If Stage 36.2 (Stokes / Navier-Stokes) saddle-point systems prove
+too ill-conditioned for our pure-Rust CG to converge in reasonable
+iterations, swap in `russell_sparse`'s wrappers around MUMPS /
+UMFPACK for direct factorization. Today's CG handles diffusion +
+heat fine; this stage is a contingency, not committed work.
+
+**NOT planned for v1.** Listed only so we have a fallback in mind
+if iterative solvers break down on harder PDEs.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
