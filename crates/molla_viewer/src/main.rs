@@ -387,6 +387,7 @@ fn main() {
         .insert_resource(FemHeatExampleState::default())
         .insert_resource(FemHeatP2ExampleState::default())
         .insert_resource(FemBeamExampleState::default())
+        .insert_resource(FemDiffBeamExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -455,6 +456,7 @@ fn main() {
                     update_fem_heat_example,
                     update_fem_heat_p2_example,
                     update_fem_beam_example,
+                    update_fem_diff_beam_example,
                 )
                     .chain(),
                 (
@@ -489,6 +491,9 @@ fn main() {
             )
                 .chain(),
         )
+        // Stage 36.4 — kept in its own `add_systems` call so the chain
+        // tuple above stays under Bevy's 20-element ceiling.
+        .add_systems(Update, draw_fem_diff_beam_gizmos)
         .add_systems(EguiPrimaryContextPass, control_pane)
         .run();
 }
@@ -587,6 +592,8 @@ struct SceneStates<'w> {
     fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
     /// Stage 36.1 — FEM elasticity beam demo state.
     fem_beam: ResMut<'w, FemBeamExampleState>,
+    /// Stage 36.4 — Differentiable FEM beam demo state.
+    fem_diff_beam: ResMut<'w, FemDiffBeamExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -643,6 +650,8 @@ struct PaneSceneStates<'w> {
     fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
     /// Stage 36.1 — FEM elasticity beam demo state.
     fem_beam: ResMut<'w, FemBeamExampleState>,
+    /// Stage 36.4 — Differentiable FEM beam demo state.
+    fem_diff_beam: ResMut<'w, FemDiffBeamExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -969,6 +978,12 @@ enum Scene {
     /// Stage 36.1 — FEM elasticity cantilever-beam demo. 20×4×4 tet
     /// beam pinned at one end, downward traction on the other end.
     FemBeam,
+    /// Stage 36.4 — Differentiable FEM beam. Same geometry as
+    /// `Scene::FemBeam`, but with a "Target tip deflection" slider; the
+    /// scene runs gradient descent on Young's modulus to make the
+    /// solved tip deflection match the target. Pane shows current vs
+    /// target deflection, gradient norm, and iteration count.
+    FemDiffBeam,
 }
 
 impl Scene {
@@ -1024,6 +1039,7 @@ impl Scene {
         Scene::FemHeat,
         Scene::FemBeam,
         Scene::FemHeatP2,
+        Scene::FemDiffBeam,
     ];
 
     fn label(self) -> &'static str {
@@ -1077,6 +1093,7 @@ impl Scene {
             Scene::FemHeat => "47 FEM heat (Stage 36 v1)",
             Scene::FemBeam => "48 FEM elasticity (Stage 36.1)",
             Scene::FemHeatP2 => "49 FEM heat P2 (Stage 36.3)",
+            Scene::FemDiffBeam => "51 FEM diff beam (Stage 36.4)",
         }
     }
 
@@ -2434,6 +2451,7 @@ impl Sim {
             Scene::FemHeat => build_fem_heat_model(),
             Scene::FemHeatP2 => build_fem_heat_p2_model(),
             Scene::FemBeam => build_fem_beam_model(),
+            Scene::FemDiffBeam => build_fem_diff_beam_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5582,6 +5600,8 @@ fn apply_scene_switch(
     scene_states.fem_heat_p2.needs_reset = true;
     // Stage 36.1 — same for the elasticity beam.
     scene_states.fem_beam.needs_reset = true;
+    // Stage 36.4 — same for the differentiable elasticity beam.
+    scene_states.fem_diff_beam.needs_reset = true;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5699,6 +5719,11 @@ fn step_simulation(
     // solver in `update_fem_beam_example`; bypass the standard
     // pipeline (no bodies, no contacts).
     if sim.scene == Scene::FemBeam {
+        return;
+    }
+    // Stage-36.4 differentiable FEM beam — runs gradient descent on E
+    // in `update_fem_diff_beam_example`; same bypass as `FemBeam`.
+    if sim.scene == Scene::FemDiffBeam {
         return;
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
@@ -9119,6 +9144,7 @@ fn control_pane(
                     | Scene::FemHeat
                     | Scene::FemHeatP2
                     | Scene::FemBeam
+                    | Scene::FemDiffBeam
             ),
             _ => false,
         },
@@ -9265,6 +9291,7 @@ fn control_pane(
         Scene::FemHeat => Some("FEM heat (Stage 36)"),
         Scene::FemHeatP2 => Some("FEM heat P2 (Stage 36.3)"),
         Scene::FemBeam => Some("FEM beam (Stage 36.1)"),
+        Scene::FemDiffBeam => Some("FEM diff beam (Stage 36.4)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9372,6 +9399,9 @@ fn control_pane(
                         fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2)
                     }
                     Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
+                    Scene::FemDiffBeam => {
+                        fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam)
+                    }
                     _ => {}
                 });
         }
@@ -15335,5 +15365,361 @@ fn fem_beam_pane(ui: &mut egui::Ui, state: &mut FemBeamExampleState) {
     }
     ui.small("BCs: clamp at x = 0, traction on x = L.");
     ui.small("Linear: solves K · u = f. SVK: 5-iter Newton-Raphson.");
+}
+
+// ─── Stage 36.4 — Differentiable FEM beam ─────────────────────────────
+//
+// Same beam geometry as `Scene::FemBeam`, but instead of just solving
+// K · u = f for a fixed material, the scene runs gradient descent on
+// Young's modulus E to drive the tip-deflection toward a user-supplied
+// target. Each frame:
+//   1. Forward-solve the linear elasticity system at the current E.
+//   2. Read the tip deflection.
+//   3. Compute the loss `L = ½ (δ − δ_target)²`.
+//   4. Adjoint-solve `K · λ = ∂L/∂u` (the seed has a single non-zero
+//      component, the average of (δ − δ_target) / N_tip across the
+//      tip-face DoFs).
+//   5. Compute `∂L/∂E = compute_grad_youngs(...)`, step
+//      `E ← E − η · ∂L/∂E`.
+//
+// Convergence is fastest for an adaptive step ∝ E²/L; we keep a
+// fixed-but-relative `lr_factor` slider so the user can play.
+
+#[derive(Resource)]
+struct FemDiffBeamExampleState {
+    mesh: fem::FemMesh,
+    bcs: Vec<fem::BoundaryCondition>,
+    /// Tip-face vertex indices — used to read the tip deflection +
+    /// build the adjoint seed.
+    tip_face_verts: Vec<u32>,
+    /// External-load vector — fixed for this scene (the scene
+    /// optimises material, not load).
+    f_ext: Vec<f64>,
+    /// Current displacement field.
+    u: Vec<f64>,
+    /// Current Young's modulus (the optimisation variable).
+    youngs: f64,
+    /// Fixed Poisson's ratio.
+    poisson: f64,
+    /// Fixed total tip-load (downward).
+    load_z: f64,
+    /// Target tip deflection (slider, m).
+    target_deflection: f64,
+    /// Current tip deflection.
+    tip_deflection: f64,
+    /// Last computed `∂L/∂E`.
+    last_grad: f64,
+    /// Per-step learning-rate factor (multiplies the adaptive E²/|L|
+    /// scale). 0 ⇒ paused.
+    lr_factor: f64,
+    /// Step counter (resets on entry / when target changes).
+    iter_count: usize,
+    /// Run / pause toggle for the descent loop.
+    run_descent: bool,
+    /// Set by `apply_scene_switch`; cleared on the first update tick.
+    needs_reset: bool,
+    /// Set by the pane "Reset" button.
+    user_reset: bool,
+    /// Last loss value (for the readout).
+    last_loss: f64,
+}
+
+impl Default for FemDiffBeamExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tet_grid_3d(
+            FEM_BEAM_NX,
+            FEM_BEAM_NY,
+            FEM_BEAM_NZ,
+            FEM_BEAM_LEN_X,
+            FEM_BEAM_DEPTH_Y,
+            FEM_BEAM_HEIGHT_Z,
+        );
+        let mut bcs: Vec<fem::BoundaryCondition> = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.x.abs() < 1e-9 {
+                bcs.push(fem::BoundaryCondition::DirichletVector {
+                    vertex: i as u32,
+                    values: vec![0.0, 0.0, 0.0],
+                });
+            }
+        }
+        let tip_face_verts: Vec<u32> = mesh
+            .vertices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                if (p.x - FEM_BEAM_LEN_X).abs() < 1e-9 {
+                    Some(i as u32)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let n = mesh.vert_count() * 3;
+        let f_ext = build_fem_beam_traction(&mesh, FEM_BEAM_DEFAULT_LOAD);
+        Self {
+            mesh,
+            bcs,
+            tip_face_verts,
+            f_ext,
+            u: vec![0.0; n],
+            youngs: FEM_BEAM_DEFAULT_E,
+            poisson: FEM_BEAM_DEFAULT_NU,
+            load_z: FEM_BEAM_DEFAULT_LOAD,
+            // Default target: 80% of the analytic Bernoulli deflection
+            // at E0 (so the optimiser can move E either up or down to
+            // hit it depending on starting conditions).
+            target_deflection: -2.0e-3,
+            tip_deflection: 0.0,
+            last_grad: 0.0,
+            lr_factor: 0.2,
+            iter_count: 0,
+            run_descent: true,
+            needs_reset: true,
+            user_reset: false,
+            last_loss: 0.0,
+        }
+    }
+}
+
+impl FemDiffBeamExampleState {
+    /// Run one step of (forward solve → adjoint → gradient descent).
+    fn step_once(&mut self) {
+        // Re-assemble K(E).
+        let (lam, mu) = fem_beam_lame(self.youngs, self.poisson);
+        let space = fem::FunctionSpace::P1Vector { dim: 3 };
+        let stiff = fem::assemble_global(&self.mesh, space, |c, v| {
+            fem::compute_element_elasticity_stiffness(c, v, lam, mu)
+        })
+        .expect("FEM diff beam: assemble stiffness");
+
+        // Forward solve.
+        let mut k_red = stiff.clone();
+        let mut f_red = self.f_ext.clone();
+        fem::apply_bcs(&mut k_red, &mut f_red, &self.bcs, &self.mesh.vertices, 3);
+        let cg_res = molla::math::iterative::cg_solve(
+            |x| {
+                let mut y = vec![0.0; k_red.nrows()];
+                k_red.mv(x, &mut y).unwrap();
+                y
+            },
+            &f_red,
+            &vec![0.0; f_red.len()],
+            1.0e-10,
+            molla::fem::solver::DEFAULT_MAX_ITERS,
+        );
+        self.u = cg_res.x;
+
+        // Tip deflection (avg of tip-face z-components).
+        let n_tip = self.tip_face_verts.len().max(1);
+        let mut sum = 0.0;
+        for &v in &self.tip_face_verts {
+            sum += self.u[(v as usize) * 3 + 2];
+        }
+        self.tip_deflection = sum / n_tip as f64;
+        let err = self.tip_deflection - self.target_deflection;
+        self.last_loss = 0.5 * err * err;
+
+        // Adjoint: ∂L/∂u_v = (err / n_tip) at tip-face z-DoFs (chain
+        // rule of the average reduction); zero everywhere else.
+        let n_dof = self.u.len();
+        let mut dj_du = vec![0.0_f64; n_dof];
+        let coeff = err / n_tip as f64;
+        for &v in &self.tip_face_verts {
+            dj_du[(v as usize) * 3 + 2] = coeff;
+        }
+        let lambda = fem::solve_adjoint_with(
+            &stiff,
+            &dj_du,
+            &self.bcs,
+            &self.mesh.vertices,
+            3,
+            molla::fem::solver::DEFAULT_MAX_ITERS,
+            1.0e-10,
+        );
+        let g = fem::compute_grad_youngs(
+            &self.mesh,
+            &self.mesh.vertices,
+            &self.u,
+            &lambda,
+            self.poisson,
+            self.youngs,
+        );
+        self.last_grad = g;
+
+        // Adaptive step proportional to E²/|L|, scaled by lr_factor.
+        if self.run_descent && self.lr_factor > 0.0 {
+            let lr = self.lr_factor * self.youngs * self.youngs / self.last_loss.max(1e-30);
+            let e_next = (self.youngs - lr * g).max(1.0e3).min(1.0e10);
+            self.youngs = e_next;
+        }
+        self.iter_count += 1;
+    }
+
+    fn reset_optim(&mut self) {
+        let n = self.mesh.vert_count() * 3;
+        self.u = vec![0.0; n];
+        self.youngs = FEM_BEAM_DEFAULT_E;
+        self.tip_deflection = 0.0;
+        self.last_grad = 0.0;
+        self.iter_count = 0;
+        self.last_loss = 0.0;
+        self.f_ext = build_fem_beam_traction(&self.mesh, self.load_z);
+    }
+}
+
+/// Empty molla model — the diff-FEM beam scene carries its own mesh +
+/// solver in `FemDiffBeamExampleState`; the standard pipeline is
+/// short-circuited in `step_simulation`.
+fn build_fem_diff_beam_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("FEM diff beam: empty model"), Vec::new())
+}
+
+/// Per-frame system: drives the gradient-descent loop on Young's
+/// modulus when the scene is active.
+fn update_fem_diff_beam_example(
+    sim: Res<Sim>,
+    mut state: ResMut<FemDiffBeamExampleState>,
+) {
+    if sim.scene != Scene::FemDiffBeam {
+        return;
+    }
+    if state.needs_reset || state.user_reset {
+        state.reset_optim();
+        // Always run one step on entry so the deformed shape is visible
+        // from frame 0.
+        state.step_once();
+        state.needs_reset = false;
+        state.user_reset = false;
+        return;
+    }
+    state.step_once();
+}
+
+/// Draw the deformed tet wireframe + tip-face overlay highlighting how
+/// far the current tip is from the target.
+fn draw_fem_diff_beam_gizmos(
+    sim: Res<Sim>,
+    state: Res<FemDiffBeamExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::FemDiffBeam {
+        return;
+    }
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::with_capacity(state.mesh.cells.len() * 4);
+    let origin = FEM_BEAM_ORIGIN;
+    let pinned: HashSet<u32> = state
+        .bcs
+        .iter()
+        .filter_map(|bc| match bc {
+            fem::BoundaryCondition::DirichletVector { vertex, .. } => Some(*vertex),
+            _ => None,
+        })
+        .collect();
+    let pos = |v: u32| -> bevy::math::Vec3 {
+        let p = state.mesh.vertices[v as usize];
+        let base = (v as usize) * 3;
+        let ux = state.u[base];
+        let uy = state.u[base + 1];
+        let uz = state.u[base + 2];
+        origin
+            + bevy::math::Vec3::new(
+                (p.x + ux) as f32,
+                (p.z + uz) as f32,
+                (p.y + uy) as f32,
+            )
+    };
+    let edge_colour = |a: u32, b: u32| -> Color {
+        if pinned.contains(&a) && pinned.contains(&b) {
+            Color::srgb(0.95, 0.85, 0.30)
+        } else {
+            Color::srgb(0.40, 0.95, 0.55)
+        }
+    };
+    for cell in &state.mesh.cells {
+        if let fem::FemCell::Tet(v) = cell {
+            let edges = [
+                (v[0], v[1]),
+                (v[0], v[2]),
+                (v[0], v[3]),
+                (v[1], v[2]),
+                (v[1], v[3]),
+                (v[2], v[3]),
+            ];
+            for &(a, b) in &edges {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                gizmos.line(pos(a), pos(b), edge_colour(a, b));
+            }
+        }
+    }
+    // Draw a marker on the *target* tip plane (at y_target = z_target
+    // visualised as the desired centroid offset).
+    if let Some(&v0) = state.tip_face_verts.first() {
+        let p = state.mesh.vertices[v0 as usize];
+        // Approximate centroid of the tip face — just average all tip
+        // verts undeformed.
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        for &v in &state.tip_face_verts {
+            cx += state.mesh.vertices[v as usize].y;
+            cy += state.mesh.vertices[v as usize].z;
+        }
+        let n = state.tip_face_verts.len() as f64;
+        cx /= n;
+        cy /= n;
+        let target_z = cy + state.target_deflection;
+        let target_world = origin
+            + bevy::math::Vec3::new(p.x as f32, target_z as f32, cx as f32);
+        gizmos.sphere(target_world, 0.06, Color::srgb(0.95, 0.40, 0.30));
+    }
+}
+
+/// Right-rail pane for `Scene::FemDiffBeam`. Target deflection slider,
+/// run / step controls, and the optimiser readouts.
+fn fem_diff_beam_pane(ui: &mut egui::Ui, state: &mut FemDiffBeamExampleState) {
+    ui.label("Differentiable FEM — Stage 36.4");
+    ui.separator();
+    readout(
+        ui,
+        "Mesh",
+        &format!(
+            "{}×{}×{} tets ({} verts)",
+            FEM_BEAM_NX,
+            FEM_BEAM_NY,
+            FEM_BEAM_NZ,
+            state.mesh.vert_count()
+        ),
+    );
+    readout(ui, "DoFs", &format!("{}", state.u.len()));
+    ui.separator();
+    ui.label("Target tip deflection (m, downward = negative)");
+    let _ = ui.add(egui::Slider::new(&mut state.target_deflection, -1.0e-2..=0.0));
+    ui.label("Step factor (lr · E² / L)");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.lr_factor, 0.0..=1.0).logarithmic(false),
+    );
+    ui.checkbox(&mut state.run_descent, "Run gradient descent");
+    ui.separator();
+    readout(ui, "Young's E (Pa)", &format!("{:.4e}", state.youngs));
+    readout(ui, "Tip δ (m)", &format!("{:.4e}", state.tip_deflection));
+    readout(ui, "Target δ (m)", &format!("{:.4e}", state.target_deflection));
+    let err = state.tip_deflection - state.target_deflection;
+    readout(ui, "δ − target", &format!("{:.4e}", err));
+    readout(ui, "Loss ½(δ−t)²", &format!("{:.4e}", state.last_loss));
+    readout(ui, "∂L/∂E", &format!("{:.4e}", state.last_grad));
+    readout(ui, "|∂L/∂E|", &format!("{:.4e}", state.last_grad.abs()));
+    readout(ui, "Iter", &format!("{}", state.iter_count));
+    ui.separator();
+    if ui.button("Reset optimiser (E = E₀)").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("Forward: K(E) · u = f. Adjoint: K · λ = (δ − target)/N · ê_tip.");
+    ui.small("Update: E ← E − lr_factor · E² / L · ∂L/∂E.");
+    ui.small("Red sphere = target tip-deflection plane.");
 }
 
