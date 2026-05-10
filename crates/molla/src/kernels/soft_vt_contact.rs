@@ -142,13 +142,15 @@ impl SoftVtContactKernel {
         });
 
         // ── Bind-group layouts ─────────────────────────────────────
-        // Group 0: particle_q (rw), particle_inv_mass (ro), particle_dq (rw atomic)
+        // Group 0: particle_q (rw), particle_inv_mass (ro), particle_dq
+        // (rw atomic), particle_qd (rw — for commit_dq velocity damping).
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::soft_vt_contact state"),
             entries: &[
                 rw_storage(0),
                 ro_storage(1),
                 rw_storage(2),
+                rw_storage(3),
             ],
         });
         // Group 1: soft_surface_tris (ro), soft_surfaces (ro)
@@ -537,6 +539,12 @@ impl SoftVtContactKernel {
             .ok_or_else(|| Error::Gpu(
                 "soft_vt_contact: model.particle_inv_mass has no device mirror".into(),
             ))?;
+        let qd = state
+            .particle_qd
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu(
+                "soft_vt_contact: state.particle_qd has no device mirror".into(),
+            ))?;
         Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::soft_vt_contact state bg"),
             layout: &self.layout_state,
@@ -547,6 +555,7 @@ impl SoftVtContactKernel {
                     binding: 2,
                     resource: self.particle_dq.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry { binding: 3, resource: qd.as_entire_binding() },
             ],
         }))
     }

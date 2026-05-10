@@ -584,27 +584,47 @@ impl Solver for VbdSolver {
                     }
                     let soft_bvh = gpu.soft_bvh_gpu.as_mut().unwrap();
                     let vt_kernel = gpu.soft_vt_kernel.as_ref().unwrap();
-                    // 1) compute per-tri AABBs from the post-substep
-                    //    state.particle_q (writes directly into the
-                    //    LBVH primitive_aabb buffer).
-                    vt_kernel.dispatch_compute_tri_aabbs(model, state_out, soft_bvh)?;
-                    // 2) refit the LBVH in place against those AABBs.
-                    soft_bvh.refit(model)?;
-                    // 3) gather + apply + commit_dq — fully GPU.
-                    let stats = vt_kernel.dispatch_gather_and_apply(
-                        model,
-                        state_out,
-                        soft_bvh,
-                        self.vt_contact_margin,
-                        self.contact_stiffness,
-                    )?;
-                    self.last_vt_contact_count = stats.contact_count as usize;
-                    // commit_dq mutated state_out.particle_q in place.
-                    // The Buffer<Vec3> wrapper still thinks the host is
-                    // canonical — mark it device-dirty so subsequent
-                    // host reads trip the staleness check (and
-                    // legitimate use cases call download).
+                    // Run the gather+apply+commit Jacobi-style sweep
+                    // `vt_contact_sweeps` times per substep — matches
+                    // the CPU `project_vt_contacts` semantics. Each
+                    // sweep refits the BVH against the latest
+                    // post-projection positions so successive contacts
+                    // converge.
+                    let n_sweeps = self.vt_contact_sweeps.max(1);
+                    let mut last_count = 0u32;
+                    for _ in 0..n_sweeps {
+                        // 1) compute per-tri AABBs from the current
+                        //    state.particle_q (writes directly into the
+                        //    LBVH primitive_aabb buffer).
+                        vt_kernel.dispatch_compute_tri_aabbs(model, state_out, soft_bvh)?;
+                        // 2) refit the LBVH in place against those AABBs.
+                        soft_bvh.refit(model)?;
+                        // 3) gather + apply + commit_dq — fully GPU.
+                        let stats = vt_kernel.dispatch_gather_and_apply(
+                            model,
+                            state_out,
+                            soft_bvh,
+                            self.vt_contact_margin,
+                            self.contact_stiffness,
+                        )?;
+                        last_count = stats.contact_count;
+                        if stats.contact_count == 0 {
+                            // No active contacts — early-out the rest
+                            // of the sweep (matches CPU
+                            // `project_vt_contacts` `break` on empty
+                            // contact list).
+                            break;
+                        }
+                    }
+                    self.last_vt_contact_count = last_count as usize;
+                    // commit_dq mutated state_out.particle_q +
+                    // particle_qd in place. The Buffer<Vec3> wrapper
+                    // still thinks the host is canonical — mark them
+                    // device-dirty so subsequent host reads trip the
+                    // staleness check (and legitimate use cases call
+                    // download).
                     state_out.particle_q.mark_device_dirty();
+                    state_out.particle_qd.mark_device_dirty();
                 }
                 // Stage 20.4 — host-side fallbacks for tet-vs-tet (when
                 // ≥ 2 tet meshes register but soft surfaces don't yet

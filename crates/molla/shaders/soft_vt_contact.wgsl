@@ -123,9 +123,15 @@ struct Uniforms {
 // place. The `apply_vt_penalty` pass writes to `particle_dq` instead
 // (atomic float-add via CAS); `commit_dq` reads `particle_dq`, adds
 // it into `particle_q`, and zeroes `particle_dq` for the next round.
+// `particle_qd` is read_write because `commit_dq` damps the inward
+// velocity component along the dominant contact direction (the dq
+// direction proxies for the contact normal sum — points the same
+// way for the contact-vertex side, opposite for the tri-vertex side,
+// either way the inward component should be zeroed).
 @group(0) @binding(0) var<storage, read_write> particle_q:        array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read>       particle_inv_mass: array<f32>;
 @group(0) @binding(2) var<storage, read_write> particle_dq:       array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> particle_qd:       array<vec4<f32>>;
 
 // ── Group 1: soft-surface registry + tri indices ─────────────────────
 @group(1) @binding(0) var<storage, read>       soft_surface_tris: array<vec4<u32>>;
@@ -481,8 +487,27 @@ fn commit_dq(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dy = bitcast<f32>(dy_bits);
     let dz = bitcast<f32>(dz_bits);
     if (dx == 0.0 && dy == 0.0 && dz == 0.0) { return; }
+    let dq = vec3<f32>(dx, dy, dz);
     let q_old = particle_q[v].xyz;
-    particle_q[v] = vec4<f32>(q_old + vec3<f32>(dx, dy, dz), 0.0);
+    particle_q[v] = vec4<f32>(q_old + dq, 0.0);
+    // Velocity damping along the dq direction. CPU
+    // `project_vt_contacts` zeroes the inward velocity component
+    // along the per-particle contact-normal sum (vertex side: +n;
+    // tri side: -n weighted by bary). The per-substep accumulated
+    // dq is a mass-weighted proxy for that direction (same sign on
+    // each side — vertex moves +n·α·push, tri verts move
+    // -n·β_i·push). Project out the inward component
+    // (negative-dq direction) of velocity.
+    let dq_len2 = dot(dq, dq);
+    if (dq_len2 > 1.0e-20 && particle_inv_mass[v] > 0.0) {
+        let n_dir = dq / sqrt(dq_len2);
+        let qd_old = particle_qd[v].xyz;
+        let vn = dot(qd_old, n_dir);
+        if (vn < 0.0) {
+            // Inward velocity (against push direction) — zero it.
+            particle_qd[v] = vec4<f32>(qd_old - n_dir * vn, 0.0);
+        }
+    }
     atomicStore(&particle_dq[base + 0u], 0u);
     atomicStore(&particle_dq[base + 1u], 0u);
     atomicStore(&particle_dq[base + 2u], 0u);
