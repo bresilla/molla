@@ -72,8 +72,8 @@ pub fn solve_steady_state_with_initial(
     // Make sure the initial guess is consistent with the Dirichlet
     // values — otherwise CG burns iterations correcting it.
     for bc in bcs {
-        if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
-            x_init[vertex as usize] = value;
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x_init[*vertex as usize] = *value;
         }
     }
     cg_solve(|x| matvec(&k_red, x), &f_red, &x_init, tol, max_iters)
@@ -148,11 +148,177 @@ pub fn solve_transient_with_initial(
     apply_dirichlet(&mut a_red, &mut b, bcs);
     let mut x_init = x0.to_vec();
     for bc in bcs {
-        if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
-            x_init[vertex as usize] = value;
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x_init[*vertex as usize] = *value;
         }
     }
     cg_solve(|x| matvec(&a_red, x), &b, &x_init, tol, max_iters)
+}
+
+/// Vector-aware steady-state solve. Identical to
+/// [`solve_steady_state`] except it routes through [`apply_bcs`] so
+/// `BoundaryCondition::DirichletVector` and `NeumannTraction` are
+/// honoured. `dim` is the per-vertex DoF count (1 for scalar fields,
+/// 2 / 3 for vector elasticity); `vertices` is the mesh vertex array
+/// needed for `NeumannTraction` face-area integration.
+pub fn solve_steady_state_vector(
+    k: &BsrMatrix,
+    f: &[Real],
+    bcs: &[BoundaryCondition],
+    vertices: &[crate::math::Vec3],
+    dim: usize,
+    max_iters: usize,
+    tol: Real,
+) -> Vec<Real> {
+    let mut k_red = k.clone();
+    let mut f_red = f.to_vec();
+    super::bc::apply_bcs(&mut k_red, &mut f_red, bcs, vertices, dim);
+    let mut x_init = vec![0.0; f.len()];
+    for bc in bcs {
+        match bc {
+            BoundaryCondition::Dirichlet { vertex, value } => {
+                x_init[(*vertex as usize) * dim] = *value;
+            }
+            BoundaryCondition::DirichletVector { vertex, values } => {
+                let base = (*vertex as usize) * dim;
+                for (ci, val) in values.iter().enumerate() {
+                    x_init[base + ci] = *val;
+                }
+            }
+            _ => {}
+        }
+    }
+    cg_solve(|x| matvec(&k_red, x), &f_red, &x_init, tol, max_iters).x
+}
+
+/// Newton-Raphson driver for the **nonlinear static** elasticity
+/// solve `R(u) = K_int(u) − f_ext = 0`.
+///
+/// Each Newton iteration:
+///   1. assemble the **tangent** `K(u)` via `tangent_assembler(u)`,
+///   2. compute the **residual** `R(u) = K_int(u) − f_ext` via
+///      `residual_assembler(u)`,
+///   3. apply Dirichlet BCs to `(K, R)` (zero-row + diagonal=1, but
+///      with RHS `−R` so the increment respects the BC),
+///   4. solve `K · du = −R` via `cg_solve`,
+///   5. update `u ← u + du`.
+///
+/// Termination: `‖du‖ < tol` (absolute) or `iter == max_newton_iters`.
+///
+/// `vertices` is needed by `apply_bcs` (NeumannTraction face areas);
+/// `dim` is the per-vertex DoF count. The Dirichlet BCs are
+/// **incremental** for the Newton step (`du = 0` at constrained DoFs
+/// after the first iteration), but the user supplies the absolute
+/// values — we seed `u_initial` to satisfy them then enforce `du = 0`
+/// on those rows internally.
+///
+/// v1: no line search. Small problems only.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_nonlinear_static<KAsm, RAsm>(
+    tangent_assembler: KAsm,
+    residual_assembler: RAsm,
+    f_ext: &[Real],
+    bcs: &[BoundaryCondition],
+    vertices: &[crate::math::Vec3],
+    dim: usize,
+    max_newton_iters: usize,
+    tol: Real,
+) -> Vec<Real>
+where
+    KAsm: Fn(&[Real]) -> BsrMatrix,
+    RAsm: Fn(&[Real]) -> Vec<Real>,
+{
+    let n = f_ext.len();
+    let mut u = vec![0.0; n];
+    // Seed Dirichlet entries.
+    for bc in bcs {
+        match bc {
+            BoundaryCondition::Dirichlet { vertex, value } => {
+                u[(*vertex as usize) * dim] = *value;
+            }
+            BoundaryCondition::DirichletVector { vertex, values } => {
+                let base = (*vertex as usize) * dim;
+                for (ci, val) in values.iter().enumerate() {
+                    u[base + ci] = *val;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for _iter in 0..max_newton_iters {
+        let k = tangent_assembler(&u);
+        let r_int = residual_assembler(&u);
+        // Residual R(u) = K_int(u) − f_ext. Newton increment solves
+        // K · du = −R = f_ext − K_int(u).
+        let mut rhs: Vec<Real> = f_ext
+            .iter()
+            .zip(r_int.iter())
+            .map(|(fe, ri)| fe - ri)
+            .collect();
+        let mut k_red = k;
+        // For Dirichlet rows, enforce du = 0: pin row + zero RHS.
+        // We re-use apply_bcs but with **zero**-valued Dirichlet rows
+        // (the absolute Dirichlet value is already in `u`).
+        let zero_bcs: Vec<BoundaryCondition> = bcs
+            .iter()
+            .map(|bc| match bc {
+                BoundaryCondition::Dirichlet { vertex, .. } => {
+                    BoundaryCondition::Dirichlet { vertex: *vertex, value: 0.0 }
+                }
+                BoundaryCondition::DirichletVector { vertex, values } => {
+                    BoundaryCondition::DirichletVector {
+                        vertex: *vertex,
+                        values: vec![0.0; values.len()],
+                    }
+                }
+                BoundaryCondition::Neumann { face, flux } => {
+                    BoundaryCondition::Neumann { face: *face, flux: *flux }
+                }
+                BoundaryCondition::NeumannTraction { face, traction } => {
+                    BoundaryCondition::NeumannTraction {
+                        face: *face,
+                        traction: *traction,
+                    }
+                }
+            })
+            .collect();
+        // `f_ext` already accounts for tractions, so we DROP traction
+        // entries from the BC list before pinning rows — apply_bcs
+        // would otherwise add them again into `rhs`.
+        let pin_only: Vec<BoundaryCondition> = zero_bcs
+            .into_iter()
+            .filter(|bc| {
+                matches!(
+                    bc,
+                    BoundaryCondition::Dirichlet { .. }
+                        | BoundaryCondition::DirichletVector { .. }
+                )
+            })
+            .collect();
+        super::bc::apply_bcs(&mut k_red, &mut rhs, &pin_only, vertices, dim);
+
+        // Initial guess for the increment: zero (BCs already enforce
+        // du = 0 on the constrained rows).
+        let du = cg_solve(
+            |x| matvec(&k_red, x),
+            &rhs,
+            &vec![0.0; n],
+            DEFAULT_TOL,
+            DEFAULT_MAX_ITERS,
+        )
+        .x;
+        // Update.
+        let mut max_du = 0.0_f64;
+        for (uv, dv) in u.iter_mut().zip(du.iter()) {
+            *uv += *dv;
+            max_du = max_du.max(dv.abs());
+        }
+        if max_du < tol {
+            break;
+        }
+    }
+    u
 }
 
 /// Returns a fresh `BsrMatrix` representing `α·A + β·B` where `A` and
@@ -240,8 +406,8 @@ mod tests {
         }
         let u = solve_transient(&m, &k, &f, &u_old, 0.1, &bcs);
         for bc in &bcs {
-            if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
-                assert!((u[vertex as usize] - value).abs() < 1e-6);
+            if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+                assert!((u[*vertex as usize] - *value).abs() < 1e-6);
             }
         }
     }

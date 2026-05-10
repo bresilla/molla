@@ -1,6 +1,6 @@
 //! Local element matrices — the "weak form" visitor pattern.
 //!
-//! Stage 36 v1 ships two element kernels:
+//! Stage 36 v1 shipped two scalar kernels:
 //!
 //! - [`compute_element_mass`]      — local mass matrix `Mₑ`
 //!   (consistent, `(area / 12) · M_ref` for triangles, `(vol / 20) ·
@@ -8,18 +8,26 @@
 //! - [`compute_element_stiffness`] — local Laplacian `Kₑ = α · ∫ ∇φᵢ ·
 //!   ∇φⱼ dx`. P1 ⇒ gradients are constant per element ⇒ no
 //!   quadrature loop needed; the integral collapses to `α · Bᵀ·B ·
-//!   |Ω|` where `B` is the (D × N) matrix of shape-function
-//!   gradients.
+//!   |Ω|`.
 //!
-//! Both kernels return a row-major dense matrix as `Vec<Vec<Real>>`
-//! (`N × N` where `N` is the cell's vertex count). The choice of
-//! `Vec<Vec<…>>` over a packed `Vec<Real>` keeps the v1 assembly
-//! readable; Stage 36.5 (GPU port) will switch to a flat `[Real; 16]`
-//! style local-matrix payload.
+//! Stage 36.1 adds two **vector-valued** kernels:
 //!
-//! Stage 36.1 will add `compute_element_elasticity_stiffness` here and
-//! Stage 36.2 will add `compute_element_stokes_block` — both follow
-//! the same `(cell, vertices, params) → Vec<Vec<Real>>` shape.
+//! - [`compute_element_elasticity_stiffness`] — linear isotropic
+//!   elasticity `Kₑ = ∫ Bᵀ D B dx`. Returns a `(N · dim) × (N · dim)`
+//!   block where each row/col groups the per-vertex displacement
+//!   components in **interleaved** layout: `[ux₀, uy₀, uz₀, ux₁,
+//!   uy₁, uz₁, …]`. Use parameters `λ, μ` (Lamé coefficients).
+//! - [`compute_element_st_venant_kirchhoff_stress`] — geometrically
+//!   nonlinear elastic force from the Green strain `E = ½(FᵀF − I)`
+//!   and 2nd Piola-Kirchhoff stress `S = λ tr(E) I + 2 μ E`.
+//!
+//! All kernels return a row-major dense matrix as `Vec<Vec<Real>>`.
+//! The choice of `Vec<Vec<…>>` over a packed `Vec<Real>` keeps the
+//! v1 assembly readable; Stage 36.5 (GPU port) will switch to a flat
+//! `[Real; 144]` style local-matrix payload.
+//!
+//! Stage 36.2 will add `compute_element_stokes_block` (Taylor-Hood
+//! velocity-pressure block) under the same shape.
 
 use crate::math::{Real, Vec3};
 
@@ -187,6 +195,258 @@ fn tet_shape_grads(p: &[Vec3; 4]) -> [Vec3; 4] {
     let g3 = inv_t.z_axis;
     let g0 = -(g1 + g2 + g3);
     [g0, g1, g2, g3]
+}
+
+// ─── Linear isotropic elasticity ─────────────────────────────────────
+
+/// Per-cell stiffness matrix for linear isotropic elasticity:
+/// `Kₑ = ∫ Bᵀ D B dV`, where `B` is the strain-displacement matrix
+/// (Voigt notation) and `D` is the elasticity tensor in matrix form.
+///
+/// Returns a `(N · dim) × (N · dim)` row-major matrix in **interleaved**
+/// layout: row `i * dim + c` corresponds to local vertex `i`'s
+/// component `c`. For a tetrahedron, that's a 12×12 matrix; for a
+/// triangle (plane strain, `dim = 2`), it's a 6×6 matrix.
+///
+/// Lamé parameters: `lambda = E ν / ((1 + ν)(1 − 2ν))`,
+/// `mu = E / (2(1 + ν))`.
+///
+/// Triangle elements use plane-strain: the out-of-plane strain
+/// `εzz` is held at zero and the in-plane part of `D` becomes
+/// `λ + 2μ` on the diagonal (xx, yy), `λ` off-diagonal, with shear
+/// modulus `μ` in the (3,3) slot.
+#[must_use]
+pub fn compute_element_elasticity_stiffness(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    lambda: Real,
+    mu: Real,
+) -> Vec<Vec<Real>> {
+    match cell {
+        FemCell::Tri(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+            ];
+            let area = tri_area_2d(&p);
+            let grads = tri_shape_grads_2d(&p);
+            // 2D plane-strain D matrix (3×3 in Voigt: [εxx, εyy, 2εxy]).
+            let d11 = lambda + 2.0 * mu;
+            let d12 = lambda;
+            let d33 = mu;
+            // Build B (3 × 6): for each node i, the columns
+            // (i*2, i*2+1) are
+            //   [ ∂φᵢ/∂x , 0       ]
+            //   [ 0       , ∂φᵢ/∂y ]
+            //   [ ∂φᵢ/∂y , ∂φᵢ/∂x ]
+            let n_dof = 3 * 2;
+            let mut b = vec![vec![0.0; n_dof]; 3];
+            for i in 0..3 {
+                let gx = grads[i][0];
+                let gy = grads[i][1];
+                b[0][2 * i] = gx;
+                b[1][2 * i + 1] = gy;
+                b[2][2 * i] = gy;
+                b[2][2 * i + 1] = gx;
+            }
+            // K = (Bᵀ D B) · area. D is diagonal-with-d12-coupling on
+            // the (0,1) (1,0) slots; everything else is diagonal.
+            // Compute D·B first (3 × n_dof), then Bᵀ · (D·B).
+            let mut db = vec![vec![0.0; n_dof]; 3];
+            for c in 0..n_dof {
+                db[0][c] = d11 * b[0][c] + d12 * b[1][c];
+                db[1][c] = d12 * b[0][c] + d11 * b[1][c];
+                db[2][c] = d33 * b[2][c];
+            }
+            let mut k = vec![vec![0.0; n_dof]; n_dof];
+            for r in 0..n_dof {
+                for c in 0..n_dof {
+                    let mut s = 0.0;
+                    for q in 0..3 {
+                        s += b[q][r] * db[q][c];
+                    }
+                    k[r][c] = s * area;
+                }
+            }
+            k
+        }
+        FemCell::Tet(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+                vertices[idx[3] as usize],
+            ];
+            let vol = tet_volume(&p);
+            let grads = tet_shape_grads(&p);
+            // 3D D matrix in Voigt order [εxx, εyy, εzz, γyz, γxz, γxy]
+            // — 6×6, but only the leading 3×3 (axial) and trailing 3×3
+            // (shear, all = μ on the diagonal) are non-trivial.
+            let d11 = lambda + 2.0 * mu;
+            let d12 = lambda;
+            // Build B (6 × 12): for each node i (cols i*3, i*3+1, i*3+2)
+            //   [ ∂x, 0 , 0  ]
+            //   [ 0 , ∂y, 0  ]
+            //   [ 0 , 0 , ∂z ]
+            //   [ 0 , ∂z, ∂y ]
+            //   [ ∂z, 0 , ∂x ]
+            //   [ ∂y, ∂x, 0  ]
+            let n_dof = 4 * 3;
+            let mut b = vec![vec![0.0; n_dof]; 6];
+            for i in 0..4 {
+                let gx = grads[i].x;
+                let gy = grads[i].y;
+                let gz = grads[i].z;
+                let cx = 3 * i;
+                let cy = 3 * i + 1;
+                let cz = 3 * i + 2;
+                b[0][cx] = gx;
+                b[1][cy] = gy;
+                b[2][cz] = gz;
+                b[3][cy] = gz;
+                b[3][cz] = gy;
+                b[4][cx] = gz;
+                b[4][cz] = gx;
+                b[5][cx] = gy;
+                b[5][cy] = gx;
+            }
+            // D · B
+            let mut db = vec![vec![0.0; n_dof]; 6];
+            for c in 0..n_dof {
+                let exx = b[0][c];
+                let eyy = b[1][c];
+                let ezz = b[2][c];
+                db[0][c] = d11 * exx + d12 * eyy + d12 * ezz;
+                db[1][c] = d12 * exx + d11 * eyy + d12 * ezz;
+                db[2][c] = d12 * exx + d12 * eyy + d11 * ezz;
+                db[3][c] = mu * b[3][c];
+                db[4][c] = mu * b[4][c];
+                db[5][c] = mu * b[5][c];
+            }
+            // K = vol · Bᵀ · D · B
+            let mut k = vec![vec![0.0; n_dof]; n_dof];
+            for r in 0..n_dof {
+                for c in 0..n_dof {
+                    let mut s = 0.0;
+                    for q in 0..6 {
+                        s += b[q][r] * db[q][c];
+                    }
+                    k[r][c] = s * vol;
+                }
+            }
+            k
+        }
+    }
+}
+
+/// Per-cell internal nodal force from the **St. Venant-Kirchhoff
+/// (SVK)** hyperelastic model, i.e. Green strain
+/// `E = ½(Fᵀ F − I)` and 2nd Piola-Kirchhoff stress
+/// `S = λ tr(E) I + 2μ E`. The first Piola stress is `P = F · S`,
+/// and the nodal force on vertex `a` is
+/// `fₐ = − vol · P · ∇φₐ`. (Sign convention: positive force is what
+/// the material pushes back when displaced — matches the linear
+/// stiffness `K · u` in the small-strain limit.)
+///
+/// `u_local` is the **interleaved** displacement vector:
+/// `[ux₀, uy₀, uz₀, ux₁, …]`. For a tet, `u_local.len() == 12`.
+///
+/// Tris are projected to (x, y); we treat the third coordinate as
+/// rigid (the small-strain plane-strain result reduces to the 2D
+/// linear K matrix). This is "v1 SVK" — no plane-strain
+/// regularisation in the SVK case.
+#[must_use]
+pub fn compute_element_st_venant_kirchhoff_stress(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    u_local: &[Real],
+    lambda: Real,
+    mu: Real,
+) -> Vec<Real> {
+    match cell {
+        FemCell::Tet(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+                vertices[idx[3] as usize],
+            ];
+            assert_eq!(u_local.len(), 12, "SVK: u_local must be 12-component");
+            let vol = tet_volume(&p);
+            let grads = tet_shape_grads(&p);
+
+            // Deformation gradient F = ∂x/∂X = I + ∑ᵢ uᵢ ⊗ ∇φᵢ.
+            use crate::math::Mat3;
+            let mut f = Mat3::IDENTITY;
+            for i in 0..4 {
+                let ux = u_local[3 * i];
+                let uy = u_local[3 * i + 1];
+                let uz = u_local[3 * i + 2];
+                let g = grads[i];
+                // f_jk += u_j * g_k.
+                f.x_axis.x += ux * g.x;
+                f.y_axis.x += ux * g.y;
+                f.z_axis.x += ux * g.z;
+                f.x_axis.y += uy * g.x;
+                f.y_axis.y += uy * g.y;
+                f.z_axis.y += uy * g.z;
+                f.x_axis.z += uz * g.x;
+                f.y_axis.z += uz * g.y;
+                f.z_axis.z += uz * g.z;
+            }
+            // Green strain E = ½(FᵀF − I).
+            let ftf = f.transpose() * f;
+            let e = Mat3::from_cols(
+                Vec3::new(
+                    0.5 * (ftf.x_axis.x - 1.0),
+                    0.5 * ftf.x_axis.y,
+                    0.5 * ftf.x_axis.z,
+                ),
+                Vec3::new(
+                    0.5 * ftf.y_axis.x,
+                    0.5 * (ftf.y_axis.y - 1.0),
+                    0.5 * ftf.y_axis.z,
+                ),
+                Vec3::new(
+                    0.5 * ftf.z_axis.x,
+                    0.5 * ftf.z_axis.y,
+                    0.5 * (ftf.z_axis.z - 1.0),
+                ),
+            );
+            // S = λ tr(E) I + 2 μ E.
+            let tr_e = e.x_axis.x + e.y_axis.y + e.z_axis.z;
+            let mut s = e * (2.0 * mu);
+            s.x_axis.x += lambda * tr_e;
+            s.y_axis.y += lambda * tr_e;
+            s.z_axis.z += lambda * tr_e;
+            // First Piola P = F · S.
+            let p_first = f * s;
+            // Nodal forces: f_a = vol · P · ∇φ_a (returned as positive
+            // "internal force"; for residual-form Newton-Raphson the
+            // caller flips sign — see solver::solve_nonlinear_static).
+            let mut out = vec![0.0; 12];
+            for i in 0..4 {
+                let g = grads[i];
+                // P · g: column-major glam.
+                let fx = p_first.x_axis.x * g.x + p_first.y_axis.x * g.y + p_first.z_axis.x * g.z;
+                let fy = p_first.x_axis.y * g.x + p_first.y_axis.y * g.y + p_first.z_axis.y * g.z;
+                let fz = p_first.x_axis.z * g.x + p_first.y_axis.z * g.y + p_first.z_axis.z * g.z;
+                out[3 * i] = vol * fx;
+                out[3 * i + 1] = vol * fy;
+                out[3 * i + 2] = vol * fz;
+            }
+            out
+        }
+        FemCell::Tri(_) => {
+            // 2D plane-strain SVK is intentionally deferred — Stage
+            // 36.1 cantilever uses the linear element for tris and SVK
+            // for tets only (the bonus large-deformation test runs in
+            // 3D). Return zeros so the assembly visitor signature
+            // stays stable.
+            vec![0.0; cell.vert_count() * 2]
+        }
+    }
 }
 
 #[cfg(test)]

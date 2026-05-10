@@ -29,11 +29,15 @@ use super::mesh::FemCell;
 /// local matrix into the CSR for each cell.
 ///
 /// The visitor receives the cell + the full vertex array (so it can
-/// compute geometric quantities) and must return an `N × N` row-major
-/// `Vec<Vec<Real>>` where `N = cell.vert_count()`.
+/// compute geometric quantities) and must return an `(N · d) × (N · d)`
+/// row-major `Vec<Vec<Real>>` where `N = cell.vert_count()` and
+/// `d = space.dofs_per_vertex()` (1 for `P1Nodal`, `dim` for
+/// `P1Vector { dim }`).
 ///
-/// The DoF map for `FunctionSpace::P1Nodal` is the identity:
-/// vertex index `i` ↔ global DoF `i`.
+/// The DoF layout is **interleaved**: vertex `v` component `c` lives
+/// at global DoF `v * d + c`. The local matrix is laid out the same
+/// way: local DoF `i * d + c` corresponds to local vertex `i`,
+/// component `c`.
 pub fn assemble_global<F>(
     mesh: &FemMesh,
     space: FunctionSpace,
@@ -43,21 +47,35 @@ where
     F: Fn(&FemCell, &[Vec3]) -> Vec<Vec<Real>>,
 {
     let n = space.ndof(mesh);
+    let d = space.dofs_per_vertex();
     let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 16);
+    triplets.reserve(mesh.cells.len() * 16 * d * d);
 
     for cell in &mesh.cells {
         let local = element_visitor(cell, &mesh.vertices);
         let verts = cell.verts();
-        debug_assert_eq!(local.len(), verts.len());
+        let nv = verts.len();
+        debug_assert_eq!(local.len(), nv * d, "element visitor returned wrong row count");
         for (i, vi) in verts.iter().enumerate() {
-            debug_assert_eq!(local[i].len(), verts.len());
             for (j, vj) in verts.iter().enumerate() {
-                let val = local[i][j];
-                if val == 0.0 {
-                    continue;
+                for ci in 0..d {
+                    let row_local = i * d + ci;
+                    debug_assert_eq!(
+                        local[row_local].len(),
+                        nv * d,
+                        "element visitor row {row_local} has wrong column count"
+                    );
+                    for cj in 0..d {
+                        let col_local = j * d + cj;
+                        let val = local[row_local][col_local];
+                        if val == 0.0 {
+                            continue;
+                        }
+                        let row_global = (*vi as usize) * d + ci;
+                        let col_global = (*vj as usize) * d + cj;
+                        triplets.push((row_global, col_global, vec![val]));
+                    }
                 }
-                triplets.push((*vi as usize, *vj as usize, vec![val]));
             }
         }
     }

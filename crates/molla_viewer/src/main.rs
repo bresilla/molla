@@ -14430,8 +14430,8 @@ impl Default for FemHeatExampleState {
         let n = mesh.vert_count();
         let mut u = vec![0.0_f64; n];
         for bc in &bcs {
-            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
-                u[vertex as usize] = value;
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+                u[*vertex as usize] = *value;
             }
         }
         Self {
@@ -14465,8 +14465,8 @@ impl FemHeatExampleState {
         let n = self.mesh.vert_count();
         self.u = vec![0.0_f64; n];
         for bc in &self.bcs {
-            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
-                self.u[vertex as usize] = value;
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+                self.u[*vertex as usize] = *value;
             }
         }
         self.last_residual = 0.0;

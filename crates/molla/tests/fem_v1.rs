@@ -254,8 +254,8 @@ fn time_stepping_converges_to_steady_state() {
     // Seed Dirichlet entries so the first transient step starts
     // from a consistent BC.
     for bc in &bcs {
-        if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
-            u[vertex as usize] = value;
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            u[*vertex as usize] = *value;
         }
     }
 
@@ -306,8 +306,8 @@ fn fem_heat_viewer_recipe_evolves_toward_analytic() {
     let f = vec![0.0; n];
     let mut u = vec![0.0; n];
     for bc in &bcs {
-        if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
-            u[vertex as usize] = value;
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            u[*vertex as usize] = *value;
         }
     }
 
