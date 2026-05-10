@@ -48,6 +48,8 @@ pub mod assembly;
 pub mod bc;
 pub mod element;
 pub mod function_space;
+#[cfg(feature = "gpu")]
+pub mod gpu_data;
 pub mod mesh;
 pub mod quadrature;
 pub mod solver;
@@ -56,5 +58,7 @@ pub use assembly::assemble_global;
 pub use bc::{apply_dirichlet, BoundaryCondition};
 pub use element::{compute_element_mass, compute_element_stiffness};
 pub use function_space::FunctionSpace;
+#[cfg(feature = "gpu")]
+pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};
 pub use solver::{solve_steady_state, solve_transient};
