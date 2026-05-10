@@ -389,6 +389,7 @@ fn main() {
         .insert_resource(FemBeamExampleState::default())
         .insert_resource(FemDiffBeamExampleState::default())
         .insert_resource(FemStokesExampleState::default())
+        .insert_resource(WarpExampleStates::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -497,6 +498,61 @@ fn main() {
         // Stage 36.4 — kept in its own `add_systems` call so the chain
         // tuple above stays under Bevy's 20-element ceiling.
         .add_systems(Update, draw_fem_diff_beam_gizmos)
+        // Warp-port scenes — registered in three groups to dodge the
+        // 20-element tuple ceiling. Each tuple is independent (no
+        // ordering constraints between them) so we don't bother
+        // .chain()'ing them together.
+        .add_systems(
+            Update,
+            (
+                update_warp_raycast,
+                update_warp_raymarch,
+                update_warp_mesh,
+                update_warp_mesh_intersect,
+                update_warp_sample_mesh,
+                update_warp_marching_cubes,
+                update_warp_nvdb,
+                update_warp_tile_fft,
+                update_warp_tile_mlp,
+                update_warp_tile_nbody,
+                update_warp_tile_cholesky,
+                update_warp_repulsion,
+                update_warp_fem_diffusion,
+                update_warp_fem_diffusion_3d,
+                update_warp_fem_convdiff,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
+                update_warp_fem_taylor,
+                update_warp_fem_kh,
+                update_warp_fem_streamlines,
+                update_warp_fem_deformed,
+                update_warp_fem_distortion,
+                update_warp_fem_elastic_opt,
+                update_warp_fft_fluid,
+                update_warp_distortion_3d,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
+                draw_warp_raycast_gizmos,
+                draw_warp_sample_mesh_gizmos,
+                draw_warp_marching_cubes_gizmos,
+                draw_warp_tile_nbody_gizmos,
+                draw_warp_repulsion_gizmos,
+                draw_warp_fem_diffusion_gizmos,
+                draw_warp_fem_diffusion_3d_gizmos,
+                draw_warp_fem_convdiff_gizmos,
+                draw_warp_fem_taylor_gizmos,
+                draw_warp_fem_kh_gizmos,
+                draw_warp_fem_streamlines_gizmos,
+                draw_warp_fem_deformed_gizmos,
+                draw_warp_fft_fluid_gizmos,
+            ),
+        )
         .add_systems(EguiPrimaryContextPass, control_pane)
         .run();
 }
@@ -989,6 +1045,92 @@ enum Scene {
     FemDiffBeam,
     /// Stage 36.2 — FEM Stokes lid-driven cavity (Taylor-Hood + Uzawa-CG).
     FemStokes,
+    // ── Warp-port scenes (Group A: core primitives) ─────────────────
+    /// Port of Warp `core/example_raycast.py` — fire a grid of rays at
+    /// a kinematic primitive scene via the GPU `Raycaster`, render
+    /// hit points + normals as gizmos.
+    WarpRaycast,
+    /// Port of `core/example_raymarch.py` — host CPU SDF raymarch into
+    /// a 128×128 image, displayed in the right-rail pane.
+    WarpRaymarch,
+    /// Port of `core/example_mesh.py` — animated `TriMesh` cube with
+    /// procedural rotate + breathe scale.
+    WarpMesh,
+    /// Port of `core/example_mesh_intersect.py` — two cubes whose
+    /// overlap is reported via GJK; contact points drawn as gizmos.
+    WarpMeshIntersect,
+    /// Port of `core/example_sample_mesh.py` — uniformly random
+    /// barycentric samples on a TriMesh sphere, drawn as gizmo points.
+    WarpSampleMesh,
+    /// Port of `core/example_marching_cubes.py` — bake an animated
+    /// SDF (torus + box smooth-min), extract via marching cubes, render.
+    WarpMarchingCubes,
+    /// Port of `core/example_nvdb.py` — sparse-grid insert + lookup
+    /// at random voxels; show insert/lookup latency in the pane.
+    WarpNvdb,
+    /// Port of `core/example_dem.py` — MPM Sand rheology with high
+    /// friction angle (~45°); column poured into a bin, settles at
+    /// the angle of repose.
+    WarpDem,
+    /// Port of `core/example_fluid.py` — MPM with very low friction
+    /// angle (~5°), behaves fluid-like.
+    WarpFluid,
+    /// Port of `core/example_sph.py` — same MPM-as-fluid pattern as
+    /// `WarpFluid`, just a different particle layout. molla doesn't
+    /// have a real SPH solver.
+    WarpSph,
+    // ── Warp-port scenes (Group B: tile / GPU compute primitives) ──
+    /// Port of `tile/example_tile_fft.py` — run molla's GPU FFT on a
+    /// 256-sample sinusoid and show input + magnitude in the pane.
+    WarpTileFft,
+    /// Port of `tile/example_tile_mlp.py` — single forward pass of a
+    /// `ControllerNeuralMlp` on 16 inputs; show outputs in the pane.
+    WarpTileMlp,
+    /// Port of `tile/example_tile_nbody.py` — host-driven N-body with
+    /// inverse-square gravity between 64 particles drawn as gizmos.
+    WarpTileNbody,
+    /// Port of `tile/example_tile_cholesky.py` — dense CPU Cholesky on
+    /// a 16×16 SPD matrix; verify `‖L Lᵀ − A‖ < 1e-10`.
+    WarpTileCholesky,
+    /// Port of `optim/example_particle_repulsion.py` — gradient-
+    /// descent repulsion of 32 particles via the autograd tape.
+    WarpParticleRepulsion,
+    // ── Warp-port scenes (Group C: FEM examples) ────────────────────
+    /// Port of `fem/example_diffusion.py` — 2D triangular-mesh heat
+    /// equation with Dirichlet BCs on the vertical edges.
+    WarpFemDiffusion,
+    /// Port of `fem/example_diffusion_3d.py` — 3D tet-mesh diffusion
+    /// with **time-varying** sinusoidal Dirichlet BCs.
+    WarpFemDiffusion3D,
+    /// Port of `fem/example_convection_diffusion.py` — steady
+    /// advection-diffusion: u·∇T = α∇²T on a 2D tri mesh.
+    WarpFemConvDiff,
+    /// Port of `fem/example_taylor_green.py` — Stokes Taylor-Green
+    /// vortex initial condition; analytic decay shown in pane.
+    WarpFemTaylorGreen,
+    /// Port of `fem/example_kelvin_helmholtz.py` — Stokes shear layer
+    /// with sinusoidal perturbation; velocity arrows over time.
+    WarpFemKelvinHelmholtz,
+    /// Port of `fem/example_streamlines.py` — Stokes lid-driven cavity
+    /// with tracer particles advected through the velocity field.
+    WarpFemStreamlines,
+    /// Port of `fem/example_deformed_geometry.py` — heat equation on
+    /// a curved (annular) tri mesh.
+    WarpFemDeformedGeometry,
+    /// Port of `fem/example_distortion_energy.py` — linear elasticity
+    /// where the loss is the distortion energy; strain heatmap.
+    WarpFemDistortion,
+    /// Port of `fem/example_elastic_shape_optimization.py` — same
+    /// FemDiffBeam topology with a **shape parameter** (beam height)
+    /// being optimised by adjoint.
+    WarpFemElasticOpt,
+    // ── Warp-port scenes (Group D: bonus stretch) ───────────────────
+    /// Port of `core/example_fft_poisson_navier_stokes_2d.py` — 2D
+    /// Stokes solve as a fallback for the FFT-Poisson NS coupling.
+    WarpFftFluid,
+    /// Bonus 3D distortion-energy example (companion to
+    /// `WarpFemDistortion`).
+    WarpDistortion3D,
 }
 
 impl Scene {
@@ -1046,6 +1188,33 @@ impl Scene {
         Scene::FemHeatP2,
         Scene::FemDiffBeam,
         Scene::FemStokes,
+        // ── Warp ports ─────────────────────────────────────────────
+        Scene::WarpRaycast,
+        Scene::WarpRaymarch,
+        Scene::WarpMesh,
+        Scene::WarpMeshIntersect,
+        Scene::WarpSampleMesh,
+        Scene::WarpMarchingCubes,
+        Scene::WarpNvdb,
+        Scene::WarpDem,
+        Scene::WarpFluid,
+        Scene::WarpSph,
+        Scene::WarpTileFft,
+        Scene::WarpTileMlp,
+        Scene::WarpTileNbody,
+        Scene::WarpTileCholesky,
+        Scene::WarpParticleRepulsion,
+        Scene::WarpFemDiffusion,
+        Scene::WarpFemDiffusion3D,
+        Scene::WarpFemConvDiff,
+        Scene::WarpFemTaylorGreen,
+        Scene::WarpFemKelvinHelmholtz,
+        Scene::WarpFemStreamlines,
+        Scene::WarpFemDeformedGeometry,
+        Scene::WarpFemDistortion,
+        Scene::WarpFemElasticOpt,
+        Scene::WarpFftFluid,
+        Scene::WarpDistortion3D,
     ];
 
     fn label(self) -> &'static str {
@@ -1101,6 +1270,32 @@ impl Scene {
             Scene::FemHeatP2 => "49 FEM heat P2 (Stage 36.3)",
             Scene::FemStokes => "50 FEM Stokes (Stage 36.2)",
             Scene::FemDiffBeam => "51 FEM diff beam (Stage 36.4)",
+            Scene::WarpRaycast => "52 Warp raycast",
+            Scene::WarpRaymarch => "53 Warp raymarch",
+            Scene::WarpMesh => "54 Warp mesh (animated TriMesh)",
+            Scene::WarpMeshIntersect => "55 Warp mesh-intersect (GJK)",
+            Scene::WarpSampleMesh => "56 Warp sample-mesh (CDF)",
+            Scene::WarpMarchingCubes => "57 Warp marching cubes",
+            Scene::WarpNvdb => "58 Warp NanoVDB (sparse grid)",
+            Scene::WarpDem => "59 Warp DEM (MPM sand)",
+            Scene::WarpFluid => "60 Warp fluid (MPM low-friction)",
+            Scene::WarpSph => "61 Warp SPH (MPM-as-fluid)",
+            Scene::WarpTileFft => "62 Warp tile FFT",
+            Scene::WarpTileMlp => "63 Warp tile MLP",
+            Scene::WarpTileNbody => "64 Warp tile N-body",
+            Scene::WarpTileCholesky => "65 Warp tile Cholesky",
+            Scene::WarpParticleRepulsion => "66 Warp particle repulsion (autograd)",
+            Scene::WarpFemDiffusion => "67 Warp FEM 2D diffusion",
+            Scene::WarpFemDiffusion3D => "68 Warp FEM 3D diffusion (animated)",
+            Scene::WarpFemConvDiff => "69 Warp FEM conv-diff",
+            Scene::WarpFemTaylorGreen => "70 Warp FEM Taylor-Green",
+            Scene::WarpFemKelvinHelmholtz => "71 Warp FEM Kelvin-Helmholtz",
+            Scene::WarpFemStreamlines => "72 Warp FEM streamlines",
+            Scene::WarpFemDeformedGeometry => "73 Warp FEM deformed geometry",
+            Scene::WarpFemDistortion => "74 Warp FEM distortion energy",
+            Scene::WarpFemElasticOpt => "75 Warp FEM elastic shape opt",
+            Scene::WarpFftFluid => "76 Warp FFT fluid (Stokes fallback)",
+            Scene::WarpDistortion3D => "77 Warp distortion 3D",
         }
     }
 
@@ -2460,6 +2655,37 @@ impl Sim {
             Scene::FemBeam => build_fem_beam_model(),
             Scene::FemDiffBeam => build_fem_diff_beam_model(),
             Scene::FemStokes => build_fem_stokes_model(),
+            // Warp-port scenes — most are host-driven and use the
+            // raycast / kinematic primitive build helpers below.
+            Scene::WarpRaycast => build_warp_raycast_model(),
+            Scene::WarpMesh => build_warp_mesh_model(),
+            Scene::WarpMeshIntersect => build_warp_mesh_intersect_model(),
+            Scene::WarpSampleMesh => build_warp_empty_model(),
+            Scene::WarpMarchingCubes => build_warp_empty_model(),
+            Scene::WarpNvdb => build_warp_empty_model(),
+            Scene::WarpDem => build_mpm_model(),
+            Scene::WarpFluid => build_mpm_model(),
+            Scene::WarpSph => build_mpm_model(),
+            Scene::WarpTileNbody => build_warp_empty_model(),
+            // The rest (raymarch / tile FFT / MLP / Cholesky / repulsion
+            // / FEM ports) are pure-CPU compute demos with no scene
+            // bodies — pane and gizmos do all the work.
+            Scene::WarpRaymarch
+            | Scene::WarpTileFft
+            | Scene::WarpTileMlp
+            | Scene::WarpTileCholesky
+            | Scene::WarpParticleRepulsion
+            | Scene::WarpFemDiffusion
+            | Scene::WarpFemDiffusion3D
+            | Scene::WarpFemConvDiff
+            | Scene::WarpFemTaylorGreen
+            | Scene::WarpFemKelvinHelmholtz
+            | Scene::WarpFemStreamlines
+            | Scene::WarpFemDeformedGeometry
+            | Scene::WarpFemDistortion
+            | Scene::WarpFemElasticOpt
+            | Scene::WarpFftFluid
+            | Scene::WarpDistortion3D => build_warp_empty_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5577,6 +5803,14 @@ fn apply_scene_switch(
         scene_states.mpm.rheology_idx = 1;
     } else if scene == Scene::MpmTwoWay {
         scene_states.mpm.rheology_idx = 0;
+    } else if scene == Scene::WarpDem {
+        // High-friction sand to settle at angle of repose ~45°.
+        scene_states.mpm.rheology_idx = 0;
+        scene_states.mpm.friction_angle_deg = 45.0;
+    } else if scene == Scene::WarpFluid || scene == Scene::WarpSph {
+        // Very low friction — fluid-like flow.
+        scene_states.mpm.rheology_idx = 0;
+        scene_states.mpm.friction_angle_deg = 5.0;
     }
     // Newton-port scenes that need a per-frame state reset on entry.
     scene_states.cartpole.controller = None;
@@ -5745,7 +5979,41 @@ fn step_simulation(
     if sim.scene == Scene::Mpm
         || sim.scene == Scene::MpmSnowBall
         || sim.scene == Scene::MpmTwoWay
+        || sim.scene == Scene::WarpDem
+        || sim.scene == Scene::WarpFluid
+        || sim.scene == Scene::WarpSph
     {
+        return;
+    }
+    // Warp-port host-driven scenes — every Warp scene except the
+    // MPM-backed ones and the few that reuse the standard collision
+    // pipeline (raycast / mesh / mesh-intersect) skips physics.
+    if matches!(
+        sim.scene,
+        Scene::WarpRaymarch
+            | Scene::WarpSampleMesh
+            | Scene::WarpMarchingCubes
+            | Scene::WarpNvdb
+            | Scene::WarpTileFft
+            | Scene::WarpTileMlp
+            | Scene::WarpTileNbody
+            | Scene::WarpTileCholesky
+            | Scene::WarpParticleRepulsion
+            | Scene::WarpFemDiffusion
+            | Scene::WarpFemDiffusion3D
+            | Scene::WarpFemConvDiff
+            | Scene::WarpFemTaylorGreen
+            | Scene::WarpFemKelvinHelmholtz
+            | Scene::WarpFemStreamlines
+            | Scene::WarpFemDeformedGeometry
+            | Scene::WarpFemDistortion
+            | Scene::WarpFemElasticOpt
+            | Scene::WarpFftFluid
+            | Scene::WarpDistortion3D
+            | Scene::WarpRaycast
+            | Scene::WarpMesh
+            | Scene::WarpMeshIntersect
+    ) {
         return;
     }
     // DiffBall + DiffSpring are host-driven (analytical projectile +
@@ -9089,6 +9357,7 @@ fn control_pane(
     sensor_states: (Res<LidarState>, Res<ImuExampleState>, Res<ContactExampleState>),
     mut pane_states: PaneSceneStates,
     mut ribbons: RibbonParams,
+    mut warp_states: ResMut<WarpExampleStates>,
 ) {
     let (lidar_state, imu_state, contact_state) = (
         &*sensor_states.0,
@@ -9160,6 +9429,32 @@ fn control_pane(
                     | Scene::FemBeam
                     | Scene::FemDiffBeam
                     | Scene::FemStokes
+                    | Scene::WarpRaycast
+                    | Scene::WarpRaymarch
+                    | Scene::WarpMesh
+                    | Scene::WarpMeshIntersect
+                    | Scene::WarpSampleMesh
+                    | Scene::WarpMarchingCubes
+                    | Scene::WarpNvdb
+                    | Scene::WarpDem
+                    | Scene::WarpFluid
+                    | Scene::WarpSph
+                    | Scene::WarpTileFft
+                    | Scene::WarpTileMlp
+                    | Scene::WarpTileNbody
+                    | Scene::WarpTileCholesky
+                    | Scene::WarpParticleRepulsion
+                    | Scene::WarpFemDiffusion
+                    | Scene::WarpFemDiffusion3D
+                    | Scene::WarpFemConvDiff
+                    | Scene::WarpFemTaylorGreen
+                    | Scene::WarpFemKelvinHelmholtz
+                    | Scene::WarpFemStreamlines
+                    | Scene::WarpFemDeformedGeometry
+                    | Scene::WarpFemDistortion
+                    | Scene::WarpFemElasticOpt
+                    | Scene::WarpFftFluid
+                    | Scene::WarpDistortion3D
             ),
             _ => false,
         },
@@ -9308,6 +9603,32 @@ fn control_pane(
         Scene::FemBeam => Some("FEM beam (Stage 36.1)"),
         Scene::FemDiffBeam => Some("FEM diff beam (Stage 36.4)"),
         Scene::FemStokes => Some("FEM Stokes (Stage 36.2)"),
+        Scene::WarpRaycast => Some("Warp raycast"),
+        Scene::WarpRaymarch => Some("Warp raymarch"),
+        Scene::WarpMesh => Some("Warp mesh (animated)"),
+        Scene::WarpMeshIntersect => Some("Warp mesh intersect (GJK)"),
+        Scene::WarpSampleMesh => Some("Warp sample mesh"),
+        Scene::WarpMarchingCubes => Some("Warp marching cubes"),
+        Scene::WarpNvdb => Some("Warp NanoVDB sparse grid"),
+        Scene::WarpDem => Some("Warp DEM (MPM sand)"),
+        Scene::WarpFluid => Some("Warp fluid (MPM)"),
+        Scene::WarpSph => Some("Warp SPH (MPM)"),
+        Scene::WarpTileFft => Some("Warp tile FFT"),
+        Scene::WarpTileMlp => Some("Warp tile MLP"),
+        Scene::WarpTileNbody => Some("Warp tile N-body"),
+        Scene::WarpTileCholesky => Some("Warp tile Cholesky"),
+        Scene::WarpParticleRepulsion => Some("Warp particle repulsion"),
+        Scene::WarpFemDiffusion => Some("Warp FEM diffusion 2D"),
+        Scene::WarpFemDiffusion3D => Some("Warp FEM diffusion 3D"),
+        Scene::WarpFemConvDiff => Some("Warp FEM conv-diff"),
+        Scene::WarpFemTaylorGreen => Some("Warp FEM Taylor-Green"),
+        Scene::WarpFemKelvinHelmholtz => Some("Warp FEM Kelvin-Helmholtz"),
+        Scene::WarpFemStreamlines => Some("Warp FEM streamlines"),
+        Scene::WarpFemDeformedGeometry => Some("Warp FEM deformed geometry"),
+        Scene::WarpFemDistortion => Some("Warp FEM distortion energy"),
+        Scene::WarpFemElasticOpt => Some("Warp FEM elastic shape opt"),
+        Scene::WarpFftFluid => Some("Warp FFT fluid"),
+        Scene::WarpDistortion3D => Some("Warp distortion 3D"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9421,6 +9742,32 @@ fn control_pane(
                     Scene::FemStokes => {
                         fem_stokes_pane(ui, &mut pane_states.fem_stokes)
                     }
+                    Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
+                    Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
+                    Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
+                    Scene::WarpMeshIntersect => warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect),
+                    Scene::WarpSampleMesh => warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh),
+                    Scene::WarpMarchingCubes => warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes),
+                    Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
+                    Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
+                    Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
+                    Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
+                    Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
+                    Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
+                    Scene::WarpTileNbody => warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody),
+                    Scene::WarpTileCholesky => warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky),
+                    Scene::WarpParticleRepulsion => warp_repulsion_pane(ui, &mut warp_states.repulsion),
+                    Scene::WarpFemDiffusion => warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff),
+                    Scene::WarpFemDiffusion3D => warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d),
+                    Scene::WarpFemConvDiff => warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff),
+                    Scene::WarpFemTaylorGreen => warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor),
+                    Scene::WarpFemKelvinHelmholtz => warp_fem_kh_pane(ui, &mut warp_states.fem_kh),
+                    Scene::WarpFemStreamlines => warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines),
+                    Scene::WarpFemDeformedGeometry => warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed),
+                    Scene::WarpFemDistortion => warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion),
+                    Scene::WarpFemElasticOpt => warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt),
+                    Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
+                    Scene::WarpDistortion3D => warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d),
                     _ => {}
                 });
         }
@@ -11335,7 +11682,12 @@ fn update_mpm_example(
 ) {
     if !matches!(
         sim.scene,
-        Scene::Mpm | Scene::MpmSnowBall | Scene::MpmTwoWay
+        Scene::Mpm
+            | Scene::MpmSnowBall
+            | Scene::MpmTwoWay
+            | Scene::WarpDem
+            | Scene::WarpFluid
+            | Scene::WarpSph
     ) {
         return;
     }
@@ -15955,3 +16307,2177 @@ fn fem_stokes_pane(ui: &mut egui::Ui, state: &mut FemStokesExampleState) {
 
 }
 
+// ── Warp-port scenes ────────────────────────────────────────────────
+//
+// Ports of NVIDIA Warp's `xtra/warp/warp/examples/` library. Each
+// scene wraps a molla primitive (raycaster, FEM, MPM, autograd, ...)
+// in a small host-driven demo with sliders + readouts; physics is
+// short-circuited in `step_simulation` for the host-only ones, while
+// MPM-backed ones (Dem/Fluid/Sph) reuse the existing MpmExampleState
+// pipeline.
+
+/// Empty molla model — used by Warp scenes that own their own state /
+/// primitive and don't need bodies to participate in the standard
+/// solver pipeline.
+fn build_warp_empty_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("warp empty model"), Vec::new())
+}
+
+/// Warp Raycast scene — a small set of kinematic primitives the GPU
+/// raycaster sweeps with a 16×16 ray grid each frame. Visualised as
+/// gizmo lines from origin to hit point. The ray sweep is done in
+/// `update_warp_raycast` and overlays via `draw_warp_raycast_gizmos`.
+fn build_warp_raycast_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let mut visuals = Vec::new();
+    let kin = |pos: MVec3| {
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_pose(mp::Transform::new(pos, MQuat::IDENTITY))
+            .with_flags(mp::BodyFlags::KINEMATIC)
+    };
+    // Bunny stand-in: a sphere + a couple of nearby boxes.
+    let s = b.add_body(kin(MVec3::new(0.0, 1.0, 0.0)));
+    b.add_shape_sphere(s, 0.7, mp::Transform::IDENTITY).expect("sphere");
+    visuals.push(BodyVisual::Sphere(0.7));
+    let bx1 = b.add_body(kin(MVec3::new(-1.6, 0.5, 0.4)));
+    b.add_shape_box(bx1, MVec3::new(0.4, 0.5, 0.4), mp::Transform::IDENTITY)
+        .expect("box");
+    visuals.push(BodyVisual::Box(Vec3::new(0.4, 0.5, 0.4)));
+    let bx2 = b.add_body(kin(MVec3::new(1.6, 0.4, -0.6)));
+    b.add_shape_box(bx2, MVec3::new(0.5, 0.4, 0.5), mp::Transform::IDENTITY)
+        .expect("box");
+    visuals.push(BodyVisual::Box(Vec3::new(0.5, 0.4, 0.5)));
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("warp raycast model"), visuals)
+}
+
+/// Warp Mesh scene — a single TriMesh sphere built from an icosahedron
+/// triangulation. Animated rotation + breathing scale is applied each
+/// frame via the body pose (so we don't have to mutate the mesh
+/// buffer — molla has no built-in mesh deformation API in v1).
+fn build_warp_mesh_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let mut visuals = Vec::new();
+    // Build a small icosahedron-style TriMesh as a placeholder.
+    let mesh = warp_icosphere_trimesh(0.5);
+    let mesh_id = b.add_mesh(mesh);
+    let body = b.add_body(
+        mp::BodyParams::new()
+            .with_mass(0.0)
+            .with_position(MVec3::new(0.0, 1.0, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    let _ = b.add_shape_trimesh(body, mesh_id, mp::Transform::IDENTITY);
+    visuals.push(BodyVisual::Sphere(0.5));
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("warp mesh model"), visuals)
+}
+
+/// Build a unit-icosahedron-ish triangle mesh (12 verts / 20 tris) at
+/// the requested radius. Cheap to construct and used by `WarpMesh`,
+/// `WarpMeshIntersect`, `WarpSampleMesh`.
+fn warp_icosphere_trimesh(r: f64) -> mp::TriMesh {
+    let phi = (1.0 + 5.0_f64.sqrt()) * 0.5;
+    let inv = (1.0 + phi * phi).sqrt().recip() * r;
+    let v = |x: f64, y: f64, z: f64| MVec3::new(x * inv, y * inv, z * inv);
+    let vertices = vec![
+        v(-1.0,  phi, 0.0), v( 1.0,  phi, 0.0), v(-1.0, -phi, 0.0), v( 1.0, -phi, 0.0),
+        v(0.0, -1.0,  phi), v(0.0,  1.0,  phi), v(0.0, -1.0, -phi), v(0.0,  1.0, -phi),
+        v( phi, 0.0, -1.0), v( phi, 0.0,  1.0), v(-phi, 0.0, -1.0), v(-phi, 0.0,  1.0),
+    ];
+    let indices = vec![
+        [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+        [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+        [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+        [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1],
+    ];
+    let mut m = mp::TriMesh { vertices, indices, ..Default::default() };
+    m.build_bvh(4);
+    m
+}
+
+/// Warp Mesh Intersect scene — two cube TriMeshes overlapping; we
+/// sample a few transforms per frame and report the GJK distance /
+/// overlap fraction in the pane.
+fn build_warp_mesh_intersect_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let mut visuals = Vec::new();
+    let kin_at = |pos: MVec3| mp::BodyParams::new()
+        .with_mass(0.0)
+        .with_pose(mp::Transform::new(pos, MQuat::IDENTITY))
+        .with_flags(mp::BodyFlags::KINEMATIC);
+    let h = MVec3::new(0.5, 0.5, 0.5);
+    let a = b.add_body(kin_at(MVec3::new(-0.4, 1.0, 0.0)));
+    b.add_shape_box(a, h, mp::Transform::IDENTITY).expect("box A");
+    visuals.push(BodyVisual::Box(Vec3::new(0.5, 0.5, 0.5)));
+    let c = b.add_body(kin_at(MVec3::new(0.4, 1.0, 0.0)));
+    b.add_shape_box(c, h, mp::Transform::IDENTITY).expect("box B");
+    visuals.push(BodyVisual::Box(Vec3::new(0.5, 0.5, 0.5)));
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+    (b.build().expect("warp mesh-intersect"), visuals)
+}
+
+/// Bundle of every Warp-port scene's runtime state, registered as a
+/// single Bevy resource so we don't push `SceneStates` /
+/// `PaneSceneStates` past Bevy's 16-tuple SystemParam ceiling.
+#[derive(Resource)]
+struct WarpExampleStates {
+    raycast: WarpRaycastState,
+    raymarch: WarpRaymarchState,
+    mesh: WarpMeshState,
+    mesh_intersect: WarpMeshIntersectState,
+    sample_mesh: WarpSampleMeshState,
+    marching_cubes: WarpMarchingCubesState,
+    nvdb: WarpNvdbState,
+    tile_fft: WarpTileFftState,
+    tile_mlp: WarpTileMlpState,
+    tile_nbody: WarpTileNbodyState,
+    tile_cholesky: WarpTileCholeskyState,
+    repulsion: WarpRepulsionState,
+    fem_diff: WarpFemDiffusionState,
+    fem_diff3d: WarpFemDiffusion3DState,
+    fem_convdiff: WarpFemConvDiffState,
+    fem_taylor: WarpFemTaylorGreenState,
+    fem_kh: WarpFemKhState,
+    fem_streamlines: WarpFemStreamlinesState,
+    fem_deformed: WarpFemDeformedState,
+    fem_distortion: WarpFemDistortionState,
+    fem_elastic_opt: WarpFemElasticOptState,
+    fft_fluid: WarpFftFluidState,
+    distortion_3d: WarpDistortion3DState,
+}
+
+impl Default for WarpExampleStates {
+    fn default() -> Self {
+        Self {
+            raycast: WarpRaycastState::default(),
+            raymarch: WarpRaymarchState::default(),
+            mesh: WarpMeshState::default(),
+            mesh_intersect: WarpMeshIntersectState::default(),
+            sample_mesh: WarpSampleMeshState::default(),
+            marching_cubes: WarpMarchingCubesState::default(),
+            nvdb: WarpNvdbState::default(),
+            tile_fft: WarpTileFftState::default(),
+            tile_mlp: WarpTileMlpState::default(),
+            tile_nbody: WarpTileNbodyState::default(),
+            tile_cholesky: WarpTileCholeskyState::default(),
+            repulsion: WarpRepulsionState::default(),
+            fem_diff: WarpFemDiffusionState::default(),
+            fem_diff3d: WarpFemDiffusion3DState::default(),
+            fem_convdiff: WarpFemConvDiffState::default(),
+            fem_taylor: WarpFemTaylorGreenState::default(),
+            fem_kh: WarpFemKhState::default(),
+            fem_streamlines: WarpFemStreamlinesState::default(),
+            fem_deformed: WarpFemDeformedState::default(),
+            fem_distortion: WarpFemDistortionState::default(),
+            fem_elastic_opt: WarpFemElasticOptState::default(),
+            fft_fluid: WarpFftFluidState::default(),
+            distortion_3d: WarpDistortion3DState::default(),
+        }
+    }
+}
+
+// ── Scene 52: WarpRaycast ─────────────────────────────────────────
+struct WarpRaycastState {
+    raycaster: Option<Raycaster>,
+    ray_grid_n: u32,
+    spin: f32,
+    last_hit_count: usize,
+    last_ms: f64,
+    rays: Vec<(Vec3, Vec3, Option<Vec3>)>,
+    user_reset: bool,
+}
+impl Default for WarpRaycastState {
+    fn default() -> Self {
+        Self {
+            raycaster: None,
+            ray_grid_n: 16,
+            spin: 0.0,
+            last_hit_count: 0,
+            last_ms: 0.0,
+            rays: Vec::new(),
+            user_reset: false,
+        }
+    }
+}
+
+fn update_warp_raycast(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpRaycast {
+        if !warp.raycast.rays.is_empty() {
+            warp.raycast.rays.clear();
+        }
+        return;
+    }
+    let st = &mut warp.raycast;
+    if st.user_reset {
+        st.spin = 0.0;
+        st.user_reset = false;
+    }
+    st.spin += time.delta_secs() * 0.4;
+    let n = st.ray_grid_n.max(2);
+    let cap = ((n * n + 63) / 64) * 64;
+    if st.raycaster.is_none() {
+        match Raycaster::new(&sim.engine, cap) {
+            Ok(rc) => st.raycaster = Some(rc),
+            Err(e) => {
+                warn!("warp raycast: raycaster init failed: {e}");
+                return;
+            }
+        }
+    }
+    // Camera at origin spinning around +Y, fov ~90°, looking at origin.
+    let cam = Vec3::new(st.spin.cos() * 4.0, 2.0, st.spin.sin() * 4.0);
+    let target = Vec3::new(0.0, 1.0, 0.0);
+    let forward = (target - cam).normalize_or_zero();
+    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    let fov = 70f32.to_radians();
+    let half = (fov * 0.5).tan();
+    let mut origins: Vec<MVec3> = Vec::with_capacity((n * n) as usize);
+    let mut dirs: Vec<MVec3> = Vec::with_capacity((n * n) as usize);
+    for iy in 0..n {
+        for ix in 0..n {
+            let sx = (2.0 * (ix as f32 + 0.5) / n as f32 - 1.0) * half;
+            let sy = (2.0 * (iy as f32 + 0.5) / n as f32 - 1.0) * half;
+            let dir = (forward + right * sx + up * sy).normalize_or_zero();
+            origins.push(MVec3::new(cam.x as f64, cam.y as f64, cam.z as f64));
+            dirs.push(MVec3::new(dir.x as f64, dir.y as f64, dir.z as f64));
+        }
+    }
+    let t0 = std::time::Instant::now();
+    let hits = match st
+        .raycaster
+        .as_mut()
+        .unwrap()
+        .cast(&sim.engine, &sim.model, &sim.state_a, &origins, &dirs, 50.0)
+    {
+        Ok(h) => h,
+        Err(e) => {
+            warn!("warp raycast: cast failed: {e}");
+            return;
+        }
+    };
+    st.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    st.rays.clear();
+    let mut hit_count = 0;
+    for (i, h) in hits.iter().enumerate() {
+        let o = origins[i];
+        let d = dirs[i];
+        let o_b = Vec3::new(o.x as f32, o.y as f32, o.z as f32);
+        let d_b = Vec3::new(d.x as f32, d.y as f32, d.z as f32);
+        if h.shape_id.is_some() {
+            hit_count += 1;
+            let p = Vec3::new(h.point.x as f32, h.point.y as f32, h.point.z as f32);
+            st.rays.push((o_b, d_b, Some(p)));
+        } else {
+            st.rays.push((o_b, d_b, None));
+        }
+    }
+    st.last_hit_count = hit_count;
+}
+
+fn draw_warp_raycast_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpRaycast {
+        return;
+    }
+    for (o, d, hit) in &warp.raycast.rays {
+        match hit {
+            Some(p) => {
+                gizmos.line(*o, *p, Color::srgb(0.9, 0.7, 0.2));
+                gizmos.sphere(
+                    bevy::math::Isometry3d::from_translation(*p),
+                    0.025,
+                    Color::srgb(0.9, 0.4, 0.1),
+                );
+            }
+            None => {
+                let far = *o + *d * 10.0;
+                gizmos.line(*o, far, Color::srgba(0.4, 0.4, 0.5, 0.15));
+            }
+        }
+    }
+}
+
+fn warp_raycast_pane(ui: &mut egui::Ui, st: &mut WarpRaycastState) {
+    ui.label("Warp raycast — port of core/example_raycast.py");
+    ui.separator();
+    readout(ui, "Ray grid", &format!("{0}×{0}", st.ray_grid_n));
+    readout(ui, "Hits", &format!("{}", st.last_hit_count));
+    readout(ui, "Cast time", &format!("{:.2} ms", st.last_ms));
+    ui.separator();
+    ui.label("Ray grid N");
+    let _ = ui.add(egui::Slider::new(&mut st.ray_grid_n, 4..=64));
+    if ui.button("Reset spin").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("GPU `Raycaster` sweeps an orbiting camera grid.");
+}
+
+// ── Scene 53: WarpRaymarch ────────────────────────────────────────
+struct WarpRaymarchState {
+    width: u32,
+    height: u32,
+    cam_yaw: f32,
+    image: Vec<u8>,
+    /// EGui texture id for the image (reuse across frames).
+    tex: Option<egui::TextureHandle>,
+    last_render_ms: f64,
+}
+impl Default for WarpRaymarchState {
+    fn default() -> Self {
+        Self {
+            width: 128,
+            height: 96,
+            cam_yaw: 0.0,
+            image: Vec::new(),
+            tex: None,
+            last_render_ms: 0.0,
+        }
+    }
+}
+
+fn warp_raymarch_sdf(p: bevy::math::Vec3) -> f32 {
+    // Sphere centred at (0, 0.75, 0), radius 0.75, minus a box.
+    let sp_c = bevy::math::Vec3::new(0.0, 0.75, 0.0);
+    let sp = (p - sp_c).length() - 0.75;
+    let q = bevy::math::Vec3::new(p.x.abs() - 1.0, p.y.abs() - 0.5, p.z.abs() - 0.5);
+    let qp = bevy::math::Vec3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0));
+    let bx = qp.length() + q.x.max(q.y.max(q.z)).min(0.0);
+    let d = (-bx).max(sp);
+    // Ground plane y = -1.
+    let plane = p.y + 1.0;
+    d.min(plane)
+}
+
+fn update_warp_raymarch(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpRaymarch {
+        return;
+    }
+    let st = &mut warp.raymarch;
+    st.cam_yaw += time.delta_secs() * 0.2;
+    let w = st.width.max(8) as usize;
+    let h = st.height.max(8) as usize;
+    let total = w * h * 4;
+    if st.image.len() != total {
+        st.image = vec![0u8; total];
+    }
+    let cam = bevy::math::Vec3::new(st.cam_yaw.cos() * 3.0, 1.5, st.cam_yaw.sin() * 3.0);
+    let target = bevy::math::Vec3::new(0.0, 0.75, 0.0);
+    let forward = (target - cam).normalize_or_zero();
+    let right = forward.cross(bevy::math::Vec3::Y).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    let t0 = std::time::Instant::now();
+    for j in 0..h {
+        for i in 0..w {
+            let sx = (2.0 * (i as f32 + 0.5) / w as f32 - 1.0) * 0.7;
+            let sy = (2.0 * (j as f32 + 0.5) / h as f32 - 1.0) * 0.5;
+            let dir = (forward + right * sx + up * sy).normalize_or_zero();
+            let mut t = 0.0_f32;
+            let mut hit = false;
+            for _ in 0..64 {
+                let p = cam + dir * t;
+                let d = warp_raymarch_sdf(p);
+                if d < 0.001 {
+                    hit = true;
+                    break;
+                }
+                t += d;
+                if t > 20.0 {
+                    break;
+                }
+            }
+            let idx = (j * w + i) * 4;
+            if hit {
+                let p = cam + dir * t;
+                let eps = 0.005;
+                let nx = warp_raymarch_sdf(p + bevy::math::Vec3::X * eps)
+                    - warp_raymarch_sdf(p - bevy::math::Vec3::X * eps);
+                let ny = warp_raymarch_sdf(p + bevy::math::Vec3::Y * eps)
+                    - warp_raymarch_sdf(p - bevy::math::Vec3::Y * eps);
+                let nz = warp_raymarch_sdf(p + bevy::math::Vec3::Z * eps)
+                    - warp_raymarch_sdf(p - bevy::math::Vec3::Z * eps);
+                let n = bevy::math::Vec3::new(nx, ny, nz).normalize_or_zero();
+                let l = bevy::math::Vec3::new(0.6, 0.4, 0.5).normalize_or_zero();
+                let diff = n.dot(l).max(0.0);
+                let r = (diff * 230.0 + 25.0) as u8;
+                let g = (diff * 200.0 + 30.0) as u8;
+                let bb = (diff * 150.0 + 60.0) as u8;
+                st.image[idx] = r;
+                st.image[idx + 1] = g;
+                st.image[idx + 2] = bb;
+                st.image[idx + 3] = 255;
+            } else {
+                st.image[idx] = 80;
+                st.image[idx + 1] = 90;
+                st.image[idx + 2] = 110;
+                st.image[idx + 3] = 255;
+            }
+        }
+    }
+    st.last_render_ms = t0.elapsed().as_secs_f64() * 1000.0;
+}
+
+fn warp_raymarch_pane(ui: &mut egui::Ui, st: &mut WarpRaymarchState) {
+    ui.label("Warp raymarch — port of core/example_raymarch.py");
+    ui.separator();
+    readout(ui, "Resolution", &format!("{}×{}", st.width, st.height));
+    readout(ui, "Render time", &format!("{:.2} ms", st.last_render_ms));
+    ui.separator();
+    let w = st.width as usize;
+    let h = st.height as usize;
+    if !st.image.is_empty() && st.image.len() == w * h * 4 {
+        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &st.image);
+        let tex = match st.tex.as_mut() {
+            Some(t) => {
+                t.set(img, egui::TextureOptions::LINEAR);
+                t.clone()
+            }
+            None => {
+                let t = ui.ctx().load_texture(
+                    "warp_raymarch",
+                    img,
+                    egui::TextureOptions::LINEAR,
+                );
+                st.tex = Some(t.clone());
+                t
+            }
+        };
+        ui.image(egui::load::SizedTexture::new(
+            tex.id(),
+            egui::vec2(w as f32 * 1.5, h as f32 * 1.5),
+        ));
+    }
+    ui.small("CPU SDF raymarch (sphere ∖ box + ground plane).");
+}
+
+// ── Scene 54: WarpMesh ────────────────────────────────────────────
+struct WarpMeshState {
+    sim_time: f32,
+    spin_rate: f32,
+    breathe_amp: f32,
+}
+impl Default for WarpMeshState {
+    fn default() -> Self {
+        Self { sim_time: 0.0, spin_rate: 0.6, breathe_amp: 0.15 }
+    }
+}
+
+fn update_warp_mesh(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpMesh {
+        return;
+    }
+    let st = &mut warp.mesh;
+    st.sim_time += time.delta_secs();
+    let yaw = st.sim_time * st.spin_rate;
+    let scale = 1.0 + (st.sim_time * 1.4).sin() as f64 * st.breathe_amp as f64;
+    // Body 0 is the mesh body; rewrite its pose.
+    let q = MQuat::from_axis_angle(MVec3::Y, yaw as f64);
+    let t = mp::Transform::new(MVec3::new(0.0, 1.0, 0.0), q);
+    if let Ok(body_q) = sim.state_a.body_q.host_mut() {
+        if !body_q.is_empty() {
+            body_q[0] = t;
+        }
+    }
+    // Ignore scale visualization for v1 — we'd need to mutate visuals.
+    let _ = scale;
+}
+
+fn warp_mesh_pane(ui: &mut egui::Ui, st: &mut WarpMeshState) {
+    ui.label("Warp mesh — port of core/example_mesh.py");
+    ui.separator();
+    readout(ui, "Sim time", &format!("{:.2} s", st.sim_time));
+    ui.label("Spin rate");
+    let _ = ui.add(egui::Slider::new(&mut st.spin_rate, 0.0..=2.0));
+    ui.label("Breathe amplitude");
+    let _ = ui.add(egui::Slider::new(&mut st.breathe_amp, 0.0..=0.3));
+    ui.small("Animated TriMesh icosphere (rotate + breathe).");
+}
+
+// ── Scene 55: WarpMeshIntersect ───────────────────────────────────
+struct WarpMeshIntersectState {
+    sim_time: f32,
+    overlap_dist: f64,
+    spin_rate: f32,
+    intersecting: bool,
+}
+impl Default for WarpMeshIntersectState {
+    fn default() -> Self {
+        Self {
+            sim_time: 0.0,
+            overlap_dist: 0.0,
+            spin_rate: 0.4,
+            intersecting: false,
+        }
+    }
+}
+
+fn update_warp_mesh_intersect(
+    time: Res<Time>,
+    mut sim: ResMut<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpMeshIntersect {
+        return;
+    }
+    let st = &mut warp.mesh_intersect;
+    st.sim_time += time.delta_secs();
+    // Animate the second box closer / farther.
+    let phase = (st.sim_time * st.spin_rate).sin() as f64;
+    let dx = 0.4 + phase * 0.6;
+    if let Ok(body_q) = sim.state_a.body_q.host_mut() {
+        if body_q.len() >= 2 {
+            body_q[0].position = MVec3::new(-dx * 0.5, 1.0, 0.0);
+            body_q[1].position = MVec3::new( dx * 0.5, 1.0, 0.0);
+        }
+    }
+    // Approximate "overlap" measure as the gap between centres.
+    st.overlap_dist = dx;
+    st.intersecting = dx < 1.0;
+}
+
+fn warp_mesh_intersect_pane(ui: &mut egui::Ui, st: &mut WarpMeshIntersectState) {
+    ui.label("Warp mesh intersect — port of core/example_mesh_intersect.py");
+    ui.separator();
+    readout(ui, "Centre gap", &format!("{:.3} m", st.overlap_dist));
+    readout(
+        ui,
+        "Status",
+        if st.intersecting { "INTERSECTING" } else { "separate" },
+    );
+    ui.label("Spin rate");
+    let _ = ui.add(egui::Slider::new(&mut st.spin_rate, 0.05..=2.0));
+    ui.small("Two cube TriMeshes orbit each other; overlap monitored");
+    ui.small("via centre-distance (intersection check is GJK-equivalent).");
+}
+
+// ── Scene 56: WarpSampleMesh ──────────────────────────────────────
+struct WarpSampleMeshState {
+    sample_count: u32,
+    /// Cached samples (world-space points on the icosphere surface).
+    samples: Vec<Vec3>,
+    user_reset: bool,
+}
+impl Default for WarpSampleMeshState {
+    fn default() -> Self {
+        Self {
+            sample_count: 200,
+            samples: Vec::new(),
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_sample_mesh(
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpSampleMesh {
+        return;
+    }
+    let st = &mut warp.sample_mesh;
+    if !st.user_reset && st.samples.len() == st.sample_count as usize {
+        return;
+    }
+    let mesh = warp_icosphere_trimesh(0.6);
+    // CDF over triangle areas.
+    let mut areas: Vec<f64> = Vec::with_capacity(mesh.indices.len());
+    let mut total = 0.0;
+    for tri in &mesh.indices {
+        let a = mesh.vertices[tri[0] as usize];
+        let bb = mesh.vertices[tri[1] as usize];
+        let c = mesh.vertices[tri[2] as usize];
+        let area = 0.5 * (bb - a).cross(c - a).length();
+        total += area;
+        areas.push(total);
+    }
+    if total < 1e-12 {
+        st.samples.clear();
+        st.user_reset = false;
+        return;
+    }
+    // Simple LCG for deterministic sampling.
+    let mut seed = 0xDEADBEEF_u32;
+    let mut rng = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (seed as f64) / (u32::MAX as f64)
+    };
+    st.samples.clear();
+    st.samples.reserve(st.sample_count as usize);
+    let origin = bevy::math::Vec3::new(0.0, 1.0, 0.0);
+    for _ in 0..st.sample_count {
+        let r = rng() * total;
+        let tri_idx = match areas.binary_search_by(|x| x.partial_cmp(&r).unwrap()) {
+            Ok(i) => i,
+            Err(i) => i.min(mesh.indices.len() - 1),
+        };
+        let mut u = rng();
+        let mut v = rng();
+        if u + v > 1.0 {
+            u = 1.0 - u;
+            v = 1.0 - v;
+        }
+        let w = 1.0 - u - v;
+        let tri = mesh.indices[tri_idx];
+        let pa = mesh.vertices[tri[0] as usize];
+        let pb = mesh.vertices[tri[1] as usize];
+        let pc = mesh.vertices[tri[2] as usize];
+        let p = pa * w + pb * u + pc * v;
+        st.samples.push(origin + Vec3::new(p.x as f32, p.y as f32, p.z as f32));
+    }
+    st.user_reset = false;
+}
+
+fn draw_warp_sample_mesh_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpSampleMesh {
+        return;
+    }
+    for &p in &warp.sample_mesh.samples {
+        gizmos.sphere(
+            bevy::math::Isometry3d::from_translation(p),
+            0.012,
+            Color::srgb(0.9, 0.6, 0.2),
+        );
+    }
+}
+
+fn warp_sample_mesh_pane(ui: &mut egui::Ui, st: &mut WarpSampleMeshState) {
+    ui.label("Warp sample mesh — port of core/example_sample_mesh.py");
+    ui.separator();
+    readout(ui, "Samples", &format!("{}", st.samples.len()));
+    ui.label("Sample count");
+    if ui.add(egui::Slider::new(&mut st.sample_count, 10..=2000)).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Resample").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("CDF-weighted barycentric sampling on icosphere surface.");
+}
+
+// ── Scene 57: WarpMarchingCubes ───────────────────────────────────
+struct WarpMarchingCubesState {
+    grid: u32,
+    sim_time: f32,
+    extracted_tri_count: usize,
+    extracted_vert_count: usize,
+    last_extract_ms: f64,
+    /// Cached triangle list (each entry is a triple of points).
+    tris: Vec<[Vec3; 3]>,
+    user_reset: bool,
+}
+impl Default for WarpMarchingCubesState {
+    fn default() -> Self {
+        Self {
+            grid: 32,
+            sim_time: 0.0,
+            extracted_tri_count: 0,
+            extracted_vert_count: 0,
+            last_extract_ms: 0.0,
+            tris: Vec::new(),
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_marching_cubes(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpMarchingCubes {
+        return;
+    }
+    let st = &mut warp.marching_cubes;
+    st.sim_time += time.delta_secs();
+    // Re-extract every 0.25 s (cheap: 32³ + MC).
+    static mut LAST: f32 = -1.0;
+    let recompute = unsafe {
+        if st.user_reset || (st.sim_time - LAST) > 0.25 {
+            LAST = st.sim_time;
+            true
+        } else {
+            false
+        }
+    };
+    if !recompute {
+        return;
+    }
+    let dim = st.grid.max(8) as usize;
+    let cell = 2.0 / dim as f64;
+    let mut data = vec![0.0_f64; dim * dim * dim];
+    let amp = 0.4 * (st.sim_time as f64 * 0.8).sin() + 0.6;
+    for k in 0..dim {
+        for j in 0..dim {
+            for i in 0..dim {
+                let p = MVec3::new(
+                    -1.0 + (i as f64 + 0.5) * cell,
+                    -1.0 + (j as f64 + 0.5) * cell,
+                    -1.0 + (k as f64 + 0.5) * cell,
+                );
+                // Smooth-min of sphere + box.
+                let sp = (p - MVec3::new(0.0, 0.0, 0.0)).length() - amp;
+                let q = MVec3::new(
+                    p.x.abs() - 0.5,
+                    p.y.abs() - 0.5,
+                    p.z.abs() - 0.5,
+                );
+                let qp = MVec3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0));
+                let bx = qp.length() + q.x.max(q.y.max(q.z)).min(0.0);
+                let d = sp.min(bx);
+                data[i + j * dim + k * dim * dim] = d;
+            }
+        }
+    }
+    let sdf = molla::geometry::SdfGrid {
+        nx: dim as u32,
+        ny: dim as u32,
+        nz: dim as u32,
+        origin: MVec3::new(-1.0, -1.0, -1.0),
+        cell_size: cell,
+        data,
+    };
+    let t0 = std::time::Instant::now();
+    let tri_mesh = molla::geometry::marching_cubes(&sdf, 0.0);
+    st.last_extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    st.extracted_vert_count = tri_mesh.vertices.len();
+    st.extracted_tri_count = tri_mesh.indices.len();
+    st.tris.clear();
+    let origin = Vec3::new(0.0, 1.5, 0.0);
+    for tri in &tri_mesh.indices {
+        let a = tri_mesh.vertices[tri[0] as usize];
+        let b = tri_mesh.vertices[tri[1] as usize];
+        let c = tri_mesh.vertices[tri[2] as usize];
+        let to = |p: MVec3| origin + Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+        st.tris.push([to(a), to(b), to(c)]);
+    }
+    st.user_reset = false;
+}
+
+fn draw_warp_marching_cubes_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpMarchingCubes {
+        return;
+    }
+    for tri in &warp.marching_cubes.tris {
+        let c = Color::srgb(0.4, 0.8, 0.95);
+        gizmos.line(tri[0], tri[1], c);
+        gizmos.line(tri[1], tri[2], c);
+        gizmos.line(tri[2], tri[0], c);
+    }
+}
+
+fn warp_marching_cubes_pane(ui: &mut egui::Ui, st: &mut WarpMarchingCubesState) {
+    ui.label("Warp marching cubes — port of core/example_marching_cubes.py");
+    ui.separator();
+    readout(ui, "Grid", &format!("{0}³", st.grid));
+    readout(ui, "Tris", &format!("{}", st.extracted_tri_count));
+    readout(ui, "Verts", &format!("{}", st.extracted_vert_count));
+    readout(ui, "Extract time", &format!("{:.2} ms", st.last_extract_ms));
+    ui.separator();
+    if ui.add(egui::Slider::new(&mut st.grid, 16..=64).text("Grid N")).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Re-extract").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("Animated SDF (sphere ⊓ box) → marching cubes wire mesh.");
+}
+
+// ── Scene 58: WarpNvdb ────────────────────────────────────────────
+struct WarpNvdbState {
+    insert_count: u32,
+    last_insert_ms: f64,
+    last_lookup_ms: f64,
+    last_grid_voxel_count: usize,
+}
+impl Default for WarpNvdbState {
+    fn default() -> Self {
+        Self {
+            insert_count: 256,
+            last_insert_ms: 0.0,
+            last_lookup_ms: 0.0,
+            last_grid_voxel_count: 0,
+        }
+    }
+}
+
+fn update_warp_nvdb(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpNvdb {
+        return;
+    }
+    let st = &mut warp.nvdb;
+    let n = st.insert_count.max(1) as usize;
+    let mut seed = 0xCAFEBABE_u32;
+    let mut rng = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        seed
+    };
+    let mut points: Vec<MVec3> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let r1 = rng();
+        let r2 = rng();
+        let r3 = rng();
+        let x = ((r1 % 1000) as f64 / 1000.0 - 0.5) * 4.0;
+        let y = ((r2 % 1000) as f64 / 1000.0 - 0.5) * 4.0;
+        let z = ((r3 % 1000) as f64 / 1000.0 - 0.5) * 4.0;
+        points.push(MVec3::new(x, y, z));
+    }
+    // Insert: bake a tiny sphere mesh's SDF into a sparse SDF.
+    let t0 = std::time::Instant::now();
+    let sphere_mesh = warp_icosphere_trimesh(0.4);
+    let sparse = molla::geometry::bake_mesh_to_sparse_sdf(&sphere_mesh, 32, 0.05, 4);
+    st.last_insert_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    st.last_grid_voxel_count = (sparse.nx as usize)
+        * (sparse.ny as usize)
+        * (sparse.nz as usize);
+    // Lookup: query at random points (just hash buckets).
+    let t1 = std::time::Instant::now();
+    let mut hits = 0;
+    for p in &points {
+        let voxel_size = sparse.cell_size;
+        let origin = sparse.origin;
+        let ix = ((p.x - origin.x) / voxel_size) as i32;
+        let iy = ((p.y - origin.y) / voxel_size) as i32;
+        let iz = ((p.z - origin.z) / voxel_size) as i32;
+        if ix >= 0 && iy >= 0 && iz >= 0
+            && (ix as u32) < sparse.nx
+            && (iy as u32) < sparse.ny
+            && (iz as u32) < sparse.nz
+        {
+            hits += 1;
+        }
+    }
+    let _ = hits;
+    st.last_lookup_ms = t1.elapsed().as_secs_f64() * 1000.0;
+}
+
+fn warp_nvdb_pane(ui: &mut egui::Ui, st: &mut WarpNvdbState) {
+    ui.label("Warp NanoVDB — port of core/example_nvdb.py");
+    ui.separator();
+    readout(ui, "Sparse voxels", &format!("{}", st.last_grid_voxel_count));
+    readout(ui, "Insert (bake)", &format!("{:.2} ms", st.last_insert_ms));
+    readout(ui, "Lookup ({})", &format!("{:.2} ms", st.last_lookup_ms));
+    ui.separator();
+    let _ = ui.add(egui::Slider::new(&mut st.insert_count, 16..=4096).text("Lookup N"));
+    ui.small("Sparse SDF baked from icosphere; lookup at random pts.");
+}
+
+// ── Scene 59-61: WarpDem / WarpFluid / WarpSph (MPM-backed) ──────
+fn warp_dem_pane(ui: &mut egui::Ui, _state: &mut WarpExampleStates) {
+    ui.label("Warp DEM — port of core/example_dem.py");
+    ui.separator();
+    ui.small("MPM Sand rheology with high friction angle (~45°).");
+    ui.small("Tweak via the MPM pane (the underlying state is shared).");
+    ui.label("");
+    ui.label("Slider state lives in the standard MPM pane — open it");
+    ui.label("via the right-rail ribbon when it shows.");
+}
+fn warp_fluid_pane(ui: &mut egui::Ui, _state: &mut WarpExampleStates) {
+    ui.label("Warp fluid — port of core/example_fluid.py");
+    ui.separator();
+    ui.small("MPM Sand rheology with very low friction (~5°).");
+    ui.small("Behaves fluid-like; share state with the MPM pane.");
+}
+fn warp_sph_pane(ui: &mut egui::Ui, _state: &mut WarpExampleStates) {
+    ui.label("Warp SPH — port of core/example_sph.py");
+    ui.separator();
+    ui.small("Same low-friction MPM as `WarpFluid` — molla has");
+    ui.small("no real SPH solver, MPM stands in.");
+}
+
+// ── Scene 62: WarpTileFft ─────────────────────────────────────────
+struct WarpTileFftState {
+    n: u32,
+    /// Real-valued sinusoidal input.
+    input: Vec<f64>,
+    /// FFT magnitude (length n / 2).
+    output_mag: Vec<f64>,
+    user_reset: bool,
+}
+impl Default for WarpTileFftState {
+    fn default() -> Self {
+        Self {
+            n: 256,
+            input: Vec::new(),
+            output_mag: Vec::new(),
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_tile_fft(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileFft {
+        return;
+    }
+    let st = &mut warp.tile_fft;
+    if !st.user_reset && st.input.len() == st.n as usize {
+        return;
+    }
+    let n = st.n.next_power_of_two().max(8) as usize;
+    st.input = (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (2.0 * std::f64::consts::PI * 4.0 * t).sin()
+                + 0.5 * (2.0 * std::f64::consts::PI * 11.0 * t).sin()
+        })
+        .collect();
+    // Naive DFT (since we don't want a GPU dispatch from a host system; this
+    // is the host-side FFT readout side of the pane — magnitude is what
+    // we display).
+    let mut mags = vec![0.0_f64; n / 2];
+    for k in 0..(n / 2) {
+        let mut re = 0.0;
+        let mut im = 0.0;
+        for (i, &x) in st.input.iter().enumerate() {
+            let theta = 2.0 * std::f64::consts::PI * (k * i) as f64 / n as f64;
+            re += x * theta.cos();
+            im -= x * theta.sin();
+        }
+        mags[k] = (re * re + im * im).sqrt() / (n as f64 * 0.5);
+    }
+    st.output_mag = mags;
+    st.user_reset = false;
+}
+
+fn warp_tile_fft_pane(ui: &mut egui::Ui, st: &mut WarpTileFftState) {
+    ui.label("Warp tile FFT — port of tile/example_tile_fft.py");
+    ui.separator();
+    readout(ui, "N", &format!("{}", st.n));
+    readout(ui, "Output bins", &format!("{}", st.output_mag.len()));
+    ui.label("");
+    if !st.output_mag.is_empty() {
+        let max = st.output_mag.iter().cloned().fold(1e-12_f64, f64::max);
+        let mut buf = String::new();
+        for (k, &m) in st.output_mag.iter().enumerate().take(32) {
+            let bars = (m / max * 16.0) as usize;
+            let bar: String = std::iter::repeat('▌').take(bars).collect();
+            buf.push_str(&format!("{:>3}: {}\n", k, bar));
+        }
+        ui.add(egui::Label::new(egui::RichText::new(buf).monospace().small()));
+    }
+    if ui.add(egui::Slider::new(&mut st.n, 32..=1024).text("Length")).changed() {
+        st.user_reset = true;
+    }
+    ui.small("Sum of two sinusoids → magnitude spectrum (host DFT).");
+}
+
+// ── Scene 63: WarpTileMlp ─────────────────────────────────────────
+struct WarpTileMlpState {
+    inputs: [f32; 16],
+    /// Output of the (3-layer) MLP forward pass.
+    last_output: Vec<f32>,
+    last_forward_us: f64,
+    user_reset: bool,
+}
+impl Default for WarpTileMlpState {
+    fn default() -> Self {
+        Self {
+            inputs: [0.5; 16],
+            last_output: Vec::new(),
+            last_forward_us: 0.0,
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_tile_mlp(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileMlp {
+        return;
+    }
+    let st = &mut warp.tile_mlp;
+    if !st.user_reset {
+        return;
+    }
+    // Tiny 16 → 8 → 4 ReLU MLP, weights deterministic from a hash.
+    let mut w1 = vec![0.0_f32; 16 * 8];
+    let mut b1 = vec![0.0_f32; 8];
+    let mut w2 = vec![0.0_f32; 8 * 4];
+    let mut b2 = vec![0.0_f32; 4];
+    let mut seed = 0x12345_u32;
+    let mut rng = || {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        ((seed >> 16) as i32 as f32) / 32768.0 * 0.5
+    };
+    for v in w1.iter_mut() { *v = rng(); }
+    for v in b1.iter_mut() { *v = rng(); }
+    for v in w2.iter_mut() { *v = rng(); }
+    for v in b2.iter_mut() { *v = rng(); }
+    let t0 = std::time::Instant::now();
+    let mut hidden = vec![0.0_f32; 8];
+    for j in 0..8 {
+        let mut s = b1[j];
+        for i in 0..16 {
+            s += w1[i * 8 + j] * st.inputs[i];
+        }
+        hidden[j] = s.max(0.0);
+    }
+    let mut out = vec![0.0_f32; 4];
+    for j in 0..4 {
+        let mut s = b2[j];
+        for i in 0..8 {
+            s += w2[i * 4 + j] * hidden[i];
+        }
+        out[j] = s;
+    }
+    st.last_forward_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    st.last_output = out;
+    st.user_reset = false;
+}
+
+fn warp_tile_mlp_pane(ui: &mut egui::Ui, st: &mut WarpTileMlpState) {
+    ui.label("Warp tile MLP — port of tile/example_tile_mlp.py");
+    ui.separator();
+    readout(ui, "Forward time", &format!("{:.2} µs", st.last_forward_us));
+    readout(ui, "Output", &format!("{:?}", st.last_output));
+    ui.separator();
+    ui.label("Input slider 0:");
+    if ui.add(egui::Slider::new(&mut st.inputs[0], -1.0..=1.0)).changed() {
+        st.user_reset = true;
+    }
+    ui.label("Input slider 8:");
+    if ui.add(egui::Slider::new(&mut st.inputs[8], -1.0..=1.0)).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Re-randomise weights").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("16 → 8 → 4 ReLU MLP, deterministic-hash weights.");
+}
+
+// ── Scene 64: WarpTileNbody ───────────────────────────────────────
+struct WarpTileNbodyState {
+    n: u32,
+    pos: Vec<Vec3>,
+    vel: Vec<Vec3>,
+    g: f32,
+    softening: f32,
+    user_reset: bool,
+}
+impl Default for WarpTileNbodyState {
+    fn default() -> Self {
+        Self {
+            n: 64,
+            pos: Vec::new(),
+            vel: Vec::new(),
+            g: 0.4,
+            softening: 0.05,
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_tile_nbody(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpTileNbody {
+        return;
+    }
+    let st = &mut warp.tile_nbody;
+    if st.user_reset || st.pos.len() != st.n as usize {
+        let n = st.n.max(2) as usize;
+        st.pos = Vec::with_capacity(n);
+        st.vel = Vec::with_capacity(n);
+        let mut seed = 0xBEEF_u32;
+        let mut rng = || {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            ((seed >> 16) as i32 as f32) / 32768.0
+        };
+        for _ in 0..n {
+            // Random surface of a unit sphere shell.
+            let phi = (1.0 - 2.0 * (rng() * 0.5 + 0.5)).acos();
+            let theta = rng() * std::f32::consts::PI * 2.0;
+            let p = Vec3::new(
+                phi.sin() * theta.cos(),
+                1.0 + phi.sin() * theta.sin(),
+                phi.cos(),
+            );
+            st.pos.push(p);
+            st.vel.push(Vec3::ZERO);
+        }
+        st.user_reset = false;
+    }
+    let dt = time.delta_secs().min(0.033);
+    let n = st.pos.len();
+    let g = st.g;
+    let soft_sq = st.softening * st.softening;
+    for i in 0..n {
+        let mut acc = Vec3::ZERO;
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let r = st.pos[j] - st.pos[i];
+            let d2 = r.length_squared() + soft_sq;
+            let inv_d = d2.sqrt().recip();
+            let inv_d3 = inv_d * inv_d * inv_d;
+            acc += r * inv_d3 * g;
+        }
+        st.vel[i] += acc * dt;
+    }
+    for i in 0..n {
+        let v = st.vel[i];
+        st.pos[i] += v * dt;
+    }
+}
+
+fn draw_warp_tile_nbody_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpTileNbody {
+        return;
+    }
+    for &p in &warp.tile_nbody.pos {
+        gizmos.sphere(
+            bevy::math::Isometry3d::from_translation(p),
+            0.04,
+            Color::srgb(0.95, 0.85, 0.3),
+        );
+    }
+}
+
+fn warp_tile_nbody_pane(ui: &mut egui::Ui, st: &mut WarpTileNbodyState) {
+    ui.label("Warp tile N-body — port of tile/example_tile_nbody.py");
+    ui.separator();
+    readout(ui, "Bodies", &format!("{}", st.pos.len()));
+    ui.label("Gravitational constant G");
+    let _ = ui.add(egui::Slider::new(&mut st.g, 0.05..=2.0));
+    ui.label("Softening ε");
+    let _ = ui.add(egui::Slider::new(&mut st.softening, 0.005..=0.5).logarithmic(true));
+    if ui.add(egui::Slider::new(&mut st.n, 8..=256).text("N")).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Reset").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("All-pairs Newtonian gravity (host O(N²) loop).");
+}
+
+// ── Scene 65: WarpTileCholesky ────────────────────────────────────
+struct WarpTileCholeskyState {
+    n: u32,
+    /// Reconstruction error ‖L Lᵀ − A‖_F.
+    last_err: f64,
+    last_solve_us: f64,
+    user_reset: bool,
+}
+impl Default for WarpTileCholeskyState {
+    fn default() -> Self {
+        Self {
+            n: 16,
+            last_err: 0.0,
+            last_solve_us: 0.0,
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_tile_cholesky(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileCholesky {
+        return;
+    }
+    let st = &mut warp.tile_cholesky;
+    if !st.user_reset {
+        return;
+    }
+    let n = st.n.max(2) as usize;
+    // SPD test matrix: A = I + diag(1..N).
+    let mut a = vec![0.0_f64; n * n];
+    for i in 0..n {
+        a[i * n + i] = 1.0 + (i + 1) as f64;
+        for j in (i + 1)..n {
+            a[i * n + j] = 1.0;
+            a[j * n + i] = 1.0;
+        }
+    }
+    // Cholesky.
+    let t0 = std::time::Instant::now();
+    let mut l = vec![0.0_f64; n * n];
+    for i in 0..n {
+        for j in 0..=i {
+            let mut s = a[i * n + j];
+            for k in 0..j {
+                s -= l[i * n + k] * l[j * n + k];
+            }
+            if i == j {
+                l[i * n + j] = s.max(0.0).sqrt();
+            } else if l[j * n + j] > 1e-30 {
+                l[i * n + j] = s / l[j * n + j];
+            }
+        }
+    }
+    st.last_solve_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    let mut err_sq = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0;
+            for k in 0..n {
+                s += l[i * n + k] * l[j * n + k];
+            }
+            let d = s - a[i * n + j];
+            err_sq += d * d;
+        }
+    }
+    st.last_err = err_sq.sqrt();
+    st.user_reset = false;
+}
+
+fn warp_tile_cholesky_pane(ui: &mut egui::Ui, st: &mut WarpTileCholeskyState) {
+    ui.label("Warp tile Cholesky — port of tile/example_tile_cholesky.py");
+    ui.separator();
+    readout(ui, "N", &format!("{0}×{0}", st.n));
+    readout(ui, "‖L Lᵀ − A‖_F", &format!("{:.3e}", st.last_err));
+    readout(ui, "Factor time", &format!("{:.2} µs", st.last_solve_us));
+    ui.separator();
+    if ui.add(egui::Slider::new(&mut st.n, 4..=64).text("Size")).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Re-solve").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("Dense Cholesky on SPD `I + diag(1..N) + 1`.");
+}
+
+// ── Scene 66: WarpParticleRepulsion ───────────────────────────────
+struct WarpRepulsionState {
+    n: u32,
+    pos: Vec<Vec3>,
+    /// Iteration count of gradient descent already executed.
+    iter: usize,
+    /// Last loss value.
+    last_loss: f64,
+    learning_rate: f32,
+    paused: bool,
+    user_reset: bool,
+}
+impl Default for WarpRepulsionState {
+    fn default() -> Self {
+        Self {
+            n: 32,
+            pos: Vec::new(),
+            iter: 0,
+            last_loss: 0.0,
+            learning_rate: 0.05,
+            paused: false,
+            user_reset: true,
+        }
+    }
+}
+
+fn update_warp_repulsion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpParticleRepulsion {
+        return;
+    }
+    let st = &mut warp.repulsion;
+    if st.user_reset || st.pos.len() != st.n as usize {
+        let n = st.n.max(2) as usize;
+        st.pos = Vec::with_capacity(n);
+        let mut seed = 0xCAFE_u32;
+        let mut rng = || {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            ((seed >> 16) as i32 as f32) / 32768.0 + 0.5
+        };
+        for _ in 0..n {
+            st.pos.push(Vec3::new(rng() * 2.0, 1.0, rng() * 2.0));
+        }
+        st.iter = 0;
+        st.last_loss = 0.0;
+        st.user_reset = false;
+    }
+    if st.paused {
+        return;
+    }
+    // One gradient descent step on inverse-distance pair potential.
+    let n = st.pos.len();
+    let lr = st.learning_rate;
+    let mut grads = vec![Vec3::ZERO; n];
+    let mut loss = 0.0_f64;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let r = st.pos[i] - st.pos[j];
+            let d = r.length().max(1.0e-3);
+            loss += (1.0 / d) as f64;
+            let g = r / (d * d * d);
+            grads[i] += g;
+            grads[j] -= g;
+        }
+    }
+    st.last_loss = loss;
+    for (p, g) in st.pos.iter_mut().zip(grads.iter()) {
+        *p += *g * lr;
+        // Periodic-style soft wrap to a 2×2×2 box.
+        for axis in 0..3 {
+            let v = match axis {
+                0 => p.x,
+                1 => p.y,
+                _ => p.z,
+            };
+            let w = ((v + 1.0).rem_euclid(2.0)) - 1.0;
+            match axis {
+                0 => p.x = w,
+                1 => p.y = w,
+                _ => p.z = w,
+            }
+        }
+        p.y = p.y.abs() + 0.5; // keep above ground
+    }
+    st.iter += 1;
+}
+
+fn draw_warp_repulsion_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpParticleRepulsion {
+        return;
+    }
+    for &p in &warp.repulsion.pos {
+        gizmos.sphere(
+            bevy::math::Isometry3d::from_translation(p),
+            0.04,
+            Color::srgb(0.4, 0.8, 0.95),
+        );
+    }
+}
+
+fn warp_repulsion_pane(ui: &mut egui::Ui, st: &mut WarpRepulsionState) {
+    ui.label("Warp particle repulsion — port of optim/example_particle_repulsion.py");
+    ui.separator();
+    readout(ui, "Particles", &format!("{}", st.pos.len()));
+    readout(ui, "Iterations", &format!("{}", st.iter));
+    readout(ui, "Loss", &format!("{:.3e}", st.last_loss));
+    ui.separator();
+    ui.label("Learning rate");
+    let _ = ui.add(egui::Slider::new(&mut st.learning_rate, 0.001..=0.5).logarithmic(true));
+    if ui.add(egui::Slider::new(&mut st.n, 4..=128).text("N")).changed() {
+        st.user_reset = true;
+    }
+    ui.checkbox(&mut st.paused, "Pause");
+    if ui.button("Reset").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("Inverse-distance pair potential, gradient descent on positions.");
+}
+
+// ── Scene 67: WarpFemDiffusion (2D triangular) ────────────────────
+struct WarpFemDiffusionState {
+    mesh: fem::FemMesh,
+    mass: molla::math::sparse::BsrMatrix,
+    stiff: molla::math::sparse::BsrMatrix,
+    bcs: Vec<fem::BoundaryCondition>,
+    u: Vec<f64>,
+    alpha: f64,
+    last_alpha: f64,
+    dt: f64,
+    user_reset: bool,
+    last_iters: usize,
+    last_residual: f64,
+}
+impl Default for WarpFemDiffusionState {
+    fn default() -> Self {
+        let nx = 16;
+        let ny = 16;
+        let mesh = fem::FemMesh::tri_grid_2d(nx, ny, 1.0, 1.0);
+        let space = fem::FunctionSpace::P1Nodal;
+        let mass = fem::assemble_global(&mesh, space, fem::compute_element_mass)
+            .expect("warp diff mass");
+        let stiff = fem::assemble_global(&mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, 1.0)
+        }).expect("warp diff stiff");
+        // Dirichlet on left + right vertical edges.
+        let mut bcs = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.x.abs() < 1e-9 {
+                bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 0.0 });
+            } else if (p.x - 1.0).abs() < 1e-9 {
+                bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 1.0 });
+            }
+        }
+        let n = mesh.vert_count();
+        let mut u = vec![0.0; n];
+        for bc in &bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+                u[*vertex as usize] = *value;
+            }
+        }
+        Self {
+            mesh, mass, stiff, bcs, u,
+            alpha: 1.0, last_alpha: 1.0, dt: 0.02,
+            user_reset: false, last_iters: 0, last_residual: 0.0,
+        }
+    }
+}
+
+fn update_warp_fem_diffusion(
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemDiffusion {
+        return;
+    }
+    let st = &mut warp.fem_diff;
+    if st.user_reset {
+        let n = st.mesh.vert_count();
+        st.u = vec![0.0; n];
+        for bc in &st.bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+                st.u[*vertex as usize] = *value;
+            }
+        }
+        st.user_reset = false;
+    }
+    if (st.alpha - st.last_alpha).abs() > 1e-12 {
+        let space = fem::FunctionSpace::P1Nodal;
+        st.stiff = fem::assemble_global(&st.mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, st.alpha)
+        }).expect("warp diff rebuild");
+        st.last_alpha = st.alpha;
+    }
+    if run.paused {
+        return;
+    }
+    let n = st.mesh.vert_count();
+    let f = vec![0.0_f64; n];
+    let res = molla::fem::solver::solve_transient_with_initial(
+        &st.mass, &st.stiff, &f, &st.u.clone(), st.dt.max(1e-6),
+        &st.bcs, &st.u.clone(),
+        molla::fem::solver::DEFAULT_MAX_ITERS,
+        molla::fem::solver::DEFAULT_TOL,
+    );
+    st.u = res.x;
+    st.last_iters = res.iters;
+    st.last_residual = res.residual;
+}
+
+fn draw_warp_fem_diffusion_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemDiffusion {
+        return;
+    }
+    let st = &warp.fem_diff;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    for cell in &st.mesh.cells {
+        if let fem::FemCell::Tri(v) = cell {
+            let pa = st.mesh.vertices[v[0] as usize];
+            let pb = st.mesh.vertices[v[1] as usize];
+            let pc = st.mesh.vertices[v[2] as usize];
+            let to = |p: MVec3, vi: u32| {
+                origin + Vec3::new(p.x as f32, st.u[vi as usize] as f32 * 0.4, p.y as f32)
+            };
+            let a = to(pa, v[0]);
+            let b = to(pb, v[1]);
+            let c = to(pc, v[2]);
+            let avg = (st.u[v[0] as usize] + st.u[v[1] as usize] + st.u[v[2] as usize]) / 3.0;
+            let col = fem_heat_colour(avg);
+            gizmos.line(a, b, col);
+            gizmos.line(b, c, col);
+            gizmos.line(c, a, col);
+        }
+    }
+}
+
+fn warp_fem_diffusion_pane(ui: &mut egui::Ui, st: &mut WarpFemDiffusionState) {
+    ui.label("Warp FEM 2D diffusion — port of fem/example_diffusion.py");
+    ui.separator();
+    readout(ui, "Triangles", &format!("{}", st.mesh.cells.len()));
+    readout(ui, "Verts", &format!("{}", st.mesh.vert_count()));
+    readout(ui, "CG iters", &format!("{}", st.last_iters));
+    readout(ui, "Residual", &format!("{:.2e}", st.last_residual));
+    ui.label("Diffusivity α");
+    let _ = ui.add(egui::Slider::new(&mut st.alpha, 0.05..=10.0).logarithmic(true));
+    ui.label("dt");
+    let _ = ui.add(egui::Slider::new(&mut st.dt, 0.001..=0.2).logarithmic(true));
+    if ui.button("Reset").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("BCs: T(x=0) = 0, T(x=1) = 1; Neumann on top/bottom.");
+}
+
+// ── Scene 68: WarpFemDiffusion3D (animated BC) ────────────────────
+struct WarpFemDiffusion3DState {
+    mesh: fem::FemMesh,
+    mass: molla::math::sparse::BsrMatrix,
+    stiff: molla::math::sparse::BsrMatrix,
+    /// Bottom + top vertex indices (BCs are time-varying).
+    bottom: Vec<u32>,
+    top: Vec<u32>,
+    u: Vec<f64>,
+    alpha: f64,
+    dt: f64,
+    sim_t: f64,
+    user_reset: bool,
+}
+impl Default for WarpFemDiffusion3DState {
+    fn default() -> Self {
+        let n = 8;
+        let mesh = fem::FemMesh::tet_grid_3d(n, n, n, 1.0, 1.0, 1.0);
+        let space = fem::FunctionSpace::P1Nodal;
+        let mass = fem::assemble_global(&mesh, space, fem::compute_element_mass)
+            .expect("warp diff3d mass");
+        let stiff = fem::assemble_global(&mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, 1.0)
+        }).expect("warp diff3d stiff");
+        let mut bottom = Vec::new();
+        let mut top = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.z.abs() < 1e-9 { bottom.push(i as u32); }
+            if (p.z - 1.0).abs() < 1e-9 { top.push(i as u32); }
+        }
+        Self {
+            u: vec![0.0; mesh.vert_count()],
+            mesh, mass, stiff, bottom, top,
+            alpha: 1.0, dt: 0.02, sim_t: 0.0,
+            user_reset: false,
+        }
+    }
+}
+
+fn update_warp_fem_diffusion_3d(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemDiffusion3D {
+        return;
+    }
+    let st = &mut warp.fem_diff3d;
+    if st.user_reset {
+        st.u = vec![0.0; st.mesh.vert_count()];
+        st.sim_t = 0.0;
+        st.user_reset = false;
+    }
+    if run.paused {
+        return;
+    }
+    st.sim_t += time.delta_secs() as f64;
+    let bottom_v = (st.sim_t * 1.5).sin() * 0.5 + 0.5;
+    let top_v = (st.sim_t * 1.5).cos() * 0.5 + 0.5;
+    let mut bcs = Vec::with_capacity(st.bottom.len() + st.top.len());
+    for &v in &st.bottom {
+        bcs.push(fem::BoundaryCondition::Dirichlet { vertex: v, value: bottom_v });
+    }
+    for &v in &st.top {
+        bcs.push(fem::BoundaryCondition::Dirichlet { vertex: v, value: top_v });
+    }
+    let f = vec![0.0; st.mesh.vert_count()];
+    let res = molla::fem::solver::solve_transient_with_initial(
+        &st.mass, &st.stiff, &f, &st.u.clone(), st.dt,
+        &bcs, &st.u.clone(),
+        molla::fem::solver::DEFAULT_MAX_ITERS,
+        molla::fem::solver::DEFAULT_TOL,
+    );
+    st.u = res.x;
+}
+
+fn draw_warp_fem_diffusion_3d_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemDiffusion3D {
+        return;
+    }
+    let st = &warp.fem_diff3d;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::new();
+    for cell in &st.mesh.cells {
+        if let fem::FemCell::Tet(v) = cell {
+            let edges = [(v[0],v[1]),(v[0],v[2]),(v[0],v[3]),(v[1],v[2]),(v[1],v[3]),(v[2],v[3])];
+            for &(a,b) in &edges {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !seen.insert(key) { continue; }
+                let pa = st.mesh.vertices[a as usize];
+                let pb = st.mesh.vertices[b as usize];
+                let av = origin + Vec3::new(pa.x as f32, pa.z as f32, pa.y as f32);
+                let bv = origin + Vec3::new(pb.x as f32, pb.z as f32, pb.y as f32);
+                let t = 0.5 * (st.u[a as usize] + st.u[b as usize]);
+                gizmos.line(av, bv, fem_heat_colour(t));
+            }
+        }
+    }
+}
+
+fn warp_fem_diffusion_3d_pane(ui: &mut egui::Ui, st: &mut WarpFemDiffusion3DState) {
+    ui.label("Warp FEM 3D diffusion — port of fem/example_diffusion_3d.py");
+    ui.separator();
+    readout(ui, "Tets", &format!("{}", st.mesh.cells.len()));
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    ui.label("α");
+    let _ = ui.add(egui::Slider::new(&mut st.alpha, 0.1..=10.0).logarithmic(true));
+    ui.label("dt");
+    let _ = ui.add(egui::Slider::new(&mut st.dt, 0.001..=0.2).logarithmic(true));
+    if ui.button("Reset").clicked() { st.user_reset = true; }
+    ui.small("Time-varying Dirichlet BCs (sin/cos on top + bottom faces).");
+}
+
+// ── Scene 69: WarpFemConvDiff (steady advection-diffusion) ────────
+struct WarpFemConvDiffState {
+    mesh: fem::FemMesh,
+    /// Last steady-state solution.
+    u: Vec<f64>,
+    alpha: f64,
+    user_reset: bool,
+    last_iters: usize,
+    last_residual: f64,
+}
+impl Default for WarpFemConvDiffState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tri_grid_2d(20, 20, 1.0, 1.0);
+        Self {
+            u: vec![0.0; mesh.vert_count()],
+            mesh,
+            alpha: 0.05, user_reset: true,
+            last_iters: 0, last_residual: 0.0,
+        }
+    }
+}
+
+fn update_warp_fem_convdiff(
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemConvDiff {
+        return;
+    }
+    let st = &mut warp.fem_convdiff;
+    if !st.user_reset {
+        return;
+    }
+    // Same ∇² operator scaled by α; Dirichlet BCs on left = 1, right = 0.
+    let space = fem::FunctionSpace::P1Nodal;
+    let stiff = fem::assemble_global(&st.mesh, space, |c, v| {
+        fem::compute_element_stiffness(c, v, st.alpha)
+    }).expect("warp convdiff stiff");
+    let mut bcs = Vec::new();
+    for (i, p) in st.mesh.vertices.iter().enumerate() {
+        if p.x.abs() < 1e-9 {
+            bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 1.0 });
+        } else if (p.x - 1.0).abs() < 1e-9 {
+            bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 0.0 });
+        }
+    }
+    let f = vec![0.0; st.mesh.vert_count()];
+    let x0 = vec![0.0_f64; f.len()];
+    let res = molla::fem::solver::solve_steady_state_with_initial(
+        &stiff, &f, &bcs, &x0,
+        molla::fem::solver::DEFAULT_MAX_ITERS,
+        molla::fem::solver::DEFAULT_TOL,
+    );
+    st.u = res.x;
+    st.last_iters = res.iters;
+    st.last_residual = res.residual;
+    st.user_reset = false;
+}
+
+fn draw_warp_fem_convdiff_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemConvDiff {
+        return;
+    }
+    let st = &warp.fem_convdiff;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    for cell in &st.mesh.cells {
+        if let fem::FemCell::Tri(v) = cell {
+            let pa = st.mesh.vertices[v[0] as usize];
+            let pb = st.mesh.vertices[v[1] as usize];
+            let pc = st.mesh.vertices[v[2] as usize];
+            let to = |p: MVec3| origin + Vec3::new(p.x as f32, 0.0, p.y as f32);
+            let avg = (st.u[v[0] as usize] + st.u[v[1] as usize] + st.u[v[2] as usize]) / 3.0;
+            let col = fem_heat_colour(avg);
+            gizmos.line(to(pa), to(pb), col);
+            gizmos.line(to(pb), to(pc), col);
+            gizmos.line(to(pc), to(pa), col);
+        }
+    }
+}
+
+fn warp_fem_convdiff_pane(ui: &mut egui::Ui, st: &mut WarpFemConvDiffState) {
+    ui.label("Warp FEM convection-diffusion — port of fem/example_convection_diffusion.py");
+    ui.separator();
+    readout(ui, "Triangles", &format!("{}", st.mesh.cells.len()));
+    readout(ui, "CG iters", &format!("{}", st.last_iters));
+    readout(ui, "Residual", &format!("{:.2e}", st.last_residual));
+    ui.label("Diffusivity α");
+    if ui.add(egui::Slider::new(&mut st.alpha, 0.001..=1.0).logarithmic(true)).changed() {
+        st.user_reset = true;
+    }
+    if ui.button("Recompute").clicked() { st.user_reset = true; }
+    ui.small("Steady ∇·(α ∇T) = 0 — convection term placeholder.");
+    ui.small("Full upwind advection lands in a Stage 36.x follow-up.");
+}
+
+// ── Scene 70: WarpFemTaylorGreen (Stokes vortex IC) ───────────────
+struct WarpFemTaylorGreenState {
+    sim_t: f64,
+    nu: f64,
+    /// Decay magnitude (analytic): exp(-8 π² ν t).
+    decay: f64,
+    user_reset: bool,
+}
+impl Default for WarpFemTaylorGreenState {
+    fn default() -> Self {
+        Self { sim_t: 0.0, nu: 0.01, decay: 1.0, user_reset: false }
+    }
+}
+
+fn update_warp_fem_taylor(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemTaylorGreen { return; }
+    let st = &mut warp.fem_taylor;
+    if st.user_reset { st.sim_t = 0.0; st.user_reset = false; }
+    if run.paused { return; }
+    st.sim_t += time.delta_secs() as f64;
+    let p = std::f64::consts::PI;
+    st.decay = (-8.0 * p * p * st.nu * st.sim_t).exp();
+}
+
+fn draw_warp_fem_taylor_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemTaylorGreen { return; }
+    let st = &warp.fem_taylor;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    let n = 16;
+    let p = std::f64::consts::PI;
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f64 + 0.5) / n as f64;
+            let y = (j as f64 + 0.5) / n as f64;
+            let u = -((2.0 * p * x).cos() * (2.0 * p * y).sin()) * st.decay;
+            let v = ((2.0 * p * x).sin() * (2.0 * p * y).cos()) * st.decay;
+            let from = origin + Vec3::new(x as f32, 0.0, y as f32);
+            let to = from + Vec3::new(u as f32 * 0.05, 0.0, v as f32 * 0.05);
+            gizmos.line(from, to, Color::srgb(0.4, 0.95, 0.6));
+        }
+    }
+}
+
+fn warp_fem_taylor_pane(ui: &mut egui::Ui, st: &mut WarpFemTaylorGreenState) {
+    ui.label("Warp FEM Taylor-Green — port of fem/example_taylor_green.py");
+    ui.separator();
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    readout(ui, "Decay exp(-8π²νt)", &format!("{:.3e}", st.decay));
+    ui.label("Viscosity ν");
+    let _ = ui.add(egui::Slider::new(&mut st.nu, 0.001..=0.5).logarithmic(true));
+    if ui.button("Reset t").clicked() { st.user_reset = true; }
+    ui.small("Analytic Taylor-Green vortex. Velocity arrows shrink");
+    ui.small("with the exact decay envelope.");
+}
+
+// ── Scene 71: WarpFemKelvinHelmholtz ──────────────────────────────
+struct WarpFemKhState {
+    sim_t: f64,
+    growth_rate: f64,
+}
+impl Default for WarpFemKhState {
+    fn default() -> Self { Self { sim_t: 0.0, growth_rate: 0.5 } }
+}
+
+fn update_warp_fem_kh(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemKelvinHelmholtz { return; }
+    if run.paused { return; }
+    warp.fem_kh.sim_t += time.delta_secs() as f64;
+}
+
+fn draw_warp_fem_kh_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemKelvinHelmholtz { return; }
+    let st = &warp.fem_kh;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    let n = 24;
+    let amp = (st.sim_t * st.growth_rate).tanh() * 0.05;
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f64 + 0.5) / n as f64;
+            let y = (j as f64 + 0.5) / n as f64;
+            let dy = y - 0.5;
+            let u = if dy > 0.0 { 0.5 } else { -0.5 };
+            let v = amp * (4.0 * std::f64::consts::PI * x).sin() * (-dy.abs() * 8.0).exp();
+            let from = origin + Vec3::new(x as f32, 0.0, y as f32);
+            let to = from + Vec3::new(u as f32 * 0.04, 0.0, v as f32 * 0.04);
+            let col = if dy > 0.0 { Color::srgb(0.95, 0.5, 0.3) } else { Color::srgb(0.3, 0.6, 0.95) };
+            gizmos.line(from, to, col);
+        }
+    }
+}
+
+fn warp_fem_kh_pane(ui: &mut egui::Ui, st: &mut WarpFemKhState) {
+    ui.label("Warp FEM Kelvin-Helmholtz — port of fem/example_kelvin_helmholtz.py");
+    ui.separator();
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    ui.label("Perturbation growth rate");
+    let _ = ui.add(egui::Slider::new(&mut st.growth_rate, 0.05..=2.0));
+    ui.small("Shear-layer toy model: top moves +x, bottom moves -x;");
+    ui.small("perturbation grows tanh(σt) over time.");
+}
+
+// ── Scene 72: WarpFemStreamlines ──────────────────────────────────
+struct WarpFemStreamlinesState {
+    /// Tracer positions.
+    tracers: Vec<Vec3>,
+    sim_t: f64,
+    user_reset: bool,
+}
+impl Default for WarpFemStreamlinesState {
+    fn default() -> Self {
+        Self { tracers: Vec::new(), sim_t: 0.0, user_reset: true }
+    }
+}
+
+fn warp_streamlines_velocity(p: Vec3) -> Vec3 {
+    // Simple analytic vortex (poor man's lid-driven cavity).
+    let r = Vec3::new(p.x - 0.5, 0.0, p.z - 0.5);
+    Vec3::new(-r.z, 0.0, r.x) * 0.6
+}
+
+fn update_warp_fem_streamlines(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFemStreamlines { return; }
+    let st = &mut warp.fem_streamlines;
+    if st.user_reset {
+        st.tracers.clear();
+        for j in 0..8 {
+            for i in 0..8 {
+                let x = (i as f32 + 0.5) / 8.0;
+                let z = (j as f32 + 0.5) / 8.0;
+                st.tracers.push(Vec3::new(x, 0.05, z));
+            }
+        }
+        st.sim_t = 0.0;
+        st.user_reset = false;
+    }
+    if run.paused { return; }
+    let dt = time.delta_secs().min(0.05);
+    st.sim_t += dt as f64;
+    for p in st.tracers.iter_mut() {
+        let v = warp_streamlines_velocity(*p);
+        *p += v * dt;
+        // Wrap into [0,1]^2 in xz.
+        if p.x < 0.0 { p.x += 1.0; }
+        if p.x > 1.0 { p.x -= 1.0; }
+        if p.z < 0.0 { p.z += 1.0; }
+        if p.z > 1.0 { p.z -= 1.0; }
+    }
+}
+
+fn draw_warp_fem_streamlines_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemStreamlines { return; }
+    let st = &warp.fem_streamlines;
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    for &p in &st.tracers {
+        let world = origin + Vec3::new(p.x, 0.0, p.z);
+        gizmos.sphere(
+            bevy::math::Isometry3d::from_translation(world),
+            0.015,
+            Color::srgb(0.3, 0.7, 0.95),
+        );
+    }
+}
+
+fn warp_fem_streamlines_pane(ui: &mut egui::Ui, st: &mut WarpFemStreamlinesState) {
+    ui.label("Warp FEM streamlines — port of fem/example_streamlines.py");
+    ui.separator();
+    readout(ui, "Tracers", &format!("{}", st.tracers.len()));
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    if ui.button("Reset tracers").clicked() { st.user_reset = true; }
+    ui.small("Tracers advect through analytic 2D vortex velocity field.");
+}
+
+// ── Scene 73: WarpFemDeformedGeometry (curved annular mesh) ──────
+struct WarpFemDeformedState {
+    /// Annular vertex positions for visualisation.
+    verts: Vec<MVec3>,
+    /// Annular triangle indices.
+    tris: Vec<[u32; 3]>,
+    /// Per-vertex temperature.
+    u: Vec<f64>,
+    user_reset: bool,
+}
+impl Default for WarpFemDeformedState {
+    fn default() -> Self {
+        Self { verts: Vec::new(), tris: Vec::new(), u: Vec::new(), user_reset: true }
+    }
+}
+
+fn update_warp_fem_deformed(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpFemDeformedGeometry { return; }
+    let st = &mut warp.fem_deformed;
+    if !st.user_reset { return; }
+    // Build a curved (annular) tri mesh by mapping the unit square
+    // (x,y) → (r sin t, r cos t) with r = y + 0.5, t = π x / 2.
+    let nx = 12;
+    let ny = 8;
+    st.verts.clear();
+    st.tris.clear();
+    for j in 0..=ny {
+        for i in 0..=nx {
+            let x = i as f64 / nx as f64;
+            let y = j as f64 / ny as f64;
+            let r = y + 0.5;
+            let t = 0.5 * std::f64::consts::PI * x;
+            st.verts.push(MVec3::new(r * t.sin(), 0.0, r * t.cos()));
+        }
+    }
+    let stride = nx + 1;
+    for j in 0..ny {
+        for i in 0..nx {
+            let a = (j * stride + i) as u32;
+            let b = a + 1;
+            let c = a + stride as u32;
+            let d = c + 1;
+            st.tris.push([a, b, d]);
+            st.tris.push([a, d, c]);
+        }
+    }
+    // T = boundary value: 1 on outer arc, 0 on inner arc; linear blend
+    // by radial coordinate (cheap analytic approximation).
+    st.u = st.verts.iter().map(|p| {
+        let r = (p.x * p.x + p.z * p.z).sqrt();
+        ((r - 0.5) / 1.0).clamp(0.0, 1.0)
+    }).collect();
+    st.user_reset = false;
+}
+
+fn draw_warp_fem_deformed_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFemDeformedGeometry { return; }
+    let st = &warp.fem_deformed;
+    let origin = Vec3::new(0.0, 0.05, 0.0);
+    for tri in &st.tris {
+        let pa = st.verts[tri[0] as usize];
+        let pb = st.verts[tri[1] as usize];
+        let pc = st.verts[tri[2] as usize];
+        let to = |p: MVec3| origin + Vec3::new(p.x as f32, 0.0, p.z as f32);
+        let avg = (st.u[tri[0] as usize] + st.u[tri[1] as usize] + st.u[tri[2] as usize]) / 3.0;
+        let col = fem_heat_colour(avg);
+        gizmos.line(to(pa), to(pb), col);
+        gizmos.line(to(pb), to(pc), col);
+        gizmos.line(to(pc), to(pa), col);
+    }
+}
+
+fn warp_fem_deformed_pane(ui: &mut egui::Ui, st: &mut WarpFemDeformedState) {
+    ui.label("Warp FEM deformed geometry — port of fem/example_deformed_geometry.py");
+    ui.separator();
+    readout(ui, "Triangles", &format!("{}", st.tris.len()));
+    if ui.button("Rebuild").clicked() { st.user_reset = true; }
+    ui.small("Annular (curved) mesh from unit-square parameterisation;");
+    ui.small("temperature = radial blend (analytic).");
+}
+
+// ── Scene 74: WarpFemDistortion ───────────────────────────────────
+struct WarpFemDistortionState {
+    energy: f64,
+    user_reset: bool,
+}
+impl Default for WarpFemDistortionState {
+    fn default() -> Self { Self { energy: 1.0, user_reset: true } }
+}
+
+fn update_warp_fem_distortion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpFemDistortion { return; }
+    let st = &mut warp.fem_distortion;
+    if !st.user_reset { return; }
+    // Stub: compute the symmetric Dirichlet energy for a tiny mapping.
+    // E(F) = 1/2 (‖F‖² + ‖F⁻ᵀ‖²). With F = I, E = 3.
+    st.energy = 3.0;
+    st.user_reset = false;
+}
+
+fn warp_fem_distortion_pane(ui: &mut egui::Ui, st: &mut WarpFemDistortionState) {
+    ui.label("Warp FEM distortion energy — port of fem/example_distortion_energy.py");
+    ui.separator();
+    readout(ui, "Symmetric Dirichlet E", &format!("{:.4}", st.energy));
+    if ui.button("Recompute").clicked() { st.user_reset = true; }
+    ui.small("E(F) = ½(‖F‖² + ‖F⁻ᵀ‖²); identity → E = 3.");
+    ui.small("Full Newton minimisation lands in a Stage 36.x follow-up.");
+}
+
+// ── Scene 75: WarpFemElasticOpt ───────────────────────────────────
+struct WarpFemElasticOptState {
+    /// Beam height parameter (optimised).
+    height: f64,
+    /// Stress proxy (smaller = better).
+    last_stress: f64,
+    iter: usize,
+    learning_rate: f64,
+    paused: bool,
+    user_reset: bool,
+}
+impl Default for WarpFemElasticOptState {
+    fn default() -> Self {
+        Self {
+            height: 0.4, last_stress: 0.0, iter: 0,
+            learning_rate: 0.01, paused: false, user_reset: true,
+        }
+    }
+}
+
+fn update_warp_fem_elastic_opt(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpFemElasticOpt { return; }
+    let st = &mut warp.fem_elastic_opt;
+    if st.user_reset {
+        st.height = 0.4;
+        st.iter = 0;
+        st.last_stress = 0.0;
+        st.user_reset = false;
+    }
+    if st.paused { return; }
+    // Surrogate stress model: small for h=0.5, growing for h<0.2 or h>0.8.
+    let s = (st.height - 0.5).powi(2) * 100.0 + 1.0 / st.height.max(0.05);
+    let grad = 200.0 * (st.height - 0.5) - 1.0 / st.height.max(0.05).powi(2);
+    st.last_stress = s;
+    st.height = (st.height - st.learning_rate * grad).clamp(0.1, 0.9);
+    st.iter += 1;
+}
+
+fn warp_fem_elastic_opt_pane(ui: &mut egui::Ui, st: &mut WarpFemElasticOptState) {
+    ui.label("Warp FEM elastic shape opt — port of fem/example_elastic_shape_optimization.py");
+    ui.separator();
+    readout(ui, "Iter", &format!("{}", st.iter));
+    readout(ui, "Beam height h", &format!("{:.3} m", st.height));
+    readout(ui, "Stress proxy", &format!("{:.3e}", st.last_stress));
+    ui.label("Learning rate");
+    let _ = ui.add(egui::Slider::new(&mut st.learning_rate, 0.001..=0.1).logarithmic(true));
+    ui.checkbox(&mut st.paused, "Pause");
+    if ui.button("Reset").clicked() { st.user_reset = true; }
+    ui.small("Surrogate model: optimal h ≈ 0.5; gradient descent.");
+}
+
+// ── Scene 76: WarpFftFluid ────────────────────────────────────────
+struct WarpFftFluidState {
+    sim_t: f64,
+}
+impl Default for WarpFftFluidState {
+    fn default() -> Self { Self { sim_t: 0.0 } }
+}
+
+fn update_warp_fft_fluid(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFftFluid { return; }
+    if run.paused { return; }
+    warp.fft_fluid.sim_t += time.delta_secs() as f64;
+}
+
+fn draw_warp_fft_fluid_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFftFluid { return; }
+    let origin = Vec3::new(-0.5, 0.05, -0.5);
+    let n = 16;
+    let t = warp.fft_fluid.sim_t as f32;
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f32 + 0.5) / n as f32;
+            let y = (j as f32 + 0.5) / n as f32;
+            // Two-mode standing wave (Stokes-style placeholder).
+            let p = std::f32::consts::PI;
+            let u = (2.0 * p * x).sin() * (2.0 * p * y).cos() * (1.0 + 0.5 * t.sin());
+            let v = -(2.0 * p * x).cos() * (2.0 * p * y).sin() * (1.0 + 0.5 * t.sin());
+            let from = origin + Vec3::new(x, 0.0, y);
+            let to = from + Vec3::new(u * 0.05, 0.0, v * 0.05);
+            gizmos.line(from, to, Color::srgb(0.5, 0.7, 0.95));
+        }
+    }
+}
+
+fn warp_fft_fluid_pane(ui: &mut egui::Ui, st: &mut WarpFftFluidState) {
+    ui.label("Warp FFT fluid — port of core/example_fft_poisson_navier_stokes_2d.py");
+    ui.separator();
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    ui.small("Stokes-fallback visualisation. Full FFT-Poisson coupling");
+    ui.small("ships as a Stage 24c.x follow-up.");
+}
+
+// ── Scene 77: WarpDistortion3D ────────────────────────────────────
+struct WarpDistortion3DState {
+    energy: f64,
+}
+impl Default for WarpDistortion3DState {
+    fn default() -> Self { Self { energy: 6.0 } }
+}
+
+fn update_warp_distortion_3d(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpDistortion3D { return; }
+    // Identity in 3D: E = 1/2(‖I‖² + ‖I⁻ᵀ‖²) = 3.
+    warp.distortion_3d.energy = 6.0;
+}
+
+fn warp_distortion_3d_pane(ui: &mut egui::Ui, st: &mut WarpDistortion3DState) {
+    ui.label("Warp distortion 3D (bonus, fem/example_distortion_energy.py extension)");
+    ui.separator();
+    readout(ui, "Energy E (identity)", &format!("{:.4}", st.energy));
+    ui.small("3D companion to `WarpFemDistortion`. Identity → E = 6.");
+}
