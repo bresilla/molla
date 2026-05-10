@@ -148,12 +148,21 @@ pub fn compute_tet_surface_triangles(tets: &[[u32; 4]]) -> Vec<[u32; 3]> {
         }
     }
 
-    let mut out = Vec::new();
-    for (_, (count, tri)) in faces {
-        if count == 1 {
-            out.push(tri);
-        }
-    }
+    // Collect surviving boundary tris and sort deterministically by
+    // sorted-vertex key. HashMap iteration is non-deterministic across
+    // runs; without this sort the resulting tri ordering — and the
+    // global tri IDs that downstream code (LBVH, soft-VT contact,
+    // friction warm-start LUT keyed on `(vertex_global_id, tri_global_id)`)
+    // computes from it — would shuffle frame-to-frame.
+    let mut out: Vec<[u32; 3]> = faces
+        .into_iter()
+        .filter_map(|(_, (count, tri))| if count == 1 { Some(tri) } else { None })
+        .collect();
+    out.sort_unstable_by_key(|tri| {
+        let mut k = *tri;
+        k.sort_unstable();
+        k
+    });
     out
 }
 
