@@ -49,12 +49,18 @@ pub mod bc;
 pub mod element;
 pub mod function_space;
 pub mod mesh;
+pub mod p2_element;
 pub mod quadrature;
 pub mod solver;
 
 pub use assembly::assemble_global;
 pub use bc::{apply_dirichlet, BoundaryCondition};
 pub use element::{compute_element_mass, compute_element_stiffness};
-pub use function_space::FunctionSpace;
+pub use function_space::{compute_edges, FunctionSpace};
 pub use mesh::{FemCell, FemMesh};
+pub use p2_element::{
+    assemble_global_p2, compute_element_p2_mass, compute_element_p2_stiffness,
+    p2_tet_shape_functions, p2_tet_shape_gradients, p2_tri_shape_functions,
+    p2_tri_shape_gradients, P2DofMap, TET_EDGES, TRI_EDGES,
+};
 pub use solver::{solve_steady_state, solve_transient};

@@ -156,7 +156,7 @@ pub fn tet_volume(p: &[Vec3; 4]) -> Real {
 /// Returns `[∇φ₀, ∇φ₁, ∇φ₂]` as `[gx, gy]` pairs (only the in-plane
 /// components — the normal-out-of-plane component is zero by
 /// construction for a planar triangle).
-fn tri_shape_grads_2d(p: &[Vec3; 3]) -> [[Real; 2]; 3] {
+pub(super) fn tri_shape_grads_2d(p: &[Vec3; 3]) -> [[Real; 2]; 3] {
     // φᵢ(x, y) = (aᵢ + bᵢ·x + cᵢ·y) / (2A); ∇φᵢ = (bᵢ, cᵢ) / (2A).
     // Standard expressions (see Zienkiewicz):
     //   bᵢ = y_{i+1} − y_{i+2}
@@ -176,7 +176,7 @@ fn tri_shape_grads_2d(p: &[Vec3; 3]) -> [[Real; 2]; 3] {
 /// Gradients of the four P1 hat-functions on a tetrahedron, returned
 /// as 3D vectors. Standard formula: solve `[∇φ₁, ∇φ₂, ∇φ₃] = D⁻ᵀ`
 /// where `D = [v₁−v₀ | v₂−v₀ | v₃−v₀]`, and `∇φ₀ = −∑ᵢ₌₁ ∇φᵢ`.
-fn tet_shape_grads(p: &[Vec3; 4]) -> [Vec3; 4] {
+pub(super) fn tet_shape_grads(p: &[Vec3; 4]) -> [Vec3; 4] {
     use crate::math::Mat3;
     let d = Mat3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0]);
     // Inverse-transpose.
