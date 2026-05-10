@@ -81,6 +81,13 @@ pub struct SoftVtContactKernel {
     queue: Arc<wgpu::Queue>,
 
     pipe_compute_tri_aabbs: wgpu::ComputePipeline,
+    /// `gather_vt_aabbs` writes per-vertex inflated AABBs into
+    /// `vert_aabbs`. v1 doesn't dispatch this — the gather pass walks
+    /// the BVH directly with the live position. Kept around so
+    /// downstream batched-query work (Stage 33.3 self-collision) can
+    /// reuse the per-vert AABBs without re-introducing the entry
+    /// point.
+    #[allow(dead_code)]
     pipe_gather_vt_aabbs: wgpu::ComputePipeline,
     pipe_gather_vt: wgpu::ComputePipeline,
     pipe_apply_vt_penalty: wgpu::ComputePipeline,
