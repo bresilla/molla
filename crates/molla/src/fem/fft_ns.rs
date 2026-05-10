@@ -45,6 +45,26 @@ use std::sync::Arc;
 use crate::core::{Error, Result};
 use crate::kernels::{Complex32, FftKernel};
 
+/// Discrete Laplacian stencil used by [`solve_pressure_poisson_fft`]
+/// and [`solve_pressure_poisson_fft_with_stencil`]. Choose the stencil
+/// that matches the operator the caller's gradient/divergence steps
+/// implicitly apply — otherwise the "exact projection" in the
+/// fractional-step method leaks divergence on the odd-even mode.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PoissonStencil {
+    /// Tight 5-point: `(p[i±1] − 2 p[i]) / dx²`. Use when the
+    /// gradient/divergence are implemented with one-sided or
+    /// staggered differences whose composition is the 5-point
+    /// Laplacian. Default for [`solve_pressure_poisson_fft`] —
+    /// preserves the Stage 37.5 v1 contract.
+    FivePoint,
+    /// Wide stencil `(p[i±2] − 2 p[i]) / (4 dx²)`. Use when
+    /// gradient/divergence are central first differences (stride 2)
+    /// — required by the collocated-grid fractional-step NS solver
+    /// to actually be div-free instead of div-free-modulo-checkerboard.
+    WideStencil,
+}
+
 /// Solve `-∇²p = rhs` on a uniform `n × n` periodic grid via spectral
 /// inversion. `rhs` and the returned pressure are real-valued
 /// row-major `n²`-element vectors. Implementation: forward 2D FFT of
@@ -69,6 +89,27 @@ pub fn solve_pressure_poisson_fft(
     kernel: &FftKernel,
     rhs: &[f32],
     n: usize,
+) -> Result<Vec<f32>> {
+    solve_pressure_poisson_fft_with_stencil(
+        device,
+        queue,
+        kernel,
+        rhs,
+        n,
+        PoissonStencil::FivePoint,
+    )
+}
+
+/// Same as [`solve_pressure_poisson_fft`] but lets the caller pick
+/// which discrete Laplacian symbol to invert. See [`PoissonStencil`]
+/// for when each one is appropriate.
+pub fn solve_pressure_poisson_fft_with_stencil(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    kernel: &FftKernel,
+    rhs: &[f32],
+    n: usize,
+    stencil: PoissonStencil,
 ) -> Result<Vec<f32>> {
     if n == 0 || (n & (n - 1)) != 0 {
         return Err(Error::Gpu(format!(
@@ -109,15 +150,30 @@ pub fn solve_pressure_poisson_fft(
                 fwd[idx] = Complex32::ZERO;
                 continue;
             }
-            // Eigenvalue of the negative discrete 2D Laplacian on a
-            // periodic grid with unit spacing:
-            //   λ = 4 sin²(π kx / n) + 4 sin²(π ky / n)
-            // Using the symbol of -Δ_h matches what the corrector step
-            // expects (so the projection is exact, not just spectrally
-            // approximate).
-            let sx = (std::f32::consts::PI * kx_signed / nf).sin();
-            let sy = (std::f32::consts::PI * ky_signed / nf).sin();
-            let lam = 4.0 * (sx * sx + sy * sy);
+            // Eigenvalue of `-Δ_h` for the requested stencil.
+            //
+            // - `FivePoint`: standard `(p[i+1] − 2p[i] + p[i−1]) / dx²`
+            //   on each axis, eigenvalue `4 sin²(π k / n)` per axis.
+            // - `WideStencil`: `(p[i+2] − 2p[i] + p[i−2]) / (4 dx²)` —
+            //   what you get when you take divergence-of-gradient with
+            //   *central* first differences (stride 2). Eigenvalue
+            //   `sin²(2π k / n)` per axis. The fractional-step NS
+            //   corrector applies central first differences, so its
+            //   implicit projection operator is wide-stencil; using
+            //   the 5-point symbol there leaves a residual divergence
+            //   on the odd-even checkerboard mode.
+            let lam = match stencil {
+                PoissonStencil::FivePoint => {
+                    let sx = (std::f32::consts::PI * kx_signed / nf).sin();
+                    let sy = (std::f32::consts::PI * ky_signed / nf).sin();
+                    4.0 * (sx * sx + sy * sy)
+                }
+                PoissonStencil::WideStencil => {
+                    let sx = (2.0 * std::f32::consts::PI * kx_signed / nf).sin();
+                    let sy = (2.0 * std::f32::consts::PI * ky_signed / nf).sin();
+                    sx * sx + sy * sy
+                }
+            };
             // Skip zero mode (already handled above) and any tiny
             // numerical noise.
             let inv = if lam > 1.0e-20 { 1.0 / lam } else { 0.0 };
@@ -169,10 +225,12 @@ pub struct FractionalStepConfig {
 /// 3. Corrector: `u_{n+1} = u* − Δt ∇p`.
 ///
 /// All spatial differences are second-order central with periodic
-/// wrap-around. Grid stays aligned (no staggering) — the FFT-based
-/// Poisson with the discrete symbol gives an *exact* projection on
-/// the central-difference subspace, so the resulting `u_{n+1}` is
-/// discretely divergence-free.
+/// wrap-around. Grid stays aligned (no staggering). The FFT-based
+/// Poisson uses the **wide-stencil** symbol (`λ = sin²(2π k / n)`)
+/// to match the implicit operator the central-difference
+/// gradient/divergence pair applies, so the projection is exact for
+/// the operator the corrector actually uses (instead of leaving a
+/// residual checkerboard divergence).
 pub fn solve_navier_stokes_fractional_step(
     device: &Arc<wgpu::Device>,
     queue: &Arc<wgpu::Queue>,
@@ -296,7 +354,19 @@ pub fn advance_navier_stokes_fractional_step(
         for v in div.iter_mut() {
             *v *= scale;
         }
-        let p = solve_pressure_poisson_fft(device, queue, kernel, &div, n)?;
+        // The corrector below applies central first differences for
+        // ∇p — the implicit projection operator is the wide-stencil
+        // Laplacian, not the 5-point. Match the symbol so the
+        // projection is exact instead of leaking the checkerboard
+        // mode (Stage 37 hardening).
+        let p = solve_pressure_poisson_fft_with_stencil(
+            device,
+            queue,
+            kernel,
+            &div,
+            n,
+            PoissonStencil::WideStencil,
+        )?;
 
         // ── Corrector: u_{n+1} = u* − dt ∇p ───────────────────────
         for j in 0..n {

@@ -71,7 +71,8 @@ pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 #[cfg(feature = "gpu")]
 pub use fft_ns::{
     advance_navier_stokes_fractional_step, solve_navier_stokes_fractional_step,
-    solve_pressure_poisson_fft, FractionalStepConfig,
+    solve_pressure_poisson_fft, solve_pressure_poisson_fft_with_stencil,
+    FractionalStepConfig, PoissonStencil,
 };
 pub use element::{
     compute_element_convection, compute_element_distortion_energy,
