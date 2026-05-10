@@ -18,12 +18,12 @@
 //!   and the assembled RHS each step, so the solution is consistent
 //!   with the BC at every time level.
 //!
-//! v1 caveat: because [`super::bc::apply_dirichlet`] only zeros rows
-//! (no symmetric column reduction), the constrained system is mildly
-//! non-symmetric on the BC rows. CG still converges in practice on
-//! these diagonally-dominant Laplacian-like systems; if you ever hit
-//! a pathological problem, swap in `bicgstab_solve` from
-//! [`crate::math::iterative`].
+//! [`super::bc::apply_dirichlet`] does symmetric reduction (zeroes
+//! the column too and shifts the RHS) so the reduced matrix is
+//! still SPD when the parent is. CG retains its convergence
+//! guarantee on the BC rows; non-zero Dirichlet values produce the
+//! correct RHS shift instead of silently relying on row-only
+//! elimination.
 
 use crate::math::iterative::{cg_solve, CgResult};
 use crate::math::sparse::BsrMatrix;
