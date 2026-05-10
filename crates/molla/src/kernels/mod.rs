@@ -30,6 +30,8 @@ mod dense3;
 mod epa;
 #[cfg(feature = "gpu")]
 mod featherstone;
+#[cfg(feature = "gpu")]
+mod fem;
 // Adjoint dispatcher is feature-gated separately — it does not (yet)
 // require GPU and is needed by the autograd CPU path + viewer
 // regardless of the `gpu` feature.
@@ -118,6 +120,8 @@ pub use epa::{
 };
 #[cfg(feature = "gpu")]
 pub use featherstone::FeatherstoneKernel;
+#[cfg(feature = "gpu")]
+pub use fem::FemGpuKernel;
 pub use featherstone_adjoint::{
     time_forward_us, AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher,
     MultiAdjointBatch, MultiAdjointInput, MultiAdjointOutput,
