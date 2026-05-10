@@ -8,6 +8,7 @@ pub mod mujoco;
 pub mod rnea;
 mod semi_implicit;
 mod vbd;
+pub mod vbd_vt_contact;
 mod xpbd;
 
 pub use crba::mass_matrix;
@@ -19,6 +20,7 @@ pub use mujoco::MuJoCoSolver;
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
 pub use vbd::{VbdMode, VbdSolver};
+pub use vbd_vt_contact::{gather_vt_contacts, VtContact};
 pub use xpbd::XpbdSolver;
 
 use crate::core::Result;
