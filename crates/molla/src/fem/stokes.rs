@@ -958,6 +958,183 @@ fn matvec_t(a: &BsrMatrix, x: &[Real], n_cols: usize) -> Vec<Real> {
     y
 }
 
+// ─── Convection assembly (Stage 37.3) ────────────────────────────────
+//
+// Builds the explicit convective force `f_conv = -∫ N_i (u_old · ∇u_old) dx`
+// for the IMEX Navier-Stokes step. The convection block is treated
+// **explicitly** (lagged from the previous step), so we don't need the
+// full Jacobian — just the per-element contribution evaluated at the
+// quadrature points using the previous-step velocity field.
+//
+// Stage 37.2 (separate parallel agent) is also adding a
+// `compute_element_convection` to `element.rs`. To avoid a merge
+// conflict we ship our own minimal helper here scoped to Stokes; once
+// 37.2 lands the inner per-element loop can switch over.
+
+/// Evaluate the velocity at a triangle quadrature point from the
+/// six P2 nodal DoFs `(node, comp)`-flat layout.
+#[inline]
+fn eval_p2_tri_velocity(
+    n: &[Real; 6],
+    nodes: &[usize; 6],
+    u: &[Real],
+    dim: usize,
+) -> [Real; 3] {
+    let mut v = [0.0_f64 as Real; 3];
+    for (i, &node) in nodes.iter().enumerate() {
+        for c in 0..dim {
+            v[c] += n[i] * u[node * dim + c];
+        }
+    }
+    v
+}
+
+/// Evaluate the velocity gradient at a triangle quadrature point.
+/// Returns `[∂u_c/∂x, ∂u_c/∂y]` for each component `c`.
+#[inline]
+fn eval_p2_tri_velocity_grad(
+    g: &[Vec3; 6],
+    nodes: &[usize; 6],
+    u: &[Real],
+    dim: usize,
+) -> [[Real; 2]; 3] {
+    let mut gu = [[0.0_f64 as Real; 2]; 3];
+    for (i, &node) in nodes.iter().enumerate() {
+        for c in 0..dim {
+            let uc = u[node * dim + c];
+            gu[c][0] += uc * g[i].x;
+            gu[c][1] += uc * g[i].y;
+        }
+    }
+    gu
+}
+
+/// Evaluate velocity / gradient on a P2 tet at a quadrature point.
+#[inline]
+fn eval_p2_tet_velocity(
+    n: &[Real; 10],
+    nodes: &[usize; 10],
+    u: &[Real],
+    dim: usize,
+) -> [Real; 3] {
+    let mut v = [0.0_f64 as Real; 3];
+    for (i, &node) in nodes.iter().enumerate() {
+        for c in 0..dim {
+            v[c] += n[i] * u[node * dim + c];
+        }
+    }
+    v
+}
+
+#[inline]
+fn eval_p2_tet_velocity_grad(
+    g: &[Vec3; 10],
+    nodes: &[usize; 10],
+    u: &[Real],
+    dim: usize,
+) -> [[Real; 3]; 3] {
+    let mut gu = [[0.0_f64 as Real; 3]; 3];
+    for (i, &node) in nodes.iter().enumerate() {
+        for c in 0..dim {
+            let uc = u[node * dim + c];
+            gu[c][0] += uc * g[i].x;
+            gu[c][1] += uc * g[i].y;
+            gu[c][2] += uc * g[i].z;
+        }
+    }
+    gu
+}
+
+/// Assemble the explicit convective force vector
+/// `f_conv = ∫ N_i (u_old · ∇u_old) dx` (sign convention: this is the
+/// **convective term moved to the RHS as `-f_conv`** by the time
+/// stepper). Returns a velocity-shaped vector with `n_velocity` entries
+/// in the same interleaved layout as
+/// [`compute_element_stokes_velocity_block`].
+///
+/// Implemented as a per-element quadrature integral using the
+/// previous-step velocity `u_old`. No SUPG stabilisation in v1; the
+/// IMEX time-stepper relies on the implicit viscous term to damp.
+pub fn assemble_convection_block(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    u_old: &[Real],
+) -> Vec<Real> {
+    debug_assert_eq!(u_old.len(), th.n_velocity);
+    let dim = th.dim;
+    let mut f = vec![0.0_f64 as Real; th.n_velocity];
+
+    for cell in &mesh.cells {
+        match cell {
+            FemCell::Tri(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                ];
+                let area = super::element::tri_area_2d(&p);
+                let qpts = tri_quadrature_6pt();
+                // Local node (P2) → global node mapping for this cell.
+                let mut nodes = [0usize; 6];
+                for i in 0..6 {
+                    nodes[i] = th.map.local_to_global(cell, i);
+                }
+                for q in &qpts {
+                    let n = p2_tri_shape_functions(q.bary);
+                    let g = p2_tri_shape_gradients(q.bary, &p);
+                    let u_q = eval_p2_tri_velocity(&n, &nodes, u_old, dim);
+                    let gu = eval_p2_tri_velocity_grad(&g, &nodes, u_old, dim);
+                    // Convection: (u · ∇)u → component c is
+                    // u_x ∂u_c/∂x + u_y ∂u_c/∂y.
+                    let mut conv = [0.0_f64 as Real; 3];
+                    for c in 0..dim {
+                        conv[c] = u_q[0] * gu[c][0] + u_q[1] * gu[c][1];
+                    }
+                    let w = q.weight * area;
+                    for i in 0..6 {
+                        for c in 0..dim {
+                            f[nodes[i] * dim + c] += w * n[i] * conv[c];
+                        }
+                    }
+                }
+            }
+            FemCell::Tet(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                    mesh.vertices[idx[3] as usize],
+                ];
+                let vol = super::element::tet_volume(&p);
+                let qpts = tet_quadrature_11pt();
+                let mut nodes = [0usize; 10];
+                for i in 0..10 {
+                    nodes[i] = th.map.local_to_global(cell, i);
+                }
+                for q in &qpts {
+                    let n = p2_tet_shape_functions(q.bary);
+                    let g = p2_tet_shape_gradients(q.bary, &p);
+                    let u_q = eval_p2_tet_velocity(&n, &nodes, u_old, dim);
+                    let gu = eval_p2_tet_velocity_grad(&g, &nodes, u_old, dim);
+                    let mut conv = [0.0_f64 as Real; 3];
+                    for c in 0..dim {
+                        conv[c] = u_q[0] * gu[c][0]
+                            + u_q[1] * gu[c][1]
+                            + u_q[2] * gu[c][2];
+                    }
+                    let w = q.weight * vol;
+                    for i in 0..10 {
+                        for c in 0..dim {
+                            f[nodes[i] * dim + c] += w * n[i] * conv[c];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    f
+}
+
 // ─── Solver: transient Navier-Stokes ──────────────────────────────────
 
 /// Navier-Stokes (transient, incompressible) configuration.
