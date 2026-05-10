@@ -32,7 +32,7 @@ fn imu_at_rest_reads_minus_gravity() {
     b.add_shape_sphere(body, 0.1, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
-    let (engine, model, mut state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
+    let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut imu = ImuSensor::new(
         &engine,

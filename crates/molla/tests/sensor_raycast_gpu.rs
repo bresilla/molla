@@ -1,17 +1,32 @@
 //! GPU ray-cast sensor — golden-value tests against hand-computed
 //! expectations. Each test is `#[ignore]` because it requires a real
 //! wgpu adapter (CI doesn't have one); run with
-//! `make test-xpbd-gpu` (which forwards `--include-ignored`).
+//! `make test-raycast-gpu` (forwards `-- --ignored` to the test binary).
+//!
+//! Each `#[test]` brings up its own `Engine::new_gpu()`. When the
+//! cargo `--workspace -- --ignored` lane runs all five concurrently
+//! inside this binary (rustc's default `--test-threads=N`) the wgpu
+//! Vulkan path can hang or crash on adapter creation. The
+//! `GPU_LOCK` mutex serialises adapter ownership so the suite's
+//! parallel runner can't trip over itself.
 
 #![cfg(feature = "gpu")]
+
+use std::sync::Mutex;
 
 use molla::compute::Engine;
 use molla::math::{Quat, Real, Transform, Vec3};
 use molla::prelude::*;
 use molla::sensors::Raycaster;
 
+/// Serialises wgpu adapter lifetime across the tests in this binary.
+/// See module docstring.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
 /// Bring up GPU + upload the model + a default state, returning the
-/// pieces every test needs.
+/// pieces every test needs. Returns `None` if no adapter is
+/// available (the caller `expect`s on the result so CI without a
+/// GPU surfaces an explicit "GPU adapter required" error).
 fn setup(model: Model) -> Option<(Engine, Model, State)> {
     let engine = match Engine::new_gpu() {
         Ok(e) => e,
@@ -27,16 +42,23 @@ fn setup(model: Model) -> Option<(Engine, Model, State)> {
     Some((engine, model, state))
 }
 
+/// Helper: acquire the GPU lock and return a guard that the caller
+/// drops at the end of the test scope. See module docstring.
+fn lock_gpu() -> std::sync::MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Sphere of radius 0.5 at origin; ray from (0, 5, 0) straight down.
 /// Expected hit at y = 0.5, t = 4.5, normal = +Y.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-xpbd-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
 fn ray_hits_sphere_at_expected_distance() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
 
+    let _gpu = lock_gpu();
     let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
@@ -73,12 +95,13 @@ fn ray_hits_sphere_at_expected_distance() {
 
 /// Ray that misses the sphere returns `shape_id = None`.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-xpbd-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
 fn ray_misses_sphere() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
+    let _gpu = lock_gpu();
     let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
@@ -100,13 +123,14 @@ fn ray_misses_sphere() {
 /// Box of half-extents (1, 0.5, 1) at origin; ray from (0, 5, 0) down.
 /// Expected hit at y = 0.5, t = 4.5, normal = +Y.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-xpbd-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
 fn ray_hits_box_top_face() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
     b.add_shape_box(body, Vec3::new(1.0, 0.5, 1.0), Transform::IDENTITY)
         .unwrap();
     let model = b.build().unwrap();
+    let _gpu = lock_gpu();
     let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
@@ -131,7 +155,7 @@ fn ray_hits_box_top_face() {
 /// Ray from (0, 5, 0) down should hit the upper (closer) sphere
 /// first.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-xpbd-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
 fn ray_takes_closer_of_two_spheres() {
     let mut b = ModelBuilder::new();
     let lower = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -139,6 +163,7 @@ fn ray_takes_closer_of_two_spheres() {
     let upper = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 3.0, 0.0)));
     b.add_shape_sphere(upper, 0.4, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
+    let _gpu = lock_gpu();
     let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();
@@ -162,7 +187,7 @@ fn ray_takes_closer_of_two_spheres() {
 /// a sphere to (5, 0, 0) by writing its initial pose, then cast a
 /// horizontal ray from the world origin and expect to hit at t ≈ 4.5.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-xpbd-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
 fn ray_hits_translated_body() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(
@@ -173,6 +198,7 @@ fn ray_hits_translated_body() {
     );
     b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
     let model = b.build().unwrap();
+    let _gpu = lock_gpu();
     let (engine, model, state) = setup(model).expect("GPU adapter required for this test (gated by #[ignore])");
 
     let mut sensor = Raycaster::new(&engine, 8).unwrap();

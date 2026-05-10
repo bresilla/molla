@@ -71,6 +71,19 @@ jobs:
     # `continue-on-error: true` so a CPU-only runner can't gate merges
     # on tests it physically can't run; promote to a hard gate once a
     # GPU-equipped runner is wired in.
+    #
+    # Failure-bucket guide for log triage (May 2026 audit):
+    #   1. `Engine::new_gpu()` panic                 → expected on
+    #      CPU-only runner; the panic message is the *intent*.
+    #   2. `MOLLA_NEWTON_PYTHON` env-var panic       → expected; the
+    #      Newton oracle needs a venv'd Python install (see
+    #      `Makefile::test-oracle`).
+    #   3. Wall-clock perf-gate failures (LBVH 10k,
+    #      MPM 50k+64³, etc.) under contended runs   → typically
+    #      `--test-threads` contention; perf gates document this with
+    #      a hint to re-run single-threaded.
+    #   4. SIGSEGV / kernel panic                    → real GPU bug
+    #      surfaced by the parallel run; investigate.
     name: ignored tests (GPU/perf — visibility only)
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -98,4 +111,7 @@ jobs:
         # `--ignored` runs *only* the gated tests (no overlap with
         # build-test above). Failures here surface tests that the GPU
         # path has silently bit-rotted, not just an absent adapter.
-        run: cargo test --workspace -- --ignored
+        # `--no-fail-fast` keeps the run going past the first failed
+        # crate so the log surfaces *every* failing test, not just the
+        # first one that panicked.
+        run: cargo test --workspace --no-fail-fast -- --ignored

@@ -2,15 +2,29 @@
 //! tests in `contact_friction_modes.rs` — both `μ_rolling` and
 //! `μ_torsional` should damp the matching angular DOF on the GPU
 //! kernel just like the CPU one.
+//!
+//! Both tests use a per-test `Engine::new_gpu()`. When the cargo
+//! `--workspace -- --ignored` lane runs both in parallel inside the
+//! same binary (the rustc default `--test-threads=N`) the wgpu
+//! Vulkan path SIGSEGVs on adapter destruction. We serialise the
+//! `run_gpu` call sites behind `GPU_LOCK` so the two tests share
+//! the GPU sequentially even when cargo runs them on separate
+//! threads. Make-target invocations
+//! (`make test-gpu` -> `--test-threads=1`) hit the same path.
 
 #![cfg(feature = "gpu")]
+
+use std::sync::Mutex;
 
 use molla::compute::Engine;
 use molla::core::BodyId;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Mat3, SpatialInertia, SpatialVector, Transform, Vec3 as V3};
 use molla::prelude::*;
-use molla::solvers::Solver as _;
+
+/// Serialises the wgpu adapter lifetime across the two `#[test]` fns
+/// in this binary. See module docstring for why.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
 
 fn sphere_inertia(mass: f64, r: f64) -> Mat3 {
     let i = (2.0 / 5.0) * mass * r * r;
@@ -40,6 +54,17 @@ fn build(coulomb: f64, rolling: f64, torsional: f64) -> molla::sim::Model {
 }
 
 fn run_gpu(mut model: molla::sim::Model, w0: V3, n_steps: usize) -> V3 {
+    // Serialise the GPU path across tests in this binary; the
+    // wgpu Vulkan adapter does not survive concurrent
+    // create/destroy from two threads on the dev driver. Holding
+    // the lock for the whole `run_gpu` body keeps the engine
+    // alive for the duration of the test (the lock is poisoned-
+    // safe via `unwrap_or_else(PoisonError::into_inner)`; we
+    // accept poisoned state since the failing test's panic is
+    // already the visible signal we care about).
+    let _gpu_lock = GPU_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let engine = Engine::new_gpu().expect("gpu engine");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();

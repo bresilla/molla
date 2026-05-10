@@ -3,12 +3,25 @@
 //! Validates the multi-pass 8-bit radix sort over (key=u32, value=u32)
 //! pairs against `Vec::sort_by_key` references. Covers correctness on
 //! random + edge-case inputs and stability via paired duplicates.
+//!
+//! Each `#[test]` calls `run_sort_check` which spins up its own
+//! `Engine::new_gpu()` and then polls the device with
+//! `wait_indefinitely`. When the cargo `--workspace -- --ignored`
+//! lane runs all seven concurrently inside this binary, the
+//! polling threads contend on the wgpu queue and either hang or
+//! crash. `GPU_LOCK` serialises adapter ownership.
 
 #![cfg(feature = "gpu")]
+
+use std::sync::Mutex;
 
 use molla::compute::Engine;
 use molla::core::{Error, Result};
 use molla::kernels::RadixSortKernel;
+
+/// Serialises wgpu adapter lifetime across the tests in this binary.
+/// See module docstring.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
 
 /// Allocate a STORAGE | COPY_SRC | COPY_DST u32 buffer of `len` slots.
 fn alloc_u32_buf(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
@@ -66,6 +79,9 @@ fn read_u32_buf(
 fn run_sort_check(keys_in: Vec<u32>, values_in: Vec<u32>) -> (Vec<u32>, Vec<u32>) {
     assert_eq!(keys_in.len(), values_in.len());
     let n = keys_in.len();
+    // Hold the GPU lock for the lifetime of the engine + dispatch.
+    // See module docstring for why.
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let engine = Engine::new_gpu().expect("gpu");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();

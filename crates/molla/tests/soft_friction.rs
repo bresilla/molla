@@ -310,11 +310,14 @@ fn restitution_zero_no_bounce() {
         "block never contacted the cloth — drop_height / cloth_y misconfigured",
     );
     // Bounce limit: the cube_min_y after first contact must not
-    // exceed `cloth_y + 0.005` (5 mm tolerance above the cloth
-    // rest position). The contact margin pushes the cube to sit
-    // ~`margin` above the cloth, so a small positive offset is
-    // expected — but a `e = 0` cube must NEVER bounce up beyond
-    // the contact equilibrium.
+    // exceed `cloth_y + 0.04` (4 cm). The contact margin pushes
+    // the cube to sit ~`margin` above the cloth, plus the cloth
+    // sags downward when loaded so the equilibrium cube_min_y
+    // settles slightly below cloth_y. The 4 cm allowance covers
+    // both effects on a soft 3³ tet block; a `e = 0` cube must
+    // NEVER bounce up beyond the contact equilibrium. Without
+    // restitution clamping the rebound from a 0.5 m drop reaches
+    // ~0.4 m above the cloth — that's the regression this catches.
     let bounce_limit = cloth_y + 0.04;
     assert!(
         max_y_after_first_contact <= bounce_limit,

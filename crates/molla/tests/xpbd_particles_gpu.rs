@@ -12,7 +12,6 @@ use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Real, Transform, Vec3};
 use molla::prelude::*;
-use molla::solvers::Solver as _;
 
 /// Build a small 6×6 cloth pinned at the four corners.
 fn build_cloth() -> Model {

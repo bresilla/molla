@@ -15,7 +15,7 @@ fn run_gpu_overlap(model: &mut molla::sim::Model, pairs: &[(u32, u32)]) -> Vec<u
     model.upload_to_device(&device, &queue).unwrap();
     let state = model.state().unwrap();
     // Need body_q on device — Sim's path uploads it; we mirror that here.
-    let mut body_q = state.body_q.host().unwrap().to_vec();
+    let body_q = state.body_q.host().unwrap().to_vec();
     use molla::storage::{Buffer, BufferUsage};
     let mut body_q_buf = Buffer::from_vec(body_q.clone(), BufferUsage::Storage);
     body_q_buf.ensure_device(&device).unwrap();

@@ -74,25 +74,22 @@ fn incident_tri_filter_excludes_obvious() {
     // would normally fire (vertex is geometrically inside its own
     // tet's opposite face), but the rest configuration places each
     // vertex exactly ON the opposite face plane, not strictly inside
-    // (margin keeps it a contact). What we strictly assert here is
-    // the spec's contract:
-    //   gather must not emit (vert 0, incident_tri) for any of v0's
-    //   incident tris.
-    let v0 = p0;
+    // (margin keeps it a contact). The spec contract applies to all
+    // four vertices, not just v0 — we walk every emitted contact and
+    // assert the (vert, tri) pair is non-incident.
+    let _ = (p1, p2, p3); // surfaced for future per-vertex diagnostics
     for c in &contacts {
-        if c.vertex_global_id == v0 {
-            // Look up tri[v_global] — must NOT match any tri incident
-            // to v0.
-            let lo = model.soft_vertex_incident_tris_offsets[v0 as usize] as usize;
-            let hi = model.soft_vertex_incident_tris_offsets[v0 as usize + 1] as usize;
-            let inc = &model.soft_vertex_incident_tris[lo..hi];
-            assert!(
-                !inc.contains(&c.tri_global_id),
-                "gather emitted (vert {v0}, incident tri {}); incident set = {inc:?}",
-                c.tri_global_id
-            );
-        }
+        let v = c.vertex_global_id as usize;
+        let lo = model.soft_vertex_incident_tris_offsets[v] as usize;
+        let hi = model.soft_vertex_incident_tris_offsets[v + 1] as usize;
+        let inc = &model.soft_vertex_incident_tris[lo..hi];
+        assert!(
+            !inc.contains(&c.tri_global_id),
+            "gather emitted (vert {v}, incident tri {}); incident set = {inc:?}",
+            c.tri_global_id
+        );
     }
+    let _ = p0;
 }
 
 /// Default-off path: a single tet mesh built without enabling self-
