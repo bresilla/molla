@@ -242,3 +242,48 @@ name = "bench_sensor_camera"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Stage K — Iterative solvers
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_iterative"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage L — Autograd
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_autograd_featherstone"
+harness = false
+
+[[bench]]
+name = "bench_autograd_tape"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage M — Sparse grid (NanoVDB-style)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_sparse_grid_insert"
+harness = false
+
+[[bench]]
+name = "bench_sparse_grid_query"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage N — Math + FFT
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_math"
+harness = false
+
+[[bench]]
+name = "bench_fft"
+harness = false
+required-features = ["gpu"]
+
