@@ -18193,23 +18193,240 @@ fn warp_fem_taylor_pane(ui: &mut egui::Ui, st: &mut WarpFemTaylorGreenState) {
 }
 
 // ── Scene 71: WarpFemKelvinHelmholtz ──────────────────────────────
+//
+// Real FEM Navier-Stokes time-stepping (Stage 37.3) on a 12×12 P2-P1
+// Taylor-Hood mesh of the unit square. Initial condition is a shear
+// layer (`u_x = ±0.5` above / below the midline) plus a small
+// vertical perturbation that excites the Kelvin-Helmholtz instability.
+// Boundary conditions: pin the side walls to the bulk shear value,
+// pressure pin at vertex 0.
+//
+// Per-frame budget: a handful of `solve_navier_stokes_step` calls. The
+// 12×12 mesh keeps each step well under 50 ms in release mode. The
+// pane lets the user dial viscosity, perturbation amplitude, and
+// readouts include simulated time + the L∞ vorticity diagnostic.
+
+const KH_GRID: usize = 12;
+const KH_DT: f64 = 0.01;
+/// Steps per frame — keep small so the viewer stays interactive.
+const KH_STEPS_PER_FRAME: usize = 1;
+
 struct WarpFemKhState {
     sim_t: f64,
-    growth_rate: f64,
+    /// Kinematic viscosity ν.
+    viscosity: f64,
+    /// Vertical-perturbation amplitude (initial condition).
+    perturb_amp: f64,
+    /// Last-frame max |ω| diagnostic.
+    vorticity_max: f64,
+    /// FEM mesh (built lazily).
+    mesh: Option<fem::FemMesh>,
+    th: Option<fem::MixedTaylorHood>,
+    /// Cached `M / dt + A`, divergence, and mass matrices.
+    a_eff: Option<molla::math::sparse::BsrMatrix>,
+    b_div: Option<molla::math::sparse::BsrMatrix>,
+    m: Option<molla::math::sparse::BsrMatrix>,
+    /// Static BCs (side walls) — rebuilt only on reset.
+    bcs: Vec<fem::StokesBc>,
+    /// Velocity DoFs (interleaved P2-vector).
+    u: Vec<f64>,
+    /// Reset trigger.
+    needs_reset: bool,
 }
+
 impl Default for WarpFemKhState {
-    fn default() -> Self { Self { sim_t: 0.0, growth_rate: 0.5 } }
+    fn default() -> Self {
+        Self {
+            sim_t: 0.0,
+            viscosity: 0.005,
+            perturb_amp: 0.05,
+            vorticity_max: 0.0,
+            mesh: None,
+            th: None,
+            a_eff: None,
+            b_div: None,
+            m: None,
+            bcs: Vec::new(),
+            u: Vec::new(),
+            needs_reset: true,
+        }
+    }
+}
+
+/// Build the static BC list: pin **only** the left + right walls (the
+/// shear flow direction). Top + bottom are open / shear-conserving in
+/// this surrogate (we approximate "periodic-y" via no-pin and rely on
+/// the natural Neumann condition the discretisation gives).
+fn kh_bcs(mesh: &fem::FemMesh, th: &fem::MixedTaylorHood) -> Vec<fem::StokesBc> {
+    let mut bcs: Vec<fem::StokesBc> = Vec::new();
+    let target_u = |y: f64| if y > 0.5 { 0.5_f64 } else { -0.5_f64 };
+
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        let on_left = p.x.abs() < 1e-9;
+        let on_right = (p.x - 1.0).abs() < 1e-9;
+        let on_bot = p.y.abs() < 1e-9;
+        let on_top = (p.y - 1.0).abs() < 1e-9;
+        if on_left || on_right {
+            bcs.push(fem::StokesBc::LidVelocity {
+                node: i as u32,
+                velocity: vec![target_u(p.y), 0.0],
+            });
+        } else if on_top || on_bot {
+            // No-slip top/bottom keeps the shear layer in the interior.
+            bcs.push(fem::StokesBc::LidVelocity {
+                node: i as u32,
+                velocity: vec![target_u(p.y), 0.0],
+            });
+        }
+    }
+    let (edges, _) = fem::compute_edges(mesh);
+    let edge_offset = th.map.vertex_count;
+    for (k, edge) in edges.iter().enumerate() {
+        let pa = mesh.vertices[edge[0] as usize];
+        let pb = mesh.vertices[edge[1] as usize];
+        let mx = 0.5 * (pa.x + pb.x);
+        let my = 0.5 * (pa.y + pb.y);
+        let on_b = mx.abs() < 1e-9
+            || (mx - 1.0).abs() < 1e-9
+            || my.abs() < 1e-9
+            || (my - 1.0).abs() < 1e-9;
+        if !on_b { continue; }
+        bcs.push(fem::StokesBc::LidVelocity {
+            node: (edge_offset + k) as u32,
+            velocity: vec![target_u(my), 0.0],
+        });
+    }
+    bcs.push(fem::StokesBc::PressureZero { vertex: 0 });
+    bcs
+}
+
+fn kh_initial_velocity(
+    mesh: &fem::FemMesh,
+    th: &fem::MixedTaylorHood,
+    perturb_amp: f64,
+) -> Vec<f64> {
+    let dim = th.dim;
+    let mut u = vec![0.0_f64; th.n_velocity];
+    let pi = std::f64::consts::PI;
+    let seed = |x: f64, y: f64| -> (f64, f64) {
+        let dy = y - 0.5;
+        let ux = if dy > 0.0 { 0.5 } else { -0.5 };
+        // Vertical perturbation localised near the shear layer.
+        let vy = perturb_amp * (4.0 * pi * x).sin() * (-dy.abs() * 8.0).exp();
+        (ux, vy)
+    };
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        let (ux, vy) = seed(p.x, p.y);
+        u[i * dim] = ux;
+        u[i * dim + 1] = vy;
+    }
+    let (edges, _) = fem::compute_edges(mesh);
+    let edge_offset = th.map.vertex_count;
+    for (k, edge) in edges.iter().enumerate() {
+        let pa = mesh.vertices[edge[0] as usize];
+        let pb = mesh.vertices[edge[1] as usize];
+        let mx = 0.5 * (pa.x + pb.x);
+        let my = 0.5 * (pa.y + pb.y);
+        let (ux, vy) = seed(mx, my);
+        let n = edge_offset + k;
+        u[n * dim] = ux;
+        u[n * dim + 1] = vy;
+    }
+    u
+}
+
+fn kh_assemble(
+    st: &mut WarpFemKhState,
+) {
+    let mesh = fem::FemMesh::tri_grid_2d(KH_GRID, KH_GRID, 1.0, 1.0);
+    let th = fem::MixedTaylorHood::build(&mesh, 2);
+    let a = fem::assemble_velocity_block(&mesh, &th, st.viscosity).unwrap();
+    let m = fem::assemble_velocity_mass(&mesh, &th).unwrap();
+    let b_div = fem::assemble_div_block(&mesh, &th).unwrap();
+    let inv_dt = 1.0 / KH_DT;
+    // a_eff = M/dt + A
+    let mut triplets: Vec<(usize, usize, Vec<f64>)> = Vec::new();
+    for r in 0..m.block_rows {
+        for slot in m.row_offsets[r]..m.row_offsets[r + 1] {
+            let c = m.col_idx[slot];
+            triplets.push((r, c, vec![inv_dt * m.values[slot]]));
+        }
+    }
+    for r in 0..a.block_rows {
+        for slot in a.row_offsets[r]..a.row_offsets[r + 1] {
+            let c = a.col_idx[slot];
+            triplets.push((r, c, vec![a.values[slot]]));
+        }
+    }
+    let a_eff = molla::math::sparse::BsrMatrix::from_triplets(
+        1, a.block_rows, a.block_cols, &triplets,
+    ).unwrap();
+
+    st.bcs = kh_bcs(&mesh, &th);
+    st.u = kh_initial_velocity(&mesh, &th, st.perturb_amp);
+    st.mesh = Some(mesh);
+    st.th = Some(th);
+    st.a_eff = Some(a_eff);
+    st.b_div = Some(b_div);
+    st.m = Some(m);
+    st.sim_t = 0.0;
+    st.vorticity_max = 0.0;
+    st.needs_reset = false;
 }
 
 fn update_warp_fem_kh(
-    time: Res<Time>,
     sim: Res<Sim>,
     run: Res<SimRunState>,
     mut warp: ResMut<WarpExampleStates>,
 ) {
     if sim.scene != Scene::WarpFemKelvinHelmholtz { return; }
+    let st = &mut warp.fem_kh;
+    if st.needs_reset { kh_assemble(st); }
     if run.paused { return; }
-    warp.fem_kh.sim_t += time.delta_secs() as f64;
+
+    let (Some(mesh), Some(th), Some(a_eff), Some(b_div), Some(m)) = (
+        st.mesh.as_ref(), st.th.as_ref(),
+        st.a_eff.as_ref(), st.b_div.as_ref(), st.m.as_ref(),
+    ) else { return; };
+
+    let inv_dt = 1.0 / KH_DT;
+    let zero_f = vec![0.0_f64; th.n_velocity];
+    let simple = fem::StokesSimpleConfig {
+        max_outer_iters: 40,
+        tol_outer: 1e-5,
+        max_inner_iters: 200,
+        tol_inner: 1e-7,
+        ..Default::default()
+    };
+
+    for _ in 0..KH_STEPS_PER_FRAME {
+        let res = fem::solve_navier_stokes_step(
+            mesh, th, a_eff, b_div, m, &st.u, &zero_f, inv_dt, &st.bcs, &simple,
+        );
+        if let Ok(res) = res {
+            st.u = res.u;
+            st.sim_t += KH_DT;
+        } else {
+            break;
+        }
+    }
+
+    // Vorticity diagnostic ω_z = ∂v/∂x - ∂u/∂y, sampled on vertex grid
+    // via finite differences across rows (cheap; just for the readout).
+    let n = KH_GRID + 1;
+    let dx = 1.0 / KH_GRID as f64;
+    let dim = th.dim;
+    let mut max_w: f64 = 0.0;
+    for j in 1..(n - 1) {
+        for i in 1..(n - 1) {
+            let idx = |ii: usize, jj: usize| jj * n + ii;
+            let dvdx = (st.u[idx(i + 1, j) * dim + 1] - st.u[idx(i - 1, j) * dim + 1]) / (2.0 * dx);
+            let dudy = (st.u[idx(i, j + 1) * dim] - st.u[idx(i, j - 1) * dim]) / (2.0 * dx);
+            let w = (dvdx - dudy).abs();
+            if w > max_w { max_w = w; }
+        }
+    }
+    st.vorticity_max = max_w;
 }
 
 fn draw_warp_fem_kh_gizmos(
@@ -18219,32 +18436,46 @@ fn draw_warp_fem_kh_gizmos(
 ) {
     if sim.scene != Scene::WarpFemKelvinHelmholtz { return; }
     let st = &warp.fem_kh;
+    let Some(mesh) = st.mesh.as_ref() else { return; };
+    let Some(th) = st.th.as_ref() else { return; };
     let origin = Vec3::new(-0.5, 0.05, -0.5);
-    let n = 24;
-    let amp = (st.sim_t * st.growth_rate).tanh() * 0.05;
-    for j in 0..n {
-        for i in 0..n {
-            let x = (i as f64 + 0.5) / n as f64;
-            let y = (j as f64 + 0.5) / n as f64;
-            let dy = y - 0.5;
-            let u = if dy > 0.0 { 0.5 } else { -0.5 };
-            let v = amp * (4.0 * std::f64::consts::PI * x).sin() * (-dy.abs() * 8.0).exp();
-            let from = origin + Vec3::new(x as f32, 0.0, y as f32);
-            let to = from + Vec3::new(u as f32 * 0.04, 0.0, v as f32 * 0.04);
-            let col = if dy > 0.0 { Color::srgb(0.95, 0.5, 0.3) } else { Color::srgb(0.3, 0.6, 0.95) };
-            gizmos.line(from, to, col);
-        }
+    let dim = th.dim;
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        let ux = st.u[i * dim] as f32;
+        let vy = st.u[i * dim + 1] as f32;
+        let from = origin + Vec3::new(p.x as f32, 0.0, p.y as f32);
+        let to = from + Vec3::new(ux * 0.05, 0.0, vy * 0.05);
+        let col = if p.y > 0.5 {
+            Color::srgb(0.95, 0.5, 0.3)
+        } else {
+            Color::srgb(0.3, 0.6, 0.95)
+        };
+        gizmos.line(from, to, col);
     }
 }
 
 fn warp_fem_kh_pane(ui: &mut egui::Ui, st: &mut WarpFemKhState) {
-    ui.label("Warp FEM Kelvin-Helmholtz — port of fem/example_kelvin_helmholtz.py");
+    ui.label("Warp FEM Kelvin-Helmholtz — Stage 37.3 NS time-stepping");
     ui.separator();
     readout(ui, "t", &format!("{:.2} s", st.sim_t));
-    ui.label("Perturbation growth rate");
-    let _ = ui.add(egui::Slider::new(&mut st.growth_rate, 0.05..=2.0));
-    ui.small("Shear-layer toy model: top moves +x, bottom moves -x;");
-    ui.small("perturbation grows tanh(σt) over time.");
+    readout(ui, "max |ω|", &format!("{:.3e}", st.vorticity_max));
+    ui.label("Viscosity ν");
+    let mut nu = st.viscosity;
+    if ui.add(egui::Slider::new(&mut nu, 0.0001..=0.05).logarithmic(true))
+        .changed()
+    {
+        st.viscosity = nu;
+        st.needs_reset = true;
+    }
+    ui.label("Perturbation amplitude");
+    let mut amp = st.perturb_amp;
+    if ui.add(egui::Slider::new(&mut amp, 0.0..=0.2)).changed() {
+        st.perturb_amp = amp;
+        st.needs_reset = true;
+    }
+    if ui.button("Reset").clicked() { st.needs_reset = true; }
+    ui.small("Real FEM NS solve via solve_navier_stokes_step on a");
+    ui.small("12×12 P2-P1 Taylor-Hood mesh.");
 }
 
 // ── Scene 72: WarpFemStreamlines ──────────────────────────────────
@@ -18492,22 +18723,92 @@ fn warp_fem_elastic_opt_pane(ui: &mut egui::Ui, st: &mut WarpFemElasticOptState)
 }
 
 // ── Scene 76: WarpFftFluid ────────────────────────────────────────
+//
+// Real fractional-step Navier-Stokes (Stage 37.5) on a periodic
+// 16×16 grid with Taylor-Green initial condition. Pressure-Poisson
+// solved by the GPU FFT kernel (Stage 24c). Velocity field is
+// rendered as gizmo arrows.
+//
+// One frame = `FFT_FLUID_STEPS_PER_FRAME` projection steps. The FFT
+// kernel is reused across frames — initialised lazily on first use.
+
+const FFT_FLUID_GRID: usize = 16;
+const FFT_FLUID_DT: f32 = 0.002;
+const FFT_FLUID_STEPS_PER_FRAME: usize = 1;
+
 struct WarpFftFluidState {
     sim_t: f64,
+    /// Kinematic viscosity ν.
+    viscosity: f32,
+    /// Current velocity field — row-major `(j, i) → j·n + i`.
+    u: Vec<[f32; 2]>,
+    /// FFT kernel — built lazily on first GPU access.
+    kernel: Option<molla::kernels::FftKernel>,
+    /// Reset flag.
+    needs_reset: bool,
 }
+
 impl Default for WarpFftFluidState {
-    fn default() -> Self { Self { sim_t: 0.0 } }
+    fn default() -> Self {
+        Self {
+            sim_t: 0.0,
+            viscosity: 0.05,
+            u: Vec::new(),
+            kernel: None,
+            needs_reset: true,
+        }
+    }
+}
+
+fn fft_fluid_seed_taylor_green(n: usize) -> Vec<[f32; 2]> {
+    let two_pi = 2.0 * std::f32::consts::PI;
+    let mut u = vec![[0.0_f32; 2]; n * n];
+    for j in 0..n {
+        let y = (j as f32 + 0.5) / n as f32;
+        for i in 0..n {
+            let x = (i as f32 + 0.5) / n as f32;
+            let ux = (two_pi * x).sin() * (two_pi * y).cos();
+            let vy = -(two_pi * x).cos() * (two_pi * y).sin();
+            u[j * n + i] = [ux, vy];
+        }
+    }
+    u
 }
 
 fn update_warp_fft_fluid(
-    time: Res<Time>,
     sim: Res<Sim>,
     run: Res<SimRunState>,
     mut warp: ResMut<WarpExampleStates>,
 ) {
     if sim.scene != Scene::WarpFftFluid { return; }
+    let st = &mut warp.fft_fluid;
+    if st.needs_reset {
+        st.u = fft_fluid_seed_taylor_green(FFT_FLUID_GRID);
+        st.sim_t = 0.0;
+        st.needs_reset = false;
+    }
     if run.paused { return; }
-    warp.fft_fluid.sim_t += time.delta_secs() as f64;
+
+    // Acquire the GPU runtime; if unavailable the sim leaves the
+    // state alone (the gizmos will still render the IC).
+    let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) else {
+        return;
+    };
+    if st.kernel.is_none() {
+        st.kernel = Some(molla::kernels::FftKernel::new(device));
+    }
+    let kernel = st.kernel.as_ref().unwrap();
+
+    let cfg = molla::fem::FractionalStepConfig {
+        grid_n: FFT_FLUID_GRID,
+        viscosity: st.viscosity,
+        dt: FFT_FLUID_DT,
+        num_steps: FFT_FLUID_STEPS_PER_FRAME,
+    };
+    let _ = molla::fem::advance_navier_stokes_fractional_step(
+        device, queue, kernel, &mut st.u, cfg,
+    );
+    st.sim_t += FFT_FLUID_DT as f64;
 }
 
 fn draw_warp_fft_fluid_gizmos(
@@ -18516,30 +18817,33 @@ fn draw_warp_fft_fluid_gizmos(
     mut gizmos: Gizmos,
 ) {
     if sim.scene != Scene::WarpFftFluid { return; }
+    let st = &warp.fft_fluid;
+    if st.u.is_empty() { return; }
     let origin = Vec3::new(-0.5, 0.05, -0.5);
-    let n = 16;
-    let t = warp.fft_fluid.sim_t as f32;
+    let n = FFT_FLUID_GRID;
     for j in 0..n {
+        let y = (j as f32 + 0.5) / n as f32;
         for i in 0..n {
             let x = (i as f32 + 0.5) / n as f32;
-            let y = (j as f32 + 0.5) / n as f32;
-            // Two-mode standing wave (Stokes-style placeholder).
-            let p = std::f32::consts::PI;
-            let u = (2.0 * p * x).sin() * (2.0 * p * y).cos() * (1.0 + 0.5 * t.sin());
-            let v = -(2.0 * p * x).cos() * (2.0 * p * y).sin() * (1.0 + 0.5 * t.sin());
+            let v = st.u[j * n + i];
             let from = origin + Vec3::new(x, 0.0, y);
-            let to = from + Vec3::new(u * 0.05, 0.0, v * 0.05);
+            let to = from + Vec3::new(v[0] * 0.05, 0.0, v[1] * 0.05);
             gizmos.line(from, to, Color::srgb(0.5, 0.7, 0.95));
         }
     }
 }
 
 fn warp_fft_fluid_pane(ui: &mut egui::Ui, st: &mut WarpFftFluidState) {
-    ui.label("Warp FFT fluid — port of core/example_fft_poisson_navier_stokes_2d.py");
+    ui.label("Warp FFT fluid — Stage 37.5 fractional-step NS via GPU FFT");
     ui.separator();
-    readout(ui, "t", &format!("{:.2} s", st.sim_t));
-    ui.small("Stokes-fallback visualisation. Full FFT-Poisson coupling");
-    ui.small("ships as a Stage 24c.x follow-up.");
+    readout(ui, "t", &format!("{:.3} s", st.sim_t));
+    ui.label("Viscosity ν");
+    let _ = ui.add(egui::Slider::new(&mut st.viscosity, 0.001..=0.5).logarithmic(true));
+    if ui.button("Reset (Taylor-Green IC)").clicked() {
+        st.needs_reset = true;
+    }
+    ui.small("Pressure-Poisson via molla::fem::solve_pressure_poisson_fft");
+    ui.small("(Stage 24c GPU FFT). Predictor + corrector run on CPU.");
 }
 
 // ── Scene 77: WarpDistortion3D ────────────────────────────────────

@@ -53,6 +53,8 @@ pub mod apic_coupling;
 pub mod assembly;
 pub mod bc;
 pub mod element;
+#[cfg(feature = "gpu")]
+pub mod fft_ns;
 pub mod function_space;
 #[cfg(feature = "gpu")]
 pub mod gpu_data;
@@ -66,6 +68,11 @@ pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_a
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 pub use assembly::assemble_global;
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
+#[cfg(feature = "gpu")]
+pub use fft_ns::{
+    advance_navier_stokes_fractional_step, solve_navier_stokes_fractional_step,
+    solve_pressure_poisson_fft, FractionalStepConfig,
+};
 pub use element::{
     compute_element_elasticity_stiffness, compute_element_mass,
     compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
@@ -86,9 +93,10 @@ pub use solver::{
     NEWMARK_BETA_DEFAULT, NEWMARK_GAMMA_DEFAULT,
 };
 pub use stokes::{
-    apply_stokes_velocity_bcs, assemble_div_block, assemble_velocity_block,
-    assemble_velocity_mass, build_cavity_bcs_2d, compute_element_mass_p2_vector,
-    compute_element_stokes_div_block, compute_element_stokes_velocity_block,
+    apply_stokes_velocity_bcs, assemble_convection_block, assemble_div_block,
+    assemble_velocity_block, assemble_velocity_mass, build_cavity_bcs_2d,
+    compute_element_mass_p2_vector, compute_element_stokes_div_block,
+    compute_element_stokes_velocity_block, solve_navier_stokes_step,
     solve_navier_stokes_transient, solve_stokes_steady,
     solve_stokes_with_matrices, MixedTaylorHood, NavierStokesConfig, StokesBc,
     StokesResult, StokesSimpleConfig,
