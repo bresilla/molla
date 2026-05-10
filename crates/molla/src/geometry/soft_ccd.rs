@@ -332,6 +332,23 @@ mod tests {
 
     /// Vertex passes the plane but its projection falls outside the
     /// triangle — must return `None`.
+    /// Real-scene diagnostic: cube vert at y=0.521 → 0.479 over a
+    /// cloth tri at y=0.5. TOI should be ≈ 0.5 (vert crosses
+    /// midstep). Regression for the fast-impact integration test.
+    #[test]
+    fn realistic_cube_through_cloth_crossing() {
+        let v0 = Vec3::new(0.0, 0.521, 0.0);
+        let v1 = Vec3::new(0.0, 0.479, 0.0);
+        let tri0 = [
+            Vec3::new(-0.1, 0.5, -0.1),
+            Vec3::new(0.1, 0.5, -0.1),
+            Vec3::new(0.0, 0.5, 0.1),
+        ];
+        let toi = vt_ccd(v0, v1, tri0, tri0);
+        eprintln!("[realistic] TOI = {toi:?}");
+        assert!(toi.is_some(), "must find a TOI for vert crossing tri");
+    }
+
     #[test]
     fn outside_triangle_returns_none() {
         // Triangle is in `[0, 1] × [0, 1]` on the y=0 plane; vertex

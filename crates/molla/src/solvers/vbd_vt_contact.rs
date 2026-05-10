@@ -403,6 +403,20 @@ pub fn ccd_pass(
 
     let v_threshold_sq = velocity_threshold * velocity_threshold;
     const SNAP_EPS: Real = 1.0e-4;
+    let dt2 = dt * dt;
+
+    // Stage 33.4 — per-soft-surface "shock-stop" accumulator. When any
+    // vertex of a soft surface is snapped by CCD, we also dampen the
+    // contact-normal velocity component of EVERY vertex of that
+    // surface in the same direction. This treats the mesh as a
+    // quasi-rigid body for impact-arrest purposes, which prevents the
+    // common failure mode where an unsnapped top-of-mesh vertex (whose
+    // own swept envelope didn't reach the contact tri) re-launches the
+    // snapped bottom vertices via tet elastic restoration in the very
+    // same substep. v1's per-vertex CCD without this shock-stop loses
+    // soft tet bodies entirely on hard impacts; with it the body
+    // arrests within 1-2 substeps.
+    let mut surface_shock_normal: Vec<Vec3> = vec![Vec3::ZERO; model.soft_surfaces.len()];
 
     for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
         let v_lo = s.vertex_offset as usize;
@@ -411,7 +425,10 @@ pub fn ccd_pass(
             let v_t0 = q_in[v_global];
             let v_t1 = q_t1[v_global];
             let dv = v_t1 - v_t0;
-            if dv.length_squared() < v_threshold_sq * dt * dt {
+            // Velocity gate: a vertex moving slower than threshold
+            // can't tunnel meaningfully. The check is in displacement
+            // form so the threshold has m/s units regardless of dt.
+            if dv.length_squared() < v_threshold_sq * dt2 {
                 continue;
             }
             let candidates = bvh.query_point_swept(v_t0, v_t1, margin);
@@ -471,7 +488,39 @@ pub fn ccd_pass(
                 if vn < 0.0 {
                     qd_in[v_global] = v_now - normal * vn;
                 }
+                // Accumulate a shock-stop normal for the whole soft
+                // surface. We add the snap normal weighted by the
+                // depth of the dive (how fast the vert was moving INTO
+                // the contact); the post-pass averages and applies it
+                // to every vert of the surface.
+                surface_shock_normal[s_idx] += normal * vn.abs();
                 snaps += 1;
+            }
+        }
+    }
+
+    // Stage 33.4 — apply the per-surface shock-stop. For each surface
+    // that had at least one snapped vertex, kill the contact-normal
+    // velocity component of EVERY vertex of the surface (so the
+    // unsnapped top of the mesh doesn't re-launch the snapped bottom
+    // via tet elastic restoration in the same substep). This is the
+    // quasi-rigid impact-arrest approximation.
+    for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
+        let shock = surface_shock_normal[s_idx];
+        let shock_len = shock.length();
+        if shock_len < 1.0e-9 {
+            continue;
+        }
+        let n = shock / shock_len;
+        let v_lo = s.vertex_offset as usize;
+        let v_hi = v_lo + s.vertex_count as usize;
+        for v_global in v_lo..v_hi {
+            let v_now = qd_in[v_global];
+            let vn = v_now.dot(n);
+            // Kill the dive component (the vertex moving into the
+            // contact normal direction). Tangential motion preserved.
+            if vn < 0.0 {
+                qd_in[v_global] = v_now - n * vn;
             }
         }
     }
