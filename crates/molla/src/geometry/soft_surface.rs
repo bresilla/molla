@@ -9,6 +9,7 @@
 //! v1 ships CPU-only; the GPU port (Stage 33.2) reuses these data
 //! structures verbatim and adds a per-substep tri-AABB shader.
 
+use crate::math::Real;
 use crate::sim::TetMeshId;
 
 /// Whether a soft surface comes from a tet mesh (boundary tris) or a
@@ -70,6 +71,19 @@ pub struct SoftSurface {
     /// Source cloth mesh identifier when `kind == Cloth`; `None` for
     /// tet surfaces.
     pub cloth_mesh_id: Option<ClothMeshId>,
+    /// Stage 33.5 — Coulomb friction coefficient at contacts on this
+    /// surface. Two contacting surfaces' values combine via the
+    /// geometric mean (`μ = sqrt(μ_a · μ_b)`); 0 disables tangential
+    /// resistance for any contact involving the surface. Default 0.4
+    /// (a reasonable rubber-on-rubber baseline; cloth and tet defaults
+    /// are kept identical so the geometric-mean rule reduces to `μ`).
+    pub friction: Real,
+    /// Stage 33.5 — restitution coefficient (0 = perfectly inelastic,
+    /// 1 = full velocity reversal). Two contacting surfaces' values
+    /// combine via `min(e_a, e_b)` ("the soft side wins"). Defaults
+    /// per kind: `Cloth = 0.0` (cloth is energy-absorbing), `TetMesh
+    /// = 0.1` (jelly bounces a little).
+    pub restitution: Real,
 }
 
 /// Compute the boundary (outer-surface) triangles of a tet soup via

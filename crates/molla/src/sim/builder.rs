@@ -403,6 +403,15 @@ pub struct ModelBuilder {
     /// for each cloth mesh. Length == cloth_mesh_first_particle.len() + 1.
     cloth_mesh_tri_offsets: Vec<u32>,
 
+    // Stage 33.5 — per-mesh friction/restitution overrides for the
+    // soft-surface registry. Length matches the corresponding mesh
+    // registry on `build()`; missing entries fall back to per-kind
+    // defaults (see soft_surfaces creation at the end of `build`).
+    tet_mesh_friction: Vec<Real>,
+    tet_mesh_restitution: Vec<Real>,
+    cloth_mesh_friction: Vec<Real>,
+    cloth_mesh_restitution: Vec<Real>,
+
     // Body arrays.
     body_mass: Vec<Real>,
     body_inv_mass: Vec<Real>,
@@ -1128,6 +1137,50 @@ impl ModelBuilder {
         self.cloth_mesh_particle_count.push(v_count);
 
         (first, nx, ny)
+    }
+
+    /// Stage 33.5 — set the Coulomb friction coefficient for a tet
+    /// soft surface (a previously added [`crate::sim::TetMeshId`]).
+    /// Two contacting surfaces' values combine via the geometric
+    /// mean. Default is 0.4.
+    pub fn set_tet_mesh_friction(&mut self, mesh: crate::sim::TetMeshId, mu: Real) {
+        let i = mesh.0 as usize;
+        while self.tet_mesh_friction.len() <= i {
+            self.tet_mesh_friction.push(0.4);
+        }
+        self.tet_mesh_friction[i] = mu.max(0.0);
+    }
+
+    /// Stage 33.5 — set the restitution coefficient (0..=1) for a tet
+    /// soft surface. Two contacting surfaces' values combine via
+    /// `min(e_a, e_b)`. Default is 0.1 (jelly bounces a little).
+    pub fn set_tet_mesh_restitution(&mut self, mesh: crate::sim::TetMeshId, e: Real) {
+        let i = mesh.0 as usize;
+        while self.tet_mesh_restitution.len() <= i {
+            self.tet_mesh_restitution.push(0.1);
+        }
+        self.tet_mesh_restitution[i] = e.clamp(0.0, 1.0);
+    }
+
+    /// Stage 33.5 — set the Coulomb friction coefficient for a cloth
+    /// soft surface, addressed by 0-based cloth index (the order in
+    /// which `add_cloth_grid*` was called). Default is 0.4.
+    pub fn set_cloth_friction(&mut self, cloth: crate::geometry::ClothMeshId, mu: Real) {
+        let i = cloth.0 as usize;
+        while self.cloth_mesh_friction.len() <= i {
+            self.cloth_mesh_friction.push(0.4);
+        }
+        self.cloth_mesh_friction[i] = mu.max(0.0);
+    }
+
+    /// Stage 33.5 — set the restitution coefficient for a cloth soft
+    /// surface. Default is 0.0 (cloth absorbs impact; no bounce).
+    pub fn set_cloth_restitution(&mut self, cloth: crate::geometry::ClothMeshId, e: Real) {
+        let i = cloth.0 as usize;
+        while self.cloth_mesh_restitution.len() <= i {
+            self.cloth_mesh_restitution.push(0.0);
+        }
+        self.cloth_mesh_restitution[i] = e.clamp(0.0, 1.0);
     }
 
     /// Pin particle `i` in place by setting its mass to zero.
@@ -2435,6 +2488,19 @@ impl ModelBuilder {
                 .get(m)
                 .copied()
                 .unwrap_or(0);
+            // Stage 33.5: per-mesh friction/restitution overrides
+            // (set via `set_tet_mesh_friction` / `set_tet_mesh_restitution`).
+            // Default friction = 0.4, default tet restitution = 0.1.
+            let friction = self
+                .tet_mesh_friction
+                .get(m)
+                .copied()
+                .unwrap_or(0.4);
+            let restitution = self
+                .tet_mesh_restitution
+                .get(m)
+                .copied()
+                .unwrap_or(0.1);
             soft_surfaces.push(crate::geometry::SoftSurface {
                 kind: crate::geometry::SoftSurfaceKind::TetMesh,
                 vertex_offset: v_first,
@@ -2443,6 +2509,8 @@ impl ModelBuilder {
                 tri_count: bnd.len() as u32,
                 tet_mesh_id: Some(crate::sim::TetMeshId(m as u32)),
                 cloth_mesh_id: None,
+                friction,
+                restitution,
             });
         }
         let n_cloth_meshes = self.cloth_mesh_first_particle.len();
@@ -2457,6 +2525,19 @@ impl ModelBuilder {
                     self.tri_indices[t * 3 + 2],
                 ]);
             }
+            // Stage 33.5: per-cloth friction/restitution overrides.
+            // Default friction = 0.4, default cloth restitution = 0.0
+            // (cloth absorbs impact; no bounce).
+            let friction = self
+                .cloth_mesh_friction
+                .get(m)
+                .copied()
+                .unwrap_or(0.4);
+            let restitution = self
+                .cloth_mesh_restitution
+                .get(m)
+                .copied()
+                .unwrap_or(0.0);
             soft_surfaces.push(crate::geometry::SoftSurface {
                 kind: crate::geometry::SoftSurfaceKind::Cloth,
                 vertex_offset: self.cloth_mesh_first_particle[m],
@@ -2465,6 +2546,8 @@ impl ModelBuilder {
                 tri_count: (tri_hi - tri_lo) as u32,
                 tet_mesh_id: None,
                 cloth_mesh_id: Some(crate::geometry::ClothMeshId(m as u32)),
+                friction,
+                restitution,
             });
         }
 

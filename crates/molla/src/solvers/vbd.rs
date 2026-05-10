@@ -184,6 +184,12 @@ pub struct VbdSolver {
     /// (`None` until then). Refit per substep; rebuilt only when
     /// the soft-surface tri count changes.
     pub(crate) soft_bvh: Option<crate::geometry::SoftBvh>,
+    /// Stage 33.5 — last substep's VT contact set (used to warm-
+    /// start friction across substeps via
+    /// [`super::vbd_vt_contact::warm_start_friction`]). Persisted
+    /// inside the solver so the API stays drop-in for callers that
+    /// don't manage their own friction history.
+    pub(crate) prev_vt_contacts: Vec<super::vbd_vt_contact::VtContact>,
     backend: VbdBackend,
 }
 
@@ -209,6 +215,7 @@ impl VbdSolver {
             vt_contact_sweeps: 6,
             last_vt_contact_count: 0,
             soft_bvh: None,
+            prev_vt_contacts: Vec::new(),
             backend: VbdBackend::Cpu,
         }
     }
@@ -248,6 +255,7 @@ impl VbdSolver {
             vt_contact_sweeps: 6,
             last_vt_contact_count: 0,
             soft_bvh: None,
+            prev_vt_contacts: Vec::new(),
             backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
     }
@@ -480,13 +488,26 @@ impl Solver for VbdSolver {
                         self.soft_bvh = Some(crate::geometry::SoftBvh::build(model, state_out));
                     }
                     let bvh = self.soft_bvh.as_mut().unwrap();
-                    self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                    // Stage 33.5 friction needs the per-substep
+                    // tangential drift, so pass in the pre-step
+                    // positions (`state_in.particle_q`). Use the dt
+                    // for the WHOLE outer step so the slip is over
+                    // the period the contact was active.
+                    let q_pre_step = state_in.particle_q.host()?.to_vec();
+                    let qd_pre_step = state_in.particle_qd.host()?.to_vec();
+                    let new_contacts = super::vbd_vt_contact::project_vt_contacts(
                         model,
                         state_out,
                         bvh,
                         self.vt_contact_margin,
                         self.vt_contact_sweeps,
+                        dt,
+                        &self.prev_vt_contacts,
+                        &q_pre_step,
+                        &qd_pre_step,
                     )?;
+                    self.last_vt_contact_count = new_contacts.len();
+                    self.prev_vt_contacts = new_contacts;
                     // Velocity recovery for the contact projection —
                     // overwrite particle_qd to match the post-projection
                     // displacement so the next substep doesn't drive the
@@ -577,13 +598,24 @@ impl Solver for VbdSolver {
                                 Some(crate::geometry::SoftBvh::build(model, state_out));
                         }
                         let bvh = self.soft_bvh.as_mut().unwrap();
-                        self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                        // Stage 33.5 friction needs pre-step
+                        // positions/velocities for the substep
+                        // tangential-drift baseline.
+                        let q_pre_step = state_in.particle_q.host()?.to_vec();
+                        let qd_pre_step = state_in.particle_qd.host()?.to_vec();
+                        let new_contacts = super::vbd_vt_contact::project_vt_contacts(
                             model,
                             state_out,
                             bvh,
                             self.vt_contact_margin,
                             self.vt_contact_sweeps,
+                            dt,
+                            &self.prev_vt_contacts,
+                            &q_pre_step,
+                            &qd_pre_step,
                         )?;
+                        self.last_vt_contact_count = new_contacts.len();
+                        self.prev_vt_contacts = new_contacts;
                     }
                     state_out.particle_q.ensure_device(device)?;
                     state_out.particle_q.upload(queue)?;

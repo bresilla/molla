@@ -45,6 +45,21 @@ pub struct VtContact {
     /// Penetration depth: `(margin - distance_to_tri)` if positive,
     /// 0 otherwise. Larger `depth` ⇒ stronger penalty force.
     pub depth: Real,
+    /// Stage 33.5 — Coulomb friction coefficient at the contact,
+    /// `μ = sqrt(μ_a · μ_b)` (geometric mean of the two surfaces'
+    /// friction). 0 disables tangential resistance.
+    pub friction: Real,
+    /// Stage 33.5 — restitution coefficient at the contact, taken as
+    /// `min(e_a, e_b)` (the smaller of the two surfaces' values, the
+    /// standard "soft material wins" rule). 0 means perfectly
+    /// inelastic; 1 means full velocity reversal.
+    pub restitution: Real,
+    /// Stage 33.5 — warm-start tangential impulse (m/s units, scaled
+    /// by inverse mass for application). Persisted across substeps so
+    /// the friction projection converges from a useful starting
+    /// guess instead of zero. Carried forward by the solver matching
+    /// `(vertex_global_id, tri_global_id)` keys frame-to-frame.
+    pub prev_friction_impulse: [Real; 3],
 }
 
 /// Walk every soft-surface vertex; for each, BVH-query for nearby
@@ -62,11 +77,34 @@ pub struct VtContact {
 /// `margin` is the contact buffer (typically `particle_radius +
 /// contact_slop`). A vertex `margin` beyond the tri still triggers
 /// a contact so the penalty can engage *before* full interpenetration.
+///
+/// Stage 33.5: each emitted contact's `friction` is the geometric
+/// mean of the two soft surfaces' friction coefficients, and
+/// `restitution` is the smaller of the two. `prev_friction_impulse`
+/// is initialised to zero — the caller (typically [`VbdSolver`]) is
+/// responsible for warm-starting it from the previous frame's
+/// contacts via [`warm_start_friction`].
 pub fn gather_vt_contacts(
     model: &Model,
     state: &State,
     bvh: &SoftBvh,
     margin: Real,
+) -> Vec<VtContact> {
+    gather_vt_contacts_with_hint(model, state, bvh, margin, &Default::default())
+}
+
+/// Internal variant of [`gather_vt_contacts`] that consults a per-
+/// `(vertex, tri)` previous-frame normal direction to pick the side
+/// of the contact (Stage 33.5 anti-tunneling fix). The public
+/// [`gather_vt_contacts`] is a thin wrapper that passes an empty
+/// LUT — equivalent to "every contact starts fresh, use the
+/// triangle's geometric normal as the outward hint".
+pub fn gather_vt_contacts_with_hint(
+    model: &Model,
+    state: &State,
+    bvh: &SoftBvh,
+    margin: Real,
+    prev_normal_lut: &std::collections::HashMap<(u32, u32), Vec3>,
 ) -> Vec<VtContact> {
     let mut out = Vec::new();
     if model.soft_surfaces.is_empty() {
@@ -139,22 +177,80 @@ pub fn gather_vt_contacts(
                 if dist >= margin {
                     continue;
                 }
-                let depth = margin - dist;
-                // Normal direction: from the triangle's surface to
-                // the vertex side. When the vertex is exactly on the
-                // tri, fall back to the triangle's geometric normal.
-                let normal = if dist > 1.0e-9 {
+                // Stage 33.5 — anti-tunneling contact normal.
+                //
+                // Stage 33 v1 used the unsigned `diff/dist`, which
+                // flips direction whenever the vertex crosses to the
+                // other side of the triangle. With cloth + a fast-
+                // moving tet block this caused tunneling: once a
+                // vertex landed on the back side, the contact pushed
+                // it FURTHER back instead of returning it to the
+                // intended side.
+                //
+                // Stage 33.5 fix: pick a stable "outward" reference
+                // per contact and lock the direction in for the
+                // contact's lifetime.
+                //   - For a brand-new contact (no entry in
+                //     `prev_normal_lut`), use the unsigned
+                //     `diff/dist` (the side the vertex is currently
+                //     on). For a fast vertex that has already
+                //     tunneled to the wrong side on its very first
+                //     substep, this still picks the wrong side —
+                //     use a larger margin / smaller dt to avoid
+                //     such cases (Stage 33.4 CCD will fix this
+                //     properly).
+                //   - For a persisting contact, use the previous
+                //     frame's normal direction. If the vertex
+                //     crossed during a substep, the signed distance
+                //     against `ref_dir` flips negative and the
+                //     depth becomes `margin + |dist|`, which pulls
+                //     the vertex back through the surface to the
+                //     correct side.
+                let raw_normal = if dist > 1.0e-9 {
                     diff / dist
                 } else {
                     let geo = (v1 - v0).cross(v2 - v0);
-                    let len = geo.length();
-                    if len > 1.0e-9 {
-                        geo / len
+                    let geo_len = geo.length();
+                    if geo_len > 1.0e-9 {
+                        geo / geo_len
                     } else {
                         Vec3::Y
                     }
                 };
+                let ref_dir = match prev_normal_lut
+                    .get(&(v_global as u32, tri_global))
+                {
+                    Some(&n) => n,
+                    None => raw_normal, // first contact: trust the current side
+                };
+                let aligned_with_ref = raw_normal.dot(ref_dir) >= 0.0;
+                let normal = if aligned_with_ref {
+                    raw_normal
+                } else {
+                    -raw_normal
+                };
+                let signed_dist = if aligned_with_ref { dist } else { -dist };
+                // Effective penetration depth: tunneled vertices
+                // (signed_dist < 0) need `margin - signed_dist =
+                // margin + |dist|` push to clear the surface. Clamp
+                // at `4·margin` so a wildly tunneled vertex doesn't
+                // explode neighbours (Newton's "never advance more
+                // than ~one contact-shell width per substep" rule).
+                let depth = (margin - signed_dist).min(4.0 * margin);
 
+                // Stage 33.5: friction = sqrt(μ_a · μ_b), restitution
+                // = min(e_a, e_b). Look up both surfaces' coefficients
+                // from the registry.
+                let mu_v = model.soft_surfaces[s_idx].friction.max(0.0);
+                let mu_t = model.soft_surfaces[tri_surface as usize]
+                    .friction
+                    .max(0.0);
+                let friction = (mu_v * mu_t).sqrt();
+                let e_v = model.soft_surfaces[s_idx].restitution.clamp(0.0, 1.0);
+                let e_t = model.soft_surfaces[tri_surface as usize]
+                    .restitution
+                    .clamp(0.0, 1.0);
+                let restitution = e_v.min(e_t);
                 let new_contact = VtContact {
                     vertex_global_id: v_global as u32,
                     vertex_surface: s_idx as u32,
@@ -163,6 +259,9 @@ pub fn gather_vt_contacts(
                     bary: [bary.x, bary.y, bary.z],
                     normal: [normal.x, normal.y, normal.z],
                     depth,
+                    friction,
+                    restitution,
+                    prev_friction_impulse: [0.0; 3],
                 };
                 let slot = &mut best_per_surface[tri_surface as usize];
                 match slot {
@@ -200,48 +299,120 @@ pub fn gather_vt_contacts(
 ///
 /// Multi-sweep so successive contacts converge: the v1 workload
 /// (jelly cube on cloth) settles in 4-6 sweeps for typical mass
-/// ratios. Returns the number of *active* contacts (depth > 0) for
-/// the caller to surface in diagnostics.
+/// ratios.
+///
+/// **Stage 33.5 (friction + restitution).** After the normal
+/// correction each contact applies a Coulomb friction position
+/// correction in the tangent plane:
+/// - `Δq_t_rel = (q_v - q_v_pre) - Σ_i b_i · (q_tri_i - q_tri_i_pre)` projected
+///   to the contact tangent plane (`Δq_t_rel ← Δq_t_rel - (Δq_t_rel · n) n`).
+/// - The friction position correction is `-Δq_t_rel · tanh(|Δq_t_rel|/(v_eps·dt))`
+///   clamped in magnitude to `μ · |normal_push|`. This is the
+///   Dahl-style smoothed Coulomb cone (continuous, no
+///   discontinuity at zero relative velocity, so the per-step
+///   solve doesn't ring).
+/// - Distribution to the four participating vertices follows the
+///   same `(α, β_i)` partition as the normal correction, so
+///   tri-side reaction = -vertex-side action (Newton's third law).
+///
+/// Restitution: when the vertex's pre-substep normal velocity was
+/// negative (diving into the contact), the post-projection normal
+/// velocity is set to `-restitution · v_n_pre` (instead of zeroed
+/// out). 0 ⇒ purely inelastic; 1 ⇒ full bounce.
+///
+/// `prev_contacts` carries the previous substep's contact set; the
+/// matched-by-(vertex, tri) entries warm-start their
+/// `prev_friction_impulse`. Returns the final post-projection
+/// `Vec<VtContact>` (with the substep's friction impulses written
+/// back into `prev_friction_impulse`) so the caller can persist it
+/// for the next call.
 pub fn project_vt_contacts(
     model: &Model,
     state: &mut State,
     bvh: &mut SoftBvh,
     margin: Real,
     sweeps: usize,
-) -> Result<usize> {
+    dt: Real,
+    prev_contacts: &[VtContact],
+    q_step_start: &[Vec3],
+    qd_step_start: &[Vec3],
+) -> Result<Vec<VtContact>> {
     if model.soft_surfaces.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let inv_mass = model.particle_inv_mass.host()?.to_vec();
-    let mut last_active: usize = 0;
     let n_sweeps = sweeps.max(1);
 
-    // Snapshot pre-projection positions so we can update velocities
-    // after the position correction. The implicit-Euler `qd = (q -
-    // q_prev_step) / dt` semantics need the velocity to reflect the
-    // contact correction, otherwise the next substep's predict step
-    // shoots the vertex back through the contact.
-    let q_pre = state.particle_q.host()?.to_vec();
+    // Stage 33.5: friction's tangential drift baseline is the
+    // PRE-step position (passed in by the caller), not the start of
+    // the projection. This way slip introduced by the inner VBD
+    // substeps is what the Coulomb-cone clamps, not just the slip
+    // introduced by the projection itself (which would be zero).
+    // Restitution wants the PRE-step normal velocity for the same
+    // reason — `qd_step_start` is the velocity entering the outer
+    // step, so a single multi-substep step still gets the
+    // physically-correct elastic kick.
+    let qd_pre = qd_step_start.to_vec();
+    let q_pre = q_step_start.to_vec();
     // Track per-vertex accumulated normal direction (for velocity
     // damping at the end). We sum the most-recent normal each sweep;
     // for a single contact this is just that contact's normal.
     let mut contact_normal_sum: Vec<Vec3> = vec![Vec3::ZERO; model.particle_count];
+    // Per-vertex restitution + pre-step normal velocity along the
+    // dominant contact direction. Used to set the post-projection
+    // normal velocity to `-e · v_n_pre` instead of zero.
+    let mut restitution_per_v: Vec<Real> = vec![0.0; model.particle_count];
+    // Per-vertex max friction coefficient — used by the velocity-
+    // form Coulomb damping at the end of the projection.
+    let mut friction_per_v: Vec<Real> = vec![0.0; model.particle_count];
 
-    for _ in 0..n_sweeps {
+    // Static-velocity stick threshold (m/s). Below this magnitude
+    // the tanh smoothing keeps the contact effectively glued; above
+    // it the contact slides at the Coulomb-cone limit.
+    let v_eps: Real = 1.0e-3;
+
+    // Stage 33.5 anti-tunneling: build a (vertex, tri) → previous
+    // contact normal LUT so the next gather can pick the correct
+    // side of the contact when a vertex straddles the triangle. We
+    // refresh this each sweep so contacts that resolve mid-sweep
+    // still inherit the side from the very first sweep.
+    let mut prev_normal_lut: std::collections::HashMap<(u32, u32), Vec3> =
+        std::collections::HashMap::with_capacity(prev_contacts.len());
+    for c in prev_contacts {
+        let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+        prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+    }
+
+    let mut final_contacts: Vec<VtContact> = Vec::new();
+
+    for sweep_idx in 0..n_sweeps {
         // Refit the BVH from the current positions. Cheap when the
         // tri count hasn't changed (just AABB recompute + bottom-up
         // refit); falls back to a full rebuild on a topology change.
         bvh.refit(model, state);
-        let contacts = gather_vt_contacts(model, state, bvh, margin);
-        last_active = contacts.len();
+        let mut contacts =
+            gather_vt_contacts_with_hint(model, state, bvh, margin, &prev_normal_lut);
+        // Warm-start friction once per substep (only on the first
+        // sweep — subsequent sweeps' contacts inherit the same
+        // warm-starts when the contact persists).
+        if sweep_idx == 0 {
+            warm_start_friction(prev_contacts, &mut contacts);
+        } else {
+            // Carry forward from the previous sweep's results too,
+            // so the Coulomb cone tightens monotonically.
+            warm_start_friction(&final_contacts, &mut contacts);
+        }
         if contacts.is_empty() {
+            // No active contacts this sweep — keep the previous
+            // sweep's `final_contacts` so we can still surface them
+            // for the warm-start.
             break;
         }
         // Apply position projection. Read q via host_mut() once per
         // sweep so the Jacobi update sees a consistent snapshot.
         let q = state.particle_q.host_mut()?;
         let tris: &[[u32; 3]] = &model.soft_surface_tris;
-        for c in &contacts {
+        for c in contacts.iter_mut() {
             let v = c.vertex_global_id as usize;
             let tri = tris[c.tri_global_id as usize];
             let i0 = tri[0] as usize;
@@ -255,6 +426,23 @@ pub fn project_vt_contacts(
             contact_normal_sum[i0] -= n_vec;
             contact_normal_sum[i1] -= n_vec;
             contact_normal_sum[i2] -= n_vec;
+            // Track per-vertex restitution = max over participating
+            // contacts (a more-bouncy tri pair beats a less-bouncy
+            // one if the vertex straddles).
+            if c.restitution > restitution_per_v[v] {
+                restitution_per_v[v] = c.restitution;
+            }
+            if c.friction > friction_per_v[v] {
+                friction_per_v[v] = c.friction;
+            }
+            for &i in &[i0, i1, i2] {
+                if c.restitution > restitution_per_v[i] {
+                    restitution_per_v[i] = c.restitution;
+                }
+                if c.friction > friction_per_v[i] {
+                    friction_per_v[i] = c.friction;
+                }
+            }
 
             let w_v = inv_mass[v];
             let w0 = inv_mass[i0];
@@ -275,6 +463,9 @@ pub fn project_vt_contacts(
             // the same particle and produce visible cloth tearing.
             let push = c.depth * 0.5;
             let alpha = w_v / total;
+            let f0 = b0 * b0 * w0 / total;
+            let f1 = b1 * b1 * w1 / total;
+            let f2 = b2 * b2 * w2 / total;
             // Vertex side: move +α·push along n.
             if w_v > 0.0 {
                 q[v] += n_vec * (alpha * push);
@@ -286,37 +477,118 @@ pub fn project_vt_contacts(
             // integrator AVBD penalty's per-vertex Hessian
             // contribution `+k·b_i²·n n^T`).
             if w0 > 0.0 {
-                let f0 = b0 * b0 * w0 / total;
                 q[i0] -= n_vec * (f0 * push);
             }
             if w1 > 0.0 {
-                let f1 = b1 * b1 * w1 / total;
                 q[i1] -= n_vec * (f1 * push);
             }
             if w2 > 0.0 {
-                let f2 = b2 * b2 * w2 / total;
                 q[i2] -= n_vec * (f2 * push);
             }
+
+            // ── Stage 33.5 friction (Dahl-smoothed Coulomb).
+            //
+            // Compute the tangential relative drift `Δq_t_rel`
+            // since the start of this substep, projected onto the
+            // contact tangent plane. This is the slip we want to
+            // erase (clamped by the Coulomb cone `μ · |push_n|`).
+            //
+            // Note `q[v]` etc. were just updated above. We use the
+            // post-normal-correction snapshot for the friction pass
+            // so the tangent plane is consistent with the corrected
+            // normal direction.
+            if c.friction > 0.0 {
+                let dq_v = q[v] - q_pre[v];
+                let dq0 = q[i0] - q_pre[i0];
+                let dq1 = q[i1] - q_pre[i1];
+                let dq2 = q[i2] - q_pre[i2];
+                let dq_tri = dq0 * b0 + dq1 * b1 + dq2 * b2;
+                let mut dq_t = dq_v - dq_tri;
+                // Project into the tangent plane.
+                let dn = dq_t.dot(n_vec);
+                dq_t -= n_vec * dn;
+                let dq_t_len = dq_t.length();
+                if dq_t_len > 1.0e-9 {
+                    // Coulomb cone in position-correction units.
+                    // The normal "force × dt" per substep is
+                    // proportional to the gravitational impulse the
+                    // contact must cancel (`m · g · dt` per
+                    // sub-step). We approximate it as `μ · g · dt²`
+                    // worth of tangential displacement per substep
+                    // (the maximum slip-correction the cone allows
+                    // when the contact is exactly equilibrated
+                    // against gravity). For a contact engaged
+                    // beyond gravity (push > μ·g·dt²), the depth-
+                    // proportional `μ · |push|` term dominates and
+                    // we use the larger of the two so heavily-
+                    // pressed contacts (e.g. stacked tets) still
+                    // respect the higher Coulomb cone.
+                    let cone_from_depth = c.friction * push.abs();
+                    // `μ · g · dt²`: minimum cone for any active
+                    // contact, regardless of how thin the
+                    // penetration is. `g = 9.81`.
+                    let cone_from_gravity = c.friction * 9.81 * dt * dt;
+                    let coulomb_max = cone_from_depth.max(cone_from_gravity);
+                    // Dahl-style smoothing factor: full strength
+                    // when slip far exceeds v_eps·dt; ramps down
+                    // smoothly to 0 when slip is below it.
+                    let smooth = (dq_t_len / (v_eps * dt.max(1.0e-6))).tanh();
+                    let mag = (dq_t_len * smooth).min(coulomb_max);
+                    let dir = dq_t / dq_t_len;
+                    let push_t = -dir * mag; // oppose the slip direction
+                    // Distribute the same way as normal: vertex
+                    // side gets +alpha · push_t, tri verts each
+                    // get -f_i · push_t.
+                    if w_v > 0.0 {
+                        q[v] += push_t * alpha;
+                    }
+                    if w0 > 0.0 {
+                        q[i0] -= push_t * f0;
+                    }
+                    if w1 > 0.0 {
+                        q[i1] -= push_t * f1;
+                    }
+                    if w2 > 0.0 {
+                        q[i2] -= push_t * f2;
+                    }
+                    // Record the friction impulse (per-step
+                    // tangential displacement scaled by inverse mass
+                    // ≈ J_t/m). Stored for warm-start next call.
+                    c.prev_friction_impulse =
+                        [push_t.x, push_t.y, push_t.z];
+                }
+            }
         }
+        // Refresh the prev_normal_lut from this sweep's contacts so
+        // the next sweep sees consistent contact sides.
+        for c in &contacts {
+            let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+            prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+        }
+        final_contacts = contacts;
     }
 
-    // Velocity damping along the contact normal. For each particle
-    // that participated in a contact at any sweep this substep,
-    // compute the dominant normal direction and zero out the
-    // velocity component pointing INTO the contact (i.e. the
-    // component along -contact_normal). This prevents the predict
-    // step from re-driving the vertex through the contact next
-    // substep.
+    // Velocity recovery pass.
     //
-    // We run this even when the last sweep returned 0 contacts —
-    // the per-particle `contact_normal_sum` aggregates over every
-    // sweep, so a particle whose contact resolved mid-sweep still
-    // gets the velocity correction.
+    // Stage 33 used a hard "zero out the inward normal velocity"
+    // damping; Stage 33.5 generalises this to:
+    //   - Normal: set post-projection v_n = -e · v_n_pre when
+    //     v_n_pre was diving in (otherwise leave alone).
+    //   - Tangent: apply Coulomb friction velocity damping.
+    //     `Δv_t = -μ · g · dt · (v_t/|v_t|)` clamped so the
+    //     tangential velocity never reverses sign (a frictional
+    //     impulse can stop a slip but never reverse it). This is
+    //     the velocity-form complement of the position-form
+    //     projection — together they give a usefully strong cone
+    //     even at infinitesimal penalty depths (e.g. a cube at rest
+    //     on cloth has depth ≈ m·g/k → near zero, so the position-
+    //     form alone can't carry the gravity-derived friction).
+    //     Per-vertex `μ` is the max over all contacts touching the
+    //     vertex; aggregated outside the contact loop.
     let any_contact = contact_normal_sum
         .iter()
         .any(|n| n.length_squared() > 1.0e-12);
     if any_contact {
-        let _ = q_pre; // unused; documents pre-projection snapshot intent
         let qd = state.particle_qd.host_mut()?;
         for i in 0..model.particle_count {
             let n_sum = contact_normal_sum[i];
@@ -329,19 +601,67 @@ pub fn project_vt_contacts(
                 continue;
             }
             let n = n_sum / n_len2.sqrt();
-            // The vertex side of a contact has its dominant n
-            // pointing AWAY from the tri (so the vertex is being
-            // pushed in the +n direction). A velocity component
-            // along -n is "diving in"; project it out.
-            let v = qd[i];
-            let vn = v.dot(n);
-            if vn < 0.0 {
-                qd[i] = v - n * vn;
+            // Pre-substep normal velocity along the dominant
+            // contact direction.
+            let vn_pre = qd_pre[i].dot(n);
+            // Current velocity along the same direction.
+            let mut v_now = qd[i];
+            let vn_now = v_now.dot(n);
+            // Restitution-aware normal-velocity recovery.
+            if vn_pre < 0.0 {
+                let e = restitution_per_v[i];
+                let target_vn = -e * vn_pre;
+                if vn_now < target_vn {
+                    v_now = v_now + n * (target_vn - vn_now);
+                }
+            } else if vn_now < 0.0 {
+                v_now = v_now - n * vn_now;
             }
+            // Tangential velocity damping (Coulomb friction). Use
+            // the strongest friction coefficient seen at this vertex
+            // this substep. The clamp `|Δv_t| ≤ |v_t|` prevents
+            // friction from reversing slip direction.
+            let mu_v = friction_per_v[i];
+            if mu_v > 0.0 {
+                let v_t = v_now - n * v_now.dot(n);
+                let v_t_len = v_t.length();
+                if v_t_len > 1.0e-9 {
+                    let dv_t_max = mu_v * 9.81 * dt;
+                    let dv_t = dv_t_max.min(v_t_len);
+                    v_now = v_now - (v_t / v_t_len) * dv_t;
+                }
+            }
+            qd[i] = v_now;
         }
     }
 
-    Ok(last_active)
+    Ok(final_contacts)
+}
+
+/// Stage 33.5 — copy `prev_friction_impulse` from `prev` into the
+/// matching contact in `current` (matched by `(vertex_global_id,
+/// tri_global_id)`). Unmatched contacts in `current` keep their
+/// zero-initialised impulse. Linear scan suffices because contact
+/// counts are typically small (< few hundred); we drop in O(N·log N)
+/// once contact counts justify the bookkeeping.
+pub fn warm_start_friction(prev: &[VtContact], current: &mut [VtContact]) {
+    if prev.is_empty() || current.is_empty() {
+        return;
+    }
+    // Build a small lookup map. Using a HashMap is overkill for the
+    // typical case of < 200 contacts, but it keeps the worst case
+    // sub-quadratic and is easy to reason about. Key: (vertex,
+    // tri); value: index into `prev`.
+    let mut lut: std::collections::HashMap<(u32, u32), usize> =
+        std::collections::HashMap::with_capacity(prev.len());
+    for (i, c) in prev.iter().enumerate() {
+        lut.insert((c.vertex_global_id, c.tri_global_id), i);
+    }
+    for c in current.iter_mut() {
+        if let Some(&pi) = lut.get(&(c.vertex_global_id, c.tri_global_id)) {
+            c.prev_friction_impulse = prev[pi].prev_friction_impulse;
+        }
+    }
 }
 
 /// Closest-point + barycentric weights wrapper. Wraps
