@@ -24,6 +24,8 @@ mod shape_world;
 mod spatial_hash;
 pub mod sparse_grid;
 mod support;
+pub mod soft_bvh;
+pub mod soft_surface;
 pub mod tet_bvh;
 
 pub use contact_extras::{
@@ -48,6 +50,12 @@ pub use tet_bvh::{
     recompute_tet_aabbs, tet_closest_face, tet_mesh_root_aabb,
     tet_meshes_aabb_overlap, TetAabb,
 };
+
+// ── Stage 33: cross-mesh soft-vs-soft VT contact infrastructure ────
+pub use soft_surface::{
+    compute_tet_surface_triangles, ClothMeshId, SoftSurface, SoftSurfaceKind,
+};
+pub use soft_bvh::SoftBvh;
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use support::{
     support, support_box, support_capsule, support_cone, support_convex_hull,

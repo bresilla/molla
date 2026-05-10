@@ -360,6 +360,19 @@ pub struct Model {
     /// `tet_mesh_count + 1`.
     pub tet_mesh_offsets: Buffer<u32>,
 
+    // ── Stage 33: cross-mesh soft-vs-soft VT contact ────────────────
+    /// Soft-surface registry — one entry per tet mesh (boundary tris)
+    /// or cloth mesh (tessellation tris). Each entry references a
+    /// contiguous slice of `soft_surface_tris` and a contiguous range
+    /// of `particle_q`. See [`crate::geometry::SoftSurface`] for the
+    /// per-entry layout.
+    pub soft_surfaces: Vec<crate::geometry::SoftSurface>,
+    /// Flat tri list across every soft surface. Indexed by
+    /// `SoftSurface.tri_offset..tri_offset + tri_count`. CPU-only
+    /// in v1; the GPU port (Stage 33.2) will mirror this onto a
+    /// `Buffer<[u32; 3]>`-equivalent device array.
+    pub soft_surface_tris: Vec<[u32; 3]>,
+
     // ── Per-vertex tet adjacency CSR (Stage 20.2) ──────────────────
     // Computed at build time alongside the spring adjacency. Each
     // entry pairs a tet id with the local vertex index `v_order ∈
@@ -692,6 +705,8 @@ impl Model {
             tet_kinematic_hardening: Buffer::from_vec(Vec::new(), s),
             tet_mesh_count: 0,
             tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
+            soft_surfaces: Vec::new(),
+            soft_surface_tris: Vec::new(),
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets: Buffer::from_vec(Vec::new(), s),
 
