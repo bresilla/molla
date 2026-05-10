@@ -1,7 +1,7 @@
 //! GPU ray-cast sensor — golden-value tests against hand-computed
 //! expectations. Each test is `#[ignore]` because it requires a real
 //! wgpu adapter (CI doesn't have one); run with
-//! `make test-xpbd-gpu` (which forwards `--include-ignored`).
+//! `make test-raycast-gpu` (forwards `-- --ignored` to the test binary).
 
 #![cfg(feature = "gpu")]
 
