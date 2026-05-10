@@ -224,3 +224,21 @@ harness = false
 name = "bench_contact_reduction"
 harness = false
 
+# ---------------------------------------------------------------------
+# Stage J — IK + sensors
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_ik"
+harness = false
+
+[[bench]]
+name = "bench_sensor_raycast"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_camera"
+harness = false
+required-features = ["gpu"]
+
