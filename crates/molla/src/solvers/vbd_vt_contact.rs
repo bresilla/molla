@@ -89,6 +89,10 @@ pub fn gather_vt_contacts(
     for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
         let v_lo = s.vertex_offset as usize;
         let v_hi = v_lo + s.vertex_count as usize;
+        // Stage 33.3 — capture the per-surface self-collision flag
+        // here so the inner loop can branch cheaply (vs re-reading
+        // the registry per candidate tri).
+        let self_coll = s.self_collision;
         for v_global in v_lo..v_hi {
             // Pinned vertices still produce contacts (the *other*
             // surface's tri verts get a force) but their own block
@@ -107,11 +111,41 @@ pub fn gather_vt_contacts(
             // correct.
             let mut best_per_surface: Vec<Option<VtContact>> =
                 vec![None; model.soft_surfaces.len()];
+            // Stage 33.3 — incident-tri set lookup for the current
+            // vertex. Empty when no soft surface owns the vertex
+            // (shouldn't happen given the outer surface walk, but
+            // keeps the indexing safe).
+            let inc_lo = model
+                .soft_vertex_incident_tris_offsets
+                .get(v_global)
+                .copied()
+                .unwrap_or(0) as usize;
+            let inc_hi = model
+                .soft_vertex_incident_tris_offsets
+                .get(v_global + 1)
+                .copied()
+                .unwrap_or(inc_lo as u32) as usize;
+            let incident_tris: &[u32] = &model.soft_vertex_incident_tris[inc_lo..inc_hi];
             for tri_global in candidates {
-                // Same-surface filter: defer to Stage 33.3.
                 let tri_surface = bvh.tri_to_surface[tri_global as usize];
+                // Stage 33.3 — same-surface filter. Three regimes:
+                //   (a) cross-mesh (tri_surface != s_idx): always emit.
+                //   (b) same-surface, self-collision OFF: skip
+                //       (preserves Stage 33's default behaviour).
+                //   (c) same-surface, self-collision ON: skip iff the
+                //       triangle is topologically incident to the
+                //       vertex (vertex IS one of the tri's three
+                //       corners — a degenerate, always-in-contact
+                //       pair). Adjacent-but-not-incident tris (one
+                //       ring away) ARE valid contacts — see Stage 33.3
+                //       caveat list re: thin-shell folds.
                 if tri_surface == s_idx as u32 {
-                    continue;
+                    if !self_coll {
+                        continue;
+                    }
+                    if incident_tris.contains(&tri_global) {
+                        continue;
+                    }
                 }
                 let tri = tris[tri_global as usize];
                 let v0 = q[tri[0] as usize];
