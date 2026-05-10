@@ -3080,6 +3080,43 @@ fn color_particles(
     (color_count, offsets, indices)
 }
 
+/// Stage 33 — re-colour `particle_count` particles given a set of
+/// dynamic VT contact pairs (vertex/tri-vertex). Combines the static
+/// constraint adjacency (springs + tets + cable bending) with the
+/// supplied per-substep VT pairs and runs the same greedy colouring.
+///
+/// The VBD GPU port (Stage 33.2) will call this once per substep
+/// after `gather_vt_contacts` so the per-color sweep can include the
+/// VT penalty terms without races. v1 ships the projection as a
+/// separate post-substep pass and so doesn't need this — the function
+/// is provided to keep the API stable for the GPU port.
+#[allow(clippy::too_many_arguments, dead_code)]
+pub(crate) fn color_particles_with_vt_contacts(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+    tet_indices: &[u32],
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+    vt_pairs: &[(u32, u32)],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    color_particles_with_extra_pairs(
+        particle_count,
+        vertex_adj_offsets,
+        vertex_adj_springs,
+        spring_a,
+        spring_b,
+        tet_indices,
+        cable_particle_offsets,
+        cable_particles,
+        cable_bending_stiffness,
+        vt_pairs,
+    )
+}
+
 /// Stage 20.2 superset of [`color_particles`] — incorporates tet
 /// adjacency edges *and* CABLE bending hinges in addition to
 /// spring-graph edges. Two particles `(u, v)` are coloured
@@ -3101,6 +3138,35 @@ fn color_particles_with_tets_and_bending(
     cable_particle_offsets: &[u32],
     cable_particles: &[u32],
     cable_bending_stiffness: &[Real],
+) -> (usize, Vec<u32>, Vec<u32>) {
+    color_particles_with_extra_pairs(
+        particle_count,
+        vertex_adj_offsets,
+        vertex_adj_springs,
+        spring_a,
+        spring_b,
+        tet_indices,
+        cable_particle_offsets,
+        cable_particles,
+        cable_bending_stiffness,
+        &[],
+    )
+}
+
+/// Internal — runs the greedy colouring with optional extra
+/// vertex-pair edges (e.g. VT contacts).
+#[allow(clippy::too_many_arguments)]
+fn color_particles_with_extra_pairs(
+    particle_count: usize,
+    vertex_adj_offsets: &[u32],
+    vertex_adj_springs: &[u32],
+    spring_a: &[u32],
+    spring_b: &[u32],
+    tet_indices: &[u32],
+    cable_particle_offsets: &[u32],
+    cable_particles: &[u32],
+    cable_bending_stiffness: &[Real],
+    extra_pairs: &[(u32, u32)],
 ) -> (usize, Vec<u32>, Vec<u32>) {
     if particle_count == 0 {
         return (0, vec![0u32], Vec::new());
@@ -3174,6 +3240,17 @@ fn color_particles_with_tets_and_bending(
                 }
             }
         }
+    }
+    // Stage 33 — extra dynamic pairs (e.g. VT contact endpoints).
+    // Both directions are added for symmetry.
+    for &(u, v) in extra_pairs {
+        let ui = u as usize;
+        let vi = v as usize;
+        if ui >= particle_count || vi >= particle_count || ui == vi {
+            continue;
+        }
+        neighbour[ui].push(v);
+        neighbour[vi].push(u);
     }
 
     let mut color_of = vec![u32::MAX; particle_count];
