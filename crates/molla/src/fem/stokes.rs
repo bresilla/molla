@@ -1205,15 +1205,25 @@ pub fn solve_navier_stokes_transient(
         div_residual: 0.0,
     };
 
+    // Pinned-DoF set — used to zero the convection contribution on
+    // Dirichlet boundaries (the BC reduction will re-pin those rows
+    // in `solve_stokes_with_matrices` regardless, but we keep the RHS
+    // clean to avoid introducing spurious magnitude into iterative
+    // residual norms).
+    let pin_set: std::collections::HashSet<usize> = collect_velocity_pins(bcs, th.dim)
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect();
+
     for _step in 0..cfg.n_steps {
         // Lagged convective term — explicit Picard linearisation.
-        // For Stage-36.2 v1 we ship "Stokes-stepping" (no explicit
-        // convection); the full lagged-`(u·∇)u` assembly lands in
-        // Stage 36.2.1 (a separate deferred follow-up). The
-        // semi-implicit framework here is correct as soon as that
-        // assembly arrives; only the conv_force slot needs to be
-        // populated.
-        let conv_force: Vec<Real> = vec![0.0; th.n_velocity];
+        // Stage 37.3 wires in the actual `(u·∇)u` integral via
+        // [`assemble_convection_block`]. With this active the IMEX
+        // scheme is `M(u_new − u_old)/dt + (u_old·∇)u_old + ∇p − μ∇²u_new = f`.
+        let mut conv_force = assemble_convection_block(mesh, th, &u);
+        for &dof in &pin_set {
+            conv_force[dof] = 0.0;
+        }
 
         // RHS for this step: f + (M/dt) u_old − conv.
         let mu = matvec(&m, &u);
@@ -1233,6 +1243,40 @@ pub fn solve_navier_stokes_transient(
         outer_iters: last.outer_iters,
         div_residual: last.div_residual,
     })
+}
+
+/// Lower-level **single-step** Navier-Stokes IMEX advance. Useful for
+/// scenes / tests that need to refresh BCs (e.g. analytic Taylor-Green
+/// boundary clamps) between steps without reassembling the matrices.
+///
+/// `a_eff` should be the precomputed `M / Δt + A` LHS, `b_div` the
+/// divergence matrix, `m` the velocity mass matrix. Returns the new
+/// `(u, p)` state.
+pub fn solve_navier_stokes_step(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    a_eff: &BsrMatrix,
+    b_div: &BsrMatrix,
+    m: &BsrMatrix,
+    u_old: &[Real],
+    f_velocity: &[Real],
+    inv_dt: Real,
+    bcs: &[StokesBc],
+    simple: &StokesSimpleConfig,
+) -> Result<StokesResult> {
+    let pin_set: std::collections::HashSet<usize> = collect_velocity_pins(bcs, th.dim)
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect();
+    let mut conv_force = assemble_convection_block(mesh, th, u_old);
+    for &dof in &pin_set {
+        conv_force[dof] = 0.0;
+    }
+    let mu = matvec(m, u_old);
+    let f_step: Vec<Real> = (0..th.n_velocity)
+        .map(|i| f_velocity[i] + inv_dt * mu[i] - conv_force[i])
+        .collect();
+    solve_stokes_with_matrices(th, a_eff, b_div, &f_step, bcs, simple)
 }
 
 /// Sparse `αA + βB` for B = 1 BSR matrices. Mirrors the helper in
