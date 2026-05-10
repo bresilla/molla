@@ -13829,7 +13829,15 @@ fn conveyor_pane(ui: &mut egui::Ui, state: &mut ConveyorExampleState) {
     ui.add(egui::Slider::new(&mut state.belt_speed, -2.0..=2.0));
     ui.separator();
     ui.small("Boxes are dropped onto a long kinematic box.");
-    ui.small("Set belt_speed > 0 → boxes drift in +X.");
+    ui.small("Belt pose is advected each frame; boxes settle on it.");
+    ui.colored_label(
+        egui::Color32::YELLOW,
+        "Caveat: XPBD's Coulomb friction is gated by per-substep \
+         normal impulse |λ_n|, which is ~0 at steady state. The \
+         box receives only a tiny tangential push from the belt — \
+         the belt itself slides away beneath. Visualises belt \
+         motion + box settling, not steady-state belt-drag.",
+    );
 }
 
 fn cloth_bending_pane(
