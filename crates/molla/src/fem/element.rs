@@ -209,6 +209,89 @@ pub fn compute_element_convection(
     }
 }
 
+/// Per-cell **SUPG** (Streamline-Upwind Petrov-Galerkin) stabilisation
+/// block `Sₑ = ∫ τ · (b · ∇Nᵢ) · (b · ∇Nⱼ) dx`.
+///
+/// Stage 37.2 — Hughes' classic textbook stabilisation: bias the test
+/// function in the streamline direction so the discretised
+/// convection-diffusion operator stays monotone in the
+/// convection-dominated regime (cell Péclet > 1). The stabilisation
+/// parameter is `τ = h / (2 |b|)` (caller computes `h` as the cell
+/// length scale; `alpha` is exposed as a multiplier so callers can
+/// blend in additional dampening or follow alternative `τ` formulas).
+///
+/// The block is added on top of [`compute_element_convection`] —
+/// together they replace the standard Galerkin convection term with a
+/// Petrov-Galerkin one that retains the conservation properties at
+/// `Pe ≪ 1` and removes the cell-Péclet oscillations at `Pe ≫ 1`.
+///
+/// With P1 shape functions the gradients are constant per element so
+/// the integral collapses to `τ · (b · ∇Nᵢ) · (b · ∇Nⱼ) · |Ω|`. The
+/// resulting block is **symmetric** (rank-1 outer product of `b·∇N`
+/// with itself, scaled by `τ · |Ω|`).
+///
+/// Returns an `N × N` matrix as `Vec<Vec<Real>>` where `N = 3` (Tri)
+/// or `N = 4` (Tet). When `b == 0` the block is identically zero
+/// (and skipping the call is the obvious micro-optimisation).
+#[must_use]
+pub fn compute_element_supg_convection(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    b: Vec3,
+    alpha: Real,
+    h: Real,
+) -> Vec<Vec<Real>> {
+    let bmag = b.length();
+    if bmag <= 1.0e-30 {
+        let n = cell.vert_count();
+        return vec![vec![0.0; n]; n];
+    }
+    // Hughes SUPG parameter — the textbook `h / (2 |b|)` choice. The
+    // optional `alpha` multiplier lets callers tune the stabilisation
+    // strength without rebuilding the kernel.
+    let tau = alpha * h / (2.0 * bmag);
+    match cell {
+        FemCell::Tri(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+            ];
+            let area = tri_area_2d(&p);
+            let grads = tri_shape_grads_2d(&p);
+            let bg: [Real; 3] = [
+                b.x * grads[0][0] + b.y * grads[0][1],
+                b.x * grads[1][0] + b.y * grads[1][1],
+                b.x * grads[2][0] + b.y * grads[2][1],
+            ];
+            let scale = tau * area;
+            (0..3)
+                .map(|i| (0..3).map(|j| scale * bg[i] * bg[j]).collect())
+                .collect()
+        }
+        FemCell::Tet(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+                vertices[idx[3] as usize],
+            ];
+            let vol = tet_volume(&p);
+            let grads = tet_shape_grads(&p);
+            let bg: [Real; 4] = [
+                b.dot(grads[0]),
+                b.dot(grads[1]),
+                b.dot(grads[2]),
+                b.dot(grads[3]),
+            ];
+            let scale = tau * vol;
+            (0..4)
+                .map(|i| (0..4).map(|j| scale * bg[i] * bg[j]).collect())
+                .collect()
+        }
+    }
+}
+
 /// Per-cell **wave** stiffness matrix `Kₑ = c² · ∫ ∇φᵢ · ∇φⱼ dx`.
 ///
 /// Stage 37.1 — symmetric Helmholtz operator used as the spatial

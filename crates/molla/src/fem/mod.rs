@@ -69,7 +69,8 @@ pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 pub use element::{
     compute_element_convection, compute_element_elasticity_stiffness,
     compute_element_mass, compute_element_st_venant_kirchhoff_stress,
-    compute_element_stiffness, compute_element_wave_stiffness,
+    compute_element_stiffness, compute_element_supg_convection,
+    compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, FunctionSpace};
 #[cfg(feature = "gpu")]
