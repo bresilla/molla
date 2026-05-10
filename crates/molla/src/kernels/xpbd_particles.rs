@@ -183,12 +183,23 @@ impl XpbdParticlesKernel {
         // counts to 1 — the kernel guards against out-of-range indices.
         let pn = particle_count.max(1) as usize;
         let sn = spring_count.max(1) as usize;
+        // Allocate + upload all scratch / dummy / hash buffers up front.
+        // Failures here are unrecoverable (wgpu OOM at construction time)
+        // and would otherwise surface as a confusing "missing device
+        // mirror" error inside `dispatch`. `.expect()` ensures we crash
+        // with a useful message at the actual failure site.
         let mut lambdas = Buffer::from_vec(vec![0.0_f64; sn], BufferUsage::StorageReadWrite);
         let mut deltas = Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut counts = Buffer::from_vec(vec![0u32; pn], BufferUsage::StorageReadWrite);
-        let _ = lambdas.ensure_device(device);
-        let _ = deltas.ensure_device(device);
-        let _ = counts.ensure_device(device);
+        lambdas
+            .ensure_device(device)
+            .expect("xpbd_particles: lambdas ensure_device");
+        deltas
+            .ensure_device(device)
+            .expect("xpbd_particles: deltas ensure_device");
+        counts
+            .ensure_device(device)
+            .expect("xpbd_particles: counts ensure_device");
 
         let mut dummy_u32 = Buffer::from_vec(vec![0u32; 2], BufferUsage::Storage);
         let mut dummy_real = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::Storage);
@@ -198,16 +209,36 @@ impl XpbdParticlesKernel {
             vec![crate::math::Transform::IDENTITY; 1],
             BufferUsage::Storage,
         );
-        let _ = dummy_u32.ensure_device(device);
-        let _ = dummy_u32.upload(queue);
-        let _ = dummy_real.ensure_device(device);
-        let _ = dummy_real.upload(queue);
-        let _ = dummy_vec3.ensure_device(device);
-        let _ = dummy_vec3.upload(queue);
-        let _ = dummy_i32.ensure_device(device);
-        let _ = dummy_i32.upload(queue);
-        let _ = dummy_xform.ensure_device(device);
-        let _ = dummy_xform.upload(queue);
+        dummy_u32
+            .ensure_device(device)
+            .expect("xpbd_particles: dummy_u32 ensure_device");
+        dummy_u32
+            .upload(queue)
+            .expect("xpbd_particles: dummy_u32 upload");
+        dummy_real
+            .ensure_device(device)
+            .expect("xpbd_particles: dummy_real ensure_device");
+        dummy_real
+            .upload(queue)
+            .expect("xpbd_particles: dummy_real upload");
+        dummy_vec3
+            .ensure_device(device)
+            .expect("xpbd_particles: dummy_vec3 ensure_device");
+        dummy_vec3
+            .upload(queue)
+            .expect("xpbd_particles: dummy_vec3 upload");
+        dummy_i32
+            .ensure_device(device)
+            .expect("xpbd_particles: dummy_i32 ensure_device");
+        dummy_i32
+            .upload(queue)
+            .expect("xpbd_particles: dummy_i32 upload");
+        dummy_xform
+            .ensure_device(device)
+            .expect("xpbd_particles: dummy_xform ensure_device");
+        dummy_xform
+            .upload(queue)
+            .expect("xpbd_particles: dummy_xform upload");
 
         // Spatial hash table for self-collision. 4096 buckets × 12
         // slots = 48 k u32 entries (192 KB) — comfortably small.
@@ -218,10 +249,18 @@ impl XpbdParticlesKernel {
             vec![0u32; (HASH_BUCKETS * MAX_PER_CELL) as usize],
             BufferUsage::StorageReadWrite,
         );
-        let _ = hash_count.ensure_device(device);
-        let _ = hash_count.upload(queue);
-        let _ = hash_indices.ensure_device(device);
-        let _ = hash_indices.upload(queue);
+        hash_count
+            .ensure_device(device)
+            .expect("xpbd_particles: hash_count ensure_device");
+        hash_count
+            .upload(queue)
+            .expect("xpbd_particles: hash_count upload");
+        hash_indices
+            .ensure_device(device)
+            .expect("xpbd_particles: hash_indices ensure_device");
+        hash_indices
+            .upload(queue)
+            .expect("xpbd_particles: hash_indices upload");
 
         Self {
             pipe_predict,

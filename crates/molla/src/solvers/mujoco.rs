@@ -1347,6 +1347,18 @@ mod backend_impl {
                 .host()
                 .map_err(|e| Error::Solver(format!("MuJoCo: read state_in.joint_qd: {e}")))?;
 
+            // SAFETY:
+            // - `self.sim.state.ptr()` is a non-null `*mut mjData` owned
+            //   by `mujoco_rust::Simulation`; valid for the duration of
+            //   this `&mut self` borrow.
+            // - `qpos`/`qvel` are C-allocated arrays of length `nq`/`nv`;
+            //   `n` / `nv` are clamped via `min(...)` so all `add(i)`
+            //   stay within those bounds.
+            // - `Simulation` is `!Sync`; the `&mut self` borrow ensures
+            //   no other Rust code observes the in-progress writes.
+            // - `model.ptr()` is similarly stable for `&mut self`; the
+            //   `opt.timestep` write does not invalidate any indices we
+            //   computed above.
             unsafe {
                 let data = self.sim.state.ptr();
                 let qpos_ptr = (*data).qpos;
@@ -1393,6 +1405,17 @@ mod backend_impl {
             // mujoco_rust's `xpos()` returns geom-indexed positions
             // (off-by-one in their docs; we walk it cautiously).
             let n_body = self.sim.model.nbody();
+            // SAFETY:
+            // - `self.sim.state.ptr()` is a non-null `*mut mjData` owned
+            //   by `mujoco_rust::Simulation`; valid for the duration of
+            //   this `&mut self` borrow.
+            // - `xpos` / `xquat` are C-allocated arrays of length
+            //   `3*nbody` and `4*nbody` respectively; the `mj_idx <
+            //   n_body` guard above keeps `i*3+2` and `i*4+3` within
+            //   bounds.
+            // - The bodies-loop only reads through the raw pointers; no
+            //   aliasing with the `&mut [Transform]` (`body_q_out`)
+            //   because they are distinct C and Rust allocations.
             unsafe {
                 let data = self.sim.state.ptr();
                 let xpos = (*data).xpos;
