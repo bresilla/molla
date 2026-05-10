@@ -4,7 +4,7 @@
 //! `gpu` feature + `#[ignore]`).
 
 use molla::compute::tile_convolution::{self, Kernel5};
-use molla::compute::{tile_block_cholesky, tile_filtering, tile_matmul};
+use molla::compute::{tile_block_cholesky, tile_filtering, tile_matmul, tile_stream_compaction};
 
 /// Tiny LCG so tests are dependency-free and reproducible.
 struct Lcg(u64);
@@ -312,4 +312,55 @@ fn tile_filtering_laplacian_kills_constant() {
     for v in output.iter() {
         assert!(v.abs() < 1e-5, "got {v}");
     }
+}
+
+// ── E — stream compaction ────────────────────────────────────────────
+
+#[test]
+fn tile_stream_compaction_cpu_keeps_all_when_mask_all_true() {
+    let input: Vec<f32> = (0..16).map(|i| i as f32).collect();
+    let mask = vec![true; 16];
+    let out = tile_stream_compaction::compact_cpu(&input, &mask).unwrap();
+    assert_eq!(out, input);
+}
+
+#[test]
+fn tile_stream_compaction_cpu_drops_all_when_mask_all_false() {
+    let input: Vec<f32> = (0..16).map(|i| i as f32).collect();
+    let mask = vec![false; 16];
+    let out = tile_stream_compaction::compact_cpu(&input, &mask).unwrap();
+    assert!(out.is_empty());
+}
+
+#[test]
+fn tile_stream_compaction_cpu_random_1024() {
+    let n = 1024;
+    let mut rng = Lcg::new(51);
+    let input: Vec<f32> = (0..n).map(|_| rng.signed()).collect();
+    let mask: Vec<bool> = (0..n).map(|_| (rng.next() & 1) == 1).collect();
+    let out = tile_stream_compaction::compact_cpu(&input, &mask).unwrap();
+    let expected_count = mask.iter().filter(|x| **x).count();
+    assert_eq!(out.len(), expected_count);
+
+    // Content-wise: walking input + mask in lock-step should match.
+    let expected: Vec<f32> = input
+        .iter()
+        .zip(mask.iter())
+        .filter_map(|(v, &k)| if k { Some(*v) } else { None })
+        .collect();
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn tile_stream_compaction_cpu_rejects_length_mismatch() {
+    let input = vec![0.0_f32; 4];
+    let mask = vec![true; 3];
+    assert!(tile_stream_compaction::compact_cpu(&input, &mask).is_err());
+}
+
+#[test]
+fn tile_stream_compaction_mask_to_u32_round_trips() {
+    let mask = vec![true, false, true, true, false];
+    let u = tile_stream_compaction::mask_to_u32(&mask);
+    assert_eq!(u, vec![1, 0, 1, 1, 0]);
 }

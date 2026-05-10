@@ -9,6 +9,7 @@
 use molla::compute::tile_block_cholesky::{self, TileBlockCholeskyKernel};
 use molla::compute::tile_convolution::{self, Kernel5, TileConvolutionKernel};
 use molla::compute::tile_matmul::{self, TileMatmulKernel};
+use molla::compute::tile_stream_compaction::{self, TileStreamCompactionKernel};
 use molla::compute::Engine;
 
 struct Lcg(u64);
@@ -194,6 +195,71 @@ fn tile_convolution_gpu_identity_returns_input() {
     for (a, b) in out.iter().zip(input.iter()) {
         assert!((a - b).abs() < 1.0e-6);
     }
+}
+
+// ── E — stream compaction ────────────────────────────────────────────
+
+#[test]
+#[ignore]
+fn tile_stream_compaction_gpu_random_1024() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileStreamCompactionKernel::new(device);
+
+    let n = 1024;
+    let mut rng = Lcg::new(401);
+    let input: Vec<f32> = (0..n).map(|_| rng.signed()).collect();
+    let mask_bool: Vec<bool> = (0..n).map(|_| (rng.next() & 1) == 1).collect();
+    let mask_u32 = tile_stream_compaction::mask_to_u32(&mask_bool);
+
+    let gpu_out = kernel
+        .dispatch_blocking(device, queue, &input, &mask_u32)
+        .unwrap();
+    let cpu_out = tile_stream_compaction::compact_cpu(&input, &mask_bool).unwrap();
+
+    let expected_count = mask_bool.iter().filter(|x| **x).count();
+    assert_eq!(gpu_out.len(), expected_count, "count mismatch");
+    assert_eq!(gpu_out, cpu_out, "content mismatch");
+}
+
+#[test]
+#[ignore]
+fn tile_stream_compaction_gpu_all_kept() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileStreamCompactionKernel::new(device);
+
+    let n = 512;
+    let input: Vec<f32> = (0..n).map(|i| i as f32).collect();
+    let mask = vec![1u32; n];
+    let out = kernel.dispatch_blocking(device, queue, &input, &mask).unwrap();
+    assert_eq!(out, input);
+}
+
+#[test]
+#[ignore]
+fn tile_stream_compaction_gpu_all_dropped_yields_empty() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileStreamCompactionKernel::new(device);
+
+    let n = 256;
+    let input: Vec<f32> = (0..n).map(|i| i as f32).collect();
+    let mask = vec![0u32; n];
+    let out = kernel.dispatch_blocking(device, queue, &input, &mask).unwrap();
+    assert!(out.is_empty());
 }
 
 #[test]
