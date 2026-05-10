@@ -189,3 +189,38 @@ harness = false
 name = "bench_soft_friction"
 harness = false
 
+# ---------------------------------------------------------------------
+# Stage H — Broadphase
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_lbvh_build"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_lbvh_refit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_broadphase_pairs"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage I — Narrow-phase / contact pipeline
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_narrow_phase_pairs"
+harness = false
+
+[[bench]]
+name = "bench_mpr_vs_gjk"
+harness = false
+
+[[bench]]
+name = "bench_contact_reduction"
+harness = false
+
