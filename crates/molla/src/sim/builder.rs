@@ -2407,10 +2407,10 @@ impl ModelBuilder {
         // pool slice the surface owns.
         let mut soft_surfaces: Vec<crate::geometry::SoftSurface> = Vec::new();
         let mut soft_surface_tris: Vec<[u32; 3]> = Vec::new();
-        // Stage 33.1 — flat per-surface edge list. Stage 33's commit
-        // ships the slot empty; Stage 33.1's edge-extraction commit
-        // populates it via `compute_surface_edges`.
-        let soft_surface_edges: Vec<[u32; 2]> = Vec::new();
+        // Stage 33.1 — flat per-surface edge list, derived from each
+        // surface's tris via `compute_surface_edges` (unique
+        // undirected edges).
+        let mut soft_surface_edges: Vec<[u32; 2]> = Vec::new();
         let n_tet_meshes = self.tet_mesh_offsets.len().saturating_sub(1);
         for m in 0..n_tet_meshes {
             let lo = self.tet_mesh_offsets[m] as usize;
@@ -2429,6 +2429,12 @@ impl ModelBuilder {
             for tri in &bnd {
                 soft_surface_tris.push(*tri);
             }
+            let edges = crate::geometry::compute_surface_edges(&bnd);
+            let edge_off = soft_surface_edges.len() as u32;
+            let edge_cnt = edges.len() as u32;
+            for e in edges {
+                soft_surface_edges.push(e);
+            }
             let v_first = self
                 .tet_mesh_vertex_first
                 .get(m)
@@ -2445,8 +2451,8 @@ impl ModelBuilder {
                 vertex_count: v_count,
                 tri_offset: tri_off,
                 tri_count: bnd.len() as u32,
-                edge_offset: 0,
-                edge_count: 0,
+                edge_offset: edge_off,
+                edge_count: edge_cnt,
                 tet_mesh_id: Some(crate::sim::TetMeshId(m as u32)),
                 cloth_mesh_id: None,
             });
@@ -2456,12 +2462,21 @@ impl ModelBuilder {
             let tri_lo = self.cloth_mesh_tri_offsets[m] as usize;
             let tri_hi = self.cloth_mesh_tri_offsets[m + 1] as usize;
             let tri_off = soft_surface_tris.len() as u32;
+            let mut mesh_tris: Vec<[u32; 3]> = Vec::with_capacity(tri_hi - tri_lo);
             for t in tri_lo..tri_hi {
-                soft_surface_tris.push([
+                let tri = [
                     self.tri_indices[t * 3],
                     self.tri_indices[t * 3 + 1],
                     self.tri_indices[t * 3 + 2],
-                ]);
+                ];
+                soft_surface_tris.push(tri);
+                mesh_tris.push(tri);
+            }
+            let edges = crate::geometry::compute_surface_edges(&mesh_tris);
+            let edge_off = soft_surface_edges.len() as u32;
+            let edge_cnt = edges.len() as u32;
+            for e in edges {
+                soft_surface_edges.push(e);
             }
             soft_surfaces.push(crate::geometry::SoftSurface {
                 kind: crate::geometry::SoftSurfaceKind::Cloth,
@@ -2469,8 +2484,8 @@ impl ModelBuilder {
                 vertex_count: self.cloth_mesh_particle_count[m],
                 tri_offset: tri_off,
                 tri_count: (tri_hi - tri_lo) as u32,
-                edge_offset: 0,
-                edge_count: 0,
+                edge_offset: edge_off,
+                edge_count: edge_cnt,
                 tet_mesh_id: None,
                 cloth_mesh_id: Some(crate::geometry::ClothMeshId(m as u32)),
             });
