@@ -164,3 +164,28 @@ name = "bench_mpm_implicit"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Stage G — Soft contact (Stage 33 family)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_soft_vt_contact_cpu"
+harness = false
+
+[[bench]]
+name = "bench_soft_vt_contact_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_soft_self_collision"
+harness = false
+
+[[bench]]
+name = "bench_soft_ee_contact"
+harness = false
+
+[[bench]]
+name = "bench_soft_friction"
+harness = false
+
