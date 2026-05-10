@@ -11,12 +11,22 @@
 // is fine. The big win is eliminating the CPU↔GPU round-trip on
 // every substep.
 //
-// Pipeline order (in `XpbdKernel::dispatch`):
-//   predict → project_position × N → **project_equality** →
-//   recover_velocity → project_velocity → write_final
+// Pipeline order (host-side dispatch in `solvers::xpbd::step_inner`):
+//   1. `XpbdKernel::dispatch`:
+//      predict → project_position × N → recover_velocity →
+//      project_velocity (restitution + friction) → write_final
+//   2. `XpbdEqualityKernel::dispatch`:
+//      copy body_q→body_q_pre_eq → **project_equality** (this file) →
+//      **recover_velocity_after_equality** (this file, additive)
 //
-// `recover_velocity` reads the post-equality `body_q_out` so the
-// equality correction shows up in the next-step velocity naturally.
+// The equality projection runs AFTER project_velocity so the contact
+// / friction / restitution velocity that the main XPBD kernel writes
+// into `body_qd` is preserved (the historical "qd overwrite" bug
+// happened when this stage replaced `body_qd` with `(q − q_pre_step)
+// / dt`). The CPU `cpu_step` runs equality BEFORE velocity recovery
+// instead — both orderings are valid XPBD; the resulting CPU/GPU vy
+// drift on bouncing-stack scenes is bounded and characterised by
+// `tests/xpbd_equality_gpu.rs::gpu_friction_velocity_survives_equality_recovery`.
 
 const FLAG_KINEMATIC: u32 = 1u;
 const EQ_TYPE_CONNECT: u32     = 0u;

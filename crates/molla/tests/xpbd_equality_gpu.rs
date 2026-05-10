@@ -351,18 +351,46 @@ fn gpu_rope_does_not_tunnel_floor() {
 /// CPU vs GPU smoke test for the equality + restitution pipeline.
 /// CPU is the oracle (it runs equality BEFORE velocity recovery, so
 /// it never had this bug). After the fix, GPU body_qd's vertical
-/// component matches CPU within a generous slop on a bouncing-stack
+/// component matches CPU within a bounded slop on a bouncing-stack
 /// scene. The fix keeps the project_velocity (restitution +
 /// friction) contribution in body_qd; pre-fix it was overwritten by
 /// `(q_post_eq − q_pre_step) / dt`, which silently dropped the
 /// restitution kick.
 ///
-/// Note: f32-narrowing + small differences between CPU's contact
-/// iteration order and GPU's per-body CSR layout means the GPU bounce
-/// can drift up to ~0.05 m/s from the CPU oracle even after the fix
-/// — we use a generous tolerance here. The truly-broken behaviour
-/// (recovery overwrites body_qd entirely) shows up via the rope /
-/// two-bar tests below, which check the reported symptom directly.
+/// **Source of the residual ~0.045 m/s divergence (Option C — accept
+/// + document):** CPU and GPU run the substep stages in different
+/// orders by design.
+///
+/// - CPU `cpu_step`: predict → position-projection → **equality** →
+///   velocity-recovery → velocity-projection (restitution + friction).
+///   Restitution sees `r_a / r_b` lever arms at the post-equality
+///   pose, and `v_pre = v_pred + ω × r_post_equality`.
+/// - GPU XpbdKernel + XpbdEqualityKernel: predict → position-projection
+///   → velocity-recovery → velocity-projection → **equality** →
+///   recover_velocity_after_equality (additive). Restitution sees
+///   lever arms at the post-position-projection-but-PRE-equality pose.
+///
+/// For this bouncing-stack scene, the equality projection pulls the
+/// top box ~mm downward each step. CPU's restitution then computes
+/// `dv_n = -e·v_n_pre - v_n` against the post-equality lever arms;
+/// GPU computes against the pre-equality ones. The lever-arm and
+/// `v_n` differences accumulate to a deterministic ~0.045 m/s drift
+/// after 30 substeps (same per-body, both are coupled by the
+/// CONNECT). f32-narrowing alone would only contribute ~6e-4 m/s
+/// for 60 substeps — not the dominant term.
+///
+/// Restoring stage-by-stage parity would require either re-ordering
+/// the GPU pipeline (equality before velocity-projection) — which
+/// the current order was chosen to AVOID, because the previous
+/// "equality then overwrite qd" path destroyed restitution velocity
+/// — or running a second equality projection before velocity-
+/// projection on GPU. Both are larger surgeries than the parity gain
+/// is worth; the rope / two-bar tests below catch the actually-
+/// broken regression mode (qd overwrite). This test holds the
+/// honest bound: dvy ≤ 0.06 m/s, which is 33% headroom over the
+/// measured 0.045 — tight enough to catch a re-introduction of the
+/// overwrite bug (which would push dvy past 0.5+ m/s) but loose
+/// enough to absorb the documented structural difference.
 #[test]
 #[ignore = "needs a real wgpu adapter — CPU vs GPU parity for equality + restitution velocity preservation"]
 fn gpu_friction_velocity_survives_equality_recovery() {
@@ -457,12 +485,14 @@ fn gpu_friction_velocity_survives_equality_recovery() {
             "body {i}: cpu vy={:.5} gpu vy={:.5} dvy={dvy:.5}",
             cpu_qd[i].linear.y, gpu_qd[i].linear.y,
         );
-        // Generous tolerance; see test-level doc for why CPU/GPU
-        // can drift by ~0.05 m/s even with the fix. The hard
-        // tunnelling failure mode is captured by the rope / two-bar
-        // regression tests below.
+        // Honest bound: ~0.045 measured + 33% headroom. See test-
+        // level doc for the structural CPU/GPU pipeline-order
+        // divergence that produces the residual. The hard tunnelling
+        // failure mode (qd overwrite) is captured by the rope /
+        // two-bar regression tests below and would push dvy past
+        // 0.5 m/s.
         assert!(
-            dvy < 0.10,
+            dvy < 0.06,
             "body {i} vertical velocity diverges between CPU and GPU by {dvy} m/s — equality recovery is likely destroying the project_velocity (restitution) contribution",
         );
     }
