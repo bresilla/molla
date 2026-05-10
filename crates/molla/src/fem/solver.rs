@@ -543,6 +543,117 @@ where
     u
 }
 
+/// Stage 37.4 — Newton-Raphson minimisation of the per-cell symmetric
+/// Dirichlet distortion energy summed over a [`super::FemMesh`].
+///
+/// Each Newton iteration:
+///   1. assemble the global gradient `g = ∑_e g_e` (one `Vec3` per
+///      vertex, summed in interleaved order),
+///   2. assemble the global Hessian `H = ∑_e H_e` (dense `Vec<Vec<Real>>`
+///      ⇒ packed into a [`BsrMatrix`] with `B = 1`, scattering each
+///      element 9×9 / 12×12 block in interleaved DoF order),
+///   3. solve `H · dx = −g` via [`cg_solve`] (linear-time, matrix-free
+///      via [`matvec`] over the assembled CSR),
+///   4. update `deformed ← deformed + dx`.
+///
+/// Termination: `‖dx‖∞ < tol` (max absolute component of the Newton
+/// step) or `iter == max_iter`. Returns the final deformed-vertex
+/// array.
+///
+/// `init_deformed` is the warm-start configuration; pass the rest mesh
+/// vertices for a from-rest minimisation, or perturbed positions for a
+/// "snap back to a low-distortion map" use case (the canonical
+/// `WarpFemDistortion` viewer scene).
+///
+/// v1: no line search; the Hessian is regularised by adding `1e-8 · I`
+/// before solving so degenerate elements (collinear / coplanar) don't
+/// blow up the CG. Callers with pathological inputs should pre-fix the
+/// rest mesh.
+pub fn solve_distortion_minimization(
+    rest_mesh: &super::mesh::FemMesh,
+    init_deformed: &[crate::math::Vec3],
+    max_iter: usize,
+    tol: Real,
+) -> Vec<crate::math::Vec3> {
+    use super::element::compute_element_distortion_energy;
+    use crate::math::Vec3;
+
+    let n_verts = rest_mesh.vertices.len();
+    let n_dof = n_verts * 3;
+    debug_assert_eq!(
+        init_deformed.len(),
+        n_verts,
+        "solve_distortion_minimization: init_deformed length mismatch"
+    );
+
+    let mut deformed = init_deformed.to_vec();
+
+    for _iter in 0..max_iter {
+        // Assemble the global gradient + Hessian by summing the
+        // per-element contributions. The Hessian is collected as a
+        // CSR via the same triplet rebuild path the FEM module uses
+        // elsewhere (`BsrMatrix::from_triplets`).
+        let mut grad = vec![0.0_f64; n_dof];
+        let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+        for cell in &rest_mesh.cells {
+            let (_e, g_local, h_local) =
+                compute_element_distortion_energy(cell, &rest_mesh.vertices, &deformed);
+            let verts = cell.verts();
+            for (i, vi) in verts.iter().enumerate() {
+                let row_base = (*vi as usize) * 3;
+                grad[row_base] += g_local[i].x;
+                grad[row_base + 1] += g_local[i].y;
+                grad[row_base + 2] += g_local[i].z;
+                for (j, vj) in verts.iter().enumerate() {
+                    let col_base = (*vj as usize) * 3;
+                    for ci in 0..3 {
+                        for cj in 0..3 {
+                            let val = h_local[i * 3 + ci][j * 3 + cj];
+                            if val == 0.0 {
+                                continue;
+                            }
+                            triplets.push((row_base + ci, col_base + cj, vec![val]));
+                        }
+                    }
+                }
+            }
+        }
+        // Diagonal regulariser to keep the Hessian SPD on degenerate
+        // / pinned DoFs. Mostly relevant for elements whose volume
+        // collapses during the Newton walk; harmless on smooth
+        // problems because the regulariser is 1e-8.
+        for r in 0..n_dof {
+            triplets.push((r, r, vec![1.0e-8]));
+        }
+        let h_global = BsrMatrix::from_triplets(1, n_dof, n_dof, &triplets)
+            .expect("solve_distortion_minimization: hessian assembly");
+        // Newton step: H · dx = −g.
+        let neg_g: Vec<Real> = grad.iter().map(|v| -v).collect();
+        let dx_flat = cg_solve(
+            |x| matvec(&h_global, x),
+            &neg_g,
+            &vec![0.0; n_dof],
+            DEFAULT_TOL,
+            DEFAULT_MAX_ITERS,
+        )
+        .x;
+        // Apply the increment + measure ‖dx‖∞.
+        let mut max_abs: Real = 0.0;
+        for v in 0..n_verts {
+            let dx = Vec3::new(dx_flat[v * 3], dx_flat[v * 3 + 1], dx_flat[v * 3 + 2]);
+            deformed[v] += dx;
+            let m = dx.x.abs().max(dx.y.abs()).max(dx.z.abs());
+            if m > max_abs {
+                max_abs = m;
+            }
+        }
+        if max_abs < tol {
+            break;
+        }
+    }
+    deformed
+}
+
 /// Returns a fresh `BsrMatrix` representing `α·A + β·B` where `A` and
 /// `B` share the same `(B = 1)` block size. Patterns are unioned by
 /// re-emitting the triplets through [`BsrMatrix::from_triplets`] which

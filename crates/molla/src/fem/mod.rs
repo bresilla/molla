@@ -82,9 +82,10 @@ pub use p2_element::{
     p2_tri_shape_gradients, P2DofMap, TET_EDGES, TRI_EDGES,
 };
 pub use solver::{
-    solve_nonlinear_static, solve_steady_state, solve_steady_state_vector,
-    solve_transient, solve_wave_transient, WaveStepResult,
-    NEWMARK_BETA_DEFAULT, NEWMARK_GAMMA_DEFAULT,
+    solve_distortion_minimization, solve_nonlinear_static,
+    solve_steady_state, solve_steady_state_vector, solve_transient,
+    solve_wave_transient, WaveStepResult, NEWMARK_BETA_DEFAULT,
+    NEWMARK_GAMMA_DEFAULT,
 };
 pub use stokes::{
     apply_stokes_velocity_bcs, assemble_div_block, assemble_velocity_block,
