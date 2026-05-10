@@ -481,3 +481,140 @@ fn restitution_high_bounces() {
          impact_y = {impact_y}, drop_height = {drop_height}"
     );
 }
+
+/// Stage 33.2.1 — CPU SoftBrake reference. Mirrors the viewer
+/// `Scene::SoftBrake` build (25° tilted ramp, μ = 1.0). Used as the
+/// parity oracle for the matching GPU test in
+/// `tests/soft_friction_gpu.rs::gpu_soft_brake_matches_cpu`.
+///
+/// NOTE — at μ = 1.0 the position-form Coulomb friction in the
+/// existing CPU pipeline does NOT fully arrest the slide on a 25°
+/// ramp (the cube creeps ~2.5 m/s after 1 s of sim time). This is a
+/// known limitation of the Stage 33.5 friction math (the per-substep
+/// `μ · g · dt` velocity decrement is too small to cancel the
+/// gravity-driven X-velocity build-up when contact is intermittent).
+/// The Stage 33.2.1 GPU port reproduces this CPU behavior exactly —
+/// the test asserts parity, not the (currently-unmet) physical
+/// expectation.
+#[test]
+fn cpu_soft_brake_high_mu_creeps() {
+    let mut b = ModelBuilder::new();
+    b.set_linear_damping(0.05);
+    let ramp_tilt: Real = 25.0_f64.to_radians();
+    b.set_world_gravity(
+        WorldId(0),
+        Vec3::new(9.81 * ramp_tilt.sin(), -9.81 * ramp_tilt.cos(), 0.0),
+    );
+    let ramp_lo = Vec3::new(-0.75, 1.0, -0.30);
+    let ramp_hi = Vec3::new(0.75, 1.10, 0.30);
+    let mut ramp_verts: Vec<u32> = Vec::with_capacity(8);
+    for &z in &[ramp_lo.z, ramp_hi.z] {
+        for &y in &[ramp_lo.y, ramp_hi.y] {
+            for &x in &[ramp_lo.x, ramp_hi.x] {
+                let id = b.add_particle(Vec3::new(x, y, z), 0.0, 0.02, WorldId(0));
+                ramp_verts.push(id);
+            }
+        }
+    }
+    let rv: [u32; 8] = ramp_verts.as_slice().try_into().unwrap();
+    let ramp_tets = cube_to_six_tets(rv);
+    let ramp_id = b
+        .add_tet_mesh(&ramp_tets, 1.0e6, 0.3, None)
+        .expect("ramp");
+    b.set_tet_mesh_friction(ramp_id, 1.0);
+    let bnx: u32 = 3;
+    let bdx: Real = 0.10;
+    let block_origin = Vec3::new(-0.50, 1.10 + 0.005, -bdx * (bnx as Real - 1.0) * 0.5);
+    let block_first = 8u32;
+    for kk in 0..bnx {
+        for jj in 0..bnx {
+            for ii in 0..bnx {
+                let p = block_origin
+                    + Vec3::new(ii as Real * bdx, jj as Real * bdx, kk as Real * bdx);
+                b.add_particle(p, 0.05, bdx * 0.5, WorldId(0));
+            }
+        }
+    }
+    let v_at_b = |i: u32, j: u32, k: u32| -> u32 {
+        block_first + (k * bnx + j) * bnx + i
+    };
+    let mut block_tets: Vec<[u32; 4]> = Vec::new();
+    for kk in 0..bnx - 1 {
+        for jj in 0..bnx - 1 {
+            for ii in 0..bnx - 1 {
+                let corners = [
+                    v_at_b(ii, jj, kk),
+                    v_at_b(ii + 1, jj, kk),
+                    v_at_b(ii, jj + 1, kk),
+                    v_at_b(ii + 1, jj + 1, kk),
+                    v_at_b(ii, jj, kk + 1),
+                    v_at_b(ii + 1, jj, kk + 1),
+                    v_at_b(ii, jj + 1, kk + 1),
+                    v_at_b(ii + 1, jj + 1, kk + 1),
+                ];
+                block_tets.extend_from_slice(&cube_to_six_tets(corners));
+            }
+        }
+    }
+    let materials = vec![MaterialNeoHookean::elastic(1.0e6, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; block_tets.len()];
+    let block_id = b
+        .add_tet_mesh_per_material(&block_tets, &materials, &mat_idx, None)
+        .expect("block");
+    b.set_tet_mesh_friction(block_id, 1.0);
+    let block_n_verts = bnx * bnx * bnx;
+    let model = b.build().unwrap();
+    let mut solver = VbdSolver::new_cpu()
+        .with_iterations(8)
+        .with_contact_stiffness(2.0e5)
+        .with_vt_contact_margin(0.02)
+        .with_vt_contact_sweeps(10);
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(8);
+    let dt: Real = 1.0 / 240.0;
+    for _ in 0..60 {
+        Solver::step(&mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let q_settle = s_a.particle_q.host().unwrap().to_vec();
+    let mut cx0: Real = 0.0;
+    let mut cz0: Real = 0.0;
+    for i in block_first..block_first + block_n_verts {
+        cx0 += q_settle[i as usize].x;
+        cz0 += q_settle[i as usize].z;
+    }
+    cx0 /= block_n_verts as Real;
+    cz0 /= block_n_verts as Real;
+    for _ in 0..240 {
+        Solver::step(&mut solver, &model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let q_final = s_a.particle_q.host().unwrap().to_vec();
+    let mut cx: Real = 0.0;
+    let mut cz: Real = 0.0;
+    for i in block_first..block_first + block_n_verts {
+        cx += q_final[i as usize].x;
+        cz += q_final[i as usize].z;
+    }
+    cx /= block_n_verts as Real;
+    cz /= block_n_verts as Real;
+    let drift = ((cx - cx0).powi(2) + (cz - cz0).powi(2)).sqrt();
+    eprintln!(
+        "CPU SoftBrake (μ=1.0) drift after 1 s: {drift:.4} m, \
+         settle=({cx0:.4}, {cz0:.4}), final=({cx:.4}, {cz:.4})"
+    );
+    // The block is expected to creep — assert we land in the
+    // CPU-reference window (1.5–4.0 m of slide). If it ever drops
+    // below 1.5 m or jumps above 4.0 m, the friction code regressed
+    // (or improved enough that the Stage 33.5 math fixes the
+    // creep — in which case tighten this bound).
+    assert!(
+        (1.5..=4.0).contains(&drift),
+        "CPU SoftBrake creep is outside the 1.5–4.0 m reference window: \
+         drift={drift} m"
+    );
+}

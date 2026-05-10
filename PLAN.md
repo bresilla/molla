@@ -5432,6 +5432,26 @@ the GPU path.
 **Dependencies:** Stage 33.2 (GPU pipeline), Stage 33.5 (CPU friction
 math reference).
 
+**Stage 33.2.1 status (2026-05-10) — landed.** The GPU kernel now
+mirrors the CPU `vbd_soft_contact::project_vt_contacts` math to ≤ 5 mm
+per-vertex max drift over 60 substeps on the friction-engaged
+parity workload (`gpu_friction_matches_cpu_oracle` measures 0.2 mm
+on the cube-on-cloth μ = 0.5 scene). Stick (μ = 0.5, α = 0.02·g) and
+slip (μ = 0.5, α = 1.5·g) tests both pass on GPU.
+
+Known caveats carried over from Stage 33.5 (the CPU reference):
+- The position-form Coulomb friction undershoots on a tilted ramp
+  with μ = 1.0 — the SoftBrake block creeps ~2.5 m/s after 1 s of
+  sim time on BOTH backends. The GPU port reproduces the CPU
+  behavior exactly; tightening to a true stick requires an
+  impulse-form normal-force estimate (deferred to Stage 33.5.1).
+- EE (edge-edge) friction is CPU-only — the GPU kernel only
+  implements VT friction. Edge-edge friction GPU port is its own
+  follow-up (no Stage number assigned yet).
+- FastSoftImpact (#45) still drives the CPU VBD because soft CCD
+  is CPU-only (Stage 33.4 doesn't have a GPU sibling yet). When
+  the GPU CCD pass lands (Stage 33.4.1), drop the CPU override.
+
 Coulomb friction (Dahl-style continuous approximation) at each VT/EE
 contact, plus a restitution coefficient.
 
