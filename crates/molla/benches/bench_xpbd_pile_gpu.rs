@@ -69,6 +69,16 @@ fn bench_pile_gpu(c: &mut Criterion) {
     group.sample_size(10).measurement_time(Duration::from_secs(30));
     for &n in &[1_000usize, 10_000, 100_000, 1_000_000] {
         let mut model = build_pile(n);
+        // Verify the pile actually allocates `n` bodies. The ground
+        // plane on shape 0 has body_id NONE so it does NOT count
+        // toward `body_count`; build_pile breaks the cube-grid loop
+        // exactly at `placed == n`, so this should always print
+        // body_count = n. Stderr-only so it doesn't pollute the
+        // criterion stdout report.
+        eprintln!(
+            "bench_xpbd_pile_gpu: requested n={n} → body_count={}",
+            model.body_count
+        );
         model.upload_to_device(&device, &queue).unwrap();
         let mut s_a = model.state().unwrap();
         let mut s_b = model.state().unwrap();
