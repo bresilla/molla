@@ -4,6 +4,7 @@
 //! `gpu` feature + `#[ignore]`).
 
 use molla::compute::tile_convolution::{self, Kernel5};
+use molla::compute::tile_mcgp::{self, McgpConfig};
 use molla::compute::{tile_block_cholesky, tile_filtering, tile_matmul, tile_stream_compaction};
 
 /// Tiny LCG so tests are dependency-free and reproducible.
@@ -363,4 +364,87 @@ fn tile_stream_compaction_mask_to_u32_round_trips() {
     let mask = vec![true, false, true, true, false];
     let u = tile_stream_compaction::mask_to_u32(&mask);
     assert_eq!(u, vec![1, 0, 1, 1, 0]);
+}
+
+// ── F — Monte Carlo gradient propagation ─────────────────────────────
+
+/// Quadratic loss `f(p) = Σ (p_i − target_i)²`. Closed-form gradient
+/// is `2 (p − target)`, perfectly smooth — ideal SPSA target.
+fn quadratic_loss(p: &[f64], target: &[f64]) -> f64 {
+    p.iter().zip(target.iter()).map(|(a, b)| (a - b).powi(2)).sum()
+}
+
+#[test]
+fn tile_mcgp_quadratic_within_tolerance() {
+    // Small-target quadratic so the per-component gradient magnitudes
+    // are bounded, keeping the SPSA variance manageable. With
+    // ‖∇f‖² ≈ 1.6 the per-sample stdev of any component estimate is
+    // about 1.3, and N=200k brings the CI well inside 1e-2.
+    let target: Vec<f64> = vec![0.5, 0.2, -0.3, 0.1];
+    let params: Vec<f64> = vec![0.0, 0.0, 0.0, 0.0];
+    let f = |p: &[f64]| quadratic_loss(p, &target);
+
+    let cfg = McgpConfig {
+        n_samples: 200_000,
+        epsilon: 1.0e-3,
+        seed: 0xCAFE,
+    };
+    let mc_grad = tile_mcgp::mcgp_estimate(&f, &params, &cfg);
+    let analytic: Vec<f64> = params
+        .iter()
+        .zip(target.iter())
+        .map(|(a, b)| 2.0 * (a - b))
+        .collect();
+
+    for (g, a) in mc_grad.iter().zip(analytic.iter()) {
+        assert!(
+            (g - a).abs() < 1.0e-2,
+            "MC grad {g} vs analytic {a} differ by {}",
+            (g - a).abs()
+        );
+    }
+}
+
+#[test]
+fn tile_mcgp_matches_finite_diff_on_smooth_loss() {
+    // Same quadratic but verified against the central-FD reference
+    // exposed by the module itself.
+    let target: Vec<f64> = vec![1.0, 2.0, 3.0];
+    let params: Vec<f64> = vec![0.0, 0.0, 0.0];
+    let f = |p: &[f64]| quadratic_loss(p, &target);
+
+    let fd = tile_mcgp::finite_diff_central(&f, &params, 1.0e-3);
+    // Analytic = 2(p - target) = [-2, -4, -6].
+    let expected = vec![-2.0, -4.0, -6.0];
+    for (g, e) in fd.iter().zip(expected.iter()) {
+        assert!((g - e).abs() < 1.0e-4);
+    }
+}
+
+#[test]
+fn tile_mcgp_zero_samples_returns_zero_gradient() {
+    let params = vec![1.0, 2.0, 3.0];
+    let cfg = McgpConfig {
+        n_samples: 0,
+        epsilon: 1.0e-3,
+        seed: 1,
+    };
+    let f = |p: &[f64]| p.iter().sum();
+    let grad = tile_mcgp::mcgp_estimate(&f, &params, &cfg);
+    assert_eq!(grad, vec![0.0; 3]);
+}
+
+#[test]
+fn tile_mcgp_seed_is_deterministic() {
+    let target = vec![1.0_f64, -0.5, 0.25];
+    let params = vec![0.0_f64, 0.0, 0.0];
+    let cfg = McgpConfig {
+        n_samples: 256,
+        epsilon: 1.0e-3,
+        seed: 0xABCD_1234,
+    };
+    let f = |p: &[f64]| quadratic_loss(p, &target);
+    let g1 = tile_mcgp::mcgp_estimate(&f, &params, &cfg);
+    let g2 = tile_mcgp::mcgp_estimate(&f, &params, &cfg);
+    assert_eq!(g1, g2);
 }
