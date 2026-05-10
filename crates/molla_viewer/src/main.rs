@@ -2400,6 +2400,32 @@ impl Sim {
         model.contact_margin = 0.02;
         model.linear_damping = LINEAR_DAMPING;
 
+        // Stage hardening: per-shape friction/restitution were baked
+        // at `b.build()` from the BUILDER's default (0.5 / 0.0), not
+        // the viewer's preferred PLANE_FRICTION / PLANE_RESTITUTION.
+        // Overwrite any default-valued slot so the constants above
+        // actually reach the contact resolver. Per-shape overrides
+        // (e.g. `Shapes` scene's rolling friction, BrickWall's
+        // explicit values via `set_shape_friction*`) are preserved
+        // by skipping the rewrite when the slot diverges from 0.5
+        // (the builder default). We can't tell "user set 0.5
+        // explicitly" from "default 0.5", but no scene currently does
+        // that, so the heuristic is safe.
+        if let Ok(fric) = model.shape_friction.host_mut() {
+            for v in fric.iter_mut() {
+                if (*v - 0.5).abs() < 1e-9 {
+                    *v = PLANE_FRICTION;
+                }
+            }
+        }
+        if let Ok(rest) = model.shape_restitution.host_mut() {
+            for v in rest.iter_mut() {
+                if v.abs() < 1e-9 {
+                    *v = PLANE_RESTITUTION;
+                }
+            }
+        }
+
         let mut state_a = model.state().expect("state");
         let mut state_b = model.state().expect("state");
         let mut control = model.control();
