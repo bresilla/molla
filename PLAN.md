@@ -5260,6 +5260,161 @@ quartic chains converge in at most a few iterations.
   without taking a SystemParam.
 - `Makefile` — `test-equality-joint-mimic-gpu` lane.
 
+### Stage 33 — Soft-vs-soft contact (cross-mesh VT) — v2 foundation
+
+**Why.** Today VBD has soft-vs-rigid contact (jelly-on-sphere, cloth-on-
+sphere) but no cross-mesh path: the viewer's `SoftbodyDrop` scene
+(jelly cube falling onto a hanging cloth) shows the cube falling
+straight through the cloth. v1 simply didn't ship vertex-triangle
+contact between two soft meshes. Stage 33 ships the foundational
+piece — VT (vertex-on-triangle) penalty contact between any two soft
+meshes (tet boundary tris + cloth tris, all interchangeable).
+
+**Deliverables (v1, CPU-correct first; GPU port is Stage 33.2):**
+
+- New `Model.soft_surfaces: Vec<SoftSurface>` registry + `SoftSurface
+  { kind: TetMesh | Cloth, vertex_buf_id, tri_buf_id, vertex_count,
+  tri_count }`. Each `add_tet_mesh*` / `add_cloth_mesh*` builder call
+  pushes a `SoftSurface` entry, with the tet variant computing the
+  boundary (outer-surface) triangles via the standard "tris that
+  belong to exactly one tet" pass.
+- LBVH refit per substep over all soft tris (reuses Stage 19.1's
+  `LbvhKernel`). New `crates/molla/src/geometry/soft_bvh.rs` wraps
+  the existing kernel for soft-mesh AABBs. Cost target: < 1 ms for
+  10k soft tris.
+- New `crates/molla/src/solvers/vbd_vt_contact.rs` with
+  `gather_vt_contacts(model, state, margin) -> Vec<VtContact>`:
+  for each soft vertex, BVH query → candidate tris → barycentric
+  closest point → if `signed_dist < margin` emit a contact with
+  `(vert_id, tri_id, bary, normal, depth)`. Same-mesh adjacency
+  filter (vertex part of the triangle) deferred to Stage 33.3
+  self-collision.
+- VBD per-vertex AVBD penalty extended: each `VtContact` adds an
+  energy block `½ k (depth)² · n` to the vertex AND an opposing
+  energy distributed across the triangle's 3 verts via barycentric
+  weights. Two-way force; reuses Stage 20.3's coloring (extended to
+  consider VT pairs).
+- New `Scene::SoftbodyDrop` (#43) becomes the demo: jelly cube must
+  rest ON the cloth, not pass through. Pane: contact-count readout +
+  `k_contact` slider.
+
+**Tests** (`crates/molla/tests/soft_vt_contact.rs`, CPU-only first):
+
+- `tet_vertex_on_cloth_triangle_penalty_holds_under_gravity` — tet
+  jelly cube + 1 m horizontal cloth strip pinned at edges; over 600
+  substeps the lowest cube vertex stays within `cloth_y +/- 5 mm`.
+- `cloth_particle_on_tet_face_two_way` — single cloth particle
+  released onto a kinematic tet; the tet block moves down by an
+  amount proportional to particle weight (two-way coupling check).
+- `vt_contacts_zero_when_far_apart` — two soft meshes 5 m apart;
+  `gather_vt_contacts` returns empty in < 50 µs (BVH culling works).
+
+**Caveats expected at v1:**
+- VT only — no edge-edge (cloth-fold pokethrough possible). Stage 33.1.
+- CPU-correct first; GPU port = Stage 33.2.
+- Self-collision deferred to Stage 33.3.
+- No CCD (Stage 33.4) — fast-moving impacts may tunnel.
+- No friction at soft contacts — pure normal force only (Stage 33.5).
+
+**Dependencies:** Stage 19.1 (LBVH), Stage 20.2 (VBD tets), Stage 20.3
+(per-tet plasticity + AVBD penalty), Stage 20.4 (CPU `project_*`
+host-side contacts — provides the structural template).
+
+### Stage 33.1 — Edge-edge (EE) soft contact — v2 follow-up
+
+VT alone misses cloth folds passing through tets sideways. EE catches
+the case where two edges (one from each soft mesh) cross.
+
+**Deliverables:**
+- Extend `gather_vt_contacts` → `gather_soft_contacts` returning
+  `Vec<SoftContact { Vt | Ee }>`.
+- New EE narrow-phase: for each soft edge, BVH query other-mesh
+  edges; nearest-point-between-segments + `dist < margin` → emit
+  `EeContact { edge_a_id, edge_b_id, t_a, t_b, normal, depth }`.
+- VBD penalty per-edge: the energy is distributed across all 4 verts
+  of the two edges via segment-segment barycentric weights.
+- Coloring updated to also exclude vertex pairs sharing an EE
+  contact.
+
+**Tests:**
+- `cloth_fold_through_tet_resolved_by_ee` — narrow cloth fold pushed
+  sideways through a tet block; without EE the fold passes through;
+  with EE it stays out.
+
+**Dependencies:** Stage 33.
+
+### Stage 33.2 — GPU port of soft contact pipeline — v2 hot path
+
+Today Stage 20.4 tet-tet runs `particle_q.download → CPU
+project → upload` per substep. Stage 33 ships VT contact CPU-side.
+33.2 ports both to WGSL so soft-on-soft no longer pays the per-
+substep round-trip.
+
+**Deliverables:**
+- New `crates/molla/shaders/soft_vt_contact.wgsl` with three
+  entry points: `gather_vt_aabbs` (per-vert AABB write), `gather_vt`
+  (BVH query + barycentric closest-point + `SoftContact` emit),
+  `apply_vt_penalty` (per-color VT energy contribution to the AVBD
+  inner solve).
+- New `crates/molla/src/kernels/soft_vt_contact.rs` dispatcher;
+  bind groups for the soft-surface registry + LBVH outputs.
+- VBD GPU dispatcher (`solvers/vbd.rs:407-499`) drops the host-side
+  `project_tet_tet_contacts + project_sdf_backings` round-trip;
+  `apply_vt_penalty` runs inside the existing per-color solve.
+- Tests: `tests/soft_vt_contact_gpu.rs` mirroring the CPU tests
+  with `#[ignore]` GPU markers.
+
+**Dependencies:** Stage 33 (VT pipeline), Stage 19.1 (LBVH GPU).
+
+### Stage 33.3 — Soft self-collision — v2 robustness
+
+Same VT/EE pipeline as Stage 33 / 33.1, but allow a mesh to find
+contacts against ITSELF (cloth folding onto itself, jelly squeezing
+on itself).
+
+**Deliverables:**
+- Adjacency filter: per-vertex set of "incident triangles" (verts
+  that triangle includes); query result excludes those tris.
+- Same for EE: per-edge set of "incident edges sharing a vertex".
+- New scene `Scene::ClothCollar` — pinned cloth tube collapses onto
+  itself; without self-collision it interpenetrates; with it it
+  stacks.
+
+**Dependencies:** Stage 33, 33.1.
+
+### Stage 33.4 — Continuous collision detection (CCD) for soft — v2 stability
+
+Fast-moving soft bodies can tunnel through thin cloth. CCD = pre-
+substep sweep test.
+
+**Deliverables:**
+- New `crates/molla/src/geometry/soft_ccd.rs`: VT-CCD root-finding
+  (cubic in `t ∈ [0, 1]` per vertex-tri pair) + EE-CCD (analytic
+  4D quartic). Reuses BVH but on swept AABBs.
+- VBD pre-substep step: compute earliest TOI per vert, advance
+  state to `t = TOI - eps`, then run normal substep from there.
+- Scene `Scene::FastSoftImpact` — small cloth strip + heavy tet
+  cube moving at 5 m/s; without CCD they pass through.
+
+**Dependencies:** Stage 33 (provides VT/EE pipelines).
+
+### Stage 33.5 — Friction + restitution at soft contacts — v2 fidelity
+
+Coulomb friction (Dahl-style continuous approximation) at each VT/EE
+contact, plus a restitution coefficient.
+
+**Deliverables:**
+- Per-contact friction state stored across substeps (warm start).
+- Per-contact `restitution` parameter; cloth defaults near 0.0,
+  jelly defaults near 0.1.
+- VBD penalty extended with tangential friction force; per-color
+  Jacobi sweep includes friction projection.
+- Scene `Scene::SoftBrake` — soft block sliding down a soft ramp
+  with adjustable friction-coefficient slider; should stick, slip,
+  and slide depending on the value.
+
+**Dependencies:** Stage 33.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
