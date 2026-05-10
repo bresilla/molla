@@ -694,6 +694,14 @@ impl Solver for VbdSolver {
                     }
                     let soft_bvh = gpu.soft_bvh_gpu.as_mut().unwrap();
                     let vt_kernel = gpu.soft_vt_kernel.as_ref().unwrap();
+                    // Stage 33.2.1 — snapshot pre-substep state (q + qd)
+                    // BEFORE the sweep loop. The position-form Coulomb
+                    // friction in `apply_vt_penalty` reads the snapshot
+                    // for tangential drift; `commit_velocity_recovery`
+                    // reads it for restitution-aware bounce targets.
+                    // Also resets the per-vertex friction/restitution/
+                    // contact_normal_sum scratches.
+                    vt_kernel.dispatch_snapshot_pre_step(state_in)?;
                     // Run the gather+apply+commit Jacobi-style sweep
                     // `vt_contact_sweeps` times per substep — matches
                     // the CPU `project_vt_contacts` semantics. Each
@@ -702,7 +710,7 @@ impl Solver for VbdSolver {
                     // converge.
                     let n_sweeps = self.vt_contact_sweeps.max(1);
                     let mut last_count = 0u32;
-                    for _ in 0..n_sweeps {
+                    for sweep_idx in 0..n_sweeps {
                         // 1) compute per-tri AABBs from the current
                         //    state.particle_q (writes directly into the
                         //    LBVH primitive_aabb buffer).
@@ -716,6 +724,8 @@ impl Solver for VbdSolver {
                             soft_bvh,
                             self.vt_contact_margin,
                             self.contact_stiffness,
+                            dt_sub as f64,
+                            sweep_idx == 0,
                         )?;
                         last_count = stats.contact_count;
                         if stats.contact_count == 0 {
@@ -727,6 +737,21 @@ impl Solver for VbdSolver {
                         }
                     }
                     self.last_vt_contact_count = last_count as usize;
+                    // Stage 33.2.1 — restitution-aware velocity recovery
+                    // + Coulomb tangential damping (one-shot, after the
+                    // sweep loop). No-op when no contacts engaged
+                    // because the contact_normal_sum scratch stays at
+                    // zero.
+                    if last_count > 0 {
+                        vt_kernel.dispatch_commit_velocity_recovery(
+                            model,
+                            state_out,
+                            soft_bvh,
+                            self.vt_contact_margin,
+                            self.contact_stiffness,
+                            dt_sub as f64,
+                        )?;
+                    }
                     // commit_dq mutated state_out.particle_q +
                     // particle_qd in place. The Buffer<Vec3> wrapper
                     // still thinks the host is canonical — mark them

@@ -65,17 +65,19 @@ struct LbvhNode {
 };
 
 /// `kind` mirrors the host `SoftSurfaceKind` enum (0 = TetMesh,
-/// 1 = Cloth). `_pad[3]` brings the struct to 32 bytes for clean
-/// WGSL alignment.
+/// 1 = Cloth). 32 bytes total — Stage 33.2.1 reused two of the
+/// padding slots for `friction` + `restitution` so the kernel can
+/// read per-surface contact material properties without a separate
+/// upload.
 struct SoftSurfaceGpu {
     kind:          u32,
     vertex_offset: u32,
     vertex_count:  u32,
     tri_offset:    u32,
     tri_count:     u32,
+    friction:      f32,
+    restitution:   f32,
     pad0:          u32,
-    pad1:          u32,
-    pad2:          u32,
 };
 
 /// One emitted VT contact. Fields mirror the CPU `VtContact` exactly
@@ -116,6 +118,16 @@ struct Uniforms {
     /// LBVH primitive count — needed by the BVH traversal to detect
     /// leaves (leaves live at `[0, primitive_count)`).
     primitive_count: u32,
+    /// Stage 33.2.1 — substep length (s). Used by the position-form
+    /// Coulomb friction path for the Dahl smoothing factor
+    /// `tanh(|dq_t| / (v_eps · dt))`.
+    dt:              f32,
+    /// Stage 33.2.1 — `1` on the first sweep of a substep (so the
+    /// position-form friction kicks in only once); `0` afterwards.
+    /// Mirrors CPU `vbd_soft_contact::project_vt_contacts`.
+    is_first_sweep:  u32,
+    pad0:            u32,
+    pad1:            u32,
 };
 
 // ── Group 0: per-particle state + delta scratch ──────────────────────
@@ -152,6 +164,30 @@ struct Uniforms {
 @group(4) @binding(0) var<storage, read_write> out_contacts:      array<VtContactGpu>;
 @group(4) @binding(1) var<storage, read_write> out_contact_count: array<atomic<u32>>;
 @group(4) @binding(2) var<uniform>             u: Uniforms;
+
+// ── Group 5: friction state — Stage 33.2.1 ──────────────────────────
+//
+// `pre_step_q` / `pre_step_qd` are pre-substep snapshots populated by
+// the Rust-side `dispatch_snapshot_pre_step` (one
+// `command_encoder.copy_buffer_to_buffer` per buffer). They give the
+// position-form Coulomb friction path a baseline for the tangential
+// drift `dq_t = q - q_pre` and the velocity-recovery pass the
+// pre-substep normal velocity `vn_pre`.
+//
+// `friction_per_v` / `restitution_per_v` are scattered per-vertex MAX
+// values (CAS-loop atomic-max on the bit-cast f32 — WGSL has no
+// `atomicMax<f32>`). One contact's μ / e wins per vertex per substep
+// — matches the CPU `friction_per_v[i] = max(friction_per_v[i],
+// c.friction)` pattern in `project_vt_contacts`.
+//
+// `contact_normal_sum` accumulates the per-vertex contact-normal
+// vector (vertex side `+n`, tri side `-n`); the velocity-recovery
+// pass uses the normalised sum as the working contact normal.
+@group(5) @binding(0) var<storage, read>       pre_step_q:         array<vec4<f32>>;
+@group(5) @binding(1) var<storage, read>       pre_step_qd:        array<vec4<f32>>;
+@group(5) @binding(2) var<storage, read_write> friction_per_v:     array<atomic<u32>>;
+@group(5) @binding(3) var<storage, read_write> restitution_per_v:  array<atomic<u32>>;
+@group(5) @binding(4) var<storage, read_write> contact_normal_sum: array<atomic<u32>>;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -420,6 +456,12 @@ fn gather_vt(@builtin(global_invocation_id) gid: vec3<u32>) {
 // `atomicAdd` semantics emulated via `atomicCompareExchangeWeak` on
 // the f32-bit-cast u32 view of `particle_dq`. Atomics serialise the
 // writes so colouring is unnecessary.
+//
+// Stage 33.2.1 — also applies the position-form Coulomb friction tug
+// (Dahl-smoothed, capped at `μ · push_n`) on the FIRST sweep, and
+// scatters the per-vertex friction / restitution / contact-normal
+// state so the post-sweep `commit_velocity_recovery` kernel can apply
+// the matching velocity-form bounce + tangential damping.
 @compute @workgroup_size(64)
 fn apply_vt_penalty(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -447,23 +489,103 @@ fn apply_vt_penalty(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ratios (matches CPU `project_vt_contacts`).
     let push = depth * 0.5;
     let alpha = w_v / total;
+    let f0 = b0 * b0 * w0 / total;
+    let f1 = b1 * b1 * w1 / total;
+    let f2 = b2 * b2 * w2 / total;
 
     // Vertex side: +α·push along n.
     if (w_v > 0.0) {
-        atomic_add_f32_xyz(v, n * (alpha * push));
+        atomic_add_f32_dq_xyz(v, n * (alpha * push));
     }
     if (w0 > 0.0) {
-        let f0 = b0 * b0 * w0 / total;
-        atomic_add_f32_xyz(i0, -n * (f0 * push));
+        atomic_add_f32_dq_xyz(i0, -n * (f0 * push));
     }
     if (w1 > 0.0) {
-        let f1 = b1 * b1 * w1 / total;
-        atomic_add_f32_xyz(i1, -n * (f1 * push));
+        atomic_add_f32_dq_xyz(i1, -n * (f1 * push));
     }
     if (w2 > 0.0) {
-        let f2 = b2 * b2 * w2 / total;
-        atomic_add_f32_xyz(i2, -n * (f2 * push));
+        atomic_add_f32_dq_xyz(i2, -n * (f2 * push));
     }
+
+    // Stage 33.2.1 — pair-rule friction + restitution lookup. The CPU
+    // does the same `μ = sqrt(μ_a · μ_b)` / `e = min(e_a, e_b)`
+    // combination in `gather_vt_contacts`. We do it inside the apply
+    // kernel so the gather emit struct stays unchanged (no new
+    // VtContactGpu fields).
+    let v_surface = c.vertex_surface;
+    let tri_surface = c.tri_surface;
+    let max_surf = u.surface_count;
+    var mu: f32 = 0.0;
+    var e_min: f32 = 0.0;
+    if (v_surface < max_surf && tri_surface < max_surf) {
+        let mu_v = max(soft_surfaces[v_surface].friction, 0.0);
+        let mu_t = max(soft_surfaces[tri_surface].friction, 0.0);
+        mu = sqrt(mu_v * mu_t);
+        e_min = min(
+            clamp(soft_surfaces[v_surface].restitution, 0.0, 1.0),
+            clamp(soft_surfaces[tri_surface].restitution, 0.0, 1.0),
+        );
+    }
+
+    // Position-form Coulomb friction — first sweep only (matches CPU
+    // `vbd_soft_contact::project_vt_contacts` `if sweep_idx == 0`).
+    if (mu > 0.0 && u.is_first_sweep != 0u) {
+        let q_v   = particle_q[v].xyz;
+        let q_0   = particle_q[i0].xyz;
+        let q_1   = particle_q[i1].xyz;
+        let q_2   = particle_q[i2].xyz;
+        let qp_v  = pre_step_q[v].xyz;
+        let qp_0  = pre_step_q[i0].xyz;
+        let qp_1  = pre_step_q[i1].xyz;
+        let qp_2  = pre_step_q[i2].xyz;
+        let dq_v   = q_v - qp_v;
+        let dq_tri = (q_0 - qp_0) * b0 + (q_1 - qp_1) * b1 + (q_2 - qp_2) * b2;
+        var dq_t = dq_v - dq_tri;
+        // Project into the tangent plane.
+        dq_t = dq_t - n * dot(dq_t, n);
+        let dq_t_len = length(dq_t);
+        if (dq_t_len > 1.0e-9) {
+            let v_eps: f32 = 1.0e-3;
+            let coulomb_max = mu * abs(push);
+            let dt_safe = max(u.dt, 1.0e-6);
+            let dahl = tanh(dq_t_len / (v_eps * dt_safe));
+            let mag = min(dq_t_len * dahl, coulomb_max);
+            let push_t = -(dq_t / dq_t_len) * mag;
+            if (w_v > 0.0) {
+                atomic_add_f32_dq_xyz(v,   push_t * alpha);
+            }
+            if (w0 > 0.0) {
+                atomic_add_f32_dq_xyz(i0, -push_t * f0);
+            }
+            if (w1 > 0.0) {
+                atomic_add_f32_dq_xyz(i1, -push_t * f1);
+            }
+            if (w2 > 0.0) {
+                atomic_add_f32_dq_xyz(i2, -push_t * f2);
+            }
+        }
+    }
+
+    // Per-vertex scatter for the post-sweep velocity-recovery pass.
+    // - friction_per_v / restitution_per_v: atomic-max on bit-cast f32
+    //   (CAS loop because WGSL has no atomicMax for floats). Both μ
+    //   and e are non-negative so the unsigned u32 bit-pattern compare
+    //   is monotonic with the f32 value (IEEE 754 ordering for non-
+    //   negative reals).
+    // - contact_normal_sum: vertex side gets `+n`, tri side gets `-n`
+    //   per the CPU `project_vt_contacts` accumulator.
+    atomic_max_f32_friction(v,     mu);
+    atomic_max_f32_friction(i0,    mu);
+    atomic_max_f32_friction(i1,    mu);
+    atomic_max_f32_friction(i2,    mu);
+    atomic_max_f32_restitution(v,  e_min);
+    atomic_max_f32_restitution(i0, e_min);
+    atomic_max_f32_restitution(i1, e_min);
+    atomic_max_f32_restitution(i2, e_min);
+    atomic_add_f32_normal_xyz(v,   n);
+    atomic_add_f32_normal_xyz(i0, -n);
+    atomic_add_f32_normal_xyz(i1, -n);
+    atomic_add_f32_normal_xyz(i2, -n);
 }
 
 // ── Entry: commit accumulated dq into q + zero scratch ───────────────
@@ -473,6 +595,11 @@ fn apply_vt_penalty(@builtin(global_invocation_id) gid: vec3<u32>) {
 // clean slate. Non-atomic — each thread owns one particle, so there
 // are no races at this stage (reads of `particle_dq` happen-after
 // the apply pass via the queue.submit boundary between dispatches).
+//
+// Stage 33.2.1 — dropped the per-sweep dq-direction velocity damping
+// in favour of the post-sweep `commit_velocity_recovery` entry point,
+// which uses the proper per-vertex `contact_normal_sum` + restitution
+// + friction (matching the CPU `project_vt_contacts` semantics).
 @compute @workgroup_size(64)
 fn commit_dq(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v = gid.x;
@@ -486,52 +613,174 @@ fn commit_dq(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dx = bitcast<f32>(dx_bits);
     let dy = bitcast<f32>(dy_bits);
     let dz = bitcast<f32>(dz_bits);
+    atomicStore(&particle_dq[base + 0u], 0u);
+    atomicStore(&particle_dq[base + 1u], 0u);
+    atomicStore(&particle_dq[base + 2u], 0u);
     if (dx == 0.0 && dy == 0.0 && dz == 0.0) { return; }
     let dq = vec3<f32>(dx, dy, dz);
     let q_old = particle_q[v].xyz;
     particle_q[v] = vec4<f32>(q_old + dq, 0.0);
-    // Velocity damping along the dq direction. CPU
-    // `project_vt_contacts` zeroes the inward velocity component
-    // along the per-particle contact-normal sum (vertex side: +n;
-    // tri side: -n weighted by bary). The per-substep accumulated
-    // dq is a mass-weighted proxy for that direction (same sign on
-    // each side — vertex moves +n·α·push, tri verts move
-    // -n·β_i·push). Project out the inward component
-    // (negative-dq direction) of velocity.
-    let dq_len2 = dot(dq, dq);
-    if (dq_len2 > 1.0e-20 && particle_inv_mass[v] > 0.0) {
-        let n_dir = dq / sqrt(dq_len2);
-        let qd_old = particle_qd[v].xyz;
-        let vn = dot(qd_old, n_dir);
-        if (vn < 0.0) {
-            // Inward velocity (against push direction) — zero it.
-            particle_qd[v] = vec4<f32>(qd_old - n_dir * vn, 0.0);
+}
+
+// ── Entry: post-sweep velocity recovery (Stage 33.2.1) ───────────────
+//
+// One thread per particle. After the per-sweep gather → apply →
+// commit_dq loop completes, we apply the velocity-form restitution +
+// Coulomb friction in a single pass. Mirrors the post-sweep velocity
+// block in `vbd_soft_contact::project_vt_contacts`.
+//
+// Reads:
+//   - pre_step_qd[v]            — pre-substep velocity (`vn_pre` source)
+//   - friction_per_v[v]         — max μ across the substep
+//   - restitution_per_v[v]      — max e across the substep
+//   - contact_normal_sum[v]     — accumulated normal direction
+// Writes:
+//   - particle_qd[v]
+// Then resets the friction/restitution/contact_normal_sum scratches
+// (we already do this on the host via `clear_buffer` at substep start;
+// resetting here too is defensive in case the snapshot path is
+// skipped). Actually skipped — host ownership is the source of truth
+// for the next substep's clean slate.
+@compute @workgroup_size(64)
+fn commit_velocity_recovery(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let v = gid.x;
+    if (v >= u.particle_count) { return; }
+    let inv_m = particle_inv_mass[v];
+    if (inv_m <= 0.0) { return; }
+    // Read the per-vertex contact-normal sum.
+    let base = v * 4u;
+    let nx_bits = atomicLoad(&contact_normal_sum[base + 0u]);
+    let ny_bits = atomicLoad(&contact_normal_sum[base + 1u]);
+    let nz_bits = atomicLoad(&contact_normal_sum[base + 2u]);
+    let n_sum = vec3<f32>(
+        bitcast<f32>(nx_bits),
+        bitcast<f32>(ny_bits),
+        bitcast<f32>(nz_bits),
+    );
+    let n_len2 = dot(n_sum, n_sum);
+    if (n_len2 < 1.0e-12) { return; }
+    let n = n_sum / sqrt(n_len2);
+
+    let qd_pre = pre_step_qd[v].xyz;
+    let vn_pre = dot(qd_pre, n);
+    var v_now = particle_qd[v].xyz;
+    let vn_now = dot(v_now, n);
+
+    let e_bits = atomicLoad(&restitution_per_v[v]);
+    let mu_bits = atomicLoad(&friction_per_v[v]);
+    let e = bitcast<f32>(e_bits);
+    let mu = bitcast<f32>(mu_bits);
+
+    // Restitution-aware normal velocity recovery.
+    if (vn_pre < 0.0) {
+        let target_vn = -e * vn_pre;
+        if (vn_now < target_vn) {
+            v_now = v_now + n * (target_vn - vn_now);
+        }
+    } else if (vn_now < 0.0) {
+        // Vertex was already moving outward pre-step but the elastic
+        // sweep pushed it inward — clamp the inward component so the
+        // contact constraint still holds (zero-bounce limit).
+        v_now = v_now - n * vn_now;
+    }
+
+    // Coulomb tangential damping. `μ · g · dt` is the per-substep
+    // velocity decrement (g = 9.81 m/s² as per the CPU reference).
+    if (mu > 0.0) {
+        let v_t = v_now - n * dot(v_now, n);
+        let v_t_len = length(v_t);
+        if (v_t_len > 1.0e-9) {
+            let dv_t_max = mu * 9.81 * u.dt;
+            let dv_t = min(dv_t_max, v_t_len);
+            v_now = v_now - (v_t / v_t_len) * dv_t;
         }
     }
-    atomicStore(&particle_dq[base + 0u], 0u);
-    atomicStore(&particle_dq[base + 1u], 0u);
-    atomicStore(&particle_dq[base + 2u], 0u);
+
+    particle_qd[v] = vec4<f32>(v_now, 0.0);
 }
 
 // WGSL has no `atomic<f32>`; emulate via CAS loop on the f32-bit-cast
 // `atomic<u32>` view of each lane (same pattern as `mpm.wgsl`).
-fn atomic_add_f32_xyz(particle: u32, delta: vec3<f32>) {
+// WGSL also forbids storage-buffer pointers in function arguments, so
+// we duplicate the helpers per-buffer (one for `particle_dq`, one
+// for `contact_normal_sum`, one for the per-vertex MAX scratches).
+
+fn atomic_add_f32_dq_xyz(particle: u32, delta: vec3<f32>) {
     // particle_dq layout matches particle_q: vec4<f32> = 16 bytes per
     // particle, bound as `array<atomic<u32>>` so 4 u32s per particle.
     // Lane 0 = .x, 1 = .y, 2 = .z, 3 = pad.
     let base = particle * 4u;
-    atomic_add_f32(base + 0u, delta.x);
-    atomic_add_f32(base + 1u, delta.y);
-    atomic_add_f32(base + 2u, delta.z);
+    atomic_add_f32_dq(base + 0u, delta.x);
+    atomic_add_f32_dq(base + 1u, delta.y);
+    atomic_add_f32_dq(base + 2u, delta.z);
 }
 
-fn atomic_add_f32(idx: u32, value: f32) {
+fn atomic_add_f32_dq(idx: u32, value: f32) {
     if (value == 0.0) { return; }
     var old_bits = atomicLoad(&particle_dq[idx]);
     loop {
         let old_f = bitcast<f32>(old_bits);
         let new_bits = bitcast<u32>(old_f + value);
         let r = atomicCompareExchangeWeak(&particle_dq[idx], old_bits, new_bits);
+        if (r.exchanged) {
+            return;
+        }
+        old_bits = r.old_value;
+    }
+}
+
+fn atomic_add_f32_normal_xyz(particle: u32, delta: vec3<f32>) {
+    let base = particle * 4u;
+    atomic_add_f32_normal(base + 0u, delta.x);
+    atomic_add_f32_normal(base + 1u, delta.y);
+    atomic_add_f32_normal(base + 2u, delta.z);
+}
+
+fn atomic_add_f32_normal(idx: u32, value: f32) {
+    if (value == 0.0) { return; }
+    var old_bits = atomicLoad(&contact_normal_sum[idx]);
+    loop {
+        let old_f = bitcast<f32>(old_bits);
+        let new_bits = bitcast<u32>(old_f + value);
+        let r = atomicCompareExchangeWeak(&contact_normal_sum[idx], old_bits, new_bits);
+        if (r.exchanged) {
+            return;
+        }
+        old_bits = r.old_value;
+    }
+}
+
+/// Atomic max on a non-negative f32 value bit-cast into atomic<u32>.
+/// IEEE-754 monotonic ordering: for non-negative reals the unsigned
+/// u32 bit-pattern compare matches the float compare. Two helpers
+/// (one for friction, one for restitution) because WGSL forbids
+/// storage-buffer pointer arguments. Inputs must be ≥ 0 (the kernel
+/// only ever scatters `μ ≥ 0` and `e ∈ [0, 1]`).
+fn atomic_max_f32_friction(idx: u32, value: f32) {
+    if (value <= 0.0) { return; }
+    let new_bits = bitcast<u32>(value);
+    var old_bits = atomicLoad(&friction_per_v[idx]);
+    loop {
+        if (new_bits <= old_bits) {
+            return;
+        }
+        let r = atomicCompareExchangeWeak(&friction_per_v[idx], old_bits, new_bits);
+        if (r.exchanged) {
+            return;
+        }
+        old_bits = r.old_value;
+    }
+}
+
+fn atomic_max_f32_restitution(idx: u32, value: f32) {
+    if (value <= 0.0) { return; }
+    let new_bits = bitcast<u32>(value);
+    var old_bits = atomicLoad(&restitution_per_v[idx]);
+    loop {
+        if (new_bits <= old_bits) {
+            return;
+        }
+        let r = atomicCompareExchangeWeak(&restitution_per_v[idx], old_bits, new_bits);
         if (r.exchanged) {
             return;
         }
