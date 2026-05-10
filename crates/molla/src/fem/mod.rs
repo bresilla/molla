@@ -74,9 +74,10 @@ pub use fft_ns::{
     solve_pressure_poisson_fft, FractionalStepConfig,
 };
 pub use element::{
+    compute_element_convection, compute_element_distortion_energy,
     compute_element_elasticity_stiffness, compute_element_mass,
     compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
-    compute_element_wave_stiffness,
+    compute_element_supg_convection, compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, FunctionSpace};
 #[cfg(feature = "gpu")]
@@ -88,9 +89,10 @@ pub use p2_element::{
     p2_tri_shape_gradients, P2DofMap, TET_EDGES, TRI_EDGES,
 };
 pub use solver::{
-    solve_nonlinear_static, solve_steady_state, solve_steady_state_vector,
-    solve_transient, solve_wave_transient, WaveStepResult,
-    NEWMARK_BETA_DEFAULT, NEWMARK_GAMMA_DEFAULT,
+    solve_distortion_minimization, solve_nonlinear_static,
+    solve_steady_state, solve_steady_state_vector, solve_transient,
+    solve_wave_transient, WaveStepResult, NEWMARK_BETA_DEFAULT,
+    NEWMARK_GAMMA_DEFAULT,
 };
 pub use stokes::{
     apply_stokes_velocity_bcs, assemble_convection_block, assemble_div_block,

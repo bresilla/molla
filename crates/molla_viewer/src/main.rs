@@ -18030,11 +18030,18 @@ fn warp_fem_diffusion_3d_pane(ui: &mut egui::Ui, st: &mut WarpFemDiffusion3DStat
 }
 
 // ── Scene 69: WarpFemConvDiff (steady advection-diffusion) ────────
+//
+// Stage 37.2 retrofit — the analytic-stub Laplacian was replaced by a
+// real convection-diffusion operator `(α∇² − b·∇)` with SUPG
+// stabilisation (`τ = h / (2|b|)`). Convection direction is +x; left
+// edge is the inflow Dirichlet (1.0) and right edge is the outflow
+// Dirichlet (0.0). The non-symmetric system is solved via BiCGSTAB.
 struct WarpFemConvDiffState {
     mesh: fem::FemMesh,
     /// Last steady-state solution.
     u: Vec<f64>,
     alpha: f64,
+    bx: f64,
     user_reset: bool,
     last_iters: usize,
     last_residual: f64,
@@ -18045,7 +18052,9 @@ impl Default for WarpFemConvDiffState {
         Self {
             u: vec![0.0; mesh.vert_count()],
             mesh,
-            alpha: 0.05, user_reset: true,
+            alpha: 0.05,
+            bx: 1.0,
+            user_reset: true,
             last_iters: 0, last_residual: 0.0,
         }
     }
@@ -18062,11 +18071,24 @@ fn update_warp_fem_convdiff(
     if !st.user_reset {
         return;
     }
-    // Same ∇² operator scaled by α; Dirichlet BCs on left = 1, right = 0.
+    // Assemble A = α·K + C + S_SUPG. The convection block uses the
+    // user's velocity in +x; the SUPG block uses the cell length scale
+    // `h = 1/nx` for τ = h/(2|b|).
+    let nx = 20;
+    let h = 1.0 / nx as f64;
+    let b = molla::math::Vec3::new(st.bx, 0.0, 0.0);
+    let alpha = st.alpha;
     let space = fem::FunctionSpace::P1Nodal;
-    let stiff = fem::assemble_global(&st.mesh, space, |c, v| {
-        fem::compute_element_stiffness(c, v, st.alpha)
-    }).expect("warp convdiff stiff");
+    let a = fem::assemble_global(&st.mesh, space, |cell, verts| {
+        let kk = fem::compute_element_stiffness(cell, verts, alpha);
+        let cc = fem::compute_element_convection(cell, verts, b);
+        let ss = fem::compute_element_supg_convection(cell, verts, b, 1.0, h);
+        let n = cell.vert_count();
+        (0..n)
+            .map(|i| (0..n).map(|j| kk[i][j] + cc[i][j] + ss[i][j]).collect())
+            .collect()
+    }).expect("warp convdiff assemble");
+
     let mut bcs = Vec::new();
     for (i, p) in st.mesh.vertices.iter().enumerate() {
         if p.x.abs() < 1e-9 {
@@ -18075,12 +18097,29 @@ fn update_warp_fem_convdiff(
             bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 0.0 });
         }
     }
-    let f = vec![0.0; st.mesh.vert_count()];
-    let x0 = vec![0.0_f64; f.len()];
-    let res = molla::fem::solver::solve_steady_state_with_initial(
-        &stiff, &f, &bcs, &x0,
-        molla::fem::solver::DEFAULT_MAX_ITERS,
+
+    // Apply Dirichlet to (A, f) and solve via BiCGSTAB — CG can't
+    // handle the non-symmetric advection block.
+    let mut a_red = a;
+    let mut f = vec![0.0_f64; st.mesh.vert_count()];
+    fem::apply_dirichlet(&mut a_red, &mut f, &bcs);
+    let n = f.len();
+    let mut x0 = vec![0.0; n];
+    for bc in &bcs {
+        if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x0[*vertex as usize] = *value;
+        }
+    }
+    let res = molla::math::iterative::bicgstab_solve(
+        |x| {
+            let mut y = vec![0.0; n];
+            a_red.mv(x, &mut y).expect("BsrMatrix mv");
+            y
+        },
+        &f,
+        &x0,
         molla::fem::solver::DEFAULT_TOL,
+        molla::fem::solver::DEFAULT_MAX_ITERS,
     );
     st.u = res.x;
     st.last_iters = res.iters;
@@ -18124,8 +18163,8 @@ fn warp_fem_convdiff_pane(ui: &mut egui::Ui, st: &mut WarpFemConvDiffState) {
         st.user_reset = true;
     }
     if ui.button("Recompute").clicked() { st.user_reset = true; }
-    ui.small("Steady ∇·(α ∇T) = 0 — convection term placeholder.");
-    ui.small("Full upwind advection lands in a Stage 36.x follow-up.");
+    ui.small("Steady (α∇² − b·∇)u = 0 — Stage 37.2 SUPG-stabilised");
+    ui.small("convection-diffusion; non-symmetric solve via BiCGSTAB.");
 }
 
 // ── Scene 70: WarpFemTaylorGreen (Stokes vortex IC) ───────────────
@@ -18644,31 +18683,73 @@ fn warp_fem_deformed_pane(ui: &mut egui::Ui, st: &mut WarpFemDeformedState) {
 }
 
 // ── Scene 74: WarpFemDistortion ───────────────────────────────────
+//
+// Stage 37.4 retrofit — runs the real symmetric-Dirichlet energy
+// kernel + Newton minimisation on a small 2D mesh. The state holds
+// both the initial-energy reading (from a small perturbation of the
+// rest mesh) and the post-Newton energy so the pane can show the
+// solver pulling the mesh back to E = 0.
 struct WarpFemDistortionState {
+    /// Initial perturbed energy.
+    initial_energy: f64,
+    /// Final energy after Newton.
     energy: f64,
+    /// Newton iteration cap.
+    max_iter: usize,
     user_reset: bool,
 }
 impl Default for WarpFemDistortionState {
-    fn default() -> Self { Self { energy: 1.0, user_reset: true } }
+    fn default() -> Self {
+        Self { initial_energy: 0.0, energy: 0.0, max_iter: 10, user_reset: true }
+    }
 }
 
 fn update_warp_fem_distortion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
     if sim.scene != Scene::WarpFemDistortion { return; }
     let st = &mut warp.fem_distortion;
     if !st.user_reset { return; }
-    // Stub: compute the symmetric Dirichlet energy for a tiny mapping.
-    // E(F) = 1/2 (‖F‖² + ‖F⁻ᵀ‖²). With F = I, E = 3.
-    st.energy = 3.0;
+    // Build a small 4×4 tri grid and perturb the interior vertices
+    // by a deterministic ±2e-2 offset. Hold the boundary fixed so
+    // Newton has a unique minimum to walk towards.
+    let mesh = fem::FemMesh::tri_grid_2d(4, 4, 1.0, 1.0);
+    let rest = mesh.vertices.clone();
+    let mut init = rest.clone();
+    for (i, p) in init.iter_mut().enumerate() {
+        let on_boundary = p.x.abs() < 1e-9
+            || (p.x - 1.0).abs() < 1e-9
+            || p.y.abs() < 1e-9
+            || (p.y - 1.0).abs() < 1e-9;
+        if !on_boundary {
+            let h1 = ((i as u64).wrapping_mul(2654435761)) as f64 / u64::MAX as f64;
+            let h2 = ((i as u64).wrapping_mul(40503)) as f64 / u64::MAX as f64;
+            p.x += (2.0 * h1 - 1.0) * 2.0e-2;
+            p.y += (2.0 * h2 - 1.0) * 2.0e-2;
+        }
+    }
+    let mut e0: f64 = 0.0;
+    for cell in &mesh.cells {
+        let (e, _g, _h) = fem::compute_element_distortion_energy(cell, &rest, &init);
+        e0 += e;
+    }
+    st.initial_energy = e0;
+    let final_def = fem::solve_distortion_minimization(&mesh, &init, st.max_iter, 1e-12);
+    let mut ef: f64 = 0.0;
+    for cell in &mesh.cells {
+        let (e, _g, _h) = fem::compute_element_distortion_energy(cell, &rest, &final_def);
+        ef += e;
+    }
+    st.energy = ef;
     st.user_reset = false;
 }
 
 fn warp_fem_distortion_pane(ui: &mut egui::Ui, st: &mut WarpFemDistortionState) {
     ui.label("Warp FEM distortion energy — port of fem/example_distortion_energy.py");
     ui.separator();
-    readout(ui, "Symmetric Dirichlet E", &format!("{:.4}", st.energy));
+    readout(ui, "Initial perturbed E", &format!("{:.4e}", st.initial_energy));
+    readout(ui, "Final E (post-Newton)", &format!("{:.4e}", st.energy));
     if ui.button("Recompute").clicked() { st.user_reset = true; }
-    ui.small("E(F) = ½(‖F‖² + ‖F⁻ᵀ‖²); identity → E = 3.");
-    ui.small("Full Newton minimisation lands in a Stage 36.x follow-up.");
+    ui.small("Stage 37.4 — symmetric Dirichlet E = ½ tr(FᵀF + (FᵀF)⁻¹) − 2");
+    ui.small("on 4×4 tri grid; Newton drives perturbed mesh back to E = 0.");
 }
 
 // ── Scene 75: WarpFemElasticOpt ───────────────────────────────────
@@ -18847,24 +18928,69 @@ fn warp_fft_fluid_pane(ui: &mut egui::Ui, st: &mut WarpFftFluidState) {
 }
 
 // ── Scene 77: WarpDistortion3D ────────────────────────────────────
+//
+// Stage 37.4 retrofit — 3D companion to `WarpFemDistortion`. Builds a
+// 3×3×3 tet grid, perturbs the interior vertices, and runs the same
+// Newton minimisation on the symmetric Dirichlet energy.
 struct WarpDistortion3DState {
+    initial_energy: f64,
     energy: f64,
+    max_iter: usize,
+    user_reset: bool,
 }
 impl Default for WarpDistortion3DState {
-    fn default() -> Self { Self { energy: 6.0 } }
+    fn default() -> Self {
+        Self { initial_energy: 0.0, energy: 0.0, max_iter: 10, user_reset: true }
+    }
 }
 
 fn update_warp_distortion_3d(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
     if sim.scene != Scene::WarpDistortion3D { return; }
-    // Identity in 3D: E = 1/2(‖I‖² + ‖I⁻ᵀ‖²) = 3.
-    warp.distortion_3d.energy = 6.0;
+    let st = &mut warp.distortion_3d;
+    if !st.user_reset { return; }
+    let mesh = fem::FemMesh::tet_grid_3d(3, 3, 3, 1.0, 1.0, 1.0);
+    let rest = mesh.vertices.clone();
+    let mut init = rest.clone();
+    for (i, p) in init.iter_mut().enumerate() {
+        let on_boundary = p.x.abs() < 1e-9
+            || (p.x - 1.0).abs() < 1e-9
+            || p.y.abs() < 1e-9
+            || (p.y - 1.0).abs() < 1e-9
+            || p.z.abs() < 1e-9
+            || (p.z - 1.0).abs() < 1e-9;
+        if !on_boundary {
+            let h1 = ((i as u64).wrapping_mul(2654435761)) as f64 / u64::MAX as f64;
+            let h2 = ((i as u64).wrapping_mul(40503)) as f64 / u64::MAX as f64;
+            let h3 = ((i as u64).wrapping_mul(2246822519)) as f64 / u64::MAX as f64;
+            p.x += (2.0 * h1 - 1.0) * 1.0e-2;
+            p.y += (2.0 * h2 - 1.0) * 1.0e-2;
+            p.z += (2.0 * h3 - 1.0) * 1.0e-2;
+        }
+    }
+    let mut e0: f64 = 0.0;
+    for cell in &mesh.cells {
+        let (e, _g, _h) = fem::compute_element_distortion_energy(cell, &rest, &init);
+        e0 += e;
+    }
+    st.initial_energy = e0;
+    let final_def = fem::solve_distortion_minimization(&mesh, &init, st.max_iter, 1e-12);
+    let mut ef: f64 = 0.0;
+    for cell in &mesh.cells {
+        let (e, _g, _h) = fem::compute_element_distortion_energy(cell, &rest, &final_def);
+        ef += e;
+    }
+    st.energy = ef;
+    st.user_reset = false;
 }
 
 fn warp_distortion_3d_pane(ui: &mut egui::Ui, st: &mut WarpDistortion3DState) {
     ui.label("Warp distortion 3D (bonus, fem/example_distortion_energy.py extension)");
     ui.separator();
-    readout(ui, "Energy E (identity)", &format!("{:.4}", st.energy));
-    ui.small("3D companion to `WarpFemDistortion`. Identity → E = 6.");
+    readout(ui, "Initial perturbed E", &format!("{:.4e}", st.initial_energy));
+    readout(ui, "Final E (post-Newton)", &format!("{:.4e}", st.energy));
+    if ui.button("Recompute").clicked() { st.user_reset = true; }
+    ui.small("Stage 37.4 — symmetric Dirichlet E = ½ tr(FᵀF + (FᵀF)⁻¹) − 3");
+    ui.small("on 3×3×3 tet grid; Newton minimises energy back to E ≈ 0.");
 }
 
 // ── Scene 79: WarpApicFluid (Stage 37.6 — APIC FEM-MPM hybrid) ────
