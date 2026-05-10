@@ -151,3 +151,47 @@ fn assemble_p1_stiffness_tet(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 }
+
+// ─── P1 mass matrix (tet) ────────────────────────────────────────────
+// Consistent mass M_e[i, j] = coeff * vol * (1 + delta_ij) / 20
+// (see Hughes, "The Finite Element Method", 1987, eq. 4.5.13). The
+// `coeff` slot doubles as a density / `c²` scale here — pass `1.0`
+// for the standard mass matrix, `rho` for inertial scaling. Same
+// scatter / atomic-add logic as the stiffness pass; only the per-cell
+// math differs.
+@compute @workgroup_size(WG_SIZE)
+fn assemble_p1_mass_tet(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let cid = gid.x;
+    if (cid >= u.cell_count) {
+        return;
+    }
+
+    let off = mesh_cell_offsets[cid];
+    let i0 = mesh_cells[off + 0u];
+    let i1 = mesh_cells[off + 1u];
+    let i2 = mesh_cells[off + 2u];
+    let i3 = mesh_cells[off + 3u];
+
+    let p0 = mesh_vertices[i0].xyz;
+    let p1 = mesh_vertices[i1].xyz;
+    let p2 = mesh_vertices[i2].xyz;
+    let p3 = mesh_vertices[i3].xyz;
+
+    let vol = tet_volume(p0, p1, p2, p3);
+    let scale = u.coeff * vol / 20.0;
+
+    let verts = array<u32, 4>(i0, i1, i2, i3);
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+        let row = verts[i];
+        for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+            let col = verts[j];
+            // Diagonal entries get coeff 2, off-diagonals get coeff 1.
+            let mass_coeff = select(1.0, 2.0, i == j);
+            let val = scale * mass_coeff;
+            let slot = find_slot(row, col);
+            if (slot != 0xFFFFFFFFu) {
+                atomic_add_csr(slot, val);
+            }
+        }
+    }
+}

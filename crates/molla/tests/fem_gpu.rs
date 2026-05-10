@@ -30,8 +30,9 @@ use std::sync::Mutex;
 
 use molla::compute::Engine;
 use molla::fem::{
-    apply_dirichlet, assemble_global, compute_element_stiffness, gpu_data::FemGpuData,
-    solver::solve_steady_state_gpu, BoundaryCondition, FemMesh, FunctionSpace,
+    apply_dirichlet, assemble_global, compute_element_mass, compute_element_stiffness,
+    gpu_data::FemGpuData, solver::solve_steady_state_gpu, BoundaryCondition, FemMesh,
+    FunctionSpace,
 };
 use molla::kernels::FemGpuKernel;
 use molla::math::iterative::cg_solve;
@@ -49,6 +50,17 @@ fn assemble_stiffness(mesh: &FemMesh, alpha: Real) -> BsrMatrix {
         compute_element_stiffness(c, v, alpha)
     })
     .expect("CPU stiffness assembly")
+}
+
+fn assemble_mass(mesh: &FemMesh, coeff: Real) -> BsrMatrix {
+    assemble_global(mesh, FunctionSpace::P1Nodal, |c, v| {
+        let local = compute_element_mass(c, v);
+        local
+            .into_iter()
+            .map(|row| row.into_iter().map(|x| coeff * x).collect())
+            .collect()
+    })
+    .expect("CPU mass assembly")
 }
 
 fn cpu_matvec(a: &BsrMatrix, x: &[Real]) -> Vec<Real> {
@@ -129,6 +141,50 @@ fn gpu_p1_assembly_matches_cpu_oracle() {
         gpu_values.len(),
         max_abs_err,
         max_rel_err,
+    );
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+fn gpu_p1_mass_matches_cpu_oracle() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Same 8³ tet cube as the stiffness parity test.
+    let n_grid = 8usize;
+    let mesh = FemMesh::tet_grid_3d(n_grid, n_grid, n_grid, 1.0, 1.0, 1.0);
+    let coeff: Real = 1.0;
+
+    let m_cpu = assemble_mass(&mesh, coeff);
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // Upload the CPU CSR pattern (assemble_mass also clears the values
+    // before scattering, so the uploaded value content doesn't matter).
+    let gpu_data = FemGpuData::upload(&device, &queue, &mesh, &m_cpu).expect("upload");
+    let kernel = FemGpuKernel::new(device.clone(), queue.clone());
+    kernel
+        .assemble_mass(&gpu_data, coeff as f32)
+        .expect("assemble_mass dispatch");
+
+    let gpu_values = gpu_data.read_csr_values(&device, &queue).expect("readback");
+    assert_eq!(gpu_values.len(), m_cpu.values.len());
+
+    let mut max_abs_err: f32 = 0.0;
+    for (i, (gpu, cpu)) in gpu_values.iter().zip(m_cpu.values.iter()).enumerate() {
+        let cpu_f32 = *cpu as f32;
+        let abs = (*gpu - cpu_f32).abs();
+        max_abs_err = max_abs_err.max(abs);
+        assert!(
+            abs < 1e-4,
+            "mass slot {i}: GPU = {gpu}, CPU = {cpu_f32}, abs_err = {abs}",
+        );
+    }
+    eprintln!(
+        "gpu_p1_mass_matches_cpu_oracle: \
+         {} nnz, max_abs_err = {max_abs_err:.2e}",
+        gpu_values.len(),
     );
 }
 

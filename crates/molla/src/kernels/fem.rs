@@ -47,6 +47,7 @@ pub struct FemGpuKernel {
     queue: Arc<wgpu::Queue>,
 
     pipe_assemble_tet: wgpu::ComputePipeline,
+    pipe_assemble_mass_tet: wgpu::ComputePipeline,
     pipe_matvec: wgpu::ComputePipeline,
 
     layout_asm_mesh: wgpu::BindGroupLayout,
@@ -106,6 +107,16 @@ impl FemGpuKernel {
                 cache: None,
             },
         );
+        let pipe_assemble_mass_tet = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem::assemble_p1_mass_tet"),
+                layout: Some(&asm_pipeline_layout),
+                module: &asm_shader,
+                entry_point: Some("assemble_p1_mass_tet"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
 
         // ── Matvec pipeline ────────────────────────────────────────
         let mv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -150,6 +161,7 @@ impl FemGpuKernel {
             device,
             queue,
             pipe_assemble_tet,
+            pipe_assemble_mass_tet,
             pipe_matvec,
             layout_asm_mesh,
             layout_asm_csr,
@@ -179,6 +191,33 @@ impl FemGpuKernel {
     /// entry can be added later — the dispatcher infrastructure is
     /// shared.
     pub fn assemble(&self, gpu_data: &FemGpuData, coeff: f32) -> Result<()> {
+        self.dispatch_assembly(gpu_data, coeff, &self.pipe_assemble_tet, "assemble")
+    }
+
+    /// Run `assemble_p1_mass_tet` — assembles the consistent P1 nodal
+    /// mass matrix `M[i, j] = coeff · ∫ φᵢ φⱼ dx` into `gpu_data`'s
+    /// CSR buffer. `coeff` is the per-element scale (use `1.0` for
+    /// the standard mass matrix, `ρ` for inertial scaling, `c²` for
+    /// the wave-equation modal mass). Idempotent — clears the CSR
+    /// before scattering so repeated calls don't accumulate.
+    ///
+    /// Tet meshes only in v1; tri-mesh mass remains CPU-only.
+    pub fn assemble_mass(&self, gpu_data: &FemGpuData, coeff: f32) -> Result<()> {
+        self.dispatch_assembly(
+            gpu_data,
+            coeff,
+            &self.pipe_assemble_mass_tet,
+            "assemble_mass",
+        )
+    }
+
+    fn dispatch_assembly(
+        &self,
+        gpu_data: &FemGpuData,
+        coeff: f32,
+        pipeline: &wgpu::ComputePipeline,
+        label: &str,
+    ) -> Result<()> {
         if gpu_data.cell_count == 0 {
             return Ok(());
         }
@@ -251,17 +290,19 @@ impl FemGpuKernel {
 
         let groups = gpu_data.cell_count.div_ceil(WORKGROUP_SIZE).max(1);
 
+        let enc_label = format!("molla::fem::{label} encoder");
+        let pass_label = format!("molla::fem::{label}");
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("molla::fem::asm encoder"),
+                label: Some(&enc_label),
             });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::fem::assemble"),
+                label: Some(&pass_label),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipe_assemble_tet);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bg_mesh, &[]);
             pass.set_bind_group(1, &bg_csr, &[]);
             pass.set_bind_group(2, &bg_u, &[]);
