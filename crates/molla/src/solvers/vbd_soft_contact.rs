@@ -141,22 +141,15 @@ pub fn gather_vt_contacts(
     if tris.is_empty() {
         return out;
     }
-    let inv_mass = match model.particle_inv_mass.host() {
-        Ok(m) => m,
-        Err(_) => return out,
-    };
-
-    // For each soft surface, walk its vertex range.
+    // For each soft surface, walk its vertex range. Pinned vertices
+    // still produce contacts (the *other* surface's tri verts get a
+    // force from the projection sweep) but their own block solve
+    // skips the displacement; the inverse-mass weighting in the
+    // projection step picks up the pin via `w_v = 0`.
     for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
         let v_lo = s.vertex_offset as usize;
         let v_hi = v_lo + s.vertex_count as usize;
         for v_global in v_lo..v_hi {
-            // Pinned vertices still produce contacts (the *other*
-            // surface's tri verts get a force) but their own block
-            // solve skips the displacement.
-            // We still need to surface them so the tri side moves.
-            let _ = inv_mass[v_global];
-
             let p = q[v_global];
             let candidates = bvh.query_point(p, margin);
             if candidates.is_empty() {
