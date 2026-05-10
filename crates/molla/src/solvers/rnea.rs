@@ -145,7 +145,11 @@ pub fn inverse_dynamics(
                 Vec3::ZERO,
             ),
             JointType::Fixed => SpatialVector::ZERO,
-            _ => unreachable!(),
+            // Multi-DOF joints (Ball/Free/Distance/D6) bail out at
+            // the dof-count match above (returns Err); reaching this
+            // arm would mean a new JointType variant was added without
+            // updating the dof match. Guard against that drift.
+            _ => unreachable!("RNEA reached unsupported JointType {:?} after dof guard", jt),
         };
         s_per_joint[k] = s_k;
 

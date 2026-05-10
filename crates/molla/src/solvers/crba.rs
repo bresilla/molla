@@ -141,7 +141,10 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
                 Vec3::ZERO,
             ),
             JointType::Fixed => SpatialVector::ZERO,
-            _ => unreachable!(),
+            // Multi-DOF joints bail out at the dof-count match above
+            // with `not yet supported`; reaching this arm means a new
+            // JointType variant slipped past that guard.
+            _ => unreachable!("CRBA reached unsupported JointType {:?} after dof guard", jt),
         };
 
         // Body spatial inertia at world origin (in `[linear; angular]`

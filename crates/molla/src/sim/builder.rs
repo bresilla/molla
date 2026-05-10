@@ -2738,9 +2738,10 @@ impl ModelBuilder {
             shape_body: Buffer::from_vec(self.shape_body, s),
             // Flatten ShapeGeometry into GPU-friendly parallel arrays.
             // Encoding matches the doc on `Model::shape_geom_kind` /
-            // `_data`. Triangle / TriMesh stay host-only for now (mesh
-            // BVH lives on host until stage 11), so their kind is the
-            // unsupported sentinel 0xff and the kernel skips them.
+            // `_data`. Triangle / TriMesh stay host-only — their
+            // narrow-phase walks the mesh BVH on the CPU side. The
+            // GPU sentinel `0xff` keeps them out of the kernel
+            // dispatch (the kernel skips entries with kind == 0xff).
             shape_geom_kind: Buffer::from_vec(
                 self.shape_geometry
                     .iter()

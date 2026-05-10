@@ -99,9 +99,8 @@ pub enum JointType {
     Revolute = 1,
     /// 3-DoF spherical / ball joint — rotation only, parameterised
     /// as a quaternion (4 coord) with body-frame angular velocity
-    /// (3 dof). Featherstone dynamics for ball joints land in a
-    /// follow-up; for now they integrate kinematically (the user
-    /// drives `joint_qd` directly).
+    /// (3 dof). Full Featherstone forward dynamics — gravity-driven
+    /// pendulum tests pass on both CPU and GPU backends.
     Ball = 2,
     /// Locks all relative motion (0 coord, 0 dof).
     Fixed = 3,
