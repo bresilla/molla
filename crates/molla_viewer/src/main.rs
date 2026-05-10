@@ -921,6 +921,11 @@ enum Scene {
     /// soft-on-soft contact at the engine layer. Port of
     /// `example_softbody_dropping_to_cloth.py`.
     SoftbodyDrop,
+    /// Stage 33.5 — soft tet block sliding down a soft tet ramp; the
+    /// pane exposes the friction coefficient as a slider (0..1) so
+    /// the user can stick (μ = 1.0), slip (μ = 0.5), and slide (μ =
+    /// 0.0) at clearly different rates.
+    SoftBrake,
 }
 
 impl Scene {
@@ -970,6 +975,7 @@ impl Scene {
         Scene::DiffSpring,
         Scene::BrickWall,
         Scene::SoftbodyDrop,
+        Scene::SoftBrake,
     ];
 
     fn label(self) -> &'static str {
@@ -1017,6 +1023,7 @@ impl Scene {
             Scene::DiffSpring => "41 Diffsim spring cage (rest-length gradient)",
             Scene::BrickWall => "42 Brick wall (wide, projectile)",
             Scene::SoftbodyDrop => "43 Softbody onto cloth (jelly + VBD cloth)",
+            Scene::SoftBrake => "46 Soft brake (friction sweep)",
         }
     }
 
@@ -1053,7 +1060,8 @@ impl Scene {
             | Scene::ClothTwist
             | Scene::CablePile
             | Scene::CableYJunction
-            | Scene::SoftbodyDrop => SolverKind::Vbd,
+            | Scene::SoftbodyDrop
+            | Scene::SoftBrake => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2365,6 +2373,7 @@ impl Sim {
             Scene::DiffSpring => build_diff_spring_model(),
             Scene::BrickWall => build_brick_wall_model(),
             Scene::SoftbodyDrop => build_softbody_drop_model(),
+            Scene::SoftBrake => build_soft_brake_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -2417,6 +2426,16 @@ impl Sim {
                 s.vt_contact_margin = 0.05;
                 s.vt_contact_sweeps = 8;
                 s.contact_stiffness = 1.0e5;
+            }
+        }
+        // Stage 33.5 — SoftBrake scene: smaller margin (10 mm), more
+        // sweeps for the slope contact, higher stiffness so the
+        // ramp's incline doesn't let the block tunnel.
+        if matches!(scene, Scene::SoftBrake) {
+            if let SolverBackend::Vbd(s) = &mut solver {
+                s.vt_contact_margin = 0.02;
+                s.vt_contact_sweeps = 10;
+                s.contact_stiffness = 2.0e5;
             }
         }
 
@@ -8692,14 +8711,14 @@ fn draw_jelly_gizmos(
     state: Res<JellyExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Jelly && sim.scene != Scene::SoftbodyDrop {
+    if sim.scene != Scene::Jelly && sim.scene != Scene::SoftbodyDrop && sim.scene != Scene::SoftBrake {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
         return;
     };
-    // For SoftbodyDrop the jelly tet wireframe is always shown — the
-    // demo's whole point is the cube colliding with cloth.
+    // For SoftbodyDrop / SoftBrake the jelly tet wireframe is always
+    // shown — the demo's whole point is soft-on-soft contact.
     if sim.scene == Scene::Jelly && !state.show_wireframe {
         return;
     }
@@ -8892,6 +8911,7 @@ fn control_pane(
                     | Scene::DiffBall
                     | Scene::DiffSpring
                     | Scene::SoftbodyDrop
+                    | Scene::SoftBrake
             ),
             _ => false,
         },
@@ -9032,6 +9052,7 @@ fn control_pane(
         Scene::DiffBall => Some("Diff ball"),
         Scene::DiffSpring => Some("Diff spring"),
         Scene::SoftbodyDrop => Some("Softbody → cloth"),
+        Scene::SoftBrake => Some("Soft brake (friction)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9131,6 +9152,7 @@ fn control_pane(
                         diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
                     }
                     Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
+                    Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
                     _ => {}
                 });
         }
@@ -12669,15 +12691,129 @@ fn build_softbody_drop_model() -> (mp::Model, Vec<BodyVisual>) {
     }
     let materials = vec![mp::MaterialNeoHookean::elastic(2.0e5, 0.3)];
     let mat_idx: Vec<u32> = vec![0; tets.len()];
-    let _ = b
+    let cube_tet_id = b
         .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
         .expect("add tet mesh");
+    // Stage 33.5 — friction = 0.5 keeps the cube STUCK on the cloth
+    // (the Stage 33 hand-off note's "cube slowly drifts laterally
+    // and slips off the cloth edge in the viewer's 2-edge-pinned
+    // scene at >2 s sim time" was specifically about the
+    // friction-less case).
+    b.set_tet_mesh_friction(cube_tet_id, 0.5);
 
     // Floor.
     b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
         .expect("plane");
 
     (b.build().expect("softbody drop model"), Vec::new())
+}
+
+/// Stage 33.5 SoftBrake — soft tet block sliding down a soft tet
+/// ramp. Both registered as soft surfaces with adjustable friction
+/// (default 0.5; pane slider exposes 0.0..1.0). At μ = 1.0 the
+/// block sticks; at μ = 0.5 it slips slowly; at μ = 0.0 it slides
+/// freely.
+fn build_soft_brake_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.05);
+
+    // Tilt the WORLD gravity instead of orienting the ramp tetra
+    // mesh — Newton-style "tilt the world" trick keeps the soft
+    // surfaces axis-aligned and the build code simple.
+    let ramp_tilt: f64 = 25.0_f64.to_radians();
+    b.set_world_gravity(
+        mp::WorldId(0),
+        MVec3::new(9.81 * ramp_tilt.sin(), -9.81 * ramp_tilt.cos(), 0.0),
+    );
+
+    // Ramp: a thick (1.5 × 0.10 × 0.6 m) kinematic tet slab at
+    // y = 1.0. All 8 corner particles pinned. The slab is wider
+    // than the block so the block can't slip off the edge in the
+    // sim time we run it for.
+    let ramp_lo = MVec3::new(-0.75, 1.0, -0.30);
+    let ramp_hi = MVec3::new(0.75, 1.10, 0.30);
+    let mut ramp_verts: Vec<u32> = Vec::with_capacity(8);
+    for &z in &[ramp_lo.z, ramp_hi.z] {
+        for &y in &[ramp_lo.y, ramp_hi.y] {
+            for &x in &[ramp_lo.x, ramp_hi.x] {
+                let id = b.add_particle(
+                    MVec3::new(x, y, z),
+                    0.0, // mass = 0 → pinned (kinematic ramp)
+                    0.02,
+                    mp::WorldId(0),
+                );
+                ramp_verts.push(id);
+            }
+        }
+    }
+    let rv: [u32; 8] = ramp_verts.as_slice().try_into().unwrap();
+    let ramp_tets = jelly_cube_to_six_tets(rv);
+    let ramp_id = b
+        .add_tet_mesh(&ramp_tets, 1.0e6, 0.3, None)
+        .expect("ramp tet block");
+    b.set_tet_mesh_friction(ramp_id, 0.5);
+
+    // Block: a 3×3×3 jelly cube placed just above the ramp's top
+    // surface at one end (negative-X end, so it'll slide toward
+    // +X under tilted gravity).
+    let nx: u32 = 3;
+    let dx: f64 = 0.10;
+    let block_origin = MVec3::new(
+        -0.50,
+        1.10 + 0.005, // 5 mm clear of the ramp top so the contact
+                       // engages with a clear above-ramp normal.
+        -dx * (nx as f64 - 1.0) * 0.5,
+    );
+    let block_first = 8; // ramp used 8 particles
+    for kk in 0..nx {
+        for jj in 0..nx {
+            for ii in 0..nx {
+                let p = block_origin
+                    + MVec3::new(
+                        ii as f64 * dx,
+                        jj as f64 * dx,
+                        kk as f64 * dx,
+                    );
+                b.add_particle(p, 0.05, dx * 0.5, mp::WorldId(0));
+            }
+        }
+    }
+    let v_at = |i: u32, j: u32, k: u32| -> u32 {
+        block_first + (k * nx + j) * nx + i
+    };
+    let mut tets: Vec<[u32; 4]> = Vec::new();
+    for kk in 0..nx - 1 {
+        for jj in 0..nx - 1 {
+            for ii in 0..nx - 1 {
+                let corners = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                tets.extend_from_slice(&jelly_cube_to_six_tets(corners));
+            }
+        }
+    }
+    // Stiff jelly so the block behaves nearly rigid during the
+    // slide — friction's effect is more visible without internal
+    // damping eating the slip.
+    let materials = vec![mp::MaterialNeoHookean::elastic(1.0e6, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; tets.len()];
+    let block_id = b
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("block tet mesh");
+    b.set_tet_mesh_friction(block_id, 0.5);
+
+    // Floor (visual only — block stays on the ramp).
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("soft brake model"), Vec::new())
 }
 
 
@@ -13564,6 +13700,64 @@ fn softbody_drop_pane(ui: &mut egui::Ui, sim: &mut Sim) {
     ui.small("Tet jelly cube falls onto a hanging VBD cloth.");
     ui.small("Stage 33 cross-mesh VT contact: the jelly should");
     ui.small("rest on the cloth instead of passing through.");
+}
+
+/// Stage 33.5 SoftBrake pane — Coulomb friction sweep over the
+/// soft-on-soft contact pipeline. Slider sets the block's friction
+/// coefficient (the ramp side keeps its build-time default of 0.5;
+/// effective contact μ = sqrt(μ_block · μ_ramp)).
+fn soft_brake_pane(ui: &mut egui::Ui, sim: &mut Sim) {
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    readout(
+        ui,
+        "Soft surfaces",
+        &format!("{}", sim.model.soft_surfaces.len()),
+    );
+    let mut vt_count: usize = 0;
+    if let SolverBackend::Vbd(s) = &sim.solver {
+        vt_count = s.last_vt_contact_count();
+    }
+    readout(ui, "VT contacts", &format!("{vt_count}"));
+
+    // Find the BLOCK soft surface (the one that ISN'T entirely
+    // pinned). The ramp's particles are pinned (mass = 0), the
+    // block's are dynamic.
+    let inv_mass = sim
+        .model
+        .particle_inv_mass
+        .host()
+        .ok()
+        .map(|s| s.to_vec())
+        .unwrap_or_default();
+    let mut block_idx: Option<usize> = None;
+    for (i, s) in sim.model.soft_surfaces.iter().enumerate() {
+        let any_dynamic = (s.vertex_offset..s.vertex_offset + s.vertex_count)
+            .any(|v| inv_mass.get(v as usize).copied().unwrap_or(0.0) > 0.0);
+        if any_dynamic {
+            block_idx = Some(i);
+            break;
+        }
+    }
+    ui.separator();
+
+    if let Some(bi) = block_idx {
+        // Editing live `soft_surfaces[i].friction` updates future
+        // contacts without rebuilding the model — the gather reads
+        // the field per-substep.
+        let mut friction = sim.model.soft_surfaces[bi].friction as f32;
+        ui.label("Block friction μ");
+        if ui.add(egui::Slider::new(&mut friction, 0.0_f32..=1.0_f32)).changed() {
+            sim.model.soft_surfaces[bi].friction = friction as mp::Real;
+        }
+        ui.separator();
+        let cur_friction = sim.model.soft_surfaces[bi].friction;
+        readout(ui, "block μ", &format!("{cur_friction:.2}"));
+    }
+    ui.separator();
+    ui.small("Tet block on a tilted (25°) tet ramp.");
+    ui.small("μ = 1.0 → sticks; μ = 0.5 → slips slowly;");
+    ui.small("μ = 0.0 → slides freely.");
 }
 
 fn draw_diff_spring_gizmos(
