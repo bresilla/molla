@@ -7,11 +7,11 @@
 pub use crate::core::{BodyId, Error, JointId, ParticleId, Result, ShapeId, WorldId};
 pub use crate::math::{Mat3, Quat, Real, SpatialInertia, SpatialVector, Transform, Vec3};
 pub use crate::sim::{
-    eval_fk, BodyFlags, BodyParams, Contacts, Control, Heightfield, JointTargetMode, JointType,
-    MaterialNeoHookean, Model, ModelBuilder, ParticleFlags, SdfShape, ShapeFlags, ShapeGeometry,
-    State, TetMeshId,
+    eval_fk, BodyFlags, BodyParams, Contacts, Control, EqualityType, Heightfield,
+    JointTargetMode, JointType, MaterialNeoHookean, Model, ModelBuilder, ParticleFlags,
+    SdfShape, ShapeFlags, ShapeGeometry, State, TetMeshId, TriMesh,
 };
-pub use crate::geometry::collide;
+pub use crate::geometry::{collide, CollisionPipeline};
 pub use crate::solvers::{
     FeatherstoneSolver, MuJoCoSolver, SemiImplicitSolver, Solver, VbdMode, VbdSolver, XpbdSolver,
 };

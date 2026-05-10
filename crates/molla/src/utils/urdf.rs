@@ -1,11 +1,11 @@
 //! URDF importer.
 //!
-//! Stage 3.2 scope: links (with inertial), joints (revolute,
-//! continuous, prismatic, fixed). Visual + collision blocks are
-//! parsed but ignored — collision shapes will plug into stage 4.x's
-//! mesh / convex narrow phase. Multi-DOF joints (planar, floating)
-//! are mapped to the closest molla equivalent (`Free` for floating);
-//! `planar` returns an error with a clear message.
+//! Supports links (with inertial) and joints (revolute, continuous,
+//! prismatic, fixed). Visual + collision blocks are parsed but
+//! ignored — wiring them into the narrow-phase pipeline is a
+//! follow-up. Multi-DOF joints (planar, floating) are mapped to the
+//! closest molla equivalent (`Free` for floating); `planar` returns
+//! an error with a clear message.
 //!
 //! Conventions assumed:
 //! - URDF `joint/origin` maps to the joint's `x_p` (joint frame in
@@ -112,13 +112,14 @@ pub fn build_urdf(robot: &Robot, builder: &mut ModelBuilder) -> Result<UrdfBodie
             UrdfJointType::Floating => builder.add_joint_free(parent, child, x_p, x_c)?,
             UrdfJointType::Planar => {
                 return Err(Error::Build(format!(
-                    "urdf joint {:?}: planar joints not supported (stage 3.x)",
+                    "urdf joint {:?}: planar joints have no molla equivalent",
                     joint.name
                 )));
             }
             UrdfJointType::Spherical => {
                 return Err(Error::Build(format!(
-                    "urdf joint {:?}: spherical (ball) joints not supported (stage 3.x)",
+                    "urdf joint {:?}: spherical (ball) joints not yet routed \
+                     through the URDF importer (use ModelBuilder::add_joint_ball directly)",
                     joint.name
                 )));
             }

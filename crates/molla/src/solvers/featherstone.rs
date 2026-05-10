@@ -131,6 +131,8 @@ impl FeatherstoneSolver {
         })
     }
 
+    /// Per-DOF joint damping coefficient (`τ_damp = -d · qd`),
+    /// applied uniformly across all joints. Defaults to `0.0`.
     #[must_use]
     pub fn with_damping(mut self, d: Real) -> Self {
         self.joint_damping = d;
@@ -179,6 +181,7 @@ impl FeatherstoneSolver {
         self.rigorous_distance = on;
     }
 
+    /// `true` if the solver runs on a GPU backend.
     #[must_use]
     pub fn is_gpu(&self) -> bool {
         #[cfg(feature = "gpu")]

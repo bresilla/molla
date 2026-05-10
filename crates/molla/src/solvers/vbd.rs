@@ -323,21 +323,29 @@ impl VbdSolver {
         self
     }
 
+    /// Number of VBD outer iterations per substep. Higher = stiffer
+    /// material response, slower step. Defaults to 8.
     #[must_use]
     pub fn with_iterations(mut self, n: usize) -> Self {
         self.iterations = n.max(1);
         self
     }
+    /// Substep count: each outer `step(dt)` runs `n` substeps with
+    /// `dt/n`. Defaults to 1.
     #[must_use]
     pub fn with_substeps(mut self, n: usize) -> Self {
         self.substeps = n.max(1);
         self
     }
+    /// Penalty stiffness applied at vertex-vs-collider contacts (N/m).
+    /// Defaults to `1.0e5`.
     #[must_use]
     pub fn with_contact_stiffness(mut self, k: f64) -> Self {
         self.contact_stiffness = k.max(0.0);
         self
     }
+    /// Cap on per-spring stiffness used to derive the GPU stiffness
+    /// table. Defaults to `1.0e7` N/m.
     #[must_use]
     pub fn with_max_spring_stiffness(mut self, k: f64) -> Self {
         self.max_spring_stiffness = k.max(1.0);
