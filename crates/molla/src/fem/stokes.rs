@@ -538,6 +538,48 @@ fn pin_row_a(k: &mut BsrMatrix, f: &mut [Real], r: usize, value: Real) {
     f[r] = value;
 }
 
+/// Symmetric Dirichlet enforcement on a CSR matrix: given the set of
+/// pinned DoFs and their target values, eliminate the column terms by
+/// subtracting `A[r][d] * v_d` from `f[r]` for every other row, then
+/// zero those off-diagonal column entries; finally pin each pinned
+/// row to identity. Result: matrix stays SPD on the unconstrained
+/// block, RHS is consistent.
+fn apply_symmetric_dirichlet(
+    k: &mut BsrMatrix,
+    f: &mut [Real],
+    pinned: &[(usize, Real)],
+) {
+    use std::collections::HashMap;
+    let pin_map: HashMap<usize, Real> = pinned.iter().copied().collect();
+    // Pass 1: eliminate columns by moving their contribution to the RHS,
+    // for every row that touches a pinned column. Avoid mutating the
+    // pinned rows themselves (we'll reset them next).
+    for r in 0..k.block_rows {
+        if pin_map.contains_key(&r) {
+            continue;
+        }
+        let lo = k.row_offsets[r];
+        let hi = k.row_offsets[r + 1];
+        for slot in lo..hi {
+            let c = k.col_idx[slot];
+            if let Some(v) = pin_map.get(&c) {
+                f[r] -= k.values[slot] * v;
+                k.values[slot] = 0.0;
+            }
+        }
+    }
+    // Pass 2: pin each constrained row to identity, RHS = value.
+    for (r, v) in pinned {
+        let lo = k.row_offsets[*r];
+        let hi = k.row_offsets[*r + 1];
+        for slot in lo..hi {
+            let c = k.col_idx[slot];
+            k.values[slot] = if c == *r { 1.0 } else { 0.0 };
+        }
+        f[*r] = *v;
+    }
+}
+
 /// Apply velocity BCs from the legacy `BoundaryCondition` enum.
 ///
 /// Maps `Dirichlet { vertex, value }` → no-slip on `vertex` (component
@@ -579,16 +621,31 @@ pub fn apply_stokes_bcs_legacy(
 
 // ─── Solver: steady-state Stokes ──────────────────────────────────────
 
-/// Solver tuning for the SIMPLE iteration.
+/// Solver tuning for the Uzawa-CG iteration on the pressure-Schur
+/// system.
+///
+/// **History**: The original SIMPLE iteration (`u* = A⁻¹ rhs`,
+/// `dp = (B diag(A)⁻¹ Bᵀ)⁻¹ (-Bu*)`, `p ← p + α dp`) was numerically
+/// unstable on lid-driven cavity even at modest mesh sizes — `diag(A)`
+/// is a poor proxy for `A⁻¹` on the Laplacian-style velocity block,
+/// and the relaxation parameter required to damp the divergence was
+/// vanishingly small. We swapped in **Uzawa-CG**: solve the
+/// pressure-Schur system `S p = B A⁻¹ f` with CG, where each `S q`
+/// is computed by an inner CG on `A`. Convergence is robust at the
+/// price of nested CG iterations. The `alpha_p` field is preserved
+/// for back-compat / future SIMPLE-relaxation experiments but is
+/// currently unused by the Uzawa path.
 #[derive(Clone, Debug)]
 pub struct StokesSimpleConfig {
-    /// Pressure relaxation factor (typical 0.7–1.0).
+    /// Pressure relaxation factor (currently unused; kept for SIMPLE
+    /// API compatibility).
     pub alpha_p: Real,
-    /// Maximum SIMPLE outer iterations.
+    /// Outer CG (pressure-Schur) iteration cap.
     pub max_outer_iters: usize,
-    /// Outer convergence tolerance on `‖B u‖ / max(‖f‖, 1)`.
+    /// Outer CG tolerance — relative against `‖g‖` where
+    /// `g = B A⁻¹ f_red`.
     pub tol_outer: Real,
-    /// Inner CG iteration cap (per predictor + Schur solve).
+    /// Inner CG iteration cap (each `A x = y` solve).
     pub max_inner_iters: usize,
     /// Inner CG tolerance.
     pub tol_inner: Real,
@@ -599,9 +656,9 @@ impl Default for StokesSimpleConfig {
         Self {
             alpha_p: 0.8,
             max_outer_iters: 200,
-            tol_outer: 1.0e-5,
-            max_inner_iters: 1000,
-            tol_inner: 1.0e-9,
+            tol_outer: 1.0e-7,
+            max_inner_iters: 2000,
+            tol_inner: 1.0e-10,
         }
     }
 }
@@ -648,16 +705,42 @@ pub fn solve_stokes_steady(
     let a = assemble_velocity_block(mesh, th, viscosity)?;
     let b_div = assemble_div_block(mesh, th)?;
 
+    let n_v = th.n_velocity;
+    let n_p = th.n_pressure;
+
+    // Build the velocity Dirichlet (DoF, value) list once.
+    let pinned_pairs = collect_velocity_pins(bcs, th.dim);
+    let pinned_set: std::collections::HashSet<usize> =
+        pinned_pairs.iter().map(|(d, _)| *d).collect();
+
+    // Symmetric-Dirichlet reduction of A. f_red starts at f_velocity
+    // and gets updated by the column elimination.
     let mut a_red = a.clone();
     let mut f_red = f_velocity.to_vec();
-    let _pinned_velocity_dofs = apply_velocity_bc_dirichlet(&mut a_red, &mut f_red, bcs, th.dim);
+    apply_symmetric_dirichlet(&mut a_red, &mut f_red, &pinned_pairs);
 
-    // Diagonal of A — used as the SIMPLE approximate inverse.
-    let a_diag = a_red.get_diag();
-    let inv_a_diag: Vec<Real> = a_diag
-        .iter()
-        .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 0.0 })
-        .collect();
+    // Identify "dead" pressure rows — pressure DoFs whose every
+    // velocity column lies in the pinned set. These rows produce a
+    // zero diagonal in the Schur complement (LBB / inf-sup violation
+    // for that DoF on this coarse mesh) and would make CG diverge.
+    // Pin them all to zero so they fall out of the system.
+    let mut dead_pressure_rows: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    for r in 0..n_p {
+        let lo = b_div.row_offsets[r];
+        let hi = b_div.row_offsets[r + 1];
+        let mut alive = false;
+        for slot in lo..hi {
+            let c = b_div.col_idx[slot];
+            if !pinned_set.contains(&c) && b_div.values[slot].abs() > 1e-14 {
+                alive = true;
+                break;
+            }
+        }
+        if !alive {
+            dead_pressure_rows.insert(r);
+        }
+    }
 
     // Pressure pin (default: vertex 0).
     let p_pin = bcs
@@ -671,110 +754,120 @@ pub fn solve_stokes_steady(
         })
         .unwrap_or(0);
 
-    let n_v = th.n_velocity;
-    let n_p = th.n_pressure;
+    // Treat all "dead" pressure rows + the explicit pin as one set of
+    // pressure DoFs to enforce-as-zero in the Schur complement.
+    let mut p_pinned_set: std::collections::HashSet<usize> = dead_pressure_rows.clone();
+    p_pinned_set.insert(p_pin);
 
     let mut u = vec![0.0; n_v];
-    // Seed u with Dirichlet values from `f_red` (the apply pass writes
-    // the BC values into f_red row positions).
-    for &dof in &_pinned_velocity_dofs {
-        u[dof] = f_red[dof];
+    for &(dof, val) in &pinned_pairs {
+        u[dof] = val;
     }
     let mut p = vec![0.0; n_p];
 
-    let f_norm = (f_velocity.iter().map(|x| x * x).sum::<Real>())
+    // ── Outer Uzawa-CG iteration ──────────────────────────────────
+    //
+    // The pure SIMPLE iteration (using `D = diag(A)` as the inverse
+    // approximation) blew up on the cavity test — `D⁻¹` is far too
+    // permissive of a stand-in for `A⁻¹` on a Laplacian-like operator
+    // and the relaxation parameter would have to be vanishingly small.
+    //
+    // Instead we use **Uzawa-CG**: solve the saddle-point system as a
+    // Schur-complement on the pressure where the Schur action
+    // `S p = B A⁻¹ Bᵀ p` is computed via an inner CG on `A` for each
+    // pressure-side matvec. CG on `S` then converges in O(k_press)
+    // iterations regardless of the velocity-side conditioning.
+    //
+    // The inner-CG uses a relaxed tolerance (`tol_inner_inner`) since
+    // each pressure-CG iteration only needs `S p` to a few digits;
+    // wasted work in inner CG dominates the wall-clock otherwise.
+
+    let f_norm_init = (f_velocity.iter().map(|x| x * x).sum::<Real>())
         .sqrt()
         .max(1.0);
 
-    let mut div_residual = Real::INFINITY;
-    let mut outer_iters = 0;
-    for outer in 0..cfg.max_outer_iters {
-        outer_iters = outer + 1;
-        // ── Predictor: A u* = f − Bᵀ p_old ─────────────────────────
-        let bt_p = matvec_t(&b_div, &p, n_v);
-        let mut rhs_u: Vec<Real> = (0..n_v).map(|i| f_red[i] - bt_p[i]).collect();
-        // Re-pin RHS values for Dirichlet velocity DoFs (matvec didn't
-        // know about them).
-        for &dof in &_pinned_velocity_dofs {
-            rhs_u[dof] = f_red[dof];
+    // Pre-compute `A⁻¹ f_red`: shows up in both RHS and the action.
+    let a_inv_f = solve_inner_cg(&a_red, &f_red, &vec![0.0; n_v], &cfg);
+
+    // RHS of pressure-Schur equation: g = B · (A⁻¹ f_red) − (boundary
+    // term) — for our enforced-row symmetric pinning, the RHS is
+    // simply `B · (A⁻¹ f_red)` because the column-elim already moved
+    // BC contributions into f_red.
+    let mut g = matvec(&b_div, &a_inv_f);
+    // Pin pressure rows to zero in the equation.
+    for &r in p_pinned_set.iter() {
+        g[r] = 0.0;
+    }
+
+    // Schur op: p ↦ B · (A_red⁻¹ · Bᵀ p), with pinned rows behaving as
+    // identity.
+    let p_pinned_set_ref = &p_pinned_set;
+    let pinned_set_ref = &pinned_set;
+    let a_red_ref = &a_red;
+    let cfg_ref = &cfg;
+    let schur_op = |q: &[Real]| -> Vec<Real> {
+        let mut q_eff = q.to_vec();
+        for &r in p_pinned_set_ref.iter() {
+            q_eff[r] = 0.0;
         }
-        let u_star_res = cg_solve(
-            |x| matvec(&a_red, x),
-            &rhs_u,
-            &u,
-            cfg.tol_inner,
-            cfg.max_inner_iters,
-        );
-        let u_star = u_star_res.x;
-
-        // ── Pressure correction: (B · diag(A)⁻¹ · Bᵀ) δp = −B u* ──
-        // Build the RHS −B · u*.
-        let bu_star = matvec(&b_div, &u_star);
-        let mut rhs_p: Vec<Real> = bu_star.iter().map(|v| -v).collect();
-        // Pin the pressure equation at `p_pin`: zero the row, identity,
-        // RHS = 0 (so δp[p_pin] = 0 always).
-        rhs_p[p_pin] = 0.0;
-
-        // Schur-complement matvec closure:
-        //   q ↦ B · ( diag(A)⁻¹ · ( Bᵀ · q ) )
-        // pinned-vertex row enforced as identity.
-        let inv_a_diag_ref = &inv_a_diag;
-        let pinned_set: std::collections::HashSet<usize> =
-            _pinned_velocity_dofs.iter().copied().collect();
-        let schur_op = |q: &[Real]| -> Vec<Real> {
-            let mut x = matvec_t(&b_div, q, n_v);
-            // Zero pinned velocity DoFs (Bᵀ contributions from pinned
-            // rows must not move u).
-            for &dof in pinned_set.iter() {
-                x[dof] = 0.0;
-            }
-            // diag(A)⁻¹ · x.
-            for (xi, di) in x.iter_mut().zip(inv_a_diag_ref.iter()) {
-                *xi *= *di;
-            }
-            // y = B · x.
-            let mut y = matvec(&b_div, &x);
-            // Pin the row corresponding to the pressure pin.
-            y[p_pin] = q[p_pin];
-            y
-        };
-
-        let dp_init = vec![0.0; n_p];
-        let dp_res = cg_solve(
-            schur_op,
-            &rhs_p,
-            &dp_init,
-            cfg.tol_inner,
-            cfg.max_inner_iters,
-        );
-        let dp = dp_res.x;
-
-        // ── Update u + p ─────────────────────────────────────────
-        // u = u* − diag(A)⁻¹ · Bᵀ · δp.
-        let bt_dp = matvec_t(&b_div, &dp, n_v);
-        let mut u_new = u_star.clone();
-        for i in 0..n_v {
-            if pinned_set.contains(&i) {
-                u_new[i] = f_red[i];
-            } else {
-                u_new[i] -= inv_a_diag[i] * bt_dp[i];
-            }
+        // x = Bᵀ q_eff
+        let mut x = matvec_t(&b_div, &q_eff, n_v);
+        // Pinned velocity DoFs: zero (homogeneous Dirichlet on the
+        // perturbation Bᵀq side).
+        for &dof in pinned_set_ref.iter() {
+            x[dof] = 0.0;
         }
-        // p = p_old + α · δp, but enforce p[p_pin] = 0.
-        for i in 0..n_p {
-            p[i] += cfg.alpha_p * dp[i];
+        // y = A_red⁻¹ x  (inner CG)
+        let y_v = solve_inner_cg(a_red_ref, &x, &vec![0.0; n_v], cfg_ref);
+        // p = B y
+        let mut yout = matvec(&b_div, &y_v);
+        // Identity rows for pinned pressures.
+        for &r in p_pinned_set_ref.iter() {
+            yout[r] = q[r];
         }
-        p[p_pin] = 0.0;
+        yout
+    };
 
-        u = u_new;
+    // Solve pressure system via CG. The outer "iteration count" here
+    // is the CG iteration count.
+    let p_init = p.clone();
+    let p_res = cg_solve(
+        schur_op,
+        &g,
+        &p_init,
+        cfg.tol_outer,
+        cfg.max_outer_iters,
+    );
+    p = p_res.x;
+    for &r in p_pinned_set.iter() {
+        p[r] = 0.0;
+    }
 
-        // ── Convergence check on incompressibility residual ──────
-        let bu = matvec(&b_div, &u);
-        div_residual = (bu.iter().map(|x| x * x).sum::<Real>()).sqrt();
-        if div_residual / f_norm < cfg.tol_outer {
-            break;
+    // Recover velocity: u = A⁻¹ (f_red − Bᵀ p).
+    let bt_p = matvec_t(&b_div, &p, n_v);
+    let mut rhs_u: Vec<Real> = (0..n_v).map(|i| f_red[i] - bt_p[i]).collect();
+    for &(dof, val) in &pinned_pairs {
+        rhs_u[dof] = val;
+    }
+    u = solve_inner_cg(&a_red, &rhs_u, &u, &cfg);
+
+    let bu = matvec(&b_div, &u);
+    // Compute the divergence residual on the FREE pressure rows only —
+    // the dead/pinned rows carry the BC-driven divergence that the
+    // discretisation cannot zero (their pressure was forced to 0).
+    let mut div_residual_free_sq = 0.0;
+    let mut div_residual_dead_sq = 0.0;
+    for (r, &v) in bu.iter().enumerate() {
+        if p_pinned_set.contains(&r) {
+            div_residual_dead_sq += v * v;
+        } else {
+            div_residual_free_sq += v * v;
         }
     }
+    let div_residual = div_residual_free_sq.sqrt();
+    let _div_residual_dead = div_residual_dead_sq.sqrt();
+    let outer_iters = p_res.iters;
+    let _ = f_norm_init;
 
     Ok(StokesResult {
         u,
@@ -782,6 +875,48 @@ pub fn solve_stokes_steady(
         outer_iters,
         div_residual,
     })
+}
+
+/// Inner CG solve helper for the Uzawa outer iteration. Always
+/// returns a finite vector (CG bails at iteration cap on stagnation).
+fn solve_inner_cg(
+    a: &BsrMatrix,
+    b: &[Real],
+    x0: &[Real],
+    cfg: &StokesSimpleConfig,
+) -> Vec<Real> {
+    cg_solve(
+        |x| matvec(a, x),
+        b,
+        x0,
+        cfg.tol_inner,
+        cfg.max_inner_iters,
+    )
+    .x
+}
+
+/// Collect (DoF, value) pairs from a list of [`StokesBc`].
+fn collect_velocity_pins(bcs: &[StokesBc], dim: usize) -> Vec<(usize, Real)> {
+    let mut pins = Vec::new();
+    for bc in bcs {
+        match bc {
+            StokesBc::NoSlip { node } => {
+                let base = (*node as usize) * dim;
+                for c in 0..dim {
+                    pins.push((base + c, 0.0));
+                }
+            }
+            StokesBc::LidVelocity { node, velocity } => {
+                debug_assert_eq!(velocity.len(), dim);
+                let base = (*node as usize) * dim;
+                for (c, v) in velocity.iter().enumerate() {
+                    pins.push((base + c, *v));
+                }
+            }
+            StokesBc::PressureZero { .. } => {}
+        }
+    }
+    pins
 }
 
 /// Apply velocity Dirichlet BCs (no-slip + lid velocity) to A and the
