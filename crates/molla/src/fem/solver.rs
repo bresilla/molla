@@ -39,7 +39,7 @@ use crate::core::{Error, Result};
 #[cfg(feature = "gpu")]
 use crate::fem::gpu_data::FemGpuData;
 #[cfg(feature = "gpu")]
-use crate::kernels::FemGpuKernel;
+use crate::kernels::{FemCgGpuKernel, FemGpuKernel};
 
 /// Default tolerance for the FEM CG solves — `1e-8` is sufficient for
 /// the v1 contract tests at 16³ resolution.
@@ -399,6 +399,102 @@ pub fn solve_steady_state_gpu(
         max_iters,
     );
     Ok(result)
+}
+
+/// Stage 36.5 Slice A — GPU-resident port of [`solve_steady_state`].
+///
+/// Eliminates the per-CG-iter host roundtrip that
+/// [`solve_steady_state_gpu`] paid in v1: `x`, `r`, `p`, and `Ap`
+/// stay resident on the GPU; only the dot-product partial-sum
+/// readback (a few hundred f32 max for the workgroup-wise tree
+/// reduction) crosses the host boundary per iteration.
+///
+/// Same API contract as [`solve_steady_state_gpu`]: `K_csr_gpu` is
+/// the **already BC-reduced** CSR; `f` is the BC-reduced RHS; `bcs`
+/// only seeds the initial guess.
+///
+/// Returns a [`CgResult`] in `f64` for API parity — the GPU runs
+/// `f32` internally, the host up-converts the final `x` on readback.
+#[cfg(feature = "gpu")]
+pub fn solve_steady_state_gpu_resident(
+    k_csr_gpu: &FemGpuData,
+    f: &[Real],
+    bcs: &[BoundaryCondition],
+    engine: &Engine,
+    max_iters: usize,
+    tol: Real,
+) -> Result<CgResult> {
+    let n = f.len();
+    if k_csr_gpu.csr_nrows as usize != n {
+        return Err(Error::Build(format!(
+            "solve_steady_state_gpu_resident: GPU CSR rows ({}) != f length ({n})",
+            k_csr_gpu.csr_nrows,
+        )));
+    }
+    let device = engine.device().ok_or_else(|| {
+        Error::Gpu("solve_steady_state_gpu_resident: engine has no GPU device".into())
+    })?;
+    let queue = engine.queue().ok_or_else(|| {
+        Error::Gpu("solve_steady_state_gpu_resident: engine has no GPU queue".into())
+    })?;
+
+    // Seed the initial guess with Dirichlet values (consistent with
+    // the BC-reduced CSR, which has identity rows on those DoFs).
+    let mut x_init_f64 = vec![0.0_f64; n];
+    for bc in bcs {
+        if let BoundaryCondition::Dirichlet { vertex, value } = *bc {
+            x_init_f64[vertex as usize] = value;
+        }
+    }
+    let x_init_f32: Vec<f32> = x_init_f64.iter().map(|&v| v as f32).collect();
+    let f_f32: Vec<f32> = f.iter().map(|&v| v as f32).collect();
+
+    // Upload b and x_init once; the resident CG solver keeps them on
+    // the GPU across iterations.
+    let bytes = (n.max(4) * 4) as u64;
+    let usage = wgpu::BufferUsages::STORAGE
+        | wgpu::BufferUsages::COPY_SRC
+        | wgpu::BufferUsages::COPY_DST;
+    let b_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("molla::fem::resident_cg::b"),
+        size: bytes,
+        usage,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&b_buf, 0, bytemuck::cast_slice(&f_f32));
+    let x_init_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("molla::fem::resident_cg::x_init"),
+        size: bytes,
+        usage,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&x_init_buf, 0, bytemuck::cast_slice(&x_init_f32));
+
+    // Build kernels. Both can be reused across many solves; we
+    // construct fresh ones per call here for API simplicity. Caller
+    // who wants the persistent variant can call
+    // [`crate::kernels::FemCgGpuKernel::new`] directly.
+    let mv_kernel = FemGpuKernel::new(device.clone(), queue.clone());
+    let cg_kernel = FemCgGpuKernel::new(device.clone(), queue.clone());
+
+    let result = cg_kernel.cg_solve_resident(
+        n as u32,
+        &b_buf,
+        Some(&x_init_buf),
+        tol as f32,
+        max_iters,
+        |x_buf, y_buf| mv_kernel.matvec(k_csr_gpu, x_buf, y_buf),
+    )?;
+
+    // Read back the final x.
+    let x_f32 = cg_kernel.read_buffer(&result.x, n as u32)?;
+    let x_f64: Vec<Real> = x_f32.into_iter().map(|v| v as Real).collect();
+
+    Ok(CgResult {
+        x: x_f64,
+        iters: result.iters,
+        residual: result.residual as Real,
+    })
 }
 
 /// Vector-aware steady-state solve. Identical to
