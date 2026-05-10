@@ -534,6 +534,8 @@ fn main() {
                 update_warp_fft_fluid,
                 update_warp_distortion_3d,
                 update_warp_apic_fluid,
+                update_warp_wave,
+                update_warp_diff_ray,
             ),
         )
         .add_systems(
@@ -553,6 +555,8 @@ fn main() {
                 draw_warp_fem_deformed_gizmos,
                 draw_warp_fft_fluid_gizmos,
                 draw_warp_apic_fluid_gizmos,
+                draw_warp_wave_gizmos,
+                draw_warp_diff_ray_gizmos,
             ),
         )
         .add_systems(EguiPrimaryContextPass, control_pane)
@@ -1140,6 +1144,15 @@ enum Scene {
     /// velocities back. Right-rail pane: viscosity slider, particle
     /// count readout, mean kinetic energy readout, "Reset" button.
     WarpApicFluid,
+    /// Stage 37.1 — wave PDE `u_tt = c²∇²u` on a 32×32 P1 tri mesh,
+    /// integrated implicitly via Newmark-β. Initial Gaussian pulse
+    /// at (0.3, 0.3); four edges pinned. Renders as height-field gizmos.
+    WarpWave,
+    /// Stage 37.7 — differentiable raycasting. Single sphere, target
+    /// position (red wireframe); finite-difference adjoint runs
+    /// gradient descent on sphere position to match a target depth
+    /// image.
+    WarpDiffRay,
 }
 
 impl Scene {
@@ -1225,6 +1238,8 @@ impl Scene {
         Scene::WarpFftFluid,
         Scene::WarpDistortion3D,
         Scene::WarpApicFluid,
+        Scene::WarpWave,
+        Scene::WarpDiffRay,
     ];
 
     fn label(self) -> &'static str {
@@ -1307,6 +1322,8 @@ impl Scene {
             Scene::WarpFftFluid => "76 Warp FFT fluid (Stokes fallback)",
             Scene::WarpDistortion3D => "77 Warp distortion 3D",
             Scene::WarpApicFluid => "79 Warp APIC fluid (Stage 37.6 hybrid)",
+            Scene::WarpWave => "78 Warp wave (Stage 37.1)",
+            Scene::WarpDiffRay => "80 Warp diff raycast (Stage 37.7)",
         }
     }
 
@@ -2697,7 +2714,9 @@ impl Sim {
             | Scene::WarpFemElasticOpt
             | Scene::WarpFftFluid
             | Scene::WarpDistortion3D
-            | Scene::WarpApicFluid => build_warp_empty_model(),
+            | Scene::WarpApicFluid
+            | Scene::WarpWave
+            | Scene::WarpDiffRay => build_warp_empty_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -6023,6 +6042,8 @@ fn step_simulation(
             | Scene::WarpFftFluid
             | Scene::WarpDistortion3D
             | Scene::WarpApicFluid
+            | Scene::WarpWave
+            | Scene::WarpDiffRay
             | Scene::WarpRaycast
             | Scene::WarpMesh
             | Scene::WarpMeshIntersect
@@ -9469,6 +9490,8 @@ fn control_pane(
                     | Scene::WarpFftFluid
                     | Scene::WarpDistortion3D
                     | Scene::WarpApicFluid
+                    | Scene::WarpWave
+                    | Scene::WarpDiffRay
             ),
             _ => false,
         },
@@ -9644,6 +9667,8 @@ fn control_pane(
         Scene::WarpFftFluid => Some("Warp FFT fluid"),
         Scene::WarpDistortion3D => Some("Warp distortion 3D"),
         Scene::WarpApicFluid => Some("Warp APIC fluid (Stage 37.6)"),
+        Scene::WarpWave => Some("Warp wave (Stage 37.1)"),
+        Scene::WarpDiffRay => Some("Warp diff raycast (Stage 37.7)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9784,6 +9809,8 @@ fn control_pane(
                     Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
                     Scene::WarpDistortion3D => warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d),
                     Scene::WarpApicFluid => warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid),
+                    Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
+                    Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
                     _ => {}
                 });
         }
@@ -16467,6 +16494,8 @@ struct WarpExampleStates {
     fft_fluid: WarpFftFluidState,
     distortion_3d: WarpDistortion3DState,
     apic_fluid: WarpApicFluidState,
+    wave: WarpWaveExampleState,
+    diff_ray: WarpDiffRayExampleState,
 }
 
 impl Default for WarpExampleStates {
@@ -16496,6 +16525,8 @@ impl Default for WarpExampleStates {
             fft_fluid: WarpFftFluidState::default(),
             distortion_3d: WarpDistortion3DState::default(),
             apic_fluid: WarpApicFluidState::default(),
+            wave: WarpWaveExampleState::default(),
+            diff_ray: WarpDiffRayExampleState::default(),
         }
     }
 }
@@ -19227,4 +19258,335 @@ fn warp_apic_fluid_pane(ui: &mut egui::Ui, st: &mut WarpApicFluidState) {
     ui.small("mesh applies gravity + viscous Laplacian + no-slip;");
     ui.small("particles read updated node velocities back.");
     ui.small("Pure Stokes pressure-Poisson is Stage 37.6.1.");
+}
+
+// ═══ Scene 78: WarpWave (Stage 37.1) ═══════════════════════════════════
+//
+// 32×32 P1 tri mesh on the unit square; all four edges pinned (Dirichlet
+// u = 0); initial Gaussian pulse at (0.3, 0.3); Newmark-β implicit step
+// per frame. Renders as height-field via gizmo lines.
+
+const WARP_WAVE_GRID: usize = 32;
+
+struct WarpWaveExampleState {
+    mesh: fem::FemMesh,
+    mass: molla::math::sparse::BsrMatrix,
+    stiff: molla::math::sparse::BsrMatrix,
+    bcs: Vec<fem::BoundaryCondition>,
+    u: Vec<f64>,
+    v: Vec<f64>,
+    a: Vec<f64>,
+    c2: f64,
+    last_c2_baked: f64,
+    dt: f64,
+    pulse_amp: f64,
+    sim_t: f64,
+    last_residual: f64,
+    last_iters: usize,
+    needs_reset: bool,
+    user_reset: bool,
+}
+
+impl Default for WarpWaveExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tri_grid_2d(WARP_WAVE_GRID, WARP_WAVE_GRID, 1.0, 1.0);
+        let c2 = 1.0_f64;
+        let mass = fem::assemble_global(&mesh, fem::FunctionSpace::P1Nodal, |c, v| {
+            fem::compute_element_mass(c, v)
+        })
+        .expect("WarpWave mass");
+        let stiff = fem::assemble_global(&mesh, fem::FunctionSpace::P1Nodal, |c, v| {
+            fem::compute_element_wave_stiffness(c, v, c2)
+        })
+        .expect("WarpWave stiffness");
+        // Pin all boundary verts.
+        let mut bcs = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.x <= 1e-9 || p.x >= 1.0 - 1e-9 || p.y <= 1e-9 || p.y >= 1.0 - 1e-9 {
+                bcs.push(fem::BoundaryCondition::Dirichlet {
+                    vertex: i as u32,
+                    value: 0.0,
+                });
+            }
+        }
+        let n = mesh.vertices.len();
+        // Gaussian pulse initial displacement at (0.3, 0.3).
+        let mut u = vec![0.0_f64; n];
+        let amp = 0.05;
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            let dx = p.x - 0.3;
+            let dy = p.y - 0.3;
+            u[i] = amp * (-50.0 * (dx * dx + dy * dy)).exp();
+        }
+        // Re-pin BC values.
+        for bc in &bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+                u[*vertex as usize] = *value;
+            }
+        }
+        Self {
+            mesh,
+            mass,
+            stiff,
+            bcs,
+            u,
+            v: vec![0.0; n],
+            a: vec![0.0; n],
+            c2,
+            last_c2_baked: c2,
+            dt: 0.005,
+            pulse_amp: amp,
+            sim_t: 0.0,
+            last_residual: 0.0,
+            last_iters: 0,
+            needs_reset: false,
+            user_reset: false,
+        }
+    }
+}
+
+fn update_warp_wave(
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpWave || run.paused {
+        return;
+    }
+    let st = &mut warp.wave;
+    if st.needs_reset || st.user_reset {
+        *st = WarpWaveExampleState::default();
+        return;
+    }
+    if (st.c2 - st.last_c2_baked).abs() > 1e-9 {
+        st.stiff = fem::assemble_global(&st.mesh, fem::FunctionSpace::P1Nodal, |c, v| {
+            fem::compute_element_wave_stiffness(c, v, st.c2)
+        })
+        .expect("WarpWave rebuild stiffness");
+        st.last_c2_baked = st.c2;
+    }
+    let step = fem::solve_wave_transient(
+        &st.mass,
+        &st.stiff,
+        &st.u,
+        &st.v,
+        &st.a,
+        st.dt,
+        fem::NEWMARK_BETA_DEFAULT,
+        fem::NEWMARK_GAMMA_DEFAULT,
+        &st.bcs,
+    );
+    st.u = step.u_new;
+    st.v = step.v_new;
+    st.a = step.a_new;
+    st.sim_t += st.dt;
+    st.last_residual = step.residual;
+    st.last_iters = step.iters;
+}
+
+fn draw_warp_wave_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpWave {
+        return;
+    }
+    let st = &warp.wave;
+    let origin = Vec3::new(-0.5, 0.5, -0.5);
+    let h_scale = 1.5_f32;
+    // Draw tri edges as height-field lines coloured by displacement.
+    for cell in &st.mesh.cells {
+        if let fem::FemCell::Tri(v) = cell {
+            for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
+                let pa = st.mesh.vertices[a as usize];
+                let pb = st.mesh.vertices[b as usize];
+                let ua = st.u[a as usize] as f32;
+                let ub = st.u[b as usize] as f32;
+                let from = origin
+                    + Vec3::new(pa.x as f32, ua * h_scale, pa.y as f32);
+                let to = origin
+                    + Vec3::new(pb.x as f32, ub * h_scale, pb.y as f32);
+                let amp = (0.5 * (ua + ub)).abs() / st.pulse_amp.max(1e-6) as f32;
+                let amp = amp.clamp(0.0, 1.0);
+                let colour = Color::srgb(
+                    0.30 + 0.65 * amp,
+                    0.30 + 0.40 * amp,
+                    0.95 - 0.40 * amp,
+                );
+                gizmos.line(from, to, colour);
+            }
+        }
+    }
+}
+
+fn warp_wave_pane(ui: &mut egui::Ui, state: &mut WarpWaveExampleState) {
+    ui.label("Warp wave (port of example_wave.py)");
+    ui.separator();
+    readout(ui, "Mesh", &format!("{0}×{0} P1 tris", WARP_WAVE_GRID));
+    readout(ui, "DoFs", &format!("{}", state.u.len()));
+    readout(ui, "Sim time t", &format!("{:.3} s", state.sim_t));
+    readout(ui, "CG iters", &format!("{}", state.last_iters));
+    readout(ui, "Residual", &format!("{:.3e}", state.last_residual));
+    ui.separator();
+    ui.label("Wave speed² c²");
+    let _ = ui.add(egui::Slider::new(&mut state.c2, 0.1..=10.0).logarithmic(true));
+    ui.label("Time step dt");
+    let _ = ui.add(egui::Slider::new(&mut state.dt, 0.001..=0.02).logarithmic(true));
+    ui.separator();
+    if ui.button("Reset (re-emit pulse)").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("Newmark-β implicit (β=¼, γ=½) — unconditionally stable.");
+    ui.small("Initial Gaussian pulse at (0.3, 0.3); 4 edges pinned.");
+}
+
+// ═══ Scene 80: WarpDiffRay (Stage 37.7) ════════════════════════════════
+//
+// Single sphere; gradient descent on its position to match a target depth
+// image rendered with the sphere at a different position.
+
+struct WarpDiffRayExampleState {
+    scene: molla::sensors::raycast_adjoint::RayScene,
+    rays: Vec<molla::sensors::raycast_adjoint::Ray>,
+    target_image: Vec<f64>,
+    params: Vec<f64>,
+    target_params: Vec<f64>,
+    lr: f64,
+    iter: u32,
+    last_loss: f64,
+    run_descent: bool,
+    user_reset: bool,
+}
+
+impl Default for WarpDiffRayExampleState {
+    fn default() -> Self {
+        use molla::sensors::raycast_adjoint::{Ray, RayScene};
+        use molla::math::Vec3 as MVec3;
+        let mut scene = RayScene::new();
+        // Sphere takes 3 params (xyz) starting at offset 0; radius 0.5.
+        scene.add_sphere(0, 0.5);
+        scene.add_plane_z(-2.0);
+        // 32×32 orthographic-down-Z rays.
+        let n = 32usize;
+        let half = 1.5_f64;
+        let mut rays = Vec::with_capacity(n * n);
+        for j in 0..n {
+            for i in 0..n {
+                let uu = (i as f64 + 0.5) / n as f64;
+                let vv = (j as f64 + 0.5) / n as f64;
+                rays.push(Ray::new(
+                    MVec3::new((uu - 0.5) * 2.0 * half, (vv - 0.5) * 2.0 * half, 5.0),
+                    MVec3::new(0.0, 0.0, -1.0),
+                ));
+            }
+        }
+        let target_params = vec![0.2_f64, 0.2_f64, 0.0_f64];
+        let target_image = scene.trace(&target_params, &rays);
+        let params = vec![0.0_f64; 3];
+        Self {
+            scene,
+            rays,
+            target_image,
+            params,
+            target_params,
+            lr: 5e-4,
+            iter: 0,
+            last_loss: 0.0,
+            run_descent: true,
+            user_reset: false,
+        }
+    }
+}
+
+fn update_warp_diff_ray(
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpDiffRay || run.paused {
+        return;
+    }
+    let st = &mut warp.diff_ray;
+    if st.user_reset {
+        *st = WarpDiffRayExampleState::default();
+        return;
+    }
+    let current = st.scene.trace(&st.params, &st.rays);
+    st.last_loss =
+        molla::sensors::raycast_adjoint::compute_loss_l2(&current, &st.target_image);
+    if st.run_descent {
+        let grad = molla::sensors::raycast_adjoint::compute_grad_raycast(
+            &mut st.scene,
+            &mut st.params,
+            &st.target_image,
+            &st.rays,
+            1e-3,
+        );
+        for i in 0..st.params.len() {
+            st.params[i] -= st.lr * grad[i];
+        }
+        st.iter += 1;
+    }
+}
+
+fn draw_warp_diff_ray_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpDiffRay {
+        return;
+    }
+    let st = &warp.diff_ray;
+    let cur = Vec3::new(
+        st.params[0] as f32,
+        st.params[1] as f32,
+        st.params[2] as f32,
+    );
+    let tgt = Vec3::new(
+        st.target_params[0] as f32,
+        st.target_params[1] as f32,
+        st.target_params[2] as f32,
+    );
+    gizmos.sphere(cur, 0.5, Color::srgb(0.30, 0.65, 0.95));
+    gizmos.sphere(tgt, 0.5, Color::srgb(0.95, 0.40, 0.30));
+}
+
+fn warp_diff_ray_pane(ui: &mut egui::Ui, state: &mut WarpDiffRayExampleState) {
+    ui.label("Warp differentiable raycast (port of example_diffray.py)");
+    ui.separator();
+    readout(ui, "Iteration", &format!("{}", state.iter));
+    readout(ui, "Loss", &format!("{:.4e}", state.last_loss));
+    readout(
+        ui,
+        "Position",
+        &format!(
+            "({:.3}, {:.3}, {:.3})",
+            state.params[0], state.params[1], state.params[2]
+        ),
+    );
+    readout(
+        ui,
+        "Target",
+        &format!(
+            "({:.3}, {:.3}, {:.3})",
+            state.target_params[0], state.target_params[1], state.target_params[2]
+        ),
+    );
+    ui.separator();
+    ui.label("Target X");
+    let _ = ui.add(egui::Slider::new(&mut state.target_params[0], -1.0..=1.0));
+    ui.label("Target Y");
+    let _ = ui.add(egui::Slider::new(&mut state.target_params[1], -1.0..=1.0));
+    ui.label("Learning rate");
+    let _ = ui.add(egui::Slider::new(&mut state.lr, 1e-5..=1e-2).logarithmic(true));
+    ui.separator();
+    ui.checkbox(&mut state.run_descent, "Run descent");
+    if ui.button("Reset (random init)").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("Blue = current sphere; red = target.");
+    ui.small("Vanilla SGD on FD adjoint of L2 depth-image loss.");
+    ui.small("Z-axis is hostile; XY converges within 50 iters at lr=5e-4.");
 }
