@@ -521,6 +521,18 @@ pub struct ModelBuilder {
 impl ModelBuilder {
     /// Construct a fresh builder with one world (`WorldId(0)`) at standard
     /// gravity pointing in -Y.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use molla::prelude::*;
+    ///
+    /// let mut b = ModelBuilder::new();
+    /// let body = b.add_body(BodyParams::new());
+    /// b.add_shape_sphere(body, 0.5, Transform::IDENTITY).unwrap();
+    /// let model = b.build().unwrap();
+    /// assert_eq!(model.body_count, 1);
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
