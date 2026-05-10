@@ -385,6 +385,7 @@ fn main() {
         .insert_resource(DiffBallExampleState::default())
         .insert_resource(DiffSpringExampleState::default())
         .insert_resource(FemHeatExampleState::default())
+        .insert_resource(FemHeatP2ExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -451,6 +452,7 @@ fn main() {
                     update_diff_spring_example,
                     update_cloth_collar_example,
                     update_fem_heat_example,
+                    update_fem_heat_p2_example,
                 )
                     .chain(),
                 (
@@ -478,6 +480,7 @@ fn main() {
                     draw_diff_spring_gizmos,
                     draw_diff_ball_gizmos,
                     draw_fem_heat_gizmos,
+                    draw_fem_heat_p2_gizmos,
                 )
                     .chain(),
             )
@@ -577,6 +580,9 @@ struct SceneStates<'w> {
     /// temperature field. The matrices survive scene switches; only
     /// the temperature field is reset on entry.
     fem_heat: ResMut<'w, FemHeatExampleState>,
+    /// Stage 36.3 — P2 (quadratic-nodal) heat-equation demo state.
+    /// Same bundling rationale as `fem_heat`.
+    fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -629,6 +635,9 @@ struct PaneSceneStates<'w> {
     /// Bevy's 16-tuple SystemParam ceiling via the `PaneSceneStates`
     /// derive.
     fem_heat: ResMut<'w, FemHeatExampleState>,
+    /// Stage 36.3 — P2 (quadratic-nodal) FEM heat demo state.
+    /// Bundled for the same reason as `fem_heat`.
+    fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -949,6 +958,12 @@ enum Scene {
     /// sliders, residual readout, and a "Reset to T=0" button. Pure
     /// CPU — runs entirely outside the standard solver pipeline.
     FemHeat,
+    /// Stage 36.3 — same heat equation as `FemHeat`, but the FEM
+    /// solver uses P2 (quadratic-nodal) elements: 1 DoF per vertex
+    /// + 1 DoF per edge midpoint. Pane shows the side-by-side P1 vs
+    /// P2 DoF count at the matching mesh so the user can see "P2 =
+    /// more DoF for same mesh ⇒ higher accuracy".
+    FemHeatP2,
 }
 
 impl Scene {
@@ -1002,6 +1017,7 @@ impl Scene {
         Scene::FastSoftImpact,
         Scene::SoftBrake,
         Scene::FemHeat,
+        Scene::FemHeatP2,
     ];
 
     fn label(self) -> &'static str {
@@ -1053,6 +1069,7 @@ impl Scene {
             Scene::FastSoftImpact => "45 Fast soft impact (CCD)",
             Scene::SoftBrake => "46 Soft brake (friction sweep)",
             Scene::FemHeat => "47 FEM heat (Stage 36 v1)",
+            Scene::FemHeatP2 => "49 FEM heat P2 (Stage 36.3)",
         }
     }
 
@@ -2408,6 +2425,7 @@ impl Sim {
             Scene::FastSoftImpact => build_fast_soft_impact_model(),
             Scene::SoftBrake => build_soft_brake_model(),
             Scene::FemHeat => build_fem_heat_model(),
+            Scene::FemHeatP2 => build_fem_heat_p2_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5552,6 +5570,8 @@ fn apply_scene_switch(
     // matrices survive the switch (rebuilding 16³ tets every time
     // would be wasteful) — only the per-vertex `u` resets.
     scene_states.fem_heat.needs_reset = true;
+    // Stage 36.3 — reset the P2 FEM heat scene on entry (same as P1).
+    scene_states.fem_heat_p2.needs_reset = true;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5659,9 +5679,10 @@ fn step_simulation(
         return;
     }
     // Stage-36 FEM heat-equation demo runs its own CPU FEM solver in
-    // `update_fem_heat_example`; bypass the standard pipeline (no
-    // bodies, no contacts).
-    if sim.scene == Scene::FemHeat {
+    // `update_fem_heat_example` (P1) or `update_fem_heat_p2_example`
+    // (Stage 36.3 P2); bypass the standard pipeline (no bodies, no
+    // contacts).
+    if sim.scene == Scene::FemHeat || sim.scene == Scene::FemHeatP2 {
         return;
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
@@ -9080,6 +9101,7 @@ fn control_pane(
                     | Scene::FastSoftImpact
                     | Scene::SoftBrake
                     | Scene::FemHeat
+                    | Scene::FemHeatP2
             ),
             _ => false,
         },
@@ -9224,6 +9246,7 @@ fn control_pane(
         Scene::FastSoftImpact => Some("Fast soft impact (CCD)"),
         Scene::SoftBrake => Some("Soft brake (friction)"),
         Scene::FemHeat => Some("FEM heat (Stage 36)"),
+        Scene::FemHeatP2 => Some("FEM heat P2 (Stage 36.3)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9327,6 +9350,9 @@ fn control_pane(
                     Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
                     Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
                     Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
+                    Scene::FemHeatP2 => {
+                        fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2)
+                    }
                     _ => {}
                 });
         }
@@ -14611,5 +14637,276 @@ fn fem_heat_pane(ui: &mut egui::Ui, state: &mut FemHeatExampleState) {
     }
     ui.small("BCs: T(z=0) = 0, T(z=1) = 1; sides insulating.");
     ui.small("Steady state: T(z) = z (linear gradient).");
+}
+
+// --- Stage 36.3 — FEM heat-equation scene with P2 elements (#49) ----
+//
+// Same heat equation as `Scene::FemHeat` (Dirichlet `T(z=0) = 0`,
+// `T(z=1) = 1`, sides insulating), but the FEM solve uses
+// `FunctionSpace::P2Nodal`: 1 DoF per vertex + 1 DoF per edge
+// midpoint. The scene mesh is intentionally smaller than the P1 demo
+// so the full P2 system fits comfortably in CG (10×10 element
+// matrices and one DoF per edge multiplies the unknown count by ~7×
+// vs P1 at the same mesh).
+
+const FEM_HEAT_P2_GRID: usize = 8;
+
+#[derive(Resource)]
+struct FemHeatP2ExampleState {
+    mesh: fem::FemMesh,
+    /// P2 DoF map (vertex DoFs + edge DoFs).
+    dof_map: fem::P2DofMap,
+    /// Mass matrix M (consistent, P2).
+    mass: molla::math::sparse::BsrMatrix,
+    /// Stiffness matrix K (P2).
+    stiff: molla::math::sparse::BsrMatrix,
+    alpha: f64,
+    last_alpha_baked: f64,
+    dt: f64,
+    /// Dirichlet BCs over both corner DoFs (top + bottom faces) and
+    /// the matching edge DoFs (edges with both endpoints on a face).
+    bcs: Vec<fem::BoundaryCondition>,
+    /// Current temperature field, length = `dof_map.ndof()`.
+    u: Vec<f64>,
+    last_residual: f64,
+    last_iters: usize,
+    needs_reset: bool,
+    user_reset: bool,
+    /// P1-baseline DoF count at the same mesh — for the side-by-side
+    /// pane readout. Cached at construction since the mesh is fixed.
+    p1_dof_count: usize,
+}
+
+impl Default for FemHeatP2ExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tet_grid_3d(
+            FEM_HEAT_P2_GRID,
+            FEM_HEAT_P2_GRID,
+            FEM_HEAT_P2_GRID,
+            1.0,
+            1.0,
+            1.0,
+        );
+        let dof_map = fem::P2DofMap::build(&mesh);
+        let mass = fem::assemble_global_p2(&mesh, &dof_map, fem::compute_element_p2_mass)
+            .expect("FEM heat P2: assemble mass");
+        let stiff = fem::assemble_global_p2(&mesh, &dof_map, |c, v| {
+            fem::compute_element_p2_stiffness(c, v, FEM_HEAT_DEFAULT_ALPHA)
+        })
+        .expect("FEM heat P2: assemble stiffness");
+        let bcs = fem_heat_p2_dirichlet_bcs(&mesh, &dof_map);
+        let n = dof_map.ndof();
+        let mut u = vec![0.0_f64; n];
+        for bc in &bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
+                u[vertex as usize] = value;
+            }
+        }
+        let p1_dof_count = mesh.vert_count();
+        Self {
+            mesh,
+            dof_map,
+            mass,
+            stiff,
+            alpha: FEM_HEAT_DEFAULT_ALPHA,
+            last_alpha_baked: FEM_HEAT_DEFAULT_ALPHA,
+            dt: FEM_HEAT_DEFAULT_DT,
+            bcs,
+            u,
+            last_residual: 0.0,
+            last_iters: 0,
+            needs_reset: false,
+            user_reset: false,
+            p1_dof_count,
+        }
+    }
+}
+
+impl FemHeatP2ExampleState {
+    fn rebuild_stiffness(&mut self) {
+        self.stiff = fem::assemble_global_p2(&self.mesh, &self.dof_map, |c, v| {
+            fem::compute_element_p2_stiffness(c, v, self.alpha)
+        })
+        .expect("FEM heat P2: rebuild stiffness");
+        self.last_alpha_baked = self.alpha;
+    }
+
+    fn reset_temperature_field(&mut self) {
+        let n = self.dof_map.ndof();
+        self.u = vec![0.0_f64; n];
+        for bc in &self.bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
+                self.u[vertex as usize] = value;
+            }
+        }
+        self.last_residual = 0.0;
+        self.last_iters = 0;
+    }
+}
+
+/// Build the Dirichlet BC list for the P2 heat scene: corner DoFs on
+/// the top + bottom faces, plus edge DoFs whose endpoints are both on
+/// the same face (so the edge midpoint sits on that face).
+fn fem_heat_p2_dirichlet_bcs(
+    mesh: &fem::FemMesh,
+    dof_map: &fem::P2DofMap,
+) -> Vec<fem::BoundaryCondition> {
+    let mut bcs = Vec::new();
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        if p.z.abs() < 1e-9 {
+            bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 0.0 });
+        } else if (p.z - 1.0).abs() < 1e-9 {
+            bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 1.0 });
+        }
+    }
+    for (edge, &edge_id) in &dof_map.edge_id {
+        let pa = mesh.vertices[edge[0] as usize];
+        let pb = mesh.vertices[edge[1] as usize];
+        let mid_z = 0.5 * (pa.z + pb.z);
+        let on_bottom = pa.z.abs() < 1e-9 && pb.z.abs() < 1e-9;
+        let on_top = (pa.z - 1.0).abs() < 1e-9 && (pb.z - 1.0).abs() < 1e-9;
+        if on_bottom || on_top {
+            bcs.push(fem::BoundaryCondition::Dirichlet {
+                vertex: (dof_map.vertex_count + edge_id as usize) as u32,
+                value: mid_z,
+            });
+        }
+    }
+    bcs
+}
+
+/// Empty molla model — the P2 FEM heat demo carries its own mesh +
+/// solver in `FemHeatP2ExampleState`; the standard pipeline is
+/// short-circuited in `step_simulation`.
+fn build_fem_heat_p2_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("FEM heat P2: empty model"), Vec::new())
+}
+
+/// Per-frame system: mirrors `update_fem_heat_example` but for the
+/// P2 scene.
+fn update_fem_heat_p2_example(
+    sim: Res<Sim>,
+    mut state: ResMut<FemHeatP2ExampleState>,
+    run: Res<SimRunState>,
+) {
+    if sim.scene != Scene::FemHeatP2 {
+        return;
+    }
+    if state.needs_reset || state.user_reset {
+        state.reset_temperature_field();
+        state.needs_reset = false;
+        state.user_reset = false;
+    }
+    if (state.alpha - state.last_alpha_baked).abs() > 1e-12 {
+        state.rebuild_stiffness();
+    }
+    if run.paused {
+        return;
+    }
+    let dt = state.dt.max(1e-6);
+    let n = state.dof_map.ndof();
+    let f = vec![0.0_f64; n];
+    let result = molla::fem::solver::solve_transient_with_initial(
+        &state.mass,
+        &state.stiff,
+        &f,
+        &state.u.clone(),
+        dt,
+        &state.bcs,
+        &state.u.clone(),
+        molla::fem::solver::DEFAULT_MAX_ITERS,
+        molla::fem::solver::DEFAULT_TOL,
+    );
+    state.u = result.x;
+    state.last_residual = result.residual;
+    state.last_iters = result.iters;
+}
+
+/// Draw the P2 FEM heat tet wireframe with per-edge colour from the
+/// edge-midpoint DoF temperature (which is what P2 actually solves
+/// for — a true mid-edge sample, not an interpolation of corners).
+fn draw_fem_heat_p2_gizmos(
+    sim: Res<Sim>,
+    state: Res<FemHeatP2ExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::FemHeatP2 {
+        return;
+    }
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::with_capacity(state.mesh.cells.len() * 4);
+    let origin = FEM_HEAT_ORIGIN;
+    for cell in &state.mesh.cells {
+        if let fem::FemCell::Tet(v) = cell {
+            let edges = [
+                (v[0], v[1]),
+                (v[0], v[2]),
+                (v[0], v[3]),
+                (v[1], v[2]),
+                (v[1], v[3]),
+                (v[2], v[3]),
+            ];
+            for &(a, b) in &edges {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                let pa = state.mesh.vertices[a as usize];
+                let pb = state.mesh.vertices[b as usize];
+                // P2 has a real DoF at the edge midpoint — colour by
+                // *that* value (not the corner-average) to highlight
+                // the extra resolution.
+                let edge_dof = state.dof_map.edge_dof(a, b);
+                let t_mid = state.u[edge_dof];
+                let colour = fem_heat_colour(t_mid);
+                let av = origin + Vec3::new(pa.x as f32, pa.z as f32, pa.y as f32);
+                let bv = origin + Vec3::new(pb.x as f32, pb.z as f32, pb.y as f32);
+                gizmos.line(av, bv, colour);
+            }
+        }
+    }
+}
+
+/// Right-rail pane for `Scene::FemHeatP2`. Same controls as the P1
+/// pane plus a side-by-side P1 vs P2 DoF count readout so users can
+/// see "P2 = more DoF for same mesh".
+fn fem_heat_p2_pane(ui: &mut egui::Ui, state: &mut FemHeatP2ExampleState) {
+    ui.label("FEM heat equation — Stage 36.3 P2");
+    ui.separator();
+    readout(
+        ui,
+        "Mesh",
+        &format!(
+            "{0}×{0}×{0} tets ({1} verts)",
+            FEM_HEAT_P2_GRID,
+            state.mesh.vert_count()
+        ),
+    );
+    let p2_dofs = state.u.len();
+    let p1_dofs = state.p1_dof_count;
+    let edge_dofs = p2_dofs - p1_dofs;
+    readout(ui, "P1 DoFs (verts)", &format!("{p1_dofs}"));
+    readout(ui, "P2 DoFs (verts + edges)", &format!("{p2_dofs}  (+{edge_dofs} edges)"));
+    let ratio = if p1_dofs > 0 { p2_dofs as f32 / p1_dofs as f32 } else { 0.0 };
+    readout(ui, "P2 / P1 DoF ratio", &format!("{ratio:.2}×"));
+    ui.separator();
+    ui.label("Thermal diffusivity α");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.alpha, 0.05..=10.0).logarithmic(true),
+    );
+    ui.label("Time step dt");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.dt, 0.001..=0.1).logarithmic(true),
+    );
+    ui.separator();
+    readout(ui, "Last residual", &format!("{:.3e}", state.last_residual));
+    readout(ui, "CG iters", &format!("{}", state.last_iters));
+    ui.separator();
+    if ui.button("Reset to T = 0").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("Same problem as #47, but P2 (quadratic) basis.");
+    ui.small("Edges carry their own DoF — colour reflects mid-edge T.");
 }
 
