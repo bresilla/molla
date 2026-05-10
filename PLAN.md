@@ -5594,6 +5594,126 @@ heat fine; this stage is a contingency, not committed work.
 **NOT planned for v1.** Listed only so we have a fallback in mind
 if iterative solvers break down on harder PDEs.
 
+### Stage 37 — Phase 2 Warp scene engine work (8 sub-stages)
+
+After Phase 1 ported 26 Warp examples (scenes #52-#77), four FEM
+scenes shipped as analytic surrogates because they need engine
+primitives molla doesn't have yet. Stage 37 replaces those surrogates
+with real implementations and unblocks the remaining ~11 portable
+Warp examples that need small new primitives. Each sub-stage is its
+own self-contained focused work item (~1-3 days).
+
+### Stage 37.1 — Wave PDE element matrix
+
+Add `compute_element_wave_stiffness(cell, vertices, c2)` to
+`crates/molla/src/fem/element.rs` — symmetric Helmholtz operator
+`∫ c²∇N·∇M dx`. Add `solve_wave_transient` to `solver.rs` using the
+existing implicit Newmark-β scheme on `(M − β·dt²·K)`. Replaces
+analytic-stub `WarpFftFluid` if needed; new scene `WarpWave` (#78).
+
+**Tests:** `tests/fem_wave.rs` — verify standing-wave eigenmode
+matches analytic `cos(kπx) cos(kπc·t)` to 5%.
+
+**Dependencies:** Stage 36 v1.
+
+### Stage 37.2 — Convection element + upwinding
+
+Add `compute_element_convection(cell, vertices, b: Vec3)` to
+`element.rs` — `∫ N · (b·∇M) dx` block. SUPG (Streamline Upwind
+Petrov-Galerkin) stabilization for high-Pe. Retrofits scene #69
+(`WarpFemConvDiff`) and unblocks `example_burgers`.
+
+**Tests:** verify convection-dominated Pe=100 problem doesn't
+oscillate (with SUPG); converges to analytic exponential boundary
+layer.
+
+**Dependencies:** Stage 36 v1.
+
+### Stage 37.3 — Navier-Stokes time-stepping
+
+Add `solve_navier_stokes_transient(...)` to `crates/molla/src/fem/stokes.rs`
+— extends Stokes to NS via explicit/IMEX convection: `M(u_new − u_old)/dt
++ (u_old·∇)u_old + ∇p − μ∇²u_new = f`. Uses Stage 37.2's convection
+matrix. Retrofits scene #71 (`WarpFemKelvinHelmholtz`).
+
+**Tests:** verify Taylor-Green vortex decay rate matches analytic
+`exp(-2μk²t)` within 5%.
+
+**Dependencies:** Stage 36.2 (Stokes), Stage 37.2 (convection).
+
+### Stage 37.4 — Distortion-energy Newton minimization
+
+Add `compute_element_distortion_energy(cell, rest_vertices,
+deformed_vertices) -> (energy, gradient, hessian_block)` to
+`element.rs` for the symmetric-Dirichlet distortion energy. Plug
+into `solve_nonlinear_static` (Stage 36.1). Retrofits scenes #74
+and #77.
+
+**Tests:** verify identity map has zero energy + identity
+deformation derivatives.
+
+**Dependencies:** Stage 36.1.
+
+### Stage 37.5 — FFT pressure-Poisson NS coupling
+
+Couple existing GPU FFT (Stage 24c) with Stokes (Stage 36.2) for
+2D NS via fractional step: solve velocity-tentative explicitly,
+solve pressure-Poisson via FFT (`-Δp = ∇·u*/dt`), correct velocity.
+Retrofits scene #76 (`WarpFftFluid`).
+
+**Tests:** verify against Taylor-Green decay (Stokes regime) within
+2% and standard Re=100 lid-driven cavity reference.
+
+**Dependencies:** Stage 24c (FFT), Stage 36.2 (Stokes), Stage 37.3.
+
+### Stage 37.6 — APIC FEM-MPM hybrid coupling
+
+Couple Stage 24d MPM particle representation with Stage 36 FEM tet
+mesh — particles transfer momentum to mesh nodes via APIC weights;
+mesh provides incompressibility constraint. Demo: `example_apic_fluid`
+in a tet-meshed cylinder.
+
+**Deliverables:** new `crates/molla/src/fem/apic_coupling.rs`; new
+`Scene::WarpApicFluid` (#79).
+
+**Dependencies:** Stage 24d MPM, Stage 36 v1.
+
+### Stage 37.7 — Raycast adjoint (differentiable raycasting)
+
+Add reverse-mode through the raycast pipeline. Forward stays the same
+(`Raycaster::trace`); backward computes `∂hit_distance/∂(scene_param)`
+via finite-difference on shape parameters (v1) or analytic adjoint
+(v2 follow-up).
+
+**Deliverables:** `crates/molla/src/sensors/raycast_adjoint.rs`,
+`compute_grad_raycast(scene_params, target_image) -> Vec<Real>`;
+new `Scene::WarpDiffRay` (#80) — gradient descent on sphere position
+to match a target depth image.
+
+**Dependencies:** Stage 5 raycast, Stage 23 tape autograd.
+
+### Stage 37.8 — Tile compute primitives bundle
+
+Bundle of small WGSL kernels for the Warp `tile/` examples that
+demand real GPU implementations rather than CPU placeholders:
+
+- `compute/tile_matmul.rs` + `shaders/tile_matmul.wgsl` — workgroup-
+  tiled GEMM `C = A·B` for `(M, N, K)` up to 4096.
+- `compute/tile_block_cholesky.rs` — block-Cholesky factorization
+  on SPD matrices up to 1024×1024.
+- `compute/tile_convolution.rs` — separable 2D convolution.
+- `compute/tile_filtering.rs` — same kernel infrastructure (just
+  different filter coefficients).
+- `compute/tile_stream_compaction.rs` — exposes existing prefix-
+  sum / scatter primitives buried in soft-contact gather code as a
+  public API.
+- `compute/tile_mcgp.rs` — Monte Carlo gradient propagation:
+  random-shake parameters, accumulate gradient via tape autograd.
+
+Replaces CPU placeholders in scenes #62-#66.
+
+**Dependencies:** Stage 19 GPU compute infrastructure.
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
