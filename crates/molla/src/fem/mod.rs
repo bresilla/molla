@@ -19,8 +19,9 @@
 //! - [`assembly`]    — `assemble_global` using a visitor over the
 //!   per-cell local matrices, scattering into a CSR (`BsrMatrix` with
 //!   `B = 1`).
-//! - [`bc`]          — `BoundaryCondition::{Dirichlet, Neumann}` plus
-//!   the `apply_dirichlet` reducer.
+//! - [`bc`]          — `BoundaryCondition::{Dirichlet, Neumann,
+//!   DirichletVector, NeumannTraction}` plus the `apply_dirichlet`
+//!   (scalar) and `apply_bcs` (vector-aware) reducers.
 //! - [`solver`]      — `solve_steady_state` + `solve_transient`
 //!   (backward Euler), built on top of `cg_solve`.
 //!
@@ -56,8 +57,11 @@ pub mod quadrature;
 pub mod solver;
 
 pub use assembly::assemble_global;
-pub use bc::{apply_dirichlet, BoundaryCondition};
-pub use element::{compute_element_mass, compute_element_stiffness};
+pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
+pub use element::{
+    compute_element_elasticity_stiffness, compute_element_mass,
+    compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
+};
 pub use function_space::{compute_edges, FunctionSpace};
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
@@ -67,4 +71,7 @@ pub use p2_element::{
     p2_tet_shape_functions, p2_tet_shape_gradients, p2_tri_shape_functions,
     p2_tri_shape_gradients, P2DofMap, TET_EDGES, TRI_EDGES,
 };
-pub use solver::{solve_steady_state, solve_transient};
+pub use solver::{
+    solve_nonlinear_static, solve_steady_state, solve_steady_state_vector,
+    solve_transient,
+};
