@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use molla::core::BodyId;
+use molla::geometry::CollisionPipeline;
 use molla::prelude::*;
 
 const SUBSTEPS: usize = 60;
@@ -72,7 +73,14 @@ fn bench_pile_gpu(c: &mut Criterion) {
         s_b.upload_to_device(&device, &queue).unwrap();
         let mut control = model.control();
         control.upload_to_device(&device, &queue).unwrap();
-        let contacts = Contacts::with_capacity(0);
+        // Pre-allocate contacts + run a single collide pass so the
+        // body-contact CSR (offsets/indices) gets sized to the model
+        // before the GPU bind group is built. Without this the XPBD
+        // GPU solver fails with "binding 6: no device mirror".
+        let mut contacts = Contacts::with_capacity((n * 8).max(1024));
+        let mut pipeline = CollisionPipeline::new();
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        contacts.upload_to_device(&device, &queue).unwrap();
         let mut solver = XpbdSolver::new_gpu(&engine, model.body_count as u32)
             .expect("XpbdSolver::new_gpu");
 
