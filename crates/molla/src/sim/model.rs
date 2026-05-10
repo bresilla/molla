@@ -373,6 +373,22 @@ pub struct Model {
     /// `Buffer<[u32; 3]>`-equivalent device array.
     pub soft_surface_tris: Vec<[u32; 3]>,
 
+    /// Stage 33.3 — per-vertex incident-tri set, CSR-encoded.
+    /// `soft_vertex_incident_tris[soft_vertex_incident_tris_offsets[v]..v+1]`
+    /// gives the **global** triangle indices (into
+    /// `soft_surface_tris`) that touch particle `v`. The VT contact
+    /// gather uses this for self-collision adjacency filtering: when
+    /// the vertex's surface has `self_collision = true`, candidate
+    /// tris on the same surface that are in this set are skipped
+    /// (they would always be in contact since the vertex is one of
+    /// the triangle's corners). Length =
+    /// `particle_count + 1`.
+    pub soft_vertex_incident_tris_offsets: Vec<u32>,
+    /// Stage 33.3 — flat global tri-id payload for the per-vertex
+    /// incident-tri CSR. See
+    /// [`Self::soft_vertex_incident_tris_offsets`].
+    pub soft_vertex_incident_tris: Vec<u32>,
+
     // ── Per-vertex tet adjacency CSR (Stage 20.2) ──────────────────
     // Computed at build time alongside the spring adjacency. Each
     // entry pairs a tet id with the local vertex index `v_order ∈
@@ -707,6 +723,11 @@ impl Model {
             tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
             soft_surfaces: Vec::new(),
             soft_surface_tris: Vec::new(),
+            // Stage 33.3 — empty CSR (single sentinel offset). When no
+            // soft surfaces exist, the per-vertex incident set is
+            // empty for every particle.
+            soft_vertex_incident_tris_offsets: vec![0u32],
+            soft_vertex_incident_tris: Vec::new(),
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets: Buffer::from_vec(Vec::new(), s),
 
@@ -803,6 +824,21 @@ impl Model {
     /// Allocate a fresh [`super::State`] sized for this model.
     pub fn state(&self) -> Result<super::State> {
         super::State::for_model(self)
+    }
+
+    /// Stage 33.3 — toggle the per-surface "self-collision enabled"
+    /// flag at runtime. The VT contact gather consults this on every
+    /// substep, so toggling it on/off mid-simulation is safe (no
+    /// rebuilt registries).
+    ///
+    /// `surface_id` is the 0-based index into [`Self::soft_surfaces`].
+    /// Out-of-range indices are silently ignored — the typical caller
+    /// (viewer toggle, programmatic control) shouldn't have to handle
+    /// the "no soft surface" case explicitly.
+    pub fn set_soft_surface_self_collision(&mut self, surface_id: usize, enable: bool) {
+        if let Some(s) = self.soft_surfaces.get_mut(surface_id) {
+            s.self_collision = enable;
+        }
     }
 
     /// Allocate a fresh [`super::Control`] sized for this model.
