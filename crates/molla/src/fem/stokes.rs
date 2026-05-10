@@ -744,6 +744,17 @@ pub fn solve_stokes_with_matrices(
     // zero diagonal in the Schur complement (LBB / inf-sup violation
     // for that DoF on this coarse mesh) and would make CG diverge.
     // Pin them all to zero so they fall out of the system.
+    //
+    // Threshold is scaled by `‖B‖∞` so it tracks the matrix
+    // magnitude — on a mm-scale mesh every entry of B is ~1e-9 and a
+    // hard `1e-14` floor would falsely flag every row as dead.
+    let b_inf_norm = b_div
+        .values
+        .iter()
+        .copied()
+        .map(Real::abs)
+        .fold(0.0_f64, Real::max);
+    let dead_threshold = (1e-12 * b_inf_norm).max(1e-30);
     let mut dead_pressure_rows: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
     for r in 0..n_p {
@@ -752,7 +763,7 @@ pub fn solve_stokes_with_matrices(
         let mut alive = false;
         for slot in lo..hi {
             let c = b_div.col_idx[slot];
-            if !pinned_set.contains(&c) && b_div.values[slot].abs() > 1e-14 {
+            if !pinned_set.contains(&c) && b_div.values[slot].abs() > dead_threshold {
                 alive = true;
                 break;
             }
@@ -802,6 +813,9 @@ pub fn solve_stokes_with_matrices(
     // each pressure-CG iteration only needs `S p` to a few digits;
     // wasted work in inner CG dominates the wall-clock otherwise.
 
+    // Initial RHS norm — used below to scale the outer pressure
+    // tolerance so `tol_outer` is **relative** (independent of the
+    // forcing magnitude), matching the user's intuition.
     let f_norm_init = (f_velocity.iter().map(|x| x * x).sum::<Real>())
         .sqrt()
         .max(1.0);
@@ -849,13 +863,21 @@ pub fn solve_stokes_with_matrices(
     };
 
     // Solve pressure system via CG. The outer "iteration count" here
-    // is the CG iteration count.
+    // is the CG iteration count. Scale the requested `tol_outer`
+    // (which the caller intends as relative to the forcing) by
+    // `f_norm_init` so the actual CG tolerance tracks the input
+    // magnitude — `cg_solve` measures `‖r‖` against the RHS norm of
+    // the Schur system `g = B·A⁻¹·f_red`, which can be many orders
+    // of magnitude smaller than `‖f_red‖` for nearly-divergence-free
+    // forcing (e.g. lid-driven cavity), so without this scaling the
+    // user-facing tolerance is silently looser than configured.
     let p_init = p.clone();
+    let tol_scaled = cfg.tol_outer * f_norm_init;
     let p_res = cg_solve(
         schur_op,
         &g,
         &p_init,
-        cfg.tol_outer,
+        tol_scaled,
         cfg.max_outer_iters,
     );
     p = p_res.x;
@@ -887,7 +909,6 @@ pub fn solve_stokes_with_matrices(
     let div_residual = div_residual_free_sq.sqrt();
     let _div_residual_dead = div_residual_dead_sq.sqrt();
     let outer_iters = p_res.iters;
-    let _ = f_norm_init;
 
     Ok(StokesResult {
         u,
