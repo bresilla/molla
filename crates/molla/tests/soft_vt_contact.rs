@@ -252,6 +252,141 @@ fn tet_vertex_on_cloth_triangle_penalty_holds_under_gravity() {
     );
 }
 
+/// Mirror of the viewer's `Scene::SoftbodyDrop` build (6×6×3 jelly
+/// cube above a 24×24 hanging cloth, 2-edge pinning) — proof that
+/// the live viewer scene rests instead of falling through. CPU-only
+/// so this runs in `cargo test -p molla --lib` style sweeps.
+#[test]
+fn viewer_softbody_drop_scene_jelly_rests_on_cloth() {
+    const TET_NX: u32 = 6;
+    const TET_NY: u32 = 6;
+    const TET_NZ: u32 = 3;
+    const TET_DX: Real = 0.10;
+    const CLOTH_NX: u32 = 24;
+    const CLOTH_W: Real = 1.6;
+    let cloth_y: Real = 1.0;
+
+    let mut b = ModelBuilder::new();
+    b.set_linear_damping(0.4);
+    let origin = Vec3::new(-CLOTH_W * 0.5, cloth_y, -CLOTH_W * 0.5);
+    let u_axis = Vec3::new(CLOTH_W, 0.0, 0.0);
+    let v_axis = Vec3::new(0.0, 0.0, CLOTH_W);
+    let (cloth_first, _, _) = b.add_cloth_grid(
+        origin,
+        u_axis,
+        v_axis,
+        CLOTH_NX,
+        CLOTH_NX,
+        0.05,
+        0.04,
+        5.0e-6,
+        0.05,
+        WorldId(0),
+    );
+    // 2-edge pinning matches the viewer scene exactly.
+    for ix in 0..CLOTH_NX {
+        b.pin_particle(cloth_first + ix);
+        b.pin_particle(cloth_first + (CLOTH_NX - 1) * CLOTH_NX + ix);
+    }
+    // Tet jelly cube above the cloth.
+    let cube_origin = Vec3::new(
+        -TET_DX * (TET_NX as Real - 1.0) * 0.5,
+        2.5,
+        -TET_DX * (TET_NZ as Real - 1.0) * 0.5,
+    );
+    for kk in 0..TET_NZ {
+        for jj in 0..TET_NY {
+            for ii in 0..TET_NX {
+                let p = cube_origin
+                    + Vec3::new(
+                        ii as Real * TET_DX,
+                        jj as Real * TET_DX,
+                        kk as Real * TET_DX,
+                    );
+                b.add_particle(p, 0.05, TET_DX * 0.5, WorldId(0));
+            }
+        }
+    }
+    let cloth_count = CLOTH_NX * CLOTH_NX;
+    let v_at = |i: u32, j: u32, k: u32| -> u32 {
+        cloth_first + cloth_count + (k * TET_NY + j) * TET_NX + i
+    };
+    let mut tets = Vec::new();
+    for kk in 0..TET_NZ - 1 {
+        for jj in 0..TET_NY - 1 {
+            for ii in 0..TET_NX - 1 {
+                let c = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                let cell_tets = cube_to_six_tets(c);
+                tets.extend_from_slice(&cell_tets);
+            }
+        }
+    }
+    let materials = vec![MaterialNeoHookean::elastic(2.0e5, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; tets.len()];
+    let _ = b
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("tet mesh");
+
+    let model = b.build().unwrap();
+    assert_eq!(
+        model.soft_surfaces.len(),
+        2,
+        "viewer scene must have 2 soft surfaces"
+    );
+
+    let mut solver = VbdSolver::new_cpu()
+        .with_iterations(8)
+        .with_contact_stiffness(1.0e5)
+        .with_vt_contact_margin(0.05)
+        .with_vt_contact_sweeps(8);
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(8);
+
+    let cube_first = cloth_first + cloth_count;
+    let cube_total = TET_NX * TET_NY * TET_NZ;
+
+    let dt: Real = 1.0 / 240.0;
+    // Run for 2.0 s of sim time (480 substeps). Long enough for the
+    // cube to fall ~1 m to the cloth and rest there.
+    for _ in 0..480 {
+        Solver::step(
+            &mut solver,
+            &model,
+            &s_a,
+            &control,
+            &contacts,
+            dt,
+            &mut s_b,
+        )
+        .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+
+    let q = s_a.particle_q.host().unwrap();
+    let cube_min_y = (cube_first..cube_first + cube_total)
+        .map(|i| q[i as usize].y)
+        .fold(Real::INFINITY, |a, b| a.min(b));
+    // The whole point of Stage 33 — the cube should NOT have free-
+    // fallen past the cloth floor (y < 0.0 = below the world plane).
+    // Without contact, it would have fallen >10 m; with contact it
+    // should be near the cloth at y≈1.0.
+    assert!(
+        cube_min_y > 0.5,
+        "viewer scene jelly fell through cloth: cube_min_y = {cube_min_y}"
+    );
+}
+
 /// Cloth particle on a kinematic tet block: a single cloth particle
 /// is released onto a fully-pinned tet block; verify the particle
 /// settles on the block's top face (it doesn't pass through).
