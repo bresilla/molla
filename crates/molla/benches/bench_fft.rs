@@ -1,6 +1,16 @@
 //! FFT benches: Stockham radix-2 1D N=4096, 2D 64×64, 3D 32³ on the
 //! GPU; CPU 1D N=4096 via `rustfft` for comparison.
 //!
+//! PERF NOTE (2026-05): `FftKernel::dispatch_*` blocks on a full
+//! `map_async` + `device.poll(wait_indefinitely)` readback inside
+//! the per-iter loop (see `kernels/fft.rs` ~line 553). On a 4096-
+//! point 1D FFT the GPU compute is < 10 µs but the round-trip
+//! latency is ~1.2 ms — i.e. CPU rustfft beats GPU FFT by ~300×
+//! at N=4096 (smoke: 3.9 µs vs 1.2 ms). The 3D 32³ case at 54 ms
+//! is closer to compute-bound but still pays one readback per
+//! sample. To compare raw kernel throughput, batch many FFTs into
+//! one submit and read back once — needs an engine API change.
+//!
 //! ```bash
 //! cargo bench -p molla --bench bench_fft --features gpu
 //! ```

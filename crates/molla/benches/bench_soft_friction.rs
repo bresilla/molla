@@ -2,6 +2,22 @@
 //! start friction) per substep, exercised through `VbdSolver::step`
 //! with VT contact margin / sweeps active. CPU and GPU.
 //!
+//! PERF NOTE (2026-05): the GPU side does NOT actually exercise the
+//! Stage 33.5 friction model — the GPU VBD backend skips EE contacts
+//! and friction in v1 (see `solvers/vbd.rs`: "EE contacts (Stage
+//! 33.1) and friction (Stage 33.5) are CPU-only and only run on the
+//! CPU VBD backend"). The GPU group here measures VBD substep +
+//! Stage 33.2 on-device VT contact pipeline only. The wall-clock for
+//! the GPU side is ALSO non-monotonic in problem size (smoke run:
+//! cloth=64 < cloth=8) because the kernel dispatches do not block
+//! and `Solver::step` returns once the command buffer is submitted.
+//! Without per-iter `device.poll(wait_indefinitely)` criterion is
+//! timing host-side dispatch + bind-group construction, NOT actual
+//! GPU compute. Real GPU latency lands when something downstream
+//! reads the buffers back; for true scaling numbers run the existing
+//! `bench_soft_vt_contact_gpu` and consume `download_*` between
+//! iterations.
+//!
 //! ```bash
 //! cargo bench -p molla --bench bench_soft_friction
 //! ```
