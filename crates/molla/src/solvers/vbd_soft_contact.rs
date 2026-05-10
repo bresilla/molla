@@ -12,12 +12,12 @@
 //!
 //! ### Stage 33.1 — Edge-Edge (EE) contact
 //!
-//! VT alone misses cloth folds passing sideways through a tet.
-//! EE catches the case where two soft edges (one from each mesh)
-//! come within `margin` of each other. The current commit ships
-//! the [`SoftContact`] enum + the dispatch path so subsequent
-//! commits can drop in the EE narrow-phase + projection without
-//! touching call sites.
+//! VT alone misses cloth folds passing sideways through a tet —
+//! e.g. a rope sliding edge-first through a triangle gap, where no
+//! single vertex pierces a tri but two edges cross. EE catches the
+//! case where two soft edges (one from each mesh) come within
+//! `margin` of each other and applies a position projection that
+//! pushes them apart along the edge-cross normal.
 //!
 //! Same-surface pairs are filtered out at this stage (self-collision
 //! lands in Stage 33.3 with proper adjacency exclusion).
@@ -92,9 +92,6 @@ pub enum SoftContact {
 /// Gather both VT and EE contacts for the current state. Internally
 /// concatenates the VT + EE narrow-phase results. Callers consume
 /// `Vec<SoftContact>` directly via [`project_soft_contacts`].
-///
-/// Stage 33: VT only — the EE half lights up in Stage 33.1 once the
-/// edge extraction + segment-segment narrow-phase land.
 pub fn gather_soft_contacts(
     model: &Model,
     state: &State,
@@ -642,7 +639,15 @@ fn project_one_ee(
     let wb0 = 1.0 - tb;
     let wb1 = tb;
 
-    let _ = contact_normal_sum; // EE skips velocity damping in v1.
+    // Accumulate the contact normal weighted by each vertex's
+    // barycentric share so the post-loop velocity damping in
+    // `project_vt_contacts` zeroes out the inward-bound component on
+    // EE-touching verts the same way it does for VT-touching verts.
+    // Edge A points along `+n` (`+wa{0,1} · n`); edge B along `-n`.
+    contact_normal_sum[ia0] += n_vec * wa0;
+    contact_normal_sum[ia1] += n_vec * wa1;
+    contact_normal_sum[ib0] -= n_vec * wb0;
+    contact_normal_sum[ib1] -= n_vec * wb1;
 
     let m_a0 = inv_mass[ia0];
     let m_a1 = inv_mass[ia1];
@@ -978,20 +983,13 @@ pub fn ccd_pass(
 }
 
 // Stage 33.5 — friction + restitution (ported from the pre-rename
-// vbd_vt_contact.rs). The `_with_hint` form here ignores the
-// previous-normal LUT (anti-tunneling normal sign refinement) — the
-// existing `gather_vt_contacts` already does the same-surface filter
-// and self-collision exclusion. Future Stage 33.5.1 can wire the hint
-// LUT in; for now the basic gather is enough for cube-on-cloth.
-fn gather_vt_contacts_with_hint(
-    model: &Model,
-    state: &State,
-    bvh: &SoftBvh,
-    margin: Real,
-    _prev_normal_lut: &std::collections::HashMap<(u32, u32), Vec3>,
-) -> Vec<VtContact> {
-    gather_vt_contacts(model, state, bvh, margin)
-}
+// vbd_vt_contact.rs). The previous merge included a
+// `gather_vt_contacts_with_hint` shim that took a `prev_normal_lut`
+// argument and immediately discarded it; it has been removed because
+// `gather_vt_contacts` already performs the same-surface filter and
+// self-collision exclusion that the hint was meant to refine. A
+// future hint-aware gather (anti-tunneling normal sign refinement)
+// can ship as a new function rather than a silently-broken wrapper.
 
 /// Stage 33.5 — copy `prev_friction_impulse` from `prev` into the
 /// matching contact in `current` (matched by `(vertex_global_id,
@@ -1012,9 +1010,22 @@ pub fn warm_start_friction(prev: &[VtContact], current: &mut [VtContact]) {
     }
 }
 
-/// Stage 33.5 — friction-aware VT projection. Returns the substep's
-/// final contact set (with `prev_friction_impulse` populated) so the
-/// caller can persist it for warm-starting the next substep.
+/// Stage 33.5 — friction-aware VT projection + Stage 33.1 EE
+/// projection. Returns the substep's final VT contact set (with
+/// `prev_friction_impulse` populated) so the caller can persist it
+/// for warm-starting the next substep.
+///
+/// Each Jacobi sweep runs:
+/// 1. BVH refit against the latest positions.
+/// 2. VT gather + friction-aware position projection (Stage 33.5).
+/// 3. EE gather + position projection (Stage 33.1) — frictionless
+///    in v1; friction along an edge-edge contact is geometrically
+///    ambiguous and the EE pass exists primarily to stop ropes /
+///    cloth folds from threading through tet faces.
+///
+/// Both VT and EE feed the per-vertex `contact_normal_sum`, so the
+/// post-loop velocity recovery (restitution + Coulomb tangential
+/// damping) sees normals from both contact flavours.
 pub fn project_vt_contacts(
     model: &Model,
     state: &mut State,
@@ -1039,28 +1050,23 @@ pub fn project_vt_contacts(
     let mut friction_per_v: Vec<Real> = vec![0.0; model.particle_count];
     let v_eps: Real = 1.0e-3;
 
-    let mut prev_normal_lut: std::collections::HashMap<(u32, u32), Vec3> =
-        std::collections::HashMap::with_capacity(prev_contacts.len());
-    for c in prev_contacts {
-        let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
-        prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
-    }
     let mut final_contacts: Vec<VtContact> = Vec::new();
 
     for sweep_idx in 0..n_sweeps {
         bvh.refit(model, state);
-        let mut contacts =
-            gather_vt_contacts_with_hint(model, state, bvh, margin, &prev_normal_lut);
+        let mut contacts = gather_vt_contacts(model, state, bvh, margin);
         if sweep_idx == 0 {
             warm_start_friction(prev_contacts, &mut contacts);
         } else {
             warm_start_friction(&final_contacts, &mut contacts);
         }
-        if contacts.is_empty() {
+        let ee_contacts = gather_ee_contacts(model, state, bvh, margin);
+        if contacts.is_empty() && ee_contacts.is_empty() {
             break;
         }
         let q = state.particle_q.host_mut()?;
         let tris: &[[u32; 3]] = &model.soft_surface_tris;
+        let edges: &[[u32; 2]] = &model.soft_surface_edges;
         for c in contacts.iter_mut() {
             let v = c.vertex_global_id as usize;
             let tri = tris[c.tri_global_id as usize];
@@ -1126,9 +1132,13 @@ pub fn project_vt_contacts(
                 }
             }
         }
-        for c in &contacts {
-            let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
-            prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+        // EE projection — frictionless penalty + contact-normal
+        // accumulation so the post-loop velocity damping handles
+        // both VT and EE the same way. Without this, ropes / cloth
+        // folds whose edges thread between two tris (no single
+        // vertex piercing a tri) tunnel through the other surface.
+        for ee in &ee_contacts {
+            project_one_ee(ee, q, edges, &inv_mass, &mut contact_normal_sum);
         }
         final_contacts = contacts;
     }
