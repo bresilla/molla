@@ -372,6 +372,12 @@ pub struct Model {
     /// in v1; the GPU mirror is uploaded by [`Self::upload_to_device`]
     /// into [`Self::soft_surface_tris_gpu`] (Stage 33.2).
     pub soft_surface_tris: Vec<[u32; 3]>,
+    /// Stage 33.1 — flat edge list across every soft surface. Each
+    /// entry is `[min_vert_id, max_vert_id]` (unique undirected edge);
+    /// per-surface entries occupy `SoftSurface.edge_offset .. + edge_count`.
+    /// Used by the EE narrow-phase to enumerate candidate edges
+    /// without re-deriving them per substep.
+    pub soft_surface_edges: Vec<[u32; 2]>,
 
     /// Stage 33.3 — per-vertex incident-tri set, CSR-encoded.
     /// `soft_vertex_incident_tris[soft_vertex_incident_tris_offsets[v]..v+1]`
@@ -742,6 +748,8 @@ impl Model {
             // empty for every particle.
             soft_vertex_incident_tris_offsets: vec![0u32],
             soft_vertex_incident_tris: Vec::new(),
+            // Stage 33.1 — empty edge list when no soft surfaces.
+            soft_surface_edges: Vec::new(),
             #[cfg(feature = "gpu")]
             soft_surface_tris_gpu: None,
             #[cfg(feature = "gpu")]

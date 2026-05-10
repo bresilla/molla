@@ -64,6 +64,13 @@ pub struct SoftSurface {
     /// Number of triangles in `Model.soft_surface_tris` belonging to
     /// this surface.
     pub tri_count: u32,
+    /// First edge in `Model.soft_surface_edges` (Stage 33.1 — EE
+    /// contact). Edges are unique undirected `[min, max]` pairs
+    /// derived from the surface's tris.
+    pub edge_offset: u32,
+    /// Number of edges in `Model.soft_surface_edges` belonging to
+    /// this surface (Stage 33.1).
+    pub edge_count: u32,
     /// Source tet mesh identifier when `kind == TetMesh`; `None` for
     /// cloth surfaces.
     pub tet_mesh_id: Option<TetMeshId>,
@@ -134,6 +141,40 @@ pub fn compute_tet_surface_triangles(tets: &[[u32; 4]]) -> Vec<[u32; 3]> {
     for (_, (count, tri)) in faces {
         if count == 1 {
             out.push(tri);
+        }
+    }
+    out
+}
+
+/// Compute the unique undirected edges from a triangle set.
+///
+/// Each tri contributes its 3 edges; we sort each pair as
+/// `[min, max]` and dedup so the result is a flat `Vec<[u32; 2]>`
+/// with one entry per unique edge. Used by Stage 33.1's EE contact
+/// gather to enumerate per-surface edges without re-deriving them
+/// per substep.
+#[must_use]
+pub fn compute_surface_edges(tris: &[[u32; 3]]) -> Vec<[u32; 2]> {
+    use std::collections::HashSet;
+    if tris.is_empty() {
+        return Vec::new();
+    }
+    let mut seen: HashSet<(u32, u32)> = HashSet::with_capacity(tris.len() * 3);
+    let mut out: Vec<[u32; 2]> = Vec::with_capacity(tris.len() * 3);
+    for tri in tris {
+        let pairs = [
+            (tri[0], tri[1]),
+            (tri[1], tri[2]),
+            (tri[2], tri[0]),
+        ];
+        for (a, b) in pairs {
+            if a == b {
+                continue; // degenerate edge; skip.
+            }
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen.insert(key) {
+                out.push([key.0, key.1]);
+            }
         }
     }
     out

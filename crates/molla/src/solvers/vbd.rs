@@ -184,8 +184,14 @@ pub struct VbdSolver {
     /// projection. 6 is enough for the v1 demo (jelly on cloth);
     /// raise for stiff multi-contact configurations.
     pub vt_contact_sweeps: usize,
-    /// Stage 33 — last-substep active VT contact count, surfaced so
-    /// viewer / tests can read it without re-running gather.
+    /// Stage 33 / 33.1 — last-substep active soft contact count
+    /// (VT + EE combined), surfaced so viewer / tests can read it
+    /// without re-running gather. Stage 33 emitted only VT contacts;
+    /// Stage 33.1 onwards this also includes EE contacts. The
+    /// legacy name (`vt_contact_count`) is retained for back-compat
+    /// — viewer panes already use it as a "number of cross-mesh
+    /// soft contacts" readout, which is exactly what the unified
+    /// count means.
     pub last_vt_contact_count: usize,
     /// Stage 33 — cross-mesh BVH, lazily built on the first substep
     /// (`None` until then). Refit per substep; rebuilt only when
@@ -373,8 +379,9 @@ impl VbdSolver {
         self
     }
 
-    /// Stage 33 — last-frame active VT contact count. Available for
-    /// the viewer pane and tests after `step` returns.
+    /// Stage 33 / 33.1 — last-frame active soft (VT + EE) contact
+    /// count. Available for the viewer pane and tests after `step`
+    /// returns.
     #[must_use]
     pub fn last_vt_contact_count(&self) -> usize {
         self.last_vt_contact_count
@@ -407,6 +414,14 @@ impl VbdSolver {
     #[must_use]
     pub fn last_ccd_snaps(&self) -> usize {
         self.last_ccd_snaps
+    }
+
+    /// Stage 33.1 — same value as [`Self::last_vt_contact_count`],
+    /// renamed for clarity now that the count includes EE contacts
+    /// too. New callers should prefer this accessor.
+    #[must_use]
+    pub fn last_soft_contact_count(&self) -> usize {
+        self.last_vt_contact_count
     }
 
     /// Refresh the per-spring stiffness table from `model`. Call
@@ -507,7 +522,7 @@ impl Solver for VbdSolver {
                                 Some(crate::geometry::SoftBvh::build(model, state_in));
                         }
                         let bvh = self.soft_bvh.as_mut().unwrap();
-                        let (inv, snaps) = super::vbd_vt_contact::ccd_pass(
+                        let (inv, snaps) = super::vbd_soft_contact::ccd_pass(
                             model,
                             bvh,
                             &mut p_in,
@@ -585,7 +600,7 @@ impl Solver for VbdSolver {
                         self.soft_bvh = Some(crate::geometry::SoftBvh::build(model, state_out));
                     }
                     let bvh = self.soft_bvh.as_mut().unwrap();
-                    self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                    self.last_vt_contact_count = super::vbd_soft_contact::project_soft_contacts(
                         model,
                         state_out,
                         bvh,
@@ -756,6 +771,11 @@ impl Solver for VbdSolver {
                             &inv_mass_vec,
                         )?;
                     }
+                    // VT contacts are handled by the GPU kernel above
+                    // (Stage 33.2). EE contacts (Stage 33.1) are CPU-only
+                    // and only run on the CPU VBD backend; the GPU path
+                    // skips them in v1 (a future Stage 33.2.1 EE GPU
+                    // port can extend the kernel).
                     state_out.particle_q.ensure_device(&device)?;
                     state_out.particle_q.upload(&queue)?;
                 }

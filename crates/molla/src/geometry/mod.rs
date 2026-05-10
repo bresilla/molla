@@ -54,7 +54,8 @@ pub use tet_bvh::{
 
 // ── Stage 33: cross-mesh soft-vs-soft VT contact infrastructure ────
 pub use soft_surface::{
-    compute_tet_surface_triangles, ClothMeshId, SoftSurface, SoftSurfaceKind,
+    compute_surface_edges, compute_tet_surface_triangles, ClothMeshId, SoftSurface,
+    SoftSurfaceKind,
 };
 pub use soft_bvh::SoftBvh;
 // ── Stage 33.4: VT-CCD root-finding for fast-impact tunnelling ─────
