@@ -19,6 +19,7 @@ pub mod actuators;
 pub mod autograd;
 pub mod compute;
 pub mod core;
+pub mod fem;
 pub mod geometry;
 pub mod kernels;
 pub mod math;
