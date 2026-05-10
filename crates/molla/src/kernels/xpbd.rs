@@ -301,8 +301,15 @@ impl XpbdKernel {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: external_buf.as_entire_binding() }],
         });
 
-        // Contacts. If empty, bind 1-element dummies — but for now
-        // contacts.upload_to_device guarantees the buffers exist.
+        // Contacts. The bind group requires non-null device buffers
+        // for every binding, including `body_contact_offsets` /
+        // `body_contact_indices` which are sized by the contact set
+        // (not the body count). Callers MUST run a `CollisionPipeline
+        // ::collide` pass at least once before dispatch (even if it
+        // produces zero contacts) so the CSR buffers get sized — see
+        // `bench_xpbd_pile_gpu` for the canonical pre-collide pattern.
+        // Without that pre-collide, `device_buffer()?` on an empty
+        // CSR returns "binding 6: no device mirror".
         let bg_contacts = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::xpbd contacts bg"),
             layout: &self.layout_contacts,

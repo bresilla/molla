@@ -852,7 +852,9 @@ fn cpu_step(
         qd_out.copy_from_slice(&qd_scratch);
     }
 
-    // Particle XPBD pass — separate from rigid bodies for now.
+    // Particle XPBD pass — runs after the rigid pass with no
+    // two-way coupling in v1 (cloth/rope contacts against rigids
+    // are handled by the dedicated soft-contact pipeline in VBD).
     if model.particle_count > 0 {
         let p_in = state_in.particle_q.host()?.to_vec();
         let v_in = state_in.particle_qd.host()?.to_vec();
