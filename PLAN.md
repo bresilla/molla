@@ -5398,7 +5398,39 @@ substep sweep test.
 
 **Dependencies:** Stage 33 (provides VT/EE pipelines).
 
-### Stage 33.5 — Friction + restitution at soft contacts — v2 fidelity
+### Stage 33.2.1 — GPU friction + restitution port — v2 hot path complete
+
+Stage 33.5 shipped Coulomb friction + restitution for the CPU VBD
+backend. The Stage 33.2 GPU kernel still does normal-only contact;
+viewer scenes that rely on friction (#45 FastSoftImpact, #46
+SoftBrake) override to CPU VBD. 33.2.1 extends `soft_vt_contact.wgsl`
+with the same Dahl-smoothed Coulomb friction + restitution-aware
+normal velocity recovery the CPU does, so all soft scenes stay on
+the GPU path.
+
+**Deliverables:**
+- Extend `SoftSurfaceGpu` struct (in `crates/molla/src/sim/model.rs`)
+  with `friction: f32`, `restitution: f32` (currently 32 bytes; use
+  the existing padding slots).
+- Persistent device buffer for previous-frame VT contacts
+  (`prev_vt_contacts: wgpu::Buffer`) sized to the worst-case bound;
+  warm-start lookup happens in the kernel via a small per-vertex hash.
+  Or simpler: re-emit contacts every substep without warm-start (a
+  perf vs accuracy tradeoff — pick re-emit for v1, document the
+  cost).
+- New WGSL entry point `apply_vt_friction` (or fold into existing
+  `apply_vt_penalty`): for each contact, compute tangential drift
+  from `q - q_pre`, project into tangent plane, apply Dahl-smoothed
+  Coulomb force capped at `μ · push_n`. Restitution-aware velocity
+  recovery in `commit_dq`.
+- Drop the CPU-override blocks in viewer #45 / #46 — they should run
+  on GPU now.
+- Tests: `crates/molla/tests/soft_friction_gpu.rs` mirroring the CPU
+  tests with `#[ignore]` GPU markers + a `make test-soft-friction-gpu`
+  lane.
+
+**Dependencies:** Stage 33.2 (GPU pipeline), Stage 33.5 (CPU friction
+math reference).
 
 Coulomb friction (Dahl-style continuous approximation) at each VT/EE
 contact, plus a restitution coefficient.
