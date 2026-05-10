@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-soft-vt-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -156,6 +156,15 @@ test-mpm-v3-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test mpm_v3_gpu -- --ignored
 test-mpm-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test mpm_gpu -- --ignored
+
+# Stage 33.2 — GPU port of the soft-on-soft VT contact pipeline (LBVH
+# refit + gather_vt + apply_vt_penalty + commit_dq, all on the device).
+# Tests mirror the Stage 33 CPU integration tests in
+# tests/soft_vt_contact.rs and assert: (a) the GPU/CPU paths agree
+# while in free fall, and (b) the cube rests on the cloth instead of
+# free-falling through it. All `--ignored` (real wgpu adapter needed).
+test-soft-vt-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test soft_vt_contact_gpu -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored

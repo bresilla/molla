@@ -2623,6 +2623,10 @@ impl ModelBuilder {
             soft_surface_tris,
             soft_vertex_incident_tris_offsets: svit_offsets,
             soft_vertex_incident_tris: svit,
+            #[cfg(feature = "gpu")]
+            soft_surface_tris_gpu: None,
+            #[cfg(feature = "gpu")]
+            soft_surfaces_gpu: None,
             vertex_adjacent_tets_offsets: Buffer::from_vec(
                 vertex_adjacent_tets_offsets,
                 s,

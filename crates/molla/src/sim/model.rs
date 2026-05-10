@@ -369,8 +369,8 @@ pub struct Model {
     pub soft_surfaces: Vec<crate::geometry::SoftSurface>,
     /// Flat tri list across every soft surface. Indexed by
     /// `SoftSurface.tri_offset..tri_offset + tri_count`. CPU-only
-    /// in v1; the GPU port (Stage 33.2) will mirror this onto a
-    /// `Buffer<[u32; 3]>`-equivalent device array.
+    /// in v1; the GPU mirror is uploaded by [`Self::upload_to_device`]
+    /// into [`Self::soft_surface_tris_gpu`] (Stage 33.2).
     pub soft_surface_tris: Vec<[u32; 3]>,
 
     /// Stage 33.3 — per-vertex incident-tri set, CSR-encoded.
@@ -388,6 +388,20 @@ pub struct Model {
     /// incident-tri CSR. See
     /// [`Self::soft_vertex_incident_tris_offsets`].
     pub soft_vertex_incident_tris: Vec<u32>,
+    /// Stage 33.2 — GPU mirror of [`Self::soft_surface_tris`]. Each
+    /// triangle is stored as a `vec4<u32>` (`x=v0, y=v1, z=v2,
+    /// w=tri_surface_owner`) — the surface owner is folded in so the
+    /// VT gather kernel can apply the same-surface filter without a
+    /// second indirection. Lazily allocated on the first
+    /// [`Self::upload_to_device`] when `soft_surface_tris` is non-empty;
+    /// `None` otherwise.
+    #[cfg(feature = "gpu")]
+    pub soft_surface_tris_gpu: Option<wgpu::Buffer>,
+    /// Stage 33.2 — GPU mirror of [`Self::soft_surfaces`]. One
+    /// `SoftSurfaceGpu` (32 bytes — kind, vertex_offset, vertex_count,
+    /// tri_offset, tri_count, padding) per registered soft surface.
+    #[cfg(feature = "gpu")]
+    pub soft_surfaces_gpu: Option<wgpu::Buffer>,
 
     // ── Per-vertex tet adjacency CSR (Stage 20.2) ──────────────────
     // Computed at build time alongside the spring adjacency. Each
@@ -728,6 +742,10 @@ impl Model {
             // empty for every particle.
             soft_vertex_incident_tris_offsets: vec![0u32],
             soft_vertex_incident_tris: Vec::new(),
+            #[cfg(feature = "gpu")]
+            soft_surface_tris_gpu: None,
+            #[cfg(feature = "gpu")]
+            soft_surfaces_gpu: None,
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets: Buffer::from_vec(Vec::new(), s),
 
@@ -954,8 +972,89 @@ impl Model {
         up!(equality_mimic_driven_joint);
         up!(equality_mimic_poly);
         up!(gravity);
+
+        // ── Stage 33.2 — soft surface registry GPU mirror ─────────
+        // Triangles are uploaded as `vec4<u32>` (x=v0, y=v1, z=v2,
+        // w=tri_surface_owner) so the VT gather kernel can apply the
+        // same-surface filter (Stage 33.3 will add per-vertex adjacency
+        // exclusion on top of this; for v1 the surface-owner test is
+        // enough). Each surface is uploaded as a 32-byte
+        // `SoftSurfaceGpu` (kind, vertex_offset, vertex_count,
+        // tri_offset, tri_count, _pad[3]).
+        if !self.soft_surface_tris.is_empty() && !self.soft_surfaces.is_empty() {
+            let mut tri_owner: Vec<u32> = vec![0u32; self.soft_surface_tris.len()];
+            for (s_idx, s) in self.soft_surfaces.iter().enumerate() {
+                let lo = s.tri_offset as usize;
+                let hi = lo + s.tri_count as usize;
+                for slot in tri_owner.iter_mut().take(hi).skip(lo) {
+                    *slot = s_idx as u32;
+                }
+            }
+            let mut tri_data: Vec<[u32; 4]> =
+                Vec::with_capacity(self.soft_surface_tris.len());
+            for (i, t) in self.soft_surface_tris.iter().enumerate() {
+                tri_data.push([t[0], t[1], t[2], tri_owner[i]]);
+            }
+            let tris_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("molla::soft_surface_tris"),
+                size: (tri_data.len() * core::mem::size_of::<[u32; 4]>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&tris_buf, 0, bytemuck::cast_slice(&tri_data));
+            self.soft_surface_tris_gpu = Some(tris_buf);
+
+            let mut surf_data: Vec<SoftSurfaceGpu> =
+                Vec::with_capacity(self.soft_surfaces.len());
+            for s in &self.soft_surfaces {
+                use crate::geometry::SoftSurfaceKind;
+                let kind = match s.kind {
+                    SoftSurfaceKind::TetMesh => 0u32,
+                    SoftSurfaceKind::Cloth => 1u32,
+                };
+                surf_data.push(SoftSurfaceGpu {
+                    kind,
+                    vertex_offset: s.vertex_offset,
+                    vertex_count: s.vertex_count,
+                    tri_offset: s.tri_offset,
+                    tri_count: s.tri_count,
+                    _pad: [0u32; 3],
+                });
+            }
+            let surf_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("molla::soft_surfaces"),
+                size: (surf_data.len() * core::mem::size_of::<SoftSurfaceGpu>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&surf_buf, 0, bytemuck::cast_slice(&surf_data));
+            self.soft_surfaces_gpu = Some(surf_buf);
+        }
+
         Ok(())
     }
+}
+
+/// GPU-side mirror of [`crate::geometry::SoftSurface`] — Stage 33.2.
+/// 32 bytes (8 × u32) so it aligns cleanly into a WGSL storage buffer
+/// and matches the `SoftSurfaceGpu` struct in
+/// `shaders/soft_vt_contact.wgsl`.
+#[cfg(feature = "gpu")]
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SoftSurfaceGpu {
+    /// `0 = TetMesh`, `1 = Cloth`. Matches
+    /// [`crate::geometry::SoftSurfaceKind`].
+    pub kind: u32,
+    pub vertex_offset: u32,
+    pub vertex_count: u32,
+    pub tri_offset: u32,
+    pub tri_count: u32,
+    pub _pad: [u32; 3],
 }
 
 #[cfg(test)]

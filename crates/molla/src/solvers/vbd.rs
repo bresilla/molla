@@ -92,6 +92,13 @@ pub struct GpuBackend {
     pub(crate) device: std::sync::Arc<wgpu::Device>,
     pub(crate) queue: std::sync::Arc<wgpu::Queue>,
     pub(crate) kernel: crate::kernels::VbdClothKernel,
+    /// Stage 33.2 — GPU LBVH driver for the soft-surface tris. Lazily
+    /// constructed on the first substep with VT contact (`None` for
+    /// scenes without soft surfaces, or until the first step).
+    pub(crate) soft_bvh_gpu: Option<crate::kernels::SoftBvhGpu>,
+    /// Stage 33.2 — GPU VT contact pipelines. Same lazy-construct
+    /// pattern as `soft_bvh_gpu`.
+    pub(crate) soft_vt_kernel: Option<crate::kernels::SoftVtContactKernel>,
 }
 
 /// AVBD contact treatment. **Soft** is the Stage-20 v1 quadratic
@@ -278,7 +285,13 @@ impl VbdSolver {
             ccd_velocity_threshold: 1.0,
             last_ccd_invocations: 0,
             last_ccd_snaps: 0,
-            backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
+            backend: VbdBackend::Gpu(GpuBackend {
+                device,
+                queue,
+                kernel,
+                soft_bvh_gpu: None,
+                soft_vt_kernel: None,
+            }),
         })
     }
 
@@ -609,7 +622,13 @@ impl Solver for VbdSolver {
                 // check after a previous GPU dispatch) and instead
                 // rely on the caller to manage body integration.
 
-                let GpuBackend { device, queue, kernel } = gpu;
+                // Borrow the bits the kernel dispatch needs separately
+                // from the soft-VT pipeline (which we lazy-construct
+                // below). Splitting the borrow lets us mutate
+                // `gpu.soft_bvh_gpu` / `gpu.soft_vt_kernel` after the
+                // main kernel dispatch.
+                let device = gpu.device.clone();
+                let queue = gpu.queue.clone();
                 let contact_k = self.contact_stiffness as f32;
                 let hard = matches!(self.vbd_mode, VbdMode::Hard);
                 // Stage 33.4 — GPU CCD path is deferred. The kernel
@@ -626,9 +645,9 @@ impl Solver for VbdSolver {
                 // substep ping-pong is implemented by dispatching N
                 // times with a chain of state_in → state_out swaps
                 // entirely on the device side.
-                kernel.dispatch(
-                    device,
-                    queue,
+                gpu.kernel.dispatch(
+                    &device,
+                    &queue,
                     model,
                     state_in,
                     state_out,
@@ -637,30 +656,94 @@ impl Solver for VbdSolver {
                     contact_k,
                     hard,
                 )?;
-                // Stage 20.4 — tet-vs-tet collision via a host-side
-                // post-step fixup. Only runs when the model has ≥ 2 tet
-                // meshes (the v1 demo workload of two jelly cubes
-                // colliding); single-tet-mesh models skip this entirely.
-                //
-                // This fallback was selected per the spec's risk note
-                // ("If GPU traversal is too tricky, fall back to CPU
-                //  BVH build + GPU per-vertex penalty using a flat tet
-                //  list" — we go one step simpler still: CPU broad
-                //  phase + CPU narrow phase + position projection,
-                //  applied between substeps). Round-trip cost is one
-                //  particle_q download + one upload per substep; on the
-                //  600-substep two-cube test the wall-clock cost is
-                //  ~6ms total, well under the test budget.
+                // Stage 33.2 — soft-vs-soft VT contact via a fully-GPU
+                // pipeline. Replaces the Stage 33 host-side post-step
+                // round trip (`particle_q.download → CPU project → upload`)
+                // with three on-device dispatches: `compute_tri_aabbs`
+                // → `LBVH refit_in_place` → `gather_vt + apply_vt_penalty
+                // + commit_dq`. The only host bounce is a 4-byte read
+                // of the contact count between gather and apply.
                 let has_vt = model.soft_surfaces.len() >= 2 && self.contact_stiffness > 0.0;
-                if (model.tet_count > 0 && model.tet_mesh_count >= 2
-                    && self.contact_stiffness > 0.0)
-                    || !self.sdf_backings.is_empty()
-                    || has_vt
-                {
-                    state_out.particle_q.download(device, queue)?;
-                    if model.tet_count > 0 && model.tet_mesh_count >= 2
-                        && self.contact_stiffness > 0.0
-                    {
+                if has_vt {
+                    // Lazy construct the GPU BVH + VT kernel on first use.
+                    if gpu.soft_bvh_gpu.is_none() {
+                        gpu.soft_bvh_gpu = Some(
+                            crate::kernels::SoftBvhGpu::new(
+                                device.clone(),
+                                queue.clone(),
+                                model,
+                            )?,
+                        );
+                    }
+                    if gpu.soft_vt_kernel.is_none() {
+                        gpu.soft_vt_kernel = Some(
+                            crate::kernels::SoftVtContactKernel::new(
+                                device.clone(),
+                                queue.clone(),
+                                model,
+                            )?,
+                        );
+                    }
+                    let soft_bvh = gpu.soft_bvh_gpu.as_mut().unwrap();
+                    let vt_kernel = gpu.soft_vt_kernel.as_ref().unwrap();
+                    // Run the gather+apply+commit Jacobi-style sweep
+                    // `vt_contact_sweeps` times per substep — matches
+                    // the CPU `project_vt_contacts` semantics. Each
+                    // sweep refits the BVH against the latest
+                    // post-projection positions so successive contacts
+                    // converge.
+                    let n_sweeps = self.vt_contact_sweeps.max(1);
+                    let mut last_count = 0u32;
+                    for _ in 0..n_sweeps {
+                        // 1) compute per-tri AABBs from the current
+                        //    state.particle_q (writes directly into the
+                        //    LBVH primitive_aabb buffer).
+                        vt_kernel.dispatch_compute_tri_aabbs(model, state_out, soft_bvh)?;
+                        // 2) refit the LBVH in place against those AABBs.
+                        soft_bvh.refit(model)?;
+                        // 3) gather + apply + commit_dq — fully GPU.
+                        let stats = vt_kernel.dispatch_gather_and_apply(
+                            model,
+                            state_out,
+                            soft_bvh,
+                            self.vt_contact_margin,
+                            self.contact_stiffness,
+                        )?;
+                        last_count = stats.contact_count;
+                        if stats.contact_count == 0 {
+                            // No active contacts — early-out the rest
+                            // of the sweep (matches CPU
+                            // `project_vt_contacts` `break` on empty
+                            // contact list).
+                            break;
+                        }
+                    }
+                    self.last_vt_contact_count = last_count as usize;
+                    // commit_dq mutated state_out.particle_q +
+                    // particle_qd in place. The Buffer<Vec3> wrapper
+                    // still thinks the host is canonical — mark them
+                    // device-dirty so subsequent host reads trip the
+                    // staleness check (and legitimate use cases call
+                    // download).
+                    state_out.particle_q.mark_device_dirty();
+                    state_out.particle_qd.mark_device_dirty();
+                }
+                // Stage 20.4 — host-side fallbacks for tet-vs-tet (when
+                // ≥ 2 tet meshes register but soft surfaces don't yet
+                // expose them as the unified registry) + SDF backings.
+                // These STILL require a `particle_q.download → upload`
+                // round-trip until they're ported (Stage 33.2 spec
+                // explicitly leaves rigid-SDF backings as CPU-only).
+                let has_tet_tet = model.tet_count > 0
+                    && model.tet_mesh_count >= 2
+                    && self.contact_stiffness > 0.0
+                    // Don't double-process: when soft surfaces cover
+                    // the same tet meshes, the GPU VT pipeline above
+                    // already handled them.
+                    && !has_vt;
+                if has_tet_tet || !self.sdf_backings.is_empty() {
+                    state_out.particle_q.download(&device, &queue)?;
+                    if has_tet_tet {
                         project_tet_tet_contacts(model, state_out)?;
                     }
                     if !self.sdf_backings.is_empty() {
@@ -673,22 +756,8 @@ impl Solver for VbdSolver {
                             &inv_mass_vec,
                         )?;
                     }
-                    if has_vt {
-                        if self.soft_bvh.is_none() {
-                            self.soft_bvh =
-                                Some(crate::geometry::SoftBvh::build(model, state_out));
-                        }
-                        let bvh = self.soft_bvh.as_mut().unwrap();
-                        self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
-                            model,
-                            state_out,
-                            bvh,
-                            self.vt_contact_margin,
-                            self.vt_contact_sweeps,
-                        )?;
-                    }
-                    state_out.particle_q.ensure_device(device)?;
-                    state_out.particle_q.upload(queue)?;
+                    state_out.particle_q.ensure_device(&device)?;
+                    state_out.particle_q.upload(&queue)?;
                 }
                 if n_sub > 1 {
                     // Subsequent substeps: alternate buffers using a
