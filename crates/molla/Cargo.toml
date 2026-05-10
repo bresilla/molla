@@ -287,3 +287,24 @@ name = "bench_fft"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Paired CPU-vs-GPU benches — both backends in one criterion group so
+# the reports print side-by-side for easy comparison. The matched-N
+# values are the intersection of what CPU + GPU both run sensibly.
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_xpbd_pile_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_tets_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
