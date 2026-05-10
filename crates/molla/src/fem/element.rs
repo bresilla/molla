@@ -139,6 +139,76 @@ pub fn compute_element_stiffness(
     }
 }
 
+/// Per-cell **convection** matrix `Cₑ = ∫ Nᵢ · (b · ∇Nⱼ) dx`.
+///
+/// Stage 37.2 — first-order advection operator for the
+/// convection-diffusion / Navier-Stokes momentum block. With P1
+/// (linear) shape functions the gradients `∇Nⱼ` are constant per
+/// element so `b · ∇Nⱼ` is a single number for each column `j`; the
+/// integral collapses to that constant times `∫ Nᵢ dx = |Ω| / (N+1)`
+/// for every row `i` (the well-known "barycentric mean" for P1
+/// elements over a simplex). The block is therefore rank-1 in the
+/// row direction, with all rows equal to the column vector
+/// `(|Ω| / (N+1)) · (b · ∇Nⱼ)`.
+///
+/// Returns an `N × N` matrix as `Vec<Vec<Real>>` where `N = 3` (Tri)
+/// or `N = 4` (Tet). The convection direction `b` is a 3D vector;
+/// triangle elements use only the in-plane components `(b.x, b.y)`.
+///
+/// Without stabilisation this operator is **non-symmetric** and
+/// becomes oscillatory when the cell Péclet number `|b|·h / (2α)`
+/// exceeds 1. Pair with [`compute_element_supg_convection`] to
+/// recover monotonicity in the convection-dominated regime.
+#[must_use]
+pub fn compute_element_convection(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    b: Vec3,
+) -> Vec<Vec<Real>> {
+    match cell {
+        FemCell::Tri(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+            ];
+            let area = tri_area_2d(&p);
+            let grads = tri_shape_grads_2d(&p);
+            // ∫ Nᵢ dx = area / 3 for P1 on a triangle.
+            let mean = area / 3.0;
+            let bg: [Real; 3] = [
+                b.x * grads[0][0] + b.y * grads[0][1],
+                b.x * grads[1][0] + b.y * grads[1][1],
+                b.x * grads[2][0] + b.y * grads[2][1],
+            ];
+            (0..3)
+                .map(|_i| (0..3).map(|j| mean * bg[j]).collect())
+                .collect()
+        }
+        FemCell::Tet(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+                vertices[idx[3] as usize],
+            ];
+            let vol = tet_volume(&p);
+            let grads = tet_shape_grads(&p);
+            // ∫ Nᵢ dx = vol / 4 for P1 on a tetrahedron.
+            let mean = vol / 4.0;
+            let bg: [Real; 4] = [
+                b.dot(grads[0]),
+                b.dot(grads[1]),
+                b.dot(grads[2]),
+                b.dot(grads[3]),
+            ];
+            (0..4)
+                .map(|_i| (0..4).map(|j| mean * bg[j]).collect())
+                .collect()
+        }
+    }
+}
+
 /// Per-cell **wave** stiffness matrix `Kₑ = c² · ∫ ∇φᵢ · ∇φⱼ dx`.
 ///
 /// Stage 37.1 — symmetric Helmholtz operator used as the spatial
