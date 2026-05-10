@@ -3,6 +3,7 @@
 //! GPU parity tests live in `tile_primitives_gpu.rs` (gated behind the
 //! `gpu` feature + `#[ignore]`).
 
+use molla::compute::tile_convolution::{self, Kernel5};
 use molla::compute::{tile_block_cholesky, tile_matmul};
 
 /// Tiny LCG so tests are dependency-free and reproducible.
@@ -195,5 +196,67 @@ fn tile_block_cholesky_cpu_identity_returns_identity() {
 fn tile_block_cholesky_cpu_rejects_shape_mismatch() {
     let mut a = vec![0.0_f32; 4];
     let err = tile_block_cholesky::cholesky_cpu(&mut a, 3);
+    assert!(err.is_err());
+}
+
+// ── C — separable 2D convolution ─────────────────────────────────────
+
+#[test]
+fn tile_convolution_cpu_identity_returns_input() {
+    let w = 16;
+    let h = 16;
+    let mut rng = Lcg::new(31);
+    let input: Vec<f32> = (0..w * h).map(|_| rng.signed()).collect();
+    let mut output = vec![0.0_f32; w * h];
+    tile_convolution::convolve_separable_cpu(&input, &mut output, w, h, &Kernel5::identity())
+        .unwrap();
+    for (g, e) in output.iter().zip(input.iter()) {
+        assert!((g - e).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn tile_convolution_cpu_gaussian_constant_field_returns_constant() {
+    // A constant field should be unchanged by any normalised filter.
+    let w = 32;
+    let h = 32;
+    let input = vec![3.5_f32; w * h];
+    let mut output = vec![0.0_f32; w * h];
+    tile_convolution::convolve_separable_cpu(&input, &mut output, w, h, &Kernel5::gaussian5())
+        .unwrap();
+    for v in output.iter() {
+        assert!((v - 3.5).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn tile_convolution_cpu_box_smooths_to_local_mean() {
+    // A spike at the centre of an otherwise-zero field, smoothed by a
+    // box filter, should leave the centre tap with the expected value.
+    let w = 9;
+    let h = 9;
+    let mut input = vec![0.0_f32; w * h];
+    input[4 * w + 4] = 1.0;
+    let mut output = vec![0.0_f32; w * h];
+    tile_convolution::convolve_separable_cpu(&input, &mut output, w, h, &Kernel5::box5()).unwrap();
+    // Box separable: each axis pass spreads 1/5 of the spike to its
+    // 5-tap window. After both passes, the centre tap holds (1/5)² =
+    // 0.04 and 5×5 = 25 cells around the spike are non-zero.
+    assert!((output[4 * w + 4] - 0.04).abs() < 1e-6);
+    let total: f32 = output.iter().sum();
+    assert!((total - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn tile_convolution_cpu_rejects_shape_mismatch() {
+    let input = vec![0.0_f32; 8];
+    let mut output = vec![0.0_f32; 6];
+    let err = tile_convolution::convolve_separable_cpu(
+        &input,
+        &mut output,
+        4,
+        2,
+        &Kernel5::identity(),
+    );
     assert!(err.is_err());
 }

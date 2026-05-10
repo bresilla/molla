@@ -7,6 +7,7 @@
 #![cfg(feature = "gpu")]
 
 use molla::compute::tile_block_cholesky::{self, TileBlockCholeskyKernel};
+use molla::compute::tile_convolution::{self, Kernel5, TileConvolutionKernel};
 use molla::compute::tile_matmul::{self, TileMatmulKernel};
 use molla::compute::Engine;
 
@@ -136,6 +137,63 @@ fn tile_block_cholesky_gpu_matches_cpu_128x128() {
     // Cholesky + sqrt amplifies f32 round-off; the test tolerance
     // covers element-wise drift between CPU and GPU executions.
     assert!(max_err < 1.0e-2, "max element err = {max_err}");
+}
+
+// ── C — separable 2D convolution ─────────────────────────────────────
+
+#[test]
+#[ignore]
+fn tile_convolution_gpu_matches_cpu_256_x_256_gaussian() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileConvolutionKernel::new(device);
+
+    let w = 256;
+    let h = 256;
+    let mut rng = Lcg::new(301);
+    let input: Vec<f32> = (0..w * h).map(|_| rng.signed()).collect();
+    let g = Kernel5::gaussian5();
+
+    let mut out_gpu = vec![0.0_f32; w * h];
+    let mut out_cpu = vec![0.0_f32; w * h];
+    kernel
+        .dispatch_blocking(device, queue, &input, &mut out_gpu, w, h, &g)
+        .unwrap();
+    tile_convolution::convolve_separable_cpu(&input, &mut out_cpu, w, h, &g).unwrap();
+
+    let mut max_err: f32 = 0.0;
+    for (a, b) in out_gpu.iter().zip(out_cpu.iter()) {
+        max_err = max_err.max((a - b).abs());
+    }
+    assert!(max_err < 1.0e-4, "max_err = {max_err}");
+}
+
+#[test]
+#[ignore]
+fn tile_convolution_gpu_identity_returns_input() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileConvolutionKernel::new(device);
+
+    let w = 64;
+    let h = 64;
+    let mut rng = Lcg::new(302);
+    let input: Vec<f32> = (0..w * h).map(|_| rng.signed()).collect();
+    let mut out = vec![0.0_f32; w * h];
+    kernel
+        .dispatch_blocking(device, queue, &input, &mut out, w, h, &Kernel5::identity())
+        .unwrap();
+    for (a, b) in out.iter().zip(input.iter()) {
+        assert!((a - b).abs() < 1.0e-6);
+    }
 }
 
 #[test]
