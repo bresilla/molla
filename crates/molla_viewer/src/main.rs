@@ -18030,11 +18030,18 @@ fn warp_fem_diffusion_3d_pane(ui: &mut egui::Ui, st: &mut WarpFemDiffusion3DStat
 }
 
 // ── Scene 69: WarpFemConvDiff (steady advection-diffusion) ────────
+//
+// Stage 37.2 retrofit — the analytic-stub Laplacian was replaced by a
+// real convection-diffusion operator `(α∇² − b·∇)` with SUPG
+// stabilisation (`τ = h / (2|b|)`). Convection direction is +x; left
+// edge is the inflow Dirichlet (1.0) and right edge is the outflow
+// Dirichlet (0.0). The non-symmetric system is solved via BiCGSTAB.
 struct WarpFemConvDiffState {
     mesh: fem::FemMesh,
     /// Last steady-state solution.
     u: Vec<f64>,
     alpha: f64,
+    bx: f64,
     user_reset: bool,
     last_iters: usize,
     last_residual: f64,
@@ -18045,7 +18052,9 @@ impl Default for WarpFemConvDiffState {
         Self {
             u: vec![0.0; mesh.vert_count()],
             mesh,
-            alpha: 0.05, user_reset: true,
+            alpha: 0.05,
+            bx: 1.0,
+            user_reset: true,
             last_iters: 0, last_residual: 0.0,
         }
     }
@@ -18062,11 +18071,24 @@ fn update_warp_fem_convdiff(
     if !st.user_reset {
         return;
     }
-    // Same ∇² operator scaled by α; Dirichlet BCs on left = 1, right = 0.
+    // Assemble A = α·K + C + S_SUPG. The convection block uses the
+    // user's velocity in +x; the SUPG block uses the cell length scale
+    // `h = 1/nx` for τ = h/(2|b|).
+    let nx = 20;
+    let h = 1.0 / nx as f64;
+    let b = molla::math::Vec3::new(st.bx, 0.0, 0.0);
+    let alpha = st.alpha;
     let space = fem::FunctionSpace::P1Nodal;
-    let stiff = fem::assemble_global(&st.mesh, space, |c, v| {
-        fem::compute_element_stiffness(c, v, st.alpha)
-    }).expect("warp convdiff stiff");
+    let a = fem::assemble_global(&st.mesh, space, |cell, verts| {
+        let kk = fem::compute_element_stiffness(cell, verts, alpha);
+        let cc = fem::compute_element_convection(cell, verts, b);
+        let ss = fem::compute_element_supg_convection(cell, verts, b, 1.0, h);
+        let n = cell.vert_count();
+        (0..n)
+            .map(|i| (0..n).map(|j| kk[i][j] + cc[i][j] + ss[i][j]).collect())
+            .collect()
+    }).expect("warp convdiff assemble");
+
     let mut bcs = Vec::new();
     for (i, p) in st.mesh.vertices.iter().enumerate() {
         if p.x.abs() < 1e-9 {
@@ -18075,12 +18097,29 @@ fn update_warp_fem_convdiff(
             bcs.push(fem::BoundaryCondition::Dirichlet { vertex: i as u32, value: 0.0 });
         }
     }
-    let f = vec![0.0; st.mesh.vert_count()];
-    let x0 = vec![0.0_f64; f.len()];
-    let res = molla::fem::solver::solve_steady_state_with_initial(
-        &stiff, &f, &bcs, &x0,
-        molla::fem::solver::DEFAULT_MAX_ITERS,
+
+    // Apply Dirichlet to (A, f) and solve via BiCGSTAB — CG can't
+    // handle the non-symmetric advection block.
+    let mut a_red = a;
+    let mut f = vec![0.0_f64; st.mesh.vert_count()];
+    fem::apply_dirichlet(&mut a_red, &mut f, &bcs);
+    let n = f.len();
+    let mut x0 = vec![0.0; n];
+    for bc in &bcs {
+        if let fem::BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x0[*vertex as usize] = *value;
+        }
+    }
+    let res = molla::math::iterative::bicgstab_solve(
+        |x| {
+            let mut y = vec![0.0; n];
+            a_red.mv(x, &mut y).expect("BsrMatrix mv");
+            y
+        },
+        &f,
+        &x0,
         molla::fem::solver::DEFAULT_TOL,
+        molla::fem::solver::DEFAULT_MAX_ITERS,
     );
     st.u = res.x;
     st.last_iters = res.iters;
@@ -18124,8 +18163,8 @@ fn warp_fem_convdiff_pane(ui: &mut egui::Ui, st: &mut WarpFemConvDiffState) {
         st.user_reset = true;
     }
     if ui.button("Recompute").clicked() { st.user_reset = true; }
-    ui.small("Steady ∇·(α ∇T) = 0 — convection term placeholder.");
-    ui.small("Full upwind advection lands in a Stage 36.x follow-up.");
+    ui.small("Steady (α∇² − b·∇)u = 0 — Stage 37.2 SUPG-stabilised");
+    ui.small("convection-diffusion; non-symmetric solve via BiCGSTAB.");
 }
 
 // ── Scene 70: WarpFemTaylorGreen (Stokes vortex IC) ───────────────
