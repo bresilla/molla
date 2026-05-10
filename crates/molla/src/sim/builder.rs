@@ -2407,6 +2407,10 @@ impl ModelBuilder {
         // pool slice the surface owns.
         let mut soft_surfaces: Vec<crate::geometry::SoftSurface> = Vec::new();
         let mut soft_surface_tris: Vec<[u32; 3]> = Vec::new();
+        // Stage 33.1 — flat per-surface edge list. Stage 33's commit
+        // ships the slot empty; Stage 33.1's edge-extraction commit
+        // populates it via `compute_surface_edges`.
+        let soft_surface_edges: Vec<[u32; 2]> = Vec::new();
         let n_tet_meshes = self.tet_mesh_offsets.len().saturating_sub(1);
         for m in 0..n_tet_meshes {
             let lo = self.tet_mesh_offsets[m] as usize;
@@ -2441,6 +2445,8 @@ impl ModelBuilder {
                 vertex_count: v_count,
                 tri_offset: tri_off,
                 tri_count: bnd.len() as u32,
+                edge_offset: 0,
+                edge_count: 0,
                 tet_mesh_id: Some(crate::sim::TetMeshId(m as u32)),
                 cloth_mesh_id: None,
             });
@@ -2463,6 +2469,8 @@ impl ModelBuilder {
                 vertex_count: self.cloth_mesh_particle_count[m],
                 tri_offset: tri_off,
                 tri_count: (tri_hi - tri_lo) as u32,
+                edge_offset: 0,
+                edge_count: 0,
                 tet_mesh_id: None,
                 cloth_mesh_id: Some(crate::geometry::ClothMeshId(m as u32)),
             });
@@ -2538,6 +2546,7 @@ impl ModelBuilder {
             ),
             soft_surfaces,
             soft_surface_tris,
+            soft_surface_edges,
             vertex_adjacent_tets_offsets: Buffer::from_vec(
                 vertex_adjacent_tets_offsets,
                 s,

@@ -480,7 +480,7 @@ impl Solver for VbdSolver {
                         self.soft_bvh = Some(crate::geometry::SoftBvh::build(model, state_out));
                     }
                     let bvh = self.soft_bvh.as_mut().unwrap();
-                    self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                    self.last_vt_contact_count = super::vbd_soft_contact::project_soft_contacts(
                         model,
                         state_out,
                         bvh,
@@ -577,7 +577,7 @@ impl Solver for VbdSolver {
                                 Some(crate::geometry::SoftBvh::build(model, state_out));
                         }
                         let bvh = self.soft_bvh.as_mut().unwrap();
-                        self.last_vt_contact_count = super::vbd_vt_contact::project_vt_contacts(
+                        self.last_vt_contact_count = super::vbd_soft_contact::project_soft_contacts(
                             model,
                             state_out,
                             bvh,

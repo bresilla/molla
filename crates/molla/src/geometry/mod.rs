@@ -53,7 +53,8 @@ pub use tet_bvh::{
 
 // ── Stage 33: cross-mesh soft-vs-soft VT contact infrastructure ────
 pub use soft_surface::{
-    compute_tet_surface_triangles, ClothMeshId, SoftSurface, SoftSurfaceKind,
+    compute_surface_edges, compute_tet_surface_triangles, ClothMeshId, SoftSurface,
+    SoftSurfaceKind,
 };
 pub use soft_bvh::SoftBvh;
 pub use shape_world::{shape_world_aabb, shape_world_transform};

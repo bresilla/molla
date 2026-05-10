@@ -372,6 +372,12 @@ pub struct Model {
     /// in v1; the GPU port (Stage 33.2) will mirror this onto a
     /// `Buffer<[u32; 3]>`-equivalent device array.
     pub soft_surface_tris: Vec<[u32; 3]>,
+    /// Stage 33.1 — flat edge list across every soft surface. Each
+    /// entry is `[min_vert_id, max_vert_id]` (unique undirected edge);
+    /// per-surface entries occupy `SoftSurface.edge_offset .. + edge_count`.
+    /// Used by the EE narrow-phase to enumerate candidate edges
+    /// without re-deriving them per substep.
+    pub soft_surface_edges: Vec<[u32; 2]>,
 
     // ── Per-vertex tet adjacency CSR (Stage 20.2) ──────────────────
     // Computed at build time alongside the spring adjacency. Each
@@ -707,6 +713,7 @@ impl Model {
             tet_mesh_offsets: Buffer::from_vec(vec![0u32], s),
             soft_surfaces: Vec::new(),
             soft_surface_tris: Vec::new(),
+            soft_surface_edges: Vec::new(),
             vertex_adjacent_tets_offsets: Buffer::from_vec(vec![0u32], s),
             vertex_adjacent_tets: Buffer::from_vec(Vec::new(), s),
 

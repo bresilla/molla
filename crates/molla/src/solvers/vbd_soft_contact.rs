@@ -1,4 +1,6 @@
-//! Vertex-triangle (VT) cross-mesh contact gather — Stage 33.
+//! Cross-mesh soft-vs-soft contact (VT + EE) — Stages 33 / 33.1.
+//!
+//! ### Stage 33 — Vertex-Triangle (VT) contact
 //!
 //! Walks every soft-surface vertex through the cross-mesh
 //! [`crate::geometry::SoftBvh`] and emits one [`VtContact`] per
@@ -7,6 +9,15 @@
 //! penalty energy on the vertex side + an opposing barycentric-
 //! weighted force distribution on the triangle's three vertices
 //! (Newton's third law).
+//!
+//! ### Stage 33.1 — Edge-Edge (EE) contact
+//!
+//! VT alone misses cloth folds passing sideways through a tet.
+//! EE catches the case where two soft edges (one from each mesh)
+//! come within `margin` of each other. The current commit ships
+//! the [`SoftContact`] enum + the dispatch path so subsequent
+//! commits can drop in the EE narrow-phase + projection without
+//! touching call sites.
 //!
 //! Same-surface pairs are filtered out at this stage (self-collision
 //! lands in Stage 33.3 with proper adjacency exclusion).
@@ -45,6 +56,68 @@ pub struct VtContact {
     /// Penetration depth: `(margin - distance_to_tri)` if positive,
     /// 0 otherwise. Larger `depth` ⇒ stronger penalty force.
     pub depth: Real,
+}
+
+/// One EE (edge-edge) contact emitted by [`gather_ee_contacts`].
+/// Both edges are referenced by their global edge index (into
+/// `Model.soft_surface_edges`) plus the surface they belong to so the
+/// projection sweep can apply the right per-vertex inverse mass.
+#[derive(Copy, Clone, Debug)]
+pub struct EeContact {
+    /// Global edge index for the first edge (into
+    /// `Model.soft_surface_edges`).
+    pub edge_a_global_id: u32,
+    /// Surface owning edge A (index into `Model.soft_surfaces`).
+    pub edge_a_surface: u32,
+    /// Global edge index for the second edge.
+    pub edge_b_global_id: u32,
+    /// Surface owning edge B.
+    pub edge_b_surface: u32,
+    /// Barycentric coordinate on edge A, `0 ≤ t_a ≤ 1`. The closest
+    /// point on edge A is `(1 - t_a) · A0 + t_a · A1`.
+    pub t_a: Real,
+    /// Barycentric coordinate on edge B, `0 ≤ t_b ≤ 1`.
+    pub t_b: Real,
+    /// Unit-length contact normal pointing from edge B toward
+    /// edge A. The penalty pushes edge-A's verts along `+normal`
+    /// and edge-B's verts along `-normal`.
+    pub normal: [Real; 3],
+    /// Penetration depth: `(margin - segment_distance)` if positive,
+    /// 0 otherwise.
+    pub depth: Real,
+}
+
+/// Tagged union over the two cross-mesh soft contact flavours. The
+/// single [`gather_soft_contacts`] / [`project_soft_contacts`] entry
+/// points operate on `Vec<SoftContact>` so future contact kinds (e.g.
+/// hybrid VE) can be threaded through the same pipeline without yet
+/// another parallel type.
+#[derive(Copy, Clone, Debug)]
+pub enum SoftContact {
+    Vt(VtContact),
+    Ee(EeContact),
+}
+
+/// Gather both VT and EE contacts for the current state. Internally
+/// concatenates the VT + EE narrow-phase results. Callers consume
+/// `Vec<SoftContact>` directly via [`project_soft_contacts`].
+///
+/// Stage 33: VT only — the EE half lights up in Stage 33.1 once the
+/// edge extraction + segment-segment narrow-phase land.
+pub fn gather_soft_contacts(
+    model: &Model,
+    state: &State,
+    bvh: &SoftBvh,
+    margin: Real,
+) -> Vec<SoftContact> {
+    let mut out: Vec<SoftContact> = Vec::new();
+    for c in gather_vt_contacts(model, state, bvh, margin) {
+        out.push(SoftContact::Vt(c));
+    }
+    for c in gather_ee_contacts(model, state, bvh, margin) {
+        out.push(SoftContact::Ee(c));
+    }
+    out
 }
 
 /// Walk every soft-surface vertex; for each, BVH-query for nearby
@@ -180,29 +253,22 @@ pub fn gather_vt_contacts(
     out
 }
 
-/// Jacobi-style position projection of every active VT contact.
-///
-/// For each contact, computes a separation displacement `Δ = depth · n`
-/// and distributes it as a mass-weighted impulse across the four
-/// participating vertices: the contact vertex moves `+α · Δ` while
-/// each tri vertex `i` moves `-β_i · Δ` with weights summing to 1
-/// (Newton's third law in position-projection form). The weights
-/// follow the standard inverse-mass partitioning used by XPBD-style
-/// contact solvers:
-///   `total_w = w_v + Σ_i (b_i² · w_{tri_i})`
-///   `α       = w_v / total_w`
-///   `β_i     = (b_i² · w_{tri_i}) / total_w`
-///
-/// where `w_v = 1/m_v`, `b_i` is the i-th barycentric weight, and the
-/// `b_i²` term comes from the per-vertex Hessian contribution `+k · b²
-/// · n n^T` (so the projection is consistent with the implicit-
-/// integrator block-solve interpretation).
-///
-/// Multi-sweep so successive contacts converge: the v1 workload
-/// (jelly cube on cloth) settles in 4-6 sweeps for typical mass
-/// ratios. Returns the number of *active* contacts (depth > 0) for
-/// the caller to surface in diagnostics.
-pub fn project_vt_contacts(
+/// EE narrow-phase — Stage 33.1 stub. Returns no contacts; the real
+/// implementation lands once the edge extraction + segment query
+/// support are in place.
+pub fn gather_ee_contacts(
+    _model: &Model,
+    _state: &State,
+    _bvh: &SoftBvh,
+    _margin: Real,
+) -> Vec<EeContact> {
+    Vec::new()
+}
+
+/// Multi-sweep position projection for `Vec<SoftContact>`. Refits the
+/// BVH each sweep, re-gathers contacts, and applies the per-variant
+/// projection. Returns the active contact count from the final sweep.
+pub fn project_soft_contacts(
     model: &Model,
     state: &mut State,
     bvh: &mut SoftBvh,
@@ -216,15 +282,9 @@ pub fn project_vt_contacts(
     let mut last_active: usize = 0;
     let n_sweeps = sweeps.max(1);
 
-    // Snapshot pre-projection positions so we can update velocities
-    // after the position correction. The implicit-Euler `qd = (q -
-    // q_prev_step) / dt` semantics need the velocity to reflect the
-    // contact correction, otherwise the next substep's predict step
-    // shoots the vertex back through the contact.
-    let q_pre = state.particle_q.host()?.to_vec();
-    // Track per-vertex accumulated normal direction (for velocity
-    // damping at the end). We sum the most-recent normal each sweep;
-    // for a single contact this is just that contact's normal.
+    // Per-vertex accumulated normal direction (for velocity damping
+    // at the end). VT and EE contacts both contribute. The end-of-
+    // routine pass projects out any inward-facing velocity component.
     let mut contact_normal_sum: Vec<Vec3> = vec![Vec3::ZERO; model.particle_count];
 
     for _ in 0..n_sweeps {
@@ -232,7 +292,7 @@ pub fn project_vt_contacts(
         // tri count hasn't changed (just AABB recompute + bottom-up
         // refit); falls back to a full rebuild on a topology change.
         bvh.refit(model, state);
-        let contacts = gather_vt_contacts(model, state, bvh, margin);
+        let contacts = gather_soft_contacts(model, state, bvh, margin);
         last_active = contacts.len();
         if contacts.is_empty() {
             break;
@@ -242,60 +302,13 @@ pub fn project_vt_contacts(
         let q = state.particle_q.host_mut()?;
         let tris: &[[u32; 3]] = &model.soft_surface_tris;
         for c in &contacts {
-            let v = c.vertex_global_id as usize;
-            let tri = tris[c.tri_global_id as usize];
-            let i0 = tri[0] as usize;
-            let i1 = tri[1] as usize;
-            let i2 = tri[2] as usize;
-            let n_vec = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
-            // Accumulate normal for later velocity damping. We track
-            // the last contact direction per vertex (for v1 the
-            // typical case is one dominant contact per vertex).
-            contact_normal_sum[v] += n_vec;
-            contact_normal_sum[i0] -= n_vec;
-            contact_normal_sum[i1] -= n_vec;
-            contact_normal_sum[i2] -= n_vec;
-
-            let w_v = inv_mass[v];
-            let w0 = inv_mass[i0];
-            let w1 = inv_mass[i1];
-            let w2 = inv_mass[i2];
-            let b0 = c.bary[0];
-            let b1 = c.bary[1];
-            let b2 = c.bary[2];
-            let w_tri_eff = b0 * b0 * w0 + b1 * b1 * w1 + b2 * b2 * w2;
-            let total = w_v + w_tri_eff;
-            if total <= 1.0e-20 {
-                continue; // all four are pinned — nothing to do.
-            }
-            // Underrelaxation: take a fraction of the depth each
-            // sweep so the multi-sweep Jacobi converges from above
-            // (no overshoot) for typical mass ratios. A full depth
-            // correction can cascade across neighbouring contacts on
-            // the same particle and produce visible cloth tearing.
-            let push = c.depth * 0.5;
-            let alpha = w_v / total;
-            // Vertex side: move +α·push along n.
-            if w_v > 0.0 {
-                q[v] += n_vec * (alpha * push);
-            }
-            // Tri side: distribute -(1-α)·push across the three tri
-            // verts via the inverse-mass weighted barycentric
-            // partition. The `b_i² · w_i / total` term is the
-            // Hessian-consistent share (matches the implicit-
-            // integrator AVBD penalty's per-vertex Hessian
-            // contribution `+k·b_i²·n n^T`).
-            if w0 > 0.0 {
-                let f0 = b0 * b0 * w0 / total;
-                q[i0] -= n_vec * (f0 * push);
-            }
-            if w1 > 0.0 {
-                let f1 = b1 * b1 * w1 / total;
-                q[i1] -= n_vec * (f1 * push);
-            }
-            if w2 > 0.0 {
-                let f2 = b2 * b2 * w2 / total;
-                q[i2] -= n_vec * (f2 * push);
+            match c {
+                SoftContact::Vt(vt) => {
+                    project_one_vt(vt, q, tris, &inv_mass, &mut contact_normal_sum);
+                }
+                SoftContact::Ee(ee) => {
+                    project_one_ee(ee, q, model, &inv_mass, &mut contact_normal_sum);
+                }
             }
         }
     }
@@ -303,20 +316,12 @@ pub fn project_vt_contacts(
     // Velocity damping along the contact normal. For each particle
     // that participated in a contact at any sweep this substep,
     // compute the dominant normal direction and zero out the
-    // velocity component pointing INTO the contact (i.e. the
-    // component along -contact_normal). This prevents the predict
-    // step from re-driving the vertex through the contact next
-    // substep.
-    //
-    // We run this even when the last sweep returned 0 contacts —
-    // the per-particle `contact_normal_sum` aggregates over every
-    // sweep, so a particle whose contact resolved mid-sweep still
-    // gets the velocity correction.
+    // velocity component pointing INTO the contact. Same logic
+    // shared by VT + EE so we do it once at the end.
     let any_contact = contact_normal_sum
         .iter()
         .any(|n| n.length_squared() > 1.0e-12);
     if any_contact {
-        let _ = q_pre; // unused; documents pre-projection snapshot intent
         let qd = state.particle_qd.host_mut()?;
         for i in 0..model.particle_count {
             let n_sum = contact_normal_sum[i];
@@ -324,15 +329,10 @@ pub fn project_vt_contacts(
             if n_len2 < 1.0e-12 {
                 continue;
             }
-            // Pinned particles never integrate; skip the qd update.
             if inv_mass[i] <= 0.0 {
                 continue;
             }
             let n = n_sum / n_len2.sqrt();
-            // The vertex side of a contact has its dominant n
-            // pointing AWAY from the tri (so the vertex is being
-            // pushed in the +n direction). A velocity component
-            // along -n is "diving in"; project it out.
             let v = qd[i];
             let vn = v.dot(n);
             if vn < 0.0 {
@@ -344,6 +344,82 @@ pub fn project_vt_contacts(
     Ok(last_active)
 }
 
+/// Back-compat wrapper around [`project_soft_contacts`] for any
+/// caller that only wants VT projection. Prefer
+/// [`project_soft_contacts`] for new code so EE catches cloth-fold
+/// pokethroughs.
+pub fn project_vt_contacts(
+    model: &Model,
+    state: &mut State,
+    bvh: &mut SoftBvh,
+    margin: Real,
+    sweeps: usize,
+) -> Result<usize> {
+    project_soft_contacts(model, state, bvh, margin, sweeps)
+}
+
+fn project_one_vt(
+    c: &VtContact,
+    q: &mut [Vec3],
+    tris: &[[u32; 3]],
+    inv_mass: &[Real],
+    contact_normal_sum: &mut [Vec3],
+) {
+    let v = c.vertex_global_id as usize;
+    let tri = tris[c.tri_global_id as usize];
+    let i0 = tri[0] as usize;
+    let i1 = tri[1] as usize;
+    let i2 = tri[2] as usize;
+    let n_vec = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+    contact_normal_sum[v] += n_vec;
+    contact_normal_sum[i0] -= n_vec;
+    contact_normal_sum[i1] -= n_vec;
+    contact_normal_sum[i2] -= n_vec;
+
+    let w_v = inv_mass[v];
+    let w0 = inv_mass[i0];
+    let w1 = inv_mass[i1];
+    let w2 = inv_mass[i2];
+    let b0 = c.bary[0];
+    let b1 = c.bary[1];
+    let b2 = c.bary[2];
+    let w_tri_eff = b0 * b0 * w0 + b1 * b1 * w1 + b2 * b2 * w2;
+    let total = w_v + w_tri_eff;
+    if total <= 1.0e-20 {
+        return;
+    }
+    let push = c.depth * 0.5;
+    let alpha = w_v / total;
+    if w_v > 0.0 {
+        q[v] += n_vec * (alpha * push);
+    }
+    if w0 > 0.0 {
+        let f0 = b0 * b0 * w0 / total;
+        q[i0] -= n_vec * (f0 * push);
+    }
+    if w1 > 0.0 {
+        let f1 = b1 * b1 * w1 / total;
+        q[i1] -= n_vec * (f1 * push);
+    }
+    if w2 > 0.0 {
+        let f2 = b2 * b2 * w2 / total;
+        q[i2] -= n_vec * (f2 * push);
+    }
+}
+
+/// EE projection — Stage 33.1 stub. Currently unreachable because
+/// [`gather_ee_contacts`] returns empty; once the EE narrow-phase
+/// lands the body distributes the depth across the four edge verts
+/// via segment-segment barycentric weights.
+fn project_one_ee(
+    _c: &EeContact,
+    _q: &mut [Vec3],
+    _model: &Model,
+    _inv_mass: &[Real],
+    _contact_normal_sum: &mut [Vec3],
+) {
+}
+
 /// Closest-point + barycentric weights wrapper. Wraps
 /// [`crate::geometry::closest_point_on_triangle`] which only returns
 /// the closest point + squared distance — we recompute the
@@ -352,11 +428,6 @@ pub fn project_vt_contacts(
 /// proportionally.
 fn closest_point_on_triangle_bary(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> (Vec3, Vec3) {
     let (_, q) = closest_point_on_triangle(p, a, b, c);
-    // Barycentric of `q` w.r.t. `(a, b, c)` via the standard
-    // projected-area formulation (Crane 2018, "Discrete Differential
-    // Geometry" §4.3): solve
-    //   q = α·a + β·b + γ·c, α + β + γ = 1
-    // by computing per-corner triangle areas relative to `q`.
     let v0 = b - a;
     let v1 = c - a;
     let v2 = q - a;
@@ -367,16 +438,11 @@ fn closest_point_on_triangle_bary(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> (Vec3, 
     let d21 = v2.dot(v1);
     let denom = d00 * d11 - d01 * d01;
     if denom.abs() < 1.0e-20 {
-        // Degenerate triangle — return uniform weights so the force
-        // distribution doesn't blow up.
         return (q, Vec3::splat(1.0 / 3.0));
     }
     let v = (d11 * d20 - d01 * d21) / denom;
     let w = (d00 * d21 - d01 * d20) / denom;
     let u = 1.0 - v - w;
-    // Clamp tiny negative weights from edge / vertex regions; the
-    // total still equals 1 because we re-derive `u` from the
-    // residual.
     let bary = Vec3::new(u.max(0.0), v.max(0.0), w.max(0.0));
     let sum = bary.x + bary.y + bary.z;
     if sum > 1.0e-12 {
