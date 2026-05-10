@@ -329,13 +329,27 @@ pub fn tri_area_2d(p: &[Vec3; 3]) -> Real {
     0.5 * ((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)).abs()
 }
 
-/// Signed volume of a tetrahedron (positive when (b-a, c-a, d-a) is
-/// right-handed). v1 takes the absolute value to be robust to
-/// orientation; element matrices only depend on `|vol|`.
+/// Absolute volume of a tetrahedron — always non-negative. Use this
+/// for SPD element matrices (mass, Laplacian, linear elasticity)
+/// where the integration measure must be positive regardless of
+/// vertex orientation; pair it with shape-gradient routines that
+/// also work in absolute terms (`tet_shape_grads` returns signed
+/// gradients, so for SPD operators the per-element products
+/// `vol · ∇φᵢ · ∇φⱼ` cancel the sign on flipped tets).
 #[must_use]
 pub fn tet_volume(p: &[Vec3; 4]) -> Real {
-    let v = (p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0;
-    v.abs()
+    tet_signed_volume(p).abs()
+}
+
+/// Signed volume of a tetrahedron — positive when `(b−a, c−a, d−a)`
+/// is right-handed, negative when the vertices are in a left-handed
+/// orientation. Required by routines that pair the volume with
+/// signed shape gradients (e.g. SVK / hyperelastic internal forces)
+/// where mismatched signs flip the internal-force direction on a
+/// flipped rest tet.
+#[must_use]
+pub fn tet_signed_volume(p: &[Vec3; 4]) -> Real {
+    (p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0
 }
 
 /// Gradients of the three P1 hat-functions on a 2D triangle.
@@ -551,7 +565,12 @@ pub fn compute_element_st_venant_kirchhoff_stress(
                 vertices[idx[3] as usize],
             ];
             assert_eq!(u_local.len(), 12, "SVK: u_local must be 12-component");
-            let vol = tet_volume(&p);
+            // SVK pairs the volume with signed shape gradients, so
+            // the volume must be signed too — otherwise a flipped
+            // rest tet produces a wrong-sign internal force (the
+            // hyperelastic energy itself doesn't care about parent
+            // orientation, but the assembled nodal force does).
+            let vol = tet_signed_volume(&p);
             let grads = tet_shape_grads(&p);
 
             // Deformation gradient F = ∂x/∂X = I + ∑ᵢ uᵢ ⊗ ∇φᵢ.
@@ -619,10 +638,15 @@ pub fn compute_element_st_venant_kirchhoff_stress(
         FemCell::Tri(_) => {
             // 2D plane-strain SVK is intentionally deferred — Stage
             // 36.1 cantilever uses the linear element for tris and SVK
-            // for tets only (the bonus large-deformation test runs in
-            // 3D). Return zeros so the assembly visitor signature
-            // stays stable.
-            vec![0.0; cell.vert_count() * 2]
+            // for tets only. Earlier this returned `vec![0.0; nv*2]`
+            // which silently produced wrong-size output for 3D callers
+            // indexing as `3*i + c` (out-of-bounds reads in release
+            // mode); panic explicitly instead so misuse is loud.
+            unimplemented!(
+                "compute_element_st_venant_kirchhoff_stress: Tri (plane-strain 2D) \
+                 SVK is not implemented — use Tet cells in 3D, or extend this \
+                 function for 2D plane-strain elasticity"
+            )
         }
     }
 }

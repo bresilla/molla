@@ -205,12 +205,14 @@ pub const NEWMARK_GAMMA_DEFAULT: Real = 0.5;
 /// prescribed `value`. The corrector step then derives `a_new` and
 /// `v_new` from the BC-consistent `u_new`.
 ///
-/// Caveat: Stage 37.1 v1 does not currently zero `v_new` / `a_new` on
-/// constrained DoFs after the corrector — they are recovered from the
-/// `u_new − u_pred` difference, which is `0` when both endpoints sit
-/// at the same Dirichlet value across the step (the typical pinned
-/// case). For time-varying Dirichlet data, callers should overwrite
-/// the BC entries of `v_new` / `a_new` themselves.
+/// After the corrector, `v_new` and `a_new` are zeroed on every
+/// Dirichlet DoF. Without that, a non-zero `v_old` or `a_old` on a
+/// pinned DoF (e.g. seeded from a consistent initial-acceleration
+/// solve) gets carried into `a_new` via the predictor `u_pred` and
+/// then integrated into spurious boundary motion across steps. For
+/// time-varying Dirichlet data, callers should still overwrite the
+/// BC entries of `v_new` / `a_new` with the prescribed velocity /
+/// acceleration after this routine returns.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_wave_transient(
     m: &BsrMatrix,
@@ -276,6 +278,28 @@ pub fn solve_wave_transient(
     for i in 0..n {
         a_new[i] = (u_new[i] - u_pred[i]) * bdt2_inv;
         v_new[i] = v_old[i] + dt * ((1.0 - gamma) * a_old[i] + gamma * a_new[i]);
+    }
+
+    // Zero `v_new` and `a_new` on every Dirichlet DoF — the pinned
+    // displacement makes `u_new − u_pred` non-zero through `u_pred`'s
+    // dependence on `v_old` and `a_old`, which would otherwise leak
+    // spurious motion into the boundary across steps.
+    for bc in bcs {
+        match bc {
+            BoundaryCondition::Dirichlet { vertex, .. } => {
+                let idx = *vertex as usize;
+                v_new[idx] = 0.0;
+                a_new[idx] = 0.0;
+            }
+            BoundaryCondition::DirichletVector { vertex, values } => {
+                let base = *vertex as usize * values.len();
+                for c in 0..values.len() {
+                    v_new[base + c] = 0.0;
+                    a_new[base + c] = 0.0;
+                }
+            }
+            _ => {}
+        }
     }
 
     WaveStepResult {

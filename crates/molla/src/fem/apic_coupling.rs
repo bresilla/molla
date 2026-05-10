@@ -274,13 +274,24 @@ impl ApicHybrid {
         }
 
         // Dirichlet BCs — pin the boundary velocity field. Done AFTER
-        // the smoothing pass so the boundary values are exact.
+        // the smoothing pass so the boundary values are exact. The
+        // scalar `Dirichlet` variant is interpreted as no-slip ONLY
+        // (zero velocity); a non-zero scalar would have to mean "set
+        // every component to that scalar" which is almost never what
+        // the user intends — they should reach for `DirichletVector`
+        // to pin a non-zero per-component velocity instead.
         for bc in bcs {
             match bc {
                 BoundaryCondition::Dirichlet { vertex, value } => {
+                    debug_assert_eq!(
+                        *value, 0.0,
+                        "APIC scalar Dirichlet on vertex {vertex} must be zero \
+                         (no-slip); use DirichletVector for non-zero per-component \
+                         velocity",
+                    );
                     let idx = *vertex as usize;
                     if idx < n {
-                        node_velocity[idx] = Vec3::new(*value, *value, *value);
+                        node_velocity[idx] = Vec3::ZERO;
                     }
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
