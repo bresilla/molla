@@ -378,8 +378,11 @@ fn gather_vt(@builtin(global_invocation_id) gid: vec3<u32>) {
             let tri_id = bvh_sorted_idx[node_idx];
             let tri = soft_surface_tris[tri_id];
             let tri_owner = tri.w;
-            // Same-surface filter (Stage 33.3 will replace with
-            // per-vertex adjacency exclusion).
+            // Same-surface filter — the GPU pipeline ships cross-
+            // mesh contacts only. Per-vertex adjacency exclusion for
+            // self-collision (Stage 33.3 on the CPU path) is not
+            // ported to the GPU in v1; scenes that need self-
+            // collision must run the CPU VBD backend.
             if (tri_owner == v_surface) { continue; }
             // Topological filter — vertex IS one of the tri corners
             // (rare but possible when surfaces share a particle).

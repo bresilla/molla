@@ -984,11 +984,12 @@ impl Model {
         // ── Stage 33.2 — soft surface registry GPU mirror ─────────
         // Triangles are uploaded as `vec4<u32>` (x=v0, y=v1, z=v2,
         // w=tri_surface_owner) so the VT gather kernel can apply the
-        // same-surface filter (Stage 33.3 will add per-vertex adjacency
-        // exclusion on top of this; for v1 the surface-owner test is
-        // enough). Each surface is uploaded as a 32-byte
-        // `SoftSurfaceGpu` (kind, vertex_offset, vertex_count,
-        // tri_offset, tri_count, _pad[3]).
+        // same-surface filter. Self-collision (Stage 33.3) is a CPU-
+        // only feature in v1; the GPU shader applies the cross-mesh
+        // surface-owner test only and skips per-vertex adjacency.
+        // Each surface is uploaded as a 32-byte `SoftSurfaceGpu`
+        // (kind, vertex_offset, vertex_count, tri_offset, tri_count,
+        // friction, restitution, _pad).
         if !self.soft_surface_tris.is_empty() && !self.soft_surfaces.is_empty() {
             let mut tri_owner: Vec<u32> = vec![0u32; self.soft_surface_tris.len()];
             for (s_idx, s) in self.soft_surfaces.iter().enumerate() {
@@ -1075,6 +1076,10 @@ pub struct SoftSurfaceGpu {
     /// 1 = full velocity reversal). Two contacting surfaces' values
     /// combine via `min(e_a, e_b)` in the kernel velocity-recovery pass.
     pub restitution: f32,
+    /// Reserved padding to keep the struct 32 B on both Rust + WGSL.
+    /// Earmarked for the GPU port of Stage 33.3 self-collision
+    /// (would carry the per-surface `self_collision` flag); CPU
+    /// already supports it via `SoftSurface::self_collision`.
     pub _pad: u32,
 }
 
