@@ -533,6 +533,7 @@ fn main() {
                 update_warp_fem_elastic_opt,
                 update_warp_fft_fluid,
                 update_warp_distortion_3d,
+                update_warp_wave,
             ),
         )
         .add_systems(
@@ -551,6 +552,7 @@ fn main() {
                 draw_warp_fem_streamlines_gizmos,
                 draw_warp_fem_deformed_gizmos,
                 draw_warp_fft_fluid_gizmos,
+                draw_warp_wave_gizmos,
             ),
         )
         .add_systems(EguiPrimaryContextPass, control_pane)
@@ -1131,6 +1133,11 @@ enum Scene {
     /// Bonus 3D distortion-energy example (companion to
     /// `WarpFemDistortion`).
     WarpDistortion3D,
+    /// Stage 37.1 — wave PDE (`u_tt = c² ∇²u`) on a 32×32 P1 tri
+    /// mesh, integrated implicitly via Newmark-β. Initial Gaussian
+    /// pulse, four edges pinned (Dirichlet u = 0). Renders the
+    /// surface as a height field via gizmo lines.
+    WarpWave,
 }
 
 impl Scene {
@@ -1215,6 +1222,7 @@ impl Scene {
         Scene::WarpFemElasticOpt,
         Scene::WarpFftFluid,
         Scene::WarpDistortion3D,
+        Scene::WarpWave,
     ];
 
     fn label(self) -> &'static str {
@@ -1296,6 +1304,7 @@ impl Scene {
             Scene::WarpFemElasticOpt => "75 Warp FEM elastic shape opt",
             Scene::WarpFftFluid => "76 Warp FFT fluid (Stokes fallback)",
             Scene::WarpDistortion3D => "77 Warp distortion 3D",
+            Scene::WarpWave => "78 Warp wave (Stage 37.1)",
         }
     }
 
@@ -2685,7 +2694,8 @@ impl Sim {
             | Scene::WarpFemDistortion
             | Scene::WarpFemElasticOpt
             | Scene::WarpFftFluid
-            | Scene::WarpDistortion3D => build_warp_empty_model(),
+            | Scene::WarpDistortion3D
+            | Scene::WarpWave => build_warp_empty_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -6010,6 +6020,7 @@ fn step_simulation(
             | Scene::WarpFemElasticOpt
             | Scene::WarpFftFluid
             | Scene::WarpDistortion3D
+            | Scene::WarpWave
             | Scene::WarpRaycast
             | Scene::WarpMesh
             | Scene::WarpMeshIntersect
@@ -9455,6 +9466,7 @@ fn control_pane(
                     | Scene::WarpFemElasticOpt
                     | Scene::WarpFftFluid
                     | Scene::WarpDistortion3D
+                    | Scene::WarpWave
             ),
             _ => false,
         },
@@ -9629,6 +9641,7 @@ fn control_pane(
         Scene::WarpFemElasticOpt => Some("Warp FEM elastic shape opt"),
         Scene::WarpFftFluid => Some("Warp FFT fluid"),
         Scene::WarpDistortion3D => Some("Warp distortion 3D"),
+        Scene::WarpWave => Some("Warp wave (Stage 37.1)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9768,6 +9781,7 @@ fn control_pane(
                     Scene::WarpFemElasticOpt => warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt),
                     Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
                     Scene::WarpDistortion3D => warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d),
+                    Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
                     _ => {}
                 });
         }
@@ -16450,6 +16464,7 @@ struct WarpExampleStates {
     fem_elastic_opt: WarpFemElasticOptState,
     fft_fluid: WarpFftFluidState,
     distortion_3d: WarpDistortion3DState,
+    wave: WarpWaveExampleState,
 }
 
 impl Default for WarpExampleStates {
@@ -16478,6 +16493,7 @@ impl Default for WarpExampleStates {
             fem_elastic_opt: WarpFemElasticOptState::default(),
             fft_fluid: WarpFftFluidState::default(),
             distortion_3d: WarpDistortion3DState::default(),
+            wave: WarpWaveExampleState::default(),
         }
     }
 }
@@ -18480,4 +18496,297 @@ fn warp_distortion_3d_pane(ui: &mut egui::Ui, st: &mut WarpDistortion3DState) {
     ui.separator();
     readout(ui, "Energy E (identity)", &format!("{:.4}", st.energy));
     ui.small("3D companion to `WarpFemDistortion`. Identity → E = 6.");
+}
+
+// ── Scene 78: WarpWave (Stage 37.1) ───────────────────────────────
+//
+// 32×32 P1 triangle mesh on the unit square. All four edges pinned
+// (Dirichlet u = 0). Initial Gaussian pulse centered at (0.3, 0.3)
+// gives a nontrivial wave that bounces off the pinned boundaries.
+// Each frame runs one implicit Newmark-β step against the assembled
+// (M, K) — the K matrix is rebuilt only when the wave-speed slider
+// moves. Rendered as a height-field surface using gizmo lines (one
+// short vertical from each grid point + the two grid edges connecting
+// to the +x / +y neighbour, coloured by displacement amplitude).
+
+const WARP_WAVE_GRID: usize = 32;
+const WARP_WAVE_DEFAULT_C2: f64 = 1.0;
+const WARP_WAVE_DEFAULT_DT: f64 = 0.01;
+const WARP_WAVE_DEFAULT_AMP: f64 = 0.5;
+/// Origin of the unit square in viewer coords. Lifted slightly above
+/// the ground plane so the wireframe doesn't z-fight the grid.
+const WARP_WAVE_ORIGIN: Vec3 = Vec3::new(-0.5, 0.05, -0.5);
+/// Vertical scale applied to the displacement field for rendering.
+const WARP_WAVE_Z_SCALE: f32 = 0.6;
+
+struct WarpWaveExampleState {
+    mesh: fem::FemMesh,
+    /// Mass matrix M (consistent, P1).
+    mass: molla::math::sparse::BsrMatrix,
+    /// Wave stiffness K = c² · ∫ ∇φᵢ·∇φⱼ dx. Rebuilt on c² changes.
+    stiff: molla::math::sparse::BsrMatrix,
+    c2: f64,
+    last_c2_baked: f64,
+    dt: f64,
+    /// Initial-pulse amplitude. Editing this live re-stamps the
+    /// displacement field on the next reset.
+    pulse_amp: f64,
+    /// Dirichlet BCs on all four edges (u = 0).
+    bcs: Vec<fem::BoundaryCondition>,
+    /// Indices that need to stay pinned to 0 each step.
+    pinned: Vec<usize>,
+    u: Vec<f64>,
+    v: Vec<f64>,
+    a: Vec<f64>,
+    sim_t: f64,
+    last_residual: f64,
+    last_iters: usize,
+    /// User-driven "reset to gaussian pulse" flag.
+    user_reset: bool,
+}
+
+impl Default for WarpWaveExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tri_grid_2d(
+            WARP_WAVE_GRID,
+            WARP_WAVE_GRID,
+            1.0,
+            1.0,
+        );
+        let space = fem::FunctionSpace::P1Nodal;
+        let mass = fem::assemble_global(&mesh, space, fem::compute_element_mass)
+            .expect("WarpWave: assemble mass");
+        let stiff = fem::assemble_global(&mesh, space, |c, v| {
+            fem::compute_element_wave_stiffness(c, v, WARP_WAVE_DEFAULT_C2)
+        })
+        .expect("WarpWave: assemble stiffness");
+        let mut bcs = Vec::new();
+        let mut pinned = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            let on_bd = p.x.abs() < 1e-9
+                || (p.x - 1.0).abs() < 1e-9
+                || p.y.abs() < 1e-9
+                || (p.y - 1.0).abs() < 1e-9;
+            if on_bd {
+                bcs.push(fem::BoundaryCondition::Dirichlet {
+                    vertex: i as u32,
+                    value: 0.0,
+                });
+                pinned.push(i);
+            }
+        }
+        let n = mesh.vert_count();
+        let mut state = Self {
+            mesh,
+            mass,
+            stiff,
+            c2: WARP_WAVE_DEFAULT_C2,
+            last_c2_baked: WARP_WAVE_DEFAULT_C2,
+            dt: WARP_WAVE_DEFAULT_DT,
+            pulse_amp: WARP_WAVE_DEFAULT_AMP,
+            bcs,
+            pinned,
+            u: vec![0.0; n],
+            v: vec![0.0; n],
+            a: vec![0.0; n],
+            sim_t: 0.0,
+            last_residual: 0.0,
+            last_iters: 0,
+            user_reset: false,
+        };
+        state.stamp_initial_pulse();
+        state
+    }
+}
+
+impl WarpWaveExampleState {
+    /// Stamp `u₀ = amp · exp(−r²/σ²)` centered at (0.3, 0.3); zero it
+    /// on the pinned edges.
+    fn stamp_initial_pulse(&mut self) {
+        let cx = 0.3_f64;
+        let cy = 0.3_f64;
+        let sigma = 0.08_f64;
+        let inv_two_sigma2 = 1.0 / (2.0 * sigma * sigma);
+        for (i, p) in self.mesh.vertices.iter().enumerate() {
+            let dx = p.x - cx;
+            let dy = p.y - cy;
+            let r2 = dx * dx + dy * dy;
+            self.u[i] = self.pulse_amp * (-r2 * inv_two_sigma2).exp();
+        }
+        for &p in &self.pinned {
+            self.u[p] = 0.0;
+        }
+        // Reset velocity / acceleration to zero so the pulse starts
+        // from rest — the wave equation evolves it symmetrically.
+        for v in self.v.iter_mut() {
+            *v = 0.0;
+        }
+        for a in self.a.iter_mut() {
+            *a = 0.0;
+        }
+        self.sim_t = 0.0;
+        self.last_residual = 0.0;
+        self.last_iters = 0;
+    }
+
+    fn rebuild_stiffness(&mut self) {
+        let space = fem::FunctionSpace::P1Nodal;
+        self.stiff = fem::assemble_global(&self.mesh, space, |c, v| {
+            fem::compute_element_wave_stiffness(c, v, self.c2)
+        })
+        .expect("WarpWave: rebuild stiffness");
+        self.last_c2_baked = self.c2;
+    }
+}
+
+fn update_warp_wave(
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+    run: Res<SimRunState>,
+) {
+    if sim.scene != Scene::WarpWave {
+        return;
+    }
+    let st = &mut warp.wave;
+    if st.user_reset {
+        st.stamp_initial_pulse();
+        st.user_reset = false;
+    }
+    if (st.c2 - st.last_c2_baked).abs() > 1e-12 {
+        st.rebuild_stiffness();
+    }
+    if run.paused {
+        return;
+    }
+    let dt = st.dt.max(1e-6);
+    let step = molla::fem::solve_wave_transient(
+        &st.mass,
+        &st.stiff,
+        &st.u.clone(),
+        &st.v.clone(),
+        &st.a.clone(),
+        dt,
+        molla::fem::NEWMARK_BETA_DEFAULT,
+        molla::fem::NEWMARK_GAMMA_DEFAULT,
+        &st.bcs,
+    );
+    st.u = step.u_new;
+    st.v = step.v_new;
+    st.a = step.a_new;
+    st.sim_t += dt;
+    st.last_residual = step.residual;
+    st.last_iters = step.iters;
+}
+
+/// Map a normalised displacement value `[-1, 1]` to a colour ramp
+/// (red for positive, blue for negative, white near zero).
+fn warp_wave_colour(t: f64) -> Color {
+    let t = t.clamp(-1.0, 1.0) as f32;
+    if t >= 0.0 {
+        // 0 (white) → +1 (warm red).
+        Color::srgb(1.0, 1.0 - 0.65 * t, 1.0 - 0.85 * t)
+    } else {
+        let s = -t;
+        // 0 (white) → −1 (cool blue).
+        Color::srgb(1.0 - 0.85 * s, 1.0 - 0.65 * s, 1.0)
+    }
+}
+
+fn draw_warp_wave_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpWave {
+        return;
+    }
+    let st = &warp.wave;
+    let n = WARP_WAVE_GRID;
+    let row_stride = n + 1;
+    // Find the current displacement extent for colour normalisation.
+    let max_abs: f64 = st.u.iter().fold(0.0_f64, |acc, &v| acc.max(v.abs()));
+    let inv_max = if max_abs > 1e-12 { 1.0 / max_abs } else { 1.0 };
+
+    let to_world = |i: usize, j: usize| -> Vec3 {
+        let p = st.mesh.vertices[j * row_stride + i];
+        let z = st.u[j * row_stride + i] as f32 * WARP_WAVE_Z_SCALE;
+        WARP_WAVE_ORIGIN + Vec3::new(p.x as f32, z, p.y as f32)
+    };
+
+    // Grid lines along +x and +y. Two lines per grid cell — one
+    // along the row, one along the column. Coloured by midpoint
+    // displacement.
+    for j in 0..=n {
+        for i in 0..=n {
+            let here = to_world(i, j);
+            let u_here = st.u[j * row_stride + i];
+            if i + 1 <= n {
+                let next = to_world(i + 1, j);
+                let u_next = st.u[j * row_stride + i + 1];
+                let mid = 0.5 * (u_here + u_next) * inv_max;
+                gizmos.line(here, next, warp_wave_colour(mid));
+            }
+            if j + 1 <= n {
+                let next = to_world(i, j + 1);
+                let u_next = st.u[(j + 1) * row_stride + i];
+                let mid = 0.5 * (u_here + u_next) * inv_max;
+                gizmos.line(here, next, warp_wave_colour(mid));
+            }
+        }
+    }
+
+    // Outline the unit-square boundary in white at z = 0 so the
+    // pinned edges are visually obvious even when the field is flat.
+    let corners = [
+        WARP_WAVE_ORIGIN + Vec3::new(0.0, 0.0, 0.0),
+        WARP_WAVE_ORIGIN + Vec3::new(1.0, 0.0, 0.0),
+        WARP_WAVE_ORIGIN + Vec3::new(1.0, 0.0, 1.0),
+        WARP_WAVE_ORIGIN + Vec3::new(0.0, 0.0, 1.0),
+    ];
+    let frame_col = Color::srgb(0.6, 0.6, 0.6);
+    for k in 0..4 {
+        gizmos.line(corners[k], corners[(k + 1) % 4], frame_col);
+    }
+}
+
+fn warp_wave_pane(ui: &mut egui::Ui, st: &mut WarpWaveExampleState) {
+    ui.label("Warp wave PDE — Stage 37.1");
+    ui.separator();
+    readout(
+        ui,
+        "Mesh",
+        &format!(
+            "{0}×{0} tris ({1} verts)",
+            WARP_WAVE_GRID,
+            st.mesh.vert_count()
+        ),
+    );
+    readout(ui, "DoFs", &format!("{}", st.u.len()));
+    ui.separator();
+    ui.label("Wave speed c (slider sets c)");
+    let mut c = st.c2.max(0.0).sqrt();
+    if ui
+        .add(egui::Slider::new(&mut c, 0.1..=4.0).text("c"))
+        .changed()
+    {
+        st.c2 = (c * c) as f64;
+    }
+    ui.label("Time step dt");
+    let _ = ui.add(
+        egui::Slider::new(&mut st.dt, 0.001..=0.05)
+            .logarithmic(true)
+            .text("dt"),
+    );
+    ui.label("Initial pulse amplitude");
+    let _ = ui.add(egui::Slider::new(&mut st.pulse_amp, 0.0..=2.0).text("amp"));
+    ui.separator();
+    readout(ui, "t", &format!("{:.3} s", st.sim_t));
+    readout(ui, "Last CG residual", &format!("{:.3e}", st.last_residual));
+    readout(ui, "CG iters", &format!("{}", st.last_iters));
+    ui.separator();
+    if ui.button("Reset to gaussian pulse").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("BCs: u = 0 on all four edges (pinned).");
+    ui.small("Newmark-β (β=1/4, γ=1/2) — unconditionally stable.");
 }
