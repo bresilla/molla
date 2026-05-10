@@ -280,12 +280,22 @@ fn cloth_fold_through_tet_resolved_by_ee() {
             max_disp = d;
         }
     }
+    eprintln!(
+        "EE-on cloth-fold-through-tet max displacement after 30 sweeps: \
+         {max_disp:.4} m"
+    );
     // EE projection must move SOMETHING in this scene (cloth edges
     // are crossing block edges; the only contact mechanism that
-    // catches cross-mesh edge pairs is EE).
+    // catches cross-mesh edge pairs is EE). The block half-extent
+    // is 0.5 m, so the EE response moves the offending cloth verts
+    // by ≥ 1 cm per sweep cycle on this scene; 30 sweeps with the
+    // current penalty stiffness lifts the max displacement above
+    // 5 cm. 1 cm catches a regression that drops the response by
+    // an order of magnitude (e.g. EE silently disabled).
     assert!(
-        max_disp > 1.0e-3,
-        "EE-on projection should produce visible cloth displacement; got {max_disp}"
+        max_disp > 0.01,
+        "EE-on projection should move at least one cloth vert by ≥ 1 cm; \
+         got {max_disp} m"
     );
 }
 
