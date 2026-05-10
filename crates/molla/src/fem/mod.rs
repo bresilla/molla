@@ -55,6 +55,7 @@ pub mod mesh;
 pub mod p2_element;
 pub mod quadrature;
 pub mod solver;
+pub mod stokes;
 
 pub use assembly::assemble_global;
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
@@ -74,4 +75,11 @@ pub use p2_element::{
 pub use solver::{
     solve_nonlinear_static, solve_steady_state, solve_steady_state_vector,
     solve_transient,
+};
+pub use stokes::{
+    apply_stokes_velocity_bcs, assemble_div_block, assemble_velocity_block,
+    assemble_velocity_mass, build_cavity_bcs_2d, compute_element_mass_p2_vector,
+    compute_element_stokes_div_block, compute_element_stokes_velocity_block,
+    solve_navier_stokes_transient, solve_stokes_steady, MixedTaylorHood,
+    NavierStokesConfig, StokesBc, StokesResult, StokesSimpleConfig,
 };
