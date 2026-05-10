@@ -79,3 +79,24 @@ name = "featherstone_cpu_vs_gpu"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Stage A — rigid body XPBD
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_xpbd_pile"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_stacking"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_chain"
+harness = false
+
