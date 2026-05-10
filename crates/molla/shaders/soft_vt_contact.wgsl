@@ -65,17 +65,19 @@ struct LbvhNode {
 };
 
 /// `kind` mirrors the host `SoftSurfaceKind` enum (0 = TetMesh,
-/// 1 = Cloth). `_pad[3]` brings the struct to 32 bytes for clean
-/// WGSL alignment.
+/// 1 = Cloth). 32 bytes total — Stage 33.2.1 reused two of the
+/// padding slots for `friction` + `restitution` so the kernel can
+/// read per-surface contact material properties without a separate
+/// upload.
 struct SoftSurfaceGpu {
     kind:          u32,
     vertex_offset: u32,
     vertex_count:  u32,
     tri_offset:    u32,
     tri_count:     u32,
+    friction:      f32,
+    restitution:   f32,
     pad0:          u32,
-    pad1:          u32,
-    pad2:          u32,
 };
 
 /// One emitted VT contact. Fields mirror the CPU `VtContact` exactly

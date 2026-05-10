@@ -1028,7 +1028,9 @@ impl Model {
                     vertex_count: s.vertex_count,
                     tri_offset: s.tri_offset,
                     tri_count: s.tri_count,
-                    _pad: [0u32; 3],
+                    friction: s.friction.max(0.0) as f32,
+                    restitution: s.restitution.clamp(0.0, 1.0) as f32,
+                    _pad: 0u32,
                 });
             }
             let surf_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1051,6 +1053,9 @@ impl Model {
 /// 32 bytes (8 × u32) so it aligns cleanly into a WGSL storage buffer
 /// and matches the `SoftSurfaceGpu` struct in
 /// `shaders/soft_vt_contact.wgsl`.
+///
+/// Stage 33.2.1 — added `friction` + `restitution` (bit-cast `f32` into
+/// the trailing `u32` slots so the struct layout stays 32 bytes total).
 #[cfg(feature = "gpu")]
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1062,7 +1067,15 @@ pub struct SoftSurfaceGpu {
     pub vertex_count: u32,
     pub tri_offset: u32,
     pub tri_count: u32,
-    pub _pad: [u32; 3],
+    /// Stage 33.2.1 — Coulomb friction coefficient at contacts on this
+    /// surface. Two contacting surfaces' values combine in the kernel
+    /// via the geometric mean (`μ = sqrt(μ_a · μ_b)`).
+    pub friction: f32,
+    /// Stage 33.2.1 — restitution coefficient (0 = perfectly inelastic,
+    /// 1 = full velocity reversal). Two contacting surfaces' values
+    /// combine via `min(e_a, e_b)` in the kernel velocity-recovery pass.
+    pub restitution: f32,
+    pub _pad: u32,
 }
 
 #[cfg(test)]
