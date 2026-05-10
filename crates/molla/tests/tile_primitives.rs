@@ -166,6 +166,20 @@ fn tile_block_cholesky_cpu_factorises_64x64_spd() {
 }
 
 #[test]
+fn tile_block_cholesky_cpu_rejects_non_spd_input() {
+    // 3×3 matrix with a negative eigenvalue — not SPD.
+    let n = 3;
+    let mut a = vec![1.0_f32, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0];
+    let result = tile_block_cholesky::cholesky_cpu(&mut a, n);
+    assert!(result.is_err(), "non-SPD input should return Err");
+
+    // The lenient variant clamps and continues without error.
+    let mut a = vec![1.0_f32, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0];
+    tile_block_cholesky::cholesky_cpu_lenient(&mut a, n)
+        .expect("lenient mode should accept non-SPD");
+}
+
+#[test]
 fn tile_block_cholesky_cpu_diagonal_matches_sqrt() {
     // A = diag(d). L = diag(sqrt(d)).
     let n = 8;

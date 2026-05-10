@@ -17,7 +17,29 @@ use crate::core::{Error, Result};
 /// CPU reference Cholesky for an SPD `n × n` row-major matrix. The
 /// input slice is overwritten in place: the lower triangle holds `L`
 /// (with `L · Lᵀ = A`) and the strict upper triangle is zeroed out.
+///
+/// **Returns `Error::Internal` if the matrix is not symmetric
+/// positive definite** — i.e. if any pivot `Aⱼⱼ − Σ Lⱼₖ²` is
+/// negative or smaller than `1e-30`. Earlier this function silently
+/// clamped negative pivots to zero and produced a "factor" with
+/// wildly wrong off-diagonals; that meant non-SPD inputs returned
+/// `Ok(())` with garbage data and no diagnostic. Use
+/// [`cholesky_cpu_lenient`] when you genuinely want the approximate
+/// (clamped) factor — typically only for incomplete-Cholesky-style
+/// preconditioning of nearly-SPD systems.
 pub fn cholesky_cpu(a: &mut [f32], n: usize) -> Result<()> {
+    cholesky_cpu_impl(a, n, /* lenient = */ false)
+}
+
+/// Same as [`cholesky_cpu`] but clamps negative pivots to zero
+/// instead of erroring. Use only when you understand that the
+/// returned "factor" is **not** a true Cholesky decomposition on
+/// non-SPD inputs.
+pub fn cholesky_cpu_lenient(a: &mut [f32], n: usize) -> Result<()> {
+    cholesky_cpu_impl(a, n, /* lenient = */ true)
+}
+
+fn cholesky_cpu_impl(a: &mut [f32], n: usize, lenient: bool) -> Result<()> {
     if a.len() != n * n {
         return Err(Error::Internal(format!(
             "tile_block_cholesky.cholesky_cpu: a.len() = {} but n*n = {}",
@@ -35,6 +57,13 @@ pub fn cholesky_cpu(a: &mut [f32], n: usize) -> Result<()> {
         for k in 0..j {
             let v = a[j * n + k];
             s -= v * v;
+        }
+        if !lenient && s < 1.0e-30 {
+            return Err(Error::Internal(format!(
+                "tile_block_cholesky.cholesky_cpu: matrix is not SPD — pivot {j} \
+                 evaluated to {s:.3e} (< 1e-30); use cholesky_cpu_lenient if you \
+                 want clamped pseudo-factor"
+            )));
         }
         let ljj = s.max(0.0).sqrt();
         a[j * n + j] = ljj;

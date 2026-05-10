@@ -68,7 +68,16 @@ fn tile_block_cholesky(
         workgroupBarrier();
 
         let ljj = a_buf[j * n + j];
-        let inv_ljj = select(0.0, 1.0 / ljj, ljj > 1.0e-30);
+        // WGSL `select(false_val, true_val, condition)` evaluates BOTH
+        // arguments — `1.0 / ljj` would compute `+inf` when `ljj = 0`
+        // (the singular / non-SPD path the clamp above produces) and
+        // some drivers flag this as a robustness violation. Use a
+        // branched scalar instead so the divide never executes when
+        // the diagonal is degenerate.
+        var inv_ljj: f32 = 0.0;
+        if (ljj > 1.0e-30) {
+            inv_ljj = 1.0 / ljj;
+        }
 
         // Step 2: off-diagonal entries below the diagonal in column j.
         // Each thread takes one i = j+1+tid, j+1+tid+WG, ...
