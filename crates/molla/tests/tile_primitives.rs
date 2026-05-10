@@ -4,7 +4,7 @@
 //! `gpu` feature + `#[ignore]`).
 
 use molla::compute::tile_convolution::{self, Kernel5};
-use molla::compute::{tile_block_cholesky, tile_matmul};
+use molla::compute::{tile_block_cholesky, tile_filtering, tile_matmul};
 
 /// Tiny LCG so tests are dependency-free and reproducible.
 struct Lcg(u64);
@@ -259,4 +259,57 @@ fn tile_convolution_cpu_rejects_shape_mismatch() {
         &Kernel5::identity(),
     );
     assert!(err.is_err());
+}
+
+// ── D — filtering helpers ────────────────────────────────────────────
+
+#[test]
+fn tile_filtering_identity_returns_input() {
+    let w = 24;
+    let h = 16;
+    let mut rng = Lcg::new(41);
+    let input: Vec<f32> = (0..w * h).map(|_| rng.signed()).collect();
+    let mut output = vec![0.0_f32; w * h];
+    tile_filtering::identity_filter_cpu(&input, &mut output, w, h).unwrap();
+    for (g, e) in output.iter().zip(input.iter()) {
+        assert!((g - e).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn tile_filtering_gaussian_smooths_constant_to_constant() {
+    let w = 32;
+    let h = 32;
+    let input = vec![2.5_f32; w * h];
+    let mut output = vec![0.0_f32; w * h];
+    tile_filtering::gaussian_filter_cpu(&input, &mut output, w, h).unwrap();
+    for v in output.iter() {
+        assert!((v - 2.5).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn tile_filtering_box_smooths_constant_to_constant() {
+    let w = 32;
+    let h = 32;
+    let input = vec![1.0_f32; w * h];
+    let mut output = vec![0.0_f32; w * h];
+    tile_filtering::box_filter_cpu(&input, &mut output, w, h).unwrap();
+    for v in output.iter() {
+        assert!((v - 1.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn tile_filtering_laplacian_kills_constant() {
+    // Laplacian of a constant is zero. (Boundary clamps to the
+    // constant, so even edge pixels see a flat stencil.)
+    let w = 16;
+    let h = 16;
+    let input = vec![3.14_f32; w * h];
+    let mut output = vec![0.0_f32; w * h];
+    tile_filtering::laplacian_filter_cpu(&input, &mut output, w, h).unwrap();
+    for v in output.iter() {
+        assert!(v.abs() < 1e-5, "got {v}");
+    }
 }
