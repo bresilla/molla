@@ -2,6 +2,22 @@
 //! Compares CPU and GPU. Mirrors `featherstone_cpu_vs_gpu`'s
 //! chain-length sweep but pushes N up further.
 //!
+//! PERF NOTE (2026-05): the GPU branch (`featherstone_chain_gpu/*`)
+//! reports non-monotonic times (smoke: M=32 → 660 µs, M=128 → 84 µs)
+//! because `FeatherstoneSolver::step` on the GPU returns once the
+//! command buffer is submitted — no `map_async` / poll happens here
+//! (see `kernels/featherstone.rs` ~line 280). Criterion is timing
+//! host-side bind-group / encoder construction, NOT the actual
+//! kernel work. CPU times in the same bench ARE reliable. The same
+//! pattern affects every other GPU bench whose dispatch is
+//! download-free: `bench_xpbd_pile_gpu`, `bench_vbd_cloth_gpu`,
+//! `bench_vbd_tets_gpu`, `bench_soft_vt_contact_gpu`,
+//! `bench_xpbd_pile_cpu_vs_gpu`, `bench_vbd_cloth_cpu_vs_gpu`,
+//! `bench_vbd_tets_cpu_vs_gpu`, `bench_sensor_camera`. The
+//! `bench_fft`, `bench_sensor_raycast`, `bench_lbvh_build`, and
+//! `bench_lbvh_refit` benches DO sync (their dispatches read back),
+//! so their numbers are real.
+//!
 //! ```bash
 //! cargo bench -p molla --bench bench_featherstone_chain
 //! ```

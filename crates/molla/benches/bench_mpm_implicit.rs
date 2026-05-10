@@ -64,6 +64,14 @@ fn bench_mpm_implicit(c: &mut Criterion) {
             bencher.iter(|| {
                 sim.step_n(black_box(&engine), black_box(DT), SUBSTEPS)
                     .expect("step_n");
+                // Drain the queue once per iter so the criterion run
+                // doesn't pile up thousands of unflushed substeps.
+                // Without this the wgpu device times out during
+                // teardown (`queue.rs:208 "We timed out while waiting
+                // on the last successful submission to complete!"`).
+                // `read_positions` is the cheapest sync barrier MPM
+                // exposes (single 16-byte-per-particle copy + map).
+                let _ = sim.read_positions(black_box(&engine)).expect("read_positions");
             });
         });
     }
