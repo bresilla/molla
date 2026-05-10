@@ -228,3 +228,327 @@ fn gpu_equality_velocity_recovery_zeros_drift() {
     eprintln!("GPU equality v_post: {v:.4}");
     assert!(v < 0.5, "expected ≈ 0 velocity at equilibrium, got {v}");
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Equality + contact-friction interaction regression (Stage X bug).
+//
+// The GPU equality kernel used to OVERWRITE `body_qd` after the main
+// XPBD kernel had written the post-contact / post-friction /
+// post-restitution velocity. Symptom: any body that had both an
+// equality and a contact would see its contact velocity destroyed —
+// rope spheres tunnelled through the floor, FourBar bars lost
+// friction, etc. The fix snapshots `body_q` before the equality
+// projection and ADDS the equality-only delta to `body_qd` (instead
+// of overwriting it).
+//
+// The tests below are mirrored on the CPU `cpu_step` path which runs
+// equality projection BEFORE the velocity recovery — so they pass
+// trivially on CPU, then exercise the same expectation on GPU.
+// ──────────────────────────────────────────────────────────────────
+
+const REGRESSION_ROPE_LINKS: usize = 18;
+const REGRESSION_ROPE_LINK_RADIUS: f64 = 0.12;
+const REGRESSION_ROPE_LINK_SPACING: f64 = 0.26;
+const REGRESSION_ROPE_ANCHOR_HEIGHT: f64 = 6.0;
+
+fn build_rope_for_regression() -> Model {
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.10);
+    let mut bodies = Vec::with_capacity(REGRESSION_ROPE_LINKS);
+    for i in 0..REGRESSION_ROPE_LINKS {
+        let y = REGRESSION_ROPE_ANCHOR_HEIGHT - i as f64 * REGRESSION_ROPE_LINK_SPACING;
+        let x = 0.001 * i as f64;
+        let mut params = BodyParams::new()
+            .with_spatial_inertia(SpatialInertia::sphere(0.4, REGRESSION_ROPE_LINK_RADIUS))
+            .with_position(Vec3::new(x, y, 0.0));
+        if i == 0 {
+            params = params
+                .with_mass(0.0)
+                .with_inertia(Mat3::ZERO)
+                .with_flags(BodyFlags::KINEMATIC);
+        }
+        let id = b.add_body(params);
+        b.add_shape_sphere(id, REGRESSION_ROPE_LINK_RADIUS, Transform::IDENTITY)
+            .expect("rope sphere");
+        bodies.push(id);
+    }
+    let half = REGRESSION_ROPE_LINK_SPACING * 0.5;
+    for i in 1..REGRESSION_ROPE_LINKS {
+        let _ = b.add_equality_connect(
+            bodies[i - 1],
+            bodies[i],
+            Vec3::new(0.0, -half, 0.0),
+            Vec3::new(0.0, half, 0.0),
+        );
+    }
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .expect("plane");
+    b.build().expect("rope model")
+}
+
+/// Rope (Scene #2) GPU regression: the GPU equality kernel previously
+/// destroyed the floor-contact velocity (restitution + friction) on
+/// every step, so the bottom of the rope tunnelled through the floor
+/// plane. With the fix, every sphere centre stays above
+/// `radius − slop` after the rope settles.
+#[test]
+#[ignore = "needs a real wgpu adapter — exercises the equality + contact velocity preservation fix"]
+fn gpu_rope_does_not_tunnel_floor() {
+    let mut model = build_rope_for_regression();
+    let engine = Engine::new_gpu().expect("GPU adapter required");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model.upload_to_device(&device, &queue).unwrap();
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let mut control = model.control();
+    let mut contacts = Contacts::with_capacity(8192);
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    control.upload_to_device(&device, &queue).unwrap();
+    contacts.upload_to_device(&device, &queue).unwrap();
+
+    let mut solver = XpbdSolver::new_gpu(&engine, model.body_count as u32)
+        .unwrap()
+        .with_iterations(10);
+    let mut pipeline = CollisionPipeline::new();
+    let dt: Real = 1.0 / 240.0;
+    // 4 simulated seconds — long enough for the rope to fall and
+    // settle, but short enough to keep CI runtime sane.
+    for _ in 0..960 {
+        // CollisionPipeline runs on the host, so pull the latest GPU
+        // body_q back before each broad/narrow pass; same pattern as
+        // `xpbd_gpu_parity::box_stack_cpu_gpu_match`.
+        s_a.download_from_device(&device, &queue).unwrap();
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        contacts.upload_to_device(&device, &queue).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        s_b.download_from_device(&device, &queue).unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let q = s_a.body_q.host().unwrap();
+    let mut min_y = f64::INFINITY;
+    let mut min_idx = 0;
+    for (i, p) in q.iter().enumerate() {
+        if p.position.y < min_y {
+            min_y = p.position.y;
+            min_idx = i;
+        }
+    }
+    // Same tolerance as the CPU rope test: ~5 mm of XPBD residual
+    // penetration is accepted; tunnelling under the floor by an
+    // unbounded amount (the bug) is not.
+    let slop = 8e-3;
+    assert!(
+        min_y >= REGRESSION_ROPE_LINK_RADIUS - slop,
+        "GPU rope sphere {min_idx} tunnels floor: y={min_y}, expected >= {} (this is the equality-overwrites-velocity bug)",
+        REGRESSION_ROPE_LINK_RADIUS - slop,
+    );
+}
+
+/// CPU vs GPU smoke test for the equality + restitution pipeline.
+/// CPU is the oracle (it runs equality BEFORE velocity recovery, so
+/// it never had this bug). After the fix, GPU body_qd's vertical
+/// component matches CPU within a generous slop on a bouncing-stack
+/// scene. The fix keeps the project_velocity (restitution +
+/// friction) contribution in body_qd; pre-fix it was overwritten by
+/// `(q_post_eq − q_pre_step) / dt`, which silently dropped the
+/// restitution kick.
+///
+/// Note: f32-narrowing + small differences between CPU's contact
+/// iteration order and GPU's per-body CSR layout means the GPU bounce
+/// can drift up to ~0.05 m/s from the CPU oracle even after the fix
+/// — we use a generous tolerance here. The truly-broken behaviour
+/// (recovery overwrites body_qd entirely) shows up via the rope /
+/// two-bar tests below, which check the reported symptom directly.
+#[test]
+#[ignore = "needs a real wgpu adapter — CPU vs GPU parity for equality + restitution velocity preservation"]
+fn gpu_friction_velocity_survives_equality_recovery() {
+    fn build_model() -> Model {
+        let mut b = ModelBuilder::new();
+        b.set_angular_damping(0.0);
+        b.set_linear_damping(0.0);
+        b.set_default_friction(0.0).unwrap();
+        b.set_default_restitution(1.0).unwrap();
+        let half = Vec3::splat(0.15);
+        let inertia = Mat3::from_diagonal(Vec3::new(0.03, 0.03, 0.03));
+        let bottom = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                .with_position(Vec3::new(0.0, 0.15 + 0.05, 0.0)),
+        );
+        b.add_shape_box(bottom, half, Transform::IDENTITY).unwrap();
+        let top = b.add_body(
+            BodyParams::new()
+                .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                .with_position(Vec3::new(0.0, 0.15 * 3.0 + 0.05, 0.0)),
+        );
+        b.add_shape_box(top, half, Transform::IDENTITY).unwrap();
+        b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+            .expect("plane");
+        b.add_equality_connect(
+            bottom,
+            top,
+            Vec3::new(0.0, 0.15, 0.0),
+            Vec3::new(0.0, -0.15, 0.0),
+        );
+        b.build().expect("bouncing-stack model")
+    }
+
+    let dt: Real = 1.0 / 240.0;
+    let n_steps = 30;
+
+    // CPU oracle.
+    let cpu_model = build_model();
+    let mut cpu_a = cpu_model.state().unwrap();
+    let mut cpu_b = cpu_model.state().unwrap();
+    let cpu_control = cpu_model.control();
+    let mut cpu_contacts = Contacts::with_capacity(256);
+    let mut cpu_pipeline = CollisionPipeline::new();
+    let mut cpu_solver = XpbdSolver::new().with_iterations(8);
+    for _ in 0..n_steps {
+        cpu_pipeline.collide(&cpu_model, &cpu_a, &mut cpu_contacts).unwrap();
+        cpu_solver
+            .step(&cpu_model, &cpu_a, &cpu_control, &cpu_contacts, dt, &mut cpu_b)
+            .unwrap();
+        std::mem::swap(&mut cpu_a, &mut cpu_b);
+    }
+    let cpu_qd = cpu_a.body_qd.host().unwrap().to_vec();
+
+    // GPU.
+    let mut gpu_model = build_model();
+    let engine = Engine::new_gpu().expect("GPU adapter required");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    gpu_model.upload_to_device(&device, &queue).unwrap();
+    let mut g_a = gpu_model.state().unwrap();
+    let mut g_b = gpu_model.state().unwrap();
+    let mut g_control = gpu_model.control();
+    let mut g_contacts = Contacts::with_capacity(256);
+    g_a.upload_to_device(&device, &queue).unwrap();
+    g_b.upload_to_device(&device, &queue).unwrap();
+    g_control.upload_to_device(&device, &queue).unwrap();
+    g_contacts.upload_to_device(&device, &queue).unwrap();
+    let mut g_solver = XpbdSolver::new_gpu(&engine, gpu_model.body_count as u32)
+        .unwrap()
+        .with_iterations(8);
+    let mut g_pipeline = CollisionPipeline::new();
+    for _ in 0..n_steps {
+        g_a.download_from_device(&device, &queue).unwrap();
+        g_pipeline.collide(&gpu_model, &g_a, &mut g_contacts).unwrap();
+        g_contacts.upload_to_device(&device, &queue).unwrap();
+        g_solver
+            .step(&gpu_model, &g_a, &g_control, &g_contacts, dt, &mut g_b)
+            .unwrap();
+        g_b.download_from_device(&device, &queue).unwrap();
+        std::mem::swap(&mut g_a, &mut g_b);
+    }
+    let gpu_qd = g_a.body_qd.host().unwrap().to_vec();
+
+    // Vertical velocity parity. With the fix, GPU vy ≈ CPU vy (same
+    // bounce direction + magnitude). Pre-fix the GPU vy was the
+    // pre-restitution value (negative or near-zero) while CPU vy was
+    // the post-restitution (positive bounce-back).
+    for i in 0..2 {
+        let dvy = (cpu_qd[i].linear.y - gpu_qd[i].linear.y).abs();
+        eprintln!(
+            "body {i}: cpu vy={:.5} gpu vy={:.5} dvy={dvy:.5}",
+            cpu_qd[i].linear.y, gpu_qd[i].linear.y,
+        );
+        // Generous tolerance; see test-level doc for why CPU/GPU
+        // can drift by ~0.05 m/s even with the fix. The hard
+        // tunnelling failure mode is captured by the rope / two-bar
+        // regression tests below.
+        assert!(
+            dvy < 0.10,
+            "body {i} vertical velocity diverges between CPU and GPU by {dvy} m/s — equality recovery is likely destroying the project_velocity (restitution) contribution",
+        );
+    }
+}
+
+/// FourBar-like sanity (Scene #39): two dynamic bars connected end-
+/// to-end by a CONNECT, dropped onto the floor. The closure should
+/// survive the contact phase — i.e. the bars stay pinned together
+/// AND don't tunnel through the floor.
+#[test]
+#[ignore = "needs a real wgpu adapter — verifies CONNECT closure survives contact friction"]
+fn gpu_two_bar_chain_survives_floor_contact() {
+    let mut b = ModelBuilder::new();
+    b.set_angular_damping(0.10);
+    b.set_default_friction(0.5).unwrap();
+
+    let radius = 0.1;
+    let inertia = Mat3::IDENTITY;
+    let body_a = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+            .with_position(Vec3::new(-0.5, 1.5, 0.0)),
+    );
+    b.add_shape_sphere(body_a, radius, Transform::IDENTITY).unwrap();
+    let body_b = b.add_body(
+        BodyParams::new()
+            .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+            .with_position(Vec3::new(0.5, 1.5, 0.0)),
+    );
+    b.add_shape_sphere(body_b, radius, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    // CONNECT pinning the spheres at the midpoint between them
+    // (anchor offsets along ±X half-distance).
+    b.add_equality_connect(
+        body_a,
+        body_b,
+        Vec3::new(0.5, 0.0, 0.0),
+        Vec3::new(-0.5, 0.0, 0.0),
+    );
+
+    let mut model = b.build().unwrap();
+    let engine = Engine::new_gpu().expect("GPU adapter required");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model.upload_to_device(&device, &queue).unwrap();
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let mut control = model.control();
+    let mut contacts = Contacts::with_capacity(2048);
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    control.upload_to_device(&device, &queue).unwrap();
+    contacts.upload_to_device(&device, &queue).unwrap();
+
+    let mut solver = XpbdSolver::new_gpu(&engine, model.body_count as u32)
+        .unwrap()
+        .with_iterations(10);
+    let mut pipeline = CollisionPipeline::new();
+    let dt: Real = 1.0 / 240.0;
+    for _ in 0..720 {
+        s_a.download_from_device(&device, &queue).unwrap();
+        pipeline.collide(&model, &s_a, &mut contacts).unwrap();
+        contacts.upload_to_device(&device, &queue).unwrap();
+        solver
+            .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        s_b.download_from_device(&device, &queue).unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let q = s_a.body_q.host().unwrap();
+    let dist = (q[1].position - q[0].position).length();
+    let min_y = q[0].position.y.min(q[1].position.y);
+    eprintln!(
+        "GPU two-bar: a={:?}, b={:?}, dist={dist:.4}, min_y={min_y:.4}",
+        q[0].position, q[1].position
+    );
+    // Closure should stay within ~5 cm of the rest distance (1.0 m).
+    assert!(
+        (dist - 1.0).abs() < 0.05,
+        "CONNECT closure broke: dist={dist}, expected ≈ 1.0",
+    );
+    // Neither sphere tunnels the floor.
+    assert!(
+        min_y >= radius - 8e-3,
+        "two-bar chain tunnels floor: min_y={min_y}, expected >= {}",
+        radius - 8e-3,
+    );
+    assert!(q[0].position.is_finite() && q[1].position.is_finite());
+}

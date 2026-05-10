@@ -36,6 +36,16 @@ pub struct XpbdEqualityKernel {
     layout_uniforms: wgpu::BindGroupLayout,
     /// Bind group 3 layout for the joint-mimic pipeline.
     layout_joint_mimic: wgpu::BindGroupLayout,
+    /// Scratch buffer holding `body_q` snapshotted immediately BEFORE
+    /// the equality projection runs. Sized for `body_q_capacity`
+    /// transforms (32 bytes each); regrown lazily when a larger model
+    /// shows up. Used by `recover_velocity_after_equality` to compute
+    /// the equality-only displacement so the recovery pass ADDS to the
+    /// main kernel's contact-friction velocity instead of overwriting
+    /// it. See `shaders/xpbd_equality.wgsl::recover_velocity_after_equality`
+    /// for the full bug-fix rationale.
+    body_q_pre_eq: Option<wgpu::Buffer>,
+    body_q_capacity: u32,
 }
 
 impl XpbdEqualityKernel {
@@ -148,7 +158,26 @@ impl XpbdEqualityKernel {
             layout_eq,
             layout_uniforms,
             layout_joint_mimic,
+            body_q_pre_eq: None,
+            body_q_capacity: 0,
         }
+    }
+
+    /// Ensure the `body_q_pre_eq` scratch buffer exists and is at
+    /// least `body_count` Transforms wide (32 bytes each — matches the
+    /// `Transform` GPU mirror layout used by `XpbdKernel`).
+    fn ensure_pre_eq_buffer(&mut self, device: &wgpu::Device, body_count: u32) {
+        let needed = body_count.max(1);
+        if needed <= self.body_q_capacity && self.body_q_pre_eq.is_some() {
+            return;
+        }
+        self.body_q_pre_eq = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::xpbd_equality body_q_pre_eq"),
+            size: 32u64 * needed as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.body_q_capacity = needed;
     }
 
     /// Run the equality-projection pass on `state_out.body_q`
@@ -162,7 +191,7 @@ impl XpbdEqualityKernel {
     /// `q_driven = poly(q_driver)` (driver-authoritative).
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         model: &Model,
@@ -175,14 +204,23 @@ impl XpbdEqualityKernel {
             return Ok(());
         }
 
+        // `state_in` is unused now that the recovery pass diffs against
+        // a snapshot of the post-main-kernel body_q (taken below) rather
+        // than the pre-step pose. The parameter is kept on the public
+        // signature for backwards compatibility with the dispatcher.
+        let _ = state_in;
+
+        // Make sure the snapshot scratch buffer is sized for this model.
+        self.ensure_pre_eq_buffer(device, model.body_count as u32);
+        let body_q_pre_eq_buf = self
+            .body_q_pre_eq
+            .as_ref()
+            .expect("ensure_pre_eq_buffer just allocated it");
+
         let body_q_buf = state_out
             .body_q
             .device_buffer()
             .ok_or_else(missing_buf("state_out.body_q"))?;
-        let body_q_in_buf = state_in
-            .body_q
-            .device_buffer()
-            .ok_or_else(missing_buf("state_in.body_q"))?;
         let body_qd_buf = state_out
             .body_qd
             .device_buffer()
@@ -202,7 +240,7 @@ impl XpbdEqualityKernel {
                 buffer_entry(4, model.body_flags.device_buffer())?,
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: body_q_in_buf.as_entire_binding(),
+                    resource: body_q_pre_eq_buf.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -255,6 +293,23 @@ impl XpbdEqualityKernel {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::xpbd_equality encoder"),
         });
+        // 0. Snapshot body_q → body_q_pre_eq BEFORE the projection
+        //    runs. The recovery pass below reads this snapshot to
+        //    compute the equality-only displacement and ADDS it to
+        //    the existing `body_qd` (which already carries the
+        //    contact / friction / restitution velocity from the main
+        //    XPBD kernel). Without this, the recovery would overwrite
+        //    `body_qd` with `(body_q − body_q_pre_step) / dt`,
+        //    destroying the friction velocity for every body that has
+        //    an equality — symptom: rope tunnels through the floor,
+        //    FourBar bars lose friction, arm-mimic chains jitter.
+        encoder.copy_buffer_to_buffer(
+            body_q_buf,
+            0,
+            body_q_pre_eq_buf,
+            0,
+            32u64 * model.body_count as u64,
+        );
         // 1. Project equality (single-threaded Gauss-Seidel).
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

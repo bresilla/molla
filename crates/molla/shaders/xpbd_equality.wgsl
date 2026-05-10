@@ -51,7 +51,13 @@ struct SpatialVec {
 @group(0) @binding(2) var<storage, read>       body_inv_inertia: array<GpuMat3>;
 @group(0) @binding(3) var<storage, read>       body_com:      array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read>       body_flags:    array<u32>;
-@group(0) @binding(5) var<storage, read>       body_q_in:     array<Transform>;
+// Snapshot of `body_q` taken on the host side immediately BEFORE the
+// `project_equality` pass runs. Used by `recover_velocity_after_equality`
+// to compute the equality-only displacement delta — see that entry
+// point's comment for why this is additive (preserving the contact /
+// friction / restitution velocity that the main XPBD kernel already
+// wrote into `body_qd`).
+@group(0) @binding(5) var<storage, read>       body_q_pre_eq: array<Transform>;
 @group(0) @binding(6) var<storage, read_write> body_qd:       array<SpatialVec>;
 
 @group(1) @binding(0) var<storage, read> eq_type:               array<u32>;
@@ -256,10 +262,36 @@ fn project_equality() {
     }
 }
 
-/// Recompute `body_qd` from `(body_q − body_q_in) / dt` for every
-/// non-kinematic body. Runs AFTER `project_equality` so the velocity
-/// reflects the equality-corrected pose. Mirrors the velocity-
-/// recovery loop in the host-side shim.
+/// Add the equality-projection displacement to `body_qd` so the
+/// velocity reflects the equality-corrected pose **without losing the
+/// contact / friction / restitution components** that the main XPBD
+/// kernel already wrote into `body_qd`.
+///
+/// **Bug fix (Stage X):** the previous version did
+/// `body_qd = (body_q − body_q_in) / dt`, where `body_q_in` was the
+/// PRE-STEP pose. That OVERWROTE the post-contact velocity from the
+/// main kernel — destroying friction & restitution for every body
+/// touched by an equality. Symptom: rope spheres tunnelled through the
+/// floor; FourBar bars lost contact friction; arm-with-mimic chains
+/// jittered. The CPU `cpu_step` runs the equality projection BEFORE
+/// the velocity recovery (see `solvers/xpbd.rs::cpu_step`), so its
+/// `(q_post_eq − q_pre_step) / dt` already accounts for the equality.
+///
+/// Surgical fix: snapshot `body_q` to `body_q_pre_eq` immediately
+/// before `project_equality`, then recover by ADDING the
+/// equality-only displacement on top of the existing `body_qd`:
+///
+/// ```text
+/// body_qd[i].linear  += (body_q[i].pos - body_q_pre_eq[i].pos) / dt
+/// body_qd[i].angular += quat_to_omega(q_now * conj(q_pre_eq)) / dt
+/// ```
+///
+/// For bodies with no equality touching them, the snapshot equals the
+/// post-equality pose and the additive term is zero — so non-equality
+/// bodies are unaffected. For equality-bearing bodies, the contact
+/// velocity from the main kernel is preserved and the equality
+/// constraint adds its own velocity correction on top, matching the
+/// CPU reference.
 @compute @workgroup_size(64)
 fn recover_velocity_after_equality(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
@@ -267,11 +299,11 @@ fn recover_velocity_after_equality(@builtin(global_invocation_id) gid: vec3<u32>
     if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) { return; }
 
     let q_now = body_q[tid];
-    let q_in = body_q_in[tid];
+    let q_pre = body_q_pre_eq[tid];
     let inv_dt = select(0.0, 1.0 / u.dt, u.dt > 1e-9);
 
-    let dp = (q_now.position.xyz - q_in.position.xyz) * inv_dt;
-    let dq = quat_mul(q_now.rotation, quat_conj(q_in.rotation));
+    let dp = (q_now.position.xyz - q_pre.position.xyz) * inv_dt;
+    let dq = quat_mul(q_now.rotation, quat_conj(q_pre.rotation));
     let sign_w = select(1.0, -1.0, dq.w < 0.0);
     let omega = vec3<f32>(
         dq.x * 2.0 * sign_w * inv_dt,
@@ -279,9 +311,11 @@ fn recover_velocity_after_equality(@builtin(global_invocation_id) gid: vec3<u32>
         dq.z * 2.0 * sign_w * inv_dt,
     );
 
-    var qd: SpatialVec;
-    qd.linear = vec4<f32>(dp, 0.0);
-    qd.angular = vec4<f32>(omega, 0.0);
+    // Additive — preserves the contact-friction velocity from the main
+    // XPBD kernel. See entry-point comment for the bug-fix history.
+    var qd = body_qd[tid];
+    qd.linear = vec4<f32>(qd.linear.xyz + dp, 0.0);
+    qd.angular = vec4<f32>(qd.angular.xyz + omega, 0.0);
     body_qd[tid] = qd;
 }
 
