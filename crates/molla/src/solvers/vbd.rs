@@ -177,8 +177,14 @@ pub struct VbdSolver {
     /// projection. 6 is enough for the v1 demo (jelly on cloth);
     /// raise for stiff multi-contact configurations.
     pub vt_contact_sweeps: usize,
-    /// Stage 33 — last-substep active VT contact count, surfaced so
-    /// viewer / tests can read it without re-running gather.
+    /// Stage 33 / 33.1 — last-substep active soft contact count
+    /// (VT + EE combined), surfaced so viewer / tests can read it
+    /// without re-running gather. Stage 33 emitted only VT contacts;
+    /// Stage 33.1 onwards this also includes EE contacts. The
+    /// legacy name (`vt_contact_count`) is retained for back-compat
+    /// — viewer panes already use it as a "number of cross-mesh
+    /// soft contacts" readout, which is exactly what the unified
+    /// count means.
     pub last_vt_contact_count: usize,
     /// Stage 33 — cross-mesh BVH, lazily built on the first substep
     /// (`None` until then). Refit per substep; rebuilt only when
@@ -330,10 +336,19 @@ impl VbdSolver {
         self
     }
 
-    /// Stage 33 — last-frame active VT contact count. Available for
-    /// the viewer pane and tests after `step` returns.
+    /// Stage 33 / 33.1 — last-frame active soft (VT + EE) contact
+    /// count. Available for the viewer pane and tests after `step`
+    /// returns.
     #[must_use]
     pub fn last_vt_contact_count(&self) -> usize {
+        self.last_vt_contact_count
+    }
+
+    /// Stage 33.1 — same value as [`Self::last_vt_contact_count`],
+    /// renamed for clarity now that the count includes EE contacts
+    /// too. New callers should prefer this accessor.
+    #[must_use]
+    pub fn last_soft_contact_count(&self) -> usize {
         self.last_vt_contact_count
     }
 
