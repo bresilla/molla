@@ -70,8 +70,8 @@ pub use assembly::assemble_global;
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 #[cfg(feature = "gpu")]
 pub use fft_ns::{
-    solve_navier_stokes_fractional_step, solve_pressure_poisson_fft,
-    FractionalStepConfig,
+    advance_navier_stokes_fractional_step, solve_navier_stokes_fractional_step,
+    solve_pressure_poisson_fft, FractionalStepConfig,
 };
 pub use element::{
     compute_element_elasticity_stiffness, compute_element_mass,

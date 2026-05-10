@@ -179,6 +179,7 @@ pub fn solve_navier_stokes_fractional_step(
     kernel: &FftKernel,
     cfg: FractionalStepConfig,
 ) -> Result<Vec<[f32; 2]>> {
+    // Initial condition: Taylor-Green vortex.
     let n = cfg.grid_n;
     if n == 0 || (n & (n - 1)) != 0 {
         return Err(Error::Gpu(format!(
@@ -187,8 +188,6 @@ pub fn solve_navier_stokes_fractional_step(
     }
     let total = n * n;
     let two_pi = 2.0 * std::f32::consts::PI;
-
-    // Initial condition: Taylor-Green vortex.
     let mut u = vec![[0.0_f32; 2]; total];
     for j in 0..n {
         let y = (j as f32 + 0.5) / n as f32;
@@ -198,6 +197,34 @@ pub fn solve_navier_stokes_fractional_step(
             let vy = -(two_pi * x).cos() * (two_pi * y).sin();
             u[j * n + i] = [ux, vy];
         }
+    }
+    advance_navier_stokes_fractional_step(device, queue, kernel, &mut u, cfg)?;
+    Ok(u)
+}
+
+/// In-place sibling of [`solve_navier_stokes_fractional_step`] — runs
+/// `cfg.num_steps` projection-method steps from the **caller-owned**
+/// `u` field (no Taylor-Green seeding). Useful for scenes that step
+/// frame-by-frame without restarting from the initial condition.
+pub fn advance_navier_stokes_fractional_step(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    kernel: &FftKernel,
+    u: &mut [[f32; 2]],
+    cfg: FractionalStepConfig,
+) -> Result<()> {
+    let n = cfg.grid_n;
+    if n == 0 || (n & (n - 1)) != 0 {
+        return Err(Error::Gpu(format!(
+            "advance_navier_stokes_fractional_step: grid_n must be a power of two, got {n}"
+        )));
+    }
+    let total = n * n;
+    if u.len() != total {
+        return Err(Error::Gpu(format!(
+            "advance_navier_stokes_fractional_step: u.len() = {} but grid_n² = {total}",
+            u.len()
+        )));
     }
 
     let dx = 1.0 / n as f32;
@@ -288,5 +315,5 @@ pub fn solve_navier_stokes_fractional_step(
         }
     }
 
-    Ok(u)
+    Ok(())
 }
