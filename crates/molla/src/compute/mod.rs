@@ -13,6 +13,16 @@ mod engine;
 #[cfg(feature = "gpu")]
 mod mpm;
 
+// Stage 37.8 — tile compute primitives bundle. CPU oracles are
+// always available; the GPU pipelines are gated behind the `gpu`
+// feature inside each module.
+pub mod tile_block_cholesky;
+pub mod tile_convolution;
+pub mod tile_filtering;
+pub mod tile_matmul;
+pub mod tile_mcgp;
+pub mod tile_stream_compaction;
+
 #[cfg(feature = "gpu")]
 pub use engine::{AdapterInfo, Backend, Engine};
 #[cfg(feature = "gpu")]
