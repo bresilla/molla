@@ -31,6 +31,13 @@ pub enum FunctionSpace {
     /// lives at global DoF `v * dim + c`. Stage 36.1 elasticity uses
     /// `dim = 3` in 3D and `dim = 2` for plane-strain 2D.
     P1Vector { dim: usize },
+    /// Piecewise-quadratic nodal basis with `dim` vector components
+    /// per node. DoF layout: corner DoFs first (interleaved by
+    /// component), then edge-midpoint DoFs (interleaved by component),
+    /// matching the [`crate::fem::p2_element::P2DofMap`] layout
+    /// extended for `dim` components. Stage 36.2 Taylor-Hood velocity
+    /// uses `dim = 3` in 3D, `dim = 2` for 2D.
+    P2Vector { dim: usize },
 }
 
 impl FunctionSpace {
@@ -39,6 +46,7 @@ impl FunctionSpace {
     /// - `P1Nodal` → `vertex_count`.
     /// - `P2Nodal` → `vertex_count + edge_count` (one extra DoF at the
     ///   midpoint of every unique undirected edge in the mesh).
+    /// - `P2Vector { dim }` → `(vertex_count + edge_count) * dim`.
     #[must_use]
     pub fn ndof(&self, mesh: &FemMesh) -> usize {
         match self {
@@ -48,18 +56,23 @@ impl FunctionSpace {
                 mesh.vert_count() + edges.len()
             }
             FunctionSpace::P1Vector { dim } => mesh.vert_count() * dim,
+            FunctionSpace::P2Vector { dim } => {
+                let (edges, _) = compute_edges(mesh);
+                (mesh.vert_count() + edges.len()) * dim
+            }
         }
     }
 
-    /// Number of scalar DoFs per vertex (1 for scalar fields, `dim`
-    /// for vector fields). Used by the assembly path to compute the
-    /// DoF stride.
+    /// Number of scalar DoFs per node (1 for scalar fields, `dim`
+    /// for vector fields). For `P2*` spaces a "node" is either a
+    /// corner or an edge-midpoint.
     #[must_use]
     pub fn dofs_per_vertex(&self) -> usize {
         match self {
             FunctionSpace::P1Nodal => 1,
             FunctionSpace::P2Nodal => 1,
             FunctionSpace::P1Vector { dim } => *dim,
+            FunctionSpace::P2Vector { dim } => *dim,
         }
     }
 }
@@ -178,5 +191,15 @@ mod tests {
         assert_eq!(FunctionSpace::P1Vector { dim: 3 }.ndof(&m), 3 * v);
         assert_eq!(FunctionSpace::P1Vector { dim: 3 }.dofs_per_vertex(), 3);
         assert_eq!(FunctionSpace::P1Nodal.dofs_per_vertex(), 1);
+    }
+
+    #[test]
+    fn p2_vector_ndof_scales_with_dim() {
+        let m = FemMesh::tet_grid_3d(2, 2, 2, 1.0, 1.0, 1.0);
+        let (edges, _) = compute_edges(&m);
+        let n_nodes = m.vert_count() + edges.len();
+        assert_eq!(FunctionSpace::P2Vector { dim: 3 }.ndof(&m), 3 * n_nodes);
+        assert_eq!(FunctionSpace::P2Vector { dim: 2 }.ndof(&m), 2 * n_nodes);
+        assert_eq!(FunctionSpace::P2Vector { dim: 3 }.dofs_per_vertex(), 3);
     }
 }
