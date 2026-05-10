@@ -132,6 +132,18 @@ impl SoftBvh {
             Ok(q) => q,
             Err(_) => return,
         };
+        self.refit_swept_arrays(q0, q1, tris);
+    }
+
+    /// Stage 33.4 — array variant of [`Self::refit_swept`]. The CPU
+    /// VBD substep loop already holds `p_in` / `p_predict` as `Vec<Vec3>`
+    /// scratch; passing them straight in skips the round-trip through
+    /// `State::particle_q.host()` (which would pin a borrow on the
+    /// parent state).
+    pub fn refit_swept_arrays(&mut self, q0: &[Vec3], q1: &[Vec3], tris: &[[u32; 3]]) {
+        if tris.len() != self.tri_aabbs.len() {
+            return;
+        }
         for (i, tri) in tris.iter().enumerate() {
             let a0 = tri_aabb(tri, q0);
             let a1 = tri_aabb(tri, q1);

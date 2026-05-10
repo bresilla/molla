@@ -184,6 +184,28 @@ pub struct VbdSolver {
     /// (`None` until then). Refit per substep; rebuilt only when
     /// the soft-surface tri count changes.
     pub(crate) soft_bvh: Option<crate::geometry::SoftBvh>,
+    /// Stage 33.4 — enable the pre-substep continuous collision
+    /// detection (CCD) pass. When `true`, every substep starts by
+    /// computing the earliest time-of-impact (TOI) per fast-moving
+    /// vertex against every cross-mesh triangle's swept AABB; verts
+    /// with TOI < 1 are advanced to `TOI - eps` and their normal-
+    /// direction velocity is zeroed BEFORE the discrete VBD substep
+    /// runs. Default `false` for backwards compat with Stage 33's
+    /// discrete-only contact pipeline.
+    pub ccd_enabled: bool,
+    /// Stage 33.4 — only run CCD for verts moving faster than this
+    /// (m/s). Slow verts can't tunnel between substeps so the cost
+    /// of the per-vert swept BVH query buys nothing. Default
+    /// `1.0` m/s.
+    pub ccd_velocity_threshold: Real,
+    /// Stage 33.4 — diagnostic counter: number of `vt_ccd` invocations
+    /// over the last `step` call. Surfaces in tests so the velocity
+    /// threshold's effect is observable.
+    pub last_ccd_invocations: usize,
+    /// Stage 33.4 — diagnostic counter: number of vertices whose TOI
+    /// fell strictly inside `[0, 1)` (i.e. the CCD pass actually
+    /// snapped them back) over the last `step` call.
+    pub last_ccd_snaps: usize,
     backend: VbdBackend,
 }
 
@@ -209,6 +231,10 @@ impl VbdSolver {
             vt_contact_sweeps: 6,
             last_vt_contact_count: 0,
             soft_bvh: None,
+            ccd_enabled: false,
+            ccd_velocity_threshold: 1.0,
+            last_ccd_invocations: 0,
+            last_ccd_snaps: 0,
             backend: VbdBackend::Cpu,
         }
     }
@@ -248,6 +274,10 @@ impl VbdSolver {
             vt_contact_sweeps: 6,
             last_vt_contact_count: 0,
             soft_bvh: None,
+            ccd_enabled: false,
+            ccd_velocity_threshold: 1.0,
+            last_ccd_invocations: 0,
+            last_ccd_snaps: 0,
             backend: VbdBackend::Gpu(GpuBackend { device, queue, kernel }),
         })
     }
@@ -337,6 +367,35 @@ impl VbdSolver {
         self.last_vt_contact_count
     }
 
+    /// Stage 33.4 — toggle the pre-substep CCD pass on / off.
+    #[must_use]
+    pub fn with_ccd(mut self, enabled: bool) -> Self {
+        self.ccd_enabled = enabled;
+        self
+    }
+
+    /// Stage 33.4 — set the per-vertex velocity gate (m/s) below which
+    /// the CCD pass skips the per-vertex BVH query.
+    #[must_use]
+    pub fn with_ccd_velocity_threshold(mut self, v: Real) -> Self {
+        self.ccd_velocity_threshold = v.max(0.0);
+        self
+    }
+
+    /// Stage 33.4 — number of `vt_ccd` invocations during the last
+    /// `step`. Read by tests to verify the velocity threshold gate.
+    #[must_use]
+    pub fn last_ccd_invocations(&self) -> usize {
+        self.last_ccd_invocations
+    }
+
+    /// Stage 33.4 — number of vertices snapped back by the CCD pass
+    /// (TOI strictly less than 1) during the last `step`.
+    #[must_use]
+    pub fn last_ccd_snaps(&self) -> usize {
+        self.last_ccd_snaps
+    }
+
     /// Refresh the per-spring stiffness table from `model`. Call
     /// after the user tweaks compliance sliders without rebuilding
     /// the solver. CPU backend is a no-op (it computes stiffness
@@ -413,7 +472,40 @@ impl Solver for VbdSolver {
                 } else {
                     Vec::new()
                 };
+                // Stage 33.4 — diagnostic counters reset per `step`.
+                // CCD invocations / snaps accumulate across substeps so
+                // the final value reflects the whole step.
+                self.last_ccd_invocations = 0;
+                self.last_ccd_snaps = 0;
                 for _ in 0..n_sub {
+                    // Stage 33.4 — pre-substep CCD pass. Runs only when
+                    // ≥ 2 soft surfaces are registered (no cross-mesh
+                    // contact otherwise) and the user has explicitly
+                    // opted in via `with_ccd(true)`. Mutates `p_in`
+                    // (snap to TOI - eps) + `v_in` (kill normal-side
+                    // dive component) IN PLACE so the subsequent
+                    // `cpu_step` predictor sees the corrected state.
+                    if self.ccd_enabled
+                        && model.soft_surfaces.len() >= 2
+                        && self.contact_stiffness > 0.0
+                    {
+                        if self.soft_bvh.is_none() {
+                            self.soft_bvh =
+                                Some(crate::geometry::SoftBvh::build(model, state_in));
+                        }
+                        let bvh = self.soft_bvh.as_mut().unwrap();
+                        let (inv, snaps) = super::vbd_vt_contact::ccd_pass(
+                            model,
+                            bvh,
+                            &mut p_in,
+                            &mut v_in,
+                            self.vt_contact_margin,
+                            self.ccd_velocity_threshold,
+                            dt_sub,
+                        );
+                        self.last_ccd_invocations += inv;
+                        self.last_ccd_snaps += snaps;
+                    }
                     cpu_step(
                         model,
                         &p_in,
@@ -520,6 +612,16 @@ impl Solver for VbdSolver {
                 let GpuBackend { device, queue, kernel } = gpu;
                 let contact_k = self.contact_stiffness as f32;
                 let hard = matches!(self.vbd_mode, VbdMode::Hard);
+                // Stage 33.4 — GPU CCD path is deferred. The kernel
+                // reads `state_in` from device memory and `state_in` is
+                // an immutable borrow at this layer (mutating it would
+                // require download → host CCD → upload, which can't
+                // happen through `&State`). For v1 the GPU backend
+                // surfaces zero CCD activity. The CPU backend ships
+                // the working CCD pass; viewer scenes that need CCD
+                // (Scene::FastSoftImpact) drive the CPU path.
+                self.last_ccd_invocations = 0;
+                self.last_ccd_snaps = 0;
                 // Single substep — straight kernel dispatch. Multi-
                 // substep ping-pong is implemented by dispatching N
                 // times with a chain of state_in → state_out swaps

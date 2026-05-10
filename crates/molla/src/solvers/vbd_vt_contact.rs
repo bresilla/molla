@@ -12,7 +12,7 @@
 //! lands in Stage 33.3 with proper adjacency exclusion).
 
 use crate::core::Result;
-use crate::geometry::{closest_point_on_triangle, SoftBvh};
+use crate::geometry::{closest_point_on_triangle, vt_ccd, vt_ccd_normal, SoftBvh};
 use crate::math::{Real, Vec3};
 use crate::sim::{Model, State};
 
@@ -342,6 +342,140 @@ pub fn project_vt_contacts(
     }
 
     Ok(last_active)
+}
+
+/// Stage 33.4 — pre-substep continuous collision detection sweep.
+///
+/// Operates on raw `(particle_q, particle_qd)` arrays so the VBD CPU
+/// substep loop can call us BEFORE building the implicit-Euler
+/// predictor. Steps:
+///
+/// 1. Build the t1-predicted position `q_predict[i] = q[i] + v[i] * dt`
+///    for every particle.
+/// 2. Refit the cross-mesh BVH using SWEPT AABBs (union of t0 + t1
+///    tri AABBs).
+/// 3. For every fast-moving vertex (`‖v · dt‖ > velocity_threshold ·
+///    dt`):
+///    - Query the swept BVH for candidate tris.
+///    - For each candidate (skipping same-surface + own-vertex tris),
+///      run [`vt_ccd`] to find the earliest TOI.
+///    - If a vertex has TOI < 1, snap its position to `TOI - eps`
+///      along its trajectory and zero its velocity component diving
+///      INTO the contact (along `-normal`). Tangential motion is
+///      preserved.
+///
+/// Returns `(invocations, snaps)`:
+/// - `invocations` = total number of `vt_ccd` calls (used by perf
+///   tests to verify the velocity threshold gate is working).
+/// - `snaps` = number of vertices whose TOI fell strictly inside
+///   `[0, 1)` (i.e. were snapped back).
+///
+/// Same-surface contacts are skipped (self-collision is Stage 33.3).
+/// Own-vertex contacts (the vertex IS one of the tri's corners) are
+/// skipped — these arise when two soft surfaces share a particle.
+#[allow(clippy::too_many_arguments)]
+pub fn ccd_pass(
+    model: &Model,
+    bvh: &mut SoftBvh,
+    q_in: &mut [Vec3],
+    qd_in: &mut [Vec3],
+    margin: Real,
+    velocity_threshold: Real,
+    dt: Real,
+) -> (usize, usize) {
+    let mut invocations: usize = 0;
+    let mut snaps: usize = 0;
+
+    if model.soft_surfaces.is_empty() {
+        return (invocations, snaps);
+    }
+    let tris: &[[u32; 3]] = &model.soft_surface_tris;
+    if tris.is_empty() {
+        return (invocations, snaps);
+    }
+
+    let n = q_in.len();
+    let mut q_t1: Vec<Vec3> = Vec::with_capacity(n);
+    for i in 0..n {
+        q_t1.push(q_in[i] + qd_in[i] * dt);
+    }
+    bvh.refit_swept_arrays(q_in, &q_t1, tris);
+
+    let v_threshold_sq = velocity_threshold * velocity_threshold;
+    const SNAP_EPS: Real = 1.0e-4;
+
+    for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
+        let v_lo = s.vertex_offset as usize;
+        let v_hi = v_lo + s.vertex_count as usize;
+        for v_global in v_lo..v_hi {
+            let v_t0 = q_in[v_global];
+            let v_t1 = q_t1[v_global];
+            let dv = v_t1 - v_t0;
+            if dv.length_squared() < v_threshold_sq * dt * dt {
+                continue;
+            }
+            let candidates = bvh.query_point_swept(v_t0, v_t1, margin);
+            if candidates.is_empty() {
+                continue;
+            }
+            let mut best_toi: Option<Real> = None;
+            let mut best_tri_idx: u32 = 0;
+            for tri_global in candidates {
+                let tri_surface = bvh.tri_to_surface[tri_global as usize];
+                if tri_surface == s_idx as u32 {
+                    continue;
+                }
+                let tri = tris[tri_global as usize];
+                if tri[0] as usize == v_global
+                    || tri[1] as usize == v_global
+                    || tri[2] as usize == v_global
+                {
+                    continue;
+                }
+                let a0 = q_in[tri[0] as usize];
+                let b0 = q_in[tri[1] as usize];
+                let c0 = q_in[tri[2] as usize];
+                let a1 = q_t1[tri[0] as usize];
+                let b1 = q_t1[tri[1] as usize];
+                let c1 = q_t1[tri[2] as usize];
+                invocations += 1;
+                if let Some(toi) = vt_ccd(v_t0, v_t1, [a0, b0, c0], [a1, b1, c1]) {
+                    if toi >= 0.0 && toi < 1.0 {
+                        match best_toi {
+                            Some(t) if t <= toi => {}
+                            _ => {
+                                best_toi = Some(toi);
+                                best_tri_idx = tri_global;
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(toi) = best_toi {
+                let t_safe = (toi - SNAP_EPS).max(0.0);
+                let snapped = v_t0 + dv * t_safe;
+                let tri = tris[best_tri_idx as usize];
+                let a0 = q_in[tri[0] as usize];
+                let b0 = q_in[tri[1] as usize];
+                let c0 = q_in[tri[2] as usize];
+                let a1 = q_t1[tri[0] as usize];
+                let b1 = q_t1[tri[1] as usize];
+                let c1 = q_t1[tri[2] as usize];
+                let normal = vt_ccd_normal(toi, dv, [a0, b0, c0], [a1, b1, c1]);
+                // Snap position to just before contact.
+                q_in[v_global] = snapped;
+                // Zero the velocity component diving INTO the contact
+                // (along `-normal`). Tangential motion is preserved.
+                let v_now = qd_in[v_global];
+                let vn = v_now.dot(normal);
+                if vn < 0.0 {
+                    qd_in[v_global] = v_now - normal * vn;
+                }
+                snaps += 1;
+            }
+        }
+    }
+    (invocations, snaps)
 }
 
 /// Closest-point + barycentric weights wrapper. Wraps
