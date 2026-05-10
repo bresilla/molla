@@ -25,6 +25,7 @@ mod spatial_hash;
 pub mod sparse_grid;
 mod support;
 pub mod soft_bvh;
+pub mod soft_ccd;
 pub mod soft_surface;
 pub mod tet_bvh;
 
@@ -56,6 +57,8 @@ pub use soft_surface::{
     compute_tet_surface_triangles, ClothMeshId, SoftSurface, SoftSurfaceKind,
 };
 pub use soft_bvh::SoftBvh;
+// ── Stage 33.4: VT-CCD root-finding for fast-impact tunnelling ─────
+pub use soft_ccd::{vt_ccd, vt_ccd_normal};
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use support::{
     support, support_box, support_capsule, support_cone, support_convex_hull,

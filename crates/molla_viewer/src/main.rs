@@ -927,6 +927,13 @@ enum Scene {
     /// ON the cloth folds layer onto layer; with it OFF the layers
     /// inter-penetrate.
     ClothCollar,
+    /// Stage 33.4 — fast-impact CCD demo. A small tet cube is launched
+    /// downward at ~5 m/s into a horizontal pinned cloth strip. With
+    /// CCD on (default for this scene) the cube stops at contact;
+    /// with CCD off it tunnels through. Right-rail pane has a CCD
+    /// on/off toggle and an impact-speed slider so the user can drive
+    /// the impact harder and watch CCD hold the line.
+    FastSoftImpact,
 }
 
 impl Scene {
@@ -977,6 +984,7 @@ impl Scene {
         Scene::BrickWall,
         Scene::SoftbodyDrop,
         Scene::ClothCollar,
+        Scene::FastSoftImpact,
     ];
 
     fn label(self) -> &'static str {
@@ -1025,6 +1033,7 @@ impl Scene {
             Scene::BrickWall => "42 Brick wall (wide, projectile)",
             Scene::SoftbodyDrop => "43 Softbody onto cloth (jelly + VBD cloth)",
             Scene::ClothCollar => "44 Cloth collar (self-collision)",
+            Scene::FastSoftImpact => "45 Fast soft impact (CCD)",
         }
     }
 
@@ -1062,7 +1071,8 @@ impl Scene {
             | Scene::CablePile
             | Scene::CableYJunction
             | Scene::SoftbodyDrop
-            | Scene::ClothCollar => SolverKind::Vbd,
+            | Scene::ClothCollar
+            | Scene::FastSoftImpact => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2375,6 +2385,7 @@ impl Sim {
             Scene::BrickWall => build_brick_wall_model(),
             Scene::SoftbodyDrop => build_softbody_drop_model(),
             Scene::ClothCollar => build_cloth_collar_model(),
+            Scene::FastSoftImpact => build_fast_soft_impact_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -2394,6 +2405,28 @@ impl Sim {
         let mut state_b = model.state().expect("state");
         let mut control = model.control();
         let mut contacts = mp::Contacts::with_capacity(8192);
+
+        // Stage 33.4 — FastSoftImpact: launch the tet cube downward at
+        // the user-controlled impact speed (default 5 m/s) so the
+        // first substep already needs CCD to avoid tunneling. The
+        // cube particles are the trailing batch in `particle_q` (one
+        // cloth grid + one tet cube), addressed by their flat index
+        // range `[cloth_count..particle_count]`.
+        if matches!(scene, Scene::FastSoftImpact) {
+            let v_target = -fast_soft_impact_speed();
+            let cloth_count = (FAST_SOFT_IMPACT_CLOTH_NX * FAST_SOFT_IMPACT_CLOTH_NX) as usize;
+            let p_total = model.particle_count;
+            if let Ok(qd_a) = state_a.particle_qd.host_mut() {
+                for i in cloth_count..p_total {
+                    qd_a[i] = MVec3::new(0.0, v_target, 0.0);
+                }
+            }
+            if let Ok(qd_b) = state_b.particle_qd.host_mut() {
+                for i in cloth_count..p_total {
+                    qd_b[i] = MVec3::new(0.0, v_target, 0.0);
+                }
+            }
+        }
 
         // GPU-first: bring up wgpu and bind the XPBD GPU solver.
         let engine = Engine::new_gpu().expect(
@@ -2438,6 +2471,25 @@ impl Sim {
                 s.vt_contact_sweeps = 8;
                 s.contact_stiffness = 2.0e5;
             }
+        }
+        // Stage 33.4 — FastSoftImpact uses CPU VBD because the CCD
+        // pass is host-side only in v1 (a CCD-aware GPU port lands in
+        // Stage 33.4.1 / 33.5). Override the GPU solver picked above
+        // with a CPU instance configured for fast-impact: per-vertex
+        // CCD enabled, 0.5 m/s velocity threshold (so a low-velocity
+        // settled cube doesn't pay the BVH-query tax), and an inflated
+        // contact margin to give the discrete VT pipeline a wider net
+        // for cleanup behind the CCD snap.
+        if matches!(scene, Scene::FastSoftImpact) {
+            solver = SolverBackend::Vbd(
+                mp::VbdSolver::new_cpu()
+                    .with_iterations(8)
+                    .with_contact_stiffness(1.0e5)
+                    .with_vt_contact_margin(0.03)
+                    .with_vt_contact_sweeps(8)
+                    .with_ccd(true)
+                    .with_ccd_velocity_threshold(0.5),
+            );
         }
 
         (
@@ -2502,6 +2554,20 @@ impl Sim {
                 .copy_from_slice(&initial_p);
             for v in self.state_a.particle_qd.host_mut().expect("particle_qd") {
                 *v = MVec3::ZERO;
+            }
+            // Stage 33.4 — FastSoftImpact: re-launch the cube on reset
+            // so the user can repeatedly trigger the impact without
+            // rebuilding the scene.
+            if matches!(self.scene, Scene::FastSoftImpact) {
+                let v_target = -fast_soft_impact_speed();
+                let cloth_count =
+                    (FAST_SOFT_IMPACT_CLOTH_NX * FAST_SOFT_IMPACT_CLOTH_NX) as usize;
+                let p_total = self.model.particle_count;
+                if let Ok(qd_a) = self.state_a.particle_qd.host_mut() {
+                    for i in cloth_count..p_total {
+                        qd_a[i] = MVec3::new(0.0, v_target, 0.0);
+                    }
+                }
             }
         }
 
@@ -8739,14 +8805,18 @@ fn draw_jelly_gizmos(
     state: Res<JellyExampleState>,
     mut gizmos: Gizmos,
 ) {
-    if sim.scene != Scene::Jelly && sim.scene != Scene::SoftbodyDrop {
+    if sim.scene != Scene::Jelly
+        && sim.scene != Scene::SoftbodyDrop
+        && sim.scene != Scene::FastSoftImpact
+    {
         return;
     }
     let Ok(pq) = sim.state_a.particle_q.host() else {
         return;
     };
-    // For SoftbodyDrop the jelly tet wireframe is always shown — the
-    // demo's whole point is the cube colliding with cloth.
+    // For SoftbodyDrop / FastSoftImpact the jelly tet wireframe is
+    // always shown — those demos' whole point is the cube colliding
+    // with cloth.
     if sim.scene == Scene::Jelly && !state.show_wireframe {
         return;
     }
@@ -8940,6 +9010,7 @@ fn control_pane(
                     | Scene::DiffSpring
                     | Scene::SoftbodyDrop
                     | Scene::ClothCollar
+                    | Scene::FastSoftImpact
             ),
             _ => false,
         },
@@ -9081,6 +9152,7 @@ fn control_pane(
         Scene::DiffSpring => Some("Diff spring"),
         Scene::SoftbodyDrop => Some("Softbody → cloth"),
         Scene::ClothCollar => Some("Cloth collar (self-coll)"),
+        Scene::FastSoftImpact => Some("Fast soft impact (CCD)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9181,6 +9253,7 @@ fn control_pane(
                     }
                     Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
                     Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
+                    Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
                     _ => {}
                 });
         }
@@ -12779,6 +12852,125 @@ fn build_cloth_collar_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("cloth collar model"), Vec::new())
 }
 
+// Stage 33.4 — FastSoftImpact constants. Cloth grid is 16x16; the
+// "small horizontal cloth strip" of the spec is honoured by pinning
+// all four edges so the central area takes the impact.
+const FAST_SOFT_IMPACT_CLOTH_NX: u32 = 16;
+
+// Atomic-backed slider state for impact speed (m/s). Default 5 m/s
+// (the spec-stated impact speed). The right-rail pane writes here and
+// the `finalize` / `reset` paths read it to (re)set the cube's qd.
+// We store the f32 bit pattern in the AtomicU32. A pristine zero
+// value (haven't written yet) is treated as "use the default".
+static FAST_SOFT_IMPACT_SPEED_M_S: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+fn fast_soft_impact_speed() -> f64 {
+    let bits = FAST_SOFT_IMPACT_SPEED_M_S.load(std::sync::atomic::Ordering::Relaxed);
+    if bits == 0 {
+        return 5.0;
+    }
+    let stored = f32::from_bits(bits) as f64;
+    if stored.is_finite() && stored > 0.0 {
+        stored
+    } else {
+        5.0
+    }
+}
+
+fn set_fast_soft_impact_speed(v: f32) {
+    FAST_SOFT_IMPACT_SPEED_M_S.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stage 33.4 — FastSoftImpact scene. A small (3×3×3 vert) tet cube
+/// is launched downward at ~5 m/s into a horizontal pinned cloth strip
+/// (16×4). With CCD on (default for this scene) the cube stops at the
+/// cloth; with CCD off it tunnels through. Right-rail pane carries
+/// the toggles + impact-speed slider.
+fn build_fast_soft_impact_model() -> (mp::Model, Vec<BodyVisual>) {
+    use mp::Vec3 as MVec3;
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.20);
+
+    // Horizontal pinned cloth strip at y = 1.0.
+    let cloth_n = 16u32;
+    let cloth_w: f64 = 0.6;
+    let cloth_y: f64 = 1.0;
+    let (cloth_first, _, _) = b.add_cloth_grid(
+        MVec3::new(-cloth_w * 0.5, cloth_y, -cloth_w * 0.5),
+        MVec3::new(cloth_w, 0.0, 0.0),
+        MVec3::new(0.0, 0.0, cloth_w),
+        cloth_n,
+        cloth_n,
+        0.05,
+        0.02,
+        5.0e-6,
+        0.05,
+        mp::WorldId(0),
+    );
+    // Pin all four edges so the strip is taut.
+    for ix in 0..cloth_n {
+        b.pin_particle(cloth_first + ix);
+        b.pin_particle(cloth_first + (cloth_n - 1) * cloth_n + ix);
+        b.pin_particle(cloth_first + ix * cloth_n);
+        b.pin_particle(cloth_first + ix * cloth_n + cloth_n - 1);
+    }
+
+    // Tet cube above the cloth — 3×3×3 verts, 5cm cell size.
+    let nx = 3u32;
+    let dx: f64 = 0.05;
+    let cube_lo_y: f64 = cloth_y + 0.30; // 30 cm above cloth.
+    let cube_origin = MVec3::new(
+        -dx * (nx as f64 - 1.0) * 0.5,
+        cube_lo_y,
+        -dx * (nx as f64 - 1.0) * 0.5,
+    );
+    for kk in 0..nx {
+        for jj in 0..nx {
+            for ii in 0..nx {
+                let p = cube_origin
+                    + MVec3::new(ii as f64 * dx, jj as f64 * dx, kk as f64 * dx);
+                b.add_particle(p, 0.05, dx * 0.4, mp::WorldId(0));
+            }
+        }
+    }
+    let cloth_count = cloth_n * cloth_n;
+    let v_at = |i: u32, j: u32, k: u32| -> u32 {
+        cloth_first + cloth_count + (k * nx + j) * nx + i
+    };
+    let mut tets = Vec::new();
+    for kk in 0..nx - 1 {
+        for jj in 0..nx - 1 {
+            for ii in 0..nx - 1 {
+                let corners = [
+                    v_at(ii, jj, kk),
+                    v_at(ii + 1, jj, kk),
+                    v_at(ii, jj + 1, kk),
+                    v_at(ii + 1, jj + 1, kk),
+                    v_at(ii, jj, kk + 1),
+                    v_at(ii + 1, jj, kk + 1),
+                    v_at(ii, jj + 1, kk + 1),
+                    v_at(ii + 1, jj + 1, kk + 1),
+                ];
+                let cell_tets = jelly_cube_to_six_tets(corners);
+                for tet in cell_tets {
+                    tets.push(tet);
+                }
+            }
+        }
+    }
+    let materials = vec![mp::MaterialNeoHookean::elastic(2.0e5, 0.3)];
+    let mat_idx: Vec<u32> = vec![0; tets.len()];
+    let _ = b
+        .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+        .expect("add tet mesh");
+
+    // Floor (so the cube has somewhere to land in the no-CCD case).
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("fast soft impact model"), Vec::new())
+}
 
 // ── Per-scene state stubs for Newton-port scenes (defaults populated
 // once the scene is implemented). These are insert_resource'd in main()
@@ -13697,6 +13889,60 @@ fn diff_spring_pane(
     ui.separator();
     ui.small("Particle in a cage of springs. Gradient descent");
     ui.small("on rest lengths drives the particle to the target.");
+}
+
+/// Stage 33.4 — FastSoftImpact right-rail pane. Carries:
+/// - CCD on/off toggle (re-launches the cube on flip).
+/// - Impact-speed slider (m/s).
+/// - Live readout of CCD invocations / snaps.
+/// - "Re-launch" button to retrigger the impact at the current speed.
+fn fast_soft_impact_pane(ui: &mut egui::Ui, sim: &mut Sim) {
+    readout(ui, "Particles", &format!("{}", sim.model.particle_count));
+    readout(ui, "Tets", &format!("{}", sim.model.tet_count));
+    readout(
+        ui,
+        "Soft surfaces",
+        &format!("{}", sim.model.soft_surfaces.len()),
+    );
+
+    let mut ccd_on: bool = false;
+    let mut vt_count: usize = 0;
+    let mut ccd_inv: usize = 0;
+    let mut ccd_snaps: usize = 0;
+    if let SolverBackend::Vbd(s) = &sim.solver {
+        ccd_on = s.ccd_enabled;
+        vt_count = s.last_vt_contact_count();
+        ccd_inv = s.last_ccd_invocations();
+        ccd_snaps = s.last_ccd_snaps();
+    }
+    readout(ui, "VT contacts", &format!("{vt_count}"));
+    readout(ui, "CCD invocations", &format!("{ccd_inv}"));
+    readout(ui, "CCD snaps", &format!("{ccd_snaps}"));
+    ui.separator();
+
+    let mut speed = fast_soft_impact_speed() as f32;
+    ui.label("Impact speed (m/s)");
+    if ui.add(egui::Slider::new(&mut speed, 0.5..=15.0)).changed() {
+        set_fast_soft_impact_speed(speed);
+    }
+
+    if ui
+        .checkbox(&mut ccd_on, "CCD enabled (Stage 33.4)")
+        .changed()
+    {
+        if let SolverBackend::Vbd(s) = &mut sim.solver {
+            s.ccd_enabled = ccd_on;
+        }
+    }
+
+    if ui.button("Re-launch impact").clicked() {
+        sim.reset();
+    }
+
+    ui.separator();
+    ui.small("Toggle CCD off + click Re-launch to see the cube tunnel.");
+    ui.small("Toggle CCD on + Re-launch: the cube stops at the cloth.");
+    ui.small("Stage 33.4 ships VT-CCD only; EE-CCD is deferred.");
 }
 
 fn softbody_drop_pane(ui: &mut egui::Ui, sim: &mut Sim) {
