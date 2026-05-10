@@ -9,6 +9,7 @@
 //! v1 ships CPU-only; the GPU port (Stage 33.2) reuses these data
 //! structures verbatim and adds a per-substep tri-AABB shader.
 
+use crate::math::Real;
 use crate::sim::TetMeshId;
 
 /// Whether a soft surface comes from a tet mesh (boundary tris) or a
@@ -84,6 +85,16 @@ pub struct SoftSurface {
     /// for triangles topologically incident to the vertex (looked up
     /// via `Model.soft_vertex_incident_tris`).
     pub self_collision: bool,
+    /// Stage 33.5 — Coulomb friction coefficient at contacts on this
+    /// surface. Two contacting surfaces' values combine via the
+    /// geometric mean (`μ = sqrt(μ_a · μ_b)`); 0 disables tangential
+    /// resistance for any contact involving the surface. Default 0.4.
+    pub friction: Real,
+    /// Stage 33.5 — restitution coefficient (0 = perfectly inelastic,
+    /// 1 = full velocity reversal). Two contacting surfaces' values
+    /// combine via `min(e_a, e_b)`. Defaults per kind: `Cloth = 0.0`,
+    /// `TetMesh = 0.1`.
+    pub restitution: Real,
 }
 
 /// Compute the boundary (outer-surface) triangles of a tet soup via

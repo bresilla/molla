@@ -197,28 +197,18 @@ pub struct VbdSolver {
     /// (`None` until then). Refit per substep; rebuilt only when
     /// the soft-surface tri count changes.
     pub(crate) soft_bvh: Option<crate::geometry::SoftBvh>,
-    /// Stage 33.4 — enable the pre-substep continuous collision
-    /// detection (CCD) pass. When `true`, every substep starts by
-    /// computing the earliest time-of-impact (TOI) per fast-moving
-    /// vertex against every cross-mesh triangle's swept AABB; verts
-    /// with TOI < 1 are advanced to `TOI - eps` and their normal-
-    /// direction velocity is zeroed BEFORE the discrete VBD substep
-    /// runs. Default `false` for backwards compat with Stage 33's
-    /// discrete-only contact pipeline.
+    /// Stage 33.4 — enable the pre-substep CCD pass.
     pub ccd_enabled: bool,
-    /// Stage 33.4 — only run CCD for verts moving faster than this
-    /// (m/s). Slow verts can't tunnel between substeps so the cost
-    /// of the per-vert swept BVH query buys nothing. Default
-    /// `1.0` m/s.
+    /// Stage 33.4 — velocity gate (m/s) below which CCD is skipped.
     pub ccd_velocity_threshold: Real,
-    /// Stage 33.4 — diagnostic counter: number of `vt_ccd` invocations
-    /// over the last `step` call. Surfaces in tests so the velocity
-    /// threshold's effect is observable.
+    /// Stage 33.4 — diagnostic counter: `vt_ccd` invocations.
     pub last_ccd_invocations: usize,
-    /// Stage 33.4 — diagnostic counter: number of vertices whose TOI
-    /// fell strictly inside `[0, 1)` (i.e. the CCD pass actually
-    /// snapped them back) over the last `step` call.
+    /// Stage 33.4 — diagnostic counter: vertices snapped by CCD.
     pub last_ccd_snaps: usize,
+    /// Stage 33.5 — last substep's VT contact set (warm-starts
+    /// friction across substeps via
+    /// [`super::vbd_soft_contact::warm_start_friction`]).
+    pub(crate) prev_vt_contacts: Vec<super::vbd_soft_contact::VtContact>,
     backend: VbdBackend,
 }
 
@@ -248,6 +238,7 @@ impl VbdSolver {
             ccd_velocity_threshold: 1.0,
             last_ccd_invocations: 0,
             last_ccd_snaps: 0,
+            prev_vt_contacts: Vec::new(),
             backend: VbdBackend::Cpu,
         }
     }
@@ -291,6 +282,7 @@ impl VbdSolver {
             ccd_velocity_threshold: 1.0,
             last_ccd_invocations: 0,
             last_ccd_snaps: 0,
+            prev_vt_contacts: Vec::new(),
             backend: VbdBackend::Gpu(GpuBackend {
                 device,
                 queue,
@@ -600,23 +592,24 @@ impl Solver for VbdSolver {
                         self.soft_bvh = Some(crate::geometry::SoftBvh::build(model, state_out));
                     }
                     let bvh = self.soft_bvh.as_mut().unwrap();
-                    self.last_vt_contact_count = super::vbd_soft_contact::project_soft_contacts(
+                    // Stage 33.5 friction needs the per-substep
+                    // tangential drift, so pass in the pre-step
+                    // positions (`state_in.particle_q`).
+                    let q_pre_step = state_in.particle_q.host()?.to_vec();
+                    let qd_pre_step = state_in.particle_qd.host()?.to_vec();
+                    let new_contacts = super::vbd_soft_contact::project_vt_contacts(
                         model,
                         state_out,
                         bvh,
                         self.vt_contact_margin,
                         self.vt_contact_sweeps,
+                        dt,
+                        &self.prev_vt_contacts,
+                        &q_pre_step,
+                        &qd_pre_step,
                     )?;
-                    // Velocity recovery for the contact projection —
-                    // overwrite particle_qd to match the post-projection
-                    // displacement so the next substep doesn't drive the
-                    // contact back open. We only update particles whose
-                    // q changed (a strict reset would zero penetration
-                    // recovery; we use a 0.0 multiplier on the contact
-                    // delta to kill normal-direction velocity at contact).
-                    // Cheap approximation: leave qd alone — contacts
-                    // reapply each substep so a small spurious normal
-                    // velocity gets absorbed.
+                    self.last_vt_contact_count = new_contacts.len();
+                    self.prev_vt_contacts = new_contacts;
                 }
                 // Body state passes through.
                 let q_in = state_in.body_q.host()?.to_vec();
@@ -772,10 +765,10 @@ impl Solver for VbdSolver {
                         )?;
                     }
                     // VT contacts are handled by the GPU kernel above
-                    // (Stage 33.2). EE contacts (Stage 33.1) are CPU-only
+                    // (Stage 33.2 dropped the CPU bounce). EE contacts
+                    // (Stage 33.1) and friction (Stage 33.5) are CPU-only
                     // and only run on the CPU VBD backend; the GPU path
-                    // skips them in v1 (a future Stage 33.2.1 EE GPU
-                    // port can extend the kernel).
+                    // skips them in v1.
                     state_out.particle_q.ensure_device(&device)?;
                     state_out.particle_q.upload(&queue)?;
                 }

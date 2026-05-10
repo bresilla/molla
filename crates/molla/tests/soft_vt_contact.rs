@@ -230,17 +230,15 @@ fn tet_vertex_on_cloth_triangle_penalty_holds_under_gravity() {
         .map(|i| q[i as usize].y)
         .fold(Real::INFINITY, |a, b| a.min(b));
 
-    // The cube must rest on the cloth — not pass through to the
-    // floor. The strict spec target was `cloth_y +/- 5 mm`; v1's
-    // friction-less penalty contact lets the cube slowly drift
-    // laterally over hundreds of substeps so we use a 100 mm
-    // tolerance below the sagged cloth surface (`cloth_min_y`).
-    // The whole point of the test is "the cube DOES NOT pass
-    // through to free fall"; without contact the cube would have
-    // fallen >20 m by step 600.
+    // The cube must rest on the cloth — within `cloth_y +/- 5 mm`
+    // (per the original spec). Stage 33's friction-less penalty
+    // contact had to use a 100 mm tolerance because the cube
+    // slowly drifted laterally and slipped off the cloth edge;
+    // Stage 33.5's Coulomb friction stops the lateral drift, so
+    // the strict 5 mm penetration bound now holds.
     let pene = cloth_min_y - final_min_y;
     assert!(
-        pene <= 0.10,
+        pene <= 0.005,
         "jelly cube fell through cloth: cube_min_y = {final_min_y}, \
          cloth_min_y = {cloth_min_y}, penetration = {pene}"
     );

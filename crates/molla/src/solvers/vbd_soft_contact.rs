@@ -32,30 +32,21 @@ use crate::sim::{Model, State};
 /// soft-surface arrays + `Model.particle_q`).
 #[derive(Copy, Clone, Debug)]
 pub struct VtContact {
-    /// Global particle index of the contact vertex (into
-    /// `Model.particle_q`).
     pub vertex_global_id: u32,
-    /// Index into `Model.soft_surfaces` — the surface owning the
-    /// vertex. Used by the per-color solve to skip same-surface
-    /// contacts (until self-collision Stage 33.3).
     pub vertex_surface: u32,
-    /// Global tri index (into `Model.soft_surface_tris`).
     pub tri_global_id: u32,
-    /// Index into `Model.soft_surfaces` — the surface owning the tri.
     pub tri_surface: u32,
-    /// Barycentric weights of the closest-point on the triangle.
-    /// `bary[0..3]` correspond to triangle vertices `(v0, v1, v2)` in
-    /// the order stored in `Model.soft_surface_tris`. Always
-    /// `bary[0] + bary[1] + bary[2] ≈ 1`.
     pub bary: [Real; 3],
-    /// Outward-facing contact normal at the contact (unit length),
-    /// pointing from the triangle toward the vertex side. The VBD
-    /// penalty pushes the vertex along `+normal` and the triangle
-    /// vertices along `-normal · bary[i]`.
     pub normal: [Real; 3],
-    /// Penetration depth: `(margin - distance_to_tri)` if positive,
-    /// 0 otherwise. Larger `depth` ⇒ stronger penalty force.
     pub depth: Real,
+    /// Stage 33.5 — Coulomb friction coefficient at the contact,
+    /// `μ = sqrt(μ_a · μ_b)` (geometric mean).
+    pub friction: Real,
+    /// Stage 33.5 — restitution coefficient at the contact,
+    /// `min(e_a, e_b)`.
+    pub restitution: Real,
+    /// Stage 33.5 — warm-start tangential impulse (m/s units).
+    pub prev_friction_impulse: [Real; 3],
 }
 
 /// One EE (edge-edge) contact emitted by [`gather_ee_contacts`].
@@ -243,6 +234,11 @@ pub fn gather_vt_contacts(
                     }
                 };
 
+                // Stage 33.5 — friction/restitution combination.
+                let s_v = &model.soft_surfaces[s_idx];
+                let s_t = &model.soft_surfaces[tri_surface as usize];
+                let mu = (s_v.friction.max(0.0) * s_t.friction.max(0.0)).sqrt();
+                let restitution = s_v.restitution.min(s_t.restitution).clamp(0.0, 1.0);
                 let new_contact = VtContact {
                     vertex_global_id: v_global as u32,
                     vertex_surface: s_idx as u32,
@@ -251,6 +247,9 @@ pub fn gather_vt_contacts(
                     bary: [bary.x, bary.y, bary.z],
                     normal: [normal.x, normal.y, normal.z],
                     depth,
+                    friction: mu,
+                    restitution,
+                    prev_friction_impulse: [0.0; 3],
                 };
                 let slot = &mut best_per_surface[tri_surface as usize];
                 match slot {
@@ -563,19 +562,8 @@ pub fn project_soft_contacts(
     Ok(last_active)
 }
 
-/// Back-compat wrapper around [`project_soft_contacts`] for any
-/// caller that only wants VT projection. Prefer
-/// [`project_soft_contacts`] for new code so EE catches cloth-fold
-/// pokethroughs.
-pub fn project_vt_contacts(
-    model: &Model,
-    state: &mut State,
-    bvh: &mut SoftBvh,
-    margin: Real,
-    sweeps: usize,
-) -> Result<usize> {
-    project_soft_contacts(model, state, bvh, margin, sweeps)
-}
+// project_vt_contacts (Stage 33.5 friction-aware version) is appended
+// below after the helpers it depends on.
 
 fn project_one_vt(
     c: &VtContact,
@@ -987,4 +975,200 @@ pub fn ccd_pass(
         }
     }
     (invocations, snaps)
+}
+
+// Stage 33.5 — friction + restitution (ported from the pre-rename
+// vbd_vt_contact.rs). The `_with_hint` form here ignores the
+// previous-normal LUT (anti-tunneling normal sign refinement) — the
+// existing `gather_vt_contacts` already does the same-surface filter
+// and self-collision exclusion. Future Stage 33.5.1 can wire the hint
+// LUT in; for now the basic gather is enough for cube-on-cloth.
+fn gather_vt_contacts_with_hint(
+    model: &Model,
+    state: &State,
+    bvh: &SoftBvh,
+    margin: Real,
+    _prev_normal_lut: &std::collections::HashMap<(u32, u32), Vec3>,
+) -> Vec<VtContact> {
+    gather_vt_contacts(model, state, bvh, margin)
+}
+
+/// Stage 33.5 — copy `prev_friction_impulse` from `prev` into the
+/// matching contact in `current` (matched by `(vertex_global_id,
+/// tri_global_id)`).
+pub fn warm_start_friction(prev: &[VtContact], current: &mut [VtContact]) {
+    if prev.is_empty() || current.is_empty() {
+        return;
+    }
+    let mut lut: std::collections::HashMap<(u32, u32), usize> =
+        std::collections::HashMap::with_capacity(prev.len());
+    for (i, c) in prev.iter().enumerate() {
+        lut.insert((c.vertex_global_id, c.tri_global_id), i);
+    }
+    for c in current.iter_mut() {
+        if let Some(&i) = lut.get(&(c.vertex_global_id, c.tri_global_id)) {
+            c.prev_friction_impulse = prev[i].prev_friction_impulse;
+        }
+    }
+}
+
+/// Stage 33.5 — friction-aware VT projection. Returns the substep's
+/// final contact set (with `prev_friction_impulse` populated) so the
+/// caller can persist it for warm-starting the next substep.
+pub fn project_vt_contacts(
+    model: &Model,
+    state: &mut State,
+    bvh: &mut SoftBvh,
+    margin: Real,
+    sweeps: usize,
+    dt: Real,
+    prev_contacts: &[VtContact],
+    q_step_start: &[Vec3],
+    qd_step_start: &[Vec3],
+) -> Result<Vec<VtContact>> {
+    if model.soft_surfaces.is_empty() {
+        return Ok(Vec::new());
+    }
+    let inv_mass = model.particle_inv_mass.host()?.to_vec();
+    let n_sweeps = sweeps.max(1);
+
+    let qd_pre = qd_step_start.to_vec();
+    let q_pre = q_step_start.to_vec();
+    let mut contact_normal_sum: Vec<Vec3> = vec![Vec3::ZERO; model.particle_count];
+    let mut restitution_per_v: Vec<Real> = vec![0.0; model.particle_count];
+    let mut friction_per_v: Vec<Real> = vec![0.0; model.particle_count];
+    let v_eps: Real = 1.0e-3;
+
+    let mut prev_normal_lut: std::collections::HashMap<(u32, u32), Vec3> =
+        std::collections::HashMap::with_capacity(prev_contacts.len());
+    for c in prev_contacts {
+        let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+        prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+    }
+    let mut final_contacts: Vec<VtContact> = Vec::new();
+
+    for sweep_idx in 0..n_sweeps {
+        bvh.refit(model, state);
+        let mut contacts =
+            gather_vt_contacts_with_hint(model, state, bvh, margin, &prev_normal_lut);
+        if sweep_idx == 0 {
+            warm_start_friction(prev_contacts, &mut contacts);
+        } else {
+            warm_start_friction(&final_contacts, &mut contacts);
+        }
+        if contacts.is_empty() {
+            break;
+        }
+        let q = state.particle_q.host_mut()?;
+        let tris: &[[u32; 3]] = &model.soft_surface_tris;
+        for c in contacts.iter_mut() {
+            let v = c.vertex_global_id as usize;
+            let tri = tris[c.tri_global_id as usize];
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            let n_vec = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+            contact_normal_sum[v] += n_vec;
+            contact_normal_sum[i0] -= n_vec;
+            contact_normal_sum[i1] -= n_vec;
+            contact_normal_sum[i2] -= n_vec;
+            for &i in &[v, i0, i1, i2] {
+                if c.restitution > restitution_per_v[i] {
+                    restitution_per_v[i] = c.restitution;
+                }
+                if c.friction > friction_per_v[i] {
+                    friction_per_v[i] = c.friction;
+                }
+            }
+            let w_v = inv_mass[v];
+            let w0 = inv_mass[i0];
+            let w1 = inv_mass[i1];
+            let w2 = inv_mass[i2];
+            let b0 = c.bary[0];
+            let b1 = c.bary[1];
+            let b2 = c.bary[2];
+            let w_tri_eff = b0 * b0 * w0 + b1 * b1 * w1 + b2 * b2 * w2;
+            let total = w_v + w_tri_eff;
+            if total <= 1.0e-20 {
+                continue;
+            }
+            let push = c.depth * 0.5;
+            let alpha = w_v / total;
+            let f0 = b0 * b0 * w0 / total;
+            let f1 = b1 * b1 * w1 / total;
+            let f2 = b2 * b2 * w2 / total;
+            if w_v > 0.0 { q[v] += n_vec * (alpha * push); }
+            if w0 > 0.0 { q[i0] -= n_vec * (f0 * push); }
+            if w1 > 0.0 { q[i1] -= n_vec * (f1 * push); }
+            if w2 > 0.0 { q[i2] -= n_vec * (f2 * push); }
+
+            // Position-form Coulomb friction (first sweep only).
+            if c.friction > 0.0 && sweep_idx == 0 {
+                let dq_v = q[v] - q_pre[v];
+                let dq_tri = (q[i0] - q_pre[i0]) * b0
+                    + (q[i1] - q_pre[i1]) * b1
+                    + (q[i2] - q_pre[i2]) * b2;
+                let mut dq_t = dq_v - dq_tri;
+                let dn = dq_t.dot(n_vec);
+                dq_t -= n_vec * dn;
+                let dq_t_len = dq_t.length();
+                if dq_t_len > 1.0e-9 {
+                    let coulomb_max = c.friction * push.abs();
+                    let smooth = (dq_t_len / (v_eps * dt.max(1.0e-6))).tanh();
+                    let mag = (dq_t_len * smooth).min(coulomb_max);
+                    let dir = dq_t / dq_t_len;
+                    let push_t = -dir * mag;
+                    if w_v > 0.0 { q[v] += push_t * alpha; }
+                    if w0 > 0.0 { q[i0] -= push_t * f0; }
+                    if w1 > 0.0 { q[i1] -= push_t * f1; }
+                    if w2 > 0.0 { q[i2] -= push_t * f2; }
+                    c.prev_friction_impulse = [push_t.x, push_t.y, push_t.z];
+                }
+            }
+        }
+        for c in &contacts {
+            let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+            prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+        }
+        final_contacts = contacts;
+    }
+
+    // Velocity recovery — restitution + Coulomb friction.
+    let any_contact = contact_normal_sum.iter().any(|n| n.length_squared() > 1.0e-12);
+    if any_contact {
+        let qd = state.particle_qd.host_mut()?;
+        for i in 0..model.particle_count {
+            let n_sum = contact_normal_sum[i];
+            let n_len2 = n_sum.length_squared();
+            if n_len2 < 1.0e-12 || inv_mass[i] <= 0.0 {
+                continue;
+            }
+            let n = n_sum / n_len2.sqrt();
+            let vn_pre = qd_pre[i].dot(n);
+            let mut v_now = qd[i];
+            let vn_now = v_now.dot(n);
+            if vn_pre < 0.0 {
+                let e = restitution_per_v[i];
+                let target_vn = -e * vn_pre;
+                if vn_now < target_vn {
+                    v_now += n * (target_vn - vn_now);
+                }
+            } else if vn_now < 0.0 {
+                v_now -= n * vn_now;
+            }
+            let mu_v = friction_per_v[i];
+            if mu_v > 0.0 {
+                let v_t = v_now - n * v_now.dot(n);
+                let v_t_len = v_t.length();
+                if v_t_len > 1.0e-9 {
+                    let dv_t_max = mu_v * 9.81 * dt;
+                    let dv_t = dv_t_max.min(v_t_len);
+                    v_now -= (v_t / v_t_len) * dv_t;
+                }
+            }
+            qd[i] = v_now;
+        }
+    }
+
+    Ok(final_contacts)
 }
