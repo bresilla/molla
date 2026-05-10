@@ -107,6 +107,80 @@ impl SoftBvh {
         self.root = self.build_recursive(&mut indices, &aabbs);
     }
 
+    /// Stage 33.4 — refit the BVH using SWEPT AABBs (the union of
+    /// every tri's `t0` AABB and `t1` AABB). The resulting BVH bounds
+    /// the *trajectory* of every triangle over the upcoming substep,
+    /// so a swept-point query (see [`Self::query_point_swept`]) can
+    /// find every candidate tri the vertex might collide with along
+    /// its own trajectory. Used by the VBD pre-substep CCD pass.
+    ///
+    /// Falls back to a full rebuild when the tri count has drifted
+    /// (rare — the soft surface registry is fixed at build time).
+    pub fn refit_swept(&mut self, state_t0: &State, state_t1: &State, model: &Model) {
+        let tris: &[[u32; 3]] = &model.soft_surface_tris;
+        if tris.len() != self.tri_aabbs.len() {
+            // Topology changed — full rebuild from t1 (best we can
+            // do; the topology drifted out from under us).
+            self.rebuild(model, state_t1);
+            return;
+        }
+        let q0 = match state_t0.particle_q.host() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        let q1 = match state_t1.particle_q.host() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        for (i, tri) in tris.iter().enumerate() {
+            let a0 = tri_aabb(tri, q0);
+            let a1 = tri_aabb(tri, q1);
+            self.tri_aabbs[i] = aabb_union(a0, a1);
+        }
+        if self.root >= 0 {
+            self.refit_node(self.root);
+        }
+    }
+
+    /// Stage 33.4 — query: indices of every tri whose AABB intersects
+    /// the swept-point AABB (the union of `p_t0` and `p_t1`, inflated
+    /// by `margin`). Pair with [`Self::refit_swept`] to find every tri
+    /// whose trajectory may collide with the point's trajectory.
+    /// Returns global tri indices.
+    #[must_use]
+    pub fn query_point_swept(&self, p_t0: Vec3, p_t1: Vec3, margin: Real) -> Vec<u32> {
+        let mut out = Vec::new();
+        if self.root < 0 {
+            return out;
+        }
+        // Swept-point AABB: union of `p_t0` and `p_t1`. The query
+        // returns every tri whose tri-aabb is within `margin` of any
+        // point on the line segment `[p_t0, p_t1]` — actually more
+        // conservative than that (we use the AABB of the segment
+        // not the segment itself), which is fine: candidates are
+        // refined downstream by the per-tri `vt_ccd` test.
+        let q_min = p_t0.min(p_t1);
+        let q_max = p_t0.max(p_t1);
+        let mut stack = Vec::with_capacity(64);
+        stack.push(self.root);
+        while let Some(node_idx) = stack.pop() {
+            if node_idx < 0 {
+                continue;
+            }
+            let n = self.nodes[node_idx as usize];
+            if !aabb_intersects_swept(&n.aabb, q_min, q_max, margin) {
+                continue;
+            }
+            if n.is_leaf() {
+                out.push(n.tri_index());
+            } else {
+                stack.push(n.child0);
+                stack.push(n.child1);
+            }
+        }
+        out
+    }
+
     /// Recompute every per-tri AABB from `state.particle_q` then
     /// refit the existing tree topology bottom-up. Cheap when the
     /// mesh layout is unchanged — the recommended per-substep call
@@ -268,4 +342,16 @@ fn aabb_contains_point(a: &Aabb, p: Vec3, margin: Real) -> bool {
         && p.y <= a.max.y + margin
         && p.z >= a.min.z - margin
         && p.z <= a.max.z + margin
+}
+
+/// Stage 33.4 — true iff the tri AABB `a` intersects the swept-point
+/// AABB `[q_min, q_max]` after `margin` inflation on every axis.
+#[inline]
+fn aabb_intersects_swept(a: &Aabb, q_min: Vec3, q_max: Vec3, margin: Real) -> bool {
+    a.min.x - margin <= q_max.x
+        && a.max.x + margin >= q_min.x
+        && a.min.y - margin <= q_max.y
+        && a.max.y + margin >= q_min.y
+        && a.min.z - margin <= q_max.z
+        && a.max.z + margin >= q_min.z
 }
