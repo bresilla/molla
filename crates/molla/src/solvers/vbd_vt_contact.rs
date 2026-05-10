@@ -53,6 +53,12 @@ pub struct VtContact {
 /// signed distance, and the contact normal; emit a [`VtContact`] when
 /// the depth is positive.
 ///
+/// Per-vertex deduplication: only the **deepest** contact per
+/// `(vertex, other_surface)` pair is emitted. Multiple candidate tris
+/// near one vertex would otherwise stack penalty forces and over-
+/// correct the position. This matches Newton's `vbd_self_contact`
+/// strategy of "one contact per vertex per other-surface".
+///
 /// `margin` is the contact buffer (typically `particle_radius +
 /// contact_slop`). A vertex `margin` beyond the tri still triggers
 /// a contact so the penalty can engage *before* full interpenetration.
@@ -95,6 +101,12 @@ pub fn gather_vt_contacts(
             if candidates.is_empty() {
                 continue;
             }
+            // Best contact per `(vertex, other_surface)`: only the
+            // deepest penetration survives. Stacking multiple tris
+            // near one vertex would compound the penalty and over-
+            // correct.
+            let mut best_per_surface: Vec<Option<VtContact>> =
+                vec![None; model.soft_surfaces.len()];
             for tri_global in candidates {
                 // Same-surface filter: defer to Stage 33.3.
                 let tri_surface = bvh.tri_to_surface[tri_global as usize];
@@ -143,7 +155,7 @@ pub fn gather_vt_contacts(
                     }
                 };
 
-                out.push(VtContact {
+                let new_contact = VtContact {
                     vertex_global_id: v_global as u32,
                     vertex_surface: s_idx as u32,
                     tri_global_id: tri_global,
@@ -151,7 +163,17 @@ pub fn gather_vt_contacts(
                     bary: [bary.x, bary.y, bary.z],
                     normal: [normal.x, normal.y, normal.z],
                     depth,
-                });
+                };
+                let slot = &mut best_per_surface[tri_surface as usize];
+                match slot {
+                    Some(existing) if existing.depth >= depth => {}
+                    _ => *slot = Some(new_contact),
+                }
+            }
+            for slot in best_per_surface {
+                if let Some(c) = slot {
+                    out.push(c);
+                }
             }
         }
     }
@@ -193,6 +215,18 @@ pub fn project_vt_contacts(
     let inv_mass = model.particle_inv_mass.host()?.to_vec();
     let mut last_active: usize = 0;
     let n_sweeps = sweeps.max(1);
+
+    // Snapshot pre-projection positions so we can update velocities
+    // after the position correction. The implicit-Euler `qd = (q -
+    // q_prev_step) / dt` semantics need the velocity to reflect the
+    // contact correction, otherwise the next substep's predict step
+    // shoots the vertex back through the contact.
+    let q_pre = state.particle_q.host()?.to_vec();
+    // Track per-vertex accumulated normal direction (for velocity
+    // damping at the end). We sum the most-recent normal each sweep;
+    // for a single contact this is just that contact's normal.
+    let mut contact_normal_sum: Vec<Vec3> = vec![Vec3::ZERO; model.particle_count];
+
     for _ in 0..n_sweeps {
         // Refit the BVH from the current positions. Cheap when the
         // tri count hasn't changed (just AABB recompute + bottom-up
@@ -214,6 +248,13 @@ pub fn project_vt_contacts(
             let i1 = tri[1] as usize;
             let i2 = tri[2] as usize;
             let n_vec = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+            // Accumulate normal for later velocity damping. We track
+            // the last contact direction per vertex (for v1 the
+            // typical case is one dominant contact per vertex).
+            contact_normal_sum[v] += n_vec;
+            contact_normal_sum[i0] -= n_vec;
+            contact_normal_sum[i1] -= n_vec;
+            contact_normal_sum[i2] -= n_vec;
 
             let w_v = inv_mass[v];
             let w0 = inv_mass[i0];
@@ -227,35 +268,79 @@ pub fn project_vt_contacts(
             if total <= 1.0e-20 {
                 continue; // all four are pinned — nothing to do.
             }
-            let push = c.depth * 0.5; // 0.5 underrelaxation for stability
+            // Underrelaxation: take a fraction of the depth each
+            // sweep so the multi-sweep Jacobi converges from above
+            // (no overshoot) for typical mass ratios. A full depth
+            // correction can cascade across neighbouring contacts on
+            // the same particle and produce visible cloth tearing.
+            let push = c.depth * 0.5;
             let alpha = w_v / total;
-            let beta = (b0 * w0 + b1 * w1 + b2 * w2) / total;
             // Vertex side: move +α·push along n.
             if w_v > 0.0 {
                 q[v] += n_vec * (alpha * push);
             }
-            // Tri side: each vertex i moves -bary[i] · w_i / total · push.
-            // We use the simple `b_i · w_i / total` partition (rather than
-            // the strict `b_i² · w_i / total` Hessian-consistent partition)
-            // because it produces the correct first-order sum:
-            //   Σ_i bary[i] · q_close[i] = q_close
-            // and the cube test is dominated by the first-order tri
-            // displacement.
-            let _ = beta; // referenced for clarity; per-vertex partition below
+            // Tri side: distribute -(1-α)·push across the three tri
+            // verts via the inverse-mass weighted barycentric
+            // partition. The `b_i² · w_i / total` term is the
+            // Hessian-consistent share (matches the implicit-
+            // integrator AVBD penalty's per-vertex Hessian
+            // contribution `+k·b_i²·n n^T`).
             if w0 > 0.0 {
-                let f0 = b0 * w0 / total;
+                let f0 = b0 * b0 * w0 / total;
                 q[i0] -= n_vec * (f0 * push);
             }
             if w1 > 0.0 {
-                let f1 = b1 * w1 / total;
+                let f1 = b1 * b1 * w1 / total;
                 q[i1] -= n_vec * (f1 * push);
             }
             if w2 > 0.0 {
-                let f2 = b2 * w2 / total;
+                let f2 = b2 * b2 * w2 / total;
                 q[i2] -= n_vec * (f2 * push);
             }
         }
     }
+
+    // Velocity damping along the contact normal. For each particle
+    // that participated in a contact at any sweep this substep,
+    // compute the dominant normal direction and zero out the
+    // velocity component pointing INTO the contact (i.e. the
+    // component along -contact_normal). This prevents the predict
+    // step from re-driving the vertex through the contact next
+    // substep.
+    //
+    // We run this even when the last sweep returned 0 contacts —
+    // the per-particle `contact_normal_sum` aggregates over every
+    // sweep, so a particle whose contact resolved mid-sweep still
+    // gets the velocity correction.
+    let any_contact = contact_normal_sum
+        .iter()
+        .any(|n| n.length_squared() > 1.0e-12);
+    if any_contact {
+        let _ = q_pre; // unused; documents pre-projection snapshot intent
+        let qd = state.particle_qd.host_mut()?;
+        for i in 0..model.particle_count {
+            let n_sum = contact_normal_sum[i];
+            let n_len2 = n_sum.length_squared();
+            if n_len2 < 1.0e-12 {
+                continue;
+            }
+            // Pinned particles never integrate; skip the qd update.
+            if inv_mass[i] <= 0.0 {
+                continue;
+            }
+            let n = n_sum / n_len2.sqrt();
+            // The vertex side of a contact has its dominant n
+            // pointing AWAY from the tri (so the vertex is being
+            // pushed in the +n direction). A velocity component
+            // along -n is "diving in"; project it out.
+            let v = qd[i];
+            let vn = v.dot(n);
+            if vn < 0.0 {
+                qd[i] = v - n * vn;
+            }
+        }
+    }
+
     Ok(last_active)
 }
 
