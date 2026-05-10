@@ -19,8 +19,12 @@ pub enum EqualityType {
     Weld = 1,
     /// Joint-mimic (Newton's `JOINT` equality kind) — constrains one
     /// joint coordinate as a polynomial of another:
-    /// `q_driven = poly[0] + poly[1]·q_driver + poly[2]·q_driver²
-    /// + poly[3]·q_driver³ + poly[4]·q_driver⁴`.
+    ///
+    /// ```text
+    /// q_driven = poly[0] + poly[1]·q_driver + poly[2]·q_driver²
+    ///          + poly[3]·q_driver³ + poly[4]·q_driver⁴
+    /// ```
+    ///
     /// Used for closed kinematic loops (4-bar linkage), gear
     /// couplings, and mimic-axis grippers (e.g. Robotiq 2-finger).
     /// The driver and driven joint indices + the polynomial live in

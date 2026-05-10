@@ -456,8 +456,8 @@ impl<V: Value> SparseGridStorage<V> {
     /// Read back the first three counter slots
     /// `[next_internal, next_leaf, error_flags]`. Kept as a
     /// back-compat shim for callers that pre-date Stage 24e.2 — new
-    /// callers should reach for [`read_storage_stats`] which exposes
-    /// the freelist + pending-reclaim depths too.
+    /// callers should reach for [`Self::read_all_counters`] which
+    /// exposes the freelist + pending-reclaim depths too.
     pub fn read_counters(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<[u32; 3]> {
         let all = self.read_all_counters(device, queue)?;
         Ok([all[0], all[1], all[2]])

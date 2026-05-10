@@ -216,7 +216,7 @@ impl ImuSensor {
         Ok(out)
     }
 
-    /// Reset the finite-difference filter — next [`update`] will
+    /// Reset the finite-difference filter — next [`Self::update`] will
     /// re-prime by snapshotting `state.body_qd` and return an empty
     /// vec. Use after teleporting a body or on scene reset.
     pub fn reset(&mut self) {

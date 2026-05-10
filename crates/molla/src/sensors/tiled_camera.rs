@@ -117,8 +117,8 @@ impl Default for TiledCameraConfig {
 }
 
 /// A batch of pinhole cameras with shared intrinsics. Each camera has
-/// its own world-space pose (set via [`set_camera_pose`]); a single
-/// [`dispatch`] runs the two-pass kernel for all cameras at once.
+/// its own world-space pose (set via [`Self::set_camera_pose`]); a single
+/// [`Self::dispatch`] runs the two-pass kernel for all cameras at once.
 ///
 /// Output buffers are sized `width * height * num_cameras`, indexed
 /// row-major within an image, image-major across the batch
@@ -151,8 +151,8 @@ impl TiledCamera {
     /// Build a new tiled-camera batch with `num_cameras` cameras,
     /// allocating all per-pixel + per-camera buffers up-front.
     /// Initial poses default to identity (camera at world origin
-    /// looking at -Z) — call [`set_camera_pose`] before the first
-    /// [`dispatch`] to point each camera at the scene.
+    /// looking at -Z) — call [`Self::set_camera_pose`] before the first
+    /// [`Self::dispatch`] to point each camera at the scene.
     pub fn new(engine: &Engine, config: TiledCameraConfig, num_cameras: usize) -> Result<Self> {
         if num_cameras == 0 {
             return Err(Error::Solver(

@@ -634,7 +634,7 @@ impl SparseSdf {
 /// surface — sparse storage keeps that under a few hundred megabytes.
 ///
 /// `resolution` is the number of samples along the longest axis of the
-/// (padded) AABB — same convention as [`bake_mesh_to_sdf`]. `padding`
+/// (padded) AABB — same convention as [`crate::geometry::bake_mesh_to_sdf`]. `padding`
 /// is the world-space margin around the mesh AABB before voxelisation
 /// (typically `2 × cell_size`). `narrow_band` is the width of the
 /// stored band, expressed in voxels (3–5 is plenty for trilinear
@@ -796,7 +796,7 @@ pub fn bake_mesh_to_sparse_sdf(
     }
 }
 
-/// Bake a mesh first into a dense [`SdfGrid`], then convert to a
+/// Bake a mesh first into a dense [`crate::geometry::SdfGrid`], then convert to a
 /// [`SparseSdf`] by dropping voxels outside the narrow band. Slower
 /// than [`bake_mesh_to_sparse_sdf`] (does the full dense bake first)
 /// but useful when the caller already has a dense SDF on hand and

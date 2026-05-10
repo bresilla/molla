@@ -1,7 +1,7 @@
 //! Manual reverse-mode adjoints for the XPBD distance-constraint
 //! solver — `wp.func_grad`-style hand-written gradients for the hot
 //! path so we don't pay the per-op heap allocation that the generic
-//! [`Tape`] would.
+//! [`super::tape::Tape`] would.
 //!
 //! Forward (matches `solvers::xpbd::step_particles` minus the strain
 //! limiter and ground plane — those are non-smooth and not relevant
@@ -358,7 +358,7 @@ pub fn distance_chain_final_length(
     (p_final[b] - p_final[a]).length()
 }
 
-/// Analytical d(final length of spring `spring_idx`) / d(compliance[spring_idx]).
+/// Analytical d(final length of spring `spring_idx`) / d(`compliance[spring_idx]`).
 ///
 /// Computed via central-difference on `compliance` because deriving
 /// the closed-form derivative through Gauss-Seidel iterations is the

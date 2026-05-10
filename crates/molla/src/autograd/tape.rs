@@ -87,7 +87,7 @@ pub enum TapeOp {
     /// joint coordinates `q` and joint velocities `qd` at the start of
     /// the step. The adjoint is implemented in
     /// [`super::featherstone_adjoint::FeatherstoneRevoluteChain::reverse`]
-    /// rather than via the per-op dispatch in [`Self::backward`] —
+    /// rather than via the per-op dispatch in [`Tape::backward`] —
     /// the entire 3-sweep step is differentiated together (it has to,
     /// because the inertia + acceleration sweeps depend on intermediate
     /// quantities from this sweep) and the chunked TapeOp shape exists

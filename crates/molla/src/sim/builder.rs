@@ -2191,7 +2191,7 @@ impl ModelBuilder {
     ///
     /// The constraint is projected during XPBD's equality-projection
     /// step (one scalar Lagrange-multiplier solve per pair) — see
-    /// [`crate::solvers::xpbd::equality_projection_pass`]. Joint limits
+    /// `crate::solvers::xpbd::equality_projection_pass` (private). Joint limits
     /// on the *driven* joint are NOT enforced by this constraint:
     /// `q_driven` follows the polynomial verbatim, even past its own
     /// limit. The driver's limits / friction / effort caps are still
@@ -2296,9 +2296,9 @@ impl ModelBuilder {
         self.linear_damping = damping;
     }
 
-    /// Set the model-wide default friction coefficient — used by
-    /// [`Self::push_shape`] when the per-shape friction was not
-    /// explicitly set via [`Self::set_shape_material`]. Must be set
+    /// Set the model-wide default friction coefficient — used when a
+    /// shape is added without an explicit per-shape friction (set via
+    /// [`Self::set_shape_material`]). Must be set
     /// **before** the shapes are added (or `build()` is called); the
     /// finalize substitutes NaN-sentinel per-shape friction with this
     /// value as a one-shot bake.
