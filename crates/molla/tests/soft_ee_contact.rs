@@ -11,10 +11,8 @@
 use molla::core::WorldId;
 use molla::geometry::{compute_surface_edges, compute_tet_surface_triangles, SoftBvh};
 use molla::math::{Real, Vec3};
-use molla::sim::{Contacts, MaterialNeoHookean, ModelBuilder};
-use molla::solvers::{
-    gather_ee_contacts, gather_soft_contacts, EeContact, SoftContact, Solver, VbdSolver,
-};
+use molla::sim::{MaterialNeoHookean, ModelBuilder};
+use molla::solvers::{gather_ee_contacts, gather_soft_contacts, EeContact, SoftContact};
 
 /// Six-tet decomposition of a unit cube — same convention as
 /// `tests/soft_vt_contact.rs`. Vertex order:
