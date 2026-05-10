@@ -1074,8 +1074,12 @@ fn eval_p2_tet_velocity_grad(
 /// [`compute_element_stokes_velocity_block`].
 ///
 /// Implemented as a per-element quadrature integral using the
-/// previous-step velocity `u_old`. No SUPG stabilisation in v1; the
-/// IMEX time-stepper relies on the implicit viscous term to damp.
+/// previous-step velocity `u_old`. This is the **plain Galerkin**
+/// convection — for high-Péclet (convection-dominated) cases use
+/// [`assemble_convection_block_with_supg`] which adds Hughes SUPG
+/// stabilisation. The plain-Galerkin path keeps mass conservation
+/// exact at low Pe; SUPG kicks in to damp checkerboard oscillations
+/// when Pe ≫ 1.
 pub fn assemble_convection_block(
     mesh: &FemMesh,
     th: &MixedTaylorHood,
@@ -1156,6 +1160,150 @@ pub fn assemble_convection_block(
     f
 }
 
+/// Hughes SUPG ξ(Pe) function: `ξ = coth(Pe) − 1/Pe`.
+/// - `Pe → 0`  → `ξ → Pe/3` (small — minimal stabilisation).
+/// - `Pe → ∞`  → `ξ → 1`    (full SUPG strength).
+///
+/// Branched implementation avoids the costly `coth` (and the cancellation
+/// in `coth(x) − 1/x` near zero) by using the leading Taylor term for
+/// small `Pe` and the asymptote for large `Pe`.
+#[must_use]
+fn hughes_xi(pe: Real) -> Real {
+    if pe < 1.0e-3 {
+        pe / 3.0
+    } else if pe > 50.0 {
+        1.0 - 1.0 / pe
+    } else {
+        let e2 = (2.0 * pe).exp();
+        let coth = (e2 + 1.0) / (e2 - 1.0);
+        coth - 1.0 / pe
+    }
+}
+
+/// Same as [`assemble_convection_block`] but adds Hughes SUPG
+/// (Streamline Upwind Petrov-Galerkin) stabilisation. For each cell
+/// the local Péclet number `Pe = |u_q|·h / (2 ν)` selects the SUPG
+/// strength `τ = (h / (2 |u_q|)) · ξ(Pe)`, where `ξ(Pe) = coth(Pe) − 1/Pe`
+/// (the textbook Hughes formula). The SUPG term integrates
+/// `τ · (u·∇N_i) · (u·∇u_c)` against the modified test function
+/// `N_i + τ·(u·∇N_i)`.
+///
+/// `viscosity` is the kinematic viscosity ν used in Pe; pass `0.0` to
+/// force `Pe → ∞` and full SUPG strength (only meaningful for inviscid
+/// limit problems). `alpha` is a strength multiplier on `τ` (default
+/// `1.0` matches the textbook formula; lower values blend toward
+/// plain Galerkin).
+pub fn assemble_convection_block_with_supg(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    u_old: &[Real],
+    viscosity: Real,
+    alpha: Real,
+) -> Vec<Real> {
+    debug_assert_eq!(u_old.len(), th.n_velocity);
+    let dim = th.dim;
+    let mut f = vec![0.0_f64 as Real; th.n_velocity];
+
+    for cell in &mesh.cells {
+        match cell {
+            FemCell::Tri(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                ];
+                let area = super::element::tri_area_2d(&p);
+                let h = area.sqrt();
+                let qpts = tri_quadrature_6pt();
+                let mut nodes = [0usize; 6];
+                for i in 0..6 {
+                    nodes[i] = th.map.local_to_global(cell, i);
+                }
+                for q in &qpts {
+                    let n = p2_tri_shape_functions(q.bary);
+                    let g = p2_tri_shape_gradients(q.bary, &p);
+                    let u_q = eval_p2_tri_velocity(&n, &nodes, u_old, dim);
+                    let gu = eval_p2_tri_velocity_grad(&g, &nodes, u_old, dim);
+                    let umag = (u_q[0] * u_q[0] + u_q[1] * u_q[1]).sqrt();
+                    let tau = if umag > 1.0e-30 {
+                        let pe = if viscosity > 1.0e-30 {
+                            umag * h / (2.0 * viscosity)
+                        } else {
+                            Real::INFINITY
+                        };
+                        alpha * (h / (2.0 * umag)) * hughes_xi(pe)
+                    } else {
+                        0.0
+                    };
+                    let mut conv = [0.0_f64 as Real; 3];
+                    for c in 0..dim {
+                        conv[c] = u_q[0] * gu[c][0] + u_q[1] * gu[c][1];
+                    }
+                    let w = q.weight * area;
+                    for i in 0..6 {
+                        // Galerkin term: N_i · conv
+                        // SUPG term:     τ · (u·∇N_i) · conv
+                        let u_dot_grad_ni = u_q[0] * g[i][0] + u_q[1] * g[i][1];
+                        let test = n[i] + tau * u_dot_grad_ni;
+                        for c in 0..dim {
+                            f[nodes[i] * dim + c] += w * test * conv[c];
+                        }
+                    }
+                }
+            }
+            FemCell::Tet(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                    mesh.vertices[idx[3] as usize],
+                ];
+                let vol = super::element::tet_volume(&p);
+                let h = vol.cbrt();
+                let qpts = tet_quadrature_11pt();
+                let mut nodes = [0usize; 10];
+                for i in 0..10 {
+                    nodes[i] = th.map.local_to_global(cell, i);
+                }
+                for q in &qpts {
+                    let n = p2_tet_shape_functions(q.bary);
+                    let g = p2_tet_shape_gradients(q.bary, &p);
+                    let u_q = eval_p2_tet_velocity(&n, &nodes, u_old, dim);
+                    let gu = eval_p2_tet_velocity_grad(&g, &nodes, u_old, dim);
+                    let umag =
+                        (u_q[0] * u_q[0] + u_q[1] * u_q[1] + u_q[2] * u_q[2]).sqrt();
+                    let tau = if umag > 1.0e-30 {
+                        let pe = if viscosity > 1.0e-30 {
+                            umag * h / (2.0 * viscosity)
+                        } else {
+                            Real::INFINITY
+                        };
+                        alpha * (h / (2.0 * umag)) * hughes_xi(pe)
+                    } else {
+                        0.0
+                    };
+                    let mut conv = [0.0_f64 as Real; 3];
+                    for c in 0..dim {
+                        conv[c] = u_q[0] * gu[c][0]
+                            + u_q[1] * gu[c][1]
+                            + u_q[2] * gu[c][2];
+                    }
+                    let w = q.weight * vol;
+                    for i in 0..10 {
+                        let u_dot_grad_ni =
+                            u_q[0] * g[i][0] + u_q[1] * g[i][1] + u_q[2] * g[i][2];
+                        let test = n[i] + tau * u_dot_grad_ni;
+                        for c in 0..dim {
+                            f[nodes[i] * dim + c] += w * test * conv[c];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    f
+}
+
 // ─── Solver: transient Navier-Stokes ──────────────────────────────────
 
 /// Navier-Stokes (transient, incompressible) configuration.
@@ -1167,6 +1315,14 @@ pub struct NavierStokesConfig {
     pub dt: Real,
     /// Number of time steps.
     pub n_steps: usize,
+    /// SUPG (Hughes) stabilisation strength on the convection term.
+    /// `0.0` keeps plain Galerkin; `1.0` is the textbook formula.
+    /// Set to non-zero on convection-dominated cases (cell Pe ≫ 1)
+    /// to suppress checkerboard oscillations. Defaults to `1.0` —
+    /// `hughes_xi(Pe)` is small at low Pe so this is a safe default
+    /// that adds no spurious damping in the diffusion-dominated
+    /// regime.
+    pub supg_alpha: Real,
 }
 
 impl Default for NavierStokesConfig {
@@ -1175,6 +1331,7 @@ impl Default for NavierStokesConfig {
             simple: StokesSimpleConfig::default(),
             dt: 0.01,
             n_steps: 100,
+            supg_alpha: 1.0,
         }
     }
 }
@@ -1239,9 +1396,17 @@ pub fn solve_navier_stokes_transient(
     for _step in 0..cfg.n_steps {
         // Lagged convective term — explicit Picard linearisation.
         // Stage 37.3 wires in the actual `(u·∇)u` integral via
-        // [`assemble_convection_block`]. With this active the IMEX
-        // scheme is `M(u_new − u_old)/dt + (u_old·∇)u_old + ∇p − μ∇²u_new = f`.
-        let mut conv_force = assemble_convection_block(mesh, th, &u);
+        // [`assemble_convection_block_with_supg`]. With this active
+        // the IMEX scheme is
+        //   `M(u_new − u_old)/dt + (u_old·∇)u_old + ∇p − μ∇²u_new = f`
+        // plus the SUPG perturbation on the test function for the
+        // convection term, controlled by `cfg.supg_alpha`. Pass
+        // `supg_alpha = 0.0` to fall back to plain Galerkin.
+        let mut conv_force = if cfg.supg_alpha > 0.0 {
+            assemble_convection_block_with_supg(mesh, th, &u, viscosity, cfg.supg_alpha)
+        } else {
+            assemble_convection_block(mesh, th, &u)
+        };
         for &dof in &pin_set {
             conv_force[dof] = 0.0;
         }

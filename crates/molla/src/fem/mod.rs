@@ -96,7 +96,8 @@ pub use solver::{
     NEWMARK_GAMMA_DEFAULT,
 };
 pub use stokes::{
-    apply_stokes_velocity_bcs, assemble_convection_block, assemble_div_block,
+    apply_stokes_velocity_bcs, assemble_convection_block,
+    assemble_convection_block_with_supg, assemble_div_block,
     assemble_velocity_block, assemble_velocity_mass, build_cavity_bcs_2d,
     compute_element_mass_p2_vector, compute_element_stokes_div_block,
     compute_element_stokes_velocity_block, solve_navier_stokes_step,

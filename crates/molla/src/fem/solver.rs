@@ -492,6 +492,10 @@ where
         }
     }
 
+    let l2 = |v: &[Real]| v.iter().map(|x| x * x).sum::<Real>().sqrt();
+    let mut prev_residual_norm = Real::INFINITY;
+    let mut diverging_streak: usize = 0;
+
     for _iter in 0..max_newton_iters {
         let k = tangent_assembler(&u);
         let r_int = residual_assembler(&u);
@@ -502,6 +506,27 @@ where
             .zip(r_int.iter())
             .map(|(fe, ri)| fe - ri)
             .collect();
+        // Track residual norm to detect divergence.
+        let cur_residual_norm = l2(&rhs);
+        if cur_residual_norm > prev_residual_norm {
+            diverging_streak += 1;
+            if diverging_streak >= 2 {
+                // Two consecutive iterations with growing residual —
+                // Newton has lost the basin of attraction. Bail out
+                // with the current iterate (still better than running
+                // to `max_newton_iters` and returning garbage that
+                // looks like a converged solution).
+                tracing::warn!(
+                    "solve_nonlinear_static: residual ‖R‖ grew on \
+                     consecutive iterations ({prev_residual_norm:.3e} → \
+                     {cur_residual_norm:.3e}); Newton diverging — early exit"
+                );
+                break;
+            }
+        } else {
+            diverging_streak = 0;
+        }
+        prev_residual_norm = cur_residual_norm;
         let mut k_red = k;
         // For Dirichlet rows, enforce du = 0: pin row + zero RHS.
         // We re-use apply_bcs but with **zero**-valued Dirichlet rows

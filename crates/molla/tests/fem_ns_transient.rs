@@ -279,6 +279,7 @@ fn ns_zero_step_matches_stokes() {
         simple: cfg_simple.clone(),
         dt,
         n_steps: 1,
+        supg_alpha: 0.0,
     };
     let u0 = vec![0.0_f64 as Real; th.n_velocity];
     let p0 = vec![0.0_f64 as Real; th.n_pressure];
