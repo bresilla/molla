@@ -241,12 +241,12 @@ pub fn solve_navier_stokes_fractional_step(
             }
         }
 
-        // ── Pressure-Poisson: -∇² p = (1/dt) ∇·u* ─────────────────
-        // RHS in the chosen sign convention for `solve_pressure_poisson_fft`:
-        //   `-Δp = rhs` with `rhs = (1/dt) ∇·u*`.
-        // The FFT solver returns `p` directly. The discrete Laplacian
-        // symbol used inside the FFT solver matches our central-diff
-        // gradient below — so the corrector is exact (∇·u_{n+1} = 0).
+        // ── Pressure-Poisson: Δp = (1/dt) ∇·u* ─────────────────────
+        // The FFT solver inverts `-Δp = rhs`. The projection needs
+        // `Δp = (1/dt) ∇·u*`, so we feed `rhs = -(1/dt) ∇·u*`.
+        // Sanity check: corrector is `u_new = u* - dt ∇p`, so taking
+        // divergence:
+        //   ∇·u_new = ∇·u* − dt Δp = ∇·u* − dt · (1/dt) ∇·u* = 0  ✓
         let mut div = vec![0.0_f32; total];
         for j in 0..n {
             for i in 0..n {
@@ -256,7 +256,8 @@ pub fn solve_navier_stokes_fractional_step(
                 let jm = wrap(j as i32 - 1);
                 let dudx = (u_star[idx(ip, j)][0] - u_star[idx(im, j)][0]) * 0.5 * inv_dx;
                 let dvdy = (u_star[idx(i, jp)][1] - u_star[idx(i, jm)][1]) * 0.5 * inv_dx;
-                div[idx(i, j)] = (dudx + dvdy) / cfg.dt;
+                // Note the leading minus — see comment above.
+                div[idx(i, j)] = -(dudx + dvdy) / cfg.dt;
             }
         }
         // The FFT-Poisson uses unit grid spacing in its discrete
