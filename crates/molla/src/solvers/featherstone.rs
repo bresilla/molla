@@ -170,13 +170,17 @@ impl FeatherstoneSolver {
         self
     }
 
-    /// Mutable accessor for runtime UI toggles. The Quadrotor scene's
-    /// "rigorous" pane uses this.
+    /// In-place setter for [`Self::with_rigorous_d_solve`] — the
+    /// `with_*` variant consumes `self` (for builder chains), this one
+    /// flips the flag on an already-built solver (used by viewer UI
+    /// toggles, e.g. the Quadrotor scene's "rigorous" pane).
     pub fn set_rigorous_d_solve(&mut self, on: bool) {
         self.rigorous_d_solve = on;
     }
 
-    /// Mutable accessor for runtime UI toggles.
+    /// In-place setter for [`Self::with_rigorous_distance`] — see
+    /// [`Self::set_rigorous_d_solve`] for the `with_*` vs `set_*`
+    /// convention rationale.
     pub fn set_rigorous_distance(&mut self, on: bool) {
         self.rigorous_distance = on;
     }
