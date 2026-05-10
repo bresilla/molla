@@ -150,3 +150,17 @@ required-features = ["gpu"]
 name = "bench_cable_drop"
 harness = false
 
+# ---------------------------------------------------------------------
+# Stage F — MPM
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_mpm_explicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_mpm_implicit"
+harness = false
+required-features = ["gpu"]
+
