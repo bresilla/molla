@@ -90,8 +90,29 @@ impl RayScene {
         Self { shapes: Vec::new() }
     }
 
-    /// Add a sphere with its centre stored at `params[param_offset..param_offset+3]`.
+    /// Add a sphere with its centre stored at
+    /// `params[param_offset..param_offset+3]`.
+    ///
+    /// **Panics** if the requested 3-slot range overlaps any previously
+    /// claimed range — silent overlap couples gradients between shapes
+    /// and produces optimization behaviour that's almost impossible to
+    /// debug. Use [`Self::n_params`] to get the next safe offset.
     pub fn add_sphere(&mut self, param_offset: usize, radius: Real) {
+        let new_lo = param_offset;
+        let new_hi = param_offset + 3;
+        for shape in &self.shapes {
+            if let SdfShape::Sphere { param_offset: po, .. } = *shape {
+                let lo = po;
+                let hi = po + 3;
+                if new_lo < hi && lo < new_hi {
+                    panic!(
+                        "add_sphere: param_offset {param_offset} (slots {new_lo}..{new_hi}) \
+                         overlaps an existing sphere at slots {lo}..{hi} — \
+                         shapes would silently share parameters"
+                    );
+                }
+            }
+        }
         self.shapes.push(SdfShape::Sphere { param_offset, radius });
     }
 
@@ -105,12 +126,35 @@ impl RayScene {
         self.shapes.push(SdfShape::PlaneZ { depth });
     }
 
+    /// Minimum length the `params` slice must have to cover every
+    /// shape in this scene — `max(param_offset + 3)` over all spheres
+    /// (planes are non-differentiable in v1 and consume no params).
+    /// Returns `0` when the scene contains only non-differentiable
+    /// primitives.
+    #[must_use]
+    pub fn n_params(&self) -> usize {
+        self.shapes
+            .iter()
+            .map(|s| match *s {
+                SdfShape::Sphere { param_offset, .. } => param_offset + 3,
+                SdfShape::PlaneY { .. } | SdfShape::PlaneZ { .. } => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Forward: trace `rays` through the scene; return per-ray hit
     /// distance (or [`Real::INFINITY`] for misses). The result vector
     /// has the same length as `rays` — element `i` corresponds to
     /// ray `i`. Hits at `t < 0` are treated as misses (intersections
     /// behind the ray origin).
     pub fn trace(&self, params: &[Real], rays: &[Ray]) -> Vec<Real> {
+        debug_assert!(
+            params.len() >= self.n_params(),
+            "RayScene::trace: params.len() = {} but scene needs {} slots",
+            params.len(),
+            self.n_params(),
+        );
         rays.iter()
             .map(|ray| self.closest_hit(params, ray))
             .collect()
@@ -257,20 +301,47 @@ pub fn compute_grad_raycast(
     rays: &[Ray],
     eps: Real,
 ) -> Vec<Real> {
+    compute_grad_raycast_adaptive(scene, params, target, rays, 0.0, eps)
+}
+
+/// Same as [`compute_grad_raycast`] but picks the FD step size per
+/// parameter as `step = max(eps_rel · |params[k]|, eps_abs)`.
+///
+/// Use this when parameters span very different magnitudes (e.g. a
+/// translation in metres mixed with a radius in centimetres) — a
+/// single absolute `eps` produces a 0.01% perturbation on one and a
+/// 100% perturbation on the other, biasing the gradient. A typical
+/// choice is `eps_rel = 1e-4`, `eps_abs = 1e-6`.
+///
+/// Pass `eps_rel = 0.0` to fall back to a pure absolute step
+/// (matches [`compute_grad_raycast`]).
+pub fn compute_grad_raycast_adaptive(
+    scene: &RayScene,
+    params: &mut [Real],
+    target: &[Real],
+    rays: &[Ray],
+    eps_rel: Real,
+    eps_abs: Real,
+) -> Vec<Real> {
     let mut grad = vec![0.0; params.len()];
     for k in 0..params.len() {
         let original = params[k];
+        let step = (eps_rel * original.abs()).max(eps_abs);
 
-        params[k] = original + eps;
+        params[k] = original + step;
         let img_plus = scene.trace(params, rays);
         let j_plus = compute_loss_l2(&img_plus, target);
 
-        params[k] = original - eps;
+        params[k] = original - step;
         let img_minus = scene.trace(params, rays);
         let j_minus = compute_loss_l2(&img_minus, target);
 
         params[k] = original;
-        grad[k] = (j_plus - j_minus) / (2.0 * eps);
+        grad[k] = if step > 0.0 {
+            (j_plus - j_minus) / (2.0 * step)
+        } else {
+            0.0
+        };
     }
     grad
 }
