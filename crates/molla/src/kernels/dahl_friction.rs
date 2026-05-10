@@ -138,10 +138,21 @@ impl DahlFrictionKernel {
         let mut contact_z = Buffer::from_vec(vec![Vec3::ZERO; cn], BufferUsage::StorageReadWrite);
         let mut contact_friction_force =
             Buffer::from_vec(vec![Vec3::ZERO; cn], BufferUsage::StorageReadWrite);
-        let _ = contact_z.ensure_device(device);
-        let _ = contact_z.upload(queue);
-        let _ = contact_friction_force.ensure_device(device);
-        let _ = contact_friction_force.upload(queue);
+        // Allocations / uploads at construction time are unrecoverable
+        // failures (wgpu OOM); panic with context instead of swallowing
+        // errors that would later surface as "missing device mirror".
+        contact_z
+            .ensure_device(device)
+            .expect("dahl_friction: contact_z ensure_device");
+        contact_z
+            .upload(queue)
+            .expect("dahl_friction: contact_z upload");
+        contact_friction_force
+            .ensure_device(device)
+            .expect("dahl_friction: contact_friction_force ensure_device");
+        contact_friction_force
+            .upload(queue)
+            .expect("dahl_friction: contact_friction_force upload");
 
         Self {
             pipeline,

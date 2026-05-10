@@ -500,14 +500,34 @@ mod gpu {
                 Buffer::from_vec(vec![0.0_f64; cn], BufferUsage::StorageReadWrite);
             let mut contact_friction_mu =
                 Buffer::from_vec(vec![0.0_f64; cn], BufferUsage::StorageReadWrite);
-            let _ = contact_normal.ensure_device(device);
-            let _ = contact_normal.upload(queue);
-            let _ = contact_point.ensure_device(device);
-            let _ = contact_point.upload(queue);
-            let _ = contact_normal_force.ensure_device(device);
-            let _ = contact_normal_force.upload(queue);
-            let _ = contact_friction_mu.ensure_device(device);
-            let _ = contact_friction_mu.upload(queue);
+            // Construction-time GPU allocations are unrecoverable on
+            // failure (wgpu OOM); panic with context here rather than
+            // letting the dispatch path surface a confusing
+            // "missing device mirror" later.
+            contact_normal
+                .ensure_device(device)
+                .expect("hydroelastic: contact_normal ensure_device");
+            contact_normal
+                .upload(queue)
+                .expect("hydroelastic: contact_normal upload");
+            contact_point
+                .ensure_device(device)
+                .expect("hydroelastic: contact_point ensure_device");
+            contact_point
+                .upload(queue)
+                .expect("hydroelastic: contact_point upload");
+            contact_normal_force
+                .ensure_device(device)
+                .expect("hydroelastic: contact_normal_force ensure_device");
+            contact_normal_force
+                .upload(queue)
+                .expect("hydroelastic: contact_normal_force upload");
+            contact_friction_mu
+                .ensure_device(device)
+                .expect("hydroelastic: contact_friction_mu ensure_device");
+            contact_friction_mu
+                .upload(queue)
+                .expect("hydroelastic: contact_friction_mu upload");
             Self {
                 pipeline,
                 layout,
