@@ -164,6 +164,129 @@ pub fn solve_transient_with_initial(
     cg_solve(|x| matvec(&a_red, x), &b, &x_init, tol, max_iters)
 }
 
+/// State produced by one [`solve_wave_transient`] step — the new
+/// displacement, velocity and acceleration vectors at `t + Δt`.
+#[derive(Clone, Debug)]
+pub struct WaveStepResult {
+    pub u_new: Vec<Real>,
+    pub v_new: Vec<Real>,
+    pub a_new: Vec<Real>,
+    /// Inner CG residual on the implicit solve.
+    pub residual: Real,
+    /// Inner CG iteration count.
+    pub iters: usize,
+}
+
+/// Default Newmark-β parameters — `(β = 1/4, γ = 1/2)` is the
+/// constant-average-acceleration (a.k.a. "trapezoidal-rule") variant,
+/// unconditionally stable for linear undamped wave problems.
+pub const NEWMARK_BETA_DEFAULT: Real = 0.25;
+pub const NEWMARK_GAMMA_DEFAULT: Real = 0.5;
+
+/// One implicit Newmark-β step of the second-order wave equation
+/// `M · ä + K · u = 0`.
+///
+/// Algorithm (textbook Hughes 9.1.2):
+///
+/// 1. **Predictor** `u_pred = u_old + Δt·v_old + (½ − β)·Δt²·a_old`.
+/// 2. **Solve** `(M / (β·Δt²) + K) · u_new = (M / (β·Δt²)) · u_pred`
+///    using `cg_solve` (CSR LHS materialised via [`add_csr_scaled`]).
+/// 3. **Corrector**
+///    `a_new = (u_new − u_pred) / (β·Δt²)`,
+///    `v_new = v_old + Δt · ((1 − γ)·a_old + γ·a_new)`.
+///
+/// `β = 0.25`, `γ = 0.5` (constant-average-acceleration) is
+/// unconditionally stable; smaller `β` introduces numerical damping
+/// at the price of conditional stability.
+///
+/// Dirichlet BCs are enforced exactly the same way as in
+/// [`solve_steady_state`] / [`solve_transient`]: zero the row, set
+/// the diagonal to 1, and overwrite the matching RHS entry with the
+/// prescribed `value`. The corrector step then derives `a_new` and
+/// `v_new` from the BC-consistent `u_new`.
+///
+/// Caveat: Stage 37.1 v1 does not currently zero `v_new` / `a_new` on
+/// constrained DoFs after the corrector — they are recovered from the
+/// `u_new − u_pred` difference, which is `0` when both endpoints sit
+/// at the same Dirichlet value across the step (the typical pinned
+/// case). For time-varying Dirichlet data, callers should overwrite
+/// the BC entries of `v_new` / `a_new` themselves.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_wave_transient(
+    m: &BsrMatrix,
+    k: &BsrMatrix,
+    u_old: &[Real],
+    v_old: &[Real],
+    a_old: &[Real],
+    dt: Real,
+    beta: Real,
+    gamma: Real,
+    bcs: &[BoundaryCondition],
+) -> WaveStepResult {
+    debug_assert_eq!(m.b, 1);
+    debug_assert_eq!(k.b, 1);
+    debug_assert_eq!(m.nrows(), k.nrows());
+    debug_assert_eq!(m.nrows(), u_old.len());
+    debug_assert_eq!(m.nrows(), v_old.len());
+    debug_assert_eq!(m.nrows(), a_old.len());
+    debug_assert!(beta > 0.0, "Newmark β must be > 0 for the implicit solve");
+    debug_assert!(dt > 0.0, "Newmark Δt must be > 0");
+
+    let n = u_old.len();
+    let bdt2_inv = 1.0 / (beta * dt * dt);
+    let half_minus_beta = 0.5 - beta;
+
+    // Predictor — `u_pred = u_old + Δt·v_old + (½ − β)·Δt²·a_old`.
+    let mut u_pred = vec![0.0; n];
+    for i in 0..n {
+        u_pred[i] = u_old[i] + dt * v_old[i] + half_minus_beta * dt * dt * a_old[i];
+    }
+
+    // LHS A = M / (β·Δt²) + K.
+    let a_lhs = add_csr_scaled(m, bdt2_inv, k, 1.0);
+    // RHS b = (M / (β·Δt²)) · u_pred.
+    let m_upred = matvec(m, &u_pred);
+    let mut b: Vec<Real> = m_upred.iter().map(|v| bdt2_inv * v).collect();
+
+    // Apply Dirichlet to (A, b) in tandem.
+    let mut a_red = a_lhs;
+    apply_dirichlet(&mut a_red, &mut b, bcs);
+
+    // Initial guess: `u_old` is the natural warm-start; seed Dirichlet
+    // entries so the first CG residual on those rows is already zero.
+    let mut x_init = u_old.to_vec();
+    for bc in bcs {
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x_init[*vertex as usize] = *value;
+        }
+    }
+    let cg = cg_solve(
+        |x| matvec(&a_red, x),
+        &b,
+        &x_init,
+        DEFAULT_TOL,
+        DEFAULT_MAX_ITERS,
+    );
+    let u_new = cg.x;
+
+    // Corrector — `a_new = (u_new − u_pred) / (β·Δt²)`,
+    // `v_new = v_old + Δt · ((1 − γ)·a_old + γ·a_new)`.
+    let mut a_new = vec![0.0; n];
+    let mut v_new = vec![0.0; n];
+    for i in 0..n {
+        a_new[i] = (u_new[i] - u_pred[i]) * bdt2_inv;
+        v_new[i] = v_old[i] + dt * ((1.0 - gamma) * a_old[i] + gamma * a_new[i]);
+    }
+
+    WaveStepResult {
+        u_new,
+        v_new,
+        a_new,
+        residual: cg.residual,
+        iters: cg.iters,
+    }
+}
+
 /// Stage 36.5 — GPU port of [`solve_steady_state`].
 ///
 /// Wraps the [`crate::kernels::FemGpuKernel::matvec_blocking`] entry
