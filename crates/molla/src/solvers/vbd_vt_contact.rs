@@ -217,19 +217,34 @@ pub fn gather_vt_contacts_with_hint(
                         Vec3::Y
                     }
                 };
-                let ref_dir = match prev_normal_lut
+                // Persisted side hint: a contact pair seen on the
+                // PREVIOUS substep votes for its normal direction.
+                // We only flip the current `raw_normal` when it has
+                // ROTATED away from the persistent direction by >
+                // 90 ° — this catches the tunneling case (vertex
+                // crossed to the other side, normal flipped 180 °)
+                // without disturbing slow drifting contacts where
+                // the closest-point migrates from the triangle
+                // interior to an edge / vertex (small angle change
+                // in `raw_normal`).
+                let ref_dir = prev_normal_lut
                     .get(&(v_global as u32, tri_global))
-                {
-                    Some(&n) => n,
-                    None => raw_normal, // first contact: trust the current side
-                };
-                let aligned_with_ref = raw_normal.dot(ref_dir) >= 0.0;
-                let normal = if aligned_with_ref {
-                    raw_normal
-                } else {
-                    -raw_normal
-                };
-                let signed_dist = if aligned_with_ref { dist } else { -dist };
+                    .copied();
+                let normal;
+                let signed_dist;
+                match ref_dir {
+                    Some(rd) if raw_normal.dot(rd) < 0.0 => {
+                        // > 90 ° flip: vertex tunneled. Pull it back
+                        // through to the prev_normal side.
+                        normal = -raw_normal;
+                        signed_dist = -dist;
+                    }
+                    _ => {
+                        // First contact OR persistent side respected.
+                        normal = raw_normal;
+                        signed_dist = dist;
+                    }
+                }
                 // Effective penetration depth: tunneled vertices
                 // (signed_dist < 0) need `margin - signed_dist =
                 // margin + |dist|` push to clear the surface. Clamp
@@ -486,18 +501,18 @@ pub fn project_vt_contacts(
                 q[i2] -= n_vec * (f2 * push);
             }
 
-            // ── Stage 33.5 friction (Dahl-smoothed Coulomb).
+            // ── Stage 33.5 friction (Dahl-smoothed Coulomb,
+            // position form). Applied ONLY on the first sweep so
+            // multi-contact / multi-sweep pairs don't over-damp the
+            // tangential slip (the velocity-form damping at the end
+            // of the projection takes care of the residual slip).
             //
-            // Compute the tangential relative drift `Δq_t_rel`
-            // since the start of this substep, projected onto the
-            // contact tangent plane. This is the slip we want to
-            // erase (clamped by the Coulomb cone `μ · |push_n|`).
-            //
-            // Note `q[v]` etc. were just updated above. We use the
-            // post-normal-correction snapshot for the friction pass
-            // so the tangent plane is consistent with the corrected
-            // normal direction.
-            if c.friction > 0.0 {
+            // The position correction is bounded by `μ · |push_n|`
+            // — the depth-proportional Coulomb cone. For shallow
+            // resting contacts (push tiny) this is a no-op; the
+            // velocity-form friction (gravity-floor cone `μ · g ·
+            // dt`) carries the slip stop in that regime.
+            if c.friction > 0.0 && sweep_idx == 0 {
                 let dq_v = q[v] - q_pre[v];
                 let dq0 = q[i0] - q_pre[i0];
                 let dq1 = q[i1] - q_pre[i1];
@@ -509,26 +524,7 @@ pub fn project_vt_contacts(
                 dq_t -= n_vec * dn;
                 let dq_t_len = dq_t.length();
                 if dq_t_len > 1.0e-9 {
-                    // Coulomb cone in position-correction units.
-                    // The normal "force × dt" per substep is
-                    // proportional to the gravitational impulse the
-                    // contact must cancel (`m · g · dt` per
-                    // sub-step). We approximate it as `μ · g · dt²`
-                    // worth of tangential displacement per substep
-                    // (the maximum slip-correction the cone allows
-                    // when the contact is exactly equilibrated
-                    // against gravity). For a contact engaged
-                    // beyond gravity (push > μ·g·dt²), the depth-
-                    // proportional `μ · |push|` term dominates and
-                    // we use the larger of the two so heavily-
-                    // pressed contacts (e.g. stacked tets) still
-                    // respect the higher Coulomb cone.
-                    let cone_from_depth = c.friction * push.abs();
-                    // `μ · g · dt²`: minimum cone for any active
-                    // contact, regardless of how thin the
-                    // penetration is. `g = 9.81`.
-                    let cone_from_gravity = c.friction * 9.81 * dt * dt;
-                    let coulomb_max = cone_from_depth.max(cone_from_gravity);
+                    let coulomb_max = c.friction * push.abs();
                     // Dahl-style smoothing factor: full strength
                     // when slip far exceeds v_eps·dt; ramps down
                     // smoothly to 0 when slip is below it.
@@ -551,9 +547,7 @@ pub fn project_vt_contacts(
                     if w2 > 0.0 {
                         q[i2] -= push_t * f2;
                     }
-                    // Record the friction impulse (per-step
-                    // tangential displacement scaled by inverse mass
-                    // ≈ J_t/m). Stored for warm-start next call.
+                    // Record the friction impulse for warm start.
                     c.prev_friction_impulse =
                         [push_t.x, push_t.y, push_t.z];
                 }
