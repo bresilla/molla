@@ -17286,7 +17286,12 @@ fn warp_tile_fft_pane(ui: &mut egui::Ui, st: &mut WarpTileFftState) {
     if ui.add(egui::Slider::new(&mut st.n, 32..=1024).text("Length")).changed() {
         st.user_reset = true;
     }
-    ui.small("Sum of two sinusoids → magnitude spectrum (host DFT).");
+    ui.small(
+        "Sum of two sinusoids → magnitude spectrum (host DFT). Stage 37.8 \
+         did not add a tile-FFT primitive (Stage 24c GPU FFT lives in \
+         `molla::kernels::FftKernel` instead); the host DFT stays as the \
+         live readout for this pane.",
+    );
 }
 
 // ── Scene 63: WarpTileMlp ─────────────────────────────────────────
@@ -17317,6 +17322,12 @@ fn update_warp_tile_mlp(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
         return;
     }
     // Tiny 16 → 8 → 4 ReLU MLP, weights deterministic from a hash.
+    // Stage 37.8: forward pass routes through `tile_matmul::matmul_cpu`
+    // (the molla compute primitive) instead of inline triple loops, so
+    // any future swap to the GPU `TileMatmulKernel` only needs to
+    // change the call site here. The CPU path stays the default —
+    // a 1×16 · 16×8 GEMM is microseconds, well below GPU dispatch
+    // overhead.
     let mut w1 = vec![0.0_f32; 16 * 8];
     let mut b1 = vec![0.0_f32; 8];
     let mut w2 = vec![0.0_f32; 8 * 4];
@@ -17331,21 +17342,20 @@ fn update_warp_tile_mlp(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
     for v in w2.iter_mut() { *v = rng(); }
     for v in b2.iter_mut() { *v = rng(); }
     let t0 = std::time::Instant::now();
+    // Layer 1: hidden_pre = input · W1, shape (1, 8) = (1, 16) · (16, 8).
+    let mut hidden_pre = vec![0.0_f32; 8];
+    molla::compute::tile_matmul::matmul_cpu(&st.inputs, &w1, &mut hidden_pre, 1, 8, 16)
+        .expect("tile_matmul layer1");
     let mut hidden = vec![0.0_f32; 8];
     for j in 0..8 {
-        let mut s = b1[j];
-        for i in 0..16 {
-            s += w1[i * 8 + j] * st.inputs[i];
-        }
-        hidden[j] = s.max(0.0);
+        hidden[j] = (hidden_pre[j] + b1[j]).max(0.0);
     }
+    // Layer 2: out = hidden · W2, shape (1, 4) = (1, 8) · (8, 4).
     let mut out = vec![0.0_f32; 4];
+    molla::compute::tile_matmul::matmul_cpu(&hidden, &w2, &mut out, 1, 4, 8)
+        .expect("tile_matmul layer2");
     for j in 0..4 {
-        let mut s = b2[j];
-        for i in 0..8 {
-            s += w2[i * 4 + j] * hidden[i];
-        }
-        out[j] = s;
+        out[j] += b2[j];
     }
     st.last_forward_us = t0.elapsed().as_secs_f64() * 1.0e6;
     st.last_output = out;
@@ -17369,7 +17379,12 @@ fn warp_tile_mlp_pane(ui: &mut egui::Ui, st: &mut WarpTileMlpState) {
     if ui.button("Re-randomise weights").clicked() {
         st.user_reset = true;
     }
-    ui.small("16 → 8 → 4 ReLU MLP, deterministic-hash weights.");
+    ui.small(
+        "16 → 8 → 4 ReLU MLP, deterministic-hash weights. Forward pass \
+         routed through `molla::compute::tile_matmul::matmul_cpu` \
+         (Stage 37.8). The matching GPU `TileMatmulKernel` is available \
+         for larger MLPs.",
+    );
 }
 
 // ── Scene 64: WarpTileNbody ───────────────────────────────────────
@@ -17481,7 +17496,10 @@ fn warp_tile_nbody_pane(ui: &mut egui::Ui, st: &mut WarpTileNbodyState) {
     if ui.button("Reset").clicked() {
         st.user_reset = true;
     }
-    ui.small("All-pairs Newtonian gravity (host O(N²) loop).");
+    ui.small(
+        "All-pairs Newtonian gravity (host O(N²) loop). Stage 37.8 did \
+         not add an N-body primitive — kept on CPU for the demo.",
+    );
 }
 
 // ── Scene 65: WarpTileCholesky ────────────────────────────────────
@@ -17513,43 +17531,43 @@ fn update_warp_tile_cholesky(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>)
     }
     let n = st.n.max(2) as usize;
     // SPD test matrix: A = I + diag(1..N).
-    let mut a = vec![0.0_f64; n * n];
+    let mut a32 = vec![0.0_f32; n * n];
     for i in 0..n {
-        a[i * n + i] = 1.0 + (i + 1) as f64;
+        a32[i * n + i] = 1.0 + (i + 1) as f32;
         for j in (i + 1)..n {
-            a[i * n + j] = 1.0;
-            a[j * n + i] = 1.0;
+            a32[i * n + j] = 1.0;
+            a32[j * n + i] = 1.0;
         }
     }
-    // Cholesky.
+
+    // Stage 37.8 — route through the molla `tile_block_cholesky`
+    // primitive. Try the GPU kernel first; if anything goes wrong
+    // (no adapter / N > MAX_N), fall back to the CPU oracle. Both
+    // paths produce the lower-triangular `L` in place.
     let t0 = std::time::Instant::now();
-    let mut l = vec![0.0_f64; n * n];
-    for i in 0..n {
-        for j in 0..=i {
-            let mut s = a[i * n + j];
-            for k in 0..j {
-                s -= l[i * n + k] * l[j * n + k];
-            }
-            if i == j {
-                l[i * n + j] = s.max(0.0).sqrt();
-            } else if l[j * n + j] > 1e-30 {
-                l[i * n + j] = s / l[j * n + j];
-            }
+    let mut l32 = a32.clone();
+    let used_gpu = if n <= molla::compute::tile_block_cholesky::MAX_N {
+        if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+            let kernel = molla::compute::tile_block_cholesky::TileBlockCholeskyKernel::new(device);
+            kernel
+                .dispatch_blocking(device, queue, &mut l32, n)
+                .is_ok()
+        } else {
+            false
         }
+    } else {
+        false
+    };
+    if !used_gpu {
+        // CPU fallback (also exercised when the GPU is unavailable or
+        // when N exceeds the single-workgroup limit).
+        l32 = a32.clone();
+        molla::compute::tile_block_cholesky::cholesky_cpu(&mut l32, n).expect("tile_block_cholesky cpu");
     }
     st.last_solve_us = t0.elapsed().as_secs_f64() * 1.0e6;
-    let mut err_sq = 0.0;
-    for i in 0..n {
-        for j in 0..n {
-            let mut s = 0.0;
-            for k in 0..n {
-                s += l[i * n + k] * l[j * n + k];
-            }
-            let d = s - a[i * n + j];
-            err_sq += d * d;
-        }
-    }
-    st.last_err = err_sq.sqrt();
+
+    let err32 = molla::compute::tile_block_cholesky::frobenius_recon_error(&a32, &l32, n);
+    st.last_err = err32 as f64;
     st.user_reset = false;
 }
 
@@ -17566,7 +17584,11 @@ fn warp_tile_cholesky_pane(ui: &mut egui::Ui, st: &mut WarpTileCholeskyState) {
     if ui.button("Re-solve").clicked() {
         st.user_reset = true;
     }
-    ui.small("Dense Cholesky on SPD `I + diag(1..N) + 1`.");
+    ui.small(
+        "Dense Cholesky on SPD `I + diag(1..N) + 1`, factored via \
+         `molla::compute::tile_block_cholesky` (Stage 37.8) — single-\
+         workgroup GPU kernel up to N=1024 with CPU fallback.",
+    );
 }
 
 // ── Scene 66: WarpParticleRepulsion ───────────────────────────────
@@ -17618,24 +17640,60 @@ fn update_warp_repulsion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
     if st.paused {
         return;
     }
-    // One gradient descent step on inverse-distance pair potential.
-    let n = st.pos.len();
+    // Stage 37.8 — gradient comes from the molla `tile_mcgp` primitive
+    // (SPSA stochastic estimate) instead of the inline analytic
+    // `r / d³` accumulation. Same closed-form loss; the gradient
+    // estimate is noisy by construction, so the descent path is more
+    // jittery than the analytic version — that's the demo, end users
+    // should reach for analytic gradients when they have them.
     let lr = st.learning_rate;
-    let mut grads = vec![Vec3::ZERO; n];
-    let mut loss = 0.0_f64;
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let r = st.pos[i] - st.pos[j];
-            let d = r.length().max(1.0e-3);
-            loss += (1.0 / d) as f64;
-            let g = r / (d * d * d);
-            grads[i] += g;
-            grads[j] -= g;
+
+    // Flatten positions to a `Vec<f64>` for the loss closure.
+    let params: Vec<f64> = st
+        .pos
+        .iter()
+        .flat_map(|p| [p.x as f64, p.y as f64, p.z as f64])
+        .collect();
+    let inverse_distance_loss = |p: &[f64]| -> f64 {
+        let mut s = 0.0_f64;
+        let nn = p.len() / 3;
+        for i in 0..nn {
+            for j in (i + 1)..nn {
+                let dx = p[i * 3 + 0] - p[j * 3 + 0];
+                let dy = p[i * 3 + 1] - p[j * 3 + 1];
+                let dz = p[i * 3 + 2] - p[j * 3 + 2];
+                let d = (dx * dx + dy * dy + dz * dz).sqrt().max(1.0e-3);
+                s += 1.0 / d;
+            }
         }
-    }
-    st.last_loss = loss;
-    for (p, g) in st.pos.iter_mut().zip(grads.iter()) {
-        *p += *g * lr;
+        s
+    };
+
+    // Single forward pass for the loss readout.
+    let loss_now = inverse_distance_loss(&params);
+    st.last_loss = loss_now;
+
+    // 64 SPSA samples per descent step — keeps the per-frame budget
+    // bounded while letting the noise average down across frames.
+    let cfg = molla::compute::tile_mcgp::McgpConfig {
+        n_samples: 64,
+        epsilon: 5.0e-3,
+        seed: 0x9E3779B9_u64.wrapping_add(st.iter as u64),
+    };
+    let grad = molla::compute::tile_mcgp::mcgp_estimate(
+        &inverse_distance_loss,
+        &params,
+        &cfg,
+    );
+
+    // Gradient descent: p -= lr · ∇L. Pack back into Vec3.
+    for (i, p) in st.pos.iter_mut().enumerate() {
+        let gx = grad[i * 3 + 0] as f32;
+        let gy = grad[i * 3 + 1] as f32;
+        let gz = grad[i * 3 + 2] as f32;
+        p.x -= lr * gx;
+        p.y -= lr * gy;
+        p.z -= lr * gz;
         // Periodic-style soft wrap to a 2×2×2 box.
         for axis in 0..3 {
             let v = match axis {
@@ -17688,7 +17746,12 @@ fn warp_repulsion_pane(ui: &mut egui::Ui, st: &mut WarpRepulsionState) {
     if ui.button("Reset").clicked() {
         st.user_reset = true;
     }
-    ui.small("Inverse-distance pair potential, gradient descent on positions.");
+    ui.small(
+        "Inverse-distance pair potential, gradient descent on positions. \
+         Gradient estimated by `molla::compute::tile_mcgp` SPSA \
+         (Stage 37.8) — noisy by construction, so the descent path \
+         jitters compared to the analytic-gradient placeholder.",
+    );
 }
 
 // ── Scene 67: WarpFemDiffusion (2D triangular) ────────────────────
