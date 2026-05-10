@@ -63,8 +63,11 @@ fn bench_pile_gpu(c: &mut Criterion) {
     let queue = engine.queue().unwrap().clone();
 
     let mut group = c.benchmark_group("xpbd_pile_gpu");
-    group.sample_size(10).measurement_time(Duration::from_secs(20));
-    for &n in &[1_000usize, 10_000, 100_000] {
+    // sample_size 10 + 30s measurement so the 1M case (~10s/iter on
+    // a 2020-era discrete GPU) still finishes within criterion's
+    // budget without running out of samples.
+    group.sample_size(10).measurement_time(Duration::from_secs(30));
+    for &n in &[1_000usize, 10_000, 100_000, 1_000_000] {
         let mut model = build_pile(n);
         model.upload_to_device(&device, &queue).unwrap();
         let mut s_a = model.state().unwrap();
@@ -77,7 +80,14 @@ fn bench_pile_gpu(c: &mut Criterion) {
         // body-contact CSR (offsets/indices) gets sized to the model
         // before the GPU bind group is built. Without this the XPBD
         // GPU solver fails with "binding 6: no device mirror".
-        let mut contacts = Contacts::with_capacity((n * 8).max(1024));
+        //
+        // Cap contact capacity at 256k so the 1M-sphere case doesn't
+        // need to allocate gigabytes of GPU memory it'll never use
+        // (the bench never re-runs collide inside the iter loop, so
+        // the actual contact count stays at whatever the initial
+        // pile produces — tiny for sparse drops).
+        let cap = (n * 4).clamp(1024, 256_000);
+        let mut contacts = Contacts::with_capacity(cap);
         let mut pipeline = CollisionPipeline::new();
         pipeline.collide(&model, &s_a, &mut contacts).unwrap();
         contacts.upload_to_device(&device, &queue).unwrap();
