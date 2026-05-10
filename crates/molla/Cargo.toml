@@ -33,6 +33,11 @@ tracing = "0.1"
 slotmap = "1"
 bytemuck = { version = "1.18", features = ["derive"] }
 urdf-rs = "0.9"
+# Stage 36.6 — Gmsh MSH 4.1 parser. Pure-Rust, no heavy deps; reads
+# both ASCII and binary MSH files. Used only by `fem::FemMesh::from_gmsh*`
+# constructors so `cargo check` without FEM scenes still drops the
+# transitive deps in dead-code elim.
+mshio = "0.4"
 # Stage 21.1 — data-parallel mesh-utility tools (decimate / SDF bake).
 # Used only inside `crate::geometry` authoring code; not on the per-frame
 # hot path. Added in this stage so QEM cost evaluation and per-voxel
