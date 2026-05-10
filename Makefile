@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-soft-vt-gpu test-soft-friction-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-soft-vt-gpu test-soft-friction-gpu test-fem-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -172,6 +172,14 @@ test-soft-vt-gpu:
 # needed).
 test-soft-friction-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test soft_friction_gpu -- --ignored
+
+# Stage 36.5 — GPU port of the FEM v1 framework (P1 nodal scalar).
+# Three parity tests (assembly, matvec, full steady-state CG) + one
+# 16³ smoke run that emits per-iter readback timing for the v1
+# "fully on-device CG = Stage 36.5.1 follow-up" caveat. All
+# `--ignored` (real wgpu adapter needed).
+test-fem-gpu:
+	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test fem_gpu -- --ignored
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
