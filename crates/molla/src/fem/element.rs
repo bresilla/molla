@@ -729,62 +729,61 @@ pub fn compute_element_distortion_energy(
         }
     }
 
-    // Hessian: central finite difference on the gradient itself
-    // (so each Hessian column is a fresh 6-point stencil on the
-    // energy → 9-point or 12-point stencil after combining gradient
-    // FDs). To stay cheap, take the second-derivative as
-    // `(g(x+eps·e_b) − g(x−eps·e_b)) / (2·eps)` where `g` is the
-    // analytic-FD gradient already implemented above.
+    // Hessian: direct two-point central finite difference on the
+    // **energy**, not on the gradient — avoids FD-on-FD roundoff
+    // compounding. Stencils:
+    //   H_ii ≈ (E(x + h·e_i) − 2 E(x) + E(x − h·e_i)) / h²
+    //   H_ij ≈ (E(x + h·e_i + h·e_j) − E(x + h·e_i) − E(x + h·e_j) + E(x)) / h²  for i ≠ j
+    // (the standard first-order forward mixed-partial formula; we
+    // symmetrise the (i, j) and (j, i) entries afterwards.)
     let mut hessian = vec![vec![0.0; n_dof]; n_dof];
-    let grad_at = |xx: &[Vec3]| -> Vec<Real> {
-        let mut local = xx.to_vec();
-        let mut g = vec![0.0; n_dof];
-        for a in 0..nv {
-            for alpha in 0..3 {
-                let saved = local[a];
-                let mut p = saved;
-                p[alpha] = saved[alpha] + eps;
-                local[a] = p;
-                let e_plus = energy_at(&local);
-                let mut p = saved;
-                p[alpha] = saved[alpha] - eps;
-                local[a] = p;
-                let e_minus = energy_at(&local);
-                local[a] = saved;
-                g[a * 3 + alpha] = (e_plus - e_minus) / (2.0 * eps);
-            }
-        }
-        g
+    let h_eps: Real = 1.0e-4;
+    let h2 = h_eps * h_eps;
+    let saved_local = local.clone();
+    let perturb = |coord: usize, delta: Real, base: &[Vec3]| -> Vec<Vec3> {
+        let mut out = base.to_vec();
+        let node = coord / 3;
+        let comp = coord % 3;
+        let mut p = out[node];
+        p[comp] = p[comp] + delta;
+        out[node] = p;
+        out
     };
-    let h_eps: Real = 1.0e-3; // larger step for the second pass to
-                              // keep roundoff in the gradient FDs
-                              // from dominating.
-    for b in 0..nv {
-        for beta in 0..3 {
-            let saved = local[b];
-            let mut p = saved;
-            p[beta] = saved[beta] + h_eps;
-            local[b] = p;
-            let g_plus = grad_at(&local);
-            let mut p = saved;
-            p[beta] = saved[beta] - h_eps;
-            local[b] = p;
-            let g_minus = grad_at(&local);
-            local[b] = saved;
-            let col = b * 3 + beta;
-            for row in 0..n_dof {
-                hessian[row][col] = (g_plus[row] - g_minus[row]) / (2.0 * h_eps);
-            }
-        }
+    let e0 = energy_at(&saved_local);
+    let mut e_plus_i = vec![0.0_f64; n_dof];
+    for i in 0..n_dof {
+        let p = perturb(i, h_eps, &saved_local);
+        e_plus_i[i] = energy_at(&p);
     }
-    // Symmetrise the Hessian — finite differences leave a small
-    // antisymmetric residue (~1e-6); a Newton solver works best on
-    // SPD operators, so we average the (i, j) and (j, i) entries.
+    let mut e_minus_i = vec![0.0_f64; n_dof];
+    for i in 0..n_dof {
+        let p = perturb(i, -h_eps, &saved_local);
+        e_minus_i[i] = energy_at(&p);
+    }
+    // Diagonal entries.
+    for i in 0..n_dof {
+        hessian[i][i] = (e_plus_i[i] - 2.0 * e0 + e_minus_i[i]) / h2;
+    }
+    // Off-diagonals via the forward mixed-partial formula, then
+    // symmetrise.
     for i in 0..n_dof {
         for j in (i + 1)..n_dof {
-            let avg = 0.5 * (hessian[i][j] + hessian[j][i]);
-            hessian[i][j] = avg;
-            hessian[j][i] = avg;
+            // Build x + h·e_i + h·e_j by perturbing twice.
+            let mut p = saved_local.clone();
+            let ni = i / 3;
+            let ci = i % 3;
+            let nj = j / 3;
+            let cj = j % 3;
+            let mut tmp = p[ni];
+            tmp[ci] = tmp[ci] + h_eps;
+            p[ni] = tmp;
+            let mut tmp = p[nj];
+            tmp[cj] = tmp[cj] + h_eps;
+            p[nj] = tmp;
+            let e_pp = energy_at(&p);
+            let h_ij = (e_pp - e_plus_i[i] - e_plus_i[j] + e0) / h2;
+            hessian[i][j] = h_ij;
+            hessian[j][i] = h_ij;
         }
     }
 
