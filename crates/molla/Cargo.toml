@@ -100,3 +100,32 @@ harness = false
 name = "bench_xpbd_chain"
 harness = false
 
+# ---------------------------------------------------------------------
+# Stage B — Featherstone (articulated)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_featherstone_chain"
+harness = false
+
+[[bench]]
+name = "bench_featherstone_tree"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage C — Cloth (XPBD + VBD)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_xpbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_cloth_gpu"
+harness = false
+required-features = ["gpu"]
+
