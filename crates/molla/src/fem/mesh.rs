@@ -16,7 +16,9 @@
 //! lid-driven cavity) but those scenes can lean on the same primitive
 //! `Vec<Vec3> + Vec<FemCell>` layout — no schema change needed.
 
+use crate::core::{Error, Result};
 use crate::math::{Real, Vec3};
+use std::collections::HashMap;
 
 /// A single FEM cell. v1 supports two shapes; follow-up stages can
 /// add wedge / hex / pyramid by extending this enum.
@@ -180,6 +182,177 @@ impl FemMesh {
     pub fn cell_count(&self) -> usize {
         self.cells.len()
     }
+
+    // ── Stage 36.6 — Gmsh MSH 4.1 import via `mshio` ───────────────────
+    //
+    // The constructors below pull in `mshio` to parse the MSH 4.1
+    // format (ASCII or binary). They convert the per-block node /
+    // element layout into molla's flat `Vec<Vec3> + Vec<FemCell>`
+    // representation. Element kinds other than 3-node triangles
+    // (`Tri3`) and 4-node tetrahedra (`Tet4`) are skipped with a
+    // `tracing::warn!` — v1 supports only the cell shapes the FEM
+    // module itself supports. Strict-mode handling is deferred to a
+    // follow-up if a user needs it.
+    //
+    // Node tags in MSH may be non-contiguous (e.g. when Gmsh re-uses
+    // tags from a preexisting numbering); we therefore build a global
+    // `tag → flat index` map across all node blocks before walking the
+    // element blocks, and remap each element's tag list through it.
+
+    /// Parse an MSH 4.1 ASCII file from a UTF-8 string.
+    ///
+    /// Convenience wrapper around [`FemMesh::from_gmsh_bytes`] that
+    /// takes the borrowed bytes directly. Use this for `include_str!`
+    /// embedded fixtures and string-literal MSH content.
+    pub fn from_gmsh_str(s: &str) -> Result<Self> {
+        Self::from_gmsh_bytes(s.as_bytes())
+    }
+
+    /// Parse an MSH 4.1 ASCII or binary file from a byte slice.
+    ///
+    /// Returns [`Error::Fem`] if `mshio` rejects the input or if the
+    /// element node tags reference vertex tags missing from the node
+    /// section.
+    pub fn from_gmsh_bytes(b: &[u8]) -> Result<Self> {
+        // mshio uses (Usize=u64, Int=i32, Float=f64) by default.
+        let file = mshio::parse_msh_bytes(b)
+            .map_err(|e| Error::Fem(format!("mshio parse failed: {}", e)))?;
+
+        // ─── Vertex pass: collect every Node into a flat Vec<Vec3>
+        //     and remember which global tag maps to which flat index.
+        let nodes_section = file.data.nodes.as_ref().ok_or_else(|| {
+            Error::Fem("MSH file has no $Nodes section".to_string())
+        })?;
+
+        let total_nodes = nodes_section.num_nodes as usize;
+        let mut vertices: Vec<Vec3> = Vec::with_capacity(total_nodes);
+        let mut tag_to_index: HashMap<u64, u32> = HashMap::with_capacity(total_nodes);
+
+        for block in &nodes_section.node_blocks {
+            // Block-local index → flat-index offset.
+            let base = vertices.len();
+            for n in &block.nodes {
+                vertices.push(Vec3::new(n.x as Real, n.y as Real, n.z as Real));
+            }
+            // Tags: if `node_tags` is `None`, the block's tags are
+            // sequential `min_node_tag .. min_node_tag + len`. mshio
+            // returns the *block*'s `node_tags` map keyed on the global
+            // tag whose value is the block-local node index — we add
+            // `base` to convert into a global flat-vertex index.
+            //
+            // We have to compute the implicit sequential range
+            // ourselves because mshio doesn't expose
+            // `NodeBlock::min_node_tag` (the min/max live on the
+            // `Nodes` section itself, not per-block). Sequential here
+            // means tags are `1..=block.nodes.len()` offset by the
+            // running base; but for multi-block files we instead
+            // re-scan `node_tags` if present, and otherwise fall back
+            // to the **per-section** `min_node_tag` only when there is
+            // a single block. Robust path: trust `node_tags` when
+            // present, otherwise assume contiguous starting from
+            // `nodes_section.min_node_tag + base`.
+            match &block.node_tags {
+                Some(map) => {
+                    for (&tag, &local_idx) in map {
+                        tag_to_index.insert(tag, (base + local_idx) as u32);
+                    }
+                }
+                None => {
+                    let start = nodes_section.min_node_tag + base as u64;
+                    for i in 0..block.nodes.len() {
+                        tag_to_index.insert(start + i as u64, (base + i) as u32);
+                    }
+                }
+            }
+        }
+
+        // ─── Element pass: walk every block, keeping only Tri3 / Tet4.
+        let mut cells: Vec<FemCell> = Vec::new();
+        let mut skipped: HashMap<String, usize> = HashMap::new();
+
+        if let Some(elements_section) = &file.data.elements {
+            for block in &elements_section.element_blocks {
+                use mshio::mshfile::ElementType;
+                match block.element_type {
+                    ElementType::Tri3 => {
+                        for el in &block.elements {
+                            if el.nodes.len() != 3 {
+                                return Err(Error::Fem(format!(
+                                    "Tri3 element tag {} has {} nodes (expected 3)",
+                                    el.element_tag,
+                                    el.nodes.len()
+                                )));
+                            }
+                            let v0 = lookup_tag(&tag_to_index, el.nodes[0])?;
+                            let v1 = lookup_tag(&tag_to_index, el.nodes[1])?;
+                            let v2 = lookup_tag(&tag_to_index, el.nodes[2])?;
+                            cells.push(FemCell::Tri([v0, v1, v2]));
+                        }
+                    }
+                    ElementType::Tet4 => {
+                        for el in &block.elements {
+                            if el.nodes.len() != 4 {
+                                return Err(Error::Fem(format!(
+                                    "Tet4 element tag {} has {} nodes (expected 4)",
+                                    el.element_tag,
+                                    el.nodes.len()
+                                )));
+                            }
+                            let v0 = lookup_tag(&tag_to_index, el.nodes[0])?;
+                            let v1 = lookup_tag(&tag_to_index, el.nodes[1])?;
+                            let v2 = lookup_tag(&tag_to_index, el.nodes[2])?;
+                            let v3 = lookup_tag(&tag_to_index, el.nodes[3])?;
+                            cells.push(FemCell::Tet([v0, v1, v2, v3]));
+                        }
+                    }
+                    other => {
+                        // Bucket the skipped count per kind so we warn
+                        // once per kind regardless of how many blocks
+                        // of that kind appear.
+                        let key = format!("{:?}", other);
+                        *skipped.entry(key).or_insert(0) += block.elements.len();
+                    }
+                }
+            }
+        }
+
+        for (kind, count) in &skipped {
+            tracing::warn!(
+                "FemMesh::from_gmsh: skipped {} {} element(s) — only Tri3 and Tet4 are supported in v1",
+                count,
+                kind
+            );
+        }
+
+        Ok(Self { vertices, cells })
+    }
+
+    /// Read an MSH file from disk and parse it.
+    ///
+    /// Reads the entire file into memory via [`std::fs::read`] then
+    /// delegates to [`FemMesh::from_gmsh_bytes`]. Returns
+    /// [`Error::Fem`] on either I/O or parse failure.
+    pub fn from_gmsh_path(path: &std::path::Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            Error::Fem(format!(
+                "failed to read MSH file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        Self::from_gmsh_bytes(&bytes)
+    }
+}
+
+/// Internal helper — translate an MSH node tag to a flat-vertex index
+/// or report a clear error if the element references a missing tag.
+fn lookup_tag(map: &HashMap<u64, u32>, tag: u64) -> Result<u32> {
+    map.get(&tag).copied().ok_or_else(|| {
+        Error::Fem(format!(
+            "element references node tag {} that is not in the $Nodes section",
+            tag
+        ))
+    })
 }
 
 impl Default for FemMesh {

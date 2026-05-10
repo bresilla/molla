@@ -28,6 +28,11 @@ pub enum Error {
     #[error("gpu backend error: {0}")]
     Gpu(String),
 
+    /// FEM module failure — mesh parse error, malformed input,
+    /// unsupported element kind in strict mode, etc.
+    #[error("fem error: {0}")]
+    Fem(String),
+
     /// Catch-all for invariant violations that should be impossible at
     /// runtime; reaching one indicates a crate bug.
     #[error("internal invariant violated: {0}")]
