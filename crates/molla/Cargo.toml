@@ -79,3 +79,211 @@ name = "featherstone_cpu_vs_gpu"
 harness = false
 required-features = ["gpu"]
 
+# ---------------------------------------------------------------------
+# Stage A — rigid body XPBD
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_xpbd_pile"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_stacking"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_chain"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage B — Featherstone (articulated)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_featherstone_chain"
+harness = false
+
+[[bench]]
+name = "bench_featherstone_tree"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage C — Cloth (XPBD + VBD)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_xpbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_cloth_gpu"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage D — VBD tets (soft body)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_vbd_tets"
+harness = false
+
+[[bench]]
+name = "bench_vbd_tets_gpu"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage E — Cable
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_cable_drop"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage F — MPM
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_mpm_explicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_mpm_implicit"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage G — Soft contact (Stage 33 family)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_soft_vt_contact_cpu"
+harness = false
+
+[[bench]]
+name = "bench_soft_vt_contact_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_soft_self_collision"
+harness = false
+
+[[bench]]
+name = "bench_soft_ee_contact"
+harness = false
+
+[[bench]]
+name = "bench_soft_friction"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage H — Broadphase
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_lbvh_build"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_lbvh_refit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_broadphase_pairs"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage I — Narrow-phase / contact pipeline
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_narrow_phase_pairs"
+harness = false
+
+[[bench]]
+name = "bench_mpr_vs_gjk"
+harness = false
+
+[[bench]]
+name = "bench_contact_reduction"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage J — IK + sensors
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_ik"
+harness = false
+
+[[bench]]
+name = "bench_sensor_raycast"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_camera"
+harness = false
+required-features = ["gpu"]
+
+# ---------------------------------------------------------------------
+# Stage K — Iterative solvers
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_iterative"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage L — Autograd
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_autograd_featherstone"
+harness = false
+
+[[bench]]
+name = "bench_autograd_tape"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage M — Sparse grid (NanoVDB-style)
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_sparse_grid_insert"
+harness = false
+
+[[bench]]
+name = "bench_sparse_grid_query"
+harness = false
+
+# ---------------------------------------------------------------------
+# Stage N — Math + FFT
+# ---------------------------------------------------------------------
+
+[[bench]]
+name = "bench_math"
+harness = false
+
+[[bench]]
+name = "bench_fft"
+harness = false
+required-features = ["gpu"]
+
