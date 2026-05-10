@@ -705,6 +705,26 @@ pub fn solve_stokes_steady(
     let a = assemble_velocity_block(mesh, th, viscosity)?;
     let b_div = assemble_div_block(mesh, th)?;
 
+    solve_stokes_with_matrices(th, &a, &b_div, f_velocity, bcs, cfg)
+}
+
+/// Lower-level Uzawa-CG entry point: caller supplies the pre-assembled
+/// velocity-block matrix `A` (which may include a `M/Δt` term for
+/// transient steps) and the divergence matrix `B`. Returns the
+/// `(u, p)` Stokes solve at the given RHS.
+pub fn solve_stokes_with_matrices(
+    th: &MixedTaylorHood,
+    a: &BsrMatrix,
+    b_div: &BsrMatrix,
+    f_velocity: &[Real],
+    bcs: &[StokesBc],
+    cfg: &StokesSimpleConfig,
+) -> Result<StokesResult> {
+    debug_assert_eq!(f_velocity.len(), th.n_velocity);
+    debug_assert_eq!(a.nrows(), th.n_velocity);
+    debug_assert_eq!(b_div.nrows(), th.n_pressure);
+    debug_assert_eq!(b_div.ncols(), th.n_velocity);
+
     let n_v = th.n_velocity;
     let n_p = th.n_pressure;
 
@@ -919,38 +939,6 @@ fn collect_velocity_pins(bcs: &[StokesBc], dim: usize) -> Vec<(usize, Real)> {
     pins
 }
 
-/// Apply velocity Dirichlet BCs (no-slip + lid velocity) to A and the
-/// RHS. Internal helper used by [`solve_stokes_steady`].
-fn apply_velocity_bc_dirichlet(
-    a: &mut BsrMatrix,
-    f: &mut [Real],
-    bcs: &[StokesBc],
-    dim: usize,
-) -> Vec<usize> {
-    let mut pinned = Vec::new();
-    for bc in bcs {
-        match bc {
-            StokesBc::NoSlip { node } => {
-                let base = (*node as usize) * dim;
-                for c in 0..dim {
-                    pin_row_a(a, f, base + c, 0.0);
-                    pinned.push(base + c);
-                }
-            }
-            StokesBc::LidVelocity { node, velocity } => {
-                debug_assert_eq!(velocity.len(), dim);
-                let base = (*node as usize) * dim;
-                for (c, v) in velocity.iter().enumerate() {
-                    pin_row_a(a, f, base + c, *v);
-                    pinned.push(base + c);
-                }
-            }
-            StokesBc::PressureZero { .. } => {}
-        }
-    }
-    pinned
-}
-
 /// `y = Aᵀ · x`. For a CSR matrix without a precomputed transpose, we
 /// fall back to walking the original rows and scattering. `n_cols`
 /// is `A.ncols()` (= length of the result).
@@ -1027,163 +1015,46 @@ pub fn solve_navier_stokes_transient(
     let b_div = assemble_div_block(mesh, th)?;
 
     let inv_dt = 1.0 / cfg.dt;
-    let a_plus_m = add_csr_scaled(&m, inv_dt, &a, 1.0);
-
-    let pinned_set_template = {
-        let mut set = std::collections::HashSet::new();
-        for bc in bcs {
-            match bc {
-                StokesBc::NoSlip { node } => {
-                    for c in 0..th.dim {
-                        set.insert((*node as usize) * th.dim + c);
-                    }
-                }
-                StokesBc::LidVelocity { node, .. } => {
-                    for c in 0..th.dim {
-                        set.insert((*node as usize) * th.dim + c);
-                    }
-                }
-                _ => {}
-            }
-        }
-        set
-    };
-    // Pre-build a BC-reduced LHS once: A + M/dt is fixed across steps.
-    let mut lhs = a_plus_m.clone();
-    let mut dummy_rhs = vec![0.0; th.n_velocity];
-    apply_velocity_bc_dirichlet(&mut lhs, &mut dummy_rhs, bcs, th.dim);
-
-    // Diagonal-A approx for SIMPLE (use lhs diag to reflect M/dt + A).
-    let a_diag = lhs.get_diag();
-    let inv_a_diag: Vec<Real> = a_diag
-        .iter()
-        .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 0.0 })
-        .collect();
-
-    let p_pin = bcs
-        .iter()
-        .find_map(|b| {
-            if let StokesBc::PressureZero { vertex } = b {
-                Some(*vertex as usize)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0);
+    // Effective LHS for each implicit-Euler step: A_eff = M/dt + A.
+    let a_eff = add_csr_scaled(&m, inv_dt, &a, 1.0);
 
     let mut u = u_init.to_vec();
     let mut p = p_init.to_vec();
-    // Seed u with Dirichlet values.
-    {
-        let mut tmp_lhs = lhs.clone();
-        let mut tmp_rhs = vec![0.0; th.n_velocity];
-        let pinned = apply_velocity_bc_dirichlet(&mut tmp_lhs, &mut tmp_rhs, bcs, th.dim);
-        for &dof in &pinned {
-            u[dof] = tmp_rhs[dof];
-        }
-    }
 
-    let mut div_residual = 0.0;
-    let mut outer_iters = 0;
+    let mut last = StokesResult {
+        u: u.clone(),
+        p: p.clone(),
+        outer_iters: 0,
+        div_residual: 0.0,
+    };
 
     for _step in 0..cfg.n_steps {
         // Lagged convective term — explicit Picard linearisation.
-        // For v1 we use the linearised "Oseen" form: just lag by
-        // skipping convection (Stokes-step). The full convection
-        // assembly lives in the deferred Stage 36.2.1 — Stokes alone
-        // is the primary contract; full NS is optional.
+        // For Stage-36.2 v1 we ship "Stokes-stepping" (no explicit
+        // convection); the full lagged-`(u·∇)u` assembly lands in
+        // Stage 36.2.1 (a separate deferred follow-up). The
+        // semi-implicit framework here is correct as soon as that
+        // assembly arrives; only the conv_force slot needs to be
+        // populated.
         let conv_force: Vec<Real> = vec![0.0; th.n_velocity];
 
-        // RHS for the predictor:
-        //   rhs = (M/dt) u_old + f_ext − conv − Bᵀ p_old.
+        // RHS for this step: f + (M/dt) u_old − conv.
         let mu = matvec(&m, &u);
-        let bt_p = matvec_t(&b_div, &p, th.n_velocity);
-        let mut rhs_pred: Vec<Real> = (0..th.n_velocity)
-            .map(|i| inv_dt * mu[i] + f_velocity[i] - conv_force[i] - bt_p[i])
+        let f_step: Vec<Real> = (0..th.n_velocity)
+            .map(|i| f_velocity[i] + inv_dt * mu[i] - conv_force[i])
             .collect();
-        // Apply Dirichlet to the RHS (LHS is BC-reduced + cached).
-        for bc in bcs {
-            match bc {
-                StokesBc::NoSlip { node } => {
-                    let base = (*node as usize) * th.dim;
-                    for c in 0..th.dim {
-                        rhs_pred[base + c] = 0.0;
-                    }
-                }
-                StokesBc::LidVelocity { node, velocity } => {
-                    let base = (*node as usize) * th.dim;
-                    for (c, v) in velocity.iter().enumerate() {
-                        rhs_pred[base + c] = *v;
-                    }
-                }
-                _ => {}
-            }
-        }
 
-        let u_star_res = cg_solve(
-            |x| matvec(&lhs, x),
-            &rhs_pred,
-            &u,
-            cfg.simple.tol_inner,
-            cfg.simple.max_inner_iters,
-        );
-        let u_star = u_star_res.x;
-
-        // Pressure correction.
-        let bu_star = matvec(&b_div, &u_star);
-        let mut rhs_p: Vec<Real> = bu_star.iter().map(|v| -v).collect();
-        rhs_p[p_pin] = 0.0;
-        let inv_a_diag_ref = &inv_a_diag;
-        let pinned_set_ref = &pinned_set_template;
-        let schur_op = |q: &[Real]| -> Vec<Real> {
-            let mut x = matvec_t(&b_div, q, th.n_velocity);
-            for &dof in pinned_set_ref.iter() {
-                x[dof] = 0.0;
-            }
-            for (xi, di) in x.iter_mut().zip(inv_a_diag_ref.iter()) {
-                *xi *= *di;
-            }
-            let mut y = matvec(&b_div, &x);
-            y[p_pin] = q[p_pin];
-            y
-        };
-        let dp_init = vec![0.0; th.n_pressure];
-        let dp_res = cg_solve(
-            schur_op,
-            &rhs_p,
-            &dp_init,
-            cfg.simple.tol_inner,
-            cfg.simple.max_inner_iters,
-        );
-        let dp = dp_res.x;
-
-        // Update.
-        let bt_dp = matvec_t(&b_div, &dp, th.n_velocity);
-        let mut u_new = u_star.clone();
-        for i in 0..th.n_velocity {
-            if pinned_set_ref.contains(&i) {
-                // Restore pinned value (already in u_star from CG seed,
-                // but make double-sure).
-            } else {
-                u_new[i] -= inv_a_diag[i] * bt_dp[i];
-            }
-        }
-        for i in 0..th.n_pressure {
-            p[i] += cfg.simple.alpha_p * dp[i];
-        }
-        p[p_pin] = 0.0;
-        u = u_new;
-
-        let bu = matvec(&b_div, &u);
-        div_residual = (bu.iter().map(|x| x * x).sum::<Real>()).sqrt();
-        outer_iters += 1;
+        // Solve the per-step Stokes system via Uzawa-CG.
+        last = solve_stokes_with_matrices(th, &a_eff, &b_div, &f_step, bcs, &cfg.simple)?;
+        u = last.u.clone();
+        p = last.p.clone();
     }
 
     Ok(StokesResult {
         u,
         p,
-        outer_iters,
-        div_residual,
+        outer_iters: last.outer_iters,
+        div_residual: last.div_residual,
     })
 }
 

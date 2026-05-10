@@ -387,6 +387,7 @@ fn main() {
         .insert_resource(FemHeatExampleState::default())
         .insert_resource(FemHeatP2ExampleState::default())
         .insert_resource(FemBeamExampleState::default())
+        .insert_resource(FemStokesExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -455,6 +456,7 @@ fn main() {
                     update_fem_heat_example,
                     update_fem_heat_p2_example,
                     update_fem_beam_example,
+                    update_fem_stokes_example,
                 )
                     .chain(),
                 (
@@ -486,6 +488,7 @@ fn main() {
                     draw_fem_beam_gizmos,
                 )
                     .chain(),
+                (draw_fem_stokes_gizmos,).chain(),
             )
                 .chain(),
         )
@@ -587,6 +590,8 @@ struct SceneStates<'w> {
     fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
     /// Stage 36.1 — FEM elasticity beam demo state.
     fem_beam: ResMut<'w, FemBeamExampleState>,
+    /// Stage 36.2 — FEM Stokes lid-driven cavity demo state.
+    fem_stokes: ResMut<'w, FemStokesExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -643,6 +648,8 @@ struct PaneSceneStates<'w> {
     fem_heat_p2: ResMut<'w, FemHeatP2ExampleState>,
     /// Stage 36.1 — FEM elasticity beam demo state.
     fem_beam: ResMut<'w, FemBeamExampleState>,
+    /// Stage 36.2 — FEM Stokes lid-driven cavity demo state.
+    fem_stokes: ResMut<'w, FemStokesExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -969,6 +976,11 @@ enum Scene {
     /// Stage 36.1 — FEM elasticity cantilever-beam demo. 20×4×4 tet
     /// beam pinned at one end, downward traction on the other end.
     FemBeam,
+    /// Stage 36.2 — FEM Stokes lid-driven cavity demo. 16×16 P2-P1
+    /// Taylor-Hood mesh with lid velocity (1, 0); Uzawa-CG solve on
+    /// the pressure-Schur complement; viewer renders velocity arrows
+    /// + pressure colormap.
+    FemStokes,
 }
 
 impl Scene {
@@ -1024,6 +1036,7 @@ impl Scene {
         Scene::FemHeat,
         Scene::FemBeam,
         Scene::FemHeatP2,
+        Scene::FemStokes,
     ];
 
     fn label(self) -> &'static str {
@@ -1077,6 +1090,7 @@ impl Scene {
             Scene::FemHeat => "47 FEM heat (Stage 36 v1)",
             Scene::FemBeam => "48 FEM elasticity (Stage 36.1)",
             Scene::FemHeatP2 => "49 FEM heat P2 (Stage 36.3)",
+            Scene::FemStokes => "50 FEM Stokes (Stage 36.2)",
         }
     }
 
@@ -2434,6 +2448,7 @@ impl Sim {
             Scene::FemHeat => build_fem_heat_model(),
             Scene::FemHeatP2 => build_fem_heat_p2_model(),
             Scene::FemBeam => build_fem_beam_model(),
+            Scene::FemStokes => build_fem_stokes_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5582,6 +5597,8 @@ fn apply_scene_switch(
     scene_states.fem_heat_p2.needs_reset = true;
     // Stage 36.1 — same for the elasticity beam.
     scene_states.fem_beam.needs_reset = true;
+    // Stage 36.2 — re-solve the lid-driven cavity on entry.
+    scene_states.fem_stokes.needs_reset = true;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5699,6 +5716,11 @@ fn step_simulation(
     // solver in `update_fem_beam_example`; bypass the standard
     // pipeline (no bodies, no contacts).
     if sim.scene == Scene::FemBeam {
+        return;
+    }
+    // Stage-36.2 FEM Stokes lid-driven cavity — same rationale: pure-
+    // CPU FEM Stokes/Uzawa-CG solver in `update_fem_stokes_example`.
+    if sim.scene == Scene::FemStokes {
         return;
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
@@ -9119,6 +9141,7 @@ fn control_pane(
                     | Scene::FemHeat
                     | Scene::FemHeatP2
                     | Scene::FemBeam
+                    | Scene::FemStokes
             ),
             _ => false,
         },
@@ -9265,6 +9288,7 @@ fn control_pane(
         Scene::FemHeat => Some("FEM heat (Stage 36)"),
         Scene::FemHeatP2 => Some("FEM heat P2 (Stage 36.3)"),
         Scene::FemBeam => Some("FEM beam (Stage 36.1)"),
+        Scene::FemStokes => Some("FEM Stokes (Stage 36.2)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9372,6 +9396,9 @@ fn control_pane(
                         fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2)
                     }
                     Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
+                    Scene::FemStokes => {
+                        fem_stokes_pane(ui, &mut pane_states.fem_stokes)
+                    }
                     _ => {}
                 });
         }
@@ -15335,5 +15362,271 @@ fn fem_beam_pane(ui: &mut egui::Ui, state: &mut FemBeamExampleState) {
     }
     ui.small("BCs: clamp at x = 0, traction on x = L.");
     ui.small("Linear: solves K · u = f. SVK: 5-iter Newton-Raphson.");
+}
+
+// ─── Stage 36.2 — FEM Stokes (lid-driven cavity, Taylor-Hood) ──────
+
+const FEM_STOKES_GRID: usize = 16;
+const FEM_STOKES_DEFAULT_VISCOSITY: f64 = 1.0;
+const FEM_STOKES_DEFAULT_LID_U: f64 = 1.0;
+/// Origin offset for the unit cavity — sits just above the ground
+/// plane so the gizmo wireframe + arrows don't clip.
+const FEM_STOKES_ORIGIN: bevy::math::Vec3 =
+    bevy::math::Vec3::new(-0.5, 0.05, -0.5);
+
+/// Persistent state for `Scene::FemStokes`. The Taylor-Hood mesh +
+/// matrices survive scene switches (rebuilding 16² P2 meshes is cheap
+/// but pointless on every entry); only the velocity / pressure fields
+/// reset on entry.
+#[derive(Resource)]
+struct FemStokesExampleState {
+    mesh: fem::FemMesh,
+    th: fem::MixedTaylorHood,
+    bcs: Vec<fem::StokesBc>,
+    viscosity: f64,
+    lid_u: f64,
+    /// Latest velocity field (P2 vector, interleaved layout).
+    u: Vec<f64>,
+    /// Latest pressure field (P1 nodal).
+    p: Vec<f64>,
+    /// Last solver telemetry.
+    last_outer_iters: usize,
+    last_div_residual: f64,
+    /// Apply_scene_switch sets this on entry so the next update re-runs
+    /// the solve (otherwise re-entering shows a stale field).
+    needs_reset: bool,
+    /// Right-rail "Recompute" button.
+    user_reset: bool,
+    // Cached values to detect slider changes.
+    last_viscosity_baked: f64,
+    last_lid_u_baked: f64,
+}
+
+impl Default for FemStokesExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tri_grid_2d(
+            FEM_STOKES_GRID,
+            FEM_STOKES_GRID,
+            1.0,
+            1.0,
+        );
+        let th = fem::MixedTaylorHood::build(&mesh, 2);
+        let bcs = fem::build_cavity_bcs_2d(
+            &mesh,
+            &th,
+            1.0,
+            [FEM_STOKES_DEFAULT_LID_U, 0.0],
+        );
+        let n_v = th.ndof_velocity();
+        let n_p = th.ndof_pressure();
+        Self {
+            mesh,
+            th,
+            bcs,
+            viscosity: FEM_STOKES_DEFAULT_VISCOSITY,
+            lid_u: FEM_STOKES_DEFAULT_LID_U,
+            u: vec![0.0; n_v],
+            p: vec![0.0; n_p],
+            last_outer_iters: 0,
+            last_div_residual: 0.0,
+            needs_reset: true,
+            user_reset: false,
+            last_viscosity_baked: FEM_STOKES_DEFAULT_VISCOSITY,
+            last_lid_u_baked: FEM_STOKES_DEFAULT_LID_U,
+        }
+    }
+}
+
+impl FemStokesExampleState {
+    fn rebuild_bcs(&mut self) {
+        self.bcs = fem::build_cavity_bcs_2d(
+            &self.mesh,
+            &self.th,
+            1.0,
+            [self.lid_u, 0.0],
+        );
+        self.last_lid_u_baked = self.lid_u;
+    }
+
+    fn solve_now(&mut self) {
+        let f = vec![0.0; self.th.ndof_velocity()];
+        let cfg = fem::StokesSimpleConfig {
+            alpha_p: 0.7,
+            max_outer_iters: 200,
+            tol_outer: 1.0e-6,
+            max_inner_iters: 1500,
+            tol_inner: 1.0e-9,
+        };
+        let res = fem::solve_stokes_steady(
+            &self.mesh,
+            &self.th,
+            &f,
+            self.viscosity,
+            &self.bcs,
+            &cfg,
+        );
+        match res {
+            Ok(r) => {
+                self.u = r.u;
+                self.p = r.p;
+                self.last_outer_iters = r.outer_iters;
+                self.last_div_residual = r.div_residual;
+            }
+            Err(e) => {
+                eprintln!("FemStokes solve failed: {e}");
+            }
+        }
+        self.last_viscosity_baked = self.viscosity;
+    }
+}
+
+/// Empty molla model — the FEM Stokes demo carries its own mesh +
+/// solver in `FemStokesExampleState`; the standard pipeline is
+/// short-circuited in `step_simulation`.
+fn build_fem_stokes_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("FEM stokes: empty model"), Vec::new())
+}
+
+/// Per-frame system: re-solves the steady-state Stokes system whenever
+/// material / lid sliders change, or on scene re-entry.
+fn update_fem_stokes_example(
+    sim: Res<Sim>,
+    mut state: ResMut<FemStokesExampleState>,
+) {
+    if sim.scene != Scene::FemStokes {
+        return;
+    }
+    if state.needs_reset || state.user_reset {
+        state.rebuild_bcs();
+        state.solve_now();
+        state.needs_reset = false;
+        state.user_reset = false;
+        return;
+    }
+    let visc_changed = (state.viscosity - state.last_viscosity_baked).abs() > 1e-12;
+    let lid_changed = (state.lid_u - state.last_lid_u_baked).abs() > 1e-12;
+    if lid_changed {
+        state.rebuild_bcs();
+    }
+    if visc_changed || lid_changed {
+        state.solve_now();
+    }
+}
+
+/// Map a pressure value `p` (signed) to a colour (blue = low, red =
+/// high) by normalising against `p_abs_max`.
+fn fem_stokes_pressure_colour(p: f64, p_abs_max: f64) -> Color {
+    let denom = p_abs_max.max(1e-12);
+    let t = ((p / denom) * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
+    let (r, g, b) = if t < 0.5 {
+        let s = t * 2.0;
+        (0.05, 0.20 + 0.65 * s, 1.0 - 0.6 * s)
+    } else {
+        let s = (t - 0.5) * 2.0;
+        (0.05 + 0.95 * s, 0.85 - 0.55 * s, 0.40 - 0.40 * s)
+    };
+    Color::srgb(r, g, b)
+}
+
+/// Draw the cavity: triangle wireframe coloured by averaged pressure,
+/// plus per-vertex velocity gizmo arrows.
+fn draw_fem_stokes_gizmos(
+    sim: Res<Sim>,
+    state: Res<FemStokesExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::FemStokes {
+        return;
+    }
+    let origin = FEM_STOKES_ORIGIN;
+    let p_abs_max = state.p.iter().fold(0.0_f64, |a, &b| a.max(b.abs()));
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::with_capacity(state.mesh.cells.len() * 3);
+    let pos2d = |v: usize| -> bevy::math::Vec3 {
+        let p = state.mesh.vertices[v];
+        origin + bevy::math::Vec3::new(p.x as f32, 0.0, p.y as f32)
+    };
+    for cell in &state.mesh.cells {
+        if let fem::FemCell::Tri(v) = cell {
+            let edges = [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])];
+            for &(a, b) in &edges {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                let p_avg = 0.5 * (state.p[a as usize] + state.p[b as usize]);
+                let colour = fem_stokes_pressure_colour(p_avg, p_abs_max);
+                gizmos.line(pos2d(a as usize), pos2d(b as usize), colour);
+            }
+        }
+    }
+    // Velocity arrows at every vertex (P2 vector layout: vertex DoFs
+    // come first, components interleaved).
+    let dim = state.th.dim;
+    let scale = 0.08;
+    for (i, p) in state.mesh.vertices.iter().enumerate() {
+        let ux = state.u[i * dim];
+        let uy = state.u[i * dim + 1];
+        let mag = (ux * ux + uy * uy).sqrt();
+        if mag < 1e-6 {
+            continue;
+        }
+        let from = origin + bevy::math::Vec3::new(p.x as f32, 0.01, p.y as f32);
+        let to = from + bevy::math::Vec3::new(
+            (ux * scale) as f32,
+            0.0,
+            (uy * scale) as f32,
+        );
+        let _ = mag;
+        gizmos.line(from, to, Color::srgb(0.95, 0.95, 0.95));
+    }
+}
+
+/// Right-rail pane for `Scene::FemStokes`. Material + lid sliders +
+/// readouts (Reynolds number, divergence residual, outer-CG iters).
+fn fem_stokes_pane(ui: &mut egui::Ui, state: &mut FemStokesExampleState) {
+    ui.label("FEM Stokes — Stage 36.2 (lid-driven cavity)");
+    ui.separator();
+    readout(
+        ui,
+        "Mesh",
+        &format!(
+            "{0}×{0} P2-P1 tris ({1} verts, {2} edges)",
+            FEM_STOKES_GRID,
+            state.mesh.vert_count(),
+            state.th.map.edge_id.len(),
+        ),
+    );
+    readout(ui, "Velocity DoFs", &format!("{}", state.th.ndof_velocity()));
+    readout(ui, "Pressure DoFs", &format!("{}", state.th.ndof_pressure()));
+    ui.separator();
+    ui.label("Viscosity μ (Pa·s)");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.viscosity, 1.0e-2..=1.0e2)
+            .logarithmic(true),
+    );
+    ui.label("Lid velocity U (m/s)");
+    let _ = ui.add(egui::Slider::new(&mut state.lid_u, 0.0..=5.0));
+    ui.separator();
+    // Reynolds number Re = ρ U L / μ, with ρ = 1, L = 1.
+    let re = state.lid_u / state.viscosity.max(1e-12);
+    readout(ui, "Reynolds Re", &format!("{:.3e}", re));
+    readout(
+        ui,
+        "Outer-CG iters",
+        &format!("{}", state.last_outer_iters),
+    );
+    readout(
+        ui,
+        "Div residual",
+        &format!("{:.3e}", state.last_div_residual),
+    );
+    ui.separator();
+    if ui.button("Recompute").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("Solver: Uzawa-CG on the pressure-Schur complement.");
+    ui.small("Pure Stokes (Re→0). Re slider is informational only.");
 }
 

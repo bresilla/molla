@@ -24,6 +24,9 @@
 //!   (scalar) and `apply_bcs` (vector-aware) reducers.
 //! - [`solver`]      — `solve_steady_state` + `solve_transient`
 //!   (backward Euler), built on top of `cg_solve`.
+//! - [`stokes`]      — Stage 36.2 mixed Taylor-Hood (P2 velocity, P1
+//!   pressure) Stokes / Navier-Stokes solver via Uzawa-CG on the
+//!   pressure-Schur complement.
 //!
 //! # End-to-end demo
 //!
@@ -80,6 +83,7 @@ pub use stokes::{
     apply_stokes_velocity_bcs, assemble_div_block, assemble_velocity_block,
     assemble_velocity_mass, build_cavity_bcs_2d, compute_element_mass_p2_vector,
     compute_element_stokes_div_block, compute_element_stokes_velocity_block,
-    solve_navier_stokes_transient, solve_stokes_steady, MixedTaylorHood,
-    NavierStokesConfig, StokesBc, StokesResult, StokesSimpleConfig,
+    solve_navier_stokes_transient, solve_stokes_steady,
+    solve_stokes_with_matrices, MixedTaylorHood, NavierStokesConfig, StokesBc,
+    StokesResult, StokesSimpleConfig,
 };
