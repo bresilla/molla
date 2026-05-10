@@ -243,9 +243,10 @@ impl FemCgGpuKernel {
         let bytes = (n as u64).max(4) * 4;
 
         // Allocate persistent buffers for x, r, p, Ap (all length n,
-        // f32). The dot-product partial-sum buffers are allocated
-        // per-call inside [`Self::dispatch_dot_blocking`] (cheap, and
-        // keeps the iteration arithmetic obvious).
+        // f32). The dot-product partial-sum buffer + staging are
+        // sized once per solve and cached in the workspace below —
+        // earlier they were re-allocated per iteration which dominated
+        // wall-clock at small N.
         let usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
@@ -274,9 +275,13 @@ impl FemCgGpuKernel {
             mapped_at_creation: false,
         });
 
-        // Seed x ← x_init (or zero) + r ← b (we'll subtract A·x_init
-        // below). Both happen via `copy_buffer_to_buffer` in the same
-        // encoder so the host doesn't have to allocate a CPU zero-fill.
+        // Build the cached workspace — uniform buffers + bind groups
+        // for every dispatch slot in the inner loop, plus the
+        // dot-product partials/staging. Hoisting these out of the
+        // loop is the Slice D perf finish.
+        let ws = CgWorkspace::new(self, n, &x_buf, &r_buf, &p_buf, &ap_buf, b);
+
+        // Seed x ← x_init (or zero) + r ← b.
         let mut init_enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -285,15 +290,10 @@ impl FemCgGpuKernel {
         match x_init {
             Some(buf) => init_enc.copy_buffer_to_buffer(buf, 0, &x_buf, 0, bytes),
             None => {
-                // Zero x via write_buffer (cheap; happens once per
-                // solve, not per iteration).
                 self.queue
                     .write_buffer(&x_buf, 0, &vec![0u8; bytes as usize]);
             }
         }
-        // r ← b initially; below we subtract A·x. p, Ap zeroed (only
-        // the in-bounds rows matter, but we zero everything to keep
-        // the buffers clean for staging readback).
         init_enc.copy_buffer_to_buffer(b, 0, &r_buf, 0, bytes);
         self.queue.submit(std::iter::once(init_enc.finish()));
         // Zero p, Ap so any later "min-bytes" readbacks see clean data.
@@ -303,18 +303,17 @@ impl FemCgGpuKernel {
             .write_buffer(&ap_buf, 0, &vec![0u8; bytes as usize]);
 
         // r ← b - A·x: first compute Ap ← A·x_init, then r -= Ap.
-        // Reuse the `Ap` buffer as scratch — its CG-loop role doesn't
-        // start until iter 0 below.
         matvec(&x_buf, &ap_buf)?;
-        // r -= 1.0 · Ap (axpy with alpha = -1).
-        self.dispatch_axpy(n, &r_buf, &ap_buf, -1.0)?;
+        // r -= 1.0 · Ap — uses the cached `axpy_r_ap` slot with α = -1.
+        ws.update_axpy(&self.queue, AxpySlot::RminusAlphaAp, -1.0);
+        ws.dispatch_single_axpy(self, AxpySlot::RminusAlphaAp);
 
-        // ‖b‖ — one dot-reduction over b vs b.
-        let bnorm_sq = self.dispatch_dot_blocking(n, b, b)?;
+        // ‖b‖ — one dot-reduction over b vs b (cached "bb" slot).
+        let bnorm_sq = ws.dispatch_dot_blocking(self, DotSlot::Bb)?;
         let bnorm = bnorm_sq.sqrt().max(1.0e-30);
 
-        // rr = ‖r‖² — from r vs r.
-        let mut rr = self.dispatch_dot_blocking(n, &r_buf, &r_buf)?;
+        // rr = ‖r‖² — cached "rr" dot slot.
+        let mut rr = ws.dispatch_dot_blocking(self, DotSlot::Rr)?;
         let mut residual = rr.sqrt() / bnorm;
         if residual <= tol {
             return Ok(CgGpuResult {
@@ -336,10 +335,9 @@ impl FemCgGpuKernel {
         for it in 0..max_iters {
             // Ap ← A · p.
             matvec(&p_buf, &ap_buf)?;
-            // pAp = dot(p, Ap).
-            let pap = self.dispatch_dot_blocking(n, &p_buf, &ap_buf)?;
+            // pAp = dot(p, Ap) — cached "pAp" slot.
+            let pap = ws.dispatch_dot_blocking(self, DotSlot::PAp)?;
             if pap.abs() < 1.0e-30 {
-                // Degenerate search direction — give up gracefully.
                 return Ok(CgGpuResult {
                     x: Arc::new(x_buf),
                     residual: rr.sqrt() / bnorm,
@@ -347,11 +345,14 @@ impl FemCgGpuKernel {
                 });
             }
             let alpha = rr / pap;
-            // x += α · p ; r -= α · Ap. Batch into one encoder so we
-            // submit + sync once instead of twice.
-            self.dispatch_two_axpy(n, &x_buf, &p_buf, alpha, &r_buf, &ap_buf, -alpha)?;
+            // x += α · p ; r -= α · Ap. Both axpy uniforms get refreshed
+            // via `write_buffer` (no allocation) and both dispatches go
+            // into a single command encoder.
+            ws.update_axpy(&self.queue, AxpySlot::XplusAlphaP, alpha);
+            ws.update_axpy(&self.queue, AxpySlot::RminusAlphaAp, -alpha);
+            ws.dispatch_two_axpy(self, AxpySlot::XplusAlphaP, AxpySlot::RminusAlphaAp);
             // rr_new = ‖r‖².
-            let rr_new = self.dispatch_dot_blocking(n, &r_buf, &r_buf)?;
+            let rr_new = ws.dispatch_dot_blocking(self, DotSlot::Rr)?;
             residual = rr_new.sqrt() / bnorm;
             if residual <= tol {
                 return Ok(CgGpuResult {
@@ -361,8 +362,9 @@ impl FemCgGpuKernel {
                 });
             }
             let beta = rr_new / rr;
-            // p ← r + β·p (axpby with alpha=1, beta=β).
-            self.dispatch_axpby(n, &p_buf, &r_buf, 1.0, beta)?;
+            // p ← r + β·p — cached axpby slot, just refresh β.
+            ws.update_axpby(&self.queue, 1.0, beta);
+            ws.dispatch_axpby(self);
             rr = rr_new;
         }
         Ok(CgGpuResult {
@@ -408,357 +410,417 @@ impl FemCgGpuKernel {
         Ok(out)
     }
 
-    // ── Internal dispatchers ──────────────────────────────────────
+}
 
-    fn dispatch_axpy(&self, n: u32, a: &wgpu::Buffer, b: &wgpu::Buffer, alpha: f32) -> Result<()> {
-        let u = AxpyUniforms {
-            n,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            alpha,
-            _pad3: 0.0,
-            _pad4: 0.0,
-            _pad5: 0.0,
-        };
-        let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::axpy u"),
-            size: core::mem::size_of::<AxpyUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&u));
-        let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy io bg"),
-            layout: &self.layout_axpy_io,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b.as_entire_binding(),
-                },
-            ],
-        });
-        let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy u bg"),
-            layout: &self.layout_axpy_u,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: ubuf.as_entire_binding(),
-            }],
-        });
-        let groups = n.div_ceil(WG_SIZE).max(1);
-        let mut enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("molla::fem_cg::axpy enc"),
-            });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::fem_cg::axpy"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipe_axpy);
-            pass.set_bind_group(0, &bg_io, &[]);
-            pass.set_bind_group(1, &bg_u, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        self.queue.submit(std::iter::once(enc.finish()));
-        Ok(())
-    }
+// ── CG workspace + slot enums ─────────────────────────────────────────
+//
+// `CgWorkspace` is a per-solve cache of every GPU resource the inner
+// loop touches: uniform buffers (one per dispatch slot), bind groups
+// (one per slot for IO + uniform), partials/staging buffers for the
+// dot reductions. Hoisting all of these out of the iteration cuts
+// per-iter alloc traffic from ~12 bind groups + ~9 buffers down to
+// **zero** — only `write_buffer` updates of the four uniform scalars
+// and the unavoidable map_async/poll for the two dot syncs remain.
 
-    /// Batched `(x += α·p ; r += β·Ap)` — encoded into a single
-    /// command buffer so we submit once per CG iteration's update
-    /// step instead of twice. Each axpy is independent (writes to
-    /// disjoint buffers) so they can share the encoder.
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch_two_axpy(
-        &self,
+#[derive(Copy, Clone, Debug)]
+enum AxpySlot {
+    /// `x += α · p` — io = (x, p), uniform = `axpy_xp`.
+    XplusAlphaP,
+    /// `r -= α · Ap` — io = (r, Ap), uniform = `axpy_rap`. The α
+    /// stored in the uniform is `-alpha` (the kernel does `a += α·b`).
+    RminusAlphaAp,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum DotSlot {
+    /// `‖b‖²` — io = (b, b). Computed once at solve start.
+    Bb,
+    /// `‖r‖²` — io = (r, r). Computed once per CG iter.
+    Rr,
+    /// `pᵀ Ap` — io = (p, Ap). Computed once per CG iter.
+    PAp,
+}
+
+struct CgWorkspace {
+    n: u32,
+    n_groups: u32,
+    bytes_partials: u64,
+
+    // Uniform buffers — one per axpy slot + one shared dot uniform
+    // (n is the only varying field on the dot side; written once at
+    // workspace build). The `u_dot` field looks unused because we
+    // only access it through the cached bind group, but keeping the
+    // owning handle on the workspace is what keeps wgpu's internal
+    // references valid for the lifetime of the bind group.
+    #[allow(dead_code)]
+    u_axpy_xp: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpy_rap: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpby_p: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_dot: wgpu::Buffer,
+
+    // IO bind groups — one per (a, b) pair the loop ever touches.
+    bg_io_xp: wgpu::BindGroup,
+    bg_io_rap: wgpu::BindGroup,
+    bg_io_pr: wgpu::BindGroup,
+    bg_io_bb: wgpu::BindGroup,
+    bg_io_rr: wgpu::BindGroup,
+    bg_io_pap: wgpu::BindGroup,
+
+    // Uniform bind groups — one per uniform buffer.
+    bg_u_axpy_xp: wgpu::BindGroup,
+    bg_u_axpy_rap: wgpu::BindGroup,
+    bg_u_axpby_p: wgpu::BindGroup,
+    bg_u_dot: wgpu::BindGroup,
+
+    // Dot reduction scratch — partials buffer + staging readback,
+    // both sized once for `n_groups`.
+    partials: wgpu::Buffer,
+    staging: wgpu::Buffer,
+}
+
+impl CgWorkspace {
+    fn new(
+        k: &FemCgGpuKernel,
         n: u32,
-        a1: &wgpu::Buffer,
-        b1: &wgpu::Buffer,
-        alpha1: f32,
-        a2: &wgpu::Buffer,
-        b2: &wgpu::Buffer,
-        alpha2: f32,
-    ) -> Result<()> {
-        let u1 = AxpyUniforms {
-            n,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            alpha: alpha1,
-            _pad3: 0.0,
-            _pad4: 0.0,
-            _pad5: 0.0,
-        };
-        let u2 = AxpyUniforms {
-            n,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            alpha: alpha2,
-            _pad3: 0.0,
-            _pad4: 0.0,
-            _pad5: 0.0,
-        };
-        let ubuf1 = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::axpy u1"),
-            size: core::mem::size_of::<AxpyUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ubuf2 = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::axpy u2"),
-            size: core::mem::size_of::<AxpyUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&ubuf1, 0, bytemuck::bytes_of(&u1));
-        self.queue.write_buffer(&ubuf2, 0, bytemuck::bytes_of(&u2));
-
-        let bg_io1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy io1 bg"),
-            layout: &self.layout_axpy_io,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a1.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b1.as_entire_binding(),
-                },
-            ],
-        });
-        let bg_u1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy u1 bg"),
-            layout: &self.layout_axpy_u,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: ubuf1.as_entire_binding(),
-            }],
-        });
-        let bg_io2 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy io2 bg"),
-            layout: &self.layout_axpy_io,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a2.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b2.as_entire_binding(),
-                },
-            ],
-        });
-        let bg_u2 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpy u2 bg"),
-            layout: &self.layout_axpy_u,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: ubuf2.as_entire_binding(),
-            }],
-        });
-        let groups = n.div_ceil(WG_SIZE).max(1);
-        let mut enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("molla::fem_cg::axpy2 enc"),
-            });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::fem_cg::axpy2"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipe_axpy);
-            pass.set_bind_group(0, &bg_io1, &[]);
-            pass.set_bind_group(1, &bg_u1, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-            pass.set_bind_group(0, &bg_io2, &[]);
-            pass.set_bind_group(1, &bg_u2, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        self.queue.submit(std::iter::once(enc.finish()));
-        Ok(())
-    }
-
-    fn dispatch_axpby(
-        &self,
-        n: u32,
-        dst: &wgpu::Buffer,
-        src: &wgpu::Buffer,
-        alpha: f32,
-        beta: f32,
-    ) -> Result<()> {
-        let u = AxpbyUniforms {
-            n,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            alpha,
-            beta,
-            _pad3: 0.0,
-            _pad4: 0.0,
-        };
-        let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::axpby u"),
-            size: core::mem::size_of::<AxpbyUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&u));
-        let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpby io bg"),
-            layout: &self.layout_axpby_io,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: dst.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: src.as_entire_binding(),
-                },
-            ],
-        });
-        let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::axpby u bg"),
-            layout: &self.layout_axpby_u,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: ubuf.as_entire_binding(),
-            }],
-        });
-        let groups = n.div_ceil(WG_SIZE).max(1);
-        let mut enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("molla::fem_cg::axpby enc"),
-            });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::fem_cg::axpby"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipe_axpby);
-            pass.set_bind_group(0, &bg_io, &[]);
-            pass.set_bind_group(1, &bg_u, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        self.queue.submit(std::iter::once(enc.finish()));
-        Ok(())
-    }
-
-    /// `dot(a, b)` with a synchronous host-side reduction over the
-    /// (small) per-workgroup partial sums. The only place per-iter
-    /// where the GPU → CPU traffic is non-trivial — but `partials`
-    /// is at most `⌈n / 256⌉` × 4 B (≤ 1 KiB even at 256 K DoFs).
-    fn dispatch_dot_blocking(&self, n: u32, a: &wgpu::Buffer, b: &wgpu::Buffer) -> Result<f32> {
+        x: &wgpu::Buffer,
+        r: &wgpu::Buffer,
+        p: &wgpu::Buffer,
+        ap: &wgpu::Buffer,
+        b: &wgpu::Buffer,
+    ) -> Self {
         let n_groups = n.div_ceil(WG_SIZE).max(1);
-        let partial_bytes = (n_groups as u64).max(4) * 4;
-        let partials = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::dot partials"),
-            size: partial_bytes,
+        let bytes_partials = (n_groups as u64).max(4) * 4;
+
+        let make_uniform = |label: &str, size: u64| {
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let axpy_size = core::mem::size_of::<AxpyUniforms>() as u64;
+        let axpby_size = core::mem::size_of::<AxpbyUniforms>() as u64;
+        let dot_size = core::mem::size_of::<DotUniforms>() as u64;
+
+        let u_axpy_xp = make_uniform("molla::fem_cg::ws::u_axpy_xp", axpy_size);
+        let u_axpy_rap = make_uniform("molla::fem_cg::ws::u_axpy_rap", axpy_size);
+        let u_axpby_p = make_uniform("molla::fem_cg::ws::u_axpby_p", axpby_size);
+        let u_dot = make_uniform("molla::fem_cg::ws::u_dot", dot_size);
+
+        // Dot uniform's only field is `n`; write it once and never
+        // touch again.
+        k.queue.write_buffer(
+            &u_dot,
+            0,
+            bytemuck::bytes_of(&DotUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+
+        // axpby uniform: kernel reads (alpha, beta). For our `p ← r + β·p`
+        // alpha is always 1.0 — write that once and only refresh β
+        // per iter via `update_axpby`.
+        k.queue.write_buffer(
+            &u_axpby_p,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha: 1.0,
+                beta: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+
+        let make_io_axpy = |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpy_io,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: a.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: b.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let make_io_axpby = |label: &str, dst: &wgpu::Buffer, src: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpby_io,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: dst.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: src.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let make_io_dot = |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer, partials: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_dot_io,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: a.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: b.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: partials.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let make_u_bg = |label: &str, layout: &wgpu::BindGroupLayout, ubuf: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ubuf.as_entire_binding(),
+                }],
+            })
+        };
+
+        let partials = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::ws::partials"),
+            size: bytes_partials,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        // Zero the partials so any beyond-n_groups slots (rounded up
-        // for min-buffer-size compliance) sum to zero.
-        self.queue
-            .write_buffer(&partials, 0, &vec![0u8; partial_bytes as usize]);
-
-        let u = DotUniforms {
-            n,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-        };
-        let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::dot u"),
-            size: core::mem::size_of::<DotUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&u));
-        let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::dot io bg"),
-            layout: &self.layout_dot_io,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: partials.as_entire_binding(),
-                },
-            ],
-        });
-        let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::fem_cg::dot u bg"),
-            layout: &self.layout_dot_u,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: ubuf.as_entire_binding(),
-            }],
-        });
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem_cg::dot staging"),
-            size: partial_bytes,
+        let staging = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::ws::staging"),
+            size: bytes_partials,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let mut enc = self
+        Self {
+            n,
+            n_groups,
+            bytes_partials,
+            bg_io_xp: make_io_axpy("ws::bg_io_xp", x, p),
+            bg_io_rap: make_io_axpy("ws::bg_io_rap", r, ap),
+            bg_io_pr: make_io_axpby("ws::bg_io_pr", p, r),
+            bg_io_bb: make_io_dot("ws::bg_io_bb", b, b, &partials),
+            bg_io_rr: make_io_dot("ws::bg_io_rr", r, r, &partials),
+            bg_io_pap: make_io_dot("ws::bg_io_pap", p, ap, &partials),
+            bg_u_axpy_xp: make_u_bg("ws::bg_u_axpy_xp", &k.layout_axpy_u, &u_axpy_xp),
+            bg_u_axpy_rap: make_u_bg("ws::bg_u_axpy_rap", &k.layout_axpy_u, &u_axpy_rap),
+            bg_u_axpby_p: make_u_bg("ws::bg_u_axpby_p", &k.layout_axpby_u, &u_axpby_p),
+            bg_u_dot: make_u_bg("ws::bg_u_dot", &k.layout_dot_u, &u_dot),
+            u_axpy_xp,
+            u_axpy_rap,
+            u_axpby_p,
+            u_dot,
+            partials,
+            staging,
+        }
+    }
+
+    /// Refresh the α scalar on a cached axpy uniform. Cheap — just a
+    /// `write_buffer` of the 32-byte uniform struct (the `n` field
+    /// matches what we wrote at construction; `alpha` is the only
+    /// thing that changes per iter).
+    fn update_axpy(&self, queue: &wgpu::Queue, slot: AxpySlot, alpha: f32) {
+        let buf = match slot {
+            AxpySlot::XplusAlphaP => &self.u_axpy_xp,
+            AxpySlot::RminusAlphaAp => &self.u_axpy_rap,
+        };
+        queue.write_buffer(
+            buf,
+            0,
+            bytemuck::bytes_of(&AxpyUniforms {
+                n: self.n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha,
+                _pad3: 0.0,
+                _pad4: 0.0,
+                _pad5: 0.0,
+            }),
+        );
+    }
+
+    /// Refresh the (α, β) scalars on the cached `p ← α·r + β·p`
+    /// uniform. In the inner loop we only ever pass `α = 1.0`, but
+    /// keeping both knobs lets the workspace stay general.
+    fn update_axpby(&self, queue: &wgpu::Queue, alpha: f32, beta: f32) {
+        queue.write_buffer(
+            &self.u_axpby_p,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n: self.n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha,
+                beta,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+    }
+
+    fn dispatch_single_axpy(&self, k: &FemCgGpuKernel, slot: AxpySlot) {
+        let (bg_io, bg_u) = match slot {
+            AxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            AxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("molla::fem_cg::dot enc"),
+                label: Some("molla::fem_cg::ws::axpy enc"),
             });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::fem_cg::dot"),
+                label: Some("molla::fem_cg::ws::axpy"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipe_dot);
-            pass.set_bind_group(0, &bg_io, &[]);
-            pass.set_bind_group(1, &bg_u, &[]);
-            pass.dispatch_workgroups(n_groups, 1, 1);
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, bg_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
         }
-        enc.copy_buffer_to_buffer(&partials, 0, &staging, 0, partial_bytes);
-        self.queue.submit(std::iter::once(enc.finish()));
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
 
-        let slice = staging.slice(..);
+    /// Two independent axpy dispatches in a single command encoder.
+    /// Used in the CG loop to update `x += α·p` and `r -= α·Ap` with
+    /// one submit instead of two.
+    fn dispatch_two_axpy(&self, k: &FemCgGpuKernel, s1: AxpySlot, s2: AxpySlot) {
+        let (bg1_io, bg1_u) = match s1 {
+            AxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            AxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let (bg2_io, bg2_u) = match s2 {
+            AxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            AxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::ws::axpy2 enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::ws::axpy2"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, bg1_io, &[]);
+            pass.set_bind_group(1, bg1_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+            pass.set_bind_group(0, bg2_io, &[]);
+            pass.set_bind_group(1, bg2_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    fn dispatch_axpby(&self, k: &FemCgGpuKernel) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::ws::axpby enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::ws::axpby"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpby);
+            pass.set_bind_group(0, &self.bg_io_pr, &[]);
+            pass.set_bind_group(1, &self.bg_u_axpby_p, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// `dot` with the dispatch + readback chained into a single
+    /// command encoder, then `map_async + poll` to retrieve the
+    /// per-workgroup partial sums and reduce on the host.
+    fn dispatch_dot_blocking(&self, k: &FemCgGpuKernel, slot: DotSlot) -> Result<f32> {
+        let bg_io = match slot {
+            DotSlot::Bb => &self.bg_io_bb,
+            DotSlot::Rr => &self.bg_io_rr,
+            DotSlot::PAp => &self.bg_io_pap,
+        };
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::ws::dot enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::ws::dot"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_dot);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, &self.bg_u_dot, &[]);
+            pass.dispatch_workgroups(self.n_groups, 1, 1);
+        }
+        // Zero the partials BEFORE the kernel runs (the kernel does
+        // `partials[gid] = workgroup_sum`, so any stale value would
+        // be overwritten — but the buffer might be padded to a 16-byte
+        // minimum and those padding slots need to read as zero in the
+        // host-side reduction below). We zero via a queue write at the
+        // start of the dispatch's submission cycle; cheap because it's
+        // a tiny buffer.
+        k.queue
+            .write_buffer(&self.partials, 0, &vec![0u8; self.bytes_partials as usize]);
+        enc.copy_buffer_to_buffer(&self.partials, 0, &self.staging, 0, self.bytes_partials);
+        k.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = self.staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device
+        k.device
             .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Error::Gpu(format!("fem_cg dot poll: {e:?}")))?;
+            .map_err(|e| Error::Gpu(format!("fem_cg ws dot poll: {e:?}")))?;
         rx.recv()
-            .map_err(|e| Error::Gpu(format!("fem_cg dot recv: {e}")))?
-            .map_err(|e| Error::Gpu(format!("fem_cg dot map: {e:?}")))?;
+            .map_err(|e| Error::Gpu(format!("fem_cg ws dot recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg ws dot map: {e:?}")))?;
         let mapped = slice.get_mapped_range();
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
-        // Sum only the actually-used groups (the buffer might be
-        // padded up to a 16-byte minimum).
         let mut sum: f32 = 0.0;
-        for v in parts.iter().take(n_groups as usize) {
+        for v in parts.iter().take(self.n_groups as usize) {
             sum += *v;
         }
         drop(mapped);
-        staging.unmap();
+        self.staging.unmap();
         Ok(sum)
     }
 }
