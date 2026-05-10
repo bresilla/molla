@@ -1,9 +1,10 @@
 //! Joint enums + DOF accounting.
 //!
 //! Mirrors Newton's `JointType` shape (see
-//! `xtra/newton/newton/_src/sim/enums.py`). Stage 3.0 ships
-//! `Revolute`, `Prismatic`, `Fixed`, `Free`; ball / distance / D6 /
-//! cable arrive in stage 3.x as needed.
+//! `xtra/newton/newton/_src/sim/enums.py`). Supports `Revolute`,
+//! `Prismatic`, `Fixed`, `Free`, `Ball`, `Distance`, and `D6`.
+//! [`EqualityType`] covers ball-weld, weld, and joint-mimic
+//! equality constraints (Stage 32).
 
 use crate::math::Real;
 

@@ -1,9 +1,10 @@
 //! Forward kinematics for articulated systems.
 //!
 //! [`eval_fk`] walks the joint list in declaration order and writes
-//! each child body's world transform to `state.body_q`. Single-chain
-//! topologies are required at stage 3.0 — Featherstone proper handles
-//! multi-branch trees and adds dynamics in stage 3.1.
+//! each child body's world transform to `state.body_q`. The full
+//! Featherstone solver in [`crate::solvers::FeatherstoneSolver`]
+//! handles multi-branch trees and dynamics — `eval_fk` is the
+//! pose-only "kinematics" subset suitable for IK targets and tests.
 
 use crate::core::Result;
 use crate::math::{Quat, Real, Transform, Vec3};
