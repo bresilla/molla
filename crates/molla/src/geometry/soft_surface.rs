@@ -70,6 +70,13 @@ pub struct SoftSurface {
     /// Source cloth mesh identifier when `kind == Cloth`; `None` for
     /// tet surfaces.
     pub cloth_mesh_id: Option<ClothMeshId>,
+    /// Stage 33.3 — whether this surface participates in self-
+    /// collision. Default `false` preserves Stage 33's cross-mesh-
+    /// only behaviour (same-surface VT pairs are skipped). When
+    /// `true`, the VT contact gather emits same-surface pairs except
+    /// for triangles topologically incident to the vertex (looked up
+    /// via `Model.soft_vertex_incident_tris`).
+    pub self_collision: bool,
 }
 
 /// Compute the boundary (outer-surface) triangles of a tet soup via

@@ -403,6 +403,14 @@ pub struct ModelBuilder {
     /// for each cloth mesh. Length == cloth_mesh_first_particle.len() + 1.
     cloth_mesh_tri_offsets: Vec<u32>,
 
+    // Stage 33.3 — per-mesh "self-collision enabled" toggle. Indexed
+    // parallel to the corresponding `tet_mesh_*` / `cloth_mesh_*`
+    // arrays. The build step copies these into the matching
+    // `SoftSurface.self_collision` fields. Default `false` preserves
+    // Stage 33's cross-mesh-only behaviour.
+    tet_mesh_self_collision: Vec<bool>,
+    cloth_mesh_self_collision: Vec<bool>,
+
     // Body arrays.
     body_mass: Vec<Real>,
     body_inv_mass: Vec<Real>,
@@ -917,7 +925,24 @@ impl ModelBuilder {
         let v_count = if vmax >= vmin { vmax - vmin + 1 } else { 0 };
         self.tet_mesh_vertex_first.push(v_first);
         self.tet_mesh_vertex_count.push(v_count);
+        // Stage 33.3 — default this mesh to "no self-collision".
+        // Callers opt in via `set_tet_mesh_self_collision` or the
+        // post-build `Model::set_soft_surface_self_collision` API.
+        self.tet_mesh_self_collision.push(false);
         Ok(TetMeshId(mesh_id as u32))
+    }
+
+    /// Stage 33.3 — toggle self-collision for the named tet mesh.
+    /// Defaults to `false` (no self-contact, matches Stage 33's
+    /// cross-mesh-only behaviour). Out-of-range ids are silently
+    /// ignored — the typical caller pattern is "build → maybe set →
+    /// finalise" so the flag-set call only matters when a tet mesh
+    /// was actually added.
+    pub fn set_tet_mesh_self_collision(&mut self, id: TetMeshId, enable: bool) {
+        let idx = id.index();
+        if idx < self.tet_mesh_self_collision.len() {
+            self.tet_mesh_self_collision[idx] = enable;
+        }
     }
 
     /// Add a triangle (CCW) referencing three particles. Used for
@@ -1126,8 +1151,21 @@ impl ModelBuilder {
         self.cloth_mesh_tri_offsets.push(tri_off_end);
         self.cloth_mesh_first_particle.push(first);
         self.cloth_mesh_particle_count.push(v_count);
+        // Stage 33.3 — default cloth meshes to "no self-collision".
+        self.cloth_mesh_self_collision.push(false);
 
         (first, nx, ny)
+    }
+
+    /// Stage 33.3 — toggle self-collision for the named cloth mesh.
+    /// `cloth_mesh_id` is the 0-based index returned implicitly by
+    /// the `add_cloth_grid*` push order (first cloth grid added is
+    /// id 0, second is id 1, etc.). Out-of-range ids are silently
+    /// ignored.
+    pub fn set_cloth_mesh_self_collision(&mut self, cloth_mesh_id: usize, enable: bool) {
+        if cloth_mesh_id < self.cloth_mesh_self_collision.len() {
+            self.cloth_mesh_self_collision[cloth_mesh_id] = enable;
+        }
     }
 
     /// Pin particle `i` in place by setting its mass to zero.
@@ -2435,6 +2473,11 @@ impl ModelBuilder {
                 .get(m)
                 .copied()
                 .unwrap_or(0);
+            let self_coll = self
+                .tet_mesh_self_collision
+                .get(m)
+                .copied()
+                .unwrap_or(false);
             soft_surfaces.push(crate::geometry::SoftSurface {
                 kind: crate::geometry::SoftSurfaceKind::TetMesh,
                 vertex_offset: v_first,
@@ -2443,6 +2486,7 @@ impl ModelBuilder {
                 tri_count: bnd.len() as u32,
                 tet_mesh_id: Some(crate::sim::TetMeshId(m as u32)),
                 cloth_mesh_id: None,
+                self_collision: self_coll,
             });
         }
         let n_cloth_meshes = self.cloth_mesh_first_particle.len();
@@ -2457,6 +2501,11 @@ impl ModelBuilder {
                     self.tri_indices[t * 3 + 2],
                 ]);
             }
+            let self_coll = self
+                .cloth_mesh_self_collision
+                .get(m)
+                .copied()
+                .unwrap_or(false);
             soft_surfaces.push(crate::geometry::SoftSurface {
                 kind: crate::geometry::SoftSurfaceKind::Cloth,
                 vertex_offset: self.cloth_mesh_first_particle[m],
@@ -2465,7 +2514,41 @@ impl ModelBuilder {
                 tri_count: (tri_hi - tri_lo) as u32,
                 tet_mesh_id: None,
                 cloth_mesh_id: Some(crate::geometry::ClothMeshId(m as u32)),
+                self_collision: self_coll,
             });
+        }
+
+        // Stage 33.3 — build the per-vertex incident-tri CSR over the
+        // flat `soft_surface_tris` array. One pass: count incidence
+        // per vertex, prefix-sum into offsets, then fill the payload.
+        // The self-collision filter in `gather_vt_contacts` walks this
+        // in O(incident-tris-per-vertex) (typically 6 for tets / 6 for
+        // cloth) and skips candidate tris that are in the set.
+        let mut svit_offsets: Vec<u32> = vec![0u32; particle_count + 1];
+        for tri in &soft_surface_tris {
+            for &v in tri {
+                let v = v as usize;
+                if v < particle_count {
+                    svit_offsets[v + 1] += 1;
+                }
+            }
+        }
+        for i in 1..svit_offsets.len() {
+            svit_offsets[i] += svit_offsets[i - 1];
+        }
+        let total = *svit_offsets.last().unwrap_or(&0) as usize;
+        let mut svit: Vec<u32> = vec![0u32; total];
+        // Cursor copy of offsets → bumped per insertion.
+        let mut cursor: Vec<u32> = svit_offsets.clone();
+        for (tri_global, tri) in soft_surface_tris.iter().enumerate() {
+            for &v in tri {
+                let v = v as usize;
+                if v < particle_count {
+                    let pos = cursor[v] as usize;
+                    svit[pos] = tri_global as u32;
+                    cursor[v] += 1;
+                }
+            }
         }
 
         Ok(Model {
@@ -2538,6 +2621,8 @@ impl ModelBuilder {
             ),
             soft_surfaces,
             soft_surface_tris,
+            soft_vertex_incident_tris_offsets: svit_offsets,
+            soft_vertex_incident_tris: svit,
             vertex_adjacent_tets_offsets: Buffer::from_vec(
                 vertex_adjacent_tets_offsets,
                 s,
