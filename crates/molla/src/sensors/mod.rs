@@ -17,6 +17,10 @@
 //! - [`frame_transform`] — pose tracking with optional smoothing.
 //! - [`tiled_camera`] — tiled depth/colour/normal/albedo camera for
 //!   RL pixel observations (Stage 14).
+//! - [`raycast_adjoint`] — CPU finite-difference adjoint for the
+//!   raycast pipeline (Stage 37.7). Differentiable raycasting for
+//!   inverse-rendering optimisations; CPU-only by design (FD probes
+//!   the forward pass `O(P · N_rays)` times, no GPU buffers needed).
 
 #[cfg(feature = "gpu")]
 pub mod contact;
@@ -26,6 +30,7 @@ pub mod frame_transform;
 pub mod imu;
 #[cfg(feature = "gpu")]
 pub mod raycast;
+pub mod raycast_adjoint;
 #[cfg(feature = "gpu")]
 pub mod tiled_camera;
 
@@ -37,5 +42,9 @@ pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 pub use imu::{ImuMount, ImuReading, ImuSensor};
 #[cfg(feature = "gpu")]
 pub use raycast::{RayHit, Raycaster};
+pub use raycast_adjoint::{
+    compute_grad_raycast, compute_loss_l2, forward_with_loss, Ray as DiffRay,
+    RayScene, SdfShape as DiffSdfShape,
+};
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraChannels, TiledCamera, TiledCameraConfig};
