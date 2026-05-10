@@ -48,6 +48,8 @@ pub struct FemGpuKernel {
 
     pipe_assemble_tet: wgpu::ComputePipeline,
     pipe_assemble_mass_tet: wgpu::ComputePipeline,
+    pipe_assemble_tri: wgpu::ComputePipeline,
+    pipe_assemble_mass_tri: wgpu::ComputePipeline,
     pipe_matvec: wgpu::ComputePipeline,
 
     layout_asm_mesh: wgpu::BindGroupLayout,
@@ -117,6 +119,26 @@ impl FemGpuKernel {
                 cache: None,
             },
         );
+        let pipe_assemble_tri = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem::assemble_p1_stiffness_tri"),
+                layout: Some(&asm_pipeline_layout),
+                module: &asm_shader,
+                entry_point: Some("assemble_p1_stiffness_tri"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+        let pipe_assemble_mass_tri = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem::assemble_p1_mass_tri"),
+                layout: Some(&asm_pipeline_layout),
+                module: &asm_shader,
+                entry_point: Some("assemble_p1_mass_tri"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
 
         // ── Matvec pipeline ────────────────────────────────────────
         let mv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -162,6 +184,8 @@ impl FemGpuKernel {
             queue,
             pipe_assemble_tet,
             pipe_assemble_mass_tet,
+            pipe_assemble_tri,
+            pipe_assemble_mass_tri,
             pipe_matvec,
             layout_asm_mesh,
             layout_asm_csr,
@@ -200,14 +224,32 @@ impl FemGpuKernel {
     /// the standard mass matrix, `ρ` for inertial scaling, `c²` for
     /// the wave-equation modal mass). Idempotent — clears the CSR
     /// before scattering so repeated calls don't accumulate.
-    ///
-    /// Tet meshes only in v1; tri-mesh mass remains CPU-only.
     pub fn assemble_mass(&self, gpu_data: &FemGpuData, coeff: f32) -> Result<()> {
         self.dispatch_assembly(
             gpu_data,
             coeff,
             &self.pipe_assemble_mass_tet,
             "assemble_mass",
+        )
+    }
+
+    /// Triangle-mesh equivalent of [`Self::assemble`] — P1 stiffness
+    /// for 2D meshes (the (x, y) projection of vertex positions; `z`
+    /// is ignored). Used for the wave-equation height-field, the
+    /// fractional-step NS predictor on a triangulated 2D domain, and
+    /// any other 2D PDE built on `tri_grid_2d`.
+    pub fn assemble_tri(&self, gpu_data: &FemGpuData, coeff: f32) -> Result<()> {
+        self.dispatch_assembly(gpu_data, coeff, &self.pipe_assemble_tri, "assemble_tri")
+    }
+
+    /// Triangle-mesh equivalent of [`Self::assemble_mass`] — P1
+    /// consistent mass `M[i, j] = coeff · ∫ φᵢ φⱼ dA` for 2D meshes.
+    pub fn assemble_mass_tri(&self, gpu_data: &FemGpuData, coeff: f32) -> Result<()> {
+        self.dispatch_assembly(
+            gpu_data,
+            coeff,
+            &self.pipe_assemble_mass_tri,
+            "assemble_mass_tri",
         )
     }
 

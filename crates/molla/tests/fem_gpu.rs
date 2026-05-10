@@ -190,6 +190,86 @@ fn gpu_p1_mass_matches_cpu_oracle() {
 
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+fn gpu_p1_stiffness_tri_matches_cpu_oracle() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // 16×16 tri grid on the unit square (2D). Same `tri_grid_2d`
+    // builder the wave + NS scenes use.
+    let mesh = FemMesh::tri_grid_2d(16, 16, 1.0, 1.0);
+    let alpha: Real = 1.0;
+    let k_cpu = assemble_stiffness(&mesh, alpha);
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let gpu_data = FemGpuData::upload(&device, &queue, &mesh, &k_cpu).expect("upload");
+    let kernel = FemGpuKernel::new(device.clone(), queue.clone());
+    kernel
+        .assemble_tri(&gpu_data, alpha as f32)
+        .expect("assemble_tri dispatch");
+
+    let gpu_values = gpu_data.read_csr_values(&device, &queue).expect("readback");
+    assert_eq!(gpu_values.len(), k_cpu.values.len());
+
+    let mut max_abs_err: f32 = 0.0;
+    for (i, (gpu, cpu)) in gpu_values.iter().zip(k_cpu.values.iter()).enumerate() {
+        let cpu_f32 = *cpu as f32;
+        let abs = (*gpu - cpu_f32).abs();
+        max_abs_err = max_abs_err.max(abs);
+        assert!(
+            abs < 1e-4,
+            "tri stiffness slot {i}: GPU = {gpu}, CPU = {cpu_f32}, abs_err = {abs}",
+        );
+    }
+    eprintln!(
+        "gpu_p1_stiffness_tri_matches_cpu_oracle: \
+         {} nnz, max_abs_err = {max_abs_err:.2e}",
+        gpu_values.len(),
+    );
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+fn gpu_p1_mass_tri_matches_cpu_oracle() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mesh = FemMesh::tri_grid_2d(16, 16, 1.0, 1.0);
+    let coeff: Real = 1.0;
+    let m_cpu = assemble_mass(&mesh, coeff);
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let gpu_data = FemGpuData::upload(&device, &queue, &mesh, &m_cpu).expect("upload");
+    let kernel = FemGpuKernel::new(device.clone(), queue.clone());
+    kernel
+        .assemble_mass_tri(&gpu_data, coeff as f32)
+        .expect("assemble_mass_tri dispatch");
+
+    let gpu_values = gpu_data.read_csr_values(&device, &queue).expect("readback");
+    assert_eq!(gpu_values.len(), m_cpu.values.len());
+
+    let mut max_abs_err: f32 = 0.0;
+    for (i, (gpu, cpu)) in gpu_values.iter().zip(m_cpu.values.iter()).enumerate() {
+        let cpu_f32 = *cpu as f32;
+        let abs = (*gpu - cpu_f32).abs();
+        max_abs_err = max_abs_err.max(abs);
+        assert!(
+            abs < 1e-4,
+            "tri mass slot {i}: GPU = {gpu}, CPU = {cpu_f32}, abs_err = {abs}",
+        );
+    }
+    eprintln!(
+        "gpu_p1_mass_tri_matches_cpu_oracle: \
+         {} nnz, max_abs_err = {max_abs_err:.2e}",
+        gpu_values.len(),
+    );
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
 fn gpu_csr_matvec_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

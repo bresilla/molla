@@ -152,6 +152,93 @@ fn assemble_p1_stiffness_tet(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// ─── P1 stiffness + mass (tri, 2D) ───────────────────────────────────
+// Triangles project to the (x, y) plane — z is ignored. The element
+// stiffness pattern is identical to the tet kernel; only the local
+// area + 2D shape gradients differ.
+
+fn tri_area_2d(p0: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+    let dx1 = p1.x - p0.x;
+    let dy1 = p1.y - p0.y;
+    let dx2 = p2.x - p0.x;
+    let dy2 = p2.y - p0.y;
+    return 0.5 * abs(dx1 * dy2 - dx2 * dy1);
+}
+
+// Returns the three 2D gradients [dphi_i/dx, dphi_i/dy] as vec2<f32>s.
+// Mirrors `tri_shape_grads_2d` in `crates/molla/src/fem/element.rs`:
+//   bᵢ = y_{i+1} − y_{i+2},  cᵢ = x_{i+2} − x_{i+1}
+//   ∇φᵢ = (bᵢ, cᵢ) / (2 A_signed)
+fn tri_shape_grads_2d(p0: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> array<vec2<f32>, 3> {
+    let two_a_signed = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+    let inv = 1.0 / two_a_signed;
+    let g0 = vec2<f32>(p1.y - p2.y, p2.x - p1.x) * inv;
+    let g1 = vec2<f32>(p2.y - p0.y, p0.x - p2.x) * inv;
+    let g2 = vec2<f32>(p0.y - p1.y, p1.x - p0.x) * inv;
+    return array<vec2<f32>, 3>(g0, g1, g2);
+}
+
+@compute @workgroup_size(WG_SIZE)
+fn assemble_p1_stiffness_tri(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let cid = gid.x;
+    if (cid >= u.cell_count) {
+        return;
+    }
+    let off = mesh_cell_offsets[cid];
+    let i0 = mesh_cells[off + 0u];
+    let i1 = mesh_cells[off + 1u];
+    let i2 = mesh_cells[off + 2u];
+    let p0 = mesh_vertices[i0].xyz;
+    let p1 = mesh_vertices[i1].xyz;
+    let p2 = mesh_vertices[i2].xyz;
+    let area = tri_area_2d(p0, p1, p2);
+    let grads = tri_shape_grads_2d(p0, p1, p2);
+    let verts = array<u32, 3>(i0, i1, i2);
+    for (var i: u32 = 0u; i < 3u; i = i + 1u) {
+        let row = verts[i];
+        for (var j: u32 = 0u; j < 3u; j = j + 1u) {
+            let col = verts[j];
+            let val = u.coeff * area * dot(grads[i], grads[j]);
+            if (val == 0.0) { continue; }
+            let slot = find_slot(row, col);
+            if (slot != 0xFFFFFFFFu) {
+                atomic_add_csr(slot, val);
+            }
+        }
+    }
+}
+
+@compute @workgroup_size(WG_SIZE)
+fn assemble_p1_mass_tri(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let cid = gid.x;
+    if (cid >= u.cell_count) {
+        return;
+    }
+    let off = mesh_cell_offsets[cid];
+    let i0 = mesh_cells[off + 0u];
+    let i1 = mesh_cells[off + 1u];
+    let i2 = mesh_cells[off + 2u];
+    let p0 = mesh_vertices[i0].xyz;
+    let p1 = mesh_vertices[i1].xyz;
+    let p2 = mesh_vertices[i2].xyz;
+    let area = tri_area_2d(p0, p1, p2);
+    // Consistent P1 tri mass: M[i,j] = (area / 12) * (1 + delta_ij).
+    let scale = u.coeff * area / 12.0;
+    let verts = array<u32, 3>(i0, i1, i2);
+    for (var i: u32 = 0u; i < 3u; i = i + 1u) {
+        let row = verts[i];
+        for (var j: u32 = 0u; j < 3u; j = j + 1u) {
+            let col = verts[j];
+            let mass_coeff = select(1.0, 2.0, i == j);
+            let val = scale * mass_coeff;
+            let slot = find_slot(row, col);
+            if (slot != 0xFFFFFFFFu) {
+                atomic_add_csr(slot, val);
+            }
+        }
+    }
+}
+
 // ─── P1 mass matrix (tet) ────────────────────────────────────────────
 // Consistent mass M_e[i, j] = coeff * vol * (1 + delta_ij) / 20
 // (see Hughes, "The Finite Element Method", 1987, eq. 4.5.13). The
