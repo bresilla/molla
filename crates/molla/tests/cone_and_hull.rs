@@ -7,7 +7,6 @@ use molla::geometry::{shape_world_aabb, support_with_hulls, CollisionPipeline};
 use molla::math::{Mat3, SpatialInertia, Transform, Vec3 as V3};
 use molla::prelude::*;
 use molla::sim::ShapeGeometry;
-use molla::solvers::Solver as _;
 
 fn box_inertia(mass: f64, half: V3) -> Mat3 {
     let h2 = half * half;

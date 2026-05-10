@@ -5,7 +5,6 @@ use molla::geometry::{shape_world_aabb, CollisionPipeline};
 use molla::math::{Mat3, SpatialInertia, Transform, Vec3 as V3};
 use molla::prelude::*;
 use molla::sim::{Heightfield, SdfShape};
-use molla::solvers::Solver as _;
 
 fn sphere_inertia(mass: f64, r: f64) -> Mat3 {
     let i = (2.0 / 5.0) * mass * r * r;

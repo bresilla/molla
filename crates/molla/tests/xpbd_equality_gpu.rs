@@ -9,7 +9,6 @@ use molla::compute::Engine;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Mat3, Quat, Real, SpatialInertia, Transform, Vec3};
 use molla::prelude::*;
-use molla::solvers::Solver as _;
 
 /// Mirror of `xpbd_equality.rs::connect_pins_two_bodies_under_gravity`
 /// but driven by the **GPU** solver. Two bodies (one kinematic

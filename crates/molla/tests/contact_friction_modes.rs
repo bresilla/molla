@@ -13,7 +13,6 @@ use molla::core::BodyId;
 use molla::geometry::CollisionPipeline;
 use molla::math::{Mat3, SpatialInertia, SpatialVector, Transform, Vec3 as V3};
 use molla::prelude::*;
-use molla::solvers::Solver as _;
 
 fn sphere_inertia(mass: f64, r: f64) -> Mat3 {
     let i = (2.0 / 5.0) * mass * r * r;
