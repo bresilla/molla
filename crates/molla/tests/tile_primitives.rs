@@ -3,7 +3,7 @@
 //! GPU parity tests live in `tile_primitives_gpu.rs` (gated behind the
 //! `gpu` feature + `#[ignore]`).
 
-use molla::compute::tile_matmul;
+use molla::compute::{tile_block_cholesky, tile_matmul};
 
 /// Tiny LCG so tests are dependency-free and reproducible.
 struct Lcg(u64);
@@ -118,5 +118,82 @@ fn tile_matmul_cpu_rectangular_shapes_compose() {
 fn tile_matmul_cpu_rejects_shape_mismatch() {
     let mut c = vec![0.0_f32; 4];
     let err = tile_matmul::matmul_cpu(&[1.0, 2.0], &[3.0, 4.0], &mut c, 2, 2, 2);
+    assert!(err.is_err());
+}
+
+// ── B — block Cholesky ───────────────────────────────────────────────
+
+/// Build a random SPD matrix `M Mᵀ + n·I` of size `n × n`.
+fn random_spd(rng: &mut Lcg, n: usize) -> Vec<f32> {
+    let mut m = vec![0.0_f32; n * n];
+    for v in m.iter_mut() {
+        *v = rng.signed();
+    }
+    let mut a = vec![0.0_f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0_f32;
+            for k in 0..n {
+                s += m[i * n + k] * m[j * n + k];
+            }
+            a[i * n + j] = s;
+            if i == j {
+                a[i * n + j] += n as f32;
+            }
+        }
+    }
+    a
+}
+
+#[test]
+fn tile_block_cholesky_cpu_factorises_64x64_spd() {
+    let n = 64;
+    let mut rng = Lcg::new(11);
+    let a = random_spd(&mut rng, n);
+    let mut l = a.clone();
+    tile_block_cholesky::cholesky_cpu(&mut l, n).unwrap();
+    let err = tile_block_cholesky::frobenius_recon_error(&a, &l, n);
+    assert!(err < 1.0e-3, "‖L Lᵀ − A‖_F = {err}");
+
+    // Also confirm the strict upper triangle is zero.
+    for i in 0..n {
+        for j in (i + 1)..n {
+            assert_eq!(l[i * n + j], 0.0);
+        }
+    }
+}
+
+#[test]
+fn tile_block_cholesky_cpu_diagonal_matches_sqrt() {
+    // A = diag(d). L = diag(sqrt(d)).
+    let n = 8;
+    let mut a = vec![0.0_f32; n * n];
+    for i in 0..n {
+        a[i * n + i] = (i + 1) as f32 * (i + 1) as f32; // 1, 4, 9, 16, ...
+    }
+    tile_block_cholesky::cholesky_cpu(&mut a, n).unwrap();
+    for i in 0..n {
+        assert!((a[i * n + i] - (i + 1) as f32).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn tile_block_cholesky_cpu_identity_returns_identity() {
+    let n = 16;
+    let mut a = vec![0.0_f32; n * n];
+    for i in 0..n {
+        a[i * n + i] = 1.0;
+    }
+    let orig = a.clone();
+    tile_block_cholesky::cholesky_cpu(&mut a, n).unwrap();
+    for (g, e) in a.iter().zip(orig.iter()) {
+        assert!((g - e).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn tile_block_cholesky_cpu_rejects_shape_mismatch() {
+    let mut a = vec![0.0_f32; 4];
+    let err = tile_block_cholesky::cholesky_cpu(&mut a, 3);
     assert!(err.is_err());
 }

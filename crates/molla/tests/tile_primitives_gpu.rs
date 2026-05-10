@@ -6,6 +6,7 @@
 
 #![cfg(feature = "gpu")]
 
+use molla::compute::tile_block_cholesky::{self, TileBlockCholeskyKernel};
 use molla::compute::tile_matmul::{self, TileMatmulKernel};
 use molla::compute::Engine;
 
@@ -64,6 +65,77 @@ fn tile_matmul_gpu_matches_cpu_256_x_128_x_256() {
         max_err = max_err.max((g - e).abs());
     }
     assert!(max_err < 1.0e-4, "max_err = {max_err}");
+}
+
+// ── B — block Cholesky ───────────────────────────────────────────────
+
+fn random_spd_for_gpu(rng: &mut Lcg, n: usize) -> Vec<f32> {
+    let mut m = vec![0.0_f32; n * n];
+    for v in m.iter_mut() {
+        *v = rng.signed();
+    }
+    let mut a = vec![0.0_f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0_f32;
+            for k in 0..n {
+                s += m[i * n + k] * m[j * n + k];
+            }
+            a[i * n + j] = s;
+            if i == j {
+                a[i * n + j] += n as f32;
+            }
+        }
+    }
+    a
+}
+
+#[test]
+#[ignore]
+fn tile_block_cholesky_gpu_factorises_64x64_spd() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileBlockCholeskyKernel::new(device);
+
+    let n = 64;
+    let mut rng = Lcg::new(201);
+    let a = random_spd_for_gpu(&mut rng, n);
+    let mut l = a.clone();
+    kernel.dispatch_blocking(device, queue, &mut l, n).unwrap();
+    let err = tile_block_cholesky::frobenius_recon_error(&a, &l, n);
+    assert!(err < 1.0e-3, "GPU ‖L Lᵀ − A‖_F = {err}");
+}
+
+#[test]
+#[ignore]
+fn tile_block_cholesky_gpu_matches_cpu_128x128() {
+    let Some(engine) = make_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = TileBlockCholeskyKernel::new(device);
+
+    let n = 128;
+    let mut rng = Lcg::new(202);
+    let a = random_spd_for_gpu(&mut rng, n);
+    let mut l_gpu = a.clone();
+    let mut l_cpu = a.clone();
+    kernel.dispatch_blocking(device, queue, &mut l_gpu, n).unwrap();
+    tile_block_cholesky::cholesky_cpu(&mut l_cpu, n).unwrap();
+
+    let mut max_err: f32 = 0.0;
+    for (g, e) in l_gpu.iter().zip(l_cpu.iter()) {
+        max_err = max_err.max((g - e).abs());
+    }
+    // Cholesky + sqrt amplifies f32 round-off; the test tolerance
+    // covers element-wise drift between CPU and GPU executions.
+    assert!(max_err < 1.0e-2, "max element err = {max_err}");
 }
 
 #[test]
