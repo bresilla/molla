@@ -428,22 +428,34 @@ pub fn gather_ee_contacts(
                 let da = a1 - a0;
                 let db = b1 - b0;
                 let cross = da.cross(db);
-                let cross_len = cross.length();
-                let normal = if cross_len > 1.0e-9 {
-                    let mut n = cross / cross_len;
-                    // Sign-align with `(p_a - p_b)` so the penalty
-                    // pushes apart along the same direction the
-                    // closest-point displacement implies.
-                    let pa_pb = res.point_a - res.point_b;
-                    if pa_pb.dot(n) < 0.0 {
-                        n = -n;
-                    }
-                    n
-                } else if res.dist > 1.0e-9 {
-                    (res.point_a - res.point_b) / res.dist
-                } else {
-                    Vec3::Y
-                };
+                let cross_len2 = cross.length_squared();
+                // Near-parallel gate: skip when the edges are
+                // close to colinear / coplanar in their projection
+                // (sin angle below `EE_PARALLEL_SIN`). For two
+                // perfectly perpendicular edges
+                // |cross|² = |da|² · |db|²; for parallel edges it
+                // is zero. The threshold below corresponds to
+                // ~5.7° between the edges. Below that the EE cross
+                // normal is unstable and the contact is degenerate
+                // (the same penetration is captured by VT contacts
+                // at one of the segment endpoints — see the
+                // EE_INTERIOR_EPS endpoint gate above).
+                const EE_PARALLEL_SIN: Real = 0.1;
+                let parallel_thresh =
+                    EE_PARALLEL_SIN * EE_PARALLEL_SIN * da.length_squared() * db.length_squared();
+                if cross_len2 < parallel_thresh {
+                    continue;
+                }
+                let cross_len = cross_len2.sqrt();
+                let mut n = cross / cross_len;
+                // Sign-align with `(p_a - p_b)` so the penalty
+                // pushes apart along the same direction the
+                // closest-point displacement implies.
+                let pa_pb = res.point_a - res.point_b;
+                if pa_pb.dot(n) < 0.0 {
+                    n = -n;
+                }
+                let normal = n;
 
                 let c = EeContact {
                     edge_a_global_id: e_a_idx as u32,
@@ -632,15 +644,17 @@ fn project_one_ee(
     let wb0 = 1.0 - tb;
     let wb1 = tb;
 
-    // Accumulate the contact normal weighted by each vertex's
-    // barycentric share so the post-loop velocity damping in
-    // `project_vt_contacts` zeroes out the inward-bound component on
-    // EE-touching verts the same way it does for VT-touching verts.
-    // Edge A points along `+n` (`+wa{0,1} · n`); edge B along `-n`.
-    contact_normal_sum[ia0] += n_vec * wa0;
-    contact_normal_sum[ia1] += n_vec * wa1;
-    contact_normal_sum[ib0] -= n_vec * wb0;
-    contact_normal_sum[ib1] -= n_vec * wb1;
+    // EE intentionally skips the `contact_normal_sum` accumulator.
+    // The EE cross-product normal points along the edge-perpendicular
+    // axis, which for floor-aligned edge pairs is often skewed away
+    // from the true contact-vertical direction. Mixing those into the
+    // per-vertex velocity-damping average tilts the friction direction
+    // off the VT normal and breaks `coulomb_stick_below_threshold`
+    // (the cube creeps sideways under sub-μ·g lateral force).
+    // The position-form EE penalty above is enough to stop the
+    // rope-through-tet tunneling case without polluting the
+    // velocity-recovery normal direction.
+    let _ = contact_normal_sum;
 
     let m_a0 = inv_mass[ia0];
     let m_a1 = inv_mass[ia1];
@@ -1125,12 +1139,30 @@ pub fn project_vt_contacts(
                 }
             }
         }
-        // EE projection — frictionless penalty + contact-normal
-        // accumulation so the post-loop velocity damping handles
-        // both VT and EE the same way. Without this, ropes / cloth
-        // folds whose edges thread between two tris (no single
-        // vertex piercing a tri) tunnel through the other surface.
+        // EE projection — frictionless penalty for the case VT
+        // misses (rope / cloth fold thread through a tri without
+        // any vertex piercing the tri). Skip EE contacts whose
+        // four endpoints ALL already have a VT contact this sweep:
+        // those vertices are already being pushed apart along the
+        // VT normal, and adding the EE cross-product normal on top
+        // double-counts and tilts the resulting friction direction.
+        // The rope-through-tet case (the canonical EE win) has
+        // edge endpoints with NO VT contact (they're between tri
+        // faces, not on a vertex), so this filter preserves it.
         for ee in &ee_contacts {
+            let ea = edges[ee.edge_a_global_id as usize];
+            let eb = ee.edge_b_global_id as usize;
+            let eb = edges[eb];
+            let already_vt = |idx: usize| -> bool {
+                contact_normal_sum[idx].length_squared() > 1.0e-12
+            };
+            if already_vt(ea[0] as usize)
+                && already_vt(ea[1] as usize)
+                && already_vt(eb[0] as usize)
+                && already_vt(eb[1] as usize)
+            {
+                continue;
+            }
             project_one_ee(ee, q, edges, &inv_mass, &mut contact_normal_sum);
         }
         final_contacts = contacts;
