@@ -153,6 +153,46 @@ impl SoftBvh {
         self.nodes[node_idx as usize].aabb = aabb_union(a0, a1);
     }
 
+    /// Stage 33.1 — return every tri index whose AABB overlaps the
+    /// (margin-inflated) AABB of segment `(p0, p1)`. The returned
+    /// global indices feed the EE narrow-phase, where each candidate
+    /// tri's three edges become candidate edge-pair partners.
+    ///
+    /// v1 walks the existing BVH with an iterative DFS the same way
+    /// [`Self::query_point`] does — a brute-force "segment AABB vs
+    /// every tri AABB" test. A future revision can replace the
+    /// AABB-vs-AABB overlap with a tighter swept-segment-vs-AABB
+    /// intersection if profiling shows traversal as the bottleneck.
+    #[must_use]
+    pub fn query_segment(&self, p0: Vec3, p1: Vec3, margin: Real) -> Vec<u32> {
+        let mut out = Vec::new();
+        if self.root < 0 {
+            return out;
+        }
+        let seg_aabb = Aabb {
+            min: p0.min(p1),
+            max: p0.max(p1),
+        };
+        let mut stack = Vec::with_capacity(64);
+        stack.push(self.root);
+        while let Some(node_idx) = stack.pop() {
+            if node_idx < 0 {
+                continue;
+            }
+            let n = self.nodes[node_idx as usize];
+            if !aabb_overlap_inflated(&n.aabb, &seg_aabb, margin) {
+                continue;
+            }
+            if n.is_leaf() {
+                out.push(n.tri_index());
+            } else {
+                stack.push(n.child0);
+                stack.push(n.child1);
+            }
+        }
+        out
+    }
+
     /// Query: indices of every tri whose (margin-inflated) AABB
     /// contains `p`. Returns global tri indices (into
     /// `Model.soft_surface_tris`).
@@ -268,4 +308,18 @@ fn aabb_contains_point(a: &Aabb, p: Vec3, margin: Real) -> bool {
         && p.y <= a.max.y + margin
         && p.z >= a.min.z - margin
         && p.z <= a.max.z + margin
+}
+
+/// AABB-vs-AABB overlap test where `a` is inflated by `margin` on
+/// each side before the comparison. Used by the segment query —
+/// the segment's tight AABB is compared against each tri's AABB
+/// expanded by the contact margin.
+#[inline]
+fn aabb_overlap_inflated(a: &Aabb, b: &Aabb, margin: Real) -> bool {
+    !(b.max.x < a.min.x - margin
+        || b.min.x > a.max.x + margin
+        || b.max.y < a.min.y - margin
+        || b.min.y > a.max.y + margin
+        || b.max.z < a.min.z - margin
+        || b.min.z > a.max.z + margin)
 }
