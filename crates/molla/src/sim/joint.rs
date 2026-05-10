@@ -1,9 +1,10 @@
 //! Joint enums + DOF accounting.
 //!
 //! Mirrors Newton's `JointType` shape (see
-//! `xtra/newton/newton/_src/sim/enums.py`). Stage 3.0 ships
-//! `Revolute`, `Prismatic`, `Fixed`, `Free`; ball / distance / D6 /
-//! cable arrive in stage 3.x as needed.
+//! `xtra/newton/newton/_src/sim/enums.py`). Supports `Revolute`,
+//! `Prismatic`, `Fixed`, `Free`, `Ball`, `Distance`, and `D6`.
+//! [`EqualityType`] covers ball-weld, weld, and joint-mimic
+//! equality constraints (Stage 32).
 
 use crate::math::Real;
 
@@ -19,8 +20,12 @@ pub enum EqualityType {
     Weld = 1,
     /// Joint-mimic (Newton's `JOINT` equality kind) — constrains one
     /// joint coordinate as a polynomial of another:
-    /// `q_driven = poly[0] + poly[1]·q_driver + poly[2]·q_driver²
-    /// + poly[3]·q_driver³ + poly[4]·q_driver⁴`.
+    ///
+    /// ```text
+    /// q_driven = poly[0] + poly[1]·q_driver + poly[2]·q_driver²
+    ///          + poly[3]·q_driver³ + poly[4]·q_driver⁴
+    /// ```
+    ///
     /// Used for closed kinematic loops (4-bar linkage), gear
     /// couplings, and mimic-axis grippers (e.g. Robotiq 2-finger).
     /// The driver and driven joint indices + the polynomial live in

@@ -3,7 +3,7 @@
 //!
 //! # Scope
 //!
-//! Mirrors the structure of [`crate::solvers::featherstone::cpu_step`]
+//! Mirrors the structure of `crate::solvers::featherstone::cpu_step`
 //! restricted to **serial revolute chains** with point-mass-style
 //! inertia at the COM — the joint topology that all three Stage 23.1
 //! verification cases use (single pendulum, 2-link planar arm, 6-DOF
@@ -1527,7 +1527,7 @@ impl FeatherstoneRevoluteChain {
     /// the < 5× DoD target).
     ///
     /// The pure-analytic bias derivatives (eliminating the FD-on-RNEA
-    /// Public wrapper for [`Self::fill_jacobians_closed_form`] —
+    /// Public wrapper for `Self::fill_jacobians_closed_form` —
     /// exposed so the GPU parity test in
     /// `tests/autograd_featherstone_v3_gpu.rs` can compute the CPU
     /// oracle directly without rolling its own copy of the closed-form
@@ -1716,7 +1716,7 @@ impl FeatherstoneRevoluteChain {
     ///
     /// Reference: chain-rule through RNEA at `q̈ = 0`, gravity stays
     /// fixed (qd-independent). See the
-    /// [`Self::fill_jacobians_analytic_qd`] doc-comment for the
+    /// `Self::fill_jacobians_analytic_qd` doc-comment for the
     /// step-by-step derivation.
     pub fn dh_dqd_analytic(&self, q: &[Real], qd: &[Real]) -> Vec<Real> {
         let n = self.links.len();

@@ -14,8 +14,8 @@
 //! preserves the simplex sub-coordinates so we can recover closest
 //! points on the originals.
 //!
-//! All routines are pure CPU. A WGSL port lives in stage 6.x for the
-//! GPU narrow phase.
+//! All routines in this module are pure CPU; the GPU port lives in
+//! [`crate::kernels`]'s `gjk` kernel (Stage 15).
 
 use crate::math::{Real, Transform, Vec3};
 use crate::sim::ShapeGeometry;

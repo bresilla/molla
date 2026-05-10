@@ -1,8 +1,22 @@
 //! Geometry & collision pipeline.
 //!
-//! Stage 4.0 ships a CPU-only brute-force broad phase, sphere-sphere
-//! and sphere-plane narrow phase, and the [`collide`] entry-point
-//! that fills a [`crate::sim::Contacts`].
+//! Top-level entry point is [`collide`], which runs the full broad-
+//! and narrow-phase pipeline and writes contacts into a
+//! [`crate::sim::Contacts`]. Building blocks include:
+//!
+//! - **Broad phase**: brute-force pairs ([`brute_force_pairs`]),
+//!   top-down [`Bvh`], and a GPU LBVH (in [`crate::kernels`]).
+//! - **Narrow phase**: per-pair [`pair_contact`] dispatch, with
+//!   GJK/EPA ([`gjk`], [`epa`]) and MPR ([`mpr_collide`]) for convex
+//!   pairs, dedicated routines for sphere/box/capsule/cylinder/plane,
+//!   and triangle-mesh BVH traversal ([`MeshBvh`]).
+//! - **Soft contact**: cross-mesh VT/EE pipeline ([`SoftSurface`],
+//!   [`SoftBvh`], [`vt_ccd`]) — see Stage 33.
+//! - **Hydroelastic**: rigid-vs-rigid pressure-field contact
+//!   ([`compute_hydroelastic_contact`]).
+//! - **Mesh authoring**: [`convex_hull`], [`marching_cubes`],
+//!   [`bake_mesh_to_sdf`], and the sparse-volume helpers in
+//!   [`sparse_grid`].
 
 mod aabb;
 mod broad_phase;

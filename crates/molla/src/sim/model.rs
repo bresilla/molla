@@ -559,13 +559,17 @@ pub struct Model {
     /// Per-constraint driven joint index — see
     /// [`Self::equality_mimic_driver_joint`]. Length = `equality_count`.
     pub equality_mimic_driven_joint: Buffer<i32>,
-    /// Per-constraint polynomial coefficients (5 per slot; flat layout)
-    /// — `q_driven = poly[0] + poly[1]·q_dr + poly[2]·q_dr²
-    /// + poly[3]·q_dr³ + poly[4]·q_dr⁴`. Only consulted when
-    /// `equality_type[c] == EqualityType::JointMimic`. Length =
-    /// `equality_count * 5`. Linear-mimic (gripper) is `[0, 1, 0, 0, 0]`
-    /// after offset; linear with bias `c0 + c1·q` is `[c0, c1, 0, 0, 0]`.
-    /// Stage 32.
+    /// Per-constraint polynomial coefficients (5 per slot; flat layout):
+    ///
+    /// ```text
+    /// q_driven = poly[0] + poly[1]·q_dr + poly[2]·q_dr²
+    ///          + poly[3]·q_dr³ + poly[4]·q_dr⁴
+    /// ```
+    ///
+    /// Only consulted when `equality_type` for the slot equals
+    /// `EqualityType::JointMimic`. Length = `equality_count * 5`.
+    /// Linear-mimic (gripper) is `[0, 1, 0, 0, 0]` after offset;
+    /// linear with bias `c0 + c1·q` is `[c0, c1, 0, 0, 0]`. Stage 32.
     pub equality_mimic_poly: Buffer<Real>,
 
     // ── Mimic constraints (q_a = c0 + c1 · q_b) ────────────────────

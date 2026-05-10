@@ -7,7 +7,7 @@
 //! soft mesh count changes.
 //!
 //! v1 ships CPU-only. The GPU port (Stage 33.2) will replace the
-//! traversal with the existing [`crate::kernels::lbvh`] dispatcher and
+//! traversal with the existing `crate::kernels::lbvh` dispatcher and
 //! reuse the AABB array prepared here.
 
 use crate::math::{Real, Vec3};

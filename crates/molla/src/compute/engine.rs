@@ -44,11 +44,9 @@ impl AdapterInfo {
     }
 }
 
-/// The runtime that owns the `wgpu::Device` / `Queue` and dispatches
-/// kernels.
-///
-/// At stage 0, `Engine` only stands up the runtime and reports adapter
-/// info. `Engine::step` and the kernel dispatch surface land in stage 2.
+/// The runtime that owns the `wgpu::Device` / `Queue` and feeds them
+/// to the kernel dispatch wrappers in [`crate::kernels`]. Construct
+/// via [`Engine::new_cpu`] / [`Engine::new_gpu`] / [`Engine::new`].
 pub struct Engine {
     backend: Backend,
     adapter_info: Option<AdapterInfo>,
@@ -58,6 +56,14 @@ pub struct Engine {
 
 impl Engine {
     /// Construct a CPU-only engine. No `wgpu` resources are allocated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use molla::compute::Engine;
+    /// let engine = Engine::new_cpu();
+    /// assert!(engine.device().is_none());
+    /// ```
     #[must_use]
     pub fn new_cpu() -> Self {
         Self {
@@ -69,11 +75,13 @@ impl Engine {
     }
 
     /// Construct a GPU engine, picking whatever adapter `wgpu` finds.
+    /// Returns [`Error::Gpu`] if no compatible adapter is available.
     pub fn new_gpu() -> Result<Self> {
         Self::new(Backend::AutoGpu)
     }
 
-    /// Construct an engine with the given backend.
+    /// Construct an engine with the given [`Backend`]. Use
+    /// [`Self::new_cpu`] / [`Self::new_gpu`] for the common cases.
     pub fn new(backend: Backend) -> Result<Self> {
         match backend {
             Backend::Cpu => Ok(Self::new_cpu()),

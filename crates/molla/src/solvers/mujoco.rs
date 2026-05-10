@@ -17,10 +17,10 @@
 //! 1. [`MuJoCoSolver::new`] takes a [`Model`] and emits an MJCF XML
 //!    document describing it (bodies, joints, shapes, equality
 //!    constraints, gravity). MJCF is MuJoCo's native scene format.
-//! 2. [`mujoco_rust::Model::from_xml_str`] parses + compiles the MJCF
+//! 2. `mujoco_rust::Model::from_xml_str` parses + compiles the MJCF
 //!    into MuJoCo's internal `mjModel`.
 //! 3. [`MuJoCoSolver::step`] writes molla's `state_in` into MuJoCo's
-//!    `mjData.qpos`/`qvel`, calls [`mj_step`](mujoco_rust::Simulation::step)
+//!    `mjData.qpos`/`qvel`, calls `mj_step` (`mujoco_rust::Simulation::step`)
 //!    `substeps` times, then reads `qpos`/`qvel` back into `state_out`
 //!    along with refreshed body world poses.
 //!

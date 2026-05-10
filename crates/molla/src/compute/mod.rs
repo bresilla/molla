@@ -1,7 +1,12 @@
 //! GPU runtime: `wgpu` instance, adapter, device, queue.
 //!
-//! Stage 0 just stands up the runtime and exposes adapter info. Kernel
-//! dispatch wrappers land in stage 2.
+//! [`Engine`] owns the device + queue used by every GPU kernel in the
+//! crate; pick a [`Backend`] to select the adapter (auto / native GPU /
+//! browser WebGPU / CPU fallback). Kernel dispatch wrappers live in
+//! [`crate::kernels`] — this module only stands up the runtime.
+//!
+//! [`MpmSimulation`] is the persistent-buffer MPM driver (Stage 24d.x);
+//! see [`MpmConfig`] / [`MpmRheology`] / [`MpmTimeStep`] for configuration.
 
 #[cfg(feature = "gpu")]
 mod engine;

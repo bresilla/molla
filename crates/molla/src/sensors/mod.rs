@@ -10,11 +10,13 @@
 //! - [`raycast`] — closest-hit ray vs collision shapes. Lives in
 //!   `shaders/raycast.wgsl` with the [`Raycaster`] orchestrator on
 //!   top. Sphere / Plane / Box / Capsule / Cylinder supported on GPU;
-//!   Triangle / TriMesh skipped (will land with stage 11's mesh BVH).
+//!   Triangle / TriMesh skipped (mesh BVH integration TODO — see the
+//!   [`raycast`] module docs).
 //! - [`imu`] — body-frame linear acceleration + angular velocity.
 //! - [`contact`] — per-body contact summary.
 //! - [`frame_transform`] — pose tracking with optional smoothing.
-//! - [`tiled_camera`] — tiled depth/colour camera for RL pixel obs.
+//! - [`tiled_camera`] — tiled depth/colour/normal/albedo camera for
+//!   RL pixel observations (Stage 14).
 
 #[cfg(feature = "gpu")]
 pub mod contact;

@@ -33,11 +33,15 @@ struct Uniforms {
 const WORKGROUP_SIZE: u32 = 64;
 
 /// Output stride (in `Real` / `f32` lanes). Per-pair EPA result =
-/// 4 vec4<f32> = 16 floats, laid out:
-///   [0..3]   normal.xyz, depth
-///   [4..7]   point_a.xyz, _
-///   [8..11]  point_b.xyz, _
-///   [12..15] status_bits_as_f32, _, _, _
+/// 4 `vec4<f32>` = 16 floats, laid out:
+///
+/// ```text
+/// [0..3]   normal.xyz, depth
+/// [4..7]   point_a.xyz, _
+/// [8..11]  point_b.xyz, _
+/// [12..15] status_bits_as_f32, _, _, _
+/// ```
+///
 /// Stored as `Buffer<Real>` so the `.w` lane round-trips intact
 /// (a `Buffer<Vec3>` would discard it on download).
 pub const EPA_OUT_STRIDE: usize = 16;

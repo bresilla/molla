@@ -1,4 +1,24 @@
 //! Time-integration solvers.
+//!
+//! Every solver implements the [`Solver`] trait so callers can swap
+//! integrators without rewiring the host loop. Available backends:
+//!
+//! - [`SemiImplicitSolver`] — explicit symplectic Euler for free
+//!   rigid bodies (CPU + GPU).
+//! - [`XpbdSolver`] — extended-PBD rigid + cloth + particles
+//!   (CPU + GPU; substepping + iterations are configurable).
+//! - [`FeatherstoneSolver`] — articulated-body algorithm for
+//!   reduced-coordinate articulations (CPU + GPU; multi-DOF joints
+//!   via Stage 17.1).
+//! - [`VbdSolver`] — vertex block descent for soft bodies +
+//!   tetrahedral solids (CPU + GPU; AVBD hard mode).
+//! - [`MuJoCoSolver`] — wraps `mujoco-rust` for parity testing
+//!   against MuJoCo's reference engine (gated by the `mujoco` feature).
+//!
+//! Standalone primitives (not full integrators) include the
+//! [`crba::mass_matrix`] CRBA, the recursive Newton-Euler
+//! [`rnea::inverse_dynamics`], the geometric [`jacobian::jacobian`],
+//! and the differentiable [`ik::IkSolver`].
 
 pub mod crba;
 mod featherstone;

@@ -1,8 +1,9 @@
 //! Narrow phase: produces real contacts from candidate shape pairs.
 //!
-//! Stage 4 ships sphere-sphere, sphere-plane, sphere-box, box-plane,
-//! and box-box (SAT). Capsule / cylinder / convex-mesh follow in
-//! stage 6 (GJK + EPA).
+//! Hand-rolled tests for the cheap pairs (sphere-sphere, sphere-plane,
+//! sphere-box, box-plane, box-box via SAT); capsule / cylinder /
+//! convex-mesh fall through to GJK + EPA ([`super::gjk`], [`super::epa`])
+//! and triangle meshes use the BVH in [`super::mesh_bvh`].
 
 use crate::math::{Mat3, Real, Transform, Vec3};
 use crate::sim::{Model, ShapeGeometry, State};

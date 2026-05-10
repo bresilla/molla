@@ -34,6 +34,8 @@ use super::Solver;
 /// Backend selector for [`XpbdSolver`].
 #[allow(clippy::large_enum_variant, reason = "GPU variant holds Arcs / kernel; one solver instance, fine")]
 pub enum XpbdBackend {
+    /// Reference CPU path used by tests and as a fallback when the
+    /// `gpu` feature is disabled.
     Cpu,
     /// GPU dispatch via wgpu. Built once for a fixed `body_count`;
     /// rebuild the solver if the model changes.
@@ -122,9 +124,11 @@ impl XpbdSolver {
         })
     }
 
+    /// Number of XPBD position-projection iterations per substep.
+    /// Higher = stiffer constraints, slower step. Defaults to 4.
     #[must_use]
     pub fn with_iterations(mut self, n: usize) -> Self {
-        self.position_iterations = n;
+        self.position_iterations = n.max(1);
         self
     }
 
@@ -146,6 +150,7 @@ impl XpbdSolver {
         self
     }
 
+    /// `true` if the solver runs on a GPU backend.
     #[must_use]
     pub fn is_gpu(&self) -> bool {
         #[cfg(feature = "gpu")]

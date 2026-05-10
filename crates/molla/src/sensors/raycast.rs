@@ -6,9 +6,10 @@
 //! ray/hit buffers and the dispatch wrapper.
 //!
 //! Triangle / TriMesh shapes carry the `0xff` "skip" sentinel in
-//! `Model::shape_geom_kind` — they're skipped on the GPU. The host
-//! ray-vs-mesh fallback for those is on hold until the mesh BVH lands
-//! in stage 11.
+//! `Model::shape_geom_kind` — they're skipped on the GPU. The mesh
+//! BVH already ships (Stage 15, see [`crate::geometry::MeshBvh`]) but
+//! is not yet wired into the raycast WGSL kernel; tracking as a
+//! follow-up.
 //!
 //! # Example
 //!

@@ -22,9 +22,11 @@
 //! convention throughout — same as `crba::mass_matrix` so the two
 //! algorithms compose trivially.
 //!
-//! Single-articulation, revolute + prismatic only. Multi-DoF joints
-//! (Ball/Free/D6) and Fixed joints land in a follow-up alongside the
-//! IK solvers in stage 10.
+//! Single-articulation, single-DoF joints (Revolute / Prismatic /
+//! Fixed). Multi-DoF joints (Ball / Free / Distance / D6) are not
+//! yet supported by this routine — callers receive `Err(Build)` from
+//! the upstream DOF guard so they can fall back to Featherstone /
+//! XPBD instead.
 
 use crate::core::{Error, Result};
 use crate::math::{

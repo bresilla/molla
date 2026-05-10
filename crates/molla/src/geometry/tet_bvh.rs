@@ -15,17 +15,16 @@
 //! overlap). For the demo workload (two ~150-tet jelly cubes) the
 //! per-vertex × per-tet quadratic cost is ~22.5 k checks per substep,
 //! which an L2 GPU dispatches in microseconds. A real-BVH refit is
-//! deferred to Stage 20.5 with the per-mesh AABB tree builder this
-//! module already lays out (`build_tree`) intact.
+//! deferred to Stage 20.5; this module just lays out the per-tet AABB
+//! pool the future per-mesh tree builder will consume.
 //!
 //! Public entry points:
 //!  - [`recompute_tet_aabbs`]: refresh per-tet AABBs from current vertex
 //!    positions. CPU-side, parallelisable.
 //!  - [`tet_meshes_aabb_overlap`]: top-level cull — do the coarse
 //!    bounding boxes of two tet meshes overlap?
-//!  - [`build_tree`]: top-down AABB BVH builder (kept for the future
-//!    GPU-traversal path; currently only used for the "tighter cull"
-//!    case in tests).
+//!  - [`tet_mesh_root_aabb`] / [`tet_closest_face`]: per-mesh root AABB
+//!    helper and per-tet point-to-face query used by the host fixup pass.
 
 use crate::math::{Real, Vec3};
 
