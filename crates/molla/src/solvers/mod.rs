@@ -21,7 +21,8 @@ pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
 pub use vbd::{VbdMode, VbdSolver};
 pub use vbd_soft_contact::{
-    gather_ee_contacts, gather_soft_contacts, gather_vt_contacts, EeContact, SoftContact, VtContact,
+    gather_ee_contacts, gather_soft_contacts, gather_vt_contacts, project_soft_contacts,
+    EeContact, SoftContact, VtContact,
 };
 pub use xpbd::XpbdSolver;
 

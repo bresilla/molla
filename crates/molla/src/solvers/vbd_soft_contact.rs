@@ -253,16 +253,219 @@ pub fn gather_vt_contacts(
     out
 }
 
-/// EE narrow-phase — Stage 33.1 stub. Returns no contacts; the real
-/// implementation lands once the edge extraction + segment query
-/// support are in place.
+/// EE narrow-phase — Stage 33.1.
+///
+/// Walks every soft-surface edge; broad-phases against the cross-mesh
+/// BVH via [`SoftBvh::query_segment`], then derives candidate edges
+/// from the returned tris. For each candidate cross-surface edge,
+/// runs a segment-segment closest-point computation; emits an
+/// [`EeContact`] when the distance falls within `margin`.
+///
+/// Same-surface pairs are skipped (self-collision is Stage 33.3);
+/// edge pairs sharing a vertex are skipped (they meet at a single
+/// point — that's a VT contact, not an edge crossing); near-parallel
+/// pairs are skipped (the segment-segment minimization is ill-
+/// conditioned and the resulting contact is already covered by VT
+/// at the endpoints).
+///
+/// Per-edge deduplication: only the deepest contact per
+/// `(edge, other_surface)` pair is emitted. This mirrors VT's
+/// `(vertex, other_surface)` dedup — multiple candidate partners
+/// near one edge would otherwise stack penalty forces and over-
+/// correct the position.
 pub fn gather_ee_contacts(
-    _model: &Model,
-    _state: &State,
-    _bvh: &SoftBvh,
-    _margin: Real,
+    model: &Model,
+    state: &State,
+    bvh: &SoftBvh,
+    margin: Real,
 ) -> Vec<EeContact> {
-    Vec::new()
+    let mut out = Vec::new();
+    if model.soft_surfaces.is_empty() {
+        return out;
+    }
+    let edges: &[[u32; 2]] = &model.soft_surface_edges;
+    if edges.is_empty() {
+        return out;
+    }
+    let tris: &[[u32; 3]] = &model.soft_surface_tris;
+    let q = match state.particle_q.host() {
+        Ok(q) => q,
+        Err(_) => return out,
+    };
+
+    // Map (min_vert, max_vert) → global edge index. Each tri-AABB
+    // hit fans out into 3 candidate edges; we look them up here
+    // rather than searching `edges` linearly.
+    use std::collections::HashMap;
+    let mut edge_lookup: HashMap<(u32, u32), u32> = HashMap::with_capacity(edges.len());
+    for (i, e) in edges.iter().enumerate() {
+        let key = if e[0] <= e[1] {
+            (e[0], e[1])
+        } else {
+            (e[1], e[0])
+        };
+        edge_lookup.entry(key).or_insert(i as u32);
+    }
+    let edge_of = |a: u32, b: u32| -> Option<u32> {
+        let k = if a <= b { (a, b) } else { (b, a) };
+        edge_lookup.get(&k).copied()
+    };
+
+    // Per-edge surface ownership: edges are extracted per-surface
+    // sequentially in the builder, so we can resolve via the
+    // SoftSurface.edge_offset/edge_count window.
+    let mut edge_to_surface = vec![0u32; edges.len()];
+    for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
+        let lo = s.edge_offset as usize;
+        let hi = lo + s.edge_count as usize;
+        for e in lo..hi {
+            edge_to_surface[e] = s_idx as u32;
+        }
+    }
+
+    for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
+        let e_lo = s.edge_offset as usize;
+        let e_hi = e_lo + s.edge_count as usize;
+        for e_a_idx in e_lo..e_hi {
+            let ea = edges[e_a_idx];
+            let a0_id = ea[0] as usize;
+            let a1_id = ea[1] as usize;
+            let a0 = q[a0_id];
+            let a1 = q[a1_id];
+
+            let tri_hits = bvh.query_segment(a0, a1, margin);
+            if tri_hits.is_empty() {
+                continue;
+            }
+
+            let mut best_per_surface: Vec<Option<EeContact>> =
+                vec![None; model.soft_surfaces.len()];
+
+            // Dedup candidate edges so we don't run the segment
+            // computation twice when two adjacent tris share an edge.
+            let mut seen_edges: Vec<u32> = Vec::with_capacity(tri_hits.len() * 3);
+            for tri_global in tri_hits {
+                let tri_surface = bvh.tri_to_surface[tri_global as usize];
+                if tri_surface == s_idx as u32 {
+                    continue; // same-surface — defer to Stage 33.3.
+                }
+                let tri = tris[tri_global as usize];
+                for &(va, vb) in &[
+                    (tri[0], tri[1]),
+                    (tri[1], tri[2]),
+                    (tri[2], tri[0]),
+                ] {
+                    if let Some(eid) = edge_of(va, vb) {
+                        if !seen_edges.contains(&eid) {
+                            seen_edges.push(eid);
+                        }
+                    }
+                }
+            }
+
+            for &e_b_idx in &seen_edges {
+                let s_b = edge_to_surface[e_b_idx as usize];
+                if s_b == s_idx as u32 {
+                    continue;
+                }
+                let eb = edges[e_b_idx as usize];
+                let b0_id = eb[0] as usize;
+                let b1_id = eb[1] as usize;
+                if a0_id == b0_id
+                    || a0_id == b1_id
+                    || a1_id == b0_id
+                    || a1_id == b1_id
+                {
+                    continue;
+                }
+                let b0 = q[b0_id];
+                let b1 = q[b1_id];
+
+                let res = match closest_point_segment_segment(a0, a1, b0, b1) {
+                    Some(r) => r,
+                    None => continue, // near-parallel: defer to VT.
+                };
+                if !res.dist.is_finite() {
+                    continue;
+                }
+                if res.dist >= margin {
+                    continue;
+                }
+                // Endpoint filter: when the segment-segment minimum
+                // sits at an endpoint of either edge, the contact is
+                // really vertex-edge (or vertex-vertex), which the VT
+                // narrow-phase already covers. Limiting EE to interior
+                // (t ∈ (eps, 1-eps)) closest points stops the EE pass
+                // from double-counting alongside VT.
+                const EE_INTERIOR_EPS: Real = 0.05;
+                if res.t_a < EE_INTERIOR_EPS
+                    || res.t_a > 1.0 - EE_INTERIOR_EPS
+                    || res.t_b < EE_INTERIOR_EPS
+                    || res.t_b > 1.0 - EE_INTERIOR_EPS
+                {
+                    continue;
+                }
+                let depth = margin - res.dist;
+
+                // Normal: cross-product of the two edge directions
+                // (the natural "edge plane" perpendicular). This is
+                // the standard EE penalty normal — using
+                // `(point_a - point_b) / dist` instead picks up any
+                // local geometry artefact and can flip sign once the
+                // edges cross, which would PULL them through one
+                // another instead of pushing them apart.
+                //
+                // Sign convention: we want the normal to point from
+                // edge B toward edge A. Aligning it with
+                // `(point_a - point_b)` does this whenever the edges
+                // are on opposite sides of their shared perpendicular
+                // (the "haven't crossed yet" regime that EE penalty
+                // handles correctly).
+                let da = a1 - a0;
+                let db = b1 - b0;
+                let cross = da.cross(db);
+                let cross_len = cross.length();
+                let normal = if cross_len > 1.0e-9 {
+                    let mut n = cross / cross_len;
+                    // Sign-align with `(p_a - p_b)` so the penalty
+                    // pushes apart along the same direction the
+                    // closest-point displacement implies.
+                    let pa_pb = res.point_a - res.point_b;
+                    if pa_pb.dot(n) < 0.0 {
+                        n = -n;
+                    }
+                    n
+                } else if res.dist > 1.0e-9 {
+                    (res.point_a - res.point_b) / res.dist
+                } else {
+                    Vec3::Y
+                };
+
+                let c = EeContact {
+                    edge_a_global_id: e_a_idx as u32,
+                    edge_a_surface: s_idx as u32,
+                    edge_b_global_id: e_b_idx,
+                    edge_b_surface: s_b,
+                    t_a: res.t_a,
+                    t_b: res.t_b,
+                    normal: [normal.x, normal.y, normal.z],
+                    depth,
+                };
+                let slot = &mut best_per_surface[s_b as usize];
+                match slot {
+                    Some(existing) if existing.depth >= depth => {}
+                    _ => *slot = Some(c),
+                }
+            }
+
+            for slot in best_per_surface {
+                if let Some(c) = slot {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Multi-sweep position projection for `Vec<SoftContact>`. Refits the
@@ -301,13 +504,14 @@ pub fn project_soft_contacts(
         // sweep so the Jacobi update sees a consistent snapshot.
         let q = state.particle_q.host_mut()?;
         let tris: &[[u32; 3]] = &model.soft_surface_tris;
+        let edges: &[[u32; 2]] = &model.soft_surface_edges;
         for c in &contacts {
             match c {
                 SoftContact::Vt(vt) => {
                     project_one_vt(vt, q, tris, &inv_mass, &mut contact_normal_sum);
                 }
                 SoftContact::Ee(ee) => {
-                    project_one_ee(ee, q, model, &inv_mass, &mut contact_normal_sum);
+                    project_one_ee(ee, q, edges, &inv_mass, &mut contact_normal_sum);
                 }
             }
         }
@@ -407,17 +611,152 @@ fn project_one_vt(
     }
 }
 
-/// EE projection — Stage 33.1 stub. Currently unreachable because
-/// [`gather_ee_contacts`] returns empty; once the EE narrow-phase
-/// lands the body distributes the depth across the four edge verts
-/// via segment-segment barycentric weights.
+/// EE projection — Stage 33.1.
+///
+/// For an EE contact the per-vertex Hessian contribution is
+/// `+k · w_i² · n n^T` with `w_i ∈ {1-t_a, t_a, 1-t_b, t_b}` for the
+/// four edge endpoints. Distribute the depth across the four verts
+/// via the same inverse-mass weighted barycentric partitioning the
+/// VT path uses, signed `+n` on edge A and `-n` on edge B.
 fn project_one_ee(
-    _c: &EeContact,
-    _q: &mut [Vec3],
-    _model: &Model,
-    _inv_mass: &[Real],
-    _contact_normal_sum: &mut [Vec3],
+    c: &EeContact,
+    q: &mut [Vec3],
+    edges: &[[u32; 2]],
+    inv_mass: &[Real],
+    contact_normal_sum: &mut [Vec3],
 ) {
+    let ea = edges[c.edge_a_global_id as usize];
+    let eb = edges[c.edge_b_global_id as usize];
+    let ia0 = ea[0] as usize;
+    let ia1 = ea[1] as usize;
+    let ib0 = eb[0] as usize;
+    let ib1 = eb[1] as usize;
+    let n_vec = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
+    let ta = c.t_a;
+    let tb = c.t_b;
+    let wa0 = 1.0 - ta;
+    let wa1 = ta;
+    let wb0 = 1.0 - tb;
+    let wb1 = tb;
+
+    let _ = contact_normal_sum; // EE skips velocity damping in v1.
+
+    let m_a0 = inv_mass[ia0];
+    let m_a1 = inv_mass[ia1];
+    let m_b0 = inv_mass[ib0];
+    let m_b1 = inv_mass[ib1];
+    let w_eff = wa0 * wa0 * m_a0
+        + wa1 * wa1 * m_a1
+        + wb0 * wb0 * m_b0
+        + wb1 * wb1 * m_b1;
+    if w_eff <= 1.0e-20 {
+        return;
+    }
+    // Same underrelaxation factor VT uses; the multi-sweep Jacobi
+    // settles for the v1 cloth-fold workload at this rate.
+    let push = c.depth * 0.5;
+    if m_a0 > 0.0 {
+        let f = wa0 * wa0 * m_a0 / w_eff;
+        q[ia0] += n_vec * (f * push);
+    }
+    if m_a1 > 0.0 {
+        let f = wa1 * wa1 * m_a1 / w_eff;
+        q[ia1] += n_vec * (f * push);
+    }
+    if m_b0 > 0.0 {
+        let f = wb0 * wb0 * m_b0 / w_eff;
+        q[ib0] -= n_vec * (f * push);
+    }
+    if m_b1 > 0.0 {
+        let f = wb1 * wb1 * m_b1 / w_eff;
+        q[ib1] -= n_vec * (f * push);
+    }
+}
+
+/// Result of [`closest_point_segment_segment`].
+struct ClosestSegResult {
+    /// Barycentric on segment A: `0 = a0`, `1 = a1`.
+    t_a: Real,
+    /// Barycentric on segment B.
+    t_b: Real,
+    /// Closest point on segment A.
+    point_a: Vec3,
+    /// Closest point on segment B.
+    point_b: Vec3,
+    /// Distance between `point_a` and `point_b`.
+    dist: Real,
+}
+
+/// Closest-point computation between two finite segments
+/// `(a0, a1)` and `(b0, b1)`. Returns `None` for near-parallel
+/// configurations (`|a·e − b·b|` below `1e-12`); near-parallel
+/// pairs are handled by VT contacts at the endpoints — the
+/// segment-segment minimum is degenerate (any point along the
+/// overlap is a minimum).
+///
+/// Reference: Real-Time Collision Detection §5.1.9 (Ericson 2005).
+fn closest_point_segment_segment(
+    a0: Vec3,
+    a1: Vec3,
+    b0: Vec3,
+    b1: Vec3,
+) -> Option<ClosestSegResult> {
+    let d1 = a1 - a0;
+    let d2 = b1 - b0;
+    let r = a0 - b0;
+    let a = d1.dot(d1);
+    let e = d2.dot(d2);
+    let f = d2.dot(r);
+    if a <= 1.0e-20 && e <= 1.0e-20 {
+        // Both segments degenerate to points.
+        let dist = (a0 - b0).length();
+        return Some(ClosestSegResult {
+            t_a: 0.0,
+            t_b: 0.0,
+            point_a: a0,
+            point_b: b0,
+            dist,
+        });
+    }
+    let (t_a, t_b);
+    if a <= 1.0e-20 {
+        t_a = 0.0;
+        t_b = (f / e).clamp(0.0, 1.0);
+    } else {
+        let c = d1.dot(r);
+        if e <= 1.0e-20 {
+            t_b = 0.0;
+            t_a = (-c / a).clamp(0.0, 1.0);
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            if denom.abs() < 1.0e-12 {
+                return None; // parallel; defer to VT.
+            }
+            let mut s = (b * f - c * e) / denom;
+            s = s.clamp(0.0, 1.0);
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            t_a = s;
+            t_b = t;
+        }
+    }
+    let point_a = a0 + d1 * t_a;
+    let point_b = b0 + d2 * t_b;
+    let dist = (point_a - point_b).length();
+    Some(ClosestSegResult {
+        t_a,
+        t_b,
+        point_a,
+        point_b,
+        dist,
+    })
 }
 
 /// Closest-point + barycentric weights wrapper. Wraps
