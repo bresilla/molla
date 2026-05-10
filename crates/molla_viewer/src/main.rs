@@ -533,6 +533,7 @@ fn main() {
                 update_warp_fem_elastic_opt,
                 update_warp_fft_fluid,
                 update_warp_distortion_3d,
+                update_warp_diffray,
             ),
         )
         .add_systems(
@@ -551,6 +552,7 @@ fn main() {
                 draw_warp_fem_streamlines_gizmos,
                 draw_warp_fem_deformed_gizmos,
                 draw_warp_fft_fluid_gizmos,
+                draw_warp_diffray_gizmos,
             ),
         )
         .add_systems(EguiPrimaryContextPass, control_pane)
@@ -1131,6 +1133,14 @@ enum Scene {
     /// Bonus 3D distortion-energy example (companion to
     /// `WarpFemDistortion`).
     WarpDistortion3D,
+    /// Stage 37.7 — differentiable raycasting demo. A user-controlled
+    /// sphere is gradient-descent-optimised on its world position to
+    /// match a target depth image rendered from a red-wireframe target
+    /// sphere. Right-rail pane has target XYZ sliders, learning-rate
+    /// slider, current-loss + iteration readouts, and Run/Pause +
+    /// Reset buttons. Forward + FD-adjoint live in
+    /// `molla::sensors::raycast_adjoint`.
+    WarpDiffRay,
 }
 
 impl Scene {
@@ -1215,6 +1225,7 @@ impl Scene {
         Scene::WarpFemElasticOpt,
         Scene::WarpFftFluid,
         Scene::WarpDistortion3D,
+        Scene::WarpDiffRay,
     ];
 
     fn label(self) -> &'static str {
@@ -1296,6 +1307,7 @@ impl Scene {
             Scene::WarpFemElasticOpt => "75 Warp FEM elastic shape opt",
             Scene::WarpFftFluid => "76 Warp FFT fluid (Stokes fallback)",
             Scene::WarpDistortion3D => "77 Warp distortion 3D",
+            Scene::WarpDiffRay => "80 Warp diffray (FD adjoint, Stage 37.7)",
         }
     }
 
@@ -2685,7 +2697,8 @@ impl Sim {
             | Scene::WarpFemDistortion
             | Scene::WarpFemElasticOpt
             | Scene::WarpFftFluid
-            | Scene::WarpDistortion3D => build_warp_empty_model(),
+            | Scene::WarpDistortion3D
+            | Scene::WarpDiffRay => build_warp_empty_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -6010,6 +6023,7 @@ fn step_simulation(
             | Scene::WarpFemElasticOpt
             | Scene::WarpFftFluid
             | Scene::WarpDistortion3D
+            | Scene::WarpDiffRay
             | Scene::WarpRaycast
             | Scene::WarpMesh
             | Scene::WarpMeshIntersect
@@ -9455,6 +9469,7 @@ fn control_pane(
                     | Scene::WarpFemElasticOpt
                     | Scene::WarpFftFluid
                     | Scene::WarpDistortion3D
+                    | Scene::WarpDiffRay
             ),
             _ => false,
         },
@@ -9629,6 +9644,7 @@ fn control_pane(
         Scene::WarpFemElasticOpt => Some("Warp FEM elastic shape opt"),
         Scene::WarpFftFluid => Some("Warp FFT fluid"),
         Scene::WarpDistortion3D => Some("Warp distortion 3D"),
+        Scene::WarpDiffRay => Some("Warp diffray (Stage 37.7)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9768,6 +9784,7 @@ fn control_pane(
                     Scene::WarpFemElasticOpt => warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt),
                     Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
                     Scene::WarpDistortion3D => warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d),
+                    Scene::WarpDiffRay => warp_diffray_pane(ui, &mut warp_states.diffray),
                     _ => {}
                 });
         }
@@ -16450,6 +16467,7 @@ struct WarpExampleStates {
     fem_elastic_opt: WarpFemElasticOptState,
     fft_fluid: WarpFftFluidState,
     distortion_3d: WarpDistortion3DState,
+    diffray: WarpDiffRayState,
 }
 
 impl Default for WarpExampleStates {
@@ -16478,6 +16496,7 @@ impl Default for WarpExampleStates {
             fem_elastic_opt: WarpFemElasticOptState::default(),
             fft_fluid: WarpFftFluidState::default(),
             distortion_3d: WarpDistortion3DState::default(),
+            diffray: WarpDiffRayState::default(),
         }
     }
 }
@@ -18480,4 +18499,226 @@ fn warp_distortion_3d_pane(ui: &mut egui::Ui, st: &mut WarpDistortion3DState) {
     ui.separator();
     readout(ui, "Energy E (identity)", &format!("{:.4}", st.energy));
     ui.small("3D companion to `WarpFemDistortion`. Identity → E = 6.");
+}
+
+// ── Scene 80: WarpDiffRay (Stage 37.7 differentiable raycasting) ──
+//
+// Rendered scene = a single sphere (positioned via the optimised
+// `params` vector) plus an orange wireframe "target" sphere whose
+// position the user controls via the right-rail sliders. The target
+// depth image is rendered once per slider change; the optimisation
+// then runs gradient-descent steps each frame until the optimised
+// sphere converges onto the target.
+struct WarpDiffRayState {
+    /// Optimised sphere position (the gradient-descent variable).
+    /// 3 entries: x, y, z. Matches `RayScene::add_sphere(0, _)`.
+    params: Vec<f64>,
+    /// User-controlled target sphere position (drives the depth image
+    /// the optimiser tries to match). Re-renders the target image
+    /// any time these change vs `last_target`.
+    target: [f32; 3],
+    last_target: [f32; 3],
+    /// Cached target depth image, refreshed whenever `target` changes.
+    target_image: Vec<f64>,
+    /// Cached camera ray grid (orthographic, looks down `−Z`).
+    rays: Vec<molla::sensors::raycast_adjoint::Ray>,
+    /// Vanilla SGD lr — small by default to handle FD-on-silhouette
+    /// aliasing without overshooting.
+    learning_rate: f32,
+    /// Run / pause toggle for the optimisation loop.
+    running: bool,
+    /// User-requested reset — flips the optimised sphere back to the
+    /// origin and clears the iteration counter on the next update.
+    user_reset: bool,
+    /// Most recent loss readout for the pane.
+    last_loss: f64,
+    /// Iterations since last reset.
+    iter: u32,
+}
+
+impl Default for WarpDiffRayState {
+    fn default() -> Self {
+        let mut state = Self {
+            params: vec![0.0, 0.0, 0.0],
+            target: [0.4, 0.2, 0.0],
+            last_target: [f32::NAN, f32::NAN, f32::NAN], // force first render
+            target_image: Vec::new(),
+            rays: warp_diffray_build_rays(32, 1.5),
+            learning_rate: 5.0e-4,
+            running: true,
+            user_reset: false,
+            last_loss: 0.0,
+            iter: 0,
+        };
+        state.refresh_target_image();
+        state
+    }
+}
+
+impl WarpDiffRayState {
+    fn scene() -> molla::sensors::raycast_adjoint::RayScene {
+        let mut scene = molla::sensors::raycast_adjoint::RayScene::new();
+        scene.add_sphere(0, 0.5);
+        scene.add_plane_z(-2.0);
+        scene
+    }
+
+    fn refresh_target_image(&mut self) {
+        let scene = Self::scene();
+        let target_params = vec![
+            self.target[0] as f64,
+            self.target[1] as f64,
+            self.target[2] as f64,
+        ];
+        self.target_image = scene.trace(&target_params, &self.rays);
+        self.last_target = self.target;
+    }
+}
+
+/// Build a flat orthographic ray grid (looks down `−Z` from `+Z=5`).
+/// Mirrors `crates/molla/tests/raycast_adjoint.rs::build_rays` so the
+/// viewer demo + the contract tests share the exact same camera.
+fn warp_diffray_build_rays(grid_n: usize, half: f64) -> Vec<molla::sensors::raycast_adjoint::Ray> {
+    let mut rays = Vec::with_capacity(grid_n * grid_n);
+    for iy in 0..grid_n {
+        for ix in 0..grid_n {
+            let u = (ix as f64 + 0.5) / grid_n as f64;
+            let v = (iy as f64 + 0.5) / grid_n as f64;
+            let x = -half + 2.0 * half * u;
+            let y = -half + 2.0 * half * v;
+            rays.push(molla::sensors::raycast_adjoint::Ray::new(
+                MVec3::new(x, y, 5.0),
+                MVec3::new(0.0, 0.0, -1.0),
+            ));
+        }
+    }
+    rays
+}
+
+fn update_warp_diffray(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpDiffRay {
+        return;
+    }
+    let st = &mut warp.diffray;
+    if st.user_reset {
+        st.params = vec![0.0, 0.0, 0.0];
+        st.iter = 0;
+        st.last_loss = 0.0;
+        st.user_reset = false;
+    }
+    if st.target != st.last_target {
+        st.refresh_target_image();
+    }
+
+    let scene = WarpDiffRayState::scene();
+    let current = scene.trace(&st.params, &st.rays);
+    st.last_loss = molla::sensors::raycast_adjoint::compute_loss_l2(&current, &st.target_image);
+
+    if !st.running {
+        return;
+    }
+
+    let lr = st.learning_rate as f64;
+    let grad = molla::sensors::raycast_adjoint::compute_grad_raycast(
+        &scene,
+        &mut st.params,
+        &st.target_image,
+        &st.rays,
+        1.0e-3,
+    );
+    for (p, g) in st.params.iter_mut().zip(grad.iter()) {
+        *p -= lr * g;
+    }
+    st.iter = st.iter.saturating_add(1);
+}
+
+fn draw_warp_diffray_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpDiffRay {
+        return;
+    }
+    let st = &warp.diffray;
+    // Optimised sphere — solid coloured.
+    let cur = Vec3::new(
+        st.params[0] as f32,
+        st.params[1] as f32,
+        st.params[2] as f32,
+    );
+    gizmos.sphere(
+        bevy::math::Isometry3d::from_translation(cur),
+        0.5,
+        Color::srgb(0.4, 0.7, 0.95),
+    );
+    // Target sphere — red wireframe overlay (drawn as 3 great circles).
+    let tgt = Vec3::new(st.target[0], st.target[1], st.target[2]);
+    let red = Color::srgb(0.95, 0.25, 0.25);
+    gizmos.circle(
+        bevy::math::Isometry3d::new(tgt, Quat::IDENTITY),
+        0.5,
+        red,
+    );
+    gizmos.circle(
+        bevy::math::Isometry3d::new(tgt, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+        0.5,
+        red,
+    );
+    gizmos.circle(
+        bevy::math::Isometry3d::new(tgt, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+        0.5,
+        red,
+    );
+    // Camera frustum hint — single ray bundle anchor at z=+5 centred on
+    // origin, plus the 4 corner rays as faded grey lines.
+    let cam_origin = Vec3::new(0.0, 0.0, 5.0);
+    let half = 1.5;
+    let corners = [
+        Vec3::new(-half, -half, 5.0),
+        Vec3::new(half, -half, 5.0),
+        Vec3::new(half, half, 5.0),
+        Vec3::new(-half, half, 5.0),
+    ];
+    let down_z = 7.0; // 5 → -2 (the backdrop plane).
+    for c in corners {
+        gizmos.line(c, c - Vec3::Z * down_z, Color::srgba(0.6, 0.6, 0.7, 0.25));
+    }
+    let _ = cam_origin;
+}
+
+fn warp_diffray_pane(ui: &mut egui::Ui, st: &mut WarpDiffRayState) {
+    ui.label("Warp diffray — Stage 37.7 (FD adjoint on raycast).");
+    ui.separator();
+    readout(ui, "Iter", &format!("{}", st.iter));
+    readout(ui, "Loss", &format!("{:.4}", st.last_loss));
+    readout(
+        ui,
+        "Params",
+        &format!(
+            "({:.3}, {:.3}, {:.3})",
+            st.params[0], st.params[1], st.params[2]
+        ),
+    );
+    ui.separator();
+    ui.label("Target sphere (red wireframe)");
+    let _ = ui.add(egui::Slider::new(&mut st.target[0], -1.0..=1.0).text("x"));
+    let _ = ui.add(egui::Slider::new(&mut st.target[1], -1.0..=1.0).text("y"));
+    let _ = ui.add(egui::Slider::new(&mut st.target[2], -0.5..=0.5).text("z"));
+    ui.separator();
+    ui.label("Learning rate");
+    let _ = ui.add(
+        egui::Slider::new(&mut st.learning_rate, 1.0e-5..=5.0e-3)
+            .logarithmic(true),
+    );
+    ui.separator();
+    let toggle_label = if st.running { "Pause" } else { "Run" };
+    if ui.button(toggle_label).clicked() {
+        st.running = !st.running;
+    }
+    if ui.button("Reset").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("32×32 orthographic ray grid; sphere radius = 0.5.");
+    ui.small("Vanilla SGD on params via FD-adjoint of the L2 depth loss.");
 }
