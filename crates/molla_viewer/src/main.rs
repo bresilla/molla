@@ -44,6 +44,7 @@ use molla::compute::{Engine, MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep}
 use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
+use molla::fem;
 use molla::actuators::{
     Actuator, ClampingDcMotor, ClampingDcMotorConfig, ClampingMaxEffort,
     ClampingMaxEffortConfig, ClampingStage, ControllerNeuralLstm,
@@ -383,6 +384,7 @@ fn main() {
         .insert_resource(FourBarExampleState::default())
         .insert_resource(DiffBallExampleState::default())
         .insert_resource(DiffSpringExampleState::default())
+        .insert_resource(FemHeatExampleState::default())
         // Ribbon state — open the main control pane on startup so
         // the user sees something immediately. Other panes (lidar)
         // start closed and are toggled via the right-rail button.
@@ -448,6 +450,7 @@ fn main() {
                     update_diff_ball_example,
                     update_diff_spring_example,
                     update_cloth_collar_example,
+                    update_fem_heat_example,
                 )
                     .chain(),
                 (
@@ -474,6 +477,7 @@ fn main() {
                     draw_jelly_gizmos,
                     draw_diff_spring_gizmos,
                     draw_diff_ball_gizmos,
+                    draw_fem_heat_gizmos,
                 )
                     .chain(),
             )
@@ -568,6 +572,11 @@ struct SceneStates<'w> {
     fourbar: ResMut<'w, FourBarExampleState>,
     diff_ball: ResMut<'w, DiffBallExampleState>,
     diff_spring: ResMut<'w, DiffSpringExampleState>,
+    /// Stage 36 v1 — FEM heat-equation demo state. Holds the FEM
+    /// mesh, mass / stiffness matrices, BCs, and current
+    /// temperature field. The matrices survive scene switches; only
+    /// the temperature field is reset on entry.
+    fem_heat: ResMut<'w, FemHeatExampleState>,
 }
 
 /// Bundle of per-scene mutable state used by `control_pane`. Same
@@ -615,6 +624,11 @@ struct PaneSceneStates<'w> {
     fourbar: ResMut<'w, FourBarExampleState>,
     diff_ball: ResMut<'w, DiffBallExampleState>,
     diff_spring: ResMut<'w, DiffSpringExampleState>,
+    /// Stage 36 v1 — FEM heat-equation demo state. Same bundling
+    /// rationale as the other scenes — keeps `control_pane` under
+    /// Bevy's 16-tuple SystemParam ceiling via the `PaneSceneStates`
+    /// derive.
+    fem_heat: ResMut<'w, FemHeatExampleState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -929,6 +943,12 @@ enum Scene {
     /// Stage 33.5 — soft tet block sliding down a soft tet ramp;
     /// friction-coefficient slider sweeps stick → slip → slide.
     SoftBrake,
+    /// Stage 36 v1 — FEM heat-equation demo. 16×16×16 tet cube with
+    /// Dirichlet BC `T(z=0) = 0`, `T(z=1) = 1`; backward-Euler stepping
+    /// of `∂T/∂t = α∇²T`. Right-rail pane carries diffusivity α + dt
+    /// sliders, residual readout, and a "Reset to T=0" button. Pure
+    /// CPU — runs entirely outside the standard solver pipeline.
+    FemHeat,
 }
 
 impl Scene {
@@ -981,6 +1001,7 @@ impl Scene {
         Scene::ClothCollar,
         Scene::FastSoftImpact,
         Scene::SoftBrake,
+        Scene::FemHeat,
     ];
 
     fn label(self) -> &'static str {
@@ -1031,6 +1052,7 @@ impl Scene {
             Scene::ClothCollar => "44 Cloth collar (self-collision)",
             Scene::FastSoftImpact => "45 Fast soft impact (CCD)",
             Scene::SoftBrake => "46 Soft brake (friction sweep)",
+            Scene::FemHeat => "47 FEM heat (Stage 36 v1)",
         }
     }
 
@@ -2385,6 +2407,7 @@ impl Sim {
             Scene::ClothCollar => build_cloth_collar_model(),
             Scene::FastSoftImpact => build_fast_soft_impact_model(),
             Scene::SoftBrake => build_soft_brake_model(),
+            Scene::FemHeat => build_fem_heat_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -5524,6 +5547,11 @@ fn apply_scene_switch(
     let _ = &scene_states.pendulum;
     let _ = &scene_states.conveyor;
     let _ = &scene_states.cloth_bend;
+    // Stage 36 — reset the temperature field on entry so re-entering
+    // FemHeat starts from a clean slate. The mesh + assembled
+    // matrices survive the switch (rebuilding 16³ tets every time
+    // would be wasteful) — only the per-vertex `u` resets.
+    scene_states.fem_heat.needs_reset = true;
 
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
@@ -5628,6 +5656,12 @@ fn step_simulation(
     // Stage-21 mesh-tools is purely visual — no bodies, no contacts,
     // no physics step. Bail before allocating the device handles.
     if sim.scene == Scene::MeshTools {
+        return;
+    }
+    // Stage-36 FEM heat-equation demo runs its own CPU FEM solver in
+    // `update_fem_heat_example`; bypass the standard pipeline (no
+    // bodies, no contacts).
+    if sim.scene == Scene::FemHeat {
         return;
     }
     // Stage-24d MPM scene runs its own particle/grid sim outside the
@@ -9045,6 +9079,7 @@ fn control_pane(
                     | Scene::ClothCollar
                     | Scene::FastSoftImpact
                     | Scene::SoftBrake
+                    | Scene::FemHeat
             ),
             _ => false,
         },
@@ -9188,6 +9223,7 @@ fn control_pane(
         Scene::ClothCollar => Some("Cloth collar (self-coll)"),
         Scene::FastSoftImpact => Some("Fast soft impact (CCD)"),
         Scene::SoftBrake => Some("Soft brake (friction)"),
+        Scene::FemHeat => Some("FEM heat (Stage 36)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9290,6 +9326,7 @@ fn control_pane(
                     Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
                     Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
                     Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
+                    Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
                     _ => {}
                 });
         }
@@ -14304,3 +14341,275 @@ fn draw_diff_ball_gizmos(
         prev = next;
     }
 }
+
+// --- Stage 36 v1 — FEM heat-equation scene (#47) -------------------
+//
+// Pure-CPU demo of the Stage 36 FEM framework. A 16×16×16 tet-mesh
+// of the unit cube is held by `FemHeatExampleState`; each frame we
+// step backward-Euler once via `molla::fem::solve_transient`. The
+// tet wireframe is drawn as gizmo lines coloured by the per-vertex
+// temperature (blue → red).
+//
+// The scene runs entirely outside the standard solver pipeline —
+// `step_simulation` short-circuits on `Scene::FemHeat`, and
+// `build_fem_heat_model` returns an empty `Model` with no bodies or
+// particles.
+
+const FEM_HEAT_GRID: usize = 16;
+const FEM_HEAT_DEFAULT_ALPHA: f64 = 1.0;
+const FEM_HEAT_DEFAULT_DT: f64 = 0.01;
+/// Origin offset for the unit cube — keep it just above the ground
+/// plane so the gizmo wireframe doesn't clip the grid.
+const FEM_HEAT_ORIGIN: bevy::math::Vec3 = bevy::math::Vec3::new(-0.5, 0.05, -0.5);
+
+/// Persistent runtime state for `Scene::FemHeat`. Built lazily on
+/// first entry into the scene; `apply_scene_switch` stamps
+/// `needs_reset` so re-entering re-initialises `u` to zero.
+#[derive(Resource)]
+struct FemHeatExampleState {
+    mesh: fem::FemMesh,
+    /// Mass matrix M (consistent, P1).
+    mass: molla::math::sparse::BsrMatrix,
+    /// Stiffness matrix K = α · ∫ ∇φᵢ·∇φⱼ dx. Rebuilt whenever `α`
+    /// changes via the right-rail slider.
+    stiff: molla::math::sparse::BsrMatrix,
+    /// Current α — when this drifts from `last_alpha_baked` we
+    /// rebuild `stiff` next frame.
+    alpha: f64,
+    last_alpha_baked: f64,
+    /// Backward-Euler step.
+    dt: f64,
+    /// Dirichlet BCs (top + bottom faces).
+    bcs: Vec<fem::BoundaryCondition>,
+    /// Current per-vertex temperature.
+    u: Vec<f64>,
+    /// Last CG residual (for the readout).
+    last_residual: f64,
+    /// Last CG iteration count (for the readout).
+    last_iters: usize,
+    /// Set by `apply_scene_switch` and cleared by the update system on
+    /// re-init.
+    needs_reset: bool,
+    /// Ribbon-button-driven flag — `true` means the user clicked
+    /// "Reset to T=0" on the right-rail pane. Cleared after the
+    /// solver re-initialises.
+    user_reset: bool,
+}
+
+impl Default for FemHeatExampleState {
+    fn default() -> Self {
+        let mesh = fem::FemMesh::tet_grid_3d(
+            FEM_HEAT_GRID,
+            FEM_HEAT_GRID,
+            FEM_HEAT_GRID,
+            1.0,
+            1.0,
+            1.0,
+        );
+        let space = fem::FunctionSpace::P1Nodal;
+        let mass = fem::assemble_global(&mesh, space, fem::compute_element_mass)
+            .expect("FEM heat: assemble mass");
+        let stiff = fem::assemble_global(&mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, FEM_HEAT_DEFAULT_ALPHA)
+        })
+        .expect("FEM heat: assemble stiffness");
+        let mut bcs = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.z.abs() < 1e-9 {
+                bcs.push(fem::BoundaryCondition::Dirichlet {
+                    vertex: i as u32,
+                    value: 0.0,
+                });
+            } else if (p.z - 1.0).abs() < 1e-9 {
+                bcs.push(fem::BoundaryCondition::Dirichlet {
+                    vertex: i as u32,
+                    value: 1.0,
+                });
+            }
+        }
+        let n = mesh.vert_count();
+        let mut u = vec![0.0_f64; n];
+        for bc in &bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
+                u[vertex as usize] = value;
+            }
+        }
+        Self {
+            mesh,
+            mass,
+            stiff,
+            alpha: FEM_HEAT_DEFAULT_ALPHA,
+            last_alpha_baked: FEM_HEAT_DEFAULT_ALPHA,
+            dt: FEM_HEAT_DEFAULT_DT,
+            bcs,
+            u,
+            last_residual: 0.0,
+            last_iters: 0,
+            needs_reset: false,
+            user_reset: false,
+        }
+    }
+}
+
+impl FemHeatExampleState {
+    fn rebuild_stiffness(&mut self) {
+        let space = fem::FunctionSpace::P1Nodal;
+        self.stiff = fem::assemble_global(&self.mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, self.alpha)
+        })
+        .expect("FEM heat: rebuild stiffness");
+        self.last_alpha_baked = self.alpha;
+    }
+
+    fn reset_temperature_field(&mut self) {
+        let n = self.mesh.vert_count();
+        self.u = vec![0.0_f64; n];
+        for bc in &self.bcs {
+            if let fem::BoundaryCondition::Dirichlet { vertex, value } = *bc {
+                self.u[vertex as usize] = value;
+            }
+        }
+        self.last_residual = 0.0;
+        self.last_iters = 0;
+    }
+}
+
+/// Empty molla model — the FEM heat demo carries its own mesh +
+/// solver in `FemHeatExampleState`; the standard pipeline is
+/// short-circuited in `step_simulation`.
+fn build_fem_heat_model() -> (mp::Model, Vec<BodyVisual>) {
+    let b = mp::ModelBuilder::new();
+    (b.build().expect("FEM heat: empty model"), Vec::new())
+}
+
+/// Per-frame system: rebuilds the stiffness matrix when α has
+/// changed, applies any pending reset, and runs one backward-Euler
+/// step.
+fn update_fem_heat_example(
+    sim: Res<Sim>,
+    mut state: ResMut<FemHeatExampleState>,
+    run: Res<SimRunState>,
+) {
+    if sim.scene != Scene::FemHeat {
+        return;
+    }
+    if state.needs_reset || state.user_reset {
+        state.reset_temperature_field();
+        state.needs_reset = false;
+        state.user_reset = false;
+    }
+    if (state.alpha - state.last_alpha_baked).abs() > 1e-12 {
+        state.rebuild_stiffness();
+    }
+    if run.paused {
+        return;
+    }
+    let dt = state.dt.max(1e-6);
+    let n = state.mesh.vert_count();
+    let f = vec![0.0_f64; n];
+    let result = molla::fem::solver::solve_transient_with_initial(
+        &state.mass,
+        &state.stiff,
+        &f,
+        &state.u.clone(),
+        dt,
+        &state.bcs,
+        &state.u.clone(),
+        molla::fem::solver::DEFAULT_MAX_ITERS,
+        molla::fem::solver::DEFAULT_TOL,
+    );
+    state.u = result.x;
+    state.last_residual = result.residual;
+    state.last_iters = result.iters;
+}
+
+/// Map a temperature value `t ∈ [0, 1]` to a colour (blue → cyan →
+/// yellow → red). Out-of-range values are clamped.
+fn fem_heat_colour(t: f64) -> Color {
+    let t = t.clamp(0.0, 1.0) as f32;
+    // Two-segment ramp: 0..0.5 = blue → green-ish, 0.5..1 = → red.
+    let (r, g, b) = if t < 0.5 {
+        let s = t * 2.0;
+        (0.05, 0.20 + 0.65 * s, 1.0 - 0.6 * s)
+    } else {
+        let s = (t - 0.5) * 2.0;
+        (0.05 + 0.95 * s, 0.85 - 0.55 * s, 0.40 - 0.40 * s)
+    };
+    Color::srgb(r, g, b)
+}
+
+/// Draw the FEM heat-equation tet wireframe with per-edge colour
+/// derived from the average of its endpoints' temperatures.
+fn draw_fem_heat_gizmos(
+    sim: Res<Sim>,
+    state: Res<FemHeatExampleState>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::FemHeat {
+        return;
+    }
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::with_capacity(state.mesh.cells.len() * 4);
+    let origin = FEM_HEAT_ORIGIN;
+    for cell in &state.mesh.cells {
+        if let fem::FemCell::Tet(v) = cell {
+            let edges = [
+                (v[0], v[1]),
+                (v[0], v[2]),
+                (v[0], v[3]),
+                (v[1], v[2]),
+                (v[1], v[3]),
+                (v[2], v[3]),
+            ];
+            for &(a, b) in &edges {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                let pa = state.mesh.vertices[a as usize];
+                let pb = state.mesh.vertices[b as usize];
+                let t_mid = 0.5 * (state.u[a as usize] + state.u[b as usize]);
+                let colour = fem_heat_colour(t_mid);
+                let av = origin + Vec3::new(pa.x as f32, pa.z as f32, pa.y as f32);
+                let bv = origin + Vec3::new(pb.x as f32, pb.z as f32, pb.y as f32);
+                gizmos.line(av, bv, colour);
+            }
+        }
+    }
+}
+
+/// Right-rail pane for `Scene::FemHeat`. Sliders for diffusivity α +
+/// timestep dt, residual readout, and the "Reset to T=0" button.
+fn fem_heat_pane(ui: &mut egui::Ui, state: &mut FemHeatExampleState) {
+    ui.label("FEM heat equation — Stage 36 v1");
+    ui.separator();
+    readout(
+        ui,
+        "Mesh",
+        &format!(
+            "{0}×{0}×{0} tets ({1} verts)",
+            FEM_HEAT_GRID,
+            state.mesh.vert_count()
+        ),
+    );
+    readout(ui, "DoFs", &format!("{}", state.u.len()));
+    ui.separator();
+    ui.label("Thermal diffusivity α");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.alpha, 0.05..=10.0).logarithmic(true),
+    );
+    ui.label("Time step dt");
+    let _ = ui.add(
+        egui::Slider::new(&mut state.dt, 0.001..=0.1).logarithmic(true),
+    );
+    ui.separator();
+    readout(ui, "Last residual", &format!("{:.3e}", state.last_residual));
+    readout(ui, "CG iters", &format!("{}", state.last_iters));
+    ui.separator();
+    if ui.button("Reset to T = 0").clicked() {
+        state.user_reset = true;
+    }
+    ui.small("BCs: T(z=0) = 0, T(z=1) = 1; sides insulating.");
+    ui.small("Steady state: T(z) = z (linear gradient).");
+}
+
