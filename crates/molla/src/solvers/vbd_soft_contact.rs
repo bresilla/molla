@@ -12,12 +12,12 @@
 //!
 //! ### Stage 33.1 — Edge-Edge (EE) contact
 //!
-//! VT alone misses cloth folds passing sideways through a tet.
-//! EE catches the case where two soft edges (one from each mesh)
-//! come within `margin` of each other. The current commit ships
-//! the [`SoftContact`] enum + the dispatch path so subsequent
-//! commits can drop in the EE narrow-phase + projection without
-//! touching call sites.
+//! VT alone misses cloth folds passing sideways through a tet —
+//! e.g. a rope sliding edge-first through a triangle gap, where no
+//! single vertex pierces a tri but two edges cross. EE catches the
+//! case where two soft edges (one from each mesh) come within
+//! `margin` of each other and applies a position projection that
+//! pushes them apart along the edge-cross normal.
 //!
 //! Same-surface pairs are filtered out at this stage (self-collision
 //! lands in Stage 33.3 with proper adjacency exclusion).
@@ -92,9 +92,6 @@ pub enum SoftContact {
 /// Gather both VT and EE contacts for the current state. Internally
 /// concatenates the VT + EE narrow-phase results. Callers consume
 /// `Vec<SoftContact>` directly via [`project_soft_contacts`].
-///
-/// Stage 33: VT only — the EE half lights up in Stage 33.1 once the
-/// edge extraction + segment-segment narrow-phase land.
 pub fn gather_soft_contacts(
     model: &Model,
     state: &State,
@@ -144,22 +141,15 @@ pub fn gather_vt_contacts(
     if tris.is_empty() {
         return out;
     }
-    let inv_mass = match model.particle_inv_mass.host() {
-        Ok(m) => m,
-        Err(_) => return out,
-    };
-
-    // For each soft surface, walk its vertex range.
+    // For each soft surface, walk its vertex range. Pinned vertices
+    // still produce contacts (the *other* surface's tri verts get a
+    // force from the projection sweep) but their own block solve
+    // skips the displacement; the inverse-mass weighting in the
+    // projection step picks up the pin via `w_v = 0`.
     for (s_idx, s) in model.soft_surfaces.iter().enumerate() {
         let v_lo = s.vertex_offset as usize;
         let v_hi = v_lo + s.vertex_count as usize;
         for v_global in v_lo..v_hi {
-            // Pinned vertices still produce contacts (the *other*
-            // surface's tri verts get a force) but their own block
-            // solve skips the displacement.
-            // We still need to surface them so the tri side moves.
-            let _ = inv_mass[v_global];
-
             let p = q[v_global];
             let candidates = bvh.query_point(p, margin);
             if candidates.is_empty() {
@@ -438,22 +428,34 @@ pub fn gather_ee_contacts(
                 let da = a1 - a0;
                 let db = b1 - b0;
                 let cross = da.cross(db);
-                let cross_len = cross.length();
-                let normal = if cross_len > 1.0e-9 {
-                    let mut n = cross / cross_len;
-                    // Sign-align with `(p_a - p_b)` so the penalty
-                    // pushes apart along the same direction the
-                    // closest-point displacement implies.
-                    let pa_pb = res.point_a - res.point_b;
-                    if pa_pb.dot(n) < 0.0 {
-                        n = -n;
-                    }
-                    n
-                } else if res.dist > 1.0e-9 {
-                    (res.point_a - res.point_b) / res.dist
-                } else {
-                    Vec3::Y
-                };
+                let cross_len2 = cross.length_squared();
+                // Near-parallel gate: skip when the edges are
+                // close to colinear / coplanar in their projection
+                // (sin angle below `EE_PARALLEL_SIN`). For two
+                // perfectly perpendicular edges
+                // |cross|² = |da|² · |db|²; for parallel edges it
+                // is zero. The threshold below corresponds to
+                // ~5.7° between the edges. Below that the EE cross
+                // normal is unstable and the contact is degenerate
+                // (the same penetration is captured by VT contacts
+                // at one of the segment endpoints — see the
+                // EE_INTERIOR_EPS endpoint gate above).
+                const EE_PARALLEL_SIN: Real = 0.1;
+                let parallel_thresh =
+                    EE_PARALLEL_SIN * EE_PARALLEL_SIN * da.length_squared() * db.length_squared();
+                if cross_len2 < parallel_thresh {
+                    continue;
+                }
+                let cross_len = cross_len2.sqrt();
+                let mut n = cross / cross_len;
+                // Sign-align with `(p_a - p_b)` so the penalty
+                // pushes apart along the same direction the
+                // closest-point displacement implies.
+                let pa_pb = res.point_a - res.point_b;
+                if pa_pb.dot(n) < 0.0 {
+                    n = -n;
+                }
+                let normal = n;
 
                 let c = EeContact {
                     edge_a_global_id: e_a_idx as u32,
@@ -642,7 +644,17 @@ fn project_one_ee(
     let wb0 = 1.0 - tb;
     let wb1 = tb;
 
-    let _ = contact_normal_sum; // EE skips velocity damping in v1.
+    // EE intentionally skips the `contact_normal_sum` accumulator.
+    // The EE cross-product normal points along the edge-perpendicular
+    // axis, which for floor-aligned edge pairs is often skewed away
+    // from the true contact-vertical direction. Mixing those into the
+    // per-vertex velocity-damping average tilts the friction direction
+    // off the VT normal and breaks `coulomb_stick_below_threshold`
+    // (the cube creeps sideways under sub-μ·g lateral force).
+    // The position-form EE penalty above is enough to stop the
+    // rope-through-tet tunneling case without polluting the
+    // velocity-recovery normal direction.
+    let _ = contact_normal_sum;
 
     let m_a0 = inv_mass[ia0];
     let m_a1 = inv_mass[ia1];
@@ -978,20 +990,13 @@ pub fn ccd_pass(
 }
 
 // Stage 33.5 — friction + restitution (ported from the pre-rename
-// vbd_vt_contact.rs). The `_with_hint` form here ignores the
-// previous-normal LUT (anti-tunneling normal sign refinement) — the
-// existing `gather_vt_contacts` already does the same-surface filter
-// and self-collision exclusion. Future Stage 33.5.1 can wire the hint
-// LUT in; for now the basic gather is enough for cube-on-cloth.
-fn gather_vt_contacts_with_hint(
-    model: &Model,
-    state: &State,
-    bvh: &SoftBvh,
-    margin: Real,
-    _prev_normal_lut: &std::collections::HashMap<(u32, u32), Vec3>,
-) -> Vec<VtContact> {
-    gather_vt_contacts(model, state, bvh, margin)
-}
+// vbd_vt_contact.rs). The previous merge included a
+// `gather_vt_contacts_with_hint` shim that took a `prev_normal_lut`
+// argument and immediately discarded it; it has been removed because
+// `gather_vt_contacts` already performs the same-surface filter and
+// self-collision exclusion that the hint was meant to refine. A
+// future hint-aware gather (anti-tunneling normal sign refinement)
+// can ship as a new function rather than a silently-broken wrapper.
 
 /// Stage 33.5 — copy `prev_friction_impulse` from `prev` into the
 /// matching contact in `current` (matched by `(vertex_global_id,
@@ -1012,9 +1017,22 @@ pub fn warm_start_friction(prev: &[VtContact], current: &mut [VtContact]) {
     }
 }
 
-/// Stage 33.5 — friction-aware VT projection. Returns the substep's
-/// final contact set (with `prev_friction_impulse` populated) so the
-/// caller can persist it for warm-starting the next substep.
+/// Stage 33.5 — friction-aware VT projection + Stage 33.1 EE
+/// projection. Returns the substep's final VT contact set (with
+/// `prev_friction_impulse` populated) so the caller can persist it
+/// for warm-starting the next substep.
+///
+/// Each Jacobi sweep runs:
+/// 1. BVH refit against the latest positions.
+/// 2. VT gather + friction-aware position projection (Stage 33.5).
+/// 3. EE gather + position projection (Stage 33.1) — frictionless
+///    in v1; friction along an edge-edge contact is geometrically
+///    ambiguous and the EE pass exists primarily to stop ropes /
+///    cloth folds from threading through tet faces.
+///
+/// Both VT and EE feed the per-vertex `contact_normal_sum`, so the
+/// post-loop velocity recovery (restitution + Coulomb tangential
+/// damping) sees normals from both contact flavours.
 pub fn project_vt_contacts(
     model: &Model,
     state: &mut State,
@@ -1039,28 +1057,23 @@ pub fn project_vt_contacts(
     let mut friction_per_v: Vec<Real> = vec![0.0; model.particle_count];
     let v_eps: Real = 1.0e-3;
 
-    let mut prev_normal_lut: std::collections::HashMap<(u32, u32), Vec3> =
-        std::collections::HashMap::with_capacity(prev_contacts.len());
-    for c in prev_contacts {
-        let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
-        prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
-    }
     let mut final_contacts: Vec<VtContact> = Vec::new();
 
     for sweep_idx in 0..n_sweeps {
         bvh.refit(model, state);
-        let mut contacts =
-            gather_vt_contacts_with_hint(model, state, bvh, margin, &prev_normal_lut);
+        let mut contacts = gather_vt_contacts(model, state, bvh, margin);
         if sweep_idx == 0 {
             warm_start_friction(prev_contacts, &mut contacts);
         } else {
             warm_start_friction(&final_contacts, &mut contacts);
         }
-        if contacts.is_empty() {
+        let ee_contacts = gather_ee_contacts(model, state, bvh, margin);
+        if contacts.is_empty() && ee_contacts.is_empty() {
             break;
         }
         let q = state.particle_q.host_mut()?;
         let tris: &[[u32; 3]] = &model.soft_surface_tris;
+        let edges: &[[u32; 2]] = &model.soft_surface_edges;
         for c in contacts.iter_mut() {
             let v = c.vertex_global_id as usize;
             let tri = tris[c.tri_global_id as usize];
@@ -1126,9 +1139,31 @@ pub fn project_vt_contacts(
                 }
             }
         }
-        for c in &contacts {
-            let n = Vec3::new(c.normal[0], c.normal[1], c.normal[2]);
-            prev_normal_lut.insert((c.vertex_global_id, c.tri_global_id), n);
+        // EE projection — frictionless penalty for the case VT
+        // misses (rope / cloth fold thread through a tri without
+        // any vertex piercing the tri). Skip EE contacts whose
+        // four endpoints ALL already have a VT contact this sweep:
+        // those vertices are already being pushed apart along the
+        // VT normal, and adding the EE cross-product normal on top
+        // double-counts and tilts the resulting friction direction.
+        // The rope-through-tet case (the canonical EE win) has
+        // edge endpoints with NO VT contact (they're between tri
+        // faces, not on a vertex), so this filter preserves it.
+        for ee in &ee_contacts {
+            let ea = edges[ee.edge_a_global_id as usize];
+            let eb = ee.edge_b_global_id as usize;
+            let eb = edges[eb];
+            let already_vt = |idx: usize| -> bool {
+                contact_normal_sum[idx].length_squared() > 1.0e-12
+            };
+            if already_vt(ea[0] as usize)
+                && already_vt(ea[1] as usize)
+                && already_vt(eb[0] as usize)
+                && already_vt(eb[1] as usize)
+            {
+                continue;
+            }
+            project_one_ee(ee, q, edges, &inv_mass, &mut contact_normal_sum);
         }
         final_contacts = contacts;
     }

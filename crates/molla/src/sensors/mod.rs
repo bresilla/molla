@@ -6,14 +6,15 @@
 //! dispatch wrapper and a thin orchestrator. CPU fallback paths
 //! exist only as test oracles, not as the primary execution path.
 //!
-//! Stage 9 deliverables (in progress):
+//! Modules:
 //! - [`raycast`] — closest-hit ray vs collision shapes. Lives in
 //!   `shaders/raycast.wgsl` with the [`Raycaster`] orchestrator on
 //!   top. Sphere / Plane / Box / Capsule / Cylinder supported on GPU;
 //!   Triangle / TriMesh skipped (will land with stage 11's mesh BVH).
-//! - `imu` — body-frame linear acceleration + angular velocity (TODO).
-//! - `contact` — per-body contact summary (TODO).
-//! - `frame_transform` — pose tracking with optional smoothing (TODO).
+//! - [`imu`] — body-frame linear acceleration + angular velocity.
+//! - [`contact`] — per-body contact summary.
+//! - [`frame_transform`] — pose tracking with optional smoothing.
+//! - [`tiled_camera`] — tiled depth/colour camera for RL pixel obs.
 
 #[cfg(feature = "gpu")]
 pub mod contact;

@@ -1437,6 +1437,8 @@ fn trimesh_pair(
         // against plane".
         let plane_normal_world = match other_geom {
             ShapeGeometry::Plane { normal } => other_xf.rotation * normal,
+            // Outer `matches!(other_geom, Plane)` guarantees this arm
+            // is dead — the inner match destructures the same value.
             _ => unreachable!(),
         };
         let plane_p = other_xf.position;

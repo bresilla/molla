@@ -178,7 +178,7 @@ mod tests {
     /// rotates the child accordingly via FK.
     #[test]
     fn ball_joint_fk_rotates_via_quat() {
-        use crate::math::{Quat, Vec3};
+        use crate::math::Quat;
         let mut b = ModelBuilder::new();
         let body = b.add_body(BodyParams::new());
         b.add_joint_ball(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
