@@ -147,6 +147,19 @@ impl AdamGpuKernel {
         if n == 0 {
             return Ok(());
         }
+        // Adam's bias correction factors are `1 − βᵗ`; at t = 0 they
+        // are exactly 0 and the per-element update divides by them.
+        // The kernel clamps to a tiny ε to avoid INF but the result
+        // is still meaningless. Reject step = 0 explicitly so callers
+        // can't shoot themselves in the foot with an off-by-one in
+        // the host-side step counter.
+        if step == 0 {
+            return Err(Error::Build(
+                "AdamGpuKernel::step: step must be >= 1 (1-based step index per \
+                 Kingma & Ba; the bias correction is undefined at step 0)"
+                    .into(),
+            ));
+        }
         let uniforms = AdamUniforms {
             n,
             step,

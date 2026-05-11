@@ -78,6 +78,27 @@ impl BsrGpu {
                 m.b
             )));
         }
+        // CSR shape consistency — the public `BsrMatrix` API permits
+        // construction with malformed buffers (row_offsets/values/
+        // col_idx out of sync). Without this check we'd upload
+        // inconsistent buffers and produce silent OOB reads inside
+        // the WGSL kernel.
+        let expected_nnz = *m.row_offsets.last().unwrap_or(&0);
+        if m.values.len() != expected_nnz || m.col_idx.len() != expected_nnz {
+            return Err(Error::Build(format!(
+                "BsrGpu::upload: BsrMatrix shape inconsistency — \
+                 row_offsets[last]={expected_nnz} but values.len()={} and col_idx.len()={}",
+                m.values.len(),
+                m.col_idx.len()
+            )));
+        }
+        if m.row_offsets.len() != m.block_rows + 1 {
+            return Err(Error::Build(format!(
+                "BsrGpu::upload: row_offsets.len() = {} but block_rows + 1 = {}",
+                m.row_offsets.len(),
+                m.block_rows + 1
+            )));
+        }
         let row_offsets_u32: Vec<u32> = m.row_offsets.iter().map(|&v| v as u32).collect();
         let col_idx_u32: Vec<u32> = m.col_idx.iter().map(|&v| v as u32).collect();
         let values_f32: Vec<f32> = m.values.iter().map(|&v| v as f32).collect();
@@ -462,13 +483,23 @@ impl BsrAlgebraKernel {
 
     /// Sparse axpy: `B = α · A + β · B` for the SAME-PATTERN case.
     ///
-    /// Caller asserts that A and B share identical `row_offsets` and
-    /// `col_indices`; only `values` differ. The check is performed
-    /// host-side via [`BsrGpu::nnz`] equality + a `row_offsets`
-    /// readback; if they don't match the call errors out (the
-    /// pattern-union case isn't implemented in v1 — see module
-    /// docstring).
-    pub fn axpy(
+    /// **Safety contract:** caller asserts that A and B share
+    /// **identical `row_offsets` AND `col_indices`** — only `values`
+    /// differ. We verify only the cheap scalar shape `(nnz, nrows,
+    /// ncols)` here; a true pattern check would require reading
+    /// `row_offsets` + `col_indices` back to the host (~2 mappable
+    /// readbacks per call) which makes the function unusable inside
+    /// any per-iter solver loop. The pattern-union case is not
+    /// implemented in v1 — see module docstring.
+    ///
+    /// If you pass mismatched patterns this routine produces
+    /// **numerical garbage silently** (each slot in B's `values` is
+    /// updated with α·A's same-slot value, but those slots address
+    /// different `(row, col)` pairs). Build the pattern once via
+    /// [`BsrGpu::upload`] and keep the same pattern across all axpy
+    /// calls — or use `bsr_mm` / `bsr_axpy_union` (v2) for the
+    /// pattern-changing case.
+    pub fn axpy_same_pattern_unchecked(
         &self,
         a: &BsrGpu,
         b: &mut BsrGpu,
@@ -477,8 +508,10 @@ impl BsrAlgebraKernel {
     ) -> Result<()> {
         if a.nnz != b.nnz || a.nrows != b.nrows || a.ncols != b.ncols {
             return Err(Error::Build(format!(
-                "BsrAlgebraKernel::axpy: pattern mismatch — A is {}x{} nnz={}, B is {}x{} nnz={}; \
-                 only same-pattern axpy is implemented in v1",
+                "BsrAlgebraKernel::axpy_same_pattern_unchecked: shape mismatch — \
+                 A is {}x{} nnz={}, B is {}x{} nnz={}; same-pattern axpy requires \
+                 identical (nrows, ncols, nnz). The pattern-union case is not \
+                 implemented in v1.",
                 a.nrows, a.ncols, a.nnz, b.nrows, b.ncols, b.nnz
             )));
         }

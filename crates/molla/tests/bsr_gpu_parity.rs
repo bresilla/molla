@@ -294,7 +294,9 @@ fn bsr_axpy_same_pattern_matches_cpu() {
     let kernel = BsrAlgebraKernel::new(device.clone(), queue.clone());
     let a_gpu = BsrGpu::upload(&device, &queue, &a_cpu).expect("a upload");
     let mut b_gpu = BsrGpu::upload(&device, &queue, &b_cpu).expect("b upload");
-    kernel.axpy(&a_gpu, &mut b_gpu, alpha, beta).expect("axpy");
+    kernel
+        .axpy_same_pattern_unchecked(&a_gpu, &mut b_gpu, alpha, beta)
+        .expect("axpy");
 
     let b_read = b_gpu.read_back(&device, &queue).expect("readback");
     let mut max_err: f32 = 0.0;

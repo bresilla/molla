@@ -796,6 +796,29 @@ impl RadixSortKernel64 {
 
         // Pull the offsets host-side so we can tag keys per-segment.
         let offsets_host = read_u32(&self.device, &self.queue, segment_offsets, n_segments + 1)?;
+        // Validate offset structure BEFORE indexing into keys_hi —
+        // otherwise a malformed `segment_offsets` would panic deep
+        // inside a `&mut hi_host[start..end]` slice with no
+        // actionable error.
+        for seg in 0..n_segments as usize {
+            if offsets_host[seg + 1] < offsets_host[seg] {
+                return Err(Error::Gpu(format!(
+                    "segmented_sort_pairs_u64: non-monotonic segment_offsets — \
+                     offsets[{seg}]={} > offsets[{}]={}",
+                    offsets_host[seg],
+                    seg + 1,
+                    offsets_host[seg + 1]
+                )));
+            }
+        }
+        let total_from_offsets = offsets_host[n_segments as usize];
+        if total_from_offsets != n_total {
+            return Err(Error::Gpu(format!(
+                "segmented_sort_pairs_u64: segment_offsets[{n_segments}] = \
+                 {total_from_offsets} but n_total = {n_total}; segment offsets must \
+                 cover exactly the input range",
+            )));
+        }
         // Pull keys_hi host-side, tag with segment id, write back.
         let mut hi_host = read_u32(&self.device, &self.queue, keys_hi, n_total)?;
         for seg in 0..n_segments as usize {

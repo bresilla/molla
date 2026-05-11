@@ -39,6 +39,15 @@ struct Uniforms {
 }
 
 /// Reusable GPU u32-scan dispatcher.
+///
+/// **Concurrency:** the internal `group_sums` + `uniforms` buffers
+/// are shared across calls on a single instance. Issuing a second
+/// scan before the first's GPU submission has fully drained will
+/// race on those buffers — the second scan's pass-1 may read the
+/// first scan's stale `group_sums`. For pipelined usage (multiple
+/// scans in flight) construct one `ScanKernel` per logical stream,
+/// or wait for `device.poll(...)` between calls. Single-threaded
+/// "submit, poll, submit" usage is safe.
 pub struct ScanKernel {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
