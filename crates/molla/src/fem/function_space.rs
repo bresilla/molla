@@ -5,10 +5,11 @@
 //! DoFs per vertex) — supports linear elasticity (`dim = 3` in 3D,
 //! `dim = 2` for plane-strain 2D).
 //! Stage 36.3 adds `P2Nodal` (vertex + edge-midpoint DoFs).
+//! Stage 39B adds `DGNodal { degree }` — discontinuous Galerkin nodal
+//! basis with per-cell DoFs (no inter-cell sharing).
 //!
 //! Follow-up stages will extend this further:
 //!
-//! - `P0CellWise`     — one DoF per cell (DG / FV variants).
 //! - `RaviartThomas`  — face-normal DoFs (Stage 36.2 mixed Stokes).
 //!
 //! Keeping the enum closed for now means we can pattern-match on it in
@@ -38,6 +39,21 @@ pub enum FunctionSpace {
     /// extended for `dim` components. Stage 36.2 Taylor-Hood velocity
     /// uses `dim = 3` in 3D, `dim = 2` for 2D.
     P2Vector { dim: usize },
+    /// Stage 39B — Discontinuous Galerkin nodal basis of the given
+    /// polynomial `degree`. DoFs are **per-cell**: a vertex shared by
+    /// `k` cells contributes `k * ndof_per_cell` DoFs total — one set
+    /// per cell. Inter-element coupling is via numerical flux at face
+    /// quadrature points, NOT via shared DoFs.
+    ///
+    /// `ndof_per_cell` is `(deg+1)(deg+2)/2` for triangles (1 for P0,
+    /// 3 for P1, 6 for P2) and `C(deg+3, 3)` for tetrahedra (1 for P0,
+    /// 4 for P1, 10 for P2). v1 ships support for `degree ∈ {0, 1}`;
+    /// higher-degree DG is a follow-up stage.
+    ///
+    /// The DoF offset for cell `c` is `c * ndof_per_cell` and the
+    /// local-`i`-th DoF of cell `c` lives at global index
+    /// `c * ndof_per_cell + i`.
+    DGNodal { degree: usize },
 }
 
 impl FunctionSpace {
@@ -47,6 +63,9 @@ impl FunctionSpace {
     /// - `P2Nodal` → `vertex_count + edge_count` (one extra DoF at the
     ///   midpoint of every unique undirected edge in the mesh).
     /// - `P2Vector { dim }` → `(vertex_count + edge_count) * dim`.
+    /// - `DGNodal { degree }` → `Σ_cells ndof_per_cell(cell, degree)`.
+    ///   For a homogeneous mesh this collapses to `cell_count *
+    ///   ndof_per_cell(degree)`. Returns 0 on an empty mesh.
     #[must_use]
     pub fn ndof(&self, mesh: &FemMesh) -> usize {
         match self {
@@ -60,12 +79,21 @@ impl FunctionSpace {
                 let (edges, _) = compute_edges(mesh);
                 (mesh.vert_count() + edges.len()) * dim
             }
+            FunctionSpace::DGNodal { degree } => mesh
+                .cells
+                .iter()
+                .map(|c| dg_ndof_per_cell(c, *degree))
+                .sum(),
         }
     }
 
     /// Number of scalar DoFs per node (1 for scalar fields, `dim`
     /// for vector fields). For `P2*` spaces a "node" is either a
-    /// corner or an edge-midpoint.
+    /// corner or an edge-midpoint. For DG spaces the per-cell layout
+    /// is exposed via [`FunctionSpace::dg_ndof_per_cell`] and the
+    /// concept of "per-vertex" doesn't apply; returns 1 as a sensible
+    /// default so DG-aware paths can fall through CG-style assembly
+    /// helpers safely.
     #[must_use]
     pub fn dofs_per_vertex(&self) -> usize {
         match self {
@@ -73,7 +101,46 @@ impl FunctionSpace {
             FunctionSpace::P2Nodal => 1,
             FunctionSpace::P1Vector { dim } => *dim,
             FunctionSpace::P2Vector { dim } => *dim,
+            FunctionSpace::DGNodal { .. } => 1,
         }
+    }
+
+    /// Per-cell DoF count for a DG function space — `(deg+1)(deg+2)/2`
+    /// for triangles and `C(deg+3, 3)` for tetrahedra.
+    ///
+    /// Returns `None` for non-DG spaces; the caller should use
+    /// [`FunctionSpace::ndof`] / `dofs_per_vertex` for those.
+    ///
+    /// # Panics
+    /// Panics for DG `degree > 2` — those polynomial orders aren't
+    /// shipped in v1 (the per-cell shape-function tables are only
+    /// built for `deg ∈ {0, 1, 2}`). The DG element kernels in v1
+    /// further restrict `degree ≤ 1`.
+    #[must_use]
+    pub fn dg_ndof_per_cell(&self, cell: &FemCell) -> Option<usize> {
+        match self {
+            FunctionSpace::DGNodal { degree } => Some(dg_ndof_per_cell(cell, *degree)),
+            _ => None,
+        }
+    }
+}
+
+/// Per-cell DoF count for a DG element of polynomial `degree`.
+///
+/// - Tri P0 = 1, P1 = 3, P2 = 6 → `(deg+1)(deg+2)/2`
+/// - Tet P0 = 1, P1 = 4, P2 = 10 → `C(deg+3, 3) = (deg+1)(deg+2)(deg+3)/6`
+///
+/// Panics for `degree > 2` — the v1 DG element kernels (see
+/// [`crate::fem::dg_element`]) only support `degree ∈ {0, 1}`.
+#[must_use]
+pub fn dg_ndof_per_cell(cell: &FemCell, degree: usize) -> usize {
+    assert!(
+        degree <= 2,
+        "DG: degree {degree} out of range (v1 supports 0..=2)"
+    );
+    match cell {
+        FemCell::Tri(_) => (degree + 1) * (degree + 2) / 2,
+        FemCell::Tet(_) => (degree + 1) * (degree + 2) * (degree + 3) / 6,
     }
 }
 
@@ -201,5 +268,27 @@ mod tests {
         assert_eq!(FunctionSpace::P2Vector { dim: 3 }.ndof(&m), 3 * n_nodes);
         assert_eq!(FunctionSpace::P2Vector { dim: 2 }.ndof(&m), 2 * n_nodes);
         assert_eq!(FunctionSpace::P2Vector { dim: 3 }.dofs_per_vertex(), 3);
+    }
+
+    #[test]
+    fn dg_p0_ndof_equals_cell_count() {
+        let m = FemMesh::tri_grid_2d(3, 3, 1.0, 1.0);
+        let space = FunctionSpace::DGNodal { degree: 0 };
+        assert_eq!(space.ndof(&m), m.cell_count());
+    }
+
+    #[test]
+    fn dg_p1_ndof_equals_three_times_tri_count() {
+        let m = FemMesh::tri_grid_2d(4, 4, 1.0, 1.0);
+        let space = FunctionSpace::DGNodal { degree: 1 };
+        // Each tri contributes 3 DG-P1 DoFs (no sharing).
+        assert_eq!(space.ndof(&m), 3 * m.cell_count());
+    }
+
+    #[test]
+    fn dg_p1_tet_ndof_equals_four_times_tet_count() {
+        let m = FemMesh::tet_grid_3d(2, 2, 2, 1.0, 1.0, 1.0);
+        let space = FunctionSpace::DGNodal { degree: 1 };
+        assert_eq!(space.ndof(&m), 4 * m.cell_count());
     }
 }

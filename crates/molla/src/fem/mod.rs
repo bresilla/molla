@@ -52,6 +52,7 @@ pub mod adjoint;
 pub mod apic_coupling;
 pub mod assembly;
 pub mod bc;
+pub mod dg_element;
 pub mod element;
 #[cfg(feature = "gpu")]
 pub mod fft_ns;
@@ -69,6 +70,10 @@ pub mod stokes;
 pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_adjoint_with};
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 pub use assembly::assemble_global;
+pub use dg_element::{
+    assemble_dg_global, compute_dg_flux_jump_block, compute_element_dg_mass,
+    compute_element_dg_stiffness, compute_interior_faces, InteriorFace,
+};
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 #[cfg(feature = "gpu")]
 pub use fft_ns::{
@@ -82,7 +87,7 @@ pub use element::{
     compute_element_st_venant_kirchhoff_stress, compute_element_stiffness,
     compute_element_supg_convection, compute_element_wave_stiffness,
 };
-pub use function_space::{compute_edges, FunctionSpace};
+pub use function_space::{compute_edges, dg_ndof_per_cell, FunctionSpace};
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};
