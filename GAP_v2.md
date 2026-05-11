@@ -1,6 +1,7 @@
 # GAP analysis v2 — molla vs Warp + Newton (post-FEM-GPU push)
 
 **Refreshed:** 2026-05-11 (after Stage 36.5–37.8 family completion).
+**Addendum 2026-05-11 evening — Stages 39, 40, 28.1, 41, 42, 43, 44, 45, 46 shipped.** See §11 (Addendum) below for the full landing record; §4 (Tier-2) and §5 (Tier-3) are now mostly closed. The original §0–§10 analysis is preserved as written for historical record.
 **Method:** 5 independent parallel read-only agent scans:
   - Warp examples (2 agents): `xtra/warp/warp/examples/` files vs molla viewer scenes
   - Warp library (1 agent): `xtra/warp/warp/{fem,sparse,_src,native,optim}` vs molla compute/kernels
@@ -308,3 +309,81 @@ Both **Style3D cloth** and **Kamino** are out-of-scope choices, not gaps that ne
 - **Predecessor:** `GAP.md` (2026-05-09; drove Stages 14–24e.2)
 - **Recent commits driving this update:** `8dd1fe5` (Slice E), `8b27d24` (Slice F), `479387d` (Slice G), `c509427` (Slice A), `c0d737e` (Slice D), `65f90ec` (combined Slice H + russell + assembly perf), `ddf017f` (PCG), `3fc3d9b` (steppers use PCG), `0af1727` (CPU PCG paths), `9048c7f` (russell singularity), `50c3923` + `70377d0` (tile filter + compaction scenes)
 - **Stage 38 commits (post-GAP_v2 v1):** `bba46e7` (graph coloring), `e99d93f` (BSR algebra), `f3325b5` (adj_svd3), `bb17a41` (scan + radix-64), `0eaaabd` (Adam + SGD), `08e7b04` (AdamLandscape scene #83), `90f3708` (critic fixes), `dc70cd2` + `4a559e2` (wire coloring into builder, Stage 38d.1), `6934075` (Stage 38.1 — differentiable MPM)
+
+---
+
+## 11. Addendum — 2026-05-11 evening (Stages 39–46)
+
+After GAP_v2 v2 was written, three more parallel-agent batches shipped, closing the entire Tier-2 list and most of Tier-3.
+
+### 11.1 Stage 39 cluster (Tier-2 closeout)
+
+| Sub-stage | Title | Commit |
+|---|---|---|
+| 39A | CPU implicit MPM + Bingham rheology | `e02f180`, `7d7a737` |
+| 39B | DG (Discontinuous Galerkin) P0/P1 basis | `d97b5c1` |
+| 39C | 2D Stam stable fluid (CPU + GPU FFT proj) | `75156f7` |
+| 39D | Hydroelastic anchor + aggregate reduction | `0ac863c` |
+| 39E | CABLE joint type (1 stretch + 1 bend DoF) | `09e4868` |
+| 39F | Full-GPU SpGEMM with bitmap symbolic | `399a1f8` |
+| 38.2 | Differentiable FEM (Adam fits Young's modulus) | `93341f3` |
+
+§4 Tier-2 (all 5 items) is now **closed**.
+
+### 11.2 Stage 40+ v1 batch (PLAN.md L5717+ follow-ups)
+
+| Stage | Title | Commit(s) |
+|---|---|---|
+| 40 v1 | Implicit MPM: full 27-pt Newton Hessian + GPU GS sweep | `2abb95b`, `8cff85f`, `e1cae93` |
+| 28.1 v1 | GPU MPR portal-loop + GPU contact reduction | `b40dc99`, `6c78d67`, `0606233` |
+| 41 v1 | GPU FEM elasticity end-to-end (1 of 4 sub-pipelines) | `199f640`, `72ce86f`, `fcde98b` |
+| 42 v1 | Hill-type muscle for CABLE joints | `1272b5d` |
+| 43 v1 | DG P2 + numerical-flux library + BJ slope limiter | `7bb5402` |
+| 44 v1 | Forward 3DGS Gaussian raytrace renderer | `d4583a7` |
+| 45 v1 | AMR FEM (data structure + uniform refinement) | `1e2c5d5` |
+
+### 11.3 Stage 40+ v2 batch (v2 follow-ups)
+
+| Stage | Title | Commit |
+|---|---|---|
+| 40 v2 | GPU P2G + predict + G2P, 5.9–9.9× speedup at 10k particles | `0172745`, `d8a2881`, `bb712fd` |
+| 28.1 v2 | `NarrowPhaseBackend` enum + pipeline routing | `d4ebc38` |
+| 41 v2 sub-2 | GPU steady-state Stokes (Taylor-Hood + Uzawa-CG) | `de9d43b` |
+| 41 v2 sub-3 | GPU APIC FEM-MPM coupling, 14.5× speedup | `5fb4d7d` |
+| 41 v2 sub-4 | GPU hydroelastic pressure + anchor reduction | `f3febbe` |
+| 42 v2 | Muscle co-contraction (CSR) + activation lag + tendon SEE | `e2f54ed` |
+| 43 v2 | DG weak Dirichlet BC + system DG (SWE) + SSP-RK2/RK3 | `00f36c1` |
+| 44 v2 | 3DGS reverse adjoint + pose-recovery Adam loop | `237caa2` |
+| 45 v2 | AMR hanging-node constraints + 2:1 balance | `a7c51f6` |
+
+§5 Tier-3:
+- **Implicit MPM with rheology** → SHIPPED Stage 39A + 40 v1/v2 (now 5–10× GPU vs CPU).
+- **Differentiable Gaussian raytrace renderer** → SHIPPED Stage 44 v1+v2 (forward + reverse + pose recovery).
+- **Adaptive grid FEM (AMR)** → SHIPPED Stage 45 v1+v2 (data structure + hanging nodes + non-uniform refinement).
+- **H(curl) / Nedelec elements** → IN FLIGHT (Stage 46 agent running).
+- **NonconformingField** → still open.
+- Kamino + Style3D remain explicit OOS.
+
+### 11.4 What's still open after this addendum
+
+- **Tier-3:** NonconformingField (non-matching mesh contact, ~1-2 weeks). Genuine new physics axis.
+- **40 v3:** Bingham return mapping on GPU (in flight).
+- **41 v3:** Time-stepping NS on GPU (in flight).
+- **41 follow-ups:** SUPG GPU stabilization, multi-pair batching for hydroelastic, GPU coarsening for AMR.
+- **42 v3:** GPU muscle kernel (currently CPU-only — Featherstone GPU does not consume muscle buffers).
+- **43 v3:** HLL/HLLC flux for systems, Krivodonova characteristic limiter, Roe SWE.
+- **44 v3:** Spherical harmonics for view-dependent splat color (in flight).
+- **45 v3:** P2 hanging-node constraint + DG-AMR + state interpolation between refinement events (in flight).
+- **GPU port closures:** Featherstone GPU now lags behind Hessian/Stokes/APIC GPU; Stage 33.2.1 GPU friction is shipped but the soft-contact pipeline has more CPU-only edges.
+- **Critic round on Stages 39–46.** 22+ stages shipped without a focused read-only audit; an analogue of Stage 38's `90f3708` critic pass would be high-value.
+
+### 11.5 Recommendation for next push
+
+The natural next set is **the v3 in-flight cluster** (40, 41, 44, 45) plus **Stage 46 H(curl)** — all currently running in parallel. After they land, the highest-impact open items are:
+
+1. **Critic round** on Stages 39–46 (read-only audit; 1 day).
+2. **NonconformingField** (last open Tier-3 physics axis; 1-2 weeks).
+3. **GPU muscle kernel** + **GPU Featherstone parity refresh** (closing the actuator-pipeline GPU edge; 2-3 days).
+4. **Time-harmonic Maxwell** if H(curl) lands cleanly (eddy currents + dielectrics; 3-5 days).
+5. **Viewer scenes** for the 22+ new capabilities (~1-2 days mechanical pass; currently zero new viewer scenes for any of Stages 39–46 except #93 implicit MPM Bingham).
+
