@@ -13,15 +13,15 @@
 
 ## 0. Executive summary
 
-molla today is **substantially feature-complete relative to Newton on the core engine surface** and **leading on FEM + soft contact**. The recent FEM-GPU push (Stages 36.5–37.8) added persistent GPU steppers, Jacobi-preconditioned resident CG, a direct-solver bridge, and 35 new viewer scenes covering Warp's FEM/MPM/tile primitive demos.
+molla today is **substantially feature-complete relative to Newton on the core engine surface** and **leading on FEM + soft contact + differentiable continuum mechanics**. Since the v2 doc was first written (the day Stage 36.5–37.8 closed), the **Tier-1 cluster shipped in full**: GPU sparse BSR algebra, adjoint SVD3, an `optim/` module (Adam + SGD), graph coloring, device-wide scan + 64-bit segmented radix sort. Plus a capstone: **Stage 38.1 — differentiable MPM** that chains `adj_svd3` + Adam to learn Young's modulus from a target state (FD oracle to 4.14e-6, 99.95% loss reduction in 75 Adam iters).
 
-Three takeaways:
+Three current takeaways:
 
-1. **Engine parity is high.** All Newton core solvers ship (Featherstone, XPBD, VBD, MPM); all 5 Newton sensor types ship (raycast, IMU, contact, frame_transform, tiled_camera); all 7 actuator pipeline pieces ship (PD/PID/Neural MLP/LSTM + 3 clamping models + delay). Several molla areas (FEM, soft CCD, contact pipeline) **exceed** Newton.
+1. **Tier-1 infrastructure is complete.** Every primitive flagged as "high-impact contained" in v2-v1 of this doc has shipped, hardened by a critic round (2 critical fixes), and is exercised by either parity tests or a viewer demo. molla now has the machinery for differentiable physics, parameter ID, and gradient-based learning **inside** its own engine.
 
-2. **The real remaining gaps are infrastructure primitives, not user-facing physics.** GPU sparse algebra (`bsr_mm`/`bsr_axpy`/`bsr_transpose`), differentiable SVD3 adjoint, an `optim/` module (Adam/SGD), graph coloring, and a device-wide scan are the bottlenecks blocking the next layer of capability.
+2. **External-crate evaluation: `burn` rejected.** The user asked whether adopting `burn` would shortcut autodiff/optim work. A read-only agent evaluation concluded **no** — wgpu version mismatch (burn 29 vs molla 27), type-system shift (burn's `Tensor<B,D>` vs molla's `&[Real]`/`BsrMatrix`/`Vec<Mat3>`), and structural-vs-algebraic adjoint mismatch all argue against adoption. The hand-rolled stack is the right tool for "physics-shaped" parameters.
 
-3. **Demo-side, the highest-ROI work is mechanical.** ~10 viewer scenes can be wired with primitives molla already ships, including a long-overdue showcase for the new GPU FEM steppers.
+3. **Demo-side, the highest-ROI work is still mechanical.** Most of §6's quick-win viewer scenes are still unported. The most impactful unported demo is `softbody_hanging` — Newton's missing FEM demo, perfectly matched by molla's new GPU FEM steppers + Stage 38.1's diff-MPM forward.
 
 ---
 
@@ -102,40 +102,39 @@ Newton bundles CRBA/RNEA/Jacobian into helper functions. molla exposes each as a
 
 ---
 
-## 3. The Tier-1 gaps — high-impact, contained
+## 3. The Tier-1 gaps — ✅ ALL SHIPPED (Stage 38)
 
-These five primitives are each ~1-3 days of focused work and individually unblock multiple downstream demos / capabilities.
+The five primitives below shipped via parallel-agent push between 2026-05-11 ~16:00 and ~20:00. Plus one capstone (38.1) that chains 38b + 38c into a working demo.
 
-### 3.1 GPU sparse BSR algebra
-**What's missing:** `bsr_mm` (SpGEMM), `bsr_axpy` (sparse `A += α B` with pattern union), `bsr_transpose`, WGSL `bsr_mv`.
-**Why it matters:** Currently molla assembles K on GPU then pulls it host-side for any non-matvec operation. Blocks: scaling FEM beyond what fits on one host, implicit MPM, optimization pipelines that need `Aᵀ A`.
-**Suggested module:** `crates/molla/src/math/sparse_gpu.rs` + `shaders/bsr_mm.wgsl`, `shaders/bsr_axpy.wgsl`, `shaders/bsr_transpose.wgsl`.
-**Reference:** `xtra/warp/warp/_src/sparse.py` — Warp ships these end-to-end.
+### 3.1 GPU sparse BSR algebra — ✅ `e99d93f`
+`crates/molla/src/math/sparse_gpu.rs` (1060 LOC) — `BsrGpu` + `BsrAlgebraKernel` with `matvec / axpy_same_pattern_unchecked / transpose / spgemm`. 4 parity tests vs CPU oracle pass at f32 round-off. **SpGEMM symbolic phase runs host-side; numeric phase on GPU** (full GPU SpGEMM with parallel hash deferred to v2).
 
-### 3.2 Adjoint SVD3 + polar decomposition
-**What's missing:** `adj_svd3` (reverse-mode through 3×3 SVD), polar-decomposition adjoint.
-**Why it matters:** Forward `svd3` is already in `crates/molla/src/math/dense3.rs` and `crates/molla/src/kernels/dense3.rs`. The adjoint is **the** missing piece for differentiable MPM (co-rotated elasticity), differentiable FEM hyperelasticity, neural material learning.
-**Suggested module:** add `adj_svd3` to `math/dense3.rs` + WGSL adjoint kernel. Pair with #3.3.
-**Reference:** `xtra/warp/warp/native/svd.h::adj_svd3`.
+### 3.2 Adjoint SVD3 + polar decomposition — ✅ `f3325b5`
+`adj_svd3` + `adj_polar` in `crates/molla/src/math/dense3.rs` + WGSL adjoint kernel. FD oracle agreement: **1.5e-9 relative**, machine precision. Degenerate-σ Tikhonov regularization with `ε_cpu = 1e-12`, `ε_gpu = 1e-6`. GPU/CPU parity 3.2e-4 (f32 vs f64 dominates).
 
-### 3.3 First-order optimizers (`optim/` module)
-**What's missing:** molla has **no** `optim/` directory. No Adam, no SGD, no momentum/weight-decay helpers.
-**Why it matters:** Blocks differentiable-physics training, parameter ID, policy learning examples. Warp's `optim/sgd.py` + `optim/adam.py` total ~150 LOC each.
-**Suggested module:** new top-level `crates/molla/src/optim/` directory; `adam.rs`, `sgd.rs`, with WGSL fused-update kernels for `fp32`/`vec3` weight tensors.
-**Reference:** `xtra/warp/warp/optim/{adam,sgd}.py`.
+### 3.3 First-order optimizers (`optim/` module) — ✅ `0eaaabd`
+New top-level `crates/molla/src/optim/` directory: `adam.rs` (AdamW-style decoupled WD) + `sgd.rs` (momentum + Nesterov + L2 WD) + 2 WGSL fused-update kernels. Convergence tests: Rosenbrock J=1.4e-14 in 5000 Adam steps; GPU/CPU parity 7.3e-6.
 
-### 3.4 Graph coloring utility
-**What's missing:** Centralized greedy + MCS coloring helper.
-**Why it matters:** `solvers::vbd` and XPBD distance-constraint kernels each reinvent it ad-hoc. Centralizing unlocks colored Gauss-Seidel for parallel constraint relaxation (cleanup) and scales VBD beyond current limits.
-**Suggested module:** `crates/molla/src/geometry/graph_coloring.rs` (host-side, ~150 LOC).
-**Reference:** `xtra/warp/warp/_src/fem/utils.py::graph_coloring_assign`.
+### 3.4 Graph coloring utility — ✅ `bba46e7` + wired `dc70cd2` + `4a559e2`
+`crates/molla/src/geometry/graph_coloring.rs` — `greedy_color`, `mcs_color`, `color_constraints`, `group_by_color`. 4×4 cloth → optimal 4 colors via MCS. **38d.1 follow-up wired into `sim/builder.rs`**: replaced the ad-hoc `color_springs` + `color_particles_with_tets_and_bending` greedy with calls to the new utility. Net **−66 LOC**, single source of truth, all VBD/XPBD tests still green.
 
-### 3.5 Device-wide scan + 64-bit segmented radix sort
-**What's missing:** General GPU inclusive/exclusive scan; 64-bit segmented radix-sort variant.
-**Why it matters:** Building blocks under everything else — sparse-grid insertion, hash-grid bucket counts, contact pair compaction, future SpGEMM. Today molla has only tile-local Hillis-Steele scan (`tile_stream_compaction`) and 32-bit pair-only radix sort.
-**Suggested module:** `crates/molla/src/kernels/scan.rs` + WGSL; extend `kernels/radix_sort.rs` to 64-bit + segmented mode.
+### 3.5 Device-wide scan + 64-bit segmented radix sort — ✅ `bb17a41`
+`crates/molla/src/kernels/scan.rs` (3-pass scan-then-fixup) + `RadixSortKernel64` in extended `radix_sort.rs`. 1M-key sort: **2.7× faster than CPU** (146 ms vs 390 ms). 8M-element scan: 29.7 ms vs CPU 36.6 ms. Segmented sort via segment-tag prefix encoding, max 65,536 segments.
 
-**Path:** spinning 5 parallel agents (one per Tier-1 gap) would ship the whole cluster in ~1 work-week. Same execution pattern as the recent FEM-GPU push.
+### 3.6 Capstone — Differentiable MPM — ✅ `6934075` (Stage 38.1)
+`crates/molla/src/compute/mpm_cpu_diff.rs` (764 LOC) + `crates/molla/src/autograd/mpm_adjoint.rs` (880 LOC). Chains `adj_svd3` (Stage 38b) through P2G + grid update + G2P + co-rotated Saint-Venant Kirchhoff stress; Adam (Stage 38c) optimizes Young's modulus to match a target final state. **Result: E=6e4 → 1.6108e4 (target 1.5e4) in 75 Adam iters, 7.4% rel err, 99.95% loss reduction. FD oracle agrees to 4.14e-6.** Wall: 18 ms/iter.
+
+### 3.7 Critic round on Stage 38 — ✅ `90f3708`
+Background agent audited all 5 slices. **Zero critical math bugs.** 2 critical safety/contract issues fixed:
+- `BsrAlgebraKernel::axpy` renamed `axpy_same_pattern_unchecked` with explicit safety doc (previous doc claimed pattern verification that wasn't happening).
+- `segmented_sort_pairs_u64` validates `segment_offsets` monotonicity + total before host-side indexing.
+- Plus: Adam `step==0` assertion, `BsrGpu::upload` shape consistency check, `ScanKernel` concurrency doc.
+
+### 3.8 Adam showcase scene #83 — ✅ `08e7b04`
+`AdamLandscape` viewer scene — 2D Rosenbrock landscape rendered as height-field, Adam trajectory drawn as yellow line + markers, green target marker at `(1, 1)`, pane exposes lr/β₁/β₂/wd/init.
+
+### 3.9 External-crate evaluation: `burn` — ❌ REJECTED
+Critical background agent evaluated using the `burn` crate (Rust ML framework with wgpu backend) for autodiff + optim. **Verdict: do not adopt.** Hard block: burn pins wgpu 29 via cubecl, molla pins wgpu 27 (Bevy coupling). Even unblocked: burn-autodiff operates on its own `Tensor<B, D>` type, not on molla's `&[Real]` / `BsrMatrix` / `Vec<Mat3>` — would add a *second* autograd system, not replace the existing one. Dep tree growth ~5-10×. Hand-rolled stack (Adam + SGD + structural adjoints) is the right tool for molla's "physics-shaped" parameters.
 
 ---
 
@@ -184,7 +183,7 @@ These are flagged for completeness; some are explicitly out-of-scope per `PLAN.m
 | **H(curl) / Nedelec vector FEM elements** (magnetostatics) | Warp `example_magnetostatics.py` | 1 week | not on roadmap |
 | **NonconformingField** (elastic contact between non-matching meshes) | Warp `example_nonconforming_contact.py` | 1-2 weeks | not on roadmap |
 
-**Recommendation:** Kamino + Style3D should stay out-of-scope per PLAN.md unless a concrete user need surfaces. Implicit MPM is the most useful to revisit (Stage 24d.4) since the explicit base shipped. Diff Gaussian raytrace is the gateway to learned-perception losses but is a substantial multi-week project.
+**Recommendation:** Kamino + Style3D should stay out-of-scope per PLAN.md unless a concrete user need surfaces. **Implicit MPM is now the most attractive Tier-3 item** because Stage 38 shipped its three building blocks: SpGEMM (38a), graph coloring (38d), device-wide scan + 64-bit sort (38e). Newton's `implicit_mpm/` is essentially "build the rheology Schur system + color-block Gauss-Seidel + project" — most of which is one-step-away from molla's existing MPM + the new primitives. Diff Gaussian raytrace remains the long-term gateway to learned-perception losses but is a 2-3 week project.
 
 ---
 
@@ -257,34 +256,28 @@ Cross-mesh VT + EE + self-collision + CCD + friction + GPU port.
 
 ---
 
-## 8. Recommended next-stage plan — Stage 38
+## 8. Stage 38 — ✅ SHIPPED. Next-stage candidates.
 
-If picking a single coherent next push: **Stage 38 — GPU sparse algebra + optimization toolkit.**
+Stage 38 (the GPU sparse algebra + optimization toolkit + diff MPM capstone) is **fully closed out**. See §3 for the slice-by-slice landing record.
 
-Scope (Tier-1 cluster, ~1 work-week):
-1. GPU sparse BSR algebra (`bsr_mm`, `bsr_axpy`, `bsr_transpose`, WGSL `bsr_mv`)
-2. Adjoint SVD3 (`adj_svd3` + polar adjoint)
-3. `optim/` module (Adam + SGD + WGSL fused-update kernels)
-4. Graph coloring utility
-5. Device-wide scan + 64-bit segmented radix sort
+### What to push next (ranked)
 
-**Deliverable signature:**
-- New top-level `crates/molla/src/optim/` directory
-- 4 new shaders: `bsr_mm.wgsl`, `bsr_axpy.wgsl`, `bsr_transpose.wgsl`, `scan.wgsl`
-- Extended `crates/molla/src/math/sparse.rs` + `kernels/{radix_sort,scan}.rs`
-- Adjoint SVD3 in `math/dense3.rs` + matching WGSL kernel
-- `crates/molla/src/geometry/graph_coloring.rs`
-- Parity tests against CPU oracle for each new primitive
-- Bench files showing speedup vs CPU equivalents
+**Option A — Stage 39: Implicit MPM with rheology.** Now genuinely tractable because Stage 38 shipped the three primitives that block it (SpGEMM 38a, graph coloring 38d, scan + 64-bit segmented sort 38e). Plus, Stage 38.1 wrote a differentiable forward MPM that can serve as the host-side scaffold. Newton's `implicit_mpm/` is the reference: Schur-system assembly + color-block Gauss-Seidel + projection. Estimated 1-2 weeks. **Highest impact**: gives molla stable plasticity at large dt, which the explicit base can't deliver.
 
-**Unlocks:**
-- Differentiable MPM (Tier-1 #2 closes the chain)
-- Implicit MPM with rheology (Tier-3 #3 becomes tractable)
-- Sub-stage 38.1+ family: differentiable FEM via Adam, neural-material learning, parameter ID
+**Option B — Quick-win viewer scenes (§6).** 10 demos worth ~1 day of mechanical work as a focused mini-pass. Highest single payoff is `softbody_hanging` (Newton's missing FEM demo — and now mostly an MPM-like elasticity case that pairs naturally with the new `mpm_cpu_diff`).
 
-**Execution pattern:** spin 5 parallel agents in worktrees, one per Tier-1 gap. Files are non-overlapping. Same model as the Stage 37 family that just shipped.
+**Option C — Stage 39 — 2D Stam stable fluid + DG basis.** Unblocks **6** missing Warp demos (1 Stam → 3 demos; 1 DG basis → 3 demos). Tier-2 work. Estimated 1-3 days each. Lower compute / research interest than implicit MPM but big surface-area win on the demo gap.
 
-**Concurrent:** the 10 Tier-1.5 viewer scenes (§6) as a parallel mini-pass — mechanical work, ~1 day total, mostly viewer plumbing.
+**Option D — Differentiable FEM via Adam + adjoint chain.** Mirror Stage 38.1 (diff MPM) on the FEM side: chain `fem::adjoint::solve_adjoint` through Adam to learn material parameters in a tet-mesh elasticity problem. molla already has `fem/adjoint.rs`; missing is the Adam loop wrapper + a viewer demo. Estimated 1-2 days.
+
+### Recommended ordering
+
+1. **Now:** ship Option D (~1 day) — closes the FEM differentiability story mirroring Stage 38.1's MPM win.
+2. **Next:** Option B mini-pass (~1 day) — clears the viewer gap left over from GAP_v2 §6.
+3. **Then:** Option A — implicit MPM as a focused multi-day push.
+4. **Last:** Option C — the 2D Stam fluid + DG basis (Tier-2). Lower priority than the others.
+
+The user pattern from the recent session is "spin parallel agents in worktrees for non-overlapping work." Option A is the natural next parallel-agent target (subdivides nicely: Schur assembly, color-block GS kernel, projection step, integration into existing MPM forward, viewer scene).
 
 ---
 
@@ -314,3 +307,4 @@ Both **Style3D cloth** and **Kamino** are out-of-scope choices, not gaps that ne
   - Roadmap: `PLAN.md` (stage list @ L1124+)
 - **Predecessor:** `GAP.md` (2026-05-09; drove Stages 14–24e.2)
 - **Recent commits driving this update:** `8dd1fe5` (Slice E), `8b27d24` (Slice F), `479387d` (Slice G), `c509427` (Slice A), `c0d737e` (Slice D), `65f90ec` (combined Slice H + russell + assembly perf), `ddf017f` (PCG), `3fc3d9b` (steppers use PCG), `0af1727` (CPU PCG paths), `9048c7f` (russell singularity), `50c3923` + `70377d0` (tile filter + compaction scenes)
+- **Stage 38 commits (post-GAP_v2 v1):** `bba46e7` (graph coloring), `e99d93f` (BSR algebra), `f3325b5` (adj_svd3), `bb17a41` (scan + radix-64), `0eaaabd` (Adam + SGD), `08e7b04` (AdamLandscape scene #83), `90f3708` (critic fixes), `dc70cd2` + `4a559e2` (wire coloring into builder, Stage 38d.1), `6934075` (Stage 38.1 — differentiable MPM)
