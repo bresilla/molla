@@ -16,9 +16,16 @@
 //   floor_reapply  — one thread per cell. Re-runs the post-solve floor
 //                    clamp that the CPU path applies after GS.
 //   g2p            — one thread per particle. Gathers v_grid into
-//                    per-particle velocity. APIC affine matrix is *not*
-//                    updated here — that, plus the Bingham return
-//                    mapping, stays on the CPU for v2.
+//                    per-particle velocity, plus rebuilds the APIC
+//                    affine matrix `p_C` in-place.
+//   bingham_advect — Stage 40 v3 — one thread per particle. Applies the
+//                    Bingham deviatoric return mapping to `p_C` (with
+//                    C-magnitude capping), the per-particle floor +
+//                    Bingham-Coulomb friction, then advects
+//                    `p_pos += dt·p_vel`. After this pass the device
+//                    state is fully consistent with the CPU's
+//                    `apply_bingham_and_advect`, so the host only needs
+//                    `p_pos` + `p_vel` (skip the `p_C` readback).
 //
 // Hessian stencil layout: `k_stencil[ci * 27 + s(δ)]` where
 //   s(δx, δy, δz) = (δz + 1) * 9 + (δy + 1) * 3 + (δx + 1)
@@ -57,6 +64,11 @@ struct Uniforms {
     grid_origin_x: f32,
     grid_origin_y: f32,
     grid_origin_z: f32,
+
+    yield_stress: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<storage, read_write> g_mass_atomic: array<atomic<u32>>;
@@ -446,4 +458,147 @@ fn gs_sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let rhs = m * v_pred[ci] - U.dt * off;
     let v_new = rhs / denom;
     v_grid[ci] = v_new;
+}
+
+// ── bingham_advect — Stage 40 v3 ───────────────────────────────────
+//
+// Mirror of `apply_bingham_and_advect` in
+// `crates/molla/src/compute/implicit_mpm.rs`. Inputs are the
+// post-G2P `p_vel` + `p_C` written by the `g2p` pass and `p_pos`
+// (untouched since upload). Outputs are the projected `p_vel`,
+// `p_C`, and advected `p_pos`. One thread per particle.
+@compute @workgroup_size(WG_PARTICLES)
+fn bingham_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pid = gid.x;
+    if (pid >= U.particle_count) {
+        return;
+    }
+    let dt = U.dt;
+    let dx = U.cell_size;
+    let mu_b = U.viscosity;
+    let tau_y_ = 2.0 * mu_b; // we never need 2μ_b on its own; keep μ_b only
+    // (μ_b already in scope; this local is unused but kept inline so
+    // the compiler folds it away — it's a marker so future readers
+    // see the 2μ_b factor.)
+    let _unused = tau_y_;
+
+    var pos = p_pos[pid];
+    var vel = p_vel[pid];
+    let cb = pid * 9u;
+    // p_C is column-major: cb..cb+8 → [c0.x, c0.y, c0.z, c1.x, c1.y, c1.z, c2.x, c2.y, c2.z]
+    var c0 = vec3<f32>(p_C[cb + 0u], p_C[cb + 1u], p_C[cb + 2u]);
+    var c1 = vec3<f32>(p_C[cb + 3u], p_C[cb + 4u], p_C[cb + 5u]);
+    var c2 = vec3<f32>(p_C[cb + 6u], p_C[cb + 7u], p_C[cb + 8u]);
+
+    // sym(C) = 0.5 * (C + Cᵀ). For column-major mat3 with columns
+    // (c0, c1, c2), Cᵀ has columns (row0, row1, row2). Element-wise:
+    //   sym[i, j] = 0.5 * (C[i, j] + C[j, i])
+    // For each column k, sym.col(k)[i] = 0.5 * (c_k[i] + c_i[k]).
+    let s00 = c0.x;
+    let s11 = c1.y;
+    let s22 = c2.z;
+    let s01 = 0.5 * (c1.x + c0.y);
+    let s02 = 0.5 * (c2.x + c0.z);
+    let s12 = 0.5 * (c2.y + c1.z);
+    let tr3 = (s00 + s11 + s22) / 3.0;
+
+    // dev = sym - I * tr3.
+    let d00 = s00 - tr3;
+    let d11 = s11 - tr3;
+    let d22 = s22 - tr3;
+    let d01 = s01;
+    let d02 = s02;
+    let d12 = s12;
+
+    // Frobenius norm of a symmetric 3×3 ‖dev‖² = Σᵢ dii² + 2·Σᵢ<j dij².
+    let nd2 = d00 * d00 + d11 * d11 + d22 * d22
+            + 2.0 * (d01 * d01 + d02 * d02 + d12 * d12);
+    let nd = sqrt(nd2);
+    let trial_norm = 2.0 * mu_b * nd;
+
+    // skew = C - sym. Columns:
+    //   skew.col(0) = (c0.x - s00, c0.y - s01, c0.z - s02)
+    //   skew.col(1) = (c1.x - s01, c1.y - s11, c1.z - s12)
+    //   skew.col(2) = (c2.x - s02, c2.y - s12, c2.z - s22)
+    let sk0 = vec3<f32>(c0.x - s00, c0.y - s01, c0.z - s02);
+    let sk1 = vec3<f32>(c1.x - s01, c1.y - s11, c1.z - s12);
+    let sk2 = vec3<f32>(c2.x - s02, c2.y - s12, c2.z - s22);
+
+    if (trial_norm <= U.yield_stress || nd < 1.0e-12) {
+        // Plug regime. c_new = I*tr3 + skew*0.5.
+        c0 = vec3<f32>(tr3, 0.0, 0.0) + sk0 * 0.5;
+        c1 = vec3<f32>(0.0, tr3, 0.0) + sk1 * 0.5;
+        c2 = vec3<f32>(0.0, 0.0, tr3) + sk2 * 0.5;
+        let lambda_plug = U.yield_stress / (2.0 * mu_b * dx);
+        let damp = max(1.0 - dt * lambda_plug, 0.0);
+        vel = vel * damp;
+    } else {
+        let ratio = 1.0 - U.yield_stress / trial_norm;
+        // dev_new = dev * ratio. Symmetric.
+        let dn00 = d00 * ratio;
+        let dn11 = d11 * ratio;
+        let dn22 = d22 * ratio;
+        let dn01 = d01 * ratio;
+        let dn02 = d02 * ratio;
+        let dn12 = d12 * ratio;
+        // c_new = dev_new + I*tr3 + skew.
+        c0 = vec3<f32>(dn00 + tr3, dn01, dn02) + sk0;
+        c1 = vec3<f32>(dn01, dn11 + tr3, dn12) + sk1;
+        c2 = vec3<f32>(dn02, dn12, dn22 + tr3) + sk2;
+        // ‖c_new‖_F: sum of squares of all 9 entries.
+        let nc2 = dot(c0, c0) + dot(c1, c1) + dot(c2, c2);
+        let nc = sqrt(nc2);
+        let cap = 0.5 / dt;
+        if (nc > cap) {
+            let s = cap / nc;
+            c0 = c0 * s;
+            c1 = c1 * s;
+            c2 = c2 * s;
+            vel = vel * s;
+        }
+    }
+
+    // Per-particle floor enforcement.
+    let height_above_floor = max(pos.y - U.floor_y, 0.0);
+    if (pos.y + vel.y * dt < U.floor_y && vel.y < 0.0) {
+        vel.y = 0.0;
+        let damp = 1.0 - U.floor_friction;
+        vel.x = vel.x * damp;
+        vel.z = vel.z * damp;
+    }
+    if (height_above_floor < dx) {
+        var ratio = height_above_floor / dx;
+        ratio = clamp(ratio, 0.0, 1.0);
+        let depth = 1.0 - ratio;
+        // density = mass_p / particle_volume.
+        let density = U.mass_p / U.particle_volume;
+        let particle_extent = max(pow(U.particle_volume, 1.0 / 3.0), 1.0e-6);
+        let dv_cap = dt * U.yield_stress / (density * particle_extent) * depth;
+        let vh = vec3<f32>(vel.x, 0.0, vel.z);
+        let vh_mag = length(vh);
+        if (vh_mag <= dv_cap) {
+            vel.x = 0.0;
+            vel.z = 0.0;
+            c0 = vec3<f32>(0.0, 0.0, 0.0);
+            c1 = vec3<f32>(0.0, 0.0, 0.0);
+            c2 = vec3<f32>(0.0, 0.0, 0.0);
+        } else {
+            let scale = (vh_mag - dv_cap) / vh_mag;
+            vel.x = vel.x * scale;
+            vel.z = vel.z * scale;
+            c0 = c0 * scale;
+            c1 = c1 * scale;
+            c2 = c2 * scale;
+        }
+    }
+
+    p_vel[pid] = vel;
+    var new_pos = pos + vel * dt;
+    if (new_pos.y < U.floor_y) {
+        new_pos.y = U.floor_y;
+    }
+    p_pos[pid] = new_pos;
+    p_C[cb + 0u] = c0.x; p_C[cb + 1u] = c0.y; p_C[cb + 2u] = c0.z;
+    p_C[cb + 3u] = c1.x; p_C[cb + 4u] = c1.y; p_C[cb + 5u] = c1.z;
+    p_C[cb + 6u] = c2.x; p_C[cb + 7u] = c2.y; p_C[cb + 8u] = c2.z;
 }

@@ -51,6 +51,11 @@ struct Uniforms {
     grid_origin_x: f32,
     grid_origin_y: f32,
     grid_origin_z: f32,
+
+    yield_stress: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 /// Compute pipelines + bind-group layouts for the implicit-MPM kernels.
@@ -64,6 +69,7 @@ pub struct ImplicitMpmKernel {
     pipe_gs: wgpu::ComputePipeline,
     pipe_floor: wgpu::ComputePipeline,
     pipe_g2p: wgpu::ComputePipeline,
+    pipe_bingham: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
 }
@@ -125,6 +131,7 @@ impl ImplicitMpmKernel {
         let pipe_gs = mk_pipe("gs_sweep", "molla::implicit_mpm::gs_sweep");
         let pipe_floor = mk_pipe("floor_reapply", "molla::implicit_mpm::floor_reapply");
         let pipe_g2p = mk_pipe("g2p", "molla::implicit_mpm::g2p");
+        let pipe_bingham = mk_pipe("bingham_advect", "molla::implicit_mpm::bingham_advect");
 
         Self {
             device,
@@ -135,6 +142,7 @@ impl ImplicitMpmKernel {
             pipe_gs,
             pipe_floor,
             pipe_g2p,
+            pipe_bingham,
             layout_io,
             layout_uniforms,
         }
@@ -185,6 +193,12 @@ pub struct GpuStepState {
 
     // Uniforms shared by reset / p2g / predict / floor / g2p.
     pub uniforms: wgpu::Buffer,
+
+    // Persistent staging buffers for the v3 fused readback (pos + vel).
+    // Sized to `max_particles`; reused across substeps so we don't
+    // reallocate every step.
+    pub staging_pos: wgpu::Buffer,
+    pub staging_vel: wgpu::Buffer,
 }
 
 impl GpuStepState {
@@ -220,6 +234,22 @@ impl GpuStepState {
             mapped_at_creation: false,
         });
 
+        // Persistent v3 readback staging. Sized to `max_particles`
+        // with 16-byte vec3 stride to match `p_pos`/`p_vel`.
+        let staging_bytes = (max_particles as u64 * 16).max(16);
+        let staging_pos = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::implicit_mpm staging pos"),
+            size: staging_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_vel = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::implicit_mpm staging vel"),
+            size: staging_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             grid_size,
             max_particles,
@@ -237,6 +267,8 @@ impl GpuStepState {
             color_lens: Vec::new(),
             color_uniforms: Vec::new(),
             uniforms,
+            staging_pos,
+            staging_vel,
         }
     }
 
@@ -307,6 +339,44 @@ impl GpuStepState {
         queue.write_buffer(&self.p_c, 0, bytemuck::cast_slice(c_mat));
     }
 
+    /// Stage 40 v3 — upload only `p_pos` and `p_vel`, leaving the
+    /// device-side `p_C` resident across substeps. Used when the
+    /// caller has run `run_full_step_native` previously and the device
+    /// already holds the post-Bingham projected affine matrices.
+    pub fn upload_pos_vel(
+        &self,
+        kernel: &ImplicitMpmKernel,
+        pos: &[[f32; 3]],
+        vel: &[[f32; 3]],
+    ) {
+        let queue = kernel.queue();
+        let n = pos.len();
+        assert!(n as u32 <= self.max_particles);
+        assert_eq!(vel.len(), n);
+        let pad_vec3 = |src: &[[f32; 3]]| -> Vec<f32> {
+            let mut padded = Vec::with_capacity(src.len() * 4);
+            for v in src {
+                padded.push(v[0]);
+                padded.push(v[1]);
+                padded.push(v[2]);
+                padded.push(0.0);
+            }
+            padded
+        };
+        let pos_padded = pad_vec3(pos);
+        let vel_padded = pad_vec3(vel);
+        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos_padded));
+        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&vel_padded));
+    }
+
+    /// Zero the resident `p_C` buffer. Call once before the first
+    /// substep when starting from an APIC-clean state (all zeros).
+    pub fn zero_pc(&self, kernel: &ImplicitMpmKernel) {
+        let queue = kernel.queue();
+        let zeros = vec![0.0_f32; self.max_particles as usize * 9];
+        queue.write_buffer(&self.p_c, 0, bytemuck::cast_slice(&zeros));
+    }
+
     /// Run one full P2G + predict + GS + floor + G2P pass on the GPU,
     /// then read back `p_vel` and `p_C` so the host can do the Bingham
     /// projection and advect.
@@ -344,6 +414,10 @@ impl GpuStepState {
             grid_origin_x: cfg.grid_origin[0],
             grid_origin_y: cfg.grid_origin[1],
             grid_origin_z: cfg.grid_origin[2],
+            yield_stress: cfg.yield_stress,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         for (i, ucb) in self.color_uniforms.iter().enumerate() {
@@ -473,6 +547,219 @@ impl GpuStepState {
         Ok((vel, c))
     }
 
+    /// **Stage 40 v3** — run the full P2G + predict + GS + floor + G2P
+    /// chain *plus* the `bingham_advect` pass on the device. Reads back
+    /// only `p_pos` and `p_vel` (the host doesn't need `p_C` for state
+    /// reporting), eliminating the v2 per-step `p_C` readback.
+    ///
+    /// `gs_iters` and `cfg.use_off_diag` mirror the CPU step.
+    /// `cfg.yield_stress` must be populated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_full_step_native(
+        &self,
+        kernel: &ImplicitMpmKernel,
+        particle_count: u32,
+        cfg: &StepUniforms,
+        gs_iters: u32,
+    ) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>)> {
+        let device = kernel.device();
+        let queue = kernel.queue();
+
+        let u = Uniforms {
+            grid_size: self.grid_size,
+            color_n: 0,
+            use_off_diag: u32::from(cfg.use_off_diag),
+            particle_count,
+            dt: cfg.dt,
+            cell_size: cfg.cell_size,
+            inv_cell_size: cfg.inv_cell_size,
+            gravity_y: cfg.gravity_y,
+            floor_y: cfg.floor_y,
+            floor_friction: cfg.floor_friction,
+            mass_p: cfg.mass_p,
+            particle_volume: cfg.particle_volume,
+            viscosity: cfg.viscosity,
+            grid_origin_x: cfg.grid_origin[0],
+            grid_origin_y: cfg.grid_origin[1],
+            grid_origin_z: cfg.grid_origin[2],
+            yield_stress: cfg.yield_stress,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        for (i, ucb) in self.color_uniforms.iter().enumerate() {
+            let mut uc = u;
+            uc.color_n = self.color_lens[i];
+            queue.write_buffer(ucb, 0, bytemuck::bytes_of(&uc));
+        }
+
+        let bg_io = self.make_io_bind_group(kernel, None);
+        let bg_gs_per_color: Vec<wgpu::BindGroup> = (0..self.color_bufs.len())
+            .map(|c| self.make_io_bind_group(kernel, Some(c)))
+            .collect();
+        let bg_u_main = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::implicit_mpm u-main bg v3"),
+            layout: &kernel.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.uniforms.as_entire_binding(),
+            }],
+        });
+        let bg_u_colors: Vec<wgpu::BindGroup> = self
+            .color_uniforms
+            .iter()
+            .enumerate()
+            .map(|(c, ub)| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("molla::implicit_mpm u-color {c} bg v3")),
+                    layout: &kernel.layout_uniforms,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: ub.as_entire_binding(),
+                    }],
+                })
+            })
+            .collect();
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::implicit_mpm full-step-native enc"),
+        });
+
+        // reset_grid.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 reset pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_reset);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // p2g.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 p2g pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_p2g);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = particle_count.div_ceil(WG_PARTICLES).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // predict_grid.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 predict pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_predict);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // GS sweep — one dispatch per color per iteration.
+        for _ in 0..gs_iters {
+            for (c, group_len) in self.color_lens.iter().enumerate() {
+                if *group_len == 0 {
+                    continue;
+                }
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::implicit_mpm v3 gs pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&kernel.pipe_gs);
+                pass.set_bind_group(0, &bg_gs_per_color[c], &[]);
+                pass.set_bind_group(1, &bg_u_colors[c], &[]);
+                let n = group_len.div_ceil(WG_SIZE).max(1);
+                pass.dispatch_workgroups(n, 1, 1);
+            }
+        }
+        // floor_reapply.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 floor pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_floor);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // g2p.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 g2p pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_g2p);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = particle_count.div_ceil(WG_PARTICLES).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // bingham_advect — the v3 closing pass. Eliminates the CPU tail.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v3 bingham pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_bingham);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = particle_count.div_ceil(WG_PARTICLES).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+
+        // Fused readback: queue both buffer→staging copies inside the
+        // SAME command encoder as the compute passes so the
+        // submit/wait pair runs once for the whole step. Use the
+        // persistent staging buffers built at `GpuStepState::new` so
+        // we don't allocate per-step.
+        let n_p = particle_count as usize;
+        let bytes = (n_p as u64 * 16).max(16);
+        enc.copy_buffer_to_buffer(&self.p_pos, 0, &self.staging_pos, 0, bytes);
+        enc.copy_buffer_to_buffer(&self.p_vel, 0, &self.staging_vel, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+
+        // Map both buffers, then poll once.
+        let slice_pos = self.staging_pos.slice(0..bytes);
+        let slice_vel = self.staging_vel.slice(0..bytes);
+        let (tx_pos, rx_pos) = std::sync::mpsc::channel();
+        let (tx_vel, rx_vel) = std::sync::mpsc::channel();
+        slice_pos.map_async(wgpu::MapMode::Read, move |r| { let _ = tx_pos.send(r); });
+        slice_vel.map_async(wgpu::MapMode::Read, move |r| { let _ = tx_vel.send(r); });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("implicit_mpm v3 poll: {e:?}")))?;
+        rx_pos.recv()
+            .map_err(|e| Error::Gpu(format!("implicit_mpm v3 recv pos: {e}")))?
+            .map_err(|e| Error::Gpu(format!("implicit_mpm v3 map pos: {e:?}")))?;
+        rx_vel.recv()
+            .map_err(|e| Error::Gpu(format!("implicit_mpm v3 recv vel: {e}")))?
+            .map_err(|e| Error::Gpu(format!("implicit_mpm v3 map vel: {e:?}")))?;
+        let mapped_pos = slice_pos.get_mapped_range();
+        let mapped_vel = slice_vel.get_mapped_range();
+        let raw_pos: &[f32] = bytemuck::cast_slice(&mapped_pos);
+        let raw_vel: &[f32] = bytemuck::cast_slice(&mapped_vel);
+        let mut pos = Vec::with_capacity(n_p);
+        let mut vel = Vec::with_capacity(n_p);
+        for i in 0..n_p {
+            pos.push([raw_pos[i * 4], raw_pos[i * 4 + 1], raw_pos[i * 4 + 2]]);
+            vel.push([raw_vel[i * 4], raw_vel[i * 4 + 1], raw_vel[i * 4 + 2]]);
+        }
+        drop(mapped_pos);
+        drop(mapped_vel);
+        self.staging_pos.unmap();
+        self.staging_vel.unmap();
+        Ok((pos, vel))
+    }
+
     /// Build the I/O bind group; `color_idx` selects which color
     /// group's `color_cells` buffer goes into binding 3. Pass `None`
     /// to use any color buffer (binding 3 is unused by reset / p2g /
@@ -530,6 +817,9 @@ pub struct StepUniforms {
     pub viscosity: f32,
     pub grid_origin: [f32; 3],
     pub use_off_diag: bool,
+    /// Bingham yield stress `τ_y` (Pa). Required by the v3
+    /// `bingham_advect` device pass; unused by the v2 pipeline.
+    pub yield_stress: f32,
 }
 
 impl ImplicitMpmKernel {
@@ -610,6 +900,10 @@ impl ImplicitMpmKernel {
                 grid_origin_x: 0.0,
                 grid_origin_y: 0.0,
                 grid_origin_z: 0.0,
+                yield_stress: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             };
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&label),
