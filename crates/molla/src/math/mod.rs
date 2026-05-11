@@ -11,9 +11,13 @@ pub mod iterative;
 pub mod robust_loss;
 mod spatial;
 pub mod sparse;
+#[cfg(feature = "gpu")]
+pub mod sparse_gpu;
 mod transform;
 
 pub use gpu::{GpuMat3, GpuSpatialVector, GpuTransform};
+#[cfg(feature = "gpu")]
+pub use sparse_gpu::{BsrAlgebraKernel, BsrGpu};
 pub use spatial::{
     spatial_cross, spatial_cross_dual, spatial_jacobian_column, JacobianKind,
     SpatialInertia, SpatialMatrix6, SpatialVector,
