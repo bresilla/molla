@@ -5714,6 +5714,189 @@ Replaces CPU placeholders in scenes #62-#66.
 
 **Dependencies:** Stage 19 GPU compute infrastructure.
 
+### Stage 40+ — Follow-ups from 2026-05-11 gap review
+
+Stages 38 and 39 (tracked in `GAP_v2.md`) closed out the Tier-1
+cluster (GPU sparse BSR / adj_svd3 / Adam+SGD / graph coloring /
+scan+radix-64) plus the diff-MPM (38.1) and diff-FEM (38.2)
+capstones, the Tier-2 cluster (Stam fluid 39C / DG basis 39B /
+hydroelastic anchor 39D / CABLE joint 39E / full-GPU SpGEMM 39F),
+and an initial implicit-MPM solver (39A). The follow-ups below are
+the seven open items identified by the 2026-05-11 cross-walk
+against `GAP.md` + `GAP_v2.md` + the shipped code. Each is broken
+out as a standalone stage so it can be picked up independently
+when a user / workload appears.
+
+### Stage 40 — Implicit MPM: full Hessian + GPU port
+
+**Status: DEFERRED.** Stage 39A shipped CPU implicit MPM with
+Bingham rheology, but uses a *diagonal-only* stiffness
+approximation `(M + dt·K_diag)·v_new = M·v_pred` in the colored-
+GS sweep. The off-diagonal coupling from Newton's 27-point
+Hessian is the obvious next slice. After that, port to GPU using
+the Stage 38 primitives (SpGEMM, color buckets, scan).
+
+**Deliverables:**
+
+- Full 27-point Newton Hessian `K_full` assembled per timestep,
+  driving the implicit grid solve (replaces `K_diag`).
+- GPU `implicit_mpm.wgsl` kernels:
+  - Per-particle stress + d-stress/d-velocity → grid Hessian
+    contribution (atomic-add or color-bucket scatter).
+  - Color-block Gauss-Seidel solver dispatched per color bucket.
+  - Bingham yield projection on grid stress.
+- Parity test: GPU vs CPU final particle velocities match within
+  `1e-5` relative on the existing
+  `bingham_blob_settles_under_gravity` scenario.
+- Perf: ≥ 5× speedup over CPU at 10k particles.
+
+**Definition of done:** all 4 existing `tests/implicit_mpm.rs`
+integration tests pass with the full-Hessian solver; GPU parity
+test + bench live; viewer scene 93 driveable on GPU at 60 FPS
+with 10k particles.
+
+**Dependencies:** Stage 38a (BSR algebra), Stage 38d (graph
+coloring), Stage 38e (scan), Stage 39A (CPU implicit MPM
+scaffold), Stage 39F (GPU SpGEMM symbolic).
+
+### Stage 28.1 — MPR narrow-phase GPU port (existing entry promoted)
+
+See the existing stage block above (around L4887, `Status:
+DEFERRED`). Promoted to priority follow-up by the 2026-05-11
+review because it's bounded (single deliverable), well-specified
+(CPU MPR shipped Stage 28), and unblocks GPU coverage for shape
+pairs where GJK/EPA can be brittle (cylinder-vs-cylinder,
+capsule-vs-capsule near edges). No additional scope here — the
+existing entry is the source of truth.
+
+### Stage 41 — GPU port of remaining CPU FEM + hydroelastic paths
+
+**Status: DEFERRED.** Stages 36.5 + 37.x landed GPU FEM
+assembly + matvec + resident CG, but several pipelines still
+have CPU paths without WGSL parity:
+
+- FEM elasticity full pipeline (assembly + solve on GPU).
+- FEM Stokes / Navier-Stokes full pipeline (Uzawa-CG and
+  fractional-step variants).
+- FEM-MPM APIC hybrid (Stage 37.6) — currently P2G/G2P on GPU,
+  global FEM solve still on CPU.
+- Hydroelastic contact (Stage 22.1 + 39D) — pressure-field
+  evaluation + anchor contact still CPU; needs WGSL kernels
+  reading the SDF volume directly.
+
+**Deliverables:** per-pipeline WGSL kernel + Rust dispatcher +
+CPU/GPU parity test. Order of attack:
+
+1. FEM elasticity end-to-end GPU (highest reuse).
+2. FEM Stokes / NS end-to-end GPU.
+3. FEM-MPM APIC global solve GPU.
+4. Hydroelastic anchor + aggregate GPU.
+
+**Definition of done:** every existing CPU FEM test has a
+`#[ignore]`-gated GPU parity sibling that passes within `1e-5`
+relative on a small problem.
+
+**Dependencies:** Stage 36.5 (GPU FEM v1), Stage 38a (sparse BSR
+algebra), Stage 39F (full GPU SpGEMM).
+
+### Stage 42 — CABLE joint muscles + tendons
+
+**Status: DEFERRED.** Stage 39E shipped `JointType::Cable` (1
+stretch + 1 bend DoF). Newton additionally ships per-joint
+`muscle_*` arrays in `sim/model.py` + a `kernels_muscle.py`
+activation actuator for tendon-driven biomechanics and soft
+robotics. molla has the joint type but no activation channel.
+
+**Deliverables:**
+
+- `actuators::Muscle` controller with Hill-type activation
+  dynamics (linear length-tension + force-velocity curve).
+- `ModelBuilder::add_muscle(...)` API attached to a CABLE joint
+  chain.
+- Viewer scene: a 2-segment tendon-driven finger or hopper leg.
+
+**Definition of done:** activation-driven joint torque appears
+in the existing CABLE joint test scaffolding; new viewer scene
+demoable.
+
+**Dependencies:** Stage 39E (CABLE joint type), Stage 18.1
+(composable actuator pipeline).
+
+### Stage 43 — DG higher-degree (P2/P3) + flux library + slope limiter
+
+**Status: DEFERRED.** Stage 39B shipped DG `P0/P1` only.
+Newton's `example_burgers.py` + `example_convection_diffusion_dg.py`
++ `example_shallow_water.py` need P2/P3 shape functions, full
+upwind/Roe flux assembly, and a Barth-Jespersen / MUSCL slope
+limiter for the Burgers + SWE cases.
+
+**Deliverables:**
+
+- Extend `fem::dg_element` with P2 / P3 shape function tables on
+  triangle + tet.
+- Numerical flux library: central, upwind, Roe, Lax-Friedrichs.
+- Slope limiter (Barth-Jespersen scalar + Krivodonova
+  characteristic-wise for systems).
+- Viewer scene: 1D Burgers shock + 2D SWE dam break.
+
+**Definition of done:** P2 DG converges at `h^3` rate on a
+smooth manufactured solution; shock-capturing Burgers stays
+monotone (no overshoots > 1 % of the smooth peak).
+
+**Dependencies:** Stage 39B (DG P0/P1 basis), Stage 36.3 (P2
+elements for CG).
+
+### Stage 44 — Differentiable Gaussian raytrace renderer
+
+**Status: DEFERRED — multi-week Tier-3 work.** Newton's
+`sensors/warp_raytrace/` ships a differentiable 3DGS-style
+renderer that lets gradients flow from rendered images back to
+scene parameters. Gateway capability for learned-perception
+losses (image-supervised parameter ID, RL with visual
+observations).
+
+**Deliverables:**
+
+- 3D Gaussian splat primitive (already present in
+  `Scene::Splats`, scene 30; needs differentiable raytrace path).
+- Forward raytrace WGSL kernel: per-pixel α-composited Gaussian
+  contributions with depth-sorted front-to-back.
+- Reverse adjoint: per-Gaussian gradient of pixel loss → splat
+  position + scale + color + opacity.
+- Viewer scene: image-supervised pose recovery on a single
+  Gaussian splat scene.
+
+**Definition of done:** Adam loop recovers a perturbed pose
+within `1°` orientation + `1 cm` position from a target image in
+`≤ 500` iterations on a small splat scene (≤ 10k Gaussians).
+
+**Dependencies:** Stage 30 (Gaussian splat primitive), Stage 38c
+(Adam), Stage 14 (raycast / TiledCamera infrastructure).
+
+### Stage 45 — Adaptive grid FEM (AMR)
+
+**Status: DEFERRED — Tier-3.** Warp's `example_adaptive_grid.py`
+shows octree-refined FEM near a moving collider. Complements
+implicit MPM (Stage 39A / 40) for problems where uniform-grid
+resolution wastes compute far from the interface.
+
+**Deliverables:**
+
+- Octree refinement structure on `fem::mesh::FemMesh` (or a new
+  `AmrMesh` wrapper) with per-cell refinement levels.
+- Hanging-node DoF constraint (T-junction handling) for both P1
+  and DG bases.
+- Refinement criterion API (closure: `cell → bool`).
+- Re-meshing every N steps with state interpolation between
+  meshes.
+
+**Definition of done:** AMR variant of the FEM heat / elasticity
+scene refines near a moving heat source and matches uniform-fine
+to `1 %` while using `< 25 %` of the cells.
+
+**Dependencies:** Stage 36 (FEM v1), Stage 39B (DG basis, for
+the DG-AMR case).
+
 ### Stage 25+ — Out of scope / explicitly deferred
 
 Per `GAP.md` §8 and §9, these are deliberately not on the roadmap:
