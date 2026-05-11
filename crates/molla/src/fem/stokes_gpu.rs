@@ -724,6 +724,18 @@ pub struct NavierStokesGpuConfig {
     pub supg_alpha: Real,
     /// Inner Stokes solver tolerances — re-used at every step.
     pub stokes: StokesGpuConfig,
+    /// Stage 41 v5 — lazy-CG convergence-check period. `Some(K)` runs
+    /// the inner CG in batches of `K` iters between residual reads
+    /// (eliminates `K - 1` host syncs per batch). `None` falls back to
+    /// the strict-mode CG (sync every iter — the v3/v4 behaviour). At
+    /// `tol = 5e-7` the inner CG typically burns 20-50 iters/solve.
+    ///
+    /// The "sweet spot" is rig-dependent: on a Vulkan adapter where
+    /// per-submit cost dominates, `Some(16)` wins; on a true-async-dot
+    /// adapter (large GPU + low submit overhead) smaller K (4-8) wins
+    /// because the lazy mode otherwise over-runs the true convergence
+    /// point by ~K-1 iters. `Some(8)` is the cross-rig default.
+    pub cg_check_period: Option<usize>,
 }
 
 impl Default for NavierStokesGpuConfig {
@@ -733,6 +745,7 @@ impl Default for NavierStokesGpuConfig {
             n_steps: 100,
             supg_alpha: 0.0,
             stokes: StokesGpuConfig::default(),
+            cg_check_period: Some(8),
         }
     }
 }
@@ -993,6 +1006,17 @@ pub fn solve_navier_stokes_gpu(
     let b_for_mv_step = clone_bsr(&b_gpu);
     let bt_for_mv_step = clone_bsr(&bt_gpu);
 
+    // Stage 41 v5 — when lazy CG is active, pre-build the matvec
+    // dispatches for the three inner-CG instances (a_inv_f, schur
+    // inner, u recovery) so the inner loop can chain them into a
+    // single compute pass instead of paying a fresh wgpu submit per
+    // matvec per iter. The CG result buffers (`x_buf`) are workspace-
+    // allocated inside `cg_solve_resident_lazy_prepared`, so we
+    // can't bake them into the prepared matvec — instead the CG
+    // workspace exposes `p_buf`/`ap_buf` and we plumb those in by
+    // re-creating the prepared matvec at the start of each solve.
+    // Allocation cost is one-time-per-solve (~2 bind groups) — fine.
+
     let total_t0 = Instant::now();
 
     for _step in 0..cfg.n_steps {
@@ -1036,16 +1060,45 @@ pub fn solve_navier_stokes_gpu(
 
         // (e) Uzawa-CG solve against (A_eff, B). Same Schur structure
         // as `solve_stokes_gpu` — only the RHS changes per step.
-        let cg_a_inv_f = cg_kernel.cg_solve_resident(
-            n_v as u32,
-            &rhs_buf,
-            None,
-            cfg.stokes.tol_inner,
-            cfg.stokes.max_inner_iters,
-            |x_buf, y_buf| {
-                bsr_kernel.matvec(&a_for_inv_step, x_buf, y_buf, 1.0, 0.0)
-            },
-        )?;
+        //
+        // v5: if `cfg.cg_check_period` is `Some(K)`, drive every inner
+        // CG through the prepared-matvec lazy variant. The prepared
+        // matvec caches the BSR bind groups so each inner iter records
+        // matvec + dot + axpy + dot + axpby into ONE compute pass —
+        // one submit per iter instead of two (matvec + post-matvec),
+        // and `K - 1` per-iter dot-readback syncs collapse to one read
+        // per batch of `K`. The prepared matvec costs one extra
+        // bind-group + uniform alloc per inner CG instantiation, which
+        // amortises across the ~30-100 inner iters that each solve
+        // burns.
+        let check_period = cfg.cg_check_period;
+        let cg_a_inv_f = if let Some(k) = check_period {
+            cg_kernel.cg_solve_resident_lazy_prepared(
+                n_v as u32,
+                &rhs_buf,
+                None,
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                Some(k),
+                |p_buf_l, ap_buf_l| {
+                    let prepared = bsr_kernel
+                        .prepare_matvec(&a_for_inv_step, p_buf_l, ap_buf_l, 1.0, 0.0)?;
+                    let bsr_ref = &bsr_kernel;
+                    Ok(move |pass: &mut wgpu::ComputePass| {
+                        bsr_ref.matvec_into_pass(pass, &prepared);
+                    })
+                },
+            )?
+        } else {
+            cg_kernel.cg_solve_resident(
+                n_v as u32,
+                &rhs_buf,
+                None,
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                |x_buf, y_buf| bsr_kernel.matvec(&a_for_inv_step, x_buf, y_buf, 1.0, 0.0),
+            )?
+        };
 
         bsr_kernel.matvec(&b_gpu, &cg_a_inv_f.x, &g_buf, 1.0, 0.0)?;
         apply_zero_mask_f32(queue, &g_buf, &p_pin_mask);
@@ -1053,16 +1106,33 @@ pub fn solve_navier_stokes_gpu(
         let schur_op = |q_buf: &wgpu::Buffer, y_buf: &wgpu::Buffer| -> Result<()> {
             bsr_kernel.matvec(&bt_for_mv_step, q_buf, &scratch_v, 1.0, 0.0)?;
             apply_zero_mask_f32(queue, &scratch_v, &v_pin_mask);
-            let inner = cg_kernel.cg_solve_resident(
-                n_v as u32,
-                &scratch_v,
-                None,
-                cfg.stokes.tol_inner,
-                cfg.stokes.max_inner_iters,
-                |x_buf, y_buf2| {
-                    bsr_kernel.matvec(&a_for_mv_step, x_buf, y_buf2, 1.0, 0.0)
-                },
-            )?;
+            let inner = if let Some(k) = check_period {
+                cg_kernel.cg_solve_resident_lazy_prepared(
+                    n_v as u32,
+                    &scratch_v,
+                    None,
+                    cfg.stokes.tol_inner,
+                    cfg.stokes.max_inner_iters,
+                    Some(k),
+                    |p_buf_l, ap_buf_l| {
+                        let prepared = bsr_kernel
+                            .prepare_matvec(&a_for_mv_step, p_buf_l, ap_buf_l, 1.0, 0.0)?;
+                        let bsr_ref = &bsr_kernel;
+                        Ok(move |pass: &mut wgpu::ComputePass| {
+                            bsr_ref.matvec_into_pass(pass, &prepared);
+                        })
+                    },
+                )?
+            } else {
+                cg_kernel.cg_solve_resident(
+                    n_v as u32,
+                    &scratch_v,
+                    None,
+                    cfg.stokes.tol_inner,
+                    cfg.stokes.max_inner_iters,
+                    |x_buf, y_buf2| bsr_kernel.matvec(&a_for_mv_step, x_buf, y_buf2, 1.0, 0.0),
+                )?
+            };
             bsr_kernel.matvec(&b_for_mv_step, &inner.x, y_buf, 1.0, 0.0)?;
             apply_zero_mask_f32(queue, y_buf, &p_pin_mask);
             Ok(())
@@ -1074,10 +1144,16 @@ pub fn solve_navier_stokes_gpu(
         // dominated at the actual pin counts (the host write_buffer
         // path effectively batches via the wgpu staging belt). Cached
         // bind groups would close the gap, but bind-group caching
-        // crosses into the CG inner-loop refactor that the task brief
-        // explicitly defers. See module header.
+        // crosses into the CG inner-loop refactor that v5 keeps inside
+        // the inner CG only.
 
-        // Warm-start p from the previous step.
+        // Warm-start p from the previous step. The OUTER pressure CG
+        // stays on the strict-mode kernel because its matvec is the
+        // Schur op (itself a multi-submit composition: Bᵀ matvec +
+        // inner CG + B matvec + zero masks), and there's no
+        // straightforward way to fuse that into the lazy CG's single
+        // compute pass. The brief defers full pipelined CG and
+        // explicitly scopes lazy CG to the inner Schur-action solves.
         let p_cg = cg_kernel.cg_solve_resident(
             n_p as u32,
             &g_buf,
@@ -1106,16 +1182,33 @@ pub fn solve_navier_stokes_gpu(
             n_v as u32,
             inv_dt as f32,
         )?;
-        let u_cg = cg_kernel.cg_solve_resident(
-            n_v as u32,
-            &rhs_u_buf,
-            Some(&u_buf), // warm-start from u_old
-            cfg.stokes.tol_inner,
-            cfg.stokes.max_inner_iters,
-            |x_buf, y_buf| {
-                bsr_kernel.matvec(&a_for_u_step, x_buf, y_buf, 1.0, 0.0)
-            },
-        )?;
+        let u_cg = if let Some(k) = check_period {
+            cg_kernel.cg_solve_resident_lazy_prepared(
+                n_v as u32,
+                &rhs_u_buf,
+                Some(&u_buf), // warm-start from u_old
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                Some(k),
+                |p_buf_l, ap_buf_l| {
+                    let prepared = bsr_kernel
+                        .prepare_matvec(&a_for_u_step, p_buf_l, ap_buf_l, 1.0, 0.0)?;
+                    let bsr_ref = &bsr_kernel;
+                    Ok(move |pass: &mut wgpu::ComputePass| {
+                        bsr_ref.matvec_into_pass(pass, &prepared);
+                    })
+                },
+            )?
+        } else {
+            cg_kernel.cg_solve_resident(
+                n_v as u32,
+                &rhs_u_buf,
+                Some(&u_buf), // warm-start from u_old
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                |x_buf, y_buf| bsr_kernel.matvec(&a_for_u_step, x_buf, y_buf, 1.0, 0.0),
+            )?
+        };
 
         // Copy u_cg.x and p_cg.x back into the persistent u_buf, p_buf
         // (next step reads from them).

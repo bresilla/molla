@@ -272,6 +272,20 @@ const MAX_DIM: u32 = 65535;
 
 /// Owns the compute pipelines + bind-group layouts for the four BSR
 /// kernels. Build once per device, reuse across many dispatches.
+/// Cached matvec dispatch — created by
+/// [`BsrAlgebraKernel::prepare_matvec`] and consumed repeatedly by
+/// [`BsrAlgebraKernel::matvec_into_pass`]. Holds the uniform buffer +
+/// the two cached bind groups so the inner-loop dispatch is a single
+/// `pass.dispatch_workgroups` with no per-call alloc.
+pub struct PreparedMatvec {
+    #[allow(dead_code)]
+    uniform_buf: wgpu::Buffer,
+    bg_io: wgpu::BindGroup,
+    bg_u: wgpu::BindGroup,
+    dim_x: u32,
+    dim_y: u32,
+}
+
 pub struct BsrAlgebraKernel {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -653,6 +667,93 @@ impl BsrAlgebraKernel {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         Ok(())
+    }
+
+    /// Stage 41 v5 — "prepared matvec" path used by the lazy CG inner
+    /// loop. Caches the uniform buffer + IO bind group for a fixed
+    /// `(A, x, y, alpha, beta)` so the inner loop can replay the
+    /// matvec across thousands of iters with zero per-call alloc.
+    ///
+    /// Returns the dispatch handle that [`Self::matvec_into_pass`]
+    /// consumes. Hold the handle alive for the lifetime of the
+    /// repeated dispatches.
+    pub fn prepare_matvec(
+        &self,
+        a: &BsrGpu,
+        x_buf: &wgpu::Buffer,
+        y_buf: &wgpu::Buffer,
+        alpha: f32,
+        beta: f32,
+    ) -> Result<PreparedMatvec> {
+        let uniforms = MatvecUniforms {
+            nrows: a.nrows,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            alpha,
+            beta,
+            _pad3: 0.0,
+            _pad4: 0.0,
+        };
+        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::sparse_gpu::prep-mv uniforms"),
+            size: core::mem::size_of::<MatvecUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::sparse_gpu::prep-mv io bg"),
+            layout: &self.layout_mv_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: a.row_offsets.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: a.col_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: a.values.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: x_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: y_buf.as_entire_binding() },
+            ],
+        });
+        let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::sparse_gpu::prep-mv u bg"),
+            layout: &self.layout_mv_u,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let nrows = a.nrows;
+        let dim_x = nrows.min(MAX_DIM).max(1);
+        let dim_y = nrows.div_ceil(MAX_DIM).max(1);
+
+        Ok(PreparedMatvec {
+            uniform_buf,
+            bg_io,
+            bg_u,
+            dim_x,
+            dim_y,
+        })
+    }
+
+    /// Record a prepared matvec into an existing compute pass. The
+    /// matvec runs as one extra dispatch — no extra encoder/submit.
+    ///
+    /// Note: `wgpu::ComputePass`'s `set_bind_group` and `set_pipeline`
+    /// reborrow the supplied references for the *remainder* of the
+    /// pass (until the next `set_*` call on the same slot), not
+    /// statically — so the prepared handle only needs to outlive the
+    /// dispatch we record here. wgpu's runtime tracks the actual
+    /// resource lifetime independently.
+    pub fn matvec_into_pass(
+        &self,
+        pass: &mut wgpu::ComputePass<'_>,
+        prepared: &PreparedMatvec,
+    ) {
+        pass.set_pipeline(&self.pipe_matvec);
+        pass.set_bind_group(0, &prepared.bg_io, &[]);
+        pass.set_bind_group(1, &prepared.bg_u, &[]);
+        pass.dispatch_workgroups(prepared.dim_x, prepared.dim_y, 1);
     }
 
     /// Sparse axpy: `B = α · A + β · B` for the SAME-PATTERN case.

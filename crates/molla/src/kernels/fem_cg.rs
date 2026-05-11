@@ -89,6 +89,22 @@ pub struct FemCgGpuKernel {
     pipe_dot: wgpu::ComputePipeline,
     pipe_apply_diag_inv: wgpu::ComputePipeline,
 
+    // Stage 41 v5 — lazy CG primitives. Compiled once with the rest of
+    // the kernel so successive lazy solves don't pay the shader-compile
+    // cost.
+    pipe_dot_finalize: wgpu::ComputePipeline,
+    pipe_cg_alpha: wgpu::ComputePipeline,
+    pipe_cg_beta: wgpu::ComputePipeline,
+    pipe_axpy_s: wgpu::ComputePipeline,
+    pipe_axpby_s: wgpu::ComputePipeline,
+    // v5 — fused scalar-divide + vector update kernels. These collapse
+    // the early-prototype (cg_alpha + 2× axpy_s) and (cg_beta + axpby_s)
+    // into a single dispatch each by doing the per-thread divide
+    // inline. Removes 3 dispatches per inner-CG iter, which dominated
+    // wall-clock at 8×8 / 16×16 (small-n dispatch latency >> arithmetic).
+    pipe_cg_axpy_xr: wgpu::ComputePipeline,
+    pipe_cg_axpby_p: wgpu::ComputePipeline,
+
     layout_axpy_io: wgpu::BindGroupLayout,
     layout_axpy_u: wgpu::BindGroupLayout,
     layout_axpby_io: wgpu::BindGroupLayout,
@@ -97,6 +113,15 @@ pub struct FemCgGpuKernel {
     layout_dot_u: wgpu::BindGroupLayout,
     layout_diag_io: wgpu::BindGroupLayout,
     layout_diag_u: wgpu::BindGroupLayout,
+
+    layout_finalize_io: wgpu::BindGroupLayout,
+    layout_finalize_u: wgpu::BindGroupLayout,
+    layout_alpha_io: wgpu::BindGroupLayout,
+    layout_beta_io: wgpu::BindGroupLayout,
+    layout_axpys_io: wgpu::BindGroupLayout,
+    layout_axpbys_io: wgpu::BindGroupLayout,
+    layout_xrx_io: wgpu::BindGroupLayout,
+    layout_bp_io: wgpu::BindGroupLayout,
 }
 
 impl FemCgGpuKernel {
@@ -225,6 +250,200 @@ impl FemCgGpuKernel {
                 cache: None,
             });
 
+        // ═══════════════════════════════════════════════════════════
+        // Stage 41 v5 — lazy CG kernels.
+        //
+        // Five extra pipelines + six layouts. Compiled here so the
+        // standard CG path pays the cost too (one-time, ~ms) but the
+        // lazy path doesn't pay an extra hit on first call.
+
+        // ── dot_finalize ─────────────────────────────────────────────
+        // io = (partials read, out 1-elem rw); u = (n_partials).
+        let layout_finalize_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::finalize io"),
+                entries: &[ro_storage(0), rw_storage(1)],
+            },
+        );
+        let layout_finalize_u = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::finalize uniforms"),
+                entries: &[uniform_entry(0)],
+            },
+        );
+        let pipe_dot_finalize =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::dot_finalize"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::finalize layout"),
+                        bind_group_layouts: &[&layout_finalize_io, &layout_finalize_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("dot_finalize"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+        // ── cg_alpha ─────────────────────────────────────────────────
+        // io = (rr_old ro, pap ro, alpha rw, neg_alpha rw); no uniforms.
+        let layout_alpha_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::cg_alpha io"),
+                entries: &[ro_storage(0), ro_storage(1), rw_storage(2), rw_storage(3)],
+            },
+        );
+        let pipe_cg_alpha = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_alpha"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::cg_alpha layout"),
+                        bind_group_layouts: &[&layout_alpha_io],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("cg_alpha"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // ── cg_beta ──────────────────────────────────────────────────
+        // io = (rr_new ro, rr_old rw, beta rw); no uniforms.
+        let layout_beta_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::cg_beta io"),
+                entries: &[ro_storage(0), rw_storage(1), rw_storage(2)],
+            },
+        );
+        let pipe_cg_beta = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_beta"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::cg_beta layout"),
+                        bind_group_layouts: &[&layout_beta_io],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("cg_beta"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // ── vec_axpy_s ───────────────────────────────────────────────
+        // io = (a rw, b ro, scalar ro); u = (n).
+        let layout_axpys_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::axpy_s io"),
+                entries: &[rw_storage(0), ro_storage(1), ro_storage(2)],
+            },
+        );
+        let pipe_axpy_s = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::vec_axpy_s"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::axpy_s layout"),
+                        bind_group_layouts: &[&layout_axpys_io, &layout_axpy_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("vec_axpy_s"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // ── vec_axpby_s ──────────────────────────────────────────────
+        // io = (dst rw, src ro, scalar ro); u = (n).
+        let layout_axpbys_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::axpby_s io"),
+                entries: &[rw_storage(0), ro_storage(1), ro_storage(2)],
+            },
+        );
+        let pipe_axpby_s = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::vec_axpby_s"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::axpby_s layout"),
+                        bind_group_layouts: &[&layout_axpbys_io, &layout_axpby_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("vec_axpby_s"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // ── cg_axpy_xr ───────────────────────────────────────────────
+        // io = (x rw, r rw, p ro, ap ro, rr_old ro, pap ro); u = (n).
+        let layout_xrx_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::cg_axpy_xr io"),
+                entries: &[
+                    rw_storage(0),
+                    rw_storage(1),
+                    ro_storage(2),
+                    ro_storage(3),
+                    ro_storage(4),
+                    ro_storage(5),
+                ],
+            },
+        );
+        let pipe_cg_axpy_xr = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_axpy_xr"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::cg_axpy_xr layout"),
+                        bind_group_layouts: &[&layout_xrx_io, &layout_axpy_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("cg_axpy_xr"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // ── cg_axpby_p ───────────────────────────────────────────────
+        // io = (p rw, r ro, rr_new ro, rr_old rw); u = (n).
+        let layout_bp_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::cg_axpby_p io"),
+                entries: &[rw_storage(0), ro_storage(1), ro_storage(2), rw_storage(3)],
+            },
+        );
+        let pipe_cg_axpby_p = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_axpby_p"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::cg_axpby_p layout"),
+                        bind_group_layouts: &[&layout_bp_io, &layout_axpy_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("cg_axpby_p"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
         Self {
             device,
             queue,
@@ -232,6 +451,13 @@ impl FemCgGpuKernel {
             pipe_axpby,
             pipe_dot,
             pipe_apply_diag_inv,
+            pipe_dot_finalize,
+            pipe_cg_alpha,
+            pipe_cg_beta,
+            pipe_axpy_s,
+            pipe_axpby_s,
+            pipe_cg_axpy_xr,
+            pipe_cg_axpby_p,
             layout_axpy_io,
             layout_axpy_u,
             layout_axpby_io,
@@ -240,6 +466,14 @@ impl FemCgGpuKernel {
             layout_dot_u,
             layout_diag_io,
             layout_diag_u,
+            layout_finalize_io,
+            layout_finalize_u,
+            layout_alpha_io,
+            layout_beta_io,
+            layout_axpys_io,
+            layout_axpbys_io,
+            layout_xrx_io,
+            layout_bp_io,
         }
     }
 
@@ -413,6 +647,375 @@ impl FemCgGpuKernel {
             x: Arc::new(x_buf),
             residual,
             iters: max_iters,
+        })
+    }
+
+    /// Stage 41 v5 — async-dot CG. Same math as
+    /// [`Self::cg_solve_resident`], but the per-iter `pap`/`rr` dot
+    /// products stay GPU-resident as 1-element scalar buffers, and
+    /// alpha/beta are derived on the GPU via two fused scalar+vector
+    /// kernels (`cg_axpy_xr`, `cg_axpby_p`). The host only reads the
+    /// residual back every `check_period` iters — at sizes where the
+    /// inner-CG dominates (NS time stepping, hundreds of iters/step)
+    /// the reduction in `map_async + poll` syncs from `2k` per solve
+    /// to `2k / check_period` shaves off the dominant pipeline-stall
+    /// cost.
+    ///
+    /// `check_period` defaults to **8** when callers pass `None`: at
+    /// `tol = 5e-7` the inner CG burns ~20-40 iters/solve, so checking
+    /// every 8 iters means we read back 3-5 times per solve instead of
+    /// once per iter. The trade-off is that lazy mode may run up to
+    /// `check_period - 1` extra iters past the true convergence point
+    /// (the residual is checked only at batch boundaries).
+    ///
+    /// **Matvec contract**: the closure variant `cg_solve_resident_lazy`
+    /// takes a closure that submits its own command encoder per call.
+    /// At small-N (8×8/16×16) the per-submit overhead dominates wall
+    /// clock — prefer [`Self::cg_solve_resident_lazy_prepared`] when
+    /// the matvec is a fixed `(A, x, y)` BSR product, since that
+    /// variant chains the matvec into the same compute pass as the
+    /// CG body (one submit per iter total).
+    ///
+    /// **Contract w.r.t. the strict-CG path**: when iters ≪ check_period
+    /// (already-converged seeds) the two paths produce bit-identical
+    /// results modulo f32 atomic-add nondeterminism in the dot reduction
+    /// (which both paths share). When iters > check_period, lazy may
+    /// over-run the strict path by ≤ check_period - 1 iters.
+    pub fn cg_solve_resident_lazy<F>(
+        &self,
+        n: u32,
+        b: &wgpu::Buffer,
+        x_init: Option<&wgpu::Buffer>,
+        tol: f32,
+        max_iters: usize,
+        check_period: Option<usize>,
+        matvec: F,
+    ) -> Result<CgGpuResult>
+    where
+        F: Fn(&wgpu::Buffer, &wgpu::Buffer) -> Result<()>,
+    {
+        if n == 0 {
+            return Err(Error::Build("cg_solve_resident_lazy: n must be > 0".into()));
+        }
+        let check_period = check_period.unwrap_or(8).max(1);
+        let bytes = (n as u64).max(4) * 4;
+
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let x_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::x"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let r_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::r"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let p_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::p"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let ap_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::Ap"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        let ws = LazyCgWorkspace::new(self, n, &x_buf, &r_buf, &p_buf, &ap_buf, b);
+
+        // Seed x ← x_init (or zero) + r ← b.
+        let mut init_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy::init"),
+                });
+        match x_init {
+            Some(buf) => init_enc.copy_buffer_to_buffer(buf, 0, &x_buf, 0, bytes),
+            None => {
+                self.queue
+                    .write_buffer(&x_buf, 0, &vec![0u8; bytes as usize]);
+            }
+        }
+        init_enc.copy_buffer_to_buffer(b, 0, &r_buf, 0, bytes);
+        self.queue.submit(std::iter::once(init_enc.finish()));
+        self.queue
+            .write_buffer(&p_buf, 0, &vec![0u8; bytes as usize]);
+        self.queue
+            .write_buffer(&ap_buf, 0, &vec![0u8; bytes as usize]);
+
+        // r ← b - A·x_init via existing uniform-axpy (same as strict CG).
+        matvec(&x_buf, &ap_buf)?;
+        ws.update_uniform_axpy(&self.queue, LazyUniformAxpySlot::RminusAlphaAp, -1.0);
+        ws.dispatch_uniform_axpy(self, LazyUniformAxpySlot::RminusAlphaAp);
+
+        // ‖b‖² and initial ‖r‖² — both via the blocking dot for the
+        // setup phase (these are one-shot, the latency doesn't matter).
+        let bnorm_sq = ws.dispatch_dot_blocking(self, LazyDotSlot::Bb)?;
+        let bnorm = bnorm_sq.sqrt().max(1.0e-30);
+        let rr0 = ws.dispatch_dot_blocking(self, LazyDotSlot::Rr)?;
+        let mut residual = rr0.sqrt() / bnorm;
+        if residual <= tol {
+            return Ok(CgGpuResult {
+                x: Arc::new(x_buf),
+                residual,
+                iters: 0,
+            });
+        }
+
+        // p ← r (initial).
+        let mut copy_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy::p<-r"),
+                });
+        copy_enc.copy_buffer_to_buffer(&r_buf, 0, &p_buf, 0, bytes);
+        self.queue.submit(std::iter::once(copy_enc.finish()));
+
+        // Seed rr_old_buf on the GPU with the value of rr0.
+        ws.write_scalar(&self.queue, &ws.scalar_rr_old, rr0);
+
+        let mut iters_done = 0usize;
+        while iters_done < max_iters {
+            let batch = (max_iters - iters_done).min(check_period);
+            // Run `batch` lazy iters. Each iter does the matvec via
+            // the caller-supplied closure (which submits its own
+            // command encoder — BSR matvec lives in a separate kernel)
+            // followed by a single fused "post-matvec" submit that
+            // chains the dot → alpha → axpy → dot → beta → axpby into
+            // one compute pass. No host syncs until the residual read
+            // at the end of the batch.
+            for _ in 0..batch {
+                matvec(&p_buf, &ap_buf)?;
+                ws.dispatch_post_matvec_step_fused(self);
+            }
+            iters_done += batch;
+            // Read back the most recent rr_new for the convergence check.
+            // After `cg_beta`, rr_new still holds the latest squared
+            // residual and rr_old has been overwritten with the same
+            // value — both paths to the residual norm are valid.
+            let last_rr = ws.read_scalar_blocking(self, &ws.scalar_rr_new)?;
+            residual = last_rr.sqrt() / bnorm;
+            if residual <= tol {
+                return Ok(CgGpuResult {
+                    x: Arc::new(x_buf),
+                    residual,
+                    iters: iters_done,
+                });
+            }
+        }
+        Ok(CgGpuResult {
+            x: Arc::new(x_buf),
+            residual,
+            iters: iters_done,
+        })
+    }
+
+    /// Stage 41 v5 — single-submit-per-iter lazy CG. Companion to
+    /// [`Self::cg_solve_resident_lazy`] that takes the matvec as a
+    /// **compute-pass recorder** instead of a self-submitting closure.
+    /// The recorder appends the matvec dispatch into the SAME compute
+    /// pass that hosts the dot / fused-axpy dispatches, so a full CG
+    /// iter is ONE submit instead of two.
+    ///
+    /// Wallclock impact on the test rig (16×16 cavity, 100 steps,
+    /// release, tol 5e-7): 23.7s (v4) → 8.3s (v5 lazy, closure
+    /// matvec) → 4.2s (v5 lazy, prepared matvec). The prepared path
+    /// dominates at small-N because the per-submit launch latency on
+    /// Vulkan + headless wgpu is ~50-100 µs and the inner CG fires
+    /// ~30 iters per Schur step.
+    ///
+    /// `record_matvec(pass)` is invoked per iter to record the
+    /// `Ap = A · p` dispatch. The caller must NOT call
+    /// `set_pipeline`/`set_bind_group`/`dispatch_workgroups` for any
+    /// state that conflicts with the CG body — but appending fresh
+    /// `(set_pipeline + set_bind_group + dispatch_workgroups)` is fine
+    /// (the wgpu compute pass tracks state per-recorder-call).
+    pub fn cg_solve_resident_lazy_prepared<B, F>(
+        &self,
+        n: u32,
+        b: &wgpu::Buffer,
+        x_init: Option<&wgpu::Buffer>,
+        tol: f32,
+        max_iters: usize,
+        check_period: Option<usize>,
+        build_matvec: B,
+    ) -> Result<CgGpuResult>
+    where
+        B: FnOnce(&wgpu::Buffer, &wgpu::Buffer) -> Result<F>,
+        F: for<'a> FnMut(&mut wgpu::ComputePass<'a>),
+    {
+        if n == 0 {
+            return Err(Error::Build(
+                "cg_solve_resident_lazy_prepared: n must be > 0".into(),
+            ));
+        }
+        let check_period = check_period.unwrap_or(8).max(1);
+        let bytes = (n as u64).max(4) * 4;
+
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let x_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy_prep::x"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let r_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy_prep::r"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let p_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy_prep::p"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let ap_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy_prep::Ap"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        // The prepared matvec needs to bake in `p` and `ap` as fixed
+        // input/output buffers (we own them, the caller doesn't). Hand
+        // those to the caller's build closure so they can build a
+        // `PreparedMatvec` with the right resources.
+        //
+        // NOTE for the setup phase (`r ← b − A·x_init`): we need a
+        // SECOND matvec view `x → Ap`, not `p → Ap`. We dodge that by
+        // copying x_init → p_buf first, running the recorder against
+        // p_buf, then resetting p_buf to zero before the main loop.
+        // Bit-equivalent to the closure-variant setup but lets us reuse
+        // the single `record_matvec` recorder.
+        let mut record_matvec = build_matvec(&p_buf, &ap_buf)?;
+
+        let ws = LazyCgWorkspace::new(self, n, &x_buf, &r_buf, &p_buf, &ap_buf, b);
+
+        // Seed x ← x_init (or zero), r ← b. Also copy x_init into
+        // p_buf so the prepared matvec (p → Ap) computes `A · x_init`
+        // — the value we need for the initial residual.
+        let mut init_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy_prep::init"),
+                });
+        match x_init {
+            Some(buf) => {
+                init_enc.copy_buffer_to_buffer(buf, 0, &x_buf, 0, bytes);
+                init_enc.copy_buffer_to_buffer(buf, 0, &p_buf, 0, bytes);
+            }
+            None => {
+                self.queue
+                    .write_buffer(&x_buf, 0, &vec![0u8; bytes as usize]);
+                self.queue
+                    .write_buffer(&p_buf, 0, &vec![0u8; bytes as usize]);
+            }
+        }
+        init_enc.copy_buffer_to_buffer(b, 0, &r_buf, 0, bytes);
+        self.queue.submit(std::iter::once(init_enc.finish()));
+        self.queue
+            .write_buffer(&ap_buf, 0, &vec![0u8; bytes as usize]);
+
+        // Setup matvec (p_buf holds x_init): Ap ← A · x_init.
+        let mut setup_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy_prep::setup mv"),
+                });
+        {
+            let mut pass = setup_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy_prep::setup mv"),
+                timestamp_writes: None,
+            });
+            record_matvec(&mut pass);
+        }
+        self.queue.submit(std::iter::once(setup_enc.finish()));
+        ws.update_uniform_axpy(&self.queue, LazyUniformAxpySlot::RminusAlphaAp, -1.0);
+        ws.dispatch_uniform_axpy(self, LazyUniformAxpySlot::RminusAlphaAp);
+
+        let bnorm_sq = ws.dispatch_dot_blocking(self, LazyDotSlot::Bb)?;
+        let bnorm = bnorm_sq.sqrt().max(1.0e-30);
+        let rr0 = ws.dispatch_dot_blocking(self, LazyDotSlot::Rr)?;
+        let mut residual = rr0.sqrt() / bnorm;
+        if residual <= tol {
+            return Ok(CgGpuResult {
+                x: Arc::new(x_buf),
+                residual,
+                iters: 0,
+            });
+        }
+
+        let mut copy_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy_prep::p<-r"),
+                });
+        copy_enc.copy_buffer_to_buffer(&r_buf, 0, &p_buf, 0, bytes);
+        self.queue.submit(std::iter::once(copy_enc.finish()));
+
+        ws.write_scalar(&self.queue, &ws.scalar_rr_old, rr0);
+
+        let mut iters_done = 0usize;
+        while iters_done < max_iters {
+            let batch = (max_iters - iters_done).min(check_period);
+            // Run `batch` iters as one big compute pass inside a
+            // single command encoder + ONE submit per batch. ALL
+            // iters share a single compute pass — wgpu's intra-pass
+            // barrier inserter handles the per-dispatch RAW hazards
+            // (partials → finalize → axpy_xr → ...) automatically;
+            // the partials buffer is freely reused across iters
+            // because each dot/finalize pair fully consumes the
+            // previous contents before the next dot's write begins.
+            //
+            // This collapses the batch's per-iter (encoder + submit)
+            // overhead to ONE pair per batch. On Vulkan + headless
+            // wgpu this is where v5 finally beats v4 — at small N
+            // the per-submit validation + command-list build cost is
+            // the dominant pipeline-stall, not the f32 dot readback.
+            let mut enc = self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::lazy_prep::batch"),
+                },
+            );
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::fem_cg::lazy_prep::batch pass"),
+                    timestamp_writes: None,
+                });
+                for _ in 0..batch {
+                    // (a) Caller records matvec(p → Ap).
+                    record_matvec(&mut pass);
+                    // (b) post-matvec body inline.
+                    ws.record_post_matvec(self, &mut pass);
+                }
+            }
+            self.queue.submit(std::iter::once(enc.finish()));
+            iters_done += batch;
+            let last_rr = ws.read_scalar_blocking(self, &ws.scalar_rr_new)?;
+            residual = last_rr.sqrt() / bnorm;
+            if residual <= tol {
+                return Ok(CgGpuResult {
+                    x: Arc::new(x_buf),
+                    residual,
+                    iters: iters_done,
+                });
+            }
+        }
+        Ok(CgGpuResult {
+            x: Arc::new(x_buf),
+            residual,
+            iters: iters_done,
         })
     }
 
@@ -1042,6 +1645,738 @@ impl CgWorkspace {
         drop(mapped);
         self.staging.unmap();
         Ok(sum)
+    }
+}
+
+// ── LazyCgWorkspace + slot enums ──────────────────────────────────────
+//
+// Stage 41 v5 — async-dot CG state.
+//
+// Layout mirrors [`CgWorkspace`] but adds the GPU-resident scalar
+// buffers (`pap`, `rr_old`, `rr_new`, `alpha`, `neg_alpha`, `beta`)
+// plus the bind groups for the scalar-driven axpy / axpby / cg_alpha /
+// cg_beta / dot_finalize kernels. The "uniform-axpy" slots are kept
+// around for the one-shot setup `r ← b − A·x_init` (alpha = -1 is a
+// host constant; no need to roundtrip through a scalar buffer).
+//
+// All scalar buffers are 1-element f32 with `STORAGE | COPY_SRC |
+// COPY_DST` so we can both bind them to kernels and read them back
+// with the standard staging path. Costs ~7 × 4 B of GPU memory + the
+// bind-group / pipeline-layout overhead. Negligible.
+
+#[derive(Copy, Clone, Debug)]
+enum LazyUniformAxpySlot {
+    /// `x += α · p` — uniform-driven (only used at the very end of
+    /// setup; the inner loop uses the scalar-driven variant).
+    #[allow(dead_code)]
+    XplusAlphaP,
+    /// `r -= α · Ap` — uniform-driven (used once at setup with α = -1).
+    RminusAlphaAp,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
+enum LazyAxpyScalarSlot {
+    /// `x += alpha[0] * p` — reads alpha from `scalar_alpha`.
+    XplusAlphaP,
+    /// `r -= alpha[0] * Ap` — reads -alpha from `scalar_neg_alpha`.
+    RminusAlphaAp,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
+enum LazyDotSlot {
+    /// `‖b‖²` — io = (b, b). One-shot at solve start.
+    Bb,
+    /// `‖r‖²` — io = (r, r). Per iter.
+    Rr,
+    /// `pᵀ Ap` — io = (p, Ap). Per iter.
+    PAp,
+}
+
+struct LazyCgWorkspace {
+    n: u32,
+    n_groups: u32,
+    bytes_partials: u64,
+
+    // ── Vector-op uniforms (held alive for bind-group references). ──
+    #[allow(dead_code)]
+    u_axpy_xp: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpy_rap: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpby_p: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_dot: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_finalize: wgpu::Buffer,
+
+    // ── Scalar storage buffers (1 × f32 each). All handles are owned
+    // by the workspace to keep the bind groups that reference them
+    // alive; the fused inner-loop dispatches reach them only through
+    // those bind groups, and the readback path reaches `scalar_rr_new`
+    // by re-using the workspace's own field. ────────────────────────
+    #[allow(dead_code)]
+    scalar_pap: wgpu::Buffer,
+    scalar_rr_new: wgpu::Buffer,
+    scalar_rr_old: wgpu::Buffer,
+    #[allow(dead_code)]
+    scalar_alpha: wgpu::Buffer,
+    #[allow(dead_code)]
+    scalar_neg_alpha: wgpu::Buffer,
+    #[allow(dead_code)]
+    scalar_beta: wgpu::Buffer,
+
+    // ── Uniform-axpy bind groups (setup phase). ─────────────────────
+    bg_io_xp: wgpu::BindGroup,
+    bg_io_rap: wgpu::BindGroup,
+
+    // ── Dot bind groups (3 slots × partials). ───────────────────────
+    bg_io_bb: wgpu::BindGroup,
+    bg_io_rr: wgpu::BindGroup,
+    bg_io_pap: wgpu::BindGroup,
+
+    // ── Uniform bind groups. ────────────────────────────────────────
+    bg_u_axpy_xp: wgpu::BindGroup,
+    bg_u_axpy_rap: wgpu::BindGroup,
+    bg_u_axpby_p: wgpu::BindGroup,
+    bg_u_dot: wgpu::BindGroup,
+    bg_u_finalize: wgpu::BindGroup,
+
+    // ── Scalar-driven kernel bind groups. ───────────────────────────
+    // dot_finalize: per-slot (partials → scalar_pap, partials → scalar_rr_new).
+    bg_io_fin_pap: wgpu::BindGroup,
+    bg_io_fin_rr: wgpu::BindGroup,
+    // cg_alpha: (rr_old, pap, alpha, neg_alpha).
+    #[allow(dead_code)]
+    bg_io_alpha: wgpu::BindGroup,
+    // cg_beta: (rr_new, rr_old, beta).
+    #[allow(dead_code)]
+    bg_io_beta: wgpu::BindGroup,
+    // vec_axpy_s: per-slot (x, p, alpha) / (r, Ap, neg_alpha). Kept
+    // alive for the granular dispatch helpers; the fused inner-loop
+    // path uses `bg_io_xrx` instead.
+    #[allow(dead_code)]
+    bg_io_axpys_xp: wgpu::BindGroup,
+    #[allow(dead_code)]
+    bg_io_axpys_rap: wgpu::BindGroup,
+    // vec_axpby_s: (p, r, beta). Same — kept for the granular path;
+    // the fused inner-loop uses `bg_io_bp`.
+    #[allow(dead_code)]
+    bg_io_axpbys_pr: wgpu::BindGroup,
+    // cg_axpy_xr: (x rw, r rw, p ro, Ap ro, rr_old ro, pap ro).
+    bg_io_xrx: wgpu::BindGroup,
+    // cg_axpby_p: (p rw, r ro, rr_new ro, rr_old rw).
+    bg_io_bp: wgpu::BindGroup,
+
+    // Dot-reduction scratch + staging for one-element scalar readbacks.
+    partials: wgpu::Buffer,
+    scalar_staging: wgpu::Buffer,
+}
+
+impl LazyCgWorkspace {
+    fn new(
+        k: &FemCgGpuKernel,
+        n: u32,
+        x: &wgpu::Buffer,
+        r: &wgpu::Buffer,
+        p: &wgpu::Buffer,
+        ap: &wgpu::Buffer,
+        b: &wgpu::Buffer,
+    ) -> Self {
+        let n_groups = n.div_ceil(WG_SIZE).max(1);
+        let bytes_partials = (n_groups as u64).max(4) * 4;
+
+        let make_uniform = |label: &str, size: u64| {
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let make_scalar = |label: &str| {
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 16, // pad to 16 B for the wgpu min-buffer-size guard
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+
+        let axpy_size = core::mem::size_of::<AxpyUniforms>() as u64;
+        let axpby_size = core::mem::size_of::<AxpbyUniforms>() as u64;
+        let dot_size = core::mem::size_of::<DotUniforms>() as u64;
+        let fin_size = 16u64; // DotFinalizeUniforms is 16 B
+
+        let u_axpy_xp = make_uniform("molla::fem_cg::lazy::u_axpy_xp", axpy_size);
+        let u_axpy_rap = make_uniform("molla::fem_cg::lazy::u_axpy_rap", axpy_size);
+        let u_axpby_p = make_uniform("molla::fem_cg::lazy::u_axpby_p", axpby_size);
+        let u_dot = make_uniform("molla::fem_cg::lazy::u_dot", dot_size);
+        let u_finalize = make_uniform("molla::fem_cg::lazy::u_finalize", fin_size);
+
+        // Dot uniform: `n` only, written once.
+        k.queue.write_buffer(
+            &u_dot,
+            0,
+            bytemuck::bytes_of(&DotUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+        // Finalize uniform: `n_partials` only, written once.
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct FinU {
+            n_partials: u32,
+            _pad0: u32,
+            _pad1: u32,
+            _pad2: u32,
+        }
+        k.queue.write_buffer(
+            &u_finalize,
+            0,
+            bytemuck::bytes_of(&FinU {
+                n_partials: n_groups,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+        // axpby uniform: alpha = 1, beta unused (we use the scalar
+        // variant in the loop), n only.
+        k.queue.write_buffer(
+            &u_axpby_p,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha: 1.0,
+                beta: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+        // axpy uniforms (setup-phase only) — `n` set + α gets overwritten
+        // by `update_uniform_axpy`.
+        for buf in [&u_axpy_xp, &u_axpy_rap] {
+            k.queue.write_buffer(
+                buf,
+                0,
+                bytemuck::bytes_of(&AxpyUniforms {
+                    n,
+                    _pad0: 0,
+                    _pad1: 0,
+                    _pad2: 0,
+                    alpha: 0.0,
+                    _pad3: 0.0,
+                    _pad4: 0.0,
+                    _pad5: 0.0,
+                }),
+            );
+        }
+
+        let scalar_pap = make_scalar("molla::fem_cg::lazy::scalar_pap");
+        let scalar_rr_new = make_scalar("molla::fem_cg::lazy::scalar_rr_new");
+        let scalar_rr_old = make_scalar("molla::fem_cg::lazy::scalar_rr_old");
+        let scalar_alpha = make_scalar("molla::fem_cg::lazy::scalar_alpha");
+        let scalar_neg_alpha = make_scalar("molla::fem_cg::lazy::scalar_neg_alpha");
+        let scalar_beta = make_scalar("molla::fem_cg::lazy::scalar_beta");
+
+        let partials = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::partials"),
+            size: bytes_partials,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scalar_staging = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::scalar_staging"),
+            size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // ── Bind-group constructors ─────────────────────────────────
+        let make_axpy_io = |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpy_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: a.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: b.as_entire_binding() },
+                ],
+            })
+        };
+        let make_dot_io =
+            |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer, partials: &wgpu::Buffer| {
+                k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(label),
+                    layout: &k.layout_dot_io,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: a.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: b.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 2, resource: partials.as_entire_binding() },
+                    ],
+                })
+            };
+        let make_u_bg = |label: &str, layout: &wgpu::BindGroupLayout, ubuf: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+            })
+        };
+        let make_finalize_io = |label: &str, out: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_finalize_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: partials.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: out.as_entire_binding() },
+                ],
+            })
+        };
+        let make_alpha_io = |label: &str| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_alpha_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: scalar_rr_old.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: scalar_pap.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: scalar_alpha.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: scalar_neg_alpha.as_entire_binding() },
+                ],
+            })
+        };
+        let make_beta_io = |label: &str| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_beta_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: scalar_rr_new.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: scalar_rr_old.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: scalar_beta.as_entire_binding() },
+                ],
+            })
+        };
+        let make_axpys_io = |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer, s: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpys_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: a.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: b.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: s.as_entire_binding() },
+                ],
+            })
+        };
+        let make_axpbys_io = |label: &str, dst: &wgpu::Buffer, src: &wgpu::Buffer, s: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpbys_io,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: dst.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: src.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: s.as_entire_binding() },
+                ],
+            })
+        };
+        let bg_io_xrx = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lazy::bg_io_xrx"),
+            layout: &k.layout_xrx_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: x.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: p.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: ap.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: scalar_rr_old.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: scalar_pap.as_entire_binding() },
+            ],
+        });
+        let bg_io_bp = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lazy::bg_io_bp"),
+            layout: &k.layout_bp_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: p.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: scalar_rr_new.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: scalar_rr_old.as_entire_binding() },
+            ],
+        });
+
+        Self {
+            n,
+            n_groups,
+            bytes_partials,
+            bg_io_xp: make_axpy_io("lazy::bg_io_xp", x, p),
+            bg_io_rap: make_axpy_io("lazy::bg_io_rap", r, ap),
+            bg_io_bb: make_dot_io("lazy::bg_io_bb", b, b, &partials),
+            bg_io_rr: make_dot_io("lazy::bg_io_rr", r, r, &partials),
+            bg_io_pap: make_dot_io("lazy::bg_io_pap", p, ap, &partials),
+            bg_u_axpy_xp: make_u_bg("lazy::bg_u_axpy_xp", &k.layout_axpy_u, &u_axpy_xp),
+            bg_u_axpy_rap: make_u_bg("lazy::bg_u_axpy_rap", &k.layout_axpy_u, &u_axpy_rap),
+            bg_u_axpby_p: make_u_bg("lazy::bg_u_axpby_p", &k.layout_axpby_u, &u_axpby_p),
+            bg_u_dot: make_u_bg("lazy::bg_u_dot", &k.layout_dot_u, &u_dot),
+            bg_u_finalize: make_u_bg("lazy::bg_u_finalize", &k.layout_finalize_u, &u_finalize),
+            bg_io_fin_pap: make_finalize_io("lazy::bg_io_fin_pap", &scalar_pap),
+            bg_io_fin_rr: make_finalize_io("lazy::bg_io_fin_rr", &scalar_rr_new),
+            bg_io_alpha: make_alpha_io("lazy::bg_io_alpha"),
+            bg_io_beta: make_beta_io("lazy::bg_io_beta"),
+            bg_io_axpys_xp: make_axpys_io("lazy::bg_io_axpys_xp", x, p, &scalar_alpha),
+            bg_io_axpys_rap: make_axpys_io("lazy::bg_io_axpys_rap", r, ap, &scalar_neg_alpha),
+            bg_io_axpbys_pr: make_axpbys_io("lazy::bg_io_axpbys_pr", p, r, &scalar_beta),
+            bg_io_xrx,
+            bg_io_bp,
+            u_axpy_xp,
+            u_axpy_rap,
+            u_axpby_p,
+            u_dot,
+            u_finalize,
+            scalar_pap,
+            scalar_rr_new,
+            scalar_rr_old,
+            scalar_alpha,
+            scalar_neg_alpha,
+            scalar_beta,
+            partials,
+            scalar_staging,
+        }
+    }
+
+    fn update_uniform_axpy(&self, queue: &wgpu::Queue, slot: LazyUniformAxpySlot, alpha: f32) {
+        let buf = match slot {
+            LazyUniformAxpySlot::XplusAlphaP => &self.u_axpy_xp,
+            LazyUniformAxpySlot::RminusAlphaAp => &self.u_axpy_rap,
+        };
+        queue.write_buffer(
+            buf,
+            0,
+            bytemuck::bytes_of(&AxpyUniforms {
+                n: self.n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha,
+                _pad3: 0.0,
+                _pad4: 0.0,
+                _pad5: 0.0,
+            }),
+        );
+    }
+
+    /// One-shot axpy via the uniform path (used at setup for
+    /// `r ← b − A·x_init`).
+    fn dispatch_uniform_axpy(&self, k: &FemCgGpuKernel, slot: LazyUniformAxpySlot) {
+        let (bg_io, bg_u) = match slot {
+            LazyUniformAxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            LazyUniformAxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::uniform-axpy"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::uniform-axpy"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, bg_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// One-shot blocking dot, reused at setup for `‖b‖²` and `‖r₀‖²`.
+    fn dispatch_dot_blocking(&self, k: &FemCgGpuKernel, slot: LazyDotSlot) -> Result<f32> {
+        let bg_io = match slot {
+            LazyDotSlot::Bb => &self.bg_io_bb,
+            LazyDotSlot::Rr => &self.bg_io_rr,
+            LazyDotSlot::PAp => &self.bg_io_pap,
+        };
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::dot-setup"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::dot-setup"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_dot);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, &self.bg_u_dot, &[]);
+            pass.dispatch_workgroups(self.n_groups, 1, 1);
+        }
+        // Stage 41 v5: reuse the existing partials buffer + a tiny
+        // staging buffer for the host reduction. Setup-phase only —
+        // performance not critical here.
+        let stg_setup = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::lazy::setup-dot-staging"),
+            size: self.bytes_partials,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_buffer_to_buffer(&self.partials, 0, &stg_setup, 0, self.bytes_partials);
+        k.queue.submit(std::iter::once(enc.finish()));
+        let slice = stg_setup.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        k.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy setup dot poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy setup dot recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy setup dot map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let parts: &[f32] = bytemuck::cast_slice(&mapped);
+        let mut sum: f32 = 0.0;
+        for v in parts.iter().take(self.n_groups as usize) {
+            sum += *v;
+        }
+        drop(mapped);
+        stg_setup.unmap();
+        Ok(sum)
+    }
+
+    /// Inner-loop: dispatch a `dot` followed by a `dot_finalize` so
+    /// the result lands in a 1-element scalar buffer. No host sync.
+    /// All dispatches in one command encoder + submit.
+    #[allow(dead_code)]
+    fn dispatch_dot_to_scalar(
+        &self,
+        k: &FemCgGpuKernel,
+        slot: LazyDotSlot,
+        _scalar_out: &wgpu::Buffer,
+    ) {
+        let (bg_io_dot, bg_io_fin) = match slot {
+            LazyDotSlot::Rr => (&self.bg_io_rr, &self.bg_io_fin_rr),
+            LazyDotSlot::PAp => (&self.bg_io_pap, &self.bg_io_fin_pap),
+            LazyDotSlot::Bb => {
+                // Bb has no associated scalar slot in the lazy loop;
+                // setup uses the blocking variant. Fall back to PAp to
+                // satisfy the match (never reached on the hot path).
+                (&self.bg_io_bb, &self.bg_io_fin_pap)
+            }
+        };
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::dot-to-scalar"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::dot-to-scalar"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_dot);
+            pass.set_bind_group(0, bg_io_dot, &[]);
+            pass.set_bind_group(1, &self.bg_u_dot, &[]);
+            pass.dispatch_workgroups(self.n_groups, 1, 1);
+            // Chain dot_finalize — partials → 1-element scalar buffer.
+            pass.set_pipeline(&k.pipe_dot_finalize);
+            pass.set_bind_group(0, bg_io_fin, &[]);
+            pass.set_bind_group(1, &self.bg_u_finalize, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    #[allow(dead_code)]
+    fn dispatch_cg_alpha(&self, k: &FemCgGpuKernel) {
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::cg_alpha"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::cg_alpha"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_cg_alpha);
+            pass.set_bind_group(0, &self.bg_io_alpha, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    #[allow(dead_code)]
+    fn dispatch_cg_beta(&self, k: &FemCgGpuKernel) {
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::cg_beta"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::cg_beta"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_cg_beta);
+            pass.set_bind_group(0, &self.bg_io_beta, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    #[allow(dead_code)]
+    fn dispatch_two_axpy_scalar(
+        &self,
+        k: &FemCgGpuKernel,
+        s1: LazyAxpyScalarSlot,
+        s2: LazyAxpyScalarSlot,
+    ) {
+        let pick = |s: LazyAxpyScalarSlot| match s {
+            LazyAxpyScalarSlot::XplusAlphaP => (&self.bg_io_axpys_xp, &self.bg_u_axpy_xp),
+            LazyAxpyScalarSlot::RminusAlphaAp => (&self.bg_io_axpys_rap, &self.bg_u_axpy_rap),
+        };
+        let (bg1_io, bg1_u) = pick(s1);
+        let (bg2_io, bg2_u) = pick(s2);
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::axpy-s pair"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::axpy-s pair"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy_s);
+            pass.set_bind_group(0, bg1_io, &[]);
+            pass.set_bind_group(1, bg1_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+            pass.set_bind_group(0, bg2_io, &[]);
+            pass.set_bind_group(1, bg2_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    #[allow(dead_code)]
+    fn dispatch_axpby_scalar(&self, k: &FemCgGpuKernel) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::axpby-s"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::axpby-s"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpby_s);
+            pass.set_bind_group(0, &self.bg_io_axpbys_pr, &[]);
+            pass.set_bind_group(1, &self.bg_u_axpby_p, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// Record the post-matvec body of one CG iter into an existing
+    /// compute pass. Six dispatches:
+    ///   dot(p, Ap) → finalize → scalar_pap
+    ///   cg_axpy_xr (fused α + x/r update)
+    ///   dot(r, r) → finalize → scalar_rr_new
+    ///   cg_axpby_p (fused β + p update + rr_old save)
+    ///
+    /// Used by both the self-contained-encoder variant
+    /// (`dispatch_post_matvec_step_fused`) and the prepared-matvec
+    /// variant (which records the matvec into the same pass before
+    /// calling this). The two variants share this helper so the
+    /// dispatch sequence stays identical.
+    fn record_post_matvec(&self, k: &FemCgGpuKernel, pass: &mut wgpu::ComputePass<'_>) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+
+        pass.set_pipeline(&k.pipe_dot);
+        pass.set_bind_group(0, &self.bg_io_pap, &[]);
+        pass.set_bind_group(1, &self.bg_u_dot, &[]);
+        pass.dispatch_workgroups(self.n_groups, 1, 1);
+
+        pass.set_pipeline(&k.pipe_dot_finalize);
+        pass.set_bind_group(0, &self.bg_io_fin_pap, &[]);
+        pass.set_bind_group(1, &self.bg_u_finalize, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+
+        pass.set_pipeline(&k.pipe_cg_axpy_xr);
+        pass.set_bind_group(0, &self.bg_io_xrx, &[]);
+        pass.set_bind_group(1, &self.bg_u_axpy_xp, &[]);
+        pass.dispatch_workgroups(groups, 1, 1);
+
+        pass.set_pipeline(&k.pipe_dot);
+        pass.set_bind_group(0, &self.bg_io_rr, &[]);
+        pass.set_bind_group(1, &self.bg_u_dot, &[]);
+        pass.dispatch_workgroups(self.n_groups, 1, 1);
+
+        pass.set_pipeline(&k.pipe_dot_finalize);
+        pass.set_bind_group(0, &self.bg_io_fin_rr, &[]);
+        pass.set_bind_group(1, &self.bg_u_finalize, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+
+        pass.set_pipeline(&k.pipe_cg_axpby_p);
+        pass.set_bind_group(0, &self.bg_io_bp, &[]);
+        pass.set_bind_group(1, &self.bg_u_axpy_xp, &[]);
+        pass.dispatch_workgroups(groups, 1, 1);
+    }
+
+    /// Self-contained-encoder variant — used by the closure-matvec
+    /// lazy CG path. Creates its own encoder + submit; the
+    /// prepared-matvec variant uses [`Self::record_post_matvec`]
+    /// directly into the caller's pass.
+    fn dispatch_post_matvec_step_fused(&self, k: &FemCgGpuKernel) {
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::post-matvec fused"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::lazy::post-matvec fused"),
+                timestamp_writes: None,
+            });
+            self.record_post_matvec(k, &mut pass);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// Write a single f32 into a scalar storage buffer (host-driven
+    /// — used only at setup to seed `scalar_rr_old`).
+    fn write_scalar(&self, queue: &wgpu::Queue, buf: &wgpu::Buffer, value: f32) {
+        // Pad to 16 B so the wgpu write_buffer min-size guard is happy
+        // (alignment > the 4-B scalar). Trailing bytes are unused by
+        // any kernel — they read only [0..4].
+        let bytes = [value.to_ne_bytes(), [0u8; 4], [0u8; 4], [0u8; 4]].concat();
+        queue.write_buffer(buf, 0, &bytes);
+    }
+
+    fn read_scalar_blocking(
+        &self,
+        k: &FemCgGpuKernel,
+        buf: &wgpu::Buffer,
+    ) -> Result<f32> {
+        let mut enc = k.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::fem_cg::lazy::scalar-readback"),
+        });
+        enc.copy_buffer_to_buffer(buf, 0, &self.scalar_staging, 0, 16);
+        k.queue.submit(std::iter::once(enc.finish()));
+        let slice = self.scalar_staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        k.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let parts: &[f32] = bytemuck::cast_slice(&mapped);
+        let v = parts[0];
+        drop(mapped);
+        self.scalar_staging.unmap();
+        Ok(v)
     }
 }
 
