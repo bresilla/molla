@@ -69,8 +69,11 @@ pub struct CgGpuResult {
     pub iters: usize,
 }
 
-/// GPU-resident CG dispatcher. Owns three small compute pipelines
-/// (`vec_axpy`, `vec_axpby`, `vec_dot`) — reuse across many solves.
+/// GPU-resident CG dispatcher. Owns four small compute pipelines
+/// (`vec_axpy`, `vec_axpby`, `vec_dot`, `vec_apply_diag_inv`) — reuse
+/// across many solves. The fourth (`vec_apply_diag_inv`) is only
+/// touched by [`Self::pcg_solve_resident`] but kept on the kernel so
+/// shader compilation is amortised across PCG calls.
 ///
 /// The matrix-vector product is supplied as a closure so the same
 /// dispatcher works for any GPU-resident `A` (FEM stiffness, mass +
@@ -84,6 +87,7 @@ pub struct FemCgGpuKernel {
     pipe_axpy: wgpu::ComputePipeline,
     pipe_axpby: wgpu::ComputePipeline,
     pipe_dot: wgpu::ComputePipeline,
+    pipe_apply_diag_inv: wgpu::ComputePipeline,
 
     layout_axpy_io: wgpu::BindGroupLayout,
     layout_axpy_u: wgpu::BindGroupLayout,
@@ -91,6 +95,8 @@ pub struct FemCgGpuKernel {
     layout_axpby_u: wgpu::BindGroupLayout,
     layout_dot_io: wgpu::BindGroupLayout,
     layout_dot_u: wgpu::BindGroupLayout,
+    layout_diag_io: wgpu::BindGroupLayout,
+    layout_diag_u: wgpu::BindGroupLayout,
 }
 
 impl FemCgGpuKernel {
@@ -186,18 +192,54 @@ impl FemCgGpuKernel {
             cache: None,
         });
 
+        // ── apply_diag_inv ─────────────────────────────────────────
+        // `dst = src .* inv_diag` — used by PCG to apply the Jacobi
+        // preconditioner once per iter. Reuses the axpby uniform
+        // layout (only `n` matters; alpha/beta unused) so the host
+        // doesn't have to ship a fresh uniform per iter.
+        let layout_diag_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::fem_cg::diag io"),
+            entries: &[
+                rw_storage(0), // dst
+                ro_storage(1), // src
+                ro_storage(2), // inv_diag
+            ],
+        });
+        let layout_diag_u = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::fem_cg::diag uniforms"),
+            entries: &[uniform_entry(0)],
+        });
+        let pipe_apply_diag_inv =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::vec_apply_diag_inv"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::diag layout"),
+                        bind_group_layouts: &[&layout_diag_io, &layout_diag_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &shader,
+                entry_point: Some("vec_apply_diag_inv"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         Self {
             device,
             queue,
             pipe_axpy,
             pipe_axpby,
             pipe_dot,
+            pipe_apply_diag_inv,
             layout_axpy_io,
             layout_axpy_u,
             layout_axpby_io,
             layout_axpby_u,
             layout_dot_io,
             layout_dot_u,
+            layout_diag_io,
+            layout_diag_u,
         }
     }
 
@@ -366,6 +408,187 @@ impl FemCgGpuKernel {
             ws.update_axpby(&self.queue, 1.0, beta);
             ws.dispatch_axpby(self);
             rr = rr_new;
+        }
+        Ok(CgGpuResult {
+            x: Arc::new(x_buf),
+            residual,
+            iters: max_iters,
+        })
+    }
+
+    /// Solve `A · x = b` via Jacobi-preconditioned Conjugate Gradient,
+    /// keeping `x`, `r`, `p`, `Ap`, `z` resident on the GPU across
+    /// iterations. Sibling of [`Self::cg_solve_resident`] — same
+    /// matvec contract, same workspace pattern, with one extra
+    /// per-iter `apply_diag_inv` dispatch and one extra resident
+    /// buffer (`z = M⁻¹ · r`).
+    ///
+    /// `inv_diag` is a length-`n` f32 buffer holding `1 / diag(A)`
+    /// (zero for any null-space rows — pass-through). Compute it once
+    /// per solve via [`super::FemGpuKernel::extract_diagonal`] +
+    /// host-side reciprocal (see
+    /// [`crate::fem::solver::solve_steady_state_gpu_resident_pcg`]
+    /// for the canonical wiring).
+    ///
+    /// Convergence is still tested on `‖r‖`, not `‖z‖` — same contract
+    /// as [`crate::math::iterative::pcg_solve`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn pcg_solve_resident<F>(
+        &self,
+        n: u32,
+        b: &wgpu::Buffer,
+        x_init: Option<&wgpu::Buffer>,
+        inv_diag: &wgpu::Buffer,
+        tol: f32,
+        max_iters: usize,
+        matvec: F,
+    ) -> Result<CgGpuResult>
+    where
+        F: Fn(&wgpu::Buffer, &wgpu::Buffer) -> Result<()>,
+    {
+        if n == 0 {
+            return Err(Error::Build("pcg_solve_resident: n must be > 0".into()));
+        }
+        let bytes = (n as u64).max(4) * 4;
+
+        // Allocate persistent buffers for x, r, p, Ap, z (all length n,
+        // f32). Mirror `cg_solve_resident`'s layout exactly + one new
+        // `z` slot for the preconditioned residual.
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let x_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::x"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let r_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::r"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let p_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::p"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let ap_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::Ap"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let z_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::z"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        // Build the cached workspace — identical to `CgWorkspace` plus
+        // the (z, p, r) bind groups and the `apply_diag_inv` slots.
+        let ws = PcgWorkspace::new(
+            self, n, &x_buf, &r_buf, &p_buf, &ap_buf, &z_buf, b, inv_diag,
+        );
+
+        // Seed x ← x_init (or zero) + r ← b.
+        let mut init_enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::init"),
+            });
+        match x_init {
+            Some(buf) => init_enc.copy_buffer_to_buffer(buf, 0, &x_buf, 0, bytes),
+            None => {
+                self.queue
+                    .write_buffer(&x_buf, 0, &vec![0u8; bytes as usize]);
+            }
+        }
+        init_enc.copy_buffer_to_buffer(b, 0, &r_buf, 0, bytes);
+        self.queue.submit(std::iter::once(init_enc.finish()));
+        // Zero p, Ap, z so any later "min-bytes" readbacks see clean data.
+        self.queue
+            .write_buffer(&p_buf, 0, &vec![0u8; bytes as usize]);
+        self.queue
+            .write_buffer(&ap_buf, 0, &vec![0u8; bytes as usize]);
+        self.queue
+            .write_buffer(&z_buf, 0, &vec![0u8; bytes as usize]);
+
+        // r ← b - A·x: compute Ap ← A·x_init, then r -= Ap.
+        matvec(&x_buf, &ap_buf)?;
+        ws.update_axpy(&self.queue, PcgAxpySlot::RminusAlphaAp, -1.0);
+        ws.dispatch_single_axpy(self, PcgAxpySlot::RminusAlphaAp);
+
+        // ‖b‖ — one dot-reduction over b vs b.
+        let bnorm_sq = ws.dispatch_dot_blocking(self, PcgDotSlot::Bb)?;
+        let bnorm = bnorm_sq.sqrt().max(1.0e-30);
+
+        // Convergence check on ‖r‖ before any preconditioner work.
+        let rr = ws.dispatch_dot_blocking(self, PcgDotSlot::Rr)?;
+        let mut residual = rr.sqrt() / bnorm;
+        if residual <= tol {
+            return Ok(CgGpuResult {
+                x: Arc::new(x_buf),
+                residual,
+                iters: 0,
+            });
+        }
+
+        // z₀ = M⁻¹ · r — one apply_diag_inv dispatch.
+        ws.dispatch_apply_diag_inv(self);
+        // p₀ ← z₀.
+        let mut copy_enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::p<-z"),
+            });
+        copy_enc.copy_buffer_to_buffer(&z_buf, 0, &p_buf, 0, bytes);
+        self.queue.submit(std::iter::once(copy_enc.finish()));
+        // rz = ⟨r, z⟩ — drives the α/β scalars in the preconditioned
+        // recurrence (rather than ⟨r, r⟩ in plain CG).
+        let mut rz = ws.dispatch_dot_blocking(self, PcgDotSlot::Rz)?;
+
+        for it in 0..max_iters {
+            // Ap ← A · p.
+            matvec(&p_buf, &ap_buf)?;
+            // pAp = ⟨p, Ap⟩.
+            let pap = ws.dispatch_dot_blocking(self, PcgDotSlot::PAp)?;
+            if pap.abs() < 1.0e-30 {
+                return Ok(CgGpuResult {
+                    x: Arc::new(x_buf),
+                    residual,
+                    iters: it,
+                });
+            }
+            let alpha = rz / pap;
+            // x += α · p ; r -= α · Ap (single command encoder).
+            ws.update_axpy(&self.queue, PcgAxpySlot::XplusAlphaP, alpha);
+            ws.update_axpy(&self.queue, PcgAxpySlot::RminusAlphaAp, -alpha);
+            ws.dispatch_two_axpy(self, PcgAxpySlot::XplusAlphaP, PcgAxpySlot::RminusAlphaAp);
+            // Convergence test on the unpreconditioned residual ‖r‖
+            // (matches the CPU `pcg_solve` contract).
+            let rr_new = ws.dispatch_dot_blocking(self, PcgDotSlot::Rr)?;
+            residual = rr_new.sqrt() / bnorm;
+            if residual <= tol {
+                return Ok(CgGpuResult {
+                    x: Arc::new(x_buf),
+                    residual,
+                    iters: it + 1,
+                });
+            }
+            // z = M⁻¹ · r.
+            ws.dispatch_apply_diag_inv(self);
+            // rz_new = ⟨r, z⟩.
+            let rz_new = ws.dispatch_dot_blocking(self, PcgDotSlot::Rz)?;
+            let beta = rz_new / rz;
+            // p ← z + β·p — axpby with α = 1, β = β; the cached uniform
+            // already has `alpha = 1` from construction.
+            ws.update_axpby(&self.queue, 1.0, beta);
+            ws.dispatch_axpby(self);
+            rz = rz_new;
         }
         Ok(CgGpuResult {
             x: Arc::new(x_buf),
@@ -822,6 +1045,476 @@ impl CgWorkspace {
         drop(mapped);
         self.staging.unmap();
         Ok(sum)
+    }
+}
+
+// ── PCG workspace + slot enums ────────────────────────────────────────
+//
+// Sibling of [`CgWorkspace`] for the Jacobi-preconditioned CG path.
+// Adds the resident `z = M⁻¹ · r` buffer + an `apply_diag_inv` IO
+// bind group + an additional dot slot (`r ⋅ z`). The axpy/axpby
+// machinery is the same; we duplicate the slot enum so the host can
+// pass uniform-update calls without leaking the CG-only slot names.
+
+#[derive(Copy, Clone, Debug)]
+enum PcgAxpySlot {
+    /// `x += α · p` — io = (x, p).
+    XplusAlphaP,
+    /// `r -= α · Ap` — io = (r, Ap). The α stored in the uniform is
+    /// `-alpha` (the kernel does `a += α·b`).
+    RminusAlphaAp,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum PcgDotSlot {
+    /// `‖b‖²` — io = (b, b). Computed once at solve start.
+    Bb,
+    /// `‖r‖²` — io = (r, r). Drives the convergence test.
+    Rr,
+    /// `pᵀ Ap` — io = (p, Ap). Drives the α scalar.
+    PAp,
+    /// `rᵀ z` — io = (r, z). Drives the α/β scalars in PCG (replaces
+    /// the `‖r‖²` role from the unpreconditioned recurrence).
+    Rz,
+}
+
+struct PcgWorkspace {
+    n: u32,
+    n_groups: u32,
+    bytes_partials: u64,
+
+    #[allow(dead_code)]
+    u_axpy_xp: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpy_rap: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_axpby_p: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_dot: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_diag: wgpu::Buffer,
+
+    bg_io_xp: wgpu::BindGroup,
+    bg_io_rap: wgpu::BindGroup,
+    /// `axpby` IO bind group for `p ← z + β·p` (dst = p, src = z).
+    bg_io_pz: wgpu::BindGroup,
+    bg_io_bb: wgpu::BindGroup,
+    bg_io_rr: wgpu::BindGroup,
+    bg_io_pap: wgpu::BindGroup,
+    bg_io_rz: wgpu::BindGroup,
+    /// `apply_diag_inv` IO bind group: (z, r, inv_diag).
+    bg_io_diag: wgpu::BindGroup,
+
+    bg_u_axpy_xp: wgpu::BindGroup,
+    bg_u_axpy_rap: wgpu::BindGroup,
+    bg_u_axpby_p: wgpu::BindGroup,
+    bg_u_dot: wgpu::BindGroup,
+    bg_u_diag: wgpu::BindGroup,
+
+    partials: wgpu::Buffer,
+    staging: wgpu::Buffer,
+}
+
+impl PcgWorkspace {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        k: &FemCgGpuKernel,
+        n: u32,
+        x: &wgpu::Buffer,
+        r: &wgpu::Buffer,
+        p: &wgpu::Buffer,
+        ap: &wgpu::Buffer,
+        z: &wgpu::Buffer,
+        b: &wgpu::Buffer,
+        inv_diag: &wgpu::Buffer,
+    ) -> Self {
+        let n_groups = n.div_ceil(WG_SIZE).max(1);
+        let bytes_partials = (n_groups as u64).max(4) * 4;
+
+        let make_uniform = |label: &str, size: u64| {
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let axpy_size = core::mem::size_of::<AxpyUniforms>() as u64;
+        let axpby_size = core::mem::size_of::<AxpbyUniforms>() as u64;
+        let dot_size = core::mem::size_of::<DotUniforms>() as u64;
+
+        let u_axpy_xp = make_uniform("molla::fem_cg::pcg::ws::u_axpy_xp", axpy_size);
+        let u_axpy_rap = make_uniform("molla::fem_cg::pcg::ws::u_axpy_rap", axpy_size);
+        let u_axpby_p = make_uniform("molla::fem_cg::pcg::ws::u_axpby_p", axpby_size);
+        let u_dot = make_uniform("molla::fem_cg::pcg::ws::u_dot", dot_size);
+        // `apply_diag_inv` shares the axpby uniform layout (only `n`
+        // matters; alpha/beta unused). Allocate a separate buffer
+        // because the axpby uniform's `alpha`/`beta` get rewritten per
+        // iter and we don't want to fight for it.
+        let u_diag = make_uniform("molla::fem_cg::pcg::ws::u_diag", axpby_size);
+
+        // Dot uniform's only field is `n`; written once.
+        k.queue.write_buffer(
+            &u_dot,
+            0,
+            bytemuck::bytes_of(&DotUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+
+        // axpby uniform: alpha = 1.0 once at construction; β refreshed
+        // per iter via `update_axpby`.
+        k.queue.write_buffer(
+            &u_axpby_p,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha: 1.0,
+                beta: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+
+        // diag uniform: `n` is the only live field.
+        k.queue.write_buffer(
+            &u_diag,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha: 1.0,
+                beta: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+
+        let make_io_axpy = |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpy_io,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: a.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: b.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let make_io_axpby = |label: &str, dst: &wgpu::Buffer, src: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &k.layout_axpby_io,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: dst.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: src.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let make_io_dot =
+            |label: &str, a: &wgpu::Buffer, b: &wgpu::Buffer, partials: &wgpu::Buffer| {
+                k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(label),
+                    layout: &k.layout_dot_io,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: a.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: partials.as_entire_binding(),
+                        },
+                    ],
+                })
+            };
+        let make_u_bg = |label: &str, layout: &wgpu::BindGroupLayout, ubuf: &wgpu::Buffer| {
+            k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ubuf.as_entire_binding(),
+                }],
+            })
+        };
+
+        let partials = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::ws::partials"),
+            size: bytes_partials,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::pcg::ws::staging"),
+            size: bytes_partials,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // apply_diag_inv IO: (dst = z, src = r, inv_diag).
+        let bg_io_diag = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::pcg::ws::bg_io_diag"),
+            layout: &k.layout_diag_io,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: r.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: inv_diag.as_entire_binding(),
+                },
+            ],
+        });
+
+        Self {
+            n,
+            n_groups,
+            bytes_partials,
+            bg_io_xp: make_io_axpy("pcg::ws::bg_io_xp", x, p),
+            bg_io_rap: make_io_axpy("pcg::ws::bg_io_rap", r, ap),
+            bg_io_pz: make_io_axpby("pcg::ws::bg_io_pz", p, z),
+            bg_io_bb: make_io_dot("pcg::ws::bg_io_bb", b, b, &partials),
+            bg_io_rr: make_io_dot("pcg::ws::bg_io_rr", r, r, &partials),
+            bg_io_pap: make_io_dot("pcg::ws::bg_io_pap", p, ap, &partials),
+            bg_io_rz: make_io_dot("pcg::ws::bg_io_rz", r, z, &partials),
+            bg_io_diag,
+            bg_u_axpy_xp: make_u_bg("pcg::ws::bg_u_axpy_xp", &k.layout_axpy_u, &u_axpy_xp),
+            bg_u_axpy_rap: make_u_bg("pcg::ws::bg_u_axpy_rap", &k.layout_axpy_u, &u_axpy_rap),
+            bg_u_axpby_p: make_u_bg("pcg::ws::bg_u_axpby_p", &k.layout_axpby_u, &u_axpby_p),
+            bg_u_dot: make_u_bg("pcg::ws::bg_u_dot", &k.layout_dot_u, &u_dot),
+            bg_u_diag: make_u_bg("pcg::ws::bg_u_diag", &k.layout_diag_u, &u_diag),
+            u_axpy_xp,
+            u_axpy_rap,
+            u_axpby_p,
+            u_dot,
+            u_diag,
+            partials,
+            staging,
+        }
+    }
+
+    fn update_axpy(&self, queue: &wgpu::Queue, slot: PcgAxpySlot, alpha: f32) {
+        let buf = match slot {
+            PcgAxpySlot::XplusAlphaP => &self.u_axpy_xp,
+            PcgAxpySlot::RminusAlphaAp => &self.u_axpy_rap,
+        };
+        queue.write_buffer(
+            buf,
+            0,
+            bytemuck::bytes_of(&AxpyUniforms {
+                n: self.n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha,
+                _pad3: 0.0,
+                _pad4: 0.0,
+                _pad5: 0.0,
+            }),
+        );
+    }
+
+    fn update_axpby(&self, queue: &wgpu::Queue, alpha: f32, beta: f32) {
+        queue.write_buffer(
+            &self.u_axpby_p,
+            0,
+            bytemuck::bytes_of(&AxpbyUniforms {
+                n: self.n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha,
+                beta,
+                _pad3: 0.0,
+                _pad4: 0.0,
+            }),
+        );
+    }
+
+    fn dispatch_single_axpy(&self, k: &FemCgGpuKernel, slot: PcgAxpySlot) {
+        let (bg_io, bg_u) = match slot {
+            PcgAxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            PcgAxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpy enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpy"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, bg_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    fn dispatch_two_axpy(&self, k: &FemCgGpuKernel, s1: PcgAxpySlot, s2: PcgAxpySlot) {
+        let (bg1_io, bg1_u) = match s1 {
+            PcgAxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            PcgAxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let (bg2_io, bg2_u) = match s2 {
+            PcgAxpySlot::XplusAlphaP => (&self.bg_io_xp, &self.bg_u_axpy_xp),
+            PcgAxpySlot::RminusAlphaAp => (&self.bg_io_rap, &self.bg_u_axpy_rap),
+        };
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpy2 enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpy2"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, bg1_io, &[]);
+            pass.set_bind_group(1, bg1_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+            pass.set_bind_group(0, bg2_io, &[]);
+            pass.set_bind_group(1, bg2_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    fn dispatch_axpby(&self, k: &FemCgGpuKernel) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpby enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::axpby"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpby);
+            pass.set_bind_group(0, &self.bg_io_pz, &[]);
+            pass.set_bind_group(1, &self.bg_u_axpby_p, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    fn dispatch_apply_diag_inv(&self, k: &FemCgGpuKernel) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::apply_diag_inv enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::apply_diag_inv"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_apply_diag_inv);
+            pass.set_bind_group(0, &self.bg_io_diag, &[]);
+            pass.set_bind_group(1, &self.bg_u_diag, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    fn dispatch_dot_blocking(&self, k: &FemCgGpuKernel, slot: PcgDotSlot) -> Result<f32> {
+        let bg_io = match slot {
+            PcgDotSlot::Bb => &self.bg_io_bb,
+            PcgDotSlot::Rr => &self.bg_io_rr,
+            PcgDotSlot::PAp => &self.bg_io_pap,
+            PcgDotSlot::Rz => &self.bg_io_rz,
+        };
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::dot enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::pcg::ws::dot"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_dot);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, &self.bg_u_dot, &[]);
+            pass.dispatch_workgroups(self.n_groups, 1, 1);
+        }
+        // Same zero-then-write pattern as `CgWorkspace::dispatch_dot_blocking`
+        // — keeps padding slots clean for the host-side reduction.
+        k.queue
+            .write_buffer(&self.partials, 0, &vec![0u8; self.bytes_partials as usize]);
+        enc.copy_buffer_to_buffer(&self.partials, 0, &self.staging, 0, self.bytes_partials);
+        k.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = self.staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        k.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("fem_cg pcg ws dot poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("fem_cg pcg ws dot recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg pcg ws dot map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let parts: &[f32] = bytemuck::cast_slice(&mapped);
+        let mut sum: f32 = 0.0;
+        for v in parts.iter().take(self.n_groups as usize) {
+            sum += *v;
+        }
+        drop(mapped);
+        self.staging.unmap();
+        Ok(sum)
+    }
+
+    // Touch the unused-but-required-for-binding field handles; quiet
+    // dead_code lints when the workspace is built for solves where
+    // the diag uniform is never re-bound. Mirrors the helper on
+    // [`CgWorkspace`].
+    #[allow(dead_code)]
+    fn _keep_warnings_quiet(&self) -> &wgpu::Buffer {
+        &self.u_diag
     }
 }
 
