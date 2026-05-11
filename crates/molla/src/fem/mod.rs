@@ -49,6 +49,7 @@
 //! - No mesh adaptivity (uniform refinement only).
 
 pub mod adjoint;
+pub mod amg;
 pub mod amr_mesh;
 pub mod apic_coupling;
 #[cfg(feature = "gpu")]
@@ -114,11 +115,12 @@ pub use fft_ns::{
     solve_pressure_poisson_fft, solve_pressure_poisson_fft_with_stencil,
     FractionalStepConfig, PoissonStencil,
 };
+pub use amg::{AmgHierarchy, AmgLevel};
 pub use eddy_current::{
     assemble_eddy_system, build_discrete_gradient, build_p1_vector_laplacian,
     gmres_with_precond, solve_eddy_current_steady, solve_eddy_current_steady_ams,
-    solve_eddy_current_steady_ams_mg, AmsPreconditioner, EddyBlockOp, EddyCurrentConfig,
-    EddyCurrentResult,
+    solve_eddy_current_steady_ams_amg, solve_eddy_current_steady_ams_mg, AmsPreconditioner,
+    EddyBlockOp, EddyCurrentConfig, EddyCurrentResult,
 };
 pub use element::{
     compute_element_convection, compute_element_distortion_energy,

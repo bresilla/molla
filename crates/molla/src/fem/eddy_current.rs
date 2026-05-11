@@ -84,6 +84,7 @@ use crate::core::{Error, Result};
 use crate::math::sparse::{gmres, BsrMatrix, IterConfig, LinearOperator};
 use crate::math::{Real, Vec3};
 
+use super::amg::AmgHierarchy;
 use super::assembly::matvec;
 use super::bc::BoundaryCondition;
 use super::element::{tet_shape_grads, tet_volume};
@@ -805,6 +806,16 @@ pub struct AmsPreconditioner {
     /// most `0.7×` the AMS-CG iteration count on the skin-depth slab
     /// problem (Stage 48 v3 test target).
     mg_cycles_per_apply: usize,
+    /// Optional algebraic multigrid hierarchy — Stage 48 v4. When
+    /// `Some`, takes priority over `mg_hierarchy` and applies
+    /// `amg_cycles_per_apply` AMG V-cycles to the auxiliary block. AMG
+    /// is mesh-independent (built from the matrix `K_aux` alone), so it
+    /// works on the same arbitrary-topology meshes the rest of the FEM
+    /// stack supports.
+    amg_hierarchy: Option<AmgHierarchy>,
+    /// Number of AMG V-cycles applied per `apply` call. Default 3 —
+    /// same heuristic as `mg_cycles_per_apply`.
+    amg_cycles_per_apply: usize,
 }
 
 impl AmsPreconditioner {
@@ -863,6 +874,8 @@ impl AmsPreconditioner {
             aux_max_iter: 50,
             mg_hierarchy: None,
             mg_cycles_per_apply: 8,
+            amg_hierarchy: None,
+            amg_cycles_per_apply: 1,
         })
     }
 
@@ -902,6 +915,36 @@ impl AmsPreconditioner {
         self
     }
 
+    /// Attach an [`AmgHierarchy`] so the inner auxiliary solve uses an
+    /// algebraic multigrid V-cycle (Ruge-Stüben) — Stage 48 v4.
+    ///
+    /// The hierarchy is built from the AMS auxiliary matrix `K_aux`
+    /// alone (see [`AmgHierarchy::from_matrix`]), so it works on
+    /// arbitrary-topology meshes where geometric MG can't easily
+    /// construct a refinement hierarchy. When both `with_mg_hierarchy`
+    /// and `with_amg_hierarchy` are set, AMG takes priority.
+    pub fn with_amg_hierarchy(mut self, h: AmgHierarchy) -> Self {
+        self.amg_hierarchy = Some(h);
+        self
+    }
+
+    /// Tune the AMG V-cycle iteration count per `apply` call. Default 1
+    /// — AMG V-cycles are stronger than geometric V-cycles on tet
+    /// meshes (because the algebraic prolongation captures the actual
+    /// matrix structure), so one is typically enough.
+    pub fn with_amg_cycles_per_apply(mut self, n: usize) -> Self {
+        self.amg_cycles_per_apply = n.max(1);
+        self
+    }
+
+    /// Read-only handle to the gauge-pinned auxiliary matrix `K_aux`.
+    /// Exposed for the AMG entry-point and the v4 test harness so the
+    /// AMG hierarchy can be built from the same matrix the
+    /// preconditioner's inner solve uses.
+    pub fn k_aux(&self) -> &BsrMatrix {
+        &self.k_aux
+    }
+
     /// Apply one AMS V-cycle to the residual `r` and return the
     /// preconditioned vector `z` (length `n_edges`).
     ///
@@ -935,12 +978,21 @@ impl AmsPreconditioner {
             r_aux[v as usize] = 0.0;
         }
 
-        // 3) Inner auxiliary solve. Two flavours:
-        //    - v3 path: one geometric MG V-cycle on the hierarchy.
+        // 3) Inner auxiliary solve. Three flavours, in priority order:
+        //    - v4 path: AMG V-cycle (when `amg_hierarchy` is set).
+        //    - v3 path: geometric MG V-cycle on a uniformly refined
+        //      hierarchy (when `mg_hierarchy` is set).
         //    - v2 path: fixed-iter CG on K_aux (linearity-preserving).
-        //    Both produce a linear function of `r_aux`, so GMRES sees
-        //    a *linear* preconditioner either way.
-        let w = if let Some(h) = &self.mg_hierarchy {
+        //    All three produce a linear function of `r_aux`, so GMRES
+        //    sees a *linear* preconditioner regardless of choice.
+        let w = if let Some(h) = &self.amg_hierarchy {
+            let n_verts = h.finest_matrix().nrows();
+            let mut w_iter = vec![0.0; n_verts];
+            for _ in 0..self.amg_cycles_per_apply {
+                w_iter = h.v_cycle(&r_aux, &w_iter)?;
+            }
+            w_iter
+        } else if let Some(h) = &self.mg_hierarchy {
             let n_verts = h.finest_laplacian().nrows();
             let mut w_iter = vec![0.0; n_verts];
             for _ in 0..self.mg_cycles_per_apply {
@@ -1152,6 +1204,76 @@ pub fn solve_eddy_current_steady_ams_mg(
     // Build AMS with hierarchy.
     let ams = AmsPreconditioner::new(&mesh, &k_main, &pinned_edges)?
         .with_mg_hierarchy(hierarchy);
+
+    let op = EddyBlockOp { k_main: &k_main, k_off: &k_off };
+    let mut b = vec![0.0; 2 * n];
+    b[..n].copy_from_slice(&f_re);
+    b[n..].copy_from_slice(&f_im);
+    let mut x = vec![0.0; 2 * n];
+    for &e in &pinned_edges {
+        x[e as usize] = f_re[e as usize];
+        x[n + e as usize] = f_im[e as usize];
+    }
+
+    let apply_m_inv = |r: &[Real]| -> Result<Vec<Real>> {
+        let (r_re, r_im) = r.split_at(n);
+        let z_re = ams.apply(r_re)?;
+        let z_im = ams.apply(r_im)?;
+        let mut z = vec![0.0; 2 * n];
+        z[..n].copy_from_slice(&z_re);
+        z[n..].copy_from_slice(&z_im);
+        Ok(z)
+    };
+
+    let iter_cfg = IterConfig {
+        max_iter: cfg.max_iter,
+        tol: cfg.tol,
+        restart: cfg.restart.max(1),
+    };
+    let stats = gmres_with_precond(&op, &b, &mut x, &apply_m_inv, &iter_cfg)?;
+    let a_re = x[..n].to_vec();
+    let a_im = x[n..].to_vec();
+    Ok(EddyCurrentResult {
+        a_re,
+        a_im,
+        residual: stats.residual,
+        iters: stats.iters,
+    })
+}
+
+/// Steady-state eddy-current solve via block-real GMRES + AMS-AMG
+/// preconditioning — Stage 48 v4.
+///
+/// Same arguments as [`solve_eddy_current_steady_ams`] plus `n_levels`:
+/// the AMS auxiliary block is solved by a classical Ruge-Stüben AMG
+/// V-cycle with at most `n_levels` levels (coarsening stops early once
+/// the coarse matrix has ≤ 32 rows or the coarsening ratio falls
+/// below the diminishing-returns threshold — see
+/// [`AmgHierarchy::from_matrix`]).
+///
+/// AMG removes the v3 geometric requirement (uniformly refined mesh
+/// hierarchy) — works on arbitrary mesh topologies, including AMR
+/// outputs, irregular boundary refinements, and unstructured tet
+/// imports.
+pub fn solve_eddy_current_steady_ams_amg(
+    mesh: &FemMesh,
+    n_levels: usize,
+    j_source_re: &[Vec3],
+    j_source_im: &[Vec3],
+    nu_per_cell: &[Real],
+    sigma_per_cell: &[Real],
+    bcs: &[BoundaryCondition],
+    cfg: &EddyCurrentConfig,
+) -> Result<EddyCurrentResult> {
+    let (map, k_main, k_off, f_re, f_im, pinned_edges) = assemble_eddy_system(
+        mesh, j_source_re, j_source_im, nu_per_cell, sigma_per_cell, bcs, cfg,
+    )?;
+    let n = map.ndof();
+
+    // Build AMS first so we know the gauge-pinned K_aux.
+    let ams_base = AmsPreconditioner::new(mesh, &k_main, &pinned_edges)?;
+    let amg = AmgHierarchy::from_matrix(ams_base.k_aux(), n_levels)?;
+    let ams = ams_base.with_amg_hierarchy(amg);
 
     let op = EddyBlockOp { k_main: &k_main, k_off: &k_off };
     let mut b = vec![0.0; 2 * n];
