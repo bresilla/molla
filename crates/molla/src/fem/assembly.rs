@@ -46,6 +46,16 @@ pub fn assemble_global<F>(
 where
     F: Fn(&FemCell, &[Vec3]) -> Vec<Vec<Real>>,
 {
+    // Stage 46 — Nedelec edge elements: DoF layout is per-edge and the
+    // local-→-global scatter applies orientation signs, not the
+    // interleaved (vertex, component) layout used by the H¹ kernels.
+    // Route through the dedicated assembler.
+    if let FunctionSpace::NedelecEdge { order } = space {
+        assert_eq!(order, 1, "NedelecEdge: only order 1 supported in v1");
+        let map = super::nedelec_element::NedelecDofMap::build(mesh);
+        return super::nedelec_element::assemble_global_nedelec(mesh, &map, element_visitor);
+    }
+
     let n = space.ndof(mesh);
     let d = space.dofs_per_vertex();
     // Flat scalar triplets — one allocation total, not one per entry.

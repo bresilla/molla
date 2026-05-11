@@ -54,6 +54,20 @@ pub enum FunctionSpace {
     /// local-`i`-th DoF of cell `c` lives at global index
     /// `c * ndof_per_cell + i`.
     DGNodal { degree: usize },
+    /// Stage 46 — Nedelec edge elements (H(curl)-conforming).
+    ///
+    /// One DoF per unique mesh edge. The DoF value represents the
+    /// integral of the tangential component of the vector field along
+    /// the edge (from the lower-index vertex to the higher-index one);
+    /// the basis function for edge `(i, j)` (with `i < j`) is the
+    /// Whitney 1-form `N_{ij} = λ_i ∇λ_j − λ_j ∇λ_i`, which has
+    /// tangential continuity across element faces but no normal
+    /// continuity — exactly what magnetostatics needs for the vector
+    /// potential `A`.
+    ///
+    /// v1 supports `order = 1` (lowest-order Nedelec, aka NED1) only.
+    /// Second-order Nedelec is deferred.
+    NedelecEdge { order: usize },
 }
 
 impl FunctionSpace {
@@ -84,6 +98,11 @@ impl FunctionSpace {
                 .iter()
                 .map(|c| dg_ndof_per_cell(c, *degree))
                 .sum(),
+            FunctionSpace::NedelecEdge { order } => {
+                assert_eq!(*order, 1, "NedelecEdge: only order 1 supported in v1");
+                let (edges, _) = compute_edges(mesh);
+                edges.len()
+            }
         }
     }
 
@@ -102,6 +121,7 @@ impl FunctionSpace {
             FunctionSpace::P1Vector { dim } => *dim,
             FunctionSpace::P2Vector { dim } => *dim,
             FunctionSpace::DGNodal { .. } => 1,
+            FunctionSpace::NedelecEdge { .. } => 1,
         }
     }
 

@@ -65,7 +65,9 @@ pub mod fft_ns;
 pub mod function_space;
 #[cfg(feature = "gpu")]
 pub mod gpu_data;
+pub mod magneto;
 pub mod mesh;
+pub mod nedelec_element;
 pub mod p2_element;
 pub mod quadrature;
 #[cfg(feature = "russell")]
@@ -113,6 +115,14 @@ pub use element::{
     compute_element_supg_convection, compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, dg_ndof_per_cell, FunctionSpace};
+pub use magneto::{
+    compute_curl_per_cell, integrate_field_along_edges, project_field_on_edges,
+    solve_magnetostatics_steady, MagnetostaticsResult,
+};
+pub use nedelec_element::{
+    assemble_global_nedelec, compute_element_curl_curl, compute_element_nedelec_mass,
+    NedelecDofMap,
+};
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};
