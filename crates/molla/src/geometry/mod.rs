@@ -63,8 +63,8 @@ pub use epa::{epa, EpaContact};
 // ── Stage 44 v1: 3D Gaussian splat primitive for the differentiable
 // raytrace renderer (forward-only). ───────────────────────────────
 pub use gaussian_splat::{
-    canonical_ray_max_response, composite_forward_cpu, gaussian_response,
-    map_ray_to_canonical, splat_camera_distance, GaussianSplat3d,
+    canonical_ray_max_response, composite_forward_cpu, composite_rgb_cpu, fd_grad_one_splat,
+    gaussian_response, map_ray_to_canonical, splat_camera_distance, GaussianSplat3d, SplatParam,
 };
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 // ── Stage 38d: shared constraint-graph coloring utility ────────────
