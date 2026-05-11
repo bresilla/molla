@@ -659,6 +659,19 @@ pub struct Model {
     /// `target_kp` is the per-step PD gain. Length = `joint_dof_total`.
     pub joint_target_ke: Buffer<Real>,
 
+    // ── Cable joints (Stage 39E) ────────────────────────────────────
+    // Per-joint static parameters consulted only when joint type is
+    // [`super::JointType::Cable`]. All four buffers have length
+    // `joint_count` and store `0.0` for non-cable joints.
+    /// Per-joint linear (stretch) stiffness `k_l` (N/m).
+    pub joint_cable_stiffness_linear: Buffer<Real>,
+    /// Per-joint isotropic bend stiffness `k_b` (N·m/rad).
+    pub joint_cable_stiffness_bend: Buffer<Real>,
+    /// Per-joint linear (stretch) damping `c_l` (N·s/m).
+    pub joint_cable_damping_linear: Buffer<Real>,
+    /// Per-joint isotropic bend damping `c_b` (N·m·s/rad).
+    pub joint_cable_damping_bend: Buffer<Real>,
+
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
     pub world_count: usize,
@@ -838,6 +851,10 @@ impl Model {
             joint_enabled: Buffer::from_vec(Vec::new(), s),
             joint_ancestor: Buffer::from_vec(Vec::new(), s),
             joint_target_ke: Buffer::from_vec(Vec::new(), s),
+            joint_cable_stiffness_linear: Buffer::from_vec(Vec::new(), s),
+            joint_cable_stiffness_bend: Buffer::from_vec(Vec::new(), s),
+            joint_cable_damping_linear: Buffer::from_vec(Vec::new(), s),
+            joint_cable_damping_bend: Buffer::from_vec(Vec::new(), s),
 
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),

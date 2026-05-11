@@ -804,6 +804,14 @@ impl<'a> MjcfWriter<'a> {
             JointType::Free | JointType::Distance | JointType::D6 => {
                 self.out.push_str("      <freejoint/>\n");
             }
+            JointType::Cable => {
+                // Stage 39E — CABLE joints are molla-specific (2 DoF:
+                // linear stretch + bend). MJCF has no direct equivalent;
+                // emit a freejoint as a benign placeholder so the model
+                // still loads in MuJoCo. Real coupling between molla's
+                // cable dynamics and MJCF would need a custom plugin.
+                self.out.push_str("      <freejoint/>\n");
+            }
         }
         Ok(())
     }

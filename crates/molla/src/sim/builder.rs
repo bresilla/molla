@@ -505,6 +505,15 @@ pub struct ModelBuilder {
     joint_ancestor: Vec<i32>,
     /// Per-DOF static joint stiffness (default 0).
     joint_target_ke: Vec<Real>,
+    /// Per-joint linear (stretch) stiffness for CABLE joints (N/m).
+    /// Length = joint_count; 0 for non-cable joints.
+    joint_cable_stiffness_linear: Vec<Real>,
+    /// Per-joint bend stiffness for CABLE joints (N·m/rad).
+    joint_cable_stiffness_bend: Vec<Real>,
+    /// Per-joint linear (stretch) damping for CABLE joints (N·s/m).
+    joint_cable_damping_linear: Vec<Real>,
+    /// Per-joint bend damping for CABLE joints (N·m·s/rad).
+    joint_cable_damping_bend: Vec<Real>,
 
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
@@ -1850,6 +1859,59 @@ impl ModelBuilder {
         ))
     }
 
+    /// CABLE joint (Stage 39E) — 1 linear stretch DoF + 1 isotropic
+    /// bend DoF. Adds 2 coordinates and 2 dofs. The cable axis is the
+    /// joint-local **+z**, and the bend axis is the joint-local **+x**.
+    ///
+    /// Per-joint stiffness + damping coefficients are stored on the
+    /// Model:
+    ///
+    /// ```text
+    ///   τ_l = −k_l · q_l − c_l · q̇_l    (stretch)
+    ///   τ_b = −k_b · q_b − c_b · q̇_b    (bend)
+    /// ```
+    ///
+    /// Mirrors Newton's `JointType.CABLE` (`xtra/newton/_src/sim/enums.py`).
+    pub fn add_joint_cable(
+        &mut self,
+        parent: BodyId,
+        child: BodyId,
+        x_p: Transform,
+        x_c: Transform,
+        stiffness_linear: Real,
+        stiffness_bend: Real,
+        damping_linear: Real,
+        damping_bend: Real,
+    ) -> Result<JointId> {
+        self.validate_joint(parent, child, "add_joint_cable")?;
+        for (label, v) in [
+            ("stiffness_linear", stiffness_linear),
+            ("stiffness_bend", stiffness_bend),
+            ("damping_linear", damping_linear),
+            ("damping_bend", damping_bend),
+        ] {
+            if !v.is_finite() || v < 0.0 {
+                return Err(Error::Build(format!(
+                    "add_joint_cable: {label} must be finite and ≥ 0, got {v}"
+                )));
+            }
+        }
+        let id = self.push_joint(
+            super::JointType::Cable,
+            parent,
+            child,
+            x_p,
+            x_c,
+            Vec3::ZERO,
+        );
+        let idx = id.index();
+        self.joint_cable_stiffness_linear[idx] = stiffness_linear;
+        self.joint_cable_stiffness_bend[idx] = stiffness_bend;
+        self.joint_cable_damping_linear[idx] = damping_linear;
+        self.joint_cable_damping_bend[idx] = damping_bend;
+        Ok(id)
+    }
+
     /// Free 6-DoF joint between `child` and the world frame (or
     /// `parent`). Adds 7 coordinates (xyz + quat) and 6 dof.
     pub fn add_joint_free(
@@ -1955,6 +2017,14 @@ impl ModelBuilder {
         for _ in 0..dc {
             self.joint_target_ke.push(0.0);
         }
+        // Stage 39E — per-joint CABLE parameters. Pushed for *every*
+        // joint (one row per joint, not per DoF) so the parallel
+        // buffers stay length `joint_count`. Defaults to 0 for non-
+        // cable joints; `add_joint_cable` overwrites them afterwards.
+        self.joint_cable_stiffness_linear.push(0.0);
+        self.joint_cable_stiffness_bend.push(0.0);
+        self.joint_cable_damping_linear.push(0.0);
+        self.joint_cable_damping_bend.push(0.0);
         // First joint of a (re-)opened articulation: nothing to push
         // into `articulation_start` — the trailing offset is set when
         // the articulation closes (either via `begin_articulation` or
@@ -2891,6 +2961,19 @@ impl ModelBuilder {
             joint_enabled: Buffer::from_vec(self.joint_enabled, s),
             joint_ancestor: Buffer::from_vec(self.joint_ancestor, s),
             joint_target_ke: Buffer::from_vec(self.joint_target_ke, s),
+            joint_cable_stiffness_linear: Buffer::from_vec(
+                self.joint_cable_stiffness_linear,
+                s,
+            ),
+            joint_cable_stiffness_bend: Buffer::from_vec(
+                self.joint_cable_stiffness_bend,
+                s,
+            ),
+            joint_cable_damping_linear: Buffer::from_vec(
+                self.joint_cable_damping_linear,
+                s,
+            ),
+            joint_cable_damping_bend: Buffer::from_vec(self.joint_cable_damping_bend, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),

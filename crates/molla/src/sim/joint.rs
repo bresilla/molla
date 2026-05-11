@@ -95,6 +95,7 @@ impl JointTargetMode {
 /// | `Free`       | 4   | 7     | 6   |
 /// | `Distance`   | 5   | 7     | 6   |
 /// | `D6`         | 6   | 7     | 6   |
+/// | `Cable`      | 7   | 2     | 2   |
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[repr(u32)]
 pub enum JointType {
@@ -121,6 +122,24 @@ pub enum JointType {
     /// `joint_limit_lower / joint_limit_upper` arrays (a locked
     /// axis sets `lower == upper == 0`).
     D6 = 6,
+    /// Newton-style CABLE joint (Stage 39E) — 1 linear stretch DoF
+    /// along the joint-local **+z axis** + 1 isotropic bend DoF about
+    /// the joint-local **+x axis** (the perpendicular "bend" axis is
+    /// chosen deterministically as the joint's local x). 2 coords:
+    /// `(q_linear_m, q_bend_rad)`; 2 dofs.
+    ///
+    /// Per-joint stiffness + damping live in `Model.joint_cable_*`
+    /// parallel buffers (see [`super::ModelBuilder::add_joint_cable`]):
+    ///
+    /// ```text
+    ///   τ_l = −k_l · q_l − c_l · q̇_l
+    ///   τ_b = −k_b · q_b − c_b · q̇_b
+    /// ```
+    ///
+    /// They model an axial-stretch spring (tendon stretch) and an
+    /// isotropic bend spring (rope curvature) and are added to the
+    /// generalised force in Featherstone's backward pass.
+    Cable = 7,
 }
 
 impl JointType {
@@ -137,6 +156,7 @@ impl JointType {
             JointType::Free => (7, 6),
             JointType::Distance => (7, 6),
             JointType::D6 => (7, 6),
+            JointType::Cable => (2, 2),
         }
     }
 
@@ -167,6 +187,10 @@ impl JointType {
             JointType::Free | JointType::Distance | JointType::D6 => {
                 // 7 coords: [tx, ty, tz, qx, qy, qz, qw] — identity.
                 out.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+            }
+            JointType::Cable => {
+                // 2 coords: linear stretch (m), bend angle (rad).
+                out.extend_from_slice(&[0.0, 0.0]);
             }
         }
     }

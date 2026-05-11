@@ -76,6 +76,7 @@ fn joint_type_from_u32(v: u32) -> JointType {
         4 => JointType::Free,
         5 => JointType::Distance,
         6 => JointType::D6,
+        7 => JointType::Cable,
         _ => JointType::Fixed, // safe fallback
     }
 }
@@ -102,6 +103,20 @@ fn joint_local_transform(jt: JointType, qj: &[Real], axis: Vec3) -> Transform {
             // 7 coords: [tx, ty, tz, qx, qy, qz, qw].
             let t = Vec3::new(qj[0], qj[1], qj[2]);
             let r = Quat::from_xyzw(qj[3], qj[4], qj[5], qj[6]).normalize();
+            Transform::new(t, r)
+        }
+        JointType::Cable => {
+            // 2 coords: linear stretch `q_l` along joint-local +z, bend
+            // angle `q_b` about joint-local +x. Local transform is
+            // translate-then-rotate: `T(q_l·ẑ) · R(q_b, x̂)`.
+            //
+            // Convention (Stage 39E): cable axis = joint-local +z, bend
+            // axis = joint-local +x. Documented on
+            // [`super::JointType::Cable`].
+            let q_l = qj.first().copied().unwrap_or(0.0);
+            let q_b = qj.get(1).copied().unwrap_or(0.0);
+            let t = Vec3::new(0.0, 0.0, q_l);
+            let r = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), q_b);
             Transform::new(t, r)
         }
     }

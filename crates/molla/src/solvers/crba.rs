@@ -107,7 +107,11 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
         let dof_count = match jt {
             JointType::Revolute | JointType::Prismatic => 1,
             JointType::Fixed => 0,
-            JointType::Ball | JointType::Free | JointType::Distance | JointType::D6 => {
+            JointType::Ball
+            | JointType::Free
+            | JointType::Distance
+            | JointType::D6
+            | JointType::Cable => {
                 return Err(Error::Build(format!(
                     "CRBA: joint type {:?} not yet supported (revolute/prismatic only)",
                     jt

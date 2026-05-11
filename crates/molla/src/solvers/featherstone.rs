@@ -25,7 +25,10 @@
 //!
 //! Supported joint types: Revolute, Prismatic (1-DOF), Ball (3 angular
 //! DOF), Free / Distance (6 DOF), D6 (6 DOF with per-axis locks via
-//! `lower == upper == 0` sentinel). Fixed passes through.
+//! `lower == upper == 0` sentinel), Cable (Stage 39E — 2 DOF: 1 linear
+//! stretch along joint-local +z + 1 bend about joint-local +x; per-joint
+//! spring + damper coefficients live in `Model.joint_cable_*`). Fixed
+//! passes through.
 
 use crate::core::{Error, Result};
 use crate::math::{
@@ -333,6 +336,9 @@ impl FeatherstoneSolver {
 ///   in the joint-world frame
 /// - D6: same as Free, but axes with `lower == upper == 0` (locked)
 ///   set their column to ZERO and `dof_active[k] = false`.
+/// - Cable (Stage 39E): 2 columns — col 0 = (ez; 0) linear stretch along
+///   the joint-world +z (cable axis), col 1 = (0; ex) bend about the
+///   joint-world +x (bend axis).
 fn build_motion_subspace(
     jt: JointType,
     joint_world: Transform,
@@ -409,6 +415,19 @@ fn build_motion_subspace(
                 }
             }
             6
+        }
+        JointType::Cable => {
+            // Stage 39E — 2-column motion subspace:
+            //   col 0: linear stretch along joint-world +z (cable axis)
+            //   col 1: bend rotation about joint-world +x (bend axis)
+            // Both axes are joint-frame canonical (deterministic) — the
+            // child body inherits whatever rotation `joint_x_p` applies
+            // when laying out the cable in the parent's body frame.
+            s_cols[0] = SpatialVector::new(ez, Vec3::ZERO);
+            s_cols[1] = SpatialVector::new(Vec3::ZERO, ex);
+            dof_active[0] = true;
+            dof_active[1] = true;
+            2
         }
         JointType::Fixed => 0,
     }
@@ -503,6 +522,10 @@ fn cpu_step(
     let joint_friction = model.joint_friction.host()?;
     let effort_limit = model.joint_effort_limit.host()?;
     let velocity_limit = model.joint_velocity_limit.host()?;
+    let cable_k_lin = model.joint_cable_stiffness_linear.host()?;
+    let cable_k_bend = model.joint_cable_stiffness_bend.host()?;
+    let cable_c_lin = model.joint_cable_damping_linear.host()?;
+    let cable_c_bend = model.joint_cable_damping_bend.host()?;
     let target_mode = control.joint_target_mode.host()?;
     let target_pos = control.joint_target_pos.host()?;
     let target_vel = control.joint_target_vel.host()?;
@@ -650,6 +673,8 @@ fn cpu_step(
                     JointType::Revolute | JointType::Prismatic => {
                         q_in.get(coord_idx + k).copied().unwrap_or(0.0)
                     }
+                    // Cable: 2 scalar coords (k=0 → linear stretch, k=1 → bend).
+                    JointType::Cable => q_in.get(coord_idx + k).copied().unwrap_or(0.0),
                     _ => 0.0,
                 };
                 let mode = JointTargetMode::from_u32(
@@ -670,9 +695,29 @@ fn cpu_step(
                 };
                 let mu = joint_friction.get(dof_g).copied().unwrap_or(0.0);
                 let friction_torque = -mu * qd_now;
+                // Stage 39E — CABLE per-DoF spring + damper. Only applied
+                // when joint type is CABLE (the buffers are zero for
+                // every other type).
+                let cable_torque = if matches!(jt, JointType::Cable) {
+                    let (k_stiff, c_damp) = if k == 0 {
+                        (
+                            cable_k_lin.get(j).copied().unwrap_or(0.0),
+                            cable_c_lin.get(j).copied().unwrap_or(0.0),
+                        )
+                    } else {
+                        (
+                            cable_k_bend.get(j).copied().unwrap_or(0.0),
+                            cable_c_bend.get(j).copied().unwrap_or(0.0),
+                        )
+                    };
+                    -k_stiff * q_now - c_damp * qd_now
+                } else {
+                    0.0
+                };
                 let tau_raw = control_force.get(dof_g).copied().unwrap_or(0.0)
                     + drive_torque
-                    + friction_torque;
+                    + friction_torque
+                    + cable_torque;
                 let tau_app = clamp_or_passthrough(
                     tau_raw,
                     effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),
@@ -1252,6 +1297,29 @@ fn cpu_step(
                     }
                 }
             }
+            JointType::Cable => {
+                // Stage 39E — 2 scalar coords (q_l linear stretch, q_b
+                // bend angle), 2 scalar dofs. Symplectic Euler per DoF,
+                // analogous to two stacked 1-DoF revolute/prismatic
+                // integrators. Per-DoF limits + velocity caps are
+                // honoured via the standard helpers.
+                for k in 0..2 {
+                    let qd_old = qd_in[dof_idx + k];
+                    let qd_int = qd_old + q_dd[dof_idx + k] * dt;
+                    let qd_damped = qd_int * (1.0 - joint_damping * dt).max(0.0);
+                    let qd_capped = clamp_or_passthrough(
+                        qd_damped,
+                        velocity_limit.get(dof_idx + k).copied().unwrap_or(Real::NAN),
+                    );
+                    let q_pred = q_in[coord_idx + k] + qd_capped * dt;
+                    let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
+                    let hi = limit_upper.get(dof_idx + k).copied().unwrap_or(Real::NAN);
+                    let (q_clamped, qd_after) =
+                        clamp_joint_pos(q_pred, qd_capped, lo, hi);
+                    qd_new[dof_idx + k] = qd_after;
+                    q_new[coord_idx + k] = q_clamped;
+                }
+            }
             JointType::Fixed => {
                 // No coords / no dof — pass through.
             }
@@ -1450,6 +1518,7 @@ fn joint_type_from_u32(v: u32) -> JointType {
         4 => JointType::Free,
         5 => JointType::Distance,
         6 => JointType::D6,
+        7 => JointType::Cable,
         _ => JointType::Fixed,
     }
 }
