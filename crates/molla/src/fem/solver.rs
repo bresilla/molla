@@ -552,6 +552,174 @@ impl WaveStepperGpu {
     }
 }
 
+// ─── GPU transient (Stage 36.5 Slice F) ───────────────────────────────
+
+/// Cached state for a [`solve_transient`] simulation that runs the
+/// implicit-Euler inner CG on the GPU. Build once per scene (fixes
+/// mesh, BCs, Δt); call [`Self::step`] every frame.
+///
+/// Same Slice-E restriction as [`WaveStepperGpu`]: every Dirichlet
+/// BC must have `value = 0.0`. Use the CPU [`solve_transient`] path
+/// for nonzero Dirichlet (heat-source / fixed-temperature problems
+/// with a non-zero clamp).
+#[cfg(feature = "gpu")]
+pub struct TransientStepperGpu {
+    /// BC-reduced `A = M / Δt + K` uploaded as GPU CSR.
+    a_gpu: FemGpuData,
+    /// CPU mass matrix — used for the per-step `(1/Δt) · M · u_old`
+    /// term of the RHS. Same reasoning as [`WaveStepperGpu`]: small
+    /// per-step matvec, host upload of the resulting vector is the
+    /// only way `b` lands on the GPU anyway.
+    m_cpu: BsrMatrix,
+    n: usize,
+    inv_dt: Real,
+    pinned_dofs: Vec<usize>,
+    cg_kernel: FemCgGpuKernel,
+    mv_kernel: FemGpuKernel,
+}
+
+#[cfg(feature = "gpu")]
+impl TransientStepperGpu {
+    pub fn new(
+        engine: &Engine,
+        mesh: &super::FemMesh,
+        m: &BsrMatrix,
+        k: &BsrMatrix,
+        dt: Real,
+        bcs: &[BoundaryCondition],
+    ) -> Result<Self> {
+        debug_assert_eq!(m.b, 1, "TransientStepperGpu: M must be B=1");
+        debug_assert_eq!(k.b, 1, "TransientStepperGpu: K must be B=1");
+        debug_assert_eq!(m.nrows(), k.nrows());
+        debug_assert!(dt > 0.0, "TransientStepperGpu: Δt must be > 0");
+
+        for bc in bcs {
+            match bc {
+                BoundaryCondition::Dirichlet { value, .. } if *value != 0.0 => {
+                    return Err(Error::Build(format!(
+                        "TransientStepperGpu: nonzero Dirichlet (value = {value}) is not \
+                         supported in Slice F — pin to 0 or use the CPU path"
+                    )));
+                }
+                BoundaryCondition::DirichletVector { values, .. }
+                    if values.iter().any(|v| *v != 0.0) =>
+                {
+                    return Err(Error::Build(
+                        "TransientStepperGpu: nonzero DirichletVector is not supported in \
+                         Slice F"
+                            .into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let n = m.nrows();
+        let inv_dt = 1.0 / dt;
+        // Build A = M/Δt + K, then BC-reduce.
+        let mut a_red = add_csr_scaled(m, inv_dt, k, 1.0);
+        let mut dummy_rhs = vec![0.0; n];
+        super::bc::apply_dirichlet(&mut a_red, &mut dummy_rhs, bcs);
+
+        let device = engine.device().ok_or_else(|| {
+            Error::Gpu("TransientStepperGpu::new: engine has no GPU device".into())
+        })?;
+        let queue = engine.queue().ok_or_else(|| {
+            Error::Gpu("TransientStepperGpu::new: engine has no GPU queue".into())
+        })?;
+        let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
+
+        let mut pinned_dofs = Vec::new();
+        for bc in bcs {
+            match bc {
+                BoundaryCondition::Dirichlet { vertex, .. } => {
+                    pinned_dofs.push(*vertex as usize);
+                }
+                BoundaryCondition::DirichletVector { vertex, values } => {
+                    let base = *vertex as usize * values.len();
+                    for c in 0..values.len() {
+                        pinned_dofs.push(base + c);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let cg_kernel = FemCgGpuKernel::new(device.clone(), queue.clone());
+        let mv_kernel = FemGpuKernel::new(device.clone(), queue.clone());
+
+        Ok(Self {
+            a_gpu,
+            m_cpu: m.clone(),
+            n,
+            inv_dt,
+            pinned_dofs,
+            cg_kernel,
+            mv_kernel,
+        })
+    }
+
+    /// One backward-Euler step: returns `u_new` such that
+    /// `(M/Δt + K) · u_new = f + (M/Δt) · u_old` (BC-reduced).
+    pub fn step(&self, u_old: &[Real], f: &[Real]) -> Result<CgResult> {
+        debug_assert_eq!(u_old.len(), self.n);
+        debug_assert_eq!(f.len(), self.n);
+
+        let m_uold = matvec(&self.m_cpu, u_old);
+        let mut b: Vec<Real> = f
+            .iter()
+            .zip(m_uold.iter())
+            .map(|(fi, mi)| fi + self.inv_dt * mi)
+            .collect();
+        for &dof in &self.pinned_dofs {
+            b[dof] = 0.0;
+        }
+
+        let device = self.cg_kernel.device();
+        let queue = self.cg_kernel.queue();
+        let bytes = (self.n.max(4) * 4) as u64;
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let b_f32: Vec<f32> = b.iter().map(|&v| v as f32).collect();
+        let x_init_f32: Vec<f32> = u_old.iter().map(|&v| v as f32).collect();
+        let b_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem::transient_gpu::b"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&b_buf, 0, bytemuck::cast_slice(&b_f32));
+        let x_init_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem::transient_gpu::x_init"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&x_init_buf, 0, bytemuck::cast_slice(&x_init_f32));
+
+        let mv_kernel = &self.mv_kernel;
+        let a_gpu = &self.a_gpu;
+        let cg_result = self.cg_kernel.cg_solve_resident(
+            self.n as u32,
+            &b_buf,
+            Some(&x_init_buf),
+            DEFAULT_TOL as f32,
+            DEFAULT_MAX_ITERS,
+            |x_buf, y_buf| mv_kernel.matvec(a_gpu, x_buf, y_buf),
+        )?;
+
+        let u_new_f32 = self.cg_kernel.read_buffer(&cg_result.x, self.n as u32)?;
+        let u_new: Vec<Real> = u_new_f32.into_iter().map(|v| v as Real).collect();
+
+        Ok(CgResult {
+            x: u_new,
+            iters: cg_result.iters,
+            residual: cg_result.residual as Real,
+        })
+    }
+}
+
 /// Stage 36.5 — GPU port of [`solve_steady_state`].
 ///
 /// Wraps the [`crate::kernels::FemGpuKernel::matvec_blocking`] entry

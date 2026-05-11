@@ -96,7 +96,7 @@ pub use solver::{
     NEWMARK_GAMMA_DEFAULT,
 };
 #[cfg(feature = "gpu")]
-pub use solver::WaveStepperGpu;
+pub use solver::{TransientStepperGpu, WaveStepperGpu};
 pub use stokes::{
     apply_stokes_velocity_bcs, assemble_convection_block,
     assemble_convection_block_with_supg, assemble_div_block,
