@@ -44,7 +44,10 @@
 // up in a future stage).
 pub mod muscle;
 
-pub use muscle::{force_length, force_velocity, Muscle, MuscleConfig};
+pub use muscle::{
+    force_length, force_velocity, tendon_force, update_muscle_activation, Muscle,
+    MuscleConfig, DEFAULT_TAU_ACTIVATION, DEFAULT_TENDON_STIFFNESS_RATIO,
+};
 
 #[cfg(feature = "gpu")]
 pub mod actuator;

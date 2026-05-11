@@ -515,15 +515,22 @@ pub struct ModelBuilder {
     /// Per-joint bend damping for CABLE joints (N·m·s/rad).
     joint_cable_damping_bend: Vec<Real>,
 
-    // Stage 42 — per-muscle Hill-type parameters. Parallel arrays of
-    // length `muscle_count`. Each muscle drives the cable's linear
-    // stretch DoF (see `crate::actuators::muscle`). Duplicate joint
-    // ids are rejected by `add_muscle`.
+    // Stage 42 v2 — per-muscle Hill-type parameters. Parallel arrays
+    // of length `muscle_count`. Each muscle drives one CABLE joint's
+    // linear stretch DoF (see `crate::actuators::muscle`). v2 allows
+    // multiple muscles per joint (co-contraction); the CSR
+    // `joint_muscle_offsets` / `joint_muscle_indices` is constructed
+    // at `build()` from `muscle_joint`.
     muscle_joint: Vec<i32>,
     muscle_f_max: Vec<Real>,
     muscle_l_opt: Vec<Real>,
     muscle_v_max: Vec<Real>,
     muscle_activation: Vec<Real>,
+    muscle_excitation: Vec<Real>,
+    muscle_tau_activation: Vec<Real>,
+    muscle_l_tendon_slack: Vec<Real>,
+    muscle_pennation_angle: Vec<Real>,
+    muscle_polarity: Vec<Real>,
 
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
@@ -1928,6 +1935,10 @@ impl ModelBuilder {
     /// i.e. shorter cable). See [`crate::actuators::muscle`] for
     /// the curve definitions.
     ///
+    /// v2 supports multiple muscles per joint — call `add_muscle`
+    /// again to attach an antagonist for co-contraction. The solver
+    /// sums torques from all muscles on the same joint.
+    ///
     /// Returns the new muscle id (0-based index into the
     /// `model.muscle_*` parallel arrays).
     ///
@@ -1935,8 +1946,6 @@ impl ModelBuilder {
     ///
     /// - the joint id is out of range
     /// - the joint is not `JointType::Cable`
-    /// - another muscle is already attached to the same joint (v1
-    ///   limitation; co-contraction is deferred to v2)
     /// - any Hill parameter is non-finite or non-positive
     pub fn add_muscle(
         &mut self,
@@ -1974,21 +1983,48 @@ impl ModelBuilder {
                 config.activation
             )));
         }
-        // Reject duplicate muscle on the same joint (v1 limit).
-        if let Some(existing) =
-            self.muscle_joint.iter().position(|&j| j == idx as i32)
-        {
+        if !config.excitation.is_finite() {
             return Err(Error::Build(format!(
-                "add_muscle: joint {joint:?} already has muscle id {existing}; \
-                 co-contraction (antagonist pair) is not supported in v1"
+                "add_muscle: excitation must be finite, got {}",
+                config.excitation
             )));
         }
+        if !config.tau_activation.is_finite() || config.tau_activation < 0.0 {
+            return Err(Error::Build(format!(
+                "add_muscle: tau_activation must be finite and >= 0, got {}",
+                config.tau_activation
+            )));
+        }
+        if !config.l_tendon_slack.is_finite() || config.l_tendon_slack < 0.0 {
+            return Err(Error::Build(format!(
+                "add_muscle: l_tendon_slack must be finite and >= 0, got {}",
+                config.l_tendon_slack
+            )));
+        }
+        if !config.pennation_angle.is_finite() {
+            return Err(Error::Build(format!(
+                "add_muscle: pennation_angle must be finite, got {}",
+                config.pennation_angle
+            )));
+        }
+        if !config.polarity.is_finite() || config.polarity == 0.0 {
+            return Err(Error::Build(format!(
+                "add_muscle: polarity must be finite and non-zero (use ±1), got {}",
+                config.polarity
+            )));
+        }
+        let polarity_clamped = if config.polarity >= 0.0 { 1.0 } else { -1.0 };
         let muscle_id = self.muscle_joint.len();
         self.muscle_joint.push(idx as i32);
         self.muscle_f_max.push(config.f_max);
         self.muscle_l_opt.push(config.l_opt);
         self.muscle_v_max.push(config.v_max);
         self.muscle_activation.push(config.activation.clamp(0.0, 1.0));
+        self.muscle_excitation.push(config.excitation.clamp(0.0, 1.0));
+        self.muscle_tau_activation.push(config.tau_activation);
+        self.muscle_l_tendon_slack.push(config.l_tendon_slack);
+        self.muscle_pennation_angle.push(config.pennation_angle);
+        self.muscle_polarity.push(polarity_clamped);
         Ok(muscle_id)
     }
 
@@ -2803,6 +2839,41 @@ impl ModelBuilder {
             }
         }
 
+        // Stage 42 v2 — build joint → muscle CSR before the Model
+        // literal moves `joint_type` and `muscle_joint`.
+        let (joint_muscle_offsets_vec, joint_muscle_indices_vec) = {
+            let n_joints = self.joint_type.len();
+            let mut counts = vec![0u32; n_joints];
+            for &j in &self.muscle_joint {
+                if j >= 0 && (j as usize) < n_joints {
+                    counts[j as usize] += 1;
+                }
+            }
+            let mut offsets = Vec::with_capacity(n_joints + 1);
+            offsets.push(0u32);
+            let mut acc = 0u32;
+            for c in &counts {
+                acc += *c;
+                offsets.push(acc);
+            }
+            let mut cursor = vec![0u32; n_joints];
+            let mut running = 0u32;
+            for (i, c) in counts.iter().enumerate() {
+                cursor[i] = running;
+                running += *c;
+            }
+            let mut indices = vec![0u32; self.muscle_joint.len()];
+            for (m_id, &j) in self.muscle_joint.iter().enumerate() {
+                if j < 0 || (j as usize) >= n_joints {
+                    continue;
+                }
+                let slot = cursor[j as usize] as usize;
+                indices[slot] = m_id as u32;
+                cursor[j as usize] += 1;
+            }
+            (offsets, indices)
+        };
+
         Ok(Model {
             particle_count,
             particle_mass: Buffer::from_vec(self.particle_mass, s),
@@ -3055,14 +3126,26 @@ impl ModelBuilder {
             ),
             joint_cable_damping_bend: Buffer::from_vec(self.joint_cable_damping_bend, s),
 
-            // Stage 42 — Hill-type muscles. Length = `muscle_count`,
-            // not `joint_count`.
+            // Stage 42 v2 — Hill-type muscles. CSR maps joint →
+            // muscle ids so co-contraction sums correctly in the
+            // solver. `muscle_joint` (the builder-side per-muscle
+            // array) is consumed here and discarded; downstream
+            // consumers go through the CSR.
             muscle_count: self.muscle_joint.len(),
-            muscle_joint: Buffer::from_vec(self.muscle_joint, s),
+            joint_muscle_offsets: Buffer::from_vec(joint_muscle_offsets_vec, s),
+            joint_muscle_indices: Buffer::from_vec(joint_muscle_indices_vec, s),
             muscle_f_max: Buffer::from_vec(self.muscle_f_max, s),
             muscle_l_opt: Buffer::from_vec(self.muscle_l_opt, s),
             muscle_v_max: Buffer::from_vec(self.muscle_v_max, s),
             muscle_activation: Buffer::from_vec(self.muscle_activation, s),
+            muscle_excitation: Buffer::from_vec(self.muscle_excitation, s),
+            muscle_tau_activation: Buffer::from_vec(self.muscle_tau_activation, s),
+            muscle_l_tendon_slack: Buffer::from_vec(self.muscle_l_tendon_slack, s),
+            muscle_pennation_angle: Buffer::from_vec(
+                self.muscle_pennation_angle,
+                s,
+            ),
+            muscle_polarity: Buffer::from_vec(self.muscle_polarity, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),

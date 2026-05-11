@@ -672,24 +672,32 @@ pub struct Model {
     /// Per-joint isotropic bend damping `c_b` (N·m·s/rad).
     pub joint_cable_damping_bend: Buffer<Real>,
 
-    // ── Muscles (Stage 42) ─────────────────────────────────────────
+    // ── Muscles (Stage 42 v2) ──────────────────────────────────────
     // Hill-type muscle actuators attached to CABLE joints. Each
     // muscle drives the joint's **linear stretch DoF** with an active
     // contractile force computed from the classic
     //   f = a · f_max · f_L(l/l_opt) · f_V(v/v_max)
-    // Hill three-element model. See `actuators::muscle` for the
-    // curve definitions and the v1 → v2 roadmap.
+    // Hill three-element model. v2 adds (1) co-contraction by storing
+    // multiple muscles per joint via a CSR, (2) first-order
+    // excitation→activation lag, and (3) Thelen-style series-elastic
+    // tendon with pennation. See `actuators::muscle` for the curve
+    // definitions.
     //
-    // Parallel arrays of length `muscle_count`. One muscle per joint
-    // in v1 (no antagonist co-contraction yet); duplicates are
-    // rejected by the builder. Solvers consume these buffers in the
-    // backward Featherstone pass and add the result to the cable's
-    // existing spring + damper torque.
+    // Most arrays are parallel and `muscle_count`-sized. The
+    // `joint_muscle_*` pair is a CSR mapping joint → muscle ids:
+    //   `joint_muscle_offsets[j] .. joint_muscle_offsets[j+1]`
+    // indexes into `joint_muscle_indices`. Length of `offsets` is
+    // `joint_count + 1` so the empty-muscle case still has a
+    // sentinel.
     /// Number of muscle actuators on this model.
     pub muscle_count: usize,
-    /// Per-muscle joint id (index into the joint arrays). Must point
-    /// at a `JointType::Cable`. Length = `muscle_count`.
-    pub muscle_joint: Buffer<i32>,
+    /// CSR offsets — `joint_muscle_offsets[j] .. [j+1]` indexes the
+    /// list of muscle ids attached to joint `j`. Length =
+    /// `joint_count + 1` (single `0` sentinel when no muscles).
+    pub joint_muscle_offsets: Buffer<u32>,
+    /// CSR muscle indices keyed by `joint_muscle_offsets`. Length =
+    /// `muscle_count`.
+    pub joint_muscle_indices: Buffer<u32>,
     /// Per-muscle maximum isometric force (N). Length = `muscle_count`.
     pub muscle_f_max: Buffer<Real>,
     /// Per-muscle optimal fibre length (m). Length = `muscle_count`.
@@ -697,11 +705,30 @@ pub struct Model {
     /// Per-muscle maximum shortening velocity (m/s). Length =
     /// `muscle_count`.
     pub muscle_v_max: Buffer<Real>,
-    /// Per-muscle current activation level, `a ∈ [0, 1]`. **Mutable**
-    /// at simulation time: caller updates this buffer between solver
-    /// steps (excitation → activation lag is not modelled in v1).
-    /// Length = `muscle_count`.
+    /// Per-muscle filtered activation, `a ∈ [0, 1]`. Updated each
+    /// step by [`crate::actuators::update_muscle_activation`] from
+    /// the neural drive in `muscle_excitation`. Length =
+    /// `muscle_count`.
     pub muscle_activation: Buffer<Real>,
+    /// Per-muscle neural drive / excitation, `u ∈ [0, 1]`. **User
+    /// input** — set this each step (constant for tonic muscles).
+    /// The first-order filter
+    /// `da/dt = (u − a)/τ_act` converts it into the filtered
+    /// activation. Length = `muscle_count`.
+    pub muscle_excitation: Buffer<Real>,
+    /// Per-muscle activation time constant `τ_act` (s). Length =
+    /// `muscle_count`. Defaults to 20 ms per Thelen-2003.
+    pub muscle_tau_activation: Buffer<Real>,
+    /// Per-muscle tendon slack length `l_t_slack` (m). `0.0` ⇒
+    /// rigid-tendon mode (v1 behaviour). Length = `muscle_count`.
+    pub muscle_l_tendon_slack: Buffer<Real>,
+    /// Per-muscle pennation angle `α` (rad). Length = `muscle_count`.
+    pub muscle_pennation_angle: Buffer<Real>,
+    /// Per-muscle mounting polarity (`+1` agonist, `−1` antagonist).
+    /// Antagonist muscles pull the cable longer (`q_l → +`) and
+    /// experience reversed length/velocity kinematics inside Hill's
+    /// curves. Length = `muscle_count`.
+    pub muscle_polarity: Buffer<Real>,
 
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
@@ -888,11 +915,20 @@ impl Model {
             joint_cable_damping_bend: Buffer::from_vec(Vec::new(), s),
 
             muscle_count: 0,
-            muscle_joint: Buffer::from_vec(Vec::new(), s),
+            // Stage 42 v2 — CSR offsets need a single 0 sentinel even
+            // when no muscles are attached so consumers can safely
+            // index `offsets[j+1] - offsets[j]`.
+            joint_muscle_offsets: Buffer::from_vec(vec![0u32], s),
+            joint_muscle_indices: Buffer::from_vec(Vec::new(), s),
             muscle_f_max: Buffer::from_vec(Vec::new(), s),
             muscle_l_opt: Buffer::from_vec(Vec::new(), s),
             muscle_v_max: Buffer::from_vec(Vec::new(), s),
             muscle_activation: Buffer::from_vec(Vec::new(), s),
+            muscle_excitation: Buffer::from_vec(Vec::new(), s),
+            muscle_tau_activation: Buffer::from_vec(Vec::new(), s),
+            muscle_l_tendon_slack: Buffer::from_vec(Vec::new(), s),
+            muscle_pennation_angle: Buffer::from_vec(Vec::new(), s),
+            muscle_polarity: Buffer::from_vec(Vec::new(), s),
 
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
@@ -1038,14 +1074,23 @@ impl Model {
         up!(equality_mimic_driver_joint);
         up!(equality_mimic_driven_joint);
         up!(equality_mimic_poly);
-        // Stage 42 — muscle actuators. Only uploaded when at least
-        // one muscle exists so empty-model paths skip the no-op.
+        // Stage 42 v2 — muscle actuators. Only uploaded when at least
+        // one muscle exists so empty-model paths skip the no-op. The
+        // CSR offsets array has a sentinel even at zero count, so we
+        // skip it here too to avoid uploading a single-element buffer
+        // pointlessly.
         if self.muscle_count > 0 {
-            up!(muscle_joint);
+            up!(joint_muscle_offsets);
+            up!(joint_muscle_indices);
             up!(muscle_f_max);
             up!(muscle_l_opt);
             up!(muscle_v_max);
             up!(muscle_activation);
+            up!(muscle_excitation);
+            up!(muscle_tau_activation);
+            up!(muscle_l_tendon_slack);
+            up!(muscle_pennation_angle);
+            up!(muscle_polarity);
         }
         up!(gravity);
 

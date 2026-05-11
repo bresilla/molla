@@ -526,20 +526,19 @@ fn cpu_step(
     let cable_k_bend = model.joint_cable_stiffness_bend.host()?;
     let cable_c_lin = model.joint_cable_damping_linear.host()?;
     let cable_c_bend = model.joint_cable_damping_bend.host()?;
-    // Stage 42 — Hill-type muscle actuators. Stored per muscle, not
-    // per joint; build a per-joint lookup so the inner DOF loop is
-    // O(1). Sentinel `usize::MAX` ⇒ "no muscle on this joint".
-    let muscle_joint = model.muscle_joint.host()?;
+    // Stage 42 v2 — Hill-type muscle actuators. CSR maps each joint
+    // to the list of muscles attached to it (co-contraction summed at
+    // the solver level). `joint_muscle_offsets[j+1] − [j]` is the
+    // number of muscles on joint `j`.
     let muscle_f_max = model.muscle_f_max.host()?;
     let muscle_l_opt = model.muscle_l_opt.host()?;
     let muscle_v_max = model.muscle_v_max.host()?;
     let muscle_activation = model.muscle_activation.host()?;
-    let mut joint_to_muscle: Vec<usize> = vec![usize::MAX; n];
-    for (m_id, &j) in muscle_joint.iter().enumerate() {
-        if j >= 0 && (j as usize) < n {
-            joint_to_muscle[j as usize] = m_id;
-        }
-    }
+    let muscle_l_tendon_slack = model.muscle_l_tendon_slack.host()?;
+    let muscle_pennation_angle = model.muscle_pennation_angle.host()?;
+    let muscle_polarity = model.muscle_polarity.host()?;
+    let joint_muscle_offsets = model.joint_muscle_offsets.host()?;
+    let joint_muscle_indices = model.joint_muscle_indices.host()?;
     let target_mode = control.joint_target_mode.host()?;
     let target_pos = control.joint_target_pos.host()?;
     let target_vel = control.joint_target_vel.host()?;
@@ -728,12 +727,27 @@ fn cpu_step(
                 } else {
                     0.0
                 };
-                // Stage 42 — Hill-type muscle actuator. Only the linear
-                // stretch DoF (k == 0) is driven; the bend DoF carries
-                // no muscle force in v1 (no pennation / oblique fibres).
-                let muscle_torque = if matches!(jt, JointType::Cable) && k == 0 {
-                    let m_id = joint_to_muscle[j];
-                    if m_id != usize::MAX {
+                // Stage 42 v2 — Hill-type muscle actuators. Sum over
+                // every muscle attached to this joint via the CSR
+                // (`joint_muscle_offsets[j] .. [j+1]`). Only the
+                // linear stretch DoF (k == 0) is driven; muscles on
+                // CABLE bend would need oblique-fibre pennation we
+                // don't model yet.
+                let muscle_torque = if matches!(jt, JointType::Cable)
+                    && k == 0
+                    && j + 1 < joint_muscle_offsets.len()
+                {
+                    let lo = joint_muscle_offsets[j] as usize;
+                    let hi = joint_muscle_offsets[j + 1] as usize;
+                    let mut sum: Real = 0.0;
+                    for slot in lo..hi {
+                        let m_id = joint_muscle_indices
+                            .get(slot)
+                            .copied()
+                            .unwrap_or(u32::MAX) as usize;
+                        if m_id == usize::MAX {
+                            continue;
+                        }
                         let m = crate::actuators::Muscle {
                             joint: crate::core::JointId::from_index(j),
                             config: crate::actuators::MuscleConfig {
@@ -753,12 +767,30 @@ fn cpu_step(
                                     .get(m_id)
                                     .copied()
                                     .unwrap_or(0.0),
+                                excitation: 0.0,
+                                tau_activation:
+                                    crate::actuators::DEFAULT_TAU_ACTIVATION,
+                                l_tendon_slack: muscle_l_tendon_slack
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(0.0),
+                                pennation_angle: muscle_pennation_angle
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(0.0),
+                                polarity: muscle_polarity
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(1.0),
                             },
                         };
-                        m.torque(q_now, qd_now)
-                    } else {
-                        0.0
+                        // Sign convention: each muscle's `Muscle::torque`
+                        // already applies its own `polarity`. Agonists
+                        // pull q_l negative, antagonists pull it
+                        // positive; balanced pairs cancel.
+                        sum += m.torque(q_now, qd_now);
                     }
+                    sum
                 } else {
                     0.0
                 };
