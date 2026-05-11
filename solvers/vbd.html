@@ -1,0 +1,454 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>VBD - molla — Rust + WGPU Physics Engine</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-11ed3a3f.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">molla — Rust + WGPU Physics Engine</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="vbd"><a class="header" href="#vbd">VBD</a></h1>
+<p><a href="https://docs.rs/molla/latest/molla/solvers/struct.VbdSolver.html"><code>VbdSolver</code></a>
+is molla’s <strong>Vertex Block Descent</strong> soft-body solver — a true
+implicit-Euler step solved by per-vertex 3×3 Newton blocks in a
+graph-coloured Gauss-Seidel sweep. Stage 20 onward.</p>
+<p>References:</p>
+<ul>
+<li>Chen, Liu, Yang, Yuksel (2024). <em>Vertex Block Descent.</em> SIGGRAPH.</li>
+<li>Giles, Diaz, Yuksel (2025). <em>Augmented Vertex Block Descent.</em>
+ACM Trans. Graph. 44(4).</li>
+</ul>
+<pre><code class="language-rust ignore">use molla::solvers::{VbdSolver, VbdMode, Solver};
+
+let mut solver = VbdSolver::default()                  // CPU
+    // .new_gpu(&amp;engine, particle_count, spring_count)?
+    .with_iterations(8)
+    .with_substeps(2)
+    .with_mode(VbdMode::Soft)
+    .with_contact_stiffness(1.0e5);
+
+solver.step(&amp;model, &amp;state_in, &amp;control, &amp;contacts, dt, &amp;mut state_out)?;</code></pre>
+<h2 id="algorithm"><a class="header" href="#algorithm">Algorithm</a></h2>
+<p>Implicit Euler on the soft-body equations of motion: each substep
+solves</p>
+<pre><code class="language-text">(M/dt² + Σ_e H_e(x)) · Δx = M/dt² · (y − x) + Σ_e f_e(x)
+</code></pre>
+<p>where:</p>
+<ul>
+<li><code>M</code> is the lumped mass matrix.</li>
+<li><code>y = x_n + dt·(v_n + dt·g)</code> is the inertial target.</li>
+<li><code>H_e</code>, <code>f_e</code> are the per-element Hessian + force contributions
+(spring elasticity, tet Neo-Hookean, cable bending, …).</li>
+</ul>
+<p>VBD’s trick is to do this with <strong>per-vertex Gauss-Seidel sweeps</strong>: at
+each outer iteration, every vertex assembles the 3×3 row of the
+Hessian + residual that it owns, inverts the 3×3 block locally, and
+writes back <code>x_v ← x_v + H_v⁻¹ · g_v</code>. Within a graph-coloured
+class, no two vertices share a constraint, so the sweep is <strong>race-free
+in WGSL</strong>.</p>
+<pre><code class="language-text">for outer_iter in 0..iterations:
+    for colour in 0..particle_color_count:
+        parallel for vertex v in particles_in_colour(colour):
+            (H_v, g_v) = (zero, zero)
+            # springs adjacent to v
+            for spring in vertex_adjacent_springs[v]:
+                accumulate (H, g) from spring elasticity
+            # tets adjacent to v
+            for (tet, v_order) in vertex_adjacent_tets[v]:
+                accumulate (H, g) from Neo-Hookean Ψ
+            # cable bending hinges adjacent to v
+            for entry in vertex_cable_bending[v]:
+                accumulate (H, g) from discrete hinge energy
+            # inertial target
+            H_v += M_v / dt²
+            g_v += M_v / dt² · (y_v − x_v)
+            x_v += H_v⁻¹ · g_v
+</code></pre>
+<h2 id="why-vbd-vs-xpbd-or-style3d"><a class="header" href="#why-vbd-vs-xpbd-or-style3d">Why VBD vs XPBD or Style3D</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>XPBD</th><th>VBD</th><th>Style3D (Newton ref)</th></tr>
+</thead>
+<tbody>
+<tr><td>Step type</td><td>position projection</td><td>implicit Euler</td><td>projective dynamics</td></tr>
+<tr><td>Stiffness scale</td><td>non-physical (iters → stiffer)</td><td><strong>physical</strong></td><td>physical</td></tr>
+<tr><td>Cloth + soft</td><td>cloth, particle</td><td>cloth + tet</td><td>cloth only</td></tr>
+<tr><td>Rigid coupling</td><td>rigid-via-equality</td><td>AVBD (soft / hard)</td><td>none</td></tr>
+<tr><td>GPU port</td><td>mature</td><td>mature</td><td>not ported in molla</td></tr>
+<tr><td>Cable joint</td><td>particle polyline</td><td>particle + bend hinges</td><td>n/a</td></tr>
+</tbody>
+</table>
+</div>
+<p>molla picked <strong>VBD</strong> over Style3D in Stage 20 because:</p>
+<ol>
+<li>AVBD coupling unlocks soft-on-rigid demos (cloth wrapping a
+kinematic sphere, jelly resting on a box) that Style3D can’t do.</li>
+<li>The vertex-block structure ports naturally onto WGSL — every
+vertex is a small 3×3 Newton block dispatched in colour passes
+that mirror the existing XPBD particles kernel.</li>
+<li>The CABLE joint roadmap (Stage 20.1–20.2) needs the bending
+energy infrastructure VBD already has.</li>
+</ol>
+<h2 id="cloth--spring-elasticity"><a class="header" href="#cloth--spring-elasticity">Cloth + spring elasticity</a></h2>
+<p>VBD reuses the <strong>same</strong> spring storage as XPBD — <code>Model.spring_*</code> with
+compliance <code>α = 1/k</code> — and the <strong>same</strong> per-vertex CSR
+(<code>vertex_adjacent_springs</code>). The energy is</p>
+<pre><code class="language-text">Ψ(x) = ½ · k · (|x_b − x_a| − rest)²
+</code></pre>
+<p>with <code>k = 1 / max(α, ε)</code>, capped at <code>solver.max_spring_stiffness</code> to
+avoid pathological Hessian conditioning. The per-vertex 3×3 Hessian
+contribution is</p>
+<pre><code class="language-text">H_aa = k · (n̂·n̂ᵀ + (1 − rest/d) · (I − n̂·n̂ᵀ))
+H_ab = -H_aa
+g_a  = k · (d − rest) · n̂
+</code></pre>
+<p>with <code>d = |x_b − x_a|</code> and <code>n̂ = (x_b − x_a) / d</code>.</p>
+<h2 id="tet-neo-hookean-stage-202"><a class="header" href="#tet-neo-hookean-stage-202">Tet Neo-Hookean (Stage 20.2)</a></h2>
+<p>Per tet, the deformation gradient is <code>F = D_s · D_m⁻¹</code> with <code>D_s</code> the
+current basis (<code>[x1−x0 | x2−x0 | x3−x0]</code>) and <code>D_m⁻¹</code> pre-inverted at
+build time. The energy density is co-rotated Neo-Hookean:</p>
+<pre><code class="language-text">Ψ(F) = μ · (‖F‖² − 3) − 2μ · log J + ½ · λ · log² J     (J = det F)
+</code></pre>
+<p>Per-vertex contributions are scattered via the
+<code>vertex_adjacent_tets</code> CSR (one <code>(tet_id, v_order)</code> pair per
+adjacency) so the kernel fetches the right column of <code>D_m⁻¹</code> (the
+gradient direction <code>m</code> for that vertex) and assembles the 3×3 block
+without branches.</p>
+<h3 id="plasticity-stage-203--204"><a class="header" href="#plasticity-stage-203--204">Plasticity (Stage 20.3 + 20.4)</a></h3>
+<p>Multiplicative split <code>F = F_e · F_p</code> with <strong>von Mises return mapping</strong>:</p>
+<ul>
+<li>If <code>‖dev(τ_trial)‖ ≤ σ_y(ε_p)</code> → elastic, <code>F_p</code> unchanged.</li>
+<li>Otherwise → return-map onto the yield surface; accumulate <code>ε_p</code>;
+update <code>F_p</code>.</li>
+</ul>
+<p><code>σ_y(ε_p) = σ_y0 + H · ε_p</code> is the linear isotropic hardening rule.
+<strong>Kinematic hardening</strong> (Stage 20.4) adds a per-tet back-stress
+tensor <code>α</code> via the Prager / Ziegler evolution</p>
+<pre><code class="language-text">Δα = c · (2/3) · n̂ · Δγ
+</code></pre>
+<p>producing the <strong>Bauschinger effect</strong> (reverse-yield drop after
+forward yielding) under cyclic loading. State lives on <code>State</code>:</p>
+<pre><code class="language-rust ignore">pub tet_f_plastic:      Buffer&lt;Mat3&gt;,     // F_p, identity at start
+pub tet_plastic_strain: Buffer&lt;Real&gt;,     // ε_p accumulator
+pub tet_back_stress:    Buffer&lt;Mat3&gt;,     // α, zero at start</code></pre>
+<h2 id="augmented-vbd-soft--hard-contact"><a class="header" href="#augmented-vbd-soft--hard-contact">Augmented VBD: soft + hard contact</a></h2>
+<pre><code class="language-rust ignore">pub enum VbdMode {
+    /// Quadratic penalty `½ · k_c · pen²` per contact.
+    Soft,
+    /// Augmented-Lagrangian dual update — drives penetration → 0
+    /// independent of contact stiffness.
+    Hard,
+}</code></pre>
+<p><strong>Soft mode</strong> folds a per-contact penalty force / Hessian into the
+per-vertex block. Cheap, allows ~1 mm steady-state penetration at
+typical stiffness <code>k_c = 1 × 10⁵ N/m</code>.</p>
+<p><strong>Hard mode</strong> adds an augmented-Lagrangian dual variable <code>λ</code> per
+particle. Each outer iteration:</p>
+<pre><code class="language-text">λ_v ← max(0, λ_v + k_c · pen_v)
+g_v += λ_v · n
+</code></pre>
+<p>This drives <code>pen → 0</code> regardless of <code>k_c</code>. The cost is one extra
+per-particle scratch buffer + a residual-evaluation pass per outer
+iteration. <strong>Use Hard mode when</strong>:</p>
+<ul>
+<li>No-penetration is critical (a sealed cloth on a rigid body —
+fingertip grasp).</li>
+<li>Contact stiffness is too low for soft mode to keep penetration in
+spec.</li>
+</ul>
+<h2 id="sdf-backed-rigid-contact-stage-204"><a class="header" href="#sdf-backed-rigid-contact-stage-204">SDF-backed rigid contact (Stage 20.4)</a></h2>
+<p>For arbitrary-mesh rigid colliders, the VBD pipeline accepts a
+<strong>baked SDF backing volume</strong>:</p>
+<pre><code class="language-rust ignore">solver.with_sdf_grid(arc_sdf, world_transform);          // dense 3D texture
+solver.with_sparse_sdf(arc_sparse_sdf, world_transform); // sparse NanoVDB-style</code></pre>
+<p>The post-substep fixup pass projects every soft-body vertex out of
+any registered SDF surface, using the SDF’s analytic normal +
+distance. Stage 20.5 will wire this into the GPU contact kernel
+directly via a dedicated <code>tet_sdf_contact</code> pipeline.</p>
+<h2 id="cross-mesh-soft-contact-stage-33"><a class="header" href="#cross-mesh-soft-contact-stage-33">Cross-mesh soft contact (Stage 33)</a></h2>
+<p>Two-way soft–soft VT (vertex–triangle) + EE (edge–edge) contact
+between separately-registered soft surfaces (cloth + tet boundary
+tris). The pipeline:</p>
+<ol>
+<li><strong>Build</strong> the cross-mesh BVH over <code>soft_surface_tris</code> (lazily,
+refit per substep, rebuilt on topology change).</li>
+<li><strong>Gather</strong> VT and EE candidate pairs via BVH traversal.</li>
+<li><strong>Project</strong> penetrating pairs in <code>vt_contact_sweeps</code> Jacobi sweeps
+per substep.</li>
+</ol>
+<p>Per-surface <code>self_collision</code> toggles whether a vertex can collide
+with triangles on its own surface (CSR <code>soft_vertex_incident_tris</code>
+filters out the trivial “vertex is one of the triangle’s corners”
+cases).</p>
+<p>Stage 33.4 adds <strong>CCD pre-substep</strong> for cloth–cloth pairs travelling
+faster than <code>vt_contact_margin / dt</code>.</p>
+<h2 id="cable-bending-stage-202"><a class="header" href="#cable-bending-stage-202">Cable bending (Stage 20.2)</a></h2>
+<p>Per-vertex CSR <code>vertex_cable_bending_*</code> stores
+<code>(v_prev, v_mid, v_next, role)</code> triples for every interior cable
+particle. The discrete hinge energy</p>
+<pre><code class="language-text">E_b = ½ · k_b · (2·sin(θ/2))²       (θ = angle at v_mid)
+</code></pre>
+<p>contributes to the per-vertex Hessian + gradient. Setting
+<code>set_cable_bending_stiffness(cable_id, 0)</code> (the default) disables
+bending and the cable behaves as a pure stretch polyline.</p>
+<h2 id="gpu-port"><a class="header" href="#gpu-port">GPU port</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>kernel</th><th>shader</th><th>role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VbdClothKernel</code></td><td><a href="https://github.com/molla/molla/blob/main/crates/molla/shaders/vbd_cloth.wgsl"><code>vbd_cloth.wgsl</code></a></td><td>per-vertex Newton block sweep</td></tr>
+<tr><td><code>SoftBvhGpu</code></td><td>(BVH refit shader)</td><td>cross-mesh BVH refit</td></tr>
+<tr><td><code>SoftVtContactKernel</code></td><td>(VT/EE pipelines)</td><td>cross-mesh contact gather + project</td></tr>
+</tbody>
+</table>
+</div>
+<p>All three are lazily constructed — scenes without soft surfaces pay
+zero overhead. The vertex-block sweep iterates one colour pass per
+dispatch, with within-colour parallel vertex updates.</p>
+<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
+<pre><code class="language-rust ignore">pub struct VbdSolver {
+    pub iterations: usize,           // outer Newton iters (default 8)
+    pub substeps: usize,             // (default 1)
+    pub contact_stiffness: f64,      // N/m (default 1e5)
+    pub max_spring_stiffness: f64,
+    pub vbd_mode: VbdMode,           // Soft / Hard
+    pub vt_contact_margin: Real,
+    pub vt_contact_sweeps: usize,
+    pub sdf_backings: Vec&lt;VbdSdfBacking&gt;,
+    /* … */
+}</code></pre>
+<p><code>iterations = 4</code> is the absolute minimum (visible jelly behaviour);
+<code>8–12</code> is comfortable; <code>20+</code> is overkill outside research.</p>
+<h2 id="differentiability"><a class="header" href="#differentiability">Differentiability</a></h2>
+<p>VBD’s per-vertex Newton block is locally smooth; the reverse pass is
+exposed via <a href="../autograd/xpbd_vbd.html"><code>crate::autograd::vbd_adjoint</code></a>.
+Stage 23.x ships the cloth + spring + tet adjoint; contact gradients
+follow the soft-penalty smoothing pattern.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../solvers/xpbd.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../solvers/mpm.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../solvers/xpbd.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../solvers/mpm.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

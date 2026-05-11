@@ -1,0 +1,643 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Stage history - molla — Rust + WGPU Physics Engine</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-11ed3a3f.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">molla — Rust + WGPU Physics Engine</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="stage-history"><a class="header" href="#stage-history">Stage history</a></h1>
+<p>molla was built in numbered stages. Each stage is a self-contained
+deliverable with tests + benches + (usually) a viewer scene. This
+chapter is the chronological roll-up grouped by family. The
+authoritative source is <code>PLAN.md</code> at the repository root; this is
+the human-readable index.</p>
+<h2 id="family-0--scaffolding-stage-02"><a class="header" href="#family-0--scaffolding-stage-02">Family 0 — scaffolding (Stage 0–2)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>Engine scaffold and PLAN</td><td><code>d2531d3</code></td></tr>
+<tr><td>1</td><td>Semi-implicit Euler on CPU</td><td><code>4fdfcce</code></td></tr>
+<tr><td>2</td><td>GPU semi-implicit Euler</td><td><code>b88597c</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-a--rigid-bodies-stage-37"><a class="header" href="#family-a--rigid-bodies-stage-37">Family A — rigid bodies (Stage 3–7)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>3.0</td><td>Joint data model + FK</td><td><code>c76cb60</code></td></tr>
+<tr><td>3</td><td>Featherstone CPU+GPU + URDF importer</td><td><code>a564b53</code></td></tr>
+<tr><td>4.0</td><td>XPBD + sphere/plane contacts</td><td><code>49550ee</code></td></tr>
+<tr><td>4</td><td>Boxes — SAT, SAP, jacobi XPBD</td><td><code>421e4c0</code></td></tr>
+<tr><td>5</td><td>Joint limits, drives, multi-articulation, substeps</td><td><code>bb0772a</code></td></tr>
+<tr><td>6.1</td><td>Capsule + cylinder shapes, capsule narrow phase</td><td><code>933743f</code></td></tr>
+<tr><td>6</td><td>GJK + EPA + BVH + trimesh</td><td><code>29c32b9</code></td></tr>
+<tr><td>7a</td><td>Multi-world per-entity, joint metadata, collision groups</td><td><code>60ecc56</code></td></tr>
+<tr><td>7</td><td>Joint types, equality + mimic constraints, jacobian</td><td><code>348ba33</code></td></tr>
+<tr><td>7</td><td>Humanoid ball-joint demo via CONNECT</td><td><code>42d7e83</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-b--usd-bridge-stage-8-29-now-retired"><a class="header" href="#family-b--usd-bridge-stage-8-29-now-retired">Family B — USD bridge (Stage 8, 29; now retired)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>5–8</td><td><code>usd_molla</code> scaffold + UsdPhysics round-trip</td><td><code>5e5b033</code>, <code>152bc6f</code></td></tr>
+<tr><td>29</td><td>Multi-schema resolvers (PhysX + MJC)</td><td><code>36f305c</code>, <code>43b5524</code></td></tr>
+<tr><td>—</td><td>Remove <code>usd_molla</code> crate (use bevy_openusd later)</td><td><code>8c81b13</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-c--distance-constraints--cloth-stage-12"><a class="header" href="#family-c--distance-constraints--cloth-stage-12">Family C — distance constraints + cloth (Stage 12)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>—</td><td>XPBD distance constraints and cloth simulation</td><td><code>02e617e</code></td></tr>
+<tr><td>12</td><td>Cloth-vs-rigid SDF collision pass on GPU</td><td><code>adc39fa</code></td></tr>
+<tr><td>12</td><td>Parallel GPU particle XPBD via colouring</td><td><code>277d1ec</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-d--sensors-stage-14"><a class="header" href="#family-d--sensors-stage-14">Family D — sensors (Stage 14)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>14</td><td>GPU ray-cast sensor + Lidar</td><td><code>f6cbb06</code></td></tr>
+<tr><td>14</td><td>GPU IMU sensor</td><td><code>1c0a3f1</code></td></tr>
+<tr><td>14</td><td>GPU contact sensor</td><td><code>5ac4635</code></td></tr>
+<tr><td>14</td><td>GPU frame-transform sensor</td><td><code>296d886</code></td></tr>
+<tr><td>14</td><td>Multi-channel raytraced camera</td><td><code>Camera scene</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-e--actuators-stage-18-181-31"><a class="header" href="#family-e--actuators-stage-18-181-31">Family E — actuators (Stage 18, 18.1, 31)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>18</td><td>GPU PD/PID actuator controllers</td><td><code>bcbc872</code></td></tr>
+<tr><td>18</td><td>Composable actuator pipeline (Delay → PD → DcMotor)</td><td><code>Actuator scene</code></td></tr>
+<tr><td>18.1</td><td>Neural-MLP cart-pole controller</td><td><code>NeuralPolicy scene</code></td></tr>
+<tr><td>31</td><td>Neural LSTM controller</td><td><code>NeuralLstm scene</code></td></tr>
+<tr><td>42</td><td>Hill-type muscle for CABLE joints</td><td><code>1272b5d</code></td></tr>
+<tr><td>42 v3</td><td>GPU Hill kernel + cable ABA</td><td><code>bbd5c61</code></td></tr>
+<tr><td>42 v4</td><td>SEE Newton GPU/CPU parity</td><td><code>0411d0b</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-f--gpu-narrow--broad--ik-stage-15-16-19"><a class="header" href="#family-f--gpu-narrow--broad--ik-stage-15-16-19">Family F — GPU narrow + broad + IK (Stage 15, 16, 19)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>15</td><td>GPU narrow phase</td><td><code>GpuNarrowPhase scene</code></td></tr>
+<tr><td>16</td><td>GPU IK on Franka</td><td><code>GpuIkArm scene</code></td></tr>
+<tr><td>17</td><td>Multi-DOF Featherstone (quadrotor)</td><td><code>Quadrotor scene</code></td></tr>
+<tr><td>19</td><td>GPU LBVH broad phase</td><td><code>BroadPhase scene</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-g--vbd-soft-bodies-stage-20-201-202-203-204"><a class="header" href="#family-g--vbd-soft-bodies-stage-20-201-202-203-204">Family G — VBD soft bodies (Stage 20, 20.1, 20.2, 20.3, 20.4)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>20</td><td>High-resolution VBD cloth</td><td><code>VbdCloth scene</code></td></tr>
+<tr><td>20.1</td><td>CABLE polyline + Dahl friction</td><td><code>Cable scene</code></td></tr>
+<tr><td>20.2</td><td>JELLY tetrahedral soft body</td><td><code>Jelly scene</code></td></tr>
+<tr><td>20.3</td><td>Multi-material tets + von Mises plasticity</td><td>(wave-4)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-h--mesh-utilities-stage-21"><a class="header" href="#family-h--mesh-utilities-stage-21">Family H — mesh utilities (Stage 21)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>21</td><td>Decimate / SDF bake / marching cubes / hull</td><td><code>MeshTools scene</code></td></tr>
+<tr><td>21.1</td><td>Rayon-parallel mesh-utility tools (Cargo dep)</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-i--mujoco--hydroelastic-stage-22-221"><a class="header" href="#family-i--mujoco--hydroelastic-stage-22-221">Family I — MuJoCo + hydroelastic (Stage 22, 22.1)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>22</td><td>MuJoCo wrapper (libmujoco + MjcfWriter)</td><td><code>MuJoCo scene</code></td></tr>
+<tr><td>22.1</td><td>Hydroelastic contact (CPU + GPU)</td><td><code>f3febbe</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-j--autograd-stage-23-231"><a class="header" href="#family-j--autograd-stage-23-231">Family J — autograd (Stage 23, 23.1)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>23</td><td>Differentiable arm (open-loop torque grad descent)</td><td><code>DiffArm scene</code></td></tr>
+<tr><td>23.1</td><td>Differentiable Featherstone (6-DOF reverse AD)</td><td><code>DiffArm6 scene</code></td></tr>
+<tr><td>23.1.1</td><td>GPU dispatcher parity + closed-form perf</td><td>—</td></tr>
+<tr><td>23.1.2</td><td>Pure-analytic CPU adjoint + GPU multi-arti kernel</td><td>(wave-4)</td></tr>
+<tr><td>23.1.3</td><td>Distance + D6 joint adjoints</td><td>(wave-4)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-k--small-matrix-decomps-stage-24a"><a class="header" href="#family-k--small-matrix-decomps-stage-24a">Family K — small-matrix decomps (Stage 24a)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>24a</td><td>SVD3 / QR3 / Eig3 / polar</td><td>(2026-05-09)</td></tr>
+<tr><td>38b</td><td>Adjoint SVD3 + polar decomposition</td><td><code>f3325b5</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-l--fft-mpm-sparse-grid-stage-24c-24d-24e"><a class="header" href="#family-l--fft-mpm-sparse-grid-stage-24c-24d-24e">Family L — FFT, MPM, sparse grid (Stage 24c, 24d, 24e)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>24c</td><td>GPU FFT kernel</td><td>—</td></tr>
+<tr><td>24d v1</td><td>Explicit MPM (sand)</td><td><code>Mpm scene</code></td></tr>
+<tr><td>24d.1</td><td>Semi-implicit MPM + Snow + 2-way coupling</td><td>(wave-4)</td></tr>
+<tr><td>24d.2</td><td>Persistent-buffer MPM dispatcher (6.9× speedup)</td><td>(wave-4)</td></tr>
+<tr><td>24e v1</td><td>Sparse grid (NanoVDB) mutable insert + lookup</td><td>—</td></tr>
+<tr><td>24e.1</td><td>Murmur3-based GPU root hashing</td><td>(wave-4)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-m--stage-28-contact-reduction--mpr"><a class="header" href="#family-m--stage-28-contact-reduction--mpr">Family M — Stage 28 contact reduction + MPR</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>28.1</td><td>GPU MPR portal-loop kernel</td><td><code>b40dc99</code></td></tr>
+<tr><td>28.1</td><td>GPU contact reduction kernel</td><td><code>6c78d67</code></td></tr>
+<tr><td>28.1</td><td>MPR + contact reduction parity</td><td><code>0606233</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-n--soft-contact-stage-33-332-3321-333-334-335"><a class="header" href="#family-n--soft-contact-stage-33-332-3321-333-334-335">Family N — soft contact (Stage 33, 33.2, 33.2.1, 33.3, 33.4, 33.5)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>33</td><td>Soft-on-soft VT contact pipeline</td><td><code>SoftbodyDrop scene</code></td></tr>
+<tr><td>33.2</td><td>GPU soft VT contact</td><td>(GPU port)</td></tr>
+<tr><td>33.2.1</td><td>GPU Coulomb friction + restitution</td><td>(GPU port)</td></tr>
+<tr><td>33.3</td><td>Cloth-collar self-collision</td><td><code>ClothCollar scene</code></td></tr>
+<tr><td>33.4</td><td>Fast-impact CCD</td><td><code>FastSoftImpact scene</code></td></tr>
+<tr><td>33.5</td><td>Soft brake (friction sweep)</td><td><code>SoftBrake scene</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-o--fem-v1--variants-stage-36-family"><a class="header" href="#family-o--fem-v1--variants-stage-36-family">Family O — FEM v1 + variants (Stage 36 family)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>36</td><td>FEM framework v1 (P1 nodal scalar)</td><td><code>FemHeat scene</code></td></tr>
+<tr><td>36.1</td><td>FEM elasticity (linear + SVK)</td><td><code>FemBeam scene</code></td></tr>
+<tr><td>36.2</td><td>FEM Stokes (Taylor-Hood + Uzawa-CG)</td><td><code>FemStokes scene</code></td></tr>
+<tr><td>36.3</td><td>P2 (quadratic-nodal) elements</td><td><code>FemHeatP2 scene</code></td></tr>
+<tr><td>36.4</td><td>Adjoint FEM solver + grad helpers</td><td><code>FemDiffBeam scene</code></td></tr>
+<tr><td>36.5</td><td>GPU FEM v1 (assembly + CSR matvec + resident CG)</td><td><code>697b85a</code>, <code>85c1345</code></td></tr>
+<tr><td>36.6</td><td>Gmsh import via <code>mshio</code></td><td><code>b94a8d4</code></td></tr>
+<tr><td>36.7</td><td>Direct solver scaffolding (russell feature)</td><td><code>65f90ec</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-p--stage-37-phase-2-warp-engine-work"><a class="header" href="#family-p--stage-37-phase-2-warp-engine-work">Family P — Stage 37 (Phase 2 Warp engine work)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>37.1</td><td>Wave PDE + Newmark-β + scene #78</td><td><code>c4ea941</code></td></tr>
+<tr><td>37.2 + 37.4</td><td>Convection / SUPG + distortion Newton</td><td><code>f30c6fb</code></td></tr>
+<tr><td>37.3 + 37.5</td><td>NS time-stepping + FFT-NS coupling</td><td><code>6acddf2</code></td></tr>
+<tr><td>37.6</td><td>APIC FEM-MPM hybrid coupling</td><td><code>4ae31f7</code></td></tr>
+<tr><td>37.7</td><td>Raycast FD adjoint</td><td><code>3087ef3</code></td></tr>
+<tr><td>37.8</td><td>Tile primitives bundle (matmul / cholesky / conv / stream-compaction / MCGP)</td><td><code>8b93493</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-q--stage-38-cluster-gpu-sparse--autograd"><a class="header" href="#family-q--stage-38-cluster-gpu-sparse--autograd">Family Q — Stage 38 cluster (GPU sparse + autograd)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>38a</td><td>GPU sparse BSR algebra (matvec/axpy/transpose/spgemm)</td><td><code>e99d93f</code></td></tr>
+<tr><td>38b</td><td>Adjoint SVD3 + polar decomposition</td><td><code>f3325b5</code></td></tr>
+<tr><td>38c</td><td>Adam + SGD with CPU + GPU fused-update kernels</td><td><code>0eaaabd</code></td></tr>
+<tr><td>38d.1</td><td>Route particle + spring coloring through geometry</td><td><code>4a559e2</code>, <code>dc70cd2</code></td></tr>
+<tr><td>38e</td><td>Device-wide scan + 64-bit segmented radix sort</td><td><code>bb17a41</code></td></tr>
+<tr><td>38.1</td><td>Differentiable MPM with SVD adjoint chain</td><td><code>6934075</code></td></tr>
+<tr><td>38.2</td><td>Differentiable FEM Adam loop fits Young’s modulus</td><td><code>93341f3</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-r--stage-39-dg-mpm-bingham-spgemm-cable-stable-fluid"><a class="header" href="#family-r--stage-39-dg-mpm-bingham-spgemm-cable-stable-fluid">Family R — Stage 39 (DG, MPM Bingham, SpGEMM, CABLE, stable fluid)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>39A</td><td>Implicit MPM with Bingham rheology (CPU)</td><td><code>e02f180</code></td></tr>
+<tr><td>39B</td><td>DG (Discontinuous Galerkin) P0/P1 basis</td><td><code>d97b5c1</code></td></tr>
+<tr><td>39C</td><td>2D Stam stable fluid solver</td><td><code>75156f7</code></td></tr>
+<tr><td>39D</td><td>Hydroelastic anchor contact + bucket reduction</td><td><code>0ac863c</code></td></tr>
+<tr><td>39E</td><td>CABLE joint type with 2 DoFs (stretch + bend)</td><td><code>09e4868</code></td></tr>
+<tr><td>39F</td><td>Full-GPU SpGEMM with bitmap symbolic phase</td><td><code>399a1f8</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-s--stage-40-implicit-mpm-full-newton-hessian"><a class="header" href="#family-s--stage-40-implicit-mpm-full-newton-hessian">Family S — Stage 40 (implicit MPM full Newton Hessian)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>40</td><td>Full 27-point Newton Hessian (CPU)</td><td><code>2abb95b</code></td></tr>
+<tr><td>40 v2</td><td>GPU P2G + predict + G2P</td><td><code>0172745</code></td></tr>
+<tr><td>40 v3</td><td>GPU Bingham + advect, resident p_C</td><td><code>ae3eabc</code></td></tr>
+<tr><td>40 v4</td><td>Full 125-point Newton Hessian</td><td><code>6cb417d</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-t--stage-41-gpu-fem"><a class="header" href="#family-t--stage-41-gpu-fem">Family T — Stage 41 (GPU FEM)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>41.1</td><td>GPU linear elasticity assembly + resident CG</td><td><code>72ce86f</code></td></tr>
+<tr><td>41 v2</td><td>GPU Stokes steady-state + Uzawa-CG</td><td><code>de9d43b</code></td></tr>
+<tr><td>41 v2</td><td>GPU APIC FEM-MPM coupling</td><td><code>5fb4d7d</code></td></tr>
+<tr><td>41 v2</td><td>GPU hydroelastic contact + anchor reduction</td><td><code>f3febbe</code></td></tr>
+<tr><td>41 v3</td><td>GPU IMEX Navier-Stokes time stepper</td><td><code>f2ae80f</code></td></tr>
+<tr><td>41 v4</td><td>Fused NS-IMEX RHS axpy on GPU</td><td><code>ccbe5c6</code></td></tr>
+<tr><td>41 v5</td><td>Async-dot fusion for Uzawa inner CG</td><td><code>3169fac</code></td></tr>
+<tr><td>41 v6</td><td>Fused-kernel pipelined CG (single dispatch per iter)</td><td><code>2bde182</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-u--stage-43-dg-swe--burgers"><a class="header" href="#family-u--stage-43-dg-swe--burgers">Family U — Stage 43 (DG SWE / Burgers)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>43</td><td>DG P2 + numerical-flux library + BJ limiter</td><td><code>7bb5402</code></td></tr>
+<tr><td>43 v2</td><td>DG infra expansion</td><td><code>00f36c1</code></td></tr>
+<tr><td>43 v3</td><td>HLL/HLLC/Roe SWE flux + characteristic limiter</td><td><code>d37995e</code></td></tr>
+<tr><td>43 v4</td><td>HLL/HLLC/Roe SWE flux GPU port</td><td><code>bed9c43</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-v--stage-44-gaussian-splats"><a class="header" href="#family-v--stage-44-gaussian-splats">Family V — Stage 44 (Gaussian splats)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>44 v1</td><td>Forward 3DGS raytrace renderer</td><td><code>d4583a7</code></td></tr>
+<tr><td>44 v2</td><td>3DGS reverse adjoint + pose recovery</td><td><code>237caa2</code></td></tr>
+<tr><td>44 v3</td><td>3DGS spherical-harmonic colour</td><td><code>00d8083</code></td></tr>
+<tr><td>44 v4</td><td>SH band 3 + diffuse/view split</td><td><code>121c9d3</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-w--stage-45-amr"><a class="header" href="#family-w--stage-45-amr">Family W — Stage 45 (AMR)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>45 v1</td><td>AmrMesh foundation + uniform refinement</td><td><code>1e2c5d5</code></td></tr>
+<tr><td>45 v2</td><td>AMR heat scene #100</td><td><code>571934a</code></td></tr>
+<tr><td>45</td><td>AMR hanging-node constraints + 2:1 balance</td><td><code>a7c51f6</code></td></tr>
+<tr><td>45</td><td>AMR P2 hanging + DG-AMR faces + state transfer</td><td><code>4442e3d</code></td></tr>
+<tr><td>45 v4</td><td>AMR coarsening + Krylov restart after re-mesh</td><td><code>66d976a</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-x--stage-46-magnetostatics"><a class="header" href="#family-x--stage-46-magnetostatics">Family X — Stage 46 (magnetostatics)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>46</td><td>H(curl)/Nedelec edge elements + magnetostatics</td><td><code>e4eab58</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="family-y--stages-4751-advanced-fem"><a class="header" href="#family-y--stages-4751-advanced-fem">Family Y — Stages 47–51 (advanced FEM)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Title</th><th>Commit</th></tr>
+</thead>
+<tbody>
+<tr><td>47 v1</td><td>NonconformingField L² projection</td><td><code>8a756ab</code></td></tr>
+<tr><td>47 v2</td><td>Vector projection + penalty</td><td><code>d2599bd</code></td></tr>
+<tr><td>47 v3</td><td>Surface-only cross-mesh M_st quadrature</td><td><code>0f5a27e</code></td></tr>
+<tr><td>47 v4</td><td>Coupled penalty contact Newton-Raphson</td><td><code>0f9e57e</code></td></tr>
+<tr><td>48</td><td>Time-harmonic Maxwell / eddy currents</td><td><code>35976c8</code></td></tr>
+<tr><td>48 v1+v2</td><td>Eddy-current GMRES + single-level AMS</td><td><code>f6fe6a1</code></td></tr>
+<tr><td>48 v3</td><td>Geometric multigrid V-cycle for AMS</td><td><code>fa3616e</code></td></tr>
+<tr><td>48 v4</td><td>Algebraic multigrid (Ruge-Stüben) for AMS</td><td><code>c0cb1a6</code></td></tr>
+<tr><td>49</td><td>Signorini fixed-active-set Lagrange contact</td><td><code>60a7792</code></td></tr>
+<tr><td>50</td><td>Coulomb friction at Signorini contact</td><td><code>e751d17</code></td></tr>
+<tr><td>51</td><td>Signorini active-set update loop</td><td><code>4a4fc64</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="reading-the-table"><a class="header" href="#reading-the-table">Reading the table</a></h2>
+<p>Each row is a single brick on the wall. The total count is <strong>597
+commits</strong> on <code>main</code> at the time of this snapshot, spanning Stage 0
+through Stage 51. Approximately ~100 viewer scenes correspond to a
+subset of these stages (some stages don’t add a scene, e.g. infra
+work).</p>
+<p>For the chronological commit log run:</p>
+<pre><code class="language-bash">git log --oneline main
+</code></pre>
+<p>For the per-stage long-form rationale, design rationale,
+deliverable list, and DoD (definition-of-done), open <code>PLAN.md</code>.</p>
+<h2 id="open-items-and-out-of-scope"><a class="header" href="#open-items-and-out-of-scope">Open items and out-of-scope</a></h2>
+<p>See <a href="./open.html">open.md</a> and <a href="./oos.html">oos.md</a> for the things
+that are <em>not</em> on this list.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../testing/gpu_status.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../roadmap/open.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../testing/gpu_status.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../roadmap/open.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
