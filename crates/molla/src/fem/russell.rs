@@ -149,14 +149,27 @@ impl DirectSolver {
         // Densify into column-major storage. CSR rows ⇒ for every
         // row r and stored column slot c, write `dense[r + c*n]`.
         let mut dense = vec![0.0_f64; n * n];
+        let mut matrix_inf_norm = 0.0_f64;
         for r in 0..n {
             let lo = k.row_offsets[r];
             let hi = k.row_offsets[r + 1];
             for slot in lo..hi {
                 let c = k.col_idx[slot];
-                dense[r + c * n] = k.values[slot];
+                let v = k.values[slot];
+                dense[r + c * n] = v;
+                let av = v.abs();
+                if av > matrix_inf_norm {
+                    matrix_inf_norm = av;
+                }
             }
         }
+        // Singularity threshold scales with the matrix magnitude so
+        // floating-point cancellation that leaves a "near-zero" pivot
+        // (~1e-300 from f64 subnormals, or values dominated by the
+        // matrix's own scale) doesn't sneak through as a successful
+        // factor. Pure `max_abs == 0.0` would silently return garbage
+        // on, e.g., a near-singular Schur complement.
+        let pivot_eps = 1.0e-14 * matrix_inf_norm.max(1.0);
 
         // Textbook LU with partial pivoting (LAPACK `dgetrf` style).
         // Storage convention: after column j is done, `dense[i + j*n]`
@@ -175,10 +188,11 @@ impl DirectSolver {
                 }
             }
             piv[j] = p;
-            if max_abs == 0.0 {
+            if max_abs < pivot_eps {
                 return Err(Error::Solver(format!(
-                    "DirectSolver::factorize: zero pivot at column {j} \
-                     — matrix is singular or has empty rows"
+                    "DirectSolver::factorize: near-zero pivot at column {j} \
+                     (|p| = {max_abs:.3e} < {pivot_eps:.3e}) — matrix is singular \
+                     or numerically rank-deficient"
                 )));
             }
             // Swap rows j and p across all n columns.
@@ -386,6 +400,29 @@ mod tests {
         let k = BsrMatrix::from_triplets(1, 2, 2, &triplets).unwrap();
         let mut solver = DirectSolver::new().unwrap();
         assert!(solver.factorize(&k).is_err());
+    }
+
+    #[test]
+    fn factorize_near_singular_matrix_errors() {
+        // 2×2 matrix where row 1 is nearly the same as row 0 to within
+        // 1e-15 — the column-0 pivot after eliminating row 1 against
+        // row 0 lands at ~1e-15, well below `1e-14 * |M|∞`. Pre-fix
+        // this would silently succeed and return garbage; post-fix it
+        // must report the near-singularity.
+        let triplets: Vec<(usize, usize, Vec<Real>)> = vec![
+            (0, 0, vec![1.0]),
+            (0, 1, vec![2.0]),
+            (1, 0, vec![1.0 + 1.0e-15]),
+            (1, 1, vec![2.0 + 2.0e-15]),
+        ];
+        let k = BsrMatrix::from_triplets(1, 2, 2, &triplets).unwrap();
+        let mut solver = DirectSolver::new().unwrap();
+        let err = solver.factorize(&k);
+        assert!(
+            err.is_err(),
+            "near-singular matrix must be rejected; got {:?}",
+            err
+        );
     }
 
     #[test]
