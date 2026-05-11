@@ -88,7 +88,8 @@ use super::assembly::{assemble_global, matvec};
 use super::element::compute_element_mass;
 use super::function_space::FunctionSpace;
 use super::mesh::{FemCell, FemMesh};
-use super::quadrature::tet_quadrature_5pt;
+use super::quadrature::{tet_quadrature_5pt, tri3d_quadrature_6pt};
+use crate::geometry::{boundary_facets, INVALID_VERT};
 
 /// Default tolerance for the inner CG solve against `M_tt`.
 const DEFAULT_CG_TOL: Real = 1.0e-12;
@@ -109,6 +110,18 @@ const BARY_EPS: Real = 1.0e-9;
 /// Lifetimes: `source` and `target` are borrowed for the lifetime of
 /// the operator. Cloning the field is intentionally not supported —
 /// the user holds the meshes alive externally.
+/// Stage 47 v3 — which domain `M_st` was integrated over.
+///
+/// `Volume` (the v1/v2 default) integrates over all target tets;
+/// `Surface` integrates over the target's outer triangle facets
+/// (returned by [`crate::geometry::boundary_facets`]) and is what
+/// contact formulations want.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum IntegrationDomain {
+    Volume,
+    Surface,
+}
+
 pub struct NonconformingField<'a> {
     /// Source mesh — the field `u_source` lives on this mesh's vertices.
     pub source: &'a FemMesh,
@@ -119,6 +132,8 @@ pub struct NonconformingField<'a> {
     /// Target mesh's consistent mass matrix `M_tt` (`n_target × n_target`).
     /// Stored so each `project` call doesn't reassemble it.
     target_mass: BsrMatrix,
+    /// Which domain was integrated over — exposed via [`is_surface`].
+    domain: IntegrationDomain,
 }
 
 impl<'a> NonconformingField<'a> {
@@ -155,7 +170,40 @@ impl<'a> NonconformingField<'a> {
             target,
             coupling_matrix,
             target_mass,
+            domain: IntegrationDomain::Volume,
         })
+    }
+
+    /// Build the **surface-only** cross-mesh L² projector — Stage 47 v3.
+    ///
+    /// Same operator definition as [`Self::new`] except `M_st_ij` is
+    /// integrated over the **target mesh's outer surface** (the
+    /// triangle facets returned by
+    /// [`crate::geometry::boundary_facets`]) instead of the target
+    /// volume. Quadrature: 6-point degree-4 Dunavant rule on every
+    /// facet. Interior target DoFs receive zero contribution.
+    pub fn new_surface(source: &'a FemMesh, target: &'a FemMesh) -> Result<Self> {
+        let source_aabbs = build_tet_aabbs(source)?;
+        let coupling_matrix = assemble_cross_mass_surface(source, target, &source_aabbs)?;
+        let target_mass = assemble_global(
+            target,
+            FunctionSpace::P1Nodal,
+            compute_element_mass,
+        )?;
+        Ok(Self {
+            source,
+            target,
+            coupling_matrix,
+            target_mass,
+            domain: IntegrationDomain::Surface,
+        })
+    }
+
+    /// `true` iff this operator integrates `M_st` over the target's
+    /// outer surface (Stage 47 v3). `false` for the volumetric path.
+    #[must_use]
+    pub fn is_surface(&self) -> bool {
+        matches!(self.domain, IntegrationDomain::Surface)
     }
 
     /// Number of source DoFs (target rows of `M_st`).
@@ -606,6 +654,77 @@ fn bary_to_world(p: &[Vec3; 4], bary: &[Real; 4]) -> Vec3 {
 /// Absolute tet volume.
 fn tet_volume(p: &[Vec3; 4]) -> Real {
     ((p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0).abs()
+}
+
+/// Stage 47 v3 — surface-only variant of [`assemble_cross_mass`].
+///
+/// Integrates `M_st_ij` over the target mesh's outer triangle facets
+/// (from [`boundary_facets`]) instead of the target volume. 2D-tri
+/// boundary edges (encoded as `[a, b, INVALID_VERT]`) are skipped —
+/// 1D edge quadrature is deferred.
+fn assemble_cross_mass_surface(
+    source: &FemMesh,
+    target: &FemMesh,
+    source_aabbs: &[TetAabb],
+) -> Result<BsrMatrix> {
+    let nrows = target.vertices.len();
+    let ncols = source.vertices.len();
+
+    let facets = boundary_facets(target);
+    if facets.is_empty() {
+        return Err(Error::Fem(
+            "NonconformingField::new_surface: target mesh has no outer facets".into(),
+        ));
+    }
+
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
+    let mut n_tri_facets = 0usize;
+
+    for facet in &facets {
+        if facet[2] == INVALID_VERT {
+            continue;
+        }
+        n_tri_facets += 1;
+        let tp = [
+            target.vertices[facet[0] as usize],
+            target.vertices[facet[1] as usize],
+            target.vertices[facet[2] as usize],
+        ];
+        let rule = tri3d_quadrature_6pt(&tp);
+        for q in &rule {
+            let Some((source_verts, source_bary)) =
+                locate_in_source(source, source_aabbs, q.point)
+            else {
+                continue;
+            };
+            let scale = q.weight;
+            for k in 0..3 {
+                let phi_t = q.bary[k];
+                if phi_t == 0.0 {
+                    continue;
+                }
+                let row = facet[k] as usize;
+                for j in 0..4 {
+                    let phi_s = source_bary[j];
+                    if phi_s == 0.0 {
+                        continue;
+                    }
+                    let col = source_verts[j] as usize;
+                    triplets.push((row, col, scale * phi_t * phi_s));
+                }
+            }
+        }
+    }
+
+    if n_tri_facets == 0 {
+        return Err(Error::Fem(
+            "NonconformingField::new_surface: target mesh has no triangle facets \
+             (2D tri-only target meshes are not supported in v3)"
+                .into(),
+        ));
+    }
+
+    BsrMatrix::from_scalar_triplets(nrows, ncols, &triplets)
 }
 
 /// Locate the source tet containing world-space point `x` via a

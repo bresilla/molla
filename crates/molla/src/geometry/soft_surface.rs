@@ -9,8 +9,19 @@
 //! v1 ships CPU-only; the GPU port (Stage 33.2) reuses these data
 //! structures verbatim and adds a per-substep tri-AABB shader.
 
+use crate::fem::mesh::{FemCell, FemMesh};
 use crate::math::Real;
 use crate::sim::TetMeshId;
+
+/// Sentinel for the "no third vertex" slot used when a `FemMesh` is
+/// purely 2D and [`boundary_facets`] returns boundary edges encoded as
+/// degenerate triangles `[a, b, INVALID_VERT]`. Callers should test for
+/// this value before treating the slot as a real vertex index.
+///
+/// Picked as `u32::MAX` so it cannot collide with a real mesh vertex
+/// index (which is bounded by `mesh.vertices.len() < u32::MAX` in
+/// practice).
+pub const INVALID_VERT: u32 = u32::MAX;
 
 /// Whether a soft surface comes from a tet mesh (boundary tris) or a
 /// cloth mesh (tessellation tris). Drives nothing on the contact path
@@ -200,6 +211,104 @@ pub fn compute_surface_edges(tris: &[[u32; 3]]) -> Vec<[u32; 2]> {
     out
 }
 
+/// Outer-surface facets of a [`FemMesh`] — Stage 47 v3.
+///
+/// The L²-projection operator integrates the cross-mesh mass either on
+/// the interior volume (Stage 47 v1/v2) or on the **outer surface** of
+/// the target mesh (v3). The latter is the right integration domain
+/// when the cross-mesh field carries a *contact pressure* rather than a
+/// volumetric source — the integrand has support only on the contact
+/// patch, and integrating it over the volume would dilute the result
+/// by O(h/L) per layer of interior tets.
+///
+/// This helper picks the right boundary extraction per cell type:
+///
+/// - **Tet meshes** — delegate to
+///   [`compute_tet_surface_triangles`]: collect every tet's 4 faces,
+///   keep those that belong to a single tet (outer boundary), preserve
+///   their CCW-from-outside winding.
+/// - **Tri meshes** — return the **boundary edges** encoded as
+///   degenerate triangles `[a, b, INVALID_VERT]`. The caller treats
+///   each such "facet" as a line segment in 3D and integrates a 1D
+///   quadrature along it; this lets the surface operator API uniformly
+///   return `Vec<[u32; 3]>` regardless of the source dimension.
+///   Boundary edges are the ones that appear in exactly one triangle,
+///   detected via the same one-vs-many-incidence count as for tets.
+/// - **Mixed cell kinds** (tris + tets in the same mesh) — both
+///   contributions are concatenated; the surface integrator skips
+///   `INVALID_VERT`-tagged facets when running the 2D tri rule.
+///
+/// Returns an empty `Vec` when the mesh has no cells. Faces / edges are
+/// sorted deterministically (lexicographic on sorted-vertex key) so the
+/// output is reproducible across runs — important for downstream code
+/// that warm-starts a contact LUT keyed on facet identity.
+#[must_use]
+pub fn boundary_facets(mesh: &FemMesh) -> Vec<[u32; 3]> {
+    use std::collections::HashMap;
+
+    // Split cells by kind so each path can use its specialised
+    // counter. Cloning the index buffers is cheap; the alternative
+    // (parameterising `compute_tet_surface_triangles` over a generic
+    // face count) bloats the API for one caller.
+    let mut tets: Vec<[u32; 4]> = Vec::new();
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    for cell in &mesh.cells {
+        match *cell {
+            FemCell::Tet(v) => tets.push(v),
+            FemCell::Tri(v) => tris.push(v),
+        }
+    }
+
+    let mut out: Vec<[u32; 3]> = compute_tet_surface_triangles(&tets);
+
+    if !tris.is_empty() {
+        // Mirror the "exactly-one-incident-cell" rule used for tets,
+        // but on edges. We keep the *first* directed edge seen so the
+        // boundary edge inherits an oriented winding (the caller can
+        // use the original tri's normal if it needs an outward
+        // direction; v1 of the surface operator only needs the edge
+        // length and midpoint, so the orientation is informational).
+        let mut edges: HashMap<[u32; 2], (u32, [u32; 2])> = HashMap::new();
+        for t in &tris {
+            let raw_edges: [[u32; 2]; 3] = [
+                [t[0], t[1]],
+                [t[1], t[2]],
+                [t[2], t[0]],
+            ];
+            for raw in raw_edges {
+                if raw[0] == raw[1] {
+                    continue; // degenerate edge.
+                }
+                let mut key = raw;
+                key.sort_unstable();
+                let entry = edges.entry(key).or_insert((0, raw));
+                entry.0 += 1;
+            }
+        }
+        let mut bnd_edges: Vec<[u32; 3]> = edges
+            .into_iter()
+            .filter_map(|(_, (count, edge))| {
+                if count == 1 {
+                    Some([edge[0], edge[1], INVALID_VERT])
+                } else {
+                    None
+                }
+            })
+            .collect();
+        bnd_edges.sort_unstable_by_key(|f| {
+            // INVALID_VERT is `u32::MAX` and sorts last, so the sort
+            // key is effectively `[min(a,b), max(a,b)]` — the same key
+            // we used inside the HashMap.
+            let mut k = [f[0], f[1]];
+            k.sort_unstable();
+            k
+        });
+        out.extend(bnd_edges);
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +336,37 @@ mod tests {
     fn empty_input_returns_empty() {
         let bnd = compute_tet_surface_triangles(&[]);
         assert!(bnd.is_empty());
+    }
+
+    /// A unit-cube tet mesh has exactly 12 boundary triangles
+    /// (6 cube faces × 2 triangles each).
+    #[test]
+    fn boundary_facets_unit_cube_has_twelve_tris() {
+        let mesh = FemMesh::tet_grid_3d(1, 1, 1, 1.0, 1.0, 1.0);
+        let facets = boundary_facets(&mesh);
+        assert_eq!(facets.len(), 12, "expected 12 boundary tris, got {}", facets.len());
+        for f in &facets {
+            assert!(
+                f[2] != INVALID_VERT,
+                "pure tet mesh should not produce INVALID_VERT facets"
+            );
+        }
+    }
+
+    /// A 2D triangle mesh on the unit square — boundary is the outer
+    /// 4-edge loop. `tri_grid_2d(nx, ny)` puts `2·nx + 2·ny` triangles
+    /// on the boundary, contributing `2·(nx + ny)` boundary edges.
+    #[test]
+    fn boundary_facets_tri_grid_returns_invalid_third_slot() {
+        let mesh = FemMesh::tri_grid_2d(3, 2, 1.0, 1.0);
+        let facets = boundary_facets(&mesh);
+        let n_boundary = 2 * (3 + 2);
+        assert_eq!(facets.len(), n_boundary, "got {} boundary edges", facets.len());
+        for f in &facets {
+            assert_eq!(
+                f[2], INVALID_VERT,
+                "tri-mesh boundary edge must have INVALID_VERT in slot 2"
+            );
+        }
     }
 }

@@ -22,7 +22,7 @@
 //! - [`tet_quadrature_5pt`]  — degree-3 exact (Keast P5 (5)).
 //! - [`tet_quadrature_11pt`] — degree-4 exact (Keast P11 (4)).
 
-use crate::math::Real;
+use crate::math::{Real, Vec3};
 
 /// One quadrature point on a triangle, in barycentric coordinates
 /// `(λ₀, λ₁, λ₂)` plus a weight.
@@ -183,6 +183,94 @@ pub fn tet_quadrature_11pt() -> Vec<TetQuadPoint> {
     ]
 }
 
+// ─── Surface (2D-triangle-in-3D) quadrature rules ────────────────────
+//
+// Stage 47 v3 needs to integrate `φ_target_i · φ_source_j` on the
+// **outer surface** of the target tet mesh. Each surface facet is a 3D
+// triangle (CCW from outside; comes from
+// `geometry::boundary_facets`). Unlike the volumetric tet rules
+// elsewhere in this file, which carry only barycentric coordinates,
+// the surface rules need the **world-space integration point** (so the
+// barycentric search inside the source mesh has something to test
+// against) and a weight that already folds in the triangle's area —
+// the caller then accumulates `weight · φ_target_i · φ_source_j`
+// directly.
+
+/// One quadrature point on a 3D triangle.
+///
+/// `point` is the world-space location, `weight` already includes the
+/// triangle's area (so `∑_q point[q]·weight[q]` integrates a scalar
+/// function over the triangle), and `bary` carries the barycentric
+/// coords w.r.t. the input vertex order — useful to evaluate the
+/// target's P1 shape functions on the same facet.
+#[derive(Copy, Clone, Debug)]
+pub struct Tri3dQuadPoint {
+    /// World-space point.
+    pub point: Vec3,
+    /// Area-weighted Gauss weight (`w_q · area(T)`).
+    pub weight: Real,
+    /// Barycentric coords `(λ₀, λ₁, λ₂)` of `point` w.r.t. the input
+    /// triangle's vertices — same as the underlying `TriQuadPoint`.
+    pub bary: [Real; 3],
+}
+
+/// 3D triangle area (positive). Uses the 3D cross product so the
+/// embedding plane is irrelevant — `tri_area_2d` projects to (x, y)
+/// which would zero out facets lying parallel to z-axis.
+#[must_use]
+pub fn tri3d_area(p: &[Vec3; 3]) -> Real {
+    0.5 * (p[1] - p[0]).cross(p[2] - p[0]).length()
+}
+
+/// World-space point at barycentric `(λ₀, λ₁, λ₂)` on triangle `p`.
+#[inline]
+fn tri_bary_to_world(p: &[Vec3; 3], bary: [Real; 3]) -> Vec3 {
+    p[0] * bary[0] + p[1] * bary[1] + p[2] * bary[2]
+}
+
+/// 3-point degree-2 quadrature on a 3D triangle.
+///
+/// Mirrors [`tri_quadrature_3pt`] (edge midpoints, weight 1/3 each on
+/// the reference triangle) but pre-multiplies each weight by the
+/// triangle's area so the caller integrates by summing
+/// `weight · f(point)`. Returns `(point, weight)` packed in a
+/// [`Tri3dQuadPoint`] with `bary` retained for shape-function evals.
+///
+/// Degree-2 is exact for P1 × P1 mass integrands (which are degree 2);
+/// the 6-point rule below is the conservative fallback when the
+/// cross-mesh product temporarily becomes higher order — e.g. when
+/// extending to P2 surface fields in a follow-up stage.
+#[must_use]
+pub fn tri3d_quadrature_3pt(p: &[Vec3; 3]) -> Vec<Tri3dQuadPoint> {
+    let area = tri3d_area(p);
+    tri_quadrature_3pt()
+        .into_iter()
+        .map(|q| Tri3dQuadPoint {
+            point: tri_bary_to_world(p, q.bary),
+            weight: q.weight * area,
+            bary: q.bary,
+        })
+        .collect()
+}
+
+/// 6-point degree-4 quadrature on a 3D triangle.
+///
+/// Mirrors [`tri_quadrature_6pt`] (Dunavant degree-4 rule) with the
+/// same area-pre-multiplied weight convention as
+/// [`tri3d_quadrature_3pt`].
+#[must_use]
+pub fn tri3d_quadrature_6pt(p: &[Vec3; 3]) -> Vec<Tri3dQuadPoint> {
+    let area = tri3d_area(p);
+    tri_quadrature_6pt()
+        .into_iter()
+        .map(|q| Tri3dQuadPoint {
+            point: tri_bary_to_world(p, q.bary),
+            weight: q.weight * area,
+            bary: q.bary,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +299,53 @@ mod tests {
         assert!(approx_eq(s4, 1.0));
         assert!((s5 - 1.0).abs() < 1.0e-12);
         assert!((s11 - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn tri3d_quadrature_integrates_constant_to_area() {
+        // ∫_T 1 dA = area(T). Both rules must reproduce this exactly
+        // because the integrand is degree 0.
+        let p = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(0.0, 3.0, 0.0),
+        ];
+        let area = 0.5 * 2.0 * 3.0; // 3.0
+        let s3: Real = tri3d_quadrature_3pt(&p).iter().map(|q| q.weight).sum();
+        let s6: Real = tri3d_quadrature_6pt(&p).iter().map(|q| q.weight).sum();
+        assert!((s3 - area).abs() < 1e-12, "3pt sum {s3} != area {area}");
+        assert!((s6 - area).abs() < 1e-10, "6pt sum {s6} != area {area}");
+    }
+
+    #[test]
+    fn tri3d_area_works_on_tilted_triangle() {
+        // 3-4-5 triangle tilted so it isn't in the z=0 plane.
+        let p = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 4.0),
+            Vec3::new(0.0, 5.0, 0.0),
+        ];
+        // |e1 × e2| / 2 = |(3,0,4) × (0,5,0)| / 2 = |(-20, 0, 15)| / 2 = 25/2 = 12.5
+        let area = tri3d_area(&p);
+        assert!((area - 12.5).abs() < 1e-12, "area {area} != 12.5");
+    }
+
+    #[test]
+    fn tri3d_quadrature_points_have_partition_of_unity_bary() {
+        // Sanity: barycentric coordinates always sum to 1.
+        let p = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        ];
+        for q in tri3d_quadrature_3pt(&p) {
+            let s: Real = q.bary.iter().sum();
+            assert!((s - 1.0).abs() < 1e-12);
+        }
+        for q in tri3d_quadrature_6pt(&p) {
+            let s: Real = q.bary.iter().sum();
+            assert!((s - 1.0).abs() < 1e-10);
+        }
     }
 
     #[test]
