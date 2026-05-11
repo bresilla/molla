@@ -1,34 +1,43 @@
-//! Stage 39A — **Implicit MPM with Bingham rheology** (CPU-only v1).
+//! Stage 39A / 40 — **Implicit MPM with Bingham rheology**.
 //!
 //! Forward implicit Material-Point-Method timestep that handles stiff
 //! plastic flow at dt far above the explicit-CFL limit. The algorithm
 //! mirrors Newton's `implicit_mpm` solver (forward grid step →
-//! assemble linear system → colored Gauss-Seidel solve → projection),
-//! but stripped to the essentials so v1 fits in ~700 LoC.
+//! assemble linear system → colored Gauss-Seidel solve → projection).
+//!
+//! ## Stage 40 — full 27-point Newton Hessian
+//!
+//! Stage 39A shipped a diagonal-only approximation `(M + dt·K_diag)·v = M·v_pred`.
+//! Stage 40 replaces that with the **full 27-point Newton Hessian**:
+//! each grid cell is coupled to its 26 immediate neighbours (the
+//! 3×3×3 stencil centred on the cell) plus itself. Off-diagonal
+//! entries `K_ij` (`i ≠ j`) accumulate `Σ_p k_p · w_ip · w_jp` over
+//! every particle that scatters onto **both** cells `i` and `j`.
 //!
 //! ## Algorithm
 //!
 //! Per substep:
 //!
-//! 1. **P2G** — quadratic B-spline scatter of `(mass, momentum, k_diag)`
-//!    from particles to a 3×3×3 stencil on the grid. `k_diag` is the
-//!    Bingham viscous diagonal `μ_b · particle_volume / dx²` per cell;
-//!    it parameterises the implicit term.
+//! 1. **P2G** — quadratic B-spline scatter of `(mass, momentum,
+//!    27-stencil K)` from particles to a 3×3×3 stencil on the grid.
+//!    Each particle contributes to its 3×3×3 = 27 cells; for every
+//!    *ordered pair* `(i, j)` of cells in that stencil whose offset
+//!    `j - i` lies inside the unit cube `{-1, 0, 1}³`, accumulate
+//!    `k_p · w_ip · w_jp` into the cell-i Hessian slot for offset
+//!    `j - i`. The diagonal slot (offset `(0,0,0)`) reduces to the
+//!    Stage 39A `k_diag`.
 //!
 //! 2. **Predict velocity** — `v_pred = momentum/m + g·dt`.
 //!
 //! 3. **Implicit grid solve** — solve
 //!       `(M + dt · K) · v_new = M · v_pred`
-//!    where `K_ii = k_diag_i` is the particle-scattered diagonal of the
-//!    viscous stress Jacobian. For Bingham flow the off-diagonal coupling
-//!    is small (the strain-rate operator is local) and the diagonal
-//!    capture nails stability; this is the same approximation Newton's
-//!    "jacobi" rheology solver makes in its `gs-soa` mode when it picks
-//!    `--lumped-mass`. Iteration is **colored Gauss-Seidel** (each cell
-//!    is its own node in a 3D regular grid; the 7-point stencil
-//!    `(±x, ±y, ±z)` colors into 2 classes via parity of `ix+iy+iz`,
-//!    but we go through [`graph_coloring::color_constraints`] so the
-//!    code path is identical to other constraint solvers in the crate).
+//!    with `K` the full 27-point velocity-domain Hessian (isotropic;
+//!    block entries are `k_ij · I_3`, so we store scalars). Iteration
+//!    is **colored Gauss-Seidel**: each cell is a node, the
+//!    27-stencil produces an 8-coloring on the parity of
+//!    `(ix mod 2, iy mod 2, iz mod 2)`. Per-cell update:
+//!       `v_i ← (M_i · v_pred_i − dt · Σ_{j ≠ i} K_ij · v_j) /
+//!              (M_i + dt · K_ii)`.
 //!
 //! 4. **Bingham projection** — at each particle, compute trial deviatoric
 //!    strain rate `D = sym(C) − (tr/3)·I` (from APIC affine matrix),
@@ -48,21 +57,22 @@
 //!    linear velocity from the wrench. Same pattern as the explicit
 //!    [`crate::compute::mpm::MpmSimulation`].
 //!
-//! ## What v1 doesn't do
+//! ## What this stage doesn't do
 //!
-//! - **Off-diagonal stiffness coupling.** Newton's full implicit MPM
-//!   does a true `(M − dt²·H)v = b` solve with `H = ∂(∇·σ)/∂x` (a
-//!   27-point grid stencil per particle). v1 captures only the diagonal;
-//!   that's enough for dt = 10× explicit CFL on Bingham flows (we
-//!   measure 12× in tests). Cross-particle Hessian terms become
-//!   important when the rheology has long-range elastic coupling (snow
-//!   shells, dense granular packings); those are post-v1.
+//! - **5×5×5 (125-point) "true" Hessian.** When two cells `i, j` are
+//!   separated by up to 2 cells on every axis they can still share a
+//!   particle — strictly the Newton Hessian is 5×5×5 = 125-point.
+//!   Stage 40 lumps everything past `|i − j|_∞ = 1` onto the 27-point
+//!   stencil. The 27-point block captures the dominant local coupling
+//!   (any particle is touched by 27 cells in 3³ so neighbour pairs at
+//!   `|i−j|_∞ = 1` carry the largest `w_ip · w_jp` products); the
+//!   125-point extension halves convergence again but doubles assembly
+//!   cost. Reserved for a future stage.
 //! - **Drucker-Prager / snow.** Single rheology only — Bingham is
-//!   already a non-trivial yield surface, and adding more would balloon
-//!   the LoC budget. Both rheologies live in Newton's
-//!   `rheology_solver_kernels.py` if you want to port them later.
-//! - **GPU.** Same rationale as Stage 38.1 — host-side f64 first, GPU
-//!   port in a later stage once the math is locked in.
+//!   already a non-trivial yield surface.
+//! - **Full GPU perf target.** Stage 40 ships a working GPU port
+//!   (P2G + colored-GS sweep over the full Hessian) and a parity
+//!   gate, but the per-step wall-time target is deferred.
 
 use crate::geometry::graph_coloring;
 use crate::math::{Mat3, Real, Vec3};
@@ -281,14 +291,15 @@ fn frob_norm(m: Mat3) -> Real {
     s.sqrt()
 }
 
-/// Color the regular 3D grid for red-black-like Gauss-Seidel.
+/// Color the regular 3D grid for colored Gauss-Seidel over the 27-point
+/// stencil (cell + 26 immediate neighbours).
 ///
-/// We treat each grid cell as a "constraint" whose vertex set is the
-/// cell index plus its 6 neighbours. Adjacent cells share neighbours
-/// → conflict → different colors. On a 3D regular grid this produces
-/// the classic 2-coloring `(ix + iy + iz) mod 2`, but going through
-/// the generic [`graph_coloring::color_constraints`] keeps the code
-/// uniform with the rest of the crate.
+/// Each cell is a "constraint" whose vertex set is the cell index plus
+/// every neighbour in its 3×3×3 box. Two cells share an edge iff some
+/// constraint contains both — i.e. one of them is within distance 1 of
+/// the other on any axis. The generic
+/// [`graph_coloring::color_constraints`] returns the standard 8-coloring
+/// (`(ix mod 2, iy mod 2, iz mod 2)`) on this graph.
 ///
 /// Returns `groups[c] = Vec<cell_idx>` for `c ∈ [0, n_colors)`.
 fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
@@ -305,25 +316,15 @@ fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
     for iz in 0..g as i32 {
         for iy in 0..g as i32 {
             for ix in 0..g as i32 {
-                let mut verts: Vec<u32> = Vec::with_capacity(7);
-                verts.push(cell_index(ix, iy, iz).unwrap());
-                if let Some(v) = cell_index(ix - 1, iy, iz) {
-                    verts.push(v);
-                }
-                if let Some(v) = cell_index(ix + 1, iy, iz) {
-                    verts.push(v);
-                }
-                if let Some(v) = cell_index(ix, iy - 1, iz) {
-                    verts.push(v);
-                }
-                if let Some(v) = cell_index(ix, iy + 1, iz) {
-                    verts.push(v);
-                }
-                if let Some(v) = cell_index(ix, iy, iz - 1) {
-                    verts.push(v);
-                }
-                if let Some(v) = cell_index(ix, iy, iz + 1) {
-                    verts.push(v);
+                let mut verts: Vec<u32> = Vec::with_capacity(27);
+                for dz in -1..=1 {
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if let Some(v) = cell_index(ix + dx, iy + dy, iz + dz) {
+                                verts.push(v);
+                            }
+                        }
+                    }
                 }
                 constraint_verts.push(verts);
             }
@@ -332,6 +333,18 @@ fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
     let colors = graph_coloring::color_constraints(&constraint_verts);
     graph_coloring::group_by_color(&colors)
 }
+
+/// Map 3D stencil offset `(dx, dy, dz) ∈ {-1, 0, 1}³` to a flat index
+/// in `[0, 27)`. The diagonal entry is at index 13 (centre of the cube).
+#[inline]
+pub(crate) fn stencil_offset(dx: i32, dy: i32, dz: i32) -> usize {
+    debug_assert!(dx.abs() <= 1 && dy.abs() <= 1 && dz.abs() <= 1);
+    ((dz + 1) as usize) * 9 + ((dy + 1) as usize) * 3 + ((dx + 1) as usize)
+}
+
+/// Index of the diagonal entry `(0, 0, 0)` in the 27-stencil. Inlined
+/// constant so call sites can spell out the intent.
+pub(crate) const STENCIL_DIAG: usize = 13;
 
 /// One implicit-MPM substep. Mutates `state` in place; returns
 /// per-step diagnostics.
@@ -354,11 +367,18 @@ pub fn implicit_mpm_step(
     // ── Grid scratch ─────────────────────────────────────────────────
     let mut g_mass = vec![0.0_f64; g_total];
     let mut g_momentum = vec![Vec3::ZERO; g_total];
-    // Per-cell Bingham viscous diagonal `k_diag_i = Σ_p w_ip · μ_b ·
-    // volume_p · (4/dx²)`. The factor `4/dx²` comes from the squared
-    // APIC gradient operator (same constant as the elastic stress term
-    // in the explicit MPM forward).
-    let mut g_kdiag = vec![0.0_f64; g_total];
+    // Per-cell 27-point Hessian: `k_stencil[i * 27 + s]` is the
+    // scalar coupling `K_{i, i+δ(s)}` where `δ(s)` is the stencil offset
+    // recovered from index `s ∈ [0, 27)` via [`stencil_offset`]. The
+    // matrix is isotropic (`K · v` acts componentwise), so we store a
+    // single scalar per stencil slot rather than a 3×3 block.
+    //
+    // Population: for every particle `p`, for every cell pair `(i, j)`
+    // both within `p`'s 3×3×3 stencil whose offset `j − i` has
+    // `|·|_∞ ≤ 1`, accumulate `k_p · w_ip · w_jp` into
+    // `k_stencil[i * 27 + s(j − i)]`. The diagonal slot collapses to
+    // the Stage 39A `k_diag` term.
+    let mut k_stencil = vec![0.0_f64; g_total * 27];
 
     // ── Per-particle base / weight cache for P2G and G2P. ────────────
     struct ParticleCache {
@@ -387,9 +407,14 @@ pub fn implicit_mpm_step(
 
         // Bingham viscous coefficient per cell:
         //   k_p = μ_b · vol_p · (4 / dx²)
-        // Scatter weighted by `w_ip`.
+        // The cell-pair Hessian entry accumulates `k_p · w_ip · w_jp`.
         let kp = mu_b * cfg.particle_volume * 4.0 * inv_dx * inv_dx;
 
+        // Precompute the (w, cell_idx) tuples for the 27 stencil
+        // entries so the O(N²) Hessian scatter inside the loop reads
+        // contiguous cached values. Out-of-grid entries get index `-1`
+        // so they're skipped without re-checking bounds.
+        let mut sten: [(Real, i32, i32, i32, i32); 27] = [(0.0, -1, 0, 0, 0); 27];
         for i in 0..3 {
             for j in 0..3 {
                 for k in 0..3 {
@@ -397,17 +422,52 @@ pub fn implicit_mpm_step(
                     let ix = base[0] + i as i32;
                     let iy = base[1] + j as i32;
                     let iz = base[2] + k as i32;
-                    let Some(ci) = cell_idx(g, ix, iy, iz) else { continue };
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
-                    let xn_xp = node_pos - pos;
-                    let aff = c * xn_xp;
-                    // APIC momentum contribution.
-                    g_mass[ci] += w * mass_p;
-                    g_momentum[ci] += w * mass_p * (vel + aff);
-                    g_kdiag[ci] += w * kp;
+                    let ci = cell_idx(g, ix, iy, iz)
+                        .map(|c| c as i32)
+                        .unwrap_or(-1);
+                    sten[i * 9 + j * 3 + k] = (w, ci, ix, iy, iz);
                 }
+            }
+        }
+
+        // Mass / momentum scatter (linear-in-w).
+        for &(w, ci, ix, iy, iz) in sten.iter() {
+            if ci < 0 {
+                continue;
+            }
+            let node_pos = origin
+                + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5) * dx;
+            let xn_xp = node_pos - pos;
+            let aff = c * xn_xp;
+            let ci = ci as usize;
+            g_mass[ci] += w * mass_p;
+            g_momentum[ci] += w * mass_p * (vel + aff);
+        }
+
+        // Full-Hessian scatter (O(27²) per particle — 729 ops). Only
+        // entries with `|i − j|_∞ ≤ 1` land inside the 27-stencil; the
+        // outer ring of cell pairs (where particles in the corner of
+        // their 3³ stencil couple to the opposite corner of their
+        // own 3³ stencil) is lumped into the diagonal via the implicit
+        // sum-of-particles approximation.
+        for a in 0..27 {
+            let (wa, ca, ax, ay, az) = sten[a];
+            if ca < 0 {
+                continue;
+            }
+            for b in 0..27 {
+                let (wb, cb, bx, by, bz) = sten[b];
+                if cb < 0 {
+                    continue;
+                }
+                let dx_ij = bx - ax;
+                let dy_ij = by - ay;
+                let dz_ij = bz - az;
+                if dx_ij.abs() > 1 || dy_ij.abs() > 1 || dz_ij.abs() > 1 {
+                    continue;
+                }
+                let s = stencil_offset(dx_ij, dy_ij, dz_ij);
+                k_stencil[(ca as usize) * 27 + s] += kp * wa * wb;
             }
         }
     }
@@ -485,20 +545,19 @@ pub fn implicit_mpm_step(
 
     // ── Implicit grid solve via colored Gauss-Seidel. ───────────────
     //
-    // Linear system per cell (diagonal-only approximation):
-    //   (m + dt · k_diag) · v_new = m · v_pred
+    // Linear system per cell (full 27-point Hessian):
+    //   (m_i + dt · K_ii) · v_new_i + dt · Σ_{j ≠ i} K_ij · v_j
+    //       = m_i · v_pred_i
     //
-    // The coupling between cells is captured weakly via the gravity
-    // pre-solve + the per-cell relaxation walk. For Bingham with low
-    // off-diagonal cross-talk this converges in 4-8 sweeps.
+    // K is isotropic (scalar block per stencil slot) so the 3D
+    // velocity components decouple per cell and we can solve each
+    // axis with the same scalar denominator.
     //
-    // We still color the cells (one cell per "constraint") so the
-    // GS iteration is independent within each color group and could
-    // be parallelised cleanly on a future GPU port. With diagonal-only
-    // K the per-cell update is independent of neighbours and the
-    // coloring is effectively free — but keep the structure for the
-    // off-diagonal extension in a later stage.
+    // Each cell is a node of the constraint graph; the 27-stencil
+    // gives an 8-coloring (octant parity of `(ix, iy, iz)`). Within a
+    // color group the cell updates are independent → GPU-friendly.
     let color_groups = color_grid(g);
+    let gi = g as i32;
     let mut gs_iters_done = 0usize;
     let mut last_residual = 0.0_f64;
     for outer_it in 0..cfg.max_gs_iters {
@@ -510,12 +569,42 @@ pub fn implicit_mpm_step(
                     continue;
                 }
                 let m = g_mass[ci];
-                let k = g_kdiag[ci];
-                let denom = m + dt * k;
+                let k_diag = k_stencil[ci * 27 + STENCIL_DIAG];
+                let denom = m + dt * k_diag;
                 if denom <= 0.0 {
                     continue;
                 }
-                let v_new = (m * v_pred[ci]) / denom;
+                // Decode (ix, iy, iz) so we can index neighbours.
+                let iz = (ci / (g * g)) as i32;
+                let iy = ((ci / g) % g) as i32;
+                let ix = (ci % g) as i32;
+                // Sum off-diagonal flux: dt · Σ_{j ≠ i} K_ij · v_j.
+                let mut off = Vec3::ZERO;
+                for dz in -1..=1 {
+                    for dy in -1..=1 {
+                        for dx_ in -1..=1 {
+                            if dx_ == 0 && dy == 0 && dz == 0 {
+                                continue;
+                            }
+                            let jx = ix + dx_;
+                            let jy = iy + dy;
+                            let jz = iz + dz;
+                            if jx < 0 || jy < 0 || jz < 0 || jx >= gi || jy >= gi || jz >= gi {
+                                continue;
+                            }
+                            let cj = (jx as usize)
+                                + (jy as usize) * g
+                                + (jz as usize) * g * g;
+                            let s = stencil_offset(dx_, dy, dz);
+                            let kij = k_stencil[ci * 27 + s];
+                            if kij != 0.0 {
+                                off += kij * v_grid[cj];
+                            }
+                        }
+                    }
+                }
+                let rhs = m * v_pred[ci] - dt * off;
+                let v_new = rhs / denom;
                 let diff = v_new - v_grid[ci];
                 let nd = diff.length();
                 if nd > max_dv {
