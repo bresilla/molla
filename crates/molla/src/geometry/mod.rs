@@ -66,6 +66,12 @@ pub use gaussian_splat::{
     canonical_ray_max_response, composite_forward_cpu, composite_rgb_cpu, fd_grad_one_splat,
     gaussian_response, map_ray_to_canonical, splat_camera_distance, GaussianSplat3d, SplatParam,
 };
+// ── Stage 44 v3: view-dependent (spherical-harmonics) splats. ──────
+pub use gaussian_splat::{
+    composite_sh_forward_cpu, composite_sh_rgb_cpu, eval_sh, fd_grad_sh_one_splat, sh_basis,
+    GaussianSplatSh3d, ShCoeffParam, SH_BAND_2_COUNT, SH_C0, SH_C1, SH_C2A, SH_C2B, SH_C2C,
+    SH_C2D, SH_C2E,
+};
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 // ── Stage 38d: shared constraint-graph coloring utility ────────────
 pub use graph_coloring::{color_constraints, greedy_color, group_by_color, mcs_color};

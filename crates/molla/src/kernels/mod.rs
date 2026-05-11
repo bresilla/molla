@@ -221,7 +221,7 @@ pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
 pub use scan::ScanKernel;
 #[cfg(feature = "gpu")]
-pub use splat_raytrace::{SplatGradients, SplatRaytraceKernel};
+pub use splat_raytrace::{SplatGradients, SplatRaytraceKernel, SplatShGradients};
 #[cfg(feature = "gpu")]
 pub use optim_adam::AdamGpuKernel;
 #[cfg(feature = "gpu")]
