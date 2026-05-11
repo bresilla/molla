@@ -120,6 +120,21 @@ pub struct ImplicitMpmConfig {
     pub max_newton_iters: usize,
 }
 
+/// Hessian stencil width for the implicit grid solve.
+///
+/// * [`HessianStencil::Diagonal`] — Stage 39A behaviour: per-cell
+///   diagonal preconditioner, off-diagonal `K_ij` ignored.
+/// * [`HessianStencil::Full27`] — Stage 40 default: full 27-point
+///   block-isotropic Hessian.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub enum HessianStencil {
+    /// 1-point diagonal — Stage 39A path.
+    Diagonal,
+    /// 27-point (cell + 26 neighbours) — Stage 40 default.
+    #[default]
+    Full27,
+}
+
 impl Default for ImplicitMpmConfig {
     fn default() -> Self {
         Self {
@@ -208,7 +223,7 @@ pub struct RigidSphere {
 pub struct StepReport {
     /// Number of GS sweeps actually run (1..=max_gs_iters).
     pub gs_iters: usize,
-    /// Final relative-update residual.
+    /// Final relative-update residual (the GS termination criterion).
     pub gs_residual: Real,
     /// Number of particles whose Bingham projection clamped the
     /// trial stress to the yield surface. Useful for telemetry.
@@ -216,6 +231,13 @@ pub struct StepReport {
     /// Sum of grid mass + particle mass after the step. The test
     /// suite uses this to gate mass conservation.
     pub total_mass: Real,
+    /// Squared L2-norm of the post-solve residual measured against
+    /// the **full 27-point** Hessian system:
+    ///   `Σ_i ‖(M_i + dt · K_{ii}) v_i + dt · Σ_{j ≠ i} K_{ij} v_j − M_i · v_pred_i‖²`.
+    /// Independent of which stencil the GS sweep ran on, so it
+    /// provides a fair "true accuracy" comparison between the
+    /// diagonal-only and full-27 paths.
+    pub true_residual_sq: Real,
 }
 
 /// Quadratic B-spline weights at offset `fx ∈ [0.5, 1.5)`.
@@ -337,21 +359,34 @@ fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
 /// Map 3D stencil offset `(dx, dy, dz) ∈ {-1, 0, 1}³` to a flat index
 /// in `[0, 27)`. The diagonal entry is at index 13 (centre of the cube).
 #[inline]
-pub(crate) fn stencil_offset(dx: i32, dy: i32, dz: i32) -> usize {
+pub fn stencil_offset(dx: i32, dy: i32, dz: i32) -> usize {
     debug_assert!(dx.abs() <= 1 && dy.abs() <= 1 && dz.abs() <= 1);
     ((dz + 1) as usize) * 9 + ((dy + 1) as usize) * 3 + ((dx + 1) as usize)
 }
 
 /// Index of the diagonal entry `(0, 0, 0)` in the 27-stencil. Inlined
 /// constant so call sites can spell out the intent.
-pub(crate) const STENCIL_DIAG: usize = 13;
+pub const STENCIL_DIAG: usize = 13;
 
-/// One implicit-MPM substep. Mutates `state` in place; returns
+/// One implicit-MPM substep with the **Stage 40 default** (full
+/// 27-point Newton Hessian). Mutates `state` in place; returns
 /// per-step diagnostics.
 pub fn implicit_mpm_step(
     state: &mut MpmState,
     cfg: &ImplicitMpmConfig,
     rigids: &mut [RigidSphere],
+) -> StepReport {
+    implicit_mpm_step_with_stencil(state, cfg, rigids, HessianStencil::Full27)
+}
+
+/// One implicit-MPM substep with an explicit Hessian-stencil choice.
+/// Used by the Stage 40 convergence sanity test that compares the
+/// diagonal-only (Stage 39A) path against the full 27-point path.
+pub fn implicit_mpm_step_with_stencil(
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+    rigids: &mut [RigidSphere],
+    stencil: HessianStencil,
 ) -> StepReport {
     let n = state.n();
     let g = cfg.grid_size;
@@ -558,6 +593,7 @@ pub fn implicit_mpm_step(
     // color group the cell updates are independent → GPU-friendly.
     let color_groups = color_grid(g);
     let gi = g as i32;
+    let use_off_diag = matches!(stencil, HessianStencil::Full27);
     let mut gs_iters_done = 0usize;
     let mut last_residual = 0.0_f64;
     for outer_it in 0..cfg.max_gs_iters {
@@ -574,31 +610,39 @@ pub fn implicit_mpm_step(
                 if denom <= 0.0 {
                     continue;
                 }
-                // Decode (ix, iy, iz) so we can index neighbours.
-                let iz = (ci / (g * g)) as i32;
-                let iy = ((ci / g) % g) as i32;
-                let ix = (ci % g) as i32;
-                // Sum off-diagonal flux: dt · Σ_{j ≠ i} K_ij · v_j.
                 let mut off = Vec3::ZERO;
-                for dz in -1..=1 {
-                    for dy in -1..=1 {
-                        for dx_ in -1..=1 {
-                            if dx_ == 0 && dy == 0 && dz == 0 {
-                                continue;
-                            }
-                            let jx = ix + dx_;
-                            let jy = iy + dy;
-                            let jz = iz + dz;
-                            if jx < 0 || jy < 0 || jz < 0 || jx >= gi || jy >= gi || jz >= gi {
-                                continue;
-                            }
-                            let cj = (jx as usize)
-                                + (jy as usize) * g
-                                + (jz as usize) * g * g;
-                            let s = stencil_offset(dx_, dy, dz);
-                            let kij = k_stencil[ci * 27 + s];
-                            if kij != 0.0 {
-                                off += kij * v_grid[cj];
+                if use_off_diag {
+                    // Decode (ix, iy, iz) so we can index neighbours.
+                    let iz = (ci / (g * g)) as i32;
+                    let iy = ((ci / g) % g) as i32;
+                    let ix = (ci % g) as i32;
+                    // Sum off-diagonal flux: dt · Σ_{j ≠ i} K_ij · v_j.
+                    for dz in -1..=1 {
+                        for dy in -1..=1 {
+                            for dx_ in -1..=1 {
+                                if dx_ == 0 && dy == 0 && dz == 0 {
+                                    continue;
+                                }
+                                let jx = ix + dx_;
+                                let jy = iy + dy;
+                                let jz = iz + dz;
+                                if jx < 0
+                                    || jy < 0
+                                    || jz < 0
+                                    || jx >= gi
+                                    || jy >= gi
+                                    || jz >= gi
+                                {
+                                    continue;
+                                }
+                                let cj = (jx as usize)
+                                    + (jy as usize) * g
+                                    + (jz as usize) * g * g;
+                                let s = stencil_offset(dx_, dy, dz);
+                                let kij = k_stencil[ci * 27 + s];
+                                if kij != 0.0 {
+                                    off += kij * v_grid[cj];
+                                }
                             }
                         }
                     }
@@ -621,6 +665,51 @@ pub fn implicit_mpm_step(
         last_residual = max_dv / max_v;
         if last_residual < cfg.gs_tol {
             break;
+        }
+    }
+
+    // ── True residual against the full 27-point Hessian. Independent
+    //    of whether the GS sweep used the diagonal-only approximation
+    //    or the full off-diagonal coupling, this measures how close
+    //    `v_grid` is to the exact solution of the full coupled
+    //    system. Returned in the [`StepReport`] so callers can compare
+    //    accuracy across stencil choices.
+    let mut true_residual_sq: Real = 0.0;
+    for iz in 0..g as i32 {
+        for iy in 0..g as i32 {
+            for ix in 0..g as i32 {
+                let ci_u = (ix as usize) + (iy as usize) * g + (iz as usize) * g * g;
+                if !active[ci_u] {
+                    continue;
+                }
+                let m = g_mass[ci_u];
+                let k_diag = k_stencil[ci_u * 27 + STENCIL_DIAG];
+                let mut lhs = (m + dt * k_diag) * v_grid[ci_u];
+                for dz in -1..=1 {
+                    for dy in -1..=1 {
+                        for dx_ in -1..=1 {
+                            if dx_ == 0 && dy == 0 && dz == 0 {
+                                continue;
+                            }
+                            let jx = ix + dx_;
+                            let jy = iy + dy;
+                            let jz = iz + dz;
+                            if jx < 0 || jy < 0 || jz < 0 || jx >= gi || jy >= gi || jz >= gi {
+                                continue;
+                            }
+                            let cj =
+                                (jx as usize) + (jy as usize) * g + (jz as usize) * g * g;
+                            let s = stencil_offset(dx_, dy, dz);
+                            let kij = k_stencil[ci_u * 27 + s];
+                            if kij != 0.0 {
+                                lhs += dt * kij * v_grid[cj];
+                            }
+                        }
+                    }
+                }
+                let r = lhs - m * v_pred[ci_u];
+                true_residual_sq += r.dot(r);
+            }
         }
     }
 
@@ -840,7 +929,21 @@ pub fn implicit_mpm_step(
         gs_residual: last_residual,
         yielded_count,
         total_mass,
+        true_residual_sq,
     }
+}
+
+/// Run one substep with `stencil` and return the post-solve squared
+/// residual against the **full** 27-point Hessian system. Used by the
+/// Stage 40 convergence sanity test to compare diagonal-only vs
+/// full-27 *on the same target system*.
+pub fn full_hessian_residual_norm_squared(
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+    stencil: HessianStencil,
+) -> Real {
+    let r = implicit_mpm_step_with_stencil(state, cfg, &mut [], stencil);
+    r.true_residual_sq
 }
 
 #[cfg(test)]
