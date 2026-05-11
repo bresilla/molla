@@ -368,6 +368,29 @@ pub fn stencil_offset(dx: i32, dy: i32, dz: i32) -> usize {
 /// constant so call sites can spell out the intent.
 pub const STENCIL_DIAG: usize = 13;
 
+/// Internal type that bundles the assembled implicit-MPM grid system
+/// after P2G but before the inner GS solve. Exposed via
+/// [`implicit_mpm_step_with_solver`] so the Stage 40 GPU parity test
+/// can hijack the colored-GS sweep while reusing every other step.
+#[derive(Clone, Debug)]
+pub struct GridSystem {
+    /// Edge length of the cubic grid.
+    pub grid_size: usize,
+    /// Per-cell mass (`g_total` entries).
+    pub g_mass: Vec<Real>,
+    /// 27-point Hessian, `g_total * 27` entries; see
+    /// [`stencil_offset`] for the layout.
+    pub k_stencil: Vec<Real>,
+    /// Predicted velocity (`g_total` entries).
+    pub v_pred: Vec<Vec3>,
+    /// Active-cell flags (cells with mass > 0). `g_total` entries.
+    pub active: Vec<bool>,
+    /// Colored-GS groups produced by [`color_grid`].
+    pub color_groups: Vec<Vec<usize>>,
+    /// Time step the system was assembled with.
+    pub dt: Real,
+}
+
 /// One implicit-MPM substep with the **Stage 40 default** (full
 /// 27-point Newton Hessian). Mutates `state` in place; returns
 /// per-step diagnostics.
@@ -387,6 +410,22 @@ pub fn implicit_mpm_step_with_stencil(
     cfg: &ImplicitMpmConfig,
     rigids: &mut [RigidSphere],
     stencil: HessianStencil,
+) -> StepReport {
+    implicit_mpm_step_with_solver(state, cfg, rigids, stencil, None)
+}
+
+/// One implicit-MPM substep with an optional GS-sweep override. When
+/// `gs_override` is `Some(closure)`, the closure is invoked with the
+/// assembled [`GridSystem`] and an initial-guess `v_grid`, and must
+/// mutate `v_grid` in place to the GS-solver result. When `None`, the
+/// stock host-side colored Gauss-Seidel sweep is used. The Stage 40
+/// GPU parity test plugs the device kernel into this hook.
+pub fn implicit_mpm_step_with_solver(
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+    rigids: &mut [RigidSphere],
+    stencil: HessianStencil,
+    gs_override: Option<&mut dyn FnMut(&GridSystem, &mut [Vec3], HessianStencil) -> (usize, Real)>,
 ) -> StepReport {
     let n = state.n();
     let g = cfg.grid_size;
@@ -596,6 +635,25 @@ pub fn implicit_mpm_step_with_stencil(
     let use_off_diag = matches!(stencil, HessianStencil::Full27);
     let mut gs_iters_done = 0usize;
     let mut last_residual = 0.0_f64;
+
+    // If the caller supplied an alternate solver (e.g. the Stage 40
+    // GPU kernel), package the assembled system and hand it off. The
+    // override is responsible for honoring `cfg.max_gs_iters` /
+    // `cfg.gs_tol` itself; we only record what it tells us.
+    if let Some(cb) = gs_override {
+        let system = GridSystem {
+            grid_size: g,
+            g_mass: g_mass.clone(),
+            k_stencil: k_stencil.clone(),
+            v_pred: v_pred.clone(),
+            active: active.clone(),
+            color_groups: color_groups.clone(),
+            dt,
+        };
+        let (iters, res) = cb(&system, &mut v_grid, stencil);
+        gs_iters_done = iters;
+        last_residual = res;
+    } else {
     for outer_it in 0..cfg.max_gs_iters {
         let mut max_dv: Real = 0.0;
         let mut max_v: Real = 1.0e-12;
@@ -667,6 +725,7 @@ pub fn implicit_mpm_step_with_stencil(
             break;
         }
     }
+    } // end of `if gs_override.is_none()` else
 
     // ── True residual against the full 27-point Hessian. Independent
     //    of whether the GS sweep used the diagonal-only approximation

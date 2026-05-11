@@ -61,6 +61,8 @@ mod frame_transform;
 #[cfg(feature = "gpu")]
 mod imu;
 #[cfg(feature = "gpu")]
+mod implicit_mpm;
+#[cfg(feature = "gpu")]
 mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod jacobian;
@@ -175,6 +177,12 @@ pub use mesh_bvh_raycast::{MeshBvhGpu, MeshBvhRaycastKernel};
 pub use frame_transform::FrameTransformKernel;
 #[cfg(feature = "gpu")]
 pub use imu::ImuKernel;
+#[cfg(feature = "gpu")]
+pub use implicit_mpm::{
+    readback_vec3_f32 as implicit_mpm_readback_vec3_f32,
+    upload_storage_f32 as implicit_mpm_upload_storage_f32,
+    upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32, ImplicitMpmKernel,
+};
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
