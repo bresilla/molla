@@ -68,6 +68,7 @@ pub mod function_space;
 pub mod gpu_data;
 pub mod magneto;
 pub mod mesh;
+pub mod multigrid;
 pub mod nedelec_element;
 pub mod nonconforming;
 pub mod p2_element;
@@ -114,8 +115,10 @@ pub use fft_ns::{
     FractionalStepConfig, PoissonStencil,
 };
 pub use eddy_current::{
-    build_discrete_gradient, build_p1_vector_laplacian, solve_eddy_current_steady,
-    solve_eddy_current_steady_ams, AmsPreconditioner, EddyCurrentConfig, EddyCurrentResult,
+    assemble_eddy_system, build_discrete_gradient, build_p1_vector_laplacian,
+    gmres_with_precond, solve_eddy_current_steady, solve_eddy_current_steady_ams,
+    solve_eddy_current_steady_ams_mg, AmsPreconditioner, EddyBlockOp, EddyCurrentConfig,
+    EddyCurrentResult,
 };
 pub use element::{
     compute_element_convection, compute_element_distortion_energy,
@@ -128,6 +131,7 @@ pub use magneto::{
     compute_curl_per_cell, integrate_field_along_edges, project_field_on_edges,
     solve_magnetostatics_steady, MagnetostaticsResult,
 };
+pub use multigrid::MeshHierarchy;
 pub use nedelec_element::{
     assemble_global_nedelec, compute_element_curl_curl, compute_element_nedelec_mass,
     NedelecDofMap,
