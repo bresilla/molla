@@ -241,3 +241,103 @@ fn gpu_resident_cg_matches_cpu_8_cube() {
         "8³ GPU-resident CG diverges from CPU CG: max_err = {max_err}",
     );
 }
+
+#[test]
+#[ignore = "needs a real wgpu adapter — long-running benchmark"]
+fn fem_gpu_resident_cg_scaling_sweep() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use std::time::Instant;
+
+    eprintln!();
+    eprintln!("─── Stage 36.5 GPU CG scaling sweep ──────────────────────");
+    eprintln!("Heat-equation steady state on tet cube. CPU = f64 CG;");
+    eprintln!("GPU streamed = per-iter readback; GPU resident = bind-");
+    eprintln!("group-cached resident CG (Slice D).");
+    eprintln!();
+    eprintln!(
+        "  {:>5}  {:>9}  {:>11}  {:>14}  {:>14}  {:>14}",
+        "grid", "n_dofs", "n_iters_cpu", "CPU CG (ms)", "GPU stream (ms)", "GPU resid (ms)"
+    );
+    eprintln!("  ─────  ─────────  ───────────  ──────────────  ──────────────  ──────────────");
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    for &nx in &[8usize, 12, 16, 24, 32] {
+        let mesh = FemMesh::tet_grid_3d(nx, nx, nx, 1.0, 1.0, 1.0);
+        let n = mesh.vert_count();
+        let k = assemble_stiffness(&mesh, 1.0);
+        // Source proportional to z, Dirichlet on bottom face.
+        let f: Vec<Real> = mesh.vertices.iter().map(|p| p.z).collect();
+        let mut bcs = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.z <= 1e-9 {
+                bcs.push(BoundaryCondition::Dirichlet {
+                    vertex: i as u32,
+                    value: 0.0,
+                });
+            }
+        }
+        let mut k_red = k.clone();
+        let mut f_red = f.clone();
+        apply_dirichlet(&mut k_red, &mut f_red, &bcs);
+
+        // Warm + measure CPU CG.
+        let cpu_result = cg_solve(
+            |x| {
+                let mut y = vec![0.0_f64; n];
+                k_red.mv(x, &mut y).unwrap();
+                y
+            },
+            &f_red,
+            &vec![0.0_f64; n],
+            1e-8,
+            10_000,
+        );
+        let cpu_iters = cpu_result.iters;
+        let cpu_ms = {
+            let t = Instant::now();
+            let _ = cg_solve(
+                |x| {
+                    let mut y = vec![0.0_f64; n];
+                    k_red.mv(x, &mut y).unwrap();
+                    y
+                },
+                &f_red,
+                &vec![0.0_f64; n],
+                1e-8,
+                10_000,
+            );
+            t.elapsed().as_secs_f64() * 1e3
+        };
+
+        // Upload to GPU once (shared across both GPU runs).
+        let gpu_data = FemGpuData::upload(&device, &queue, &mesh, &k_red).expect("upload");
+
+        // Warm + measure GPU streamed.
+        let _ = solve_steady_state_gpu(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-6)
+            .expect("warmup streamed");
+        let stream_ms = {
+            let t = Instant::now();
+            let _ = solve_steady_state_gpu(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-6)
+                .expect("gpu streamed");
+            t.elapsed().as_secs_f64() * 1e3
+        };
+
+        // Warm + measure GPU resident.
+        let _ = solve_steady_state_gpu_resident(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-6)
+            .expect("warmup resident");
+        let resid_ms = {
+            let t = Instant::now();
+            let _ = solve_steady_state_gpu_resident(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-6)
+                .expect("gpu resident");
+            t.elapsed().as_secs_f64() * 1e3
+        };
+
+        eprintln!(
+            "  {nx:>3}³  {n:>9}  {cpu_iters:>11}  {cpu_ms:>11.1}    {stream_ms:>11.1}    {resid_ms:>11.1}",
+        );
+    }
+    eprintln!();
+}
