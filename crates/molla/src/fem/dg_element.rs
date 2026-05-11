@@ -874,6 +874,413 @@ pub fn compute_dg_numerical_flux_block(
     block
 }
 
+// ─── Stage 43 v2 — Vector / system DG numerical flux ────────────────
+
+/// Stage 43 v2 — component-wise Lax-Friedrichs flux block for a system
+/// of `components` scalar conservation laws (e.g. shallow-water with
+/// `components = 3` for `[h, hu, hv]`).
+///
+/// The DG semi-discretisation of a system `∂U/∂t + ∇·F(U) = 0` with
+/// `U ∈ ℝᶜ` produces, for each face,
+///
+/// ```text
+///   ∮_F Ĥ(U_L, U_R, n) ⟦v⟧ dS
+/// ```
+///
+/// where `Ĥ` is a numerical flux vector with `c` components. Component-
+/// wise Lax-Friedrichs is the simplest robust choice:
+///
+/// ```text
+///   Ĥ_k = ½ (F_k(U_L) + F_k(U_R)) · n − ½ α (U_R[k] − U_L[k])
+/// ```
+///
+/// — i.e. apply scalar LF to each component independently using a
+/// shared global dissipation coefficient `α` ≥ max wave speed.
+///
+/// **Return:** a `((components·NL) + (components·NR))²` block, laid out
+/// in "component-fastest" order to match the natural flat-state layout
+/// `U_flat[dof * components + c]`. Specifically the row/column for
+/// local DG-DoF `i` of component `c` on the L-cell is
+/// `(i * components + c)`, and on the R-cell it starts at
+/// `nl_total + i * components + c` where `nl_total = NL * components`.
+///
+/// Like [`compute_dg_numerical_flux_block`] this builds **only** the
+/// dissipation contribution (the central-flux average is `0` when the
+/// caller hasn't passed a wind/flux Jacobian — system solvers are
+/// expected to assemble the analytic `∇·F` separately via volumetric
+/// quadrature, then use this block only for inter-element
+/// stabilisation).
+#[must_use]
+pub fn compute_dg_numerical_flux_block_vector(
+    cell_left: &FemCell,
+    cell_right: &FemCell,
+    face: &InteriorFace,
+    vertices: &[Vec3],
+    alpha: Real,
+    components: usize,
+    degree: usize,
+) -> Vec<Vec<Real>> {
+    assert!(degree <= 2, "DG: degree {degree} out of range (supports 0..=2)");
+    assert!(components >= 1, "DG vector flux: components must be ≥ 1");
+    let nl = dg_local_ndof(cell_left, degree);
+    let nr = dg_local_ndof(cell_right, degree);
+    let total_l = nl * components;
+    let total_r = nr * components;
+    let n = total_l + total_r;
+    let mut block = vec![vec![0.0_f64 as Real; n]; n];
+
+    let qpts = if degree >= 2 {
+        face_quadrature_high(face, vertices)
+    } else {
+        face_quadrature(face, vertices)
+    };
+
+    // The block layout is "component-fastest": DoF (cell_l, local i, comp c)
+    // → row total_index = i * components + c.
+    for q in &qpts {
+        let nl_vals = dg_shape_values_at(cell_left, vertices, q.point, degree);
+        let nr_vals = dg_shape_values_at(cell_right, vertices, q.point, degree);
+        let w = q.weight;
+        let half_a = 0.5 * alpha * w;
+        // For component `c`: pure-dissipation contribution to the
+        // residual matrix is the same scalar pattern as the scalar
+        // `LaxFriedrichs` branch in `compute_dg_numerical_flux_block`,
+        // applied independently to each component.
+        for i in 0..nl {
+            for j in 0..nl {
+                let v = half_a * nl_vals[j] * nl_vals[i];
+                for c in 0..components {
+                    block[i * components + c][j * components + c] += v;
+                }
+            }
+            for j in 0..nr {
+                let v = -half_a * nr_vals[j] * nl_vals[i];
+                for c in 0..components {
+                    block[i * components + c][total_l + j * components + c] += v;
+                }
+            }
+        }
+        for i in 0..nr {
+            for j in 0..nl {
+                let v = -half_a * nl_vals[j] * nr_vals[i];
+                for c in 0..components {
+                    block[total_l + i * components + c][j * components + c] += v;
+                }
+            }
+            for j in 0..nr {
+                let v = half_a * nr_vals[j] * nr_vals[i];
+                for c in 0..components {
+                    block[total_l + i * components + c][total_l + j * components + c] += v;
+                }
+            }
+        }
+    }
+
+    block
+}
+
+// ─── Stage 43 v2 — Nitsche boundary block for weak Dirichlet ──────────
+
+/// Stage 43 v2 — boundary face block + RHS for Nitsche weak Dirichlet.
+///
+/// Given a boundary face with sorted vertex indices `face_verts` owned
+/// by exactly one cell `cell`, compute
+///
+/// ```text
+///   a_F(u, v) = − ∫_F α (∇u·n) v dS
+///               − ∫_F α u (∇v·n) dS
+///               + ∫_F (σ α / h_F) u v dS
+/// ```
+///
+/// and the RHS contribution that pins the trace to a linearly-
+/// interpolated `u_D` between the per-vertex values supplied in
+/// `vertex_values` (one entry per face vertex, in the same order as
+/// `face_verts`):
+///
+/// ```text
+///   l_F(v) = − ∫_F α u_D (∇v·n) dS + ∫_F (σ α / h_F) u_D v dS
+/// ```
+///
+/// Returns `(block, rhs)` where `block` is `N × N` with
+/// `N = dg_ndof_per_cell(cell, degree)` and `rhs` is length `N`.
+///
+/// Used by [`super::bc::apply_dg_bcs`] when processing
+/// [`super::bc::BoundaryCondition::WeakDirichletDG`].
+#[must_use]
+pub fn compute_nitsche_boundary_block(
+    cell: &FemCell,
+    face_verts: &[u32],
+    vertices: &[Vec3],
+    alpha: Real,
+    degree: usize,
+    sigma: Real,
+    vertex_values: &[Real],
+) -> (Vec<Vec<Real>>, Vec<Real>) {
+    assert!(degree <= 2, "DG Nitsche: degree {degree} out of range");
+    assert_eq!(
+        face_verts.len(),
+        vertex_values.len(),
+        "compute_nitsche_boundary_block: vertex_values.len() != face_verts.len()"
+    );
+    let nl = dg_local_ndof(cell, degree);
+    let mut block = vec![vec![0.0_f64 as Real; nl]; nl];
+    let mut rhs = vec![0.0_f64 as Real; nl];
+
+    // Build a fake interior face structure to reuse the high-order face
+    // quadrature kernel. Geometry is identical for boundary vs interior
+    // — only the orientation/normal convention differs.
+    let pseudo_face = InteriorFace {
+        cell_left: 0,
+        cell_right: u32::MAX,
+        face_verts: face_verts.to_vec(),
+    };
+    let qpts = if degree >= 2 {
+        face_quadrature_high(&pseudo_face, vertices)
+    } else {
+        face_quadrature(&pseudo_face, vertices)
+    };
+    let h_f = face_h_scale(&pseudo_face, vertices);
+    let pen = sigma * alpha / h_f;
+
+    // Outward normal: point *away* from the cell centroid.
+    let c = cell_centroid(cell, vertices);
+    let raw_n = match face_verts.len() {
+        2 => {
+            let a = vertices[face_verts[0] as usize];
+            let b = vertices[face_verts[1] as usize];
+            edge_normal_2d(a, b)
+        }
+        3 => {
+            let a = vertices[face_verts[0] as usize];
+            let b = vertices[face_verts[1] as usize];
+            let c2 = vertices[face_verts[2] as usize];
+            tri_normal_3d(a, b, c2)
+        }
+        _ => unreachable!("compute_nitsche_boundary_block: unsupported face_verts length"),
+    };
+    let to_face_centroid = match face_verts.len() {
+        2 => {
+            let a = vertices[face_verts[0] as usize];
+            let b = vertices[face_verts[1] as usize];
+            (a + b) * 0.5 - c
+        }
+        3 => {
+            let a = vertices[face_verts[0] as usize];
+            let b = vertices[face_verts[1] as usize];
+            let c2 = vertices[face_verts[2] as usize];
+            (a + b + c2) / 3.0 - c
+        }
+        _ => unreachable!(),
+    };
+    let n_out = if raw_n.dot(to_face_centroid) >= 0.0 {
+        raw_n
+    } else {
+        -raw_n
+    };
+
+    // For interpolating `u_D` linearly between face vertices, we need
+    // a parameter along the face for each quadrature point. For an
+    // edge: ξ ∈ [0, 1] from face_verts[0] to face_verts[1]. For a
+    // triangle face: barycentric (b0, b1, b2) wrt face_verts.
+    for q in &qpts {
+        let nvals = dg_shape_values_at(cell, vertices, q.point, degree);
+        let grads = dg_shape_grads_at(cell, vertices, q.point, degree);
+        let gn: Vec<Real> = grads.iter().map(|g| g.dot(n_out)).collect();
+
+        // u_D at the quadrature point — linear interpolation between
+        // face-vertex values.
+        let u_d = match face_verts.len() {
+            2 => {
+                let a = vertices[face_verts[0] as usize];
+                let b = vertices[face_verts[1] as usize];
+                let len = (b - a).length();
+                let xi = if len < 1.0e-30 {
+                    0.5
+                } else {
+                    (q.point - a).dot(b - a) / (len * len)
+                };
+                (1.0 - xi) * vertex_values[0] + xi * vertex_values[1]
+            }
+            3 => {
+                let a = vertices[face_verts[0] as usize];
+                let b = vertices[face_verts[1] as usize];
+                let c2 = vertices[face_verts[2] as usize];
+                // 3D triangle barycentric — solve in the face plane.
+                let area = tri_area_3d(a, b, c2);
+                let area_bcq = tri_area_3d(b, c2, q.point);
+                let area_caq = tri_area_3d(c2, a, q.point);
+                let area_abq = tri_area_3d(a, b, q.point);
+                let inv_area = if area < 1.0e-30 { 0.0 } else { 1.0 / area };
+                let l0 = area_bcq * inv_area;
+                let l1 = area_caq * inv_area;
+                let l2 = area_abq * inv_area;
+                l0 * vertex_values[0] + l1 * vertex_values[1] + l2 * vertex_values[2]
+            }
+            _ => unreachable!(),
+        };
+
+        let w = q.weight;
+        for i in 0..nl {
+            for j in 0..nl {
+                let val =
+                    -alpha * gn[j] * nvals[i] - alpha * nvals[j] * gn[i] + pen * nvals[i] * nvals[j];
+                block[i][j] += w * val;
+            }
+            // RHS: − α ∫_F u_D (∇v·n) + pen ∫_F u_D v.
+            rhs[i] += w * (-alpha * u_d * gn[i] + pen * u_d * nvals[i]);
+        }
+    }
+
+    (block, rhs)
+}
+
+// ─── Stage 43 v2 — Periodic face pairing ─────────────────────────────
+
+/// Stage 43 v2 — pair up boundary faces on opposite sides of a periodic
+/// domain along `axis ∈ {0, 1, 2}` (= x / y / z).
+///
+/// Walks the boundary faces (= faces owned by a single cell), bins
+/// them by their **midpoint coordinates in the other two axes**, and
+/// returns one `(face_a, face_b)` pair per bucket that contains exactly
+/// two faces — where one is on the minimum-axis side of the domain and
+/// the other is on the maximum-axis side.
+///
+/// **Tolerance:** the bin key uses 12-digit rounding of the non-axis
+/// coordinates. Two faces match if their non-axis midpoints round
+/// identically — this is consistent with the structured `tri_grid_2d`
+/// and `tet_grid_3d` builders which produce exact (binary) coordinates
+/// on the grid lattice. For unstructured imported meshes the caller
+/// should pre-snap the periodic boundary nodes onto an exact lattice.
+///
+/// Returns an empty `Vec` if the mesh has no periodic boundary pair.
+#[must_use]
+pub fn periodic_face_pairs(
+    mesh: &super::mesh::FemMesh,
+    axis: usize,
+) -> Vec<(InteriorFace, InteriorFace)> {
+    use std::collections::HashMap;
+    assert!(axis < 3, "periodic_face_pairs: axis must be < 3");
+
+    // First pass — collect boundary faces (owned by exactly one cell).
+    let mut face_to_cells: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
+    for (cell_idx, cell) in mesh.cells.iter().enumerate() {
+        match cell {
+            FemCell::Tri(v) => {
+                for &[a, b] in &[[v[0], v[1]], [v[1], v[2]], [v[2], v[0]]] {
+                    let mut key = vec![a, b];
+                    key.sort_unstable();
+                    face_to_cells
+                        .entry(key)
+                        .or_default()
+                        .push(cell_idx as u32);
+                }
+            }
+            FemCell::Tet(v) => {
+                for &[a, b, c] in &[
+                    [v[1], v[2], v[3]],
+                    [v[0], v[2], v[3]],
+                    [v[0], v[1], v[3]],
+                    [v[0], v[1], v[2]],
+                ] {
+                    let mut key = vec![a, b, c];
+                    key.sort_unstable();
+                    face_to_cells
+                        .entry(key)
+                        .or_default()
+                        .push(cell_idx as u32);
+                }
+            }
+        }
+    }
+
+    // Find domain extents along the axis (for min/max side detection).
+    let mut axis_min: Real = Real::INFINITY;
+    let mut axis_max: Real = Real::NEG_INFINITY;
+    for v in &mesh.vertices {
+        let c = match axis {
+            0 => v.x,
+            1 => v.y,
+            _ => v.z,
+        };
+        if c < axis_min {
+            axis_min = c;
+        }
+        if c > axis_max {
+            axis_max = c;
+        }
+    }
+
+    // Bin boundary faces by rounded non-axis midpoint coordinates.
+    let key_for = |coords: &[Real; 2]| -> (i64, i64) {
+        let scale = 1.0e12_f64;
+        (
+            (coords[0] * scale).round() as i64,
+            (coords[1] * scale).round() as i64,
+        )
+    };
+    let face_midpoint = |face_verts: &[u32]| -> Vec3 {
+        let mut s = Vec3::ZERO;
+        for &v in face_verts {
+            s += mesh.vertices[v as usize];
+        }
+        s / (face_verts.len() as Real)
+    };
+    let axis_value = |p: Vec3| -> Real {
+        match axis {
+            0 => p.x,
+            1 => p.y,
+            _ => p.z,
+        }
+    };
+    let other_coords = |p: Vec3| -> [Real; 2] {
+        match axis {
+            0 => [p.y, p.z],
+            1 => [p.x, p.z],
+            _ => [p.x, p.y],
+        }
+    };
+
+    let tol_axis = (axis_max - axis_min).abs() * 1.0e-6 + 1.0e-12;
+
+    // (bin_key, side) → InteriorFace.  side: false = min side, true = max side.
+    let mut min_side: HashMap<(i64, i64), InteriorFace> = HashMap::new();
+    let mut max_side: HashMap<(i64, i64), InteriorFace> = HashMap::new();
+
+    for (face_verts, owners) in &face_to_cells {
+        if owners.len() != 1 {
+            continue;
+        }
+        let mid = face_midpoint(face_verts);
+        let a_val = axis_value(mid);
+        let is_min = (a_val - axis_min).abs() <= tol_axis;
+        let is_max = (a_val - axis_max).abs() <= tol_axis;
+        if !is_min && !is_max {
+            continue;
+        }
+        let k = key_for(&other_coords(mid));
+        let f = InteriorFace {
+            cell_left: owners[0],
+            cell_right: u32::MAX,
+            face_verts: face_verts.clone(),
+        };
+        if is_min {
+            min_side.insert(k, f);
+        } else {
+            max_side.insert(k, f);
+        }
+    }
+
+    // Pair them up.
+    let mut pairs: Vec<(InteriorFace, InteriorFace)> = Vec::new();
+    for (k, fa) in min_side.into_iter() {
+        if let Some(fb) = max_side.remove(&k) {
+            pairs.push((fa, fb));
+        }
+    }
+    pairs.sort_by_key(|(a, b)| (a.cell_left, b.cell_left));
+    pairs
+}
+
 // ─── Stage 43 — Barth-Jespersen slope limiter ────────────────────────
 
 /// Apply a scalar Barth-Jespersen slope limiter to the per-cell DG
@@ -1497,4 +1904,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn periodic_face_pairs_finds_matching_boundary_edges_on_grid() {
+        // 4×3 tri grid on [0, 4] × [0, 3]. Periodic along axis 0 (x):
+        // every face on x = 0 should pair with the same-y face on x = 4.
+        let mesh = FemMesh::tri_grid_2d(4, 3, 4.0, 3.0);
+        let pairs = periodic_face_pairs(&mesh, 0);
+        assert!(!pairs.is_empty(), "no periodic pairs found");
+        for (fa, fb) in &pairs {
+            // Both faces should be edges (2 vertices).
+            assert_eq!(fa.face_verts.len(), 2);
+            assert_eq!(fb.face_verts.len(), 2);
+            // x coords of fa midpoint should be ~0; fb midpoint ~4.
+            let mid = |f: &InteriorFace| -> Vec3 {
+                let mut s = Vec3::ZERO;
+                for &v in &f.face_verts {
+                    s += mesh.vertices[v as usize];
+                }
+                s / (f.face_verts.len() as Real)
+            };
+            let ma = mid(fa);
+            let mb = mid(fb);
+            assert!(ma.x.abs() < 1e-9, "fa midpoint not on x=0: {ma:?}");
+            assert!((mb.x - 4.0).abs() < 1e-9, "fb midpoint not on x=4: {mb:?}");
+            // y midpoints must match (the bin key).
+            assert!((ma.y - mb.y).abs() < 1e-9, "y mismatch: ma={ma:?}, mb={mb:?}");
+        }
+    }
+
+    #[test]
+    fn nitsche_boundary_block_constant_field_recovers_value() {
+        // Constant-field test: for a P1 boundary face with u_D set to
+        // the (constant) cell value, the RHS should equal `block · u`
+        // (= just the consistency boundary integral). Verifies the
+        // sign conventions for the consistency / penalty terms.
+        let v = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        ];
+        let cell = FemCell::Tri([0, 1, 2]);
+        // Boundary edge (0, 1) — the bottom of the triangle. u_D = 2.5
+        // at both endpoints (constant trace).
+        let (block, rhs) = compute_nitsche_boundary_block(
+            &cell,
+            &[0, 1],
+            &v,
+            1.0, // alpha
+            1,   // degree
+            20.0, // sigma
+            &[2.5, 2.5],
+        );
+        // u = (2.5, 2.5, 2.5) — constant field over the cell.
+        let u = [2.5_f64, 2.5, 2.5];
+        for i in 0..3 {
+            let bu: Real = (0..3).map(|j| block[i][j] * u[j]).sum();
+            // block · u should equal rhs for the constant Dirichlet trace.
+            let diff = (bu - rhs[i]).abs();
+            assert!(diff < 1e-9, "row {i}: block·u = {bu}, rhs = {}", rhs[i]);
+        }
+    }
 }

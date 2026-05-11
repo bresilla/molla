@@ -1511,6 +1511,14 @@ where
                         traction: *traction,
                     }
                 }
+                // DG Nitsche BCs are irrelevant to the CG Newton iteration.
+                BoundaryCondition::WeakDirichletDG { vertex, value, sigma } => {
+                    BoundaryCondition::WeakDirichletDG {
+                        vertex: *vertex,
+                        value: *value,
+                        sigma: *sigma,
+                    }
+                }
             })
             .collect();
         // `f_ext` already accounts for tractions, so we DROP traction

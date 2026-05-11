@@ -21,6 +21,35 @@
 //! All BCs are addressed by global DoF index (= vertex index for
 //! `FunctionSpace::P1Nodal`). The caller is responsible for picking
 //! the right vertices given the mesh.
+//!
+//! ## Stage 43 v2 — DG Nitsche weak Dirichlet
+//!
+//! The `BoundaryCondition::WeakDirichletDG { vertex, value, sigma }`
+//! variant pins the **trace** of a DG field at a boundary vertex
+//! through a Nitsche-style penalty + consistency term integrated on
+//! the boundary face. Unlike the strong Dirichlet variants, the BC
+//! never overwrites a row directly — it modifies the global matrix
+//! by adding the symmetric interior-penalty boundary block
+//!
+//! ```text
+//!   a_∂Ω(u, v) = − α ∫_∂Ω (∇u·n) v dS
+//!                − α ∫_∂Ω u (∇v·n) dS
+//!                + (σ α / h_F) ∫_∂Ω u v dS
+//! ```
+//!
+//! and contributes the matching RHS
+//!
+//! ```text
+//!   l_∂Ω(v) = − α ∫_∂Ω u_D (∇v·n) dS + (σ α / h_F) ∫_∂Ω u_D v dS
+//! ```
+//!
+//! where `u_D` is the prescribed Dirichlet trace (interpolated linearly
+//! between the vertex `value`s on each boundary face). Faces where not
+//! every vertex carries a `WeakDirichletDG` entry are skipped.
+//!
+//! Apply via [`apply_dg_bcs`] — the regular [`apply_bcs`] entrypoint
+//! drops the variant silently (DG needs the cell + degree context that
+//! `apply_bcs` doesn't have).
 
 use crate::math::sparse::BsrMatrix;
 use crate::math::Real;
@@ -56,6 +85,30 @@ pub enum BoundaryCondition {
     /// component-by-component. Used by Stage 36.1 elasticity to push
     /// loads onto a free surface.
     NeumannTraction { face: [u32; 3], traction: [Real; 3] },
+    /// Stage 43 v2 — DG weak (Nitsche) Dirichlet at a boundary
+    /// vertex. The applier ([`apply_dg_bcs`]) integrates the
+    /// symmetric-interior-penalty boundary block + matching RHS on
+    /// every boundary face whose vertices all carry the variant. The
+    /// default value of `sigma` recommended by the literature is
+    /// `degree · (degree + 1) · 10` — see [`default_nitsche_sigma`].
+    WeakDirichletDG {
+        /// Boundary vertex index in the parent `FemMesh`.
+        vertex: u32,
+        /// Prescribed Dirichlet value `u_D(vertex)`.
+        value: Real,
+        /// Nitsche penalty coefficient `σ` (dimensionless — scaled by
+        /// `α / h_F` internally).
+        sigma: Real,
+    },
+}
+
+/// Recommended Nitsche penalty for `WeakDirichletDG` of DG polynomial
+/// order `degree`. Returns `degree · (degree + 1) · 10` — large enough
+/// to keep the boundary block coercive across reasonable mesh sizes,
+/// small enough to avoid conditioning blow-up.
+#[must_use]
+pub fn default_nitsche_sigma(degree: usize) -> Real {
+    (degree as Real) * ((degree + 1) as Real) * 10.0
 }
 
 /// Apply Dirichlet BCs + Neumann tractions in-place.
@@ -154,6 +207,11 @@ pub fn apply_bcs(
             }
             BoundaryCondition::Neumann { .. } => {}
             BoundaryCondition::NeumannTraction { .. } => {}
+            // DG Nitsche BCs are handled by `apply_dg_bcs`, which
+            // needs the cell + degree context that `apply_bcs` lacks.
+            // Silently skip here so callers can mix CG + DG BCs in
+            // the same vector without panicking.
+            BoundaryCondition::WeakDirichletDG { .. } => {}
         }
     }
 
@@ -207,6 +265,193 @@ fn pin_row(k: &mut BsrMatrix, f: &mut [Real], r: usize, value: Real) {
          row has no assembled connectivity, system is singular",
     );
     f[r] = value;
+}
+
+// ─── Stage 43 v2 — DG Nitsche boundary applier ────────────────────────
+
+/// Apply DG-aware boundary conditions to a DG global matrix + RHS.
+///
+/// Currently handles [`BoundaryCondition::WeakDirichletDG`] only; the
+/// other variants are silently ignored (use [`apply_bcs`] for those —
+/// it's safe to call both in sequence on different system flavours).
+///
+/// **Inputs:**
+///
+/// - `k`         — global DG stiffness / system matrix (BSR, B = 1).
+///   The boundary block is **added** to the matrix in place, so the
+///   caller must rebuild `k` if the BC set changes (consistent with
+///   the existing strong-Dirichlet applier semantics).
+/// - `f`         — global DG RHS vector (modified in place).
+/// - `bcs`       — flat slice of BCs (mixing CG/DG variants is OK).
+/// - `mesh`      — DG mesh (vertex + cell array — same one used by the
+///   `assemble_dg_global` call that built `k`).
+/// - `degree`    — DG polynomial order (matches the assembly call).
+/// - `alpha`     — diffusion coefficient (same value passed to
+///   `compute_element_dg_stiffness` and `compute_dg_flux_jump_block`).
+///
+/// **What it does:** for every boundary face (= face owned by exactly
+/// one cell) whose two/three vertices **all** carry a `WeakDirichletDG`
+/// entry, compute the Nitsche penalty + consistency boundary block
+/// (`compute_nitsche_boundary_block`) and add it to `k`; compute the
+/// matching `u_D`-side RHS contribution and add it to `f`.
+///
+/// **Penalty resolution:** the per-face penalty `σ` is the **maximum**
+/// of the constituent vertex `sigma` values. This matches the standard
+/// "vertex-wise penalty + face takes the strongest" convention used
+/// when adjacent vertices come from different BC sources.
+///
+/// Returns `Ok(())` on success or an error from the BSR rebuild on
+/// failure.
+pub fn apply_dg_bcs(
+    k: &mut BsrMatrix,
+    f: &mut [Real],
+    bcs: &[BoundaryCondition],
+    mesh: &super::mesh::FemMesh,
+    degree: usize,
+    alpha: Real,
+) -> crate::core::Result<()> {
+    use std::collections::HashMap;
+
+    // Index DG `WeakDirichletDG` BCs by vertex.
+    struct DgVertexBc {
+        value: Real,
+        sigma: Real,
+    }
+    let mut by_vertex: HashMap<u32, DgVertexBc> = HashMap::new();
+    for bc in bcs {
+        if let BoundaryCondition::WeakDirichletDG { vertex, value, sigma } = bc {
+            by_vertex.insert(*vertex, DgVertexBc { value: *value, sigma: *sigma });
+        }
+    }
+    if by_vertex.is_empty() {
+        return Ok(());
+    }
+
+    // Identify boundary faces — face_to_cells with exactly one owner.
+    // Mirrors `compute_interior_faces` but keeps the *boundary* faces
+    // instead of dropping them.
+    let mut face_to_cells: HashMap<Vec<u32>, Vec<(u32, [usize; 3])>> = HashMap::new();
+    for (cell_idx, cell) in mesh.cells.iter().enumerate() {
+        match cell {
+            super::mesh::FemCell::Tri(v) => {
+                let edges: [[u32; 2]; 3] = [[v[0], v[1]], [v[1], v[2]], [v[2], v[0]]];
+                for e in &edges {
+                    let mut key = vec![e[0], e[1]];
+                    key.sort_unstable();
+                    face_to_cells
+                        .entry(key)
+                        .or_default()
+                        .push((cell_idx as u32, [0, 0, 0]));
+                }
+            }
+            super::mesh::FemCell::Tet(v) => {
+                let faces: [[u32; 3]; 4] = [
+                    [v[1], v[2], v[3]],
+                    [v[0], v[2], v[3]],
+                    [v[0], v[1], v[3]],
+                    [v[0], v[1], v[2]],
+                ];
+                for fc in &faces {
+                    let mut key = vec![fc[0], fc[1], fc[2]];
+                    key.sort_unstable();
+                    face_to_cells
+                        .entry(key)
+                        .or_default()
+                        .push((cell_idx as u32, [0, 0, 0]));
+                }
+            }
+        }
+    }
+
+    // DG DoF offsets (running sum of per-cell DoF count).
+    let mut offsets = Vec::with_capacity(mesh.cells.len() + 1);
+    let mut running = 0usize;
+    for c in &mesh.cells {
+        offsets.push(running);
+        running += super::function_space::dg_ndof_per_cell(c, degree);
+    }
+    offsets.push(running);
+
+    // Triplets to add into `k`.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
+
+    for (face_verts, owners) in &face_to_cells {
+        if owners.len() != 1 {
+            continue;
+        }
+        // Only process this face if *every* vertex of the face carries
+        // a WeakDirichletDG entry — partial constraints are ignored.
+        let mut bc_at: Vec<&DgVertexBc> = Vec::with_capacity(face_verts.len());
+        let mut all_constrained = true;
+        for v in face_verts {
+            if let Some(b) = by_vertex.get(v) {
+                bc_at.push(b);
+            } else {
+                all_constrained = false;
+                break;
+            }
+        }
+        if !all_constrained {
+            continue;
+        }
+        // Per-face penalty = max of vertex `sigma` values.
+        let sigma_face: Real = bc_at
+            .iter()
+            .map(|b| b.sigma)
+            .fold(Real::NEG_INFINITY, Real::max);
+
+        let cell_idx = owners[0].0 as usize;
+        let cell = &mesh.cells[cell_idx];
+        let off = offsets[cell_idx];
+        let nl = super::function_space::dg_ndof_per_cell(cell, degree);
+
+        // Build boundary block + RHS for this face.
+        let (block, rhs) = super::dg_element::compute_nitsche_boundary_block(
+            cell,
+            face_verts,
+            &mesh.vertices,
+            alpha,
+            degree,
+            sigma_face,
+            &bc_at.iter().map(|b| b.value).collect::<Vec<_>>(),
+        );
+
+        // Scatter block into triplets and add rhs into f.
+        for i in 0..nl {
+            for j in 0..nl {
+                let v = block[i][j];
+                if v != 0.0 {
+                    triplets.push((off + i, off + j, v));
+                }
+            }
+            f[off + i] += rhs[i];
+        }
+    }
+
+    if triplets.is_empty() {
+        return Ok(());
+    }
+
+    // Add the boundary triplets into `k` by rebuilding via mv expansion.
+    // We extract `k` as triplets via column scans, merge in the new
+    // boundary triplets, and rebuild — matches the `add_bsr` strategy
+    // used by the Stage 43 v1 advanced tests.
+    let n = k.nrows();
+    let mut all_triplets: Vec<(usize, usize, Real)> = Vec::new();
+    for j in 0..n {
+        let mut e = vec![0.0_f64 as Real; n];
+        e[j] = 1.0;
+        let mut col = vec![0.0_f64 as Real; n];
+        k.mv(&e, &mut col)?;
+        for (i, &v) in col.iter().enumerate() {
+            if v != 0.0 {
+                all_triplets.push((i, j, v));
+            }
+        }
+    }
+    all_triplets.extend(triplets);
+    *k = BsrMatrix::from_scalar_triplets(n, n, &all_triplets)?;
+    Ok(())
 }
 
 #[cfg(test)]

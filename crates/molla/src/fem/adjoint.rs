@@ -132,6 +132,8 @@ pub fn solve_adjoint_with(
                 })
             }
             BoundaryCondition::Neumann { .. } | BoundaryCondition::NeumannTraction { .. } => None,
+            // DG Nitsche BCs are irrelevant to the CG adjoint solve.
+            BoundaryCondition::WeakDirichletDG { .. } => None,
         })
         .collect();
     apply_bcs(&mut k_red, &mut rhs, &pin_only, vertices, dim);

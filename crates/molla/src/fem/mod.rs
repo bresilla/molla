@@ -56,6 +56,7 @@ pub mod apic_coupling_gpu;
 pub mod assembly;
 pub mod bc;
 pub mod dg_element;
+pub mod dg_time_integrator;
 pub mod element;
 #[cfg(feature = "gpu")]
 pub mod elasticity_gpu;
@@ -83,11 +84,15 @@ pub use apic_coupling_gpu::ApicGpuState;
 pub use assembly::assemble_global;
 pub use dg_element::{
     assemble_dg_global, build_cell_neighbours, compute_dg_flux_jump_block,
-    compute_dg_numerical_flux_block, compute_element_dg_mass,
-    compute_element_dg_stiffness, compute_interior_faces, dg_nodal_positions,
-    limit_solution, InteriorFace, NumericalFlux,
+    compute_dg_numerical_flux_block, compute_dg_numerical_flux_block_vector,
+    compute_element_dg_mass, compute_element_dg_stiffness, compute_interior_faces,
+    compute_nitsche_boundary_block, dg_nodal_positions, limit_solution,
+    periodic_face_pairs, InteriorFace, NumericalFlux,
 };
-pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
+pub use dg_time_integrator::{ssp_rk2_step, ssp_rk3_step};
+pub use bc::{
+    apply_bcs, apply_dg_bcs, apply_dirichlet, default_nitsche_sigma, BoundaryCondition,
+};
 #[cfg(feature = "gpu")]
 pub use elasticity_gpu::{
     assemble_elasticity_gpu_only, build_elasticity_gpu_pattern, solve_elasticity_gpu,
