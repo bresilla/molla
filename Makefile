@@ -19,7 +19,7 @@ $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-soft-vt-gpu test-soft-friction-gpu test-fem-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
+.PHONY: build b compile c run r run-profile test t test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-autograd-featherstone-gpu test-xpbd-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-hydroelastic-gpu test-mujoco-gpu test-sparse-grid-gpu test-mpm-gpu test-mpm-v3-gpu test-soft-vt-gpu test-soft-friction-gpu test-fem-gpu test-fem-elasticity-gpu test-oracle bench-cpu bench-gpu bench-featherstone check fmt clean help h
 
 build:
 	@$(CARGO) build --workspace --all-targets
@@ -180,6 +180,13 @@ test-soft-friction-gpu:
 # `--ignored` (real wgpu adapter needed).
 test-fem-gpu:
 	@$(RUN_ENV) $(CARGO) test -p molla --features gpu --test fem_gpu -- --ignored
+
+# Stage 41.1 — GPU linear elasticity assembly + resident-CG end-to-end.
+# Runs the 4³ assembly parity, the 8×4×4 cantilever solve parity, and the
+# 16³ perf telemetry (peak |u| ~ 6e-2, GPU vs CPU wall-clock). All
+# `--ignored` (real wgpu adapter needed).
+test-fem-elasticity-gpu:
+	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test fem_elasticity_gpu -- --ignored --nocapture
 
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
