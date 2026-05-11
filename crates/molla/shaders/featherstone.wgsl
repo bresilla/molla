@@ -42,6 +42,7 @@ const JOINT_FIXED:     u32 = 3u;
 const JOINT_FREE:      u32 = 4u;
 const JOINT_DISTANCE:  u32 = 5u;
 const JOINT_D6:        u32 = 6u;
+const JOINT_CABLE:     u32 = 7u;
 
 const MAX_JOINTS_PER_ART: u32 = 32u;
 const MAX_DOFS_PER_JOINT: u32 = 6u;
@@ -106,6 +107,16 @@ fn drive_torque(mode: u32, q: f32, qd: f32, kp: f32, kd: f32, pos_t: f32, vel_t:
 
 @group(3) @binding(0) var<storage, read> art_offsets: array<u32>;
 @group(4) @binding(0) var<uniform> uniforms: Uniforms;
+
+// Stage 42 v3 + 39E — per-joint cable spring/damper + per-DOF muscle
+// torque accumulator. The host zero-fills these buffers when the
+// model has no cables / muscles so the same bind-group layout works
+// for every scene.
+@group(5) @binding(0) var<storage, read> joint_cable_k_lin:  array<f32>;
+@group(5) @binding(1) var<storage, read> joint_cable_k_bend: array<f32>;
+@group(5) @binding(2) var<storage, read> joint_cable_c_lin:  array<f32>;
+@group(5) @binding(3) var<storage, read> joint_cable_c_bend: array<f32>;
+@group(5) @binding(4) var<storage, read> joint_muscle_torque: array<f32>;
 
 // ─── Spatial primitives ─────────────────────────────────────────
 
@@ -228,6 +239,13 @@ fn joint_local_transform(jt: u32, q_start: u32, axis: vec3<f32>) -> Transform {
     } else if (jt == JOINT_FREE || jt == JOINT_DISTANCE || jt == JOINT_D6) {
         t.position = vec4<f32>(joint_q[q_start], joint_q[q_start+1u], joint_q[q_start+2u], 0.0);
         t.rotation = normalize(vec4<f32>(joint_q[q_start+3u], joint_q[q_start+4u], joint_q[q_start+5u], joint_q[q_start+6u]));
+    } else if (jt == JOINT_CABLE) {
+        // 2 coords: q_l linear stretch along joint-local +z, q_b bend
+        // angle about joint-local +x. Translate-then-rotate.
+        let q_l = joint_q[q_start];
+        let q_b = joint_q[q_start + 1u];
+        t.position = vec4<f32>(0.0, 0.0, q_l, 0.0);
+        t.rotation = quat_from_axis_angle(vec3<f32>(1.0, 0.0, 0.0), q_b);
     }
     return t;
 }
@@ -237,6 +255,7 @@ fn joint_dof_n(jt: u32) -> u32 {
     if (jt == JOINT_REVOLUTE || jt == JOINT_PRISMATIC) { return 1u; }
     if (jt == JOINT_BALL) { return 3u; }
     if (jt == JOINT_FREE || jt == JOINT_DISTANCE || jt == JOINT_D6) { return 6u; }
+    if (jt == JOINT_CABLE) { return 2u; }
     return 0u; // FIXED
 }
 
@@ -433,6 +452,13 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             n_dof = 6u;
+        } else if (jt == JOINT_CABLE) {
+            // Stage 39E — 2-column subspace: linear stretch along
+            // joint-world +z, bend about joint-world +x. Mirrors the
+            // CPU build_motion_subspace impl.
+            s_lin[k][0u] = ez; dof_active_arr[k][0u] = 1u;
+            s_ang[k][1u] = ex; dof_active_arr[k][1u] = 1u;
+            n_dof = 2u;
         }
         n_dof_arr[k] = n_dof;
 
@@ -536,6 +562,9 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             var q_now = 0.0;
             if (jt == JOINT_REVOLUTE || jt == JOINT_PRISMATIC) {
                 q_now = joint_q[coord + d];
+            } else if (jt == JOINT_CABLE) {
+                // Cable: 2 scalar coords (k=0 → linear stretch, k=1 → bend).
+                q_now = joint_q[coord + d];
             }
             let mode = joint_target_mode[dof_g];
             let drv = drive_torque(
@@ -545,7 +574,30 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 joint_target_pos[dof_g], joint_target_vel[dof_g],
             );
             let mu_jt = joint_friction[dof_g];
-            let tau_raw = joint_force[dof_g] + drv - mu_jt * qd_now;
+            // Stage 39E — per-DoF spring + damper for CABLE joints
+            // (k=0 linear stretch uses k_lin/c_lin, k=1 bend uses
+            // k_bend/c_bend). Buffers are zero for every other joint
+            // type so we can read unconditionally.
+            var cable_tau = 0.0;
+            if (jt == JOINT_CABLE) {
+                var k_stiff = 0.0;
+                var c_damp = 0.0;
+                if (d == 0u) {
+                    k_stiff = joint_cable_k_lin[j];
+                    c_damp  = joint_cable_c_lin[j];
+                } else {
+                    k_stiff = joint_cable_k_bend[j];
+                    c_damp  = joint_cable_c_bend[j];
+                }
+                cable_tau = -k_stiff * q_now - c_damp * qd_now;
+            }
+            // Stage 42 v3 — pre-computed Hill-type muscle torque.
+            // `muscle.wgsl` writes the per-DOF sum into
+            // `joint_muscle_torque[dof_g]`. Only the cable linear-
+            // stretch DoF is populated; everything else is zero.
+            let muscle_tau = joint_muscle_torque[dof_g];
+            let tau_raw = joint_force[dof_g] + drv - mu_jt * qd_now
+                          + cable_tau + muscle_tau;
             let tau_app = clamp_or_passthrough(tau_raw, joint_effort_limit[dof_g]);
             u_tau_arr[k][d] = tau_app - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));
 
@@ -662,6 +714,30 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             joint_qd[dof] = qd_after;
             joint_q[coord] = q_clamped;
+        } else if (jt == JOINT_CABLE) {
+            // Stage 39E — 2 scalar coords (q_l, q_b), 2 dofs. Symplectic
+            // Euler per DoF, identical to two stacked 1-DoF integrators.
+            for (var dd = 0u; dd < 2u; dd = dd + 1u) {
+                let qd_old = joint_qd[dof + dd];
+                let qd_int = qd_old + q_dd_arr[k][dd] * uniforms.dt;
+                let qd_damped = qd_int * damp;
+                let qd_capped = clamp_or_passthrough(qd_damped, joint_velocity_limit[dof + dd]);
+                let q_pred = joint_q[coord + dd] + qd_capped * uniforms.dt;
+                let lo = joint_limit_lower[dof + dd];
+                let hi = joint_limit_upper[dof + dd];
+                var q_clamped = q_pred;
+                var qd_after = qd_capped;
+                if ((lo == lo) && (q_clamped < lo)) {
+                    q_clamped = lo;
+                    if (qd_after < 0.0) { qd_after = 0.0; }
+                }
+                if ((hi == hi) && (q_clamped > hi)) {
+                    q_clamped = hi;
+                    if (qd_after > 0.0) { qd_after = 0.0; }
+                }
+                joint_qd[dof + dd] = qd_after;
+                joint_q[coord + dd] = q_clamped;
+            }
         } else if (jt == JOINT_BALL) {
             var omega = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
             let alpha = vec3<f32>(q_dd_arr[k][0u], q_dd_arr[k][1u], q_dd_arr[k][2u]);

@@ -59,6 +59,8 @@ mod hydroelastic;
 #[cfg(feature = "gpu")]
 mod mpr;
 #[cfg(feature = "gpu")]
+mod muscle;
+#[cfg(feature = "gpu")]
 mod contact_reduction;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast;
@@ -178,6 +180,8 @@ pub use mpr::{
     decode_mpr_out, MprKernel, MprPairResult, MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE,
     MPR_STATUS_FALLBACK, MPR_STATUS_NONE, MPR_STATUS_OK,
 };
+#[cfg(feature = "gpu")]
+pub use muscle::MuscleKernel;
 #[cfg(feature = "gpu")]
 pub use contact_reduction::{
     pack_groups_host, unpack_output_host, ContactReductionKernel, CONTACT_STRIDE,

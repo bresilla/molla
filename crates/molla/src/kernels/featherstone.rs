@@ -36,11 +36,19 @@ pub struct FeatherstoneKernel {
     layout_control: wgpu::BindGroupLayout,
     layout_arts: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
+    /// Bind group 5 — per-joint cable spring/damper + per-DOF muscle
+    /// torque accumulator (Stage 39E + 42 v3).
+    layout_cable_muscle: wgpu::BindGroupLayout,
     /// Articulation CSR — built from `model.articulation_start` at
     /// kernel construction. Length = `articulation_count + 1`.
     art_offsets: wgpu::Buffer,
+    /// Zero-filled fallback buffer used when the caller doesn't pass
+    /// a custom per-DOF muscle torque buffer. Size = `dof_total *
+    /// sizeof(f32)`, allocated once at kernel construction.
+    zero_dof_buf: wgpu::Buffer,
     articulation_count: u32,
     joint_count: u32,
+    dof_total: u32,
 }
 
 impl FeatherstoneKernel {
@@ -81,6 +89,13 @@ impl FeatherstoneKernel {
                 count: None,
             }],
         });
+        // Bind group 5 — 4 cable per-joint buffers + 1 per-DOF muscle
+        // torque accumulator. All read-only.
+        let layout_cable_muscle =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::featherstone cable+muscle"),
+                entries: &storage_entries(5, true),
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::featherstone layout"),
@@ -90,6 +105,7 @@ impl FeatherstoneKernel {
                 &layout_control,
                 &layout_arts,
                 &layout_uniforms,
+                &layout_cable_muscle,
             ],
             push_constant_ranges: &[],
         });
@@ -125,6 +141,17 @@ impl FeatherstoneKernel {
         });
         queue.write_buffer(&art_offsets, 0, bytemuck::cast_slice(&art_offsets_data));
 
+        let dof_total = model.joint_dof_total.max(1) as u32;
+        let zero_dof_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::featherstone zero_dof"),
+            size: (dof_total as u64) * (core::mem::size_of::<f32>() as u64),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Zero-fill once — never written again.
+        let zeros: Vec<u8> = vec![0u8; (dof_total as usize) * core::mem::size_of::<f32>()];
+        queue.write_buffer(&zero_dof_buf, 0, &zeros);
+
         Self {
             pipeline,
             layout_model,
@@ -132,14 +159,35 @@ impl FeatherstoneKernel {
             layout_control,
             layout_arts,
             layout_uniforms,
+            layout_cable_muscle,
             art_offsets,
+            zero_dof_buf,
             articulation_count,
             joint_count,
+            dof_total,
         }
+    }
+
+    /// Borrow the cable+muscle bind-group layout so external callers
+    /// (e.g. an integration test) can build their own custom bind
+    /// group. The dispatch path uses a private path.
+    pub fn cable_muscle_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout_cable_muscle
+    }
+
+    /// Cached joint DoF total for sizing externally-supplied muscle
+    /// torque buffers.
+    pub fn dof_total(&self) -> u32 {
+        self.dof_total
     }
 
     /// Run one Featherstone step on the GPU. Caller must have
     /// uploaded the model + state + control beforehand.
+    ///
+    /// `muscle_torque` (optional) is a per-DOF buffer of `f32` of
+    /// length `dof_total` containing the pre-computed Hill-type muscle
+    /// torque sum for every DoF (zero on non-muscle DoFs). Pass
+    /// `None` to use the kernel's internal zero buffer.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
@@ -154,6 +202,7 @@ impl FeatherstoneKernel {
         rigorous_d_solve: bool,
         rigorous_distance: bool,
         state_out: &mut State,
+        muscle_torque: Option<&wgpu::Buffer>,
     ) -> Result<()> {
         if model.joint_count == 0 {
             return Ok(());
@@ -227,6 +276,23 @@ impl FeatherstoneKernel {
             }],
         });
 
+        // Bind group 5 — cable spring/damper + muscle torque accumulator.
+        let muscle_buf = muscle_torque.unwrap_or(&self.zero_dof_buf);
+        let bg_cable_muscle = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::featherstone cable+muscle bg"),
+            layout: &self.layout_cable_muscle,
+            entries: &[
+                buffer_entry(0, model.joint_cable_stiffness_linear.device_buffer())?,
+                buffer_entry(1, model.joint_cable_stiffness_bend.device_buffer())?,
+                buffer_entry(2, model.joint_cable_damping_linear.device_buffer())?,
+                buffer_entry(3, model.joint_cable_damping_bend.device_buffer())?,
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: muscle_buf.as_entire_binding(),
+                },
+            ],
+        });
+
         let uniforms = Uniforms {
             dt: dt as f32,
             joint_damping,
@@ -267,6 +333,7 @@ impl FeatherstoneKernel {
             pass.set_bind_group(2, &bg_control, &[]);
             pass.set_bind_group(3, &bg_arts, &[]);
             pass.set_bind_group(4, &bg_uniforms, &[]);
+            pass.set_bind_group(5, &bg_cable_muscle, &[]);
             let groups = self.articulation_count.div_ceil(WORKGROUP_SIZE);
             pass.dispatch_workgroups(groups.max(1), 1, 1);
         }

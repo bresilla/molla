@@ -55,6 +55,10 @@ pub struct GpuBackend {
     pub(crate) device: std::sync::Arc<wgpu::Device>,
     pub(crate) queue: std::sync::Arc<wgpu::Queue>,
     pub(crate) kernel: crate::kernels::FeatherstoneKernel,
+    /// Stage 42 v3 — pre-pass that fills the per-DOF muscle torque
+    /// accumulator before each Featherstone step. `None` when the
+    /// model has no muscles, so empty scenes pay zero overhead.
+    pub(crate) muscle_kernel: Option<crate::kernels::MuscleKernel>,
 }
 
 /// Forward-dynamics solver for articulated rigid bodies.
@@ -121,6 +125,11 @@ impl FeatherstoneSolver {
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
         let kernel = crate::kernels::FeatherstoneKernel::new(&device, &queue, model);
+        let muscle_kernel = if model.muscle_count > 0 {
+            Some(crate::kernels::MuscleKernel::new(&device, model))
+        } else {
+            None
+        };
         Ok(Self {
             joint_damping: 0.0,
             substeps: 1,
@@ -130,6 +139,7 @@ impl FeatherstoneSolver {
                 device,
                 queue,
                 kernel,
+                muscle_kernel,
             }),
         })
     }
@@ -186,6 +196,35 @@ impl FeatherstoneSolver {
     /// convention rationale.
     pub fn set_rigorous_distance(&mut self, on: bool) {
         self.rigorous_distance = on;
+    }
+
+    /// Stage 42 v3 — run the GPU activation filter on every muscle.
+    /// Mirrors the CPU [`crate::actuators::update_muscle_activation`]
+    /// helper. No-op on the CPU backend (caller should invoke the
+    /// host function directly) or on a GPU model without muscles.
+    /// Must be called by the user before each step, just like the
+    /// CPU path expects.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Gpu` if the muscle buffers haven't been
+    /// uploaded.
+    #[cfg(feature = "gpu")]
+    pub fn update_muscle_activation_gpu(
+        &mut self,
+        model: &Model,
+        state: &State,
+        dt: Real,
+    ) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Cpu => Ok(()),
+            FeatherstoneBackend::Gpu(gpu) => {
+                if let Some(mk) = &gpu.muscle_kernel {
+                    mk.dispatch_activation(&gpu.device, &gpu.queue, model, state, dt as f32)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// `true` if the solver runs on a GPU backend.
@@ -304,7 +343,28 @@ impl FeatherstoneSolver {
             ),
             #[cfg(feature = "gpu")]
             FeatherstoneBackend::Gpu(gpu) => {
-                let GpuBackend { device, queue, kernel } = gpu;
+                let GpuBackend {
+                    device,
+                    queue,
+                    kernel,
+                    muscle_kernel,
+                } = gpu;
+                // Stage 42 v3 — Hill-type muscle pre-pass. Compute
+                // the per-joint torque sum from the *current*
+                // activation (the caller must have already called
+                // [`crate::actuators::update_muscle_activation`] —
+                // either the CPU helper that mutates host memory, or
+                // the GPU [`crate::kernels::MuscleKernel::
+                // dispatch_activation`] entry point — to filter the
+                // excitation into activation before stepping). The
+                // CPU `cpu_step` makes the same assumption, so we
+                // intentionally don't run the filter here.
+                let muscle_buf = if let Some(mk) = muscle_kernel {
+                    mk.dispatch_torque_sum(device, queue, model, state_in)?;
+                    Some(mk.torque_buffer())
+                } else {
+                    None
+                };
                 kernel.dispatch(
                     device,
                     queue,
@@ -317,6 +377,7 @@ impl FeatherstoneSolver {
                     self.rigorous_d_solve,
                     self.rigorous_distance,
                     state_out,
+                    muscle_buf,
                 )
             }
         }

@@ -1074,6 +1074,16 @@ impl Model {
         up!(equality_mimic_driver_joint);
         up!(equality_mimic_driven_joint);
         up!(equality_mimic_poly);
+        // Stage 39E — cable spring/damper coefficients. Always
+        // uploaded so the Featherstone GPU shader's bind-group layout
+        // is uniform across scenes (buffers are zeros for non-cable
+        // joints).
+        if self.joint_count > 0 {
+            up!(joint_cable_stiffness_linear);
+            up!(joint_cable_stiffness_bend);
+            up!(joint_cable_damping_linear);
+            up!(joint_cable_damping_bend);
+        }
         // Stage 42 v2 — muscle actuators. Only uploaded when at least
         // one muscle exists so empty-model paths skip the no-op. The
         // CSR offsets array has a sentinel even at zero count, so we
