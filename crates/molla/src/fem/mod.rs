@@ -68,6 +68,7 @@ pub mod gpu_data;
 pub mod magneto;
 pub mod mesh;
 pub mod nedelec_element;
+pub mod nonconforming;
 pub mod p2_element;
 pub mod quadrature;
 #[cfg(feature = "russell")]
@@ -123,6 +124,7 @@ pub use nedelec_element::{
     assemble_global_nedelec, compute_element_curl_curl, compute_element_nedelec_mass,
     NedelecDofMap,
 };
+pub use nonconforming::NonconformingField;
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};
