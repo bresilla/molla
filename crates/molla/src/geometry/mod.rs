@@ -57,7 +57,7 @@ pub use mpr::{mpr_collide, Manifold as MprManifold, ShapeSupport, SupportFn};
 pub use aabb::Aabb;
 pub use broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
 pub use narrow_phase::{pair_contact, ContactManifold, MAX_MANIFOLD_POINTS};
-pub use pipeline::{collide, CollisionPipeline, STATIC_BODY};
+pub use pipeline::{collide, CollisionPipeline, NarrowPhaseBackend, STATIC_BODY};
 pub use bvh::{Bvh, BvhNode as BroadBvhNode};
 pub use epa::{epa, EpaContact};
 // ── Stage 44 v1: 3D Gaussian splat primitive for the differentiable

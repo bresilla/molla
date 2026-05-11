@@ -3,20 +3,88 @@
 //! into `Contacts`.
 
 use crate::core::Result;
-use crate::sim::{Contacts, Model, State};
+#[cfg(feature = "gpu")]
+use crate::math::Real;
+use crate::sim::{Contacts, Model, ShapeGeometry, State};
 use crate::storage::BufferUsage;
 
 use super::broad_phase::{brute_force_pairs, BroadPhase, ShapePair};
 use super::narrow_phase::{pair_contact, ContactManifold};
+use super::shape_world::shape_world_transform;
+
+/// Selectable narrow-phase backend used by [`CollisionPipeline`].
+///
+/// The default is [`NarrowPhaseBackend::Gjk`] — the legacy CPU GJK +
+/// EPA path. Two opt-in alternatives are available since Stage 28.1:
+///
+/// * [`NarrowPhaseBackend::MprCpu`] — runs the CPU MPR portal
+///   refinement ([`super::mpr_collide`]) on convex pairs. Prefer
+///   for deep-penetration scenes (cloth reset states, MPM
+///   couplings) where EPA's polytope expansion can stall.
+/// * [`NarrowPhaseBackend::MprGpu`] — batches all eligible convex
+///   pairs into a single dispatch on the [`crate::kernels::MprKernel`].
+///   Prefer for high pair counts (≥ 256) on a `gpu`-feature build
+///   where the per-pair work amortizes the launch + readback.
+///
+/// Pairs the chosen backend cannot resolve (Plane / TriMesh /
+/// Heightfield / SDF / Triangle / GPU-status `FALLBACK`) transparently
+/// fall through to the CPU GJK + EPA path so callers always get a
+/// complete manifold set.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum NarrowPhaseBackend {
+    /// CPU GJK + EPA (default). Robust, no GPU dependency, exhaustive
+    /// shape-type support via the existing `pair_contact` dispatch.
+    #[default]
+    Gjk,
+    /// CPU MPR portal refinement. One algorithm for both overlap and
+    /// penetration depth — preferred when EPA's polytope grows
+    /// numerically unstable. Falls back to GJK + EPA on shape pairs
+    /// MPR's support map can't handle (Plane / TriMesh / Heightfield /
+    /// SDF / Triangle on either side).
+    MprCpu,
+    /// GPU MPR portal refinement ([`crate::kernels::MprKernel`]).
+    /// Batches all convex pairs through one dispatch and only re-runs
+    /// the FALLBACK / unsupported pairs through CPU. Requires the
+    /// `gpu` feature.
+    MprGpu,
+}
 
 /// Stateful CPU collision pipeline: caches the SAP scratch buffers
 /// across frames. Use this in real simulations; [`collide`] still
 /// exists as a stateless brute-force entry-point for tests.
+///
+/// # Backend selection
+///
+/// The narrow-phase backend is selectable at runtime via
+/// [`Self::set_narrow_phase_backend`] / [`Self::with_narrow_phase_backend`]:
+///
+/// * [`NarrowPhaseBackend::Gjk`] (default) — CPU GJK + EPA via
+///   [`pair_contact`]. Best general-purpose choice; no GPU dependency
+///   and exhaustive shape-type support.
+/// * [`NarrowPhaseBackend::MprCpu`] — CPU MPR portal refinement.
+///   Prefer for deep-penetration scenes where EPA polytope expansion
+///   stalls; not generally faster than GJK on shallow contact.
+/// * [`NarrowPhaseBackend::MprGpu`] — GPU MPR batch dispatch. Wins
+///   on large pair counts (≥ 256) where the per-dispatch overhead is
+///   amortized; otherwise the CPU paths are cheaper.
+///
+/// Selecting `MprCpu` or `MprGpu` is independent of the existing GPU
+/// prefilter / full GPU GJK+EPA narrow phase. When the full GPU
+/// narrow phase is enabled it takes precedence over the MPR backend
+/// choice (both run on the GPU, but only one at a time).
 #[derive(Default)]
 pub struct CollisionPipeline {
     broad: BroadPhase,
     pair_buf: Vec<ShapePair>,
     manifolds: Vec<ContactManifold>,
+    /// Narrow-phase algorithm used for each pair. Defaults to
+    /// [`NarrowPhaseBackend::Gjk`] so existing behaviour is unchanged.
+    narrow_phase_backend: NarrowPhaseBackend,
+    /// Lazily-constructed MPR GPU state. Created on the first
+    /// `collide` call when `narrow_phase_backend == MprGpu` and the
+    /// pipeline has been configured via `enable_mpr_gpu_backend`.
+    #[cfg(feature = "gpu")]
+    mpr_gpu_state: Option<MprGpuState>,
     #[cfg(feature = "gpu")]
     gpu_prefilter: Option<GpuPrefilterState>,
     #[cfg(feature = "gpu")]
@@ -37,6 +105,19 @@ pub struct CollisionPipeline {
     /// broad-phase demo so the user can compare CPU SAP vs GPU LBVH
     /// pair counts side-by-side.
     last_broad_phase_pairs: usize,
+}
+
+#[cfg(feature = "gpu")]
+struct MprGpuState {
+    device: std::sync::Arc<wgpu::Device>,
+    queue: std::sync::Arc<wgpu::Queue>,
+    kernel: crate::kernels::MprKernel,
+    body_q: crate::storage::Buffer<crate::math::Transform>,
+    pair_a: crate::storage::Buffer<u32>,
+    pair_b: crate::storage::Buffer<u32>,
+    mpr_out: crate::storage::Buffer<Real>,
+    capacity: usize,
+    tolerance: f32,
 }
 
 #[cfg(feature = "gpu")]
@@ -80,6 +161,70 @@ impl CollisionPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Select the narrow-phase backend. Pairs the backend can't
+    /// resolve (Plane / TriMesh / Heightfield / SDF / Triangle on
+    /// either side, or GPU `FALLBACK`) fall through to CPU GJK + EPA.
+    pub fn set_narrow_phase_backend(&mut self, backend: NarrowPhaseBackend) {
+        self.narrow_phase_backend = backend;
+    }
+
+    /// Fluent variant of [`Self::set_narrow_phase_backend`] for use at
+    /// construction.
+    #[must_use]
+    pub fn with_narrow_phase_backend(mut self, backend: NarrowPhaseBackend) -> Self {
+        self.narrow_phase_backend = backend;
+        self
+    }
+
+    /// Currently-selected narrow-phase backend.
+    #[must_use]
+    pub fn narrow_phase_backend(&self) -> NarrowPhaseBackend {
+        self.narrow_phase_backend
+    }
+
+    /// Pre-allocate the GPU MPR resources so the first `collide` call
+    /// with `narrow_phase_backend == MprGpu` doesn't pay the
+    /// initialization cost. Optional — `collide` will lazily
+    /// initialize on first use if this hasn't been called.
+    #[cfg(feature = "gpu")]
+    pub fn enable_mpr_gpu_backend(
+        &mut self,
+        engine: &crate::compute::Engine,
+        initial_capacity: usize,
+        tolerance: f32,
+    ) -> Result<()> {
+        let device = engine
+            .device()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| crate::core::Error::Gpu("no GPU queue".into()))?
+            .clone();
+        let kernel = crate::kernels::MprKernel::new(&device);
+        let cap = initial_capacity.max(1);
+        let (pair_a, pair_b) = crate::kernels::MprKernel::alloc_pairs(&device, &queue, cap)?;
+        let mpr_out = crate::kernels::MprKernel::alloc_out(&device, &queue, cap)?;
+        let mut body_q = crate::storage::Buffer::from_vec(
+            vec![crate::math::Transform::IDENTITY; 1],
+            BufferUsage::Storage,
+        );
+        body_q.ensure_device(&device)?;
+        body_q.upload(&queue)?;
+        self.mpr_gpu_state = Some(MprGpuState {
+            device,
+            queue,
+            kernel,
+            body_q,
+            pair_a,
+            pair_b,
+            mpr_out,
+            capacity: cap,
+            tolerance,
+        });
+        Ok(())
     }
 
     /// Number of pairs that fell back to the CPU narrow phase on the
@@ -294,14 +439,131 @@ impl CollisionPipeline {
         let prefilter_mask: Option<Vec<u32>> = None;
 
         self.manifolds.clear();
-        for (i, &pair) in self.pair_buf.iter().enumerate() {
+
+        // GPU MPR backend: batch all MPR-eligible pairs through the
+        // kernel in a single dispatch. Ineligible pairs (and FALLBACK
+        // status from the kernel) drop to the CPU GJK + EPA path.
+        #[cfg(feature = "gpu")]
+        if self.narrow_phase_backend == NarrowPhaseBackend::MprGpu {
+            self.run_mpr_gpu_backend(model, state, prefilter_mask.as_ref())?;
+            push_contacts_into(contacts, &self.manifolds, model)?;
+            return Ok(self.manifolds.len());
+        }
+
+        // Snapshot pair indices that survive the optional prefilter
+        // mask so we can iterate without keeping an immutable borrow
+        // on `self.pair_buf` across the mutable `dispatch_pair_cpu`
+        // call.
+        let n_pairs = self.pair_buf.len();
+        for i in 0..n_pairs {
             if let Some(mask) = &prefilter_mask {
-                // 0 = definite-disjoint (skip), 1 = overlap (run NP),
-                // 2 = fall back to CPU (run NP).
                 if mask.get(i).copied().unwrap_or(2) == 0 {
                     continue;
                 }
             }
+            let pair = self.pair_buf[i];
+            self.dispatch_pair_cpu(model, state, pair);
+        }
+
+        push_contacts_into(contacts, &self.manifolds, model)?;
+        Ok(self.manifolds.len())
+    }
+
+    /// Dispatch a single pair through the configured CPU narrow-phase
+    /// backend. Routes MPR-eligible convex pairs to
+    /// [`super::mpr_collide`] when [`NarrowPhaseBackend::MprCpu`] is
+    /// selected; everything else (Gjk backend, MPR-ineligible pairs,
+    /// MPR disjoint result) goes through the existing CPU
+    /// [`pair_contact`] dispatch. Bumps `last_cpu_np_calls` on each
+    /// invocation that touches the CPU GJK + EPA path.
+    fn dispatch_pair_cpu(&mut self, model: &Model, state: &State, pair: ShapePair) {
+        let geom_a = model.shape_geometry[pair.a as usize];
+        let geom_b = model.shape_geometry[pair.b as usize];
+        let want_mpr = self.narrow_phase_backend == NarrowPhaseBackend::MprCpu
+            && mpr_eligible(geom_a)
+            && mpr_eligible(geom_b);
+
+        if want_mpr {
+            // Run CPU MPR. On overlap, build a ContactManifold; on
+            // disjoint, do nothing (matches CPU GJK+EPA behaviour).
+            if let Some(m) = cpu_mpr_manifold(model, state, pair, geom_a, geom_b) {
+                self.manifolds.push(m);
+                return;
+            }
+            // MPR returned None — disjoint, no contact. Done.
+            return;
+        }
+
+        pair_contact(
+            model,
+            state,
+            pair,
+            model.default_friction,
+            model.default_restitution,
+            &mut self.manifolds,
+        );
+        self.last_cpu_np_calls += 1;
+    }
+
+    /// Run the GPU MPR backend: batch all MPR-eligible pairs through
+    /// one kernel dispatch, then translate per-pair results back into
+    /// `ContactManifold`s. Pairs flagged FALLBACK / NONE (or that the
+    /// kernel can't handle) drop to CPU.
+    ///
+    /// Requires [`Self::enable_mpr_gpu_backend`] to have been called.
+    /// When the GPU state isn't initialised this transparently falls
+    /// back to the CPU MPR backend so callers never get a silent
+    /// no-op contact list.
+    #[cfg(feature = "gpu")]
+    fn run_mpr_gpu_backend(
+        &mut self,
+        model: &Model,
+        state: &State,
+        prefilter_mask: Option<&Vec<u32>>,
+    ) -> Result<()> {
+        if self.mpr_gpu_state.is_none() {
+            // No GPU state — degrade to CPU MPR semantics. The caller
+            // saw the failure via `enable_mpr_gpu_backend` (or didn't
+            // call it). Equivalent to `MprCpu` for this frame.
+            let n_pairs = self.pair_buf.len();
+            for i in 0..n_pairs {
+                if let Some(mask) = prefilter_mask {
+                    if mask.get(i).copied().unwrap_or(2) == 0 {
+                        continue;
+                    }
+                }
+                let pair = self.pair_buf[i];
+                let saved = self.narrow_phase_backend;
+                self.narrow_phase_backend = NarrowPhaseBackend::MprCpu;
+                self.dispatch_pair_cpu(model, state, pair);
+                self.narrow_phase_backend = saved;
+            }
+            return Ok(());
+        }
+
+        // Partition pairs into MPR-GPU-eligible and CPU-fallback.
+        let mut gpu_pairs: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
+        let mut cpu_pairs: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
+        for (i, p) in self.pair_buf.iter().enumerate() {
+            if let Some(mask) = prefilter_mask {
+                if mask.get(i).copied().unwrap_or(2) == 0 {
+                    continue;
+                }
+            }
+            let ka = model.shape_geometry[p.a as usize];
+            let kb = model.shape_geometry[p.b as usize];
+            if mpr_gpu_eligible(ka) && mpr_gpu_eligible(kb) {
+                gpu_pairs.push(i);
+            } else {
+                cpu_pairs.push(i);
+            }
+        }
+
+        // CPU-fallback pairs first — these stay on the original
+        // pair_contact path (Plane / TriMesh / Heightfield / SDF /
+        // Triangle / ConvexHull / Ellipsoid).
+        for &i in &cpu_pairs {
+            let pair = self.pair_buf[i];
             pair_contact(
                 model,
                 state,
@@ -313,8 +575,141 @@ impl CollisionPipeline {
             self.last_cpu_np_calls += 1;
         }
 
-        push_contacts_into(contacts, &self.manifolds, model)?;
-        Ok(self.manifolds.len())
+        if gpu_pairs.is_empty() {
+            return Ok(());
+        }
+
+        let n = gpu_pairs.len();
+        let state_ref = self.mpr_gpu_state.as_mut().expect("mpr_gpu_state");
+
+        if n > state_ref.capacity {
+            let cap = (n * 2).max(64);
+            let (pa, pb) =
+                crate::kernels::MprKernel::alloc_pairs(&state_ref.device, &state_ref.queue, cap)?;
+            state_ref.pair_a = pa;
+            state_ref.pair_b = pb;
+            state_ref.mpr_out =
+                crate::kernels::MprKernel::alloc_out(&state_ref.device, &state_ref.queue, cap)?;
+            state_ref.capacity = cap;
+        }
+
+        {
+            let pa_h = state_ref.pair_a.host_mut()?;
+            let pb_h = state_ref.pair_b.host_mut()?;
+            for (slot, &i) in gpu_pairs.iter().enumerate() {
+                let p = self.pair_buf[i];
+                pa_h[slot] = p.a;
+                pb_h[slot] = p.b;
+            }
+        }
+        state_ref.pair_a.upload(&state_ref.queue)?;
+        state_ref.pair_b.upload(&state_ref.queue)?;
+
+        // Mirror state.body_q.
+        let body_count = state.body_q.host()?.len();
+        if state_ref.body_q.host()?.len() < body_count {
+            state_ref.body_q = crate::storage::Buffer::from_vec(
+                vec![crate::math::Transform::IDENTITY; body_count.max(1)],
+                BufferUsage::Storage,
+            );
+            state_ref.body_q.ensure_device(&state_ref.device)?;
+        }
+        {
+            let dst = state_ref.body_q.host_mut()?;
+            let src = state.body_q.host()?;
+            dst[..src.len()].copy_from_slice(src);
+        }
+        state_ref.body_q.upload(&state_ref.queue)?;
+
+        let body_q_buf = state_ref
+            .body_q
+            .device_buffer()
+            .ok_or_else(|| crate::core::Error::Gpu("body_q device_buffer".into()))?;
+
+        state_ref.kernel.dispatch(
+            &state_ref.device,
+            &state_ref.queue,
+            model,
+            body_q_buf,
+            &state_ref.pair_a,
+            &state_ref.pair_b,
+            &mut state_ref.mpr_out,
+            n as u32,
+            state_ref.tolerance,
+        )?;
+        state_ref.mpr_out.download(&state_ref.device, &state_ref.queue)?;
+        let host = state_ref.mpr_out.host()?;
+        let results = crate::kernels::decode_mpr_out(host, n);
+
+        for (slot, &i) in gpu_pairs.iter().enumerate() {
+            let pair = self.pair_buf[i];
+            let res = results[slot];
+
+            // Anything but a clean OK goes back to CPU GJK + EPA so we
+            // never silently drop a contact the kernel struggled with.
+            if res.status != crate::kernels::MPR_STATUS_OK
+                || !res.normal.length_squared().is_finite()
+                || res.normal.length_squared() < 1e-12
+                || res.depth <= 0.0
+            {
+                if res.status == crate::kernels::MPR_STATUS_NONE {
+                    // Disjoint — no contact.
+                    continue;
+                }
+                // FALLBACK / NaN / non-positive depth: re-run on CPU.
+                pair_contact(
+                    model,
+                    state,
+                    pair,
+                    model.default_friction,
+                    model.default_restitution,
+                    &mut self.manifolds,
+                );
+                self.last_cpu_np_calls += 1;
+                continue;
+            }
+
+            let normal = res.normal.normalize();
+            let point = (res.point_a + res.point_b) * 0.5;
+            let pair_friction = pair_material(
+                model.shape_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                model.default_friction,
+            );
+            let pair_restitution = pair_material(
+                model.shape_restitution.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                model.default_restitution,
+            );
+            let pair_rolling = pair_material(
+                model.shape_rolling_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                0.0,
+            );
+            let pair_torsional = pair_material(
+                model.shape_torsional_friction.host()?,
+                pair.a as usize,
+                pair.b as usize,
+                0.0,
+            );
+
+            self.manifolds.push(ContactManifold {
+                a_shape: pair.a,
+                b_shape: pair.b,
+                point,
+                normal,
+                depth: res.depth as Real,
+                friction: pair_friction,
+                rolling_friction: pair_rolling,
+                torsional_friction: pair_torsional,
+                restitution: pair_restitution,
+            });
+        }
+
+        Ok(())
     }
 
     /// Run the full GPU narrow phase. Splits pairs into:
@@ -859,7 +1254,104 @@ fn is_gpu_eligible(g: crate::sim::ShapeGeometry) -> bool {
     )
 }
 
+/// Shapes the CPU MPR portal-loop can handle via `ShapeSupport` /
+/// `support_with_hulls`. Plane / TriMesh / Heightfield / SDF have no
+/// usable support function for portal refinement and must fall back to
+/// the existing CPU GJK + EPA path (which has bespoke handling for
+/// each). Triangle is technically supported by `support_with_hulls`
+/// but degenerate in volume — keep it on the CPU mesh-tri pipeline so
+/// triangle-vs-mesh paths stay consistent.
+fn mpr_eligible(g: ShapeGeometry) -> bool {
+    matches!(
+        g,
+        ShapeGeometry::Sphere { .. }
+            | ShapeGeometry::Box { .. }
+            | ShapeGeometry::Capsule { .. }
+            | ShapeGeometry::Cylinder { .. }
+            | ShapeGeometry::Cone { .. }
+            | ShapeGeometry::Ellipsoid { .. }
+            | ShapeGeometry::ConvexHull { .. }
+    )
+}
+
+/// Subset of [`mpr_eligible`] supported by the GPU MPR kernel. The
+/// kernel only ships analytic support maps for the 5 primitives
+/// (Sphere / Box / Capsule / Cylinder / Cone) — Ellipsoid and
+/// ConvexHull stay on CPU even with the GPU backend active.
 #[cfg(feature = "gpu")]
+fn mpr_gpu_eligible(g: ShapeGeometry) -> bool {
+    matches!(
+        g,
+        ShapeGeometry::Sphere { .. }
+            | ShapeGeometry::Box { .. }
+            | ShapeGeometry::Capsule { .. }
+            | ShapeGeometry::Cylinder { .. }
+            | ShapeGeometry::Cone { .. }
+    )
+}
+
+/// Run CPU MPR on a pair and translate the result into a
+/// [`ContactManifold`] with the standard pair-material rules applied.
+/// Returns `None` on a disjoint pair (no contact emitted). MPR's
+/// normal convention is "A → B", same as CPU GJK + EPA, so no flip.
+fn cpu_mpr_manifold(
+    model: &Model,
+    state: &State,
+    pair: ShapePair,
+    geom_a: ShapeGeometry,
+    geom_b: ShapeGeometry,
+) -> Option<ContactManifold> {
+    let xf_a = shape_world_transform(model, state, pair.a as usize);
+    let xf_b = shape_world_transform(model, state, pair.b as usize);
+    let sa = super::mpr::ShapeSupport::with_hulls(geom_a, &xf_a, &model.hulls);
+    let sb = super::mpr::ShapeSupport::with_hulls(geom_b, &xf_b, &model.hulls);
+    let m = super::mpr::mpr_collide(&sa, &sb, 1e-8, 64)?;
+    if m.depth <= 0.0 || !m.normal.length_squared().is_finite() {
+        return None;
+    }
+    let normal_len_sq = m.normal.length_squared();
+    if normal_len_sq < 1e-12 {
+        return None;
+    }
+    let normal = m.normal / normal_len_sq.sqrt();
+    let point = (m.point_a + m.point_b) * 0.5;
+    let pair_friction = pair_material(
+        model.shape_friction.host().expect("shape_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        model.default_friction,
+    );
+    let pair_restitution = pair_material(
+        model.shape_restitution.host().expect("shape_restitution"),
+        pair.a as usize,
+        pair.b as usize,
+        model.default_restitution,
+    );
+    let pair_rolling = pair_material(
+        model.shape_rolling_friction.host().expect("shape_rolling_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        0.0,
+    );
+    let pair_torsional = pair_material(
+        model.shape_torsional_friction.host().expect("shape_torsional_friction"),
+        pair.a as usize,
+        pair.b as usize,
+        0.0,
+    );
+    Some(ContactManifold {
+        a_shape: pair.a,
+        b_shape: pair.b,
+        point,
+        normal,
+        depth: m.depth,
+        friction: pair_friction,
+        rolling_friction: pair_rolling,
+        torsional_friction: pair_torsional,
+        restitution: pair_restitution,
+    })
+}
+
 fn pair_material(
     arr: &[crate::math::Real],
     a: usize,
