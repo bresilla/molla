@@ -51,6 +51,7 @@ pub struct FemGpuKernel {
     pipe_assemble_tri: wgpu::ComputePipeline,
     pipe_assemble_mass_tri: wgpu::ComputePipeline,
     pipe_matvec: wgpu::ComputePipeline,
+    pipe_extract_diag: wgpu::ComputePipeline,
 
     layout_asm_mesh: wgpu::BindGroupLayout,
     layout_asm_csr: wgpu::BindGroupLayout,
@@ -58,6 +59,9 @@ pub struct FemGpuKernel {
 
     layout_mv_io: wgpu::BindGroupLayout,
     layout_mv_uniforms: wgpu::BindGroupLayout,
+
+    layout_diag_io: wgpu::BindGroupLayout,
+    layout_diag_uniforms: wgpu::BindGroupLayout,
 }
 
 impl FemGpuKernel {
@@ -179,6 +183,41 @@ impl FemGpuKernel {
             },
         );
 
+        // ── Diagonal extraction pipeline ───────────────────────────
+        let diag_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::fem::extract_diag"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fem_extract_diag.wgsl").into(),
+            ),
+        });
+        let layout_diag_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::fem::diag io"),
+            entries: &[
+                ro_storage(0), // csr_row_offsets
+                ro_storage(1), // csr_col_indices
+                ro_storage(2), // csr_values
+                rw_storage(3), // diag (output)
+            ],
+        });
+        let layout_diag_uniforms =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem::diag uniforms"),
+                entries: &[uniform_entry(0)],
+            });
+        let diag_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::fem::diag layout"),
+            bind_group_layouts: &[&layout_diag_io, &layout_diag_uniforms],
+            push_constant_ranges: &[],
+        });
+        let pipe_extract_diag = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("molla::fem::extract_diag"),
+            layout: Some(&diag_pipeline_layout),
+            module: &diag_shader,
+            entry_point: Some("extract_diag"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
         Self {
             device,
             queue,
@@ -187,11 +226,14 @@ impl FemGpuKernel {
             pipe_assemble_tri,
             pipe_assemble_mass_tri,
             pipe_matvec,
+            pipe_extract_diag,
             layout_asm_mesh,
             layout_asm_csr,
             layout_asm_uniforms,
             layout_mv_io,
             layout_mv_uniforms,
+            layout_diag_io,
+            layout_diag_uniforms,
         }
     }
 
@@ -527,6 +569,99 @@ impl FemGpuKernel {
         staging.unmap();
         out.truncate(n);
         Ok(out)
+    }
+
+    /// Extract the diagonal of `gpu_data`'s assembled CSR matrix into
+    /// the caller-supplied `dst` buffer (length `csr_nrows`, `f32`).
+    /// Used by the Jacobi-preconditioned CG path to build the
+    /// inverse-diagonal preconditioner.
+    ///
+    /// One workgroup per row, packed into a 2D dispatch grid (matches
+    /// the matvec pattern — rows can exceed 65535). The output buffer
+    /// is zeroed before dispatch so any rows missing a diagonal entry
+    /// remain `0` (the host-side `JacobiPreconditioner` then maps
+    /// `0` to a pass-through inverse — the expected null-space
+    /// behaviour for BC-reduced systems).
+    pub fn extract_diagonal(&self, gpu_data: &FemGpuData, dst: &wgpu::Buffer) -> Result<()> {
+        let nrows = gpu_data.csr_nrows;
+        if nrows == 0 {
+            return Ok(());
+        }
+
+        // Zero `dst` so missing diagonals show as 0 (the kernel only
+        // writes when it finds the (i, i) slot).
+        let dst_bytes = (nrows as u64).max(4) * 4;
+        self.queue
+            .write_buffer(dst, 0, &vec![0u8; dst_bytes as usize]);
+
+        let uniforms = MatvecUniforms {
+            nrows,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem::diag uniforms"),
+            size: core::mem::size_of::<MatvecUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem::diag io bg"),
+            layout: &self.layout_diag_io,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gpu_data.csr_row_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gpu_data.csr_col_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: gpu_data.csr_values.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: dst.as_entire_binding(),
+                },
+            ],
+        });
+        let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem::diag uniforms bg"),
+            layout: &self.layout_diag_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem::diag encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem::extract_diag"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_extract_diag);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u, &[]);
+            // One workgroup per row, 2D-packed because WebGPU caps
+            // any single dispatch dim at 65535 (same scheme as matvec).
+            const MAX_DIM: u32 = 65535;
+            let dim_x = nrows.min(MAX_DIM).max(1);
+            let dim_y = nrows.div_ceil(MAX_DIM).max(1);
+            pass.dispatch_workgroups(dim_x, dim_y, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
     }
 }
 

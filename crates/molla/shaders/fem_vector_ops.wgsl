@@ -4,11 +4,20 @@
 // roundtrip that `solve_steady_state_gpu` paid in v1.
 //
 // Kernels:
-//   * `vec_axpy`       — `a[i] += alpha * b[i]`
-//   * `vec_axpby`      — `dst[i] = alpha * src[i] + beta * dst[i]`
-//   * `vec_dot`        — workgroup-wise reduction of `dot(a, b)` into
-//                        `partial_sums[group_id]`. The host sums the
-//                        (small, ≤ ⌈n / WG⌉) partials.
+//   * `vec_axpy`            — `a[i] += alpha * b[i]`
+//   * `vec_axpby`           — `dst[i] = alpha * src[i] + beta * dst[i]`
+//   * `vec_dot`             — workgroup-wise reduction of `dot(a, b)`
+//                             into `partial_sums[group_id]`. The host
+//                             sums the (small, ≤ ⌈n / WG⌉) partials.
+//   * `vec_apply_diag_inv`  — `dst[i] = src[i] * inv_diag[i]`. Used by
+//                             the Jacobi-preconditioned CG path
+//                             (`pcg_solve_resident`) to apply
+//                             `M⁻¹ = diag(K)⁻¹` once per iteration.
+//                             The caller pre-inverts the diagonal on
+//                             the host so the kernel only multiplies
+//                             (a per-thread divide is the same cost on
+//                             modern GPUs but precluding NaN/Inf when
+//                             `diag = 0` is cleaner host-side).
 //
 // All ops are `f32` to match the rest of the FEM GPU stack
 // (see `fem::gpu_data` for the precision rationale).
@@ -136,4 +145,29 @@ fn vec_dot(
     if (lane == 0u) {
         dot_partials[wid.x] = sdata[0];
     }
+}
+
+// ─────────────────────── vec_apply_diag_inv ──────────────────────
+//
+// `dst[i] = src[i] * inv_diag[i]` for `i ∈ [0, n)`. One thread per
+// element. Used by the PCG solver to apply the Jacobi preconditioner
+// `M⁻¹ = diag(K)⁻¹` to a residual vector — `inv_diag` is computed
+// host-side once per solve (the caller stamps `0` for any zero diag
+// entries so null-space rows pass through cleanly).
+//
+// Reuses the `n` field of [`AxpbyUniforms`] (alpha/beta unused) so we
+// don't have to introduce a fourth uniform layout.
+
+@group(0) @binding(0) var<storage, read_write> diag_dst      : array<f32>;
+@group(0) @binding(1) var<storage, read>       diag_src      : array<f32>;
+@group(0) @binding(2) var<storage, read>       diag_inv_diag : array<f32>;
+@group(1) @binding(0) var<uniform>             diag_u        : AxpbyUniforms;
+
+@compute @workgroup_size(WG_SIZE)
+fn vec_apply_diag_inv(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= diag_u.n) {
+        return;
+    }
+    diag_dst[i] = diag_src[i] * diag_inv_diag[i];
 }
