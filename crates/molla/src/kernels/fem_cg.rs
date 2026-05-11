@@ -969,20 +969,20 @@ impl FemCgGpuKernel {
         let mut iters_done = 0usize;
         while iters_done < max_iters {
             let batch = (max_iters - iters_done).min(check_period);
-            // Run `batch` iters as one big compute pass inside a
-            // single command encoder + ONE submit per batch. ALL
-            // iters share a single compute pass — wgpu's intra-pass
-            // barrier inserter handles the per-dispatch RAW hazards
-            // (partials → finalize → axpy_xr → ...) automatically;
-            // the partials buffer is freely reused across iters
+            // Run `batch` iters as ONE mega-compute-pass inside ONE
+            // command encoder + ONE submit. All `batch × (matvec +
+            // post-matvec)` dispatches share a single compute pass
+            // — wgpu's intra-pass barrier inserter handles the
+            // per-dispatch RAW hazards (partials → finalize →
+            // axpy_xr → next-iter matvec → ...) automatically; the
+            // `partials` buffer is freely reused across iters
             // because each dot/finalize pair fully consumes the
             // previous contents before the next dot's write begins.
             //
-            // This collapses the batch's per-iter (encoder + submit)
-            // overhead to ONE pair per batch. On Vulkan + headless
-            // wgpu this is where v5 finally beats v4 — at small N
-            // the per-submit validation + command-list build cost is
-            // the dominant pipeline-stall, not the f32 dot readback.
+            // Empirically (on the test rig's wgpu+Vulkan path) this
+            // is faster than one-pass-per-iter (which would let
+            // wgpu insert explicit inter-pass barriers — extra Vk
+            // barrier commands per iter).
             let mut enc = self.device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor {
                     label: Some("molla::fem_cg::lazy_prep::batch"),
@@ -994,9 +994,7 @@ impl FemCgGpuKernel {
                     timestamp_writes: None,
                 });
                 for _ in 0..batch {
-                    // (a) Caller records matvec(p → Ap).
                     record_matvec(&mut pass);
-                    // (b) post-matvec body inline.
                     ws.record_post_matvec(self, &mut pass);
                 }
             }
