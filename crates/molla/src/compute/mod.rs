@@ -18,6 +18,11 @@ mod mpm;
 // backwards. Always compiled (no GPU dependency).
 pub mod mpm_cpu_diff;
 
+// Stage 39C — 2D Stam stable-fluid solver. CPU path is always compiled
+// (uses an iterative Gauss-Seidel pressure solve); GPU `step_gpu` reuses
+// `fem::fft_ns::solve_pressure_poisson_fft` for the projection.
+pub mod stam_fluid;
+
 // Stage 37.8 — tile compute primitives bundle. CPU oracles are
 // always available; the GPU pipelines are gated behind the `gpu`
 // feature inside each module.
