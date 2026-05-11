@@ -317,11 +317,12 @@ pub fn solve_wave_transient(
 /// the implicit-Newmark inner CG on the GPU. Build once per scene
 /// (fixes mesh, BCs, β, γ, Δt); call [`Self::step`] every frame.
 ///
-/// **Restriction (Slice E):** every Dirichlet BC must have `value =
-/// 0.0`. Non-zero Dirichlet would require a per-step column-elimination
-/// shift that this v1 doesn't compute. This matches the WarpWave
-/// scene + every other no-slip wave demo. A follow-up Slice F can
-/// support nonzero Dirichlet by precomputing the constant shift.
+/// Supports **arbitrary** Dirichlet values (zero or non-zero) via a
+/// pre-computed column-elimination shift `bc_shift` baked at
+/// construction — the per-step RHS is `b_unreduced + bc_shift` on
+/// unpinned rows, with pinned rows overwritten to the prescribed
+/// values. This matches what `apply_bcs` would do on every step but
+/// without the per-step matrix touch.
 #[cfg(feature = "gpu")]
 pub struct WaveStepperGpu {
     /// BC-reduced `A = M / (β·Δt²) + K` uploaded as GPU CSR.
@@ -338,11 +339,17 @@ pub struct WaveStepperGpu {
     dt: Real,
     bdt2_inv: Real,
     half_minus_beta: Real,
-    /// Flat list of every pinned (DoF, value=0) for fast per-step
-    /// row-overwrite on `b`. We store the vector even though every
-    /// `value` is `0.0` so a follow-up nonzero-Dirichlet variant
-    /// only needs to plug in the column-shift precomputation.
-    pinned_dofs: Vec<usize>,
+    /// Flat list of (DoF, value) for every Dirichlet pin — used per
+    /// step to overwrite the matching `b` rows.
+    pinned: Vec<(usize, Real)>,
+    /// Per-row bitset of pinned DoFs for the column-shift skip.
+    is_pinned: Vec<bool>,
+    /// Precomputed RHS contribution from the column elimination on
+    /// `A_orig = M/(β·Δt²) + K`: for an unpinned row `i`,
+    /// `bc_shift[i] = -Σ_r A_orig[i, r] · value[r]` (sum over pinned
+    /// rows `r`). For pinned rows the value is unused (per-step pin
+    /// overwrites `b[i]` directly).
+    bc_shift: Vec<Real>,
     cg_kernel: FemCgGpuKernel,
     mv_kernel: FemGpuKernel,
 }
@@ -370,38 +377,20 @@ impl WaveStepperGpu {
         debug_assert!(beta > 0.0, "WaveStepperGpu: β must be > 0");
         debug_assert!(dt > 0.0, "WaveStepperGpu: Δt must be > 0");
 
-        // Slice-E restriction: every Dirichlet must pin to zero.
-        for bc in bcs {
-            match bc {
-                BoundaryCondition::Dirichlet { value, .. } if *value != 0.0 => {
-                    return Err(Error::Build(format!(
-                        "WaveStepperGpu: nonzero Dirichlet (value = {value}) is not \
-                         supported in Slice E — pin to 0 or use the CPU path"
-                    )));
-                }
-                BoundaryCondition::DirichletVector { values, .. }
-                    if values.iter().any(|v| *v != 0.0) =>
-                {
-                    return Err(Error::Build(
-                        "WaveStepperGpu: nonzero DirichletVector is not supported in Slice E"
-                            .into(),
-                    ));
-                }
-                _ => {}
-            }
-        }
-
         let n = m.nrows();
         let bdt2_inv = 1.0 / (beta * dt * dt);
         let half_minus_beta = 0.5 - beta;
 
-        // Build A = M / (β·Δt²) + K, then BC-reduce it (with a dummy
-        // zero RHS — the row pin sets `1` on the diagonal and zeros
-        // the off-diagonals; the column elimination zeros K[:, r] but
-        // shifts no RHS because every value is zero).
+        // Build A = M / (β·Δt²) + K, then run BC reduction on a
+        // **zero** RHS to extract the column-elimination shift. After
+        // `apply_dirichlet`, `bc_shift[i]` for unpinned `i` equals
+        // `-Σ_r A_orig[i, r] · value[r]` (sum over pinned rows) and
+        // for pinned `i` equals `value[i]`. The reduced `a_red` is
+        // what we upload to the GPU; the shift becomes the per-step
+        // RHS correction.
         let mut a_red = add_csr_scaled(m, bdt2_inv, k, 1.0);
-        let mut dummy_rhs = vec![0.0; n];
-        super::bc::apply_dirichlet(&mut a_red, &mut dummy_rhs, bcs);
+        let mut bc_shift = vec![0.0; n];
+        super::bc::apply_dirichlet(&mut a_red, &mut bc_shift, bcs);
 
         let device = engine.device().ok_or_else(|| {
             Error::Gpu("WaveStepperGpu::new: engine has no GPU device".into())
@@ -411,17 +400,22 @@ impl WaveStepperGpu {
         })?;
         let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
 
-        // Collect every pinned DoF for per-step row-overwrite.
-        let mut pinned_dofs = Vec::new();
+        // Collect every pinned (DoF, value) for per-step row-overwrite,
+        // and a parallel bitset for the column-shift skip.
+        let mut pinned: Vec<(usize, Real)> = Vec::new();
+        let mut is_pinned = vec![false; n];
         for bc in bcs {
             match bc {
-                BoundaryCondition::Dirichlet { vertex, .. } => {
-                    pinned_dofs.push(*vertex as usize);
+                BoundaryCondition::Dirichlet { vertex, value } => {
+                    let dof = *vertex as usize;
+                    pinned.push((dof, *value));
+                    is_pinned[dof] = true;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
                     let base = *vertex as usize * values.len();
-                    for c in 0..values.len() {
-                        pinned_dofs.push(base + c);
+                    for (c, v) in values.iter().enumerate() {
+                        pinned.push((base + c, *v));
+                        is_pinned[base + c] = true;
                     }
                 }
                 _ => {}
@@ -440,7 +434,9 @@ impl WaveStepperGpu {
             dt,
             bdt2_inv,
             half_minus_beta,
-            pinned_dofs,
+            pinned,
+            is_pinned,
+            bc_shift,
             cg_kernel,
             mv_kernel,
         })
@@ -477,12 +473,17 @@ impl WaveStepperGpu {
 
         // RHS b = (M / (β·Δt²)) · u_pred. Compute on CPU then upload
         // (one per-step transfer of `n` f32 values, dwarfed by the CG
-        // savings).
+        // savings). Add the precomputed BC column-shift to unpinned
+        // rows; overwrite pinned rows with the prescribed value.
         let m_upred = matvec(&self.m_cpu, &u_pred);
         let mut b: Vec<Real> = m_upred.iter().map(|v| self.bdt2_inv * v).collect();
-        // Pinned rows of `b` get the prescribed value (= 0 in Slice E).
-        for &dof in &self.pinned_dofs {
-            b[dof] = 0.0;
+        for i in 0..self.n {
+            if !self.is_pinned[i] {
+                b[i] += self.bc_shift[i];
+            }
+        }
+        for &(dof, val) in &self.pinned {
+            b[dof] = val;
         }
 
         // Initial guess: u_old (BC entries already zero from previous
@@ -536,8 +537,10 @@ impl WaveStepperGpu {
         }
         // Zero v, a on every Dirichlet DoF (same reasoning as the CPU
         // path — non-zero v_old/a_old on a pinned DoF would otherwise
-        // leak motion into the boundary across steps).
-        for &dof in &self.pinned_dofs {
+        // leak motion into the boundary across steps; the prescribed
+        // u value on the BC is held constant in time by construction,
+        // so its derivative is zero).
+        for &(dof, _val) in &self.pinned {
             v_new[dof] = 0.0;
             a_new[dof] = 0.0;
         }
@@ -558,10 +561,10 @@ impl WaveStepperGpu {
 /// implicit-Euler inner CG on the GPU. Build once per scene (fixes
 /// mesh, BCs, Δt); call [`Self::step`] every frame.
 ///
-/// Same Slice-E restriction as [`WaveStepperGpu`]: every Dirichlet
-/// BC must have `value = 0.0`. Use the CPU [`solve_transient`] path
-/// for nonzero Dirichlet (heat-source / fixed-temperature problems
-/// with a non-zero clamp).
+/// Supports arbitrary Dirichlet values via a precomputed column-
+/// elimination shift baked at construction (same trick as
+/// [`WaveStepperGpu`]) — fixed-temperature / heat-source problems
+/// with non-zero pinned values work without per-step matrix touches.
 #[cfg(feature = "gpu")]
 pub struct TransientStepperGpu {
     /// BC-reduced `A = M / Δt + K` uploaded as GPU CSR.
@@ -573,7 +576,12 @@ pub struct TransientStepperGpu {
     m_cpu: BsrMatrix,
     n: usize,
     inv_dt: Real,
-    pinned_dofs: Vec<usize>,
+    /// (DoF, value) for every Dirichlet pin — overwrites `b` per step.
+    pinned: Vec<(usize, Real)>,
+    is_pinned: Vec<bool>,
+    /// Same column-shift trick as [`WaveStepperGpu::bc_shift`] —
+    /// `bc_shift[i] = -Σ_r A_orig[i, r] · value[r]` for unpinned `i`.
+    bc_shift: Vec<Real>,
     cg_kernel: FemCgGpuKernel,
     mv_kernel: FemGpuKernel,
 }
@@ -593,33 +601,13 @@ impl TransientStepperGpu {
         debug_assert_eq!(m.nrows(), k.nrows());
         debug_assert!(dt > 0.0, "TransientStepperGpu: Δt must be > 0");
 
-        for bc in bcs {
-            match bc {
-                BoundaryCondition::Dirichlet { value, .. } if *value != 0.0 => {
-                    return Err(Error::Build(format!(
-                        "TransientStepperGpu: nonzero Dirichlet (value = {value}) is not \
-                         supported in Slice F — pin to 0 or use the CPU path"
-                    )));
-                }
-                BoundaryCondition::DirichletVector { values, .. }
-                    if values.iter().any(|v| *v != 0.0) =>
-                {
-                    return Err(Error::Build(
-                        "TransientStepperGpu: nonzero DirichletVector is not supported in \
-                         Slice F"
-                            .into(),
-                    ));
-                }
-                _ => {}
-            }
-        }
-
         let n = m.nrows();
         let inv_dt = 1.0 / dt;
-        // Build A = M/Δt + K, then BC-reduce.
+        // Build A = M/Δt + K, then BC-reduce on a zero RHS to extract
+        // the column-elimination shift.
         let mut a_red = add_csr_scaled(m, inv_dt, k, 1.0);
-        let mut dummy_rhs = vec![0.0; n];
-        super::bc::apply_dirichlet(&mut a_red, &mut dummy_rhs, bcs);
+        let mut bc_shift = vec![0.0; n];
+        super::bc::apply_dirichlet(&mut a_red, &mut bc_shift, bcs);
 
         let device = engine.device().ok_or_else(|| {
             Error::Gpu("TransientStepperGpu::new: engine has no GPU device".into())
@@ -629,16 +617,20 @@ impl TransientStepperGpu {
         })?;
         let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
 
-        let mut pinned_dofs = Vec::new();
+        let mut pinned: Vec<(usize, Real)> = Vec::new();
+        let mut is_pinned = vec![false; n];
         for bc in bcs {
             match bc {
-                BoundaryCondition::Dirichlet { vertex, .. } => {
-                    pinned_dofs.push(*vertex as usize);
+                BoundaryCondition::Dirichlet { vertex, value } => {
+                    let dof = *vertex as usize;
+                    pinned.push((dof, *value));
+                    is_pinned[dof] = true;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
                     let base = *vertex as usize * values.len();
-                    for c in 0..values.len() {
-                        pinned_dofs.push(base + c);
+                    for (c, v) in values.iter().enumerate() {
+                        pinned.push((base + c, *v));
+                        is_pinned[base + c] = true;
                     }
                 }
                 _ => {}
@@ -653,7 +645,9 @@ impl TransientStepperGpu {
             m_cpu: m.clone(),
             n,
             inv_dt,
-            pinned_dofs,
+            pinned,
+            is_pinned,
+            bc_shift,
             cg_kernel,
             mv_kernel,
         })
@@ -671,8 +665,13 @@ impl TransientStepperGpu {
             .zip(m_uold.iter())
             .map(|(fi, mi)| fi + self.inv_dt * mi)
             .collect();
-        for &dof in &self.pinned_dofs {
-            b[dof] = 0.0;
+        for i in 0..self.n {
+            if !self.is_pinned[i] {
+                b[i] += self.bc_shift[i];
+            }
+        }
+        for &(dof, val) in &self.pinned {
+            b[dof] = val;
         }
 
         let device = self.cg_kernel.device();

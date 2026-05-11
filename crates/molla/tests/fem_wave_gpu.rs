@@ -143,19 +143,25 @@ fn gpu_wave_step_matches_cpu_oracle() {
 
 #[test]
 #[ignore = "needs a real wgpu adapter — run via nixVulkan cargo test"]
-fn gpu_wave_stepper_rejects_nonzero_dirichlet() {
+fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
+    // Slice G: nonzero Dirichlet is now supported via the precomputed
+    // column shift. Verify the stepper builds AND that one step
+    // matches the CPU oracle on a problem with a non-zero pinned
+    // boundary value.
     let mesh = FemMesh::tri_grid_2d(8, 8, 1.0, 1.0);
     let m = assemble_mass(&mesh);
     let k = assemble_wave_stiffness(&mesh, 1.0);
+    let n = mesh.vert_count();
+    // Pin the corner to a nonzero displacement.
     let bcs = vec![BoundaryCondition::Dirichlet {
         vertex: 0,
-        value: 0.5, // nonzero — must be rejected in Slice E
+        value: 0.5,
     }];
 
     let engine = Engine::new_gpu().expect("gpu");
-    let result = WaveStepperGpu::new(
+    let stepper = WaveStepperGpu::new(
         &engine,
         &mesh,
         &m,
@@ -164,9 +170,34 @@ fn gpu_wave_stepper_rejects_nonzero_dirichlet() {
         NEWMARK_BETA_DEFAULT,
         NEWMARK_GAMMA_DEFAULT,
         &bcs,
+    )
+    .expect("stepper builds with nonzero Dirichlet");
+
+    // Initial state: BC-consistent (pinned vertex at 0.5).
+    let mut u_init = vec![0.0; n];
+    u_init[0] = 0.5;
+    let v0 = vec![0.0; n];
+    let a0 = vec![0.0; n];
+
+    let cpu = solve_wave_transient(
+        &m,
+        &k,
+        &u_init,
+        &v0,
+        &a0,
+        0.01,
+        NEWMARK_BETA_DEFAULT,
+        NEWMARK_GAMMA_DEFAULT,
+        &bcs,
     );
+    let gpu = stepper.step(&u_init, &v0, &a0).expect("step");
+    let mut max_du: Real = 0.0;
+    for i in 0..n {
+        max_du = max_du.max((cpu.u_new[i] - gpu.u_new[i]).abs());
+    }
     assert!(
-        result.is_err(),
-        "WaveStepperGpu::new must reject nonzero Dirichlet in Slice E"
+        max_du < 1e-3,
+        "nonzero-Dirichlet single-step max |Δu| = {max_du:.3e}",
     );
+    assert!((gpu.u_new[0] - 0.5).abs() < 1e-5, "pinned DoF must hold");
 }

@@ -14883,6 +14883,12 @@ struct FemHeatExampleState {
     /// "Reset to T=0" on the right-rail pane. Cleared after the
     /// solver re-initialises.
     user_reset: bool,
+    /// GPU stepper — `Some` once the user has enabled GPU mode.
+    /// Lazily built (Default has no Engine access). Invalidated
+    /// whenever α or dt change.
+    gpu_stepper: Option<fem::TransientStepperGpu>,
+    use_gpu: bool,
+    last_dt_baked: f64,
 }
 
 impl Default for FemHeatExampleState {
@@ -14936,6 +14942,9 @@ impl Default for FemHeatExampleState {
             last_iters: 0,
             needs_reset: false,
             user_reset: false,
+            gpu_stepper: None,
+            use_gpu: false,
+            last_dt_baked: FEM_HEAT_DEFAULT_DT,
         }
     }
 }
@@ -14987,8 +14996,15 @@ fn update_fem_heat_example(
         state.needs_reset = false;
         state.user_reset = false;
     }
-    if (state.alpha - state.last_alpha_baked).abs() > 1e-12 {
+    let alpha_changed = (state.alpha - state.last_alpha_baked).abs() > 1e-12;
+    let dt_changed = (state.dt - state.last_dt_baked).abs() > 1e-9;
+    if alpha_changed {
         state.rebuild_stiffness();
+        state.gpu_stepper = None;
+    }
+    if dt_changed {
+        state.gpu_stepper = None;
+        state.last_dt_baked = state.dt;
     }
     if run.paused {
         return;
@@ -14996,6 +15012,31 @@ fn update_fem_heat_example(
     let dt = state.dt.max(1e-6);
     let n = state.mesh.vert_count();
     let f = vec![0.0_f64; n];
+
+    // Lazily build GPU stepper if requested.
+    if state.use_gpu && state.gpu_stepper.is_none() {
+        match fem::TransientStepperGpu::new(&sim.engine, &state.mesh, &state.mass, &state.stiff, dt, &state.bcs) {
+            Ok(s) => state.gpu_stepper = Some(s),
+            Err(e) => {
+                warn!("FemHeat: GPU stepper init failed ({e}); falling back to CPU");
+                state.use_gpu = false;
+            }
+        }
+    }
+
+    if let (true, Some(stepper)) = (state.use_gpu, state.gpu_stepper.as_ref()) {
+        match stepper.step(&state.u.clone(), &f) {
+            Ok(r) => {
+                state.u = r.x;
+                state.last_residual = r.residual;
+                state.last_iters = r.iters;
+                return;
+            }
+            Err(e) => {
+                warn!("FemHeat: GPU step failed ({e}); falling back to CPU this frame");
+            }
+        }
+    }
     let result = molla::fem::solver::solve_transient_with_initial(
         &state.mass,
         &state.stiff,
@@ -15098,6 +15139,20 @@ fn fem_heat_pane(ui: &mut egui::Ui, state: &mut FemHeatExampleState) {
     if ui.button("Reset to T = 0").clicked() {
         state.user_reset = true;
     }
+    ui.separator();
+    let was_gpu = state.use_gpu;
+    let _ = ui.checkbox(&mut state.use_gpu, "Use GPU CG (Stage 36.5 Slice F)");
+    if was_gpu != state.use_gpu {
+        state.gpu_stepper = None;
+    }
+    let backend = if state.use_gpu && state.gpu_stepper.is_some() {
+        "GPU resident CG"
+    } else if state.use_gpu {
+        "GPU (init pending / failed)"
+    } else {
+        "CPU"
+    };
+    readout(ui, "Backend", backend);
     ui.small("BCs: T(z=0) = 0, T(z=1) = 1; sides insulating.");
     ui.small("Steady state: T(z) = z (linear gradient).");
 }
