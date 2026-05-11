@@ -23,15 +23,16 @@
 #![cfg(feature = "gpu")]
 
 use molla::compute::implicit_mpm::{
-    implicit_mpm_step, implicit_mpm_step_with_solver, GridSystem, HessianStencil,
-    ImplicitMpmConfig, MpmState,
+    apply_bingham_and_advect, color_grid, implicit_mpm_step, implicit_mpm_step_with_solver,
+    GridSystem, HessianStencil, ImplicitMpmConfig, MpmState,
 };
 use molla::compute::Engine;
 use molla::kernels::{
-    implicit_mpm_readback_vec3_f32, implicit_mpm_upload_storage_f32,
-    implicit_mpm_upload_storage_vec3_f32, ImplicitMpmKernel,
+    implicit_mpm_readback_vec3_real, implicit_mpm_upload_storage_f32,
+    implicit_mpm_upload_storage_vec3_f32, ImplicitMpmGpuStepState, ImplicitMpmKernel,
+    ImplicitMpmStepUniforms,
 };
-use molla::math::{Real, Vec3};
+use molla::math::{Mat3, Real, Vec3};
 
 fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
@@ -143,7 +144,7 @@ fn run_gpu_sweep(
         .expect("GPU GS sweep");
 
     let v_back =
-        implicit_mpm_readback_vec3_f32(device, queue, &v_grid_buf, g_total).expect("readback");
+        implicit_mpm_readback_vec3_real(device, queue, &v_grid_buf, g_total).expect("readback");
     for (i, v) in v_back.iter().enumerate() {
         v_grid[i] = Vec3::new(v[0], v[1], v[2]);
     }
@@ -250,5 +251,272 @@ fn implicit_mpm_gs_sweep_cpu_gpu_parity() {
     assert!(
         max_rel < 1.0e-5 || max_abs < 1.0e-5 * avg_speed,
         "CPU/GPU velocity parity broken: max_rel={max_rel:.3e}, max_abs={max_abs:.3e}, peak |v|={avg_speed:.3e}"
+    );
+}
+
+// ─── Stage 40 v2 — full P2G + GS + G2P on GPU ─────────────────────
+
+fn pack_particles(state: &MpmState) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<f32>) {
+    let n = state.n();
+    let mut pos = Vec::with_capacity(n);
+    let mut vel = Vec::with_capacity(n);
+    let mut c_flat = Vec::with_capacity(n * 9);
+    for p in 0..n {
+        pos.push([state.pos[p].x as f32, state.pos[p].y as f32, state.pos[p].z as f32]);
+        vel.push([state.vel[p].x as f32, state.vel[p].y as f32, state.vel[p].z as f32]);
+        let c = state.c[p];
+        // glam DMat3 columns: col(0), col(1), col(2). Column-major.
+        for col in 0..3 {
+            let v = c.col(col);
+            c_flat.push(v.x as f32);
+            c_flat.push(v.y as f32);
+            c_flat.push(v.z as f32);
+        }
+    }
+    (pos, vel, c_flat)
+}
+
+fn build_step_uniforms(cfg: &ImplicitMpmConfig, use_off_diag: bool) -> ImplicitMpmStepUniforms {
+    ImplicitMpmStepUniforms {
+        dt: cfg.dt as f32,
+        cell_size: cfg.cell_size as f32,
+        inv_cell_size: 1.0 / cfg.cell_size as f32,
+        gravity_y: cfg.gravity_y as f32,
+        floor_y: cfg.floor_y as f32,
+        floor_friction: cfg.floor_friction as f32,
+        mass_p: cfg.particle_mass() as f32,
+        particle_volume: cfg.particle_volume as f32,
+        viscosity: cfg.viscosity as f32,
+        grid_origin: [
+            cfg.grid_origin[0] as f32,
+            cfg.grid_origin[1] as f32,
+            cfg.grid_origin[2] as f32,
+        ],
+        use_off_diag,
+    }
+}
+
+fn run_one_gpu_step(
+    kernel: &ImplicitMpmKernel,
+    gpu: &ImplicitMpmGpuStepState,
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+) {
+    let (pos, vel, c_flat) = pack_particles(state);
+    gpu.upload_particles(kernel, &pos, &vel, &c_flat);
+    let u = build_step_uniforms(cfg, true);
+    let (v_back, c_back) = gpu
+        .run_full_step(kernel, state.n() as u32, &u, cfg.max_gs_iters as u32)
+        .expect("GPU full step");
+
+    // Decode back into host Vec3 / Mat3 buffers.
+    let n = state.n();
+    let mut v_new = Vec::with_capacity(n);
+    let mut c_new = Vec::with_capacity(n);
+    for p in 0..n {
+        v_new.push(Vec3::new(
+            v_back[p][0] as Real,
+            v_back[p][1] as Real,
+            v_back[p][2] as Real,
+        ));
+        let cb = p * 9;
+        c_new.push(Mat3::from_cols(
+            Vec3::new(c_back[cb] as Real, c_back[cb + 1] as Real, c_back[cb + 2] as Real),
+            Vec3::new(c_back[cb + 3] as Real, c_back[cb + 4] as Real, c_back[cb + 5] as Real),
+            Vec3::new(c_back[cb + 6] as Real, c_back[cb + 7] as Real, c_back[cb + 8] as Real),
+        ));
+    }
+    apply_bingham_and_advect(state, cfg, &v_new, &c_new);
+}
+
+#[test]
+#[ignore]
+fn implicit_mpm_full_step_cpu_gpu_parity() {
+    let engine = match try_engine() {
+        Some(e) => e,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+    let kernel = {
+        let device = engine.device().expect("device").clone();
+        let queue = engine.queue().expect("queue").clone();
+        ImplicitMpmKernel::new(device, queue)
+    };
+
+    let cfg = parity_cfg();
+    let particles = make_blob(Vec3::new(0.0, 0.20, 0.0), 0.10, cfg.cell_size * 0.5);
+    eprintln!("v2 parity: n_particles = {}", particles.len());
+    assert!(particles.len() <= 200);
+    assert!(particles.len() >= 32);
+
+    // ── Build persistent GPU state. ──────────────────────────────────
+    let max_particles = particles.len() as u32;
+    let mut gpu = ImplicitMpmGpuStepState::new(&kernel, cfg.grid_size as u32, max_particles);
+    let groups = color_grid(cfg.grid_size);
+    let groups_u32: Vec<Vec<u32>> = groups
+        .iter()
+        .map(|g| g.iter().map(|&ci| ci as u32).collect())
+        .collect();
+    gpu.upload_color_groups(&kernel, &groups_u32);
+
+    // ── CPU baseline. ────────────────────────────────────────────────
+    let mut state_cpu = MpmState::new(&particles, &[]);
+    for _ in 0..3 {
+        implicit_mpm_step(&mut state_cpu, &cfg, &mut []);
+    }
+    let snapshot = state_cpu.clone();
+    let _ = implicit_mpm_step(&mut state_cpu, &cfg, &mut []);
+
+    // ── GPU replay. ──────────────────────────────────────────────────
+    let mut state_gpu = snapshot;
+    run_one_gpu_step(&kernel, &gpu, &mut state_gpu, &cfg);
+
+    // ── Compare. ─────────────────────────────────────────────────────
+    let mut max_rel: Real = 0.0;
+    let mut max_abs: Real = 0.0;
+    let mut max_speed: Real = 1.0e-12;
+    for v in &state_cpu.vel {
+        let s = v.length();
+        if s > max_speed { max_speed = s; }
+    }
+    for (i, (vc, vg)) in state_cpu.vel.iter().zip(state_gpu.vel.iter()).enumerate() {
+        let d = *vc - *vg;
+        let ad = d.length();
+        if ad > max_abs { max_abs = ad; }
+        let denom = vc.length().max(1.0e-6);
+        let rel = ad / denom;
+        if rel > max_rel { max_rel = rel; }
+        if i < 3 {
+            eprintln!(
+                "  p{i}: cpu=({:.5}, {:.5}, {:.5})  gpu=({:.5}, {:.5}, {:.5})",
+                vc.x, vc.y, vc.z, vg.x, vg.y, vg.z
+            );
+        }
+    }
+    eprintln!(
+        "v2 parity: max_abs_dv={:.3e}, max_rel_dv={:.3e}, peak |v|={:.3e}",
+        max_abs, max_rel, max_speed
+    );
+    assert!(
+        max_rel < 1.0e-5 || max_abs < 1.0e-5 * max_speed,
+        "Full-step CPU/GPU parity broken: max_rel={max_rel:.3e}, max_abs={max_abs:.3e}, peak |v|={max_speed:.3e}"
+    );
+}
+
+// ─── Stage 40 v2 — 10k-particle perf bench. ──────────────────────
+
+fn make_dense_blob(cfg: &ImplicitMpmConfig, target: usize) -> Vec<Vec3> {
+    // Cubic-grid placement inside an axis-aligned box so we can hit
+    // exactly `target` particles. Spacing tuned to half-cell.
+    let spacing = cfg.cell_size * 0.5;
+    let per_axis = (target as f64).cbrt().ceil() as i32;
+    let mut pos = Vec::with_capacity(target);
+    let origin = Vec3::new(0.0, 0.20, 0.0);
+    'outer: for iz in 0..per_axis {
+        for iy in 0..per_axis {
+            for ix in 0..per_axis {
+                let off = Vec3::new(
+                    (ix as Real - per_axis as Real / 2.0) * spacing,
+                    iy as Real * spacing,
+                    (iz as Real - per_axis as Real / 2.0) * spacing,
+                );
+                pos.push(origin + off);
+                if pos.len() >= target {
+                    break 'outer;
+                }
+            }
+        }
+    }
+    pos
+}
+
+fn perf_cfg(grid: usize) -> ImplicitMpmConfig {
+    ImplicitMpmConfig {
+        grid_size: grid,
+        cell_size: 0.06,
+        grid_origin: [-(grid as f64) * 0.03, -0.05, -(grid as f64) * 0.03],
+        dt: 1.0 / 120.0,
+        gravity_y: -9.81,
+        yield_stress: 500.0,
+        viscosity: 20.0,
+        density: 1000.0,
+        particle_volume: 1.0e-4,
+        floor_y: 0.0,
+        floor_friction: 0.6,
+        max_gs_iters: 8,
+        gs_tol: 0.0,
+        max_newton_iters: 1,
+    }
+}
+
+#[test]
+#[ignore]
+fn bingham_step_wall_time_10k_particles_gpu() {
+    let engine = match try_engine() {
+        Some(e) => e,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+    let kernel = {
+        let device = engine.device().expect("device").clone();
+        let queue = engine.queue().expect("queue").clone();
+        ImplicitMpmKernel::new(device, queue)
+    };
+
+    let cfg = perf_cfg(24);
+    let target_n = 10_000usize;
+    let particles = make_dense_blob(&cfg, target_n);
+    eprintln!("perf: n_particles = {} (target {})", particles.len(), target_n);
+
+    // ── CPU baseline. ────────────────────────────────────────────────
+    let mut state_cpu = MpmState::new(&particles, &[]);
+    // Warm-up.
+    for _ in 0..3 {
+        implicit_mpm_step(&mut state_cpu, &cfg, &mut []);
+    }
+    let n_steps = 5usize;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n_steps {
+        implicit_mpm_step(&mut state_cpu, &cfg, &mut []);
+    }
+    let cpu_elapsed = t0.elapsed().as_secs_f64();
+    let cpu_ms_per_step = 1000.0 * cpu_elapsed / n_steps as f64;
+    eprintln!(
+        "perf CPU: {} steps in {:.3}s → {:.2} ms/step",
+        n_steps, cpu_elapsed, cpu_ms_per_step
+    );
+
+    // ── GPU. ─────────────────────────────────────────────────────────
+    let mut state_gpu = MpmState::new(&particles, &[]);
+    let mut gpu = ImplicitMpmGpuStepState::new(&kernel, cfg.grid_size as u32, particles.len() as u32);
+    let groups = color_grid(cfg.grid_size);
+    let groups_u32: Vec<Vec<u32>> = groups
+        .iter()
+        .map(|g| g.iter().map(|&ci| ci as u32).collect())
+        .collect();
+    gpu.upload_color_groups(&kernel, &groups_u32);
+    for _ in 0..3 {
+        run_one_gpu_step(&kernel, &gpu, &mut state_gpu, &cfg);
+    }
+    let t1 = std::time::Instant::now();
+    for _ in 0..n_steps {
+        run_one_gpu_step(&kernel, &gpu, &mut state_gpu, &cfg);
+    }
+    let gpu_elapsed = t1.elapsed().as_secs_f64();
+    let gpu_ms_per_step = 1000.0 * gpu_elapsed / n_steps as f64;
+    let speedup = cpu_ms_per_step / gpu_ms_per_step;
+    eprintln!(
+        "perf GPU: {} steps in {:.3}s → {:.2} ms/step  (speedup ×{:.2})",
+        n_steps, gpu_elapsed, gpu_ms_per_step, speedup
+    );
+
+    assert!(
+        speedup >= 5.0,
+        "Stage 40 v2 perf target missed: GPU/CPU speedup={speedup:.2} (< 5.0). \
+         CPU={cpu_ms_per_step:.2}ms/step, GPU={gpu_ms_per_step:.2}ms/step"
     );
 }
