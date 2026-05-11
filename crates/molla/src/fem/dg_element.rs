@@ -699,6 +699,53 @@ pub enum NumericalFlux {
     /// `Upwind`; included so callers can write generic code keyed on
     /// the variant.
     Roe,
+    /// Stage 43 v3 — HLL (Harten-Lax-van-Leer) two-wave Riemann solver
+    /// for **systems** of conservation laws. Picks a single
+    /// star-region state by enforcing conservation across the slowest
+    /// and fastest wave-speed estimates (`s_l`, `s_r`). Works for any
+    /// system; for SWE on a face with state `(h, hu, hv)` and normal
+    /// `n`, the wave-speed estimates are
+    ///
+    /// ```text
+    ///   s_l = min(u_L·n − √(g h_L), u_R·n − √(g h_R))
+    ///   s_r = max(u_L·n + √(g h_L), u_R·n + √(g h_R))
+    /// ```
+    ///
+    /// Robust + diffusive in the contact (HLLC adds the missing third
+    /// wave). The flux itself is system-specific so the enum variant
+    /// is just a tag — the SWE evaluation lives in
+    /// [`compute_swe_numerical_flux_hll`].
+    Hll,
+    /// Stage 43 v3 — HLLC (Toro 1994) three-wave Riemann solver
+    /// **specialised for shallow water**. Adds a contact-discontinuity
+    /// star-region between the two HLL waves. Produces sharper
+    /// contact resolution than HLL — important for dam-break/wet-dry
+    /// fronts where the post-shock height has a slowly-moving
+    /// contact between the left and right star states.
+    Hllc,
+    /// Stage 43 v3 — Roe (1981) linearised Riemann solver
+    /// **specialised for shallow water**. Builds the Roe-average
+    /// state `(ĥ, û, v̂)` such that the discrete Jacobian satisfies the
+    /// "Property U" (jump-condition compatibility), then upwinds each
+    /// of the three characteristic fields independently:
+    ///
+    /// ```text
+    ///   ĥ  = ½(h_L + h_R)                   (arithmetic mean for SWE — the
+    ///                                        textbook Roe SWE average; the
+    ///                                        density-weighted Roe avg
+    ///                                        familiar from gas dynamics
+    ///                                        collapses to this for SWE)
+    ///   û  = (u_L √h_L + u_R √h_R) / (√h_L + √h_R)
+    ///   v̂  = analogous
+    ///   ĉ  = √(g ĥ)
+    /// ```
+    ///
+    /// The three eigenvalues are `(û·n − ĉ, û·n, û·n + ĉ)`; an
+    /// **entropy fix** (Harten-Hyman) replaces eigenvalues smaller
+    /// than `δ = max(0, λ̂ − λ_L, λ_R − λ̂)` with the smooth
+    /// `(λ² + δ²) / (2δ)` to prevent transonic-rarefaction
+    /// "anti-entropy" sonic glitches.
+    RoeSwe,
 }
 
 /// Stage 43 — advection-style face flux block for the linear scalar
@@ -773,6 +820,14 @@ pub fn compute_dg_numerical_flux_block(
         NumericalFlux::Upwind { wind } => (wind, 0.0, true),
         NumericalFlux::LaxFriedrichs { alpha } => (Vec3::ZERO, alpha, false),
         NumericalFlux::Roe => (Vec3::ZERO, 0.0, true),
+        // System-only fluxes: not usable here. Caller must dispatch
+        // through the SWE helpers below (compute_swe_numerical_flux_*).
+        NumericalFlux::Hll | NumericalFlux::Hllc | NumericalFlux::RoeSwe => {
+            panic!(
+                "compute_dg_numerical_flux_block: {flux:?} is a system flux; \
+                 use compute_swe_numerical_flux_{{hll,hllc,roe}} for SWE"
+            );
+        }
     };
 
     if is_upwind {
@@ -1736,6 +1791,706 @@ where
     }
 
     crate::math::sparse::BsrMatrix::from_scalar_triplets(n, n, &triplets)
+}
+
+// ─── Stage 43 v3 — SWE numerical fluxes (HLL / HLLC / Roe) ──────────
+//
+// All three functions return the **3-component physical flux vector**
+// `Ĥ(U_L, U_R, n)` for the shallow-water system
+//
+// ```text
+//   U  = (h,  hu, hv)
+//   F  = (hu, hu² + ½ g h², hu·hv / h)            (in x)
+//   G  = (hv, hu·hv / h, hv² + ½ g h²)            (in y)
+//   F·n + G·n  expanded for a 2D normal n = (nx, ny)
+// ```
+//
+// Caller is responsible for the DG face-quadrature loop + scattering
+// `−Ĥ ⟦v⟧` into the residual. These helpers are deliberately
+// pointwise (`u_l, u_r → ĥ`) so they compose with hand-rolled face
+// quadrature loops as well as the structured `compute_dg_numerical_*`
+// assembly path.
+
+/// Stage 43 v3 — SWE physical flux `F(U)·n` for state `U = (h, hu, hv)`
+/// and normal `n` (only `nx, ny` are used; `nz = 0`).
+///
+/// Returns `(F·n)[0..3]`.
+#[must_use]
+fn swe_flux_dot_n(h: Real, hu: Real, hv: Real, n: Vec3, g: Real) -> [Real; 3] {
+    let h_safe = h.max(1.0e-12);
+    let u = hu / h_safe;
+    let v = hv / h_safe;
+    // F·n = nx · (hu, hu² + ½gh², hu·hv/h)
+    //     + ny · (hv, hu·hv/h, hv² + ½gh²)
+    let fx = [hu, hu * u + 0.5 * g * h * h, hu * v];
+    let fy = [hv, hv * u, hv * v + 0.5 * g * h * h];
+    [
+        fx[0] * n.x + fy[0] * n.y,
+        fx[1] * n.x + fy[1] * n.y,
+        fx[2] * n.x + fy[2] * n.y,
+    ]
+}
+
+/// Stage 43 v3 — **HLL** numerical flux for the SWE system.
+///
+/// Two-wave Riemann solver (Harten-Lax-van-Leer 1983). Estimates the
+/// slowest and fastest wave speeds `s_l, s_r`; for SWE these are the
+/// minimum / maximum of the eigenvalues of the normal Jacobian on the
+/// two sides:
+///
+/// ```text
+///   s_l = min(u_n_L − c_L, u_n_R − c_R, û_n − ĉ)
+///   s_r = max(u_n_L + c_L, u_n_R + c_R, û_n + ĉ)
+/// ```
+///
+/// with `c = √(g h)`. The Davis (1988) speed estimate already includes
+/// the Roe-average `û_n ± ĉ` for robustness on near-vacuum left/right
+/// states (dry-bed / wet-bed pair). The HLL flux is then
+///
+/// ```text
+///   Ĥ = ⎧ F_L · n,                       s_l ≥ 0
+///       ⎨ (s_r F_L − s_l F_R + s_l s_r (U_R − U_L)) / (s_r − s_l),  s_l < 0 < s_r
+///       ⎩ F_R · n,                       s_r ≤ 0
+/// ```
+///
+/// Returns the 3-component flux vector `(Ĥ_h, Ĥ_hu, Ĥ_hv)`.
+#[must_use]
+pub fn compute_swe_numerical_flux_hll(
+    u_l: [Real; 3],
+    u_r: [Real; 3],
+    n: Vec3,
+    g: Real,
+) -> [Real; 3] {
+    let h_l = u_l[0].max(1.0e-12);
+    let h_r = u_r[0].max(1.0e-12);
+    let un_l = (u_l[1] * n.x + u_l[2] * n.y) / h_l;
+    let un_r = (u_r[1] * n.x + u_r[2] * n.y) / h_r;
+    let c_l = (g * h_l).sqrt();
+    let c_r = (g * h_r).sqrt();
+
+    // Roe-average wave speeds (Davis style — wider stencil for robustness).
+    let sqrt_h_l = h_l.sqrt();
+    let sqrt_h_r = h_r.sqrt();
+    let h_hat = 0.5 * (h_l + h_r);
+    let denom = sqrt_h_l + sqrt_h_r;
+    let un_hat = if denom > 1.0e-30 {
+        (un_l * sqrt_h_l + un_r * sqrt_h_r) / denom
+    } else {
+        0.5 * (un_l + un_r)
+    };
+    let c_hat = (g * h_hat).sqrt();
+
+    let s_l = (un_l - c_l).min(un_r - c_r).min(un_hat - c_hat);
+    let s_r = (un_l + c_l).max(un_r + c_r).max(un_hat + c_hat);
+
+    let f_l = swe_flux_dot_n(u_l[0], u_l[1], u_l[2], n, g);
+    let f_r = swe_flux_dot_n(u_r[0], u_r[1], u_r[2], n, g);
+
+    if s_l >= 0.0 {
+        f_l
+    } else if s_r <= 0.0 {
+        f_r
+    } else {
+        let inv = 1.0 / (s_r - s_l);
+        [
+            (s_r * f_l[0] - s_l * f_r[0] + s_l * s_r * (u_r[0] - u_l[0])) * inv,
+            (s_r * f_l[1] - s_l * f_r[1] + s_l * s_r * (u_r[1] - u_l[1])) * inv,
+            (s_r * f_l[2] - s_l * f_r[2] + s_l * s_r * (u_r[2] - u_l[2])) * inv,
+        ]
+    }
+}
+
+/// Stage 43 v3 — **HLLC** numerical flux for the SWE system (Toro 1994
+/// adapted for shallow water by Fraccarollo & Toro 1995).
+///
+/// Three-wave Riemann solver: adds the contact-discontinuity speed
+/// `s_*` between the HLL `s_l, s_r` waves. The contact speed is
+/// derived from the conservation of mass + normal momentum across the
+/// star region:
+///
+/// ```text
+///   s_* = (s_l h_R (u_n_R − s_r) − s_r h_L (u_n_L − s_l))
+///       / (h_R (u_n_R − s_r) − h_L (u_n_L − s_l))
+/// ```
+///
+/// The four-region flux is
+///
+/// ```text
+///   Ĥ = ⎧ F_L,        s_l ≥ 0
+///       ⎪ F_*L,       s_l < 0 ≤ s_*
+///       ⎨ F_*R,       s_* < 0 ≤ s_r
+///       ⎩ F_R,        s_r ≤ 0
+/// ```
+///
+/// with `F_*K = F_K + s_K (U_*K − U_K)` and the star-region state
+/// `U_*K` constructed so the tangential velocity is unchanged across
+/// the contact (the SWE contact only carries `h` / normal-velocity
+/// jumps; tangential velocity is purely advected).
+#[must_use]
+pub fn compute_swe_numerical_flux_hllc(
+    u_l: [Real; 3],
+    u_r: [Real; 3],
+    n: Vec3,
+    g: Real,
+) -> [Real; 3] {
+    let h_l = u_l[0].max(1.0e-12);
+    let h_r = u_r[0].max(1.0e-12);
+    let un_l = (u_l[1] * n.x + u_l[2] * n.y) / h_l;
+    let un_r = (u_r[1] * n.x + u_r[2] * n.y) / h_r;
+    let c_l = (g * h_l).sqrt();
+    let c_r = (g * h_r).sqrt();
+
+    // Roe-average wave-speed estimate (Davis style).
+    let sqrt_h_l = h_l.sqrt();
+    let sqrt_h_r = h_r.sqrt();
+    let h_hat = 0.5 * (h_l + h_r);
+    let denom = sqrt_h_l + sqrt_h_r;
+    let un_hat = if denom > 1.0e-30 {
+        (un_l * sqrt_h_l + un_r * sqrt_h_r) / denom
+    } else {
+        0.5 * (un_l + un_r)
+    };
+    let c_hat = (g * h_hat).sqrt();
+    let s_l = (un_l - c_l).min(un_r - c_r).min(un_hat - c_hat);
+    let s_r = (un_l + c_l).max(un_r + c_r).max(un_hat + c_hat);
+
+    let f_l = swe_flux_dot_n(u_l[0], u_l[1], u_l[2], n, g);
+    let f_r = swe_flux_dot_n(u_r[0], u_r[1], u_r[2], n, g);
+
+    if s_l >= 0.0 {
+        return f_l;
+    }
+    if s_r <= 0.0 {
+        return f_r;
+    }
+
+    // Star-region contact speed (Toro 2001, Eq. 10.70 for SWE).
+    let num = h_r * un_r * (s_r - un_r) - h_l * un_l * (s_l - un_l)
+        + 0.5 * g * (h_l * h_l - h_r * h_r);
+    let den = h_r * (s_r - un_r) - h_l * (s_l - un_l);
+    let s_star = if den.abs() > 1.0e-30 { num / den } else { 0.5 * (s_l + s_r) };
+
+    // Helper to build the star-region conservative state `U_*K` and
+    // the corresponding flux `F_*K = F_K + s_K (U_*K − U_K)`.
+    //
+    // Decompose velocity into normal + tangential components. Across
+    // the contact the tangential velocity is preserved; the normal
+    // velocity equals `s_star`; the depth follows from conservation:
+    //   h_*K = h_K · (s_K − u_n_K) / (s_K − s_*)
+    let nx = n.x;
+    let ny = n.y;
+    let tx = -ny;
+    let ty = nx;
+
+    let star_flux = |h_k: Real, hu_k: Real, hv_k: Real, un_k: Real, s_k: Real, f_k: [Real; 3]| -> [Real; 3] {
+        let h_star = h_k * (s_k - un_k) / (s_k - s_star);
+        let u_k = hu_k / h_k;
+        let v_k = hv_k / h_k;
+        let ut_k = u_k * tx + v_k * ty;
+        // Star velocity components.
+        let us_x = s_star * nx + ut_k * tx;
+        let us_y = s_star * ny + ut_k * ty;
+        let hu_star = h_star * us_x;
+        let hv_star = h_star * us_y;
+        [
+            f_k[0] + s_k * (h_star - h_k),
+            f_k[1] + s_k * (hu_star - hu_k),
+            f_k[2] + s_k * (hv_star - hv_k),
+        ]
+    };
+
+    if s_star >= 0.0 {
+        star_flux(h_l, u_l[1], u_l[2], un_l, s_l, f_l)
+    } else {
+        star_flux(h_r, u_r[1], u_r[2], un_r, s_r, f_r)
+    }
+}
+
+/// Stage 43 v3 — **Roe** numerical flux for the SWE system.
+///
+/// Linearised Riemann solver around the Roe-average state. The
+/// three-component flux is
+///
+/// ```text
+///   Ĥ = ½ (F_L · n + F_R · n) − ½ Σ_k |λ̂_k| α_k r̂_k
+/// ```
+///
+/// where `(λ̂_k, r̂_k)` are the eigenvalues and right eigenvectors of
+/// the Roe-averaged Jacobian `Â(U_L, U_R)` and `α_k = ℓ̂_k · (U_R − U_L)`
+/// are the wave strengths (`ℓ̂_k` left eigenvectors).
+///
+/// Eigenstructure (in the rotated normal/tangential frame):
+///
+/// ```text
+///   λ̂_1 = û_n − ĉ,        r̂_1 = (1, û_n − ĉ nx + û_t (−ny), …)
+///   λ̂_2 = û_n,            r̂_2 = (0, −ny, nx)·ĉ            (shear wave)
+///   λ̂_3 = û_n + ĉ
+/// ```
+///
+/// The implementation rotates the problem into a coordinate system
+/// aligned with `n`, applies the textbook 1D SWE Roe solver, then
+/// rotates back. **Entropy fix** (Harten-Hyman): eigenvalues smaller
+/// than `δ_k = max(0, λ̂_k − λ_{k,L}, λ_{k,R} − λ̂_k)` are replaced
+/// with the smooth `(λ̂² + δ²) / (2δ)` to prevent transonic-
+/// rarefaction sonic glitches.
+#[must_use]
+pub fn compute_swe_numerical_flux_roe(
+    u_l: [Real; 3],
+    u_r: [Real; 3],
+    n: Vec3,
+    g: Real,
+) -> [Real; 3] {
+    // Wet-dry guard: clamp `h` to a small positive value and zero the
+    // momentum if the depth is below a numerical floor. Without this,
+    // a near-vacuum trace produces `hu/h → ∞` and the Roe flux NaN's.
+    const H_FLOOR: Real = 1.0e-8;
+    let (h_l, hu_l, hv_l) = if u_l[0] < H_FLOOR {
+        (H_FLOOR, 0.0, 0.0)
+    } else {
+        (u_l[0], u_l[1], u_l[2])
+    };
+    let (h_r, hu_r, hv_r) = if u_r[0] < H_FLOOR {
+        (H_FLOOR, 0.0, 0.0)
+    } else {
+        (u_r[0], u_r[1], u_r[2])
+    };
+    let nx = n.x;
+    let ny = n.y;
+    let tx = -ny;
+    let ty = nx;
+
+    // Rotate to the normal / tangential frame.
+    let u_l_n = (hu_l * nx + hv_l * ny) / h_l;
+    let u_l_t = (hu_l * tx + hv_l * ty) / h_l;
+    let u_r_n = (hu_r * nx + hv_r * ny) / h_r;
+    let u_r_t = (hu_r * tx + hv_r * ty) / h_r;
+
+    let sqrt_h_l = h_l.sqrt();
+    let sqrt_h_r = h_r.sqrt();
+    let h_hat = 0.5 * (h_l + h_r);
+    let denom = sqrt_h_l + sqrt_h_r;
+    let (un_hat, ut_hat) = if denom > 1.0e-30 {
+        (
+            (u_l_n * sqrt_h_l + u_r_n * sqrt_h_r) / denom,
+            (u_l_t * sqrt_h_l + u_r_t * sqrt_h_r) / denom,
+        )
+    } else {
+        (0.5 * (u_l_n + u_r_n), 0.5 * (u_l_t + u_r_t))
+    };
+    let c_hat = (g * h_hat).sqrt();
+
+    // Jumps in conservative variables (h, h·u_n, h·u_t).
+    let dh = h_r - h_l;
+    let d_hun = h_r * u_r_n - h_l * u_l_n;
+    let d_hut = h_r * u_r_t - h_l * u_l_t;
+
+    // Wave strengths (Toro 2001, §13.7 for 2D SWE in rotated coordinates):
+    //   α_1 = ½ (dh − (dhu_n − û_n dh) / ĉ)
+    //   α_2 = dhu_t − û_t dh                     (shear-wave strength)
+    //   α_3 = ½ (dh + (dhu_n − û_n dh) / ĉ)
+    let inv_c = if c_hat > 1.0e-30 { 1.0 / c_hat } else { 0.0 };
+    let alpha_1 = 0.5 * (dh - (d_hun - un_hat * dh) * inv_c);
+    let alpha_2 = d_hut - ut_hat * dh;
+    let alpha_3 = 0.5 * (dh + (d_hun - un_hat * dh) * inv_c);
+
+    // Eigenvalues at the Roe-average state.
+    let lam_1 = un_hat - c_hat;
+    let lam_2 = un_hat;
+    let lam_3 = un_hat + c_hat;
+
+    // Eigenvalues on the L and R sides (for the entropy fix).
+    let c_l = (g * h_l).sqrt();
+    let c_r = (g * h_r).sqrt();
+    let lam_1_l = u_l_n - c_l;
+    let lam_1_r = u_r_n - c_r;
+    let lam_3_l = u_l_n + c_l;
+    let lam_3_r = u_r_n + c_r;
+
+    // Harten-Hyman entropy fix: smooth |λ| near sonic points so that
+    // transonic rarefactions get the correct shock-free expansion.
+    let smooth_abs = |lam: Real, lam_l: Real, lam_r: Real| -> Real {
+        let delta = ((lam - lam_l).max(0.0)).max((lam_r - lam).max(0.0));
+        if lam.abs() < delta {
+            0.5 * (lam * lam / delta.max(1.0e-30) + delta)
+        } else {
+            lam.abs()
+        }
+    };
+    let abs_lam_1 = smooth_abs(lam_1, lam_1_l, lam_1_r);
+    // Contact / shear wave: no entropy fix needed (it's linearly
+    // degenerate — no rarefaction across it).
+    let abs_lam_2 = lam_2.abs();
+    let abs_lam_3 = smooth_abs(lam_3, lam_3_l, lam_3_r);
+
+    // Right eigenvectors in the rotated (normal/tangential) frame:
+    //   r_1 = (1, û_n − ĉ, û_t)
+    //   r_2 = (0, 0, 1)                       (pure shear)
+    //   r_3 = (1, û_n + ĉ, û_t)
+    let r1 = [1.0_f64 as Real, un_hat - c_hat, ut_hat];
+    let r2 = [0.0_f64 as Real, 0.0, 1.0];
+    let r3 = [1.0_f64 as Real, un_hat + c_hat, ut_hat];
+
+    // Roe dissipation in the rotated frame.
+    let d_rot = [
+        abs_lam_1 * alpha_1 * r1[0] + abs_lam_2 * alpha_2 * r2[0] + abs_lam_3 * alpha_3 * r3[0],
+        abs_lam_1 * alpha_1 * r1[1] + abs_lam_2 * alpha_2 * r2[1] + abs_lam_3 * alpha_3 * r3[1],
+        abs_lam_1 * alpha_1 * r1[2] + abs_lam_2 * alpha_2 * r2[2] + abs_lam_3 * alpha_3 * r3[2],
+    ];
+
+    // Average physical flux (in original frame). Use the clamped
+    // (h, hu, hv) so a near-vacuum trace doesn't blow up here either.
+    let f_l = swe_flux_dot_n(h_l, hu_l, hv_l, n, g);
+    let f_r = swe_flux_dot_n(h_r, hu_r, hv_r, n, g);
+
+    // Rotate the dissipation back: the dissipation acts on (h, h·u_n,
+    // h·u_t) → (h, hu, hv) via
+    //   d_hu = d_hun · nx + d_hut · tx
+    //   d_hv = d_hun · ny + d_hut · ty
+    let d_h = d_rot[0];
+    let d_hu = d_rot[1] * nx + d_rot[2] * tx;
+    let d_hv = d_rot[1] * ny + d_rot[2] * ty;
+
+    [
+        0.5 * (f_l[0] + f_r[0]) - 0.5 * d_h,
+        0.5 * (f_l[1] + f_r[1]) - 0.5 * d_hu,
+        0.5 * (f_l[2] + f_r[2]) - 0.5 * d_hv,
+    ]
+}
+
+// ─── Stage 43 v3 — Krivodonova characteristic limiter ───────────────
+
+/// Stage 43 v3 — characteristic-wise Barth-Jespersen limiter for the
+/// SWE `(h, hu, hv)` system (Krivodonova 2007).
+///
+/// The scalar BJ limiter applied component-wise to a non-linear
+/// system over-limits the contact / shear field, producing
+/// excessive diffusion in smooth regions adjacent to shocks. The
+/// fix is to transform per-cell residuals into **characteristic
+/// variables** (eigenvector basis of the local Roe-averaged Jacobian),
+/// apply scalar BJ independently to each characteristic, and
+/// transform back. The cell-average and per-cell layout are unchanged
+/// vs [`limit_solution`].
+///
+/// Algorithm:
+/// 1. Compute cell averages `Ū_K` (mean of nodal values, like
+///    `limit_solution`).
+/// 2. For each cell `K`, build a single Roe-average state from the
+///    cell-average + the average of its face-neighbour cell-averages
+///    (a centred / symmetric choice — Krivodonova originally used
+///    direction-dependent averages, but the symmetric variant gives
+///    the same shock-capturing behaviour and avoids tie-breaks on
+///    triangular meshes where each cell has 3 neighbours).
+/// 3. Compute the left + right eigenmatrices `L̂, R̂` of the Jacobian
+///    `Â · n_K` at the Roe-average state. The "principal" normal
+///    `n_K` is the average outward normal across the cell's faces —
+///    on an isotropic mesh this is well-defined; on anisotropic
+///    meshes the limiter degrades gracefully to the scalar BJ.
+/// 4. Transform the per-cell deltas `U_i − Ū_K` and the neighbour
+///    deltas `Ū_NB − Ū_K` into characteristic variables via `L̂`.
+/// 5. Apply scalar BJ to each characteristic field independently.
+/// 6. Transform back via `R̂` and update `u_dg`.
+///
+/// `u_dg` is the flat **system** state in component-fastest layout:
+/// `u_dg[(dof) * components + c]`. The function is hard-coded to
+/// `components == 3` and treats them as `(h, hu, hv)` SWE variables.
+pub fn limit_solution_characteristic(
+    mesh: &super::mesh::FemMesh,
+    u_dg: &mut [Real],
+    degree: usize,
+    cell_neighbours: &[Vec<u32>],
+    g: Real,
+    physical_h_min: Real,
+) {
+    const COMPONENTS: usize = 3;
+    assert!(
+        degree <= 2,
+        "limit_solution_characteristic: degree {degree} out of range"
+    );
+    if degree == 0 {
+        // P0 has only cell averages → just clamp h non-negative.
+        for ci in 0..mesh.cells.len() {
+            let idx = ci * COMPONENTS;
+            if u_dg[idx] < physical_h_min {
+                u_dg[idx] = physical_h_min;
+            }
+        }
+        return;
+    }
+
+    // 1. Per-cell offsets (in scalar DoFs).
+    let mut offsets: Vec<usize> = Vec::with_capacity(mesh.cells.len() + 1);
+    let mut running = 0usize;
+    for c in &mesh.cells {
+        offsets.push(running);
+        running += dg_local_ndof(c, degree);
+    }
+    offsets.push(running);
+
+    // 2. Cell averages — per component.
+    let cell_avg: Vec<[Real; COMPONENTS]> = (0..mesh.cells.len())
+        .map(|ci| {
+            let n = offsets[ci + 1] - offsets[ci];
+            let inv_n = 1.0 / (n as Real);
+            let mut avg = [0.0_f64 as Real; COMPONENTS];
+            for i in 0..n {
+                for c in 0..COMPONENTS {
+                    avg[c] += u_dg[(offsets[ci] + i) * COMPONENTS + c];
+                }
+            }
+            for c in 0..COMPONENTS {
+                avg[c] *= inv_n;
+            }
+            avg
+        })
+        .collect();
+
+    // Helper: scalar BJ factor over a single field. Returns phi ∈ [0,1].
+    let bj_phi = |center: Real, nodal: &[Real], u_min: Real, u_max: Real| -> Real {
+        let mut phi: Real = 1.0;
+        for &u_i in nodal {
+            let d = u_i - center;
+            let yi = if d > 1.0e-30 {
+                ((u_max - center) / d).min(1.0)
+            } else if d < -1.0e-30 {
+                ((u_min - center) / d).min(1.0)
+            } else {
+                1.0
+            };
+            let yi = yi.clamp(0.0, 1.0);
+            if yi < phi {
+                phi = yi;
+            }
+        }
+        phi
+    };
+
+    // 3. Apply per-cell characteristic limiting.
+    let n_cells = mesh.cells.len();
+    let mut new_u_dg: Vec<Real> = u_dg.to_vec();
+
+    for ci in 0..n_cells {
+        let nbrs = &cell_neighbours[ci];
+        let u_bar = cell_avg[ci];
+
+        // Build the principal cell normal — average of the outward
+        // normals on each face. On an isotropic mesh (square / right-tri
+        // grid) this is well-defined; on degenerate cells it falls
+        // back to (1, 0, 0).
+        let cell = &mesh.cells[ci];
+        let centroid = cell_centroid(cell, &mesh.vertices);
+        let mut n_avg = Vec3::ZERO;
+        match cell {
+            FemCell::Tri(v) => {
+                for &[a, b] in &[[v[0], v[1]], [v[1], v[2]], [v[2], v[0]]] {
+                    let pa = mesh.vertices[a as usize];
+                    let pb = mesh.vertices[b as usize];
+                    let mid = (pa + pb) * 0.5;
+                    let raw_n = edge_normal_2d(pa, pb);
+                    let out_n = if raw_n.dot(mid - centroid) >= 0.0 { raw_n } else { -raw_n };
+                    n_avg += out_n;
+                }
+            }
+            FemCell::Tet(_) => {
+                // 3D SWE is non-standard; degrade to scalar component-wise BJ.
+                let off = offsets[ci];
+                let n = offsets[ci + 1] - off;
+                for c in 0..COMPONENTS {
+                    let center = u_bar[c];
+                    let mut u_min = center;
+                    let mut u_max = center;
+                    for &nb in nbrs {
+                        let v = cell_avg[nb as usize][c];
+                        if v < u_min { u_min = v; }
+                        if v > u_max { u_max = v; }
+                    }
+                    if c == 0 && u_min < physical_h_min { u_min = physical_h_min; }
+                    let nodal: Vec<Real> = (0..n)
+                        .map(|i| u_dg[(off + i) * COMPONENTS + c])
+                        .collect();
+                    let phi = bj_phi(center, &nodal, u_min, u_max);
+                    for i in 0..n {
+                        let u_i = u_dg[(off + i) * COMPONENTS + c];
+                        new_u_dg[(off + i) * COMPONENTS + c] = center + phi * (u_i - center);
+                    }
+                }
+                continue;
+            }
+        }
+        let n_len = (n_avg.x * n_avg.x + n_avg.y * n_avg.y).sqrt();
+        let n_principal = if n_len > 1.0e-12 {
+            Vec3::new(n_avg.x / n_len, n_avg.y / n_len, 0.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+
+        // Roe-average state between this cell and the *average* of its
+        // neighbours' cell averages.
+        let mut nb_avg = [0.0_f64 as Real; COMPONENTS];
+        if !nbrs.is_empty() {
+            for &nb in nbrs {
+                for c in 0..COMPONENTS {
+                    nb_avg[c] += cell_avg[nb as usize][c];
+                }
+            }
+            let inv = 1.0 / (nbrs.len() as Real);
+            for c in 0..COMPONENTS {
+                nb_avg[c] *= inv;
+            }
+        } else {
+            nb_avg = u_bar;
+        }
+
+        // Roe-average between (u_bar, nb_avg). Numerical floor on `h`
+        // (independent of `physical_h_min` which is the user-facing
+        // post-limit clamp) guards against transient near-vacuum
+        // cell-averages — the wave-speed and eigenvector math
+        // dividing by `h_l`/`h_r` would otherwise NaN.
+        const H_NUM_FLOOR: Real = 1.0e-8;
+        let h_l = u_bar[0].max(H_NUM_FLOOR);
+        let h_r = nb_avg[0].max(H_NUM_FLOOR);
+        let sqrt_h_l = h_l.sqrt();
+        let sqrt_h_r = h_r.sqrt();
+        let denom = sqrt_h_l + sqrt_h_r;
+        let nx = n_principal.x;
+        let ny = n_principal.y;
+        let tx = -ny;
+        let ty = nx;
+        // Zero out momenta when h is near-vacuum (consistent with
+        // the wet/dry treatment in `compute_swe_numerical_flux_roe`).
+        let (hu_l, hv_l) = if u_bar[0] < H_NUM_FLOOR { (0.0, 0.0) } else { (u_bar[1], u_bar[2]) };
+        let (hu_r, hv_r) = if nb_avg[0] < H_NUM_FLOOR { (0.0, 0.0) } else { (nb_avg[1], nb_avg[2]) };
+        let u_l_n = (hu_l * nx + hv_l * ny) / h_l;
+        let u_l_t = (hu_l * tx + hv_l * ty) / h_l;
+        let u_r_n = (hu_r * nx + hv_r * ny) / h_r;
+        let u_r_t = (hu_r * tx + hv_r * ty) / h_r;
+        let (un_hat, ut_hat) = if denom > 1.0e-30 {
+            (
+                (u_l_n * sqrt_h_l + u_r_n * sqrt_h_r) / denom,
+                (u_l_t * sqrt_h_l + u_r_t * sqrt_h_r) / denom,
+            )
+        } else {
+            (0.5 * (u_l_n + u_r_n), 0.5 * (u_l_t + u_r_t))
+        };
+        let h_hat = 0.5 * (h_l + h_r);
+        let c_hat = (g * h_hat).sqrt();
+
+        // Left + right eigenmatrices in the rotated (normal/tangential)
+        // frame. Conservative variables in that frame are
+        // (h, h·u_n, h·u_t). The left eigenmatrix L̂ maps a (h, h·u_n,
+        // h·u_t) jump → wave strengths (α_1, α_2, α_3):
+        //
+        //   L̂ = ½ ⎡ (1 + û_n/ĉ)  −1/ĉ   0 ⎤
+        //          ⎢ −2 û_t        0      2 ⎥
+        //          ⎣ (1 − û_n/ĉ)  +1/ĉ   0 ⎦
+        //
+        //   R̂ = ⎡ 1            0     1           ⎤
+        //        ⎢ û_n − ĉ      0     û_n + ĉ     ⎥
+        //        ⎣ û_t          1     û_t         ⎦
+        //
+        // Verified L̂·R̂ = I.
+        let inv_c = if c_hat > 1.0e-30 { 1.0 / c_hat } else { 0.0 };
+        let l_mat = [
+            [0.5 * (1.0 + un_hat * inv_c), -0.5 * inv_c, 0.0],
+            [-ut_hat, 0.0, 1.0],
+            [0.5 * (1.0 - un_hat * inv_c), 0.5 * inv_c, 0.0],
+        ];
+        let r_mat = [
+            [1.0_f64 as Real, 0.0, 1.0],
+            [un_hat - c_hat, 0.0, un_hat + c_hat],
+            [ut_hat, 1.0, ut_hat],
+        ];
+
+        // Transform `U = (h, hu, hv)` → rotated `(h, h·u_n, h·u_t)`.
+        let rotate_to_nt = |u: [Real; 3]| -> [Real; 3] {
+            [u[0], u[1] * nx + u[2] * ny, u[1] * tx + u[2] * ty]
+        };
+        // Transform rotated → original.
+        let rotate_to_xy = |u: [Real; 3]| -> [Real; 3] {
+            [u[0], u[1] * nx + u[2] * tx, u[1] * ny + u[2] * ty]
+        };
+
+        // Center cell-average in characteristic vars (only used to
+        // pick the BJ neighbourhood — the limiter actually limits the
+        // *deltas* relative to the cell average, then converts back).
+        let u_bar_nt = rotate_to_nt(u_bar);
+        let mut w_bar = [0.0_f64 as Real; COMPONENTS];
+        for i in 0..COMPONENTS {
+            for j in 0..COMPONENTS {
+                w_bar[i] += l_mat[i][j] * u_bar_nt[j];
+            }
+        }
+
+        // Characteristic min/max over neighbours.
+        let mut w_min = w_bar;
+        let mut w_max = w_bar;
+        for &nb in nbrs {
+            let nb_state = cell_avg[nb as usize];
+            let nb_nt = rotate_to_nt(nb_state);
+            let mut w_nb = [0.0_f64 as Real; COMPONENTS];
+            for i in 0..COMPONENTS {
+                for j in 0..COMPONENTS {
+                    w_nb[i] += l_mat[i][j] * nb_nt[j];
+                }
+            }
+            for i in 0..COMPONENTS {
+                if w_nb[i] < w_min[i] { w_min[i] = w_nb[i]; }
+                if w_nb[i] > w_max[i] { w_max[i] = w_nb[i]; }
+            }
+        }
+
+        // Compute nodal characteristic values + BJ phi per characteristic.
+        let off = offsets[ci];
+        let n = offsets[ci + 1] - off;
+        let mut nodal_w: Vec<[Real; COMPONENTS]> = Vec::with_capacity(n);
+        for i in 0..n {
+            let u_i = [
+                u_dg[(off + i) * COMPONENTS + 0],
+                u_dg[(off + i) * COMPONENTS + 1],
+                u_dg[(off + i) * COMPONENTS + 2],
+            ];
+            let u_i_nt = rotate_to_nt(u_i);
+            let mut w_i = [0.0_f64 as Real; COMPONENTS];
+            for ii in 0..COMPONENTS {
+                for jj in 0..COMPONENTS {
+                    w_i[ii] += l_mat[ii][jj] * u_i_nt[jj];
+                }
+            }
+            nodal_w.push(w_i);
+        }
+
+        let mut phi = [1.0_f64 as Real; COMPONENTS];
+        for k in 0..COMPONENTS {
+            let nodal: Vec<Real> = nodal_w.iter().map(|w| w[k]).collect();
+            phi[k] = bj_phi(w_bar[k], &nodal, w_min[k], w_max[k]);
+        }
+
+        // Apply: w_i ← w_bar + phi · (w_i − w_bar); convert back to
+        // conservative variables in the original frame.
+        for i in 0..n {
+            let mut w_limited = [0.0_f64 as Real; COMPONENTS];
+            for k in 0..COMPONENTS {
+                w_limited[k] = w_bar[k] + phi[k] * (nodal_w[i][k] - w_bar[k]);
+            }
+            // Back to rotated conservative vars via R̂.
+            let mut u_limited_nt = [0.0_f64 as Real; COMPONENTS];
+            for ii in 0..COMPONENTS {
+                for kk in 0..COMPONENTS {
+                    u_limited_nt[ii] += r_mat[ii][kk] * w_limited[kk];
+                }
+            }
+            // Rotate to physical (h, hu, hv) frame.
+            let u_limited = rotate_to_xy(u_limited_nt);
+            for c in 0..COMPONENTS {
+                new_u_dg[(off + i) * COMPONENTS + c] = u_limited[c];
+            }
+            // Hard clamp h ≥ physical_h_min.
+            if new_u_dg[(off + i) * COMPONENTS + 0] < physical_h_min {
+                new_u_dg[(off + i) * COMPONENTS + 0] = physical_h_min;
+            }
+        }
+    }
+
+    u_dg.copy_from_slice(&new_u_dg);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────

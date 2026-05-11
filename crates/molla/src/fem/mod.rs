@@ -91,7 +91,9 @@ pub use dg_element::{
     assemble_dg_global, build_cell_neighbours, compute_dg_flux_jump_block,
     compute_dg_numerical_flux_block, compute_dg_numerical_flux_block_vector,
     compute_element_dg_mass, compute_element_dg_stiffness, compute_interior_faces,
-    compute_nitsche_boundary_block, dg_nodal_positions, limit_solution,
+    compute_nitsche_boundary_block, compute_swe_numerical_flux_hll,
+    compute_swe_numerical_flux_hllc, compute_swe_numerical_flux_roe,
+    dg_nodal_positions, limit_solution, limit_solution_characteristic,
     periodic_face_pairs, InteriorFace, NumericalFlux,
 };
 pub use dg_time_integrator::{ssp_rk2_step, ssp_rk3_step};
