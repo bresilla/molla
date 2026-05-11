@@ -74,6 +74,7 @@ pub mod p2_element;
 pub mod quadrature;
 #[cfg(feature = "russell")]
 pub mod russell;
+pub mod signorini;
 pub mod solver;
 pub mod stokes;
 #[cfg(feature = "gpu")]
@@ -132,6 +133,11 @@ pub use nedelec_element::{
     NedelecDofMap,
 };
 pub use nonconforming::{NonconformingField, NonconformingPenaltyContact};
+pub use signorini::{
+    assemble_constraint_matrix, estimate_dual_step, solve_augmented_system,
+    solve_augmented_system_with, target_gap_vector, SignoriniContact, UzawaResult,
+    DEFAULT_INNER_CG_MAX_ITERS, DEFAULT_INNER_CG_TOL,
+};
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};
