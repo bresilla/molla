@@ -112,6 +112,10 @@ pub use fft_ns::{
     solve_pressure_poisson_fft, solve_pressure_poisson_fft_with_stencil,
     FractionalStepConfig, PoissonStencil,
 };
+pub use eddy_current::{
+    build_discrete_gradient, build_p1_vector_laplacian, solve_eddy_current_steady,
+    solve_eddy_current_steady_ams, AmsPreconditioner, EddyCurrentConfig, EddyCurrentResult,
+};
 pub use element::{
     compute_element_convection, compute_element_distortion_energy,
     compute_element_elasticity_stiffness, compute_element_mass,
@@ -119,9 +123,6 @@ pub use element::{
     compute_element_supg_convection, compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, dg_ndof_per_cell, FunctionSpace};
-pub use eddy_current::{
-    solve_eddy_current_steady, EddyCurrentConfig, EddyCurrentResult,
-};
 pub use magneto::{
     compute_curl_per_cell, integrate_field_along_edges, project_field_on_edges,
     solve_magnetostatics_steady, MagnetostaticsResult,
