@@ -164,6 +164,7 @@ fn gpu_ns_lid_cavity_matches_cpu_8x8_re100() {
             tol_inner: 5.0e-7,
         },
         cg_check_period: None,
+        cg_fused: false,
     };
     let t0 = Instant::now();
     let res_v4 = solve_navier_stokes_gpu(
@@ -191,6 +192,24 @@ fn gpu_ns_lid_cavity_matches_cpu_8x8_re100() {
         res.last_outer_iters, res.div_residual,
     );
 
+    // Stage 41 v6 — fully fused CG iter (3 dispatches/iter, down from
+    // v5's 7). Same check_period semantics + opt-in via cg_fused = true.
+    let cfg_v6 = NavierStokesGpuConfig {
+        cg_check_period: Some(8),
+        cg_fused: true,
+        ..cfg_v4.clone()
+    };
+    let t0 = Instant::now();
+    let res_v6 = solve_navier_stokes_gpu(
+        &mesh, &th, &u_init, &p_init, &f, viscosity, &bcs, &cfg_v6, &engine,
+    )
+    .expect("GPU NS solve v6");
+    let v6_gpu_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    eprintln!(
+        "GPU NS 8×8 v6 (fused K=8): time = {v6_gpu_ms:.1} ms, last_iters = {}, div = {:.3e}",
+        res_v6.last_outer_iters, res_v6.div_residual,
+    );
+
     // ── Compare ───────────────────────────────────────────────────
     let mut peak_u: Real = 0.0;
     let mut max_abs: Real = 0.0;
@@ -207,10 +226,13 @@ fn gpu_ns_lid_cavity_matches_cpu_8x8_re100() {
     let v3_gpu_ms: f64 = 7986.0;
     let speedup_v3 = v3_gpu_ms / gpu_ms.max(1.0e-3);
     let speedup_v4 = v4_gpu_ms / gpu_ms.max(1.0e-3);
+    let speedup_v6_vs_v5 = gpu_ms / v6_gpu_ms.max(1.0e-3);
+    let speedup_v6_vs_v4 = v4_gpu_ms / v6_gpu_ms.max(1.0e-3);
     eprintln!(
         "wall-clock 8×8: CPU = {cpu_ms:.1} ms, v3 = {v3_gpu_ms:.1} ms (hist), \
-         v4 = {v4_gpu_ms:.1} ms (live), v5 = {gpu_ms:.1} ms \
-         (CPU/v5 = {speedup_cpu:.2}x, v3/v5 = {speedup_v3:.2}x, v4/v5 = {speedup_v4:.2}x)",
+         v4 = {v4_gpu_ms:.1} ms (live), v5 = {gpu_ms:.1} ms, v6 = {v6_gpu_ms:.1} ms \
+         (CPU/v5 = {speedup_cpu:.2}x, v3/v5 = {speedup_v3:.2}x, v4/v5 = {speedup_v4:.2}x, \
+          v5/v6 = {speedup_v6_vs_v5:.2}x, v4/v6 = {speedup_v6_vs_v4:.2}x)",
     );
     assert!(
         rel < 5.0e-3,
@@ -220,6 +242,22 @@ fn gpu_ns_lid_cavity_matches_cpu_8x8_re100() {
         res.div_residual < 1.0e-2,
         "GPU divergence residual {:.3e} too large",
         res.div_residual,
+    );
+    // v6 parity check — must converge to a comparable solution.
+    let mut max_abs_v6: Real = 0.0;
+    for (cpu, gpu) in cpu_u.iter().zip(res_v6.u.iter()) {
+        max_abs_v6 = max_abs_v6.max((cpu - gpu).abs());
+    }
+    let rel_v6 = max_abs_v6 / peak_u.max(1.0e-20);
+    eprintln!("u-diff (v6 vs CPU): rel = {rel_v6:.3e}");
+    assert!(
+        rel_v6 < 5.0e-3,
+        "v6 GPU vs CPU velocity diff too large: rel = {rel_v6}",
+    );
+    assert!(
+        res_v6.div_residual < 1.0e-2,
+        "v6 GPU divergence residual {:.3e} too large",
+        res_v6.div_residual,
     );
 }
 
@@ -267,6 +305,7 @@ fn gpu_ns_perf_16x16_re100_100steps() {
             tol_inner: 5.0e-7,
         },
         cg_check_period: None, // strict — sync every iter
+        cg_fused: false,
     };
     let t0 = Instant::now();
     let res_v4 = solve_navier_stokes_gpu(
@@ -286,52 +325,77 @@ fn gpu_ns_perf_16x16_re100_100steps() {
     .expect("GPU NS solve (v5 lazy)");
     let gpu_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+    // Stage 41 v6 — fully fused single-pass CG iter.
+    let cfg_v6 = NavierStokesGpuConfig {
+        cg_check_period: Some(8),
+        cg_fused: true,
+        ..cfg_v4.clone()
+    };
+    let t0 = Instant::now();
+    let res_v6 = solve_navier_stokes_gpu(
+        &mesh, &th, &u_init, &p_init, &f, viscosity, &bcs, &cfg_v6, &engine,
+    )
+    .expect("GPU NS solve (v6 fused)");
+    let v6_gpu_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
     let speedup_cpu = cpu_ms / gpu_ms.max(1.0e-3);
     // Historical v3 baseline measured on this rig.
     let v3_gpu_ms: f64 = 26964.0;
     let speedup_v3 = v3_gpu_ms / gpu_ms.max(1.0e-3);
     let speedup_v4 = v4_gpu_ms / gpu_ms.max(1.0e-3);
+    let speedup_v6_vs_v5 = gpu_ms / v6_gpu_ms.max(1.0e-3);
+    let speedup_v6_vs_v4 = v4_gpu_ms / v6_gpu_ms.max(1.0e-3);
     eprintln!(
         "GPU NS 16×16 (100 steps): v4 = {v4_gpu_ms:.1} ms last_iters={}, \
-         v5 = {gpu_ms:.1} ms last_iters={} div={:.3e}",
+         v5 = {gpu_ms:.1} ms last_iters={}, v6 = {v6_gpu_ms:.1} ms last_iters={} \
+         (div v5={:.3e} v6={:.3e})",
         res_v4.last_outer_iters,
         res.last_outer_iters,
+        res_v6.last_outer_iters,
         res.div_residual,
+        res_v6.div_residual,
     );
     eprintln!(
         "perf 16×16 100 steps: CPU = {cpu_ms:.1} ms, v3 = {v3_gpu_ms:.1} ms (hist), \
-         v4 = {v4_gpu_ms:.1} ms, v5 = {gpu_ms:.1} ms \
-         (CPU/v5 = {speedup_cpu:.2}x, v3/v5 = {speedup_v3:.2}x, v4/v5 = {speedup_v4:.2}x)",
+         v4 = {v4_gpu_ms:.1} ms, v5 = {gpu_ms:.1} ms, v6 = {v6_gpu_ms:.1} ms \
+         (CPU/v5 = {speedup_cpu:.2}x, v3/v5 = {speedup_v3:.2}x, v4/v5 = {speedup_v4:.2}x, \
+          v5/v6 = {speedup_v6_vs_v5:.2}x, v4/v6 = {speedup_v6_vs_v4:.2}x)",
     );
-    // v5 perf NOTE — the target brief is 1.5× over v4 at 16×16. On
+    // v6 perf NOTE — the target brief is 1.5× over v5 at 16×16. On
     // this rig (headless Vulkan + small mesh) the per-submit cost in
-    // wgpu's Vulkan backend turns out to be a larger fraction of v4's
-    // wall-clock than the dot syncs that v5 eliminates, so the
-    // measured speedup ratio is rig-dependent. We report it but don't
-    // gate on it — sanity is enforced by the `fem_ns_gpu_lazy_cg`
-    // sibling test, which compares the strict vs lazy CG iter counts
-    // directly and is invariant under per-rig submit-overhead noise.
-    if speedup_v4 >= 1.0 {
-        eprintln!("perf: v5 is {speedup_v4:.2}× faster than v4 at 16×16");
+    // wgpu's Vulkan backend dominates regardless of dispatch count, so
+    // the achievable wall-clock ratio is rig-dependent. We report it
+    // but don't gate on it — sanity is enforced by the
+    // `cg_fused_convergence_matches_strict` sibling test in
+    // `fem_ns_gpu_lazy_cg.rs`, which compares the strict vs fused CG
+    // iter counts directly and is invariant under per-rig
+    // submit-overhead noise.
+    if speedup_v6_vs_v5 >= 1.0 {
+        eprintln!("perf: v6 is {speedup_v6_vs_v5:.2}× faster than v5 at 16×16");
     } else {
         eprintln!(
-            "perf: v5 slower than v4 on this rig (v4/v5 = {speedup_v4:.2}×) — \
-             likely wgpu submit overhead > dot-sync overhead at this mesh size",
+            "perf: v6 slower than v5 on this rig (v5/v6 = {speedup_v6_vs_v5:.2}×) — \
+             likely wgpu submit overhead > per-iter dispatch count at this mesh size",
         );
     }
 
     // Sanity check — GPU should produce a finite, low-divergence field.
     assert!(res.div_residual < 1.0e-1, "div residual too large");
+    assert!(res_v6.div_residual < 1.0e-1, "v6 div residual too large");
     let mut peak: Real = 0.0;
     let mut max_abs: Real = 0.0;
-    for (cpu, gpu) in cpu_u.iter().zip(res.u.iter()) {
+    let mut max_abs_v6: Real = 0.0;
+    for ((cpu, gpu), gpu6) in cpu_u.iter().zip(res.u.iter()).zip(res_v6.u.iter()) {
         peak = peak.max(cpu.abs());
         max_abs = max_abs.max((cpu - gpu).abs());
+        max_abs_v6 = max_abs_v6.max((cpu - gpu6).abs());
     }
     let rel = max_abs / peak.max(1.0e-20);
+    let rel_v6 = max_abs_v6 / peak.max(1.0e-20);
     eprintln!(
-        "16×16 parity check: peak = {peak:.3e}, max_abs = {max_abs:.3e}, rel = {rel:.3e}",
+        "16×16 parity check: peak = {peak:.3e}, v5_rel = {rel:.3e}, v6_rel = {rel_v6:.3e}",
     );
     // Looser tolerance at 16×16 (more CG iters, more f32 round-off).
     assert!(rel < 1.0e-2, "GPU vs CPU rel = {rel} too large at 16×16");
+    assert!(rel_v6 < 1.5e-2, "v6 GPU vs CPU rel = {rel_v6} too large at 16×16");
 }

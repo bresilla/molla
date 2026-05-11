@@ -736,6 +736,15 @@ pub struct NavierStokesGpuConfig {
     /// because the lazy mode otherwise over-runs the true convergence
     /// point by ~K-1 iters. `Some(8)` is the cross-rig default.
     pub cg_check_period: Option<usize>,
+    /// Stage 41 v6 — opt-in fully-fused single-pass CG iter. When
+    /// `true`, the three inner-CG instances (Schur action `A⁻¹·f`,
+    /// `A⁻¹·Bᵀ·q`, and the velocity recovery solve) route through
+    /// [`crate::kernels::FemCgGpuKernel::cg_solve_resident_fused`],
+    /// which collapses each CG iter from v5's 7 dispatches down to 3
+    /// (matvec+atomic-pap, alpha+x/r+atomic-rr, beta+p+save). Same
+    /// `cg_check_period` semantics for the residual readback cadence
+    /// as v5. Default off; the perf bench enables it.
+    pub cg_fused: bool,
 }
 
 impl Default for NavierStokesGpuConfig {
@@ -746,6 +755,7 @@ impl Default for NavierStokesGpuConfig {
             supg_alpha: 0.0,
             stokes: StokesGpuConfig::default(),
             cg_check_period: Some(8),
+            cg_fused: false,
         }
     }
 }
@@ -1072,7 +1082,18 @@ pub fn solve_navier_stokes_gpu(
         // amortises across the ~30-100 inner iters that each solve
         // burns.
         let check_period = cfg.cg_check_period;
-        let cg_a_inv_f = if let Some(k) = check_period {
+        let cg_a_inv_f = if cfg.cg_fused {
+            // Stage 41 v6 — single-pass fused CG.
+            cg_kernel.cg_solve_resident_fused(
+                n_v as u32,
+                &a_for_inv_step,
+                &rhs_buf,
+                None,
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                check_period,
+            )?
+        } else if let Some(k) = check_period {
             cg_kernel.cg_solve_resident_lazy_prepared(
                 n_v as u32,
                 &rhs_buf,
@@ -1106,7 +1127,17 @@ pub fn solve_navier_stokes_gpu(
         let schur_op = |q_buf: &wgpu::Buffer, y_buf: &wgpu::Buffer| -> Result<()> {
             bsr_kernel.matvec(&bt_for_mv_step, q_buf, &scratch_v, 1.0, 0.0)?;
             apply_zero_mask_f32(queue, &scratch_v, &v_pin_mask);
-            let inner = if let Some(k) = check_period {
+            let inner = if cfg.cg_fused {
+                cg_kernel.cg_solve_resident_fused(
+                    n_v as u32,
+                    &a_for_mv_step,
+                    &scratch_v,
+                    None,
+                    cfg.stokes.tol_inner,
+                    cfg.stokes.max_inner_iters,
+                    check_period,
+                )?
+            } else if let Some(k) = check_period {
                 cg_kernel.cg_solve_resident_lazy_prepared(
                     n_v as u32,
                     &scratch_v,
@@ -1182,7 +1213,17 @@ pub fn solve_navier_stokes_gpu(
             n_v as u32,
             inv_dt as f32,
         )?;
-        let u_cg = if let Some(k) = check_period {
+        let u_cg = if cfg.cg_fused {
+            cg_kernel.cg_solve_resident_fused(
+                n_v as u32,
+                &a_for_u_step,
+                &rhs_u_buf,
+                Some(&u_buf), // warm-start from u_old
+                cfg.stokes.tol_inner,
+                cfg.stokes.max_inner_iters,
+                check_period,
+            )?
+        } else if let Some(k) = check_period {
             cg_kernel.cg_solve_resident_lazy_prepared(
                 n_v as u32,
                 &rhs_u_buf,

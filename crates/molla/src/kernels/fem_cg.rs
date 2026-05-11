@@ -105,6 +105,19 @@ pub struct FemCgGpuKernel {
     pipe_cg_axpy_xr: wgpu::ComputePipeline,
     pipe_cg_axpby_p: wgpu::ComputePipeline,
 
+    // Stage 41 v6 — fully fused CG iter kernels. Three pipelines
+    // collapse the v5 iter (matvec + dot + finalize + axpy_xr + dot +
+    // finalize + axpby_p = 7 dispatches) down to **3 dispatches** +
+    // 2 cheap `clear_buffer` transfer commands. See
+    // `shaders/fem_cg_fused.wgsl` for the kernel docstrings.
+    //
+    //   * `pipe_bsr_matvec_pap_fused` — BSR matvec + atomic-CAS dot(p,Ap)
+    //   * `pipe_cg_alpha_xr_rr_fused`  — fused α + x/r update + atomic dot(r,r)
+    //   * `pipe_cg_axpby_p_with_save` — β + p update + rr_old save
+    pipe_bsr_matvec_pap_fused: wgpu::ComputePipeline,
+    pipe_cg_alpha_xr_rr_fused: wgpu::ComputePipeline,
+    pipe_cg_axpby_p_with_save: wgpu::ComputePipeline,
+
     layout_axpy_io: wgpu::BindGroupLayout,
     layout_axpy_u: wgpu::BindGroupLayout,
     layout_axpby_io: wgpu::BindGroupLayout,
@@ -122,6 +135,13 @@ pub struct FemCgGpuKernel {
     layout_axpbys_io: wgpu::BindGroupLayout,
     layout_xrx_io: wgpu::BindGroupLayout,
     layout_bp_io: wgpu::BindGroupLayout,
+
+    // Stage 41 v6 — fused-CG bind-group layouts.
+    layout_fused_mv_io: wgpu::BindGroupLayout,
+    layout_fused_mv_u: wgpu::BindGroupLayout,
+    layout_fused_xr_io: wgpu::BindGroupLayout,
+    layout_fused_xr_u: wgpu::BindGroupLayout,
+    layout_fused_bp_io: wgpu::BindGroupLayout,
 }
 
 impl FemCgGpuKernel {
@@ -444,6 +464,131 @@ impl FemCgGpuKernel {
             },
         );
 
+        // ═══════════════════════════════════════════════════════════
+        // Stage 41 v6 — fused CG kernels.
+        //
+        // Three pipelines compiled from a single shader module
+        // (`shaders/fem_cg_fused.wgsl`):
+        //   * `bsr_matvec_pap_fused`     (kernel 1)
+        //   * `cg_alpha_xr_rr_fused`     (kernel 2)
+        //   * `cg_axpby_p_with_save`     (kernel 3)
+        let fused_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::fem_cg::fused"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fem_cg_fused.wgsl").into(),
+            ),
+        });
+
+        // Kernel 1: bsr_matvec_pap_fused
+        // io = (row_offsets ro, col_indices ro, values ro, p ro, ap rw, pap_atomic rw)
+        // u  = (MvUniforms — same fields as `bsr_mv_gpu.wgsl`)
+        let layout_fused_mv_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::fused mv io"),
+                entries: &[
+                    ro_storage(0),
+                    ro_storage(1),
+                    ro_storage(2),
+                    ro_storage(3),
+                    rw_storage(4),
+                    rw_storage(5),
+                ],
+            },
+        );
+        let layout_fused_mv_u = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::fused mv uniforms"),
+                entries: &[uniform_entry(0)],
+            },
+        );
+        let pipe_bsr_matvec_pap_fused = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::bsr_matvec_pap_fused"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::fused mv layout"),
+                        bind_group_layouts: &[&layout_fused_mv_io, &layout_fused_mv_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &fused_shader,
+                entry_point: Some("bsr_matvec_pap_fused"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // Kernel 2: cg_alpha_xr_rr_fused
+        // io = (x rw, r rw, p ro, ap ro, pap_in rw atomic, rr_old ro, rr_out rw atomic)
+        // u  = (XrUniforms { n })
+        let layout_fused_xr_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::fused xr io"),
+                entries: &[
+                    rw_storage(0),
+                    rw_storage(1),
+                    ro_storage(2),
+                    ro_storage(3),
+                    rw_storage(4),
+                    ro_storage(5),
+                    rw_storage(6),
+                ],
+            },
+        );
+        let layout_fused_xr_u = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::fused xr uniforms"),
+                entries: &[uniform_entry(0)],
+            },
+        );
+        let pipe_cg_alpha_xr_rr_fused = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_alpha_xr_rr_fused"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::fused xr layout"),
+                        bind_group_layouts: &[&layout_fused_xr_io, &layout_fused_xr_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &fused_shader,
+                entry_point: Some("cg_alpha_xr_rr_fused"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
+        // Kernel 3: cg_axpby_p_with_save
+        // io = (p rw, r ro, rr_new_in rw atomic, rr_old rw)
+        // u  = (XrUniforms { n })  — shared with kernel 2
+        let layout_fused_bp_io = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::fem_cg::fused bp io"),
+                entries: &[
+                    rw_storage(0),
+                    ro_storage(1),
+                    rw_storage(2),
+                    rw_storage(3),
+                ],
+            },
+        );
+        let pipe_cg_axpby_p_with_save = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::fem_cg::cg_axpby_p_with_save"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("molla::fem_cg::fused bp layout"),
+                        bind_group_layouts: &[&layout_fused_bp_io, &layout_fused_xr_u],
+                        push_constant_ranges: &[],
+                    }),
+                ),
+                module: &fused_shader,
+                entry_point: Some("cg_axpby_p_with_save"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
         Self {
             device,
             queue,
@@ -458,6 +603,9 @@ impl FemCgGpuKernel {
             pipe_axpby_s,
             pipe_cg_axpy_xr,
             pipe_cg_axpby_p,
+            pipe_bsr_matvec_pap_fused,
+            pipe_cg_alpha_xr_rr_fused,
+            pipe_cg_axpby_p_with_save,
             layout_axpy_io,
             layout_axpy_u,
             layout_axpby_io,
@@ -474,6 +622,11 @@ impl FemCgGpuKernel {
             layout_axpbys_io,
             layout_xrx_io,
             layout_bp_io,
+            layout_fused_mv_io,
+            layout_fused_mv_u,
+            layout_fused_xr_io,
+            layout_fused_xr_u,
+            layout_fused_bp_io,
         }
     }
 
@@ -1001,6 +1154,184 @@ impl FemCgGpuKernel {
             self.queue.submit(std::iter::once(enc.finish()));
             iters_done += batch;
             let last_rr = ws.read_scalar_blocking(self, &ws.scalar_rr_new)?;
+            residual = last_rr.sqrt() / bnorm;
+            if residual <= tol {
+                return Ok(CgGpuResult {
+                    x: Arc::new(x_buf),
+                    residual,
+                    iters: iters_done,
+                });
+            }
+        }
+        Ok(CgGpuResult {
+            x: Arc::new(x_buf),
+            residual,
+            iters: iters_done,
+        })
+    }
+
+    /// Stage 41 v6 — fully fused single-compute-pass CG solver.
+    ///
+    /// Drops the per-iter dispatch count from v5's 7 (matvec + dot +
+    /// finalize + axpy_xr + dot + finalize + axpby_p) to **3** by
+    /// merging the dot reductions into the matvec / axpy kernels via
+    /// f32 atomic-CAS-add into 1-element scalar buffers. Plus 2 cheap
+    /// `clear_buffer` transfer commands per iter to zero the atomics
+    /// (these are not compute dispatches — they're transfer ops, much
+    /// cheaper than a 1-thread compute kernel).
+    ///
+    /// Takes the BSR matrix `a` directly (rather than as a closure) so
+    /// the fused matvec can be baked into kernel 1's bind group. The
+    /// host loops `n` iters of the fused triple in a single command
+    /// encoder, opening a fresh compute pass per iter (the
+    /// `clear_buffer` calls must happen between passes — wgpu inserts
+    /// the inter-pass barriers automatically). Host syncs are limited
+    /// to one residual readback every `check_period` iters.
+    ///
+    /// **Bit-equivalence**: not bit-equal to the strict path, since
+    /// the atomic-add reduction order is nondeterministic (different
+    /// WG arrival orders → different float-sum truncation). Tolerance
+    /// gates in callers must allow ≤ 2× the strict CG's tolerance.
+    pub fn cg_solve_resident_fused(
+        &self,
+        n: u32,
+        a: &crate::math::BsrGpu,
+        b: &wgpu::Buffer,
+        x_init: Option<&wgpu::Buffer>,
+        tol: f32,
+        max_iters: usize,
+        check_period: Option<usize>,
+    ) -> Result<CgGpuResult> {
+        if n == 0 {
+            return Err(Error::Build(
+                "cg_solve_resident_fused: n must be > 0".into(),
+            ));
+        }
+        if a.nrows != n {
+            return Err(Error::Build(format!(
+                "cg_solve_resident_fused: a.nrows ({}) != n ({})",
+                a.nrows, n,
+            )));
+        }
+        let check_period = check_period.unwrap_or(8).max(1);
+        let bytes = (n as u64).max(4) * 4;
+
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let x_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::x"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let r_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::r"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let p_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::p"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        let ap_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::Ap"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        let ws = FusedCgWorkspace::new(self, a, n, &x_buf, &r_buf, &p_buf, &ap_buf, b);
+
+        // ── Setup: seed x ← x_init (or zero), r ← b, p ← x_init (so the
+        //   setup matvec computes A·x_init), bnorm² = ⟨b, b⟩.
+        let mut init_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::fused::init"),
+                });
+        match x_init {
+            Some(buf) => {
+                init_enc.copy_buffer_to_buffer(buf, 0, &x_buf, 0, bytes);
+                init_enc.copy_buffer_to_buffer(buf, 0, &p_buf, 0, bytes);
+            }
+            None => {
+                self.queue
+                    .write_buffer(&x_buf, 0, &vec![0u8; bytes as usize]);
+                self.queue
+                    .write_buffer(&p_buf, 0, &vec![0u8; bytes as usize]);
+            }
+        }
+        init_enc.copy_buffer_to_buffer(b, 0, &r_buf, 0, bytes);
+        self.queue.submit(std::iter::once(init_enc.finish()));
+        self.queue
+            .write_buffer(&ap_buf, 0, &vec![0u8; bytes as usize]);
+
+        // Setup matvec: Ap ← A · x_init (p holds x_init). We use a
+        // plain matvec — the atomic-pap-add scribbles `pap_atomic` but
+        // we'll clear it again before the first real iter. Reuses the
+        // fused matvec kernel for simplicity.
+        ws.clear_atomics(self);
+        ws.dispatch_setup_matvec(self);
+        // r ← b − Ap (host-driven axpy with α = -1 via legacy uniform-axpy).
+        ws.dispatch_r_minus_ap(self);
+
+        let bnorm_sq = ws.dispatch_dot_bb_blocking(self)?;
+        let bnorm = bnorm_sq.sqrt().max(1.0e-30);
+        let rr0 = ws.dispatch_dot_rr_blocking(self)?;
+        let mut residual = rr0.sqrt() / bnorm;
+        if residual <= tol {
+            return Ok(CgGpuResult {
+                x: Arc::new(x_buf),
+                residual,
+                iters: 0,
+            });
+        }
+
+        // p ← r (initial direction).
+        let mut copy_enc =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::fused::p<-r"),
+                });
+        copy_enc.copy_buffer_to_buffer(&r_buf, 0, &p_buf, 0, bytes);
+        self.queue.submit(std::iter::once(copy_enc.finish()));
+
+        // Seed rr_old = rr0 (the fused kernel reads this for α).
+        ws.write_scalar(&self.queue, &ws.scalar_rr_old, rr0);
+
+        let mut iters_done = 0usize;
+        while iters_done < max_iters {
+            let batch = (max_iters - iters_done).min(check_period);
+            // Run `batch` iters as one command encoder + one submit.
+            // We open a fresh compute pass per iter (the inter-iter
+            // `clear_buffer` calls are transfer commands and can't
+            // appear inside a compute pass).
+            let mut enc = self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("molla::fem_cg::fused::batch"),
+                },
+            );
+            for _ in 0..batch {
+                // Zero the two scalar atomics — transfer commands,
+                // O(1) bytes each. Much cheaper than a 1-thread
+                // compute dispatch.
+                enc.clear_buffer(&ws.scalar_pap, 0, Some(4));
+                enc.clear_buffer(&ws.scalar_rr_new, 0, Some(4));
+                {
+                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("molla::fem_cg::fused::iter"),
+                        timestamp_writes: None,
+                    });
+                    ws.record_fused_iter(self, &mut pass);
+                }
+            }
+            self.queue.submit(std::iter::once(enc.finish()));
+            iters_done += batch;
+            let last_rr = ws.read_scalar_atomic_blocking(self, &ws.scalar_rr_new)?;
             residual = last_rr.sqrt() / bnorm;
             if residual <= tol {
                 return Ok(CgGpuResult {
@@ -2369,6 +2700,523 @@ impl LazyCgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let parts: &[f32] = bytemuck::cast_slice(&mapped);
+        let v = parts[0];
+        drop(mapped);
+        self.scalar_staging.unmap();
+        Ok(v)
+    }
+}
+
+// ── FusedCgWorkspace ──────────────────────────────────────────────────
+//
+// Stage 41 v6 — workspace for the fully fused single-pass CG iter.
+// Holds the three fused-kernel bind groups + the GPU-resident scalar
+// atomic buffers (`scalar_pap`, `scalar_rr_new` as atomic<u32>; the
+// host bit-casts to/from f32) + a `scalar_rr_old` plain f32 buffer
+// for the alpha denominator on the next iter.
+//
+// Per-iter dispatch budget:
+//   1. `bsr_matvec_pap_fused`  — writes `ap` AND atomic-adds to `scalar_pap`
+//   2. `cg_alpha_xr_rr_fused`  — reads pap+rr_old, updates x,r, atomic-adds to scalar_rr_new
+//   3. `cg_axpby_p_with_save`  — reads rr_new+rr_old, computes β, updates p, saves rr_old
+//
+// Plus 2 transfer-only `clear_buffer` calls per iter to zero the
+// scalar atomics. No `dot_finalize` dispatches at all — workgroup
+// reductions terminate via atomic-CAS directly into the destination
+// scalars.
+
+struct FusedCgWorkspace {
+    n: u32,
+    n_groups: u32,
+    n_groups_mv_x: u32,
+    n_groups_mv_y: u32,
+
+    // ── Uniform buffers (held alive for bind-group references). ──────
+    #[allow(dead_code)]
+    u_mv: wgpu::Buffer,
+    #[allow(dead_code)]
+    u_xr: wgpu::Buffer,
+    // Legacy uniform-axpy for the one-shot `r ← b − A·x_init` setup
+    // path (uses the v5 `vec_axpy` kernel with α = -1).
+    #[allow(dead_code)]
+    u_axpy_setup: wgpu::Buffer,
+    // Dot uniform for the setup ⟨b, b⟩ and ⟨r₀, r₀⟩ blocking dots.
+    #[allow(dead_code)]
+    u_dot_setup: wgpu::Buffer,
+
+    // ── Scalar storage buffers (atomic<u32> via bit-cast f32). ───────
+    scalar_pap: wgpu::Buffer,
+    scalar_rr_new: wgpu::Buffer,
+    scalar_rr_old: wgpu::Buffer,
+
+    // ── Bind groups for the three fused kernels. ─────────────────────
+    bg_mv_io: wgpu::BindGroup,
+    bg_mv_u: wgpu::BindGroup,
+    bg_xr_io: wgpu::BindGroup,
+    bg_xr_u: wgpu::BindGroup,
+    bg_bp_io: wgpu::BindGroup,
+
+    // ── Setup-phase bind groups (legacy uniform-axpy / dot kernels). ──
+    bg_axpy_setup_io: wgpu::BindGroup,
+    bg_axpy_setup_u: wgpu::BindGroup,
+    bg_dot_bb_io: wgpu::BindGroup,
+    bg_dot_rr_io: wgpu::BindGroup,
+    bg_dot_setup_u: wgpu::BindGroup,
+
+    // Dot-reduction scratch for the setup blocking dots.
+    partials: wgpu::Buffer,
+    setup_staging: wgpu::Buffer,
+    // Staging for scalar readback (4 bytes, MAP_READ).
+    scalar_staging: wgpu::Buffer,
+    bytes_partials: u64,
+}
+
+impl FusedCgWorkspace {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        k: &FemCgGpuKernel,
+        a: &crate::math::BsrGpu,
+        n: u32,
+        x: &wgpu::Buffer,
+        r: &wgpu::Buffer,
+        p: &wgpu::Buffer,
+        ap: &wgpu::Buffer,
+        b: &wgpu::Buffer,
+    ) -> Self {
+        const MAX_DIM: u32 = 65535;
+        let n_groups = n.div_ceil(WG_SIZE).max(1);
+        let n_groups_mv_x = n.min(MAX_DIM).max(1);
+        let n_groups_mv_y = n.div_ceil(MAX_DIM).max(1);
+        let bytes_partials = (n_groups as u64).max(4) * 4;
+
+        let make_uniform = |label: &str, size: u64| {
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let make_scalar = |label: &str| {
+            // 16 B padded — wgpu min binding size guard. Only [0..4]
+            // are touched by the kernels; the kernel treats this as
+            // `atomic<u32>` (1-element). The padding is unused.
+            k.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+
+        // ── Uniforms ─────────────────────────────────────────────────
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct MvU {
+            nrows: u32,
+            _p0: u32,
+            _p1: u32,
+            _p2: u32,
+            alpha: f32,
+            beta: f32,
+            _p3: f32,
+            _p4: f32,
+        }
+        let u_mv = make_uniform(
+            "molla::fem_cg::fused::u_mv",
+            core::mem::size_of::<MvU>() as u64,
+        );
+        k.queue.write_buffer(
+            &u_mv,
+            0,
+            bytemuck::bytes_of(&MvU {
+                nrows: n,
+                _p0: 0,
+                _p1: 0,
+                _p2: 0,
+                alpha: 1.0,
+                beta: 0.0,
+                _p3: 0.0,
+                _p4: 0.0,
+            }),
+        );
+
+        let u_xr = make_uniform(
+            "molla::fem_cg::fused::u_xr",
+            core::mem::size_of::<DotUniforms>() as u64,
+        );
+        k.queue.write_buffer(
+            &u_xr,
+            0,
+            bytemuck::bytes_of(&DotUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+
+        let u_axpy_setup = make_uniform(
+            "molla::fem_cg::fused::u_axpy_setup",
+            core::mem::size_of::<AxpyUniforms>() as u64,
+        );
+        k.queue.write_buffer(
+            &u_axpy_setup,
+            0,
+            bytemuck::bytes_of(&AxpyUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                alpha: -1.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+                _pad5: 0.0,
+            }),
+        );
+
+        let u_dot_setup = make_uniform(
+            "molla::fem_cg::fused::u_dot_setup",
+            core::mem::size_of::<DotUniforms>() as u64,
+        );
+        k.queue.write_buffer(
+            &u_dot_setup,
+            0,
+            bytemuck::bytes_of(&DotUniforms {
+                n,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            }),
+        );
+
+        // ── Scalars ──────────────────────────────────────────────────
+        let scalar_pap = make_scalar("molla::fem_cg::fused::scalar_pap");
+        let scalar_rr_new = make_scalar("molla::fem_cg::fused::scalar_rr_new");
+        let scalar_rr_old = make_scalar("molla::fem_cg::fused::scalar_rr_old");
+
+        // ── Partials + staging (setup-phase only) ───────────────────
+        let partials = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::partials"),
+            size: bytes_partials,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let setup_staging = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::setup_staging"),
+            size: bytes_partials,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scalar_staging = k.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem_cg::fused::scalar_staging"),
+            size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // ── Fused-kernel bind groups ────────────────────────────────
+        let bg_mv_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_mv_io"),
+            layout: &k.layout_fused_mv_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: a.row_offsets.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: a.col_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: a.values.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: p.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: ap.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: scalar_pap.as_entire_binding() },
+            ],
+        });
+        let bg_mv_u = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_mv_u"),
+            layout: &k.layout_fused_mv_u,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: u_mv.as_entire_binding(),
+            }],
+        });
+
+        let bg_xr_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_xr_io"),
+            layout: &k.layout_fused_xr_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: x.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: p.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: ap.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: scalar_pap.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: scalar_rr_old.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: scalar_rr_new.as_entire_binding() },
+            ],
+        });
+        let bg_xr_u = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_xr_u"),
+            layout: &k.layout_fused_xr_u,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: u_xr.as_entire_binding(),
+            }],
+        });
+
+        let bg_bp_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_bp_io"),
+            layout: &k.layout_fused_bp_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: p.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: scalar_rr_new.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: scalar_rr_old.as_entire_binding() },
+            ],
+        });
+
+        // ── Setup-phase bind groups (axpy + dot) ────────────────────
+        let bg_axpy_setup_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_axpy_setup_io"),
+            layout: &k.layout_axpy_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: ap.as_entire_binding() },
+            ],
+        });
+        let bg_axpy_setup_u = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_axpy_setup_u"),
+            layout: &k.layout_axpy_u,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: u_axpy_setup.as_entire_binding(),
+            }],
+        });
+        let bg_dot_bb_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_dot_bb_io"),
+            layout: &k.layout_dot_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: b.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: b.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: partials.as_entire_binding() },
+            ],
+        });
+        let bg_dot_rr_io = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_dot_rr_io"),
+            layout: &k.layout_dot_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: r.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: partials.as_entire_binding() },
+            ],
+        });
+        let bg_dot_setup_u = k.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::fem_cg::fused::bg_dot_setup_u"),
+            layout: &k.layout_dot_u,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: u_dot_setup.as_entire_binding(),
+            }],
+        });
+
+        Self {
+            n,
+            n_groups,
+            n_groups_mv_x,
+            n_groups_mv_y,
+            u_mv,
+            u_xr,
+            u_axpy_setup,
+            u_dot_setup,
+            scalar_pap,
+            scalar_rr_new,
+            scalar_rr_old,
+            bg_mv_io,
+            bg_mv_u,
+            bg_xr_io,
+            bg_xr_u,
+            bg_bp_io,
+            bg_axpy_setup_io,
+            bg_axpy_setup_u,
+            bg_dot_bb_io,
+            bg_dot_rr_io,
+            bg_dot_setup_u,
+            partials,
+            setup_staging,
+            scalar_staging,
+            bytes_partials,
+        }
+    }
+
+    /// Zero both scalar atomics via one command encoder. Used at the
+    /// setup-matvec-clear-up step + as a sanity reset.
+    fn clear_atomics(&self, k: &FemCgGpuKernel) {
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::fused::clear-atomics"),
+            });
+        enc.clear_buffer(&self.scalar_pap, 0, Some(4));
+        enc.clear_buffer(&self.scalar_rr_new, 0, Some(4));
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// Run the fused matvec kernel ONCE for the setup phase
+    /// (`Ap ← A · x_init`, with x_init currently in `p_buf`). The
+    /// kernel scribbles `scalar_pap` as a side-effect — we don't read
+    /// it back here; it gets cleared at the start of the first real
+    /// CG iter.
+    fn dispatch_setup_matvec(&self, k: &FemCgGpuKernel) {
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::fused::setup-mv"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::fused::setup-mv pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_bsr_matvec_pap_fused);
+            pass.set_bind_group(0, &self.bg_mv_io, &[]);
+            pass.set_bind_group(1, &self.bg_mv_u, &[]);
+            pass.dispatch_workgroups(self.n_groups_mv_x, self.n_groups_mv_y, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// `r -= 1.0 · Ap` via the legacy uniform-axpy kernel (α already
+    /// set to -1 at workspace construction).
+    fn dispatch_r_minus_ap(&self, k: &FemCgGpuKernel) {
+        let groups = self.n.div_ceil(WG_SIZE).max(1);
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::fused::r-=Ap"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::fused::r-=Ap pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_axpy);
+            pass.set_bind_group(0, &self.bg_axpy_setup_io, &[]);
+            pass.set_bind_group(1, &self.bg_axpy_setup_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        k.queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// Setup-phase ⟨b, b⟩ — used to derive the relative-residual norm.
+    fn dispatch_dot_bb_blocking(&self, k: &FemCgGpuKernel) -> Result<f32> {
+        self.dispatch_dot_blocking(k, &self.bg_dot_bb_io)
+    }
+
+    /// Setup-phase ⟨r, r⟩.
+    fn dispatch_dot_rr_blocking(&self, k: &FemCgGpuKernel) -> Result<f32> {
+        self.dispatch_dot_blocking(k, &self.bg_dot_rr_io)
+    }
+
+    fn dispatch_dot_blocking(
+        &self,
+        k: &FemCgGpuKernel,
+        bg_io: &wgpu::BindGroup,
+    ) -> Result<f32> {
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::fused::dot-setup"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::fem_cg::fused::dot-setup pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&k.pipe_dot);
+            pass.set_bind_group(0, bg_io, &[]);
+            pass.set_bind_group(1, &self.bg_dot_setup_u, &[]);
+            pass.dispatch_workgroups(self.n_groups, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&self.partials, 0, &self.setup_staging, 0, self.bytes_partials);
+        k.queue.submit(std::iter::once(enc.finish()));
+        let slice = self.setup_staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        k.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("fem_cg fused dot poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("fem_cg fused dot recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg fused dot map: {e:?}")))?;
+        let mapped = slice.get_mapped_range();
+        let parts: &[f32] = bytemuck::cast_slice(&mapped);
+        let mut sum: f32 = 0.0;
+        for v in parts.iter().take(self.n_groups as usize) {
+            sum += *v;
+        }
+        drop(mapped);
+        self.setup_staging.unmap();
+        Ok(sum)
+    }
+
+    /// Record one full fused CG iter into an existing compute pass.
+    /// THREE dispatches.
+    fn record_fused_iter(&self, k: &FemCgGpuKernel, pass: &mut wgpu::ComputePass<'_>) {
+        // 1. matvec + atomic dot(p, Ap).
+        pass.set_pipeline(&k.pipe_bsr_matvec_pap_fused);
+        pass.set_bind_group(0, &self.bg_mv_io, &[]);
+        pass.set_bind_group(1, &self.bg_mv_u, &[]);
+        pass.dispatch_workgroups(self.n_groups_mv_x, self.n_groups_mv_y, 1);
+
+        // 2. α derive + x/r update + atomic dot(r, r).
+        pass.set_pipeline(&k.pipe_cg_alpha_xr_rr_fused);
+        pass.set_bind_group(0, &self.bg_xr_io, &[]);
+        pass.set_bind_group(1, &self.bg_xr_u, &[]);
+        pass.dispatch_workgroups(self.n_groups, 1, 1);
+
+        // 3. β derive + p update + rr_old save.
+        pass.set_pipeline(&k.pipe_cg_axpby_p_with_save);
+        pass.set_bind_group(0, &self.bg_bp_io, &[]);
+        pass.set_bind_group(1, &self.bg_xr_u, &[]);
+        pass.dispatch_workgroups(self.n_groups, 1, 1);
+    }
+
+    /// Write a single f32 to a 16-byte-padded scalar buffer (bit-cast
+    /// into the lo word; the upper 12 bytes are unused). Same pattern
+    /// as `LazyCgWorkspace::write_scalar`.
+    fn write_scalar(&self, queue: &wgpu::Queue, buf: &wgpu::Buffer, value: f32) {
+        let bytes = [value.to_ne_bytes(), [0u8; 4], [0u8; 4], [0u8; 4]].concat();
+        queue.write_buffer(buf, 0, &bytes);
+    }
+
+    /// Read a single f32 from a 16-byte-padded atomic<u32>-backed
+    /// scalar buffer. The bit-cast from u32 → f32 happens on the host.
+    fn read_scalar_atomic_blocking(
+        &self,
+        k: &FemCgGpuKernel,
+        buf: &wgpu::Buffer,
+    ) -> Result<f32> {
+        let mut enc = k
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::fem_cg::fused::scalar-readback"),
+            });
+        enc.copy_buffer_to_buffer(buf, 0, &self.scalar_staging, 0, 16);
+        k.queue.submit(std::iter::once(enc.finish()));
+        let slice = self.scalar_staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        k.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("fem_cg fused scalar poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("fem_cg fused scalar recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("fem_cg fused scalar map: {e:?}")))?;
         let mapped = slice.get_mapped_range();
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let v = parts[0];
