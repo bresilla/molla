@@ -1,0 +1,35 @@
+[book]
+title = "molla — Rust + WGPU Physics Engine"
+authors = ["Trim Bresilla"]
+description = "Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp."
+src = "src"
+language = "en"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "ayu"
+copy-fonts = true
+mathjax-support = true
+git-repository-url = "https://github.com/bresilla/molla"
+edit-url-template = "https://github.com/bresilla/molla/edit/main/docs/{path}"
+additional-css = ["theme/molla.css"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.print]
+enable = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+heading-split-level = 2
+copy-js = true
+
+[output.html.playground]
+editable = false
+runnable = false
+
+[rust]
+edition = "2021"
