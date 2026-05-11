@@ -358,4 +358,146 @@ mod gpu_tests {
             rel * 100.0
         );
     }
+
+    /// Stage 41 v2 sub-pipeline 4 — anchor reduction on GPU.
+    ///
+    /// Scenario (`sphere_on_plane_anchor`): a rigid sphere is sampled
+    /// at 256 surface points and pressed into a soft cube (playing the
+    /// role of a ground plane) with 0.02 m of penetration. The CPU
+    /// path runs [`compute_hydroelastic_contact`] + [`reduce_with_anchor`]
+    /// to produce a 2-contact anchor pair (centroid + center of
+    /// pressure). The GPU path runs the new `kernels::HydroelasticKernel`
+    /// which does both passes on-device and reads back the same
+    /// `AnchorReducedContact`.
+    ///
+    /// Tolerances per the v1 spec:
+    ///   - force magnitude: `1e-4` relative
+    ///   - net moment:      `1e-3` relative
+    ///
+    /// The CPU path here also drives a wall-clock measurement so the
+    /// post-stage report can quote CPU vs GPU.
+    #[test]
+    #[ignore = "needs a real wgpu adapter — Stage 41 v2 sub-pipeline 4 anchor reduction"]
+    fn sphere_on_plane_anchor_gpu_parity() {
+        use molla::geometry::{manifold_to_samples, reduce_with_anchor};
+        use molla::kernels::HydroelasticKernel as GpuHydroelastic;
+
+        let engine = try_engine()
+            .expect("GPU adapter required for this test (gated by #[ignore])");
+        let device = engine.device().unwrap().clone();
+        let queue = engine.queue().unwrap().clone();
+
+        let mesh = unit_cube_mesh();
+        let sdf = bake_mesh_to_sdf(&mesh, 32, 0.05);
+        let radius: Real = 0.15;
+        // 256 samples — non-trivial reduction workload, still well
+        // under one workgroup of 256 strided iterations.
+        let samples = sample_sphere_surface(radius, 256);
+        // Off-axis sphere placement → the center of pressure deviates
+        // from the geometric centroid, so the anchor split is
+        // non-trivial (alpha ≠ 1).
+        let pen = 0.02;
+        let sphere_pose = Transform::from_translation(Vec3::new(
+            0.05, 0.5 + radius - pen, -0.03,
+        ));
+
+        let cfg = HydroelasticConfig {
+            hydroelastic_modulus: 2.0e5,
+            ..HydroelasticConfig::default()
+        };
+
+        // ── CPU reference path (timed). ───────────────────────────────
+        let t0 = std::time::Instant::now();
+        let cpu_manifold = compute_hydroelastic_contact(
+            &sdf,
+            &samples,
+            Transform::IDENTITY,
+            sphere_pose,
+            &cfg,
+        );
+        let cpu_patch = manifold_to_samples(&cpu_manifold);
+        let cpu_anchor = reduce_with_anchor(&cpu_patch)
+            .expect("CPU anchor reduction must succeed on a penetrating manifold");
+        let cpu_elapsed = t0.elapsed();
+        assert!(
+            !cpu_patch.is_empty(),
+            "test setup error — no penetrating samples"
+        );
+
+        // ── GPU path (timed). Single dispatch covers both the
+        //    pressure-field eval and the anchor reduction. ────────────
+        let n = samples.len() as u32;
+        let mut k = GpuHydroelastic::new(&device, &queue, n);
+
+        // Warm-up dispatch so the timed run measures steady-state cost
+        // (cold-cache device alloc + shader-cache miss dominates the
+        // first call on most adapters).
+        let _ = k
+            .dispatch(
+                &device,
+                &queue,
+                Transform::IDENTITY,
+                sphere_pose,
+                &sdf,
+                &samples,
+                &cfg,
+            )
+            .unwrap();
+
+        let t1 = std::time::Instant::now();
+        let gpu_anchor = k
+            .dispatch(
+                &device,
+                &queue,
+                Transform::IDENTITY,
+                sphere_pose,
+                &sdf,
+                &samples,
+                &cfg,
+            )
+            .unwrap()
+            .expect("GPU anchor reduction must produce a non-empty pair");
+        let gpu_elapsed = t1.elapsed();
+
+        // ── Parity assertions. ────────────────────────────────────────
+        let f_cpu = cpu_anchor.net_force();
+        let f_gpu = gpu_anchor.net_force();
+        let m_cpu = cpu_anchor.net_moment();
+        let m_gpu = gpu_anchor.net_moment();
+
+        let f_err = (f_gpu - f_cpu).length() / f_cpu.length().max(1.0e-12);
+        let m_err = (m_gpu - m_cpu).length() / m_cpu.length().max(1.0e-12);
+
+        eprintln!(
+            "sphere_on_plane_anchor: cpu = {:?}, gpu = {:?} (force rel-err {:e}, moment rel-err {:e})",
+            cpu_elapsed, gpu_elapsed, f_err, m_err,
+        );
+        eprintln!(
+            "  CPU anchor: centroid f={:.4} N at {:?}, anchor f={:.4} N at {:?}",
+            cpu_anchor.centroid.force_magnitude,
+            cpu_anchor.centroid.point,
+            cpu_anchor.anchor.force_magnitude,
+            cpu_anchor.anchor.point,
+        );
+        eprintln!(
+            "  GPU anchor: centroid f={:.4} N at {:?}, anchor f={:.4} N at {:?}",
+            gpu_anchor.centroid.force_magnitude,
+            gpu_anchor.centroid.point,
+            gpu_anchor.anchor.force_magnitude,
+            gpu_anchor.anchor.point,
+        );
+
+        // v1 spec: 1e-4 relative force, 1e-3 relative torque. The GPU
+        // path runs f32 internally while the CPU path runs f64, so
+        // the achievable parity is ~1e-6 on flat-pressure manifolds
+        // and ~1e-4 on heterogeneous patches like this one.
+        assert!(
+            f_err < 1.0e-4,
+            "GPU vs CPU net-force mismatch: cpu = {f_cpu:?} N, gpu = {f_gpu:?} N (rel = {f_err:e}, budget 1e-4)"
+        );
+        assert!(
+            m_err < 1.0e-3,
+            "GPU vs CPU net-moment mismatch: cpu = {m_cpu:?} N·m, gpu = {m_gpu:?} N·m (rel = {m_err:e}, budget 1e-3)"
+        );
+    }
 }

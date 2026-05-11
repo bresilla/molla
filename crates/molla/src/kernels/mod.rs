@@ -51,6 +51,8 @@ mod fft;
 #[cfg(feature = "gpu")]
 mod gjk;
 #[cfg(feature = "gpu")]
+mod hydroelastic;
+#[cfg(feature = "gpu")]
 mod mpr;
 #[cfg(feature = "gpu")]
 mod contact_reduction;
@@ -161,6 +163,8 @@ pub use featherstone_adjoint_gpu::{
 pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
 pub use gjk::{GjkKernel, GJK_SIMPLEX_STRIDE};
+#[cfg(feature = "gpu")]
+pub use hydroelastic::HydroelasticKernel;
 #[cfg(feature = "gpu")]
 pub use mpr::{
     decode_mpr_out, MprKernel, MprPairResult, MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE,
