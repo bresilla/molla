@@ -526,6 +526,20 @@ fn cpu_step(
     let cable_k_bend = model.joint_cable_stiffness_bend.host()?;
     let cable_c_lin = model.joint_cable_damping_linear.host()?;
     let cable_c_bend = model.joint_cable_damping_bend.host()?;
+    // Stage 42 — Hill-type muscle actuators. Stored per muscle, not
+    // per joint; build a per-joint lookup so the inner DOF loop is
+    // O(1). Sentinel `usize::MAX` ⇒ "no muscle on this joint".
+    let muscle_joint = model.muscle_joint.host()?;
+    let muscle_f_max = model.muscle_f_max.host()?;
+    let muscle_l_opt = model.muscle_l_opt.host()?;
+    let muscle_v_max = model.muscle_v_max.host()?;
+    let muscle_activation = model.muscle_activation.host()?;
+    let mut joint_to_muscle: Vec<usize> = vec![usize::MAX; n];
+    for (m_id, &j) in muscle_joint.iter().enumerate() {
+        if j >= 0 && (j as usize) < n {
+            joint_to_muscle[j as usize] = m_id;
+        }
+    }
     let target_mode = control.joint_target_mode.host()?;
     let target_pos = control.joint_target_pos.host()?;
     let target_vel = control.joint_target_vel.host()?;
@@ -714,10 +728,45 @@ fn cpu_step(
                 } else {
                     0.0
                 };
+                // Stage 42 — Hill-type muscle actuator. Only the linear
+                // stretch DoF (k == 0) is driven; the bend DoF carries
+                // no muscle force in v1 (no pennation / oblique fibres).
+                let muscle_torque = if matches!(jt, JointType::Cable) && k == 0 {
+                    let m_id = joint_to_muscle[j];
+                    if m_id != usize::MAX {
+                        let m = crate::actuators::Muscle {
+                            joint: crate::core::JointId::from_index(j),
+                            config: crate::actuators::MuscleConfig {
+                                f_max: muscle_f_max
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(0.0),
+                                l_opt: muscle_l_opt
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(1.0),
+                                v_max: muscle_v_max
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(1.0),
+                                activation: muscle_activation
+                                    .get(m_id)
+                                    .copied()
+                                    .unwrap_or(0.0),
+                            },
+                        };
+                        m.torque(q_now, qd_now)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
                 let tau_raw = control_force.get(dof_g).copied().unwrap_or(0.0)
                     + drive_torque
                     + friction_torque
-                    + cable_torque;
+                    + cable_torque
+                    + muscle_torque;
                 let tau_app = clamp_or_passthrough(
                     tau_raw,
                     effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),

@@ -38,6 +38,14 @@
 //! tracking PD on a quaternion isn't well-defined anyway; for those
 //! cases use an external orientation-error controller.
 
+// Stage 42 — Hill-type muscle actuator. Always compiled (no GPU
+// kernel yet; consumed host-side by the CPU Featherstone solver and
+// stored as parallel buffers on `Model` so the GPU path can pick it
+// up in a future stage).
+pub mod muscle;
+
+pub use muscle::{force_length, force_velocity, Muscle, MuscleConfig};
+
 #[cfg(feature = "gpu")]
 pub mod actuator;
 #[cfg(feature = "gpu")]

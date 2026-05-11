@@ -515,6 +515,16 @@ pub struct ModelBuilder {
     /// Per-joint bend damping for CABLE joints (N·m·s/rad).
     joint_cable_damping_bend: Vec<Real>,
 
+    // Stage 42 — per-muscle Hill-type parameters. Parallel arrays of
+    // length `muscle_count`. Each muscle drives the cable's linear
+    // stretch DoF (see `crate::actuators::muscle`). Duplicate joint
+    // ids are rejected by `add_muscle`.
+    muscle_joint: Vec<i32>,
+    muscle_f_max: Vec<Real>,
+    muscle_l_opt: Vec<Real>,
+    muscle_v_max: Vec<Real>,
+    muscle_activation: Vec<Real>,
+
     // Per-world arrays.
     world_gravity: Vec<Vec3>,
 
@@ -1912,6 +1922,76 @@ impl ModelBuilder {
         Ok(id)
     }
 
+    /// Stage 42 — attach a Hill-type muscle to a CABLE joint. The
+    /// muscle drives the cable's **linear stretch DoF** with an
+    /// active tensile force (sign: pulls `q_l` toward negative,
+    /// i.e. shorter cable). See [`crate::actuators::muscle`] for
+    /// the curve definitions.
+    ///
+    /// Returns the new muscle id (0-based index into the
+    /// `model.muscle_*` parallel arrays).
+    ///
+    /// # Errors
+    ///
+    /// - the joint id is out of range
+    /// - the joint is not `JointType::Cable`
+    /// - another muscle is already attached to the same joint (v1
+    ///   limitation; co-contraction is deferred to v2)
+    /// - any Hill parameter is non-finite or non-positive
+    pub fn add_muscle(
+        &mut self,
+        joint: JointId,
+        config: crate::actuators::MuscleConfig,
+    ) -> Result<usize> {
+        let idx = joint.index();
+        if idx >= self.joint_type.len() {
+            return Err(Error::Build(format!(
+                "add_muscle: joint {joint:?} out of range (have {} joints)",
+                self.joint_type.len()
+            )));
+        }
+        if self.joint_type[idx] != super::JointType::Cable as u32 {
+            return Err(Error::Build(format!(
+                "add_muscle: joint {joint:?} is not a CABLE joint \
+                 (type = {}); muscles only drive cable stretch DoFs",
+                self.joint_type[idx]
+            )));
+        }
+        for (label, v) in [
+            ("f_max", config.f_max),
+            ("l_opt", config.l_opt),
+            ("v_max", config.v_max),
+        ] {
+            if !v.is_finite() || v <= 0.0 {
+                return Err(Error::Build(format!(
+                    "add_muscle: {label} must be finite and > 0, got {v}"
+                )));
+            }
+        }
+        if !config.activation.is_finite() {
+            return Err(Error::Build(format!(
+                "add_muscle: activation must be finite, got {}",
+                config.activation
+            )));
+        }
+        // Reject duplicate muscle on the same joint (v1 limit).
+        if let Some(existing) =
+            self.muscle_joint.iter().position(|&j| j == idx as i32)
+        {
+            return Err(Error::Build(format!(
+                "add_muscle: joint {joint:?} already has muscle id {existing}; \
+                 co-contraction (antagonist pair) is not supported in v1"
+            )));
+        }
+        let muscle_id = self.muscle_joint.len();
+        self.muscle_joint.push(idx as i32);
+        self.muscle_f_max.push(config.f_max);
+        self.muscle_l_opt.push(config.l_opt);
+        self.muscle_v_max.push(config.v_max);
+        self.muscle_activation.push(config.activation.clamp(0.0, 1.0));
+        Ok(muscle_id)
+    }
+
     /// Free 6-DoF joint between `child` and the world frame (or
     /// `parent`). Adds 7 coordinates (xyz + quat) and 6 dof.
     pub fn add_joint_free(
@@ -2974,6 +3054,15 @@ impl ModelBuilder {
                 s,
             ),
             joint_cable_damping_bend: Buffer::from_vec(self.joint_cable_damping_bend, s),
+
+            // Stage 42 — Hill-type muscles. Length = `muscle_count`,
+            // not `joint_count`.
+            muscle_count: self.muscle_joint.len(),
+            muscle_joint: Buffer::from_vec(self.muscle_joint, s),
+            muscle_f_max: Buffer::from_vec(self.muscle_f_max, s),
+            muscle_l_opt: Buffer::from_vec(self.muscle_l_opt, s),
+            muscle_v_max: Buffer::from_vec(self.muscle_v_max, s),
+            muscle_activation: Buffer::from_vec(self.muscle_activation, s),
 
             world_count,
             gravity: Buffer::from_vec(self.world_gravity, s),

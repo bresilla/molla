@@ -672,6 +672,37 @@ pub struct Model {
     /// Per-joint isotropic bend damping `c_b` (N·m·s/rad).
     pub joint_cable_damping_bend: Buffer<Real>,
 
+    // ── Muscles (Stage 42) ─────────────────────────────────────────
+    // Hill-type muscle actuators attached to CABLE joints. Each
+    // muscle drives the joint's **linear stretch DoF** with an active
+    // contractile force computed from the classic
+    //   f = a · f_max · f_L(l/l_opt) · f_V(v/v_max)
+    // Hill three-element model. See `actuators::muscle` for the
+    // curve definitions and the v1 → v2 roadmap.
+    //
+    // Parallel arrays of length `muscle_count`. One muscle per joint
+    // in v1 (no antagonist co-contraction yet); duplicates are
+    // rejected by the builder. Solvers consume these buffers in the
+    // backward Featherstone pass and add the result to the cable's
+    // existing spring + damper torque.
+    /// Number of muscle actuators on this model.
+    pub muscle_count: usize,
+    /// Per-muscle joint id (index into the joint arrays). Must point
+    /// at a `JointType::Cable`. Length = `muscle_count`.
+    pub muscle_joint: Buffer<i32>,
+    /// Per-muscle maximum isometric force (N). Length = `muscle_count`.
+    pub muscle_f_max: Buffer<Real>,
+    /// Per-muscle optimal fibre length (m). Length = `muscle_count`.
+    pub muscle_l_opt: Buffer<Real>,
+    /// Per-muscle maximum shortening velocity (m/s). Length =
+    /// `muscle_count`.
+    pub muscle_v_max: Buffer<Real>,
+    /// Per-muscle current activation level, `a ∈ [0, 1]`. **Mutable**
+    /// at simulation time: caller updates this buffer between solver
+    /// steps (excitation → activation lag is not modelled in v1).
+    /// Length = `muscle_count`.
+    pub muscle_activation: Buffer<Real>,
+
     // ── Worlds ──────────────────────────────────────────────────────
     /// Number of independent worlds (RL/multi-env grouping).
     pub world_count: usize,
@@ -856,6 +887,13 @@ impl Model {
             joint_cable_damping_linear: Buffer::from_vec(Vec::new(), s),
             joint_cable_damping_bend: Buffer::from_vec(Vec::new(), s),
 
+            muscle_count: 0,
+            muscle_joint: Buffer::from_vec(Vec::new(), s),
+            muscle_f_max: Buffer::from_vec(Vec::new(), s),
+            muscle_l_opt: Buffer::from_vec(Vec::new(), s),
+            muscle_v_max: Buffer::from_vec(Vec::new(), s),
+            muscle_activation: Buffer::from_vec(Vec::new(), s),
+
             world_count: 1,
             gravity: Buffer::from_vec(vec![Vec3::new(0.0, -crate::math::GRAVITY, 0.0)], s),
 
@@ -1000,6 +1038,15 @@ impl Model {
         up!(equality_mimic_driver_joint);
         up!(equality_mimic_driven_joint);
         up!(equality_mimic_poly);
+        // Stage 42 — muscle actuators. Only uploaded when at least
+        // one muscle exists so empty-model paths skip the no-op.
+        if self.muscle_count > 0 {
+            up!(muscle_joint);
+            up!(muscle_f_max);
+            up!(muscle_l_opt);
+            up!(muscle_v_max);
+            up!(muscle_activation);
+        }
         up!(gravity);
 
         // ── Stage 33.2 — soft surface registry GPU mirror ─────────
