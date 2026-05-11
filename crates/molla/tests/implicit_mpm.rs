@@ -250,6 +250,193 @@ fn full_hessian_reduces_residual_more_than_diagonal() {
     );
 }
 
+/// Stage 40 v4 — full 125-point Hessian convergence gate. Measures
+/// the post-GS residual of each stencil (Diagonal, Full27, Full125)
+/// against the **125-point** Newton Hessian (the strict true target
+/// for the quadratic-B-spline kernel) after a fixed iteration cap.
+///
+/// Expected ordering: `Full125 < Full27 < Diagonal`. The Full125 path
+/// matches its own Hessian exactly (modulo color-GS not being a direct
+/// solver), so its residual is the smallest by construction. Full27
+/// converges to a 27-pt fixed point that leaves the |δ|=2 ring of
+/// cross-cell couplings unbalanced.
+#[test]
+fn full_125_reduces_residual_more_than_full_27() {
+    use molla::compute::implicit_mpm::{
+        full_hessian_residual_norm_squared_125, stencil_offset_125,
+    };
+    let _ = stencil_offset_125;
+    let mut cfg = test_cfg();
+    cfg.viscosity = 200.0;
+    cfg.yield_stress = 200.0;
+    cfg.max_gs_iters = 4;
+    cfg.gs_tol = 1.0e-12;
+
+    let particles = make_blob(Vec3::new(0.0, 0.20, 0.0), 0.08, cfg.cell_size * 0.7);
+    assert!(particles.len() >= 32);
+
+    let mut state_seed = MpmState::new(&particles, &[]);
+    for _ in 0..6 {
+        implicit_mpm_step_with_stencil(&mut state_seed, &cfg, &mut [], HessianStencil::Full27);
+    }
+
+    let mut s_diag = state_seed.clone();
+    let res_diag =
+        full_hessian_residual_norm_squared_125(&mut s_diag, &cfg, HessianStencil::Diagonal);
+    let mut s_27 = state_seed.clone();
+    let res_27 =
+        full_hessian_residual_norm_squared_125(&mut s_27, &cfg, HessianStencil::Full27);
+    let mut s_125 = state_seed.clone();
+    let res_125 =
+        full_hessian_residual_norm_squared_125(&mut s_125, &cfg, HessianStencil::Full125);
+
+    eprintln!(
+        "v4 convergence (against 125-pt Hessian, {} GS iters): \
+         diagonal={res_diag:.3e}  full-27={res_27:.3e}  full-125={res_125:.3e}",
+        cfg.max_gs_iters
+    );
+    assert!(
+        res_125 < res_27 * 0.9,
+        "Stage 40 v4 full-125 should leave a measurably lower residual than full-27 \
+         (got full-125={res_125:.3e}, full-27={res_27:.3e})"
+    );
+    assert!(
+        res_27 < res_diag * 0.9,
+        "full-27 should still beat diagonal at the same iteration cap"
+    );
+}
+
+/// Stage 40 v4 — make sure Full125 still passes the same end-to-end
+/// scenarios as the default Full27 stencil. Runs each of the three
+/// existing acceptance gates with `HessianStencil::Full125` and
+/// asserts the same physics constraints hold.
+#[test]
+fn full_125_passes_existing_acceptance_gates() {
+    // Mass conservation gate.
+    {
+        let cfg = test_cfg();
+        let particles = make_blob(Vec3::new(0.0, 0.20, 0.0), 0.10, cfg.cell_size * 0.7);
+        let mut state = MpmState::new(&particles, &[]);
+        let mass_p = cfg.particle_mass();
+        let total_mass_init = state.total_mass(mass_p);
+        let mut max_drift: Real = 0.0;
+        for _ in 0..50 {
+            let report = implicit_mpm_step_with_stencil(
+                &mut state,
+                &cfg,
+                &mut [],
+                HessianStencil::Full125,
+            );
+            let drift = (report.total_mass - total_mass_init).abs() / total_mass_init;
+            if drift > max_drift {
+                max_drift = drift;
+            }
+        }
+        eprintln!("v4 mass: max drift = {:.4}%", max_drift * 100.0);
+        assert!(
+            max_drift < 0.01,
+            "full-125 mass drift = {:.4}% > 1%",
+            max_drift * 100.0
+        );
+    }
+
+    // Bingham settle gate.
+    {
+        let cfg = test_cfg();
+        let particles = make_blob(Vec3::new(0.0, 0.30, 0.0), 0.12, cfg.cell_size * 0.7);
+        let mass_p = cfg.particle_mass();
+        let mut state = MpmState::new(&particles, &[]);
+        let mut ke_max = state.kinetic_energy(mass_p);
+        for _ in 0..100 {
+            implicit_mpm_step_with_stencil(
+                &mut state,
+                &cfg,
+                &mut [],
+                HessianStencil::Full125,
+            );
+            let ke = state.kinetic_energy(mass_p);
+            if ke > ke_max {
+                ke_max = ke;
+            }
+        }
+        let ke_final = state.kinetic_energy(mass_p);
+        let dissipation = 1.0 - ke_final / ke_max.max(1.0e-12);
+        eprintln!("v4 settle: dissipation = {:.2}%", dissipation * 100.0);
+        assert!(
+            dissipation > 0.95,
+            "full-125 dissipation = {:.1}% < 95%",
+            dissipation * 100.0
+        );
+    }
+
+    // Large-dt stability gate.
+    {
+        let mut cfg = test_cfg();
+        cfg.dt = 0.1;
+        cfg.max_gs_iters = 32;
+        let particles = make_blob(Vec3::new(0.0, 0.30, 0.0), 0.10, cfg.cell_size * 0.7);
+        let mut state = MpmState::new(&particles, &[]);
+        let mut max_speed: Real = 0.0;
+        for _ in 0..20 {
+            let _ = implicit_mpm_step_with_stencil(
+                &mut state,
+                &cfg,
+                &mut [],
+                HessianStencil::Full125,
+            );
+            let s = state
+                .vel
+                .iter()
+                .map(|v| v.length())
+                .fold(0.0_f64, Real::max);
+            if s > max_speed {
+                max_speed = s;
+            }
+            for v in &state.vel {
+                assert!(v.x.is_finite() && v.y.is_finite() && v.z.is_finite());
+            }
+        }
+        eprintln!("v4 large-dt: max|v| = {max_speed:.3}");
+        assert!(max_speed < 50.0, "full-125 max|v| = {max_speed} > 50");
+    }
+}
+
+/// Stage 40 v4 — the 125-stencil grid coloring should produce more
+/// colors than the 27-stencil coloring. On a sufficiently large grid
+/// (>= 5 cells per axis) the 27-stencil natural coloring is 8 and the
+/// 125-stencil natural coloring is 64; the generic
+/// `graph_coloring::color_constraints` may return a number close to
+/// (but not necessarily equal to) these, depending on its greedy /
+/// MCS ordering. The gate asserts the 125-stencil color count is
+/// strictly greater than the 27-stencil count.
+#[test]
+fn color_grid_125_has_more_colors_than_27() {
+    use molla::compute::implicit_mpm::{color_grid, color_grid_125};
+    let g = 8;
+    let groups_27 = color_grid(g);
+    let groups_125 = color_grid_125(g);
+    let n27 = groups_27.iter().filter(|g| !g.is_empty()).count();
+    let n125 = groups_125.iter().filter(|g| !g.is_empty()).count();
+    eprintln!("color grids: 27-stencil={n27} colors, 125-stencil={n125} colors");
+    assert!(n27 >= 8, "27-stencil expected >= 8 colors, got {n27}");
+    assert!(
+        n125 > n27,
+        "125-stencil should need more colors than 27-stencil (27={n27}, 125={n125})"
+    );
+    // Sanity: the 125-stencil coloring covers every cell exactly once.
+    let mut covered = vec![false; g * g * g];
+    for group in &groups_125 {
+        for &ci in group {
+            assert!(!covered[ci], "cell {ci} appears in multiple color groups");
+            covered[ci] = true;
+        }
+    }
+    assert!(
+        covered.iter().all(|&c| c),
+        "125-stencil coloring missed some cells"
+    );
+}
+
 /// Wall-time micro-benchmark printed via `eprintln!` so `cargo test -- --nocapture`
 /// surfaces it. Not a gate; just informational.
 #[test]

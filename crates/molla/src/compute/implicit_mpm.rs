@@ -5,6 +5,18 @@
 //! mirrors Newton's `implicit_mpm` solver (forward grid step →
 //! assemble linear system → colored Gauss-Seidel solve → projection).
 //!
+//! ## Stage 40 v4 — full 125-point Newton Hessian
+//!
+//! v1/v2/v3 shipped the 27-point Hessian (cells coupled to their 26
+//! immediate neighbours). v4 extends the stencil to the **true** Newton
+//! reach for the quadratic-B-spline kernel: two cells whose 3×3×3
+//! particle support boxes overlap can share a particle whenever their
+//! index offset is at most ±2 on every axis, so the strict Hessian is
+//! 5×5×5 = 125-point. v4 keeps the 27-point path as the default (a
+//! 5× cheaper assembly) but exposes [`HessianStencil::Full125`] for
+//! callers that need tighter convergence per GS iteration on stiff
+//! Bingham configurations.
+//!
 //! ## Stage 40 — full 27-point Newton Hessian
 //!
 //! Stage 39A shipped a diagonal-only approximation `(M + dt·K_diag)·v = M·v_pred`.
@@ -125,7 +137,11 @@ pub struct ImplicitMpmConfig {
 /// * [`HessianStencil::Diagonal`] — Stage 39A behaviour: per-cell
 ///   diagonal preconditioner, off-diagonal `K_ij` ignored.
 /// * [`HessianStencil::Full27`] — Stage 40 default: full 27-point
-///   block-isotropic Hessian.
+///   block-isotropic Hessian (cell + 26 immediate neighbours).
+/// * [`HessianStencil::Full125`] — Stage 40 v4: full 5×5×5 = 125-point
+///   Hessian. The quadratic-B-spline kernel scatters each particle onto
+///   a 3×3×3 box; two cells within distance 2 on every axis can share a
+///   particle, so the strict Newton Hessian reaches 125 entries per row.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub enum HessianStencil {
     /// 1-point diagonal — Stage 39A path.
@@ -133,6 +149,9 @@ pub enum HessianStencil {
     /// 27-point (cell + 26 neighbours) — Stage 40 default.
     #[default]
     Full27,
+    /// 125-point (5×5×5 box) — Stage 40 v4. True Newton Hessian for the
+    /// quadratic-B-spline particle kernel.
+    Full125,
 }
 
 impl Default for ImplicitMpmConfig {
@@ -357,6 +376,51 @@ pub fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
     graph_coloring::group_by_color(&colors)
 }
 
+/// Color the regular 3D grid for colored Gauss-Seidel over the **125-point**
+/// stencil (5×5×5 box centred on each cell).
+///
+/// Two cells share an edge iff one lies within distance 2 of the other
+/// on every axis. The natural closed-form coloring is the 64-coloring
+/// `(ix mod 4, iy mod 4, iz mod 4)` — guaranteed proper because any
+/// two cells in the same color group differ by at least 4 on at least
+/// one axis, which is strictly greater than the 2-cell stencil reach.
+/// The generic [`graph_coloring::color_constraints`] is given the
+/// 5×5×5 vertex sets per cell; it may discover a different ordering
+/// but still returns at most 64 colors on a sufficiently large grid.
+///
+/// Returns `groups[c] = Vec<cell_idx>` for `c ∈ [0, n_colors)`.
+pub fn color_grid_125(grid_size: usize) -> Vec<Vec<usize>> {
+    let g = grid_size;
+    let n_cells = g * g * g;
+    let cell_index = |ix: i32, iy: i32, iz: i32| -> Option<u32> {
+        if ix < 0 || iy < 0 || iz < 0 || ix >= g as i32 || iy >= g as i32 || iz >= g as i32 {
+            None
+        } else {
+            Some((ix as u32) + (iy as u32) * g as u32 + (iz as u32) * g as u32 * g as u32)
+        }
+    };
+    let mut constraint_verts: Vec<Vec<u32>> = Vec::with_capacity(n_cells);
+    for iz in 0..g as i32 {
+        for iy in 0..g as i32 {
+            for ix in 0..g as i32 {
+                let mut verts: Vec<u32> = Vec::with_capacity(125);
+                for dz in -2..=2 {
+                    for dy in -2..=2 {
+                        for dx in -2..=2 {
+                            if let Some(v) = cell_index(ix + dx, iy + dy, iz + dz) {
+                                verts.push(v);
+                            }
+                        }
+                    }
+                }
+                constraint_verts.push(verts);
+            }
+        }
+    }
+    let colors = graph_coloring::color_constraints(&constraint_verts);
+    graph_coloring::group_by_color(&colors)
+}
+
 /// Map 3D stencil offset `(dx, dy, dz) ∈ {-1, 0, 1}³` to a flat index
 /// in `[0, 27)`. The diagonal entry is at index 13 (centre of the cube).
 #[inline]
@@ -365,9 +429,24 @@ pub fn stencil_offset(dx: i32, dy: i32, dz: i32) -> usize {
     ((dz + 1) as usize) * 9 + ((dy + 1) as usize) * 3 + ((dx + 1) as usize)
 }
 
+/// Map 3D stencil offset `(dx, dy, dz) ∈ {-2..=2}³` to a flat index in
+/// `[0, 125)`. The diagonal entry `(0, 0, 0)` is at index
+/// [`STENCIL_DIAG_125`] = 62 (centre of the 5×5×5 box).
+#[inline]
+pub fn stencil_offset_125(dx: i32, dy: i32, dz: i32) -> usize {
+    debug_assert!(dx.abs() <= 2 && dy.abs() <= 2 && dz.abs() <= 2);
+    ((dz + 2) as usize) * 25 + ((dy + 2) as usize) * 5 + ((dx + 2) as usize)
+}
+
 /// Index of the diagonal entry `(0, 0, 0)` in the 27-stencil. Inlined
 /// constant so call sites can spell out the intent.
 pub const STENCIL_DIAG: usize = 13;
+
+/// Index of the diagonal entry `(0, 0, 0)` in the 125-stencil.
+pub const STENCIL_DIAG_125: usize = 62;
+
+/// Width of a single Hessian row for the 125-stencil (5³).
+pub const STENCIL_LEN_125: usize = 125;
 
 /// Internal type that bundles the assembled implicit-MPM grid system
 /// after P2G but before the inner GS solve. Exposed via
@@ -380,16 +459,27 @@ pub struct GridSystem {
     /// Per-cell mass (`g_total` entries).
     pub g_mass: Vec<Real>,
     /// 27-point Hessian, `g_total * 27` entries; see
-    /// [`stencil_offset`] for the layout.
+    /// [`stencil_offset`] for the layout. Populated when the assembled
+    /// stencil is [`HessianStencil::Diagonal`] or [`HessianStencil::Full27`].
+    /// For Full125 this is empty — the system stores [`Self::k_stencil_125`]
+    /// instead.
     pub k_stencil: Vec<Real>,
+    /// 125-point Hessian, `g_total * 125` entries; see
+    /// [`stencil_offset_125`] for the layout. Populated only when the
+    /// assembled stencil is [`HessianStencil::Full125`].
+    pub k_stencil_125: Vec<Real>,
     /// Predicted velocity (`g_total` entries).
     pub v_pred: Vec<Vec3>,
     /// Active-cell flags (cells with mass > 0). `g_total` entries.
     pub active: Vec<bool>,
-    /// Colored-GS groups produced by [`color_grid`].
+    /// Colored-GS groups produced by [`color_grid`] or [`color_grid_125`].
+    /// Length corresponds to the stencil that was used during assembly.
     pub color_groups: Vec<Vec<usize>>,
     /// Time step the system was assembled with.
     pub dt: Real,
+    /// Stencil this system was assembled with. Determines whether
+    /// [`Self::k_stencil`] or [`Self::k_stencil_125`] is populated.
+    pub stencil: HessianStencil,
 }
 
 /// One implicit-MPM substep with the **Stage 40 default** (full
@@ -442,6 +532,7 @@ pub fn implicit_mpm_step_with_solver(
     // ── Grid scratch ─────────────────────────────────────────────────
     let mut g_mass = vec![0.0_f64; g_total];
     let mut g_momentum = vec![Vec3::ZERO; g_total];
+    let want_125 = matches!(stencil, HessianStencil::Full125);
     // Per-cell 27-point Hessian: `k_stencil[i * 27 + s]` is the
     // scalar coupling `K_{i, i+δ(s)}` where `δ(s)` is the stencil offset
     // recovered from index `s ∈ [0, 27)` via [`stencil_offset`]. The
@@ -453,7 +544,21 @@ pub fn implicit_mpm_step_with_solver(
     // `|·|_∞ ≤ 1`, accumulate `k_p · w_ip · w_jp` into
     // `k_stencil[i * 27 + s(j − i)]`. The diagonal slot collapses to
     // the Stage 39A `k_diag` term.
-    let mut k_stencil = vec![0.0_f64; g_total * 27];
+    //
+    // When `want_125`, we instead allocate the 125-stencil
+    // (`k_stencil_125`) which captures every cell pair within the
+    // 3×3×3 particle support — the strict Newton Hessian for the
+    // quadratic-B-spline kernel. Offsets `|j − i|_∞ ≤ 2`.
+    let mut k_stencil = if want_125 {
+        Vec::new()
+    } else {
+        vec![0.0_f64; g_total * 27]
+    };
+    let mut k_stencil_125 = if want_125 {
+        vec![0.0_f64; g_total * STENCIL_LEN_125]
+    } else {
+        Vec::new()
+    };
 
     // ── Per-particle base / weight cache for P2G and G2P. ────────────
     struct ParticleCache {
@@ -519,30 +624,56 @@ pub fn implicit_mpm_step_with_solver(
             g_momentum[ci] += w * mass_p * (vel + aff);
         }
 
-        // Full-Hessian scatter (O(27²) per particle — 729 ops). Only
-        // entries with `|i − j|_∞ ≤ 1` land inside the 27-stencil; the
-        // outer ring of cell pairs (where particles in the corner of
-        // their 3³ stencil couple to the opposite corner of their
-        // own 3³ stencil) is lumped into the diagonal via the implicit
-        // sum-of-particles approximation.
-        for a in 0..27 {
-            let (wa, ca, ax, ay, az) = sten[a];
-            if ca < 0 {
-                continue;
+        // Full-Hessian scatter (O(27²) per particle — 729 ops). For the
+        // 27-stencil path, only entries with `|i − j|_∞ ≤ 1` land inside
+        // the row; the outer ring of cell pairs (where particles in the
+        // corner of their 3³ stencil couple to the opposite corner of
+        // their own 3³ stencil) is lumped onto the diagonal via the
+        // implicit sum-of-particles approximation. The 125-stencil path
+        // (Stage 40 v4) keeps every pair — `|i − j|_∞ ≤ 2` is the strict
+        // bound for a 3×3×3 particle support, so the full 729 pairs all
+        // land cleanly inside the 5×5×5 row.
+        if want_125 {
+            for a in 0..27 {
+                let (wa, ca, ax, ay, az) = sten[a];
+                if ca < 0 {
+                    continue;
+                }
+                for b in 0..27 {
+                    let (wb, cb, bx, by, bz) = sten[b];
+                    if cb < 0 {
+                        continue;
+                    }
+                    let dx_ij = bx - ax;
+                    let dy_ij = by - ay;
+                    let dz_ij = bz - az;
+                    // Distance between any two cells inside a 3³ box is
+                    // at most 2 on each axis — guaranteed in-range.
+                    debug_assert!(dx_ij.abs() <= 2 && dy_ij.abs() <= 2 && dz_ij.abs() <= 2);
+                    let s = stencil_offset_125(dx_ij, dy_ij, dz_ij);
+                    k_stencil_125[(ca as usize) * STENCIL_LEN_125 + s] += kp * wa * wb;
+                }
             }
-            for b in 0..27 {
-                let (wb, cb, bx, by, bz) = sten[b];
-                if cb < 0 {
+        } else {
+            for a in 0..27 {
+                let (wa, ca, ax, ay, az) = sten[a];
+                if ca < 0 {
                     continue;
                 }
-                let dx_ij = bx - ax;
-                let dy_ij = by - ay;
-                let dz_ij = bz - az;
-                if dx_ij.abs() > 1 || dy_ij.abs() > 1 || dz_ij.abs() > 1 {
-                    continue;
+                for b in 0..27 {
+                    let (wb, cb, bx, by, bz) = sten[b];
+                    if cb < 0 {
+                        continue;
+                    }
+                    let dx_ij = bx - ax;
+                    let dy_ij = by - ay;
+                    let dz_ij = bz - az;
+                    if dx_ij.abs() > 1 || dy_ij.abs() > 1 || dz_ij.abs() > 1 {
+                        continue;
+                    }
+                    let s = stencil_offset(dx_ij, dy_ij, dz_ij);
+                    k_stencil[(ca as usize) * 27 + s] += kp * wa * wb;
                 }
-                let s = stencil_offset(dx_ij, dy_ij, dz_ij);
-                k_stencil[(ca as usize) * 27 + s] += kp * wa * wb;
             }
         }
     }
@@ -620,7 +751,8 @@ pub fn implicit_mpm_step_with_solver(
 
     // ── Implicit grid solve via colored Gauss-Seidel. ───────────────
     //
-    // Linear system per cell (full 27-point Hessian):
+    // Linear system per cell (full Newton Hessian — 27 or 125 entries
+    // per row depending on `stencil`):
     //   (m_i + dt · K_ii) · v_new_i + dt · Σ_{j ≠ i} K_ij · v_j
     //       = m_i · v_pred_i
     //
@@ -628,12 +760,18 @@ pub fn implicit_mpm_step_with_solver(
     // velocity components decouple per cell and we can solve each
     // axis with the same scalar denominator.
     //
-    // Each cell is a node of the constraint graph; the 27-stencil
-    // gives an 8-coloring (octant parity of `(ix, iy, iz)`). Within a
-    // color group the cell updates are independent → GPU-friendly.
-    let color_groups = color_grid(g);
+    // Each cell is a node of the constraint graph. The 27-stencil
+    // produces an 8-coloring (octant parity of `(ix, iy, iz)`); the
+    // 125-stencil reaches farther and produces up to a 64-coloring
+    // (`(ix mod 4, iy mod 4, iz mod 4)`). Within a color group the
+    // cell updates are independent → GPU-friendly.
+    let color_groups = if want_125 {
+        color_grid_125(g)
+    } else {
+        color_grid(g)
+    };
     let gi = g as i32;
-    let use_off_diag = matches!(stencil, HessianStencil::Full27);
+    let use_off_diag = matches!(stencil, HessianStencil::Full27 | HessianStencil::Full125);
     let mut gs_iters_done = 0usize;
     let mut last_residual = 0.0_f64;
 
@@ -646,14 +784,86 @@ pub fn implicit_mpm_step_with_solver(
             grid_size: g,
             g_mass: g_mass.clone(),
             k_stencil: k_stencil.clone(),
+            k_stencil_125: k_stencil_125.clone(),
             v_pred: v_pred.clone(),
             active: active.clone(),
             color_groups: color_groups.clone(),
             dt,
+            stencil,
         };
         let (iters, res) = cb(&system, &mut v_grid, stencil);
         gs_iters_done = iters;
         last_residual = res;
+    } else if want_125 {
+        // 5×5×5 GS sweep.
+        for outer_it in 0..cfg.max_gs_iters {
+            let mut max_dv: Real = 0.0;
+            let mut max_v: Real = 1.0e-12;
+            for group in &color_groups {
+                for &ci in group {
+                    if !active[ci] {
+                        continue;
+                    }
+                    let m = g_mass[ci];
+                    let k_diag =
+                        k_stencil_125[ci * STENCIL_LEN_125 + STENCIL_DIAG_125];
+                    let denom = m + dt * k_diag;
+                    if denom <= 0.0 {
+                        continue;
+                    }
+                    let iz = (ci / (g * g)) as i32;
+                    let iy = ((ci / g) % g) as i32;
+                    let ix = (ci % g) as i32;
+                    let mut off = Vec3::ZERO;
+                    for dz in -2..=2 {
+                        for dy in -2..=2 {
+                            for dx_ in -2..=2 {
+                                if dx_ == 0 && dy == 0 && dz == 0 {
+                                    continue;
+                                }
+                                let jx = ix + dx_;
+                                let jy = iy + dy;
+                                let jz = iz + dz;
+                                if jx < 0
+                                    || jy < 0
+                                    || jz < 0
+                                    || jx >= gi
+                                    || jy >= gi
+                                    || jz >= gi
+                                {
+                                    continue;
+                                }
+                                let cj = (jx as usize)
+                                    + (jy as usize) * g
+                                    + (jz as usize) * g * g;
+                                let s = stencil_offset_125(dx_, dy, dz);
+                                let kij = k_stencil_125[ci * STENCIL_LEN_125 + s];
+                                if kij != 0.0 {
+                                    off += kij * v_grid[cj];
+                                }
+                            }
+                        }
+                    }
+                    let rhs = m * v_pred[ci] - dt * off;
+                    let v_new = rhs / denom;
+                    let diff = v_new - v_grid[ci];
+                    let nd = diff.length();
+                    if nd > max_dv {
+                        max_dv = nd;
+                    }
+                    let nv = v_new.length();
+                    if nv > max_v {
+                        max_v = nv;
+                    }
+                    v_grid[ci] = v_new;
+                }
+            }
+            gs_iters_done = outer_it + 1;
+            last_residual = max_dv / max_v;
+            if last_residual < cfg.gs_tol {
+                break;
+            }
+        }
     } else {
     for outer_it in 0..cfg.max_gs_iters {
         let mut max_dv: Real = 0.0;
@@ -728,47 +938,108 @@ pub fn implicit_mpm_step_with_solver(
     }
     } // end of `if gs_override.is_none()` else
 
-    // ── True residual against the full 27-point Hessian. Independent
-    //    of whether the GS sweep used the diagonal-only approximation
-    //    or the full off-diagonal coupling, this measures how close
-    //    `v_grid` is to the exact solution of the full coupled
-    //    system. Returned in the [`StepReport`] so callers can compare
-    //    accuracy across stencil choices.
+    // ── True residual against the assembled Newton Hessian.
+    //    Independent of whether the GS sweep used the diagonal-only
+    //    approximation or the full off-diagonal coupling, this measures
+    //    how close `v_grid` is to the exact solution of the **assembled**
+    //    coupled system. For Diagonal/Full27 the stencil is 27-point;
+    //    for Full125 it is 125-point. Returned in the [`StepReport`].
+    //    Cross-stencil comparison (e.g. Full27 vs Full125 against the
+    //    same 125-pt yardstick) is done by the standalone helpers
+    //    [`full_hessian_residual_norm_squared`] (27-pt yardstick) and
+    //    [`full_hessian_residual_norm_squared_125`] (125-pt yardstick).
     let mut true_residual_sq: Real = 0.0;
-    for iz in 0..g as i32 {
-        for iy in 0..g as i32 {
-            for ix in 0..g as i32 {
-                let ci_u = (ix as usize) + (iy as usize) * g + (iz as usize) * g * g;
-                if !active[ci_u] {
-                    continue;
-                }
-                let m = g_mass[ci_u];
-                let k_diag = k_stencil[ci_u * 27 + STENCIL_DIAG];
-                let mut lhs = (m + dt * k_diag) * v_grid[ci_u];
-                for dz in -1..=1 {
-                    for dy in -1..=1 {
-                        for dx_ in -1..=1 {
-                            if dx_ == 0 && dy == 0 && dz == 0 {
-                                continue;
-                            }
-                            let jx = ix + dx_;
-                            let jy = iy + dy;
-                            let jz = iz + dz;
-                            if jx < 0 || jy < 0 || jz < 0 || jx >= gi || jy >= gi || jz >= gi {
-                                continue;
-                            }
-                            let cj =
-                                (jx as usize) + (jy as usize) * g + (jz as usize) * g * g;
-                            let s = stencil_offset(dx_, dy, dz);
-                            let kij = k_stencil[ci_u * 27 + s];
-                            if kij != 0.0 {
-                                lhs += dt * kij * v_grid[cj];
+    if want_125 {
+        for iz in 0..g as i32 {
+            for iy in 0..g as i32 {
+                for ix in 0..g as i32 {
+                    let ci_u =
+                        (ix as usize) + (iy as usize) * g + (iz as usize) * g * g;
+                    if !active[ci_u] {
+                        continue;
+                    }
+                    let m = g_mass[ci_u];
+                    let k_diag =
+                        k_stencil_125[ci_u * STENCIL_LEN_125 + STENCIL_DIAG_125];
+                    let mut lhs = (m + dt * k_diag) * v_grid[ci_u];
+                    for dz in -2..=2 {
+                        for dy in -2..=2 {
+                            for dx_ in -2..=2 {
+                                if dx_ == 0 && dy == 0 && dz == 0 {
+                                    continue;
+                                }
+                                let jx = ix + dx_;
+                                let jy = iy + dy;
+                                let jz = iz + dz;
+                                if jx < 0
+                                    || jy < 0
+                                    || jz < 0
+                                    || jx >= gi
+                                    || jy >= gi
+                                    || jz >= gi
+                                {
+                                    continue;
+                                }
+                                let cj = (jx as usize)
+                                    + (jy as usize) * g
+                                    + (jz as usize) * g * g;
+                                let s = stencil_offset_125(dx_, dy, dz);
+                                let kij =
+                                    k_stencil_125[ci_u * STENCIL_LEN_125 + s];
+                                if kij != 0.0 {
+                                    lhs += dt * kij * v_grid[cj];
+                                }
                             }
                         }
                     }
+                    let r = lhs - m * v_pred[ci_u];
+                    true_residual_sq += r.dot(r);
                 }
-                let r = lhs - m * v_pred[ci_u];
-                true_residual_sq += r.dot(r);
+            }
+        }
+    } else {
+        for iz in 0..g as i32 {
+            for iy in 0..g as i32 {
+                for ix in 0..g as i32 {
+                    let ci_u = (ix as usize) + (iy as usize) * g + (iz as usize) * g * g;
+                    if !active[ci_u] {
+                        continue;
+                    }
+                    let m = g_mass[ci_u];
+                    let k_diag = k_stencil[ci_u * 27 + STENCIL_DIAG];
+                    let mut lhs = (m + dt * k_diag) * v_grid[ci_u];
+                    for dz in -1..=1 {
+                        for dy in -1..=1 {
+                            for dx_ in -1..=1 {
+                                if dx_ == 0 && dy == 0 && dz == 0 {
+                                    continue;
+                                }
+                                let jx = ix + dx_;
+                                let jy = iy + dy;
+                                let jz = iz + dz;
+                                if jx < 0
+                                    || jy < 0
+                                    || jz < 0
+                                    || jx >= gi
+                                    || jy >= gi
+                                    || jz >= gi
+                                {
+                                    continue;
+                                }
+                                let cj = (jx as usize)
+                                    + (jy as usize) * g
+                                    + (jz as usize) * g * g;
+                                let s = stencil_offset(dx_, dy, dz);
+                                let kij = k_stencil[ci_u * 27 + s];
+                                if kij != 0.0 {
+                                    lhs += dt * kij * v_grid[cj];
+                                }
+                            }
+                        }
+                    }
+                    let r = lhs - m * v_pred[ci_u];
+                    true_residual_sq += r.dot(r);
+                }
             }
         }
     }
@@ -1210,6 +1481,400 @@ pub fn full_hessian_residual_norm_squared(
 ) -> Real {
     let r = implicit_mpm_step_with_stencil(state, cfg, &mut [], stencil);
     r.true_residual_sq
+}
+
+/// Run one substep with `stencil` and return the post-solve squared
+/// residual against the **full 125-point** Hessian system (the true
+/// Newton Hessian for the quadratic-B-spline kernel). Stage 40 v4
+/// uses this to compare Diagonal / Full27 / Full125 on a common
+/// yardstick. The step's particle state advances exactly as in
+/// [`implicit_mpm_step_with_stencil`]; the only difference is that
+/// the *reported* residual is measured against the 125-stencil
+/// regardless of which solver stencil was used.
+///
+/// Internally this assembles two systems in parallel (27 and 125)
+/// from the same particle scatter — about 5× the assembly memory of
+/// the regular step, but ~negligible at test scales.
+pub fn full_hessian_residual_norm_squared_125(
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+    stencil: HessianStencil,
+) -> Real {
+    // Build the diagnostic 125-point Hessian + RHS *before* the step
+    // runs, by replaying the same P2G + predict math from the state's
+    // initial particles. After the step finishes (mutating particles),
+    // we compute the residual against the captured K125 + v_pred using
+    // the post-GS v_grid the step computed.
+    let (g_mass, k_stencil_125, v_pred, active) =
+        assemble_grid_system_125(state, cfg);
+
+    // Run the step (any stencil), capturing v_grid via the override hook.
+    let mut work = state.clone();
+    let mut captured: Vec<Vec3> = Vec::new();
+    let mut hook = |sys: &GridSystem, v_grid: &mut [Vec3], st: HessianStencil| -> (usize, Real) {
+        // Reproduce the host CPU GS sweep for the requested stencil,
+        // then return the post-GS v_grid. We mirror the implementation
+        // in `implicit_mpm_step_with_solver` exactly, so the captured
+        // v_grid matches what the unhooked path would produce.
+        host_gs_sweep_on_system(sys, v_grid, cfg, st);
+        // Floor reapply (mirrors the post-GS floor step).
+        let g = sys.grid_size;
+        let dx = cfg.cell_size;
+        let origin_y = cfg.grid_origin[1];
+        for iz in 0..g {
+            for iy in 0..g {
+                for ix in 0..g {
+                    let ci = ix + iy * g + iz * g * g;
+                    if !sys.active[ci] {
+                        continue;
+                    }
+                    let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                    if node_y < cfg.floor_y {
+                        let mut v = v_grid[ci];
+                        if v.y < 0.0 {
+                            v.y = 0.0;
+                        }
+                        let damp = 1.0 - cfg.floor_friction;
+                        v.x *= damp;
+                        v.z *= damp;
+                        v_grid[ci] = v;
+                    }
+                }
+            }
+        }
+        captured = v_grid.to_vec();
+        (cfg.max_gs_iters, 0.0)
+    };
+    implicit_mpm_step_with_solver(&mut work, cfg, &mut [], stencil, Some(&mut hook));
+    let v_grid_post = captured;
+
+    // Now measure residual against the 125-stencil Hessian.
+    let g = cfg.grid_size;
+    let gi = g as i32;
+    let dt = cfg.dt;
+    let mut res_sq: Real = 0.0;
+    for iz in 0..g as i32 {
+        for iy in 0..g as i32 {
+            for ix in 0..g as i32 {
+                let ci_u = (ix as usize) + (iy as usize) * g + (iz as usize) * g * g;
+                if !active[ci_u] {
+                    continue;
+                }
+                let m = g_mass[ci_u];
+                let k_diag = k_stencil_125[ci_u * STENCIL_LEN_125 + STENCIL_DIAG_125];
+                let mut lhs = (m + dt * k_diag) * v_grid_post[ci_u];
+                for dz in -2..=2 {
+                    for dy in -2..=2 {
+                        for dx_ in -2..=2 {
+                            if dx_ == 0 && dy == 0 && dz == 0 {
+                                continue;
+                            }
+                            let jx = ix + dx_;
+                            let jy = iy + dy;
+                            let jz = iz + dz;
+                            if jx < 0
+                                || jy < 0
+                                || jz < 0
+                                || jx >= gi
+                                || jy >= gi
+                                || jz >= gi
+                            {
+                                continue;
+                            }
+                            let cj = (jx as usize)
+                                + (jy as usize) * g
+                                + (jz as usize) * g * g;
+                            let s = stencil_offset_125(dx_, dy, dz);
+                            let kij = k_stencil_125[ci_u * STENCIL_LEN_125 + s];
+                            if kij != 0.0 {
+                                lhs += dt * kij * v_grid_post[cj];
+                            }
+                        }
+                    }
+                }
+                let r = lhs - m * v_pred[ci_u];
+                res_sq += r.dot(r);
+            }
+        }
+    }
+    res_sq
+}
+
+/// Run the host CPU colored Gauss-Seidel sweep on a pre-assembled
+/// [`GridSystem`] using the stencil width that matches the system's
+/// `stencil` field, until `cfg.max_gs_iters` or `cfg.gs_tol` is hit.
+/// Used by [`full_hessian_residual_norm_squared_125`] to reproduce the
+/// step's interior GS without re-running P2G.
+fn host_gs_sweep_on_system(
+    sys: &GridSystem,
+    v_grid: &mut [Vec3],
+    cfg: &ImplicitMpmConfig,
+    stencil: HessianStencil,
+) {
+    let g = sys.grid_size;
+    let gi = g as i32;
+    let dt = sys.dt;
+    let use_off_diag =
+        matches!(stencil, HessianStencil::Full27 | HessianStencil::Full125);
+    if matches!(sys.stencil, HessianStencil::Full125) {
+        for _ in 0..cfg.max_gs_iters {
+            let mut max_dv: Real = 0.0;
+            let mut max_v: Real = 1.0e-12;
+            for group in &sys.color_groups {
+                for &ci in group {
+                    if !sys.active[ci] {
+                        continue;
+                    }
+                    let m = sys.g_mass[ci];
+                    let k_diag =
+                        sys.k_stencil_125[ci * STENCIL_LEN_125 + STENCIL_DIAG_125];
+                    let denom = m + dt * k_diag;
+                    if denom <= 0.0 {
+                        continue;
+                    }
+                    let iz = (ci / (g * g)) as i32;
+                    let iy = ((ci / g) % g) as i32;
+                    let ix = (ci % g) as i32;
+                    let mut off = Vec3::ZERO;
+                    if use_off_diag {
+                        for dz in -2..=2 {
+                            for dy in -2..=2 {
+                                for dx_ in -2..=2 {
+                                    if dx_ == 0 && dy == 0 && dz == 0 {
+                                        continue;
+                                    }
+                                    let jx = ix + dx_;
+                                    let jy = iy + dy;
+                                    let jz = iz + dz;
+                                    if jx < 0
+                                        || jy < 0
+                                        || jz < 0
+                                        || jx >= gi
+                                        || jy >= gi
+                                        || jz >= gi
+                                    {
+                                        continue;
+                                    }
+                                    let cj = (jx as usize)
+                                        + (jy as usize) * g
+                                        + (jz as usize) * g * g;
+                                    let s = stencil_offset_125(dx_, dy, dz);
+                                    let kij =
+                                        sys.k_stencil_125[ci * STENCIL_LEN_125 + s];
+                                    if kij != 0.0 {
+                                        off += kij * v_grid[cj];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let rhs = m * sys.v_pred[ci] - dt * off;
+                    let v_new = rhs / denom;
+                    let diff = v_new - v_grid[ci];
+                    let nd = diff.length();
+                    if nd > max_dv {
+                        max_dv = nd;
+                    }
+                    let nv = v_new.length();
+                    if nv > max_v {
+                        max_v = nv;
+                    }
+                    v_grid[ci] = v_new;
+                }
+            }
+            let last_residual = max_dv / max_v;
+            if last_residual < cfg.gs_tol {
+                break;
+            }
+        }
+    } else {
+        for _ in 0..cfg.max_gs_iters {
+            let mut max_dv: Real = 0.0;
+            let mut max_v: Real = 1.0e-12;
+            for group in &sys.color_groups {
+                for &ci in group {
+                    if !sys.active[ci] {
+                        continue;
+                    }
+                    let m = sys.g_mass[ci];
+                    let k_diag = sys.k_stencil[ci * 27 + STENCIL_DIAG];
+                    let denom = m + dt * k_diag;
+                    if denom <= 0.0 {
+                        continue;
+                    }
+                    let mut off = Vec3::ZERO;
+                    if use_off_diag {
+                        let iz = (ci / (g * g)) as i32;
+                        let iy = ((ci / g) % g) as i32;
+                        let ix = (ci % g) as i32;
+                        for dz in -1..=1 {
+                            for dy in -1..=1 {
+                                for dx_ in -1..=1 {
+                                    if dx_ == 0 && dy == 0 && dz == 0 {
+                                        continue;
+                                    }
+                                    let jx = ix + dx_;
+                                    let jy = iy + dy;
+                                    let jz = iz + dz;
+                                    if jx < 0
+                                        || jy < 0
+                                        || jz < 0
+                                        || jx >= gi
+                                        || jy >= gi
+                                        || jz >= gi
+                                    {
+                                        continue;
+                                    }
+                                    let cj = (jx as usize)
+                                        + (jy as usize) * g
+                                        + (jz as usize) * g * g;
+                                    let s = stencil_offset(dx_, dy, dz);
+                                    let kij = sys.k_stencil[ci * 27 + s];
+                                    if kij != 0.0 {
+                                        off += kij * v_grid[cj];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let rhs = m * sys.v_pred[ci] - dt * off;
+                    let v_new = rhs / denom;
+                    let diff = v_new - v_grid[ci];
+                    let nd = diff.length();
+                    if nd > max_dv {
+                        max_dv = nd;
+                    }
+                    let nv = v_new.length();
+                    if nv > max_v {
+                        max_v = nv;
+                    }
+                    v_grid[ci] = v_new;
+                }
+            }
+            let last_residual = max_dv / max_v;
+            if last_residual < cfg.gs_tol {
+                break;
+            }
+        }
+    }
+}
+
+/// Assemble the 125-point Hessian + RHS for a given particle state.
+/// Used for diagnostic residual computation in
+/// [`full_hessian_residual_norm_squared_125`]. Returns
+/// `(g_mass, k_stencil_125, v_pred, active)`.
+fn assemble_grid_system_125(
+    state: &MpmState,
+    cfg: &ImplicitMpmConfig,
+) -> (Vec<Real>, Vec<Real>, Vec<Vec3>, Vec<bool>) {
+    let n = state.n();
+    let g = cfg.grid_size;
+    let g_total = g * g * g;
+    let dx = cfg.cell_size;
+    let inv_dx = 1.0 / dx;
+    let dt = cfg.dt;
+    let mass_p = cfg.particle_mass();
+    let mu_b = cfg.viscosity;
+    let origin = Vec3::new(cfg.grid_origin[0], cfg.grid_origin[1], cfg.grid_origin[2]);
+
+    let mut g_mass = vec![0.0_f64; g_total];
+    let mut g_momentum = vec![Vec3::ZERO; g_total];
+    let mut k_stencil_125 = vec![0.0_f64; g_total * STENCIL_LEN_125];
+
+    for p in 0..n {
+        let pos = state.pos[p];
+        let vel = state.vel[p];
+        let c = state.c[p];
+
+        let xp = (pos - origin) * inv_dx;
+        let base_xyz =
+            Vec3::new((xp.x - 0.5).floor(), (xp.y - 0.5).floor(), (xp.z - 0.5).floor());
+        let base = [base_xyz.x as i32, base_xyz.y as i32, base_xyz.z as i32];
+        let fx = xp - base_xyz;
+        let wx = quad_weights(fx.x);
+        let wy = quad_weights(fx.y);
+        let wz = quad_weights(fx.z);
+
+        let kp = mu_b * cfg.particle_volume * 4.0 * inv_dx * inv_dx;
+
+        let mut sten: [(Real, i32, i32, i32, i32); 27] = [(0.0, -1, 0, 0, 0); 27];
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    let w = wx[i] * wy[j] * wz[k];
+                    let ix = base[0] + i as i32;
+                    let iy = base[1] + j as i32;
+                    let iz = base[2] + k as i32;
+                    let ci = cell_idx(g, ix, iy, iz)
+                        .map(|c| c as i32)
+                        .unwrap_or(-1);
+                    sten[i * 9 + j * 3 + k] = (w, ci, ix, iy, iz);
+                }
+            }
+        }
+
+        for &(w, ci, ix, iy, iz) in sten.iter() {
+            if ci < 0 {
+                continue;
+            }
+            let node_pos = origin
+                + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5) * dx;
+            let xn_xp = node_pos - pos;
+            let aff = c * xn_xp;
+            let ci = ci as usize;
+            g_mass[ci] += w * mass_p;
+            g_momentum[ci] += w * mass_p * (vel + aff);
+        }
+
+        for a in 0..27 {
+            let (wa, ca, ax, ay, az) = sten[a];
+            if ca < 0 {
+                continue;
+            }
+            for b in 0..27 {
+                let (wb, cb, bx, by, bz) = sten[b];
+                if cb < 0 {
+                    continue;
+                }
+                let dx_ij = bx - ax;
+                let dy_ij = by - ay;
+                let dz_ij = bz - az;
+                let s = stencil_offset_125(dx_ij, dy_ij, dz_ij);
+                k_stencil_125[(ca as usize) * STENCIL_LEN_125 + s] += kp * wa * wb;
+            }
+        }
+    }
+
+    let mut v_pred = vec![Vec3::ZERO; g_total];
+    let mut active = vec![false; g_total];
+    for iz in 0..g {
+        for iy in 0..g {
+            for ix in 0..g {
+                let ci = ix + iy * g + iz * g * g;
+                let m = g_mass[ci];
+                if m <= 0.0 {
+                    continue;
+                }
+                let mut v = g_momentum[ci] / m;
+                v.y += cfg.gravity_y * dt;
+                let node_y = origin.y + ((iy as Real) + 0.5) * dx;
+                if node_y < cfg.floor_y + dx {
+                    let depth = (cfg.floor_y + dx - node_y).max(0.0) / dx;
+                    if node_y < cfg.floor_y && v.y < 0.0 {
+                        v.y = 0.0;
+                    } else if v.y < 0.0 {
+                        v.y *= 1.0 - depth;
+                    }
+                    let damp = 1.0 - cfg.floor_friction * depth;
+                    v.x *= damp;
+                    v.z *= damp;
+                }
+                v_pred[ci] = v;
+                active[ci] = true;
+            }
+        }
+    }
+    (g_mass, k_stencil_125, v_pred, active)
 }
 
 #[cfg(test)]

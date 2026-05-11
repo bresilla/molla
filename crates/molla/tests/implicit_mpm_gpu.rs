@@ -23,8 +23,9 @@
 #![cfg(feature = "gpu")]
 
 use molla::compute::implicit_mpm::{
-    apply_bingham_and_advect, color_grid, implicit_mpm_step, implicit_mpm_step_with_solver,
-    GridSystem, HessianStencil, ImplicitMpmConfig, MpmState,
+    apply_bingham_and_advect, color_grid, color_grid_125, implicit_mpm_step,
+    implicit_mpm_step_with_solver, implicit_mpm_step_with_stencil, GridSystem,
+    HessianStencil, ImplicitMpmConfig, MpmState,
 };
 use molla::compute::Engine;
 use molla::kernels::{
@@ -825,4 +826,123 @@ fn bingham_step_wall_time_10k_particles_gpu_v3() {
              elimination doesn't dominate at this problem size"
         );
     }
+}
+
+// ─── Stage 40 v4 — full 125-point Hessian GPU/CPU parity ────────
+
+/// Drive one full-125 GPU step (P2G_125 + predict + GS_125 + floor + G2P)
+/// then apply the host Bingham + advect tail.
+fn run_one_gpu_step_125(
+    kernel: &ImplicitMpmKernel,
+    gpu: &ImplicitMpmGpuStepState,
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+) {
+    let (pos, vel, c_flat) = pack_particles(state);
+    gpu.upload_particles(kernel, &pos, &vel, &c_flat);
+    let u = build_step_uniforms(cfg, true);
+    let (v_back, c_back) = gpu
+        .run_full_step_125(kernel, state.n() as u32, &u, cfg.max_gs_iters as u32)
+        .expect("GPU v4 full step");
+
+    let n = state.n();
+    let mut v_new = Vec::with_capacity(n);
+    let mut c_new = Vec::with_capacity(n);
+    for p in 0..n {
+        v_new.push(Vec3::new(
+            v_back[p][0] as Real,
+            v_back[p][1] as Real,
+            v_back[p][2] as Real,
+        ));
+        let cb = p * 9;
+        c_new.push(Mat3::from_cols(
+            Vec3::new(c_back[cb] as Real, c_back[cb + 1] as Real, c_back[cb + 2] as Real),
+            Vec3::new(c_back[cb + 3] as Real, c_back[cb + 4] as Real, c_back[cb + 5] as Real),
+            Vec3::new(c_back[cb + 6] as Real, c_back[cb + 7] as Real, c_back[cb + 8] as Real),
+        ));
+    }
+    apply_bingham_and_advect(state, cfg, &v_new, &c_new);
+}
+
+#[test]
+#[ignore]
+fn implicit_mpm_full125_cpu_gpu_parity() {
+    let engine = match try_engine() {
+        Some(e) => e,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+    let kernel = {
+        let device = engine.device().expect("device").clone();
+        let queue = engine.queue().expect("queue").clone();
+        ImplicitMpmKernel::new(device, queue)
+    };
+
+    let cfg = parity_cfg();
+    let particles = make_blob(Vec3::new(0.0, 0.20, 0.0), 0.10, cfg.cell_size * 0.5);
+    eprintln!("v4 parity: n_particles = {}", particles.len());
+    assert!(particles.len() <= 200);
+    assert!(particles.len() >= 32);
+
+    // ── GPU setup with the 125-stencil coloring. ─────────────────────
+    let max_particles = particles.len() as u32;
+    let mut gpu = ImplicitMpmGpuStepState::new(&kernel, cfg.grid_size as u32, max_particles);
+    let groups = color_grid_125(cfg.grid_size);
+    let groups_u32: Vec<Vec<u32>> = groups
+        .iter()
+        .map(|g| g.iter().map(|&ci| ci as u32).collect())
+        .collect();
+    gpu.upload_color_groups(&kernel, &groups_u32);
+
+    // ── CPU baseline: warm-up with Full27 (matches the existing
+    //    parity tests) then run one step with Full125 to set the
+    //    reference. ───────────────────────────────────────────────────
+    let mut state_cpu = MpmState::new(&particles, &[]);
+    for _ in 0..3 {
+        implicit_mpm_step(&mut state_cpu, &cfg, &mut []);
+    }
+    let snapshot = state_cpu.clone();
+    let _ = implicit_mpm_step_with_stencil(
+        &mut state_cpu,
+        &cfg,
+        &mut [],
+        HessianStencil::Full125,
+    );
+
+    // ── GPU replay using the v4 kernels from the same snapshot. ─────
+    let mut state_gpu = snapshot;
+    run_one_gpu_step_125(&kernel, &gpu, &mut state_gpu, &cfg);
+
+    // ── Compare. ─────────────────────────────────────────────────────
+    let mut max_rel: Real = 0.0;
+    let mut max_abs: Real = 0.0;
+    let mut max_speed: Real = 1.0e-12;
+    for v in &state_cpu.vel {
+        let s = v.length();
+        if s > max_speed { max_speed = s; }
+    }
+    for (i, (vc, vg)) in state_cpu.vel.iter().zip(state_gpu.vel.iter()).enumerate() {
+        let d = *vc - *vg;
+        let ad = d.length();
+        if ad > max_abs { max_abs = ad; }
+        let denom = vc.length().max(1.0e-6);
+        let rel = ad / denom;
+        if rel > max_rel { max_rel = rel; }
+        if i < 3 {
+            eprintln!(
+                "  p{i}: cpu=({:.5}, {:.5}, {:.5})  gpu=({:.5}, {:.5}, {:.5})",
+                vc.x, vc.y, vc.z, vg.x, vg.y, vg.z
+            );
+        }
+    }
+    eprintln!(
+        "v4 parity: max_abs_dv={:.3e}, max_rel_dv={:.3e}, peak |v|={:.3e}",
+        max_abs, max_rel, max_speed
+    );
+    assert!(
+        max_rel < 1.0e-5 || max_abs < 1.0e-5 * max_speed,
+        "Full-125 CPU/GPU parity broken: max_rel={max_rel:.3e}, max_abs={max_abs:.3e}, peak |v|={max_speed:.3e}"
+    );
 }

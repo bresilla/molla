@@ -70,6 +70,10 @@ pub struct ImplicitMpmKernel {
     pipe_floor: wgpu::ComputePipeline,
     pipe_g2p: wgpu::ComputePipeline,
     pipe_bingham: wgpu::ComputePipeline,
+    // Stage 40 v4 — 125-stencil variants.
+    pipe_reset_125: wgpu::ComputePipeline,
+    pipe_p2g_125: wgpu::ComputePipeline,
+    pipe_gs_125: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
 }
@@ -93,16 +97,17 @@ impl ImplicitMpmKernel {
         let layout_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::implicit_mpm io"),
             entries: &[
-                rw_storage(0), // g_mass_atomic
-                rw_storage(1), // k_stencil_atomic
-                rw_storage(2), // v_pred
-                ro_storage(3), // color_cells
-                rw_storage(4), // v_grid
-                rw_storage(5), // g_momentum_atomic
-                rw_storage(6), // p_pos
-                rw_storage(7), // p_vel
-                rw_storage(8), // p_C
-                rw_storage(9), // g_active
+                rw_storage(0),  // g_mass_atomic
+                rw_storage(1),  // k_stencil_atomic
+                rw_storage(2),  // v_pred
+                ro_storage(3),  // color_cells
+                rw_storage(4),  // v_grid
+                rw_storage(5),  // g_momentum_atomic
+                rw_storage(6),  // p_pos
+                rw_storage(7),  // p_vel
+                rw_storage(8),  // p_C
+                rw_storage(9),  // g_active
+                rw_storage(10), // k_stencil_125_atomic (Stage 40 v4)
             ],
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -132,6 +137,9 @@ impl ImplicitMpmKernel {
         let pipe_floor = mk_pipe("floor_reapply", "molla::implicit_mpm::floor_reapply");
         let pipe_g2p = mk_pipe("g2p", "molla::implicit_mpm::g2p");
         let pipe_bingham = mk_pipe("bingham_advect", "molla::implicit_mpm::bingham_advect");
+        let pipe_reset_125 = mk_pipe("reset_grid_125", "molla::implicit_mpm::reset_grid_125");
+        let pipe_p2g_125 = mk_pipe("p2g_125", "molla::implicit_mpm::p2g_125");
+        let pipe_gs_125 = mk_pipe("gs_sweep_125", "molla::implicit_mpm::gs_sweep_125");
 
         Self {
             device,
@@ -143,6 +151,9 @@ impl ImplicitMpmKernel {
             pipe_floor,
             pipe_g2p,
             pipe_bingham,
+            pipe_reset_125,
+            pipe_p2g_125,
+            pipe_gs_125,
             layout_io,
             layout_uniforms,
         }
@@ -175,6 +186,9 @@ pub struct GpuStepState {
     pub g_mass: wgpu::Buffer,
     pub g_momentum: wgpu::Buffer,
     pub k_stencil: wgpu::Buffer,
+    /// Stage 40 v4 — 125-entry Hessian buffer (allocated lazily; the
+    /// 27-stencil paths never touch it). Sized `g_total * 125 * 4`.
+    pub k_stencil_125: wgpu::Buffer,
     pub v_pred: wgpu::Buffer,
     pub v_grid: wgpu::Buffer,
     pub g_active: wgpu::Buffer,
@@ -220,6 +234,10 @@ impl GpuStepState {
         let g_mass = mk_storage("molla::implicit_mpm g_mass", g_total as u64 * 4);
         let g_momentum = mk_storage("molla::implicit_mpm g_momentum", g_total as u64 * 3 * 4);
         let k_stencil = mk_storage("molla::implicit_mpm k_stencil", g_total as u64 * 27 * 4);
+        let k_stencil_125 = mk_storage(
+            "molla::implicit_mpm k_stencil_125",
+            g_total as u64 * 125 * 4,
+        );
         let v_pred = mk_storage("molla::implicit_mpm v_pred", g_total as u64 * 16);
         let v_grid = mk_storage("molla::implicit_mpm v_grid", g_total as u64 * 16);
         let g_active = mk_storage("molla::implicit_mpm g_active", g_total as u64 * 4);
@@ -257,6 +275,7 @@ impl GpuStepState {
             g_mass,
             g_momentum,
             k_stencil,
+            k_stencil_125,
             v_pred,
             v_grid,
             g_active,
@@ -547,6 +566,185 @@ impl GpuStepState {
         Ok((vel, c))
     }
 
+    /// **Stage 40 v4** — full P2G + predict + GS + floor + G2P pass with
+    /// the **125-point** Newton Hessian. Mirrors [`Self::run_full_step`]
+    /// but routes the assembly through `p2g_125`, the GS sweep through
+    /// `gs_sweep_125`, and reads/writes from `k_stencil_125`. Reads
+    /// back `p_vel` + `p_C` exactly like the 27-pt variant so the host
+    /// applies the same Bingham return mapping.
+    ///
+    /// `color_groups` for this call must have been uploaded via
+    /// [`Self::upload_color_groups`] with the 125-stencil coloring
+    /// ([`crate::compute::implicit_mpm::color_grid_125`]) — the GS
+    /// sweep does not validate the stencil width of the input groups.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_full_step_125(
+        &self,
+        kernel: &ImplicitMpmKernel,
+        particle_count: u32,
+        cfg: &StepUniforms,
+        gs_iters: u32,
+    ) -> Result<(Vec<[f32; 3]>, Vec<f32>)> {
+        let device = kernel.device();
+        let queue = kernel.queue();
+
+        let u = Uniforms {
+            grid_size: self.grid_size,
+            color_n: 0,
+            use_off_diag: u32::from(cfg.use_off_diag),
+            particle_count,
+            dt: cfg.dt,
+            cell_size: cfg.cell_size,
+            inv_cell_size: cfg.inv_cell_size,
+            gravity_y: cfg.gravity_y,
+            floor_y: cfg.floor_y,
+            floor_friction: cfg.floor_friction,
+            mass_p: cfg.mass_p,
+            particle_volume: cfg.particle_volume,
+            viscosity: cfg.viscosity,
+            grid_origin_x: cfg.grid_origin[0],
+            grid_origin_y: cfg.grid_origin[1],
+            grid_origin_z: cfg.grid_origin[2],
+            yield_stress: cfg.yield_stress,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        for (i, ucb) in self.color_uniforms.iter().enumerate() {
+            let mut uc = u;
+            uc.color_n = self.color_lens[i];
+            queue.write_buffer(ucb, 0, bytemuck::bytes_of(&uc));
+        }
+
+        let bg_io = self.make_io_bind_group(kernel, None);
+        let bg_gs_per_color: Vec<wgpu::BindGroup> = (0..self.color_bufs.len())
+            .map(|c| self.make_io_bind_group(kernel, Some(c)))
+            .collect();
+        let bg_u_main = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::implicit_mpm v4 u-main bg"),
+            layout: &kernel.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.uniforms.as_entire_binding(),
+            }],
+        });
+        let bg_u_colors: Vec<wgpu::BindGroup> = self
+            .color_uniforms
+            .iter()
+            .enumerate()
+            .map(|(c, ub)| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("molla::implicit_mpm v4 u-color {c} bg")),
+                    layout: &kernel.layout_uniforms,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: ub.as_entire_binding(),
+                    }],
+                })
+            })
+            .collect();
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::implicit_mpm v4 full-step enc"),
+        });
+        // reset_grid (27-stencil scratch — also clears mass / momentum /
+        // active / v_grid / v_pred) then reset_grid_125 (clears the
+        // 125-entry Hessian buffer only).
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 reset pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_reset);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 reset_125 pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_reset_125);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // p2g_125 — scatters mass/momentum and 125-entry Hessian.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 p2g_125 pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_p2g_125);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = particle_count.div_ceil(WG_PARTICLES).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // predict_grid (unchanged from 27-pt path).
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 predict pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_predict);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // gs_sweep_125 — one dispatch per color per iteration.
+        for _ in 0..gs_iters {
+            for (c, group_len) in self.color_lens.iter().enumerate() {
+                if *group_len == 0 {
+                    continue;
+                }
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::implicit_mpm v4 gs_125 pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&kernel.pipe_gs_125);
+                pass.set_bind_group(0, &bg_gs_per_color[c], &[]);
+                pass.set_bind_group(1, &bg_u_colors[c], &[]);
+                let n = group_len.div_ceil(WG_SIZE).max(1);
+                pass.dispatch_workgroups(n, 1, 1);
+            }
+        }
+        // floor_reapply.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 floor pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_floor);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = self.g_total.div_ceil(WG_SIZE).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        // g2p.
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::implicit_mpm v4 g2p pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&kernel.pipe_g2p);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_u_main, &[]);
+            let n = particle_count.div_ceil(WG_PARTICLES).max(1);
+            pass.dispatch_workgroups(n, 1, 1);
+        }
+        queue.submit(std::iter::once(enc.finish()));
+
+        let vel = readback_vec3_f32(device, queue, &self.p_vel, particle_count as usize)?;
+        let c = readback_flat_f32(device, queue, &self.p_c, particle_count as usize * 9)?;
+        Ok((vel, c))
+    }
+
     /// **Stage 40 v3** — run the full P2G + predict + GS + floor + G2P
     /// chain *plus* the `bingham_advect` pass on the device. Reads back
     /// only `p_pos` and `p_vel` (the host doesn't need `p_C` for state
@@ -797,6 +995,7 @@ impl GpuStepState {
                 wgpu::BindGroupEntry { binding: 7, resource: self.p_vel.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 8, resource: self.p_c.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 9, resource: self.g_active.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: self.k_stencil_125.as_entire_binding() },
             ],
         })
     }
@@ -862,6 +1061,7 @@ impl ImplicitMpmKernel {
         let dummy_pv = mk_dummy("molla::implicit_mpm dummy pv", 16);
         let dummy_pc = mk_dummy("molla::implicit_mpm dummy pc", 16);
         let dummy_active = mk_dummy("molla::implicit_mpm dummy active", g_total * 4);
+        let dummy_k125 = mk_dummy("molla::implicit_mpm dummy k125", g_total * 125 * 4);
 
         let mut color_bufs: Vec<wgpu::Buffer> = Vec::with_capacity(color_groups.len());
         for (c, group) in color_groups.iter().enumerate() {
@@ -936,6 +1136,7 @@ impl ImplicitMpmKernel {
                         wgpu::BindGroupEntry { binding: 7, resource: dummy_pv.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 8, resource: dummy_pc.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 9, resource: dummy_active.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 10, resource: dummy_k125.as_entire_binding() },
                     ],
                 });
                 let bg_u = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
