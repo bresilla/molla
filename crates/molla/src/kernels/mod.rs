@@ -37,6 +37,8 @@ mod fem_cg;
 #[cfg(feature = "gpu")]
 mod fem_elasticity;
 #[cfg(feature = "gpu")]
+mod fem_ns_advect;
+#[cfg(feature = "gpu")]
 mod fem_stokes;
 #[cfg(feature = "gpu")]
 mod fem_step_ops;
@@ -150,6 +152,8 @@ pub use fem::FemGpuKernel;
 pub use fem_cg::{CgGpuResult, FemCgGpuKernel};
 #[cfg(feature = "gpu")]
 pub use fem_elasticity::FemElasticityGpuKernel;
+#[cfg(feature = "gpu")]
+pub use fem_ns_advect::FemNsAdvectKernel;
 #[cfg(feature = "gpu")]
 pub use fem_stokes::{FemStokesGpuKernel, StokesEntry};
 #[cfg(feature = "gpu")]

@@ -147,5 +147,6 @@ pub use stokes::{
 };
 #[cfg(feature = "gpu")]
 pub use stokes_gpu::{
-    assemble_stokes_gpu_only, solve_stokes_gpu, StokesGpuConfig, StokesGpuResult,
+    assemble_stokes_gpu_only, solve_navier_stokes_gpu, solve_stokes_gpu,
+    NavierStokesGpuConfig, NavierStokesGpuResult, StokesGpuConfig, StokesGpuResult,
 };
