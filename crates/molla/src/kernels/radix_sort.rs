@@ -410,3 +410,478 @@ fn rw_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
 // Quiet unused-import warning when only Error is referenced indirectly.
 #[allow(dead_code)]
 fn _touch_error(_: Error) {}
+
+// =====================================================================
+// 64-bit variant — `RadixSortKernel64`.
+// =====================================================================
+//
+// Same multi-pass 8-bit-radix pattern as `RadixSortKernel`, but with
+// 8 passes instead of 4. The 64-bit key is stored as two parallel
+// `u32` arrays (`keys_lo`, `keys_hi`) on the GPU.
+//
+// For segmented sort we use the **prefix-tag** approach: each key is
+// host-XOR'd with `(segment_id << TAG_SHIFT)` in the high word, so
+// sorting in normal 64-bit order keeps segments contiguous AND sorts
+// within each segment. After the sort the tag bits are masked out.
+// This means the user's keys cannot use the top `TAG_BITS` bits if
+// they want segmented sort — documented on the public API.
+
+const TAG_BITS_64: u32 = 16;
+const TAG_SHIFT_64: u32 = 32 - TAG_BITS_64; // shift inside `keys_hi`
+const TAG_MASK_HI_64: u32 = ((1u32 << TAG_BITS_64) - 1) << TAG_SHIFT_64;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms64 {
+    n: u32,
+    shift: u32,
+    num_blocks: u32,
+    use_high: u32,
+}
+
+/// 64-bit-key GPU radix sort dispatcher. Reusable across many sorts;
+/// scratch buffers grow as needed. Stable.
+pub struct RadixSortKernel64 {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+
+    pipeline_count: wgpu::ComputePipeline,
+    pipeline_scan: wgpu::ComputePipeline,
+    pipeline_scatter: wgpu::ComputePipeline,
+
+    layout_data: wgpu::BindGroupLayout,
+    layout_uniforms: wgpu::BindGroupLayout,
+
+    scratch_lo: wgpu::Buffer,
+    scratch_hi: wgpu::Buffer,
+    scratch_values: wgpu::Buffer,
+    block_bins: wgpu::Buffer,
+    /// 8 uniform buffers — one per pass.
+    uniforms: [wgpu::Buffer; 8],
+
+    capacity: usize,
+    bins_capacity: usize,
+}
+
+impl RadixSortKernel64 {
+    /// Build pipelines + initial scratch buffers.
+    pub fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        initial_capacity: usize,
+    ) -> Result<Self> {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::radix_sort_64"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/radix_sort_64.wgsl").into(),
+            ),
+        });
+
+        let layout_data = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::radix_sort_64 data"),
+            entries: &[
+                ro_storage(0),
+                ro_storage(1),
+                ro_storage(2),
+                rw_storage(3),
+                rw_storage(4),
+                rw_storage(5),
+                rw_storage(6),
+            ],
+        });
+        let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::radix_sort_64 uniforms"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::radix_sort_64 layout"),
+            bind_group_layouts: &[&layout_data, &layout_uniforms],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline_count = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("molla::radix_sort_64::count_block_bins"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("count_block_bins"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let pipeline_scan = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("molla::radix_sort_64::scan_global_bins"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("scan_global_bins"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let pipeline_scatter = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("molla::radix_sort_64::scatter"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("scatter"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let cap = initial_capacity.max(BLOCK_SIZE as usize);
+        let scratch_lo = alloc_storage(
+            &device,
+            "molla::radix_sort_64 scratch_lo",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        let scratch_hi = alloc_storage(
+            &device,
+            "molla::radix_sort_64 scratch_hi",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        let scratch_values = alloc_storage(
+            &device,
+            "molla::radix_sort_64 scratch_values",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        let bins_cap = bins_capacity_for(cap);
+        let block_bins = alloc_storage(
+            &device,
+            "molla::radix_sort_64 block_bins",
+            (bins_cap * core::mem::size_of::<u32>()) as u64,
+        );
+
+        let uniforms = std::array::from_fn(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("molla::radix_sort_64 uniforms[i]"),
+                size: core::mem::size_of::<Uniforms64>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+
+        Ok(Self {
+            device,
+            queue,
+            pipeline_count,
+            pipeline_scan,
+            pipeline_scatter,
+            layout_data,
+            layout_uniforms,
+            scratch_lo,
+            scratch_hi,
+            scratch_values,
+            block_bins,
+            uniforms,
+            capacity: cap,
+            bins_capacity: bins_cap,
+        })
+    }
+
+    /// Maximum supported segment count (number of distinct tag values).
+    /// Segmented sort encodes the segment id in the top 16 bits of the
+    /// high word — see the module docs.
+    pub const MAX_SEGMENTS: u32 = 1u32 << TAG_BITS_64;
+
+    fn ensure_capacity(&mut self, n: usize) {
+        if n <= self.capacity {
+            return;
+        }
+        let cap = (n * 2).max(self.capacity * 2).max(BLOCK_SIZE as usize);
+        self.scratch_lo = alloc_storage(
+            &self.device,
+            "molla::radix_sort_64 scratch_lo",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        self.scratch_hi = alloc_storage(
+            &self.device,
+            "molla::radix_sort_64 scratch_hi",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        self.scratch_values = alloc_storage(
+            &self.device,
+            "molla::radix_sort_64 scratch_values",
+            (cap * core::mem::size_of::<u32>()) as u64,
+        );
+        let bins_cap = bins_capacity_for(cap);
+        if bins_cap > self.bins_capacity {
+            self.block_bins = alloc_storage(
+                &self.device,
+                "molla::radix_sort_64 block_bins",
+                (bins_cap * core::mem::size_of::<u32>()) as u64,
+            );
+            self.bins_capacity = bins_cap;
+        }
+        self.capacity = cap;
+    }
+
+    /// Sort `(keys_lo, keys_hi, values)` in place — `n` elements,
+    /// ascending by 64-bit key (`(keys_hi << 32) | keys_lo`). Stable.
+    ///
+    /// `keys_lo`, `keys_hi`, `values` must be `STORAGE | COPY_SRC |
+    /// COPY_DST` u32 buffers of at least `n` u32s each.
+    pub fn sort_pairs_u64(
+        &mut self,
+        keys_lo: &wgpu::Buffer,
+        keys_hi: &wgpu::Buffer,
+        values: &wgpu::Buffer,
+        n: u32,
+    ) -> Result<()> {
+        if n < 2 {
+            return Ok(());
+        }
+        self.ensure_capacity(n as usize);
+        let num_blocks = n.div_ceil(BLOCK_SIZE);
+
+        // Stage the 8 per-pass uniform buffers.
+        // pass 0..3 → low word, shifts 0/8/16/24
+        // pass 4..7 → high word, shifts 0/8/16/24
+        for pass in 0..8usize {
+            let use_high = if pass >= 4 { 1u32 } else { 0u32 };
+            let shift = ((pass as u32) % 4) * 8;
+            let uni = Uniforms64 {
+                n,
+                shift,
+                num_blocks,
+                use_high,
+            };
+            self.queue
+                .write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&uni));
+        }
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::radix_sort_64 encoder"),
+            });
+
+        // 8-pass ping-pong: even pass → caller → scratch, odd pass →
+        // scratch → caller. Ends back in caller buffers.
+        for pass in 0..8usize {
+            let (in_lo, in_hi, in_v, out_lo, out_hi, out_v) = if pass % 2 == 0 {
+                (
+                    keys_lo,
+                    keys_hi,
+                    values,
+                    &self.scratch_lo,
+                    &self.scratch_hi,
+                    &self.scratch_values,
+                )
+            } else {
+                (
+                    &self.scratch_lo,
+                    &self.scratch_hi,
+                    &self.scratch_values,
+                    keys_lo,
+                    keys_hi,
+                    values,
+                )
+            };
+            let bg_data = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("molla::radix_sort_64 data bg"),
+                layout: &self.layout_data,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: in_lo.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: in_hi.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: in_v.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: out_lo.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: out_hi.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: out_v.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: self.block_bins.as_entire_binding(),
+                    },
+                ],
+            });
+            let bg_uniforms = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("molla::radix_sort_64 uniforms bg"),
+                layout: &self.layout_uniforms,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniforms[pass].as_entire_binding(),
+                }],
+            });
+
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::radix_sort_64::count"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&self.pipeline_count);
+                p.set_bind_group(0, &bg_data, &[]);
+                p.set_bind_group(1, &bg_uniforms, &[]);
+                p.dispatch_workgroups(num_blocks, 1, 1);
+            }
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::radix_sort_64::scan"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&self.pipeline_scan);
+                p.set_bind_group(0, &bg_data, &[]);
+                p.set_bind_group(1, &bg_uniforms, &[]);
+                p.dispatch_workgroups(1, 1, 1);
+            }
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("molla::radix_sort_64::scatter"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&self.pipeline_scatter);
+                p.set_bind_group(0, &bg_data, &[]);
+                p.set_bind_group(1, &bg_uniforms, &[]);
+                p.dispatch_workgroups(num_blocks, 1, 1);
+            }
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Segmented sort: sort each segment `segment_offsets[i] ..
+    /// segment_offsets[i+1]` independently, leaving cross-segment
+    /// order unchanged.
+    ///
+    /// Implementation: tag each key's `keys_hi` with the segment id in
+    /// the top 16 bits (`segment_id << 16`), run a single 64-bit
+    /// global sort (so the tag dominates and segments stay grouped),
+    /// then strip the tag.
+    ///
+    /// **Caveat:** keys must NOT use the top 16 bits of `keys_hi` for
+    /// segmented sort. With `n_segments <= 65 536` this is safe; an
+    /// assertion is hoisted. The straight `sort_pairs_u64` has no such
+    /// restriction.
+    pub fn segmented_sort_pairs_u64(
+        &mut self,
+        keys_lo: &wgpu::Buffer,
+        keys_hi: &wgpu::Buffer,
+        values: &wgpu::Buffer,
+        segment_offsets: &wgpu::Buffer,
+        n_segments: u32,
+        n_total: u32,
+    ) -> Result<()> {
+        if n_total < 2 || n_segments == 0 {
+            return Ok(());
+        }
+        if n_segments > Self::MAX_SEGMENTS {
+            return Err(Error::Gpu(format!(
+                "radix_sort_64: n_segments={n_segments} exceeds MAX_SEGMENTS={}",
+                Self::MAX_SEGMENTS
+            )));
+        }
+
+        // Pull the offsets host-side so we can tag keys per-segment.
+        let offsets_host = read_u32(&self.device, &self.queue, segment_offsets, n_segments + 1)?;
+        // Pull keys_hi host-side, tag with segment id, write back.
+        let mut hi_host = read_u32(&self.device, &self.queue, keys_hi, n_total)?;
+        for seg in 0..n_segments as usize {
+            let start = offsets_host[seg] as usize;
+            let end = offsets_host[seg + 1] as usize;
+            let tag = ((seg as u32) << TAG_SHIFT_64) & TAG_MASK_HI_64;
+            for hi in &mut hi_host[start..end] {
+                // Forbid users from passing pre-tagged data — the top
+                // 16 bits must be zero.
+                if *hi & TAG_MASK_HI_64 != 0 {
+                    return Err(Error::Gpu(format!(
+                        "radix_sort_64: keys_hi top {TAG_BITS_64} bits must be zero for segmented sort (at offset {seg})"
+                    )));
+                }
+                *hi |= tag;
+            }
+        }
+        self.queue
+            .write_buffer(keys_hi, 0, bytemuck::cast_slice(&hi_host));
+
+        // Run the regular 64-bit sort.
+        self.sort_pairs_u64(keys_lo, keys_hi, values, n_total)?;
+
+        // Strip the tag from keys_hi.
+        let mut hi_host = read_u32(&self.device, &self.queue, keys_hi, n_total)?;
+        for hi in &mut hi_host {
+            *hi &= !TAG_MASK_HI_64;
+        }
+        self.queue
+            .write_buffer(keys_hi, 0, bytemuck::cast_slice(&hi_host));
+
+        Ok(())
+    }
+}
+
+/// Convenience free function — builds a transient kernel + runs one
+/// 64-bit sort.
+pub fn radix_sort_pairs_u64(
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    keys_lo: &wgpu::Buffer,
+    keys_hi: &wgpu::Buffer,
+    values: &wgpu::Buffer,
+    n: u32,
+) -> Result<()> {
+    let mut k = RadixSortKernel64::new(device, queue, n as usize)?;
+    k.sort_pairs_u64(keys_lo, keys_hi, values, n)
+}
+
+/// Read `n` u32s from `buf` back to the host. Sync — waits on the GPU.
+fn read_u32(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buf: &wgpu::Buffer,
+    n: u32,
+) -> Result<Vec<u32>> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let bytes = (n as u64) * core::mem::size_of::<u32>() as u64;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("molla::radix_sort_64 read_u32 staging"),
+        size: bytes,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("molla::radix_sort_64 read_u32 enc"),
+    });
+    encoder.copy_buffer_to_buffer(buf, 0, &staging, 0, bytes);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| Error::Gpu(format!("radix_sort_64 poll: {e:?}")))?;
+    rx.recv()
+        .map_err(|e| Error::Gpu(format!("radix_sort_64 recv: {e}")))?
+        .map_err(|e| Error::Gpu(format!("radix_sort_64 map: {e:?}")))?;
+    let mapped = slice.get_mapped_range();
+    let out = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
+    drop(mapped);
+    staging.unmap();
+    Ok(out)
+}

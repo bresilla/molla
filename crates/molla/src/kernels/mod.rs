@@ -69,6 +69,8 @@ mod radix_sort;
 #[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
+mod scan;
+#[cfg(feature = "gpu")]
 mod robust_loss;
 #[cfg(feature = "gpu")]
 mod rnea;
@@ -160,9 +162,13 @@ pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]
 pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu};
 #[cfg(feature = "gpu")]
-pub use radix_sort::{radix_sort_pairs, RadixSortKernel};
+pub use radix_sort::{
+    radix_sort_pairs, radix_sort_pairs_u64, RadixSortKernel, RadixSortKernel64,
+};
 #[cfg(feature = "gpu")]
 pub use raycast::RaycastKernel;
+#[cfg(feature = "gpu")]
+pub use scan::ScanKernel;
 #[cfg(feature = "gpu")]
 pub use robust_loss::{LossPair, RobustLossKernel};
 #[cfg(feature = "gpu")]
