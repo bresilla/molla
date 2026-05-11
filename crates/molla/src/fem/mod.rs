@@ -57,6 +57,7 @@ pub mod assembly;
 pub mod bc;
 pub mod dg_element;
 pub mod dg_time_integrator;
+pub mod eddy_current;
 pub mod element;
 #[cfg(feature = "gpu")]
 pub mod elasticity_gpu;
@@ -118,6 +119,9 @@ pub use element::{
     compute_element_supg_convection, compute_element_wave_stiffness,
 };
 pub use function_space::{compute_edges, dg_ndof_per_cell, FunctionSpace};
+pub use eddy_current::{
+    solve_eddy_current_steady, EddyCurrentConfig, EddyCurrentResult,
+};
 pub use magneto::{
     compute_curl_per_cell, integrate_field_along_edges, project_field_on_edges,
     solve_magnetostatics_steady, MagnetostaticsResult,
