@@ -309,6 +309,12 @@ name = "bench_fft"
 harness = false
 required-features = ["gpu"]
 
+# Stage 39F — full-GPU SpGEMM vs host-symbolic baseline.
+[[bench]]
+name = "bench_spgemm_gpu"
+harness = false
+required-features = ["gpu"]
+
 # ---------------------------------------------------------------------
 # Paired CPU-vs-GPU benches — both backends in one criterion group so
 # the reports print side-by-side for easy comparison. The matched-N
