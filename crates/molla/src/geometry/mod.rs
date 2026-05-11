@@ -26,6 +26,7 @@ pub mod contact_reduction;
 mod decimate;
 mod epa;
 mod gjk;
+pub mod graph_coloring;
 mod hull;
 pub mod hydroelastic;
 mod marching_cubes;
@@ -59,6 +60,8 @@ pub use pipeline::{collide, CollisionPipeline, STATIC_BODY};
 pub use bvh::{Bvh, BvhNode as BroadBvhNode};
 pub use epa::{epa, EpaContact};
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
+// ── Stage 38d: shared constraint-graph coloring utility ────────────
+pub use graph_coloring::{color_constraints, greedy_color, group_by_color, mcs_color};
 pub use mesh_bvh::{BvhNode as MeshBvhNode, MeshBvh};
 // ── Stage 20.4: per-tet AABB for tet-vs-tet collision ──────────────
 pub use tet_bvh::{
