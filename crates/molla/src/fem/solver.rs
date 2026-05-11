@@ -311,6 +311,247 @@ pub fn solve_wave_transient(
     }
 }
 
+// ─── GPU wave transient (Stage 36.5 Slice E) ─────────────────────────
+
+/// Cached state for a [`solve_wave_transient`] simulation that runs
+/// the implicit-Newmark inner CG on the GPU. Build once per scene
+/// (fixes mesh, BCs, β, γ, Δt); call [`Self::step`] every frame.
+///
+/// **Restriction (Slice E):** every Dirichlet BC must have `value =
+/// 0.0`. Non-zero Dirichlet would require a per-step column-elimination
+/// shift that this v1 doesn't compute. This matches the WarpWave
+/// scene + every other no-slip wave demo. A follow-up Slice F can
+/// support nonzero Dirichlet by precomputing the constant shift.
+#[cfg(feature = "gpu")]
+pub struct WaveStepperGpu {
+    /// BC-reduced `A = M / (β·Δt²) + K` uploaded as GPU CSR.
+    a_gpu: FemGpuData,
+    /// CPU mass matrix — used to compute the per-step RHS
+    /// `(1 / (β·Δt²)) · M · u_pred`. Kept on CPU because this matvec
+    /// is small (one per timestep, not one per CG iter) and the
+    /// resulting `b` has to land on the GPU anyway.
+    m_cpu: BsrMatrix,
+    /// Linear-system size.
+    n: usize,
+    beta: Real,
+    gamma: Real,
+    dt: Real,
+    bdt2_inv: Real,
+    half_minus_beta: Real,
+    /// Flat list of every pinned (DoF, value=0) for fast per-step
+    /// row-overwrite on `b`. We store the vector even though every
+    /// `value` is `0.0` so a follow-up nonzero-Dirichlet variant
+    /// only needs to plug in the column-shift precomputation.
+    pinned_dofs: Vec<usize>,
+    cg_kernel: FemCgGpuKernel,
+    mv_kernel: FemGpuKernel,
+}
+
+#[cfg(feature = "gpu")]
+impl WaveStepperGpu {
+    /// Build the stepper. `m`, `k`, `dt`, `beta`, `gamma`, `bcs` are
+    /// fixed for the lifetime of the stepper — if any of them change,
+    /// build a new one. Returns the wave-equation analogue of
+    /// [`solve_steady_state_gpu_resident`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        engine: &Engine,
+        mesh: &super::FemMesh,
+        m: &BsrMatrix,
+        k: &BsrMatrix,
+        dt: Real,
+        beta: Real,
+        gamma: Real,
+        bcs: &[BoundaryCondition],
+    ) -> Result<Self> {
+        debug_assert_eq!(m.b, 1, "WaveStepperGpu: M must be B=1");
+        debug_assert_eq!(k.b, 1, "WaveStepperGpu: K must be B=1");
+        debug_assert_eq!(m.nrows(), k.nrows(), "WaveStepperGpu: M, K row mismatch");
+        debug_assert!(beta > 0.0, "WaveStepperGpu: β must be > 0");
+        debug_assert!(dt > 0.0, "WaveStepperGpu: Δt must be > 0");
+
+        // Slice-E restriction: every Dirichlet must pin to zero.
+        for bc in bcs {
+            match bc {
+                BoundaryCondition::Dirichlet { value, .. } if *value != 0.0 => {
+                    return Err(Error::Build(format!(
+                        "WaveStepperGpu: nonzero Dirichlet (value = {value}) is not \
+                         supported in Slice E — pin to 0 or use the CPU path"
+                    )));
+                }
+                BoundaryCondition::DirichletVector { values, .. }
+                    if values.iter().any(|v| *v != 0.0) =>
+                {
+                    return Err(Error::Build(
+                        "WaveStepperGpu: nonzero DirichletVector is not supported in Slice E"
+                            .into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let n = m.nrows();
+        let bdt2_inv = 1.0 / (beta * dt * dt);
+        let half_minus_beta = 0.5 - beta;
+
+        // Build A = M / (β·Δt²) + K, then BC-reduce it (with a dummy
+        // zero RHS — the row pin sets `1` on the diagonal and zeros
+        // the off-diagonals; the column elimination zeros K[:, r] but
+        // shifts no RHS because every value is zero).
+        let mut a_red = add_csr_scaled(m, bdt2_inv, k, 1.0);
+        let mut dummy_rhs = vec![0.0; n];
+        super::bc::apply_dirichlet(&mut a_red, &mut dummy_rhs, bcs);
+
+        let device = engine.device().ok_or_else(|| {
+            Error::Gpu("WaveStepperGpu::new: engine has no GPU device".into())
+        })?;
+        let queue = engine.queue().ok_or_else(|| {
+            Error::Gpu("WaveStepperGpu::new: engine has no GPU queue".into())
+        })?;
+        let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
+
+        // Collect every pinned DoF for per-step row-overwrite.
+        let mut pinned_dofs = Vec::new();
+        for bc in bcs {
+            match bc {
+                BoundaryCondition::Dirichlet { vertex, .. } => {
+                    pinned_dofs.push(*vertex as usize);
+                }
+                BoundaryCondition::DirichletVector { vertex, values } => {
+                    let base = *vertex as usize * values.len();
+                    for c in 0..values.len() {
+                        pinned_dofs.push(base + c);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let cg_kernel = FemCgGpuKernel::new(device.clone(), queue.clone());
+        let mv_kernel = FemGpuKernel::new(device.clone(), queue.clone());
+
+        Ok(Self {
+            a_gpu,
+            m_cpu: m.clone(),
+            n,
+            beta,
+            gamma,
+            dt,
+            bdt2_inv,
+            half_minus_beta,
+            pinned_dofs,
+            cg_kernel,
+            mv_kernel,
+        })
+    }
+
+    /// Suppress unused-field warnings — `beta` and `half_minus_beta`
+    /// are stored for parity with the CPU function's documentation
+    /// (caller can introspect; the per-step values are precomputed
+    /// into `bdt2_inv` and the predictor coefficient).
+    #[allow(dead_code)]
+    fn _keep_warnings_quiet(&self) -> (Real, Real) {
+        (self.beta, self.half_minus_beta)
+    }
+
+    /// One implicit Newmark-β step on the GPU CG path. CPU does
+    /// predictor + per-step RHS + corrector; GPU does the implicit
+    /// solve via the cached-bind-group resident CG.
+    pub fn step(
+        &self,
+        u_old: &[Real],
+        v_old: &[Real],
+        a_old: &[Real],
+    ) -> Result<WaveStepResult> {
+        debug_assert_eq!(u_old.len(), self.n);
+        debug_assert_eq!(v_old.len(), self.n);
+        debug_assert_eq!(a_old.len(), self.n);
+
+        // Predictor — `u_pred = u_old + Δt·v_old + (½ − β)·Δt²·a_old`.
+        let mut u_pred = vec![0.0; self.n];
+        for i in 0..self.n {
+            u_pred[i] =
+                u_old[i] + self.dt * v_old[i] + self.half_minus_beta * self.dt * self.dt * a_old[i];
+        }
+
+        // RHS b = (M / (β·Δt²)) · u_pred. Compute on CPU then upload
+        // (one per-step transfer of `n` f32 values, dwarfed by the CG
+        // savings).
+        let m_upred = matvec(&self.m_cpu, &u_pred);
+        let mut b: Vec<Real> = m_upred.iter().map(|v| self.bdt2_inv * v).collect();
+        // Pinned rows of `b` get the prescribed value (= 0 in Slice E).
+        for &dof in &self.pinned_dofs {
+            b[dof] = 0.0;
+        }
+
+        // Initial guess: u_old (BC entries already zero from previous
+        // corrector pass; if this is the first step the caller's
+        // initial state must already satisfy the BCs).
+        let device = self.cg_kernel.device();
+        let queue = self.cg_kernel.queue();
+        let bytes = (self.n.max(4) * 4) as u64;
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+
+        let b_f32: Vec<f32> = b.iter().map(|&v| v as f32).collect();
+        let x_init_f32: Vec<f32> = u_old.iter().map(|&v| v as f32).collect();
+
+        let b_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem::wave_gpu::b"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&b_buf, 0, bytemuck::cast_slice(&b_f32));
+        let x_init_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::fem::wave_gpu::x_init"),
+            size: bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&x_init_buf, 0, bytemuck::cast_slice(&x_init_f32));
+
+        let mv_kernel = &self.mv_kernel;
+        let a_gpu = &self.a_gpu;
+        let cg_result = self.cg_kernel.cg_solve_resident(
+            self.n as u32,
+            &b_buf,
+            Some(&x_init_buf),
+            DEFAULT_TOL as f32,
+            DEFAULT_MAX_ITERS,
+            |x_buf, y_buf| mv_kernel.matvec(a_gpu, x_buf, y_buf),
+        )?;
+
+        let u_new_f32 = self.cg_kernel.read_buffer(&cg_result.x, self.n as u32)?;
+        let u_new: Vec<Real> = u_new_f32.into_iter().map(|v| v as Real).collect();
+
+        // Corrector — same as CPU path.
+        let mut a_new = vec![0.0; self.n];
+        let mut v_new = vec![0.0; self.n];
+        for i in 0..self.n {
+            a_new[i] = (u_new[i] - u_pred[i]) * self.bdt2_inv;
+            v_new[i] = v_old[i] + self.dt * ((1.0 - self.gamma) * a_old[i] + self.gamma * a_new[i]);
+        }
+        // Zero v, a on every Dirichlet DoF (same reasoning as the CPU
+        // path — non-zero v_old/a_old on a pinned DoF would otherwise
+        // leak motion into the boundary across steps).
+        for &dof in &self.pinned_dofs {
+            v_new[dof] = 0.0;
+            a_new[dof] = 0.0;
+        }
+
+        Ok(WaveStepResult {
+            u_new,
+            v_new,
+            a_new,
+            residual: cg_result.residual as Real,
+            iters: cg_result.iters,
+        })
+    }
+}
+
 /// Stage 36.5 — GPU port of [`solve_steady_state`].
 ///
 /// Wraps the [`crate::kernels::FemGpuKernel::matvec_blocking`] entry
