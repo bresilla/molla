@@ -72,6 +72,8 @@ pub mod quadrature;
 pub mod russell;
 pub mod solver;
 pub mod stokes;
+#[cfg(feature = "gpu")]
+pub mod stokes_gpu;
 
 pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_adjoint_with};
 pub use amr_mesh::{
@@ -137,9 +139,13 @@ pub use stokes::{
     apply_stokes_velocity_bcs, assemble_convection_block,
     assemble_convection_block_with_supg, assemble_div_block,
     assemble_velocity_block, assemble_velocity_mass, build_cavity_bcs_2d,
-    compute_element_mass_p2_vector, compute_element_stokes_div_block,
-    compute_element_stokes_velocity_block, solve_navier_stokes_step,
-    solve_navier_stokes_transient, solve_stokes_steady,
+    collect_velocity_pins_pub, compute_element_mass_p2_vector,
+    compute_element_stokes_div_block, compute_element_stokes_velocity_block,
+    solve_navier_stokes_step, solve_navier_stokes_transient, solve_stokes_steady,
     solve_stokes_with_matrices, MixedTaylorHood, NavierStokesConfig, StokesBc,
     StokesResult, StokesSimpleConfig,
+};
+#[cfg(feature = "gpu")]
+pub use stokes_gpu::{
+    assemble_stokes_gpu_only, solve_stokes_gpu, StokesGpuConfig, StokesGpuResult,
 };

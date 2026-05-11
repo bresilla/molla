@@ -188,6 +188,11 @@ test-fem-gpu:
 test-fem-elasticity-gpu:
 	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test fem_elasticity_gpu -- --ignored --nocapture
 
+# Stage 41 v2 — GPU Taylor-Hood Stokes parity vs CPU on the 8×8 lid-
+# driven cavity. `--ignored` (real wgpu adapter needed).
+test-fem-stokes-gpu:
+	@$(RUN_ENV) $(CARGO) test --release -p molla --features gpu --test fem_stokes_gpu -- --ignored --nocapture
+
 test-oracle:
 	@$(RUN_ENV) $(CARGO) test -p molla --test oracle -- --ignored
 

@@ -37,6 +37,8 @@ mod fem_cg;
 #[cfg(feature = "gpu")]
 mod fem_elasticity;
 #[cfg(feature = "gpu")]
+mod fem_stokes;
+#[cfg(feature = "gpu")]
 mod fem_step_ops;
 // Adjoint dispatcher is feature-gated separately — it does not (yet)
 // require GPU and is needed by the autograd CPU path + viewer
@@ -148,6 +150,8 @@ pub use fem::FemGpuKernel;
 pub use fem_cg::{CgGpuResult, FemCgGpuKernel};
 #[cfg(feature = "gpu")]
 pub use fem_elasticity::FemElasticityGpuKernel;
+#[cfg(feature = "gpu")]
+pub use fem_stokes::{FemStokesGpuKernel, StokesEntry};
 #[cfg(feature = "gpu")]
 pub use fem_step_ops::{TransientStepOpsKernel, WaveStepOpsKernel};
 pub use featherstone_adjoint::{

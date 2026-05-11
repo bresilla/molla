@@ -932,6 +932,15 @@ fn solve_inner_cg(
 }
 
 /// Collect (DoF, value) pairs from a list of [`StokesBc`].
+/// Re-export of the internal [`collect_velocity_pins`] helper so the
+/// GPU dispatcher (`crates/molla/src/fem/stokes_gpu.rs`) can build the
+/// same `(DoF, value)` pin list as the CPU solver. Kept as a separate
+/// `pub` symbol so the internal name stays free for refactors.
+#[must_use]
+pub fn collect_velocity_pins_pub(bcs: &[StokesBc], dim: usize) -> Vec<(usize, Real)> {
+    collect_velocity_pins(bcs, dim)
+}
+
 fn collect_velocity_pins(bcs: &[StokesBc], dim: usize) -> Vec<(usize, Real)> {
     let mut pins = Vec::new();
     for bc in bcs {
