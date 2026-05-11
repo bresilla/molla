@@ -94,7 +94,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::Result;
+use crate::core::{Error, Result};
+use crate::math::iterative::{cg_solve, CgResult};
 use crate::math::sparse::BsrMatrix;
 use crate::math::{Real, Vec3};
 
@@ -241,12 +242,25 @@ pub struct AmrMesh {
     pub refinement_levels: Vec<u8>,
 
     /// Per-cell "has been split" marker. A cell is a *leaf* iff
-    /// `!is_refined[idx]`.
+    /// `!is_refined[idx] && !is_removed[idx]`.
     is_refined: Vec<bool>,
 
-    /// One [`RefinedCell`] per non-leaf cell. Stored in refinement
-    /// order (so `refined_cells[k].parent`'s `is_refined` was set by
-    /// step `k`).
+    /// Per-cell "has been coarsened away" marker. v4 introduces
+    /// coarsening; when a parent cell is coarsened, all of its children
+    /// become *removed* — they remain in the flat pool for index
+    /// stability but are skipped by every leaf walk
+    /// (`flatten`, `compute_hanging_nodes`, `propagate_refinement`,
+    /// `compute_dg_amr_faces`, …). Removed cells are never refined or
+    /// flattened. The flag is monotone — a removed cell is never
+    /// re-activated; if a coarsened parent is later re-refined it
+    /// receives *fresh* child indices appended to the pool.
+    is_removed: Vec<bool>,
+
+    /// One [`RefinedCell`] per non-leaf, non-removed cell. Stored in
+    /// refinement order (so `refined_cells[k].parent`'s `is_refined`
+    /// was set by step `k`). v4 coarsening **removes** entries from
+    /// this list — callers iterating `refined_cells` see only currently
+    /// active refinements.
     pub refined_cells: Vec<RefinedCell>,
 
     /// Edge-midpoint cache — keyed on the *sorted* endpoint pair
@@ -277,6 +291,7 @@ impl AmrMesh {
             vertices,
             refinement_levels: vec![0; n_cells],
             is_refined: vec![false; n_cells],
+            is_removed: vec![false; n_cells],
             refined_cells: Vec::new(),
             midpoint_cache: HashMap::new(),
             hanging_nodes: Vec::new(),
@@ -307,16 +322,28 @@ impl AmrMesh {
         &self.vertices
     }
 
-    /// Number of *leaf* cells — those not yet refined.
+    /// Number of *leaf* cells — those not yet refined and not removed
+    /// by coarsening.
     #[must_use]
     pub fn leaf_count(&self) -> usize {
-        self.is_refined.iter().filter(|r| !**r).count()
+        (0..self.cells.len())
+            .filter(|&i| !self.is_refined[i] && !self.is_removed[i])
+            .count()
     }
 
-    /// Whether cell `idx` is a leaf (has not been refined).
+    /// Whether cell `idx` is a *leaf* — not refined and not removed by
+    /// coarsening.
     #[must_use]
     pub fn is_leaf(&self, idx: usize) -> bool {
-        !self.is_refined[idx]
+        !self.is_refined[idx] && !self.is_removed[idx]
+    }
+
+    /// Whether cell `idx` has been *removed* (coarsened away) — kept in
+    /// the flat pool for index stability but invisible to every leaf
+    /// walk.
+    #[must_use]
+    pub fn is_removed_cell(&self, idx: usize) -> bool {
+        self.is_removed[idx]
     }
 
     /// Get-or-insert the midpoint of edge `(a, b)`.
@@ -334,7 +361,8 @@ impl AmrMesh {
         id
     }
 
-    /// Split a single cell. Panics if `cell_idx` is already refined.
+    /// Split a single cell. Panics if `cell_idx` is already refined or
+    /// has been removed by a prior coarsening.
     ///
     /// Triangle → 4 sub-triangles via regular (red) refinement.
     /// Tetrahedron → 8 sub-tetrahedra via Bey's red refinement.
@@ -342,6 +370,10 @@ impl AmrMesh {
         assert!(
             !self.is_refined[cell_idx],
             "amr_mesh: cell {cell_idx} is already refined"
+        );
+        assert!(
+            !self.is_removed[cell_idx],
+            "amr_mesh: cell {cell_idx} has been removed by coarsening"
         );
         let parent_level = self.refinement_levels[cell_idx];
         let child_level = parent_level + 1;
@@ -369,9 +401,9 @@ impl AmrMesh {
     pub fn refine_uniform(&mut self) {
         // Snapshot the current leaf indices — we mutate `cells` /
         // `is_refined` inside the loop, so we must not iterate them
-        // directly.
+        // directly. Skip removed (coarsened-away) cells.
         let leaves: Vec<usize> = (0..self.cells.len())
-            .filter(|&i| !self.is_refined[i])
+            .filter(|&i| !self.is_refined[i] && !self.is_removed[i])
             .collect();
         for idx in leaves {
             self.refine_cell(idx);
@@ -390,7 +422,7 @@ impl AmrMesh {
     /// neither parent endpoint of `m` is itself hanging.
     pub fn refine_where<C: RefinementCriterion>(&mut self, criterion: C) {
         let to_refine: Vec<usize> = (0..self.cells.len())
-            .filter(|&i| !self.is_refined[i])
+            .filter(|&i| !self.is_refined[i] && !self.is_removed[i])
             .filter(|&i| criterion.should_refine(&self.cells[i], &self.vertices))
             .collect();
         for idx in to_refine {
@@ -398,6 +430,233 @@ impl AmrMesh {
         }
         self.propagate_refinement();
         self.compute_hanging_nodes();
+    }
+
+    /// Stage 45 v4 — **coarsen** (un-refine) a single parent cell: mark
+    /// each of its `4` (tri) or `8` (tet) children as removed and
+    /// restore the parent itself to leaf status.
+    ///
+    /// The operation only succeeds if every precondition holds:
+    /// - The parent has actually been refined (`is_refined[parent_idx]`
+    ///   is true and a `RefinedCell` record exists).
+    /// - All of the parent's children are themselves leaves — none has
+    ///   been further refined. (Coarsening a sub-tree first requires
+    ///   coarsening its deepest leaves; v4 does not recurse.)
+    /// - The midpoints that would be orphaned do not currently anchor
+    ///   any hanging-node constraint that a neighbouring leaf still
+    ///   needs. (After coarsening, a midpoint becomes orphaned iff no
+    ///   other still-refined parent uses it on one of its edges.) The
+    ///   2:1-balance invariant after the coarsening must continue to
+    ///   hold — i.e. no leaf edge ends up with split depth `> 1`.
+    ///
+    /// On success, the parent's `is_refined` flag flips back to `false`
+    /// (returning it to leaf status), the children's `is_removed`
+    /// flags flip to `true`, the `RefinedCell` entry is dropped, and
+    /// the midpoint cache is rebuilt to reflect the new refined set.
+    /// Hanging-node records are *not* recomputed — call
+    /// [`Self::compute_hanging_nodes`] (or use the batched
+    /// [`Self::coarsen_where`] wrapper, which does so for you).
+    ///
+    /// On failure, the mesh state is left **unchanged** — no partial
+    /// coarsening is applied. Failures return `Error::Fem(_)`.
+    pub fn coarsen_cell(&mut self, parent_idx: usize) -> Result<()> {
+        if parent_idx >= self.cells.len() {
+            return Err(Error::Fem(format!(
+                "coarsen_cell: parent index {parent_idx} out of bounds (cell count {})",
+                self.cells.len()
+            )));
+        }
+        if self.is_removed[parent_idx] {
+            return Err(Error::Fem(format!(
+                "coarsen_cell: parent cell {parent_idx} has already been removed"
+            )));
+        }
+        if !self.is_refined[parent_idx] {
+            return Err(Error::Fem(format!(
+                "coarsen_cell: parent cell {parent_idx} is a leaf, nothing to coarsen"
+            )));
+        }
+        // Locate the matching RefinedCell record.
+        let rec_idx = self
+            .refined_cells
+            .iter()
+            .position(|r| r.parent as usize == parent_idx)
+            .ok_or_else(|| {
+                Error::Fem(format!(
+                    "coarsen_cell: no RefinedCell record for parent {parent_idx} \
+                     (mesh state is internally inconsistent)"
+                ))
+            })?;
+        let record = self.refined_cells[rec_idx];
+
+        // All children must be leaves themselves — no recursive
+        // refinement.
+        for &c in record.children.as_slice() {
+            let ci = c as usize;
+            if self.is_refined[ci] {
+                return Err(Error::Fem(format!(
+                    "coarsen_cell: child cell {ci} of parent {parent_idx} \
+                     is itself refined — coarsen the sub-tree first"
+                )));
+            }
+            if self.is_removed[ci] {
+                return Err(Error::Fem(format!(
+                    "coarsen_cell: child cell {ci} of parent {parent_idx} \
+                     is already marked removed — mesh state is internally inconsistent"
+                )));
+            }
+        }
+
+        // Tentatively apply the coarsening, then validate post-conditions
+        // (2:1 balance, hanging-node midpoint orphaning). On any
+        // violation we roll back.
+        for &c in record.children.as_slice() {
+            self.is_removed[c as usize] = true;
+        }
+        self.is_refined[parent_idx] = false;
+        self.refined_cells.remove(rec_idx);
+
+        // Rebuild the midpoint cache from the *remaining* refined cells
+        // so `edge_split_depth` reflects the post-coarsening state.
+        self.rebuild_midpoint_cache();
+
+        // 2:1 balance check: every remaining leaf edge must have split
+        // depth ≤ 1. If the coarsening exposed a deeper neighbour
+        // (e.g. parent_idx is now a level-L leaf adjacent to a
+        // level-L+2 sub-cell), roll back.
+        let parent_cell = self.cells[parent_idx];
+        for (a, b) in leaf_edges(&parent_cell) {
+            if self.edge_split_depth(a, b) > 1 {
+                // Roll back.
+                for &c in record.children.as_slice() {
+                    self.is_removed[c as usize] = false;
+                }
+                self.is_refined[parent_idx] = true;
+                self.refined_cells.insert(rec_idx, record);
+                self.rebuild_midpoint_cache();
+                return Err(Error::Fem(format!(
+                    "coarsen_cell: would violate 2:1 balance on edge ({a}, {b}) of \
+                     parent {parent_idx} — split depth would be > 1"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stage 45 v4 — batched coarsening. Coarsen every refined cell
+    /// **all of whose children** satisfy `predicate`. Cells whose
+    /// children fail the predicate (or whose coarsening would violate
+    /// any precondition of [`Self::coarsen_cell`]) are silently skipped.
+    ///
+    /// After the batch is applied, [`Self::propagate_coarsening`] runs
+    /// to restore 2:1 balance (refining cells whose coarsening would
+    /// have created a level-2 gap), and the hanging-node cache is
+    /// refreshed.
+    ///
+    /// Returns the number of cells actually coarsened.
+    pub fn coarsen_where<F>(&mut self, predicate: F) -> usize
+    where
+        F: Fn(&FemCell) -> bool,
+    {
+        // Snapshot the refined-cell list — we mutate it in the loop.
+        let candidates: Vec<u32> = self
+            .refined_cells
+            .iter()
+            .filter(|rec| {
+                rec.children
+                    .as_slice()
+                    .iter()
+                    .all(|&c| predicate(&self.cells[c as usize]))
+            })
+            .map(|rec| rec.parent)
+            .collect();
+
+        let mut coarsened = 0usize;
+        for parent in candidates {
+            if self.coarsen_cell(parent as usize).is_ok() {
+                coarsened += 1;
+            }
+        }
+        self.propagate_coarsening();
+        self.compute_hanging_nodes();
+        coarsened
+    }
+
+    /// Stage 45 v4 — counterpart of [`Self::propagate_refinement`] for
+    /// coarsening. Walks the current leaf set; if any leaf has an edge
+    /// of split depth `> 1` (i.e. the coarsening exposed a finer
+    /// neighbour two levels deeper), refine that leaf once to restore
+    /// 2:1 balance. Iterates until balance is restored.
+    ///
+    /// This *cannot loop forever*: every iteration strictly refines at
+    /// least one offending leaf, increasing the global cell count, so
+    /// the bounded number of cells in the mesh terminates the loop.
+    pub fn propagate_coarsening(&mut self) {
+        // The 2:1-restoration semantics is identical to
+        // `propagate_refinement` (refine any leaf adjacent to a
+        // depth-2 edge), so we can simply call into it.
+        self.propagate_refinement();
+    }
+
+    /// Rebuild the midpoint cache from the currently-active refinement
+    /// records. Useful after coarsening, which can render some cached
+    /// midpoints stale (no longer referenced by any refined parent).
+    ///
+    /// The cache is populated by walking each [`RefinedCell`] record's
+    /// parent edges (the parent's own `FemCell::verts`) and looking up
+    /// the midpoint as the vertex that appears in two non-corner
+    /// positions in the children's vertex lists.
+    fn rebuild_midpoint_cache(&mut self) {
+        let mut cache: HashMap<(u32, u32), u32> = HashMap::new();
+        // For each active refined cell, the children carry midpoint
+        // vertex ids. The simplest reconstruction: walk the children
+        // and, for every pair of vertices in a child cell, check
+        // whether the child's vertex coincides with the geometric
+        // midpoint of a parent edge. The parent edges are the
+        // unordered vertex pairs from `cells[parent].verts()`.
+        for rec in &self.refined_cells {
+            let parent = self.cells[rec.parent as usize];
+            let parent_verts = parent.verts();
+            // Collect unique vertex ids from the children — these are
+            // the candidate midpoints.
+            let mut child_verts: HashSet<u32> = HashSet::new();
+            for &c in rec.children.as_slice() {
+                for &v in self.cells[c as usize].verts() {
+                    child_verts.insert(v);
+                }
+            }
+            // For each pair of parent corners, find the midpoint vertex
+            // by geometric coincidence.
+            let n = parent_verts.len();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    // Tri parent: every (i, j) pair is an edge.
+                    // Tet parent: same — all 6 (i, j) pairs with i < j
+                    // are edges of the tet.
+                    let a = parent_verts[i];
+                    let b = parent_verts[j];
+                    let pa = self.vertices[a as usize];
+                    let pb = self.vertices[b as usize];
+                    let mid = (pa + pb) * 0.5;
+                    // Find the child vertex equal to `mid` (allowing a
+                    // tiny floating tolerance).
+                    for &cv in &child_verts {
+                        // Skip the parent corners themselves.
+                        if cv == a || cv == b {
+                            continue;
+                        }
+                        let pv = self.vertices[cv as usize];
+                        if (pv - mid).length() < 1.0e-12 {
+                            let key = if a < b { (a, b) } else { (b, a) };
+                            cache.insert(key, cv);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        self.midpoint_cache = cache;
     }
 
     /// Build a [`FemMesh`] containing every leaf cell + the union of
@@ -425,7 +684,7 @@ impl AmrMesh {
         let mut cells: Vec<FemCell> = Vec::new();
 
         for (idx, cell) in self.cells.iter().enumerate() {
-            if self.is_refined[idx] {
+            if self.is_refined[idx] || self.is_removed[idx] {
                 continue;
             }
             let verts = cell.verts();
@@ -484,7 +743,7 @@ impl AmrMesh {
         let mut result: Vec<HangingNode> = Vec::new();
 
         for (idx, cell) in self.cells.iter().enumerate() {
-            if self.is_refined[idx] {
+            if self.is_refined[idx] || self.is_removed[idx] {
                 continue;
             }
             for (a, b) in leaf_edges(cell) {
@@ -523,7 +782,7 @@ impl AmrMesh {
         loop {
             let mut to_refine: Vec<usize> = Vec::new();
             for (idx, cell) in self.cells.iter().enumerate() {
-                if self.is_refined[idx] {
+                if self.is_refined[idx] || self.is_removed[idx] {
                     continue;
                 }
                 for (a, b) in leaf_edges(cell) {
@@ -541,7 +800,7 @@ impl AmrMesh {
                 // violate; the `is_refined` check inside `refine_cell`
                 // would panic on the second attempt, so we filter
                 // explicitly.
-                if !self.is_refined[idx] {
+                if !self.is_refined[idx] && !self.is_removed[idx] {
                     self.refine_cell(idx);
                 }
             }
@@ -899,7 +1158,7 @@ impl AmrMesh {
         // present, the face is split 1→4 (4 sub-triangles meeting at
         // the three midpoints + the central inverted tri).
         for (idx, cell) in self.cells.iter().enumerate() {
-            if self.is_refined[idx] {
+            if self.is_refined[idx] || self.is_removed[idx] {
                 continue;
             }
             match cell {
@@ -1232,6 +1491,71 @@ impl AmrMesh {
         u
     }
 
+    /// Stage 45 v4 — **Krylov restart after re-mesh**. Solve the linear
+    /// system `K_new · x = f_new` using a **warm-start** initial guess
+    /// derived from the previous mesh's solution interpolated onto the
+    /// new mesh (typically the output of [`Self::transfer_state`]).
+    ///
+    /// The solver is plain Conjugate Gradient (`cg_solve`); on SPD
+    /// systems (e.g. Poisson with Dirichlet BCs already baked into
+    /// `K_new` and `f_new`) CG with a warm start converges in fewer
+    /// iterations than CG started from zero, because the initial
+    /// residual `‖f - K · x_warm‖` is already small.
+    ///
+    /// Inputs:
+    /// - `k_new`: the assembled stiffness matrix for the new mesh
+    ///   (post-BC, ready to solve).
+    /// - `f_new`: the right-hand side of the same system.
+    /// - `x_old_on_new_mesh`: the previous solution evaluated on the
+    ///   new mesh's DoFs — typically `self.transfer_state(...)` after
+    ///   the re-mesh. Length must equal `k_new.nrows()`.
+    /// - `max_iters`, `tol`: forwarded to `cg_solve`.
+    ///
+    /// Returns `(x_new, iters)` — the new solution and the number of
+    /// CG iterations consumed. Callers comparing warm-start vs
+    /// cold-start should run `solve_after_remesh` once with the
+    /// transferred state and once with `vec![0.0; n]` and compare iter
+    /// counts directly.
+    ///
+    /// This helper deliberately does **not** call `transfer_state`
+    /// internally — the caller has typically already done so to apply
+    /// any post-interpolation steps (e.g. re-applying Dirichlet pins on
+    /// the new mesh), and we don't want to duplicate that work.
+    pub fn solve_after_remesh(
+        k_new: &BsrMatrix,
+        f_new: &[Real],
+        x_old_on_new_mesh: &[Real],
+        max_iters: usize,
+        tol: Real,
+    ) -> (Vec<Real>, usize) {
+        assert_eq!(
+            k_new.nrows(),
+            f_new.len(),
+            "solve_after_remesh: k_new has {} rows but f_new has {} entries",
+            k_new.nrows(),
+            f_new.len()
+        );
+        assert_eq!(
+            k_new.nrows(),
+            x_old_on_new_mesh.len(),
+            "solve_after_remesh: k_new has {} rows but x_old has {} entries",
+            k_new.nrows(),
+            x_old_on_new_mesh.len()
+        );
+        let result: CgResult = cg_solve(
+            |x: &[Real]| {
+                let mut y = vec![0.0; k_new.nrows()];
+                k_new.mv(x, &mut y).expect("k_new matvec");
+                y
+            },
+            f_new,
+            x_old_on_new_mesh,
+            tol,
+            max_iters,
+        );
+        (result.x, result.iters)
+    }
+
     // ── Internal — per-shape splitters ────────────────────────────────
 
     /// Regular 1→4 split of a triangle. Returns the 4 newly-appended
@@ -1254,6 +1578,7 @@ impl AmrMesh {
         for _ in 0..4 {
             self.refinement_levels.push(child_level);
             self.is_refined.push(false);
+            self.is_removed.push(false);
         }
 
         RefinedChildren::Tri([base, base + 1, base + 2, base + 3])
@@ -1309,6 +1634,7 @@ impl AmrMesh {
         for _ in 0..8 {
             self.refinement_levels.push(child_level);
             self.is_refined.push(false);
+            self.is_removed.push(false);
         }
 
         RefinedChildren::Tet([
