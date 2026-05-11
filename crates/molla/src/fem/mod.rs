@@ -138,8 +138,10 @@ pub use nedelec_element::{
 };
 pub use nonconforming::{NonconformingField, NonconformingPenaltyContact};
 pub use signorini::{
-    assemble_constraint_matrix, estimate_dual_step, solve_augmented_system,
-    solve_augmented_system_with, target_gap_vector, SignoriniContact, UzawaResult,
+    assemble_constraint_matrix, assemble_full_constraint_matrix, estimate_dual_step,
+    solve_augmented_system, solve_augmented_system_with,
+    solve_augmented_system_with_friction, solve_augmented_system_with_friction_full,
+    target_gap_vector, ContactPair, FrictionUzawaResult, SignoriniContact, UzawaResult,
     DEFAULT_INNER_CG_MAX_ITERS, DEFAULT_INNER_CG_TOL,
 };
 #[cfg(feature = "gpu")]

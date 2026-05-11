@@ -1,5 +1,6 @@
 //! Stage 49 — Signorini hard non-penetration contact via Lagrange
 //! multipliers (fixed active set).
+//! Stage 50 — Coulomb friction at the Signorini contact interface.
 //!
 //! Stage 47 v2 ships **penalty contact**, which approximates the
 //! Signorini condition `gap_normal ≥ 0` with the soft spring
@@ -27,14 +28,47 @@
 //! `λ ≥ 0`-friendly form below; the reported `λ` is the contact pressure
 //! magnitude pointing along the master surface normal.)
 //!
+//! # Stage 50 — Coulomb friction
+//!
+//! Stage 50 adds **tangential reactions** at every active contact pair.
+//! Each pair carries an orthonormal tangent basis `(t_u, t_v)` spanning
+//! the master tangent plane (orthogonal to the normal `n`). The
+//! constraint matrix is augmented with two extra rows per pair that
+//! project the slave's displacement onto each tangent direction:
+//!
+//! ```text
+//!   C_full = [ C_n ; C_tu ; C_tv ]      (3 rows per pair, stacked)
+//! ```
+//!
+//! and three multipliers per pair `(λ_n, λ_tu, λ_tv)`. The friction
+//! cone is enforced by projecting the dual pair `(λ_tu, λ_tv)` onto the
+//! disc of radius `μ · λ_n` at every Uzawa step:
+//!
+//! ```text
+//!   λ_n ← max(0, λ_n + ρ · residual_n)                       (normal push)
+//!   (λ_tu, λ_tv) ← proj_disc_{μ λ_n} (λ_tu + ρ · res_tu,
+//!                                     λ_tv + ρ · res_tv)     (Coulomb cap)
+//! ```
+//!
+//! At each contact, this is exactly the classical Coulomb stick/slip
+//! split: if the unprojected tangential multiplier lies *inside* the
+//! disc the constraint is sticking and the projection is a no-op; if it
+//! lies *outside* we radially rescale to the disc boundary, recovering
+//! the slip case where `|λ_t| = μ · λ_n`.
+//!
+//! The friction Uzawa is otherwise unchanged: the inner CG solves
+//! `K u = f + C_full^T λ_full` with the now-stacked constraint matrix.
+//!
 //! # Algorithm — Uzawa iteration
 //!
 //! Uzawa is the textbook dual-ascent / inner-primal-solve scheme:
 //!
 //! 1. **Inner primal** — fix `λ`, solve `K u = f + C^T λ` via CG.
 //! 2. **Dual update** — gradient ascent on the (concave) dual
-//!    functional with projection onto `λ ≥ 0`:
-//!    `λ ← max(0, λ + ρ · (g − C u))`.
+//!    functional with projection onto the admissible set:
+//!    - `λ_n ← max(0, λ_n + ρ · (g − C_n u))` (normal cap),
+//!    - `(λ_tu, λ_tv) ← proj_disc_{μ λ_n}(λ_t + ρ · (0 − C_t u))`
+//!      (friction cone).
 //! 3. Iterate until `‖g − C u‖_∞ < tol` and `λ` has stabilised.
 //!
 //! # Choice of dual step `ρ`
@@ -50,6 +84,10 @@
 //! avoid oscillation across the wide range of `S` spectra produced by
 //! FEM contact problems.
 //!
+//! For Stage 50 we estimate `λ_max(S)` on the **full stacked** `C` (so
+//! the bound covers both normal and tangential rows). The same `ρ` is
+//! used for every multiplier.
+//!
 //! # Scope — fixed active set
 //!
 //! This stage solves the **augmented system for a fixed list of active
@@ -59,9 +97,18 @@
 //! penetrations after each Uzawa solve, drop pairs whose `λ` clamps to
 //! zero (separating), and re-solve.
 //!
+//! # Out of scope (deferred)
+//!
+//! - **Rate-dependent friction** (Stribeck curve). Stage 50 uses a
+//!   single static coefficient `μ` for both stick and slip.
+//! - **Dahl friction** (smooth stick-slip with memory) — handled by
+//!   Stage 33.4's cable kernel; not duplicated here.
+//! - **GPU port** of the friction projection — currently CPU-only.
+//!
 //! # Reference
 //!
-//! - Wriggers, *Computational Contact Mechanics*, §6.3 (Uzawa-Lagrange).
+//! - Wriggers, *Computational Contact Mechanics*, §6.3 (Uzawa-Lagrange)
+//!   and §10 (Coulomb friction projection).
 //! - Newton's `signorini.py` and Warp's `xpbd_contact.py` for the active-
 //!   set logic that comes in v2.
 
@@ -81,39 +128,130 @@ pub const DEFAULT_INNER_CG_TOL: Real = 1.0e-11;
 /// small elasticity blocks; 2000 iterations is generous.
 pub const DEFAULT_INNER_CG_MAX_ITERS: usize = 2000;
 
-/// Fixed list of Signorini contact pairs to enforce.
+/// One Signorini contact pair with full normal + tangent-plane bases.
 ///
-/// Each entry is `(slave_dof_global, master_normal, target_gap)`:
-/// - `slave_dof_global`: BASE global DoF index of the slave vertex
+/// Stage 49 only used `(slave_dof, normal, target_gap)`. Stage 50 adds
+/// the orthonormal tangent basis `(tangent_u, tangent_v)` spanning the
+/// master tangent plane, which is required for Coulomb friction. For a
+/// frictionless solve the tangents are still populated (any
+/// `n`-orthogonal pair) but ignored by the friction projection because
+/// `μ = 0`.
+///
+/// Fields:
+/// - `slave_dof`: BASE global DoF index of the slave vertex
 ///   (i.e. `vertex_index * dim`). The constraint operator writes the
-///   normal components into the three consecutive DoFs starting here.
-/// - `master_normal`: unit outward normal of the master plane at the
-///   contact point. The constraint enforces `n · u_slave ≥ g`.
+///   normal/tangent components into the three consecutive DoFs starting
+///   here.
+/// - `normal`: unit outward normal of the master plane at the contact
+///   point. The constraint enforces `n · u_slave ≥ target_gap`.
 /// - `target_gap`: minimum allowed projected displacement. If the
-///   initial geometry has a penetration `−p < 0`, set
-///   `target_gap = p` so that `n · u_slave ≥ p` restores contact at
-///   zero gap. For nodes that are merely *on* the master surface,
-///   `target_gap = 0`.
+///   initial geometry has a penetration `−p < 0`, set `target_gap = p`
+///   so that `n · u_slave ≥ p` restores contact at zero gap. For nodes
+///   that are merely *on* the master surface, `target_gap = 0`.
+/// - `tangent_u`, `tangent_v`: orthonormal pair spanning the tangent
+///   plane (i.e. perpendicular to `normal` and to each other). The
+///   friction cone is enforced on the dual pair acting in this basis.
+#[derive(Clone, Copy, Debug)]
+pub struct ContactPair {
+    /// Base global DoF index of the slave vertex.
+    pub slave_dof: u32,
+    /// Outward unit normal of the master plane at this contact point.
+    pub normal: Vec3,
+    /// Target gap (≥ 0; usually 0 for fresh contacts, positive when
+    /// resolving an initial penetration of magnitude `target_gap`).
+    pub target_gap: Real,
+    /// First tangent-plane basis vector (unit, ⟂ normal).
+    pub tangent_u: Vec3,
+    /// Second tangent-plane basis vector (unit, ⟂ normal, ⟂ tangent_u).
+    pub tangent_v: Vec3,
+}
+
+impl ContactPair {
+    /// Build a pair from `(slave_dof, normal, target_gap)`, auto-
+    /// generating an orthonormal tangent basis from the normal.
+    ///
+    /// The basis is chosen deterministically (cross with the world axis
+    /// least aligned with `normal`); friction is rotationally invariant
+    /// inside the tangent plane so the specific choice does not affect
+    /// the converged solution.
+    #[must_use]
+    pub fn from_normal(slave_dof: u32, normal: Vec3, target_gap: Real) -> Self {
+        let (tu, tv) = orthonormal_tangents(normal);
+        Self {
+            slave_dof,
+            normal,
+            target_gap,
+            tangent_u: tu,
+            tangent_v: tv,
+        }
+    }
+}
+
+/// Build an orthonormal tangent-plane basis `(t_u, t_v)` from `n`.
+///
+/// Picks the world axis least aligned with `n` as the seed, crosses it
+/// against `n` to get `t_u`, then crosses `n × t_u` to get `t_v`. The
+/// basis is always right-handed: `n × t_u = t_v`.
+fn orthonormal_tangents(normal: Vec3) -> (Vec3, Vec3) {
+    let nx = normal.x.abs();
+    let ny = normal.y.abs();
+    let nz = normal.z.abs();
+    // Pick the world axis least aligned with `normal`.
+    let seed = if nx <= ny && nx <= nz {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else if ny <= nx && ny <= nz {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    let t_u_raw = seed - normal * normal.dot(seed);
+    let len_u = t_u_raw.length();
+    let t_u = if len_u > 1.0e-12 {
+        t_u_raw / len_u
+    } else {
+        // Degenerate fallback (normal exactly equals seed — should not
+        // happen given the "least aligned" choice above, but be safe).
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let t_v = normal.cross(t_u);
+    (t_u, t_v)
+}
+
+/// Fixed list of Signorini contact pairs to enforce, plus optional
+/// Coulomb friction.
 ///
 /// The active-set update logic (deciding *which* pairs end up here) is
-/// out of scope for Stage 49 — the caller assembles `active_pairs`
+/// out of scope for Stage 49/50 — the caller assembles `active_pairs`
 /// from their own contact-detection pass.
 #[derive(Clone, Debug)]
 pub struct SignoriniContact {
-    /// `(slave_dof_global, master_normal, target_gap)` triplets.
-    pub active_pairs: Vec<(u32, Vec3, Real)>,
+    /// One [`ContactPair`] per active constraint.
+    pub active_pairs: Vec<ContactPair>,
+    /// Coulomb friction coefficient `μ` applied uniformly to every
+    /// pair. Default `0.0` recovers frictionless Stage 49 behaviour.
+    pub friction_coeff: Real,
 }
 
 impl SignoriniContact {
-    /// Build an empty contact set.
+    /// Build an empty, frictionless contact set.
     #[must_use]
     pub fn new() -> Self {
         Self {
             active_pairs: Vec::new(),
+            friction_coeff: 0.0,
         }
     }
 
-    /// Number of active constraint rows.
+    /// Build a contact set with a given friction coefficient.
+    #[must_use]
+    pub fn with_friction(friction_coeff: Real) -> Self {
+        Self {
+            active_pairs: Vec::new(),
+            friction_coeff,
+        }
+    }
+
+    /// Number of active contact pairs.
     #[must_use]
     pub fn n_active(&self) -> usize {
         self.active_pairs.len()
@@ -121,8 +259,15 @@ impl SignoriniContact {
 
     /// Borrow the active pairs as a slice.
     #[must_use]
-    pub fn pairs(&self) -> &[(u32, Vec3, Real)] {
+    pub fn pairs(&self) -> &[ContactPair] {
         &self.active_pairs
+    }
+
+    /// Push a contact pair, auto-deriving the tangent basis from the
+    /// normal.
+    pub fn push_from_normal(&mut self, slave_dof: u32, normal: Vec3, target_gap: Real) {
+        self.active_pairs
+            .push(ContactPair::from_normal(slave_dof, normal, target_gap));
     }
 }
 
@@ -132,18 +277,14 @@ impl Default for SignoriniContact {
     }
 }
 
-/// Assemble the sparse constraint matrix `C` of shape `n_active × n_dofs`.
+/// Assemble the sparse **normal-only** constraint matrix `C_n` of shape
+/// `n_active × n_dofs`.
 ///
-/// Row `k` corresponds to active pair `k`: three entries at columns
-/// `(slave_dof, slave_dof+1, slave_dof+2)` equal to
-/// `(n.x, n.y, n.z)`. All other entries are zero.
-///
-/// The matrix is built with [`BsrMatrix::from_scalar_triplets`]
-/// (`B = 1`, scalar CSR-style storage), which sorts and dedupes the
-/// `(row, col)` pattern. Multiple pairs that share the same slave node
-/// land in distinct rows, so duplicates within a row only occur if the
-/// caller put two entries pointing at the same column inside one pair
-/// (impossible for the `(slave, normal)` writer below).
+/// Back-compat entry point preserved from Stage 49: each active pair
+/// contributes one row holding `(n.x, n.y, n.z)` at the slave's three
+/// consecutive DoFs. Stage 50 prefers
+/// [`assemble_full_constraint_matrix`] which stacks normals and
+/// tangents.
 ///
 /// Returns [`Error::Build`] if any `slave_dof + 2 >= n_dofs` or if the
 /// underlying BSR builder rejects the pattern.
@@ -153,10 +294,6 @@ pub fn assemble_constraint_matrix(
 ) -> Result<BsrMatrix> {
     let n_active = active_pairs.len();
     if n_active == 0 {
-        // Empty constraint matrix: 0 rows × n_dofs cols. Still has to
-        // satisfy `block_rows >= 1` for the from_pattern path — use a
-        // dummy single-row matrix with no entries. The downstream
-        // Uzawa loop skips the dual update entirely in this case.
         return BsrMatrix::from_pattern(1, 0, n_dofs.max(1), Vec::new());
     }
     let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(3 * n_active);
@@ -175,10 +312,63 @@ pub fn assemble_constraint_matrix(
     BsrMatrix::from_scalar_triplets(n_active, n_dofs, &triplets)
 }
 
-/// Extract the `g` (target-gap) vector from the active pairs.
+/// Extract the `g` (target-gap) vector from the back-compat tuple
+/// active-pair list.
 #[must_use]
 pub fn target_gap_vector(active_pairs: &[(u32, Vec3, Real)]) -> Vec<Real> {
     active_pairs.iter().map(|(_, _, g)| *g).collect()
+}
+
+/// Assemble the **stacked** constraint matrix `C_full` for Stage 50.
+///
+/// Layout: `3 · n_active` rows, organised as
+/// ```text
+///   row 3k + 0 : normal n at slave k        →  enforces (n · u) ≥ g_k
+///   row 3k + 1 : tangent_u t_u at slave k   →  observed in C_t u
+///   row 3k + 2 : tangent_v t_v at slave k   →  observed in C_t u
+/// ```
+///
+/// The interleaving keeps each pair's three rows contiguous, which is
+/// convenient when projecting the dual triple onto the friction cone
+/// (Coulomb couples normal and tangential multipliers).
+///
+/// Returns [`Error::Build`] on out-of-range DoF indices or BSR build
+/// errors.
+pub fn assemble_full_constraint_matrix(
+    pairs: &[ContactPair],
+    n_dofs: usize,
+) -> Result<BsrMatrix> {
+    let n_active = pairs.len();
+    if n_active == 0 {
+        return BsrMatrix::from_pattern(1, 0, n_dofs.max(1), Vec::new());
+    }
+    let n_rows = 3 * n_active;
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(9 * n_active);
+    for (k, pair) in pairs.iter().enumerate() {
+        let base = pair.slave_dof as usize;
+        if base + 2 >= n_dofs {
+            return Err(Error::Build(format!(
+                "Signorini constraint pair {k}: slave_dof {} + 2 >= n_dofs {}",
+                base, n_dofs
+            )));
+        }
+        let row_n = 3 * k;
+        let row_tu = 3 * k + 1;
+        let row_tv = 3 * k + 2;
+        // Normal row.
+        triplets.push((row_n, base, pair.normal.x));
+        triplets.push((row_n, base + 1, pair.normal.y));
+        triplets.push((row_n, base + 2, pair.normal.z));
+        // Tangent-u row.
+        triplets.push((row_tu, base, pair.tangent_u.x));
+        triplets.push((row_tu, base + 1, pair.tangent_u.y));
+        triplets.push((row_tu, base + 2, pair.tangent_u.z));
+        // Tangent-v row.
+        triplets.push((row_tv, base, pair.tangent_v.x));
+        triplets.push((row_tv, base + 1, pair.tangent_v.y));
+        triplets.push((row_tv, base + 2, pair.tangent_v.z));
+    }
+    BsrMatrix::from_scalar_triplets(n_rows, n_dofs, &triplets)
 }
 
 /// Convergence summary for [`solve_augmented_system`].
@@ -200,30 +390,32 @@ pub struct UzawaResult {
     pub dual_residual: Real,
 }
 
-/// Solve the Signorini saddle-point system via projected Uzawa.
+/// Convergence summary for [`solve_augmented_system_with_friction`].
 ///
-/// Inputs:
-/// - `k_global`: global stiffness matrix `K` (assumed SPD after
-///   Dirichlet BCs are baked in — the caller applies BCs *before*
-///   handing `K` here).
-/// - `c_matrix`: contact constraint matrix from
-///   [`assemble_constraint_matrix`]. Shape `n_active × n_dofs`.
-/// - `f`: external force / Dirichlet-shifted RHS, length `n_dofs`.
-/// - `g`: target gaps, length `n_active`.
-/// - `max_iters`: outer Uzawa iteration cap.
-/// - `tol`: outer convergence tolerance on `‖g − C u‖_∞` (primal
-///   residual of the *active* constraints).
-///
-/// Returns the final `(u, λ)` plus iteration diagnostics.
-///
-/// Optional knobs default to:
-/// - Dual step `ρ = 1 / λ_max(C K⁻¹ C^T)` — Lipschitz-inverse estimated
-///   via a short matrix-free power iteration (see
-///   [`estimate_dual_step`]).
-/// - Inner CG tolerance [`DEFAULT_INNER_CG_TOL`].
-/// - Inner CG iteration cap [`DEFAULT_INNER_CG_MAX_ITERS`].
-///
-/// Use [`solve_augmented_system_with`] to override any of those.
+/// The dual is now split into a length-`n_active` normal vector and a
+/// `n_active × 2` tangential matrix (flattened row-major: pair `k` owns
+/// entries `[2k]` and `[2k+1]` corresponding to `(λ_tu, λ_tv)`).
+#[derive(Clone, Debug)]
+pub struct FrictionUzawaResult {
+    /// Final displacement field, length `n_dofs`.
+    pub u: Vec<Real>,
+    /// Final normal multipliers `λ_n`, length `n_active`. Always `≥ 0`.
+    pub lambda_normal: Vec<Real>,
+    /// Final tangential multipliers, flattened length `2 · n_active`.
+    /// Pair `k` occupies `[2k] = λ_tu`, `[2k+1] = λ_tv`. Always inside
+    /// the friction disc `√(λ_tu² + λ_tv²) ≤ μ · λ_n`.
+    pub lambda_tangent: Vec<Real>,
+    /// Outer iterations actually performed.
+    pub iters: usize,
+    /// Sup-norm of the active normal-constraint violation.
+    pub primal_residual: Real,
+    /// Sup-norm of the dual increment across all `3 · n_active`
+    /// multipliers in the last iteration.
+    pub dual_residual: Real,
+}
+
+/// Solve the Signorini saddle-point system via projected Uzawa
+/// (frictionless, Stage 49 API).
 pub fn solve_augmented_system(
     k_global: &BsrMatrix,
     c_matrix: &BsrMatrix,
@@ -276,9 +468,6 @@ pub fn solve_augmented_system_with(
         )));
     }
     let n_active = g.len();
-    // `c_matrix` may carry a dummy 1×n_dofs "no-active" pattern (see
-    // `assemble_constraint_matrix`); the dual update path handles
-    // that gracefully via the `n_active == 0` short-circuit.
     if n_active > 0 && c_matrix.ncols() != n_dofs {
         return Err(Error::Build(format!(
             "Signorini: C has {} cols but f has length {}",
@@ -295,9 +484,6 @@ pub fn solve_augmented_system_with(
     }
 
     let mut lambda = vec![0.0; n_active];
-    // Warm start `u` from the unconstrained solve `K u = f`. This is
-    // the same first inner CG that Uzawa would do anyway with
-    // `λ = 0`, so caching it costs nothing.
     let mut u = cg_solve(
         |x| matvec(k_global, x),
         f,
@@ -314,11 +500,6 @@ pub fn solve_augmented_system_with(
     for it in 0..max_iters {
         outer_iters = it + 1;
 
-        // ── Compute primal residual on the *active* constraints ───
-        // residual_k = g_k − (C u)_k. A negative entry means the
-        // constraint is over-satisfied (gap larger than target) and
-        // we should release the multiplier; a positive entry means
-        // the constraint is violated (penetration) and λ must grow.
         let cu = if n_active > 0 {
             matvec(c_matrix, &u)
         } else {
@@ -328,9 +509,6 @@ pub fn solve_augmented_system_with(
         let mut max_violation: Real = 0.0;
         for k in 0..n_active {
             residual[k] = g[k] - cu[k];
-            // Track only the active violation: λ > 0 entries care
-            // about both signs, but λ = 0 entries only care about
-            // *positive* residual (i.e. still penetrating).
             let active_violation = if lambda[k] > 0.0 {
                 residual[k].abs()
             } else {
@@ -342,11 +520,6 @@ pub fn solve_augmented_system_with(
         }
         primal_residual = max_violation;
 
-        // ── Projected dual update ────────────────────────────────
-        // λ ← max(0, λ + ρ · residual). The `max(0, ·)` projection
-        // enforces λ ≥ 0 — physically: contact can push but not
-        // pull. A pair whose multiplier clamps to zero is a
-        // candidate for active-set release in v2.
         let mut max_dlam: Real = 0.0;
         let lambda_new: Vec<Real> = (0..n_active)
             .map(|k| {
@@ -362,12 +535,10 @@ pub fn solve_augmented_system_with(
         dual_residual = max_dlam;
         lambda = lambda_new;
 
-        // ── Convergence test ────────────────────────────────────
         if primal_residual < tol && dual_residual < tol {
             break;
         }
 
-        // ── Inner primal solve: K u = f + C^T λ ─────────────────
         let mut rhs = f.to_vec();
         if n_active > 0 {
             let ct_lambda = ct_transpose_mul(c_matrix, &lambda, n_dofs);
@@ -378,7 +549,7 @@ pub fn solve_augmented_system_with(
         u = cg_solve(
             |x| matvec(k_global, x),
             &rhs,
-            &u, // warm-start from previous iterate
+            &u,
             inner_cg_tol,
             inner_cg_max_iters,
         )
@@ -394,10 +565,246 @@ pub fn solve_augmented_system_with(
     })
 }
 
+/// Solve the Signorini saddle-point system with Coulomb friction.
+///
+/// For each pair we maintain three multipliers `(λ_n, λ_tu, λ_tv)`.
+/// The dual update is the same projected-gradient step as
+/// frictionless Uzawa, but the projection now mixes the normal cap and
+/// the friction cone:
+///
+/// - `λ_n ← max(0, λ_n + ρ · (g − n·u))`
+/// - `(λ_tu, λ_tv) ← proj_disc_{μ · λ_n}(λ_tu + ρ · (−t_u·u),
+///                                       λ_tv + ρ · (−t_v·u))`
+///
+/// Note the **tangential target is zero** — we want to drive
+/// `t · u = 0` (stick); the disc cap then permits the slip residual to
+/// grow up to the Coulomb limit.
+///
+/// The inner CG solves `K u = f + C_full^T λ` with `C_full` carrying
+/// all three rows per pair.
+///
+/// Returns a [`FrictionUzawaResult`] with `lambda_normal` of length
+/// `n_active` and `lambda_tangent` of length `2 · n_active`.
+pub fn solve_augmented_system_with_friction(
+    k_global: &BsrMatrix,
+    contact: &SignoriniContact,
+    f: &[Real],
+    max_iters: usize,
+    tol: Real,
+) -> Result<FrictionUzawaResult> {
+    let n_active = contact.n_active();
+    let n_dofs = f.len();
+    let c_full = assemble_full_constraint_matrix(contact.pairs(), n_dofs)?;
+    let rho = estimate_dual_step(
+        k_global,
+        &c_full,
+        3 * n_active,
+        DEFAULT_INNER_CG_TOL,
+        DEFAULT_INNER_CG_MAX_ITERS,
+    );
+    solve_augmented_system_with_friction_full(
+        k_global,
+        contact,
+        &c_full,
+        f,
+        max_iters,
+        tol,
+        rho,
+        DEFAULT_INNER_CG_TOL,
+        DEFAULT_INNER_CG_MAX_ITERS,
+    )
+}
+
+/// Same as [`solve_augmented_system_with_friction`] with the dual step,
+/// the pre-assembled stacked `C_full`, and CG knobs exposed. Useful
+/// when the caller wants to reuse one `C_full` build across multiple
+/// solves (e.g. parameter sweeps over `μ`).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_augmented_system_with_friction_full(
+    k_global: &BsrMatrix,
+    contact: &SignoriniContact,
+    c_full: &BsrMatrix,
+    f: &[Real],
+    max_iters: usize,
+    tol: Real,
+    rho: Real,
+    inner_cg_tol: Real,
+    inner_cg_max_iters: usize,
+) -> Result<FrictionUzawaResult> {
+    let n_dofs = f.len();
+    let n_active = contact.n_active();
+    let mu = contact.friction_coeff;
+
+    if k_global.nrows() != n_dofs || k_global.ncols() != n_dofs {
+        return Err(Error::Build(format!(
+            "Signorini-friction: K is {}×{} but f has length {}",
+            k_global.nrows(),
+            k_global.ncols(),
+            n_dofs
+        )));
+    }
+    if n_active > 0 && c_full.ncols() != n_dofs {
+        return Err(Error::Build(format!(
+            "Signorini-friction: C_full has {} cols but f has length {}",
+            c_full.ncols(),
+            n_dofs
+        )));
+    }
+    if n_active > 0 && c_full.nrows() != 3 * n_active {
+        return Err(Error::Build(format!(
+            "Signorini-friction: C_full has {} rows but expected 3 × n_active = {}",
+            c_full.nrows(),
+            3 * n_active
+        )));
+    }
+
+    // λ stacked as `[λ_n_0, λ_tu_0, λ_tv_0, λ_n_1, …]` to match the
+    // row interleaving of `C_full`.
+    let mut lambda_stacked = vec![0.0; 3 * n_active];
+    let mut u = cg_solve(
+        |x| matvec(k_global, x),
+        f,
+        &vec![0.0; n_dofs],
+        inner_cg_tol,
+        inner_cg_max_iters,
+    )
+    .x;
+
+    let mut primal_residual = Real::INFINITY;
+    let mut dual_residual = 0.0;
+    let mut outer_iters = 0;
+
+    for it in 0..max_iters {
+        outer_iters = it + 1;
+
+        // C_full · u — gives normal and tangential projections at every
+        // pair, interleaved.
+        let cu = if n_active > 0 {
+            matvec(c_full, &u)
+        } else {
+            Vec::new()
+        };
+
+        // ── Compute primal residual on the normal rows only ─────────
+        // (tangential rows have "target = 0"; their residual feeds the
+        // dual update but is not part of the convergence metric — the
+        // dual_residual sup-norm catches stagnation in λ_t).
+        let mut max_violation: Real = 0.0;
+        for k in 0..n_active {
+            let row_n = 3 * k;
+            let res_n = contact.active_pairs[k].target_gap - cu[row_n];
+            let lam_n = lambda_stacked[row_n];
+            let active_violation = if lam_n > 0.0 {
+                res_n.abs()
+            } else {
+                res_n.max(0.0)
+            };
+            if active_violation > max_violation {
+                max_violation = active_violation;
+            }
+        }
+        primal_residual = max_violation;
+
+        // ── Projected dual update (normal + Coulomb cone) ───────────
+        let mut max_dlam: Real = 0.0;
+        let mut lambda_new = vec![0.0; 3 * n_active];
+        for k in 0..n_active {
+            let row_n = 3 * k;
+            let row_tu = 3 * k + 1;
+            let row_tv = 3 * k + 2;
+
+            // Normal: gradient ascent toward residual_n = g − n·u, then
+            // clip to λ_n ≥ 0.
+            let target_g = contact.active_pairs[k].target_gap;
+            let res_n = target_g - cu[row_n];
+            let lam_n_raw = lambda_stacked[row_n] + rho * res_n;
+            let lam_n_new = lam_n_raw.max(0.0);
+
+            // Tangential: target is zero displacement (stick). We push
+            // λ_t in the direction of `−t·u` so the inner solve sees a
+            // tangential force that opposes the observed tangential
+            // slide.
+            let res_tu = -cu[row_tu];
+            let res_tv = -cu[row_tv];
+            let lam_tu_raw = lambda_stacked[row_tu] + rho * res_tu;
+            let lam_tv_raw = lambda_stacked[row_tv] + rho * res_tv;
+
+            // Project onto the friction disc of radius `μ · λ_n_new`.
+            // If `μ = 0` the disc collapses to a point → both tangents
+            // forced to zero (Stage 49 frictionless).
+            let mu_eff = mu * lam_n_new;
+            let mag = (lam_tu_raw * lam_tu_raw + lam_tv_raw * lam_tv_raw).sqrt();
+            let (lam_tu_new, lam_tv_new) = if mag <= mu_eff {
+                // Inside cone → stick, no projection.
+                (lam_tu_raw, lam_tv_raw)
+            } else if mag > 0.0 {
+                // Outside cone → slip; radially rescale to the boundary.
+                let s = mu_eff / mag;
+                (lam_tu_raw * s, lam_tv_raw * s)
+            } else {
+                // mag == 0 and mu_eff > 0 — already inside trivially.
+                (0.0, 0.0)
+            };
+
+            // Track sup-norm of dual increment across all three.
+            let dl_n = (lam_n_new - lambda_stacked[row_n]).abs();
+            let dl_tu = (lam_tu_new - lambda_stacked[row_tu]).abs();
+            let dl_tv = (lam_tv_new - lambda_stacked[row_tv]).abs();
+            let dl_max = dl_n.max(dl_tu).max(dl_tv);
+            if dl_max > max_dlam {
+                max_dlam = dl_max;
+            }
+
+            lambda_new[row_n] = lam_n_new;
+            lambda_new[row_tu] = lam_tu_new;
+            lambda_new[row_tv] = lam_tv_new;
+        }
+        dual_residual = max_dlam;
+        lambda_stacked = lambda_new;
+
+        // ── Convergence test ───────────────────────────────────────
+        if primal_residual < tol && dual_residual < tol {
+            break;
+        }
+
+        // ── Inner primal solve: K u = f + C_full^T λ ────────────────
+        let mut rhs = f.to_vec();
+        if n_active > 0 {
+            let ct_lambda = ct_transpose_mul(c_full, &lambda_stacked, n_dofs);
+            for i in 0..n_dofs {
+                rhs[i] += ct_lambda[i];
+            }
+        }
+        u = cg_solve(
+            |x| matvec(k_global, x),
+            &rhs,
+            &u,
+            inner_cg_tol,
+            inner_cg_max_iters,
+        )
+        .x;
+    }
+
+    // De-interleave the stacked dual into normal / tangential views.
+    let mut lambda_normal = vec![0.0; n_active];
+    let mut lambda_tangent = vec![0.0; 2 * n_active];
+    for k in 0..n_active {
+        lambda_normal[k] = lambda_stacked[3 * k];
+        lambda_tangent[2 * k] = lambda_stacked[3 * k + 1];
+        lambda_tangent[2 * k + 1] = lambda_stacked[3 * k + 2];
+    }
+
+    Ok(FrictionUzawaResult {
+        u,
+        lambda_normal,
+        lambda_tangent,
+        iters: outer_iters,
+        primal_residual,
+        dual_residual,
+    })
+}
+
 /// Compute `y = C^T · x` where `C` is `n_active × n_dofs` (B = 1).
-/// We don't materialise `C^T` — the constraint matrix is short and
-/// fat (`n_active << n_dofs`) so walking its rows once per dual
-/// update is cheaper than transposing.
 fn ct_transpose_mul(c: &BsrMatrix, x: &[Real], n_dofs: usize) -> Vec<Real> {
     debug_assert_eq!(c.b, 1, "ct_transpose_mul: only B = 1 supported");
     debug_assert_eq!(x.len(), c.nrows());
@@ -416,33 +823,23 @@ fn ct_transpose_mul(c: &BsrMatrix, x: &[Real], n_dofs: usize) -> Vec<Real> {
 
 /// Estimate `ρ = 1 / λ_max(C K⁻¹ C^T)` via 6 power-iteration steps.
 ///
-/// Each step computes `y ← C K⁻¹ C^T y / ‖y‖`, using inner CG to apply
-/// `K⁻¹`. Three to five iterations are normally enough to nail
-/// `λ_max` to ~10 % — the inverse of which is a *conservative*
-/// step (always inside the `(0, 2 / λ_max)` stability band, never
-/// optimal but never oscillating).
-///
-/// Returns `1.0` if `n_active == 0` (the caller never enters the dual
-/// update path in that case so the value is irrelevant).
+/// `n_active_rows` is the number of rows of `C` (i.e. `n_active` for
+/// the Stage 49 normal-only path, or `3 · n_active` for the Stage 50
+/// stacked path).
 pub fn estimate_dual_step(
     k: &BsrMatrix,
     c: &BsrMatrix,
-    n_active: usize,
+    n_active_rows: usize,
     inner_cg_tol: Real,
     inner_cg_max_iters: usize,
 ) -> Real {
-    if n_active == 0 {
+    if n_active_rows == 0 {
         return 1.0;
     }
     let n_dofs = k.nrows();
-    // Seed with a deterministic vector (not the all-ones — that would
-    // be a near-eigenvector for translational rigid-body modes after
-    // BCs, which can confuse the estimate). A length-`n_active` ramp
-    // is fine.
-    let mut y: Vec<Real> = (0..n_active).map(|i| 1.0 + i as Real * 0.5).collect();
+    let mut y: Vec<Real> = (0..n_active_rows).map(|i| 1.0 + i as Real * 0.5).collect();
     let mut lam_max: Real = 1.0;
     for _ in 0..6 {
-        // y_next = C · K⁻¹ · C^T · y
         let cty = ct_transpose_mul(c, &y, n_dofs);
         let kinv_cty = cg_solve(
             |x| matvec(k, x),
@@ -457,17 +854,10 @@ pub fn estimate_dual_step(
         if norm <= 1.0e-30 {
             break;
         }
-        // Rayleigh quotient: λ ≈ y_next · y / (y · y)
         let y_dot_y: Real = y.iter().map(|v| v * v).sum();
         let rq: Real = y.iter().zip(y_next.iter()).map(|(a, b)| a * b).sum::<Real>()
             / y_dot_y.max(1.0e-30);
         lam_max = rq.abs().max(1.0e-30);
-        // Normalise for the next step.
-        for v in y.iter_mut() {
-            *v /= norm;
-        }
-        // Replace y with the normalised image for the next iteration.
-        // (Power iteration: y ← y_next / ‖y_next‖.)
         let inv = 1.0 / norm;
         for (a, b) in y.iter_mut().zip(y_next.iter()) {
             *a = b * inv;
@@ -491,8 +881,6 @@ mod tests {
         ])
         .unwrap();
         let f = vec![0.0, 0.0, -3.0]; // push z-component negative.
-        // One contact pair: slave_dof = 0 (3 components 0..3),
-        // normal = +z, target_gap = 0.
         let pairs = vec![(0u32, Vec3::new(0.0, 0.0, 1.0), 0.0)];
         let c = assemble_constraint_matrix(&pairs, 3).unwrap();
         let g = target_gap_vector(&pairs);
@@ -502,14 +890,33 @@ mod tests {
             "u_z should clamp to 0, got {}",
             res.u[2]
         );
-        // λ = 3.0 because K u + C^T λ = f, with C^T λ = [0,0,λ] and
-        // K u = 0 (clamped), gives λ = −f_z = 3.0... but our sign
-        // convention has K u = f + C^T λ ⇒ 0 = -3 + λ ⇒ λ = 3.
         assert!(
             (res.lambda[0] - 3.0).abs() < 1.0e-6,
             "λ should converge to 3.0, got {}",
             res.lambda[0]
         );
         assert!(res.lambda[0] >= -1.0e-9, "λ must be ≥ 0");
+    }
+
+    /// Tangent basis sanity: orthonormal and right-handed.
+    #[test]
+    fn tangent_basis_is_orthonormal() {
+        for n in [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 1.0).normalize(),
+            Vec3::new(0.3, -0.4, 0.866).normalize(),
+        ] {
+            let (tu, tv) = orthonormal_tangents(n);
+            assert!((tu.length() - 1.0).abs() < 1.0e-10, "|t_u| != 1 for n={n:?}");
+            assert!((tv.length() - 1.0).abs() < 1.0e-10, "|t_v| != 1 for n={n:?}");
+            assert!(tu.dot(n).abs() < 1.0e-10, "t_u not ⟂ n for n={n:?}");
+            assert!(tv.dot(n).abs() < 1.0e-10, "t_v not ⟂ n for n={n:?}");
+            assert!(tu.dot(tv).abs() < 1.0e-10, "t_u not ⟂ t_v for n={n:?}");
+            // Right-handed: n × t_u = t_v.
+            let nt = n.cross(tu);
+            assert!((nt - tv).length() < 1.0e-10, "basis not right-handed for n={n:?}");
+        }
     }
 }
