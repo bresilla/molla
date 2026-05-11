@@ -1,15 +1,15 @@
 # molla — what's left to do
 
-> **Comprehensive documentation lives in [`docs/`](./docs/).** This file is
+> **Comprehensive documentation lives in [`book/`](./book/).** This file is
 > a minimal pointer to what's *still open* — the historical roadmap and
-> gap analyses have been folded into `docs/src/roadmap/`.
+> gap analyses have been folded into `book/src/roadmap/`.
 
-For everything that's been built, start with `docs/src/introduction.md`
-or the table of contents in `docs/src/SUMMARY.md`. The full open-items
+For everything that's been built, start with `book/src/introduction.md`
+or the table of contents in `book/src/SUMMARY.md`. The full open-items
 list with effort estimates + dependencies is in
-[`docs/src/roadmap/open.md`](./docs/src/roadmap/open.md); the explicit
+[`book/src/roadmap/open.md`](./book/src/roadmap/open.md); the explicit
 out-of-scope catalogue is in
-[`docs/src/roadmap/oos.md`](./docs/src/roadmap/oos.md).
+[`book/src/roadmap/oos.md`](./book/src/roadmap/oos.md).
 
 ---
 
@@ -27,7 +27,7 @@ Stages **0 through 51** are on `main`, including:
 
 ## What's still open
 
-Three tiers, summarized — see `docs/src/roadmap/open.md` for full
+Three tiers, summarized — see `book/src/roadmap/open.md` for full
 detail (problem statement, dependencies, effort, value).
 
 ### Tier-A — small v5 follow-ups (1-3 days each)
@@ -68,7 +68,7 @@ detail (problem statement, dependencies, effort, value).
 
 ## Explicitly out of scope
 
-Per design — see `docs/src/roadmap/oos.md` for full rationale:
+Per design — see `book/src/roadmap/oos.md` for full rationale:
 
 - Python bindings (`pyo3`) — Newton serves Python, molla serves Rust.
 - Style3D cloth — Stage 20 picked VBD; not a gap.
@@ -82,7 +82,7 @@ Per design — see `docs/src/roadmap/oos.md` for full rationale:
 ## How to contribute
 
 Pick any item from Tier-A or Tier-B; consult the relevant chapter
-under `docs/src/` for the existing implementation, then open a branch.
+under `book/src/` for the existing implementation, then open a branch.
 Every existing stage in `main` is paired with at least one parity /
 FD-gradient / convergence-rate test in `crates/molla/tests/` — new
 work is expected to do the same.

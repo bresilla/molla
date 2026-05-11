@@ -3,7 +3,6 @@ name: book
 on:
   push:
     branches:
-      - main
       - develop
   workflow_dispatch:
 
@@ -26,10 +25,10 @@ jobs:
           mdbook-version: 'latest'
 
       - name: Build book
-        run: mdbook build docs --dest-dir build
+        run: mdbook build book --dest-dir docs
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/build
+          publish_dir: ./docs
