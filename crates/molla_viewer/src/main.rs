@@ -539,6 +539,9 @@ fn main() {
                 update_warp_tile_filter,
                 update_warp_tile_compaction,
                 update_adam_landscape,
+                update_warp_tile_matmul,
+                update_warp_tile_convolution,
+                update_warp_tile_mcgp,
             ),
         )
         .add_systems(
@@ -565,6 +568,9 @@ fn main() {
         .add_systems(Update, draw_warp_tile_filter_gizmos)
         .add_systems(Update, draw_warp_tile_compaction_gizmos)
         .add_systems(Update, draw_adam_landscape_gizmos)
+        .add_systems(Update, draw_warp_tile_matmul_gizmos)
+        .add_systems(Update, draw_warp_tile_convolution_gizmos)
+        .add_systems(Update, draw_warp_tile_mcgp_gizmos)
         .add_systems(EguiPrimaryContextPass, control_pane)
         .run();
 }
@@ -1176,6 +1182,24 @@ enum Scene {
     /// and the optimization trajectory as a line. Pane exposes lr, β1,
     /// β2, weight-decay. Wires `molla::optim::{AdamConfig, AdamState}`.
     AdamLandscape,
+    /// Stage 37.8 — standalone GEMM `C = A · B` demo. M=64, N=32, K=128
+    /// with deterministic-hash inputs; CPU/GPU toggle; side-by-side
+    /// render of A, B, C as colored grids. Wires
+    /// `molla::compute::tile_matmul::{matmul_cpu, TileMatmulKernel}`.
+    WarpTileMatmul,
+    /// Stage 37.8 — standalone separable 2D convolution demo. 64×64
+    /// procedural input; 5-tap kernel exposed as five user-editable
+    /// coefficients (each axis uses the same kernel — the molla API
+    /// is symmetric-separable). CPU/GPU toggle; side-by-side render
+    /// of input + output. Wires `molla::compute::tile_convolution::{
+    /// convolve_separable_cpu, TileConvolutionKernel, Kernel5}`.
+    WarpTileConvolution,
+    /// Stage 37.8 — Monte Carlo Laplace demo via walk-on-spheres on
+    /// the unit square `[-1, 1]²`. Boundary value `g(x, y) = x²·y² −
+    /// 0.5·(x² + y²)` is sampled at 16×16 = 256 interior points; each
+    /// point's value is estimated by `mcgp_estimate`. Renders as a
+    /// grid of points colored by their estimated solution.
+    WarpTileMcgp,
 }
 
 impl Scene {
@@ -1266,6 +1290,9 @@ impl Scene {
         Scene::WarpTileFilter,
         Scene::WarpTileCompaction,
         Scene::AdamLandscape,
+        Scene::WarpTileMatmul,
+        Scene::WarpTileConvolution,
+        Scene::WarpTileMcgp,
     ];
 
     fn label(self) -> &'static str {
@@ -1353,6 +1380,9 @@ impl Scene {
             Scene::WarpTileFilter => "81 Warp tile filter (Stage 37.8)",
             Scene::WarpTileCompaction => "82 Warp tile compaction (Stage 37.8)",
             Scene::AdamLandscape => "83 Adam optimization landscape (Stage 38c)",
+            Scene::WarpTileMatmul => "90 Warp tile matmul (Stage 37.8)",
+            Scene::WarpTileConvolution => "91 Warp tile convolution (Stage 37.8)",
+            Scene::WarpTileMcgp => "92 Warp tile MCGP (Stage 37.8)",
         }
     }
 
@@ -2748,7 +2778,10 @@ impl Sim {
             | Scene::WarpDiffRay
             | Scene::WarpTileFilter
             | Scene::WarpTileCompaction
-            | Scene::AdamLandscape => build_warp_empty_model(),
+            | Scene::AdamLandscape
+            | Scene::WarpTileMatmul
+            | Scene::WarpTileConvolution
+            | Scene::WarpTileMcgp => build_warp_empty_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -6079,6 +6112,9 @@ fn step_simulation(
             | Scene::WarpTileFilter
             | Scene::WarpTileCompaction
             | Scene::AdamLandscape
+            | Scene::WarpTileMatmul
+            | Scene::WarpTileConvolution
+            | Scene::WarpTileMcgp
             | Scene::WarpRaycast
             | Scene::WarpMesh
             | Scene::WarpMeshIntersect
@@ -9530,6 +9566,9 @@ fn control_pane(
                     | Scene::WarpTileFilter
                     | Scene::WarpTileCompaction
                     | Scene::AdamLandscape
+                    | Scene::WarpTileMatmul
+                    | Scene::WarpTileConvolution
+                    | Scene::WarpTileMcgp
             ),
             _ => false,
         },
@@ -9710,6 +9749,9 @@ fn control_pane(
         Scene::WarpTileFilter => Some("Warp tile filter (Stage 37.8)"),
         Scene::WarpTileCompaction => Some("Warp tile compaction (Stage 37.8)"),
         Scene::AdamLandscape => Some("Adam optimization landscape (Stage 38c)"),
+        Scene::WarpTileMatmul => Some("Warp tile matmul (Stage 37.8)"),
+        Scene::WarpTileConvolution => Some("Warp tile convolution (Stage 37.8)"),
+        Scene::WarpTileMcgp => Some("Warp tile MCGP (Stage 37.8)"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9855,6 +9897,9 @@ fn control_pane(
                     Scene::WarpTileFilter => warp_tile_filter_pane(ui, &mut warp_states.tile_filter),
                     Scene::WarpTileCompaction => warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction),
                     Scene::AdamLandscape => adam_landscape_pane(ui, &mut warp_states.adam_landscape),
+                    Scene::WarpTileMatmul => warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul),
+                    Scene::WarpTileConvolution => warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution),
+                    Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
                     _ => {}
                 });
         }
@@ -16629,6 +16674,9 @@ struct WarpExampleStates {
     tile_filter: WarpTileFilterState,
     tile_compaction: WarpTileCompactionState,
     adam_landscape: AdamLandscapeState,
+    tile_matmul: WarpTileMatmulState,
+    tile_convolution: WarpTileConvolutionState,
+    tile_mcgp: WarpTileMcgpState,
 }
 
 impl Default for WarpExampleStates {
@@ -16663,6 +16711,9 @@ impl Default for WarpExampleStates {
             tile_filter: WarpTileFilterState::default(),
             tile_compaction: WarpTileCompactionState::default(),
             adam_landscape: AdamLandscapeState::default(),
+            tile_matmul: WarpTileMatmulState::default(),
+            tile_convolution: WarpTileConvolutionState::default(),
+            tile_mcgp: WarpTileMcgpState::default(),
         }
     }
 }
@@ -20366,3 +20417,660 @@ fn adam_landscape_pane(ui: &mut egui::Ui, st: &mut AdamLandscapeState) {
     ui.small("Yellow trajectory = Adam path; green sphere = (1, 1) target.");
     ui.small("Adam: m + v moments with bias correction (Kingma & Ba).");
 }
+
+// ═══ Scene 90: WarpTileMatmul (Stage 37.8) ═════════════════════════════
+//
+// Standalone GEMM `C = A · B` demo. Fixed M=64, N=32, K=128 with
+// deterministic-hash inputs. CPU/GPU toggle exercises both
+// `tile_matmul::matmul_cpu` and the GPU `TileMatmulKernel`. Renders A
+// (M × K) on the left, B (K × N) in the middle, and C (M × N) on the
+// right as colored point grids; each cell's hue encodes the value.
+
+const TILE_MATMUL_M: usize = 64;
+const TILE_MATMUL_N: usize = 32;
+const TILE_MATMUL_K: usize = 128;
+
+struct WarpTileMatmulState {
+    a: Vec<f32>,
+    b: Vec<f32>,
+    c: Vec<f32>,
+    use_gpu: bool,
+    last_us: f64,
+    needs_recompute: bool,
+    /// Per-frame display scale so all three grids share a consistent
+    /// colour range; updated from the latest |C| max.
+    c_abs_max: f32,
+}
+
+impl Default for WarpTileMatmulState {
+    fn default() -> Self {
+        let m = TILE_MATMUL_M;
+        let n = TILE_MATMUL_N;
+        let k = TILE_MATMUL_K;
+        // Deterministic LCG so the demo doesn't shimmer between runs.
+        let mut seed = 0xA110_BEEF_u32;
+        let mut rng = || {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            ((seed >> 16) as i32 as f32) / 32768.0
+        };
+        let mut a = vec![0.0_f32; m * k];
+        let mut b = vec![0.0_f32; k * n];
+        for v in a.iter_mut() { *v = rng(); }
+        for v in b.iter_mut() { *v = rng(); }
+        Self {
+            a,
+            b,
+            c: vec![0.0_f32; m * n],
+            use_gpu: false,
+            last_us: 0.0,
+            needs_recompute: true,
+            c_abs_max: 1.0,
+        }
+    }
+}
+
+fn update_warp_tile_matmul(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileMatmul {
+        return;
+    }
+    let st = &mut warp.tile_matmul;
+    if !st.needs_recompute {
+        return;
+    }
+    let m = TILE_MATMUL_M;
+    let n = TILE_MATMUL_N;
+    let k = TILE_MATMUL_K;
+    let mut c = vec![0.0_f32; m * n];
+
+    let t0 = std::time::Instant::now();
+    let used_gpu = if st.use_gpu {
+        if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+            let kernel = molla::compute::tile_matmul::TileMatmulKernel::new(device);
+            kernel
+                .dispatch_blocking(device, queue, &st.a, &st.b, &mut c, m, n, k)
+                .is_ok()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !used_gpu {
+        molla::compute::tile_matmul::matmul_cpu(&st.a, &st.b, &mut c, m, n, k)
+            .expect("matmul_cpu");
+    }
+    st.last_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    // Track absolute-value range of C for consistent colour scaling.
+    let mut mx = 1.0_f32;
+    for &v in c.iter() {
+        let av = v.abs();
+        if av > mx {
+            mx = av;
+        }
+    }
+    st.c_abs_max = mx;
+    st.c = c;
+    st.needs_recompute = false;
+}
+
+/// Map a scalar `v` normalized to roughly `[-1, 1]` to a Bevy colour.
+fn tile_matmul_color(v: f32) -> Color {
+    let t = ((v + 1.0) * 0.5).clamp(0.0, 1.0);
+    if t < 0.5 {
+        let s = t * 2.0;
+        Color::srgb(0.05, 0.20 + 0.65 * s, 1.0 - 0.6 * s)
+    } else {
+        let s = (t - 0.5) * 2.0;
+        Color::srgb(0.05 + 0.95 * s, 0.85 - 0.55 * s, 0.40 - 0.40 * s)
+    }
+}
+
+fn draw_warp_tile_matmul_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpTileMatmul {
+        return;
+    }
+    let st = &warp.tile_matmul;
+    let m = TILE_MATMUL_M;
+    let n = TILE_MATMUL_N;
+    let k = TILE_MATMUL_K;
+    // Each grid is rendered in a 1×1 box at y ≈ 0.05. The three grids
+    // sit side-by-side along +X with a small gap. K is the largest axis
+    // (128), so each tile of A/B is ~1/128 wide.
+    let panel_w = 1.0_f32;
+    let panel_h = 1.0_f32;
+    let gap = 0.15_f32;
+    // A at x ∈ [-1.7, -0.7]
+    let ax_lo = -1.5_f32 - gap;
+    // B at x ∈ [-0.5, 0.5]
+    let bx_lo = -0.5_f32;
+    // C at x ∈ [0.7, 1.7]
+    let cx_lo = 0.5_f32 + gap;
+    // A: M × K, rendered with M on z, K on x.
+    let cell_a_x = panel_w / k as f32;
+    let cell_a_z = panel_h / m as f32;
+    let a_inv_max = 1.0_f32 / st.a.iter().map(|v| v.abs()).fold(1e-6_f32, f32::max);
+    for i in 0..m {
+        for p in 0..k {
+            let v = st.a[i * k + p];
+            let x = ax_lo + (p as f32 + 0.5) * cell_a_x;
+            let z = -0.5 + (i as f32 + 0.5) * cell_a_z;
+            gizmos.sphere(
+                Vec3::new(x, 0.05, z),
+                cell_a_z.min(cell_a_x) * 0.4,
+                tile_matmul_color(v * a_inv_max),
+            );
+        }
+    }
+    // B: K × N, rendered with K on z, N on x.
+    let cell_b_x = panel_w / n as f32;
+    let cell_b_z = panel_h / k as f32;
+    let b_inv_max = 1.0_f32 / st.b.iter().map(|v| v.abs()).fold(1e-6_f32, f32::max);
+    for p in 0..k {
+        for j in 0..n {
+            let v = st.b[p * n + j];
+            let x = bx_lo + (j as f32 + 0.5) * cell_b_x;
+            let z = -0.5 + (p as f32 + 0.5) * cell_b_z;
+            gizmos.sphere(
+                Vec3::new(x, 0.05, z),
+                cell_b_x.min(cell_b_z) * 0.4,
+                tile_matmul_color(v * b_inv_max),
+            );
+        }
+    }
+    // C: M × N, rendered with M on z, N on x.
+    let cell_c_x = panel_w / n as f32;
+    let cell_c_z = panel_h / m as f32;
+    let c_inv_max = 1.0_f32 / st.c_abs_max.max(1e-6);
+    for i in 0..m {
+        for j in 0..n {
+            let v = st.c[i * n + j];
+            let x = cx_lo + (j as f32 + 0.5) * cell_c_x;
+            let z = -0.5 + (i as f32 + 0.5) * cell_c_z;
+            gizmos.sphere(
+                Vec3::new(x, 0.05, z),
+                cell_c_x.min(cell_c_z) * 0.4,
+                tile_matmul_color(v * c_inv_max),
+            );
+        }
+    }
+}
+
+fn warp_tile_matmul_pane(ui: &mut egui::Ui, st: &mut WarpTileMatmulState) {
+    ui.label("Warp tile matmul — Stage 37.8 GEMM `C = A · B`");
+    ui.separator();
+    readout(
+        ui,
+        "Shapes",
+        &format!(
+            "A={M}×{K}, B={K}×{N}, C={M}×{N}",
+            M = TILE_MATMUL_M,
+            N = TILE_MATMUL_N,
+            K = TILE_MATMUL_K,
+        ),
+    );
+    readout(ui, "Last solve", &format!("{:.1} µs", st.last_us));
+    readout(ui, "max|C|", &format!("{:.3}", st.c_abs_max));
+    ui.separator();
+    let was_gpu = st.use_gpu;
+    let _ = ui.checkbox(&mut st.use_gpu, "Use GPU");
+    if was_gpu != st.use_gpu {
+        st.needs_recompute = true;
+    }
+    let backend = if st.use_gpu { "GPU TileMatmulKernel" } else { "CPU matmul_cpu" };
+    readout(ui, "Backend", backend);
+    if ui.button("Re-randomise inputs").clicked() {
+        // Re-seed off the wall clock so the demo can show new inputs.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let mut seed = (nanos ^ 0xA110_BEEF) as u32;
+        let mut rng = || {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            ((seed >> 16) as i32 as f32) / 32768.0
+        };
+        for v in st.a.iter_mut() { *v = rng(); }
+        for v in st.b.iter_mut() { *v = rng(); }
+        st.needs_recompute = true;
+    }
+    if ui.button("Re-run").clicked() {
+        st.needs_recompute = true;
+    }
+    ui.small("Left grid: A (M × K). Middle: B (K × N). Right: C (M × N).");
+    ui.small("Stage 37.8 primitive: tile_matmul (`matmul_cpu` / `TileMatmulKernel`).");
+}
+
+// ═══ Scene 91: WarpTileConvolution (Stage 37.8) ════════════════════════
+//
+// Standalone separable 2D convolution demo. Procedural 64×64 input
+// image; user-editable 5-tap kernel exposed as five coefficient sliders
+// (the molla `convolve_separable_cpu` / `TileConvolutionKernel` API
+// applies the same 1-D kernel along x and along y, hence "symmetric
+// separable" — there is no independent K_x / K_y dial; this is what the
+// existing primitive supports). CPU/GPU toggle exercises both paths.
+
+const TILE_CONV_DIM: usize = 64;
+
+struct WarpTileConvolutionState {
+    input: Vec<f32>,
+    output: Vec<f32>,
+    /// Five 1-D kernel coefficients [c0, c1, c2, c3, c4]. Applied
+    /// along x and y in sequence by the molla separable primitive.
+    coeffs: [f32; 5],
+    use_gpu: bool,
+    last_us: f64,
+    needs_recompute: bool,
+}
+
+impl Default for WarpTileConvolutionState {
+    fn default() -> Self {
+        let n = TILE_CONV_DIM;
+        let mut input = vec![0.0_f32; n * n];
+        for j in 0..n {
+            for i in 0..n {
+                let x = (i as f32 + 0.5) / n as f32;
+                let y = (j as f32 + 0.5) / n as f32;
+                // Low-frequency pattern + a bright bump in the centre +
+                // a square stamp off-centre — gives box / gaussian /
+                // laplacian visibly different outputs.
+                let pat = (5.0 * std::f32::consts::PI * x).sin()
+                    * (5.0 * std::f32::consts::PI * y).cos();
+                let dx = x - 0.5;
+                let dy = y - 0.5;
+                let bump = (-40.0 * (dx * dx + dy * dy)).exp();
+                let in_square = ((x - 0.25).abs() < 0.08 && (y - 0.75).abs() < 0.08) as i32 as f32;
+                input[j * n + i] = 0.35 * pat + 0.55 * bump + 0.5 * in_square;
+            }
+        }
+        Self {
+            input,
+            output: vec![0.0_f32; n * n],
+            // Default to the binomial 5-tap gaussian.
+            coeffs: [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0],
+            use_gpu: false,
+            last_us: 0.0,
+            needs_recompute: true,
+        }
+    }
+}
+
+fn update_warp_tile_convolution(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileConvolution {
+        return;
+    }
+    let st = &mut warp.tile_convolution;
+    if !st.needs_recompute {
+        return;
+    }
+    let n = TILE_CONV_DIM;
+    let kernel = molla::compute::tile_convolution::Kernel5 { coeffs: st.coeffs };
+    let mut output = vec![0.0_f32; n * n];
+    let t0 = std::time::Instant::now();
+    let used_gpu = if st.use_gpu {
+        if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+            let kk = molla::compute::tile_convolution::TileConvolutionKernel::new(device);
+            kk.dispatch_blocking(device, queue, &st.input, &mut output, n, n, &kernel)
+                .is_ok()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !used_gpu {
+        let _ = molla::compute::tile_convolution::convolve_separable_cpu(
+            &st.input, &mut output, n, n, &kernel,
+        );
+    }
+    st.last_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    st.output = output;
+    st.needs_recompute = false;
+}
+
+fn tile_conv_color(v: f32) -> Color {
+    let t = ((v + 1.0) * 0.5).clamp(0.0, 1.0);
+    if t < 0.5 {
+        let s = t * 2.0;
+        Color::srgb(0.05, 0.20 + 0.65 * s, 1.0 - 0.6 * s)
+    } else {
+        let s = (t - 0.5) * 2.0;
+        Color::srgb(0.05 + 0.95 * s, 0.85 - 0.55 * s, 0.40 - 0.40 * s)
+    }
+}
+
+fn draw_warp_tile_convolution_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpTileConvolution {
+        return;
+    }
+    let st = &warp.tile_convolution;
+    let n = TILE_CONV_DIM;
+    let cell = 1.0 / n as f32;
+    let half = 0.5_f32;
+    for j in 0..n {
+        for i in 0..n {
+            let x_local = (i as f32 + 0.5) * cell - 0.5;
+            let z_local = (j as f32 + 0.5) * cell - 0.5;
+            let in_val = st.input[j * n + i];
+            let in_pos = Vec3::new(-half - 0.05 + x_local, 0.05 + 0.5 * in_val, z_local);
+            gizmos.sphere(in_pos, cell * 0.4, tile_conv_color(in_val));
+            let out_val = st.output[j * n + i];
+            let out_pos = Vec3::new(half + 0.05 + x_local, 0.05 + 0.5 * out_val, z_local);
+            gizmos.sphere(out_pos, cell * 0.4, tile_conv_color(out_val));
+        }
+    }
+}
+
+fn warp_tile_convolution_pane(ui: &mut egui::Ui, st: &mut WarpTileConvolutionState) {
+    ui.label("Warp tile convolution — Stage 37.8 separable 5-tap convolution");
+    ui.separator();
+    readout(ui, "Image", &format!("{0}×{0}", TILE_CONV_DIM));
+    readout(ui, "Last solve", &format!("{:.1} µs", st.last_us));
+    let sum: f32 = st.coeffs.iter().sum();
+    readout(ui, "Σ coeffs", &format!("{:+.3}", sum));
+    ui.separator();
+    ui.label("Kernel coefficients (applied along x then y):");
+    let mut changed = false;
+    for (idx, c) in st.coeffs.iter_mut().enumerate() {
+        if ui
+            .add(egui::Slider::new(c, -1.0..=1.0).text(format!("c[{}]", idx)))
+            .changed()
+        {
+            changed = true;
+        }
+    }
+    if changed {
+        st.needs_recompute = true;
+    }
+    ui.horizontal(|ui| {
+        if ui.button("Box").clicked() {
+            st.coeffs = [0.2, 0.2, 0.2, 0.2, 0.2];
+            st.needs_recompute = true;
+        }
+        if ui.button("Gauss").clicked() {
+            st.coeffs = [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0];
+            st.needs_recompute = true;
+        }
+        if ui.button("Laplace").clicked() {
+            st.coeffs = [0.0, 1.0, -2.0, 1.0, 0.0];
+            st.needs_recompute = true;
+        }
+        if ui.button("Identity").clicked() {
+            st.coeffs = [0.0, 0.0, 1.0, 0.0, 0.0];
+            st.needs_recompute = true;
+        }
+    });
+    ui.separator();
+    let was_gpu = st.use_gpu;
+    let _ = ui.checkbox(&mut st.use_gpu, "Use GPU");
+    if was_gpu != st.use_gpu {
+        st.needs_recompute = true;
+    }
+    let backend = if st.use_gpu {
+        "GPU TileConvolutionKernel"
+    } else {
+        "CPU convolve_separable_cpu"
+    };
+    readout(ui, "Backend", backend);
+    if ui.button("Re-apply").clicked() {
+        st.needs_recompute = true;
+    }
+    ui.small("Left grid: input image. Right grid: filtered output.");
+    ui.small("Stage 37.8 primitive: tile_convolution (separable, 5-tap, clamp-to-edge).");
+    ui.small("Note: the molla API applies one 1-D kernel along both axes (symmetric separable).");
+}
+
+// ═══ Scene 92: WarpTileMcgp (Stage 37.8) ═══════════════════════════════
+//
+// Monte Carlo Laplace solver on the unit square `[-1, 1]²` via the
+// walk-on-spheres algorithm (Sawhney & Crane 2020, the same recipe
+// driving Warp's `tile/example_tile_mcgp.py`). Each interior sample
+// point launches `n_samples` random walks; at every step a uniformly
+// random direction at distance equal to the closest-boundary radius
+// is taken. The walk stops when the radius shrinks below `epsilon`,
+// at which point the prescribed boundary value `g(x, y)` is returned.
+// The average over walks is an unbiased estimator of `u(x, y)` where
+// `Δu = 0` interior and `u = g` on the boundary.
+//
+// Wires `molla::compute::tile_mcgp::McgpConfig` directly (n_samples,
+// epsilon, seed map cleanly onto walks-per-point / boundary-ε / RNG
+// seed). The same module's `mcgp_estimate` is the SPSA gradient
+// estimator — different problem, same MC tooling — and is mentioned
+// in the pane for context.
+
+const TILE_MCGP_GRID: usize = 16;
+
+struct WarpTileMcgpState {
+    /// Interior sample points (grid laid out in `[-0.95, 0.95]²`).
+    /// Stored as `(x, y, u_hat)` after the last solve.
+    points: Vec<(f32, f32, f32)>,
+    cfg: molla::compute::tile_mcgp::McgpConfig,
+    /// Cap on per-walk step count (textbook walk-on-spheres typically
+    /// terminates in <50 steps for the unit square boundary).
+    max_steps: u32,
+    last_us: f64,
+    needs_recompute: bool,
+}
+
+impl Default for WarpTileMcgpState {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            cfg: molla::compute::tile_mcgp::McgpConfig {
+                n_samples: 64,
+                epsilon: 0.01,
+                seed: 0x5EED_F00D,
+            },
+            max_steps: 128,
+            last_us: 0.0,
+            needs_recompute: true,
+        }
+    }
+}
+
+/// Prescribed boundary function `g(x, y)`. Used on the four edges
+/// `|x| = 1` or `|y| = 1`. A smooth, signed pattern makes the Laplace
+/// solution interesting to view.
+fn mcgp_boundary_value(x: f32, y: f32) -> f32 {
+    // 0.5 + 0.5 · sin(2π·x) · cos(2π·y). Range [0, 1].
+    0.5 + 0.5 * (std::f32::consts::TAU * x).sin() * (std::f32::consts::TAU * y).cos()
+}
+
+/// Signed distance to the unit-square boundary on the inside. Positive
+/// inside, zero on the boundary, undefined outside. For `(x, y) ∈
+/// [-1, 1]²` this is `min(1 − |x|, 1 − |y|)`.
+fn mcgp_dist_to_boundary(x: f32, y: f32) -> f32 {
+    (1.0 - x.abs()).min(1.0 - y.abs())
+}
+
+/// Nearest-boundary point on `[-1, 1]²`. Used when the walk terminates
+/// within the boundary epsilon to evaluate `g`.
+fn mcgp_nearest_boundary(x: f32, y: f32) -> (f32, f32) {
+    let dx_left = x - -1.0;
+    let dx_right = 1.0 - x;
+    let dy_bot = y - -1.0;
+    let dy_top = 1.0 - y;
+    let mut best = (dx_left.abs(), -1.0_f32, y);
+    let cand = (dx_right.abs(), 1.0_f32, y);
+    if cand.0 < best.0 { best = cand; }
+    let cand = (dy_bot.abs(), x, -1.0_f32);
+    if cand.0 < best.0 { best = cand; }
+    let cand = (dy_top.abs(), x, 1.0_f32);
+    if cand.0 < best.0 { best = cand; }
+    (best.1, best.2)
+}
+
+/// Tiny xorshift64; same construction as inside `tile_mcgp`. The
+/// crate's RNG is private — we reproduce the canonical 13/7/17
+/// xorshift here so this scene stays viewer-only.
+struct McgpXorShift(u64);
+impl McgpXorShift {
+    fn new(seed: u64) -> Self { Self(seed.max(1)) }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    /// Uniform f32 in `[0, 1)`.
+    fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+/// One walk-on-spheres random walk starting at `(x0, y0)`.
+fn mcgp_walk(rng: &mut McgpXorShift, x0: f32, y0: f32, eps: f32, max_steps: u32) -> f32 {
+    let mut x = x0;
+    let mut y = y0;
+    for _ in 0..max_steps {
+        let r = mcgp_dist_to_boundary(x, y);
+        if r < eps {
+            let (bx, by) = mcgp_nearest_boundary(x, y);
+            return mcgp_boundary_value(bx, by);
+        }
+        // Sample uniformly on the circle of radius r centred at (x, y).
+        let theta = rng.next_f32() * std::f32::consts::TAU;
+        x += r * theta.cos();
+        y += r * theta.sin();
+    }
+    // Hit the step cap — fall back to the nearest boundary value.
+    let (bx, by) = mcgp_nearest_boundary(x, y);
+    mcgp_boundary_value(bx, by)
+}
+
+fn update_warp_tile_mcgp(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
+    if sim.scene != Scene::WarpTileMcgp {
+        return;
+    }
+    let st = &mut warp.tile_mcgp;
+    if !st.needs_recompute {
+        return;
+    }
+    let n = TILE_MCGP_GRID;
+    let mut pts = Vec::with_capacity(n * n);
+    let t0 = std::time::Instant::now();
+    let mut rng = McgpXorShift::new(st.cfg.seed);
+    let walks = st.cfg.n_samples.max(1) as u32;
+    let eps = st.cfg.epsilon as f32;
+    for j in 0..n {
+        for i in 0..n {
+            // Interior grid laid out in [-0.95, 0.95]² so we never
+            // start on the boundary.
+            let x = -0.95 + 1.9 * (i as f32 + 0.5) / n as f32;
+            let y = -0.95 + 1.9 * (j as f32 + 0.5) / n as f32;
+            let mut acc = 0.0_f32;
+            for _ in 0..walks {
+                acc += mcgp_walk(&mut rng, x, y, eps, st.max_steps);
+            }
+            pts.push((x, y, acc / walks as f32));
+        }
+    }
+    st.last_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    st.points = pts;
+    st.needs_recompute = false;
+}
+
+fn tile_mcgp_color(v: f32) -> Color {
+    let t = v.clamp(0.0, 1.0);
+    if t < 0.5 {
+        let s = t * 2.0;
+        Color::srgb(0.05, 0.20 + 0.65 * s, 1.0 - 0.6 * s)
+    } else {
+        let s = (t - 0.5) * 2.0;
+        Color::srgb(0.05 + 0.95 * s, 0.85 - 0.55 * s, 0.40 - 0.40 * s)
+    }
+}
+
+fn draw_warp_tile_mcgp_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpTileMcgp {
+        return;
+    }
+    let st = &warp.tile_mcgp;
+    // Draw the unit-square boundary (z = 0) with the boundary
+    // function `g` sampled along it.
+    let edge_n = 96;
+    for k in 0..edge_n {
+        let t0 = -1.0 + 2.0 * k as f32 / edge_n as f32;
+        let t1 = -1.0 + 2.0 * (k + 1) as f32 / edge_n as f32;
+        // Top: y = 1
+        gizmos.line(Vec3::new(t0, 0.0, 1.0), Vec3::new(t1, 0.0, 1.0), tile_mcgp_color(mcgp_boundary_value(t0, 1.0)));
+        // Bottom: y = -1
+        gizmos.line(Vec3::new(t0, 0.0, -1.0), Vec3::new(t1, 0.0, -1.0), tile_mcgp_color(mcgp_boundary_value(t0, -1.0)));
+        // Right: x = 1
+        gizmos.line(Vec3::new(1.0, 0.0, t0), Vec3::new(1.0, 0.0, t1), tile_mcgp_color(mcgp_boundary_value(1.0, t0)));
+        // Left: x = -1
+        gizmos.line(Vec3::new(-1.0, 0.0, t0), Vec3::new(-1.0, 0.0, t1), tile_mcgp_color(mcgp_boundary_value(-1.0, t0)));
+    }
+    // Sample points; height = u_hat so the surface bulges.
+    for &(x, y, u) in &st.points {
+        let pos = Vec3::new(x, 0.05 + 0.5 * u, y);
+        gizmos.sphere(pos, 0.025, tile_mcgp_color(u));
+    }
+}
+
+fn warp_tile_mcgp_pane(ui: &mut egui::Ui, st: &mut WarpTileMcgpState) {
+    ui.label("Warp tile MCGP — Stage 37.8 Monte Carlo Laplace");
+    ui.separator();
+    readout(
+        ui,
+        "Points",
+        &format!("{0}×{0} = {1}", TILE_MCGP_GRID, TILE_MCGP_GRID * TILE_MCGP_GRID),
+    );
+    readout(ui, "Last solve", &format!("{:.1} ms", st.last_us / 1000.0));
+    ui.separator();
+    ui.label("McgpConfig (from molla::compute::tile_mcgp):");
+    let mut n_samples = st.cfg.n_samples as i32;
+    if ui
+        .add(egui::Slider::new(&mut n_samples, 4..=512).text("n_samples"))
+        .changed()
+    {
+        st.cfg.n_samples = n_samples.max(1) as usize;
+        st.needs_recompute = true;
+    }
+    let mut eps = st.cfg.epsilon as f32;
+    if ui
+        .add(egui::Slider::new(&mut eps, 0.001..=0.1).text("epsilon").logarithmic(true))
+        .changed()
+    {
+        st.cfg.epsilon = eps as f64;
+        st.needs_recompute = true;
+    }
+    let mut max_steps = st.max_steps as i32;
+    if ui
+        .add(egui::Slider::new(&mut max_steps, 16..=512).text("max walk steps"))
+        .changed()
+    {
+        st.max_steps = max_steps as u32;
+        st.needs_recompute = true;
+    }
+    ui.separator();
+    if ui.button("Re-seed").clicked() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xC0FFEE);
+        st.cfg.seed = nanos ^ 0x5EED_F00D;
+        st.needs_recompute = true;
+    }
+    if ui.button("Re-solve").clicked() {
+        st.needs_recompute = true;
+    }
+    ui.small("Walk-on-spheres MC Laplace solver on `[-1, 1]²`.");
+    ui.small("Boundary `g(x, y) = 0.5 + 0.5·sin(2π·x)·cos(2π·y)`.");
+    ui.small("Sphere colour = û at that interior point; height = û.");
+    ui.small("Companion API: `mcgp_estimate` (SPSA gradient — separate problem, shared MC tooling).");
+}
+
