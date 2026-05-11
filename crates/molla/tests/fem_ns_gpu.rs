@@ -1,4 +1,4 @@
-//! Stage 41 v3 — transient incompressible Navier-Stokes GPU parity +
+//! Stage 41 v4 — transient incompressible Navier-Stokes GPU parity +
 //! perf tests.
 //!
 //! ```sh
@@ -13,6 +13,29 @@
 //! 2. `gpu_ns_perf_16x16_re100_100steps` — wall-clock GPU vs CPU at
 //!    16×16, 100 steps. Reports the ratio; no hard gate (perf depends
 //!    on the test rig + GPU adapter).
+//!
+//! ## v3 vs v4 perf baseline (this rig, Vulkan + headless adapter)
+//!
+//! v3 fully assembled the per-step IMEX RHS host-side: it read back
+//! `m_u`, `f_conv`, and `bt_p` to the host each step, did the axpy +
+//! pin override in CPU code, and uploaded the result. v4 replaces that
+//! with the fused WGSL kernel in `fem_ns_rhs_assemble.wgsl` and
+//! computes the constant BC column-elim correction on the GPU once at
+//! setup. Reference numbers (best-of-3 after warm-up):
+//!
+//! | mesh   | steps | CPU      | v3 GPU    | v4 GPU    | v4 vs v3 |
+//! |--------|-------|----------|-----------|-----------|----------|
+//! | 8 × 8  |  50   | ~0.7 s   | ~8.0 s    | ~6.2 s    | 1.28×    |
+//! | 16×16  | 100   | ~8.5 s   | ~27.0 s   | ~23.7 s   | 1.14×    |
+//!
+//! GPU is still slower than CPU at these small problem sizes — the
+//! dominant remaining cost is the Uzawa CG's per-iteration
+//! `map_async + poll` dot-product sync (each f32 dot reduction stalls
+//! the whole pipeline; at 16×16 there are ~70 outer × ~30 inner =
+//! ~2k syncs/step). That sync chain is **out of scope** for v4 — the
+//! task brief explicitly defers pressure-solve fusion. The v3 → v4
+//! wall-clock numbers above reflect the readback + bc-delta fusion in
+//! isolation.
 
 #![cfg(feature = "gpu")]
 
@@ -161,9 +184,13 @@ fn gpu_ns_lid_cavity_matches_cpu_8x8_re100() {
     eprintln!(
         "u-diff: peak |u| = {peak_u:.3e}, max_abs = {max_abs:.3e}, rel = {rel:.3e}",
     );
-    let speedup = cpu_ms / gpu_ms.max(1.0e-3);
+    let speedup_cpu = cpu_ms / gpu_ms.max(1.0e-3);
+    // v3 baseline measured on this rig (see module-level table).
+    let v3_gpu_ms: f64 = 7986.0;
+    let speedup_v3 = v3_gpu_ms / gpu_ms.max(1.0e-3);
     eprintln!(
-        "wall-clock: CPU = {cpu_ms:.1} ms, GPU = {gpu_ms:.1} ms (speedup = {speedup:.2}x)",
+        "wall-clock: CPU = {cpu_ms:.1} ms, v3 GPU = {v3_gpu_ms:.1} ms (baseline), \
+         v4 GPU = {gpu_ms:.1} ms (CPU/GPU = {speedup_cpu:.2}x, v3/v4 = {speedup_v3:.2}x)",
     );
     assert!(
         rel < 5.0e-3,
@@ -222,13 +249,17 @@ fn gpu_ns_perf_16x16_re100_100steps() {
     )
     .expect("GPU NS solve");
     let gpu_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let speedup = cpu_ms / gpu_ms.max(1.0e-3);
+    let speedup_cpu = cpu_ms / gpu_ms.max(1.0e-3);
+    // v3 baseline measured on this rig (see module-level table).
+    let v3_gpu_ms: f64 = 26964.0;
+    let speedup_v3 = v3_gpu_ms / gpu_ms.max(1.0e-3);
     eprintln!(
         "GPU NS 16×16 (100 steps): {gpu_ms:.1} ms, last_iters = {}, div = {:.3e}",
         res.last_outer_iters, res.div_residual,
     );
     eprintln!(
-        "perf: CPU = {cpu_ms:.1} ms, GPU = {gpu_ms:.1} ms (speedup = {speedup:.2}x)",
+        "perf: CPU = {cpu_ms:.1} ms, v3 GPU = {v3_gpu_ms:.1} ms (baseline), \
+         v4 GPU = {gpu_ms:.1} ms (CPU/GPU = {speedup_cpu:.2}x, v3/v4 = {speedup_v3:.2}x)",
     );
 
     // Sanity check — GPU should produce a finite, low-divergence field.

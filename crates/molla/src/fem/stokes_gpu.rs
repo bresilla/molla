@@ -35,7 +35,10 @@ use crate::fem::stokes::{
     assemble_div_block, assemble_velocity_block, assemble_velocity_mass,
     collect_velocity_pins_pub, MixedTaylorHood, StokesBc,
 };
-use crate::kernels::{FemCgGpuKernel, FemNsAdvectKernel, FemStokesGpuKernel, StokesEntry};
+use crate::kernels::{
+    FemCgGpuKernel, FemNsAdvectKernel, FemNsRhsAssembleKernel, FemStokesGpuKernel, NsRhsMode,
+    StokesEntry,
+};
 use crate::math::{BsrAlgebraKernel, BsrGpu};
 use crate::math::sparse::BsrMatrix;
 use crate::math::Real;
@@ -660,22 +663,30 @@ fn clone_bsr(b: &BsrGpu) -> BsrGpu {
     }
 }
 
-// ─── Stage 41 v3 — transient Navier-Stokes ────────────────────────────
+// ─── Stage 41 v4 — transient Navier-Stokes (fused RHS) ───────────────
 //
 // IMEX time-stepping (implicit viscous + explicit advection) on the
-// GPU. Per step we:
+// GPU. v4 replaces the per-step host roundtrip from v3 with a fused
+// WGSL RHS-axpy kernel (`fem_ns_rhs_assemble.wgsl`). Per step:
 //   1. zero the GPU `f_conv` buffer,
-//   2. dispatch `FemNsAdvectKernel` to scatter `∫ N_i · (u_old·∇)u_old dx`
-//      (optionally with Hughes SUPG) into `f_conv`,
-//   3. compute the per-step RHS `rhs = (M/Δt)·u_old + f_ext − f_conv`
-//      on the host (one BSR matvec + axpy — cheap relative to the CG
-//      inner work),
-//   4. apply the symmetric-Dirichlet column elimination using the
-//      precomputed pinned-value list and run the Uzawa-CG solver
-//      against the constant `A_eff = M/Δt + νK` (pre-reduced once at
-//      setup time),
-//   5. read back `u_new` and overwrite the GPU u_old buffer for the
-//      next step.
+//   2. dispatch `FemNsAdvectKernel` to scatter
+//      `∫ N_i · (u_old·∇)u_old dx` (optionally with Hughes SUPG)
+//      into `f_conv`,
+//   3. matvec `m_u = M · u_old` on the GPU,
+//   4. dispatch `FemNsRhsAssembleKernel::Step` to compute
+//      `rhs = (M/Δt)·u_old + f_ext − f_conv − bc_delta`
+//      with the pin-override applied inline — no host readback,
+//   5. run the Uzawa-CG solver against the constant
+//      `A_eff = M/Δt + νK` (pre-reduced once at setup time),
+//   6. matvec `bt_p = Bᵀ · p_new` and dispatch
+//      `FemNsRhsAssembleKernel::Recovery` to compute the recovery RHS
+//      `rhs_u = rhs_step − bt_p` (with pin override) — again no host
+//      readback,
+//   7. run the inner CG for `u_new = A_eff⁻¹ rhs_u`,
+//   8. copy `u_cg.x`, `p_cg.x` into the persistent `u_buf`, `p_buf`.
+//
+// All four "axpy + pin" operations that v3 paid for host-side (two per
+// step) are now a single GPU dispatch each.
 //
 // Time-stepping scheme:
 //   * **θ = 1** (implicit Euler) on the viscous + pressure terms.
@@ -824,15 +835,15 @@ pub fn solve_navier_stokes_gpu(
     // discretisation, so the result keeps the same pattern as K.
     let a_eff_host = build_a_eff_host(&m_cpu, &k_cpu, inv_dt);
 
-    // BC reduction on A_eff. The host RHS at each step starts as
-    // `(M/dt)·u_old + f_ext − f_conv`; the column-elimination here
-    // produces the **deltas** we need to subtract from that RHS for
-    // every step (since pinned values are constant across steps for
-    // the lid-driven cavity / Taylor-Green BC sets).
+    // BC reduction on A_eff. The reduced matrix lives on the GPU
+    // throughout the per-step loop. v4 computes the symmetric-Dirichlet
+    // **column-elimination delta** on the GPU (one matvec `bc_delta =
+    // A_eff_unreduced · pin_val_full` with pinned rows masked to 0)
+    // and feeds it into the fused RHS kernel, so the host never touches
+    // the per-step RHS axpy.
     let pinned_pairs = collect_velocity_pins_pub(bcs, dim);
     let pinned_set: std::collections::HashSet<usize> =
         pinned_pairs.iter().map(|(d, _)| *d).collect();
-    let bc_rhs_delta = compute_bc_rhs_delta(&a_eff_host, &pinned_pairs, n_v);
     let mut a_eff_reduced = a_eff_host.clone();
     apply_symmetric_dirichlet_inline(&mut a_eff_reduced, &mut vec![0.0; n_v], &pinned_pairs);
 
@@ -895,6 +906,10 @@ pub fn solve_navier_stokes_gpu(
     let m_gpu = BsrGpu::upload(device, queue, &m_cpu)?;
     // BC-reduced effective LHS — never written after setup.
     let a_eff_gpu = BsrGpu::upload(device, queue, &a_eff_reduced)?;
+    // Unreduced A_eff — used ONCE at setup to derive the per-step BC
+    // column-elimination correction on the GPU. Released at the end of
+    // setup (the binding scope drops with the function).
+    let a_eff_unreduced_gpu = BsrGpu::upload(device, queue, &a_eff_host)?;
     // Divergence matrix — unmodified, see comment in `solve_stokes_gpu`.
     let b_gpu = BsrGpu::upload(device, queue, &b_cpu_unreduced)?;
 
@@ -902,6 +917,7 @@ pub fn solve_navier_stokes_gpu(
     let bt_gpu = bsr_kernel.transpose(&b_gpu)?;
     let cg_kernel = FemCgGpuKernel::new(Arc::clone(device), Arc::clone(queue));
     let advect_kernel = FemNsAdvectKernel::new(Arc::clone(device), Arc::clone(queue));
+    let rhs_kernel = FemNsRhsAssembleKernel::new(Arc::clone(device), Arc::clone(queue));
 
     let alloc_f32_buf = |label: &str, n: u32| -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
@@ -925,13 +941,44 @@ pub fn solve_navier_stokes_gpu(
     let f_conv_buf = alloc_f32_buf("molla::ns_gpu f_conv", n_v as u32);
     let m_u_buf = alloc_f32_buf("molla::ns_gpu m_u", n_v as u32);
     let rhs_buf = alloc_f32_buf("molla::ns_gpu rhs", n_v as u32);
+    // Separate destination for the recovery RHS — WGSL forbids binding
+    // the same buffer as both read and read_write in one dispatch, so
+    // we ping-pong between `rhs_buf` (step output / recovery input) and
+    // `rhs_u_buf` (recovery output, fed into the u-CG).
+    let rhs_u_buf = alloc_f32_buf("molla::ns_gpu rhs_u", n_v as u32);
 
-    // Pre-compute constant pieces of the per-step RHS host-side:
-    //   * f_ext (constant) cast to f32,
-    //   * the BC-correction `bc_rhs_delta` (the symmetric-elim minus-sign
-    //     applied to the pinned value column).
+    // Persistent constants for the fused RHS kernel — uploaded once.
+    //   * f_ext   : external body force (constant per step).
+    //   * pin_val : full-size velocity vector with pinned values at
+    //               pinned DoFs and zero elsewhere. Used both to
+    //               compute `bc_delta` and to override pinned RHS
+    //               entries inside the kernel.
+    //   * pin_mask: u32 per DoF, 1 if pinned.
+    //   * bc_delta: `A_eff_unreduced · pin_val_full`, with pinned rows
+    //               zeroed. Computed once at setup with a single
+    //               BSR matvec + apply-zero-mask — no host axpy.
     let f_ext_f32: Vec<f32> = f_velocity.iter().map(|&v| v as f32).collect();
-    let bc_rhs_delta_f32: Vec<f32> = bc_rhs_delta.iter().map(|&v| v as f32).collect();
+    let f_ext_buf = alloc_f32_buf("molla::ns_gpu f_ext", n_v as u32);
+    queue.write_buffer(&f_ext_buf, 0, bytemuck::cast_slice(&f_ext_f32));
+
+    let mut pin_val_full = vec![0.0f32; n_v];
+    for &(dof, val) in &pinned_pairs {
+        pin_val_full[dof] = val as f32;
+    }
+    let pin_val_buf = alloc_f32_buf("molla::ns_gpu pin_val", n_v as u32);
+    queue.write_buffer(&pin_val_buf, 0, bytemuck::cast_slice(&pin_val_full));
+    let pin_mask_buf = alloc_f32_buf("molla::ns_gpu pin_mask", n_v as u32); // u32 storage buffer
+    queue.write_buffer(&pin_mask_buf, 0, bytemuck::cast_slice(&v_pin_mask));
+
+    // bc_delta = A_eff_unreduced · pin_val_full, with pinned rows
+    // zeroed. Mirrors the host helper `compute_bc_rhs_delta` from v3
+    // but stays entirely on the GPU.
+    let bc_delta_buf = alloc_f32_buf("molla::ns_gpu bc_delta", n_v as u32);
+    let pin_for_bc = clone_bsr(&a_eff_unreduced_gpu);
+    bsr_kernel.matvec(&pin_for_bc, &pin_val_buf, &bc_delta_buf, 1.0, 0.0)?;
+    // (One-time setup — host zero-mask is fine here; the per-step loop
+    // uses the GPU `zero_mask` kernel.)
+    apply_zero_mask_f32(queue, &bc_delta_buf, &v_pin_mask);
 
     let mut last_outer_iters = 0usize;
 
@@ -970,24 +1017,22 @@ pub fn solve_navier_stokes_gpu(
         // (c) m_u = M · u_old (per-step matvec).
         bsr_kernel.matvec(&m_gpu, &u_buf, &m_u_buf, 1.0, 0.0)?;
 
-        // (d) host RHS:
+        // (d) fused RHS axpy + pin override on the GPU:
         //     rhs[i] = inv_dt * m_u[i] + f_ext[i] − f_conv[i] − bc_delta[i]
-        //     (with rhs[dof] = pinned_value at pinned DoFs).
-        // Reading back is unavoidable because the BC reduction is
-        // value-dependent; m_u and f_conv together are 2 × n_v floats —
-        // tiny compared to the Uzawa-CG inner work.
-        let m_u_host = read_f32_buf(device, queue, &m_u_buf, n_v as u32)?;
-        let f_conv_host = read_f32_buf(device, queue, &f_conv_buf, n_v as u32)?;
-        let mut rhs_host: Vec<f32> = (0..n_v)
-            .map(|i| {
-                (inv_dt as f32) * m_u_host[i] + f_ext_f32[i] - f_conv_host[i]
-                    - bc_rhs_delta_f32[i]
-            })
-            .collect();
-        for &(dof, val) in &pinned_pairs {
-            rhs_host[dof] = val as f32;
-        }
-        queue.write_buffer(&rhs_buf, 0, bytemuck::cast_slice(&rhs_host));
+        //     rhs[dof] = pin_val[dof]   for pinned DoFs.
+        // Single dispatch — no host roundtrip.
+        rhs_kernel.dispatch(
+            NsRhsMode::Step,
+            &m_u_buf,
+            &f_ext_buf,
+            &f_conv_buf,
+            &bc_delta_buf,
+            &pin_mask_buf,
+            &pin_val_buf,
+            &rhs_buf,
+            n_v as u32,
+            inv_dt as f32,
+        )?;
 
         // (e) Uzawa-CG solve against (A_eff, B). Same Schur structure
         // as `solve_stokes_gpu` — only the RHS changes per step.
@@ -1022,6 +1067,15 @@ pub fn solve_navier_stokes_gpu(
             apply_zero_mask_f32(queue, y_buf, &p_pin_mask);
             Ok(())
         };
+        // NOTE: per-Schur-iter `apply_zero_mask_f32` is still host-side.
+        // A v4 prototype that swapped each call for a GPU `zero_mask`
+        // entry-point dispatch was *slower* at 16×16 because the
+        // per-dispatch uniform buffer + bind-group allocation overhead
+        // dominated at the actual pin counts (the host write_buffer
+        // path effectively batches via the wgpu staging belt). Cached
+        // bind groups would close the gap, but bind-group caching
+        // crosses into the CG inner-loop refactor that the task brief
+        // explicitly defers. See module header.
 
         // Warm-start p from the previous step.
         let p_cg = cg_kernel.cg_solve_resident(
@@ -1034,19 +1088,27 @@ pub fn solve_navier_stokes_gpu(
         )?;
         last_outer_iters = p_cg.iters;
 
-        // Recover u_new = A_eff⁻¹ (rhs − Bᵀ p).
+        // Recover u_new = A_eff⁻¹ (rhs − Bᵀ p). The fused recovery
+        // kernel does `rhs_u = rhs − bt_p` + pin override into the
+        // separate `rhs_u_buf` (WGSL forbids read+read_write aliasing
+        // on the same buffer within a single dispatch). No host
+        // roundtrip.
         bsr_kernel.matvec(&bt_gpu, &p_cg.x, &bt_p_buf, 1.0, 0.0)?;
-        let bt_p_host = read_f32_buf(device, queue, &bt_p_buf, n_v as u32)?;
-        let mut rhs_u_host: Vec<f32> = (0..n_v)
-            .map(|i| rhs_host[i] - bt_p_host[i])
-            .collect();
-        for &(dof, val) in &pinned_pairs {
-            rhs_u_host[dof] = val as f32;
-        }
-        queue.write_buffer(&rhs_buf, 0, bytemuck::cast_slice(&rhs_u_host));
+        rhs_kernel.dispatch(
+            NsRhsMode::Recovery,
+            &rhs_buf,
+            &bt_p_buf,
+            &bc_delta_buf, // unused source slot — kernel ignores src_c.
+            &bc_delta_buf, // unused source slot — kernel ignores src_d.
+            &pin_mask_buf,
+            &pin_val_buf,
+            &rhs_u_buf,
+            n_v as u32,
+            inv_dt as f32,
+        )?;
         let u_cg = cg_kernel.cg_solve_resident(
             n_v as u32,
-            &rhs_buf,
+            &rhs_u_buf,
             Some(&u_buf), // warm-start from u_old
             cfg.stokes.tol_inner,
             cfg.stokes.max_inner_iters,
@@ -1130,41 +1192,8 @@ fn build_a_eff_host(m: &BsrMatrix, k: &BsrMatrix, inv_dt: Real) -> BsrMatrix {
         .expect("build_a_eff_host: triplet rebuild")
 }
 
-/// Compute the additive RHS correction that the symmetric-Dirichlet
-/// column elimination applies for a constant `(dof, value)` pin list:
-///
-/// ```text
-///   delta[r] = Σ_{c ∈ pinned} A[r, c] · v_c    for r ∉ pinned
-///   delta[r] = 0                              for r ∈ pinned (the
-///                                              row is rebuilt
-///                                              identity-style).
-/// ```
-///
-/// The per-step RHS is then `rhs_red = rhs_raw − delta` (the pinned-row
-/// override `rhs_red[dof] = v` is applied separately by the caller). We
-/// hoist this out of the per-step inner loop because the pins + matrix
-/// are constant across all `n_steps` for the typical NS scene (cavity,
-/// Taylor-Green at fixed time → here we reset BCs per step on TG, but
-/// the **homogeneous** BC values still amortise the constant pieces).
-fn compute_bc_rhs_delta(
-    a: &BsrMatrix,
-    pinned: &[(usize, Real)],
-    n_v: usize,
-) -> Vec<Real> {
-    let pin_map: std::collections::HashMap<usize, Real> = pinned.iter().copied().collect();
-    let mut delta = vec![0.0; n_v];
-    for r in 0..a.block_rows {
-        if pin_map.contains_key(&r) {
-            continue;
-        }
-        let lo = a.row_offsets[r];
-        let hi = a.row_offsets[r + 1];
-        for slot in lo..hi {
-            let c = a.col_idx[slot];
-            if let Some(v) = pin_map.get(&c) {
-                delta[r] += a.values[slot] * v;
-            }
-        }
-    }
-    delta
-}
+// `compute_bc_rhs_delta` (host) removed in Stage 41 v4 — the BC
+// column-elimination delta is now computed on the GPU via a single
+// `BsrAlgebraKernel::matvec(A_eff_unreduced, pin_val_full)` followed by
+// `apply_zero_mask_f32(.., v_pin_mask)`, see the setup section of
+// `solve_navier_stokes_gpu`.
