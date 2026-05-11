@@ -124,6 +124,42 @@ impl BsrMatrix {
         Ok(m)
     }
 
+    /// Like [`Self::from_triplets`] but for scalar (B = 1) matrices —
+    /// takes flat `(row, col, val)` tuples instead of a `Vec<Real>`
+    /// per entry. Avoids the per-triplet allocation that dominated
+    /// FEM assembly time on 16³+ meshes.
+    ///
+    /// Coalescing semantics match `from_triplets` exactly: repeated
+    /// `(row, col)` pairs accumulate into a single CSR slot. The
+    /// resulting matrix has `b == 1`.
+    pub fn from_scalar_triplets(
+        nrows: usize,
+        ncols: usize,
+        triplets: &[(usize, usize, Real)],
+    ) -> Result<Self> {
+        let pattern: Vec<(usize, usize)> = triplets.iter().map(|t| (t.0, t.1)).collect();
+        let mut m = Self::from_pattern(1, nrows, ncols, pattern)?;
+        for (r, c, val) in triplets {
+            // Find the slot for (r, c). Identical lookup to
+            // `from_triplets` — patterns are sorted+deduped by
+            // `from_pattern` so the slot exists.
+            let lo = m.row_offsets[*r];
+            let hi = m.row_offsets[*r + 1];
+            let mut slot = None;
+            for i in lo..hi {
+                if m.col_idx[i] == *c {
+                    slot = Some(i);
+                    break;
+                }
+            }
+            let slot = slot.ok_or_else(|| {
+                Error::Build(format!("BsrMatrix: pattern missing ({r},{c})"))
+            })?;
+            m.values[slot] += *val;
+        }
+        Ok(m)
+    }
+
     /// Total scalar rows.
     #[must_use]
     pub fn nrows(&self) -> usize {
@@ -630,6 +666,52 @@ mod tests {
             }
         }
         BsrMatrix::from_triplets(1, n, n, &triplets).unwrap()
+    }
+
+    /// Contract: `from_scalar_triplets` must produce byte-identical
+    /// CSR (`row_offsets`, `col_idx`, `values`) to `from_triplets` with
+    /// `vec![val]` wrappers. Locks the equivalence the FEM assembly
+    /// path now relies on.
+    #[test]
+    fn from_scalar_triplets_matches_from_triplets() {
+        // Mix of duplicates, out-of-order rows, and zero columns to
+        // exercise the sort + coalesce path. Patterns are intentionally
+        // not pre-sorted.
+        let raw: Vec<(usize, usize, Real)> = vec![
+            (2, 1, 3.0),
+            (0, 0, 1.0),
+            (1, 2, -2.5),
+            (0, 0, 0.5),       // duplicate of (0, 0)
+            (3, 3, 7.0),
+            (2, 1, -1.0),      // duplicate of (2, 1)
+            (1, 0, 4.0),
+            (0, 0, -0.25),     // third hit on (0, 0)
+        ];
+        let block_form: Vec<(usize, usize, Vec<Real>)> = raw
+            .iter()
+            .map(|&(r, c, v)| (r, c, vec![v]))
+            .collect();
+
+        let m_block = BsrMatrix::from_triplets(1, 4, 4, &block_form).unwrap();
+        let m_scalar = BsrMatrix::from_scalar_triplets(4, 4, &raw).unwrap();
+
+        assert_eq!(m_scalar.b, 1);
+        assert_eq!(m_scalar.block_rows, m_block.block_rows);
+        assert_eq!(m_scalar.block_cols, m_block.block_cols);
+        assert_eq!(m_scalar.row_offsets, m_block.row_offsets);
+        assert_eq!(m_scalar.col_idx, m_block.col_idx);
+        assert_eq!(m_scalar.values, m_block.values);
+
+        // Spot-check the coalesced (0, 0) sum: 1.0 + 0.5 + (-0.25) = 1.25.
+        let lo = m_scalar.row_offsets[0];
+        let hi = m_scalar.row_offsets[1];
+        let mut sum_00: Real = 0.0;
+        for i in lo..hi {
+            if m_scalar.col_idx[i] == 0 {
+                sum_00 = m_scalar.values[i];
+            }
+        }
+        assert!((sum_00 - 1.25).abs() < 1e-15, "(0,0) sum = {sum_00}");
     }
 
     #[test]

@@ -61,6 +61,8 @@ pub mod gpu_data;
 pub mod mesh;
 pub mod p2_element;
 pub mod quadrature;
+#[cfg(feature = "russell")]
+pub mod russell;
 pub mod solver;
 pub mod stokes;
 
@@ -96,7 +98,13 @@ pub use solver::{
     NEWMARK_GAMMA_DEFAULT,
 };
 #[cfg(feature = "gpu")]
-pub use solver::{TransientStepperGpu, WaveStepperGpu};
+pub use solver::{
+    TransientStepStats, TransientStepperGpu, WaveStepStats, WaveStepperGpu,
+};
+#[cfg(feature = "russell")]
+pub use russell::{DirectSolver, MAX_DIRECT_DIM};
+#[cfg(feature = "russell")]
+pub use solver::solve_steady_state_direct;
 pub use stokes::{
     apply_stokes_velocity_bcs, assemble_convection_block,
     assemble_convection_block_with_supg, assemble_div_block,

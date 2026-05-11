@@ -39,7 +39,11 @@ use crate::core::{Error, Result};
 #[cfg(feature = "gpu")]
 use crate::fem::gpu_data::FemGpuData;
 #[cfg(feature = "gpu")]
-use crate::kernels::{FemCgGpuKernel, FemGpuKernel};
+use crate::kernels::{
+    FemCgGpuKernel, FemGpuKernel, TransientStepOpsKernel, WaveStepOpsKernel,
+};
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
 
 /// Default tolerance for the FEM CG solves — `1e-8` is sufficient for
 /// the v1 contract tests at 16³ resolution.
@@ -61,6 +65,35 @@ pub fn solve_steady_state(
     tol: Real,
 ) -> Vec<Real> {
     solve_steady_state_with_initial(k, f, bcs, &vec![0.0; f.len()], max_iters, tol).x
+}
+
+/// Stage 36.7 — direct-solver sibling of [`solve_steady_state`].
+///
+/// Same input + output contract as [`solve_steady_state`]: assemble
+/// `K`, run the symmetric Dirichlet reduction, then solve the
+/// reduced `K_red · u = f_red` system. The only difference is the
+/// inner solve — instead of iterating with CG it routes through a
+/// direct LU factorisation via [`crate::fem::russell::DirectSolver`].
+/// That makes the routine a drop-in alternative when CG stalls
+/// (stiff problems, indefinite systems) or pays more overhead than
+/// a one-shot factor (very small systems, repeated solves with the
+/// same matrix).
+///
+/// For the "factor-once, back-solve-many" workflow (one matrix,
+/// many RHS — e.g. adjoint loops) construct a [`crate::fem::russell::DirectSolver`]
+/// directly: call `factorize(&k_red)` once, then `back_solve(&b)`
+/// in a loop. This wrapper rebuilds the factorisation every call.
+#[cfg(feature = "russell")]
+pub fn solve_steady_state_direct(
+    k: &BsrMatrix,
+    f: &[Real],
+    bcs: &[BoundaryCondition],
+) -> Result<Vec<Real>> {
+    let mut k_red = k.clone();
+    let mut f_red = f.to_vec();
+    apply_dirichlet(&mut k_red, &mut f_red, bcs);
+    let mut solver = super::russell::DirectSolver::new()?;
+    solver.solve(&k_red, &f_red)
 }
 
 /// Variant of [`solve_steady_state`] that returns the full
@@ -311,11 +344,32 @@ pub fn solve_wave_transient(
     }
 }
 
-// ─── GPU wave transient (Stage 36.5 Slice E) ─────────────────────────
+// ─── GPU wave transient (Stage 36.5 Slice E + Slice H) ──────────────
+
+/// Per-step diagnostic returned by [`WaveStepperGpu::step`] — inner
+/// CG residual + iteration count. The new (Slice H) API leaves
+/// `(u, v, a)` resident on the GPU; call [`WaveStepperGpu::read_state`]
+/// (or [`WaveStepperGpu::read_u`] alone) to copy them back to host
+/// when the viewer needs to render.
+#[cfg(feature = "gpu")]
+#[derive(Copy, Clone, Debug)]
+pub struct WaveStepStats {
+    /// Inner CG residual on the implicit solve.
+    pub residual: Real,
+    /// Inner CG iteration count.
+    pub iters: usize,
+}
 
 /// Cached state for a [`solve_wave_transient`] simulation that runs
 /// the implicit-Newmark inner CG on the GPU. Build once per scene
 /// (fixes mesh, BCs, β, γ, Δt); call [`Self::step`] every frame.
+///
+/// **Slice H** keeps `u`, `v`, `a` resident on the GPU as `f32`
+/// storage buffers across timesteps. The predictor, RHS construction
+/// (with BC shift + pin overwrite), CG solve, and corrector all run
+/// on GPU dispatches with **zero** host↔device traffic per step. The
+/// viewer reads back `u` (or the full state) only when it needs to
+/// render — typically once per render frame, not once per substep.
 ///
 /// Supports **arbitrary** Dirichlet values (zero or non-zero) via a
 /// pre-computed column-elimination shift `bc_shift` baked at
@@ -327,39 +381,48 @@ pub fn solve_wave_transient(
 pub struct WaveStepperGpu {
     /// BC-reduced `A = M / (β·Δt²) + K` uploaded as GPU CSR.
     a_gpu: FemGpuData,
-    /// CPU mass matrix — used to compute the per-step RHS
-    /// `(1 / (β·Δt²)) · M · u_pred`. Kept on CPU because this matvec
-    /// is small (one per timestep, not one per CG iter) and the
-    /// resulting `b` has to land on the GPU anyway.
-    m_cpu: BsrMatrix,
+    /// Mass matrix uploaded as GPU CSR — used by the per-step
+    /// `M · u_pred` matvec on the GPU. Slice H removed the CPU
+    /// matvec + per-step f32 upload that the original code did.
+    m_gpu: FemGpuData,
     /// Linear-system size.
     n: usize,
+    /// Newmark parameters (kept for API introspection — the per-step
+    /// values are baked into `bdt2_inv` / `half_minus_beta_dt2`
+    /// floats below).
     beta: Real,
     gamma: Real,
     dt: Real,
     bdt2_inv: Real,
-    half_minus_beta: Real,
-    /// Flat list of (DoF, value) for every Dirichlet pin — used per
-    /// step to overwrite the matching `b` rows.
-    pinned: Vec<(usize, Real)>,
-    /// Per-row bitset of pinned DoFs for the column-shift skip.
-    is_pinned: Vec<bool>,
-    /// Precomputed RHS contribution from the column elimination on
-    /// `A_orig = M/(β·Δt²) + K`: for an unpinned row `i`,
-    /// `bc_shift[i] = -Σ_r A_orig[i, r] · value[r]` (sum over pinned
-    /// rows `r`). For pinned rows the value is unused (per-step pin
-    /// overwrites `b[i]` directly).
-    bc_shift: Vec<Real>,
+    half_minus_beta_dt2: Real,
+    /// Persistent GPU state buffers (length `n`, `f32`). Survive
+    /// across calls to [`Self::step`].
+    u_buf: Arc<wgpu::Buffer>,
+    v_buf: Arc<wgpu::Buffer>,
+    a_buf: Arc<wgpu::Buffer>,
+    /// Per-step scratch — `u_pred`, `m_upred`, `b`, `x_init` (a copy
+    /// of `u` used to seed CG). Allocated once at construction.
+    u_pred_buf: Arc<wgpu::Buffer>,
+    m_upred_buf: Arc<wgpu::Buffer>,
+    b_buf: Arc<wgpu::Buffer>,
+    /// Precomputed BC column-shift uploaded once (length `n`, `f32`).
+    bc_shift_buf: Arc<wgpu::Buffer>,
+    /// Per-row pin bitset (1 = pinned, 0 = free), `u32` storage buffer.
+    is_pinned_buf: Arc<wgpu::Buffer>,
+    /// Per-row prescribed Dirichlet value; unused on free rows.
+    pinned_value_buf: Arc<wgpu::Buffer>,
     cg_kernel: FemCgGpuKernel,
     mv_kernel: FemGpuKernel,
+    ops_kernel: WaveStepOpsKernel,
 }
 
 #[cfg(feature = "gpu")]
 impl WaveStepperGpu {
-    /// Build the stepper. `m`, `k`, `dt`, `beta`, `gamma`, `bcs` are
-    /// fixed for the lifetime of the stepper — if any of them change,
-    /// build a new one. Returns the wave-equation analogue of
-    /// [`solve_steady_state_gpu_resident`].
+    /// Build the stepper from initial state. `m`, `k`, `dt`, `beta`,
+    /// `gamma`, `bcs` are fixed for the lifetime of the stepper — if
+    /// any of them change, build a new one. The initial `(u, v, a)`
+    /// are uploaded once and survive across `step` calls; mutate them
+    /// later via [`Self::write_state`] (e.g. on user reset).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: &Engine,
@@ -370,16 +433,22 @@ impl WaveStepperGpu {
         beta: Real,
         gamma: Real,
         bcs: &[BoundaryCondition],
+        u: &[Real],
+        v: &[Real],
+        a: &[Real],
     ) -> Result<Self> {
         debug_assert_eq!(m.b, 1, "WaveStepperGpu: M must be B=1");
         debug_assert_eq!(k.b, 1, "WaveStepperGpu: K must be B=1");
         debug_assert_eq!(m.nrows(), k.nrows(), "WaveStepperGpu: M, K row mismatch");
         debug_assert!(beta > 0.0, "WaveStepperGpu: β must be > 0");
         debug_assert!(dt > 0.0, "WaveStepperGpu: Δt must be > 0");
+        debug_assert_eq!(u.len(), m.nrows(), "WaveStepperGpu: u length mismatch");
+        debug_assert_eq!(v.len(), m.nrows(), "WaveStepperGpu: v length mismatch");
+        debug_assert_eq!(a.len(), m.nrows(), "WaveStepperGpu: a length mismatch");
 
         let n = m.nrows();
         let bdt2_inv = 1.0 / (beta * dt * dt);
-        let half_minus_beta = 0.5 - beta;
+        let half_minus_beta_dt2 = (0.5 - beta) * dt * dt;
 
         // Build A = M / (β·Δt²) + K, then run BC reduction on a
         // **zero** RHS to extract the column-elimination shift. After
@@ -399,195 +468,279 @@ impl WaveStepperGpu {
             Error::Gpu("WaveStepperGpu::new: engine has no GPU queue".into())
         })?;
         let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
+        // Mass matrix uploaded unmodified — used for `M · u_pred` on
+        // the GPU. The matvec only reads `csr_*`; we don't apply the
+        // BC reduction here.
+        let m_gpu = FemGpuData::upload(device, queue, mesh, m)?;
 
-        // Collect every pinned (DoF, value) for per-step row-overwrite,
-        // and a parallel bitset for the column-shift skip.
-        let mut pinned: Vec<(usize, Real)> = Vec::new();
-        let mut is_pinned = vec![false; n];
+        // Build the per-row pin bitset + prescribed-value array.
+        let mut is_pinned_u32 = vec![0u32; n];
+        let mut pinned_value_f32 = vec![0.0f32; n];
         for bc in bcs {
             match bc {
                 BoundaryCondition::Dirichlet { vertex, value } => {
                     let dof = *vertex as usize;
-                    pinned.push((dof, *value));
-                    is_pinned[dof] = true;
+                    is_pinned_u32[dof] = 1;
+                    pinned_value_f32[dof] = *value as f32;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
                     let base = *vertex as usize * values.len();
                     for (c, v) in values.iter().enumerate() {
-                        pinned.push((base + c, *v));
-                        is_pinned[base + c] = true;
+                        is_pinned_u32[base + c] = 1;
+                        pinned_value_f32[base + c] = *v as f32;
                     }
                 }
                 _ => {}
             }
         }
 
+        let bytes = (n.max(4) * 4) as u64;
+        let usage_rw = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+
+        let make_buf = |label: &str| {
+            Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: usage_rw,
+                mapped_at_creation: false,
+            }))
+        };
+
+        let u_buf = make_buf("molla::fem::wave_gpu::u");
+        let v_buf = make_buf("molla::fem::wave_gpu::v");
+        let a_buf = make_buf("molla::fem::wave_gpu::a");
+        let u_pred_buf = make_buf("molla::fem::wave_gpu::u_pred");
+        let m_upred_buf = make_buf("molla::fem::wave_gpu::m_upred");
+        let b_buf = make_buf("molla::fem::wave_gpu::b");
+        let bc_shift_buf = make_buf("molla::fem::wave_gpu::bc_shift");
+        let is_pinned_buf = make_buf("molla::fem::wave_gpu::is_pinned");
+        let pinned_value_buf = make_buf("molla::fem::wave_gpu::pinned_value");
+
+        // Upload initial state + the constant per-row metadata.
+        let u_f32: Vec<f32> = u.iter().map(|&v| v as f32).collect();
+        let v_f32: Vec<f32> = v.iter().map(|&v| v as f32).collect();
+        let a_f32: Vec<f32> = a.iter().map(|&v| v as f32).collect();
+        let bc_shift_f32: Vec<f32> = bc_shift.iter().map(|&v| v as f32).collect();
+        queue.write_buffer(&u_buf, 0, bytemuck::cast_slice(&u_f32));
+        queue.write_buffer(&v_buf, 0, bytemuck::cast_slice(&v_f32));
+        queue.write_buffer(&a_buf, 0, bytemuck::cast_slice(&a_f32));
+        queue.write_buffer(&bc_shift_buf, 0, bytemuck::cast_slice(&bc_shift_f32));
+        queue.write_buffer(&is_pinned_buf, 0, bytemuck::cast_slice(&is_pinned_u32));
+        queue.write_buffer(&pinned_value_buf, 0, bytemuck::cast_slice(&pinned_value_f32));
+
         let cg_kernel = FemCgGpuKernel::new(device.clone(), queue.clone());
         let mv_kernel = FemGpuKernel::new(device.clone(), queue.clone());
+        let ops_kernel = WaveStepOpsKernel::new(device.clone(), queue.clone());
 
         Ok(Self {
             a_gpu,
-            m_cpu: m.clone(),
+            m_gpu,
             n,
             beta,
             gamma,
             dt,
             bdt2_inv,
-            half_minus_beta,
-            pinned,
-            is_pinned,
-            bc_shift,
+            half_minus_beta_dt2,
+            u_buf,
+            v_buf,
+            a_buf,
+            u_pred_buf,
+            m_upred_buf,
+            b_buf,
+            bc_shift_buf,
+            is_pinned_buf,
+            pinned_value_buf,
             cg_kernel,
             mv_kernel,
+            ops_kernel,
         })
     }
 
-    /// Suppress unused-field warnings — `beta` and `half_minus_beta`
-    /// are stored for parity with the CPU function's documentation
-    /// (caller can introspect; the per-step values are precomputed
-    /// into `bdt2_inv` and the predictor coefficient).
+    /// Suppress unused-field warnings — `beta` is stored for API
+    /// introspection (the per-step value is precomputed into
+    /// `bdt2_inv` and `half_minus_beta_dt2`).
     #[allow(dead_code)]
-    fn _keep_warnings_quiet(&self) -> (Real, Real) {
-        (self.beta, self.half_minus_beta)
+    fn _keep_warnings_quiet(&self) -> Real {
+        self.beta
     }
 
-    /// One implicit Newmark-β step on the GPU CG path. CPU does
-    /// predictor + per-step RHS + corrector; GPU does the implicit
-    /// solve via the cached-bind-group resident CG.
-    pub fn step(
-        &self,
-        u_old: &[Real],
-        v_old: &[Real],
-        a_old: &[Real],
-    ) -> Result<WaveStepResult> {
-        debug_assert_eq!(u_old.len(), self.n);
-        debug_assert_eq!(v_old.len(), self.n);
-        debug_assert_eq!(a_old.len(), self.n);
+    /// Linear-system size (number of DoFs).
+    pub fn n(&self) -> usize {
+        self.n
+    }
 
-        // Predictor — `u_pred = u_old + Δt·v_old + (½ − β)·Δt²·a_old`.
-        let mut u_pred = vec![0.0; self.n];
-        for i in 0..self.n {
-            u_pred[i] =
-                u_old[i] + self.dt * v_old[i] + self.half_minus_beta * self.dt * self.dt * a_old[i];
-        }
+    /// One implicit Newmark-β step running entirely on the GPU.
+    /// `(u, v, a)` are read + updated in their persistent storage
+    /// buffers — no host↔device traffic per step. Returns CG
+    /// diagnostics (residual + iters).
+    pub fn step(&mut self) -> Result<WaveStepStats> {
+        // 1. Predictor — `u_pred = u + dt·v + (½−β)·dt²·a`.
+        self.ops_kernel.predictor(
+            self.n as u32,
+            self.dt as f32,
+            self.half_minus_beta_dt2 as f32,
+            &self.u_buf,
+            &self.v_buf,
+            &self.a_buf,
+            &self.u_pred_buf,
+        )?;
 
-        // RHS b = (M / (β·Δt²)) · u_pred. Compute on CPU then upload
-        // (one per-step transfer of `n` f32 values, dwarfed by the CG
-        // savings). Add the precomputed BC column-shift to unpinned
-        // rows; overwrite pinned rows with the prescribed value.
-        let m_upred = matvec(&self.m_cpu, &u_pred);
-        let mut b: Vec<Real> = m_upred.iter().map(|v| self.bdt2_inv * v).collect();
-        for i in 0..self.n {
-            if !self.is_pinned[i] {
-                b[i] += self.bc_shift[i];
-            }
-        }
-        for &(dof, val) in &self.pinned {
-            b[dof] = val;
-        }
+        // 2. m_upred = M · u_pred (GPU sparse matvec, unreduced M).
+        self.mv_kernel
+            .matvec(&self.m_gpu, &self.u_pred_buf, &self.m_upred_buf)?;
 
-        // Initial guess: u_old (BC entries already zero from previous
-        // corrector pass; if this is the first step the caller's
-        // initial state must already satisfy the BCs).
-        let device = self.cg_kernel.device();
-        let queue = self.cg_kernel.queue();
-        let bytes = (self.n.max(4) * 4) as u64;
-        let usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST;
+        // 3. RHS construction — `b[i] = bdt2_inv · m_upred[i] +
+        //    bc_shift[i]` for unpinned i; `b[i] = pinned_value[i]`
+        //    for pinned i.
+        self.ops_kernel.rhs(
+            self.n as u32,
+            self.bdt2_inv as f32,
+            &self.m_upred_buf,
+            &self.bc_shift_buf,
+            &self.is_pinned_buf,
+            &self.pinned_value_buf,
+            &self.b_buf,
+        )?;
 
-        let b_f32: Vec<f32> = b.iter().map(|&v| v as f32).collect();
-        let x_init_f32: Vec<f32> = u_old.iter().map(|&v| v as f32).collect();
-
-        let b_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem::wave_gpu::b"),
-            size: bytes,
-            usage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&b_buf, 0, bytemuck::cast_slice(&b_f32));
-        let x_init_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem::wave_gpu::x_init"),
-            size: bytes,
-            usage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&x_init_buf, 0, bytemuck::cast_slice(&x_init_f32));
-
+        // 4. CG solve `(A_red) · u_new = b` with `u` as the warm
+        //    start. The cg_solve_resident allocates its own `x`
+        //    buffer + copies `x_init` into it.
         let mv_kernel = &self.mv_kernel;
         let a_gpu = &self.a_gpu;
         let cg_result = self.cg_kernel.cg_solve_resident(
             self.n as u32,
-            &b_buf,
-            Some(&x_init_buf),
+            &self.b_buf,
+            Some(&self.u_buf),
             DEFAULT_TOL as f32,
             DEFAULT_MAX_ITERS,
             |x_buf, y_buf| mv_kernel.matvec(a_gpu, x_buf, y_buf),
         )?;
 
-        let u_new_f32 = self.cg_kernel.read_buffer(&cg_result.x, self.n as u32)?;
-        let u_new: Vec<Real> = u_new_f32.into_iter().map(|v| v as Real).collect();
+        // 5. Corrector — `a_new = (u_new − u_pred) · bdt2_inv` and
+        //    `v_new = v_old + dt · ((1−γ)·a_old + γ·a_new)`. Read
+        //    `v` and `a` in-place (the kernel reads then writes).
+        self.ops_kernel.corrector(
+            self.n as u32,
+            self.dt as f32,
+            self.bdt2_inv as f32,
+            self.gamma as f32,
+            &cg_result.x,
+            &self.u_pred_buf,
+            &self.v_buf,
+            &self.a_buf,
+            &self.is_pinned_buf,
+        )?;
 
-        // Corrector — same as CPU path.
-        let mut a_new = vec![0.0; self.n];
-        let mut v_new = vec![0.0; self.n];
-        for i in 0..self.n {
-            a_new[i] = (u_new[i] - u_pred[i]) * self.bdt2_inv;
-            v_new[i] = v_old[i] + self.dt * ((1.0 - self.gamma) * a_old[i] + self.gamma * a_new[i]);
-        }
-        // Zero v, a on every Dirichlet DoF (same reasoning as the CPU
-        // path — non-zero v_old/a_old on a pinned DoF would otherwise
-        // leak motion into the boundary across steps; the prescribed
-        // u value on the BC is held constant in time by construction,
-        // so its derivative is zero).
-        for &(dof, _val) in &self.pinned {
-            v_new[dof] = 0.0;
-            a_new[dof] = 0.0;
-        }
+        // 6. Promote the CG iterate into the persistent `u` buffer.
+        self.ops_kernel.copy_u(self.n as u32, &cg_result.x, &self.u_buf)?;
 
-        Ok(WaveStepResult {
-            u_new,
-            v_new,
-            a_new,
+        Ok(WaveStepStats {
             residual: cg_result.residual as Real,
             iters: cg_result.iters,
         })
     }
+
+    /// Read the persistent `u` buffer back to host as `f64`. Call
+    /// once per render frame, not once per substep.
+    pub fn read_u(&self) -> Result<Vec<Real>> {
+        let f32_buf = self.cg_kernel.read_buffer(&self.u_buf, self.n as u32)?;
+        Ok(f32_buf.into_iter().map(|v| v as Real).collect())
+    }
+
+    /// Read the persistent `v` buffer.
+    pub fn read_v(&self) -> Result<Vec<Real>> {
+        let f32_buf = self.cg_kernel.read_buffer(&self.v_buf, self.n as u32)?;
+        Ok(f32_buf.into_iter().map(|v| v as Real).collect())
+    }
+
+    /// Read the persistent `a` buffer.
+    pub fn read_a(&self) -> Result<Vec<Real>> {
+        let f32_buf = self.cg_kernel.read_buffer(&self.a_buf, self.n as u32)?;
+        Ok(f32_buf.into_iter().map(|v| v as Real).collect())
+    }
+
+    /// Read the full `(u, v, a)` triple in one shot. Three sequential
+    /// readbacks — same wall-clock as calling them individually.
+    pub fn read_state(&self) -> Result<(Vec<Real>, Vec<Real>, Vec<Real>)> {
+        Ok((self.read_u()?, self.read_v()?, self.read_a()?))
+    }
+
+    /// Overwrite the persistent state buffers from host. Used when
+    /// the viewer wants to push a fresh initial condition without
+    /// rebuilding the stepper (e.g. user clicked "Reset").
+    pub fn write_state(&mut self, u: &[Real], v: &[Real], a: &[Real]) -> Result<()> {
+        debug_assert_eq!(u.len(), self.n);
+        debug_assert_eq!(v.len(), self.n);
+        debug_assert_eq!(a.len(), self.n);
+        let queue = self.cg_kernel.queue();
+        let u_f32: Vec<f32> = u.iter().map(|&v| v as f32).collect();
+        let v_f32: Vec<f32> = v.iter().map(|&v| v as f32).collect();
+        let a_f32: Vec<f32> = a.iter().map(|&v| v as f32).collect();
+        queue.write_buffer(&self.u_buf, 0, bytemuck::cast_slice(&u_f32));
+        queue.write_buffer(&self.v_buf, 0, bytemuck::cast_slice(&v_f32));
+        queue.write_buffer(&self.a_buf, 0, bytemuck::cast_slice(&a_f32));
+        Ok(())
+    }
 }
 
-// ─── GPU transient (Stage 36.5 Slice F) ───────────────────────────────
+// ─── GPU transient (Stage 36.5 Slice F + Slice H) ────────────────────
+
+/// Per-step diagnostic returned by [`TransientStepperGpu::step`].
+/// Mirrors the [`WaveStepStats`] shape; see that type for the
+/// rationale.
+#[cfg(feature = "gpu")]
+#[derive(Copy, Clone, Debug)]
+pub struct TransientStepStats {
+    pub residual: Real,
+    pub iters: usize,
+}
 
 /// Cached state for a [`solve_transient`] simulation that runs the
 /// implicit-Euler inner CG on the GPU. Build once per scene (fixes
 /// mesh, BCs, Δt); call [`Self::step`] every frame.
 ///
+/// **Slice H** keeps `u` resident on the GPU as an `f32` storage
+/// buffer across timesteps. The RHS construction (with mass matvec
+/// + BC shift + pin overwrite) and CG solve all run on GPU
+/// dispatches — zero host↔device traffic per step. Read `u` back via
+/// [`Self::read_u`] when the viewer needs to render.
+///
 /// Supports arbitrary Dirichlet values via a precomputed column-
 /// elimination shift baked at construction (same trick as
-/// [`WaveStepperGpu`]) — fixed-temperature / heat-source problems
-/// with non-zero pinned values work without per-step matrix touches.
+/// [`WaveStepperGpu`]).
 #[cfg(feature = "gpu")]
 pub struct TransientStepperGpu {
     /// BC-reduced `A = M / Δt + K` uploaded as GPU CSR.
     a_gpu: FemGpuData,
-    /// CPU mass matrix — used for the per-step `(1/Δt) · M · u_old`
-    /// term of the RHS. Same reasoning as [`WaveStepperGpu`]: small
-    /// per-step matvec, host upload of the resulting vector is the
-    /// only way `b` lands on the GPU anyway.
-    m_cpu: BsrMatrix,
+    /// Mass matrix uploaded as GPU CSR — used for the per-step
+    /// `M · u_old` matvec on the GPU.
+    m_gpu: FemGpuData,
     n: usize,
     inv_dt: Real,
-    /// (DoF, value) for every Dirichlet pin — overwrites `b` per step.
-    pinned: Vec<(usize, Real)>,
-    is_pinned: Vec<bool>,
-    /// Same column-shift trick as [`WaveStepperGpu::bc_shift`] —
-    /// `bc_shift[i] = -Σ_r A_orig[i, r] · value[r]` for unpinned `i`.
-    bc_shift: Vec<Real>,
+    /// Persistent state buffer (length `n`, `f32`).
+    u_buf: Arc<wgpu::Buffer>,
+    /// Per-step source-term buffer (length `n`, `f32`). Updated each
+    /// step via [`Self::write_f`] when non-zero; defaults to zero.
+    f_buf: Arc<wgpu::Buffer>,
+    /// Per-step scratch buffers.
+    m_uold_buf: Arc<wgpu::Buffer>,
+    b_buf: Arc<wgpu::Buffer>,
+    /// Constant per-row metadata.
+    bc_shift_buf: Arc<wgpu::Buffer>,
+    is_pinned_buf: Arc<wgpu::Buffer>,
+    pinned_value_buf: Arc<wgpu::Buffer>,
     cg_kernel: FemCgGpuKernel,
     mv_kernel: FemGpuKernel,
+    ops_kernel: TransientStepOpsKernel,
 }
 
 #[cfg(feature = "gpu")]
 impl TransientStepperGpu {
+    /// Build the stepper from initial state. The initial `u` is
+    /// uploaded once and survives across `step` calls; mutate it
+    /// later via [`Self::write_u`] (e.g. on user reset).
     pub fn new(
         engine: &Engine,
         mesh: &super::FemMesh,
@@ -595,11 +748,13 @@ impl TransientStepperGpu {
         k: &BsrMatrix,
         dt: Real,
         bcs: &[BoundaryCondition],
+        u: &[Real],
     ) -> Result<Self> {
         debug_assert_eq!(m.b, 1, "TransientStepperGpu: M must be B=1");
         debug_assert_eq!(k.b, 1, "TransientStepperGpu: K must be B=1");
         debug_assert_eq!(m.nrows(), k.nrows());
         debug_assert!(dt > 0.0, "TransientStepperGpu: Δt must be > 0");
+        debug_assert_eq!(u.len(), m.nrows(), "TransientStepperGpu: u length mismatch");
 
         let n = m.nrows();
         let inv_dt = 1.0 / dt;
@@ -616,106 +771,150 @@ impl TransientStepperGpu {
             Error::Gpu("TransientStepperGpu::new: engine has no GPU queue".into())
         })?;
         let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
+        let m_gpu = FemGpuData::upload(device, queue, mesh, m)?;
 
-        let mut pinned: Vec<(usize, Real)> = Vec::new();
-        let mut is_pinned = vec![false; n];
+        let mut is_pinned_u32 = vec![0u32; n];
+        let mut pinned_value_f32 = vec![0.0f32; n];
         for bc in bcs {
             match bc {
                 BoundaryCondition::Dirichlet { vertex, value } => {
                     let dof = *vertex as usize;
-                    pinned.push((dof, *value));
-                    is_pinned[dof] = true;
+                    is_pinned_u32[dof] = 1;
+                    pinned_value_f32[dof] = *value as f32;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
                     let base = *vertex as usize * values.len();
                     for (c, v) in values.iter().enumerate() {
-                        pinned.push((base + c, *v));
-                        is_pinned[base + c] = true;
+                        is_pinned_u32[base + c] = 1;
+                        pinned_value_f32[base + c] = *v as f32;
                     }
                 }
                 _ => {}
             }
         }
 
+        let bytes = (n.max(4) * 4) as u64;
+        let usage_rw = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let make_buf = |label: &str| {
+            Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: usage_rw,
+                mapped_at_creation: false,
+            }))
+        };
+        let u_buf = make_buf("molla::fem::transient_gpu::u");
+        let f_buf = make_buf("molla::fem::transient_gpu::f");
+        let m_uold_buf = make_buf("molla::fem::transient_gpu::m_uold");
+        let b_buf = make_buf("molla::fem::transient_gpu::b");
+        let bc_shift_buf = make_buf("molla::fem::transient_gpu::bc_shift");
+        let is_pinned_buf = make_buf("molla::fem::transient_gpu::is_pinned");
+        let pinned_value_buf = make_buf("molla::fem::transient_gpu::pinned_value");
+
+        let u_f32: Vec<f32> = u.iter().map(|&v| v as f32).collect();
+        let bc_shift_f32: Vec<f32> = bc_shift.iter().map(|&v| v as f32).collect();
+        queue.write_buffer(&u_buf, 0, bytemuck::cast_slice(&u_f32));
+        // f defaults to zero — explicitly write so any later
+        // dispatch reads consistent data.
+        queue.write_buffer(&f_buf, 0, &vec![0u8; bytes as usize]);
+        queue.write_buffer(&bc_shift_buf, 0, bytemuck::cast_slice(&bc_shift_f32));
+        queue.write_buffer(&is_pinned_buf, 0, bytemuck::cast_slice(&is_pinned_u32));
+        queue.write_buffer(&pinned_value_buf, 0, bytemuck::cast_slice(&pinned_value_f32));
+
         let cg_kernel = FemCgGpuKernel::new(device.clone(), queue.clone());
         let mv_kernel = FemGpuKernel::new(device.clone(), queue.clone());
+        let ops_kernel = TransientStepOpsKernel::new(device.clone(), queue.clone());
 
         Ok(Self {
             a_gpu,
-            m_cpu: m.clone(),
+            m_gpu,
             n,
             inv_dt,
-            pinned,
-            is_pinned,
-            bc_shift,
+            u_buf,
+            f_buf,
+            m_uold_buf,
+            b_buf,
+            bc_shift_buf,
+            is_pinned_buf,
+            pinned_value_buf,
             cg_kernel,
             mv_kernel,
+            ops_kernel,
         })
     }
 
-    /// One backward-Euler step: returns `u_new` such that
-    /// `(M/Δt + K) · u_new = f + (M/Δt) · u_old` (BC-reduced).
-    pub fn step(&self, u_old: &[Real], f: &[Real]) -> Result<CgResult> {
-        debug_assert_eq!(u_old.len(), self.n);
-        debug_assert_eq!(f.len(), self.n);
+    /// Linear-system size (number of DoFs).
+    pub fn n(&self) -> usize {
+        self.n
+    }
 
-        let m_uold = matvec(&self.m_cpu, u_old);
-        let mut b: Vec<Real> = f
-            .iter()
-            .zip(m_uold.iter())
-            .map(|(fi, mi)| fi + self.inv_dt * mi)
-            .collect();
-        for i in 0..self.n {
-            if !self.is_pinned[i] {
-                b[i] += self.bc_shift[i];
-            }
-        }
-        for &(dof, val) in &self.pinned {
-            b[dof] = val;
-        }
+    /// One backward-Euler step running entirely on the GPU. Returns
+    /// CG diagnostics. The persistent `u` buffer is updated in place.
+    pub fn step(&mut self) -> Result<TransientStepStats> {
+        // 1. m_uold = M · u (GPU sparse matvec).
+        self.mv_kernel
+            .matvec(&self.m_gpu, &self.u_buf, &self.m_uold_buf)?;
 
-        let device = self.cg_kernel.device();
-        let queue = self.cg_kernel.queue();
-        let bytes = (self.n.max(4) * 4) as u64;
-        let usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST;
-        let b_f32: Vec<f32> = b.iter().map(|&v| v as f32).collect();
-        let x_init_f32: Vec<f32> = u_old.iter().map(|&v| v as f32).collect();
-        let b_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem::transient_gpu::b"),
-            size: bytes,
-            usage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&b_buf, 0, bytemuck::cast_slice(&b_f32));
-        let x_init_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fem::transient_gpu::x_init"),
-            size: bytes,
-            usage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&x_init_buf, 0, bytemuck::cast_slice(&x_init_f32));
+        // 2. RHS construction.
+        self.ops_kernel.rhs(
+            self.n as u32,
+            self.inv_dt as f32,
+            &self.m_uold_buf,
+            &self.f_buf,
+            &self.bc_shift_buf,
+            &self.is_pinned_buf,
+            &self.pinned_value_buf,
+            &self.b_buf,
+        )?;
 
+        // 3. CG solve (warm-start from u).
         let mv_kernel = &self.mv_kernel;
         let a_gpu = &self.a_gpu;
         let cg_result = self.cg_kernel.cg_solve_resident(
             self.n as u32,
-            &b_buf,
-            Some(&x_init_buf),
+            &self.b_buf,
+            Some(&self.u_buf),
             DEFAULT_TOL as f32,
             DEFAULT_MAX_ITERS,
             |x_buf, y_buf| mv_kernel.matvec(a_gpu, x_buf, y_buf),
         )?;
 
-        let u_new_f32 = self.cg_kernel.read_buffer(&cg_result.x, self.n as u32)?;
-        let u_new: Vec<Real> = u_new_f32.into_iter().map(|v| v as Real).collect();
+        // 4. Promote CG iterate into the persistent `u` buffer.
+        self.ops_kernel.copy_u(self.n as u32, &cg_result.x, &self.u_buf)?;
 
-        Ok(CgResult {
-            x: u_new,
-            iters: cg_result.iters,
+        Ok(TransientStepStats {
             residual: cg_result.residual as Real,
+            iters: cg_result.iters,
         })
+    }
+
+    /// Read the persistent `u` buffer back to host as `f64`. Call
+    /// once per render frame, not once per substep.
+    pub fn read_u(&self) -> Result<Vec<Real>> {
+        let f32_buf = self.cg_kernel.read_buffer(&self.u_buf, self.n as u32)?;
+        Ok(f32_buf.into_iter().map(|v| v as Real).collect())
+    }
+
+    /// Overwrite the persistent `u` buffer from host (e.g. on reset).
+    pub fn write_u(&mut self, u: &[Real]) -> Result<()> {
+        debug_assert_eq!(u.len(), self.n);
+        let queue = self.cg_kernel.queue();
+        let u_f32: Vec<f32> = u.iter().map(|&v| v as f32).collect();
+        queue.write_buffer(&self.u_buf, 0, bytemuck::cast_slice(&u_f32));
+        Ok(())
+    }
+
+    /// Overwrite the persistent source-term `f` buffer from host.
+    /// Defaults to zero at construction; call this when the source
+    /// changes per step.
+    pub fn write_f(&mut self, f: &[Real]) -> Result<()> {
+        debug_assert_eq!(f.len(), self.n);
+        let queue = self.cg_kernel.queue();
+        let f_f32: Vec<f32> = f.iter().map(|&v| v as f32).collect();
+        queue.write_buffer(&self.f_buf, 0, bytemuck::cast_slice(&f_f32));
+        Ok(())
     }
 }
 

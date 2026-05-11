@@ -34,6 +34,8 @@ mod featherstone;
 mod fem;
 #[cfg(feature = "gpu")]
 mod fem_cg;
+#[cfg(feature = "gpu")]
+mod fem_step_ops;
 // Adjoint dispatcher is feature-gated separately — it does not (yet)
 // require GPU and is needed by the autograd CPU path + viewer
 // regardless of the `gpu` feature.
@@ -126,6 +128,8 @@ pub use featherstone::FeatherstoneKernel;
 pub use fem::FemGpuKernel;
 #[cfg(feature = "gpu")]
 pub use fem_cg::{CgGpuResult, FemCgGpuKernel};
+#[cfg(feature = "gpu")]
+pub use fem_step_ops::{TransientStepOpsKernel, WaveStepOpsKernel};
 pub use featherstone_adjoint::{
     time_forward_us, AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher,
     MultiAdjointBatch, MultiAdjointInput, MultiAdjointOutput,

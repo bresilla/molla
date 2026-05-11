@@ -380,7 +380,8 @@ where
     F: Fn(&FemCell, &[Vec3]) -> Vec<Vec<Real>>,
 {
     let n = map.ndof();
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+    // Flat scalar triplets — see `assemble_global` for the rationale.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
     triplets.reserve(mesh.cells.len() * 100);
     for cell in &mesh.cells {
         let local = element_visitor(cell, &mesh.vertices);
@@ -393,11 +394,11 @@ where
                 if val == 0.0 {
                     continue;
                 }
-                triplets.push((gi, gj, vec![val]));
+                triplets.push((gi, gj, val));
             }
         }
     }
-    crate::math::sparse::BsrMatrix::from_triplets(1, n, n, &triplets)
+    crate::math::sparse::BsrMatrix::from_scalar_triplets(n, n, &triplets)
 }
 
 #[cfg(test)]

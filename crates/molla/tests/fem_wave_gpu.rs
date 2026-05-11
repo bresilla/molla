@@ -1,8 +1,14 @@
-//! Stage 36.5 Slice E — GPU wave transient parity tests.
+//! Stage 36.5 Slice E + Slice H — GPU wave transient parity tests.
 //!
 //! Verifies that [`molla::fem::WaveStepperGpu::step`] produces the
 //! same `(u, v, a)` triple as the CPU [`molla::fem::solve_wave_transient`]
 //! on a pinned-boundary 2D wave PDE.
+//!
+//! **Slice H** changed the GPU stepper to keep `(u, v, a)` resident
+//! across timesteps — the new test pattern loops `gpu.step()` for N
+//! iterations with no per-step host upload, then reads back the final
+//! state and compares to the CPU oracle looped from the same initial
+//! state.
 //!
 //! All tests are `#[ignore]` because they need a real wgpu adapter.
 //! Run with `nixVulkan cargo test -p molla --test fem_wave_gpu -- --ignored`.
@@ -88,57 +94,47 @@ fn gpu_wave_step_matches_cpu_oracle() {
     let mut u_cpu = u_init.clone();
     let mut v_cpu = vec![0.0; n];
     let mut a_cpu = vec![0.0; n];
-    let mut u_gpu = u_init.clone();
-    let mut v_gpu = vec![0.0; n];
-    let mut a_gpu = vec![0.0; n];
+    let v0 = vec![0.0; n];
+    let a0 = vec![0.0; n];
 
     let engine = Engine::new_gpu().expect("gpu");
-    let stepper = WaveStepperGpu::new(&engine, &mesh, &m, &k, dt, beta, gamma, &bcs)
-        .expect("WaveStepperGpu::new");
+    // Slice H — initial (u, v, a) are uploaded once at construction;
+    // step() runs entirely on GPU thereafter.
+    let mut stepper = WaveStepperGpu::new(
+        &engine, &mesh, &m, &k, dt, beta, gamma, &bcs, &u_init, &v0, &a0,
+    )
+    .expect("WaveStepperGpu::new");
 
-    // Step 50 times and compare every step.
+    // Step 50 times on both paths; CPU keeps host vectors in sync,
+    // GPU mutates persistent buffers.
     let n_steps = 50;
-    for step in 0..n_steps {
+    for _ in 0..n_steps {
         let cpu = solve_wave_transient(&m, &k, &u_cpu, &v_cpu, &a_cpu, dt, beta, gamma, &bcs);
-        let gpu = stepper.step(&u_gpu, &v_gpu, &a_gpu).expect("gpu step");
-
-        // Per-vertex max-abs error on u_new.
-        let mut max_du: Real = 0.0;
-        let mut max_dv: Real = 0.0;
-        let mut max_da: Real = 0.0;
-        for i in 0..n {
-            max_du = max_du.max((cpu.u_new[i] - gpu.u_new[i]).abs());
-            max_dv = max_dv.max((cpu.v_new[i] - gpu.v_new[i]).abs());
-            max_da = max_da.max((cpu.a_new[i] - gpu.a_new[i]).abs());
-        }
-        // f32 GPU + f64 CPU + 50 steps of error accumulation — 1e-3
-        // is loose but well within the published GPU FEM precision
-        // budget.
-        assert!(
-            max_du < 1e-3,
-            "step {step}: max |Δu| = {max_du:.3e} (CPU iters = {}, GPU iters = {})",
-            cpu.iters,
-            gpu.iters,
-        );
-        assert!(max_dv < 1e-2, "step {step}: max |Δv| = {max_dv:.3e}");
-        assert!(max_da < 1.0, "step {step}: max |Δa| = {max_da:.3e}");
-
+        let _gpu_stats = stepper.step().expect("gpu step");
         u_cpu = cpu.u_new;
         v_cpu = cpu.v_new;
         a_cpu = cpu.a_new;
-        u_gpu = gpu.u_new;
-        v_gpu = gpu.v_new;
-        a_gpu = gpu.a_new;
     }
 
-    // Final-step diagnostic.
-    let mut final_du: Real = 0.0;
+    // Read back the final GPU state and compare.
+    let (u_gpu, v_gpu, a_gpu) = stepper.read_state().expect("gpu read_state");
+    let mut max_du: Real = 0.0;
+    let mut max_dv: Real = 0.0;
+    let mut max_da: Real = 0.0;
     for i in 0..n {
-        final_du = final_du.max((u_cpu[i] - u_gpu[i]).abs());
+        max_du = max_du.max((u_cpu[i] - u_gpu[i]).abs());
+        max_dv = max_dv.max((v_cpu[i] - v_gpu[i]).abs());
+        max_da = max_da.max((a_cpu[i] - a_gpu[i]).abs());
     }
     eprintln!(
-        "gpu_wave_step_matches_cpu_oracle: n = {n}, {n_steps} steps, final max |Δu| = {final_du:.3e}",
+        "gpu_wave_step_matches_cpu_oracle: n = {n}, {n_steps} steps, \
+         final max |Δu| = {max_du:.3e}, |Δv| = {max_dv:.3e}, |Δa| = {max_da:.3e}",
     );
+    // f32 GPU + f64 CPU + 50 steps of error accumulation — 1e-3 is
+    // loose but well within the published GPU FEM precision budget.
+    assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
+    assert!(max_dv < 1e-2, "final max |Δv| = {max_dv:.3e}");
+    assert!(max_da < 1.0, "final max |Δa| = {max_da:.3e}");
 }
 
 #[test]
@@ -146,9 +142,9 @@ fn gpu_wave_step_matches_cpu_oracle() {
 fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Slice G: nonzero Dirichlet is now supported via the precomputed
-    // column shift. Verify the stepper builds AND that one step
-    // matches the CPU oracle on a problem with a non-zero pinned
+    // Slice G: nonzero Dirichlet is supported via the precomputed
+    // column shift. Slice H: stepper is now persistent — verify one
+    // step matches the CPU oracle on a problem with a non-zero pinned
     // boundary value.
     let mesh = FemMesh::tri_grid_2d(8, 8, 1.0, 1.0);
     let m = assemble_mass(&mesh);
@@ -160,8 +156,14 @@ fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
         value: 0.5,
     }];
 
+    // Initial state: BC-consistent (pinned vertex at 0.5).
+    let mut u_init = vec![0.0; n];
+    u_init[0] = 0.5;
+    let v0 = vec![0.0; n];
+    let a0 = vec![0.0; n];
+
     let engine = Engine::new_gpu().expect("gpu");
-    let stepper = WaveStepperGpu::new(
+    let mut stepper = WaveStepperGpu::new(
         &engine,
         &mesh,
         &m,
@@ -170,14 +172,11 @@ fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
         NEWMARK_BETA_DEFAULT,
         NEWMARK_GAMMA_DEFAULT,
         &bcs,
+        &u_init,
+        &v0,
+        &a0,
     )
     .expect("stepper builds with nonzero Dirichlet");
-
-    // Initial state: BC-consistent (pinned vertex at 0.5).
-    let mut u_init = vec![0.0; n];
-    u_init[0] = 0.5;
-    let v0 = vec![0.0; n];
-    let a0 = vec![0.0; n];
 
     let cpu = solve_wave_transient(
         &m,
@@ -190,14 +189,15 @@ fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
         NEWMARK_GAMMA_DEFAULT,
         &bcs,
     );
-    let gpu = stepper.step(&u_init, &v0, &a0).expect("step");
+    stepper.step().expect("step");
+    let u_gpu = stepper.read_u().expect("read_u");
     let mut max_du: Real = 0.0;
     for i in 0..n {
-        max_du = max_du.max((cpu.u_new[i] - gpu.u_new[i]).abs());
+        max_du = max_du.max((cpu.u_new[i] - u_gpu[i]).abs());
     }
     assert!(
         max_du < 1e-3,
         "nonzero-Dirichlet single-step max |Δu| = {max_du:.3e}",
     );
-    assert!((gpu.u_new[0] - 0.5).abs() < 1e-5, "pinned DoF must hold");
+    assert!((u_gpu[0] - 0.5).abs() < 1e-5, "pinned DoF must hold");
 }

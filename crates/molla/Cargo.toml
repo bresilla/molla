@@ -25,6 +25,18 @@ gpu = ["dep:wgpu", "dep:pollster"]
 # at link time, the build fails with a clear linker error from
 # `mujoco-rust`. See PLAN.md Stage 22 for scope notes.
 mujoco = ["dep:mujoco-rust"]
+# Stage 36.7 — direct sparse linear solver (`fem::DirectSolver`,
+# `fem::solve_steady_state_direct`). Off by default. Enabled via
+# `cargo build -p molla --features russell`. The original Stage 36.7
+# spec called for the upstream `russell_sparse` crate; that crate
+# requires SuiteSparse + LAPACKE native libraries with hard-coded
+# include paths (`/usr/include/suitesparse`) that aren't available in
+# molla's nix-flake devShell, so the feature presently ships a pure-
+# Rust dense LU implementation under the same flag. See
+# `crate::fem::russell` for the swap-out story. The feature flag gate
+# matches the existing `mujoco` pattern: with the flag off the module
+# compiles to nothing so users without the dependency still build.
+russell = []
 
 [dependencies]
 glam = { version = "0.30", features = ["bytemuck"] }

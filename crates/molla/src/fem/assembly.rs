@@ -48,7 +48,10 @@ where
 {
     let n = space.ndof(mesh);
     let d = space.dofs_per_vertex();
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+    // Flat scalar triplets — one allocation total, not one per entry.
+    // `from_scalar_triplets` coalesces duplicates the same way
+    // `from_triplets` did.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
     triplets.reserve(mesh.cells.len() * 16 * d * d);
 
     for cell in &mesh.cells {
@@ -73,14 +76,14 @@ where
                         }
                         let row_global = (*vi as usize) * d + ci;
                         let col_global = (*vj as usize) * d + cj;
-                        triplets.push((row_global, col_global, vec![val]));
+                        triplets.push((row_global, col_global, val));
                     }
                 }
             }
         }
     }
 
-    BsrMatrix::from_triplets(1, n, n, &triplets)
+    BsrMatrix::from_scalar_triplets(n, n, &triplets)
 }
 
 /// Convenience: assemble the (consistent) mass matrix for `mesh`.

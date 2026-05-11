@@ -369,7 +369,8 @@ pub fn assemble_velocity_block(
 ) -> Result<BsrMatrix> {
     let n = th.n_velocity;
     let dim = th.dim;
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+    // Flat scalar triplets — avoids the per-entry `vec![val]` alloc.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
     triplets.reserve(mesh.cells.len() * 100 * dim * dim);
     for cell in &mesh.cells {
         let local = compute_element_stokes_velocity_block(cell, &mesh.vertices, viscosity, dim);
@@ -387,17 +388,13 @@ pub fn assemble_velocity_block(
                         if val == 0.0 {
                             continue;
                         }
-                        triplets.push((
-                            gi_node * dim + ci,
-                            gj_node * dim + cj,
-                            vec![val],
-                        ));
+                        triplets.push((gi_node * dim + ci, gj_node * dim + cj, val));
                     }
                 }
             }
         }
     }
-    BsrMatrix::from_triplets(1, n, n, &triplets)
+    BsrMatrix::from_scalar_triplets(n, n, &triplets)
 }
 
 /// Assemble the global P2-vector velocity-mass matrix `M` (consistent).
@@ -407,7 +404,8 @@ pub fn assemble_velocity_mass(
 ) -> Result<BsrMatrix> {
     let n = th.n_velocity;
     let dim = th.dim;
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+    // Flat scalar triplets — see `assemble_velocity_block`.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
     triplets.reserve(mesh.cells.len() * 100 * dim * dim);
     for cell in &mesh.cells {
         let local = compute_element_mass_p2_vector(cell, &mesh.vertices, dim);
@@ -425,17 +423,13 @@ pub fn assemble_velocity_mass(
                         if val == 0.0 {
                             continue;
                         }
-                        triplets.push((
-                            gi_node * dim + ci,
-                            gj_node * dim + cj,
-                            vec![val],
-                        ));
+                        triplets.push((gi_node * dim + ci, gj_node * dim + cj, val));
                     }
                 }
             }
         }
     }
-    BsrMatrix::from_triplets(1, n, n, &triplets)
+    BsrMatrix::from_scalar_triplets(n, n, &triplets)
 }
 
 /// Assemble the global divergence matrix `B` (P1 pressure × ∂P2
@@ -444,7 +438,8 @@ pub fn assemble_div_block(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<BsrMat
     let n_p = th.n_pressure;
     let n_v = th.n_velocity;
     let dim = th.dim;
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> = Vec::new();
+    // Flat scalar triplets — see `assemble_velocity_block`.
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
     triplets.reserve(mesh.cells.len() * 4 * 30);
     for cell in &mesh.cells {
         let local = compute_element_stokes_div_block(cell, &mesh.vertices, dim);
@@ -461,12 +456,12 @@ pub fn assemble_div_block(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<BsrMat
                     if val == 0.0 {
                         continue;
                     }
-                    triplets.push((gip, gjv_node * dim + c, vec![val]));
+                    triplets.push((gip, gjv_node * dim + c, val));
                 }
             }
         }
     }
-    BsrMatrix::from_triplets(1, n_p, n_v, &triplets)
+    BsrMatrix::from_scalar_triplets(n_p, n_v, &triplets)
 }
 
 // ─── Boundary conditions ──────────────────────────────────────────────
@@ -1473,21 +1468,21 @@ fn add_csr_scaled(a: &BsrMatrix, alpha: Real, b: &BsrMatrix, beta: Real) -> BsrM
     debug_assert_eq!(b.b, 1);
     debug_assert_eq!(a.nrows(), b.nrows());
     debug_assert_eq!(a.ncols(), b.ncols());
-    let mut triplets: Vec<(usize, usize, Vec<Real>)> =
+    let mut triplets: Vec<(usize, usize, Real)> =
         Vec::with_capacity(a.values.len() + b.values.len());
     for r in 0..a.block_rows {
         for slot in a.row_offsets[r]..a.row_offsets[r + 1] {
             let c = a.col_idx[slot];
-            triplets.push((r, c, vec![alpha * a.values[slot]]));
+            triplets.push((r, c, alpha * a.values[slot]));
         }
     }
     for r in 0..b.block_rows {
         for slot in b.row_offsets[r]..b.row_offsets[r + 1] {
             let c = b.col_idx[slot];
-            triplets.push((r, c, vec![beta * b.values[slot]]));
+            triplets.push((r, c, beta * b.values[slot]));
         }
     }
-    BsrMatrix::from_triplets(1, a.block_rows, a.block_cols, &triplets)
+    BsrMatrix::from_scalar_triplets(a.block_rows, a.block_cols, &triplets)
         .expect("add_csr_scaled: triplet rebuild")
 }
 

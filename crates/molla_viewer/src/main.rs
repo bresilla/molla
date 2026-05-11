@@ -14995,6 +14995,15 @@ fn update_fem_heat_example(
         state.reset_temperature_field();
         state.needs_reset = false;
         state.user_reset = false;
+        // Push the fresh u to the GPU stepper if it's already built.
+        // Clone first so we can split the borrow.
+        let u_snapshot = state.u.clone();
+        if let Some(s) = state.gpu_stepper.as_mut() {
+            if let Err(e) = s.write_u(&u_snapshot) {
+                warn!("FemHeat: GPU write_u after reset failed ({e})");
+                state.gpu_stepper = None;
+            }
+        }
     }
     let alpha_changed = (state.alpha - state.last_alpha_baked).abs() > 1e-12;
     let dt_changed = (state.dt - state.last_dt_baked).abs() > 1e-9;
@@ -15015,7 +15024,15 @@ fn update_fem_heat_example(
 
     // Lazily build GPU stepper if requested.
     if state.use_gpu && state.gpu_stepper.is_none() {
-        match fem::TransientStepperGpu::new(&sim.engine, &state.mesh, &state.mass, &state.stiff, dt, &state.bcs) {
+        match fem::TransientStepperGpu::new(
+            &sim.engine,
+            &state.mesh,
+            &state.mass,
+            &state.stiff,
+            dt,
+            &state.bcs,
+            &state.u,
+        ) {
             Ok(s) => state.gpu_stepper = Some(s),
             Err(e) => {
                 warn!("FemHeat: GPU stepper init failed ({e}); falling back to CPU");
@@ -15024,16 +15041,30 @@ fn update_fem_heat_example(
         }
     }
 
-    if let (true, Some(stepper)) = (state.use_gpu, state.gpu_stepper.as_ref()) {
-        match stepper.step(&state.u.clone(), &f) {
-            Ok(r) => {
-                state.u = r.x;
-                state.last_residual = r.residual;
-                state.last_iters = r.iters;
+    if state.use_gpu && state.gpu_stepper.is_some() {
+        // Slice H — `step` updates the GPU-resident `u` in place;
+        // read it back per render frame so the gizmo system sees
+        // current data. The source `f` is zero in this scene; we
+        // skip `write_f` because the constructor already zeroed it.
+        let _ = f; // keep the binding live so future non-zero f flows compile
+        let stepper = state.gpu_stepper.as_mut().expect("checked above");
+        let step_result = stepper.step();
+        let read_result = match step_result {
+            Ok(stats) => match stepper.read_u() {
+                Ok(u) => Ok((stats, u)),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        match read_result {
+            Ok((stats, u)) => {
+                state.last_residual = stats.residual;
+                state.last_iters = stats.iters;
+                state.u = u;
                 return;
             }
             Err(e) => {
-                warn!("FemHeat: GPU step failed ({e}); falling back to CPU this frame");
+                warn!("FemHeat: GPU step/read failed ({e}); falling back to CPU this frame");
             }
         }
     }
@@ -19431,7 +19462,8 @@ fn update_warp_wave(
         st.gpu_stepper = None;
     }
     // Lazily build the GPU stepper if the user has enabled GPU mode
-    // and the cache is empty.
+    // and the cache is empty. Slice H — initial state is uploaded
+    // once to the persistent GPU buffers.
     if st.use_gpu && st.gpu_stepper.is_none() {
         match fem::WaveStepperGpu::new(
             &sim.engine,
@@ -19442,6 +19474,9 @@ fn update_warp_wave(
             fem::NEWMARK_BETA_DEFAULT,
             fem::NEWMARK_GAMMA_DEFAULT,
             &st.bcs,
+            &st.u,
+            &st.v,
+            &st.a,
         ) {
             Ok(s) => st.gpu_stepper = Some(s),
             Err(e) => {
@@ -19450,26 +19485,36 @@ fn update_warp_wave(
             }
         }
     }
-    let step = if let (true, Some(stepper)) = (st.use_gpu, st.gpu_stepper.as_ref()) {
-        match stepper.step(&st.u, &st.v, &st.a) {
-            Ok(s) => s,
+    if st.use_gpu && st.gpu_stepper.is_some() {
+        // Slice H GPU path — `step` runs entirely on GPU; `read_state`
+        // pulls back `(u, v, a)` so the height-field gizmos can render.
+        // Falling back to CPU here would leak the GPU-resident state
+        // out of sync with the host; on error we mark the stepper for
+        // rebuild on the next frame.
+        let stepper = st.gpu_stepper.as_mut().expect("checked above");
+        let step_result = stepper.step();
+        let read_result = match step_result {
+            Ok(stats) => match stepper.read_state() {
+                Ok((u, v, a)) => Ok((stats, u, v, a)),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        match read_result {
+            Ok((stats, u, v, a)) => {
+                st.u = u;
+                st.v = v;
+                st.a = a;
+                st.last_residual = stats.residual;
+                st.last_iters = stats.iters;
+            }
             Err(e) => {
-                warn!("WarpWave: GPU step failed ({e}); falling back to CPU this frame");
-                fem::solve_wave_transient(
-                    &st.mass,
-                    &st.stiff,
-                    &st.u,
-                    &st.v,
-                    &st.a,
-                    st.dt,
-                    fem::NEWMARK_BETA_DEFAULT,
-                    fem::NEWMARK_GAMMA_DEFAULT,
-                    &st.bcs,
-                )
+                warn!("WarpWave: GPU step/read failed ({e}); rebuilding next frame");
+                st.gpu_stepper = None;
             }
         }
     } else {
-        fem::solve_wave_transient(
+        let step = fem::solve_wave_transient(
             &st.mass,
             &st.stiff,
             &st.u,
@@ -19479,14 +19524,14 @@ fn update_warp_wave(
             fem::NEWMARK_BETA_DEFAULT,
             fem::NEWMARK_GAMMA_DEFAULT,
             &st.bcs,
-        )
-    };
-    st.u = step.u_new;
-    st.v = step.v_new;
-    st.a = step.a_new;
+        );
+        st.u = step.u_new;
+        st.v = step.v_new;
+        st.a = step.a_new;
+        st.last_residual = step.residual;
+        st.last_iters = step.iters;
+    }
     st.sim_t += st.dt;
-    st.last_residual = step.residual;
-    st.last_iters = step.iters;
 }
 
 fn draw_warp_wave_gizmos(

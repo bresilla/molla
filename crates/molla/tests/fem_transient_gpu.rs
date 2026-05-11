@@ -1,8 +1,13 @@
-//! Stage 36.5 Slice F — GPU heat-transient parity test.
+//! Stage 36.5 Slice F + Slice H — GPU heat-transient parity test.
 //!
 //! Verifies that [`molla::fem::TransientStepperGpu::step`] produces
 //! the same per-vertex temperature as the CPU
 //! [`molla::fem::solve_transient`] over many backward-Euler steps.
+//!
+//! **Slice H** changed the GPU stepper to keep `u` resident across
+//! timesteps — the new test pattern loops `gpu.step()` for N
+//! iterations with no per-step host upload, then reads back the
+//! final `u` and compares to the CPU oracle.
 //!
 //! Tests are `#[ignore]` because they need a real wgpu adapter.
 
@@ -61,44 +66,33 @@ fn gpu_transient_step_matches_cpu_oracle() {
         }
     }
 
-    // Initial state: linear gradient from top to bottom (units don't
-    // matter — we only compare CPU vs GPU).
-    let mut u_cpu: Vec<Real> = (0..n).map(|i| mesh.vertices[i].z).collect();
-    let mut u_gpu = u_cpu.clone();
+    // Initial state: linear gradient from top to bottom.
+    let u_init: Vec<Real> = (0..n).map(|i| mesh.vertices[i].z).collect();
+    let mut u_cpu = u_init.clone();
     let f = vec![0.0; n];
 
     let dt: Real = 0.01;
 
     let engine = Engine::new_gpu().expect("gpu");
-    let stepper = TransientStepperGpu::new(&engine, &mesh, &m, &k, dt, &bcs)
+    let mut stepper = TransientStepperGpu::new(&engine, &mesh, &m, &k, dt, &bcs, &u_init)
         .expect("TransientStepperGpu::new");
 
     let n_steps = 50;
-    for step in 0..n_steps {
+    for _ in 0..n_steps {
         let cpu = solve_transient(&m, &k, &f, &u_cpu, dt, &bcs);
-        let gpu = stepper.step(&u_gpu, &f).expect("gpu transient step");
-
-        let mut max_du: Real = 0.0;
-        for i in 0..n {
-            max_du = max_du.max((cpu[i] - gpu.x[i]).abs());
-        }
-        assert!(
-            max_du < 1e-3,
-            "step {step}: max |Δu| = {max_du:.3e} (GPU iters = {})",
-            gpu.iters,
-        );
-
+        let _gpu_stats = stepper.step().expect("gpu transient step");
         u_cpu = cpu;
-        u_gpu = gpu.x;
     }
 
-    let mut final_du: Real = 0.0;
+    let u_gpu = stepper.read_u().expect("gpu read_u");
+    let mut max_du: Real = 0.0;
     for i in 0..n {
-        final_du = final_du.max((u_cpu[i] - u_gpu[i]).abs());
+        max_du = max_du.max((u_cpu[i] - u_gpu[i]).abs());
     }
     eprintln!(
-        "gpu_transient_step_matches_cpu_oracle: n = {n}, {n_steps} steps, final max |Δu| = {final_du:.3e}",
+        "gpu_transient_step_matches_cpu_oracle: n = {n}, {n_steps} steps, final max |Δu| = {max_du:.3e}",
     );
+    assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
 }
 
 #[test]
@@ -106,9 +100,8 @@ fn gpu_transient_step_matches_cpu_oracle() {
 fn gpu_transient_step_with_nonzero_dirichlet_matches_cpu() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Slice G: nonzero Dirichlet now supported. This exercise mirrors
-    // the FemHeat viewer scene — bottom face cold (T=0), top face
-    // hot (T=1). Verify GPU/CPU parity over many backward-Euler
+    // Slice G: nonzero Dirichlet now supported. Slice H: stepper is
+    // persistent — verify GPU/CPU parity over many backward-Euler
     // steps with the heat conducting through.
     let nx = 8usize;
     let mesh = FemMesh::tet_grid_3d(nx, nx, nx, 1.0, 1.0, 1.0);
@@ -131,36 +124,33 @@ fn gpu_transient_step_with_nonzero_dirichlet_matches_cpu() {
         }
     }
 
-    let mut u_cpu = vec![0.0_f64 as Real; n];
+    let mut u_init = vec![0.0_f64 as Real; n];
     for bc in &bcs {
         if let BoundaryCondition::Dirichlet { vertex, value } = bc {
-            u_cpu[*vertex as usize] = *value;
+            u_init[*vertex as usize] = *value;
         }
     }
-    let mut u_gpu = u_cpu.clone();
+    let mut u_cpu = u_init.clone();
     let f = vec![0.0; n];
     let dt: Real = 0.01;
 
     let engine = Engine::new_gpu().expect("gpu");
-    let stepper = TransientStepperGpu::new(&engine, &mesh, &m, &k, dt, &bcs).expect("stepper");
+    let mut stepper = TransientStepperGpu::new(&engine, &mesh, &m, &k, dt, &bcs, &u_init)
+        .expect("stepper");
 
     let n_steps = 30;
-    for step in 0..n_steps {
+    for _ in 0..n_steps {
         let cpu = solve_transient(&m, &k, &f, &u_cpu, dt, &bcs);
-        let gpu = stepper.step(&u_gpu, &f).expect("gpu step");
-        let mut max_du: Real = 0.0;
-        for i in 0..n {
-            max_du = max_du.max((cpu[i] - gpu.x[i]).abs());
-        }
-        assert!(
-            max_du < 1e-3,
-            "step {step}: max |Δu| = {max_du:.3e} (GPU iters = {})",
-            gpu.iters,
-        );
+        let _gpu_stats = stepper.step().expect("gpu step");
         u_cpu = cpu;
-        u_gpu = gpu.x;
+    }
+    let u_gpu = stepper.read_u().expect("read_u");
+    let mut max_du: Real = 0.0;
+    for i in 0..n {
+        max_du = max_du.max((u_cpu[i] - u_gpu[i]).abs());
     }
     eprintln!(
-        "gpu_transient_step_with_nonzero_dirichlet_matches_cpu: n = {n}, {n_steps} steps OK",
+        "gpu_transient_step_with_nonzero_dirichlet_matches_cpu: n = {n}, {n_steps} steps, max |Δu| = {max_du:.3e}",
     );
+    assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
 }
