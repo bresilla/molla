@@ -1013,15 +1013,12 @@ impl CgWorkspace {
             pass.set_bind_group(1, &self.bg_u_dot, &[]);
             pass.dispatch_workgroups(self.n_groups, 1, 1);
         }
-        // Zero the partials BEFORE the kernel runs (the kernel does
-        // `partials[gid] = workgroup_sum`, so any stale value would
-        // be overwritten — but the buffer might be padded to a 16-byte
-        // minimum and those padding slots need to read as zero in the
-        // host-side reduction below). We zero via a queue write at the
-        // start of the dispatch's submission cycle; cheap because it's
-        // a tiny buffer.
-        k.queue
-            .write_buffer(&self.partials, 0, &vec![0u8; self.bytes_partials as usize]);
+        // The kernel writes `partials[wid.x]` for every dispatched
+        // workgroup (`wid.x ∈ [0, n_groups)`), so the host reduction
+        // below — which only reads the first `n_groups` entries —
+        // never observes any pre-existing data. No pre-clear needed
+        // even though the buffer is padded to the 16-byte minimum
+        // for tiny `n_groups`.
         enc.copy_buffer_to_buffer(&self.partials, 0, &self.staging, 0, self.bytes_partials);
         k.queue.submit(std::iter::once(enc.finish()));
 
@@ -1479,10 +1476,9 @@ impl PcgWorkspace {
             pass.set_bind_group(1, &self.bg_u_dot, &[]);
             pass.dispatch_workgroups(self.n_groups, 1, 1);
         }
-        // Same zero-then-write pattern as `CgWorkspace::dispatch_dot_blocking`
-        // — keeps padding slots clean for the host-side reduction.
-        k.queue
-            .write_buffer(&self.partials, 0, &vec![0u8; self.bytes_partials as usize]);
+        // Host reduction reads only the first `n_groups` entries that
+        // the kernel always writes — no pre-clear of the padding slots
+        // is needed. Same reasoning as `CgWorkspace::dispatch_dot_blocking`.
         enc.copy_buffer_to_buffer(&self.partials, 0, &self.staging, 0, self.bytes_partials);
         k.queue.submit(std::iter::once(enc.finish()));
 

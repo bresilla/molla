@@ -714,6 +714,45 @@ mod tests {
         assert!((sum_00 - 1.25).abs() < 1e-15, "(0,0) sum = {sum_00}");
     }
 
+    /// Sparsity-pattern coverage gap the previous test missed:
+    /// 1. **Empty rows** in the middle of the matrix — exercises
+    ///    `row_offsets` accumulation when no triplet writes to row `r`.
+    /// 2. **Interior column hit** — a triplet whose `(row, col)` lands
+    ///    in the middle of an existing row's column range, exercising
+    ///    the sort + linear search.
+    #[test]
+    fn from_scalar_triplets_handles_empty_rows_and_interior_cols() {
+        // 6×6 matrix; rows 1, 3, 5 are entirely empty.
+        // Row 0 has cols {1, 4} (sorted). Row 2 has cols {0, 2, 5} (interior 2 lands between 0 and 5).
+        // Row 4 has col {3}.
+        let raw: Vec<(usize, usize, Real)> = vec![
+            (0, 4, 1.0),
+            (0, 1, 2.0),
+            (2, 5, 3.0),
+            (2, 0, 4.0),
+            (2, 2, 5.0),    // interior column — between (2,0) and (2,5) when sorted
+            (4, 3, 6.0),
+        ];
+        let block_form: Vec<(usize, usize, Vec<Real>)> = raw
+            .iter()
+            .map(|&(r, c, v)| (r, c, vec![v]))
+            .collect();
+        let m_block = BsrMatrix::from_triplets(1, 6, 6, &block_form).unwrap();
+        let m_scalar = BsrMatrix::from_scalar_triplets(6, 6, &raw).unwrap();
+        assert_eq!(m_scalar.row_offsets, m_block.row_offsets);
+        assert_eq!(m_scalar.col_idx, m_block.col_idx);
+        assert_eq!(m_scalar.values, m_block.values);
+        // Empty rows must produce equal consecutive offsets.
+        assert_eq!(m_scalar.row_offsets[1], m_scalar.row_offsets[2]);
+        assert_eq!(m_scalar.row_offsets[3], m_scalar.row_offsets[4]);
+        assert_eq!(m_scalar.row_offsets[5], m_scalar.row_offsets[6]);
+        // Row 2 must have its interior column actually present.
+        let lo = m_scalar.row_offsets[2];
+        let hi = m_scalar.row_offsets[3];
+        let cols: Vec<usize> = (lo..hi).map(|s| m_scalar.col_idx[s]).collect();
+        assert_eq!(cols, vec![0, 2, 5]);
+    }
+
     #[test]
     fn bsr_mv_matches_dense() {
         let a = tridiag_4();
