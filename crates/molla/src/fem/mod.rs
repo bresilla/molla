@@ -49,6 +49,7 @@
 //! - No mesh adaptivity (uniform refinement only).
 
 pub mod adjoint;
+pub mod amr_mesh;
 pub mod apic_coupling;
 pub mod assembly;
 pub mod bc;
@@ -68,6 +69,7 @@ pub mod solver;
 pub mod stokes;
 
 pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_adjoint_with};
+pub use amr_mesh::{near_point, AmrMesh, RefinedCell, RefinedChildren, RefinementCriterion};
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 pub use assembly::assemble_global;
 pub use dg_element::{
