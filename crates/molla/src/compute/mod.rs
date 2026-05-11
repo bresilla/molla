@@ -23,6 +23,12 @@ pub mod mpm_cpu_diff;
 // `fem::fft_ns::solve_pressure_poisson_fft` for the projection.
 pub mod stam_fluid;
 
+// Stage 39A — CPU-only implicit MPM with Bingham rheology. Pure-Rust,
+// `f64` everywhere. Builds on the new graph-coloring primitive for a
+// colored Gauss-Seidel grid-velocity solve that's stable far above the
+// explicit-CFL limit.
+pub mod implicit_mpm;
+
 // Stage 37.8 — tile compute primitives bundle. CPU oracles are
 // always available; the GPU pipelines are gated behind the `gpu`
 // feature inside each module.
