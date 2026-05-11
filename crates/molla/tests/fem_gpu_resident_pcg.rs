@@ -246,3 +246,59 @@ fn pcg_vs_cg_wall_time_32_cube() {
         cg.iters,
     );
 }
+
+#[test]
+#[ignore = "needs a real wgpu adapter — long-running benchmark"]
+fn fem_gpu_resident_cg_vs_pcg_scaling_sweep() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use std::time::Instant;
+
+    eprintln!();
+    eprintln!("─── Stage 36.5+ GPU CG vs PCG scaling sweep ──────────────");
+    eprintln!("Heat-equation steady state on tet cube. CG = unpreconditioned");
+    eprintln!("resident; PCG = Jacobi-preconditioned resident.");
+    eprintln!();
+    eprintln!(
+        "  {:>5}  {:>9}  {:>10}  {:>10}  {:>14}  {:>14}  {:>10}",
+        "grid", "n_dofs", "CG iters", "PCG iters", "CG (ms)", "PCG (ms)", "iter cut"
+    );
+    eprintln!("  ─────  ─────────  ──────────  ──────────  ──────────────  ──────────────  ──────────");
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    for &nx in &[8usize, 16, 24, 32, 48] {
+        let (mesh, bcs, k_red, f_red) = build_heat_eq(nx);
+        let n = f_red.len();
+        let gpu_data = FemGpuData::upload(&device, &queue, &mesh, &k_red).expect("upload");
+
+        // Warm both paths so first-call kernel + bind-group cost doesn't
+        // skew the measurement.
+        let _ = solve_steady_state_gpu_resident(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-5)
+            .expect("warmup CG");
+        let _ = solve_steady_state_gpu_resident_pcg(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-5)
+            .expect("warmup PCG");
+
+        let cg_start = Instant::now();
+        let cg = solve_steady_state_gpu_resident(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-5)
+            .expect("gpu resident CG");
+        let cg_ms = cg_start.elapsed().as_secs_f64() * 1e3;
+
+        let pcg_start = Instant::now();
+        let pcg = solve_steady_state_gpu_resident_pcg(&gpu_data, &f_red, &bcs, &engine, 5000, 1e-5)
+            .expect("gpu resident PCG");
+        let pcg_ms = pcg_start.elapsed().as_secs_f64() * 1e3;
+
+        let iter_cut = if cg.iters > 0 {
+            100.0 * (1.0 - pcg.iters as f64 / cg.iters as f64)
+        } else {
+            0.0
+        };
+        eprintln!(
+            "  {nx:>3}³  {n:>9}  {:>10}  {:>10}  {cg_ms:>11.1}    {pcg_ms:>11.1}    {iter_cut:>8.1}%",
+            cg.iters, pcg.iters
+        );
+    }
+    eprintln!();
+}
