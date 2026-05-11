@@ -324,7 +324,7 @@ fn frob_norm(m: Mat3) -> Real {
 /// (`(ix mod 2, iy mod 2, iz mod 2)`) on this graph.
 ///
 /// Returns `groups[c] = Vec<cell_idx>` for `c ∈ [0, n_colors)`.
-fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
+pub fn color_grid(grid_size: usize) -> Vec<Vec<usize>> {
     let g = grid_size;
     let n_cells = g * g * g;
     let cell_index = |ix: i32, iy: i32, iz: i32| -> Option<u32> {
@@ -990,6 +990,212 @@ pub fn implicit_mpm_step_with_solver(
         total_mass,
         true_residual_sq,
     }
+}
+
+/// Diagnostic — run **only** P2G + predict + GS + G2P on the CPU and
+/// return per-particle `(v_new, c_new)` BEFORE the Bingham return
+/// mapping, alongside the assembled [`GridSystem`] (mass, k_stencil,
+/// v_pred, active flags) and the post-GS / post-floor grid velocity.
+/// The Stage 40 v2 GPU debug path compares these element-wise against
+/// the GPU output so a discrepancy can be localised to P2G/predict/GS/G2P
+/// precisely.
+pub fn cpu_p2g_predict_gs_g2p_debug(
+    state: &MpmState,
+    cfg: &ImplicitMpmConfig,
+) -> (Vec<Vec3>, Vec<Mat3>, GridSystem, Vec<Vec3>) {
+    let mut work = state.clone();
+    let mut captured: Option<(Vec<Vec3>, Vec<Mat3>, GridSystem, Vec<Vec3>)> = None;
+    let mut hook = |sys: &GridSystem, v_grid: &mut [Vec3], _: HessianStencil| -> (usize, Real) {
+        let g = sys.grid_size;
+        let gi = g as i32;
+        for _ in 0..cfg.max_gs_iters {
+            for group in &sys.color_groups {
+                for &ci in group {
+                    if !sys.active[ci] {
+                        continue;
+                    }
+                    let m = sys.g_mass[ci];
+                    let k_diag = sys.k_stencil[ci * 27 + STENCIL_DIAG];
+                    let denom = m + sys.dt * k_diag;
+                    if denom <= 0.0 {
+                        continue;
+                    }
+                    let iz = (ci / (g * g)) as i32;
+                    let iy = ((ci / g) % g) as i32;
+                    let ix = (ci % g) as i32;
+                    let mut off = Vec3::ZERO;
+                    for dz in -1..=1 {
+                        for dy in -1..=1 {
+                            for dx in -1..=1 {
+                                if dx == 0 && dy == 0 && dz == 0 {
+                                    continue;
+                                }
+                                let jx = ix + dx;
+                                let jy = iy + dy;
+                                let jz = iz + dz;
+                                if jx < 0 || jy < 0 || jz < 0 || jx >= gi || jy >= gi || jz >= gi {
+                                    continue;
+                                }
+                                let cj = (jx as usize) + (jy as usize) * g + (jz as usize) * g * g;
+                                let s = stencil_offset(dx, dy, dz);
+                                let kij = sys.k_stencil[ci * 27 + s];
+                                if kij != 0.0 {
+                                    off += kij * v_grid[cj];
+                                }
+                            }
+                        }
+                    }
+                    let rhs = m * sys.v_pred[ci] - sys.dt * off;
+                    v_grid[ci] = rhs / denom;
+                }
+            }
+        }
+        // Floor reapply.
+        let origin_y = cfg.grid_origin[1];
+        let dx = cfg.cell_size;
+        for iz in 0..g {
+            for iy in 0..g {
+                for ix in 0..g {
+                    let ci = ix + iy * g + iz * g * g;
+                    if !sys.active[ci] { continue; }
+                    let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                    if node_y < cfg.floor_y {
+                        let mut v = v_grid[ci];
+                        if v.y < 0.0 { v.y = 0.0; }
+                        let damp = 1.0 - cfg.floor_friction;
+                        v.x *= damp;
+                        v.z *= damp;
+                        v_grid[ci] = v;
+                    }
+                }
+            }
+        }
+        // G2P.
+        let inv_dx = 1.0 / dx;
+        let origin = Vec3::new(cfg.grid_origin[0], cfg.grid_origin[1], cfg.grid_origin[2]);
+        let n = state.n();
+        let mut v_new = vec![Vec3::ZERO; n];
+        let mut c_new = vec![Mat3::ZERO; n];
+        for p in 0..n {
+            let pos = state.pos[p];
+            let xp = (pos - origin) * inv_dx;
+            let base_xyz = Vec3::new((xp.x - 0.5).floor(), (xp.y - 0.5).floor(), (xp.z - 0.5).floor());
+            let base = [base_xyz.x as i32, base_xyz.y as i32, base_xyz.z as i32];
+            let fx = xp - base_xyz;
+            let wx = quad_weights(fx.x);
+            let wy = quad_weights(fx.y);
+            let wz = quad_weights(fx.z);
+            for i in 0..3 {
+                for j in 0..3 {
+                    for k in 0..3 {
+                        let w = wx[i] * wy[j] * wz[k];
+                        let ix = base[0] + i as i32;
+                        let iy = base[1] + j as i32;
+                        let iz = base[2] + k as i32;
+                        let Some(ci) = cell_idx(g, ix, iy, iz) else { continue };
+                        let v_node = v_grid[ci];
+                        let node_pos = origin
+                            + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
+                                * dx;
+                        let xn_xp = node_pos - pos;
+                        v_new[p] += w * v_node;
+                        c_new[p] += outer(v_node, xn_xp) * (4.0 * w * inv_dx * inv_dx);
+                    }
+                }
+            }
+        }
+        captured = Some((v_new, c_new, sys.clone(), v_grid.to_vec()));
+        (cfg.max_gs_iters, 0.0)
+    };
+    implicit_mpm_step_with_solver(&mut work, cfg, &mut [], HessianStencil::Full27, Some(&mut hook));
+    captured.expect("hook should run")
+}
+
+/// Apply the **Bingham return mapping + per-particle floor / friction +
+/// advect** stage to a precomputed `(v_new, c_new)` pair (e.g. from the
+/// Stage 40 v2 GPU pipeline that hands back gathered velocities + APIC
+/// matrices). Mutates `state.vel`, `state.c`, `state.pos` in place,
+/// mirroring the tail of [`implicit_mpm_step_with_solver`]. Used by
+/// the full CPU↔GPU parity test so both paths apply **identical**
+/// rheology and advect math, leaving only P2G/predict/GS/G2P as the
+/// variable under test.
+pub fn apply_bingham_and_advect(
+    state: &mut MpmState,
+    cfg: &ImplicitMpmConfig,
+    v_new: &[Vec3],
+    c_new: &[Mat3],
+) -> usize {
+    assert_eq!(v_new.len(), state.n());
+    assert_eq!(c_new.len(), state.n());
+    let dt = cfg.dt;
+    let dx = cfg.cell_size;
+    let mu_b = cfg.viscosity;
+    let tau_y = cfg.yield_stress;
+    let mut yielded_count = 0usize;
+    for p in 0..state.n() {
+        let pos = state.pos[p];
+        let mut v_new_p = v_new[p];
+        let mut c_new_p = c_new[p];
+
+        let sym_c = sym(c_new_p);
+        let tr3 = tr_over_3(sym_c);
+        let dev = sym_c - Mat3::IDENTITY * tr3;
+        let nd = frob_norm(dev);
+        let trial_norm = 2.0 * mu_b * nd;
+        let skew = c_new_p - sym_c;
+        if trial_norm <= tau_y || nd < 1.0e-12 {
+            yielded_count += 1;
+            c_new_p = Mat3::IDENTITY * tr3 + skew * 0.5;
+            let lambda_plug = tau_y / (2.0 * mu_b * dx);
+            let damp = (1.0 - dt * lambda_plug).max(0.0);
+            v_new_p *= damp;
+        } else {
+            let ratio = 1.0 - tau_y / trial_norm;
+            let dev_new = dev * ratio;
+            c_new_p = dev_new + Mat3::IDENTITY * tr3 + skew;
+            let cap = 0.5 / dt;
+            let nc = frob_norm(c_new_p);
+            if nc > cap {
+                let s = cap / nc;
+                c_new_p *= s;
+                v_new_p *= s;
+            }
+        }
+
+        let height_above_floor = (pos.y - cfg.floor_y).max(0.0);
+        if pos.y + v_new_p.y * dt < cfg.floor_y && v_new_p.y < 0.0 {
+            v_new_p.y = 0.0;
+            let damp = 1.0 - cfg.floor_friction;
+            v_new_p.x *= damp;
+            v_new_p.z *= damp;
+        }
+        if height_above_floor < dx {
+            let depth = 1.0 - (height_above_floor / dx).clamp(0.0, 1.0);
+            let particle_extent = cfg.particle_volume.powf(1.0 / 3.0).max(1.0e-6);
+            let dv_cap = dt * tau_y / (cfg.density * particle_extent) * depth;
+            let vh = Vec3::new(v_new_p.x, 0.0, v_new_p.z);
+            let vh_mag = vh.length();
+            if vh_mag <= dv_cap {
+                v_new_p.x = 0.0;
+                v_new_p.z = 0.0;
+                c_new_p *= 0.0;
+            } else {
+                let scale = (vh_mag - dv_cap) / vh_mag;
+                v_new_p.x *= scale;
+                v_new_p.z *= scale;
+                c_new_p *= scale;
+            }
+        }
+
+        state.vel[p] = v_new_p;
+        state.c[p] = c_new_p;
+        let mut new_pos = pos + v_new_p * dt;
+        if new_pos.y < cfg.floor_y {
+            new_pos.y = cfg.floor_y;
+        }
+        state.pos[p] = new_pos;
+    }
+    yielded_count
 }
 
 /// Run one substep with `stencil` and return the post-solve squared
