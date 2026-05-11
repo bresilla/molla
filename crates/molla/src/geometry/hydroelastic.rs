@@ -433,19 +433,30 @@ pub fn sample_plane_patch(
 /// built by iterating a [`HydroelasticManifold`]'s contacts and
 /// packing `(point, normal, pressure · area)` into this struct.
 ///
-/// `force_magnitude` is the **scalar** pressure-area product; the
+/// `force_magnitude` is the **signed** scalar pressure-area product; the
 /// world-frame force vector is `force_magnitude · normal`. We carry
 /// the normal separately (rather than baking it into a `Vec3 force`)
 /// because the anchor contact needs the aggregate *direction* as a
 /// unit vector, and recovering a unit vector from `Σ p_i · A_i · n_i`
 /// after the fact would lose precision when contributions cancel.
+///
+/// **Sign convention:** for raw contact samples emitted by hydroelastic
+/// integration `force_magnitude ≥ 0`. After [`reduce_with_anchor`] the
+/// **centroid** and **anchor** samples can each carry a *negative*
+/// `force_magnitude` when the moment-balance split coefficient `α`
+/// leaves `[0, 1]` — the centroid pulls one way and the anchor pulls
+/// the other, summing to the total normal force. Callers projecting
+/// onto a friction cone or capping by a magnitude should treat this
+/// field as signed and use `force_magnitude.abs()` if they need the
+/// magnitude.
 #[derive(Copy, Clone, Debug)]
 pub struct PatchSample {
     /// World-frame contact point (m).
     pub point: Vec3,
     /// World-frame unit normal (points from soft body into rigid).
     pub normal: Vec3,
-    /// Per-sample normal-force magnitude (N): `pressure · area`.
+    /// Per-sample normal-force scalar (N). Signed for anchor-reduced
+    /// outputs; non-negative for raw patch samples. See type docs.
     pub force_magnitude: Real,
 }
 

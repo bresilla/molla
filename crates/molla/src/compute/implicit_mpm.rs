@@ -267,12 +267,12 @@ fn outer(a: Vec3, b: Vec3) -> Mat3 {
 
 /// Bingham return mapping applied to a 3×3 symmetric deviatoric
 /// strain-rate tensor `D = sym(C) − tr/3 · I`. Returns the projected
-/// deviator and a `yielded` flag. The math:
+/// deviator and a `plug` flag (true = rigid plug, false = flowing).
 ///
 /// - Trial stress norm: `‖τ_trial‖ = 2μ_b ‖D‖`.
-/// - If `‖τ_trial‖ ≤ τ_y` → rigid plug, return `D := 0`.
+/// - If `‖τ_trial‖ ≤ τ_y` → rigid plug, return `D := 0` with `plug = true`.
 /// - Else `D := (1 − τ_y / ‖τ_trial‖) · D` — scaled so the projected
-///   stress lies exactly on the yield surface (Daviet 2016 §3.2).
+///   stress lies exactly on the yield surface (Daviet 2016 §3.2); `plug = false`.
 ///
 /// `frob` is the precomputed Frobenius norm of `D`.
 ///
@@ -286,7 +286,8 @@ pub fn bingham_project(d: Mat3, frob_d: Real, mu_b: Real, tau_y: Real) -> (Mat3,
         (Mat3::ZERO, true)
     } else {
         let scale = 1.0 - tau_y / trial_norm;
-        (d * scale, scale < 1.0)
+        // Flowing regime: `tau_y > 0` ⇒ `scale < 1.0` strictly, so `plug = false`.
+        (d * scale, false)
     }
 }
 

@@ -193,14 +193,13 @@ pub fn tendon_force(eps: Real, f_max: Real, stiffness_ratio: Real) -> Real {
     }
     // Quadratic past slack:
     //   f_t(ε) = f_max · k · ε²    where k controls the strain at f_max.
-    // We want f_t(ε*) = f_max ⇒ ε* = 1/√k.
-    // For E·A / f_max = 30 with a quadratic, the slope at ε = ε* is
+    // We want f_t(ε*) = f_max ⇒ ε* = 1/√k, and the slope at ε = ε* is
     // 2·f_max·k·ε* = 2·√k · f_max. Matching the linear-tendon stiffness
-    // E·A = 30·f_max at the strain where f_t = f_max requires k = 225
-    // (so ε* ≈ 6.7 %, mid-range for real tendons). We use that.
-    let _ = stiffness_ratio;
-    const K: Real = 225.0;
-    f_max * K * eps * eps
+    // E·A = stiffness_ratio · f_max at the strain where f_t = f_max
+    // requires `k = stiffness_ratio² / 4` (so the default 30 yields k=225,
+    // ε* ≈ 6.7 %, mid-range for real tendons).
+    let k = 0.25 * stiffness_ratio * stiffness_ratio;
+    f_max * k * eps * eps
 }
 
 /// Slope `df_t/dl_t` (N/m) at strain `eps`. Used by the Newton solve
@@ -211,9 +210,11 @@ pub fn tendon_force_slope(eps: Real, f_max: Real, l_tendon_slack: Real) -> Real 
     if !eps.is_finite() || eps <= 0.0 || l_tendon_slack <= 0.0 {
         return 0.0;
     }
-    const K: Real = 225.0;
-    // f_t = f_max · K · eps² ⇒ df_t/dl_t = 2·f_max·K·eps · (1/l_t_slack).
-    2.0 * f_max * K * eps / l_tendon_slack
+    // f_t = f_max · k · eps² with k = stiffness_ratio² / 4 ⇒
+    //   df_t/dl_t = 2·f_max·k·eps · (1/l_t_slack)
+    // Default DEFAULT_TENDON_STIFFNESS_RATIO = 30 → k = 225.
+    let k = 0.25 * DEFAULT_TENDON_STIFFNESS_RATIO * DEFAULT_TENDON_STIFFNESS_RATIO;
+    2.0 * f_max * k * eps / l_tendon_slack
 }
 
 impl Muscle {
@@ -300,11 +301,12 @@ impl Muscle {
         //     still pulling. Seed `eps` at the analytic root assuming
         //     `f_L = f_V = 1` (fibre at optimum), which gives
         //     `ε* = sqrt(a · cos_α / K)`. With `a = 1` and `cos_α =
-        //     1` and our `K = 225`, `ε* ≈ 6.7 %`.
-        const K: Real = 225.0;
+        //     1` and `K = stiffness_ratio² / 4 = 225` (default), `ε* ≈ 6.7 %`.
+        let k: Real =
+            0.25 * DEFAULT_TENDON_STIFFNESS_RATIO * DEFAULT_TENDON_STIFFNESS_RATIO;
         let l_t0 = (l_total - self.config.l_opt * cos_alpha).max(l_t_slack);
         let eps_geom = ((l_t0 - l_t_slack) / l_t_slack).max(0.0);
-        let eps_analytic = (a * cos_alpha / K).sqrt();
+        let eps_analytic = (a * cos_alpha / k).sqrt();
         let mut eps = if eps_geom < eps_analytic * 0.1 {
             eps_analytic
         } else {
@@ -340,7 +342,7 @@ impl Muscle {
             let df_fibre_deps = a * f_max * f_v * df_l_deps;
             // Tendon slope. Floor at the analytic-root slope to keep
             // the denominator from vanishing near ε = 0.
-            let df_t_deps = f_max * 2.0 * K * eps.max(1e-3);
+            let df_t_deps = f_max * 2.0 * k * eps.max(1e-3);
             let denom = df_fibre_deps * cos_alpha - df_t_deps;
             if denom.abs() < 1e-12 * f_max {
                 break;
