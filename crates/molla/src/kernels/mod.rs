@@ -44,6 +44,8 @@ mod fem_ns_rhs_assemble;
 mod fem_stokes;
 #[cfg(feature = "gpu")]
 mod fem_step_ops;
+#[cfg(feature = "gpu")]
+mod dg_swe_flux;
 // Adjoint dispatcher is feature-gated separately — it does not (yet)
 // require GPU and is needed by the autograd CPU path + viewer
 // regardless of the `gpu` feature.
@@ -164,6 +166,11 @@ pub use fem_ns_rhs_assemble::{FemNsRhsAssembleKernel, NsRhsMode};
 pub use fem_stokes::{FemStokesGpuKernel, StokesEntry};
 #[cfg(feature = "gpu")]
 pub use fem_step_ops::{TransientStepOpsKernel, WaveStepOpsKernel};
+#[cfg(feature = "gpu")]
+pub use dg_swe_flux::{
+    DgSweFace, DgSweFluxKernel, DgSweFluxVariant, DG_SWE_COMPONENTS, DG_SWE_FACE_STRIDE,
+    DG_SWE_NODES_PER_CELL,
+};
 pub use featherstone_adjoint::{
     time_forward_us, AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher,
     MultiAdjointBatch, MultiAdjointInput, MultiAdjointOutput,
