@@ -25,7 +25,7 @@
 //! correct RHS shift instead of silently relying on row-only
 //! elimination.
 
-use crate::math::iterative::{cg_solve, CgResult};
+use crate::math::iterative::{cg_solve, pcg_solve, CgResult, JacobiPreconditioner};
 use crate::math::sparse::BsrMatrix;
 use crate::math::Real;
 
@@ -121,6 +121,44 @@ pub fn solve_steady_state_with_initial(
     cg_solve(|x| matvec(&k_red, x), &f_red, &x_init, tol, max_iters)
 }
 
+/// Jacobi-preconditioned variant of [`solve_steady_state_with_initial`].
+///
+/// Same input/output contract — applies symmetric Dirichlet reduction
+/// then solves `K_red · u = f_red` via [`pcg_solve`] using
+/// `M⁻¹ = diag(K_red)⁻¹` (Jacobi). For Laplacian-like SPD systems
+/// this typically cuts CG iter count by 25-40% with no per-iter cost
+/// beyond the diagonal apply (one elementwise multiply per row).
+///
+/// The preconditioner is built once from `K_red`'s diagonal — this
+/// is `O(n)` and dwarfed by even a single CG iteration.
+pub fn solve_steady_state_pcg(
+    k: &BsrMatrix,
+    f: &[Real],
+    bcs: &[BoundaryCondition],
+    x0: &[Real],
+    max_iters: usize,
+    tol: Real,
+) -> CgResult {
+    let mut k_red = k.clone();
+    let mut f_red = f.to_vec();
+    apply_dirichlet(&mut k_red, &mut f_red, bcs);
+    let pre = JacobiPreconditioner::new(&k_red.diagonal());
+    let mut x_init = x0.to_vec();
+    for bc in bcs {
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x_init[*vertex as usize] = *value;
+        }
+    }
+    pcg_solve(
+        |x| matvec(&k_red, x),
+        |r| pre.apply(r),
+        &f_red,
+        &x_init,
+        tol,
+        max_iters,
+    )
+}
+
 /// One backward-Euler step of the parabolic heat equation:
 ///
 /// `(M / Δt + K) · uⁿ⁺¹ = f + (M / Δt) · uⁿ`
@@ -195,6 +233,54 @@ pub fn solve_transient_with_initial(
         }
     }
     cg_solve(|x| matvec(&a_red, x), &b, &x_init, tol, max_iters)
+}
+
+/// Jacobi-preconditioned variant of [`solve_transient_with_initial`].
+/// See [`solve_steady_state_pcg`] for the rationale — the per-step
+/// LHS `A = M/Δt + K` is rebuilt and BC-reduced as in the
+/// non-preconditioned path; the diagonal extraction adds `O(n)` per
+/// step and the iter-count cut typically pays for it many times over.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_transient_pcg(
+    m: &BsrMatrix,
+    k: &BsrMatrix,
+    f: &[Real],
+    u_old: &[Real],
+    dt: Real,
+    bcs: &[BoundaryCondition],
+    x0: &[Real],
+    max_iters: usize,
+    tol: Real,
+) -> CgResult {
+    debug_assert_eq!(m.b, 1);
+    debug_assert_eq!(k.b, 1);
+    debug_assert_eq!(m.nrows(), k.nrows());
+
+    let inv_dt = 1.0 / dt;
+    let a = add_csr_scaled(m, inv_dt, k, 1.0);
+    let m_uold = matvec(m, u_old);
+    let mut b: Vec<Real> = f
+        .iter()
+        .zip(m_uold.iter())
+        .map(|(fi, mi)| fi + inv_dt * mi)
+        .collect();
+    let mut a_red = a;
+    apply_dirichlet(&mut a_red, &mut b, bcs);
+    let pre = JacobiPreconditioner::new(&a_red.diagonal());
+    let mut x_init = x0.to_vec();
+    for bc in bcs {
+        if let BoundaryCondition::Dirichlet { vertex, value } = bc {
+            x_init[*vertex as usize] = *value;
+        }
+    }
+    pcg_solve(
+        |x| matvec(&a_red, x),
+        |r| pre.apply(r),
+        &b,
+        &x_init,
+        tol,
+        max_iters,
+    )
 }
 
 /// State produced by one [`solve_wave_transient`] step — the new

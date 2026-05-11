@@ -172,6 +172,33 @@ impl BsrMatrix {
         self.block_cols * self.b
     }
 
+    /// Extract the matrix diagonal `diag[i] = A[i, i]` as a flat
+    /// `Vec<Real>` of length `nrows()`. Only meaningful for square
+    /// matrices (the implementation tolerates non-square but only
+    /// fills `min(nrows, ncols)` entries).
+    ///
+    /// Scalar (`B = 1`) only in v1 — for the BSR `B > 1` case the
+    /// "diagonal" would be a sequence of `B × B` blocks and the
+    /// caller almost always wants something more structured (e.g.
+    /// `block_diag_inv` for block-Jacobi).
+    #[must_use]
+    pub fn diagonal(&self) -> Vec<Real> {
+        debug_assert_eq!(self.b, 1, "BsrMatrix::diagonal: only B=1 supported");
+        let n = self.nrows().min(self.ncols());
+        let mut diag = vec![0.0; n];
+        for r in 0..n {
+            let lo = self.row_offsets[r];
+            let hi = self.row_offsets[r + 1];
+            for slot in lo..hi {
+                if self.col_idx[slot] == r {
+                    diag[r] = self.values[slot];
+                    break;
+                }
+            }
+        }
+        diag
+    }
+
     /// `y = A · x` with `x.len() == ncols()`, `y.len() == nrows()`.
     pub fn mv(&self, x: &[Real], y: &mut [Real]) -> Result<()> {
         if x.len() != self.ncols() || y.len() != self.nrows() {

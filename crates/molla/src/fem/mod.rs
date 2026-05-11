@@ -93,8 +93,8 @@ pub use p2_element::{
 };
 pub use solver::{
     solve_distortion_minimization, solve_nonlinear_static,
-    solve_steady_state, solve_steady_state_vector, solve_transient,
-    solve_wave_transient, WaveStepResult, NEWMARK_BETA_DEFAULT,
+    solve_steady_state, solve_steady_state_pcg, solve_steady_state_vector, solve_transient,
+    solve_transient_pcg, solve_wave_transient, WaveStepResult, NEWMARK_BETA_DEFAULT,
     NEWMARK_GAMMA_DEFAULT,
 };
 #[cfg(feature = "gpu")]
