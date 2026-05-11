@@ -71,6 +71,10 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod scan;
 #[cfg(feature = "gpu")]
+pub(crate) mod optim_adam;
+#[cfg(feature = "gpu")]
+mod optim_sgd;
+#[cfg(feature = "gpu")]
 mod robust_loss;
 #[cfg(feature = "gpu")]
 mod rnea;
@@ -169,6 +173,10 @@ pub use radix_sort::{
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
 pub use scan::ScanKernel;
+#[cfg(feature = "gpu")]
+pub use optim_adam::AdamGpuKernel;
+#[cfg(feature = "gpu")]
+pub use optim_sgd::SgdGpuKernel;
 #[cfg(feature = "gpu")]
 pub use robust_loss::{LossPair, RobustLossKernel};
 #[cfg(feature = "gpu")]

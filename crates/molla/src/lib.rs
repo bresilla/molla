@@ -23,6 +23,7 @@ pub mod fem;
 pub mod geometry;
 pub mod kernels;
 pub mod math;
+pub mod optim;
 pub mod sensors;
 pub mod sim;
 pub mod solvers;
