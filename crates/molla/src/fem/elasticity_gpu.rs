@@ -8,8 +8,8 @@
 //!
 //! ## Why pattern on CPU, values on GPU?
 //!
-//! `BsrMatrix::from_scalar_triplets` does an `O(nnz · log nnz)` sort
-//! + dedupe to build the sparsity pattern; even at `16³` tet
+//! `BsrMatrix::from_scalar_triplets` does an `O(nnz · log nnz)`
+//! sort-and-dedupe to build the sparsity pattern; even at `16³` tet
 //! resolution this is sub-millisecond and dominated by the underlying
 //! mesh-graph traversal. The expensive part — computing the 144
 //! values of every per-cell `Kₑ = ∫ Bᵀ D B dV` — moves to the GPU
@@ -117,8 +117,8 @@ pub fn build_elasticity_gpu_pattern(
         *v = 0.0;
     }
     // Set diagonal of BC rows to 1.0.
-    for r in 0..n {
-        if bc_mask[r] == 0 {
+    for (r, &mask) in bc_mask.iter().enumerate() {
+        if mask == 0 {
             continue;
         }
         let lo = k_pattern.row_offsets[r];
