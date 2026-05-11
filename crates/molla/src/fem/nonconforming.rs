@@ -85,7 +85,8 @@ use crate::math::sparse::BsrMatrix;
 use crate::math::{Mat3, Real, Vec3};
 
 use super::assembly::{assemble_global, matvec};
-use super::element::compute_element_mass;
+use super::bc::{apply_bcs, BoundaryCondition};
+use super::element::{compute_element_elasticity_stiffness, compute_element_mass};
 use super::function_space::FunctionSpace;
 use super::mesh::{FemCell, FemMesh};
 use super::quadrature::{tet_quadrature_5pt, tri3d_quadrature_6pt};
@@ -485,6 +486,562 @@ impl<'a> NonconformingPenaltyContact<'a> {
 
         (f_source, f_target)
     }
+
+    /// Stage 47 v4 — assemble the **tangent stiffness blocks** of the
+    /// penalty-contact term `Π_c(u) = ½ k · ‖u_t − M_tt⁻¹ M_st u_s‖²_Mtt`.
+    ///
+    /// Returns the two scalar (`B = 1`) blocks of the contact Jacobian:
+    ///
+    /// - **`K_ss = k · M_stᵀ · M_st`** (`n_s × n_s`, SPSD).
+    /// - **`K_st = −k · M_stᵀ · M_tt`** (`n_s × n_t`).
+    ///
+    /// The full stacked contact tangent (sized `(n_s + n_t) × (n_s + n_t)`)
+    /// has the structure
+    ///
+    /// ```text
+    ///   K_contact = k · [  M_stᵀ M_st ,  − M_stᵀ M_tt ;
+    ///                       − M_tt M_st ,    M_tt M_tt   ]
+    /// ```
+    ///
+    /// The remaining two blocks are obtained from the returned ones by
+    /// symmetry / transpose plus the cached `M_tt`:
+    /// - `K_ts = K_stᵀ = −k · M_tt · M_st`,
+    /// - `K_tt = k · M_tt · M_tt` (re-uses [`Self::field`]`.target_mass`).
+    ///
+    /// **Scalar storage**: per the v2 storage-choice note (the cross-mesh
+    /// mass is component-decoupled), these are scalar (`B = 1`) blocks.
+    /// The vector-valued contact tangent for `dim = 3` is the
+    /// block-diagonal embedding of these scalar matrices into the
+    /// interleaved `(vertex · 3 + comp)` layout — applied component-wise
+    /// in [`solve_coupled_elasticity`].
+    ///
+    /// **Symmetry**: `K_ss = K_ssᵀ`, `K_tt = K_ttᵀ`, and `K_st = K_tsᵀ`,
+    /// so the full contact tangent is symmetric. The penalty residual
+    /// `R_c(u) = K_contact · u` makes the coupled elasticity tangent SPD
+    /// for any `k > 0` (it adds a rank-deficient PSD perturbation to the
+    /// SPD elasticity block — the rigid-body kernel of `K_s + K_t` may
+    /// remain in the kernel of `K_contact` if both meshes translate
+    /// equally, which is why Dirichlet BCs are still required on at
+    /// least one body to make the stacked system SPD).
+    pub fn compute_jacobian(&self) -> (BsrMatrix, BsrMatrix) {
+        let mst = &self.field.coupling_matrix;
+        let mtt = &self.field.target_mass;
+        let k = self.stiffness;
+
+        // K_ss = k · M_stᵀ · M_st (size n_s × n_s).
+        let k_ss = mat_transpose_times_mat(mst, mst, k)
+            .expect("compute_jacobian: K_ss assembly");
+        // K_st = − k · M_stᵀ · M_tt (size n_s × n_t).
+        let k_st = mat_transpose_times_mat(mst, mtt, -k)
+            .expect("compute_jacobian: K_st assembly");
+        (k_ss, k_st)
+    }
+}
+
+// ─── Stage 47 v4 — coupled Newton-Raphson elasticity solve ──────────
+
+/// Stage 47 v4 — solve the **stacked elasticity + non-conforming
+/// penalty-contact** system via CG.
+///
+/// Conceptual model: two linearly-elastic bodies (`source` and `target`)
+/// each with their own tangent stiffness `K_s`, `K_t`, external load
+/// `f_source`, `f_target`, and Dirichlet BC sets. They are coupled
+/// through the penalty-spring contact `K_contact` (built once from
+/// `contact.compute_jacobian()` plus the cached `M_tt`).
+///
+/// The stacked linear system is
+///
+/// ```text
+///   ┌ K_s + k·Kss   k·Kst   ┐ ┌ u_s ┐   ┌ f_s ┐
+///   │                       │ │     │ = │     │
+///   └ k·Kts        K_t + k·Ktt ┘ └ u_t ┘   └ f_t ┘
+/// ```
+///
+/// where `Kss = M_stᵀ M_st`, `Kst = −M_stᵀ M_tt`, `Kts = Kstᵀ`,
+/// `Ktt = M_tt M_tt`. With Dirichlet BCs applied on both bodies the
+/// stacked operator is **symmetric positive definite** for any
+/// `k_penalty ≥ 0`, so CG is the right solver (and the system is
+/// linear — Newton-Raphson reduces to a single linear solve).
+///
+/// **Vector layout** (interleaved 3D for each body):
+/// - `f_source` / `u_source` length: `source.vert_count() · 3`.
+/// - `f_target` / `u_target` length: `target.vert_count() · 3`.
+/// - The stacked DoF vector is `[u_source ; u_target]` (source first,
+///   target second).
+///
+/// **BC handling**: `bcs_source` and `bcs_target` are applied **only**
+/// to their respective elasticity blocks (`K_s`, `K_t`). The CG iterate
+/// is kept in `du`-form on the pinned DoFs (pinned increments are zero,
+/// so the prescribed values flow through unchanged from the seed).
+/// `NeumannTraction` BCs are integrated into `f_*` *before* the solve.
+///
+/// **Args:**
+/// - `k_source` (Lamé `λ`, `μ`) — source material parameters.
+/// - `k_target` (Lamé `λ`, `μ`) — target material parameters.
+/// - `contact` — the [`NonconformingPenaltyContact`] coupling.
+/// - `f_source`, `f_target` — external load vectors (interleaved 3D).
+/// - `bcs_source`, `bcs_target` — Dirichlet / Neumann BC lists.
+/// - `k_penalty` — contact stiffness multiplier. **Overrides**
+///   `contact.stiffness`; `k_penalty = 0` recovers two independent
+///   elasticity solves to round-off.
+/// - `max_iters`, `tol` — outer CG cap + relative residual tolerance.
+///
+/// Returns `(u_source, u_target)` — interleaved 3D displacement
+/// vectors, length matching the input loads.
+///
+/// **Newton iterations**: linear elasticity ⇒ a single linear solve
+/// is enough; the `max_iters` argument caps the **CG** (Krylov) inner
+/// iterations, not Newton outer steps. The "Newton-Raphson" label in
+/// the name is for consistency with v5 (which generalises to nonlinear
+/// elasticity / Signorini hard constraint).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_coupled_elasticity(
+    source_mesh: &FemMesh,
+    target_mesh: &FemMesh,
+    k_source: (Real, Real),
+    k_target: (Real, Real),
+    contact: &NonconformingPenaltyContact<'_>,
+    f_source: &[Real],
+    f_target: &[Real],
+    bcs_source: &[BoundaryCondition],
+    bcs_target: &[BoundaryCondition],
+    k_penalty: Real,
+    max_iters: usize,
+    tol: Real,
+) -> (Vec<Real>, Vec<Real>) {
+    let dim = 3usize;
+    let n_s = source_mesh.vertices.len();
+    let n_t = target_mesh.vertices.len();
+    assert_eq!(
+        f_source.len(),
+        n_s * dim,
+        "solve_coupled_elasticity: f_source length {} != n_source ({}) · 3",
+        f_source.len(),
+        n_s,
+    );
+    assert_eq!(
+        f_target.len(),
+        n_t * dim,
+        "solve_coupled_elasticity: f_target length {} != n_target ({}) · 3",
+        f_target.len(),
+        n_t,
+    );
+    assert!(
+        std::ptr::eq(contact.field.source as *const _, source_mesh as *const _),
+        "solve_coupled_elasticity: contact source mesh must equal source_mesh"
+    );
+    assert!(
+        std::ptr::eq(contact.field.target as *const _, target_mesh as *const _),
+        "solve_coupled_elasticity: contact target mesh must equal target_mesh"
+    );
+
+    // ── 1. Assemble per-body elasticity stiffness blocks ────────────
+    let (lam_s, mu_s) = k_source;
+    let (lam_t, mu_t) = k_target;
+    let space = FunctionSpace::P1Vector { dim };
+    let k_s = assemble_global(source_mesh, space, |c, v| {
+        compute_element_elasticity_stiffness(c, v, lam_s, mu_s)
+    })
+    .expect("solve_coupled_elasticity: source elasticity assembly");
+    let k_t = assemble_global(target_mesh, space, |c, v| {
+        compute_element_elasticity_stiffness(c, v, lam_t, mu_t)
+    })
+    .expect("solve_coupled_elasticity: target elasticity assembly");
+
+    // ── 2. Pre-compute the contact block matrices (scalar) ──────────
+    // K_ss = k_penalty · M_stᵀ · M_st (n_s × n_s).
+    // K_st = -k_penalty · M_stᵀ · M_tt (n_s × n_t).
+    // K_tt_contact = k_penalty · M_tt · M_tt (n_t × n_t).
+    // K_ts = K_stᵀ (used by transpose matvec).
+    let mst = contact.field.coupling_matrix.clone();
+    let mtt = contact.field.target_mass.clone();
+    let k_ss_scalar = mat_transpose_times_mat(&mst, &mst, k_penalty)
+        .expect("solve_coupled_elasticity: K_ss");
+    let k_st_scalar = mat_transpose_times_mat(&mst, &mtt, -k_penalty)
+        .expect("solve_coupled_elasticity: K_st");
+    let k_tt_scalar = mat_times_mat(&mtt, &mtt, k_penalty)
+        .expect("solve_coupled_elasticity: K_tt_contact");
+
+    // ── 3. Apply BCs on the elasticity blocks (column-elim + pin) ───
+    // The BCs modify `K_s`, `f_s`, `K_t`, `f_t` in the usual symmetric
+    // way (zero the row + column of every pinned DoF, set diagonal to 1,
+    // RHS to the prescribed value). We snapshot the pinned indices +
+    // their values so we can (a) absorb the contact block contribution
+    // of the prescribed values into the RHS, and (b) zero the contact
+    // block contribution at pinned rows/columns during the matvec.
+    let mut k_s_red = k_s;
+    let mut f_s_red = f_source.to_vec();
+    apply_bcs(
+        &mut k_s_red,
+        &mut f_s_red,
+        bcs_source,
+        &source_mesh.vertices,
+        dim,
+    );
+    let mut k_t_red = k_t;
+    let mut f_t_red = f_target.to_vec();
+    apply_bcs(
+        &mut k_t_red,
+        &mut f_t_red,
+        bcs_target,
+        &target_mesh.vertices,
+        dim,
+    );
+
+    // Index the Dirichlet pin set for each body — flat per-DoF
+    // (interleaved layout). `None` = free, `Some(v)` = pinned to `v`.
+    let pinned_s = collect_pinned_dofs(bcs_source, n_s, dim);
+    let pinned_t = collect_pinned_dofs(bcs_target, n_t, dim);
+
+    // ── 4. Absorb the contact block's column shift on Dirichlet pins ─
+    // The standard symmetric BC reduction (already applied to K_s/K_t)
+    // shifts the RHS by `K_block · u_pin` for every pinned column.
+    // We need the analogous shift for the K_contact block:
+    //   f_red[i, free] -= K_contact[i, j] · u_pin[j]  for every pinned j.
+    // We build `u_pin = [u_pin_s; u_pin_t]` (zero on free DoFs, pin
+    // value on pinned DoFs) and matvec the contact tangent against it.
+    let mut u_pin_s = vec![0.0; n_s * dim];
+    for (i, v) in pinned_s.iter().enumerate() {
+        if let Some(val) = v {
+            u_pin_s[i] = *val;
+        }
+    }
+    let mut u_pin_t = vec![0.0; n_t * dim];
+    for (i, v) in pinned_t.iter().enumerate() {
+        if let Some(val) = v {
+            u_pin_t[i] = *val;
+        }
+    }
+    // Compute K_contact · u_pin (block-wise, component-decoupled).
+    let (mut shift_s, mut shift_t) = matvec_stacked_contact(
+        &k_ss_scalar,
+        &k_st_scalar,
+        &k_tt_scalar,
+        &u_pin_s,
+        &u_pin_t,
+        dim,
+    );
+    // Zero out the pinned rows of the shift (those rows get their
+    // diagonal-1 BC contribution from K_block, not from K_contact —
+    // we don't want to double-count the Dirichlet value).
+    for (i, v) in pinned_s.iter().enumerate() {
+        if v.is_some() {
+            shift_s[i] = 0.0;
+        }
+    }
+    for (i, v) in pinned_t.iter().enumerate() {
+        if v.is_some() {
+            shift_t[i] = 0.0;
+        }
+    }
+    for i in 0..f_s_red.len() {
+        f_s_red[i] -= shift_s[i];
+    }
+    for i in 0..f_t_red.len() {
+        f_t_red[i] -= shift_t[i];
+    }
+
+    // ── 5. Build the stacked RHS + matvec closure ───────────────────
+    let n_total = (n_s + n_t) * dim;
+    let mut rhs = vec![0.0; n_total];
+    rhs[..f_s_red.len()].copy_from_slice(&f_s_red);
+    rhs[n_s * dim..n_s * dim + f_t_red.len()].copy_from_slice(&f_t_red);
+
+    // Initial guess: seed pinned DoFs at their prescribed values, zero
+    // elsewhere. This makes the converged CG iterate satisfy the
+    // Dirichlet condition exactly (the pinned rows of the matvec map
+    // `u_pin → u_pin` because of the diagonal-1 BC pin in K_block, and
+    // the contact-row mask below).
+    let mut x0 = vec![0.0; n_total];
+    for (i, v) in pinned_s.iter().enumerate() {
+        if let Some(val) = v {
+            x0[i] = *val;
+            // Also force the RHS at pinned rows to `val` (overwrite
+            // apply_bcs' choice in case the BC list re-uses non-zero
+            // values; apply_bcs already sets f_red[pin] = val, but the
+            // earlier shift step zeroed the contact part so this is a
+            // no-op verification step).
+            rhs[i] = *val;
+        }
+    }
+    for (i, v) in pinned_t.iter().enumerate() {
+        if let Some(val) = v {
+            x0[n_s * dim + i] = *val;
+            rhs[n_s * dim + i] = *val;
+        }
+    }
+
+    // Stacked matvec — built block-by-block:
+    //   y_s = (K_s · u_s)        + (K_ss · u_s + K_st · u_t)_masked
+    //   y_t = (K_t · u_t)        + (K_ts · u_s + K_tt · u_t)_masked
+    // where _masked = "pinned rows zeroed".
+    let pinned_s_clone = pinned_s.clone();
+    let pinned_t_clone = pinned_t.clone();
+    let op = move |x: &[Real]| -> Vec<Real> {
+        debug_assert_eq!(x.len(), n_total);
+        let (u_s, u_t) = x.split_at(n_s * dim);
+        // Block-block (elasticity).
+        let mut y_s = matvec(&k_s_red, u_s);
+        let mut y_t = matvec(&k_t_red, u_t);
+        // For the contact contribution we need to mask the input at
+        // pinned DoFs (column elimination) — zeroing pinned components
+        // of u_s, u_t before applying the contact blocks ensures the
+        // pinned columns don't contribute to free rows.
+        let mut u_s_masked = u_s.to_vec();
+        for (i, v) in pinned_s_clone.iter().enumerate() {
+            if v.is_some() {
+                u_s_masked[i] = 0.0;
+            }
+        }
+        let mut u_t_masked = u_t.to_vec();
+        for (i, v) in pinned_t_clone.iter().enumerate() {
+            if v.is_some() {
+                u_t_masked[i] = 0.0;
+            }
+        }
+        let (cs, ct) = matvec_stacked_contact(
+            &k_ss_scalar,
+            &k_st_scalar,
+            &k_tt_scalar,
+            &u_s_masked,
+            &u_t_masked,
+            dim,
+        );
+        // Mask pinned output rows: K_block already enforces
+        // `y[pin] = u[pin]` via its diagonal-1 pin, so the contact
+        // contribution at pinned rows must be zeroed.
+        for i in 0..(n_s * dim) {
+            if pinned_s_clone[i].is_some() {
+                continue;
+            }
+            y_s[i] += cs[i];
+        }
+        for i in 0..(n_t * dim) {
+            if pinned_t_clone[i].is_some() {
+                continue;
+            }
+            y_t[i] += ct[i];
+        }
+
+        // Stack.
+        let mut y = Vec::with_capacity(n_total);
+        y.extend_from_slice(&y_s);
+        y.extend_from_slice(&y_t);
+        y
+    };
+
+    // ── 6. Solve the stacked system via CG ──────────────────────────
+    let result = cg_solve(op, &rhs, &x0, tol, max_iters);
+    if !result.converged(tol) {
+        tracing::warn!(
+            "solve_coupled_elasticity: CG did not converge — \
+             iters = {}/{}, residual = {:.3e} (tol = {:.3e})",
+            result.iters,
+            max_iters,
+            result.residual,
+            tol,
+        );
+    }
+    tracing::debug!(
+        "solve_coupled_elasticity: CG iters = {}, residual = {:.3e}",
+        result.iters,
+        result.residual,
+    );
+    let mut u_s = vec![0.0; n_s * dim];
+    let mut u_t = vec![0.0; n_t * dim];
+    u_s.copy_from_slice(&result.x[..n_s * dim]);
+    u_t.copy_from_slice(&result.x[n_s * dim..]);
+    (u_s, u_t)
+}
+
+/// Apply the **stacked contact matvec** to an interleaved 3D
+/// displacement pair `(u_s, u_t)`, component-by-component (the contact
+/// blocks are scalar / component-decoupled — see the v2 storage-choice
+/// note in the module header).
+///
+/// Returns `(y_s, y_t)` where
+/// ```text
+///   y_s = k_ss · u_s + k_st · u_t
+///   y_t = k_stᵀ · u_s + k_tt · u_t
+/// ```
+/// `k_ss`, `k_st`, `k_tt` are the **scalar** (`B = 1`) blocks built by
+/// [`NonconformingPenaltyContact::compute_jacobian`] (or the inline
+/// equivalents in [`solve_coupled_elasticity`]); `dim` is the per-vertex
+/// component count (3 for elasticity).
+fn matvec_stacked_contact(
+    k_ss: &BsrMatrix,
+    k_st: &BsrMatrix,
+    k_tt: &BsrMatrix,
+    u_s: &[Real],
+    u_t: &[Real],
+    dim: usize,
+) -> (Vec<Real>, Vec<Real>) {
+    let n_s = k_ss.nrows();
+    let n_t = k_tt.nrows();
+    debug_assert_eq!(u_s.len(), n_s * dim);
+    debug_assert_eq!(u_t.len(), n_t * dim);
+    debug_assert_eq!(k_st.nrows(), n_s);
+    debug_assert_eq!(k_st.ncols(), n_t);
+
+    let mut y_s = vec![0.0; n_s * dim];
+    let mut y_t = vec![0.0; n_t * dim];
+    let mut comp_s = vec![0.0; n_s];
+    let mut comp_t = vec![0.0; n_t];
+
+    for c in 0..dim {
+        for i in 0..n_s {
+            comp_s[i] = u_s[i * dim + c];
+        }
+        for i in 0..n_t {
+            comp_t[i] = u_t[i * dim + c];
+        }
+        // y_s_c = K_ss · u_s_c + K_st · u_t_c.
+        let a = matvec(k_ss, &comp_s);
+        let b = matvec(k_st, &comp_t);
+        for i in 0..n_s {
+            y_s[i * dim + c] = a[i] + b[i];
+        }
+        // y_t_c = K_stᵀ · u_s_c + K_tt · u_t_c.
+        let at = matvec_transpose(k_st, &comp_s);
+        let d = matvec(k_tt, &comp_t);
+        for i in 0..n_t {
+            y_t[i * dim + c] = at[i] + d[i];
+        }
+    }
+    (y_s, y_t)
+}
+
+/// Collect Dirichlet pins from a BC list into a flat
+/// `Vec<Option<Real>>` of length `n_verts · dim`. `None` = free DoF,
+/// `Some(value)` = pinned. Handles both `Dirichlet` (component 0 only)
+/// and `DirichletVector` (every component). Neumann variants are
+/// silently ignored (they affect the RHS, not the matrix pattern).
+fn collect_pinned_dofs(
+    bcs: &[BoundaryCondition],
+    n_verts: usize,
+    dim: usize,
+) -> Vec<Option<Real>> {
+    let mut out = vec![None; n_verts * dim];
+    for bc in bcs {
+        match bc {
+            BoundaryCondition::Dirichlet { vertex, value } => {
+                let base = (*vertex as usize) * dim;
+                if base < out.len() {
+                    out[base] = Some(*value);
+                }
+            }
+            BoundaryCondition::DirichletVector { vertex, values } => {
+                let base = (*vertex as usize) * dim;
+                for (ci, val) in values.iter().enumerate() {
+                    if base + ci < out.len() {
+                        out[base + ci] = Some(*val);
+                    }
+                }
+            }
+            BoundaryCondition::Neumann { .. }
+            | BoundaryCondition::NeumannTraction { .. }
+            | BoundaryCondition::WeakDirichletDG { .. } => {}
+        }
+    }
+    out
+}
+
+/// Compute `C = α · Aᵀ · B` as a scalar (`B = 1`) [`BsrMatrix`].
+///
+/// Shapes: `A` is `m × p`, `B` is `m × q`, output is `p × q` (the
+/// transposition swaps `A`'s row/column roles). Used by
+/// [`NonconformingPenaltyContact::compute_jacobian`] to build
+/// `k · M_stᵀ · M_st` and `−k · M_stᵀ · M_tt`.
+///
+/// Implementation: walk every non-zero entry of `A` as triplets
+/// `(r, c, v)`, then for each entry in row `r` of `B` (call it
+/// `(r, c2, v2)`) accumulate `α · v · v2` into `C[c, c2]`. Final
+/// triplets are coalesced via [`BsrMatrix::from_scalar_triplets`] so
+/// repeated `(row, col)` pairs sum.
+///
+/// Complexity: `O(nnz(A) · avg_row_nnz(B))` — fine for the
+/// non-conforming contact scale (target meshes have a few thousand
+/// vertices in practice).
+fn mat_transpose_times_mat(a: &BsrMatrix, b: &BsrMatrix, alpha: Real) -> Result<BsrMatrix> {
+    debug_assert_eq!(a.b, 1, "mat_transpose_times_mat: only B = 1 supported");
+    debug_assert_eq!(b.b, 1, "mat_transpose_times_mat: only B = 1 supported");
+    assert_eq!(
+        a.nrows(),
+        b.nrows(),
+        "mat_transpose_times_mat: row mismatch {} vs {}",
+        a.nrows(),
+        b.nrows()
+    );
+    let p = a.ncols();
+    let q = b.ncols();
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
+    for r in 0..a.block_rows {
+        let a_lo = a.row_offsets[r];
+        let a_hi = a.row_offsets[r + 1];
+        let b_lo = b.row_offsets[r];
+        let b_hi = b.row_offsets[r + 1];
+        if a_lo == a_hi || b_lo == b_hi {
+            continue;
+        }
+        for a_slot in a_lo..a_hi {
+            let c_a = a.col_idx[a_slot];
+            let v_a = a.values[a_slot];
+            if v_a == 0.0 {
+                continue;
+            }
+            for b_slot in b_lo..b_hi {
+                let c_b = b.col_idx[b_slot];
+                let v_b = b.values[b_slot];
+                if v_b == 0.0 {
+                    continue;
+                }
+                triplets.push((c_a, c_b, alpha * v_a * v_b));
+            }
+        }
+    }
+    BsrMatrix::from_scalar_triplets(p, q, &triplets)
+}
+
+/// Compute `C = α · A · B` as a scalar (`B = 1`) [`BsrMatrix`].
+///
+/// Shapes: `A` is `m × p`, `B` is `p × q`, output is `m × q`. Used by
+/// [`solve_coupled_elasticity`] to build the contact `K_tt = k · M_tt²`
+/// block (target-target coupling).
+fn mat_times_mat(a: &BsrMatrix, b: &BsrMatrix, alpha: Real) -> Result<BsrMatrix> {
+    debug_assert_eq!(a.b, 1, "mat_times_mat: only B = 1 supported");
+    debug_assert_eq!(b.b, 1, "mat_times_mat: only B = 1 supported");
+    assert_eq!(
+        a.ncols(),
+        b.nrows(),
+        "mat_times_mat: inner dim mismatch {} vs {}",
+        a.ncols(),
+        b.nrows()
+    );
+    let m = a.nrows();
+    let q = b.ncols();
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
+    for i in 0..a.block_rows {
+        let a_lo = a.row_offsets[i];
+        let a_hi = a.row_offsets[i + 1];
+        for a_slot in a_lo..a_hi {
+            let k = a.col_idx[a_slot];
+            let v_a = a.values[a_slot];
+            if v_a == 0.0 {
+                continue;
+            }
+            let b_lo = b.row_offsets[k];
+            let b_hi = b.row_offsets[k + 1];
+            for b_slot in b_lo..b_hi {
+                let j = b.col_idx[b_slot];
+                let v_b = b.values[b_slot];
+                if v_b == 0.0 {
+                    continue;
+                }
+                triplets.push((i, j, alpha * v_a * v_b));
+            }
+        }
+    }
+    BsrMatrix::from_scalar_triplets(m, q, &triplets)
 }
 
 // ─── Sparse helpers ─────────────────────────────────────────────────

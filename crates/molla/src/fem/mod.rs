@@ -138,7 +138,9 @@ pub use nedelec_element::{
     assemble_global_nedelec, compute_element_curl_curl, compute_element_nedelec_mass,
     NedelecDofMap,
 };
-pub use nonconforming::{NonconformingField, NonconformingPenaltyContact};
+pub use nonconforming::{
+    solve_coupled_elasticity, NonconformingField, NonconformingPenaltyContact,
+};
 pub use signorini::{
     assemble_constraint_matrix, assemble_full_constraint_matrix, estimate_dual_step,
     solve_active_set_signorini, solve_augmented_system, solve_augmented_system_with,
