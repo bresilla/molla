@@ -34,12 +34,17 @@ const WG_SIZE: u32 = 64u;
 // Workgroup-shared accumulator for the per-row reduction.
 var<workgroup> row_acc : array<f32, WG_SIZE>;
 
+// WebGPU limits any single dispatch dim to 65535 workgroups, so we
+// flatten `row = wid.y * 65535 + wid.x`. The host dispatcher splits
+// the row count into a 2D `(min(n, 65535), ⌈n / 65535⌉)` grid.
+const MAX_DIM: u32 = 65535u;
+
 @compute @workgroup_size(WG_SIZE)
 fn csr_matvec(
     @builtin(workgroup_id) wid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
 ) {
-    let row = wid.x;
+    let row = wid.y * MAX_DIM + wid.x;
     let lane = lid.x;
     if (row >= u.nrows) {
         return;

@@ -264,7 +264,7 @@ fn fem_gpu_resident_cg_scaling_sweep() {
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
 
-    for &nx in &[8usize, 12, 16, 24, 32] {
+    for &nx in &[8usize, 16, 24, 32, 48] {
         let mesh = FemMesh::tet_grid_3d(nx, nx, nx, 1.0, 1.0, 1.0);
         let n = mesh.vert_count();
         let k = assemble_stiffness(&mesh, 1.0);

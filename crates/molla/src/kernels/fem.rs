@@ -434,8 +434,14 @@ impl FemGpuKernel {
             pass.set_pipeline(&self.pipe_matvec);
             pass.set_bind_group(0, &bg_io, &[]);
             pass.set_bind_group(1, &bg_u, &[]);
-            // One workgroup per row.
-            pass.dispatch_workgroups(gpu_data.csr_nrows, 1, 1);
+            // One workgroup per row, packed into a 2D grid because
+            // WebGPU caps any single dispatch dim at 65535. The
+            // shader unpacks `row = wid.y * 65535 + wid.x`.
+            const MAX_DIM: u32 = 65535;
+            let nrows = gpu_data.csr_nrows;
+            let dim_x = nrows.min(MAX_DIM).max(1);
+            let dim_y = nrows.div_ceil(MAX_DIM).max(1);
+            pass.dispatch_workgroups(dim_x, dim_y, 1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         Ok(())
