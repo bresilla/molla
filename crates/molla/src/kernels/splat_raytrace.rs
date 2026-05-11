@@ -30,7 +30,7 @@
 //! buffers (CAS-loop f32 atomic-add — WGSL has no `atomic<f32>`).
 
 use crate::core::{Error, Result};
-use crate::geometry::SH_BAND_2_COUNT;
+use crate::geometry::{SH_BAND_2_COUNT, SH_BAND_3_COUNT};
 use crate::math::{Real, Vec3};
 use crate::storage::Buffer;
 
@@ -68,6 +68,12 @@ pub struct SplatRaytraceKernel {
     // replaces the constant diffuse RGB buffer). We share the same
     // [`storage_entries(5, true)`] layout — both layouts hold 5 read-only
     // storage buffers in identical positions, so `layout_splats` is reused.
+
+    // Stage 44 v4 — band-3 SH (16 coeffs) forward + backward.
+    // Same bind-group layouts as v3; only the WGSL coefficient stride
+    // is different (16 vs 9 vec4 per splat).
+    pipeline_sh_band3_forward: wgpu::ComputePipeline,
+    pipeline_sh_band3_backward: wgpu::ComputePipeline,
 }
 
 /// Per-splat gradient buffers returned by [`SplatRaytraceKernel::backward`].
@@ -95,6 +101,20 @@ pub struct SplatShGradients {
     pub d_scale: Vec<Vec3>,
     pub d_rotation: Vec<crate::math::Quat>,
     pub d_sh: Vec<[Vec3; SH_BAND_2_COUNT]>,
+    pub d_opacity: Vec<Real>,
+}
+
+/// Stage 44 v4 — per-splat gradient buffers returned by
+/// [`SplatRaytraceKernel::backward_sh_band3`].
+///
+/// Geometry / opacity gradients are identical to [`SplatGradients`];
+/// the colour gradient is 16 per-band SH coefficient triples per
+/// splat (`d_sh.len() == splat_count`, each entry has 16 `Vec3` slots).
+pub struct SplatShBand3Gradients {
+    pub d_pos: Vec<Vec3>,
+    pub d_scale: Vec<Vec3>,
+    pub d_rotation: Vec<crate::math::Quat>,
+    pub d_sh: Vec<[Vec3; SH_BAND_3_COUNT]>,
     pub d_opacity: Vec<Real>,
 }
 
@@ -260,6 +280,65 @@ impl SplatRaytraceKernel {
             },
         );
 
+        // ── Stage 44 v4 — band-3 SH forward + backward pipelines ───
+        // Same bind-group layouts as v3 (SH buffer at binding 3 is
+        // still a flat `array<vec4<f32>>` — the stride per splat is
+        // 16 vec4 instead of 9, but the binding type is identical).
+        let shader_sh_b3 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/splat_raytrace_sh_band3.wgsl").into(),
+            ),
+        });
+        let pipeline_layout_sh_b3 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 layout"),
+            bind_group_layouts: &[
+                &layout_splats,
+                &layout_rays,
+                &layout_outputs,
+                &layout_uniforms,
+            ],
+            push_constant_ranges: &[],
+        });
+        let pipeline_sh_band3_forward =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::render"),
+                layout: Some(&pipeline_layout_sh_b3),
+                module: &shader_sh_b3,
+                entry_point: Some("render"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+        let shader_sh_b3_back = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3_backward"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/splat_raytrace_sh_band3_backward.wgsl").into(),
+            ),
+        });
+        let pipeline_layout_sh_b3_back = device.create_pipeline_layout(
+            &wgpu::PipelineLayoutDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3_backward layout"),
+                bind_group_layouts: &[
+                    &layout_splats,
+                    &layout_back_rays,
+                    &layout_back_outputs,
+                    &layout_uniforms,
+                ],
+                push_constant_ranges: &[],
+            },
+        );
+        let pipeline_sh_band3_backward = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::backward"),
+                layout: Some(&pipeline_layout_sh_b3_back),
+                module: &shader_sh_b3_back,
+                entry_point: Some("backward"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            },
+        );
+
         Self {
             pipeline,
             layout_splats,
@@ -271,6 +350,8 @@ impl SplatRaytraceKernel {
             layout_back_outputs,
             pipeline_sh_forward,
             pipeline_sh_backward,
+            pipeline_sh_band3_forward,
+            pipeline_sh_band3_backward,
         }
     }
 
@@ -1156,6 +1237,456 @@ impl SplatRaytraceKernel {
         let d_opacity = read_s(&staging_opacity)?;
 
         Ok(SplatShGradients {
+            d_pos,
+            d_scale,
+            d_rotation,
+            d_sh,
+            d_opacity,
+        })
+    }
+
+    // ── Stage 44 v4 — band-3 SH-aware forward ───────────────────────
+    /// Band-3 SH forward kernel. Identical to [`Self::dispatch_sh`]
+    /// except `splat_sh` is now `splat_count * 16` `Vec3` entries
+    /// (band-major; see [`crate::geometry::GaussianSplatShBand3d`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch_sh_band3(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        splat_pos: &Buffer<Vec3>,
+        splat_scale: &Buffer<Vec3>,
+        splat_rot: &Buffer<crate::math::Quat>,
+        splat_sh: &Buffer<Vec3>,
+        splat_opacity: &Buffer<Real>,
+        ray_origin: &Buffer<Vec3>,
+        ray_direction: &Buffer<Vec3>,
+        out_rgba: &mut Buffer<Vec3>,
+        out_depth: &mut Buffer<Real>,
+        pixel_count: u32,
+        max_distance: f32,
+        min_alpha: f32,
+    ) -> Result<()> {
+        if pixel_count == 0 {
+            return Ok(());
+        }
+        let splat_count = splat_pos.len() as u32;
+        if splat_count == 0 {
+            return Ok(());
+        }
+        if pixel_count as usize > ray_origin.len() {
+            return Err(Error::Gpu(format!(
+                "splat_raytrace_sh_band3: pixel_count {pixel_count} exceeds ray buffer len {}",
+                ray_origin.len()
+            )));
+        }
+        if pixel_count as usize > out_rgba.len() || pixel_count as usize > out_depth.len() {
+            return Err(Error::Gpu(format!(
+                "splat_raytrace_sh_band3: pixel_count {pixel_count} exceeds output buffer len"
+            )));
+        }
+        let expected_sh_len = splat_count as usize * SH_BAND_3_COUNT;
+        if splat_scale.len() != splat_count as usize
+            || splat_rot.len() != splat_count as usize
+            || splat_opacity.len() != splat_count as usize
+        {
+            return Err(Error::Gpu(
+                "splat_raytrace_sh_band3: splat SoA buffers have mismatched lengths".into(),
+            ));
+        }
+        if splat_sh.len() != expected_sh_len {
+            return Err(Error::Gpu(format!(
+                "splat_raytrace_sh_band3: sh buffer len {} != {} * {} = {}",
+                splat_sh.len(),
+                splat_count,
+                SH_BAND_3_COUNT,
+                expected_sh_len
+            )));
+        }
+
+        let groups = pixel_count.div_ceil(WORKGROUP_SIZE);
+
+        let bg_splats = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 splats bg"),
+            layout: &self.layout_splats,
+            entries: &[
+                buffer_entry(0, splat_pos.device_buffer())?,
+                buffer_entry(1, splat_scale.device_buffer())?,
+                buffer_entry(2, splat_rot.device_buffer())?,
+                buffer_entry(3, splat_sh.device_buffer())?,
+                buffer_entry(4, splat_opacity.device_buffer())?,
+            ],
+        });
+        let bg_rays = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 rays bg"),
+            layout: &self.layout_rays,
+            entries: &[
+                buffer_entry(0, ray_origin.device_buffer())?,
+                buffer_entry(1, ray_direction.device_buffer())?,
+            ],
+        });
+        let bg_outputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 outputs bg"),
+            layout: &self.layout_outputs,
+            entries: &[
+                buffer_entry(0, out_rgba.device_buffer())?,
+                buffer_entry(1, out_depth.device_buffer())?,
+            ],
+        });
+
+        let uniforms = Uniforms {
+            pixel_count,
+            splat_count,
+            max_distance,
+            min_alpha,
+        };
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 uniforms"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3 encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::render"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline_sh_band3_forward);
+            pass.set_bind_group(0, &bg_splats, &[]);
+            pass.set_bind_group(1, &bg_rays, &[]);
+            pass.set_bind_group(2, &bg_outputs, &[]);
+            pass.set_bind_group(3, &bg_uniforms, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        out_rgba.mark_device_dirty();
+        out_depth.mark_device_dirty();
+        Ok(())
+    }
+
+    // ── Stage 44 v4 — band-3 SH-aware reverse adjoint ───────────────
+    /// Band-3 SH backward kernel. Returns [`SplatShBand3Gradients`]
+    /// with `d_sh` carrying 16 per-coefficient `Vec3` gradients per
+    /// splat.
+    #[allow(clippy::too_many_arguments)]
+    pub fn backward_sh_band3(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        splat_pos: &Buffer<Vec3>,
+        splat_scale: &Buffer<Vec3>,
+        splat_rot: &Buffer<crate::math::Quat>,
+        splat_sh: &Buffer<Vec3>,
+        splat_opacity: &Buffer<Real>,
+        ray_origin: &Buffer<Vec3>,
+        ray_direction: &Buffer<Vec3>,
+        d_loss_d_rgb: &Buffer<Vec3>,
+        pixel_count: u32,
+        max_distance: f32,
+        min_alpha: f32,
+    ) -> Result<SplatShBand3Gradients> {
+        let splat_count = splat_pos.len();
+        if splat_count == 0 || pixel_count == 0 {
+            return Ok(SplatShBand3Gradients {
+                d_pos: vec![Vec3::ZERO; splat_count],
+                d_scale: vec![Vec3::ZERO; splat_count],
+                d_rotation: vec![crate::math::Quat::from_xyzw(0.0, 0.0, 0.0, 0.0); splat_count],
+                d_sh: vec![[Vec3::ZERO; SH_BAND_3_COUNT]; splat_count],
+                d_opacity: vec![0.0; splat_count],
+            });
+        }
+        if pixel_count as usize > ray_origin.len()
+            || pixel_count as usize > d_loss_d_rgb.len()
+        {
+            return Err(Error::Gpu(format!(
+                "splat_raytrace_sh_band3::backward: pixel_count {pixel_count} exceeds ray / dL buffer len"
+            )));
+        }
+        let expected_sh_len = splat_count * SH_BAND_3_COUNT;
+        if splat_scale.len() != splat_count
+            || splat_rot.len() != splat_count
+            || splat_opacity.len() != splat_count
+        {
+            return Err(Error::Gpu(
+                "splat_raytrace_sh_band3::backward: splat SoA buffers have mismatched lengths".into(),
+            ));
+        }
+        if splat_sh.len() != expected_sh_len {
+            return Err(Error::Gpu(format!(
+                "splat_raytrace_sh_band3::backward: sh buffer len {} != {} * {} = {}",
+                splat_sh.len(),
+                splat_count,
+                SH_BAND_3_COUNT,
+                expected_sh_len
+            )));
+        }
+
+        let pad4_bytes = (splat_count * 4) as u64 * 4;
+        let s_bytes = (splat_count) as u64 * 4;
+        let sh_bytes = (splat_count * SH_BAND_3_COUNT * 4) as u64 * 4;
+        let storage_usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
+        let grad_pos = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::grad_pos"),
+            size: pad4_bytes,
+            usage: storage_usage,
+            mapped_at_creation: false,
+        });
+        let grad_scale = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::grad_scale"),
+            size: pad4_bytes,
+            usage: storage_usage,
+            mapped_at_creation: false,
+        });
+        let grad_rot = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::grad_rot"),
+            size: pad4_bytes,
+            usage: storage_usage,
+            mapped_at_creation: false,
+        });
+        let grad_sh = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::grad_sh"),
+            size: sh_bytes,
+            usage: storage_usage,
+            mapped_at_creation: false,
+        });
+        let grad_opacity = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::grad_opacity"),
+            size: s_bytes,
+            usage: storage_usage,
+            mapped_at_creation: false,
+        });
+        let zeros_pad4 = vec![0u32; splat_count * 4];
+        let zeros_s = vec![0u32; splat_count];
+        let zeros_sh = vec![0u32; splat_count * SH_BAND_3_COUNT * 4];
+        queue.write_buffer(&grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
+        queue.write_buffer(&grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
+        queue.write_buffer(&grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
+        queue.write_buffer(&grad_sh, 0, bytemuck::cast_slice(&zeros_sh));
+        queue.write_buffer(&grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
+
+        let groups = pixel_count.div_ceil(WORKGROUP_SIZE);
+
+        let bg_splats = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward splats bg"),
+            layout: &self.layout_splats,
+            entries: &[
+                buffer_entry(0, splat_pos.device_buffer())?,
+                buffer_entry(1, splat_scale.device_buffer())?,
+                buffer_entry(2, splat_rot.device_buffer())?,
+                buffer_entry(3, splat_sh.device_buffer())?,
+                buffer_entry(4, splat_opacity.device_buffer())?,
+            ],
+        });
+        let bg_rays = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward rays bg"),
+            layout: &self.layout_back_rays,
+            entries: &[
+                buffer_entry(0, ray_origin.device_buffer())?,
+                buffer_entry(1, ray_direction.device_buffer())?,
+                buffer_entry(2, d_loss_d_rgb.device_buffer())?,
+            ],
+        });
+        let bg_outputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward outputs bg"),
+            layout: &self.layout_back_outputs,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: grad_pos.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: grad_scale.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grad_rot.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: grad_sh.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: grad_opacity.as_entire_binding() },
+            ],
+        });
+        let uniforms = Uniforms {
+            pixel_count,
+            splat_count: splat_count as u32,
+            max_distance,
+            min_alpha,
+        };
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward uniforms"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::splat_raytrace_sh_band3::backward encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::backward"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline_sh_band3_backward);
+            pass.set_bind_group(0, &bg_splats, &[]);
+            pass.set_bind_group(1, &bg_rays, &[]);
+            pass.set_bind_group(2, &bg_outputs, &[]);
+            pass.set_bind_group(3, &bg_uniforms, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+
+        let stage_pad4 = |label: &str| -> wgpu::Buffer {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: pad4_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let stage_s = |label: &str| -> wgpu::Buffer {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: s_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let stage_sh = |label: &str| -> wgpu::Buffer {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: sh_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let staging_pos = stage_pad4("molla::splat_raytrace_sh_band3::backward grad_pos staging");
+        let staging_scale = stage_pad4("molla::splat_raytrace_sh_band3::backward grad_scale staging");
+        let staging_rot = stage_pad4("molla::splat_raytrace_sh_band3::backward grad_rot staging");
+        let staging_sh = stage_sh("molla::splat_raytrace_sh_band3::backward grad_sh staging");
+        let staging_opacity = stage_s("molla::splat_raytrace_sh_band3::backward grad_opacity staging");
+        encoder.copy_buffer_to_buffer(&grad_pos, 0, &staging_pos, 0, pad4_bytes);
+        encoder.copy_buffer_to_buffer(&grad_scale, 0, &staging_scale, 0, pad4_bytes);
+        encoder.copy_buffer_to_buffer(&grad_rot, 0, &staging_rot, 0, pad4_bytes);
+        encoder.copy_buffer_to_buffer(&grad_sh, 0, &staging_sh, 0, sh_bytes);
+        encoder.copy_buffer_to_buffer(&grad_opacity, 0, &staging_opacity, 0, s_bytes);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let read_pad4 = |staging: &wgpu::Buffer| -> Result<Vec<Vec3>> {
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
+            rx.recv()
+                .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+                .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+            let mapped = slice.get_mapped_range();
+            let f: &[f32] = bytemuck::cast_slice(&mapped);
+            let n = splat_count;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let b = i * 4;
+                out.push(Vec3::new(f[b] as Real, f[b + 1] as Real, f[b + 2] as Real));
+            }
+            drop(mapped);
+            staging.unmap();
+            Ok(out)
+        };
+        let read_pad4_quat = |staging: &wgpu::Buffer| -> Result<Vec<crate::math::Quat>> {
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
+            rx.recv()
+                .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+                .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+            let mapped = slice.get_mapped_range();
+            let f: &[f32] = bytemuck::cast_slice(&mapped);
+            let n = splat_count;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let b = i * 4;
+                out.push(crate::math::Quat::from_xyzw(
+                    f[b] as Real,
+                    f[b + 1] as Real,
+                    f[b + 2] as Real,
+                    f[b + 3] as Real,
+                ));
+            }
+            drop(mapped);
+            staging.unmap();
+            Ok(out)
+        };
+        let read_s = |staging: &wgpu::Buffer| -> Result<Vec<Real>> {
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
+            rx.recv()
+                .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+                .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+            let mapped = slice.get_mapped_range();
+            let f: &[f32] = bytemuck::cast_slice(&mapped);
+            let out = f.iter().map(|x| *x as Real).collect::<Vec<_>>();
+            drop(mapped);
+            staging.unmap();
+            Ok(out)
+        };
+        let read_sh = |staging: &wgpu::Buffer| -> Result<Vec<[Vec3; SH_BAND_3_COUNT]>> {
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
+            rx.recv()
+                .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+                .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+            let mapped = slice.get_mapped_range();
+            let f: &[f32] = bytemuck::cast_slice(&mapped);
+            let n = splat_count;
+            let mut out: Vec<[Vec3; SH_BAND_3_COUNT]> = Vec::with_capacity(n);
+            for i in 0..n {
+                let mut coeffs = [Vec3::ZERO; SH_BAND_3_COUNT];
+                for k in 0..SH_BAND_3_COUNT {
+                    let b = (i * SH_BAND_3_COUNT + k) * 4;
+                    coeffs[k] = Vec3::new(f[b] as Real, f[b + 1] as Real, f[b + 2] as Real);
+                }
+                out.push(coeffs);
+            }
+            drop(mapped);
+            staging.unmap();
+            Ok(out)
+        };
+
+        let d_pos = read_pad4(&staging_pos)?;
+        let d_scale = read_pad4(&staging_scale)?;
+        let d_rotation = read_pad4_quat(&staging_rot)?;
+        let d_sh = read_sh(&staging_sh)?;
+        let d_opacity = read_s(&staging_opacity)?;
+
+        Ok(SplatShBand3Gradients {
             d_pos,
             d_scale,
             d_rotation,

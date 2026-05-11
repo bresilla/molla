@@ -662,6 +662,451 @@ pub fn fd_grad_sh_one_splat(
     out
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Stage 44 v4 — Band-3 SH (Kerbl 2023, 16 coeffs per channel) and
+// diffuse / view-dependent split.
+//
+// Band-3 adds 7 more SH basis functions, raising the per-channel
+// coefficient count from 9 (`SH_BAND_2_COUNT`) to 16
+// (`SH_BAND_3_COUNT`). The same band-major layout is preserved:
+//
+//   c[ 9] = c_{3,-3}, c[10] = c_{3,-2}, c[11] = c_{3,-1},
+//   c[12] = c_{3, 0}, c[13] = c_{3,+1}, c[14] = c_{3,+2}, c[15] = c_{3,+3}
+//
+// Coefficient normalisation matches the gsplat / Kerbl 2023 reference
+// (cubic polynomials of the unit view direction `(x, y, z)`):
+//
+//   Y_{3,-3} = SH_C3A · y · (3x² − y²)
+//   Y_{3,-2} = SH_C3B · x · y · z
+//   Y_{3,-1} = SH_C3C · y · (5z² − 1)
+//   Y_{3, 0} = SH_C3D · z · (5z² − 3)
+//   Y_{3,+1} = SH_C3E · x · (5z² − 1)
+//   Y_{3,+2} = SH_C3F · z · (x² − y²)
+//   Y_{3,+3} = SH_C3G · x · (x² − 3y²)
+//
+// Diffuse/view-dep split — see [`GaussianSplatShDiffuseView3d`] —
+// stores the band-0 / diffuse component as a separate `Vec3` and only
+// the 15 band-1..3 coefficients in the SH array. Forward eval is
+// `color = diffuse + Σ_{l=1..3} c_lm · Y_lm(d)`; the gradient w.r.t.
+// `diffuse` is just the unmodulated pixel gradient and the gradient
+// w.r.t. each band-≥1 coefficient is `pixel_grad · Y_basis[k]`.
+
+/// Number of SH coefficients per channel for bands 0..=3 (= 16) —
+/// matches Kerbl 2023.
+pub const SH_BAND_3_COUNT: usize = 16;
+
+/// Number of band-1..3 (view-dependent) SH coefficients per channel
+/// (= 15) — used by the diffuse / view-dep split.
+pub const SH_VIEW_DEP_COUNT: usize = 15;
+
+// Band-3 constants (Kerbl 2023 / gsplat convention).
+/// Band-3 m=-3 normalisation `−¼·√(35/(2π))`.
+pub const SH_C3A: Real = -0.5900435899266435;
+/// Band-3 m=-2 normalisation `½·√(105/π)`.
+pub const SH_C3B: Real = 2.890611442640554;
+/// Band-3 m=-1 normalisation `−¼·√(21/(2π))`.
+pub const SH_C3C: Real = -0.4570457994644658;
+/// Band-3 m=0 normalisation `¼·√(7/π)`.
+pub const SH_C3D: Real = 0.3731763325901154;
+/// Band-3 m=+1 normalisation `−¼·√(21/(2π))`.
+pub const SH_C3E: Real = -0.4570457994644658;
+/// Band-3 m=+2 normalisation `¼·√(105/π)`.
+pub const SH_C3F: Real = 1.445305721320277;
+/// Band-3 m=+3 normalisation `−¼·√(35/(2π))`.
+pub const SH_C3G: Real = -0.5900435899266435;
+
+/// Evaluate the 16 SH basis functions at the normalised view
+/// direction `dir`. If `dir` is zero-length returns `[SH_C0, 0, ...]`
+/// — band-0 only.
+#[must_use]
+pub fn sh_basis_band3(dir: Vec3) -> [Real; SH_BAND_3_COUNT] {
+    let len_sq = dir.length_squared();
+    let mut out = [0.0; SH_BAND_3_COUNT];
+    if len_sq <= 0.0 {
+        out[0] = SH_C0;
+        return out;
+    }
+    let inv_len = 1.0 / len_sq.sqrt();
+    let x = dir.x * inv_len;
+    let y = dir.y * inv_len;
+    let z = dir.z * inv_len;
+    let xx = x * x;
+    let yy = y * y;
+    let zz = z * z;
+    // Bands 0–2: identical to `sh_basis`.
+    out[0] = SH_C0;
+    out[1] = -SH_C1 * y;
+    out[2] = SH_C1 * z;
+    out[3] = -SH_C1 * x;
+    out[4] = SH_C2A * (x * y);
+    out[5] = SH_C2B * (y * z);
+    out[6] = SH_C2C * (3.0 * zz - 1.0);
+    out[7] = SH_C2D * (x * z);
+    out[8] = SH_C2E * (xx - yy);
+    // Band 3 (Kerbl 2023).
+    out[9] = SH_C3A * y * (3.0 * xx - yy);
+    out[10] = SH_C3B * (x * y * z);
+    out[11] = SH_C3C * y * (5.0 * zz - 1.0);
+    out[12] = SH_C3D * z * (5.0 * zz - 3.0);
+    out[13] = SH_C3E * x * (5.0 * zz - 1.0);
+    out[14] = SH_C3F * z * (xx - yy);
+    out[15] = SH_C3G * x * (xx - 3.0 * yy);
+    out
+}
+
+/// Anisotropic 3D Gaussian with view-dependent **spherical-harmonic**
+/// colour up to band 3 (Stage 44 v4 — 16 coeffs per channel, matches
+/// Kerbl 2023). Geometry is identical to [`GaussianSplat3d`]; colour
+/// is `Σ c_lm · Y_lm(d)` with the 16 coefficient triples below.
+///
+/// Layout mirrors [`GaussianSplatSh3d`] extended with seven band-3
+/// slots: `sh[0]` is the band-0 / diffuse coeff, `sh[1..=3]` is band 1,
+/// `sh[4..=8]` is band 2, `sh[9..=15]` is band 3.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaussianSplatShBand3d {
+    /// World-space mean μ (m).
+    pub position: Vec3,
+    /// Per-axis stddev (m).
+    pub scale: Vec3,
+    /// Local-to-world rotation.
+    pub rotation: Quat,
+    /// 16 SH coefficient triples (band-major; see module docs).
+    pub sh: [Vec3; SH_BAND_3_COUNT],
+    /// Bare opacity in `[0, 1]`.
+    pub opacity: Real,
+}
+
+impl GaussianSplatShBand3d {
+    /// Construct a band-0-only ("diffuse") band-3 SH splat — all
+    /// higher bands are zero. Mirror of [`GaussianSplatSh3d::diffuse`].
+    #[must_use]
+    pub fn diffuse(
+        position: Vec3,
+        scale: Vec3,
+        rotation: Quat,
+        color_rgb: Vec3,
+        opacity: Real,
+    ) -> Self {
+        let mut sh = [Vec3::ZERO; SH_BAND_3_COUNT];
+        sh[0] = color_rgb * (1.0 / SH_C0);
+        Self { position, scale, rotation, sh, opacity }
+    }
+
+    /// Construct from explicit SH coefficients.
+    #[must_use]
+    pub fn from_sh(
+        position: Vec3,
+        scale: Vec3,
+        rotation: Quat,
+        sh: [Vec3; SH_BAND_3_COUNT],
+        opacity: Real,
+    ) -> Self {
+        Self { position, scale, rotation, sh, opacity }
+    }
+
+    /// Evaluate the per-channel colour at a view direction `dir`. The
+    /// direction need not be unit; it is normalised internally.
+    #[must_use]
+    pub fn eval_color(&self, dir: Vec3) -> Vec3 {
+        eval_sh_band3(&self.sh, dir)
+    }
+}
+
+/// Evaluate the band-0..3 SH at `dir` and dot with the coefficients.
+#[must_use]
+pub fn eval_sh_band3(coeffs: &[Vec3; SH_BAND_3_COUNT], dir: Vec3) -> Vec3 {
+    let basis = sh_basis_band3(dir);
+    let mut out = Vec3::ZERO;
+    for i in 0..SH_BAND_3_COUNT {
+        out += coeffs[i] * basis[i];
+    }
+    out
+}
+
+/// CPU mirror of the band-3 SH α-composite forward.
+#[must_use]
+pub fn composite_sh_band3_forward_cpu(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    splats: &[GaussianSplatShBand3d],
+    max_distance: Real,
+    min_alpha: Real,
+) -> (Vec3, Real) {
+    let mut hits: Vec<(Real, Real, Vec3)> = Vec::with_capacity(splats.len());
+    for s in splats {
+        let geom = GaussianSplat3d {
+            position: s.position,
+            scale: s.scale,
+            rotation: s.rotation,
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: s.opacity,
+        };
+        let t = splat_camera_distance(ray_origin, ray_dir, &geom);
+        if t <= 0.0 || t > max_distance {
+            continue;
+        }
+        let alpha = gaussian_response(ray_origin, ray_dir, &geom);
+        if alpha < min_alpha {
+            continue;
+        }
+        let color = eval_sh_band3(&s.sh, ray_dir);
+        hits.push((t, alpha, color));
+    }
+    hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+
+    let mut rgb = Vec3::ZERO;
+    let mut transmittance: Real = 1.0;
+    for (_t, alpha, color) in hits {
+        rgb += color * alpha * transmittance;
+        transmittance *= 1.0 - alpha;
+        if transmittance < 1.0e-4 {
+            break;
+        }
+    }
+    (rgb, transmittance)
+}
+
+/// Convenience wrapper: returns only the composited rgb (for the FD
+/// oracle).
+#[must_use]
+pub fn composite_sh_band3_rgb_cpu(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    splats: &[GaussianSplatShBand3d],
+    max_distance: Real,
+    min_alpha: Real,
+) -> Vec3 {
+    composite_sh_band3_forward_cpu(ray_origin, ray_dir, splats, max_distance, min_alpha).0
+}
+
+/// Identifies a single band-3-SH-coefficient scalar — same shape as
+/// [`ShCoeffParam`] but with `coeff` ranging over `0..SH_BAND_3_COUNT`.
+#[derive(Copy, Clone, Debug)]
+pub struct ShBand3CoeffParam {
+    pub coeff: usize,
+    pub channel: usize,
+}
+
+fn perturb_sh_band3(
+    s: &GaussianSplatShBand3d,
+    p: ShBand3CoeffParam,
+    delta: Real,
+) -> GaussianSplatShBand3d {
+    let mut out = *s;
+    let v = match p.channel {
+        0 => &mut out.sh[p.coeff].x,
+        1 => &mut out.sh[p.coeff].y,
+        2 => &mut out.sh[p.coeff].z,
+        _ => unreachable!("invalid channel"),
+    };
+    *v += delta;
+    out
+}
+
+/// Central finite-difference `dL/d sh_coeff[coeff].channel` for a
+/// single band-3 SH splat.
+#[must_use]
+pub fn fd_grad_sh_band3_one_splat(
+    splats: &[GaussianSplatShBand3d],
+    splat_idx: usize,
+    params: &[ShBand3CoeffParam],
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    dl_dc: Vec3,
+    max_distance: Real,
+    min_alpha: Real,
+    h: Real,
+) -> Vec<Real> {
+    let mut out = Vec::with_capacity(params.len());
+    let mut probe = splats.to_vec();
+    let orig = splats[splat_idx];
+    for &p in params {
+        probe[splat_idx] = perturb_sh_band3(&orig, p, h);
+        let rgb_plus =
+            composite_sh_band3_rgb_cpu(ray_origin, ray_dir, &probe, max_distance, min_alpha);
+        probe[splat_idx] = perturb_sh_band3(&orig, p, -h);
+        let rgb_minus =
+            composite_sh_band3_rgb_cpu(ray_origin, ray_dir, &probe, max_distance, min_alpha);
+        probe[splat_idx] = orig;
+        let dc = (rgb_plus - rgb_minus) * (1.0 / (2.0 * h));
+        out.push(dl_dc.dot(dc));
+    }
+    out
+}
+
+// ── Stage 44 v4 — diffuse / view-dep split ──────────────────────────
+
+/// Anisotropic 3D Gaussian splat with a Kerbl-style **diffuse +
+/// view-dependent split**. The base diffuse RGB is stored
+/// independently and unmodulated; the 15 band-1..3 SH coefficient
+/// triples encode the view-dependent residual.
+///
+/// Forward:
+///   `color(d) = diffuse + Σ_{l=1..3, m=−l..l} sh_view[k] · Y_lm(d)`
+///
+/// Backward (per pixel):
+///   ∂L/∂diffuse        = ∂L/∂color                (unmodulated)
+///   ∂L/∂sh_view[k]_ch  = ∂L/∂color_ch · Y_lm(d)
+///
+/// Equivalent to a band-3 [`GaussianSplatShBand3d`] with
+/// `sh[0] = (diffuse − Σ...)·1/SH_C0`, but keeps the band-0
+/// independent of the SH basis so optimisers can regularise the
+/// view-dep coefficients without affecting the colour seen along
+/// "neutral" view directions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaussianSplatShDiffuseView3d {
+    /// World-space mean μ (m).
+    pub position: Vec3,
+    /// Per-axis stddev (m).
+    pub scale: Vec3,
+    /// Local-to-world rotation.
+    pub rotation: Quat,
+    /// Direction-invariant base RGB.
+    pub diffuse: Vec3,
+    /// 15 band-1..3 SH coefficient triples (band-major; `sh_view[0..3]`
+    /// is band 1, `[3..8]` is band 2, `[8..15]` is band 3).
+    pub sh_view: [Vec3; SH_VIEW_DEP_COUNT],
+    /// Bare opacity in `[0, 1]`.
+    pub opacity: Real,
+}
+
+impl GaussianSplatShDiffuseView3d {
+    /// Pure diffuse — sets `diffuse = color_rgb` and all view-dep
+    /// coefficients to zero.
+    #[must_use]
+    pub fn diffuse(
+        position: Vec3,
+        scale: Vec3,
+        rotation: Quat,
+        color_rgb: Vec3,
+        opacity: Real,
+    ) -> Self {
+        Self {
+            position,
+            scale,
+            rotation,
+            diffuse: color_rgb,
+            sh_view: [Vec3::ZERO; SH_VIEW_DEP_COUNT],
+            opacity,
+        }
+    }
+
+    /// Construct from explicit diffuse + view-dep coefficients.
+    #[must_use]
+    pub fn from_diffuse_view(
+        position: Vec3,
+        scale: Vec3,
+        rotation: Quat,
+        diffuse: Vec3,
+        sh_view: [Vec3; SH_VIEW_DEP_COUNT],
+        opacity: Real,
+    ) -> Self {
+        Self { position, scale, rotation, diffuse, sh_view, opacity }
+    }
+
+    /// Evaluate the per-channel colour at view direction `dir`.
+    #[must_use]
+    pub fn eval_color(&self, dir: Vec3) -> Vec3 {
+        eval_sh_diffuse_view(self.diffuse, &self.sh_view, dir)
+    }
+}
+
+/// Evaluate the 15 view-dependent SH basis functions at the
+/// normalised view direction `dir`. Order: bands 1..3 in the same
+/// band-major layout as `sh_basis_band3` minus the band-0 slot:
+///
+///   `view_basis[0..=2]`  = band 1 (Y_{1,-1}, Y_{1,0}, Y_{1,+1})
+///   `view_basis[3..=7]`  = band 2 (Y_{2,-2}..Y_{2,+2})
+///   `view_basis[8..=14]` = band 3 (Y_{3,-3}..Y_{3,+3})
+#[must_use]
+pub fn sh_view_basis(dir: Vec3) -> [Real; SH_VIEW_DEP_COUNT] {
+    let full = sh_basis_band3(dir);
+    let mut out = [0.0; SH_VIEW_DEP_COUNT];
+    // out[k] corresponds to full[k+1].
+    for k in 0..SH_VIEW_DEP_COUNT {
+        out[k] = full[k + 1];
+    }
+    out
+}
+
+/// Evaluate the diffuse + view-dep colour at view direction `dir`.
+/// Returns `diffuse + Σ_k sh_view[k] · view_basis[k](d)`.
+#[must_use]
+pub fn eval_sh_diffuse_view(
+    diffuse: Vec3,
+    sh_view: &[Vec3; SH_VIEW_DEP_COUNT],
+    dir: Vec3,
+) -> Vec3 {
+    let basis = sh_view_basis(dir);
+    let mut out = diffuse;
+    for i in 0..SH_VIEW_DEP_COUNT {
+        out += sh_view[i] * basis[i];
+    }
+    out
+}
+
+/// CPU mirror of the diffuse/view-dep α-composite forward.
+#[must_use]
+pub fn composite_sh_diffuse_view_forward_cpu(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    splats: &[GaussianSplatShDiffuseView3d],
+    max_distance: Real,
+    min_alpha: Real,
+) -> (Vec3, Real) {
+    let mut hits: Vec<(Real, Real, Vec3)> = Vec::with_capacity(splats.len());
+    for s in splats {
+        let geom = GaussianSplat3d {
+            position: s.position,
+            scale: s.scale,
+            rotation: s.rotation,
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: s.opacity,
+        };
+        let t = splat_camera_distance(ray_origin, ray_dir, &geom);
+        if t <= 0.0 || t > max_distance {
+            continue;
+        }
+        let alpha = gaussian_response(ray_origin, ray_dir, &geom);
+        if alpha < min_alpha {
+            continue;
+        }
+        let color = eval_sh_diffuse_view(s.diffuse, &s.sh_view, ray_dir);
+        hits.push((t, alpha, color));
+    }
+    hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+
+    let mut rgb = Vec3::ZERO;
+    let mut transmittance: Real = 1.0;
+    for (_t, alpha, color) in hits {
+        rgb += color * alpha * transmittance;
+        transmittance *= 1.0 - alpha;
+        if transmittance < 1.0e-4 {
+            break;
+        }
+    }
+    (rgb, transmittance)
+}
+
+/// Convenience wrapper: returns only the composited rgb.
+#[must_use]
+pub fn composite_sh_diffuse_view_rgb_cpu(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    splats: &[GaussianSplatShDiffuseView3d],
+    max_distance: Real,
+    min_alpha: Real,
+) -> Vec3 {
+    composite_sh_diffuse_view_forward_cpu(
+        ray_origin,
+        ray_dir,
+        splats,
+        max_distance,
+        min_alpha,
+    )
+    .0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

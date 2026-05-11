@@ -72,6 +72,14 @@ pub use gaussian_splat::{
     GaussianSplatSh3d, ShCoeffParam, SH_BAND_2_COUNT, SH_C0, SH_C1, SH_C2A, SH_C2B, SH_C2C,
     SH_C2D, SH_C2E,
 };
+// ── Stage 44 v4: band-3 SH (Kerbl 2023) + diffuse/view-dep split. ──
+pub use gaussian_splat::{
+    composite_sh_band3_forward_cpu, composite_sh_band3_rgb_cpu,
+    composite_sh_diffuse_view_forward_cpu, composite_sh_diffuse_view_rgb_cpu, eval_sh_band3,
+    eval_sh_diffuse_view, fd_grad_sh_band3_one_splat, sh_basis_band3, sh_view_basis,
+    GaussianSplatShBand3d, GaussianSplatShDiffuseView3d, ShBand3CoeffParam, SH_BAND_3_COUNT,
+    SH_C3A, SH_C3B, SH_C3C, SH_C3D, SH_C3E, SH_C3F, SH_C3G, SH_VIEW_DEP_COUNT,
+};
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 // ── Stage 38d: shared constraint-graph coloring utility ────────────
 pub use graph_coloring::{color_constraints, greedy_color, group_by_color, mcs_color};
