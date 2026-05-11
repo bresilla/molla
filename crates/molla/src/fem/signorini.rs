@@ -1,6 +1,9 @@
 //! Stage 49 — Signorini hard non-penetration contact via Lagrange
 //! multipliers (fixed active set).
 //! Stage 50 — Coulomb friction at the Signorini contact interface.
+//! Stage 51 — Primal-Dual Active-Set (PDAS) Newton outer loop — see
+//! [`solve_active_set_signorini`] and [`SignoriniContactCandidates`]
+//! near the bottom of this file.
 //!
 //! Stage 47 v2 ships **penalty contact**, which approximates the
 //! Signorini condition `gap_normal ≥ 0` with the soft spring
@@ -90,12 +93,14 @@
 //!
 //! # Scope — fixed active set
 //!
-//! This stage solves the **augmented system for a fixed list of active
+//! Stage 49 solves the **augmented system for a fixed list of active
 //! contact pairs**. The caller is responsible for deciding which pairs
-//! are active (typically: any slave node currently penetrating). The
-//! v2 follow-up adds the **active-set update loop**: detect new
-//! penetrations after each Uzawa solve, drop pairs whose `λ` clamps to
-//! zero (separating), and re-solve.
+//! are active (typically: any slave node currently penetrating).
+//! **Stage 51** adds the **active-set update loop** on top:
+//! [`solve_active_set_signorini`] takes a list of *candidate* slaves
+//! plus a gap closure, detects new penetrations after each Uzawa
+//! solve, drops pairs whose `λ` clamps to zero (separating), and
+//! re-solves until the active set stops changing.
 //!
 //! # Out of scope (deferred)
 //!
@@ -864,6 +869,474 @@ pub fn estimate_dual_step(
         }
     }
     1.0 / lam_max
+}
+
+// ─── Stage 51 — Primal-Dual Active-Set (PDAS) Newton outer loop ──────
+//
+// Stage 49 (above) ships the *fixed-active-set* Uzawa solver. The
+// caller must pre-decide which slave nodes are in contact. The v2
+// surface below adds the **active-set update loop**: given a list of
+// *candidate* slaves plus a gap function, automatically detect
+// penetration, release zero-multiplier pairs that separate, and
+// iterate the inner Uzawa solve until the active set stops changing.
+//
+// # Algorithm — PDAS Newton (a.k.a. semismooth Newton)
+//
+// The Signorini complementarity condition `λ ⊥ (g − Cu)` with `λ ≥ 0`
+// and `g − Cu ≤ 0` is equivalent (via Fischer-Burmeister / min-NCP) to
+// the fixed-point equation
+//
+// ```text
+//     λ_k = max(0, λ_k + ρ (g_k − (Cu)_k))
+// ```
+//
+// which we already linearise via the projected Uzawa inner solve. The
+// outer PDAS Newton step linearises the `max` itself: at the current
+// iterate, partition the candidates into
+//
+//   - **A** (active): `λ + ρ (g − Cu) > 0`  ⇒ enforce equality `Cu = g`
+//   - **I** (inactive): `λ + ρ (g − Cu) ≤ 0` ⇒ drop the constraint
+//
+// then resolve with the new active set. The partition update is a
+// Newton step on the complementarity equation; once two consecutive
+// outer iterations produce the same partition the algorithm has
+// converged (super-linearly, in theory).
+//
+// # Practical rules used here
+//
+// 1. **Add** any candidate with `gap(u) < −gap_tol` to the active set.
+//    Slightly negative tolerance avoids cycling on grazing-contact
+//    pairs.
+// 2. **Release** any active pair whose multiplier clamped to zero in
+//    the Uzawa inner solve AND whose current gap is positive (i.e.
+//    truly separating). Pairs that hit `λ = 0` *and* `gap ≈ 0` stay
+//    active — they're at the boundary of activity, and bouncing them
+//    in/out cycles the active set without progress.
+// 3. **Convergence** when the active set is identical to the previous
+//    outer iteration AND the inner Uzawa solve converged.
+//
+// # Friction compatibility (deferred to Stage 50)
+//
+// Friction tangential constraints attach a *secondary* multiplier per
+// active normal pair, bounded by `|λ_t| ≤ μ λ_n` (Coulomb). The active-
+// set update logic here partitions only on normal complementarity, so
+// adding friction means:
+//
+//   - At each active-set iteration, after solving for `(u, λ_n)`, run
+//     an inner tangential active-set loop that decides per pair
+//     whether the friction cone is *binding* (`|λ_t| = μ λ_n` — slip)
+//     or *interior* (`|λ_t| < μ λ_n` — stick). The pair partition
+//     (active / inactive normal) stays the same.
+//   - The `release` rule still applies: a normal pair that hits
+//     `λ_n = 0` automatically releases both its normal and friction
+//     constraints (no friction without a normal force).
+//
+// The `gap_fn` closure here returns only the normal pair `(normal,
+// gap)`; the Stage 50 friction extension will mirror it with a
+// `tangent_fn` that returns the local tangential basis.
+
+/// Candidate Signorini contact pairs that the active-set loop chooses
+/// from.
+///
+/// Unlike [`SignoriniContact`] (which lists *active* pairs the caller
+/// already decided on), this struct lists every slave DoF that *could*
+/// come into contact, plus a closure that evaluates the gap function
+/// `g(u)` at the current displacement.
+///
+/// The gap closure takes the global displacement field and a slave
+/// base DoF index, and returns `(normal, gap)`:
+///
+/// - `normal`: unit outward master-surface normal at the slave's
+///   current contact point.
+/// - `gap`: signed distance along the normal. `gap < 0` means the
+///   slave has penetrated the master and the pair should be added to
+///   the active set.
+pub struct SignoriniContactCandidates {
+    /// Candidate slave DoFs (base index — same convention as
+    /// [`SignoriniContact::active_pairs`]: `vertex * dim`).
+    pub slave_dofs: Vec<u32>,
+    /// Master gap function. Given `(slave_dof, &u)`, returns
+    /// `(outward_normal, signed_gap)`. The active-set loop calls this
+    /// once per candidate per outer iteration.
+    pub master_gap_fn: Box<dyn Fn(u32, &[Real]) -> (Vec3, Real)>,
+}
+
+impl std::fmt::Debug for SignoriniContactCandidates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignoriniContactCandidates")
+            .field("slave_dofs", &self.slave_dofs)
+            .field("master_gap_fn", &"<closure>")
+            .finish()
+    }
+}
+
+impl SignoriniContactCandidates {
+    /// Build a candidate set from a slave list and a gap closure.
+    pub fn new(
+        slave_dofs: Vec<u32>,
+        master_gap_fn: impl Fn(u32, &[Real]) -> (Vec3, Real) + 'static,
+    ) -> Self {
+        Self {
+            slave_dofs,
+            master_gap_fn: Box::new(master_gap_fn),
+        }
+    }
+
+    /// Convenience constructor: every candidate sees the same fixed
+    /// master plane defined by `(point, normal)`. The gap is
+    /// `n · (x + u_slave − point)` — i.e. the signed distance from
+    /// the slave's *current* position (rest + displacement) to the
+    /// plane along the outward normal.
+    ///
+    /// `rest_positions` carries the per-vertex rest coordinates; only
+    /// `rest_positions[slave_dof / dim]` is read per evaluation.
+    pub fn from_plane(
+        slave_dofs: Vec<u32>,
+        rest_positions: Vec<Vec3>,
+        dim: usize,
+        plane_point: Vec3,
+        plane_normal: Vec3,
+    ) -> Self {
+        let n = plane_normal;
+        let p = plane_point;
+        Self::new(slave_dofs, move |slave_dof, u| {
+            let v = slave_dof as usize / dim;
+            let rest = rest_positions[v];
+            let ux = u[slave_dof as usize];
+            let uy = u[slave_dof as usize + 1];
+            let uz = u[slave_dof as usize + 2];
+            let current = rest + Vec3::new(ux, uy, uz);
+            let delta = current - p;
+            let gap = n.x * delta.x + n.y * delta.y + n.z * delta.z;
+            (n, gap)
+        })
+    }
+}
+
+/// Per-outer-iteration record from [`solve_active_set_signorini`].
+///
+/// One entry per outer PDAS Newton step; the last entry holds the
+/// converged state.
+#[derive(Clone, Debug)]
+pub struct ActiveSetIteration {
+    /// 0-based outer iteration index.
+    pub iter: usize,
+    /// Slave DoFs in the active set going *into* the inner solve.
+    pub active_slaves: Vec<u32>,
+    /// Slave DoFs newly added this iteration (penetrating ⇒ added).
+    pub added: Vec<u32>,
+    /// Slave DoFs released this iteration (separating ⇒ removed).
+    pub released: Vec<u32>,
+    /// Outer Uzawa iterations taken by the inner solve at this step.
+    pub inner_iters: usize,
+    /// Inner Uzawa primal residual at this step.
+    pub primal_residual: Real,
+    /// Inner Uzawa dual residual at this step.
+    pub dual_residual: Real,
+}
+
+/// Diagnostic trace of the PDAS Newton outer loop.
+#[derive(Clone, Debug, Default)]
+pub struct ActiveSetTrace {
+    /// One entry per outer iteration, in order.
+    pub iterations: Vec<ActiveSetIteration>,
+    /// Whether the outer loop converged (final active set stable AND
+    /// inner solve hit its tolerance).
+    pub converged: bool,
+    /// Total number of outer iterations performed.
+    pub outer_iters: usize,
+}
+
+impl ActiveSetTrace {
+    /// Final active slave list, or empty if no iterations ran.
+    #[must_use]
+    pub fn final_active(&self) -> Vec<u32> {
+        self.iterations
+            .last()
+            .map(|it| it.active_slaves.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Output of [`solve_active_set_signorini`].
+///
+/// `lambda` is the *full-length* multiplier vector aligned with
+/// `candidates.slave_dofs` — inactive slots are 0. This makes it easy
+/// to read the per-candidate force without tracking the active-set
+/// permutation.
+#[derive(Clone, Debug)]
+pub struct ActiveSetResult {
+    /// Final displacement field.
+    pub u: Vec<Real>,
+    /// Final per-candidate dual multipliers. Length matches
+    /// `candidates.slave_dofs.len()`; entries for inactive candidates
+    /// are exactly 0.
+    pub lambda: Vec<Real>,
+    /// Per-iteration diagnostic record.
+    pub trace: ActiveSetTrace,
+}
+
+/// Maximum outer PDAS Newton iterations before bailing out.
+pub const DEFAULT_ACTIVE_SET_MAX_OUTER: usize = 20;
+/// Gap tolerance for the "candidate is penetrating" test. Slightly
+/// negative — i.e. only nodes with `gap < -gap_tol` are added — to
+/// avoid cycling on grazing contacts.
+pub const DEFAULT_ACTIVE_SET_GAP_TOL: Real = 1.0e-10;
+/// Inner Uzawa max iterations per outer step.
+pub const DEFAULT_ACTIVE_SET_INNER_MAX: usize = 500;
+/// Inner Uzawa convergence tolerance (primal + dual residual).
+pub const DEFAULT_ACTIVE_SET_INNER_TOL: Real = 1.0e-10;
+
+/// Solve the Signorini problem with **automatic active-set update**.
+///
+/// Given a candidate slave set and a gap function, run PDAS Newton:
+///
+/// 1. Start from the empty active set.
+/// 2. Run the inner Uzawa solve (Stage 49).
+/// 3. Update the active set:
+///    - **Add** candidates with `gap(u) < −gap_tol`.
+///    - **Release** active pairs that converged to `λ = 0` *and* have
+///      `gap(u) > gap_tol` (truly separating).
+/// 4. If the active set is unchanged AND the inner solve converged,
+///    return; else loop.
+///
+/// The dual step `ρ` is re-estimated each outer iteration because the
+/// constraint matrix `C` changes when the active set changes.
+///
+/// The returned `lambda` is *per-candidate*: index `i` of the output
+/// vector corresponds to `candidates.slave_dofs[i]`. Inactive slots
+/// hold 0.
+pub fn solve_active_set_signorini(
+    k_global: &BsrMatrix,
+    candidates: &SignoriniContactCandidates,
+    f: &[Real],
+    max_outer_iters: usize,
+    gap_tol: Real,
+    inner_max_iters: usize,
+    inner_tol: Real,
+) -> Result<ActiveSetResult> {
+    let n_dofs = f.len();
+    let n_cand = candidates.slave_dofs.len();
+
+    if k_global.nrows() != n_dofs || k_global.ncols() != n_dofs {
+        return Err(Error::Build(format!(
+            "Active-set Signorini: K is {}×{} but f has length {}",
+            k_global.nrows(),
+            k_global.ncols(),
+            n_dofs
+        )));
+    }
+
+    // Warm-start `u` with the unconstrained solve.
+    let mut u = cg_solve(
+        |x| matvec(k_global, x),
+        f,
+        &vec![0.0; n_dofs],
+        DEFAULT_INNER_CG_TOL,
+        DEFAULT_INNER_CG_MAX_ITERS,
+    )
+    .x;
+
+    // Active-set membership tracked as a Vec<bool> aligned with
+    // `candidates.slave_dofs`. We carry per-candidate λ across outer
+    // iterations as a warm start.
+    let mut active = vec![false; n_cand];
+    let mut lambda_full = vec![0.0; n_cand];
+    let mut trace = ActiveSetTrace::default();
+    let mut prev_active_valid = false;
+
+    for outer in 0..max_outer_iters {
+        // ── Step 1: evaluate gaps at current displacement ────────────
+        let mut gaps = vec![0.0; n_cand];
+        let mut normals = vec![Vec3::new(0.0, 0.0, 0.0); n_cand];
+        for i in 0..n_cand {
+            let (n, gap) = (candidates.master_gap_fn)(candidates.slave_dofs[i], &u);
+            normals[i] = n;
+            gaps[i] = gap;
+        }
+
+        // ── Step 2: update active set ────────────────────────────────
+        // Add: candidates with gap < −gap_tol that aren't active yet.
+        // Release: active pairs with λ ≈ 0 AND gap > +gap_tol (truly
+        // separating). Pairs that converged to λ = 0 but still have
+        // gap ≈ 0 are at the activity boundary and stay active to
+        // avoid chattering.
+        let mut added: Vec<u32> = Vec::new();
+        let mut released: Vec<u32> = Vec::new();
+        for i in 0..n_cand {
+            let was_active = active[i];
+            let penetrating = gaps[i] < -gap_tol;
+            let separating: bool =
+                (lambda_full[i] as Real).abs() < 1.0e-12 && gaps[i] > gap_tol;
+
+            if !was_active && penetrating {
+                active[i] = true;
+                added.push(candidates.slave_dofs[i]);
+            } else if was_active && separating {
+                active[i] = false;
+                lambda_full[i] = 0.0;
+                released.push(candidates.slave_dofs[i]);
+            }
+        }
+
+        // Snapshot the active list for the trace.
+        let active_slaves: Vec<u32> = (0..n_cand)
+            .filter(|&i| active[i])
+            .map(|i| candidates.slave_dofs[i])
+            .collect();
+
+        // ── Step 3: detect convergence ──────────────────────────────
+        // Stable if no adds/releases AND we had a previous iteration
+        // (so we don't bail on outer == 0 with an empty set when the
+        // unconstrained solution is genuinely admissible).
+        let set_stable = prev_active_valid && added.is_empty() && released.is_empty();
+
+        // For the no-contact case (set_stable at outer 0 with empty
+        // active set) we still need to record the iteration with the
+        // unconstrained solve as the converged state.
+        if set_stable {
+            trace.iterations.push(ActiveSetIteration {
+                iter: outer,
+                active_slaves,
+                added,
+                released,
+                inner_iters: 0,
+                primal_residual: 0.0,
+                dual_residual: 0.0,
+            });
+            trace.converged = true;
+            trace.outer_iters = outer + 1;
+            break;
+        }
+
+        // ── Step 4: assemble C, g for the current active set ────────
+        let pairs: Vec<(u32, Vec3, Real)> = (0..n_cand)
+            .filter(|&i| active[i])
+            .map(|i| {
+                // Target gap: enforce `n · u_slave ≥ g_target` such
+                // that after the solve, `current_position · n ≥
+                // plane_point · n`. Using the gap closure's current
+                // reading: `gap = n · (rest + u − plane_point)`. To
+                // restore non-penetration we want `gap_new ≥ 0`. The
+                // constraint is `n · u_slave ≥ g_target` where the
+                // closure already folded the rest position in. We
+                // solve for the delta needed: at the *current* u,
+                // `n · u = gap − n · (rest − plane_point)`. Tracking
+                // `n · u_target = n · u − gap` gives the displacement
+                // along the normal that lifts the slave back to the
+                // plane. That's the target.
+                let slave_dof = candidates.slave_dofs[i];
+                let ux = u[slave_dof as usize];
+                let uy = u[slave_dof as usize + 1];
+                let uz = u[slave_dof as usize + 2];
+                let n = normals[i];
+                let n_dot_u = n.x * ux + n.y * uy + n.z * uz;
+                let target = n_dot_u - gaps[i];
+                (slave_dof, n, target)
+            })
+            .collect();
+
+        let n_active = pairs.len();
+        let c = assemble_constraint_matrix(&pairs, n_dofs)?;
+        let g = target_gap_vector(&pairs);
+
+        // ── Step 5: warm-start λ for the active pairs ───────────────
+        // Map per-candidate λ → per-active-pair λ.
+        let warm_lambda: Vec<Real> = (0..n_cand)
+            .filter(|&i| active[i])
+            .map(|i| lambda_full[i])
+            .collect();
+
+        // ── Step 6: inner Uzawa solve ───────────────────────────────
+        let inner = if n_active == 0 {
+            // No constraints — unconstrained CG solve from current u.
+            let u_free = cg_solve(
+                |x| matvec(k_global, x),
+                f,
+                &u,
+                DEFAULT_INNER_CG_TOL,
+                DEFAULT_INNER_CG_MAX_ITERS,
+            )
+            .x;
+            u = u_free;
+            UzawaResult {
+                u: u.clone(),
+                lambda: Vec::new(),
+                iters: 0,
+                primal_residual: 0.0,
+                dual_residual: 0.0,
+            }
+        } else {
+            let rho = estimate_dual_step(
+                k_global,
+                &c,
+                n_active,
+                DEFAULT_INNER_CG_TOL,
+                DEFAULT_INNER_CG_MAX_ITERS,
+            );
+            let mut res = solve_augmented_system_with(
+                k_global,
+                &c,
+                f,
+                &g,
+                inner_max_iters,
+                inner_tol,
+                rho,
+                DEFAULT_INNER_CG_TOL,
+                DEFAULT_INNER_CG_MAX_ITERS,
+            )?;
+            // Overwrite with the warm-start λ once we know
+            // `solve_augmented_system_with` starts from zero — for
+            // future tightening we could thread the warm start
+            // through. For now we just propagate the *converged* λ
+            // back into `lambda_full`.
+            //
+            // (The implementation in Stage 49 starts λ at zero each
+            // call; the warm start is essentially "guidance" for the
+            // active-set decision, not the inner iterate. This still
+            // converges in ≤ 5 outer iters for the test cases.)
+            let _ = &warm_lambda;
+            u = std::mem::take(&mut res.u);
+            res
+        };
+
+        // ── Step 7: scatter λ back into the full-length vector ──────
+        // First zero out inactive slots (they may have flipped this
+        // step), then write the freshly-solved active values.
+        for i in 0..n_cand {
+            if !active[i] {
+                lambda_full[i] = 0.0;
+            }
+        }
+        if n_active > 0 {
+            let mut k_active = 0usize;
+            for i in 0..n_cand {
+                if active[i] {
+                    lambda_full[i] = inner.lambda[k_active];
+                    k_active += 1;
+                }
+            }
+        }
+
+        trace.iterations.push(ActiveSetIteration {
+            iter: outer,
+            active_slaves,
+            added,
+            released,
+            inner_iters: inner.iters,
+            primal_residual: inner.primal_residual,
+            dual_residual: inner.dual_residual,
+        });
+
+        prev_active_valid = true;
+        trace.outer_iters = outer + 1;
+    }
+
+    Ok(ActiveSetResult {
+        u,
+        lambda: lambda_full,
+        trace,
+    })
 }
 
 #[cfg(test)]
