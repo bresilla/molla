@@ -283,6 +283,139 @@ pub fn polar_decompose_3(m: Mat3) -> (Mat3, Mat3) {
     (r, s)
 }
 
+/// Regularisation epsilon for the SVD adjoint's `F_ij = 1/(σⱼ² − σᵢ²)`
+/// divisor. When two singular values are within this distance (in σ²
+/// units) the divisor blows up; we Tikhonov-regularise as
+/// `F_ij = (σⱼ² − σᵢ²) / max((σⱼ² − σᵢ²)², ε²)` which stays bounded by
+/// `1/ε` and is exactly `1/(σⱼ² − σᵢ²)` away from the degeneracy.
+const ADJ_SVD_EPS: Real = 1.0e-12;
+
+/// Reverse-mode adjoint of [`svd3`].
+///
+/// Given the forward decomposition `A = U · diag(σ) · Vᵀ` and the
+/// upstream gradients `adj_U`, `adj_σ`, `adj_V` of some downstream
+/// scalar loss `J`, returns `adj_A = ∂J/∂A`.
+///
+/// Reference: McAdams et al. "Computing the Singular Value Decomposition
+/// of 3×3 Matrices" (2011) for the forward; Townsend "Differentiating
+/// the Singular Value Decomposition" (2016) and Klingner & Shewchuk's
+/// note for the adjoint. The literal arithmetic mirrors the structure
+/// of `xtra/warp/warp/native/svd.h::adj_svd3` (Apache-2.0).
+///
+/// **Degenerate σ handling.** When two singular values are equal, the
+/// off-diagonal entries of `F` (with `F_ij = 1/(σⱼ² − σᵢ²)`) become
+/// undefined. We use a Tikhonov regularisation
+/// `F_ij = (σⱼ² − σᵢ²) / max((σⱼ² − σᵢ²)², ε²)` (with `ε = ADJ_SVD_EPS`)
+/// which stays bounded by `1/ε` and is exactly `1/(σⱼ² − σᵢ²)` away
+/// from the degeneracy. At exact degeneracy `F_ij → 0` — the rotational
+/// gauge between equal-σ columns is genuinely ambiguous, so projecting
+/// the gradient onto the symmetric part is the right limit.
+///
+/// The first `a` argument is accepted for signature symmetry with the
+/// Warp / autograd convention but currently unused — the adjoint is
+/// expressed purely in terms of the forward outputs.
+pub fn adj_svd3(
+    _a: Mat3,
+    u: Mat3,
+    sigma: Vec3,
+    v: Mat3,
+    adj_u: Mat3,
+    adj_sigma: Vec3,
+    adj_v: Mat3,
+) -> Mat3 {
+    // F_ij is anti-symmetric in (i,j); we only need the strict-upper
+    // entries and negate for the lower.
+    let s0 = sigma.x;
+    let s1 = sigma.y;
+    let s2 = sigma.z;
+    let f01 = safe_inv_sq_diff(s0, s1, ADJ_SVD_EPS);
+    let f02 = safe_inv_sq_diff(s0, s2, ADJ_SVD_EPS);
+    let f12 = safe_inv_sq_diff(s1, s2, ADJ_SVD_EPS);
+    // F = [[ 0,    F01,  F02 ],
+    //      [-F01,  0,    F12 ],
+    //      [-F02, -F12,  0   ]]
+    let f = Mat3::from_cols(
+        Vec3::new(0.0, -f01, -f02),
+        Vec3::new(f01, 0.0, -f12),
+        Vec3::new(f02, f12, 0.0),
+    );
+
+    let sigma_diag = Mat3::from_diagonal(sigma);
+    let adj_sigma_diag = Mat3::from_diagonal(adj_sigma);
+    let ut = u.transpose();
+    let vt = v.transpose();
+
+    // 1) Direct σ contribution: U · diag(adj_σ) · Vᵀ.
+    let sigma_term = u * adj_sigma_diag * vt;
+
+    // 2) U-rotation contribution.
+    //    Ω_U = Uᵀ·adj_U − adj_Uᵀ·U   (twice the skew part of Uᵀ·adj_U).
+    //    block_u = (F ⊙ Ω_U) · Σ
+    //    u_term = U · block_u · Vᵀ
+    let omega_u = ut * adj_u - adj_u.transpose() * u;
+    let skew_u = cw_mul(f, omega_u);
+    let u_term = u * (skew_u * sigma_diag) * vt;
+
+    // 3) V-rotation contribution.
+    //    Ω_V = Vᵀ·adj_V − adj_Vᵀ·V   (twice the skew part).
+    //    block_v = Σ · (F ⊙ Ω_V)
+    //    v_term = U · block_v · Vᵀ
+    let omega_v = vt * adj_v - adj_v.transpose() * v;
+    let skew_v = cw_mul(f, omega_v);
+    let v_term = u * (sigma_diag * skew_v) * vt;
+
+    sigma_term + u_term + v_term
+}
+
+/// Reverse-mode adjoint of [`polar_decompose_3`].
+///
+/// Given `F = R · S` (forward) with `R = U·Vᵀ` and `S = V·Σ·Vᵀ`,
+/// returns `adj_F = ∂J/∂F` from upstream gradients `adj_R`, `adj_S`.
+///
+/// Implementation: chain through SVD. Differentiation of `R = U·Vᵀ`
+/// gives
+///   `adj_U ← adj_R · V`
+///   `adj_V ← adj_Rᵀ · U`
+/// and of `S = V·Σ·Vᵀ` gives
+///   `adj_σᵢ ← (Vᵀ · adj_S · V)_{ii}`
+///   `adj_V += (adj_S + adj_Sᵀ) · V · Σ`
+/// then we hand off to [`adj_svd3`].
+///
+/// The `r` and `s` arguments are unused in the math (the polar adjoint
+/// is expressed purely through the SVD path) but kept in the signature
+/// for parity with the autograd convention and to allow future
+/// algebraic shortcuts.
+pub fn adj_polar(f: Mat3, r: Mat3, s: Mat3, adj_r: Mat3, adj_s: Mat3) -> Mat3 {
+    let _ = (r, s);
+    // Recover (U, σ, V) from F. Cheap (single SVD) and matches what the
+    // forward did, so all approximation errors cancel under FD.
+    let (u, sigma, v) = svd3(f);
+
+    // From R = U·Vᵀ.
+    let adj_u_r = adj_r * v;
+    let adj_v_r = adj_r.transpose() * u;
+
+    // From S = V·Σ·Vᵀ.
+    let vt = v.transpose();
+    let vt_adjs_v = vt * adj_s * v;
+    let adj_sigma_s = Vec3::new(
+        vt_adjs_v.col(0).x,
+        vt_adjs_v.col(1).y,
+        vt_adjs_v.col(2).z,
+    );
+    let adj_v_s = (adj_s + adj_s.transpose()) * v * Mat3::from_diagonal(sigma);
+
+    adj_svd3(
+        f,
+        u,
+        sigma,
+        v,
+        adj_u_r,
+        adj_sigma_s,
+        adj_v_r + adj_v_s,
+    )
+}
+
 /// Estimate the **2-norm condition number** of a 3×3 matrix as
 /// `σ_max / σ_min`. Returns `Real::INFINITY` if `σ_min` is exactly
 /// zero (numerically singular).
@@ -340,6 +473,25 @@ fn mset(m: &mut Mat3, i: usize, j: usize, v: Real) {
     let mut c = m.col(j);
     c[i] = v;
     set_col(m, j, c);
+}
+
+/// Component-wise (Hadamard) product of two 3×3 matrices.
+#[inline]
+fn cw_mul(a: Mat3, b: Mat3) -> Mat3 {
+    Mat3::from_cols(
+        Vec3::new(a.col(0).x * b.col(0).x, a.col(0).y * b.col(0).y, a.col(0).z * b.col(0).z),
+        Vec3::new(a.col(1).x * b.col(1).x, a.col(1).y * b.col(1).y, a.col(1).z * b.col(1).z),
+        Vec3::new(a.col(2).x * b.col(2).x, a.col(2).y * b.col(2).y, a.col(2).z * b.col(2).z),
+    )
+}
+
+/// Returns `1 / (b² − a²)` Tikhonov-regularised so that the result is
+/// bounded by `1/ε` even when `b² ≈ a²`. Used by [`adj_svd3`] to handle
+/// degenerate singular values.
+#[inline]
+fn safe_inv_sq_diff(a: Real, b: Real, eps: Real) -> Real {
+    let d = b * b - a * a;
+    d / (d * d + eps * eps)
 }
 
 #[cfg(test)]
@@ -425,6 +577,31 @@ mod tests {
     #[test]
     fn cond_identity_is_one() {
         assert!((cond2_3(Mat3::IDENTITY) - 1.0).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn adj_svd_identity_zero_upstream_is_zero() {
+        // With all upstream gradients = 0, adj_A must be 0.
+        let a = Mat3::IDENTITY;
+        let (u, sigma, v) = svd3(a);
+        let adj_a = adj_svd3(
+            a,
+            u,
+            sigma,
+            v,
+            Mat3::ZERO,
+            Vec3::ZERO,
+            Mat3::ZERO,
+        );
+        assert!(frob(adj_a) < 1.0e-12);
+    }
+
+    #[test]
+    fn adj_polar_identity_zero_upstream_is_zero() {
+        let f = Mat3::IDENTITY;
+        let (r, s) = polar_decompose_3(f);
+        let adj_f = adj_polar(f, r, s, Mat3::ZERO, Mat3::ZERO);
+        assert!(frob(adj_f) < 1.0e-12);
     }
 
     #[test]

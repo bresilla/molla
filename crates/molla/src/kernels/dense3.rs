@@ -53,8 +53,10 @@ pub struct Dense3Kernel {
     pipeline_svd: wgpu::ComputePipeline,
     pipeline_qr: wgpu::ComputePipeline,
     pipeline_eig: wgpu::ComputePipeline,
+    pipeline_adj_svd: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
+    layout_adj_io: wgpu::BindGroupLayout,
 }
 
 impl Dense3Kernel {
@@ -105,12 +107,50 @@ impl Dense3Kernel {
                 cache: None,
             })
         };
+
+        // ── Adjoint SVD pipeline (separate module + bind-group). ───
+        let adj_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::dense3 adj"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/dense3_adj.wgsl").into(),
+            ),
+        });
+        let layout_adj_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::dense3 adj io"),
+            entries: &[
+                storage_entry(0, true),  // A
+                storage_entry(1, true),  // U
+                storage_entry(2, true),  // sigma
+                storage_entry(3, true),  // V
+                storage_entry(4, true),  // adj_U
+                storage_entry(5, true),  // adj_sigma
+                storage_entry(6, true),  // adj_V
+                storage_entry(7, false), // adj_A (output)
+            ],
+        });
+        let adj_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::dense3 adj layout"),
+            bind_group_layouts: &[&layout_adj_io, &layout_uniforms],
+            push_constant_ranges: &[],
+        });
+        let pipeline_adj_svd =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::dense3::adj_svd"),
+                layout: Some(&adj_pipeline_layout),
+                module: &adj_shader,
+                entry_point: Some("adj_svd_kernel"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         Self {
             pipeline_svd: mk("svd_kernel", "molla::dense3::svd"),
             pipeline_qr: mk("qr_kernel", "molla::dense3::qr"),
             pipeline_eig: mk("eig_kernel", "molla::dense3::eig"),
+            pipeline_adj_svd,
             layout_io,
             layout_uniforms,
+            layout_adj_io,
         }
     }
 
@@ -307,6 +347,242 @@ impl Dense3Kernel {
             diag,
             right,
         })
+    }
+}
+
+impl Dense3Kernel {
+    /// Reverse-mode adjoint SVD over a batch of matrices, operating on
+    /// pre-allocated wgpu buffers. Caller owns the buffers — this just
+    /// records the dispatch onto the supplied encoder.
+    ///
+    /// All buffers must hold `n * 9` `f32` values in row-major layout
+    /// (matching the forward `Dense3Op::Svd` output convention), except
+    /// `sigma_buf` and `adj_sigma_buf` which use the first 3 of every 9
+    /// slot (see `dense3_svd.wgsl::store_vec`). The remaining 6 floats
+    /// of those buffers are unread.
+    ///
+    /// `adj_a_buf` is written; the other seven inputs are read-only.
+    /// Dispatches one workgroup of size 64 per `WORKGROUP_SIZE` matrices.
+    #[allow(clippy::too_many_arguments)]
+    pub fn adj_svd3_batch(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        a_buf: &wgpu::Buffer,
+        u_buf: &wgpu::Buffer,
+        sigma_buf: &wgpu::Buffer,
+        v_buf: &wgpu::Buffer,
+        adj_u_buf: &wgpu::Buffer,
+        adj_sigma_buf: &wgpu::Buffer,
+        adj_v_buf: &wgpu::Buffer,
+        adj_a_buf: &wgpu::Buffer,
+        uniform_buf: &wgpu::Buffer,
+        n: u32,
+    ) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::dense3 adj io bg"),
+            layout: &self.layout_adj_io,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: a_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: u_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: sigma_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: v_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: adj_u_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: adj_sigma_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: adj_v_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: adj_a_buf.as_entire_binding() },
+            ],
+        });
+        let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::dense3 adj uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+        let groups = n.div_ceil(WORKGROUP_SIZE);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("molla::dense3 adj pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline_adj_svd);
+        pass.set_bind_group(0, &bg_io, &[]);
+        pass.set_bind_group(1, &bg_u, &[]);
+        pass.dispatch_workgroups(groups, 1, 1);
+        Ok(())
+    }
+
+    /// Blocking convenience wrapper around [`Self::adj_svd3_batch`].
+    /// Allocates all buffers, dispatches once, and reads `adj_A` back
+    /// to host as `Vec<Mat3>`. Used by tests + small-batch callers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn adj_svd3_dispatch_blocking(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        a: &[Mat3],
+        u: &[Mat3],
+        sigma: &[Vec3],
+        v: &[Mat3],
+        adj_u: &[Mat3],
+        adj_sigma: &[Vec3],
+        adj_v: &[Mat3],
+    ) -> Result<Vec<Mat3>> {
+        let n = a.len();
+        assert_eq!(u.len(), n);
+        assert_eq!(sigma.len(), n);
+        assert_eq!(v.len(), n);
+        assert_eq!(adj_u.len(), n);
+        assert_eq!(adj_sigma.len(), n);
+        assert_eq!(adj_v.len(), n);
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        let floats_per_mat = 9usize;
+        let bytes = (n * floats_per_mat * 4) as u64;
+        let usage_storage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+        let mk_buf = |label: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: usage_storage,
+                mapped_at_creation: false,
+            })
+        };
+
+        let pack_mats = |slice: &[Mat3]| -> Vec<f32> {
+            let mut packed: Vec<f32> = Vec::with_capacity(n * floats_per_mat);
+            for m in slice {
+                for i in 0..3 {
+                    for j in 0..3 {
+                        packed.push(m.col(j)[i] as f32);
+                    }
+                }
+            }
+            packed
+        };
+        let pack_vecs = |slice: &[Vec3]| -> Vec<f32> {
+            // First 3 floats per slot = (x, y, z), pad to 9.
+            let mut packed: Vec<f32> = vec![0.0; n * floats_per_mat];
+            for (i, vv) in slice.iter().enumerate() {
+                packed[i * 9 + 0] = vv.x as f32;
+                packed[i * 9 + 1] = vv.y as f32;
+                packed[i * 9 + 2] = vv.z as f32;
+            }
+            packed
+        };
+
+        let a_buf = mk_buf("adj_svd a");
+        let u_buf = mk_buf("adj_svd u");
+        let sigma_buf = mk_buf("adj_svd sigma");
+        let v_buf = mk_buf("adj_svd v");
+        let adj_u_buf = mk_buf("adj_svd adj_u");
+        let adj_sigma_buf = mk_buf("adj_svd adj_sigma");
+        let adj_v_buf = mk_buf("adj_svd adj_v");
+        let adj_a_buf = mk_buf("adj_svd adj_a");
+
+        queue.write_buffer(&a_buf, 0, bytemuck::cast_slice(&pack_mats(a)));
+        queue.write_buffer(&u_buf, 0, bytemuck::cast_slice(&pack_mats(u)));
+        queue.write_buffer(&sigma_buf, 0, bytemuck::cast_slice(&pack_vecs(sigma)));
+        queue.write_buffer(&v_buf, 0, bytemuck::cast_slice(&pack_mats(v)));
+        queue.write_buffer(&adj_u_buf, 0, bytemuck::cast_slice(&pack_mats(adj_u)));
+        queue.write_buffer(
+            &adj_sigma_buf,
+            0,
+            bytemuck::cast_slice(&pack_vecs(adj_sigma)),
+        );
+        queue.write_buffer(&adj_v_buf, 0, bytemuck::cast_slice(&pack_mats(adj_v)));
+
+        let uniforms = Uniforms {
+            matrix_count: n as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("adj_svd uniforms"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("adj_svd encoder"),
+        });
+        self.adj_svd3_batch(
+            device,
+            &mut encoder,
+            &a_buf,
+            &u_buf,
+            &sigma_buf,
+            &v_buf,
+            &adj_u_buf,
+            &adj_sigma_buf,
+            &adj_v_buf,
+            &adj_a_buf,
+            &uniform_buf,
+            n as u32,
+        )?;
+
+        // Stage adj_a for readback.
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("adj_svd stage"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&adj_a_buf, 0, &stage, 0, bytes);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = stage.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            sender
+                .send(r.map_err(|e| Error::Gpu(format!("adj_svd readback: {e:?}"))))
+                .ok();
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("adj_svd readback poll: {e:?}")))?;
+        receiver
+            .recv()
+            .map_err(|e| Error::Gpu(format!("adj_svd readback recv: {e:?}")))??;
+        let data = slice.get_mapped_range();
+        let raw: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        stage.unmap();
+
+        // Unpack 9-float row-major.
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let base = i * 9;
+            out.push(Mat3::from_cols(
+                Vec3::new(
+                    raw[base + 0] as Real,
+                    raw[base + 3] as Real,
+                    raw[base + 6] as Real,
+                ),
+                Vec3::new(
+                    raw[base + 1] as Real,
+                    raw[base + 4] as Real,
+                    raw[base + 7] as Real,
+                ),
+                Vec3::new(
+                    raw[base + 2] as Real,
+                    raw[base + 5] as Real,
+                    raw[base + 8] as Real,
+                ),
+            ));
+        }
+        Ok(out)
     }
 }
 
