@@ -71,6 +71,8 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod scan;
 #[cfg(feature = "gpu")]
+mod splat_raytrace;
+#[cfg(feature = "gpu")]
 pub(crate) mod optim_adam;
 #[cfg(feature = "gpu")]
 mod optim_sgd;
@@ -173,6 +175,8 @@ pub use radix_sort::{
 pub use raycast::RaycastKernel;
 #[cfg(feature = "gpu")]
 pub use scan::ScanKernel;
+#[cfg(feature = "gpu")]
+pub use splat_raytrace::SplatRaytraceKernel;
 #[cfg(feature = "gpu")]
 pub use optim_adam::AdamGpuKernel;
 #[cfg(feature = "gpu")]

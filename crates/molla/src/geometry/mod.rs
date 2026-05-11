@@ -25,6 +25,7 @@ pub mod contact_extras;
 pub mod contact_reduction;
 mod decimate;
 mod epa;
+pub mod gaussian_splat;
 mod gjk;
 pub mod graph_coloring;
 mod hull;
@@ -59,6 +60,12 @@ pub use narrow_phase::{pair_contact, ContactManifold, MAX_MANIFOLD_POINTS};
 pub use pipeline::{collide, CollisionPipeline, STATIC_BODY};
 pub use bvh::{Bvh, BvhNode as BroadBvhNode};
 pub use epa::{epa, EpaContact};
+// ── Stage 44 v1: 3D Gaussian splat primitive for the differentiable
+// raytrace renderer (forward-only). ───────────────────────────────
+pub use gaussian_splat::{
+    canonical_ray_max_response, composite_forward_cpu, gaussian_response,
+    map_ray_to_canonical, splat_camera_distance, GaussianSplat3d,
+};
 pub use gjk::{gjk, GjkDistance, GjkResult, GjkSimplex, SupportPoint};
 // ── Stage 38d: shared constraint-graph coloring utility ────────────
 pub use graph_coloring::{color_constraints, greedy_color, group_by_color, mcs_color};
