@@ -13,6 +13,11 @@ mod engine;
 #[cfg(feature = "gpu")]
 mod mpm;
 
+// Stage 38.1 — CPU-only differentiable MPM. Pure-Rust, `f64` everywhere,
+// records a tape so [`crate::autograd::mpm_adjoint`] can walk it
+// backwards. Always compiled (no GPU dependency).
+pub mod mpm_cpu_diff;
+
 // Stage 37.8 — tile compute primitives bundle. CPU oracles are
 // always available; the GPU pipelines are gated behind the `gpu`
 // feature inside each module.

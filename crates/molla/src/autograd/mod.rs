@@ -43,6 +43,7 @@
 
 pub mod diff_arm;
 pub mod featherstone_adjoint;
+pub mod mpm_adjoint;
 pub mod tape;
 pub mod xpbd_adjoint;
 

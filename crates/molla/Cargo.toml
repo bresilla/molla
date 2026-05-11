@@ -279,6 +279,11 @@ harness = false
 name = "bench_autograd_tape"
 harness = false
 
+# Stage 38.1 — CPU diff-MPM forward + backward wall-time.
+[[bench]]
+name = "bench_mpm_diff"
+harness = false
+
 # ---------------------------------------------------------------------
 # Stage M — Sparse grid (NanoVDB-style)
 # ---------------------------------------------------------------------
