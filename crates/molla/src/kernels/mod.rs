@@ -187,9 +187,16 @@ pub use frame_transform::FrameTransformKernel;
 pub use imu::ImuKernel;
 #[cfg(feature = "gpu")]
 pub use implicit_mpm::{
+    readback_flat_f32 as implicit_mpm_readback_flat_f32,
+    readback_g_mass_f32 as implicit_mpm_readback_g_mass_f32,
+    readback_g_momentum_f32 as implicit_mpm_readback_g_momentum_f32,
+    readback_v_grid_f32 as implicit_mpm_readback_v_grid_f32,
+    readback_v_pred_f32 as implicit_mpm_readback_v_pred_f32,
     readback_vec3_f32 as implicit_mpm_readback_vec3_f32,
+    readback_vec3_real as implicit_mpm_readback_vec3_real,
     upload_storage_f32 as implicit_mpm_upload_storage_f32,
-    upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32, ImplicitMpmKernel,
+    upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32, GpuStepState as ImplicitMpmGpuStepState,
+    ImplicitMpmKernel, StepUniforms as ImplicitMpmStepUniforms,
 };
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
