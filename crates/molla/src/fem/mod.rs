@@ -130,7 +130,7 @@ pub use nedelec_element::{
     assemble_global_nedelec, compute_element_curl_curl, compute_element_nedelec_mass,
     NedelecDofMap,
 };
-pub use nonconforming::NonconformingField;
+pub use nonconforming::{NonconformingField, NonconformingPenaltyContact};
 #[cfg(feature = "gpu")]
 pub use gpu_data::FemGpuData;
 pub use mesh::{FemCell, FemMesh};

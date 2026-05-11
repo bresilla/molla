@@ -1,4 +1,5 @@
-//! Stage 47 v1 — L² projection between non-matching tetrahedral meshes.
+//! Stage 47 v1/v2 — L² projection between non-matching tetrahedral meshes
+//! + vector-valued projection + a simple penalty-contact force.
 //!
 //! Two FEM meshes that share no DoFs need a transfer operator to move a
 //! scalar field from one to the other. The textbook (and Warp-reference)
@@ -31,16 +32,40 @@
 //!   projection introduces an O(h²) error; halving `h` cuts the error
 //!   by ~4× — the standard P1 best-approximation rate.
 //!
-//! # Out of scope (v1)
+//! # v2 additions
 //!
-//! - **Elasticity coupling** — the cross-mesh field that matters for the
-//!   non-matching contact paper is the *displacement* (vector-valued).
-//!   The scalar operator here is the building block; v2 will (a) extend
-//!   `coupling_matrix` to a block-1 `BsrMatrix` with `B = 3` and (b)
-//!   wire it into the residual / Jacobian of the contact problem.
+//! - **Vector-valued projection** — [`NonconformingField::project_vector`]
+//!   pushes a `dim`-component (e.g. displacement) field through the same
+//!   scalar `M_st` / `M_tt` once per component. Storage choice: we keep
+//!   the **single scalar `BsrMatrix`** and loop over components rather
+//!   than constructing a `B = 3` block matrix. The math is identical
+//!   (the cross-mesh mass operator is **scalar** — it couples a target
+//!   scalar dof to a source scalar dof; for an isotropic vector field
+//!   the components decouple and a `B = 3` block matrix would just hold
+//!   three identical scalar copies on its block diagonal with zero off-
+//!   diagonal blocks, i.e. 3× the storage for the same numerics). The
+//!   3× CG solves still reuse the cached SPD `M_tt` factorisation-free
+//!   so the cost is `3 ·` the scalar path with zero re-assembly.
+//! - **Penalty contact force** —
+//!   [`NonconformingPenaltyContact::compute_penalty_forces`] computes a
+//!   pair of nodal force vectors from a displacement gap
+//!   `Δu = u_target − project_vector(u_source)`. The target receives
+//!   `f_target = − k · M_tt · Δu` (consistent-mass weighting); the
+//!   source receives `f_source = + k · M_stᵀ · Δu` (the transpose of
+//!   the projection operator, so total force vanishes by Newton's third
+//!   law). The relation `1ᵀ M_tt = 1ᵀ M_st` (both reproduce the target
+//!   volume measure) makes the cancellation exact.
+//!
+//! # Out of scope (v2 — deferred to v3)
+//!
+//! - **Surface-only quadrature** — v2 still integrates over the target
+//!   *volume*; surface-only quadrature requires extracting the contact
+//!   surface mesh and integrating on that 2-manifold instead.
+//! - **Full elasticity residual + Jacobian** for an implicit solve.
 //! - **Contact pressure formulation** — Hertz / Signorini contact across
 //!   non-matching surfaces wants an additional surface mass operator on
-//!   the slave side, plus a Lagrange multiplier or penalty term. v3.
+//!   the slave side, plus a Lagrange multiplier formulation.
+//! - **Friction** at the contact interface.
 //! - **Tet-location acceleration** — v1 uses the same brute-force
 //!   barycentric search as Stage 37.6 (`apic_coupling::locate_particle_tet`).
 //!   A `TetBvh` (`crates/molla/src/geometry/tet_bvh.rs`) would drop the
@@ -203,6 +228,249 @@ impl<'a> NonconformingField<'a> {
         );
         result.x
     }
+
+    /// Project a vector-valued field defined on the source vertices onto
+    /// the target vertices. The input is laid out **interleaved**:
+    /// `u_source[i * dim + c]` is component `c` of the displacement at
+    /// source vertex `i`. The output uses the same interleaved layout,
+    /// length `target_dofs() * dim`.
+    ///
+    /// Implementation: the scalar L² projector commutes with the
+    /// component-wise extraction (the cross-mesh mass matrix `M_st`
+    /// doesn't couple components — see the v2 storage-choice note in
+    /// the module header). So we deinterleave, run [`project_with`] on
+    /// each scalar component, and reinterleave the results. The CG
+    /// solves share the cached `M_tt` so the work is `dim ·` the
+    /// scalar path with zero re-assembly.
+    ///
+    /// Panics on a length mismatch or `dim == 0`.
+    #[must_use]
+    pub fn project_vector(&self, u_source: &[Real], dim: usize) -> Vec<Real> {
+        self.project_vector_with(u_source, dim, DEFAULT_CG_TOL, DEFAULT_CG_MAX_ITERS)
+    }
+
+    /// Same as [`project_vector`](Self::project_vector) but exposes the
+    /// CG tolerance / iteration cap (matches [`project_with`] for the
+    /// scalar path).
+    #[must_use]
+    pub fn project_vector_with(
+        &self,
+        u_source: &[Real],
+        dim: usize,
+        tol: Real,
+        max_iters: usize,
+    ) -> Vec<Real> {
+        assert!(dim > 0, "NonconformingField::project_vector: dim must be > 0");
+        assert_eq!(
+            u_source.len(),
+            self.source_dofs() * dim,
+            "NonconformingField::project_vector: u_source length {} != source_dofs ({}) · dim ({})",
+            u_source.len(),
+            self.source_dofs(),
+            dim,
+        );
+        let n_src = self.source_dofs();
+        let n_tgt = self.target_dofs();
+        let mut out = vec![0.0; n_tgt * dim];
+        let mut comp = vec![0.0; n_src];
+        for c in 0..dim {
+            for i in 0..n_src {
+                comp[i] = u_source[i * dim + c];
+            }
+            let projected = self.project_with(&comp, tol, max_iters);
+            for i in 0..n_tgt {
+                out[i * dim + c] = projected[i];
+            }
+        }
+        out
+    }
+}
+
+/// Stage 47 v2 — simple **penalty-spring** contact handler between two
+/// non-matching meshes coupled through a [`NonconformingField`].
+///
+/// Conceptual model: the source mesh and the target mesh are treated as
+/// two elastic bodies in (one-sided) contact. We measure the
+/// displacement gap on the **target** mesh,
+///
+/// ```text
+///   Δu_target = u_target − Π_st · u_source
+/// ```
+///
+/// where `Π_st = M_tt⁻¹ M_st` is the cross-mesh projection operator
+/// from [`NonconformingField::project_vector`]. The penalty contact
+/// force on the target is a consistent-mass-weighted spring force,
+///
+/// ```text
+///   f_target = − k · M_tt · Δu_target
+/// ```
+///
+/// and the reaction on the source is the **transpose** of that load
+/// pushed through the cross-mesh operator,
+///
+/// ```text
+///   f_source = + k · M_stᵀ · Δu_target
+/// ```
+///
+/// (one component at a time — see the storage-choice note in the
+/// module header). Newton's third law is exact because
+/// `1ᵀ M_tt 1 = 1ᵀ M_st 1` (both reproduce the target volume) — see
+/// the [`tests::constant_projection_preserves_total_mass`] check in
+/// v1.
+///
+/// **Caveat (v2 scope):** the integration is still over the **target
+/// volume**, not just the contact surface — v3 will swap in a
+/// surface-only quadrature. This means the v2 penalty is a "soft
+/// volumetric coupling" suitable for thin overlapping bodies; for thick
+/// volumetric contact, v3 should be used.
+pub struct NonconformingPenaltyContact<'a> {
+    /// The underlying projection operator (re-used as-is).
+    pub field: NonconformingField<'a>,
+    /// Spring stiffness `k`. The units are `[force] / [displacement]`
+    /// per unit volume on the target side (consistent-mass weighting).
+    pub stiffness: Real,
+}
+
+impl<'a> NonconformingPenaltyContact<'a> {
+    /// Build a penalty-contact coupling on top of a fresh
+    /// [`NonconformingField`].
+    pub fn new(source: &'a FemMesh, target: &'a FemMesh, stiffness: Real) -> Result<Self> {
+        Ok(Self {
+            field: NonconformingField::new(source, target)?,
+            stiffness,
+        })
+    }
+
+    /// Wrap a caller-built [`NonconformingField`] (useful when the
+    /// projector is already built for another purpose).
+    pub fn from_field(field: NonconformingField<'a>, stiffness: Real) -> Self {
+        Self { field, stiffness }
+    }
+
+    /// Compute the penalty-spring contact force on both meshes given the
+    /// current displacement state.
+    ///
+    /// `u_source` is interleaved 3D displacement at source vertices
+    /// (length `n_source · 3`); `u_target` is the same on the target
+    /// side. Returns `(f_source, f_target)` — both interleaved 3D
+    /// nodal forces — with `Σ f_source + Σ f_target = 0` (Newton's
+    /// third law, exact to round-off because `M_stᵀ · 1 = M_tt · 1` on
+    /// the target side, see [`tests::constant_projection_preserves_total_mass`]
+    /// in v1).
+    #[must_use]
+    pub fn compute_penalty_forces(
+        &self,
+        u_source: &[Real],
+        u_target: &[Real],
+    ) -> (Vec<Real>, Vec<Real>) {
+        self.compute_penalty_forces_with(
+            u_source,
+            u_target,
+            DEFAULT_CG_TOL,
+            DEFAULT_CG_MAX_ITERS,
+        )
+    }
+
+    /// Same as [`compute_penalty_forces`](Self::compute_penalty_forces)
+    /// but exposes the inner CG tolerance / iteration cap.
+    #[must_use]
+    pub fn compute_penalty_forces_with(
+        &self,
+        u_source: &[Real],
+        u_target: &[Real],
+        tol: Real,
+        max_iters: usize,
+    ) -> (Vec<Real>, Vec<Real>) {
+        let dim = 3usize;
+        let n_src = self.field.source_dofs();
+        let n_tgt = self.field.target_dofs();
+        assert_eq!(
+            u_source.len(),
+            n_src * dim,
+            "compute_penalty_forces: u_source length {} != source_dofs ({}) · 3",
+            u_source.len(),
+            n_src,
+        );
+        assert_eq!(
+            u_target.len(),
+            n_tgt * dim,
+            "compute_penalty_forces: u_target length {} != target_dofs ({}) · 3",
+            u_target.len(),
+            n_tgt,
+        );
+
+        // Per-component work. We don't call project_vector_with so we
+        // can re-use the projected-source intermediate for both the
+        // f_target (M_tt · Δu) and the f_source (M_stᵀ · Δu) products
+        // without re-projecting.
+        let mut f_source = vec![0.0; n_src * dim];
+        let mut f_target = vec![0.0; n_tgt * dim];
+        let mut u_src_c = vec![0.0; n_src];
+        let mut u_tgt_c = vec![0.0; n_tgt];
+        let mut delta_c = vec![0.0; n_tgt];
+
+        for c in 0..dim {
+            for i in 0..n_src {
+                u_src_c[i] = u_source[i * dim + c];
+            }
+            for i in 0..n_tgt {
+                u_tgt_c[i] = u_target[i * dim + c];
+            }
+            let projected = self.field.project_with(&u_src_c, tol, max_iters);
+            for i in 0..n_tgt {
+                delta_c[i] = u_tgt_c[i] - projected[i];
+            }
+
+            // f_target = − k · M_tt · Δu_target.
+            let mtt_delta = matvec(&self.field.target_mass, &delta_c);
+            for i in 0..n_tgt {
+                f_target[i * dim + c] = -self.stiffness * mtt_delta[i];
+            }
+
+            // f_source = + k · M_stᵀ · Δu_target.
+            let mst_t_delta = matvec_transpose(&self.field.coupling_matrix, &delta_c);
+            assert_eq!(mst_t_delta.len(), n_src);
+            for i in 0..n_src {
+                f_source[i * dim + c] = self.stiffness * mst_t_delta[i];
+            }
+        }
+
+        (f_source, f_target)
+    }
+}
+
+// ─── Sparse helpers ─────────────────────────────────────────────────
+
+/// Compute `y = Aᵀ · x` for a scalar (`B = 1`) [`BsrMatrix`]. Used by
+/// [`NonconformingPenaltyContact`] to push the target-side gap back
+/// through the cross-mesh operator's transpose (Newton's third law).
+///
+/// Output length is `a.ncols()`; the input length must equal `a.nrows()`.
+/// Panics on a shape mismatch (a programming error — both meshes are
+/// fixed at construction time).
+fn matvec_transpose(a: &BsrMatrix, x: &[Real]) -> Vec<Real> {
+    debug_assert_eq!(a.b, 1, "matvec_transpose: only B=1 supported");
+    assert_eq!(
+        x.len(),
+        a.nrows(),
+        "matvec_transpose: x length {} != A.nrows {}",
+        x.len(),
+        a.nrows()
+    );
+    let mut y = vec![0.0; a.ncols()];
+    for r in 0..a.block_rows {
+        let lo = a.row_offsets[r];
+        let hi = a.row_offsets[r + 1];
+        let xr = x[r];
+        if xr == 0.0 {
+            continue;
+        }
+        for slot in lo..hi {
+            let c = a.col_idx[slot];
+            y[c] += a.values[slot] * xr;
+        }
+    }
+    y
 }
 
 // ─── Cross-mesh mass assembly ────────────────────────────────────────
