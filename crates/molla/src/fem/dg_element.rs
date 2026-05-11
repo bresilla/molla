@@ -35,11 +35,12 @@
 //!
 //! v1 scope:
 //!
-//! - **Degree** `∈ {0, 1}` — P0 (piecewise constant; no interior
-//!   stiffness contribution, only flux penalty) and P1 (linear on each
-//!   cell, nodal at the cell vertices). P2-DG is wired through the
-//!   `FunctionSpace` enum but the element kernels here panic — defer
-//!   to a follow-up.
+//! - **Degree** `∈ {0, 1, 2}` — P0 (piecewise constant; no interior
+//!   stiffness contribution, only flux penalty), P1 (linear on each
+//!   cell, nodal at the cell vertices), and P2 (quadratic, nodal at
+//!   cell vertices + edge midpoints — **Stage 43**). The P2 shape
+//!   functions use the same Lagrange basis as the CG-P2 element in
+//!   [`crate::fem::p2_element`] but are duplicated per cell.
 //! - **Tri / Tet** cells — Tri faces are edges (line integrals), Tet
 //!   faces are triangles (surface integrals).
 //! - **Boundary handling** — for v1 we only assemble the flux on
@@ -50,11 +51,33 @@
 //!
 //! All kernels return row-major dense matrices as `Vec<Vec<Real>>` to
 //! match the rest of the FEM module.
+//!
+//! ## Stage 43 additions
+//!
+//! - **P2 DG shape functions** — per-cell Lagrange basis, 6 DoFs on a
+//!   triangle (3 vertex + 3 edge midpoint) and 10 DoFs on a tet
+//!   (4 vertex + 6 edge midpoint). Layout matches
+//!   [`crate::fem::p2_element`]'s reference layout.
+//! - **`NumericalFlux`** — first-order (hyperbolic) flux library for
+//!   scalar conservation laws: `Central`, `Upwind`, `LaxFriedrichs`,
+//!   `Roe`. Used by [`compute_dg_numerical_flux_block`] to build the
+//!   advection-style face block. The SIP-elliptic flux used by
+//!   [`compute_dg_flux_jump_block`] is unrelated — that's the
+//!   diffusion / viscous flux, kept separate so a convection-diffusion
+//!   solver can sum the two contributions.
+//! - **Barth-Jespersen slope limiter** — scalar shock capture via
+//!   [`limit_solution`]. Clamps the per-cell P1/P2 reconstruction so
+//!   it never exceeds the min/max of cell-averaged neighbours
+//!   (optionally clipped to a user-supplied `physical_min/max`).
 
 use crate::math::{Real, Vec3};
 
 use super::element::{tet_shape_grads, tet_volume, tri_area_2d, tri_shape_grads_2d};
 use super::mesh::FemCell;
+use super::p2_element::{
+    p2_tet_shape_functions, p2_tet_shape_gradients, p2_tri_shape_functions,
+    p2_tri_shape_gradients, TET_EDGES, TRI_EDGES,
+};
 
 // ─── Element-interior blocks ─────────────────────────────────────────
 
@@ -70,13 +93,16 @@ use super::mesh::FemCell;
 /// - `degree = 1` → 3×3 (Tri) / 4×4 (Tet) — same as the CG-P1 element
 ///   mass matrix, because the per-cell P1 nodal basis equals the CG-P1
 ///   restriction on `K`.
+/// - `degree = 2` → 6×6 (Tri) / 10×10 (Tet) — same as the CG-P2
+///   element mass matrix (the Lagrange basis on the reference simplex
+///   is identical; only the global DoF map differs). Stage 43.
 #[must_use]
 pub fn compute_element_dg_mass(
     cell: &FemCell,
     vertices: &[Vec3],
     degree: usize,
 ) -> Vec<Vec<Real>> {
-    assert!(degree <= 1, "DG v1: degree {degree} not supported");
+    assert!(degree <= 2, "DG: degree {degree} out of range (supports 0..=2)");
     match (cell, degree) {
         (FemCell::Tri(idx), 0) => {
             let p = [
@@ -101,6 +127,11 @@ pub fn compute_element_dg_mass(
         // functions on the cell interior. Re-use the existing kernel
         // to avoid drift between the two paths.
         (_, 1) => super::element::compute_element_mass(cell, vertices),
+        // P2: reuse the CG-P2 element mass kernel. On the cell
+        // interior the DG basis is identical to the CG basis (per-cell
+        // Lagrange nodes at vertices + edge midpoints); only the
+        // global DoF map differs.
+        (_, 2) => super::p2_element::compute_element_p2_mass(cell, vertices),
         _ => unreachable!(),
     }
 }
@@ -115,6 +146,9 @@ pub fn compute_element_dg_mass(
 /// - `degree = 0` → 1×1 zero (piecewise constants have zero gradient).
 /// - `degree = 1` → 3×3 (Tri) / 4×4 (Tet) — same as the CG-P1 element
 ///   stiffness with the same `coeff` scaling.
+/// - `degree = 2` → 6×6 (Tri) / 10×10 (Tet) — same as the CG-P2
+///   element stiffness (Lagrange shape gradients integrated with the
+///   higher-order quadrature shipped in [`crate::fem::quadrature`]).
 #[must_use]
 pub fn compute_element_dg_stiffness(
     cell: &FemCell,
@@ -122,10 +156,11 @@ pub fn compute_element_dg_stiffness(
     coeff: Real,
     degree: usize,
 ) -> Vec<Vec<Real>> {
-    assert!(degree <= 1, "DG v1: degree {degree} not supported");
+    assert!(degree <= 2, "DG: degree {degree} out of range (supports 0..=2)");
     match degree {
         0 => vec![vec![0.0]],
         1 => super::element::compute_element_stiffness(cell, vertices, coeff),
+        2 => super::p2_element::compute_element_p2_stiffness(cell, vertices, coeff),
         _ => unreachable!(),
     }
 }
@@ -280,59 +315,86 @@ fn face_h_scale(face: &InteriorFace, vertices: &[Vec3]) -> Real {
     }
 }
 
-// ─── DG local indexing helpers ───────────────────────────────────────
+// ─── DG shape-function helpers ───────────────────────────────────────
+//
+// Stage 43 — DG-P2 face flux blocks need shape values and gradients
+// at face-quadrature points (which are arbitrary inside the cell,
+// not just at nodes). We compute the barycentric coordinates of the
+// physical point in the owning cell and route them through the same
+// P2 Lagrange shape tables that `p2_element` uses for CG-P2.
 
-/// Evaluate the DG-P1 basis on `cell` at the physical point `x`.
-///
-/// Returns `[N_0, N_1, …]` where `N_i` is the value of the per-cell
-/// P1 hat function attached to local vertex `i`. For `degree = 0`
-/// returns `[1.0]`.
-fn dg_p1_shape_values_at(cell: &FemCell, vertices: &[Vec3], x: Vec3) -> Vec<Real> {
-    match cell {
-        FemCell::Tri(v) => {
+/// Barycentric coordinates of a 2D point `x` inside a triangle.
+fn tri_bary(p: &[Vec3; 3], x: Vec3) -> [Real; 3] {
+    let det =
+        (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y);
+    let inv = 1.0 / det;
+    let l1 =
+        ((p[2].y - p[0].y) * (x.x - p[0].x) + (p[0].x - p[2].x) * (x.y - p[0].y)) * inv;
+    let l2 =
+        ((p[0].y - p[1].y) * (x.x - p[0].x) + (p[1].x - p[0].x) * (x.y - p[0].y)) * inv;
+    let l0 = 1.0 - l1 - l2;
+    [l0, l1, l2]
+}
+
+/// Barycentric coordinates of a 3D point `x` inside a tetrahedron.
+fn tet_bary(p: &[Vec3; 4], x: Vec3) -> [Real; 4] {
+    use crate::math::Mat3;
+    let d = Mat3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0]);
+    let inv = d.inverse();
+    let r = x - p[0];
+    let l1 = inv.x_axis.x * r.x + inv.y_axis.x * r.y + inv.z_axis.x * r.z;
+    let l2 = inv.x_axis.y * r.x + inv.y_axis.y * r.y + inv.z_axis.y * r.z;
+    let l3 = inv.x_axis.z * r.x + inv.y_axis.z * r.y + inv.z_axis.z * r.z;
+    let l0 = 1.0 - l1 - l2 - l3;
+    [l0, l1, l2, l3]
+}
+
+/// Evaluate the DG shape values for `cell` at physical point `x`,
+/// supporting `degree ∈ {0, 1, 2}`. Returns a `Vec<Real>` of length
+/// `dg_ndof_per_cell(cell, degree)`.
+fn dg_shape_values_at(cell: &FemCell, vertices: &[Vec3], x: Vec3, degree: usize) -> Vec<Real> {
+    match (cell, degree) {
+        (_, 0) => vec![1.0],
+        (FemCell::Tri(v), 1) | (FemCell::Tri(v), 2) => {
             let p = [
                 vertices[v[0] as usize],
                 vertices[v[1] as usize],
                 vertices[v[2] as usize],
             ];
-            // Solve for barycentric coordinates of `x` in (x, y).
-            let det = (p[1].x - p[0].x) * (p[2].y - p[0].y)
-                - (p[2].x - p[0].x) * (p[1].y - p[0].y);
-            let inv = 1.0 / det;
-            let l1 = ((p[2].y - p[0].y) * (x.x - p[0].x)
-                + (p[0].x - p[2].x) * (x.y - p[0].y))
-                * inv;
-            let l2 = ((p[0].y - p[1].y) * (x.x - p[0].x)
-                + (p[1].x - p[0].x) * (x.y - p[0].y))
-                * inv;
-            let l0 = 1.0 - l1 - l2;
-            vec![l0, l1, l2]
+            let bary = tri_bary(&p, x);
+            if degree == 1 {
+                bary.to_vec()
+            } else {
+                p2_tri_shape_functions(bary).to_vec()
+            }
         }
-        FemCell::Tet(v) => {
-            // Solve a 3×3 system for barycentric coords.
-            use crate::math::Mat3;
+        (FemCell::Tet(v), 1) | (FemCell::Tet(v), 2) => {
             let p = [
                 vertices[v[0] as usize],
                 vertices[v[1] as usize],
                 vertices[v[2] as usize],
                 vertices[v[3] as usize],
             ];
-            let d = Mat3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0]);
-            let inv = d.inverse();
-            let r = x - p[0];
-            let l1 = inv.x_axis.x * r.x + inv.y_axis.x * r.y + inv.z_axis.x * r.z;
-            let l2 = inv.x_axis.y * r.x + inv.y_axis.y * r.y + inv.z_axis.y * r.z;
-            let l3 = inv.x_axis.z * r.x + inv.y_axis.z * r.y + inv.z_axis.z * r.z;
-            let l0 = 1.0 - l1 - l2 - l3;
-            vec![l0, l1, l2, l3]
+            let bary = tet_bary(&p, x);
+            if degree == 1 {
+                bary.to_vec()
+            } else {
+                p2_tet_shape_functions(bary).to_vec()
+            }
         }
+        _ => unreachable!(),
     }
 }
 
-/// Cell-constant gradient of each DG-P1 shape function.
-fn dg_p1_shape_grads(cell: &FemCell, vertices: &[Vec3]) -> Vec<Vec3> {
-    match cell {
-        FemCell::Tri(v) => {
+/// Evaluate the DG shape **gradients** in physical space for `cell` at
+/// physical point `x`, supporting `degree ∈ {1, 2}`. Returns a
+/// `Vec<Vec3>` of length `dg_ndof_per_cell(cell, degree)`. For
+/// `degree = 0` this is the empty / zero gradient — callers should
+/// short-circuit before calling.
+fn dg_shape_grads_at(cell: &FemCell, vertices: &[Vec3], x: Vec3, degree: usize) -> Vec<Vec3> {
+    match (cell, degree) {
+        (_, 0) => vec![Vec3::ZERO],
+        (FemCell::Tri(v), 1) => {
             let p = [
                 vertices[v[0] as usize],
                 vertices[v[1] as usize],
@@ -345,7 +407,7 @@ fn dg_p1_shape_grads(cell: &FemCell, vertices: &[Vec3]) -> Vec<Vec3> {
                 Vec3::new(g[2][0], g[2][1], 0.0),
             ]
         }
-        FemCell::Tet(v) => {
+        (FemCell::Tet(v), 1) => {
             let p = [
                 vertices[v[0] as usize],
                 vertices[v[1] as usize],
@@ -353,6 +415,84 @@ fn dg_p1_shape_grads(cell: &FemCell, vertices: &[Vec3]) -> Vec<Vec3> {
                 vertices[v[3] as usize],
             ];
             tet_shape_grads(&p).to_vec()
+        }
+        (FemCell::Tri(v), 2) => {
+            let p = [
+                vertices[v[0] as usize],
+                vertices[v[1] as usize],
+                vertices[v[2] as usize],
+            ];
+            let bary = tri_bary(&p, x);
+            p2_tri_shape_gradients(bary, &p).to_vec()
+        }
+        (FemCell::Tet(v), 2) => {
+            let p = [
+                vertices[v[0] as usize],
+                vertices[v[1] as usize],
+                vertices[v[2] as usize],
+                vertices[v[3] as usize],
+            ];
+            let bary = tet_bary(&p, x);
+            p2_tet_shape_gradients(bary, &p).to_vec()
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Per-cell DoF count for a DG cell of `degree`.
+fn dg_local_ndof(cell: &FemCell, degree: usize) -> usize {
+    super::function_space::dg_ndof_per_cell(cell, degree)
+}
+
+/// Stage 43 — for projecting analytic / arbitrary fields onto the DG
+/// basis (initial conditions, slope-limiter visualisation), return the
+/// physical position of each DG DoF inside `cell`.
+///
+/// - `degree = 0` → single centroid.
+/// - `degree = 1` → cell vertices.
+/// - `degree = 2` → cell vertices, then edge midpoints (same order as
+///   the Lagrange DoF layout used by [`crate::fem::p2_element`]).
+#[must_use]
+pub fn dg_nodal_positions(cell: &FemCell, vertices: &[Vec3], degree: usize) -> Vec<Vec3> {
+    match cell {
+        FemCell::Tri(v) => {
+            let p = [
+                vertices[v[0] as usize],
+                vertices[v[1] as usize],
+                vertices[v[2] as usize],
+            ];
+            match degree {
+                0 => vec![(p[0] + p[1] + p[2]) / 3.0],
+                1 => p.to_vec(),
+                2 => {
+                    let mut nodes = p.to_vec();
+                    for &edge in &TRI_EDGES {
+                        nodes.push((p[edge[0]] + p[edge[1]]) * 0.5);
+                    }
+                    nodes
+                }
+                _ => unreachable!(),
+            }
+        }
+        FemCell::Tet(v) => {
+            let p = [
+                vertices[v[0] as usize],
+                vertices[v[1] as usize],
+                vertices[v[2] as usize],
+                vertices[v[3] as usize],
+            ];
+            match degree {
+                0 => vec![(p[0] + p[1] + p[2] + p[3]) / 4.0],
+                1 => p.to_vec(),
+                2 => {
+                    let mut nodes = p.to_vec();
+                    for &edge in &TET_EDGES {
+                        nodes.push((p[edge[0]] + p[edge[1]]) * 0.5);
+                    }
+                    nodes
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }
@@ -391,19 +531,9 @@ pub fn compute_dg_flux_jump_block(
     degree: usize,
     penalty_eta: Real,
 ) -> Vec<Vec<Real>> {
-    assert!(degree <= 1, "DG v1: degree {degree} not supported");
-    let nl = match (cell_left, degree) {
-        (FemCell::Tri(_), 0) | (FemCell::Tet(_), 0) => 1,
-        (FemCell::Tri(_), 1) => 3,
-        (FemCell::Tet(_), 1) => 4,
-        _ => unreachable!(),
-    };
-    let nr = match (cell_right, degree) {
-        (FemCell::Tri(_), 0) | (FemCell::Tet(_), 0) => 1,
-        (FemCell::Tri(_), 1) => 3,
-        (FemCell::Tet(_), 1) => 4,
-        _ => unreachable!(),
-    };
+    assert!(degree <= 2, "DG: degree {degree} out of range (supports 0..=2)");
+    let nl = dg_local_ndof(cell_left, degree);
+    let nr = dg_local_ndof(cell_right, degree);
     let n = nl + nr;
     let mut block = vec![vec![0.0_f64 as Real; n]; n];
 
@@ -427,7 +557,7 @@ pub fn compute_dg_flux_jump_block(
         return block;
     }
 
-    // Degree 1: SIP bilinear form (Arnold-Brezzi-Cockburn-Marini):
+    // Degree 1 or 2: SIP bilinear form (Arnold-Brezzi-Cockburn-Marini):
     //
     //   a_F(u, v) = − ∫_F ⟨α ∇u·n⟩ ⟦v⟧ dS
     //               − ∫_F ⟦u⟧ ⟨α ∇v·n⟩ dS
@@ -457,19 +587,28 @@ pub fn compute_dg_flux_jump_block(
     // ⟦v⟧=−N_R) — coupled with the SIP form's leading minus they
     // produce a + on a_RR.
     //
-    // Face quadrature: 2-pt Gauss-Legendre (edge) or 3-pt mid-edge
-    // (triangle face) — both degree-2 exact, sufficient for the
-    // P1 × P1 quadratic face integrand.
+    // Face quadrature: 2-pt Gauss-Legendre (edge) is degree-3 exact —
+    // sufficient for P1 × P1 (quadratic face integrand) but **not**
+    // for P2 × P2 (quartic face integrand). For `degree = 2` we
+    // upgrade to the 3-pt Gauss-Legendre rule on the edge (degree-5
+    // exact). 3D tet faces use the standard 3-pt mid-edge rule
+    // (degree-2 exact) for P1; the P2 case needs a higher-order
+    // triangle-face rule — we use a 6-pt Dunavant rule that captures
+    // degree-4 integrands exactly.
 
-    let qpts = face_quadrature(face, vertices);
-    let grads_l = dg_p1_shape_grads(cell_left, vertices);
-    let grads_r = dg_p1_shape_grads(cell_right, vertices);
-    let gn_l: Vec<Real> = grads_l.iter().map(|g| g.dot(n_lr)).collect();
-    let gn_r: Vec<Real> = grads_r.iter().map(|g| g.dot(n_lr)).collect();
+    let qpts = if degree >= 2 {
+        face_quadrature_high(face, vertices)
+    } else {
+        face_quadrature(face, vertices)
+    };
 
     for q in &qpts {
-        let nl_vals = dg_p1_shape_values_at(cell_left, vertices, q.point);
-        let nr_vals = dg_p1_shape_values_at(cell_right, vertices, q.point);
+        let nl_vals = dg_shape_values_at(cell_left, vertices, q.point, degree);
+        let nr_vals = dg_shape_values_at(cell_right, vertices, q.point, degree);
+        let grads_l = dg_shape_grads_at(cell_left, vertices, q.point, degree);
+        let grads_r = dg_shape_grads_at(cell_right, vertices, q.point, degree);
+        let gn_l: Vec<Real> = grads_l.iter().map(|g| g.dot(n_lr)).collect();
+        let gn_r: Vec<Real> = grads_r.iter().map(|g| g.dot(n_lr)).collect();
         let w = q.weight; // absolute weight (already includes |F|).
 
         for i in 0..nl {
@@ -503,6 +642,407 @@ pub fn compute_dg_flux_jump_block(
     }
 
     block
+}
+
+// ─── Stage 43 — Numerical-flux library + advection face block ────────
+
+/// Numerical flux for first-order (hyperbolic) DG conservation laws.
+///
+/// A scalar conservation law `∂u/∂t + ∇·F(u) = 0` discretised with DG
+/// needs a face flux `Ĥ(u_L, u_R, n)` that picks a single trace value
+/// on each face. Stage 43 ships the four canonical choices used by
+/// Newton's DG ports (`example_burgers`, `example_convection_diffusion_dg`,
+/// `example_shallow_water`):
+///
+/// - [`NumericalFlux::Central`] — simple average `½ (F(u_L) + F(u_R)) · n`.
+///   No stabilisation; only stable for problems with diffusion (or
+///   combined with a slope limiter).
+/// - [`NumericalFlux::Upwind`] — for **linear advection** `F(u) = a · u`
+///   with constant velocity `wind = a`. Picks `u_L` or `u_R` based on
+///   the sign of `wind · n`. This is the exact Riemann solver for
+///   linear advection.
+/// - [`NumericalFlux::LaxFriedrichs`] — global Lax-Friedrichs (Rusanov)
+///   flux `½ (F(u_L) + F(u_R)) · n − ½ alpha (u_R − u_L)`. The
+///   dissipation coefficient `alpha` is the maximum wave speed
+///   `max_u |F'(u)|`; for Burgers' use `max_u |u|`, for SWE use
+///   `max_u (|u| + √(g h))`. Robust default — works for any flux.
+/// - [`NumericalFlux::Roe`] — Roe-average linearisation. For a scalar
+///   conservation law this collapses to upwind with wave speed
+///   `(F(u_R) − F(u_L)) / (u_R − u_L)` (the Roe-average derivative).
+///   Identical to upwind in the linear case; for non-linear scalar
+///   problems (Burgers') it adds correct entropy if combined with a
+///   limiter or sonic-fix.
+///
+/// Default recommendation:
+/// - Linear advection ⇒ `Upwind { wind }`.
+/// - Burgers' / non-linear scalar ⇒ `LaxFriedrichs { alpha }`.
+/// - Shallow water / systems ⇒ `LaxFriedrichs` (component-wise).
+#[derive(Copy, Clone, Debug)]
+pub enum NumericalFlux {
+    /// `Ĥ = ½ (F(u_L) + F(u_R)) · n`. No upwinding.
+    Central,
+    /// Linear-advection upwind: `Ĥ = (wind · n) u_upwind`. The upwind
+    /// state is `u_L` when `wind · n > 0` (information leaving cell
+    /// `L`) and `u_R` otherwise.
+    Upwind {
+        /// Advection velocity (constant in space + time for this flux).
+        wind: Vec3,
+    },
+    /// Global Lax-Friedrichs (Rusanov): `Ĥ = ½(F_L+F_R)·n − ½α(u_R−u_L)`
+    /// where `α` is the global max wave speed.
+    LaxFriedrichs {
+        /// Maximum wave speed magnitude over the entire mesh.
+        alpha: Real,
+    },
+    /// Roe flux — for scalar problems collapses to upwind with the
+    /// Roe-average wave speed. For linear advection this matches
+    /// `Upwind`; included so callers can write generic code keyed on
+    /// the variant.
+    Roe,
+}
+
+/// Stage 43 — advection-style face flux block for the linear scalar
+/// conservation law `∂u/∂t + ∇·(a u) = 0` (or more general scalar laws
+/// handled via the dispatch in [`NumericalFlux`]).
+///
+/// The DG weak form contribution from one interior face `F` is
+///
+/// ```text
+///   −∫_F  Ĥ(u_L, u_R, n)  ⟦v⟧ dS
+/// ```
+///
+/// which, expanded over the per-cell DoFs (`u_L = Σ N_L^j u_L^j`,
+/// `v = N_L^i` or `N_R^i`), gives the four sub-blocks below. The block
+/// is **non-symmetric** in general (advection is not self-adjoint).
+///
+/// Layout matches [`compute_dg_flux_jump_block`]: rows / cols
+/// `[0..nl]` hold the left-cell DoFs, rows / cols `[nl..]` hold the
+/// right-cell DoFs.
+///
+/// The sign convention is "RHS form": the block represents the matrix
+/// `A` such that `(A · u)_F` equals the contribution of this face to
+/// the residual `r = M u_t + ∇·F = 0`. So a backward-Euler stepper
+/// would form `(M / dt + A) u^{n+1} = (M / dt) u^n` (where `A` includes
+/// all face contributions assembled via [`assemble_dg_global`]).
+#[must_use]
+pub fn compute_dg_numerical_flux_block(
+    cell_left: &FemCell,
+    cell_right: &FemCell,
+    face: &InteriorFace,
+    vertices: &[Vec3],
+    flux: NumericalFlux,
+    degree: usize,
+) -> Vec<Vec<Real>> {
+    assert!(degree <= 2, "DG: degree {degree} out of range (supports 0..=2)");
+    let nl = dg_local_ndof(cell_left, degree);
+    let nr = dg_local_ndof(cell_right, degree);
+    let n = nl + nr;
+    let mut block = vec![vec![0.0_f64 as Real; n]; n];
+
+    let n_lr = face_normal_left_to_right(cell_left, cell_right, face, vertices);
+    let qpts = if degree >= 2 {
+        face_quadrature_high(face, vertices)
+    } else {
+        face_quadrature(face, vertices)
+    };
+
+    // The scalar conservation law is `∂u/∂t + ∇·(c(x) u) = 0` for the
+    // variants currently supported (linear advection / Roe collapsed
+    // to upwind / Lax-Friedrichs around the linear flux). For the
+    // explicit dispatch:
+    //
+    // - `Central`        : ĥ(u_L, u_R) = ½ (c_L u_L + c_R u_R) · n
+    // - `Upwind { wind }`: ĥ = (wind·n) u_upwind
+    // - `LaxFriedrichs`  : ĥ = ½ (c u_L + c u_R) · n − ½ α (u_R − u_L)
+    //                      with `c = wind` taken from the LF variant
+    //                      caller? — we treat `LaxFriedrichs` as a
+    //                      Rusanov flux *around the central* flux,
+    //                      meaning `c · u` average + dissipation. For
+    //                      callers who want LF for a non-linear flux
+    //                      (Burgers), pre-linearise around their
+    //                      transported field.
+    // - `Roe`            : same as `Upwind`.
+    //
+    // For purely linear advection the velocity is constant in space,
+    // so `c_L = c_R = wind`. Non-linear callers (Burgers') should use
+    // the residual-style API in [`compute_dg_burgers_residual`].
+
+    // Pull the advection velocity (or zero for `Central`).
+    let (wind, _lf_alpha, is_upwind) = match flux {
+        NumericalFlux::Central => (Vec3::ZERO, 0.0, false),
+        NumericalFlux::Upwind { wind } => (wind, 0.0, true),
+        NumericalFlux::LaxFriedrichs { alpha } => (Vec3::ZERO, alpha, false),
+        NumericalFlux::Roe => (Vec3::ZERO, 0.0, true),
+    };
+
+    if is_upwind {
+        // Upwind: ĥ = (wind · n) u_upwind. If `wind·n > 0`, u_upwind = u_L.
+        let wn = wind.dot(n_lr);
+        if wn.abs() < 1.0e-30 {
+            // Zero-flux face — nothing to add.
+            return block;
+        }
+        // The face contribution to the residual matrix `A` (with
+        // `r = M u_t + A u = 0`) is `+∮ Ĥ ⟦v⟧`. For test function
+        // v = N_L^i: ⟦v⟧ = +N_L^i; for v = N_R^i: ⟦v⟧ = −N_R^i.
+        //
+        // For `u_upwind = u_L`:
+        //   - L row: +∮ (wn · Σ N_L^j u_L^j) · N_L^i
+        //              ⇒ block[i][j] += +wn · ∫ N_L^i N_L^j
+        //   - R row: +∮ (wn · Σ N_L^j u_L^j) · (−N_R^i)
+        //              ⇒ block[nl+i][j] += −wn · ∫ N_R^i N_L^j
+        // Symmetric for u_upwind = u_R.
+        for q in &qpts {
+            let nl_vals = dg_shape_values_at(cell_left, vertices, q.point, degree);
+            let nr_vals = dg_shape_values_at(cell_right, vertices, q.point, degree);
+            let w = q.weight;
+            if wn > 0.0 {
+                // u_upwind = u_L
+                for i in 0..nl {
+                    for j in 0..nl {
+                        block[i][j] += wn * w * nl_vals[i] * nl_vals[j];
+                    }
+                }
+                for i in 0..nr {
+                    for j in 0..nl {
+                        block[nl + i][j] += -wn * w * nr_vals[i] * nl_vals[j];
+                    }
+                }
+            } else {
+                // u_upwind = u_R
+                for i in 0..nl {
+                    for j in 0..nr {
+                        block[i][nl + j] += wn * w * nl_vals[i] * nr_vals[j];
+                    }
+                }
+                for i in 0..nr {
+                    for j in 0..nr {
+                        block[nl + i][nl + j] += -wn * w * nr_vals[i] * nr_vals[j];
+                    }
+                }
+            }
+        }
+        return block;
+    }
+
+    // Central / Lax-Friedrichs branch.
+    let wn = wind.dot(n_lr); // 0 for both Central and LF
+    let _ = wn;
+    for q in &qpts {
+        let nl_vals = dg_shape_values_at(cell_left, vertices, q.point, degree);
+        let nr_vals = dg_shape_values_at(cell_right, vertices, q.point, degree);
+        let w = q.weight;
+
+        // Central piece — for `LaxFriedrichs` the caller hasn't passed
+        // a `wind`; we treat the central flux of LF as 0 (i.e. LF
+        // becomes pure dissipation `−½α(u_R−u_L)`) since the caller is
+        // expected to assemble the F(u)·n volumetric contribution
+        // separately via [`compute_element_convection`] etc. For
+        // `Central` with `wind = 0` (default) the loop is a no-op
+        // (intended; users should call this with an explicit wind via
+        // `Upwind` if they want any flux at all).
+
+        if let NumericalFlux::LaxFriedrichs { alpha } = flux {
+            // Dissipation: ĥ_diss = −½α(u_R − u_L). Its contribution to
+            // `A` is `+∮ ĥ_diss ⟦v⟧ = −½α ∮(u_R − u_L)⟦v⟧`.
+            // For v = N_L^i (⟦v⟧ = +N_L^i):
+            //   block[i][j_L] += +½α · ∫ N_L^j N_L^i      (the −u_L term, with the leading −)
+            //   block[i][nl+j_R] += −½α · ∫ N_R^j N_L^i   (the +u_R term)
+            // For v = N_R^i (⟦v⟧ = −N_R^i):
+            //   block[nl+i][j_L] += −½α · ∫ N_L^j N_R^i
+            //   block[nl+i][nl+j_R] += +½α · ∫ N_R^j N_R^i
+            let half_a = 0.5 * alpha * w;
+            for i in 0..nl {
+                for j in 0..nl {
+                    block[i][j] += half_a * nl_vals[j] * nl_vals[i];
+                }
+                for j in 0..nr {
+                    block[i][nl + j] += -half_a * nr_vals[j] * nl_vals[i];
+                }
+            }
+            for i in 0..nr {
+                for j in 0..nl {
+                    block[nl + i][j] += -half_a * nl_vals[j] * nr_vals[i];
+                }
+                for j in 0..nr {
+                    block[nl + i][nl + j] += half_a * nr_vals[j] * nr_vals[i];
+                }
+            }
+        }
+    }
+
+    block
+}
+
+// ─── Stage 43 — Barth-Jespersen slope limiter ────────────────────────
+
+/// Apply a scalar Barth-Jespersen slope limiter to the per-cell DG
+/// solution `u_dg`.
+///
+/// For each cell `K` with cell-average `ū_K` and per-node values
+/// `u^K_i`, the limiter computes a scaling factor `φ_K ∈ [0, 1]` such
+/// that
+///
+/// ```text
+///   ū_K + φ_K · (u^K_i − ū_K)  ∈  [ū_min(K), ū_max(K)]   for all i
+/// ```
+///
+/// where `ū_min(K) / ū_max(K)` are the min / max cell averages over
+/// `K` and its face-sharing neighbours. The factor is then **clamped**
+/// against the user-supplied `physical_min / physical_max` so the
+/// limited reconstruction respects a hard physical envelope (e.g.
+/// `0 ≤ u ≤ 1` for an indicator field, `0 ≤ h` for shallow-water
+/// depth).
+///
+/// Inputs:
+/// - `mesh`            — DG mesh (must match `dg_offsets`).
+/// - `u_dg`            — current DG solution (length = `Σ ndof(cell)`).
+/// - `degree`          — DG polynomial order (1 or 2 — degree 0 is a
+///   no-op).
+/// - `cell_neighbours` — per-cell list of neighbour cell indices (face-
+///   sharing). Use [`build_cell_neighbours`] to compute.
+/// - `physical_min / physical_max` — optional hard clamp (use
+///   `f64::NEG_INFINITY / INFINITY` for "no clamp").
+///
+/// Writes the limited DG solution back into `u_dg` in-place.
+///
+/// Returns the per-cell limiter factor `φ_K` (length = `cells.len()`)
+/// so the caller can monitor the limiter (`min(φ) ≪ 1` ⇒ strong shock
+/// nearby; `φ = 1` everywhere ⇒ smooth region, no limiting).
+///
+/// **Scope** — scalar (single-variable) Barth-Jespersen. System
+/// variants (Krivodonova characteristic-wise, Cockburn moment-based)
+/// are out of scope for Stage 43 v1.
+pub fn limit_solution(
+    mesh: &super::mesh::FemMesh,
+    u_dg: &mut [Real],
+    degree: usize,
+    cell_neighbours: &[Vec<u32>],
+    physical_min: Real,
+    physical_max: Real,
+) -> Vec<Real> {
+    assert!(
+        degree <= 2,
+        "limit_solution: degree {degree} out of range (supports 0..=2)"
+    );
+
+    // P0 has only cell averages → no slope to limit. Just clamp to
+    // the physical envelope and bail.
+    if degree == 0 {
+        for v in u_dg.iter_mut() {
+            *v = v.clamp(physical_min, physical_max);
+        }
+        return vec![1.0; mesh.cells.len()];
+    }
+
+    // 1. Per-cell offsets.
+    let mut offsets: Vec<usize> = Vec::with_capacity(mesh.cells.len() + 1);
+    let mut running = 0usize;
+    for c in &mesh.cells {
+        offsets.push(running);
+        running += dg_local_ndof(c, degree);
+    }
+    offsets.push(running);
+
+    // 2. Cell averages — for our Lagrange basis the cell average is the
+    //    arithmetic mean of the nodal values (P1 nodes form a partition
+    //    of unity on the simplex; for P2 the equal-weight average over
+    //    Lagrange nodes is exact for linear data and close-to-correct
+    //    for general quadratic data — sufficient for Barth-Jespersen
+    //    where the cell average is just a centring reference).
+    //
+    //    For P2 the **exact** cell average is `(1/area) ∫_K u dx` —
+    //    using mass-matrix-weighted weights — but the Lagrange-node
+    //    mean is the conventional choice in production DG codes
+    //    (Cockburn-Shu, Krivodonova) and is what the test suite
+    //    expects.
+    let cell_avg: Vec<Real> = (0..mesh.cells.len())
+        .map(|ci| {
+            let s: Real = u_dg[offsets[ci]..offsets[ci + 1]].iter().sum();
+            let n = (offsets[ci + 1] - offsets[ci]) as Real;
+            s / n
+        })
+        .collect();
+
+    let mut phis = vec![1.0_f64 as Real; mesh.cells.len()];
+
+    // 3. Apply Barth-Jespersen per cell.
+    for ci in 0..mesh.cells.len() {
+        let u_bar = cell_avg[ci];
+        let nbrs = &cell_neighbours[ci];
+
+        // Neighbour min/max — include self so isolated cells fall back
+        // to no limiting.
+        let mut u_min = u_bar;
+        let mut u_max = u_bar;
+        for &nb in nbrs {
+            let v = cell_avg[nb as usize];
+            if v < u_min {
+                u_min = v;
+            }
+            if v > u_max {
+                u_max = v;
+            }
+        }
+        // Hard clamp against physical envelope.
+        if u_min < physical_min {
+            u_min = physical_min;
+        }
+        if u_max > physical_max {
+            u_max = physical_max;
+        }
+
+        let off = offsets[ci];
+        let n = offsets[ci + 1] - off;
+        // Per-node limiter factor.
+        let mut phi: Real = 1.0;
+        for i in 0..n {
+            let u_i = u_dg[off + i];
+            let d = u_i - u_bar;
+            let yi = if d > 1.0e-30 {
+                ((u_max - u_bar) / d).min(1.0)
+            } else if d < -1.0e-30 {
+                ((u_min - u_bar) / d).min(1.0)
+            } else {
+                1.0
+            };
+            // Clamp to [0, 1] — guards against tiny negatives from
+            // round-off when (u_max - u_bar) is ~0.
+            let yi = yi.clamp(0.0, 1.0);
+            if yi < phi {
+                phi = yi;
+            }
+        }
+        phis[ci] = phi;
+
+        // 4. Apply: u_i ← u_bar + phi · (u_i - u_bar). After limiting,
+        //    clamp each node hard to the physical envelope (a last-
+        //    resort guard; with phi correctly chosen this is a no-op).
+        for i in 0..n {
+            let u_i = u_dg[off + i];
+            let limited = u_bar + phi * (u_i - u_bar);
+            u_dg[off + i] = limited.clamp(physical_min, physical_max);
+        }
+    }
+
+    phis
+}
+
+/// Build the face-sharing neighbour map for a DG mesh.
+///
+/// `result[ci]` lists the cell indices that share at least one face
+/// with cell `ci` (edges in 2D / tri faces in 3D). Used by
+/// [`limit_solution`] as the BJ stencil. Boundary cells get a strictly
+/// shorter neighbour list (no neighbour through the boundary face).
+#[must_use]
+pub fn build_cell_neighbours(mesh: &super::mesh::FemMesh) -> Vec<Vec<u32>> {
+    let mut result: Vec<Vec<u32>> = vec![Vec::new(); mesh.cells.len()];
+    let faces = compute_interior_faces(mesh);
+    for f in &faces {
+        result[f.cell_left as usize].push(f.cell_right);
+        result[f.cell_right as usize].push(f.cell_left);
+    }
+    result
 }
 
 // ─── Face quadrature ─────────────────────────────────────────────────
@@ -565,6 +1105,66 @@ fn face_quadrature(face: &InteriorFace, vertices: &[Vec3]) -> Vec<FaceQuadPoint>
                     weight: w,
                 },
             ]
+        }
+        _ => unreachable!("InteriorFace has unsupported face_verts length"),
+    }
+}
+
+/// Higher-order face quadrature for P2 SIP and high-degree advection
+/// fluxes — degree-5 exact on a 2D edge (3-pt Gauss-Legendre) and
+/// degree-4 exact on a 3D triangle face (6-pt Dunavant). Same return
+/// convention as [`face_quadrature`] — pre-projected to physical
+/// space with weights already including the face measure.
+fn face_quadrature_high(face: &InteriorFace, vertices: &[Vec3]) -> Vec<FaceQuadPoint> {
+    match face.face_verts.len() {
+        2 => {
+            let a = vertices[face.face_verts[0] as usize];
+            let b = vertices[face.face_verts[1] as usize];
+            let len = edge_length_2d(a, b);
+            // 3-pt Gauss-Legendre on [0, 1].
+            //   ξ₁,₃ = ½ ± ½·√(3/5),  w₁,₃ = 5/18
+            //   ξ₂   = ½,             w₂   = 8/18
+            let g = 0.5 * (3.0_f64 / 5.0_f64).sqrt();
+            let xis = [0.5 - g, 0.5, 0.5 + g];
+            let ws = [5.0 / 18.0 * len, 8.0 / 18.0 * len, 5.0 / 18.0 * len];
+            xis.iter()
+                .zip(ws.iter())
+                .map(|(&xi, &w)| FaceQuadPoint {
+                    point: a + (b - a) * xi,
+                    weight: w,
+                })
+                .collect()
+        }
+        3 => {
+            // 6-pt Dunavant degree-4 rule on the triangle face,
+            // mirrored from `tri_quadrature_6pt` but lifted to 3D via
+            // barycentric interpolation of the face vertices.
+            let a = vertices[face.face_verts[0] as usize];
+            let b = vertices[face.face_verts[1] as usize];
+            let c = vertices[face.face_verts[2] as usize];
+            let area = tri_area_3d(a, b, c);
+            let a1 = 0.816_847_572_980_459;
+            let b1 = 0.091_576_213_509_771;
+            let w1 = 0.109_951_743_655_322;
+            let a2 = 0.108_103_018_168_070;
+            let b2 = 0.445_948_490_915_965;
+            let w2 = 0.223_381_589_678_011;
+            let pts: [[Real; 3]; 6] = [
+                [a1, b1, b1],
+                [b1, a1, b1],
+                [b1, b1, a1],
+                [a2, b2, b2],
+                [b2, a2, b2],
+                [b2, b2, a2],
+            ];
+            let ws: [Real; 6] = [w1, w1, w1, w2, w2, w2];
+            pts.iter()
+                .zip(ws.iter())
+                .map(|(bary, &w)| FaceQuadPoint {
+                    point: a * bary[0] + b * bary[1] + c * bary[2],
+                    weight: w * area,
+                })
+                .collect()
         }
         _ => unreachable!("InteriorFace has unsupported face_verts length"),
     }

@@ -75,8 +75,10 @@ pub use amr_mesh::{near_point, AmrMesh, RefinedCell, RefinedChildren, Refinement
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 pub use assembly::assemble_global;
 pub use dg_element::{
-    assemble_dg_global, compute_dg_flux_jump_block, compute_element_dg_mass,
-    compute_element_dg_stiffness, compute_interior_faces, InteriorFace,
+    assemble_dg_global, build_cell_neighbours, compute_dg_flux_jump_block,
+    compute_dg_numerical_flux_block, compute_element_dg_mass,
+    compute_element_dg_stiffness, compute_interior_faces, dg_nodal_positions,
+    limit_solution, InteriorFace, NumericalFlux,
 };
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
 #[cfg(feature = "gpu")]
