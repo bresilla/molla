@@ -92,11 +92,23 @@ impl FemGpuData {
                 csr.b
             )));
         }
-        if csr.nrows() != mesh.vert_count() {
+        // The scalar-CSR (`B = 1`) layout supports both scalar-field
+        // (`nrows == vert_count`) and vector-field (`nrows ==
+        // vert_count * dim`) systems with the same buffer layout —
+        // each scalar DoF gets one CSR row regardless of how the
+        // vector components were grouped at the visitor level. Stage
+        // 41 elasticity uses `P1Vector { dim = 3 }` which lands on
+        // `nrows == vert_count * 3`; the heat path uses `P1Nodal`
+        // with `nrows == vert_count`. Accept any positive integer
+        // multiple of `vert_count` (the vector dim is derived per-
+        // dispatch from a uniform — see
+        // `crate::fem::elasticity_gpu::FemElasticityGpuKernel`).
+        let nrows = csr.nrows();
+        let vc = mesh.vert_count();
+        if vc == 0 || nrows == 0 || nrows % vc != 0 {
             return Err(Error::Build(format!(
-                "FemGpuData::upload: CSR rows ({}) != mesh vertices ({})",
-                csr.nrows(),
-                mesh.vert_count(),
+                "FemGpuData::upload: CSR rows ({nrows}) is not a positive integer \
+                 multiple of mesh vertices ({vc})",
             )));
         }
 

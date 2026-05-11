@@ -56,6 +56,8 @@ pub mod bc;
 pub mod dg_element;
 pub mod element;
 #[cfg(feature = "gpu")]
+pub mod elasticity_gpu;
+#[cfg(feature = "gpu")]
 pub mod fft_ns;
 pub mod function_space;
 #[cfg(feature = "gpu")]
@@ -77,6 +79,11 @@ pub use dg_element::{
     compute_element_dg_stiffness, compute_interior_faces, InteriorFace,
 };
 pub use bc::{apply_bcs, apply_dirichlet, BoundaryCondition};
+#[cfg(feature = "gpu")]
+pub use elasticity_gpu::{
+    assemble_elasticity_gpu_only, build_elasticity_gpu_pattern, solve_elasticity_gpu,
+    ElasticityGpuResult,
+};
 #[cfg(feature = "gpu")]
 pub use fft_ns::{
     advance_navier_stokes_fractional_step, solve_navier_stokes_fractional_step,
