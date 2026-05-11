@@ -51,6 +51,8 @@
 pub mod adjoint;
 pub mod amr_mesh;
 pub mod apic_coupling;
+#[cfg(feature = "gpu")]
+pub mod apic_coupling_gpu;
 pub mod assembly;
 pub mod bc;
 pub mod dg_element;
@@ -73,6 +75,8 @@ pub mod stokes;
 pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_adjoint_with};
 pub use amr_mesh::{near_point, AmrMesh, RefinedCell, RefinedChildren, RefinementCriterion};
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
+#[cfg(feature = "gpu")]
+pub use apic_coupling_gpu::ApicGpuState;
 pub use assembly::assemble_global;
 pub use dg_element::{
     assemble_dg_global, build_cell_neighbours, compute_dg_flux_jump_block,

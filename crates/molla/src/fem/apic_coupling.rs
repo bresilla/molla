@@ -63,8 +63,11 @@
 //! - **No real Stokes projection (v1).** The viscous-smoothing
 //!   placeholder is incompressible only in the limit `ν · dt → ∞`. A
 //!   true pressure-Poisson on the P1 mesh is Stage 37.6.1.
-//! - **CPU only.** The arithmetic is straight scatter / gather and
-//!   ports cleanly to WGSL atomics; GPU port is Stage 37.6.2.
+//! - **GPU port (Stage 41 v2).** The `step_gpu` method runs the full
+//!   pipeline (locate, P2G, grid-update, viscous-smoothing, BCs, G2P)
+//!   on the device. Mirrors the CPU mathematics exactly; the only
+//!   semantic delta is f32 vs f64 round-off. See
+//!   [`ApicHybrid::step_gpu`].
 //! - **No particle re-seeding** if a tet empties (particles can drift
 //!   slightly out of bounds when the explicit advect overshoots a
 //!   wall). The `falling-particles-settle` contract test clamps to
