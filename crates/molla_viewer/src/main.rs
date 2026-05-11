@@ -571,6 +571,29 @@ fn main() {
         .add_systems(Update, draw_warp_tile_matmul_gizmos)
         .add_systems(Update, draw_warp_tile_convolution_gizmos)
         .add_systems(Update, draw_warp_tile_mcgp_gizmos)
+        // Newton-port follow-ups (Stage 39).
+        .add_systems(
+            Update,
+            (
+                update_cloth_poker_cards,
+                update_softbody_hanging,
+                update_cable_twist,
+                draw_cloth_poker_cards_gizmos,
+                draw_softbody_hanging_gizmos,
+                draw_cable_twist_gizmos,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
+                update_ik_custom,
+                update_diffsim_drone,
+                update_warp_fft_poisson_2d,
+                draw_ik_custom_gizmos,
+                draw_diffsim_drone_gizmos,
+                draw_warp_fft_poisson_2d_gizmos,
+            ),
+        )
         .add_systems(EguiPrimaryContextPass, control_pane)
         .run();
 }
@@ -1182,6 +1205,26 @@ enum Scene {
     /// and the optimization trajectory as a line. Pane exposes lr, β1,
     /// β2, weight-decay. Wires `molla::optim::{AdamConfig, AdamState}`.
     AdamLandscape,
+    /// Newton port — 52 stiff VBD cloth "cards" stacked into a deck
+    /// on top of a static cube, with a kinematic sphere swinging in
+    /// from the side to knock the stack over.
+    ClothPokerCards,
+    /// Newton port — 4 tetrahedral soft bodies hanging from pinned
+    /// faces, each with a different Young's modulus (1×, 2×, 5×, 10×).
+    SoftbodyHanging,
+    /// Newton port — a single cable pinned at both ends; one endpoint
+    /// rotates about its tangent each frame to inject twist that
+    /// propagates along the cable.
+    CableTwist,
+    /// Newton port — collision-avoidance IK on the GpuIkArm Franka.
+    /// Sphere obstacle becomes a per-link position-residual row.
+    IkCustom,
+    /// Newton port — differentiable-simulation MPC over a simplified
+    /// point-mass quadrotor. Adam over FD gradients of a 50-step rollout.
+    DiffsimDrone,
+    /// Warp port — 2D FFT-Poisson pressure solve on a 32×32 periodic
+    /// grid with a moving Gaussian source. Wires `solve_pressure_poisson_fft`.
+    WarpFftPoisson2d,
     /// Stage 37.8 — standalone GEMM `C = A · B` demo. M=64, N=32, K=128
     /// with deterministic-hash inputs; CPU/GPU toggle; side-by-side
     /// render of A, B, C as colored grids. Wires
@@ -1290,6 +1333,13 @@ impl Scene {
         Scene::WarpTileFilter,
         Scene::WarpTileCompaction,
         Scene::AdamLandscape,
+        // Newton-port follow-ups.
+        Scene::ClothPokerCards,
+        Scene::SoftbodyHanging,
+        Scene::CableTwist,
+        Scene::IkCustom,
+        Scene::DiffsimDrone,
+        Scene::WarpFftPoisson2d,
         Scene::WarpTileMatmul,
         Scene::WarpTileConvolution,
         Scene::WarpTileMcgp,
@@ -1380,6 +1430,12 @@ impl Scene {
             Scene::WarpTileFilter => "81 Warp tile filter (Stage 37.8)",
             Scene::WarpTileCompaction => "82 Warp tile compaction (Stage 37.8)",
             Scene::AdamLandscape => "83 Adam optimization landscape (Stage 38c)",
+            Scene::ClothPokerCards => "84 Cloth poker cards (Newton port)",
+            Scene::SoftbodyHanging => "85 Softbody hanging (E sweep)",
+            Scene::CableTwist => "86 Cable twist (tangent rotate)",
+            Scene::IkCustom => "87 IK custom (collision avoidance)",
+            Scene::DiffsimDrone => "88 Diffsim drone (MPC)",
+            Scene::WarpFftPoisson2d => "89 Warp FFT Poisson 2D",
             Scene::WarpTileMatmul => "90 Warp tile matmul (Stage 37.8)",
             Scene::WarpTileConvolution => "91 Warp tile convolution (Stage 37.8)",
             Scene::WarpTileMcgp => "92 Warp tile MCGP (Stage 37.8)",
@@ -1422,7 +1478,10 @@ impl Scene {
             | Scene::SoftbodyDrop
             | Scene::ClothCollar
             | Scene::FastSoftImpact
-            | Scene::SoftBrake => SolverKind::Vbd,
+            | Scene::SoftBrake
+            | Scene::ClothPokerCards
+            | Scene::SoftbodyHanging
+            | Scene::CableTwist => SolverKind::Vbd,
             Scene::MuJoCo => SolverKind::MuJoCo,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2779,9 +2838,15 @@ impl Sim {
             | Scene::WarpTileFilter
             | Scene::WarpTileCompaction
             | Scene::AdamLandscape
+            | Scene::DiffsimDrone
+            | Scene::WarpFftPoisson2d
             | Scene::WarpTileMatmul
             | Scene::WarpTileConvolution
             | Scene::WarpTileMcgp => build_warp_empty_model(),
+            Scene::ClothPokerCards => build_cloth_poker_cards_model(),
+            Scene::SoftbodyHanging => build_softbody_hanging_model(),
+            Scene::CableTwist => build_cable_twist_model(),
+            Scene::IkCustom => build_gpu_ik_arm_model(),
         };
         Self::finalize(scene, model, visuals)
     }
@@ -6115,6 +6180,12 @@ fn step_simulation(
             | Scene::WarpTileMatmul
             | Scene::WarpTileConvolution
             | Scene::WarpTileMcgp
+            | Scene::ClothPokerCards
+            | Scene::SoftbodyHanging
+            | Scene::CableTwist
+            | Scene::IkCustom
+            | Scene::DiffsimDrone
+            | Scene::WarpFftPoisson2d
             | Scene::WarpRaycast
             | Scene::WarpMesh
             | Scene::WarpMeshIntersect
@@ -9569,6 +9640,12 @@ fn control_pane(
                     | Scene::WarpTileMatmul
                     | Scene::WarpTileConvolution
                     | Scene::WarpTileMcgp
+                    | Scene::ClothPokerCards
+                    | Scene::SoftbodyHanging
+                    | Scene::CableTwist
+                    | Scene::IkCustom
+                    | Scene::DiffsimDrone
+                    | Scene::WarpFftPoisson2d
             ),
             _ => false,
         },
@@ -9752,6 +9829,12 @@ fn control_pane(
         Scene::WarpTileMatmul => Some("Warp tile matmul (Stage 37.8)"),
         Scene::WarpTileConvolution => Some("Warp tile convolution (Stage 37.8)"),
         Scene::WarpTileMcgp => Some("Warp tile MCGP (Stage 37.8)"),
+        Scene::ClothPokerCards => Some("Cloth poker cards (Newton port)"),
+        Scene::SoftbodyHanging => Some("Softbody hanging (E sweep)"),
+        Scene::CableTwist => Some("Cable twist (tangent rotate)"),
+        Scene::IkCustom => Some("IK custom (collision avoidance)"),
+        Scene::DiffsimDrone => Some("Diffsim drone (Adam + FD MPC)"),
+        Scene::WarpFftPoisson2d => Some("Warp FFT Poisson 2D"),
         _ => None,
     };
     if let Some(title) = scene_pane_title {
@@ -9900,6 +9983,12 @@ fn control_pane(
                     Scene::WarpTileMatmul => warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul),
                     Scene::WarpTileConvolution => warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution),
                     Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
+                    Scene::ClothPokerCards => cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards),
+                    Scene::SoftbodyHanging => softbody_hanging_pane(ui, &mut warp_states.softbody_hanging),
+                    Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
+                    Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
+                    Scene::DiffsimDrone => diffsim_drone_pane(ui, &mut warp_states.diffsim_drone),
+                    Scene::WarpFftPoisson2d => warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d),
                     _ => {}
                 });
         }
@@ -16677,6 +16766,13 @@ struct WarpExampleStates {
     tile_matmul: WarpTileMatmulState,
     tile_convolution: WarpTileConvolutionState,
     tile_mcgp: WarpTileMcgpState,
+    // Newton + Warp follow-ups (Stage 39).
+    cloth_poker_cards: ClothPokerCardsState,
+    softbody_hanging: SoftbodyHangingState,
+    cable_twist: CableTwistState,
+    ik_custom: IkCustomState,
+    diffsim_drone: DiffsimDroneState,
+    fft_poisson_2d: WarpFftPoisson2dState,
 }
 
 impl Default for WarpExampleStates {
@@ -16714,6 +16810,12 @@ impl Default for WarpExampleStates {
             tile_matmul: WarpTileMatmulState::default(),
             tile_convolution: WarpTileConvolutionState::default(),
             tile_mcgp: WarpTileMcgpState::default(),
+            cloth_poker_cards: ClothPokerCardsState::default(),
+            softbody_hanging: SoftbodyHangingState::default(),
+            cable_twist: CableTwistState::default(),
+            ik_custom: IkCustomState::default(),
+            diffsim_drone: DiffsimDroneState::default(),
+            fft_poisson_2d: WarpFftPoisson2dState::default(),
         }
     }
 }
@@ -21074,3 +21176,1520 @@ fn warp_tile_mcgp_pane(ui: &mut egui::Ui, st: &mut WarpTileMcgpState) {
     ui.small("Companion API: `mcgp_estimate` (SPSA gradient — separate problem, shared MC tooling).");
 }
 
+// ═══ Scene 84: ClothPokerCards (Newton port) ═══════════════════════════
+//
+// 52 stiff VBD cloth "cards" stacked into a deck on top of a static box,
+// with a kinematic sphere swinging in from the side to knock the stack
+// over. Each card is a small high-stiffness cloth grid (4×6 cells, 5×7
+// particles). Pure stress test of the VBD cloth solver — no plumbing
+// beyond `add_cloth_grid_with_bending` + the existing VBD pipeline.
+//
+// Newton ref: `xtra/newton/newton/examples/cloth/example_cloth_poker_cards.py`.
+
+const POKER_NUM_CARDS: u32 = 52;
+const POKER_CARD_W: f64 = 0.0635;   // 6.35 cm
+const POKER_CARD_H: f64 = 0.0889;   // 8.89 cm
+const POKER_CARD_DIM_X: u32 = 4;    // cells along width
+const POKER_CARD_DIM_Y: u32 = 6;    // cells along height
+const POKER_CUBE_HALF: f64 = 0.10;  // static cube half-extent
+const POKER_CUBE_Y: f64 = 0.10;     // cube centre Y
+const POKER_DROP_BASE: f64 = 0.25;  // first card spawn Y
+const POKER_CARD_SPACING: f64 = 0.0015;
+const POKER_SPHERE_RADIUS: f32 = 0.025;
+const POKER_SPHERE_Y: f32 = 0.225;
+const POKER_SPHERE_START_X: f32 = -0.40;
+const POKER_SPHERE_END_X: f32 = 0.40;
+const POKER_SPHERE_VEL: f32 = 0.40;
+const POKER_PARTICLE_RADIUS: f64 = 0.003;
+const POKER_PARTICLE_MASS: f64 = 1.8e-3 / 35.0;
+// Stiff cards — very small stretch compliance and moderate bending.
+const POKER_STRETCH_COMPLIANCE: f64 = 5.0e-8;
+const POKER_BEND_COMPLIANCE: f64 = 5.0e-4;
+
+struct ClothPokerCardsState {
+    /// Live sphere X. Reset to `POKER_SPHERE_START_X` when the scene
+    /// switches or the user clicks "Reset sphere".
+    sphere_x: f32,
+    sphere_vel: f32,
+    /// User-controlled pause for the sphere only (physics still runs).
+    sphere_paused: bool,
+    user_reset: bool,
+}
+
+impl Default for ClothPokerCardsState {
+    fn default() -> Self {
+        Self {
+            sphere_x: POKER_SPHERE_START_X,
+            sphere_vel: POKER_SPHERE_VEL,
+            sphere_paused: false,
+            user_reset: false,
+        }
+    }
+}
+
+/// Build 52 stiff cloth grids stacked above a static cube + a kinematic
+/// sphere off to the left. The sphere body is recorded as the LAST
+/// body added so `update_cloth_poker_cards` can address it via
+/// `body_count - 1`.
+fn build_cloth_poker_cards_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_angular_damping(0.05);
+    b.set_linear_damping(0.4);
+
+    // Static cube — body with KINEMATIC flag so it stays put.
+    let cube = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(1.0, POKER_CUBE_HALF))
+            .with_position(MVec3::new(0.0, POKER_CUBE_Y, 0.0))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_box(
+        cube,
+        MVec3::new(POKER_CUBE_HALF, POKER_CUBE_HALF, POKER_CUBE_HALF),
+        mp::Transform::IDENTITY,
+    )
+    .expect("poker cube");
+
+    // 52 cards stacked above the cube. Tiny random-ish offsets so they
+    // settle into a slightly disordered stack (deterministic LCG).
+    let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
+    let rng = |s: &mut u64| -> f64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    };
+    for i in 0..POKER_NUM_CARDS {
+        let off_x = rng(&mut rng_state) * 0.004;
+        let off_z = rng(&mut rng_state) * 0.004;
+        let z = POKER_DROP_BASE + i as f64 * POKER_CARD_SPACING;
+        let origin = MVec3::new(
+            -POKER_CARD_W * 0.5 + off_x,
+            z,
+            -POKER_CARD_H * 0.5 + off_z,
+        );
+        let u_axis = MVec3::new(POKER_CARD_W, 0.0, 0.0);
+        let v_axis = MVec3::new(0.0, 0.0, POKER_CARD_H);
+        let _ = b.add_cloth_grid_with_bending(
+            origin,
+            u_axis,
+            v_axis,
+            POKER_CARD_DIM_X + 1,
+            POKER_CARD_DIM_Y + 1,
+            POKER_PARTICLE_MASS,
+            POKER_PARTICLE_RADIUS,
+            POKER_STRETCH_COMPLIANCE,
+            0.02,
+            POKER_BEND_COMPLIANCE,
+            mp::WorldId(0),
+        );
+    }
+
+    // Kinematic wrecking sphere — added LAST so it's at body index
+    // `body_count - 1` and `update_cloth_poker_cards` can find it.
+    let sphere = b.add_body(
+        mp::BodyParams::new()
+            .with_spatial_inertia(mp::SpatialInertia::sphere(1.0, POKER_SPHERE_RADIUS as f64))
+            .with_position(MVec3::new(
+                POKER_SPHERE_START_X as f64,
+                POKER_SPHERE_Y as f64,
+                0.0,
+            ))
+            .with_flags(mp::BodyFlags::KINEMATIC),
+    );
+    b.add_shape_sphere(sphere, POKER_SPHERE_RADIUS as f64, mp::Transform::IDENTITY)
+        .expect("poker sphere");
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("poker plane");
+
+    let visuals = vec![
+        BodyVisual::Box(Vec3::new(
+            POKER_CUBE_HALF as f32,
+            POKER_CUBE_HALF as f32,
+            POKER_CUBE_HALF as f32,
+        )),
+        BodyVisual::Sphere(POKER_SPHERE_RADIUS),
+    ];
+    (b.build().expect("cloth poker cards model"), visuals)
+}
+
+fn update_cloth_poker_cards(
+    mut sim: ResMut<Sim>,
+    time: Res<Time>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::ClothPokerCards {
+        return;
+    }
+    let st = &mut warp.cloth_poker_cards;
+    if st.user_reset {
+        st.sphere_x = POKER_SPHERE_START_X;
+        st.user_reset = false;
+    }
+    if !run.paused && !st.sphere_paused {
+        st.sphere_x += st.sphere_vel * time.delta_secs();
+        if st.sphere_x > POKER_SPHERE_END_X {
+            st.sphere_x = POKER_SPHERE_END_X;
+        }
+    }
+    // Sphere body is the LAST body in the model (added after the cube).
+    let n_bodies = sim.model.body_count;
+    if n_bodies < 2 {
+        return;
+    }
+    let pose = mp::Transform::from_translation(MVec3::new(
+        st.sphere_x as f64,
+        POKER_SPHERE_Y as f64,
+        0.0,
+    ));
+    if let Ok(bq) = sim.state_a.body_q.host_mut() {
+        if let Some(b) = bq.last_mut() {
+            *b = pose;
+        }
+    }
+    if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+        let device = device.clone();
+        let queue = queue.clone();
+        let _ = sim.state_a.body_q.ensure_device(&device);
+        let _ = sim.state_a.body_q.upload(&queue);
+    }
+}
+
+fn draw_cloth_poker_cards_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
+    if sim.scene != Scene::ClothPokerCards {
+        return;
+    }
+    // Draw each cloth-grid card as a wireframe of its tri edges (so the
+    // user sees 52 stacked little quads). Cards are laid out
+    // sequentially in `particle_q` starting at index 0; each card has
+    // `(DIM_X+1) * (DIM_Y+1)` particles.
+    let Ok(pq) = sim.state_a.particle_q.host() else {
+        return;
+    };
+    let nx = POKER_CARD_DIM_X + 1;
+    let ny = POKER_CARD_DIM_Y + 1;
+    let per_card = (nx * ny) as usize;
+    let max_card = (sim.model.particle_count / per_card).min(POKER_NUM_CARDS as usize);
+    for c in 0..max_card {
+        let base = c * per_card;
+        // Hue cycles around the deck for visual separation.
+        let t = c as f32 / POKER_NUM_CARDS as f32;
+        let r = 0.85 - 0.5 * t;
+        let g = 0.30 + 0.5 * (t * 6.28).sin().abs();
+        let b = 0.20 + 0.7 * t;
+        let col = Color::srgb(r, g, b);
+        for iy in 0..ny {
+            for ix in 0..nx {
+                let i = base + (iy * nx + ix) as usize;
+                if ix + 1 < nx {
+                    let j = base + (iy * nx + ix + 1) as usize;
+                    let a = pq[i];
+                    let bp = pq[j];
+                    gizmos.line(
+                        Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+                        Vec3::new(bp.x as f32, bp.y as f32, bp.z as f32),
+                        col,
+                    );
+                }
+                if iy + 1 < ny {
+                    let j = base + ((iy + 1) * nx + ix) as usize;
+                    let a = pq[i];
+                    let bp = pq[j];
+                    gizmos.line(
+                        Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+                        Vec3::new(bp.x as f32, bp.y as f32, bp.z as f32),
+                        col,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn cloth_poker_cards_pane(ui: &mut egui::Ui, st: &mut ClothPokerCardsState) {
+    ui.label("Newton port — 52 stiff VBD cards on a stacked deck.");
+    ui.separator();
+    readout(ui, "Cards", &format!("{}", POKER_NUM_CARDS));
+    readout(ui, "Cells / card", &format!("{}×{}", POKER_CARD_DIM_X, POKER_CARD_DIM_Y));
+    readout(ui, "Particles / card", &format!("{}", (POKER_CARD_DIM_X + 1) * (POKER_CARD_DIM_Y + 1)));
+    readout(ui, "Sphere x", &format!("{:+.3} m", st.sphere_x));
+    ui.separator();
+    ui.label("Wrecking sphere");
+    let _ = ui.add(egui::Slider::new(&mut st.sphere_vel, -1.0..=1.0).text("velocity (m/s)"));
+    let _ = ui.checkbox(&mut st.sphere_paused, "Pause sphere");
+    if ui.button("Reset sphere to start").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("Stack settles for a beat, then the sphere swings");
+    ui.small("through it. Bending stiffness is high so cards stay rigid.");
+}
+
+// ═══ Scene 85: SoftbodyHanging (Newton port) ═══════════════════════════
+//
+// Four tetrahedral soft bodies hanging from pinned top-left faces, each
+// built with a different Young's modulus (1×, 2×, 5×, 10× the base).
+// Side-by-side comparison of how stiffness affects deflection under
+// gravity. Uses the VBD tet solver via `add_tet_mesh_per_material` +
+// `pin_particle` to fix the left face of each block.
+//
+// Newton ref: `xtra/newton/newton/examples/softbody/example_softbody_hanging.py`.
+
+const HANG_DIM_X: u32 = 10;
+const HANG_DIM_Y: u32 = 3;
+const HANG_DIM_Z: u32 = 3;
+const HANG_CELL: f64 = 0.10;
+const HANG_SPACING_Z: f64 = 0.55;
+const HANG_BASE_Y: f64 = 1.3;
+const HANG_PARTICLE_MASS: f64 = 0.10;
+const HANG_BASE_E: f64 = 5.0e4;
+const HANG_NU: f64 = 0.40;
+const HANG_E_SWEEP: [f64; 4] = [1.0, 2.0, 5.0, 10.0];
+
+struct SoftbodyHangingState {
+    /// Last computed mean Y of the right-most slice of each block —
+    /// updated each frame and surfaced in the pane so the user can
+    /// confirm stiffer blocks sag less.
+    tip_y: [f64; 4],
+}
+
+impl Default for SoftbodyHangingState {
+    fn default() -> Self {
+        Self { tip_y: [HANG_BASE_Y; 4] }
+    }
+}
+
+fn hang_cube_to_six_tets(c: [u32; 8]) -> [[u32; 4]; 6] {
+    // Same diagonal split as the Jelly scene.
+    let (v000, v100, v010, v110, v001, v101, v011, v111) =
+        (c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
+    [
+        [v000, v100, v110, v111],
+        [v000, v110, v010, v111],
+        [v000, v010, v011, v111],
+        [v000, v011, v001, v111],
+        [v000, v001, v101, v111],
+        [v000, v101, v100, v111],
+    ]
+}
+
+fn build_softbody_hanging_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.6);
+    b.set_angular_damping(0.10);
+
+    let nx = HANG_DIM_X + 1;
+    let ny = HANG_DIM_Y + 1;
+    let nz = HANG_DIM_Z + 1;
+    let dx = HANG_CELL;
+
+    // Layout: 4 blocks lined up along Z, each independent but sharing
+    // the global particle pool.
+    for (blk, &e_scale) in HANG_E_SWEEP.iter().enumerate() {
+        let centre_z = (blk as f64 - 1.5) * HANG_SPACING_Z;
+        let origin = MVec3::new(
+            -(HANG_CELL * HANG_DIM_X as f64) * 0.5,
+            HANG_BASE_Y,
+            centre_z - (HANG_CELL * HANG_DIM_Z as f64) * 0.5,
+        );
+        let mut block_first: u32 = u32::MAX;
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let p = origin
+                        + MVec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
+                    let id = b.add_particle(p, HANG_PARTICLE_MASS, dx * 0.5, mp::WorldId(0));
+                    if block_first == u32::MAX {
+                        block_first = id;
+                    }
+                }
+            }
+        }
+        let v_at = |i: u32, j: u32, k: u32| -> u32 {
+            block_first + (k * ny + j) * nx + i
+        };
+        let mut tets = Vec::new();
+        for kk in 0..nz - 1 {
+            for jj in 0..ny - 1 {
+                for ii in 0..nx - 1 {
+                    let corners = [
+                        v_at(ii, jj, kk),
+                        v_at(ii + 1, jj, kk),
+                        v_at(ii, jj + 1, kk),
+                        v_at(ii + 1, jj + 1, kk),
+                        v_at(ii, jj, kk + 1),
+                        v_at(ii + 1, jj, kk + 1),
+                        v_at(ii, jj + 1, kk + 1),
+                        v_at(ii + 1, jj + 1, kk + 1),
+                    ];
+                    for tet in hang_cube_to_six_tets(corners) {
+                        tets.push(tet);
+                    }
+                }
+            }
+        }
+        let mat_idx: Vec<u32> = vec![0; tets.len()];
+        let materials =
+            vec![mp::MaterialNeoHookean::elastic(HANG_BASE_E * e_scale, HANG_NU)];
+        let _ = b
+            .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
+            .expect("softbody hanging tet mesh");
+
+        // Pin the entire i=0 face (every particle with ix == 0).
+        for k in 0..nz {
+            for j in 0..ny {
+                b.pin_particle(v_at(0, j, k));
+            }
+        }
+    }
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("softbody hanging model"), Vec::new())
+}
+
+fn update_softbody_hanging(
+    sim: Res<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::SoftbodyHanging {
+        return;
+    }
+    let Ok(pq) = sim.state_a.particle_q.host() else { return };
+    let nx = HANG_DIM_X + 1;
+    let ny = HANG_DIM_Y + 1;
+    let nz = HANG_DIM_Z + 1;
+    let per_block = (nx * ny * nz) as usize;
+    let st = &mut warp.softbody_hanging;
+    for blk in 0..4usize {
+        let base = blk * per_block;
+        // Mean Y of the right-most face (i = nx-1) gives a clean
+        // "tip droop" readout.
+        let mut sum = 0.0_f64;
+        let mut count = 0_usize;
+        let ix = nx - 1;
+        for k in 0..nz {
+            for j in 0..ny {
+                let i = base + ((k * ny + j) * nx + ix) as usize;
+                if i < pq.len() {
+                    sum += pq[i].y;
+                    count += 1;
+                }
+            }
+        }
+        if count > 0 {
+            st.tip_y[blk] = sum / count as f64;
+        }
+    }
+}
+
+fn draw_softbody_hanging_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
+    if sim.scene != Scene::SoftbodyHanging {
+        return;
+    }
+    let Ok(pq) = sim.state_a.particle_q.host() else { return };
+    let nx = HANG_DIM_X + 1;
+    let ny = HANG_DIM_Y + 1;
+    let nz = HANG_DIM_Z + 1;
+    let per_block = (nx * ny * nz) as usize;
+    // Draw cube-edges only (12 edges per cell) but de-duplicated across
+    // shared faces via the grid topology. We use a colour ramp from
+    // soft (blue) → stiff (red) so the comparison reads at a glance.
+    for blk in 0..4usize {
+        let base = blk * per_block;
+        // Stiffness 1× → 10×: log-ramp t ∈ [0, 1].
+        let s = (HANG_E_SWEEP[blk] / HANG_E_SWEEP[0]).log10()
+            / (HANG_E_SWEEP[3] / HANG_E_SWEEP[0]).log10();
+        let t = s.clamp(0.0, 1.0) as f32;
+        let col = Color::srgb(0.15 + 0.80 * t, 0.40, 0.95 - 0.80 * t);
+        let v = |i: u32, j: u32, k: u32| -> Vec3 {
+            let p = pq[base + ((k * ny + j) * nx + i) as usize];
+            Vec3::new(p.x as f32, p.y as f32, p.z as f32)
+        };
+        // X-edges
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx - 1 {
+                    gizmos.line(v(i, j, k), v(i + 1, j, k), col);
+                }
+            }
+        }
+        // Y-edges
+        for k in 0..nz {
+            for j in 0..ny - 1 {
+                for i in 0..nx {
+                    gizmos.line(v(i, j, k), v(i, j + 1, k), col);
+                }
+            }
+        }
+        // Z-edges
+        for k in 0..nz - 1 {
+            for j in 0..ny {
+                for i in 0..nx {
+                    gizmos.line(v(i, j, k), v(i, j, k + 1), col);
+                }
+            }
+        }
+    }
+}
+
+fn softbody_hanging_pane(ui: &mut egui::Ui, st: &mut SoftbodyHangingState) {
+    ui.label("Newton port — 4 hanging tet blocks, E sweep.");
+    ui.separator();
+    readout(
+        ui,
+        "Grid",
+        &format!("{}×{}×{} cells / block", HANG_DIM_X, HANG_DIM_Y, HANG_DIM_Z),
+    );
+    readout(ui, "Cell size", &format!("{:.3} m", HANG_CELL));
+    readout(ui, "Poisson ν", &format!("{:.2}", HANG_NU));
+    readout(ui, "Base E", &format!("{:.2e} Pa", HANG_BASE_E));
+    ui.separator();
+    ui.label("Per-block Young's modulus & tip droop");
+    for blk in 0..4usize {
+        let e = HANG_BASE_E * HANG_E_SWEEP[blk];
+        let droop = HANG_BASE_Y - st.tip_y[blk];
+        readout(
+            ui,
+            &format!("blk {} (×{:.0})", blk, HANG_E_SWEEP[blk]),
+            &format!("E = {:.2e} | droop = {:.3} m", e, droop),
+        );
+    }
+    ui.separator();
+    ui.small("Each block's i=0 face is pinned (left face).");
+    ui.small("Colour ramp blue → red ≡ soft → stiff.");
+}
+
+// ═══ Scene 86: CableTwist (Newton port) ════════════════════════════════
+//
+// One CABLE polyline pinned at both ends. The bottom-right corner of the
+// path is rotated about the cable's local tangent each frame, injecting
+// twist that propagates along the cable. The polyline carries a 90°
+// bend mid-route (path goes +X then +Y) so the writhe is visually
+// obvious where the twist energy concentrates at the elbow.
+//
+// Newton ref: `xtra/newton/newton/examples/cable/example_cable_twist.py`.
+
+const TWIST_PARTICLES: u32 = 48;
+const TWIST_LEG_LEN: f64 = 0.9;
+const TWIST_RADIUS: f64 = 0.012;
+const TWIST_PARTICLE_MASS: f64 = 0.02;
+const TWIST_STIFFNESS: f64 = 1.0e6;
+const TWIST_BEND_STIFFNESS: f64 = 5.0e2;
+const TWIST_DRIVEN_END_Y: f64 = 0.20;
+
+struct CableTwistState {
+    /// Accumulated twist angle of the driven endpoint (radians).
+    twist_angle: f32,
+    /// Twist rate (rad/s) — controlled from the pane.
+    twist_rate: f32,
+    /// Pause just the spin (not the physics).
+    paused: bool,
+    /// Live readout: mean particle Y at the elbow, surfaced so the
+    /// user can confirm the cable is actually writhing.
+    elbow_y: f64,
+    user_reset: bool,
+}
+
+impl Default for CableTwistState {
+    fn default() -> Self {
+        Self {
+            twist_angle: 0.0,
+            twist_rate: 1.5,
+            paused: false,
+            elbow_y: 0.0,
+            user_reset: false,
+        }
+    }
+}
+
+/// Build a single L-shaped cable: leg 1 goes +X from origin, leg 2 goes
+/// +Y from the corner. Endpoint pins (first + last) are added via
+/// `pin_particle`. The driven endpoint (last particle) gets re-written
+/// each frame by `update_cable_twist`.
+fn build_cable_twist_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    b.set_linear_damping(0.6);
+    b.set_angular_damping(0.10);
+
+    let n = TWIST_PARTICLES;
+    let half = n / 2;
+    let start = MVec3::new(-TWIST_LEG_LEN, TWIST_DRIVEN_END_Y, 0.0);
+    let corner = MVec3::new(0.0, TWIST_DRIVEN_END_Y, 0.0);
+    let end = MVec3::new(0.0, TWIST_DRIVEN_END_Y + TWIST_LEG_LEN, 0.0);
+
+    // Lay out particles along the two legs by hand so we get a clean
+    // 90° elbow. We share the elbow particle between the legs.
+    let mut first: u32 = u32::MAX;
+    let mut last: u32 = 0;
+    for i in 0..half {
+        let t = i as f64 / half as f64;
+        let p = start + (corner - start) * t;
+        let id = b.add_particle(p, TWIST_PARTICLE_MASS, TWIST_RADIUS, mp::WorldId(0));
+        if first == u32::MAX {
+            first = id;
+        }
+        last = id;
+    }
+    // Corner + leg 2.
+    let leg2 = n - half;
+    for i in 0..=leg2 {
+        let t = i as f64 / leg2 as f64;
+        let p = corner + (end - corner) * t;
+        let id = b.add_particle(p, TWIST_PARTICLE_MASS, TWIST_RADIUS, mp::WorldId(0));
+        last = id;
+    }
+    let ids: Vec<u32> = (first..=last).collect();
+    let cable_id = b.add_cable(&ids, TWIST_STIFFNESS, 0.02);
+    b.set_cable_bending_stiffness(cable_id, TWIST_BEND_STIFFNESS);
+
+    // Pin both endpoints. The driven (last) end is rewritten each
+    // frame by `update_cable_twist`; the first stays at `start`.
+    b.pin_particle(first);
+    b.pin_particle(last);
+
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("plane");
+
+    (b.build().expect("cable twist model"), Vec::new())
+}
+
+fn update_cable_twist(
+    mut sim: ResMut<Sim>,
+    time: Res<Time>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::CableTwist {
+        return;
+    }
+    let st = &mut warp.cable_twist;
+    if st.user_reset {
+        st.twist_angle = 0.0;
+        st.user_reset = false;
+    }
+    if !run.paused && !st.paused {
+        st.twist_angle += st.twist_rate * time.delta_secs();
+    }
+    let n = sim.model.particle_count;
+    if n < 4 {
+        return;
+    }
+    // The driven endpoint is the LAST particle. We rotate it around
+    // the tangent (which at the end of leg 2 points +Y) so the
+    // displacement traces a tiny circle in the XZ plane around the
+    // anchor. The cable's bending energy carries the twist back along
+    // the leg toward the elbow.
+    let r = 0.04_f64; // wiggle radius
+    let anchor = MVec3::new(0.0, TWIST_DRIVEN_END_Y + TWIST_LEG_LEN, 0.0);
+    let a = st.twist_angle as f64;
+    let driven = anchor + MVec3::new(r * a.cos(), 0.0, r * a.sin());
+    if let Ok(pq) = sim.state_a.particle_q.host_mut() {
+        if let Some(last) = pq.last_mut() {
+            *last = driven;
+        }
+        // Sample the elbow Y for the readout. The elbow particle is
+        // roughly at index `TWIST_PARTICLES / 2` (where leg 1 meets
+        // leg 2 — small off-by-one is fine, it's a readout).
+        let elbow_idx = (TWIST_PARTICLES / 2) as usize;
+        if elbow_idx < pq.len() {
+            st.elbow_y = pq[elbow_idx].y;
+        }
+    }
+    if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
+        let device = device.clone();
+        let queue = queue.clone();
+        let _ = sim.state_a.particle_q.ensure_device(&device);
+        let _ = sim.state_a.particle_q.upload(&queue);
+    }
+}
+
+fn draw_cable_twist_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::CableTwist {
+        return;
+    }
+    let Ok(pq) = sim.state_a.particle_q.host() else { return };
+    let n = sim.model.particle_count;
+    if n < 2 {
+        return;
+    }
+    // Cable polyline — warm yellow.
+    let cable_col = Color::srgb(0.95, 0.80, 0.20);
+    for i in 0..n - 1 {
+        let a = pq[i];
+        let b = pq[i + 1];
+        gizmos.line(
+            Vec3::new(a.x as f32, a.y as f32, a.z as f32),
+            Vec3::new(b.x as f32, b.y as f32, b.z as f32),
+            cable_col,
+        );
+    }
+    // Pin markers at endpoints.
+    let pin_col = Color::srgb(1.0, 0.4, 0.4);
+    for &i in [0_usize, n - 1].iter() {
+        let p = pq[i];
+        gizmos.sphere(
+            Vec3::new(p.x as f32, p.y as f32, p.z as f32),
+            0.025,
+            pin_col,
+        );
+    }
+    // Frame triad at the driven endpoint — three short axes so the
+    // user can see the twist rotation directly.
+    let st = &warp.cable_twist;
+    let p = pq[n - 1];
+    let centre = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+    let a = st.twist_angle;
+    let r = 0.08;
+    // The driven-end tangent points +Y; "right" rotates in the XZ
+    // plane with `twist_angle`.
+    let right = Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+    let up = Vec3::new(-a.sin() * r, 0.0, a.cos() * r);
+    let fwd = Vec3::new(0.0, r, 0.0);
+    gizmos.line(centre, centre + right, Color::srgb(1.0, 0.3, 0.3));
+    gizmos.line(centre, centre + up, Color::srgb(0.3, 1.0, 0.3));
+    gizmos.line(centre, centre + fwd, Color::srgb(0.3, 0.5, 1.0));
+}
+
+fn cable_twist_pane(ui: &mut egui::Ui, st: &mut CableTwistState) {
+    ui.label("Newton port — single CABLE, driven endpoint rotated.");
+    ui.separator();
+    readout(ui, "Particles", &format!("{}", TWIST_PARTICLES));
+    readout(ui, "Stretch stiff.", &format!("{:.1e} N/m", TWIST_STIFFNESS));
+    readout(ui, "Bend stiff.", &format!("{:.1e} N·m", TWIST_BEND_STIFFNESS));
+    readout(ui, "Twist angle", &format!("{:+.2} rad", st.twist_angle));
+    readout(ui, "Elbow Y", &format!("{:.3} m", st.elbow_y));
+    ui.separator();
+    let _ = ui.add(egui::Slider::new(&mut st.twist_rate, -6.0..=6.0).text("twist rate (rad/s)"));
+    let _ = ui.checkbox(&mut st.paused, "Pause twist");
+    if ui.button("Reset twist").clicked() {
+        st.user_reset = true;
+    }
+    ui.small("Driven endpoint traces a tiny circle around its anchor;");
+    ui.small("the bending energy carries twist back across the elbow.");
+}
+// ═══ Scene 87: IkCustom — IK with collision-avoidance objective ═════════
+//
+// Reuses the Stage-16 7-DOF Franka-style arm geometry (built via
+// `build_gpu_ik_arm_model`) and adds a sphere obstacle in front of the
+// arm. The standard `IkSolver::solve_gpu` from #10 is reused unchanged;
+// per-frame, in addition to the EE-position objective, we synthesise an
+// extra `IkObjective::Position` per link whose target is the link's
+// current world position projected to lie just outside the sphere when
+// the link centre is within `obstacle_margin` of the sphere surface.
+// When a link is clear of the sphere, the synthetic target collapses to
+// the link's current position (residual = 0).
+//
+// This is the "shape the residual to encode the constraint" pattern —
+// the IkSolver shipped only `Position` and `JointLimit` objective
+// kinds, so a collision-avoidance objective is realised as a
+// dynamically-targeted Position objective. Newton's `CollisionSphereAvoidObjective`
+// uses softplus penetration depth; this maps cleanly because once a
+// link is inside the safety margin, the residual norm grows linearly
+// with penetration, which is what LM consumes.
+
+struct IkCustomState {
+    /// Target world position for the EE.
+    target: MVec3,
+    /// Obstacle sphere centre (world).
+    obstacle_center: MVec3,
+    /// Obstacle sphere radius.
+    obstacle_radius: f32,
+    /// Per-link sphere proxy radius used for collision avoidance.
+    link_radius: f32,
+    /// Extra margin added to the (link_radius + obstacle_radius) gap
+    /// so the solver pulls links well clear of the surface.
+    obstacle_margin: f32,
+    /// Weight on the collision residuals relative to the EE position
+    /// residual (which has weight 1.0).
+    collision_weight: f32,
+    /// Toggle: when off, only the EE objective runs (so the user can
+    /// see the arm slam straight through the obstacle).
+    collision_enabled: bool,
+    /// Have we initialised `target` from the rest EE pose?
+    target_init: bool,
+    /// Last solver telemetry (for the pane).
+    last_iters: usize,
+    last_residual: f64,
+    last_solve_us: f64,
+    /// Worst-case (smallest) signed-distance from any tracked link to
+    /// the obstacle surface this frame. Negative = penetrating.
+    worst_link_clearance: f64,
+}
+
+impl Default for IkCustomState {
+    fn default() -> Self {
+        Self {
+            target: MVec3::ZERO,
+            obstacle_center: MVec3::new(0.30, 1.10, 0.05),
+            obstacle_radius: 0.15,
+            link_radius: 0.06,
+            obstacle_margin: 0.04,
+            collision_weight: 3.0,
+            collision_enabled: true,
+            target_init: false,
+            last_iters: 0,
+            last_residual: 0.0,
+            last_solve_us: 0.0,
+            worst_link_clearance: f64::INFINITY,
+        }
+    }
+}
+
+/// Indices of the links we treat as collision spheres. We skip body 0
+/// (the rooted base) since it never moves and would just add a no-op
+/// row to the IK Jacobian.
+const IK_CUSTOM_LINKS: &[usize] = &[1, 2, 3, 4, 5, 6];
+
+fn update_ik_custom(
+    mut sim: ResMut<Sim>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::IkCustom {
+        return;
+    }
+    let st = &mut warp.ik_custom;
+    let Sim {
+        model,
+        state_a,
+        engine,
+        ..
+    } = &mut *sim;
+
+    // EE = last body in the chain (mirrors `update_gpu_ik_arm`).
+    let ee_body = model.body_count - 1;
+
+    // Lazy-seed the EE target from rest FK so the arm starts at a
+    // reachable pose just in front of the sphere.
+    if !st.target_init {
+        molla::sim::eval_fk(model, state_a).expect("eval_fk");
+        let bq = state_a.body_q.host().expect("body_q");
+        // Park the target on the opposite side of the obstacle so the
+        // arm has to either go around or burrow through (which the
+        // collision objective prevents).
+        let rest_ee = bq[ee_body].position;
+        st.target = MVec3::new(rest_ee.x + 0.35, rest_ee.y - 0.20, rest_ee.z + 0.15);
+        st.target_init = true;
+    }
+
+    // Build the objective list. Always include the EE position
+    // objective. When collisions are enabled, append a per-link
+    // Position objective whose target sits OUTSIDE the obstacle.
+    //
+    // For each link i, let `p_i` be the link's current world centre.
+    // Direction from obstacle centre to the link: `d = p_i − c_obs`.
+    // Required minimum distance to keep the link clear:
+    //     r_min = r_obs + r_link + margin.
+    // If `‖d‖ < r_min`, the synthetic target is at `c_obs +
+    // (r_min / ‖d‖) · d` — the radial projection out of the sphere.
+    // Else, the target collapses to `p_i` (zero residual).
+    let q0: Vec<f64> = state_a
+        .joint_q
+        .host()
+        .expect("joint_q")
+        .iter()
+        .copied()
+        .collect();
+    let body_q_now = state_a.body_q.host().expect("body_q").to_vec();
+    let c_obs = st.obstacle_center;
+    let r_obs = st.obstacle_radius as f64;
+    let r_link = st.link_radius as f64;
+    let margin = st.obstacle_margin as f64;
+    let r_min = r_obs + r_link + margin;
+    let mut worst_clearance: f64 = f64::INFINITY;
+
+    let mut objectives: Vec<IkObjective> = vec![IkObjective::Position {
+        body: ee_body,
+        point_local: MVec3::ZERO,
+        target_world: st.target,
+        weight: 1.0,
+    }];
+    if st.collision_enabled {
+        for &li in IK_CUSTOM_LINKS {
+            if li >= body_q_now.len() {
+                continue;
+            }
+            let p = body_q_now[li].position;
+            let d = p - c_obs;
+            let dist = d.length();
+            let signed = dist - (r_obs + r_link);
+            if signed < worst_clearance {
+                worst_clearance = signed;
+            }
+            if dist < 1.0e-6 {
+                // Degenerate — push along world +Y to avoid NaN normal.
+                let push = MVec3::new(0.0, r_min, 0.0);
+                objectives.push(IkObjective::Position {
+                    body: li,
+                    point_local: MVec3::ZERO,
+                    target_world: c_obs + push,
+                    weight: st.collision_weight as f64,
+                });
+                continue;
+            }
+            if dist < r_min {
+                // Push the synthetic target to the surface-plus-margin
+                // location along the radial direction.
+                let n = d / dist;
+                let synth = c_obs + n * r_min;
+                objectives.push(IkObjective::Position {
+                    body: li,
+                    point_local: MVec3::ZERO,
+                    target_world: synth,
+                    weight: st.collision_weight as f64,
+                });
+            }
+            // else: link is clear; emit no row (cheaper than a
+            // weight-zero residual + Jacobian row).
+        }
+    }
+    st.worst_link_clearance = worst_clearance;
+
+    let solver = IkSolver::new(objectives).with_config(IkConfig {
+        max_iter: 30,
+        residual_tol: 5.0e-4,
+        ..IkConfig::default()
+    });
+
+    let t0 = std::time::Instant::now();
+    let result = solver.solve_gpu(engine, model, state_a, &q0);
+    st.last_solve_us = t0.elapsed().as_secs_f64() * 1_000_000.0;
+    match result {
+        Ok(r) => {
+            st.last_iters = r.iters;
+            st.last_residual = r.residual;
+        }
+        Err(e) => warn!("ik_custom: solve failed: {e}"),
+    }
+}
+
+fn draw_ik_custom_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::IkCustom {
+        return;
+    }
+    let st = &warp.ik_custom;
+    // Target marker (green).
+    let target_v = Vec3::new(st.target.x as f32, st.target.y as f32, st.target.z as f32);
+    gizmos.sphere(target_v, 0.04, Color::srgb(0.2, 1.0, 0.4));
+    // Obstacle sphere — wireframe by stacking three orthogonal circles
+    // so users can see the inside of the shell.
+    let center = Vec3::new(
+        st.obstacle_center.x as f32,
+        st.obstacle_center.y as f32,
+        st.obstacle_center.z as f32,
+    );
+    let r = st.obstacle_radius;
+    let color = if st.worst_link_clearance < 0.0 {
+        Color::srgb(1.0, 0.3, 0.2) // red — link inside
+    } else if (st.worst_link_clearance as f32) < st.obstacle_margin {
+        Color::srgb(1.0, 0.7, 0.2) // amber — within margin
+    } else {
+        Color::srgb(0.4, 0.7, 1.0) // blue — clear
+    };
+    let segs = 48;
+    for axis in 0..3 {
+        for s in 0..segs {
+            let t0 = (s as f32 / segs as f32) * std::f32::consts::TAU;
+            let t1 = ((s + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+            let (a, b) = match axis {
+                0 => (
+                    Vec3::new(0.0, r * t0.cos(), r * t0.sin()),
+                    Vec3::new(0.0, r * t1.cos(), r * t1.sin()),
+                ),
+                1 => (
+                    Vec3::new(r * t0.cos(), 0.0, r * t0.sin()),
+                    Vec3::new(r * t1.cos(), 0.0, r * t1.sin()),
+                ),
+                _ => (
+                    Vec3::new(r * t0.cos(), r * t0.sin(), 0.0),
+                    Vec3::new(r * t1.cos(), r * t1.sin(), 0.0),
+                ),
+            };
+            gizmos.line(center + a, center + b, color);
+        }
+    }
+    // Link spheres — outline each tracked link's collision proxy.
+    if let Ok(bq) = sim.state_a.body_q.host() {
+        for &li in IK_CUSTOM_LINKS {
+            if li >= bq.len() {
+                continue;
+            }
+            let p = bq[li].position;
+            let pv = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+            gizmos.sphere(pv, st.link_radius, Color::srgba(1.0, 0.95, 0.8, 0.5));
+        }
+    }
+}
+
+fn ik_custom_pane(ui: &mut egui::Ui, st: &mut IkCustomState) {
+    ui.label("IK custom — Newton-port `ik_custom` (collision objective)");
+    ui.separator();
+    readout(ui, "Solver", "GPU LM (Stage 16)");
+    readout(ui, "DOFs", "7");
+    readout(ui, "Iterations", &format!("{}", st.last_iters));
+    readout(ui, "Residual", &format!("{:.5}", st.last_residual));
+    readout(
+        ui,
+        "ms / solve",
+        &format!("{:.2}", st.last_solve_us / 1000.0),
+    );
+    let clearance = st.worst_link_clearance;
+    let clr_label = if clearance.is_finite() {
+        format!("{:+.3} m", clearance)
+    } else {
+        "n/a".to_string()
+    };
+    readout(ui, "Worst link gap", &clr_label);
+    ui.separator();
+
+    ui.checkbox(&mut st.collision_enabled, "Enable collision objective");
+    ui.separator();
+    ui.label("EE target (world)");
+    ui.add(egui::Slider::new(&mut st.target.x, -1.5..=1.5).text("x").step_by(0.005));
+    ui.add(egui::Slider::new(&mut st.target.y, 0.05..=2.5).text("y").step_by(0.005));
+    ui.add(egui::Slider::new(&mut st.target.z, -1.5..=1.5).text("z").step_by(0.005));
+    ui.separator();
+    ui.label("Obstacle sphere centre");
+    ui.add(egui::Slider::new(&mut st.obstacle_center.x, -1.0..=1.0).text("cx"));
+    ui.add(egui::Slider::new(&mut st.obstacle_center.y, 0.3..=2.0).text("cy"));
+    ui.add(egui::Slider::new(&mut st.obstacle_center.z, -1.0..=1.0).text("cz"));
+    ui.add(egui::Slider::new(&mut st.obstacle_radius, 0.05..=0.40).text("radius"));
+    ui.separator();
+    ui.label("Collision tuning");
+    ui.add(egui::Slider::new(&mut st.link_radius, 0.02..=0.15).text("link radius"));
+    ui.add(egui::Slider::new(&mut st.obstacle_margin, 0.0..=0.20).text("margin"));
+    ui.add(
+        egui::Slider::new(&mut st.collision_weight, 0.1..=20.0)
+            .text("collision weight")
+            .logarithmic(true),
+    );
+    if ui.button("Re-seed target").clicked() {
+        st.target_init = false;
+    }
+    ui.small(
+        "Collision avoidance is encoded as per-link Position objectives whose target \
+         is the link's centre projected to the obstacle's surface-plus-margin radius. \
+         Disable the toggle to see the arm reach straight through.",
+    );
+}
+
+// ═══ Scene 88: DiffsimDrone — MPC over a point-mass quadrotor ══════════
+//
+// Open-loop trajectory MPC. State `x ∈ ℝ⁶` = (px, py, pz, vx, vy, vz);
+// control `u ∈ ℝ³` = (thrust, ax_lat, az_lat) — thrust along +Y, plus
+// two lateral acceleration command channels acting in world +X / +Z so
+// we have a simple controllable system without modelling attitude
+// explicitly. Dynamics per substep:
+//     a = (0, thrust − g, 0) + (ax_lat, 0, az_lat);
+//     v ← v + a · dt − k_drag · v · dt;
+//     p ← p + v · dt.
+// Loss = `‖p_T − target‖²` at the final step.
+//
+// Adam optimises the open-loop sequence over `DRONE_HORIZON` steps; the
+// gradient comes from **finite differences** on each control component
+// (the quadrotor's Featherstone topology has no autograd path in
+// scope, and the task explicitly allows FD as the fallback).
+//
+// Visualisation: cyan trajectory line for the optimised rollout +
+// orange drone marker that loops through the trajectory. Adam control
+// re-runs when the user touches the target slider.
+
+const DRONE_HORIZON: usize = 50;
+const DRONE_DT: f64 = 0.05; // seconds per substep
+const DRONE_DRAG: f64 = 0.4; // linear damping (1/s)
+const DRONE_GRAVITY: f64 = 9.81;
+const DRONE_OPT_ITERS: usize = 40;
+const DRONE_FD_EPS: f64 = 1.0e-3;
+
+struct DiffsimDroneState {
+    /// Per-step controls flattened as `[thrust_0, ax_0, az_0, thrust_1, …]`.
+    controls: Vec<f64>,
+    /// Adam optimiser state matching `controls`.
+    adam: molla::optim::AdamState,
+    cfg: molla::optim::AdamConfig,
+    /// Initial position (world).
+    p0: MVec3,
+    /// Target position (world).
+    target: MVec3,
+    /// Cached rollout (one entry per substep, `DRONE_HORIZON + 1` total).
+    trajectory: Vec<MVec3>,
+    /// Last computed loss.
+    last_loss: f64,
+    /// Optimisation iters consumed this rebuild.
+    iters_run: u32,
+    /// Last gradient-eval ms (timing of the full Adam iteration).
+    last_iter_us: f64,
+    /// Playback head — index into `trajectory` for the drone marker.
+    playback_t: f64,
+    /// User toggles.
+    needs_rerun: bool,
+    paused_opt: bool,
+}
+
+impl Default for DiffsimDroneState {
+    fn default() -> Self {
+        let n_params = DRONE_HORIZON * 3;
+        let mut controls = vec![0.0_f64; n_params];
+        // Hover-feed-forward thrust so the optimiser starts at a
+        // sensible operating point rather than ballistic freefall.
+        for k in 0..DRONE_HORIZON {
+            controls[k * 3] = DRONE_GRAVITY;
+        }
+        Self {
+            controls,
+            adam: molla::optim::AdamState::new(n_params),
+            cfg: molla::optim::AdamConfig {
+                lr: 0.5,
+                beta1: 0.9,
+                beta2: 0.999,
+                eps: 1.0e-8,
+                weight_decay: 0.0,
+            },
+            p0: MVec3::new(0.0, 1.0, 0.0),
+            target: MVec3::new(1.2, 1.6, 0.8),
+            trajectory: Vec::new(),
+            last_loss: f64::INFINITY,
+            iters_run: 0,
+            last_iter_us: 0.0,
+            playback_t: 0.0,
+            needs_rerun: true,
+            paused_opt: false,
+        }
+    }
+}
+
+/// Drone forward rollout. Returns final position + the trajectory.
+fn drone_rollout(p0: MVec3, controls: &[f64]) -> Vec<MVec3> {
+    let mut p = p0;
+    let mut v = MVec3::ZERO;
+    let dt = DRONE_DT;
+    let mut traj = Vec::with_capacity(DRONE_HORIZON + 1);
+    traj.push(p);
+    for k in 0..DRONE_HORIZON {
+        let thrust = controls[k * 3];
+        let ax_lat = controls[k * 3 + 1];
+        let az_lat = controls[k * 3 + 2];
+        let a = MVec3::new(ax_lat, thrust - DRONE_GRAVITY, az_lat);
+        v = v + a * dt - v * (DRONE_DRAG * dt);
+        p = p + v * dt;
+        traj.push(p);
+    }
+    traj
+}
+
+fn drone_loss(p0: MVec3, target: MVec3, controls: &[f64]) -> f64 {
+    let traj = drone_rollout(p0, controls);
+    let pf = traj[traj.len() - 1];
+    let d = pf - target;
+    d.dot(d)
+}
+
+fn update_diffsim_drone(
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::DiffsimDrone {
+        return;
+    }
+    let st = &mut warp.diffsim_drone;
+    if st.needs_rerun {
+        // Reset Adam + control sequence to the hover feed-forward.
+        let n = DRONE_HORIZON * 3;
+        st.controls = vec![0.0_f64; n];
+        for k in 0..DRONE_HORIZON {
+            st.controls[k * 3] = DRONE_GRAVITY;
+        }
+        st.adam = molla::optim::AdamState::new(n);
+        st.iters_run = 0;
+        st.last_loss = f64::INFINITY;
+        st.trajectory = drone_rollout(st.p0, &st.controls);
+        st.needs_rerun = false;
+        st.playback_t = 0.0;
+    }
+    if run.paused || st.paused_opt {
+        // Even when paused, keep the playback advancing so the user
+        // can see the current best trajectory animate.
+        if !run.paused {
+            advance_drone_playback(st);
+        }
+        return;
+    }
+
+    if (st.iters_run as usize) < DRONE_OPT_ITERS {
+        let t0 = std::time::Instant::now();
+        let n = st.controls.len();
+        let base_loss = drone_loss(st.p0, st.target, &st.controls);
+        // Central differences for accuracy: 2N forward evaluations.
+        let mut grads = vec![0.0_f64; n];
+        let eps = DRONE_FD_EPS;
+        for i in 0..n {
+            let saved = st.controls[i];
+            st.controls[i] = saved + eps;
+            let lp = drone_loss(st.p0, st.target, &st.controls);
+            st.controls[i] = saved - eps;
+            let lm = drone_loss(st.p0, st.target, &st.controls);
+            st.controls[i] = saved;
+            grads[i] = (lp - lm) / (2.0 * eps);
+        }
+        st.adam.step(&mut st.controls, &grads, &st.cfg);
+        st.last_loss = base_loss;
+        st.iters_run += 1;
+        st.trajectory = drone_rollout(st.p0, &st.controls);
+        st.last_iter_us = t0.elapsed().as_secs_f64() * 1_000_000.0;
+    }
+
+    advance_drone_playback(st);
+}
+
+fn advance_drone_playback(st: &mut DiffsimDroneState) {
+    if st.trajectory.is_empty() {
+        return;
+    }
+    let total = DRONE_DT * DRONE_HORIZON as f64;
+    st.playback_t += 1.0 / 60.0;
+    if st.playback_t > total + 0.5 {
+        st.playback_t = 0.0;
+    }
+}
+
+fn draw_diffsim_drone_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::DiffsimDrone {
+        return;
+    }
+    let st = &warp.diffsim_drone;
+    if st.trajectory.is_empty() {
+        return;
+    }
+    // Start marker (purple), target marker (green).
+    let p0v = Vec3::new(st.p0.x as f32, st.p0.y as f32, st.p0.z as f32);
+    let tv = Vec3::new(st.target.x as f32, st.target.y as f32, st.target.z as f32);
+    gizmos.sphere(p0v, 0.05, Color::srgb(0.7, 0.4, 1.0));
+    gizmos.sphere(tv, 0.06, Color::srgb(0.2, 1.0, 0.4));
+    // Trajectory polyline (cyan).
+    let mut prev: Option<Vec3> = None;
+    for p in &st.trajectory {
+        let v = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+        if let Some(pv) = prev {
+            gizmos.line(pv, v, Color::srgb(0.4, 0.85, 1.0));
+        }
+        prev = Some(v);
+    }
+    // Drone marker — linear interpolation along the trajectory based
+    // on playback time.
+    let total = DRONE_DT * DRONE_HORIZON as f64;
+    let t = st.playback_t.clamp(0.0, total);
+    let f = (t / DRONE_DT).floor() as usize;
+    let frac = (t / DRONE_DT - f as f64) as f32;
+    let i = f.min(DRONE_HORIZON);
+    let j = (i + 1).min(DRONE_HORIZON);
+    let pa = st.trajectory[i];
+    let pb = st.trajectory[j];
+    let pm = pa + (pb - pa) * frac as f64;
+    let pmv = Vec3::new(pm.x as f32, pm.y as f32, pm.z as f32);
+    gizmos.sphere(pmv, 0.07, Color::srgb(1.0, 0.6, 0.2));
+    // Tiny "rotor" cross around the drone marker.
+    let arm = 0.10;
+    gizmos.line(pmv + Vec3::X * arm, pmv - Vec3::X * arm, Color::srgb(1.0, 0.4, 0.3));
+    gizmos.line(pmv + Vec3::Z * arm, pmv - Vec3::Z * arm, Color::srgb(1.0, 0.4, 0.3));
+}
+
+fn diffsim_drone_pane(ui: &mut egui::Ui, st: &mut DiffsimDroneState) {
+    ui.label("Diffsim drone — MPC + Adam + FD gradients (Newton-port)");
+    ui.separator();
+    readout(
+        ui,
+        "Backend",
+        "point-mass model · FD ∂L/∂u · Adam",
+    );
+    readout(ui, "Horizon", &format!("{} × {:.0} ms", DRONE_HORIZON, DRONE_DT * 1000.0));
+    readout(
+        ui,
+        "Iter",
+        &format!("{} / {}", st.iters_run, DRONE_OPT_ITERS),
+    );
+    readout(ui, "Loss", &format!("{:.4e}", st.last_loss));
+    if let Some(pf) = st.trajectory.last() {
+        let err = (*pf - st.target).length();
+        readout(ui, "‖p_T − target‖", &format!("{:.4} m", err));
+    }
+    readout(ui, "ms / iter", &format!("{:.2}", st.last_iter_us / 1_000.0));
+    ui.separator();
+    ui.label("Start (world)");
+    let mut p0 = st.p0;
+    let dx = ui.add(egui::Slider::new(&mut p0.x, -2.0..=2.0).text("x₀")).changed();
+    let dy = ui.add(egui::Slider::new(&mut p0.y, 0.2..=3.0).text("y₀")).changed();
+    let dz = ui.add(egui::Slider::new(&mut p0.z, -2.0..=2.0).text("z₀")).changed();
+    if dx || dy || dz {
+        st.p0 = p0;
+        st.needs_rerun = true;
+    }
+    ui.separator();
+    ui.label("Target (world)");
+    let mut t = st.target;
+    let dxt = ui.add(egui::Slider::new(&mut t.x, -2.0..=2.0).text("x")).changed();
+    let dyt = ui.add(egui::Slider::new(&mut t.y, 0.2..=3.0).text("y")).changed();
+    let dzt = ui.add(egui::Slider::new(&mut t.z, -2.0..=2.0).text("z")).changed();
+    if dxt || dyt || dzt {
+        st.target = t;
+        st.needs_rerun = true;
+    }
+    ui.separator();
+    ui.label("Adam hyperparameters");
+    let _ = ui.add(
+        egui::Slider::new(&mut st.cfg.lr, 0.001..=2.0)
+            .text("lr")
+            .logarithmic(true),
+    );
+    let _ = ui.add(egui::Slider::new(&mut st.cfg.beta1, 0.5..=0.9999).text("β1"));
+    let _ = ui.add(egui::Slider::new(&mut st.cfg.beta2, 0.9..=0.99999).text("β2"));
+    ui.separator();
+    let _ = ui.checkbox(&mut st.paused_opt, "Pause optimisation");
+    if ui.button("Re-run from hover").clicked() {
+        st.needs_rerun = true;
+    }
+    ui.small(
+        "Open-loop control sequence over a point-mass quadrotor. \
+         The full Featherstone quadrotor has no autograd path in scope, \
+         so gradients come from central finite differences (2 · 3 · H \
+         forward rollouts per Adam step).",
+    );
+}
+
+// ═══ Scene 89: WarpFftPoisson2d — periodic 2-D Poisson on a torus ══════
+//
+// Port of Warp `core/example_fft_poisson_navier_stokes_2d.py`, but
+// reduced to the Poisson core: deposit a localised Gaussian source
+// every frame, invert `-∇² p = rhs` via the GPU tile-FFT, decay the
+// field slightly so it doesn't saturate, render as a coloured point
+// grid. This shows the FFT-Poisson + tile-FFT plumbing the same way
+// the original example uses it for the vorticity-streamfunction
+// projection.
+//
+// Lower complexity than the upstream example (no time-stepping NS, no
+// turbulence IC — just a moving Gaussian source). Still exercises the
+// same primitives: `molla::fem::solve_pressure_poisson_fft` +
+// `molla::kernels::FftKernel`.
+
+const FFT_POISSON_GRID: usize = 32;
+
+struct WarpFftPoisson2dState {
+    /// Current pressure field, row-major `n × n`.
+    p: Vec<f32>,
+    /// FFT kernel (lazy).
+    kernel: Option<molla::kernels::FftKernel>,
+    /// Simulation time (s).
+    sim_t: f64,
+    /// Decay factor applied to `p` each frame so steady-state forcing
+    /// doesn't blow up. `1.0 = no decay`, `0.99 ≈ slow drift`.
+    decay: f32,
+    /// Source Gaussian half-width (in grid cells).
+    source_sigma: f32,
+    /// Source amplitude.
+    source_amp: f32,
+    /// Whether the source orbits or sits at the centre.
+    orbiting_source: bool,
+    /// Last solve time (µs).
+    last_us: f64,
+    /// "Reset to zero" flag.
+    needs_reset: bool,
+}
+
+impl Default for WarpFftPoisson2dState {
+    fn default() -> Self {
+        Self {
+            p: vec![0.0_f32; FFT_POISSON_GRID * FFT_POISSON_GRID],
+            kernel: None,
+            sim_t: 0.0,
+            decay: 0.95,
+            source_sigma: 1.8,
+            source_amp: 5.0,
+            orbiting_source: true,
+            last_us: 0.0,
+            needs_reset: true,
+        }
+    }
+}
+
+/// Wrap-aware squared distance between grid cell `(i, j)` and a real-
+/// valued cell centre `(cx, cy)`. Periodic — the closest copy among the
+/// 3×3 wrap candidates wins, but in practice the source is far from the
+/// boundary so the direct distance is enough for the demo.
+fn fft_poisson_gaussian(
+    n: usize,
+    cx: f32,
+    cy: f32,
+    sigma: f32,
+    amp: f32,
+) -> Vec<f32> {
+    let mut rhs = vec![0.0_f32; n * n];
+    let inv_2s2 = 1.0 / (2.0 * sigma * sigma);
+    for j in 0..n {
+        for i in 0..n {
+            let dx = i as f32 - cx;
+            let dy = j as f32 - cy;
+            let r2 = dx * dx + dy * dy;
+            rhs[j * n + i] = amp * (-r2 * inv_2s2).exp();
+        }
+    }
+    rhs
+}
+
+fn update_warp_fft_poisson_2d(
+    sim: Res<Sim>,
+    run: Res<SimRunState>,
+    mut warp: ResMut<WarpExampleStates>,
+) {
+    if sim.scene != Scene::WarpFftPoisson2d {
+        return;
+    }
+    let st = &mut warp.fft_poisson_2d;
+    if st.needs_reset {
+        st.p = vec![0.0_f32; FFT_POISSON_GRID * FFT_POISSON_GRID];
+        st.sim_t = 0.0;
+        st.needs_reset = false;
+    }
+    if run.paused {
+        return;
+    }
+
+    let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) else {
+        return;
+    };
+    if st.kernel.is_none() {
+        st.kernel = Some(molla::kernels::FftKernel::new(device));
+    }
+    let kernel = st.kernel.as_ref().unwrap();
+
+    // Build the source. If `orbiting_source`, the Gaussian orbits the
+    // grid centre at radius n/5 with period 6 s.
+    let n = FFT_POISSON_GRID;
+    let centre = (n as f32 - 1.0) * 0.5;
+    let (cx, cy) = if st.orbiting_source {
+        let omega = std::f32::consts::TAU / 6.0;
+        let r = n as f32 / 5.0;
+        let theta = (st.sim_t as f32) * omega;
+        (centre + r * theta.cos(), centre + r * theta.sin())
+    } else {
+        (centre, centre)
+    };
+    let rhs = fft_poisson_gaussian(n, cx, cy, st.source_sigma, st.source_amp);
+
+    // Solve `-∇² p_new = rhs`.
+    let t0 = std::time::Instant::now();
+    match molla::fem::solve_pressure_poisson_fft(device, queue, kernel, &rhs, n) {
+        Ok(p_new) => {
+            // Mix new pressure into the field with the decay factor so
+            // the source's effect accumulates briefly before fading.
+            for (q, np) in st.p.iter_mut().zip(p_new.iter()) {
+                *q = *q * st.decay + np * (1.0 - st.decay);
+            }
+        }
+        Err(e) => warn!("fft_poisson_2d solve: {e}"),
+    }
+    st.last_us = t0.elapsed().as_secs_f64() * 1.0e6;
+    st.sim_t += 1.0 / 60.0;
+}
+
+fn fft_poisson_colour(v: f32, scale: f32) -> Color {
+    // Map signed pressure into a diverging blue→white→red ramp.
+    let t = (v / scale).clamp(-1.0, 1.0);
+    if t < 0.0 {
+        let s = -t;
+        Color::srgb(0.1 + 0.3 * (1.0 - s), 0.3 + 0.5 * (1.0 - s), 0.9 * s + 0.1)
+    } else {
+        Color::srgb(0.9 * t + 0.1, 0.3 + 0.5 * (1.0 - t), 0.1 + 0.3 * (1.0 - t))
+    }
+}
+
+fn draw_warp_fft_poisson_2d_gizmos(
+    sim: Res<Sim>,
+    warp: Res<WarpExampleStates>,
+    mut gizmos: Gizmos,
+) {
+    if sim.scene != Scene::WarpFftPoisson2d {
+        return;
+    }
+    let st = &warp.fft_poisson_2d;
+    let n = FFT_POISSON_GRID;
+    if st.p.len() != n * n {
+        return;
+    }
+    let cell = 1.0_f32 / n as f32;
+    // Auto-scale colour ramp by current max magnitude (so small initial
+    // values are still visible).
+    let max = st
+        .p
+        .iter()
+        .fold(0.0_f32, |acc, v| acc.max(v.abs()))
+        .max(1.0e-6);
+    let half = 0.5_f32;
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f32 + 0.5) * cell - half;
+            let z = (j as f32 + 0.5) * cell - half;
+            let v = st.p[j * n + i];
+            // Heightmap-ish: y = 0.05 + 0.3 * (v / max).
+            let y = 0.05 + 0.30 * (v / max);
+            let pos = Vec3::new(x, y, z);
+            gizmos.sphere(pos, cell * 0.45, fft_poisson_colour(v, max));
+        }
+    }
+    // Source marker (yellow).
+    let centre = (n as f32 - 1.0) * 0.5;
+    let (cx, cy) = if st.orbiting_source {
+        let omega = std::f32::consts::TAU / 6.0;
+        let r = n as f32 / 5.0;
+        let theta = (st.sim_t as f32) * omega;
+        (centre + r * theta.cos(), centre + r * theta.sin())
+    } else {
+        (centre, centre)
+    };
+    let sx = (cx + 0.5) * cell - half;
+    let sz = (cy + 0.5) * cell - half;
+    gizmos.sphere(Vec3::new(sx, 0.5, sz), 0.04, Color::srgb(1.0, 1.0, 0.2));
+}
+
+fn warp_fft_poisson_2d_pane(ui: &mut egui::Ui, st: &mut WarpFftPoisson2dState) {
+    ui.label("Warp FFT Poisson 2-D — periodic `−∇² p = f` via tile-FFT");
+    ui.separator();
+    readout(ui, "Grid", &format!("{0}×{0}", FFT_POISSON_GRID));
+    readout(ui, "Last solve", &format!("{:.1} µs", st.last_us));
+    readout(ui, "t", &format!("{:.2} s", st.sim_t));
+    let (pmin, pmax) = st
+        .p
+        .iter()
+        .copied()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+            (a.min(v), b.max(v))
+        });
+    readout(ui, "p range", &format!("[{:+.3}, {:+.3}]", pmin, pmax));
+    ui.separator();
+    ui.label("Source");
+    let _ = ui.checkbox(&mut st.orbiting_source, "Orbiting source");
+    let _ = ui.add(egui::Slider::new(&mut st.source_sigma, 0.6..=4.0).text("σ (cells)"));
+    let _ = ui.add(egui::Slider::new(&mut st.source_amp, -20.0..=20.0).text("amplitude"));
+    ui.separator();
+    ui.label("Field dynamics");
+    let _ = ui.add(egui::Slider::new(&mut st.decay, 0.0..=1.0).text("decay (mix)"));
+    if ui.button("Reset field").clicked() {
+        st.needs_reset = true;
+    }
+    ui.small(
+        "Each frame: deposit a Gaussian source, solve `−∇² p = source` via \
+         GPU `solve_pressure_poisson_fft` (Stage 37.5), then EMA-mix into \
+         the visible field. Coloured grid renders the pressure heightmap.",
+    );
+}
