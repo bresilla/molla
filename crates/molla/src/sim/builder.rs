@@ -3404,52 +3404,28 @@ fn color_particles_with_extra_pairs(
         neighbour[vi].push(u);
     }
 
-    let mut color_of = vec![u32::MAX; particle_count];
-    let mut max_color: u32 = 0;
-    let mut used = Vec::<bool>::with_capacity(16);
+    // Stage 38d.1 — route the actual colour assignment through the
+    // shared `geometry::graph_coloring::mcs_color` (Maximum Cardinality
+    // Search ordering + greedy). The domain-specific bit above builds
+    // the neighbour list; the algorithm is generic and lives in the
+    // utility.
+    let color_of = crate::geometry::mcs_color(&neighbour);
+    let color_count = color_of.iter().copied().max().map_or(0, |c| c as usize + 1);
+    let groups = crate::geometry::group_by_color(&color_of);
 
-    for v in 0..particle_count {
-        used.clear();
-        for &nbr in &neighbour[v] {
-            let nbr = nbr as usize;
-            if nbr >= particle_count {
-                continue;
-            }
-            let nc = color_of[nbr];
-            if nc == u32::MAX {
-                continue;
-            }
-            let nc_idx = nc as usize;
-            if used.len() <= nc_idx {
-                used.resize(nc_idx + 1, false);
-            }
-            used[nc_idx] = true;
-        }
-        let mut chosen: u32 = 0;
-        while (chosen as usize) < used.len() && used[chosen as usize] {
-            chosen += 1;
-        }
-        color_of[v] = chosen;
-        if chosen > max_color {
-            max_color = chosen;
-        }
-    }
-
-    let color_count = (max_color as usize) + 1;
-    let mut counts = vec![0u32; color_count];
-    for &c in &color_of {
-        counts[c as usize] += 1;
-    }
+    // Convert groups to CSR — same offsets + indices layout the
+    // downstream VBD kernel expects.
     let mut offsets = vec![0u32; color_count + 1];
     for k in 0..color_count {
-        offsets[k + 1] = offsets[k] + counts[k];
+        offsets[k + 1] = offsets[k] + groups[k].len() as u32;
     }
-    let mut cursors = offsets[..color_count].to_vec();
     let mut indices = vec![0u32; particle_count];
-    for (v, &c) in color_of.iter().enumerate() {
-        let slot = cursors[c as usize] as usize;
-        indices[slot] = v as u32;
-        cursors[c as usize] += 1;
+    let mut cursor = 0usize;
+    for group in &groups {
+        for &v in group {
+            indices[cursor] = v as u32;
+            cursor += 1;
+        }
     }
     (color_count, offsets, indices)
 }
