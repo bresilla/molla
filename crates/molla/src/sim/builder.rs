@@ -2927,74 +2927,32 @@ fn color_springs(
     if n == 0 {
         return (0, vec![0u32], Vec::new());
     }
-    // Per-particle adjacency: list of (spring_idx, color) once we've
-    // assigned a spring's colour, store the colour against both
-    // endpoints. To pick the next spring's colour we scan its two
-    // endpoints' colour sets and find the smallest colour absent
-    // from the union.
-    let mut endpoint_colors: Vec<Vec<u32>> = vec![Vec::new(); particle_count];
-    let mut spring_color: Vec<u32> = vec![0u32; n];
-    let mut max_color: u32 = 0;
+    // Stage 38d.1 — route through the shared
+    // `geometry::graph_coloring::color_constraints` utility. Each
+    // spring is a constraint touching its two endpoint particles;
+    // the utility (MCS + greedy on the line-graph) tends to use
+    // fewer colours than the previous ad-hoc endpoint-scan greedy
+    // on irregular topology.
+    let _ = particle_count; // accepted for API stability
+    let constraint_verts: Vec<Vec<u32>> = (0..n).map(|i| vec![spring_a[i], spring_b[i]]).collect();
+    let colors = crate::geometry::color_constraints(&constraint_verts);
+    let color_count = colors.iter().copied().max().map_or(0, |c| c as usize + 1);
 
-    let mut used = Vec::<bool>::with_capacity(8);
-    for i in 0..n {
-        let a = spring_a[i] as usize;
-        let b = spring_b[i] as usize;
-        let in_bounds = a < particle_count && b < particle_count;
-        let neighbour_max = if in_bounds {
-            endpoint_colors[a].iter().chain(endpoint_colors[b].iter()).copied().max()
-        } else {
-            None
-        };
-        let need_size = neighbour_max.map_or(0, |c| c as usize + 2);
-        if used.len() < need_size {
-            used.resize(need_size, false);
-        }
-        for u in used.iter_mut() {
-            *u = false;
-        }
-        if in_bounds {
-            for &c in &endpoint_colors[a] {
-                if (c as usize) < used.len() {
-                    used[c as usize] = true;
-                }
-            }
-            for &c in &endpoint_colors[b] {
-                if (c as usize) < used.len() {
-                    used[c as usize] = true;
-                }
-            }
-        }
-        let mut chosen: u32 = 0;
-        while (chosen as usize) < used.len() && used[chosen as usize] {
-            chosen += 1;
-        }
-        spring_color[i] = chosen;
-        if chosen > max_color {
-            max_color = chosen;
-        }
-        if in_bounds {
-            endpoint_colors[a].push(chosen);
-            endpoint_colors[b].push(chosen);
-        }
-    }
-
-    let color_count = (max_color as usize) + 1;
-    // Build CSR: count per colour, prefix-sum to offsets, then place.
-    let mut counts = vec![0u32; color_count];
-    for &c in &spring_color {
-        counts[c as usize] += 1;
-    }
+    // Convert to CSR (offsets + indices ordered by colour). The
+    // helper produces `groups[k]` = list of constraint indices in
+    // colour k; we lay them out in colour-major order.
+    let groups = crate::geometry::group_by_color(&colors);
     let mut offsets = vec![0u32; color_count + 1];
     for k in 0..color_count {
-        offsets[k + 1] = offsets[k] + counts[k];
+        offsets[k + 1] = offsets[k] + groups[k].len() as u32;
     }
-    let mut cursors = offsets[..color_count].to_vec();
     let mut indices = vec![0u32; n];
-    for (i, &c) in spring_color.iter().enumerate() {
-        let slot = cursors[c as usize];
-        indices[slot as usize] = i as u32;
-        cursors[c as usize] += 1;
+    let mut cursor = 0usize;
+    for group in &groups {
+        for &i in group {
+            indices[cursor] = i as u32;
+            cursor += 1;
+        }
     }
     (color_count, offsets, indices)
 }
