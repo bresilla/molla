@@ -19285,6 +19285,11 @@ struct WarpWaveExampleState {
     last_iters: usize,
     needs_reset: bool,
     user_reset: bool,
+    /// GPU stepper — `Some` once the user has clicked "Use GPU"
+    /// (built lazily because `Default` doesn't have access to the
+    /// `Engine`). Rebuilt whenever the mesh or BCs change.
+    gpu_stepper: Option<fem::WaveStepperGpu>,
+    use_gpu: bool,
 }
 
 impl Default for WarpWaveExampleState {
@@ -19341,6 +19346,8 @@ impl Default for WarpWaveExampleState {
             last_iters: 0,
             needs_reset: false,
             user_reset: false,
+            gpu_stepper: None,
+            use_gpu: false,
         }
     }
 }
@@ -19358,24 +19365,67 @@ fn update_warp_wave(
         *st = WarpWaveExampleState::default();
         return;
     }
-    if (st.c2 - st.last_c2_baked).abs() > 1e-9 {
+    let stiff_changed = (st.c2 - st.last_c2_baked).abs() > 1e-9;
+    if stiff_changed {
         st.stiff = fem::assemble_global(&st.mesh, fem::FunctionSpace::P1Nodal, |c, v| {
             fem::compute_element_wave_stiffness(c, v, st.c2)
         })
         .expect("WarpWave rebuild stiffness");
         st.last_c2_baked = st.c2;
+        // Stiffness changed — invalidate the cached GPU stepper.
+        st.gpu_stepper = None;
     }
-    let step = fem::solve_wave_transient(
-        &st.mass,
-        &st.stiff,
-        &st.u,
-        &st.v,
-        &st.a,
-        st.dt,
-        fem::NEWMARK_BETA_DEFAULT,
-        fem::NEWMARK_GAMMA_DEFAULT,
-        &st.bcs,
-    );
+    // Lazily build the GPU stepper if the user has enabled GPU mode
+    // and the cache is empty.
+    if st.use_gpu && st.gpu_stepper.is_none() {
+        match fem::WaveStepperGpu::new(
+            &sim.engine,
+            &st.mesh,
+            &st.mass,
+            &st.stiff,
+            st.dt,
+            fem::NEWMARK_BETA_DEFAULT,
+            fem::NEWMARK_GAMMA_DEFAULT,
+            &st.bcs,
+        ) {
+            Ok(s) => st.gpu_stepper = Some(s),
+            Err(e) => {
+                warn!("WarpWave: GPU stepper init failed ({e}); falling back to CPU");
+                st.use_gpu = false;
+            }
+        }
+    }
+    let step = if let (true, Some(stepper)) = (st.use_gpu, st.gpu_stepper.as_ref()) {
+        match stepper.step(&st.u, &st.v, &st.a) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("WarpWave: GPU step failed ({e}); falling back to CPU this frame");
+                fem::solve_wave_transient(
+                    &st.mass,
+                    &st.stiff,
+                    &st.u,
+                    &st.v,
+                    &st.a,
+                    st.dt,
+                    fem::NEWMARK_BETA_DEFAULT,
+                    fem::NEWMARK_GAMMA_DEFAULT,
+                    &st.bcs,
+                )
+            }
+        }
+    } else {
+        fem::solve_wave_transient(
+            &st.mass,
+            &st.stiff,
+            &st.u,
+            &st.v,
+            &st.a,
+            st.dt,
+            fem::NEWMARK_BETA_DEFAULT,
+            fem::NEWMARK_GAMMA_DEFAULT,
+            &st.bcs,
+        )
+    };
     st.u = step.u_new;
     st.v = step.v_new;
     st.a = step.a_new;
@@ -19437,6 +19487,22 @@ fn warp_wave_pane(ui: &mut egui::Ui, state: &mut WarpWaveExampleState) {
     if ui.button("Reset (re-emit pulse)").clicked() {
         state.user_reset = true;
     }
+    ui.separator();
+    let was_gpu = state.use_gpu;
+    let _ = ui.checkbox(&mut state.use_gpu, "Use GPU CG (Stage 36.5 Slice E)");
+    if was_gpu != state.use_gpu {
+        // Toggle changed — invalidate the cached stepper so the
+        // next frame either builds it or drops it.
+        state.gpu_stepper = None;
+    }
+    let backend = if state.use_gpu && state.gpu_stepper.is_some() {
+        "GPU resident CG"
+    } else if state.use_gpu {
+        "GPU (init pending / failed)"
+    } else {
+        "CPU"
+    };
+    readout(ui, "Backend", backend);
     ui.small("Newmark-β implicit (β=¼, γ=½) — unconditionally stable.");
     ui.small("Initial Gaussian pulse at (0.3, 0.3); 4 edges pinned.");
 }
