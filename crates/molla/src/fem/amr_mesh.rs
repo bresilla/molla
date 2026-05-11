@@ -63,9 +63,34 @@
 //! `m` has *both* parents non-hanging — the P1 average constraint
 //! `u_m = ½(u_a + u_b)` is then well-defined.
 //!
-//! v2 ships P1 (`degree = 1`) constraints only; the P2 case (a
-//! `½(a+b) + ⅛(a + b − 2m)` term on edges and a fitted face-mid
-//! constraint for tets) is deferred.
+//! v3 extends the constraint apparatus with:
+//!
+//! - **P2 hanging-node constraints** — the vertex midpoint constraint
+//!   (`u_m = u_M` where `M` is the parent edge's P2 mid-edge DoF) plus
+//!   the two **sub-edge** P2 mid-edge DoF constraints derived from
+//!   evaluating the parent's P2 polynomial at `ξ = 1/4` and `ξ = 3/4`:
+//!
+//!   ```text
+//!   u(ξ) = u_a (1-ξ)(1-2ξ) + u_b ξ(2ξ-1) + 4 u_M ξ(1-ξ)
+//!   ⇒ u(1/4) = (3/8) u_a + (-1/8) u_b + (3/4) u_M
+//!   ⇒ u(3/4) = (-1/8) u_a + (3/8) u_b + (3/4) u_M
+//!   ⇒ u(1/2) = u_M                        (the vertex-midpoint case)
+//!   ```
+//!
+//!   These three constraints together exactly reproduce a quadratic
+//!   field on a hanging P2 edge.
+//!
+//! - **DG-AMR constraint apparatus** — DG has no inter-cell DoF
+//!   sharing, so the analogue of a hanging-node constraint is a face-
+//!   flux balance condition. See
+//!   [`AmrMesh::compute_dg_amr_faces`]: each parent face on the
+//!   coarse side maps onto two child sub-faces on the refined side, and
+//!   the per-face flux integral on the parent must equal the sum over
+//!   the children.
+//!
+//! - **State interpolation** between refinement events — see
+//!   [`AmrMesh::transfer_state`]: evaluate a P1 field on the *old*
+//!   AMR/flat mesh at every DoF location of the *new* AMR/flat mesh.
 
 use std::collections::{HashMap, HashSet};
 
@@ -540,17 +565,35 @@ impl AmrMesh {
         }
     }
 
-    /// Build the P1 hanging-node constraint matrix `T` mapping
+    /// Build the hanging-node constraint matrix `T` mapping
     /// `u_free → u_total` for the **current flat-mesh DoF set**.
     ///
     /// `T` has shape `(n_total × n_free)` where `n_total` is the
     /// flat-mesh DoF count and `n_free` is the count of non-hanging
     /// DoFs. The row for a non-hanging DoF is a standard identity
-    /// indicator; the row for a hanging DoF `m` with parents
-    /// `(a, b)` is `½` at the free-index columns for `a` and `b`.
+    /// indicator; the row for a hanging DoF is the per-degree
+    /// interpolation:
     ///
-    /// `degree` must be `1` in v2 — the P2 constraint is the v3 work
-    /// item.
+    /// - **P1** (`degree = 1`): hanging vertex `m` constrained as
+    ///   `u_m = ½(u_a + u_b)` (linear average of edge endpoints).
+    ///
+    /// - **P2** (`degree = 2`): three hanging DoF families per parent
+    ///   edge that has been split. With `(u_a, u_b, u_M)` the parent
+    ///   edge's three P2 DoFs (corners `a`, `b` and the parent edge
+    ///   mid-DoF `M`), and the parent trace
+    ///   `u(ξ) = u_a (1-ξ)(1-2ξ) + u_b ξ(2ξ-1) + 4 u_M ξ(1-ξ)`:
+    ///   - **Vertex midpoint** at `ξ = 1/2` → `u_m = u_M`.
+    ///   - **Sub-edge** `(a, m)` mid-DoF at `ξ = 1/4` →
+    ///     `(3/8) u_a + (-1/8) u_b + (3/4) u_M`.
+    ///   - **Sub-edge** `(m, b)` mid-DoF at `ξ = 3/4` →
+    ///     `(-1/8) u_a + (3/8) u_b + (3/4) u_M`.
+    ///
+    ///   The full P2 DoF set on the flat mesh is `n_vert + n_edge`
+    ///   (vertex DoFs first, edge mid-DoFs second — matching the
+    ///   [`crate::fem::p2_element::P2DofMap`] layout). The constraint
+    ///   matrix is sized accordingly.
+    ///
+    /// `degree ∈ {1, 2}`. P3+ is not supported.
     ///
     /// `remap` is the AMR-vertex-id → flat-vertex-id map returned by
     /// [`Self::flatten_with_remap`]. Building it inside this routine
@@ -561,10 +604,23 @@ impl AmrMesh {
         degree: usize,
         remap: &HashMap<u32, u32>,
     ) -> Result<BsrMatrix> {
-        assert_eq!(
-            degree, 1,
-            "build_constraint_matrix: v2 ships P1 (degree = 1) only"
+        assert!(
+            degree == 1 || degree == 2,
+            "build_constraint_matrix: degree must be 1 or 2 (got {degree})"
         );
+        match degree {
+            1 => self.build_constraint_matrix_p1(remap),
+            2 => self.build_constraint_matrix_p2(remap),
+            _ => unreachable!(),
+        }
+    }
+
+    /// P1 implementation — one DoF per vertex, hanging-vertex constraint
+    /// is the linear average of its two edge endpoints.
+    fn build_constraint_matrix_p1(
+        &self,
+        remap: &HashMap<u32, u32>,
+    ) -> Result<BsrMatrix> {
         let n_total = remap.len();
 
         // Hanging DoF set in flat-index space — only those hanging
@@ -624,6 +680,382 @@ impl AmrMesh {
 
         BsrMatrix::from_scalar_triplets(n_total, n_free, &triplets)
     }
+
+    /// P2 implementation — vertex DoFs + edge-midpoint DoFs of the flat
+    /// mesh, in the same layout as [`crate::fem::p2_element::P2DofMap`]
+    /// (vertices first, edges second). Hanging-DoF families:
+    ///
+    /// - Hanging vertex midpoint `m` of parent edge `(a, b)` →
+    ///   `u_m = u_M` where `M` is the parent edge's P2 mid-edge DoF.
+    /// - Sub-edge mid-DoFs on `(a, m)` and `(m, b)` → curvature-aware
+    ///   constraint reproducing the parent's P2 polynomial at
+    ///   `ξ = 1/4` and `ξ = 3/4` respectively.
+    fn build_constraint_matrix_p2(
+        &self,
+        remap: &HashMap<u32, u32>,
+    ) -> Result<BsrMatrix> {
+        use super::function_space::compute_edges;
+
+        // We need the flat mesh's vertex + edge enumeration to address
+        // P2 edge-midpoint DoFs. The caller's `remap` already supplies
+        // AMR vid → flat vid; rebuilding the flat mesh is cheap (no
+        // per-cell heavy work) and lets us reuse `compute_edges`.
+        let (flat, _remap_check) = self.flatten_with_remap();
+        debug_assert_eq!(remap.len(), flat.vert_count());
+
+        let n_vert = flat.vert_count();
+        let (edges, edge_id) = compute_edges(&flat);
+        let n_edge = edges.len();
+        let n_total = n_vert + n_edge;
+
+        // Each hanging-node record gives us a parent edge `(a, b)` (in
+        // flat-vertex ids, after remapping) and a hanging vertex `m`.
+        // We need the parent edge DoF `M`, the sub-edge DoFs `Q1` (on
+        // `(a, m)`) and `Q2` (on `(m, b)`), in flat-mesh DoF coordinates.
+        //
+        // Layout: P2 DoFs are `[vertex_0..vertex_{n_vert-1},
+        //                       edge_0..edge_{n_edge-1}]`. So edge `e`
+        // (with flat-edge id `e_id`) lives at DoF `n_vert + e_id`.
+        //
+        // For each hanging record we set up to 3 constraint rows:
+        //   row vid(m)            ← [(vid(M_dof_idx), 1.0)]
+        //   row dof(Q1)           ← [(vid(a),  3/8), (vid(b), -1/8), (vid(M_dof_idx), 3/4)]
+        //   row dof(Q2)           ← [(vid(a), -1/8), (vid(b),  3/8), (vid(M_dof_idx), 3/4)]
+        //
+        // `vid(M_dof_idx) = n_vert + edge_id[(a, b)]`.
+        let mut is_hanging: Vec<bool> = vec![false; n_total];
+        // `constraint[i]` = Some(Vec<(dof_index, coefficient)>) for
+        // hanging DoF i. We build it as a flat list to keep allocation
+        // simple.
+        let mut constraint_rows: Vec<Option<Vec<(usize, Real)>>> =
+            vec![None; n_total];
+
+        let edge_key = |a: u32, b: u32| -> [u32; 2] {
+            if a < b { [a, b] } else { [b, a] }
+        };
+
+        for hn in &self.hanging_nodes {
+            let Some(&flat_m) = remap.get(&hn.dof) else { continue };
+            let Some(&flat_a) = remap.get(&hn.parents[0]) else { continue };
+            let Some(&flat_b) = remap.get(&hn.parents[1]) else { continue };
+
+            // Parent edge (a, b) in flat-mesh edge enumeration.
+            let Some(&pe_id) = edge_id.get(&edge_key(flat_a, flat_b)) else {
+                // The parent edge has to live in the flat mesh — the
+                // unrefined leaf on the other side uses it. If we ever
+                // hit this (e.g. corner refinement on the boundary
+                // where both sides happen to refine), the hanging
+                // record is spurious and there's nothing to constrain.
+                continue;
+            };
+            let m_parent_dof = n_vert + pe_id as usize;
+
+            // (1) Vertex midpoint constraint: u_m = u_M.
+            let m_dof = flat_m as usize;
+            is_hanging[m_dof] = true;
+            constraint_rows[m_dof] = Some(vec![(m_parent_dof, 1.0)]);
+
+            // (2) Sub-edge (a, m) P2 mid-edge DoF — constrained iff
+            // present in the flat mesh's edge set. It will be present
+            // if the refined-side leaves include this sub-edge, which
+            // is the standard case under 2:1 balance.
+            if let Some(&se1_id) = edge_id.get(&edge_key(flat_a, flat_m)) {
+                let q1_dof = n_vert + se1_id as usize;
+                is_hanging[q1_dof] = true;
+                constraint_rows[q1_dof] = Some(vec![
+                    (flat_a as usize, 3.0 / 8.0),
+                    (flat_b as usize, -1.0 / 8.0),
+                    (m_parent_dof, 3.0 / 4.0),
+                ]);
+            }
+            if let Some(&se2_id) = edge_id.get(&edge_key(flat_m, flat_b)) {
+                let q2_dof = n_vert + se2_id as usize;
+                is_hanging[q2_dof] = true;
+                constraint_rows[q2_dof] = Some(vec![
+                    (flat_a as usize, -1.0 / 8.0),
+                    (flat_b as usize, 3.0 / 8.0),
+                    (m_parent_dof, 3.0 / 4.0),
+                ]);
+            }
+        }
+
+        // Free DoFs are the non-hanging ones. Numbered in DoF order so
+        // the pattern stays deterministic.
+        let mut free_index: Vec<i32> = vec![-1; n_total];
+        let mut n_free = 0usize;
+        for i in 0..n_total {
+            if !is_hanging[i] {
+                free_index[i] = n_free as i32;
+                n_free += 1;
+            }
+        }
+
+        // Emit triplets — identity for free DoFs, the interpolation
+        // coefficients for hanging rows. 2:1 balance is enforced by
+        // `refine_where`, so every DoF a hanging row depends on must be
+        // free; we check that here as a debug assertion.
+        let mut triplets: Vec<(usize, usize, Real)> =
+            Vec::with_capacity(n_total + 3 * self.hanging_nodes.len() * 3);
+        for i in 0..n_total {
+            if is_hanging[i] {
+                let row = constraint_rows[i]
+                    .as_ref()
+                    .expect("hanging DoF without constraint row");
+                for &(dof_j, c) in row {
+                    debug_assert!(
+                        !is_hanging[dof_j],
+                        "P2 hanging-DoF dependency {dof_j} is itself hanging — \
+                         2:1 balance violated"
+                    );
+                    let col = free_index[dof_j] as usize;
+                    triplets.push((i, col, c));
+                }
+            } else {
+                let col = free_index[i] as usize;
+                triplets.push((i, col, 1.0));
+            }
+        }
+
+        BsrMatrix::from_scalar_triplets(n_total, n_free, &triplets)
+    }
+
+    /// Stage 45 v3 — interpolate a P1 nodal field from `u_old` (defined
+    /// on the *previous* flat-mesh DoF set) onto the *current* flat
+    /// mesh's DoF set.
+    ///
+    /// `old_amr` is the AMR mesh that produced `u_old`; `self` is the
+    /// new (refined or coarsened) AMR mesh. The interpolant uses the
+    /// P1 nodal shape functions of `old_amr`'s leaf containing each new
+    /// DoF location.
+    ///
+    /// For a linear field `u(x) = α + β · x` the interpolation is
+    /// **exact** (P1 reproduces affine functions). For higher-order
+    /// fields the operator is `O(h²)` accurate per the standard
+    /// Lagrange-interpolation estimate.
+    ///
+    /// Returns a `Vec<Real>` of length `self.flatten().vert_count()`
+    /// (one entry per flat-mesh vertex DoF).
+    ///
+    /// # Panics
+    /// Panics if `u_old.len()` does not match `old_amr`'s flat vertex
+    /// count, or if a new DoF location falls outside the geometric
+    /// support of every old leaf (indicates a topology mismatch — the
+    /// two AMR meshes must share the same `base_mesh`).
+    #[must_use]
+    pub fn transfer_state(
+        &self,
+        u_old: &[Real],
+        old_amr: &AmrMesh,
+    ) -> Vec<Real> {
+        let (old_flat, _) = old_amr.flatten_with_remap();
+        assert_eq!(
+            u_old.len(),
+            old_flat.vert_count(),
+            "transfer_state: u_old length ({}) != old flat-mesh DoF count ({})",
+            u_old.len(),
+            old_flat.vert_count()
+        );
+
+        let (new_flat, _) = self.flatten_with_remap();
+        let mut u_new = vec![0.0_f64 as Real; new_flat.vert_count()];
+
+        // Build a leaf index — list of (cell index, vertex positions)
+        // we can iterate to locate each new vertex. For Stage 45 mesh
+        // sizes the linear search is acceptable; a spatial-hash index
+        // is the obvious follow-up if profiling demands it.
+        for (i, p) in new_flat.vertices.iter().enumerate() {
+            u_new[i] = evaluate_p1_field_on_mesh(&old_flat, u_old, *p);
+        }
+
+        u_new
+    }
+
+    /// Stage 45 v3 — for DG-AMR, return the list of
+    /// **parent → child** face mappings induced by the refinement
+    /// tree.
+    ///
+    /// Each `DgAmrFaceMatch` records one **parent face** (the face of
+    /// a coarse leaf on the unrefined side of a T-junction) together
+    /// with the **sub-faces** that the refined side contributes —
+    /// 2 sub-edges per parent edge in 2D, 4 sub-triangles per parent
+    /// triangular face in 3D (corresponding to a 1→4 face-split that
+    /// goes along with a 1→8 tet split).
+    ///
+    /// The list is computed from the AMR tree (no FEM data needed)
+    /// and is used by DG-AMR flux assembly to balance the parent's
+    /// flux integral against the child sum so the DG semi-discrete
+    /// equation stays conservative across refinement levels.
+    #[must_use]
+    pub fn compute_dg_amr_faces(&self) -> Vec<DgAmrFaceMatch> {
+        let mut matches = Vec::new();
+
+        // Walk leaves; for each leaf edge, look up the midpoint cache.
+        // If the edge has been split exactly once (depth 1 — the 2:1
+        // balance invariant), it is a coarse "parent" face whose two
+        // child sub-edges live on the refined side.
+        //
+        // For tets, a face is a triangle (a, b, c); we look up the
+        // three edge midpoints (a,b), (b,c), (c,a). If all three are
+        // present, the face is split 1→4 (4 sub-triangles meeting at
+        // the three midpoints + the central inverted tri).
+        for (idx, cell) in self.cells.iter().enumerate() {
+            if self.is_refined[idx] {
+                continue;
+            }
+            match cell {
+                FemCell::Tri(v) => {
+                    for k in 0..3 {
+                        let a = v[k];
+                        let b = v[(k + 1) % 3];
+                        let key = if a < b { (a, b) } else { (b, a) };
+                        if let Some(&m) = self.midpoint_cache.get(&key) {
+                            matches.push(DgAmrFaceMatch {
+                                parent_cell: idx as u32,
+                                parent_face: vec![a, b],
+                                child_faces: vec![vec![a, m], vec![m, b]],
+                            });
+                        }
+                    }
+                }
+                FemCell::Tet(v) => {
+                    // 4 tri faces of the tet — opposite each vertex.
+                    let faces: [[usize; 3]; 4] = [
+                        [1, 2, 3],
+                        [0, 2, 3],
+                        [0, 1, 3],
+                        [0, 1, 2],
+                    ];
+                    for f in &faces {
+                        let a = v[f[0]];
+                        let b = v[f[1]];
+                        let c = v[f[2]];
+                        let key_ab = if a < b { (a, b) } else { (b, a) };
+                        let key_bc = if b < c { (b, c) } else { (c, b) };
+                        let key_ca = if c < a { (c, a) } else { (a, c) };
+                        let m_ab = self.midpoint_cache.get(&key_ab).copied();
+                        let m_bc = self.midpoint_cache.get(&key_bc).copied();
+                        let m_ca = self.midpoint_cache.get(&key_ca).copied();
+                        if let (Some(m_ab), Some(m_bc), Some(m_ca)) =
+                            (m_ab, m_bc, m_ca)
+                        {
+                            // 1→4 sub-triangles — corner tris around
+                            // each parent vertex + the central
+                            // inverted tri.
+                            matches.push(DgAmrFaceMatch {
+                                parent_cell: idx as u32,
+                                parent_face: vec![a, b, c],
+                                child_faces: vec![
+                                    vec![a, m_ab, m_ca],
+                                    vec![m_ab, b, m_bc],
+                                    vec![m_ca, m_bc, c],
+                                    vec![m_ab, m_bc, m_ca],
+                                ],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        matches
+    }
+}
+
+/// Evaluate a P1 nodal field `u` on `mesh` at physical point `x`.
+///
+/// Walks every cell, computes the barycentric coordinates of `x` inside
+/// it, and returns the linear combination `Σ λᵢ uᵢ` for the first cell
+/// whose barycentrics are all ≥ `-tol`. The tolerance handles the
+/// "shared edge" case where `x` is exactly on a cell boundary: the
+/// first containing cell wins (deterministic by iteration order).
+///
+/// # Panics
+/// Panics if `x` is outside every cell in `mesh` (beyond `tol`).
+fn evaluate_p1_field_on_mesh(mesh: &FemMesh, u: &[Real], x: Vec3) -> Real {
+    use crate::math::Mat3;
+
+    let tol: Real = 1.0e-9;
+    for cell in &mesh.cells {
+        match cell {
+            FemCell::Tri(idx) => {
+                let p0 = mesh.vertices[idx[0] as usize];
+                let p1 = mesh.vertices[idx[1] as usize];
+                let p2 = mesh.vertices[idx[2] as usize];
+                // 2D barycentric (z assumed to be planar / matching).
+                let det = (p1.x - p0.x) * (p2.y - p0.y)
+                    - (p2.x - p0.x) * (p1.y - p0.y);
+                if det.abs() < 1.0e-30 {
+                    continue;
+                }
+                let inv = 1.0 / det;
+                let l1 = ((p2.y - p0.y) * (x.x - p0.x)
+                    + (p0.x - p2.x) * (x.y - p0.y))
+                    * inv;
+                let l2 = ((p0.y - p1.y) * (x.x - p0.x)
+                    + (p1.x - p0.x) * (x.y - p0.y))
+                    * inv;
+                let l0 = 1.0 - l1 - l2;
+                if l0 >= -tol && l1 >= -tol && l2 >= -tol {
+                    return l0 * u[idx[0] as usize]
+                        + l1 * u[idx[1] as usize]
+                        + l2 * u[idx[2] as usize];
+                }
+            }
+            FemCell::Tet(idx) => {
+                let p0 = mesh.vertices[idx[0] as usize];
+                let p1 = mesh.vertices[idx[1] as usize];
+                let p2 = mesh.vertices[idx[2] as usize];
+                let p3 = mesh.vertices[idx[3] as usize];
+                let d = Mat3::from_cols(p1 - p0, p2 - p0, p3 - p0);
+                let det = d.determinant();
+                if det.abs() < 1.0e-30 {
+                    continue;
+                }
+                let inv = d.inverse();
+                let r = x - p0;
+                let l1 =
+                    inv.x_axis.x * r.x + inv.y_axis.x * r.y + inv.z_axis.x * r.z;
+                let l2 =
+                    inv.x_axis.y * r.x + inv.y_axis.y * r.y + inv.z_axis.y * r.z;
+                let l3 =
+                    inv.x_axis.z * r.x + inv.y_axis.z * r.y + inv.z_axis.z * r.z;
+                let l0 = 1.0 - l1 - l2 - l3;
+                if l0 >= -tol && l1 >= -tol && l2 >= -tol && l3 >= -tol {
+                    return l0 * u[idx[0] as usize]
+                        + l1 * u[idx[1] as usize]
+                        + l2 * u[idx[2] as usize]
+                        + l3 * u[idx[3] as usize];
+                }
+            }
+        }
+    }
+    panic!(
+        "evaluate_p1_field_on_mesh: point ({}, {}, {}) lies outside every cell",
+        x.x, x.y, x.z
+    );
+}
+
+/// One **parent face → child sub-faces** record for DG-AMR. The
+/// constraint imposed at a 2:1-balanced face split is that the DG
+/// numerical-flux integral over `parent_face` (computed from the
+/// coarse side's basis) equals the sum of flux integrals over
+/// `child_faces` (each computed from the refined side's basis).
+///
+/// For triangles (2D) the parent face is an edge `[a, b]` and the
+/// children are `[a, m]` and `[m, b]`. For tetrahedra (3D) the parent
+/// face is a triangle `[a, b, c]` and the children are the four sub-
+/// triangles produced by inserting the three edge midpoints (the
+/// "red" 1→4 split of a triangle).
+#[derive(Clone, Debug)]
+pub struct DgAmrFaceMatch {
+    /// AMR cell index of the coarse leaf that owns the parent face.
+    pub parent_cell: u32,
+    /// AMR vertex ids of the parent face (length 2 for tri-mesh
+    /// edges, length 3 for tet-mesh triangular faces).
+    pub parent_face: Vec<u32>,
+    /// AMR vertex ids of the child sub-faces (each entry has the
+    /// same length as `parent_face`).
+    pub child_faces: Vec<Vec<u32>>,
 }
 
 /// Iterate the unordered edges of a single FEM cell as `(a, b)`
@@ -730,7 +1162,11 @@ pub fn tt_times_vector(t: &BsrMatrix, v: &[Real]) -> Vec<Real> {
 /// Compute `Tᵀ · K · T` for sparse `T` (n_total × n_free) and `K`
 /// (n_total × n_total), returning a sparse `BsrMatrix` of shape
 /// `(n_free × n_free)`.
-fn compute_ttkt(t: &BsrMatrix, k: &BsrMatrix) -> Result<BsrMatrix> {
+///
+/// Useful when the caller has assembled `K` separately (e.g. for a P2
+/// problem) and wants to reduce it against the constraint matrix `T`
+/// built via [`AmrMesh::build_constraint_matrix`].
+pub fn compute_ttkt(t: &BsrMatrix, k: &BsrMatrix) -> Result<BsrMatrix> {
     debug_assert_eq!(t.b, 1);
     debug_assert_eq!(k.b, 1);
     debug_assert_eq!(t.nrows(), k.nrows());

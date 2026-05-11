@@ -77,8 +77,8 @@ pub mod stokes_gpu;
 
 pub use adjoint::{compute_grad_load, compute_grad_youngs, solve_adjoint, solve_adjoint_with};
 pub use amr_mesh::{
-    assemble_global_amr, near_point, tt_times_vector, AmrMesh, HangingNode, RefinedCell,
-    RefinedChildren, RefinementCriterion,
+    assemble_global_amr, compute_ttkt, near_point, tt_times_vector, AmrMesh, DgAmrFaceMatch,
+    HangingNode, RefinedCell, RefinedChildren, RefinementCriterion,
 };
 pub use apic_coupling::{locate_particle_tet, validate_hybrid, ApicHybrid, ApicParticle};
 #[cfg(feature = "gpu")]
