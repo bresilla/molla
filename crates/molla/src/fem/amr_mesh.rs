@@ -1,10 +1,11 @@
-//! Stage 45 v1 — adaptive-mesh-refinement foundation for FEM.
+//! Stage 45 — adaptive-mesh-refinement foundation for FEM.
 //!
-//! v1 ships the **data-structure foundation** and **uniform refinement**
-//! only. The hanging-node DoF constraints required for true *non-uniform*
-//! refinement (the T-junction case where a refined cell shares an edge
-//! with a coarser unrefined neighbour) are intentionally deferred — see
-//! the module-level "v2 outlook" comment below.
+//! v1 shipped the **data-structure foundation** and **uniform refinement**.
+//! v2 lands the constraint apparatus that makes *non-uniform* refinement
+//! actually usable: hanging-node detection, **2:1 balance** enforcement
+//! through propagated refinement, and a sparse **constraint matrix `T`**
+//! that maps `u_free → u_total` so the caller can solve the reduced
+//! `K_c = TᵀKT, f_c = Tᵀf` system on the free DoFs only.
 //!
 //! # Concepts
 //!
@@ -44,7 +45,7 @@
 //!   repeated refinement remains shape-regular (no "sliver"
 //!   degeneracy after multiple levels).
 //!
-//! # v2 outlook — hanging-node constraints
+//! # Hanging nodes and the constraint matrix
 //!
 //! Non-uniform refinement produces *hanging nodes*: a midpoint vertex
 //! `m` that lives on the shared edge of (a refined cell) and (an
@@ -52,17 +53,28 @@
 //! one of its DoFs, so naive assembly leaves the linear system
 //! inconsistent across the hanging edge. The standard fix is to
 //! **constrain** the DoF at `m` to be the average of its two parent
-//! vertices (for P1) or a higher-order combination (for P2+). v1
-//! refuses to address this — the only AMR pattern supported is uniform
-//! refinement (every leaf refined to the same depth) where every edge
-//! is shared between cells of the same level and no hanging node can
-//! appear. Stage 45 v2 will land the constraint matrix `T` and the
-//! reduced solve `Kᶜ = TᵀKT, fᶜ = Tᵀf`.
+//! vertices `(u_m = ½(u_a + u_b))` for P1 — encoded as a sparse
+//! constraint matrix `T` that maps the *free* (non-hanging) DoF set to
+//! the *full* DoF set.
+//!
+//! v2 enforces **2:1 balance**: after every `refine_where` we walk the
+//! edge-adjacency graph and refine any leaf whose neighbour is more
+//! than one level finer. This guarantees that every hanging-node midpoint
+//! `m` has *both* parents non-hanging — the P1 average constraint
+//! `u_m = ½(u_a + u_b)` is then well-defined.
+//!
+//! v2 ships P1 (`degree = 1`) constraints only; the P2 case (a
+//! `½(a+b) + ⅛(a + b − 2m)` term on edges and a fitted face-mid
+//! constraint for tets) is deferred.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::core::Result;
+use crate::math::sparse::BsrMatrix;
 use crate::math::{Real, Vec3};
 
+use super::assembly::assemble_global;
+use super::function_space::FunctionSpace;
 use super::mesh::{FemCell, FemMesh};
 
 /// Per-parent record of a 1→N split.
@@ -115,6 +127,24 @@ impl RefinedChildren {
     pub fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
+}
+
+/// One hanging-node DoF — a midpoint vertex `m` that appears on the
+/// edge of *some* leaf without that leaf having been refined to
+/// introduce it.
+///
+/// `dof` is the **AMR vertex id** of the hanging midpoint;
+/// `parents` are the AMR vertex ids of the two endpoints of the edge
+/// `m` sits on (the endpoints come from the unrefined leaf, so they
+/// are themselves *not* hanging when 2:1 balance is enforced).
+///
+/// The P1 constraint encoded by this record is `u_m = ½(u_a + u_b)`.
+#[derive(Clone, Copy, Debug)]
+pub struct HangingNode {
+    /// AMR vertex id of the constrained midpoint DoF.
+    pub dof: u32,
+    /// AMR vertex ids of the two parent endpoints (the edge `m` is on).
+    pub parents: [u32; 2],
 }
 
 /// Refinement criterion — predicate over a single cell.
@@ -200,6 +230,13 @@ pub struct AmrMesh {
     /// stays watertight (no T-junction on a shared *fully refined*
     /// edge).
     midpoint_cache: HashMap<(u32, u32), u32>,
+
+    /// Cached hanging-node records — one per midpoint DoF that lives on
+    /// a leaf edge but was not introduced by that leaf's own
+    /// refinement. Populated by [`Self::compute_hanging_nodes`], which
+    /// is invoked automatically after every `refine_where` /
+    /// `refine_uniform` call.
+    hanging_nodes: Vec<HangingNode>,
 }
 
 impl AmrMesh {
@@ -217,6 +254,7 @@ impl AmrMesh {
             is_refined: vec![false; n_cells],
             refined_cells: Vec::new(),
             midpoint_cache: HashMap::new(),
+            hanging_nodes: Vec::new(),
         }
     }
 
@@ -299,7 +337,10 @@ impl AmrMesh {
 
     /// Refine every *leaf* cell once. After this call every cell that
     /// was a leaf gets split into 4 (tri) or 8 (tet) children, and
-    /// the new children become the leaves.
+    /// the new children become the leaves. The hanging-node cache is
+    /// refreshed at the end — uniform refinement produces no hanging
+    /// nodes, but rebuilding ensures the cache stays consistent across
+    /// repeated calls.
     pub fn refine_uniform(&mut self) {
         // Snapshot the current leaf indices — we mutate `cells` /
         // `is_refined` inside the loop, so we must not iterate them
@@ -310,18 +351,18 @@ impl AmrMesh {
         for idx in leaves {
             self.refine_cell(idx);
         }
+        self.compute_hanging_nodes();
     }
 
-    /// Refine every leaf cell that `criterion` accepts. Convenience
-    /// closure-friendly entry point — useful for tests that drive
-    /// refinement off a spatial query (`near_point(p, r)` etc.).
+    /// Refine every leaf cell that `criterion` accepts, then propagate
+    /// refinement until the **2:1 balance** invariant is restored:
+    /// no two edge-adjacent leaves differ in refinement level by more
+    /// than one. After balance is restored, `compute_hanging_nodes` is
+    /// rebuilt so the constraint apparatus sees the current leaf set.
     ///
-    /// **Caveat (v1)** — driving non-uniform refinement via a
-    /// criterion *will* produce hanging nodes if neighbouring cells
-    /// disagree about whether to refine. The flatten + assembly path
-    /// is **only** valid for the uniform-refinement subset of the
-    /// resulting tree. v1 ships this entry so the v2 hanging-node
-    /// work has a working harness to plug into.
+    /// 2:1 balance is what makes the P1 hanging-node constraint
+    /// `u_m = ½(u_a + u_b)` *well-defined*: with the balance enforced,
+    /// neither parent endpoint of `m` is itself hanging.
     pub fn refine_where<C: RefinementCriterion>(&mut self, criterion: C) {
         let to_refine: Vec<usize> = (0..self.cells.len())
             .filter(|&i| !self.is_refined[i])
@@ -330,6 +371,8 @@ impl AmrMesh {
         for idx in to_refine {
             self.refine_cell(idx);
         }
+        self.propagate_refinement();
+        self.compute_hanging_nodes();
     }
 
     /// Build a [`FemMesh`] containing every leaf cell + the union of
@@ -342,6 +385,15 @@ impl AmrMesh {
     /// rely on a specific ordering for correctness.
     #[must_use]
     pub fn flatten(&self) -> FemMesh {
+        self.flatten_with_remap().0
+    }
+
+    /// Like [`Self::flatten`] but also returns the
+    /// AMR-vertex-id → flat-vertex-id remap. Required by
+    /// [`Self::build_constraint_matrix`] to translate hanging-node
+    /// records (stored in AMR ids) into flat-DoF coordinates.
+    #[must_use]
+    pub fn flatten_with_remap(&self) -> (FemMesh, HashMap<u32, u32>) {
         // Compact vertex remap: AMR-vertex-id → flat-mesh-vertex-id.
         let mut remap: HashMap<u32, u32> = HashMap::new();
         let mut vertices: Vec<Vec3> = Vec::new();
@@ -370,7 +422,378 @@ impl AmrMesh {
             }
         }
 
-        FemMesh { vertices, cells }
+        (FemMesh { vertices, cells }, remap)
+    }
+
+    /// Borrow the cached hanging-node list. Empty unless
+    /// [`Self::compute_hanging_nodes`] (or a `refine_*` wrapper that
+    /// calls it) has been run.
+    #[must_use]
+    pub fn hanging_nodes(&self) -> &[HangingNode] {
+        &self.hanging_nodes
+    }
+
+    /// Walk every leaf's edges and record every midpoint that lives on
+    /// an edge of an unrefined leaf — that midpoint is a *hanging
+    /// node* on this leaf's edge.
+    ///
+    /// Algorithm:
+    /// - For every leaf cell, list its edges as `(min, max)` endpoint
+    ///   pairs (3 per triangle, 6 per tet).
+    /// - For each edge `(a, b)`, look up the midpoint cache. If
+    ///   present, the edge was split somewhere — but only by a
+    ///   *neighbouring* refinement (this leaf itself uses `(a, b)` as
+    ///   a flat edge). The midpoint `m` is then a hanging-node DoF for
+    ///   this leaf.
+    /// - Deduplicate by the hanging midpoint id (the same midpoint can
+    ///   show up on edges of multiple coarse leaves; one record is
+    ///   enough).
+    ///
+    /// The result is stored on `self.hanging_nodes` and returned by
+    /// the accessor [`Self::hanging_nodes`]. The order is the order in
+    /// which hanging midpoints are first encountered while walking
+    /// leaves; downstream code should not rely on a specific ordering
+    /// for correctness.
+    pub fn compute_hanging_nodes(&mut self) {
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut result: Vec<HangingNode> = Vec::new();
+
+        for (idx, cell) in self.cells.iter().enumerate() {
+            if self.is_refined[idx] {
+                continue;
+            }
+            for (a, b) in leaf_edges(cell) {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some(&m) = self.midpoint_cache.get(&key) {
+                    if seen.insert(m) {
+                        result.push(HangingNode {
+                            dof: m,
+                            parents: [key.0, key.1],
+                        });
+                    }
+                }
+            }
+        }
+
+        self.hanging_nodes = result;
+    }
+
+    /// Restore the **2:1 balance** invariant: walk edge-adjacency
+    /// between leaves and refine any coarse leaf that shares an edge
+    /// whose deeper neighbours have split it more than once.
+    ///
+    /// Implementation:
+    /// - For every leaf, scan its edges; for each edge `(a, b)`,
+    ///   recursively walk the midpoint cache to find the deepest
+    ///   *split depth* a neighbour has reached on this edge.
+    /// - If `depth > 1`, refining this leaf once shrinks the gap by
+    ///   one and produces children of level `parent_level + 1`. The
+    ///   process iterates until no leaf has an edge with depth `> 1`.
+    ///
+    /// The iteration is bounded by the maximum refinement level
+    /// already present in the mesh: every refinement strictly
+    /// increases the coarsest leaf level, so the BFS terminates in at
+    /// most `max_level + 1` outer rounds.
+    pub fn propagate_refinement(&mut self) {
+        loop {
+            let mut to_refine: Vec<usize> = Vec::new();
+            for (idx, cell) in self.cells.iter().enumerate() {
+                if self.is_refined[idx] {
+                    continue;
+                }
+                for (a, b) in leaf_edges(cell) {
+                    if self.edge_split_depth(a, b) > 1 {
+                        to_refine.push(idx);
+                        break;
+                    }
+                }
+            }
+            if to_refine.is_empty() {
+                break;
+            }
+            for idx in to_refine {
+                // A leaf may appear multiple times if multiple edges
+                // violate; the `is_refined` check inside `refine_cell`
+                // would panic on the second attempt, so we filter
+                // explicitly.
+                if !self.is_refined[idx] {
+                    self.refine_cell(idx);
+                }
+            }
+        }
+    }
+
+    /// How many recursive midpoint splits are present on edge `(a, b)`
+    /// in the midpoint cache. `0` means the edge has not been
+    /// subdivided at all; `1` means a single midpoint `m` exists
+    /// (one neighbour-level deeper); `≥ 2` means at least one of the
+    /// sub-edges `(a, m)` or `(m, b)` has itself been split.
+    fn edge_split_depth(&self, a: u32, b: u32) -> usize {
+        let key = if a < b { (a, b) } else { (b, a) };
+        match self.midpoint_cache.get(&key) {
+            None => 0,
+            Some(&m) => {
+                1 + self
+                    .edge_split_depth(a, m)
+                    .max(self.edge_split_depth(m, b))
+            }
+        }
+    }
+
+    /// Build the P1 hanging-node constraint matrix `T` mapping
+    /// `u_free → u_total` for the **current flat-mesh DoF set**.
+    ///
+    /// `T` has shape `(n_total × n_free)` where `n_total` is the
+    /// flat-mesh DoF count and `n_free` is the count of non-hanging
+    /// DoFs. The row for a non-hanging DoF is a standard identity
+    /// indicator; the row for a hanging DoF `m` with parents
+    /// `(a, b)` is `½` at the free-index columns for `a` and `b`.
+    ///
+    /// `degree` must be `1` in v2 — the P2 constraint is the v3 work
+    /// item.
+    ///
+    /// `remap` is the AMR-vertex-id → flat-vertex-id map returned by
+    /// [`Self::flatten_with_remap`]. Building it inside this routine
+    /// would duplicate work the caller has typically already done as
+    /// part of assembling `K`.
+    pub fn build_constraint_matrix(
+        &self,
+        degree: usize,
+        remap: &HashMap<u32, u32>,
+    ) -> Result<BsrMatrix> {
+        assert_eq!(
+            degree, 1,
+            "build_constraint_matrix: v2 ships P1 (degree = 1) only"
+        );
+        let n_total = remap.len();
+
+        // Hanging DoF set in flat-index space — only those hanging
+        // midpoints whose AMR id was actually used by a leaf (i.e.
+        // entered the flatten remap) get a constraint row. Hanging
+        // midpoints belong to leaf edges by construction, so they all
+        // map; the filter guards against pathological hand-built test
+        // cases.
+        let mut is_hanging_flat: Vec<bool> = vec![false; n_total];
+        let mut hanging_parents_flat: Vec<Option<(u32, u32)>> =
+            vec![None; n_total];
+        for hn in &self.hanging_nodes {
+            let Some(&flat_h) = remap.get(&hn.dof) else {
+                continue;
+            };
+            let Some(&fp1) = remap.get(&hn.parents[0]) else {
+                continue;
+            };
+            let Some(&fp2) = remap.get(&hn.parents[1]) else {
+                continue;
+            };
+            is_hanging_flat[flat_h as usize] = true;
+            hanging_parents_flat[flat_h as usize] = Some((fp1, fp2));
+        }
+
+        // Free DoFs are the non-hanging ones. Assign each a column
+        // index in the same order as the full DoF iteration so the
+        // resulting `T` row-pattern stays deterministic.
+        let mut free_index: Vec<i32> = vec![-1; n_total];
+        let mut n_free = 0usize;
+        for i in 0..n_total {
+            if !is_hanging_flat[i] {
+                free_index[i] = n_free as i32;
+                n_free += 1;
+            }
+        }
+
+        // Emit triplets.
+        let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(n_total + 2 * self.hanging_nodes.len());
+        for i in 0..n_total {
+            if is_hanging_flat[i] {
+                let (p1, p2) = hanging_parents_flat[i]
+                    .expect("hanging DoF marked but parents missing");
+                debug_assert!(
+                    !is_hanging_flat[p1 as usize] && !is_hanging_flat[p2 as usize],
+                    "hanging-node parent is itself hanging — 2:1 balance violated"
+                );
+                let c1 = free_index[p1 as usize] as usize;
+                let c2 = free_index[p2 as usize] as usize;
+                triplets.push((i, c1, 0.5));
+                triplets.push((i, c2, 0.5));
+            } else {
+                let col = free_index[i] as usize;
+                triplets.push((i, col, 1.0));
+            }
+        }
+
+        BsrMatrix::from_scalar_triplets(n_total, n_free, &triplets)
+    }
+}
+
+/// Iterate the unordered edges of a single FEM cell as `(a, b)`
+/// pairs — 3 for a triangle, 6 for a tetrahedron. Used by both the
+/// hanging-node walk and the 2:1-balance propagation.
+fn leaf_edges(cell: &FemCell) -> Vec<(u32, u32)> {
+    match cell {
+        FemCell::Tri(v) => vec![(v[0], v[1]), (v[1], v[2]), (v[2], v[0])],
+        FemCell::Tet(v) => vec![
+            (v[0], v[1]),
+            (v[0], v[2]),
+            (v[0], v[3]),
+            (v[1], v[2]),
+            (v[1], v[3]),
+            (v[2], v[3]),
+        ],
+    }
+}
+
+/// Assemble the reduced AMR system
+/// `K_c = TᵀKT, f_c = Tᵀf, T = constraint matrix`.
+///
+/// `local_fn` is the element kernel — same signature as
+/// [`assemble_global`]. `f_full` is the full-mesh RHS to be reduced;
+/// `None` is treated as a zero vector of the right length (Laplace
+/// case).
+///
+/// The caller is responsible for **applying Dirichlet BCs to the
+/// reduced system** (`K_c, f_c`) — that is the textbook ordering:
+/// constraint-reduce first, BC-pin second. After solving
+/// `K_c · u_free = f_c`, the full-DoF solution is recovered as
+/// `u = T · u_free` (which the caller can compute via
+/// [`BsrMatrix::mv`]).
+///
+/// Returns `(K_c, f_c, T)`.
+pub fn assemble_global_amr<F>(
+    amr_mesh: &AmrMesh,
+    space: FunctionSpace,
+    local_fn: F,
+    f_full: Option<&[Real]>,
+) -> Result<(BsrMatrix, Vec<Real>, BsrMatrix)>
+where
+    F: Fn(&FemCell, &[Vec3]) -> Vec<Vec<Real>>,
+{
+    assert!(
+        matches!(space, FunctionSpace::P1Nodal),
+        "assemble_global_amr: v2 ships P1Nodal only"
+    );
+
+    let (flat, remap) = amr_mesh.flatten_with_remap();
+    let n_total = flat.vert_count();
+    let k_full = assemble_global(&flat, space, local_fn)?;
+
+    let f_full_owned: Vec<Real> = match f_full {
+        Some(f) => {
+            assert_eq!(
+                f.len(),
+                n_total,
+                "assemble_global_amr: f_full length ({}) != flat DoF count ({})",
+                f.len(),
+                n_total
+            );
+            f.to_vec()
+        }
+        None => vec![0.0; n_total],
+    };
+
+    let t = amr_mesh.build_constraint_matrix(1, &remap)?;
+    let n_free = t.ncols();
+
+    // K_c = T^T · K · T. Compute it via triplets: walk the dense
+    // intermediate via per-column matvec. For Stage 45 mesh sizes
+    // (small) the O(n_free · nnz(K)) cost is acceptable.
+    let k_c = compute_ttkt(&t, &k_full)?;
+
+    // f_c = T^T · f. Vector form — explicit transpose-times-vector.
+    let f_c = tt_times_vector(&t, &f_full_owned);
+
+    debug_assert_eq!(k_c.nrows(), n_free);
+    debug_assert_eq!(k_c.ncols(), n_free);
+    debug_assert_eq!(f_c.len(), n_free);
+
+    Ok((k_c, f_c, t))
+}
+
+/// `Tᵀ · v` for a (`n_total × n_free`) sparse `T` and a length-`n_total`
+/// vector `v`. Output has length `n_free`.
+#[must_use]
+pub fn tt_times_vector(t: &BsrMatrix, v: &[Real]) -> Vec<Real> {
+    debug_assert_eq!(t.b, 1);
+    debug_assert_eq!(t.nrows(), v.len());
+    let mut out = vec![0.0; t.ncols()];
+    for r in 0..t.block_rows {
+        let lo = t.row_offsets[r];
+        let hi = t.row_offsets[r + 1];
+        for slot in lo..hi {
+            let c = t.col_idx[slot];
+            out[c] += t.values[slot] * v[r];
+        }
+    }
+    out
+}
+
+/// Compute `Tᵀ · K · T` for sparse `T` (n_total × n_free) and `K`
+/// (n_total × n_total), returning a sparse `BsrMatrix` of shape
+/// `(n_free × n_free)`.
+fn compute_ttkt(t: &BsrMatrix, k: &BsrMatrix) -> Result<BsrMatrix> {
+    debug_assert_eq!(t.b, 1);
+    debug_assert_eq!(k.b, 1);
+    debug_assert_eq!(t.nrows(), k.nrows());
+    debug_assert_eq!(t.nrows(), k.ncols());
+
+    let n_total = t.nrows();
+    let n_free = t.ncols();
+
+    // For each column α ∈ [0, n_free): t_α is a sparse column of T
+    // (length n_total). Compute u = K · t_α (a dense temporary of
+    // length n_total), then for each non-zero T[i, β], the entry
+    // K_c[β, α] += T[i, β] · u[i].
+    //
+    // Build a column-major view of T by inverting the row offsets.
+    let mut col_to_rows: Vec<Vec<(usize, Real)>> = vec![Vec::new(); n_free];
+    for r in 0..n_total {
+        let lo = t.row_offsets[r];
+        let hi = t.row_offsets[r + 1];
+        for slot in lo..hi {
+            let c = t.col_idx[slot];
+            let v = t.values[slot];
+            col_to_rows[c].push((r, v));
+        }
+    }
+
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
+    let mut t_col_dense = vec![0.0; n_total];
+    let mut u = vec![0.0; n_total];
+    for alpha in 0..n_free {
+        // Densify t_α.
+        for &(r, v) in &col_to_rows[alpha] {
+            t_col_dense[r] = v;
+        }
+        k.mv(&t_col_dense, &mut u)?;
+        // For each β with non-zero column in T, accumulate
+        // K_c[β, α] = sum_i T[i, β] · u[i].
+        for beta in 0..n_free {
+            let mut acc = 0.0;
+            for &(r, v) in &col_to_rows[beta] {
+                acc += v * u[r];
+            }
+            if acc != 0.0 {
+                triplets.push((beta, alpha, acc));
+            }
+        }
+        // Re-zero the dense buffer.
+        for &(r, _) in &col_to_rows[alpha] {
+            t_col_dense[r] = 0.0;
+        }
+    }
+
+    BsrMatrix::from_scalar_triplets(n_free, n_free, &triplets)
+}
+
+impl AmrMesh {
+    /// Expand a free-DoF solution `u_free` into the full-DoF vector
+    /// `u = T · u_free`. Convenience wrapper around
+    /// [`crate::math::sparse::BsrMatrix::mv`].
+    #[must_use]
+    pub fn expand_free_solution(t: &BsrMatrix, u_free: &[Real]) -> Vec<Real> {
+        let mut u = vec![0.0; t.nrows()];
+        t.mv(u_free, &mut u).expect("T · u_free matvec");
+        u
     }
 
     // ── Internal — per-shape splitters ────────────────────────────────
