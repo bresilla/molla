@@ -106,3 +106,9 @@ pub use hydroelastic::{
 };
 #[cfg(feature = "gpu")]
 pub use hydroelastic::HydroelasticKernel;
+// ── Stage 39D: hydroelastic contact polish (anchor + aggregate-stiffness) ──
+pub use hydroelastic::{
+    aggregate_by_bucket, manifold_to_samples, reduce_with_anchor,
+    AggregateStiffnessConfig, AggregatedContact, AnchorReducedContact, PatchSample,
+    StiffnessReduction, StiffnessSample,
+};

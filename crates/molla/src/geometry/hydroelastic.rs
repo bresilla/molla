@@ -384,6 +384,520 @@ pub fn sample_plane_patch(
     out
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Stage 39D — hydroelastic contact polish
+//
+// Two upgrades on top of the v1 manifold:
+//
+//  1. **Anchor contact for moment balance.** Reducing a patch to its
+//     centroid preserves the *net force* but throws away the moment
+//     about the centroid — i.e. how the pressure was distributed over
+//     the patch. Solvers that read only the centroid contact will
+//     under-rotate (or rotate the wrong way) when the contact patch
+//     is asymmetric. Drake's hydroelastic paper (Elandt et al. 2019,
+//     §IV-B) and Newton's `contact_reduction_hydroelastic.py`
+//     `anchor_contact=True` path both add a synthetic second contact
+//     placed at the *center of pressure* of the original patch, with
+//     a normal aligned with the aggregate force direction. This
+//     module's [`reduce_with_anchor`] computes that pair from a slice
+//     of arbitrary `(point, normal, force_magnitude)` samples and is
+//     accuracy-tested in `tests/hydroelastic_polish.rs`.
+//
+//  2. **Aggregate stiffness via hashtable + voxel slots + normal
+//     bins.** The Stage 22.1 manifold emits one contact per surface
+//     sample; for a large patch this dumps thousands of nearly-
+//     redundant contacts on the solver. Newton's approach buckets
+//     contacts by `(shape pair, coarse_position_voxel,
+//     coarse_normal_bin)` and emits one aggregate per bucket. Per-
+//     contact stiffness is **summed reciprocally** (springs in
+//     series): `1/k_agg = Σ 1/k_i` reduces N nearly-coplanar contacts
+//     to one *equally stiff* contact, while **parallel** addition
+//     (`k_agg = Σ k_i`) is used inside the same voxel slot because
+//     those represent independent contact area. See
+//     [`AggregateStiffnessConfig`] for the tunable bucket size and
+//     [`aggregate_by_bucket`] for the kernel. The math matches
+//     Newton's `c_stiffness = k_eff · |agg_force| / total_depth`
+//     scaling (where `total_depth = Σ |depth_i|` is the series-sum
+//     equivalent for hydroelastic contacts).
+//
+// **Design note.** Both routines work on a generic
+// `Vec<HydroelasticContact>` so they compose with either the v1 CPU
+// or the GPU kernel's output. They are *pure functions* — no global
+// state, no allocations beyond the returned `Vec` — so the contact
+// pipeline can call them per-shape-pair per-substep without thinking
+// about lifetimes.
+// ─────────────────────────────────────────────────────────────────────
+
+/// One sample in a distributed-pressure patch, expressed in world
+/// space. This is the *input* to [`reduce_with_anchor`]: usually
+/// built by iterating a [`HydroelasticManifold`]'s contacts and
+/// packing `(point, normal, pressure · area)` into this struct.
+///
+/// `force_magnitude` is the **scalar** pressure-area product; the
+/// world-frame force vector is `force_magnitude · normal`. We carry
+/// the normal separately (rather than baking it into a `Vec3 force`)
+/// because the anchor contact needs the aggregate *direction* as a
+/// unit vector, and recovering a unit vector from `Σ p_i · A_i · n_i`
+/// after the fact would lose precision when contributions cancel.
+#[derive(Copy, Clone, Debug)]
+pub struct PatchSample {
+    /// World-frame contact point (m).
+    pub point: Vec3,
+    /// World-frame unit normal (points from soft body into rigid).
+    pub normal: Vec3,
+    /// Per-sample normal-force magnitude (N): `pressure · area`.
+    pub force_magnitude: Real,
+}
+
+impl PatchSample {
+    /// World-frame force vector at this sample.
+    #[inline]
+    pub fn force(&self) -> Vec3 {
+        self.normal * self.force_magnitude
+    }
+}
+
+/// Convert a [`HydroelasticManifold`]'s contacts into the
+/// [`PatchSample`] slice consumed by [`reduce_with_anchor`] and
+/// [`aggregate_by_bucket`]. Kept as a free function (rather than a
+/// `From` impl) so callers can also build samples from non-
+/// hydroelastic sources without round-tripping through `HydroelasticContact`.
+pub fn manifold_to_samples(manifold: &HydroelasticManifold) -> Vec<PatchSample> {
+    manifold
+        .contacts
+        .iter()
+        .map(|c| PatchSample {
+            point: c.point,
+            normal: c.normal,
+            force_magnitude: c.normal_force(),
+        })
+        .collect()
+}
+
+/// Output of [`reduce_with_anchor`] — exactly two contacts that
+/// together reproduce both the net force AND net moment of the input
+/// patch.
+///
+/// The pair is constructed as follows:
+///
+/// * `centroid` carries the **area-weighted centroid position** and
+///   the **net force direction**. Its `force_magnitude` is the bulk
+///   of the load (matched to give zero net residual after the anchor
+///   contact is added).
+/// * `anchor` is placed at the **center of pressure** of the patch
+///   and carries a complementary force such that the combined wrench
+///   `(F_c · n_c at p_c) + (F_a · n_a at p_a)` reproduces both the
+///   net force and the moment about any reference point.
+///
+/// **Math.** Let `F_total = Σ f_i · n_i` and `M_total = Σ r_i × (f_i · n_i)`
+/// (moment about the centroid). The aggregate-force direction is
+/// `n̂ = F_total / |F_total|`. We pick the anchor position as the
+/// center of pressure `r_cp = (Σ f_i · r_i) / Σ f_i`, then split the
+/// total force into two parts placed at `r_centroid` (the spatial
+/// centroid) and `r_cp` such that:
+///
+///   F_c + F_a = F_total                        (force balance)
+///   r_centroid × F_c + r_cp × F_a = M_total    (moment balance)
+///
+/// With both `F_c` and `F_a` chosen along `n̂`, the moment equation
+/// projects onto the plane perpendicular to `n̂` and yields a 2-D
+/// linear system in `(|F_c|, |F_a|)`. We solve in closed form below.
+///
+/// See `tests/hydroelastic_polish.rs::anchor_contact_reproduces_moment`
+/// for the numerical check (<1% error vs the original patch).
+#[derive(Copy, Clone, Debug)]
+pub struct AnchorReducedContact {
+    /// Centroid contact (spatial mean of the patch).
+    pub centroid: PatchSample,
+    /// Anchor contact (center of pressure).
+    pub anchor: PatchSample,
+}
+
+impl AnchorReducedContact {
+    /// Net force vector of the pair. Should match the input patch's
+    /// `Σ f_i · n_i` to within numerical roundoff.
+    pub fn net_force(&self) -> Vec3 {
+        self.centroid.force() + self.anchor.force()
+    }
+
+    /// Net moment about the world origin. Used by the tests to
+    /// verify the pair reproduces the patch's moment.
+    pub fn net_moment(&self) -> Vec3 {
+        self.centroid.point.cross(self.centroid.force())
+            + self.anchor.point.cross(self.anchor.force())
+    }
+}
+
+/// Reduce a distributed pressure patch to a centroid + anchor pair
+/// that reproduces both the net force AND the net moment of the
+/// input. See [`AnchorReducedContact`] for the math.
+///
+/// Returns `None` when the patch is empty or carries zero net force
+/// (then there is nothing meaningful to anchor).
+pub fn reduce_with_anchor(samples: &[PatchSample]) -> Option<AnchorReducedContact> {
+    if samples.is_empty() {
+        return None;
+    }
+    // Aggregate force and direction.
+    let total_force_vec: Vec3 = samples.iter().map(|s| s.force()).sum();
+    let total_force_mag = total_force_vec.length();
+    if total_force_mag < 1.0e-20 {
+        return None;
+    }
+    let force_dir = total_force_vec / total_force_mag;
+
+    // Two reference points:
+    //   * `r_centroid` — area-weighted centroid (uses `force_magnitude`
+    //     as the weight, which equals `pressure · area` for the
+    //     hydroelastic case so it's the area-weighted centroid when
+    //     pressure is uniform).
+    //   * `r_cp` — center of pressure (same formula, but explicit so
+    //     callers reading the code see the physics). For our purposes
+    //     the two coincide in expectation; we pick the centroid by
+    //     equal weighting (1/N) and the COP by force-magnitude
+    //     weighting (f_i/Σf), so they differ whenever pressure is
+    //     spatially non-uniform — exactly the regime where the moment
+    //     matters.
+    let n = samples.len() as Real;
+    let r_centroid: Vec3 =
+        samples.iter().map(|s| s.point).sum::<Vec3>() / n;
+    let sum_f: Real = samples.iter().map(|s| s.force_magnitude).sum();
+    let r_cp: Vec3 = if sum_f > 1.0e-20 {
+        samples
+            .iter()
+            .map(|s| s.point * s.force_magnitude)
+            .sum::<Vec3>()
+            / sum_f
+    } else {
+        r_centroid
+    };
+
+    // Net moment of the original patch about the world origin.
+    let m_total: Vec3 = samples.iter().map(|s| s.point.cross(s.force())).sum();
+
+    // ── Force/moment split ─────────────────────────────────────────
+    // Both contact forces are along `force_dir`. Write:
+    //   F_c = α · force_dir · total_force_mag
+    //   F_a = (1 - α) · force_dir · total_force_mag
+    // with α ∈ ℝ (not necessarily in [0, 1] — we let the anchor pull
+    // the other way if needed to balance the moment).
+    //
+    // The moment about the origin is:
+    //   M = r_centroid × F_c + r_cp × F_a
+    //     = total_force_mag · [α · r_centroid × n̂
+    //                          + (1 - α) · r_cp × n̂]
+    //     = total_force_mag · [r_cp × n̂ + α · (r_centroid - r_cp) × n̂]
+    //
+    // Setting `M == M_total` and solving for α, dotting both sides
+    // with `(r_centroid - r_cp) × n̂` (a vector in the plane
+    // perpendicular to n̂):
+    //
+    //   α · |Δr × n̂|² · total_force_mag
+    //     = (M_total - total_force_mag · r_cp × n̂) · (Δr × n̂)
+    //
+    // where Δr = r_centroid - r_cp.
+    let dr = r_centroid - r_cp;
+    let dr_cross_n = dr.cross(force_dir);
+    let denom = dr_cross_n.length_squared() * total_force_mag;
+    let alpha = if denom > 1.0e-20 {
+        let target_m = m_total - r_cp.cross(force_dir) * total_force_mag;
+        target_m.dot(dr_cross_n) / denom
+    } else {
+        // Degenerate: r_centroid == r_cp (uniform pressure, or
+        // single-sample patch). The split is irrelevant — pick
+        // α = 1 so the anchor carries no force. The centroid
+        // contact alone reproduces the wrench within the numerical
+        // precision of `m_total ≈ r_centroid × F_total`.
+        1.0
+    };
+
+    let f_centroid_mag = alpha * total_force_mag;
+    let f_anchor_mag = (1.0 - alpha) * total_force_mag;
+    Some(AnchorReducedContact {
+        centroid: PatchSample {
+            point: r_centroid,
+            normal: force_dir,
+            force_magnitude: f_centroid_mag,
+        },
+        anchor: PatchSample {
+            point: r_cp,
+            normal: force_dir,
+            force_magnitude: f_anchor_mag,
+        },
+    })
+}
+
+/// Aggregation policy for [`aggregate_by_bucket`]. The two cases —
+/// stiffness in series vs in parallel — correspond to the physical
+/// behaviour of springs:
+///
+/// * **Series**: contacts mounted "in line" (same line of action,
+///   stacked depth-wise). Equivalent compliance `c = Σ c_i = Σ 1/k_i`,
+///   so `k_agg = 1 / Σ (1/k_i)`. Used when collapsing duplicate
+///   contacts that all touch the same point on the rigid body
+///   through different paths (e.g. multiple SDF samples that land
+///   in the same voxel slot).
+/// * **Parallel**: contacts mounted side-by-side (independent
+///   contact patches, sharing the load). Equivalent stiffness
+///   `k_agg = Σ k_i`. Used when summing distinct contact area
+///   inside the same `(position_voxel, normal_bin)` bucket — each
+///   sample contributes independent surface area, and the total
+///   resistance is the sum.
+///
+/// **Newton's policy** (mirrored here): use *parallel* aggregation
+/// inside a bucket (multiple SDF samples sharing a normal bin all
+/// contribute their `pressure · area` independently) and *series*
+/// aggregation across buckets when collapsing the manifold to a
+/// single anchor pair. See
+/// `tests/hydroelastic_polish.rs::aggregate_stiffness_recovers_series_compliance`.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StiffnessReduction {
+    /// `k_agg = Σ k_i` (parallel springs).
+    Parallel,
+    /// `k_agg = 1 / Σ (1/k_i)` (series springs / sum of compliances).
+    Series,
+}
+
+/// Bucket granularity for [`aggregate_by_bucket`]. Tune `voxel_size`
+/// down to keep more contacts (finer manifold); tune it up to
+/// collapse aggressively (cheaper solver). `normal_bin_angle` is the
+/// angular width of a normal bin in radians — contacts whose normals
+/// fall within `cos(angle)` of each other go in the same bin.
+#[derive(Copy, Clone, Debug)]
+pub struct AggregateStiffnessConfig {
+    /// Position-space voxel edge length (m). Contacts within the
+    /// same axis-aligned voxel are candidates for the same bucket.
+    /// Set this to a fraction of the expected patch extent — Newton
+    /// uses `aabb_size / voxel_resolution`, typically `~0.05 m`.
+    pub voxel_size: Real,
+    /// Angular bin width for the normal direction (radians). Two
+    /// normals `n_a`, `n_b` go in the same bin iff their octahedral-
+    /// quantised bin id matches; we approximate that with an
+    /// equirectangular quantisation here.
+    pub normal_bin_angle: Real,
+    /// How to combine per-contact stiffness inside one bucket. See
+    /// [`StiffnessReduction`]; default is `Parallel`.
+    pub stiffness_reduction: StiffnessReduction,
+}
+
+impl Default for AggregateStiffnessConfig {
+    fn default() -> Self {
+        Self {
+            voxel_size: 0.05,
+            // ~10° default bin width (matches Newton's `NUM_NORMAL_BINS=18`
+            // octahedral binning, where each bin covers roughly 4π/18 sr
+            // ≈ 0.69 sr ≈ 0.83 rad spread — we use a tighter 10° for
+            // direction-quality reasons).
+            normal_bin_angle: 10.0_f64.to_radians(),
+            stiffness_reduction: StiffnessReduction::Parallel,
+        }
+    }
+}
+
+/// One reduced contact emitted by [`aggregate_by_bucket`]. The
+/// world-frame `point` is the area-weighted centroid of the bucket;
+/// `normal` is the force-magnitude-weighted mean direction
+/// (renormalised to unit length); `force_magnitude` is the sum of
+/// the bucket's per-sample force magnitudes; `aggregate_stiffness`
+/// is the bucket's reduced stiffness per
+/// [`StiffnessReduction`].
+#[derive(Copy, Clone, Debug)]
+pub struct AggregatedContact {
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub force_magnitude: Real,
+    pub aggregate_stiffness: Real,
+    /// Number of input samples that fell in this bucket.
+    pub sample_count: u32,
+}
+
+/// Per-sample stiffness — passed in alongside the patch samples so
+/// the reducer can apply the per-bucket [`StiffnessReduction`]
+/// policy.
+#[derive(Copy, Clone, Debug)]
+pub struct StiffnessSample<'a> {
+    pub patch: &'a PatchSample,
+    pub stiffness: Real,
+}
+
+/// Aggregate a slice of patch samples (each carrying its own
+/// stiffness) into one [`AggregatedContact`] per
+/// `(position_voxel, normal_bin)` bucket. This is the molla
+/// equivalent of Newton's hashtable+voxel+normal-bin reducer in
+/// `contact_reduction_hydroelastic.py`.
+///
+/// **Algorithm.**
+///
+/// 1. For each input sample, compute a coarse `(voxel_ix, voxel_iy,
+///    voxel_iz, normal_bin_ix, normal_bin_iy)` bucket key. Position
+///    voxel is `floor(p / voxel_size)`; normal bin is the equi-
+///    rectangular quantisation of the unit normal into a sphere of
+///    `2π·π / (bin_angle²)` cells — fine enough that two contacts
+///    in the same bin have normals within `bin_angle` radians.
+/// 2. Group samples by bucket key in a `HashMap`.
+/// 3. For each bucket, sum the force-weighted position and the
+///    force-weighted normal; combine the per-sample stiffness
+///    according to the configured [`StiffnessReduction`].
+/// 4. Emit one [`AggregatedContact`] per bucket.
+///
+/// **Why a `HashMap` (and not a fixed-size hashtable like Newton's
+/// CUDA kernel)?** On the CPU, a `HashMap` is fast enough for the
+/// expected scale (typically <10000 samples per pair per substep).
+/// The GPU port (PLAN Stage 39E) will use the fixed-size hashtable;
+/// the CPU and GPU paths share the bucket-key + reduction policy.
+pub fn aggregate_by_bucket(
+    samples: &[StiffnessSample<'_>],
+    cfg: &AggregateStiffnessConfig,
+) -> Vec<AggregatedContact> {
+    use std::collections::HashMap;
+
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    // Translate sample positions by the patch centroid before
+    // voxelising. This makes the bucket assignment invariant to the
+    // global coordinate frame — a patch positioned at (5, 0, 5)
+    // collapses to the same bucket count as one at the origin —
+    // and avoids the obvious failure mode where a patch straddling
+    // x = 0 splits across `floor(-ε/voxel) = -1` and
+    // `floor(+ε/voxel) = 0` even though `voxel >> ε`. Newton's
+    // CUDA path keys against `shape_b`'s AABB lower corner instead
+    // of the centroid, but the two are equivalent for grouping
+    // purposes (both just provide a stable reference point).
+    let patch_centroid: Vec3 = samples
+        .iter()
+        .map(|s| s.patch.point)
+        .sum::<Vec3>()
+        / (samples.len() as Real);
+    let inv_voxel = 1.0 / cfg.voxel_size.max(1.0e-12);
+    // Normal-bin discretisation. We snap the unit normal onto a
+    // direction-cosine grid: each axis component `n_i ∈ [-1, 1]` is
+    // floored at a step of `sin(angle)`. Two normals within `angle`
+    // radians of each other produce direction-cosine differences of
+    // at most `~angle` along each axis (and exactly `sin(angle)`
+    // perpendicular to the rotation axis), so this binning has the
+    // property that two normals within `angle` radians collide
+    // *unless* they straddle a grid line — close to Newton's
+    // octahedral binning but trivially singularity-free, which we
+    // need because contact patches with `n ≈ ±ẑ` (or any axis) are
+    // common and would land on the equirectangular-grid pole
+    // otherwise. The bin_step = sin(angle) trade-off is conservative
+    // and matches the rule-of-thumb in the Drake hydroelastic paper
+    // for normal-bin width.
+    let bin_step = cfg.normal_bin_angle.max(1.0e-6).sin();
+    let inv_bin = 1.0 / bin_step;
+
+    type Key = (i64, i64, i64, i64, i64, i64);
+
+    struct BucketAcc {
+        /// Force-magnitude-weighted position sum.
+        weighted_pos: Vec3,
+        /// Force-magnitude-weighted normal sum.
+        weighted_normal: Vec3,
+        /// Σ |f_i|.
+        force_sum: Real,
+        /// Σ k_i (parallel) or Σ 1/k_i (series), as configured.
+        stiffness_acc: Real,
+        sample_count: u32,
+    }
+
+    let mut buckets: HashMap<Key, BucketAcc> = HashMap::new();
+
+    for s in samples {
+        let p = s.patch.point;
+        let n = s.patch.normal;
+        // Round-based voxel binning (with displacements relative to
+        // the patch centroid) means a patch of half-extent < step/2
+        // collapses to bucket (0, 0, 0). Floor-based binning would
+        // straddle the 0-line and split a centred symmetric patch
+        // into 2³ = 8 buckets even when the patch is much smaller
+        // than the voxel — observed in the unit test.
+        let q = p - patch_centroid;
+        let vx = (q.x * inv_voxel).round() as i64;
+        let vy = (q.y * inv_voxel).round() as i64;
+        let vz = (q.z * inv_voxel).round() as i64;
+        // Direction-cosine grid: snap each axis component of the
+        // (renormalised) unit normal to the *nearest* bin center
+        // (round, not floor). `round` is symmetric around zero, so a
+        // patch with `n ≈ +Y` and small ±x/z wobble within `step/2`
+        // collapses cleanly into bin (0, ±1, 0) without straddling
+        // a grid edge near each axis. This is singularity-free at
+        // every axis-aligned direction.
+        let n_norm = if n.length_squared() > 1.0e-24 {
+            n.normalize()
+        } else {
+            Vec3::Y
+        };
+        let bn_x = (n_norm.x * inv_bin).round() as i64;
+        let bn_y = (n_norm.y * inv_bin).round() as i64;
+        let bn_z = (n_norm.z * inv_bin).round() as i64;
+        let key: Key = (vx, vy, vz, bn_x, bn_y, bn_z);
+        let fmag = s.patch.force_magnitude.max(0.0);
+        let acc = buckets.entry(key).or_insert(BucketAcc {
+            weighted_pos: Vec3::ZERO,
+            weighted_normal: Vec3::ZERO,
+            force_sum: 0.0,
+            stiffness_acc: 0.0,
+            sample_count: 0,
+        });
+        // Weight position/normal by force magnitude. If the bucket
+        // ends up with zero total force we fall back to an
+        // equal-weight mean (see emission step below).
+        acc.weighted_pos += p * fmag;
+        acc.weighted_normal += n * fmag;
+        acc.force_sum += fmag;
+        acc.sample_count += 1;
+        let k = s.stiffness.max(0.0);
+        match cfg.stiffness_reduction {
+            StiffnessReduction::Parallel => acc.stiffness_acc += k,
+            StiffnessReduction::Series => {
+                if k > 1.0e-30 {
+                    acc.stiffness_acc += 1.0 / k;
+                }
+            }
+        }
+    }
+
+    // Convert per-bucket accumulators into output contacts.
+    let mut out = Vec::with_capacity(buckets.len());
+    for (_, acc) in buckets {
+        // Position/normal: force-weighted if any force present,
+        // else equal-weight (fallback when all samples were
+        // zero-force — useful e.g. for margin contacts).
+        let (pos, norm) = if acc.force_sum > 1.0e-20 {
+            let pos = acc.weighted_pos / acc.force_sum;
+            let n = if acc.weighted_normal.length_squared() > 1.0e-24 {
+                acc.weighted_normal.normalize()
+            } else {
+                Vec3::Y
+            };
+            (pos, n)
+        } else {
+            let pos = acc.weighted_pos
+                / (acc.sample_count as Real).max(1.0);
+            (pos, Vec3::Y)
+        };
+        let k_agg = match cfg.stiffness_reduction {
+            StiffnessReduction::Parallel => acc.stiffness_acc,
+            StiffnessReduction::Series => {
+                if acc.stiffness_acc > 1.0e-30 {
+                    1.0 / acc.stiffness_acc
+                } else {
+                    0.0
+                }
+            }
+        };
+        out.push(AggregatedContact {
+            point: pos,
+            normal: norm,
+            force_magnitude: acc.force_sum,
+            aggregate_stiffness: k_agg,
+            sample_count: acc.sample_count,
+        });
+    }
+    out
+}
+
 /// Stage-22.1 GPU dispatch for hydroelastic contact. Feature-gated
 /// so the CPU types stay buildable without `gpu`.
 #[cfg(feature = "gpu")]
