@@ -49,6 +49,10 @@ mod fft;
 #[cfg(feature = "gpu")]
 mod gjk;
 #[cfg(feature = "gpu")]
+mod mpr;
+#[cfg(feature = "gpu")]
+mod contact_reduction;
+#[cfg(feature = "gpu")]
 mod mesh_bvh_raycast;
 #[cfg(feature = "gpu")]
 mod frame_transform;
@@ -151,6 +155,16 @@ pub use featherstone_adjoint_gpu::{
 pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
 pub use gjk::{GjkKernel, GJK_SIMPLEX_STRIDE};
+#[cfg(feature = "gpu")]
+pub use mpr::{
+    decode_mpr_out, MprKernel, MprPairResult, MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE,
+    MPR_STATUS_FALLBACK, MPR_STATUS_NONE, MPR_STATUS_OK,
+};
+#[cfg(feature = "gpu")]
+pub use contact_reduction::{
+    pack_groups_host, unpack_output_host, ContactReductionKernel, CONTACT_STRIDE,
+    MAX_OUT_PER_GROUP, MAX_PER_GROUP,
+};
 #[cfg(feature = "gpu")]
 pub use mesh_bvh_raycast::{MeshBvhGpu, MeshBvhRaycastKernel};
 #[cfg(feature = "gpu")]
