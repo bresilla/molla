@@ -7,7 +7,7 @@ to a marquee scene via a hotkey.
 
 This chapter is the index. The scenes are grouped by topic; for the
 strictly numerical ordering see `Scene::label()` in
-`crates/molla_viewer/src/main.rs`.
+`bin/molla_viewer/src/main.rs`.
 
 ## Group A — basics & rigid (XPBD)
 
@@ -39,7 +39,7 @@ Frame transform is exercised in [Group F #07] and in `tests/sensor_frame_transfo
 | 10 | GpuIkArm      |        | 7-DOF Franka chases a draggable target via `IkSolver::solve_gpu`         |
 | 13 | Actuator      |        | Single revolute joint driven by `Delay → ControllerPipelinePd → DcMotor` |
 | 14 | Quadrotor     | `Q`    | FREE-root + 4 fixed rotor bodies; PD altitude + attitude control         |
-| 17 | MuJoCo        | `J`    | Double pendulum stepped via the MuJoCo wrapper (Stage 22)                |
+| 17 | NativePendulum| `J`    | Procedural double pendulum stepped by the native Featherstone solver     |
 | 26 | Pendulum      |        | 1-DoF revolute + 3-link chain pendulum side by side                      |
 | 27 | JointSampler  |        | Revolute / prismatic / ball / distance joints, side by side              |
 | 29 | Conveyor      |        | Kinematic conveyor belt + dropped boxes that slide                       |
@@ -197,7 +197,7 @@ Frame transform is exercised in [Group F #07] and in `tests/sensor_frame_transfo
 - The remainder are original molla demos built around specific
   Stage deliverables.
 
-Each scene's source lives in `crates/molla_viewer/src/main.rs`.
+Each scene's source lives in `bin/molla_viewer/src/main.rs`.
 Search for the variant name (e.g. `Scene::ImplicitMpmBingham`) to
 find the `build_scene` arm, the per-scene state struct, the update
 system (if any), and the control_pane arm.

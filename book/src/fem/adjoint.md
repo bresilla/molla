@@ -1,6 +1,6 @@
 # Adjoint / differentiable FEM
 
-`crates/molla/src/fem/adjoint.rs` implements reverse-mode differentiation
+`crates/molla-fem/src/adjoint.rs` implements reverse-mode differentiation
 through the linear elasticity assembly + solve. Given a forward solve
 \\( K(p) u = f(p) \\) with design parameters \\( p \\) (Young's modulus,
 applied traction, ...) and a scalar loss \\( J(u, p) \\), the adjoint

@@ -4,7 +4,7 @@ Quadrature rules turn a continuous integral
 \\( \int_K f(x) \, dx \\) over a reference simplex into a finite sum
 \\( |K| \cdot \sum_q w_q \, f(x_q) \\) at a handful of barycentric
 sample points. Molla ships rules of increasing degree for triangles
-and tetrahedra in `crates/molla/src/fem/quadrature.rs`, all
+and tetrahedra in `crates/molla-fem/src/quadrature.rs`, all
 pre-normalised so that \\( \sum_q w_q = 1 \\) — the assembly path
 multiplies by the cell measure (area for triangles, volume for tets)
 so the rules themselves are "shape-agnostic".

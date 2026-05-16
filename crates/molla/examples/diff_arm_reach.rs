@@ -26,7 +26,9 @@ fn main() {
     );
     println!(
         "  horizon = {} substeps × dt = {} s ({} s total)",
-        arm.horizon, arm.dt, arm.horizon as Real * arm.dt,
+        arm.horizon,
+        arm.dt,
+        arm.horizon as Real * arm.dt,
     );
     println!("  optimisation: {ITERS} iters of GD with lr = {LR}");
     println!();
@@ -72,8 +74,6 @@ fn main() {
     if let Some(it) = converged_at {
         println!("converged within 5 cm of target at iter {it}");
     } else {
-        println!(
-            "did NOT converge within 5 cm in {ITERS} iters — try a different LR or HORIZON",
-        );
+        println!("did NOT converge within 5 cm in {ITERS} iters — try a different LR or HORIZON",);
     }
 }

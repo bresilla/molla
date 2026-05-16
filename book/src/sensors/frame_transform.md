@@ -7,7 +7,7 @@ frame's pose **expressed in a reference frame**. It mirrors Newton's
 tracking, chase-cam targets, and trajectory recording.
 
 Source: `crates/molla/src/sensors/frame_transform.rs`. Shader:
-`crates/molla/shaders/frame_transform.wgsl` (one thread per target).
+`crates/molla-kernels/shaders/frame_transform.wgsl` (one thread per target).
 
 ## Targets + reading
 

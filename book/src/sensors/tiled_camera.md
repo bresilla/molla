@@ -12,8 +12,8 @@ rendered in lock-step so the policy sees a tensor of shape
 `(num_envs, H, W, channels)` each step.
 
 Source: `crates/molla/src/sensors/tiled_camera.rs`. Shaders:
-`crates/molla/shaders/camera_rays.wgsl` (ray generation) and
-`crates/molla/shaders/camera_trace.wgsl` (closest-hit + shading).
+`crates/molla-kernels/shaders/camera_rays.wgsl` (ray generation) and
+`crates/molla-kernels/shaders/camera_trace.wgsl` (closest-hit + shading).
 
 ## Pipeline
 

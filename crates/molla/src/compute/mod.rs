@@ -9,8 +9,6 @@
 //! see [`MpmConfig`] / [`MpmRheology`] / [`MpmTimeStep`] for configuration.
 
 #[cfg(feature = "gpu")]
-mod engine;
-#[cfg(feature = "gpu")]
 mod mpm;
 
 // Stage 38.1 — CPU-only differentiable MPM. Pure-Rust, `f64` everywhere,
@@ -40,6 +38,6 @@ pub mod tile_mcgp;
 pub mod tile_stream_compaction;
 
 #[cfg(feature = "gpu")]
-pub use engine::{AdapterInfo, Backend, Engine};
+pub use molla_compute::{AdapterInfo, Backend, Engine};
 #[cfg(feature = "gpu")]
 pub use mpm::{MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep};

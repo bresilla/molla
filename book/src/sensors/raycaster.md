@@ -7,7 +7,7 @@ visibility queries all build on top of.
 
 The implementation lives in `crates/molla/src/sensors/raycast.rs` with
 the heavy math (per-primitive ray intersection + outward-normal
-computation) in `crates/molla/shaders/raycast.wgsl`. Following molla's
+computation) in `crates/molla-kernels/shaders/raycast.wgsl`. Following molla's
 GPU-first rule, the Rust orchestrator owns the per-batch ray / hit
 buffers and the dispatch wrapper; the CPU oracle path is only used
 inside parity tests.

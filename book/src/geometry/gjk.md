@@ -12,7 +12,7 @@ References:
 * van den Bergen, *A Fast and Robust GJK Implementation* (1999).
 
 CPU implementation: `crates/molla/src/geometry/gjk.rs`. GPU
-boolean-overlap port: `crates/molla/shaders/gjk.wgsl` (Stage 15).
+boolean-overlap port: `crates/molla-geometry/shaders/gjk.wgsl` (Stage 15).
 
 ## Public API
 

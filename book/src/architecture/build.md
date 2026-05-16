@@ -17,7 +17,6 @@ devShell; if you've installed the engine outside the devShell, swap
 | `make test` / `t`    | `cargo test --workspace` (skips `#[ignore]`'d GPU tests)      |
 | `make test-gpu`      | The flagship CPU/GPU parity test                              |
 | `make test-*-gpu`    | ~25 dedicated GPU lanes, one per major kernel family          |
-| `make test-oracle`   | Newton trajectory oracle tests (needs Python venv)            |
 | `make bench-cpu`     | CPU semi-implicit step bench                                  |
 | `make bench-gpu`     | GPU semi-implicit step bench                                  |
 | `make bench-featherstone` | CPU-vs-GPU Featherstone parity bench                     |
@@ -75,10 +74,15 @@ make test-equality-gpu              # XPBD equality projection
 make test-equality-joint-mimic-gpu  # Stage 32 joint mimic
 make test-particles-gpu             # particle XPBD
 make test-hydroelastic-gpu          # Stage 22.1 hydroelastic
-make test-mujoco-gpu                # Stage 22 wrapper — needs libmujoco
 make test-sparse-grid-gpu           # Stage 24e NanoVDB
 make test-mpm-gpu                   # Stage 24d v1 explicit MPM
 make test-mpm-v3-gpu                # Stage 24d.1 semi-implicit MPM + Snow
+make test-implicit-mpm-gpu           # implicit MPM GPU kernels/parity
+make test-vbd-cloth-gpu             # VBD cloth GPU suite
+make test-vbd-tets-gpu              # VBD tetrahedral GPU suite
+make test-vbd-tets-v3-gpu           # VBD tet large-strain/plasticity GPU suite
+make test-vbd-tets-v4-gpu           # VBD tet damping/contact GPU suite
+make test-vbd-extended-gpu          # extended VBD mode/contact GPU suite
 make test-soft-vt-gpu               # Stage 33.2 soft VT contact
 make test-soft-friction-gpu         # Stage 33.2.1 soft friction + restitution
 make test-fem-gpu                   # Stage 36.5 GPU FEM v1
@@ -92,9 +96,8 @@ Makefile.
 
 ## Benches
 
-Benches use `criterion`. There are 43 of them in
-`crates/molla/benches/`. The Makefile exposes three convenience
-targets:
+Benches use `criterion` and live with their owning functionality crates. The
+Makefile exposes three convenience targets:
 
 ```bash
 make bench-cpu              # CPU step bench
@@ -105,15 +108,14 @@ make bench-featherstone     # CPU-vs-GPU Featherstone in one criterion group
 To run a specific bench:
 
 ```bash
-nixVulkan cargo bench -p molla --bench bench_xpbd_pile_gpu --features gpu
+nixVulkan cargo bench -p molla-solvers --bench bench_xpbd_pile_gpu --features gpu
 ```
 
-The bench inventory is in `crates/molla/Cargo.toml` under the
-`[[bench]]` sections, grouped by stage family (A = rigid XPBD,
-B = Featherstone, C = cloth, D = VBD tets, E = cable, F = MPM,
-G = soft contact, H = broadphase, I = narrow phase, J = IK +
-sensors, K = iterative solvers, L = autograd, M = sparse grid,
-N = math + FFT).
+The bench inventory is in each owning crate's Cargo.toml under its `[[bench]]`
+sections. For example solver/XPBD/VBD/MPM benches are in
+`crates/molla-solvers`, geometry benches in `crates/molla-geometry`, kernel
+benches in `crates/molla-kernels`, sensor benches in `crates/molla-sensors`,
+math benches in `crates/molla-math`, and facade step benches in `crates/molla`.
 
 Paired CPU-vs-GPU benches (suffix `_cpu_vs_gpu`) print side-by-side
 reports in one criterion group so you can eyeball the wall-clock
@@ -139,17 +141,6 @@ make run RELEASE=1 ARGS="--some-flag"
 The viewer also recognises hotkeys for the marquee scenes — see
 [`viewer/overview.md`](./../viewer/overview.md).
 
-## Oracle tests
-
-```bash
-make test-oracle
-```
-
-Runs `crates/molla/tests/oracle/`. These compare molla output
-against Python Newton's. The Newton venv is *not* managed by the
-nix shell — you need to install it separately (see Newton's docs).
-The oracle suite is `#[ignore]`'d in the default `cargo test` lane.
-
 ## Common gotchas
 
 - **wgpu init fails with "no adapter found"** — you forgot
@@ -158,10 +149,6 @@ The oracle suite is `#[ignore]`'d in the default `cargo test` lane.
 - **Tracy frame stalls** — `--features profile` is on but no Tracy
   client is connected; the trace buffer grows unbounded. Connect
   immediately on launch, or use `--features log_diag` instead.
-- **MuJoCo link failure** — `--features mujoco` requires
-  `libmujoco` system-installed. The molla nix shell does not carry
-  it. See [`importers/mjcf.md`](./../importers/mjcf.md) and the
-  PLAN.md Stage 22 notes.
 - **Long initial build** — first compile pulls ~400 Mb of
-  dependencies (Bevy, wgpu, egui, glam, criterion, urdf-rs,
-  mshio, mujoco-rust, ...). Subsequent incremental builds are fast.
+  dependencies (Bevy, wgpu, egui, glam, criterion, ...). Subsequent
+  incremental builds are fast.

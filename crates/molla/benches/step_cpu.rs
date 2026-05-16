@@ -6,7 +6,7 @@
 //!
 //! The DoD for stage 1 is < 100µs per step for 100 spheres.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use molla::prelude::*;
 
 fn build_n_spheres(n: usize) -> Model {

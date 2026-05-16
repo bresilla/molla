@@ -26,8 +26,7 @@ pub enum ShapeGeometry {
 ```
 
 `Capsule` / `Cylinder` / `Cone` are oriented along the shape-local
-`+Y` axis (URDF/MJCF convention). The body's `Transform` rotates them
-into world frame.
+`+Y` axis. The body's `Transform` rotates them into world frame.
 
 ## Support functions
 

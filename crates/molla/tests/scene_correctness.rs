@@ -168,7 +168,11 @@ fn tower_does_not_explode_at_rest() {
                 let pose = Transform::new(Vec3::new(x, y, z), Quat::IDENTITY);
                 let body = b.add_body(
                     BodyParams::new()
-                        .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                        .with_spatial_inertia(SpatialInertia {
+                            mass: 1.0,
+                            com: Vec3::ZERO,
+                            inertia,
+                        })
                         .with_pose(pose),
                 );
                 b.add_shape_box(body, half_v, Transform::IDENTITY).unwrap();
@@ -203,7 +207,10 @@ fn tower_does_not_explode_at_rest() {
             pos.x.abs() < 6.0 && pos.z.abs() < 6.0 && pos.y > -0.5 && pos.y < 12.0,
             "tower brick {i} escaped: pos = {pos:?}",
         );
-        assert!(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite(), "brick {i} NaN'd");
+        assert!(
+            pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite(),
+            "brick {i} NaN'd"
+        );
     }
 }
 
@@ -236,14 +243,19 @@ fn pyramid_does_not_explode_at_rest() {
                 let z = (iz as f64 - (row_count as f64 - 1.0) * 0.5) * spacing;
                 let body = b.add_body(
                     BodyParams::new()
-                        .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                        .with_spatial_inertia(SpatialInertia {
+                            mass: 1.0,
+                            com: Vec3::ZERO,
+                            inertia,
+                        })
                         .with_position(Vec3::new(x, y, z)),
                 );
                 b.add_shape_box(body, half_v, Transform::IDENTITY).unwrap();
             }
         }
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
 
     let model = b.build().unwrap();
     let mut s_a = model.state().unwrap();
@@ -262,7 +274,11 @@ fn pyramid_does_not_explode_at_rest() {
     }
     let q = s_a.body_q.host().unwrap();
     for (i, p) in q.iter().enumerate() {
-        assert!(p.position.is_finite(), "pyramid box {i} NaN'd: {:?}", p.position);
+        assert!(
+            p.position.is_finite(),
+            "pyramid box {i} NaN'd: {:?}",
+            p.position
+        );
         // Bodies should stay within sane bounds.
         assert!(
             p.position.x.abs() < 8.0 && p.position.z.abs() < 8.0 && p.position.y > -0.5,
@@ -307,13 +323,18 @@ fn brick_wall_stands_without_projectile() {
             let y = BRICK_HALF_Y + 0.001 + (row as f64) * layer_h;
             let body = b.add_body(
                 BodyParams::new()
-                    .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                    .with_spatial_inertia(SpatialInertia {
+                        mass,
+                        com: Vec3::ZERO,
+                        inertia,
+                    })
                     .with_position(Vec3::new(x, y, 0.0)),
             );
             b.add_shape_box(body, half_v, Transform::IDENTITY).unwrap();
         }
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let model = b.build().unwrap();
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();
@@ -338,7 +359,10 @@ fn brick_wall_stands_without_projectile() {
         // (without friction the bricks slide along the plane —
         // documented limitation, not a regression).
         assert!(
-            p.position.x.abs() < 7.0 && p.position.z.abs() < 7.0 && p.position.y > -0.2 && p.position.y < 5.0,
+            p.position.x.abs() < 7.0
+                && p.position.z.abs() < 7.0
+                && p.position.y > -0.2
+                && p.position.y < 5.0,
             "brick {i} escaped: pos = {:?}",
             p.position
         );
@@ -358,7 +382,6 @@ fn brick_wall_stands_without_projectile() {
 // ──────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "documents an XPBD-Coulomb-friction limitation: μ·|λ_n| at steady state is ~0, so the belt drags the box by ~1 mm/s. To re-enable, a Newton-style cap (μ · m · g) would need to be wired in."]
 fn conveyor_belt_drags_box_via_friction() {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
@@ -373,17 +396,24 @@ fn conveyor_belt_drags_box_via_friction() {
             .with_position(Vec3::new(0.0, 1.0, 0.0))
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_box(belt, belt_half, Transform::IDENTITY).unwrap();
+    b.add_shape_box(belt, belt_half, Transform::IDENTITY)
+        .unwrap();
 
     let half = Vec3::splat(0.15);
     let inertia = box_inertia(0.5, 0.15);
     let box_body = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: 0.5, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: 0.5,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(Vec3::new(0.0, 1.0 + 0.05 + 0.15 + 0.001, 0.0)),
     );
-    b.add_shape_box(box_body, half, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_box(box_body, half, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
 
     let model = b.build().unwrap();
     let mut s_a = model.state().unwrap();
@@ -397,7 +427,10 @@ fn conveyor_belt_drags_box_via_friction() {
     let mut start_x = None;
     for step in 0..240 {
         if let Ok(qd) = s_a.body_qd.host_mut() {
-            qd[0] = SpatialVector { linear: Vec3::new(belt_vx, 0.0, 0.0), angular: Vec3::ZERO };
+            qd[0] = SpatialVector {
+                linear: Vec3::new(belt_vx, 0.0, 0.0),
+                angular: Vec3::ZERO,
+            };
         }
         collide(&model, &s_a, &mut contacts, &mut pair_buf).unwrap();
         solver
@@ -412,7 +445,10 @@ fn conveyor_belt_drags_box_via_friction() {
     let q = s_a.body_q.host().unwrap();
     let final_x = q[1].position.x;
     let drift = final_x - start_x.unwrap();
-    assert!(drift > 0.05, "box not dragged by belt: drift={drift} m (XPBD limitation)");
+    assert!(
+        drift > 0.05,
+        "box not dragged by belt: drift={drift} m (XPBD limitation)"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -434,7 +470,11 @@ fn pile_bodies_stay_above_floor() {
             let z = (iz as f64 - 2.5) * 0.6;
             let body = b.add_body(
                 BodyParams::new()
-                    .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                    .with_spatial_inertia(SpatialInertia {
+                        mass: 1.0,
+                        com: Vec3::ZERO,
+                        inertia,
+                    })
                     .with_position(Vec3::new(x, 1.5, z)),
             );
             b.add_shape_box(body, half_v, Transform::IDENTITY).unwrap();
@@ -442,7 +482,8 @@ fn pile_bodies_stay_above_floor() {
         }
     }
     let _ = count;
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let model = b.build().unwrap();
     let mut s_a = model.state().unwrap();
     let mut s_b = model.state().unwrap();
@@ -460,7 +501,11 @@ fn pile_bodies_stay_above_floor() {
     }
     let q = s_a.body_q.host().unwrap();
     for (i, p) in q.iter().enumerate() {
-        assert!(p.position.is_finite(), "pile body {i} NaN'd: {:?}", p.position);
+        assert!(
+            p.position.is_finite(),
+            "pile body {i} NaN'd: {:?}",
+            p.position
+        );
         assert!(
             p.position.y > -0.5,
             "pile body {i} sank below floor: y = {}",

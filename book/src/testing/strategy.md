@@ -1,11 +1,11 @@
-# Test strategy & the Newton oracle
+# Test strategy
 
 molla treats tests as part of the engine, not as documentation. The
 quality bar from `PLAN.md` §1.3 is:
 
 > Every shipped feature must have:
 >
-> 1. A trajectory or unit test against the Newton reference (where
+> 1. A trajectory or unit test against the Newton/Warp references (where
 >    applicable).
 > 2. A doctest or example demonstrating idiomatic use.
 > 3. A bench in `criterion` measuring cost per step.
@@ -13,17 +13,18 @@ quality bar from `PLAN.md` §1.3 is:
 >    (single-threaded) for debugging, and produces bit-identical
 >    results modulo floating-point ordering nondeterminism on GPU.
 
-At the time of writing there are **154 integration tests** in
-`crates/molla/tests/` and **43 criterion benches** in
-`crates/molla/benches/`. Most GPU tests are `#[ignore]`-gated so the
-default `cargo test` lane runs CPU-only on machines that don't have
-a wgpu adapter.
+Integration tests and Criterion benches live with the crate that owns the
+functionality under test: for example FEM tests in `crates/molla-fem/tests/`,
+solver and dynamics tests in `crates/molla-solvers/tests/`, kernel parity tests
+in `crates/molla-kernels/tests/`, and facade/product compatibility tests in
+`crates/molla/tests/`. Most GPU tests are `#[ignore]`-gated so the default
+`cargo test` lane runs CPU-only on machines that don't have a wgpu adapter.
 
 ## The testing pyramid
 
 ```
                   ┌──────────────────────────┐
-                  │  trajectory oracle tests │   slow, run on opt-in
+                  │  reference-port tests    │   algorithm fixtures
                   │  (Newton + Warp parity)  │
                   ├──────────────────────────┤
                   │  CPU/GPU parity tests    │   #[ignore]'d, GPU-only
@@ -41,23 +42,19 @@ a wgpu adapter.
                   └──────────────────────────┘
 ```
 
-## The Newton oracle
+## Reference-port tests
 
-Newton (the Python tree at `xtra/newton/`) is treated as the
-**source of truth** for any trajectory test. The pattern:
+The read-only `xtra/newton/` and `xtra/warp/` trees are treated as algorithm
+references, not as runtime dependencies. The pattern:
 
 1. Author a scene in molla using `ModelBuilder`.
-2. Export the same scene to Python Newton (or hand-replicate it
-   using Newton's `ModelBuilder` Python API).
-3. Step both engines for N substeps with the same `dt` and same
-   solver kind.
-4. Compare body poses + velocities to within a documented
-   tolerance.
+2. Port the upstream fixture or formula into Rust.
+3. Step molla for N substeps with the same `dt` and solver intent.
+4. Compare body poses, velocities, contacts, or scalar diagnostics to within a
+   documented tolerance.
 
-The tests live at `crates/molla/tests/oracle/` (the fixtures) and
-`crates/molla/tests/oracle_newton.rs` (the assertions). They are
-`#[ignore]`-gated because they need Newton's Python venv installed
-separately — run via `make test-oracle`.
+The facade-level ported assertions live at `crates/molla/tests/oracle_newton.rs`
+and do not shell out to external runtimes.
 
 Conventions documented in the file header:
 
@@ -71,8 +68,8 @@ Conventions documented in the file header:
 
 ## CPU/GPU parity (the everyday check)
 
-The most-run test family. Every `_gpu` test in
-`crates/molla/tests/` follows the same recipe:
+The most-run test family. Every `_gpu` test follows the same recipe, regardless
+of whether it lives in `crates/molla/tests/` or in an owning functionality crate:
 
 1. Build a `Model` with fixed-seed inputs.
 2. Step on CPU for N steps; collect trajectory.
@@ -155,9 +152,8 @@ Documenting honest gaps:
 - **No multi-platform CI.** The Makefile assumes nix + Vulkan; tests
   run only on Linux. Metal / DX12 paths compile but aren't
   CI-exercised.
-- **No Python-Rust diff CI.** The oracle tests pass when run by
-  hand; they don't run in any automated job because the Newton
-  venv lives outside the molla repo.
+- **No external-runtime diff CI.** Reference trees are not built or executed by
+  molla; tests should port the relevant invariant into Rust.
 
 These are roadmap items. Until they materialise, the everyday
 contract is "the test suite passes and the parity tolerances

@@ -7,7 +7,7 @@ muscle-tendon units (MTUs). Together they let molla simulate
 musculoskeletal models in the OpenSim / MyoSuite tradition without
 leaving the GPU-first pipeline.
 
-The muscle ships in four progressive cuts (v1 → v4):
+The muscle ships in five progressive cuts (v1 → v5):
 
 - **v1** — Single muscle per joint, instantaneous activation, rigid
   tendon. Hill three-element model only.
@@ -17,9 +17,12 @@ The muscle ships in four progressive cuts (v1 → v4):
 - **v3** — GPU kernel (`shaders/muscle.wgsl`) for the per-step torque
   computation on host-allocated parallel buffers.
 - **v4** — SEE Newton solve runs on the GPU with full host parity.
+- **v5** — Per-muscle tendon stiffness ratio is stored in model buffers and
+  consumed by both CPU and GPU SEE paths; pennation remains per-muscle on both
+  paths.
 
-Source: `crates/molla/src/actuators/muscle.rs`. Shader:
-`crates/molla/shaders/muscle.wgsl`. The host-side Hill model is
+Source: `crates/molla-actuators/src/muscle.rs`. Shader:
+`crates/molla-kernels/shaders/muscle.wgsl`. The host-side Hill model is
 always compiled (no GPU feature gate) so unit tests and the CPU
 solver can use it directly.
 
@@ -177,7 +180,8 @@ Featherstone solver's torque-injection pass then sums them into the
 joint-space tau vector.
 
 v4 ships the SEE Newton solve on the GPU too, with full host
-parity (verified by parity tests in `tests/muscle_gpu.rs`). The same
+parity (verified by parity tests in
+`crates/molla-solvers/tests/joint_muscle_gpu.rs`). The same
 damped Newton kernel runs across all muscles in lockstep — no
 per-muscle control divergence inside the 8 iterations, because every
 muscle that converges early simply repeats its converged solution
@@ -194,6 +198,7 @@ pub struct MuscleConfig {
     pub excitation: Real,       // u ∈ [0, 1] (initial neural drive)
     pub tau_activation: Real,   // τ_act (s), default 0.020
     pub l_tendon_slack: Real,   // 0 ⇒ rigid tendon, > 0 enables SEE
+    pub tendon_stiffness_ratio: Real, // E·A / f_max, default 30
     pub pennation_angle: Real,  // α₀ at l_opt (rad), default 0
     pub polarity: Real,         // +1 / −1 (antagonist flag)
 }

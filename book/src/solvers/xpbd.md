@@ -169,9 +169,9 @@ impl XpbdSolver {
 
 | kernel | shader | role |
 |--------|--------|------|
-| `XpbdKernel` | [`xpbd.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/xpbd.wgsl) | rigid-body predict + per-body Jacobi contact projection + velocity recovery |
-| `XpbdEqualityKernel` | [`xpbd_equality.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/xpbd_equality.wgsl) | CONNECT / WELD post-step projection |
-| `XpbdParticlesKernel` | [`xpbd_particles.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/xpbd_particles.wgsl) | particles + springs + strain limit + plane collision + velocity recovery |
+| `XpbdKernel` | [`xpbd.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/xpbd.wgsl) | rigid-body predict + per-body Jacobi contact projection + velocity recovery |
+| `XpbdEqualityKernel` | [`xpbd_equality.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/xpbd_equality.wgsl) | CONNECT / WELD post-step projection |
+| `XpbdParticlesKernel` | [`xpbd_particles.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/xpbd_particles.wgsl) | particles + springs + strain limit + plane collision + velocity recovery |
 
 The particle kernel is **lazily constructed** on the first step that
 has particles, so rigid-only models pay no compile cost. Inside the

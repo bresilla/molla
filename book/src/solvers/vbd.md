@@ -237,7 +237,7 @@ bending and the cable behaves as a pure stretch polyline.
 
 | kernel | shader | role |
 |--------|--------|------|
-| `VbdClothKernel` | [`vbd_cloth.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/vbd_cloth.wgsl) | per-vertex Newton block sweep |
+| `VbdClothKernel` | [`vbd_cloth.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/vbd_cloth.wgsl) | per-vertex Newton block sweep |
 | `SoftBvhGpu` | (BVH refit shader) | cross-mesh BVH refit |
 | `SoftVtContactKernel` | (VT/EE pipelines) | cross-mesh contact gather + project |
 

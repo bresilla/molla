@@ -135,7 +135,7 @@ fn atomic_add_csr(slot: u32, value: f32) {
 }
 ```
 
-(From `crates/molla/shaders/fem_assembly.wgsl`; the SpGEMM kernel
+(From `crates/molla-fem/shaders/fem_assembly.wgsl`; the SpGEMM kernel
 uses the same pattern.)
 
 ## Cross-references

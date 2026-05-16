@@ -1,8 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/molla-core",
+    "crates/molla-math",
+    "crates/molla-storage",
+    "crates/molla-compute",
+    "crates/molla-sim",
+    "crates/molla-optim",
+    "crates/molla-actuators",
+    "crates/molla-kernels",
+    "crates/molla-sensors",
+    "crates/molla-geometry",
+    "crates/molla-solvers",
+    "crates/molla-autograd",
+    "crates/molla-fem",
+    "crates/molla-compute-primitives",
     "crates/molla",
-    "crates/molla_viewer",
+    "bin/molla_viewer",
 ]
 exclude = ["xtra"]
 

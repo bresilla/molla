@@ -87,7 +87,6 @@
   - [Explicit](./solvers/mpm_explicit.md)
   - [Semi-implicit](./solvers/mpm_semi_implicit.md)
   - [Implicit Bingham](./solvers/mpm_implicit.md)
-- [MuJoCo wrapper](./solvers/mujoco.md)
 
 ---
 
@@ -113,6 +112,7 @@
 - [Nonconforming meshes](./fem/nonconforming.md)
 - [Signorini hard contact](./fem/signorini.md)
 - [Coulomb friction](./fem/friction.md)
+- [Phase-field fracture](./fem/phase_field.md)
 
 ---
 
@@ -145,15 +145,6 @@
 - [FEM adjoint](./autograd/fem.md)
 - [Raycast adjoint](./autograd/raycast.md)
 - [Differentiable Gaussian splat renderer](./autograd/splat.md)
-
----
-
-# Importers
-
-- [URDF](./importers/urdf.md)
-- [MJCF (writer)](./importers/mjcf.md)
-- [USD (usd_molla)](./importers/usd.md)
-- [Gmsh (mshio)](./importers/gmsh.md)
 
 ---
 

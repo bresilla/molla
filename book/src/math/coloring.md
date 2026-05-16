@@ -1,6 +1,6 @@
 # Graph coloring
 
-`crates/molla/src/geometry/graph_coloring.rs` (Stage 38d) centralises
+`crates/molla-math/src/coloring.rs` (Stage 38d) centralises
 the constraint-graph colouring step used by VBD and XPBD. Before this
 module, each parallel-constraint solver carried its own copy of the
 same recipe; now there's a single source of truth.
@@ -88,7 +88,7 @@ pass per colour over its index list, with a barrier between passes.
 ## End-to-end wiring
 
 ```rust
-use molla::geometry::{color_constraints, group_by_color};
+use molla::math::{color_constraints, group_by_color};
 
 // 1. Build the constraint set.
 let constraint_verts: Vec<Vec<u32>> = build_edges_from_mesh(&mesh);

@@ -1,0 +1,170 @@
+//! Body-Jacobian — `J(q)` mapping joint velocities to a target
+//! body-point's spatial velocity.
+//!
+//! For a serial chain articulation:
+//!
+//! ```text
+//! v_target = J(q) · q̇
+//! ```
+//!
+//! where `J` is a `6 × N` matrix with one column per joint DOF, and
+//! `v_target = [v_linear; ω]` is the spatial velocity at
+//! `point_local` (in the target body's frame), expressed in world
+//! axes. Columns for joints that are NOT ancestors of the target
+//! body are zero (they don't move it).
+//!
+//! Used by IK (gradient of position/rotation residuals) and
+//! operational-space control. Stays CPU until a high-throughput
+//! consumer needs the GPU port.
+
+use crate::core::{Error, Result};
+use crate::math::{JacobianKind, Real, SpatialVector, Vec3, spatial_jacobian_column};
+use crate::sim::{JointType, Model, State};
+
+/// `6 × N` Jacobian for a body point. Returns a flat row-major
+/// `6 · N` Vec where row `r ∈ [0,5]` and column `k ∈ [0,N)` give
+/// the spatial-velocity contribution from joint DOF `k`. Layout is
+/// `[v_linear (3), ω (3)]` per column, just like `SpatialVector`.
+///
+/// `target_body` is a global body index; `point_local` is the point's
+/// position in the body's local frame. `articulation` selects which
+/// articulation owns the joints — the result is sized to that
+/// articulation's DOF total.
+pub fn jacobian(
+    model: &Model,
+    state: &State,
+    articulation: usize,
+    target_body: usize,
+    point_local: Vec3,
+) -> Result<Vec<Real>> {
+    if model.joint_count == 0 || target_body >= model.body_count {
+        return Ok(Vec::new());
+    }
+    let (j_begin, j_end) = articulation_range(model, articulation)?;
+
+    let body_q = state.body_q.host()?;
+    let joint_type = model.joint_type.host()?;
+    let joint_parent = model.joint_parent.host()?;
+    let joint_child = model.joint_child.host()?;
+    let joint_x_p = model.joint_x_p.host()?;
+    let joint_axis = model.joint_axis.host()?;
+    let joint_dof_offset = model.joint_dof_offset.host()?;
+
+    let dof_total = (joint_dof_offset[j_end] - joint_dof_offset[j_begin]) as usize;
+    if dof_total == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Target point in WORLD frame.
+    let cw = body_q[target_body];
+    let target_world = cw.position + cw.rotation * point_local;
+
+    // For each joint in the articulation, decide if it's an ancestor
+    // of `target_body`. Walk up from the target via joint_parent /
+    // joint_child links and mark each ancestor joint.
+    //
+    // Ancestor relationship: joint k is an ancestor of body B if
+    // following parent chain from B (B → parent_of_B → ... → root)
+    // hits joint k's child body.
+    let mut is_ancestor = vec![false; j_end - j_begin];
+    let mut walker: i32 = target_body as i32;
+    while walker >= 0 {
+        let mut found = false;
+        for kk in 0..(j_end - j_begin) {
+            let jj = j_begin + kk;
+            if joint_child[jj] == walker {
+                is_ancestor[kk] = true;
+                walker = joint_parent[jj];
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+
+    // Build columns.
+    let mut j_cols = vec![0.0; 6 * dof_total];
+    for k in 0..(j_end - j_begin) {
+        if !is_ancestor[k] {
+            continue;
+        }
+        let j = j_begin + k;
+        let parent_body = joint_parent[j];
+        let parent_world = if parent_body < 0 {
+            crate::math::Transform::IDENTITY
+        } else {
+            body_q[parent_body as usize]
+        };
+        let xpw = parent_world.compose(&joint_x_p[j]);
+        let joint_origin_w = xpw.position;
+        let axis_w = xpw.rotation * joint_axis[j];
+        let jt = decode_joint_type(joint_type[j])?;
+        let dof_local = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
+        let col = match jt {
+            JointType::Revolute => spatial_jacobian_column(
+                JacobianKind::Revolute,
+                axis_w,
+                joint_origin_w,
+                target_world,
+            ),
+            JointType::Prismatic => spatial_jacobian_column(
+                JacobianKind::Prismatic,
+                axis_w,
+                joint_origin_w,
+                target_world,
+            ),
+            JointType::Fixed => SpatialVector::ZERO,
+            _ => {
+                return Err(Error::Build(format!(
+                    "jacobian: joint type {:?} not yet supported",
+                    jt
+                )));
+            }
+        };
+        let dof_width = match jt {
+            JointType::Revolute | JointType::Prismatic => 1,
+            _ => 0,
+        };
+        if dof_width == 0 {
+            continue;
+        }
+        j_cols[0 * dof_total + dof_local] = col.linear.x;
+        j_cols[1 * dof_total + dof_local] = col.linear.y;
+        j_cols[2 * dof_total + dof_local] = col.linear.z;
+        j_cols[3 * dof_total + dof_local] = col.angular.x;
+        j_cols[4 * dof_total + dof_local] = col.angular.y;
+        j_cols[5 * dof_total + dof_local] = col.angular.z;
+    }
+    Ok(j_cols)
+}
+
+fn decode_joint_type(v: u32) -> Result<JointType> {
+    match v {
+        0 => Ok(JointType::Prismatic),
+        1 => Ok(JointType::Revolute),
+        2 => Ok(JointType::Ball),
+        3 => Ok(JointType::Fixed),
+        4 => Ok(JointType::Free),
+        5 => Ok(JointType::Distance),
+        6 => Ok(JointType::D6),
+        _ => Err(Error::Build(format!("jacobian: unknown joint_type {v}"))),
+    }
+}
+
+fn articulation_range(model: &Model, articulation: usize) -> Result<(usize, usize)> {
+    if model.articulation_count == 0 {
+        return Ok((0, model.joint_count));
+    }
+    let starts = model.articulation_start.host()?;
+    if articulation + 1 >= starts.len() {
+        return Err(Error::Build(format!(
+            "jacobian: articulation {articulation} out of range"
+        )));
+    }
+    Ok((
+        starts[articulation] as usize,
+        starts[articulation + 1] as usize,
+    ))
+}

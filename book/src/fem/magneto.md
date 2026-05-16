@@ -3,7 +3,7 @@
 Stage 46 brought H(curl)-conforming **first-order Nedelec edge
 elements** to molla, with a steady-state curl–curl solver for
 magnetostatics. The element basis lives in
-`crates/molla/src/fem/nedelec_element.rs`; the magnetostatics solver
+`crates/molla-fem/src/nedelec_element.rs`; the magnetostatics solver
 is in `magneto.rs`.
 
 ## Why edge elements?

@@ -146,8 +146,16 @@ fn run_xpbd_smoke(model: &Model, label: &str) {
     let mut solver = XpbdSolver::new_cpu().with_iterations(8);
     for _ in 0..SMOKE_STEPS {
         collide(model, &s_a, &mut contacts, &mut pair_buf).expect("collide");
-        Solver::step(&mut solver, model, &s_a, &control, &contacts, SMOKE_DT, &mut s_b)
-            .expect("xpbd step");
+        Solver::step(
+            &mut solver,
+            model,
+            &s_a,
+            &control,
+            &contacts,
+            SMOKE_DT,
+            &mut s_b,
+        )
+        .expect("xpbd step");
         std::mem::swap(&mut s_a, &mut s_b);
     }
     assert_no_nan_or_escape(&s_a, label);
@@ -160,12 +168,7 @@ fn run_featherstone_smoke(model: &Model, label: &str) {
 }
 
 /// Run Featherstone on CPU, with custom damping + rigorous-D-solve flag.
-fn run_featherstone_smoke_with(
-    model: &Model,
-    label: &str,
-    damping: f64,
-    rigorous_d: bool,
-) {
+fn run_featherstone_smoke_with(model: &Model, label: &str, damping: f64, rigorous_d: bool) {
     let mut s_a = model.state().expect("state_a");
     let mut s_b = model.state().expect("state_b");
     let control = model.control();
@@ -176,8 +179,16 @@ fn run_featherstone_smoke_with(
         .with_rigorous_d_solve(rigorous_d);
     for _ in 0..SMOKE_STEPS {
         collide(model, &s_a, &mut contacts, &mut pair_buf).expect("collide");
-        Solver::step(&mut solver, model, &s_a, &control, &contacts, SMOKE_DT, &mut s_b)
-            .expect("featherstone step");
+        Solver::step(
+            &mut solver,
+            model,
+            &s_a,
+            &control,
+            &contacts,
+            SMOKE_DT,
+            &mut s_b,
+        )
+        .expect("featherstone step");
         std::mem::swap(&mut s_a, &mut s_b);
     }
     assert_no_nan_or_escape(&s_a, label);
@@ -197,8 +208,16 @@ fn run_vbd_smoke(model: &Model, label: &str, steps: usize) {
         .with_contact_stiffness(1.0e5);
     for _ in 0..steps {
         collide(model, &s_a, &mut contacts, &mut pair_buf).expect("collide");
-        Solver::step(&mut solver, model, &s_a, &control, &contacts, SMOKE_DT, &mut s_b)
-            .expect("vbd step");
+        Solver::step(
+            &mut solver,
+            model,
+            &s_a,
+            &control,
+            &contacts,
+            SMOKE_DT,
+            &mut s_b,
+        )
+        .expect("vbd step");
         std::mem::swap(&mut s_a, &mut s_b);
     }
     assert_no_nan_or_escape(&s_a, label);
@@ -233,13 +252,19 @@ fn build_pile_smoke() -> Model {
     b.set_angular_damping(0.05);
     let mut rng_state: u64 = 0x9E3779B97F4A7C15;
     fn next_unit(s: &mut u64) -> f64 {
-        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let v = (*s >> 11) as f64 / (1u64 << 53) as f64;
         v * 2.0 - 1.0
     }
     fn random_rotation(s: &mut u64) -> Quat {
         let axis = Vec3::new(next_unit(s), next_unit(s), next_unit(s)).normalize_or_zero();
-        let axis = if axis.length_squared() < 1e-9 { Vec3::Y } else { axis };
+        let axis = if axis.length_squared() < 1e-9 {
+            Vec3::Y
+        } else {
+            axis
+        };
         let angle = next_unit(s) * std::f64::consts::PI;
         Quat::from_axis_angle(axis, angle)
     }
@@ -261,7 +286,8 @@ fn build_pile_smoke() -> Model {
                             .with_spatial_inertia(SpatialInertia::sphere(1.0, PILE_SPHERE_RADIUS))
                             .with_position(pos),
                     );
-                    b.add_shape_sphere(body, PILE_SPHERE_RADIUS, Transform::IDENTITY).unwrap();
+                    b.add_shape_sphere(body, PILE_SPHERE_RADIUS, Transform::IDENTITY)
+                        .unwrap();
                 }
                 1 => {
                     let half = Vec3::splat(PILE_BOX_HALF);
@@ -301,7 +327,8 @@ fn build_pile_smoke() -> Model {
             }
         }
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("pile model")
 }
 
@@ -334,7 +361,8 @@ fn build_rope_smoke() -> Model {
                 .with_flags(BodyFlags::KINEMATIC);
         }
         let id = b.add_body(params);
-        b.add_shape_sphere(id, ROPE_LINK_RADIUS, Transform::IDENTITY).unwrap();
+        b.add_shape_sphere(id, ROPE_LINK_RADIUS, Transform::IDENTITY)
+            .unwrap();
         bodies.push(id);
     }
     let half = ROPE_LINK_SPACING * 0.5;
@@ -346,7 +374,8 @@ fn build_rope_smoke() -> Model {
             Vec3::new(0.0, half, 0.0),
         );
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("rope model")
 }
 
@@ -398,8 +427,10 @@ fn build_tower_smoke() -> Model {
             .with_spatial_inertia(SpatialInertia::sphere(TOWER_BALL_MASS, TOWER_BALL_RADIUS))
             .with_position(Vec3::new(0.0, TOWER_BALL_HEIGHT, 0.0)),
     );
-    b.add_shape_sphere(ball, TOWER_BALL_RADIUS, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(ball, TOWER_BALL_RADIUS, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("tower model")
 }
 
@@ -448,7 +479,8 @@ fn build_cloth_smoke() -> Model {
         Transform::from_translation(Vec3::new(0.0, CLOTH_SPHERE_Y, 0.0)),
     )
     .unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cloth model")
 }
 
@@ -470,14 +502,19 @@ fn build_lidar_smoke() -> Model {
     let body = b.add_body(kin_at(Vec3::new(4.5, 1.2, 0.0)));
     b.add_shape_sphere(body, 1.2, Transform::IDENTITY).unwrap();
     let body = b.add_body(kin_at(Vec3::new(-3.5, 1.5, 2.0)));
-    b.add_shape_box(body, Vec3::new(0.7, 1.5, 0.7), Transform::IDENTITY).unwrap();
+    b.add_shape_box(body, Vec3::new(0.7, 1.5, 0.7), Transform::IDENTITY)
+        .unwrap();
     let body = b.add_body(kin_at(Vec3::new(0.0, 0.6, 6.0)));
-    b.add_shape_box(body, Vec3::new(3.0, 0.6, 0.4), Transform::IDENTITY).unwrap();
+    b.add_shape_box(body, Vec3::new(3.0, 0.6, 0.4), Transform::IDENTITY)
+        .unwrap();
     let body = b.add_body(kin_at(Vec3::new(3.0, 1.0, -3.5)));
-    b.add_shape_capsule(body, 1.0, 0.4, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(body, 1.0, 0.4, Transform::IDENTITY)
+        .unwrap();
     let body = b.add_body(kin_at(Vec3::new(-3.0, 0.8, -3.0)));
-    b.add_shape_cylinder(body, 0.8, 0.5, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_cylinder(body, 0.8, 0.5, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("lidar model")
 }
 
@@ -498,7 +535,8 @@ fn build_imu_smoke() -> Model {
             .with_position(Vec3::new(0.0, 4.0, 0.0)),
     );
     b.add_shape_sphere(body, 0.4, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("imu model")
 }
 
@@ -539,8 +577,10 @@ fn build_contact_smoke() -> Model {
             })
             .with_position(Vec3::new(-0.1, 2.6, 0.05)),
     );
-    b.add_shape_capsule(body, 0.4, 0.25, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(body, 0.4, 0.25, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("contact model")
 }
 
@@ -576,7 +616,8 @@ fn build_arm_smoke() -> Model {
                 })
                 .with_position(next_pos),
         );
-        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
         let x_p = if i == 0 {
             let flip = Quat::from_axis_angle(Vec3::X, std::f64::consts::PI);
             Transform::new(Vec3::new(0.0, ARM_BASE_HEIGHT, 0.0), flip)
@@ -585,7 +626,8 @@ fn build_arm_smoke() -> Model {
         };
         let x_c = Transform::from_translation(Vec3::new(0.0, -half_h, 0.0));
         let axis = if i == 0 { Vec3::Z } else { Vec3::X };
-        b.add_joint_revolute(prev_body, body, x_p, x_c, axis).unwrap();
+        b.add_joint_revolute(prev_body, body, x_p, x_c, axis)
+            .unwrap();
         prev_body = body;
         next_pos = next_pos - Vec3::new(0.0, ARM_LINK_LEN, 0.0);
     }
@@ -628,7 +670,8 @@ fn build_shapes_smoke() -> Model {
         heights,
     };
     let field_id = b.add_heightfield(hf);
-    b.add_shape_heightfield(BodyId::NONE, field_id, Transform::IDENTITY).unwrap();
+    b.add_shape_heightfield(BodyId::NONE, field_id, Transform::IDENTITY)
+        .unwrap();
     let sdf_id = b.add_sdf(SdfShape::Torus {
         major: SHAPES_TORUS_MAJOR,
         minor: SHAPES_TORUS_MINOR,
@@ -658,10 +701,18 @@ fn build_shapes_smoke() -> Model {
         ));
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
-                .with_pose(Transform::new(*pos, Quat::from_axis_angle(Vec3::Z, (i as f64) * 0.3 + 0.4))),
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
+                .with_pose(Transform::new(
+                    *pos,
+                    Quat::from_axis_angle(Vec3::Z, (i as f64) * 0.3 + 0.4),
+                )),
         );
-        b.add_shape_cone(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_cone(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
     }
     // 3 convex hulls.
     for (i, pos) in [
@@ -693,11 +744,19 @@ fn build_shapes_smoke() -> Model {
         ));
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
-                .with_pose(Transform::new(*pos, Quat::from_axis_angle(Vec3::X, (i as f64) * 0.5))),
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
+                .with_pose(Transform::new(
+                    *pos,
+                    Quat::from_axis_angle(Vec3::X, (i as f64) * 0.5),
+                )),
         );
         let hull_id = b.add_hull(verts);
-        b.add_shape_convex_hull(body, hull_id, Transform::IDENTITY).unwrap();
+        b.add_shape_convex_hull(body, hull_id, Transform::IDENTITY)
+            .unwrap();
     }
     // 3 spheres.
     for pos in &[
@@ -711,10 +770,15 @@ fn build_shapes_smoke() -> Model {
         let inertia = Mat3::from_diagonal(Vec3::new(i_v, i_v, i_v));
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
                 .with_position(*pos),
         );
-        b.add_shape_sphere(body, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_sphere(body, radius, Transform::IDENTITY)
+            .unwrap();
     }
     // 1 ellipsoid.
     {
@@ -729,13 +793,18 @@ fn build_shapes_smoke() -> Model {
         ));
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
                 .with_pose(Transform::new(
                     Vec3::new(1.2, 12.0, 1.2),
                     Quat::from_axis_angle(Vec3::Z, 0.6),
                 )),
         );
-        b.add_shape_ellipsoid(body, half_axes, Transform::IDENTITY).unwrap();
+        b.add_shape_ellipsoid(body, half_axes, Transform::IDENTITY)
+            .unwrap();
     }
     b.build().expect("shapes model")
 }
@@ -763,17 +832,23 @@ fn build_gpu_ik_arm_smoke() -> Model {
         m_third * (h2.x + h2.y),
     ));
     b.begin_articulation();
-    let axes = [Vec3::Z, Vec3::Y, Vec3::Z, Vec3::Y, Vec3::Z, Vec3::Y, Vec3::Z];
+    let axes = [
+        Vec3::Z,
+        Vec3::Y,
+        Vec3::Z,
+        Vec3::Y,
+        Vec3::Z,
+        Vec3::Y,
+        Vec3::Z,
+    ];
     let link_lens = [0.333_f64, 0.0, 0.316, 0.0, 0.384, 0.0, 0.107];
     let mut prev = BodyId::NONE;
     for i in 0..7 {
-        let body = b.add_body(
-            BodyParams::new().with_spatial_inertia(SpatialInertia {
-                mass,
-                com: Vec3::ZERO,
-                inertia,
-            }),
-        );
+        let body = b.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass,
+            com: Vec3::ZERO,
+            inertia,
+        }));
         let x_p = if i == 0 {
             Transform::from_translation(Vec3::new(0.0, 1.0, 0.0))
         } else {
@@ -800,7 +875,8 @@ fn build_gpu_narrow_phase_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
     b.set_linear_damping(0.2);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let n_side = 4i32;
     for ix in 0..n_side {
         for iz in 0..n_side {
@@ -815,7 +891,11 @@ fn build_gpu_narrow_phase_smoke() -> Model {
                     let inertia = box_inertia(mass, 0.25);
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_position(Vec3::new(x, y, z)),
                     );
                     b.add_shape_box(body, half, Transform::IDENTITY).unwrap();
@@ -827,7 +907,11 @@ fn build_gpu_narrow_phase_smoke() -> Model {
                     let inertia = Mat3::from_diagonal(Vec3::new(i_v, i_v, i_v));
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_position(Vec3::new(x, y, z)),
                     );
                     b.add_shape_sphere(body, r, Transform::IDENTITY).unwrap();
@@ -843,10 +927,15 @@ fn build_gpu_narrow_phase_smoke() -> Model {
                     ));
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_position(Vec3::new(x, y, z)),
                     );
-                    b.add_shape_cylinder(body, half_h, r, Transform::IDENTITY).unwrap();
+                    b.add_shape_cylinder(body, half_h, r, Transform::IDENTITY)
+                        .unwrap();
                 }
                 _ => {
                     let half_h: f64 = 0.30;
@@ -859,10 +948,15 @@ fn build_gpu_narrow_phase_smoke() -> Model {
                     ));
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_position(Vec3::new(x, y, z)),
                     );
-                    b.add_shape_cone(body, half_h, r, Transform::IDENTITY).unwrap();
+                    b.add_shape_cone(body, half_h, r, Transform::IDENTITY)
+                        .unwrap();
                 }
             }
         }
@@ -881,7 +975,8 @@ fn build_camera_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
     b.set_linear_damping(0.20);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let sphere_specs = [
         (Vec3::new(-1.6, 1.5, 0.0), 0.5),
         (Vec3::new(0.0, 1.5, 0.0), 0.5),
@@ -920,7 +1015,8 @@ fn build_camera_smoke() -> Model {
                 })
                 .with_position(Vec3::new(-2.4, 1.0, 1.6)),
         );
-        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
     }
     {
         let half_h: f64 = 0.6;
@@ -934,7 +1030,8 @@ fn build_camera_smoke() -> Model {
                 })
                 .with_position(Vec3::new(2.4, 1.2, 1.6)),
         );
-        b.add_shape_cone(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_cone(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
     }
     b.build().expect("camera model")
 }
@@ -954,7 +1051,11 @@ const ACTUATOR_LINK_MASS: f64 = 0.5;
 fn build_actuator_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
-    let inertia = capsule_inertia(ACTUATOR_LINK_MASS, ACTUATOR_LINK_HALF_H, ACTUATOR_LINK_RADIUS);
+    let inertia = capsule_inertia(
+        ACTUATOR_LINK_MASS,
+        ACTUATOR_LINK_HALF_H,
+        ACTUATOR_LINK_RADIUS,
+    );
     b.begin_articulation();
     let body = b.add_body(
         BodyParams::new()
@@ -963,14 +1064,24 @@ fn build_actuator_smoke() -> Model {
                 com: Vec3::ZERO,
                 inertia,
             })
-            .with_position(Vec3::new(0.0, ACTUATOR_BASE_HEIGHT - ACTUATOR_LINK_HALF_H, 0.0)),
+            .with_position(Vec3::new(
+                0.0,
+                ACTUATOR_BASE_HEIGHT - ACTUATOR_LINK_HALF_H,
+                0.0,
+            )),
     );
-    b.add_shape_capsule(body, ACTUATOR_LINK_HALF_H, ACTUATOR_LINK_RADIUS, Transform::IDENTITY)
-        .unwrap();
+    b.add_shape_capsule(
+        body,
+        ACTUATOR_LINK_HALF_H,
+        ACTUATOR_LINK_RADIUS,
+        Transform::IDENTITY,
+    )
+    .unwrap();
     let flip = Quat::from_axis_angle(Vec3::X, std::f64::consts::PI);
     let x_p = Transform::new(Vec3::new(0.0, ACTUATOR_BASE_HEIGHT, 0.0), flip);
     let x_c = Transform::from_translation(Vec3::new(0.0, -ACTUATOR_LINK_HALF_H, 0.0));
-    b.add_joint_revolute(BodyId::NONE, body, x_p, x_c, Vec3::Z).unwrap();
+    b.add_joint_revolute(BodyId::NONE, body, x_p, x_c, Vec3::Z)
+        .unwrap();
     b.build().expect("actuator model")
 }
 
@@ -1001,12 +1112,21 @@ fn build_quadrotor_smoke() -> Model {
     ));
     let frame = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: m, com: Vec3::ZERO, inertia: i_frame })
+            .with_spatial_inertia(SpatialInertia {
+                mass: m,
+                com: Vec3::ZERO,
+                inertia: i_frame,
+            })
             .with_position(Vec3::new(0.0, QUAD_INITIAL_HEIGHT, 0.0)),
     );
     b.add_shape_box(frame, half, Transform::IDENTITY).unwrap();
-    b.add_joint_free(BodyId::NONE, frame, Transform::IDENTITY, Transform::IDENTITY)
-        .unwrap();
+    b.add_joint_free(
+        BodyId::NONE,
+        frame,
+        Transform::IDENTITY,
+        Transform::IDENTITY,
+    )
+    .unwrap();
     let r2 = QUAD_ROTOR_RADIUS * QUAD_ROTOR_RADIUS;
     let i_rotor = Mat3::from_diagonal(Vec3::new(
         QUAD_ROTOR_MASS * r2 * 0.25,
@@ -1028,7 +1148,8 @@ fn build_quadrotor_smoke() -> Model {
                 })
                 .with_position(Vec3::new(off.x, QUAD_INITIAL_HEIGHT + 0.02, off.z)),
         );
-        b.add_shape_sphere(rotor, QUAD_ROTOR_RADIUS, Transform::IDENTITY).unwrap();
+        b.add_shape_sphere(rotor, QUAD_ROTOR_RADIUS, Transform::IDENTITY)
+            .unwrap();
         b.add_joint_fixed(
             frame,
             rotor,
@@ -1051,7 +1172,8 @@ fn build_broad_phase_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
     b.set_linear_damping(0.20);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let nx: i32 = 8; // viewer uses 32×32×4; smaller for speed.
     let nz: i32 = 8;
     let ny: i32 = 2;
@@ -1074,7 +1196,11 @@ fn build_broad_phase_smoke() -> Model {
                 let inertia = Mat3::from_diagonal(Vec3::new(i_v, i_v, i_v));
                 let body = b.add_body(
                     BodyParams::new()
-                        .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                        .with_spatial_inertia(SpatialInertia {
+                            mass,
+                            com: Vec3::ZERO,
+                            inertia,
+                        })
                         .with_position(Vec3::new(x, y, z)),
                 );
                 b.add_shape_sphere(body, r, Transform::IDENTITY).unwrap();
@@ -1129,7 +1255,8 @@ fn build_vbd_cloth_smoke() -> Model {
         Transform::from_translation(Vec3::new(0.0, VBD_CLOTH_SPHERE_Y, 0.0)),
     )
     .unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("vbd cloth model")
 }
 
@@ -1138,53 +1265,61 @@ fn scene_16_vbd_cloth_smoke() {
     run_vbd_smoke(&build_vbd_cloth_smoke(), "16 VbdCloth", 60);
 }
 
-// ── Scene 17: MuJoCo (double pendulum) ───────────────────────────────
+// ── Scene 17: Native double pendulum ─────────────────────────────────
 
-const MUJOCO_LINK_LEN: f64 = 0.5;
-const MUJOCO_LINK_RADIUS: f64 = 0.05;
-const MUJOCO_LINK_MASS: f64 = 0.6;
-const MUJOCO_BASE_HEIGHT: f64 = 4.0;
+const REFERENCE_PENDULUM_LINK_LEN: f64 = 0.5;
+const REFERENCE_PENDULUM_LINK_RADIUS: f64 = 0.05;
+const REFERENCE_PENDULUM_LINK_MASS: f64 = 0.6;
+const REFERENCE_PENDULUM_BASE_HEIGHT: f64 = 4.0;
 
-fn build_mujoco_smoke() -> Model {
+fn build_reference_pendulum_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
-    let half_h = MUJOCO_LINK_LEN * 0.5;
-    let radius = MUJOCO_LINK_RADIUS;
-    let inertia = capsule_inertia(MUJOCO_LINK_MASS, half_h, radius);
+    let half_h = REFERENCE_PENDULUM_LINK_LEN * 0.5;
+    let radius = REFERENCE_PENDULUM_LINK_RADIUS;
+    let inertia = capsule_inertia(REFERENCE_PENDULUM_LINK_MASS, half_h, radius);
     b.begin_articulation();
-    let upper_pos = Vec3::new(0.0, MUJOCO_BASE_HEIGHT - half_h, 0.0);
+    let upper_pos = Vec3::new(0.0, REFERENCE_PENDULUM_BASE_HEIGHT - half_h, 0.0);
     let upper = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: MUJOCO_LINK_MASS, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: REFERENCE_PENDULUM_LINK_MASS,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(upper_pos),
     );
-    b.add_shape_capsule(upper, half_h, radius, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(upper, half_h, radius, Transform::IDENTITY)
+        .unwrap();
     let shoulder_x_p = Transform::new(
-        Vec3::new(0.0, MUJOCO_BASE_HEIGHT, 0.0),
+        Vec3::new(0.0, REFERENCE_PENDULUM_BASE_HEIGHT, 0.0),
         Quat::from_axis_angle(Vec3::X, std::f64::consts::PI),
     );
     let shoulder_x_c = Transform::from_translation(Vec3::new(0.0, -half_h, 0.0));
     b.add_joint_revolute(BodyId::NONE, upper, shoulder_x_p, shoulder_x_c, Vec3::Z)
         .unwrap();
-    let lower_pos = upper_pos - Vec3::new(0.0, MUJOCO_LINK_LEN, 0.0);
+    let lower_pos = upper_pos - Vec3::new(0.0, REFERENCE_PENDULUM_LINK_LEN, 0.0);
     let lower = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: MUJOCO_LINK_MASS, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: REFERENCE_PENDULUM_LINK_MASS,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(lower_pos),
     );
-    b.add_shape_capsule(lower, half_h, radius, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(lower, half_h, radius, Transform::IDENTITY)
+        .unwrap();
     let elbow_x_p = Transform::from_translation(Vec3::new(0.0, half_h, 0.0));
     let elbow_x_c = Transform::from_translation(Vec3::new(0.0, -half_h, 0.0));
     b.add_joint_revolute(upper, lower, elbow_x_p, elbow_x_c, Vec3::X)
         .unwrap();
-    b.build().expect("mujoco model")
+    b.build().expect("reference pendulum model")
 }
 
 #[test]
-fn scene_17_mujoco_smoke() {
-    // Run via Featherstone — the viewer falls back when the `mujoco`
-    // Cargo feature is OFF (the test crate doesn't enable it).
-    run_featherstone_smoke(&build_mujoco_smoke(), "17 MuJoCo");
+fn scene_17_reference_pendulum_smoke() {
+    run_featherstone_smoke(&build_reference_pendulum_smoke(), "17 Native pendulum");
 }
 
 // ── Scene 18: DiffArm (kinematic 2-link, host-driven) ───────────────
@@ -1199,7 +1334,10 @@ fn build_diff_arm_smoke() -> Model {
     let upper = b.add_body(
         BodyParams::new()
             .with_mass(0.0)
-            .with_pose(Transform::new(Vec3::new(0.0, DIFF_ARM_BASE_Y - half1, 0.0), Quat::IDENTITY))
+            .with_pose(Transform::new(
+                Vec3::new(0.0, DIFF_ARM_BASE_Y - half1, 0.0),
+                Quat::IDENTITY,
+            ))
             .with_flags(BodyFlags::KINEMATIC),
     );
     b.add_shape_capsule(upper, half1, DIFF_ARM_LINK_RADIUS, Transform::IDENTITY)
@@ -1215,7 +1353,8 @@ fn build_diff_arm_smoke() -> Model {
     );
     b.add_shape_capsule(lower, half2, DIFF_ARM_LINK_RADIUS, Transform::IDENTITY)
         .unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("diff arm model")
 }
 
@@ -1236,9 +1375,11 @@ fn build_diff_arm6_smoke() -> Model {
                 .with_pose(Transform::new(Vec3::new(0.0, 0.5, 0.0), Quat::IDENTITY))
                 .with_flags(BodyFlags::KINEMATIC),
         );
-        b.add_shape_capsule(body, 0.06, 0.04, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, 0.06, 0.04, Transform::IDENTITY)
+            .unwrap();
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("diff arm6 model")
 }
 
@@ -1277,24 +1418,38 @@ fn build_neural_policy_smoke() -> Model {
     let cart_inertia = box_inertia_xyz(CART_MASS, CART_HALF_X, CART_HALF_Y, CART_HALF_Z);
     let cart = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: CART_MASS, com: Vec3::ZERO, inertia: cart_inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: CART_MASS,
+                com: Vec3::ZERO,
+                inertia: cart_inertia,
+            })
             .with_position(Vec3::new(0.0, CART_RAIL_Y, 0.0)),
     );
-    b.add_shape_box(cart, Vec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z), Transform::IDENTITY)
-        .unwrap();
+    b.add_shape_box(
+        cart,
+        Vec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z),
+        Transform::IDENTITY,
+    )
+    .unwrap();
     let x_p_cart = Transform::from_translation(Vec3::new(0.0, CART_RAIL_Y, 0.0));
     b.add_joint_prismatic(BodyId::NONE, cart, x_p_cart, Transform::IDENTITY, Vec3::X)
         .unwrap();
     let pole_inertia = capsule_inertia(POLE_MASS, POLE_HALF_LEN, POLE_RADIUS);
     let pole = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: POLE_MASS, com: Vec3::ZERO, inertia: pole_inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: POLE_MASS,
+                com: Vec3::ZERO,
+                inertia: pole_inertia,
+            })
             .with_position(Vec3::new(0.0, CART_RAIL_Y - POLE_HALF_LEN, 0.0)),
     );
-    b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, Transform::IDENTITY)
+        .unwrap();
     let x_p_pole = Transform::from_translation(Vec3::new(0.0, CART_HALF_Y, 0.0));
     let x_c_pole = Transform::from_translation(Vec3::new(0.0, POLE_HALF_LEN, 0.0));
-    b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, Vec3::Z).unwrap();
+    b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, Vec3::Z)
+        .unwrap();
     b.build().expect("neural policy model")
 }
 
@@ -1352,8 +1507,10 @@ fn build_cable_smoke() -> Model {
             .with_position(puller_pos)
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_sphere(puller, CABLE_PULLER_RADIUS, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(puller, CABLE_PULLER_RADIUS, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cable model")
 }
 
@@ -1444,14 +1601,16 @@ fn build_jelly_smoke() -> Model {
     let _ = b
         .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
         .expect("tet mesh");
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let puller = b.add_body(
         BodyParams::new()
             .with_spatial_inertia(SpatialInertia::sphere(0.5, JELLY_PULLER_RADIUS))
             .with_position(Vec3::new(0.6, 0.18, 0.0))
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_sphere(puller, JELLY_PULLER_RADIUS, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(puller, JELLY_PULLER_RADIUS, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("jelly model")
 }
 
@@ -1481,10 +1640,15 @@ fn build_pendulum_smoke() -> Model {
     let single_anchor = Vec3::new(-1.5, PENDULUM_BASE_Y, 0.0);
     let single = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass: PENDULUM_LINK_MASS, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass: PENDULUM_LINK_MASS,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(single_anchor - Vec3::new(0.0, half_h, 0.0)),
     );
-    b.add_shape_capsule(single, half_h, radius, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(single, half_h, radius, Transform::IDENTITY)
+        .unwrap();
     let flip = Quat::from_axis_angle(Vec3::X, std::f64::consts::PI);
     b.add_joint_revolute(
         BodyId::NONE,
@@ -1501,10 +1665,15 @@ fn build_pendulum_smoke() -> Model {
     for i in 0..3 {
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass: PENDULUM_LINK_MASS, com: Vec3::ZERO, inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass: PENDULUM_LINK_MASS,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
                 .with_position(next_pos),
         );
-        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
         let x_p = if i == 0 {
             Transform::new(chain_anchor, flip)
         } else {
@@ -1515,7 +1684,8 @@ fn build_pendulum_smoke() -> Model {
         prev = body;
         next_pos = next_pos - Vec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("pendulum model")
 }
 
@@ -1541,10 +1711,15 @@ fn build_joint_sampler_smoke() -> Model {
         let anchor = Vec3::new(-2.0, base_y, 0.0);
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
                 .with_position(anchor - Vec3::new(0.0, half_h, 0.0)),
         );
-        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
         b.add_joint_revolute(
             BodyId::NONE,
             body,
@@ -1567,9 +1742,16 @@ fn build_joint_sampler_smoke() -> Model {
                 })
                 .with_position(anchor - Vec3::new(0.0, 0.5, 0.0)),
         );
-        b.add_shape_box(body, Vec3::splat(0.15), Transform::IDENTITY).unwrap();
-        b.add_joint_prismatic(BodyId::NONE, body, Transform::from_translation(anchor), Transform::IDENTITY, Vec3::Y)
+        b.add_shape_box(body, Vec3::splat(0.15), Transform::IDENTITY)
             .unwrap();
+        b.add_joint_prismatic(
+            BodyId::NONE,
+            body,
+            Transform::from_translation(anchor),
+            Transform::IDENTITY,
+            Vec3::Y,
+        )
+        .unwrap();
     }
     // Ball.
     {
@@ -1577,10 +1759,15 @@ fn build_joint_sampler_smoke() -> Model {
         let anchor = Vec3::new(2.0, base_y, 0.0);
         let body = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass,
+                    com: Vec3::ZERO,
+                    inertia,
+                })
                 .with_position(anchor - Vec3::new(0.0, half_h, 0.0)),
         );
-        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+            .unwrap();
         b.add_joint_ball(
             BodyId::NONE,
             body,
@@ -1589,7 +1776,8 @@ fn build_joint_sampler_smoke() -> Model {
         )
         .unwrap();
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("joint sampler model")
 }
 
@@ -1632,15 +1820,22 @@ fn build_heightfield_smoke() -> Model {
         heights,
     };
     let field_id = b.add_heightfield(hf);
-    b.add_shape_heightfield(BodyId::NONE, field_id, Transform::IDENTITY).unwrap();
+    b.add_shape_heightfield(BodyId::NONE, field_id, Transform::IDENTITY)
+        .unwrap();
     let mut rng_state: u64 = 0xCAFEBABEDEADBEEF;
     fn rng_uniform(s: &mut u64) -> f64 {
-        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
     }
     fn random_quat(s: &mut u64) -> Quat {
         let axis = Vec3::new(rng_uniform(s), rng_uniform(s), rng_uniform(s)).normalize_or_zero();
-        let axis = if axis.length_squared() < 1e-9 { Vec3::Y } else { axis };
+        let axis = if axis.length_squared() < 1e-9 {
+            Vec3::Y
+        } else {
+            axis
+        };
         let angle = rng_uniform(s) * std::f64::consts::PI;
         Quat::from_axis_angle(axis, angle)
     }
@@ -1669,10 +1864,15 @@ fn build_heightfield_smoke() -> Model {
                     let inertia = box_inertia(1.0, h);
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass: 1.0,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_pose(Transform::new(pos, rot)),
                     );
-                    b.add_shape_box(body, Vec3::splat(h), Transform::IDENTITY).unwrap();
+                    b.add_shape_box(body, Vec3::splat(h), Transform::IDENTITY)
+                        .unwrap();
                 }
                 _ => {
                     let half_h = 0.30;
@@ -1680,10 +1880,15 @@ fn build_heightfield_smoke() -> Model {
                     let inertia = capsule_inertia(0.8, half_h, radius);
                     let body = b.add_body(
                         BodyParams::new()
-                            .with_spatial_inertia(SpatialInertia { mass: 0.8, com: Vec3::ZERO, inertia })
+                            .with_spatial_inertia(SpatialInertia {
+                                mass: 0.8,
+                                com: Vec3::ZERO,
+                                inertia,
+                            })
                             .with_pose(Transform::new(pos, rot)),
                     );
-                    b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY).unwrap();
+                    b.add_shape_capsule(body, half_h, radius, Transform::IDENTITY)
+                        .unwrap();
                 }
             }
         }
@@ -1707,7 +1912,11 @@ fn build_conveyor_smoke() -> Model {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
     b.set_linear_damping(0.2);
-    let belt_half = Vec3::new(CONVEYOR_BELT_LEN * 0.5, CONVEYOR_BELT_HALF_THICK, CONVEYOR_BELT_HALF_WIDTH);
+    let belt_half = Vec3::new(
+        CONVEYOR_BELT_LEN * 0.5,
+        CONVEYOR_BELT_HALF_THICK,
+        CONVEYOR_BELT_HALF_WIDTH,
+    );
     let belt = b.add_body(
         BodyParams::new()
             .with_mass(0.0)
@@ -1715,8 +1924,12 @@ fn build_conveyor_smoke() -> Model {
             .with_position(Vec3::new(0.0, CONVEYOR_BELT_Y, 0.0))
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_box(belt, belt_half, Transform::IDENTITY).unwrap();
-    for &z_off in &[-CONVEYOR_BELT_HALF_WIDTH - 0.1, CONVEYOR_BELT_HALF_WIDTH + 0.1] {
+    b.add_shape_box(belt, belt_half, Transform::IDENTITY)
+        .unwrap();
+    for &z_off in &[
+        -CONVEYOR_BELT_HALF_WIDTH - 0.1,
+        CONVEYOR_BELT_HALF_WIDTH + 0.1,
+    ] {
         b.add_shape_box(
             BodyId::NONE,
             Vec3::new(CONVEYOR_BELT_LEN * 0.5, 0.15, 0.05),
@@ -1742,7 +1955,8 @@ fn build_conveyor_smoke() -> Model {
         );
         b.add_shape_box(body, half, Transform::IDENTITY).unwrap();
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("conveyor model")
 }
 
@@ -1781,7 +1995,11 @@ fn build_pyramid_smoke() -> Model {
                 let z = (iz as f64 - (row_count as f64 - 1.0) * 0.5) * spacing;
                 let body = b.add_body(
                     BodyParams::new()
-                        .with_spatial_inertia(SpatialInertia { mass: 1.0, com: Vec3::ZERO, inertia })
+                        .with_spatial_inertia(SpatialInertia {
+                            mass: 1.0,
+                            com: Vec3::ZERO,
+                            inertia,
+                        })
                         .with_position(Vec3::new(x, y, z)),
                 );
                 b.add_shape_box(body, half_v, Transform::IDENTITY).unwrap();
@@ -1790,11 +2008,16 @@ fn build_pyramid_smoke() -> Model {
     }
     let ball = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia::sphere(PYRAMID_BALL_MASS, PYRAMID_BALL_RADIUS))
+            .with_spatial_inertia(SpatialInertia::sphere(
+                PYRAMID_BALL_MASS,
+                PYRAMID_BALL_RADIUS,
+            ))
             .with_position(Vec3::new(1.5, PYRAMID_BALL_HEIGHT, 0.0)),
     );
-    b.add_shape_sphere(ball, PYRAMID_BALL_RADIUS, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(ball, PYRAMID_BALL_RADIUS, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("pyramid model")
 }
 
@@ -1841,7 +2064,8 @@ fn build_cloth_bending_smoke() -> Model {
             b.pin_particle(first + ix);
         }
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cloth bending model")
 }
 
@@ -1884,7 +2108,8 @@ fn build_cloth_twist_smoke() -> Model {
     for ix in 0..CLOTH_TWIST_GRID_X {
         b.pin_particle(first + bottom_iy * CLOTH_TWIST_GRID_X + ix);
     }
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cloth twist model")
 }
 
@@ -1925,12 +2150,15 @@ fn build_cable_pile_smoke() -> Model {
         Transform::from_translation(Vec3::new(-bowl_size, wall_h, 0.0)),
     )
     .unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let cable_len = 1.4;
     let particles_per_cable: u32 = 16; // viewer uses 24
     let mut rng_state: u64 = 0xFEEDFACECAFEBEEF;
     fn rng(s: &mut u64) -> f64 {
-        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
     }
     for i in 0..4 {
@@ -1994,7 +2222,8 @@ fn build_cable_y_junction_smoke() -> Model {
         b.pin_particle(*f);
     }
     b.pin_particle(firsts[0] + particles_per_branch - 1);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cable y junction model")
 }
 
@@ -2050,23 +2279,37 @@ fn build_cartpole_swarm_smoke() -> Model {
         b.begin_articulation();
         let cart = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass: CART_MASS, com: Vec3::ZERO, inertia: cart_inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass: CART_MASS,
+                    com: Vec3::ZERO,
+                    inertia: cart_inertia,
+                })
                 .with_position(Vec3::new(0.0, CART_RAIL_Y, z)),
         );
-        b.add_shape_box(cart, Vec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z), Transform::IDENTITY)
-            .unwrap();
+        b.add_shape_box(
+            cart,
+            Vec3::new(CART_HALF_X, CART_HALF_Y, CART_HALF_Z),
+            Transform::IDENTITY,
+        )
+        .unwrap();
         let x_p_cart = Transform::from_translation(Vec3::new(0.0, CART_RAIL_Y, z));
         b.add_joint_prismatic(BodyId::NONE, cart, x_p_cart, Transform::IDENTITY, Vec3::X)
             .unwrap();
         let pole = b.add_body(
             BodyParams::new()
-                .with_spatial_inertia(SpatialInertia { mass: POLE_MASS, com: Vec3::ZERO, inertia: pole_inertia })
+                .with_spatial_inertia(SpatialInertia {
+                    mass: POLE_MASS,
+                    com: Vec3::ZERO,
+                    inertia: pole_inertia,
+                })
                 .with_position(Vec3::new(0.0, CART_RAIL_Y - POLE_HALF_LEN, z)),
         );
-        b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, Transform::IDENTITY).unwrap();
+        b.add_shape_capsule(pole, POLE_HALF_LEN, POLE_RADIUS, Transform::IDENTITY)
+            .unwrap();
         let x_p_pole = Transform::from_translation(Vec3::new(0.0, CART_HALF_Y, 0.0));
         let x_c_pole = Transform::from_translation(Vec3::new(0.0, POLE_HALF_LEN, 0.0));
-        b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, Vec3::Z).unwrap();
+        b.add_joint_revolute(cart, pole, x_p_pole, x_c_pole, Vec3::Z)
+            .unwrap();
     }
     b.build().expect("cartpole swarm model")
 }
@@ -2093,10 +2336,15 @@ fn build_fourbar_smoke() -> Model {
     let a_pivot = Vec3::new(-0.5, FOURBAR_BASE_Y, 0.0);
     let bar_a = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(a_pivot - Vec3::new(0.0, l_a * 0.5, 0.0)),
     );
-    b.add_shape_capsule(bar_a, l_a * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(bar_a, l_a * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY)
+        .unwrap();
     let flip = Quat::from_axis_angle(Vec3::X, std::f64::consts::PI);
     let driver_id = b
         .add_joint_revolute(
@@ -2116,7 +2364,8 @@ fn build_fourbar_smoke() -> Model {
             })
             .with_position(Vec3::new(0.0, FOURBAR_BASE_Y - l_a, 0.0)),
     );
-    b.add_shape_capsule(bar_b, l_b * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(bar_b, l_b * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY)
+        .unwrap();
     let coupler_id = b
         .add_joint_revolute(
             bar_a,
@@ -2128,10 +2377,15 @@ fn build_fourbar_smoke() -> Model {
         .unwrap();
     let bar_c = b.add_body(
         BodyParams::new()
-            .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+            .with_spatial_inertia(SpatialInertia {
+                mass,
+                com: Vec3::ZERO,
+                inertia,
+            })
             .with_position(Vec3::new(0.5, FOURBAR_BASE_Y - l_a, 0.0)),
     );
-    b.add_shape_capsule(bar_c, l_c * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY).unwrap();
+    b.add_shape_capsule(bar_c, l_c * 0.5, FOURBAR_BAR_RADIUS, Transform::IDENTITY)
+        .unwrap();
     let rocker_id = b
         .add_joint_revolute(
             bar_b,
@@ -2143,7 +2397,8 @@ fn build_fourbar_smoke() -> Model {
         .unwrap();
     let _ = b.add_equality_joint_mimic(driver_id, coupler_id, [0.0, -1.0, 0.0, 0.0, 0.0]);
     let _ = b.add_equality_joint_mimic(driver_id, rocker_id, [0.0, 1.0, 0.0, 0.0, 0.0]);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("fourbar model")
 }
 
@@ -2171,8 +2426,10 @@ fn build_diff_ball_smoke() -> Model {
             .with_position(Vec3::new(3.0, 1.5, 0.0))
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_sphere(target, 0.08, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(target, 0.08, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("diff ball model")
 }
 
@@ -2208,8 +2465,10 @@ fn build_diff_spring_smoke() -> Model {
             .with_position(Vec3::new(0.0, cy, 0.0))
             .with_flags(BodyFlags::KINEMATIC),
     );
-    b.add_shape_sphere(particle, 0.08, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(particle, 0.08, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("diff spring model")
 }
 
@@ -2249,10 +2508,15 @@ fn build_brick_wall_smoke() -> Model {
             let y = BRICK_HALF_VEC.y + 0.001 + (row as f64) * layer_h;
             let body = b.add_body(
                 BodyParams::new()
-                    .with_spatial_inertia(SpatialInertia { mass, com: Vec3::ZERO, inertia })
+                    .with_spatial_inertia(SpatialInertia {
+                        mass,
+                        com: Vec3::ZERO,
+                        inertia,
+                    })
                     .with_position(Vec3::new(x, y, 0.0)),
             );
-            b.add_shape_box(body, BRICK_HALF_VEC, Transform::IDENTITY).unwrap();
+            b.add_shape_box(body, BRICK_HALF_VEC, Transform::IDENTITY)
+                .unwrap();
         }
     }
     let proj_radius = 0.45;
@@ -2262,8 +2526,10 @@ fn build_brick_wall_smoke() -> Model {
             .with_spatial_inertia(SpatialInertia::sphere(proj_mass, proj_radius))
             .with_position(Vec3::new(0.0, 12.0, 3.5)),
     );
-    b.add_shape_sphere(projectile, proj_radius, Transform::IDENTITY).unwrap();
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(projectile, proj_radius, Transform::IDENTITY)
+        .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("brick wall model")
 }
 
@@ -2351,7 +2617,8 @@ fn build_softbody_drop_smoke() -> Model {
         .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
         .expect("tet mesh");
     b.set_tet_mesh_friction(cube_id, 0.5);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("softbody drop model")
 }
 
@@ -2390,7 +2657,8 @@ fn build_cloth_collar_smoke() -> Model {
         b.pin_particle(first + (COLLAR_NX - 1) * COLLAR_NX + ix);
     }
     b.set_cloth_mesh_self_collision(0, true);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("cloth collar model")
 }
 
@@ -2442,9 +2710,8 @@ fn build_fast_soft_impact_smoke() -> Model {
         }
     }
     let cloth_count = cloth_n * cloth_n;
-    let v_at = |i: u32, j: u32, k: u32| -> u32 {
-        cloth_first + cloth_count + (k * nx + j) * nx + i
-    };
+    let v_at =
+        |i: u32, j: u32, k: u32| -> u32 { cloth_first + cloth_count + (k * nx + j) * nx + i };
     let mut tets = Vec::new();
     for kk in 0..nx - 1 {
         for jj in 0..nx - 1 {
@@ -2470,7 +2737,8 @@ fn build_fast_soft_impact_smoke() -> Model {
     let _ = b
         .add_tet_mesh_per_material(&tets, &materials, &mat_idx, None)
         .expect("tet mesh");
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("fast soft impact model")
 }
 
@@ -2491,8 +2759,16 @@ fn scene_45_fast_soft_impact_smoke() {
         .with_contact_stiffness(1.0e5);
     for _ in 0..60 {
         collide(&model, &s_a, &mut contacts, &mut pair_buf).expect("collide");
-        Solver::step(&mut solver, &model, &s_a, &control, &contacts, SMOKE_DT, &mut s_b)
-            .expect("vbd step");
+        Solver::step(
+            &mut solver,
+            &model,
+            &s_a,
+            &control,
+            &contacts,
+            SMOKE_DT,
+            &mut s_b,
+        )
+        .expect("vbd step");
         std::mem::swap(&mut s_a, &mut s_b);
     }
     assert_no_nan_or_escape(&s_a, "45 FastSoftImpact");
@@ -2523,7 +2799,9 @@ fn build_soft_brake_smoke() -> Model {
     }
     let rv: [u32; 8] = ramp_verts.as_slice().try_into().unwrap();
     let ramp_tets = jelly_cube_to_six_tets(rv);
-    let ramp_id = b.add_tet_mesh(&ramp_tets, 1.0e6, 0.3, None).expect("ramp tet block");
+    let ramp_id = b
+        .add_tet_mesh(&ramp_tets, 1.0e6, 0.3, None)
+        .expect("ramp tet block");
     b.set_tet_mesh_friction(ramp_id, 0.5);
     // Block.
     let bnx: u32 = 3;
@@ -2563,7 +2841,8 @@ fn build_soft_brake_smoke() -> Model {
         .add_tet_mesh_per_material(&block_tets, &materials, &mat_idx, None)
         .expect("block tet mesh");
     b.set_tet_mesh_friction(block_id, 0.5);
-    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY).unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     b.build().expect("soft brake model")
 }
 

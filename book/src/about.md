@@ -34,8 +34,6 @@ the repository root).
   that just works.
 - The Bevy maintainers for an ECS that the viewer rides on without
   fighting it.
-- The `urdf-rs`, `mshio`, `openusd`, `mujoco-rust` crate authors —
-  every importer in molla stands on one of them.
 - The `glam` team — host `f64` math + device `f32` math from the
   same type names is a small thing that saved a lot of churn.
 
@@ -52,12 +50,20 @@ substantial change, please:
    parity, BSR `B=1`, persistent buffers, atomic-CAS pattern, no
    `cooperative_matrix`).
 3. For new solvers / kernels, follow the existing scaffold:
-   - Rust dispatcher in `crates/molla/src/kernels/<name>.rs`.
-   - WGSL kernel in `crates/molla/shaders/<name>.wgsl`.
-   - CPU reference implementation in the same Rust module.
-   - Parity test in `crates/molla/tests/<name>_gpu.rs`, gated by
-     `#[ignore]` and `#[cfg(feature = "gpu")]`.
-   - Criterion bench in `crates/molla/benches/`.
+   - Put reusable implementation in the owning functionality crate
+     under `crates/` (`molla-solvers`, `molla-fem`,
+     `molla-sensors`, etc.).
+   - Put shared WGSL dispatch wrappers and shaders in
+     `crates/molla-kernels` unless the kernel is intentionally owned
+     by a functional crate such as `molla-fem`.
+   - Keep CPU reference/oracle code beside the functionality it
+     verifies.
+   - Put parity tests and Criterion benches in the owning crate's
+     `tests/` and `benches/` directories, gated by `#[ignore]` /
+     `#[cfg(feature = "gpu")]` and `required-features = ["gpu"]`
+     where appropriate.
+   - Use `crates/molla` tests/benches only for facade compatibility
+     or top-level product coverage.
    - If the feature has a user-visible behaviour: a viewer scene.
 
 ## License

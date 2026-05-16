@@ -187,6 +187,6 @@ explanation of why bitmaps beat hashtables on FEM-shaped inputs.
 
 Every kernel here has an oracle: run the matching `BsrMatrix` op on
 the host and compare with `BsrGpu::read_back`. The parity tests in
-`crates/molla/tests/sparse_gpu_parity.rs` cover matvec, axpy, transpose,
+`crates/molla-kernels/tests/bsr_gpu_parity.rs` cover matvec, axpy, transpose,
 and SpGEMM at multiple sizes — the contract is **bit-identical CSR
 structure** plus an `f32`-tolerance comparison on values.

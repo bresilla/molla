@@ -8,7 +8,7 @@ primitive that locomotion / balance policies build their
 proprioceptive observation vector on.
 
 Source: `crates/molla/src/sensors/imu.rs`. Shader:
-`crates/molla/shaders/imu.wgsl`.
+`crates/molla-kernels/shaders/imu.wgsl`.
 
 ## Reading + mount types
 

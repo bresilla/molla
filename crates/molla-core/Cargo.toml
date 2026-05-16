@@ -1,0 +1,19 @@
+[package]
+name = "molla-core"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core IDs, errors, and tiny shared primitives for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+gpu = []
+
+[dependencies]
+glam = "0.30"
+thiserror = "2"

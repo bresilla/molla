@@ -1,0 +1,27 @@
+[package]
+name = "molla-math"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Host-side math, transforms, spatial algebra, sparse math, and numerics for molla."
+
+[lints]
+workspace = true
+
+[dependencies]
+molla-core = { path = "../molla-core", default-features = false }
+bytemuck = { version = "1.18", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+
+[[bench]]
+name = "bench_math"
+harness = false
+
+[[bench]]
+name = "bench_iterative"
+harness = false

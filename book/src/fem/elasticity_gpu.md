@@ -1,6 +1,6 @@
 # GPU linear elasticity
 
-`crates/molla/src/fem/elasticity_gpu.rs` is the end-to-end GPU port of
+`crates/molla-fem/src/elasticity_gpu.rs` is the end-to-end GPU port of
 the linear-elasticity solve. It builds the BC-reduced sparsity
 pattern on CPU, hands it to the GPU via `FemGpuData`, dispatches a
 WGSL kernel that computes the 144 per-cell `Bᵀ D B` values, and
@@ -155,7 +155,7 @@ arithmetic on GPU.
 
 ## Validation
 
-The contract tests in `crates/molla/tests/fem_elasticity_gpu.rs`
+The contract tests in `crates/molla-fem/tests/fem_elasticity_gpu.rs`
 compare GPU vs CPU on a fixed cantilever fixture:
 
 - Same `K` values to ~1e-4 relative (f32 vs f64).

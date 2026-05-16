@@ -104,7 +104,7 @@ worked example).
 
 ## Raycast adaptive FD
 
-The raycast adjoint test (`crates/molla/tests/raycast_adjoint.rs`)
+The raycast adjoint test (`crates/molla-sensors/tests/raycast_adjoint.rs`)
 uses **adaptive FD** because the residual is sensitive to the step
 size when rays graze the silhouette of a sphere:
 
@@ -167,6 +167,6 @@ relative error before the adjoint shipped.
 
 - [Parity testing](./parity.md) — for non-adjoint test patterns.
 - [Test strategy](./strategy.md) — the higher-level picture.
-- `crates/molla/tests/autograd_*.rs` — the actual FD tests.
-- `crates/molla/tests/splat_*_backward.rs` — splat adjoint FD
+- `crates/molla-autograd/tests/autograd_*.rs` — the actual FD tests.
+- `crates/molla-kernels/tests/splat_*_backward.rs` — splat adjoint FD
   tests, the worked example.

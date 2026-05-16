@@ -11,8 +11,11 @@ SoftSurface  ──▶  SoftBvh  ──▶  VT / EE contact gather
    └── ClothMeshId / TetMeshId    └── soft_ccd::vt_ccd → root-finder
 ```
 
-All entry points live under `crates/molla/src/geometry/`:
-`soft_surface.rs`, `soft_bvh.rs`, `soft_ccd.rs`.
+Raw registry descriptors live under `crates/molla/src/sim/soft_surface.rs`
+because they are model data. Geometry re-exports those descriptors for
+compatibility and owns the derived acceleration/contact pieces in
+`crates/molla/src/geometry/`: `soft_surface.rs` (`boundary_facets`),
+`soft_bvh.rs`, and `soft_ccd.rs`.
 
 ## `SoftSurface` registry
 
@@ -57,7 +60,7 @@ The original CCW winding (from outside the tet) is preserved so
 downstream normal queries get the outward direction.
 
 A key invariant: the resulting tri list is **sorted by sorted-key**
-(`soft_surface.rs:172-176`). `HashMap` iteration order isn't
+(`sim/soft_surface.rs`). `HashMap` iteration order isn't
 stable across runs; without the sort, the per-tri global IDs that
 downstream code (LBVH, soft-VT contact gather, friction warm-start
 LUT keyed on `(vertex_global_id, tri_global_id)`) computes would

@@ -16,7 +16,7 @@ Two implementations cohabit:
   **slice-API reducer** + temporal warm-start. Generic
   max-N-per-pair primitive.
 
-GPU port at `crates/molla/shaders/contact_reduction.wgsl` (Stage
+GPU port at `crates/molla-kernels/shaders/contact_reduction.wgsl` (Stage
 28.1).
 
 ## Voxel-AABB pruning (`contact_extras`)
@@ -142,7 +142,7 @@ hands.
 
 ## Graph-coloring partitioning
 
-`crates/molla/src/geometry/graph_coloring.rs` provides the
+`crates/molla-math/src/coloring.rs` provides the
 constraint-graph coloring utility used by both the contact
 reducer (when the solver wants conflict-free parallel batches)
 and the XPBD distance-constraint pass:
@@ -201,6 +201,6 @@ layout mirrors input: a same-shaped slab plus a per-group count
 buffer so the host can know how many of the 4 slots are valid.
 
 The kernel sits behind the `ContactReductionKernel` host
-dispatcher (`crates/molla/src/kernels/contact_reduction.rs`); see
+dispatcher (`crates/molla-kernels/src/contact_reduction.rs`); see
 `pack_groups_host` and `unpack_output_host` for the
 slab-packing / unpacking helpers exposed for tests.

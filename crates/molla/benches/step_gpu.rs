@@ -11,7 +11,7 @@
 
 #![cfg(feature = "gpu")]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use molla::compute::{Backend, Engine};
 use molla::prelude::*;
 
