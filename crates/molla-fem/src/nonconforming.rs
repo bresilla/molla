@@ -465,7 +465,20 @@ impl<'a> NonconformingPenaltyContact<'a> {
     }
 
     /// Stage 47 v4 — assemble the **tangent stiffness blocks** of the
-    /// penalty-contact term `Π_c(u) = ½ k · ‖u_t − M_tt⁻¹ M_st u_s‖²_Mtt`.
+    /// penalty-contact term.
+    ///
+    /// ⚠️ INCONSISTENCY (known, latent): this Jacobian — and
+    /// [`solve_coupled_elasticity`], which consumes it — is the Hessian
+    /// of the penalty energy `Π_c(u) = ½ k · ‖M_tt u_t − M_st u_s‖²`
+    /// (plain L² of the mass-weighted residual). That is NOT the same
+    /// energy as the one [`compute_penalty_forces`](Self::compute_penalty_forces)
+    /// differentiates, which is the `M_tt`-norm form
+    /// `½ k · ‖u_t − M_tt⁻¹ M_st u_s‖²_Mtt`. Both penalties share the
+    /// same `k → ∞` limit (the mortar condition `u_t = M_tt⁻¹ M_st u_s`)
+    /// but differ at finite `k`. Do NOT query `compute_penalty_forces`
+    /// against a `solve_coupled_elasticity` result and expect a
+    /// vanishing residual. Reconciling both paths onto a single energy
+    /// (preferably the `M_tt`-norm form) is tracked follow-up work.
     ///
     /// Returns the two scalar (`B = 1`) blocks of the contact Jacobian:
     ///

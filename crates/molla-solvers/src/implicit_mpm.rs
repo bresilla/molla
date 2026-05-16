@@ -740,7 +740,7 @@ pub fn implicit_mpm_step_with_solver(
                     } else if v.y < 0.0 {
                         v.y *= 1.0 - depth;
                     }
-                    let damp = 1.0 - cfg.floor_friction * depth;
+                    let damp = (1.0 - cfg.floor_friction * depth).max(0.0);
                     v.x *= damp;
                     v.z *= damp;
                 }
@@ -1032,7 +1032,7 @@ pub fn implicit_mpm_step_with_solver(
                     if v.y < 0.0 {
                         v.y = 0.0;
                     }
-                    let damp = 1.0 - cfg.floor_friction;
+                    let damp = (1.0 - cfg.floor_friction).max(0.0);
                     v.x *= damp;
                     v.z *= damp;
                     v_grid[ci] = v;
@@ -1144,7 +1144,7 @@ pub fn implicit_mpm_step_with_solver(
         let height_above_floor = (pos.y - cfg.floor_y).max(0.0);
         if pos.y + v_new.y * dt < cfg.floor_y && v_new.y < 0.0 {
             v_new.y = 0.0;
-            let damp = 1.0 - cfg.floor_friction;
+            let damp = (1.0 - cfg.floor_friction).max(0.0);
             v_new.x *= damp;
             v_new.z *= damp;
         }
@@ -1310,7 +1310,7 @@ pub fn cpu_p2g_predict_gs_g2p_debug(
                         if v.y < 0.0 {
                             v.y = 0.0;
                         }
-                        let damp = 1.0 - cfg.floor_friction;
+                        let damp = (1.0 - cfg.floor_friction).max(0.0);
                         v.x *= damp;
                         v.z *= damp;
                         v_grid[ci] = v;
@@ -1425,7 +1425,7 @@ pub fn apply_bingham_and_advect(
         let height_above_floor = (pos.y - cfg.floor_y).max(0.0);
         if pos.y + v_new_p.y * dt < cfg.floor_y && v_new_p.y < 0.0 {
             v_new_p.y = 0.0;
-            let damp = 1.0 - cfg.floor_friction;
+            let damp = (1.0 - cfg.floor_friction).max(0.0);
             v_new_p.x *= damp;
             v_new_p.z *= damp;
         }
@@ -1521,7 +1521,7 @@ pub fn full_hessian_residual_norm_squared_125(
                         if v.y < 0.0 {
                             v.y = 0.0;
                         }
-                        let damp = 1.0 - cfg.floor_friction;
+                        let damp = (1.0 - cfg.floor_friction).max(0.0);
                         v.x *= damp;
                         v.z *= damp;
                         v_grid[ci] = v;
@@ -1840,7 +1840,7 @@ fn assemble_grid_system_125(
                     } else if v.y < 0.0 {
                         v.y *= 1.0 - depth;
                     }
-                    let damp = 1.0 - cfg.floor_friction * depth;
+                    let damp = (1.0 - cfg.floor_friction * depth).max(0.0);
                     v.x *= damp;
                     v.z *= damp;
                 }

@@ -371,14 +371,9 @@ fn brick_wall_stands_without_projectile() {
 
 // ──────────────────────────────────────────────────────────────────
 // Conveyor (Scene::Conveyor) — kinematic belt with prescribed +X
-// linear velocity. Documents the known limitation that XPBD's
-// Coulomb friction (capped at `μ · |λ_n|` per substep) only delivers
-// a tiny tangential push at steady state because the per-substep
-// normal impulse `λ_n` is itself tiny once the box has settled. The
-// belt scene LOOKS like nothing is happening because of this — not a
-// bug in the scene definition, an inherent XPBD model limitation.
-// Mark `#[ignore]` so the failure documents the property without
-// breaking CI.
+// linear velocity. Asserts that XPBD Coulomb friction against the
+// moving belt surface drags the resting box along by a measurable
+// distance (drift > 0.05 m over 240 steps).
 // ──────────────────────────────────────────────────────────────────
 
 #[test]
@@ -445,10 +440,7 @@ fn conveyor_belt_drags_box_via_friction() {
     let q = s_a.body_q.host().unwrap();
     let final_x = q[1].position.x;
     let drift = final_x - start_x.unwrap();
-    assert!(
-        drift > 0.05,
-        "box not dragged by belt: drift={drift} m (XPBD limitation)"
-    );
+    assert!(drift > 0.05, "box not dragged by belt: drift={drift} m");
 }
 
 // ──────────────────────────────────────────────────────────────────

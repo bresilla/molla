@@ -477,8 +477,12 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                             + dot(ra_x_t, i_inv_a * ra_x_t)
                             + dot(rb_x_t, i_inv_b * rb_x_t);
                 if (denom_t > 0.0) {
+                    // Coulomb cone caps the friction *impulse* λ_t at
+                    // μ|λ_n|. λ_t = dv_t/denom_t, so dv_t must be
+                    // capped at μ|λ_n|·denom_t (matches CPU xpbd.rs) —
+                    // capping dv_t at μ|λ_n| alone is wrong by denom_t.
                     let cap = mu * abs(lambda_n);
-                    let dv_t = min(v_t_len, max(cap, 0.0));
+                    let dv_t = min(v_t_len, max(cap, 0.0) * denom_t);
                     let lambda_t = dv_t / denom_t;
                     // self impulses: if self is a, +t_hat ; if self is b, -t_hat.
                     let lin_t_self = select(t_hat, -t_hat, is_b) * lambda_t;
@@ -512,7 +516,9 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let denom_r = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
                 if (denom_r > 0.0) {
                     let cap_r = mu_roll * abs(lambda_n);
-                    let dw = min(w_perp_len, max(cap_r, 0.0));
+                    // Cap the rolling-friction impulse at μ_roll|λ_n|
+                    // (= dw capped at cap_r·denom_r), matching CPU.
+                    let dw = min(w_perp_len, max(cap_r, 0.0) * denom_r);
                     let lambda_r = dw / denom_r;
                     // Self gets +dir if self == a, -dir if self == b
                     // (relative velocity sign flips).
@@ -542,7 +548,9 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let denom_t = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
                 if (denom_t > 0.0) {
                     let cap_t = mu_tors * abs(lambda_n);
-                    let dw = min(w_n_abs, max(cap_t, 0.0));
+                    // Cap the torsional-friction impulse at μ_tors|λ_n|
+                    // (= dw capped at cap_t·denom_t), matching CPU.
+                    let dw = min(w_n_abs, max(cap_t, 0.0) * denom_t);
                     let lambda_t = dw / denom_t;
                     let ang_t_self = select(dir, -dir, is_b) * lambda_t;
                     ang_acc = ang_acc + ang_t_self;

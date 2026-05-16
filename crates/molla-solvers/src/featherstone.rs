@@ -424,10 +424,23 @@ fn build_motion_subspace(
     let ex = (r * Vec3::new(1.0, 0.0, 0.0)).normalize_or_zero();
     let ey = (r * Vec3::new(0.0, 1.0, 0.0)).normalize_or_zero();
     let ez = (r * Vec3::new(0.0, 0.0, 1.0)).normalize_or_zero();
+    // Every spatial quantity in this solver (body inertia, gravity
+    // wrench, external wrench) is referenced at the WORLD ORIGIN, so
+    // the joint motion subspace must be too. A unit rotation `ω` about
+    // an axis through the joint origin `p` produces, at the world
+    // origin, the spatial velocity `(ω × (-p); ω)` — the linear part
+    // is the moment-arm term. Omitting it (treating `S` as the twist
+    // at a point *on* the axis) makes the solver origin-dependent and
+    // wrong for any joint not sitting at the world origin. Pure
+    // translations (prismatic / free-linear / cable stretch) carry no
+    // moment arm and are left as `(axis; 0)`. Matches the verified
+    // CRBA/RNEA `spatial_jacobian_column`.
+    let p = joint_world.position;
+    let twist = |axis: Vec3| SpatialVector::new(axis.cross(-p), axis);
     match jt {
         JointType::Revolute => {
             let axis_world = (r * axis_local).normalize_or_zero();
-            s_cols[0] = SpatialVector::new(Vec3::ZERO, axis_world);
+            s_cols[0] = twist(axis_world);
             dof_active[0] = true;
             1
         }
@@ -438,9 +451,9 @@ fn build_motion_subspace(
             1
         }
         JointType::Ball => {
-            s_cols[0] = SpatialVector::new(Vec3::ZERO, ex);
-            s_cols[1] = SpatialVector::new(Vec3::ZERO, ey);
-            s_cols[2] = SpatialVector::new(Vec3::ZERO, ez);
+            s_cols[0] = twist(ex);
+            s_cols[1] = twist(ey);
+            s_cols[2] = twist(ez);
             dof_active[0] = true;
             dof_active[1] = true;
             dof_active[2] = true;
@@ -451,9 +464,9 @@ fn build_motion_subspace(
             s_cols[0] = SpatialVector::new(ex, Vec3::ZERO);
             s_cols[1] = SpatialVector::new(ey, Vec3::ZERO);
             s_cols[2] = SpatialVector::new(ez, Vec3::ZERO);
-            s_cols[3] = SpatialVector::new(Vec3::ZERO, ex);
-            s_cols[4] = SpatialVector::new(Vec3::ZERO, ey);
-            s_cols[5] = SpatialVector::new(Vec3::ZERO, ez);
+            s_cols[3] = twist(ex);
+            s_cols[4] = twist(ey);
+            s_cols[5] = twist(ez);
             for k in 0..6 {
                 dof_active[k] = true;
             }
@@ -465,9 +478,9 @@ fn build_motion_subspace(
                 SpatialVector::new(ex, Vec3::ZERO),
                 SpatialVector::new(ey, Vec3::ZERO),
                 SpatialVector::new(ez, Vec3::ZERO),
-                SpatialVector::new(Vec3::ZERO, ex),
-                SpatialVector::new(Vec3::ZERO, ey),
-                SpatialVector::new(Vec3::ZERO, ez),
+                twist(ex),
+                twist(ey),
+                twist(ez),
             ];
             for k in 0..6 {
                 let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
@@ -491,7 +504,7 @@ fn build_motion_subspace(
             // child body inherits whatever rotation `joint_x_p` applies
             // when laying out the cable in the parent's body frame.
             s_cols[0] = SpatialVector::new(ez, Vec3::ZERO);
-            s_cols[1] = SpatialVector::new(Vec3::ZERO, ex);
+            s_cols[1] = twist(ex);
             dof_active[0] = true;
             dof_active[1] = true;
             2

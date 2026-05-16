@@ -277,6 +277,13 @@ impl<T: BufferElement> Buffer<T> {
         if self.host.is_empty() {
             return Ok(());
         }
+        // Uploading while the device copy is dirty would silently
+        // clobber fresh kernel output the host has not read back.
+        debug_assert!(
+            !matches!(self.state, SyncState::DeviceDirty),
+            "Buffer::upload would overwrite device-dirty data with stale \
+             host data — call download() before re-uploading"
+        );
         let gpu_data: Vec<T::Gpu> = self.host.iter().map(BufferElement::to_gpu).collect();
         queue.write_buffer(buf, 0, bytemuck::cast_slice(&gpu_data));
         self.state = SyncState::InSync;
@@ -293,6 +300,13 @@ impl<T: BufferElement> Buffer<T> {
         if self.host.is_empty() {
             return Ok(());
         }
+        // Downloading while the host copy is dirty would silently
+        // clobber un-uploaded host mutations with stale device data.
+        debug_assert!(
+            !matches!(self.state, SyncState::HostDirty),
+            "Buffer::download would overwrite host-dirty data with stale \
+             device data — call upload() before downloading"
+        );
 
         let elem_size = core::mem::size_of::<T::Gpu>();
         let byte_size = (self.host.len() * elem_size) as u64;

@@ -342,7 +342,10 @@ fn predict_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else if (v.y < 0.0) {
             v.y = v.y * (1.0 - depth);
         }
-        let damp = 1.0 - U.floor_friction * depth;
+        // Clamp to ≥ 0 — a friction coefficient > 1 would otherwise
+        // make `damp` negative and *reverse* the tangential velocity
+        // instead of damping it toward zero.
+        let damp = max(1.0 - U.floor_friction * depth, 0.0);
         v.x = v.x * damp;
         v.z = v.z * damp;
     }
@@ -371,7 +374,7 @@ fn floor_reapply(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (node_y < U.floor_y) {
         var v = v_grid[ci];
         if (v.y < 0.0) { v.y = 0.0; }
-        let damp = 1.0 - U.floor_friction;
+        let damp = max(1.0 - U.floor_friction, 0.0);
         v.x = v.x * damp;
         v.z = v.z * damp;
         v_grid[ci] = v;
@@ -596,7 +599,7 @@ fn bingham_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
     let height_above_floor = max(pos.y - U.floor_y, 0.0);
     if (pos.y + vel.y * dt < U.floor_y && vel.y < 0.0) {
         vel.y = 0.0;
-        let damp = 1.0 - U.floor_friction;
+        let damp = max(1.0 - U.floor_friction, 0.0);
         vel.x = vel.x * damp;
         vel.z = vel.z * damp;
     }

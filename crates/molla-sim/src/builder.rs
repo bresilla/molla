@@ -1166,11 +1166,19 @@ impl ModelBuilder {
         if self.cloth_mesh_tri_offsets.is_empty() {
             self.cloth_mesh_tri_offsets.push(tri_off_start);
         } else {
-            // Sanity: the previous mesh's closing offset must equal
-            // our opening offset. If not, downstream registry slicing
-            // will be wrong (some other path pushed tris out of
-            // band — e.g. `add_triangle` directly).
-            // We don't panic; we just trust the caller.
+            // The previous cloth mesh's closing offset must equal this
+            // mesh's opening offset, or the registry slicing
+            // `tri_indices[offsets[m]*3 .. offsets[m+1]*3]` silently
+            // reads the wrong triangle range. This breaks only if some
+            // other path (e.g. `add_triangle`) pushed triangles
+            // between two `add_cloth_grid` calls — fail loudly in
+            // debug builds instead of corrupting the registry.
+            debug_assert_eq!(
+                tri_off_start,
+                *self.cloth_mesh_tri_offsets.last().unwrap(),
+                "add_cloth_grid: triangles were pushed between cloth meshes; \
+                 the cloth-mesh tri-offset registry would be corrupted"
+            );
         }
         self.cloth_mesh_tri_offsets.push(tri_off_end);
         self.cloth_mesh_first_particle.push(first);
@@ -1249,12 +1257,19 @@ impl ModelBuilder {
                 .push(Vec3::new(0.0, -molla_math::GRAVITY, 0.0));
         }
 
-        let inv_mass = if params.mass > 0.0 {
+        // A KINEMATIC body is immovable by forces/constraints — its
+        // motion is prescribed by the host. Zero its inverse mass and
+        // inverse inertia regardless of the `mass` field so every
+        // consumer (including any GPU kernel that gathers
+        // `body_inv_mass` without re-checking the flag) treats it as
+        // infinitely massive. Matches Newton's finalize step.
+        let is_kinematic = (params.flags & BodyFlags::KINEMATIC) != 0;
+        let inv_mass = if params.mass > 0.0 && !is_kinematic {
             1.0 / params.mass
         } else {
             0.0
         };
-        let inv_inertia = if params.mass > 0.0 && params.inertia != Mat3::ZERO {
+        let inv_inertia = if params.mass > 0.0 && params.inertia != Mat3::ZERO && !is_kinematic {
             params.inertia.inverse()
         } else {
             Mat3::ZERO

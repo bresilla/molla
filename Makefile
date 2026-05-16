@@ -7,16 +7,51 @@ ifeq ($(PROJECT_NAME),)
 endif
 
 CARGO := nixVulkan cargo
-# DISPLAY=:1 is required so winit can find the host X server when
-# cargo is invoked from contexts (nix shell, systemd user unit, etc.)
-# that don't inherit the desktop session's DISPLAY env var. Only
-# matters for targets that actually open a window (`run`).
-# WAYLAND_DISPLAY= forces winit onto the X11 path: if both env vars
-# are set, winit prefers Wayland and we want it pinned to X11.
-RUN_ENV := DISPLAY=:1 WAYLAND_DISPLAY=
+XDG_RUNTIME_DIR ?= /run/user/$(shell id -u)
+# Resolve a usable Wayland socket. $WAYLAND_DISPLAY is trusted ONLY when
+# it names a live socket — over SSH / waypipe / nix shells it routinely
+# leaks through pointing at nothing, which is exactly what makes winit
+# panic with `NoCompositor`. Otherwise fall back to the conventional
+# `wayland-0`. Override the socket with `make run WL_SOCKET=wayland-1`.
+WL_SOCKET ?= $(shell [ -S "$(XDG_RUNTIME_DIR)/$$WAYLAND_DISPLAY" ] && printf '%s' "$$WAYLAND_DISPLAY" || printf wayland-0)
+# Windowing backend winit talks to. Auto-detected: `wayland` when that
+# socket actually exists, otherwise `x11` (covers plain Xorg and
+# XWayland). Force it with `make run BACKEND=x11` (or `BACKEND=wayland`).
+BACKEND ?= $(shell [ -S "$(XDG_RUNTIME_DIR)/$(WL_SOCKET)" ] && echo wayland || echo x11)
+# DISPLAY pins which X server receives the window when BACKEND=x11
+# (matches the XWayland / Nvidia GL display on multi-X setups). Override
+# if you need `:0` or similar: `make run DISPLAY=:0`.
+DISPLAY ?= :1
+
+# Per-backend launch env. X11: clear the Wayland vars so winit can't be
+# lured onto an unreachable socket, pin $DISPLAY. Wayland: pin
+# $WAYLAND_DISPLAY to the resolved socket, clear $WAYLAND_SOCKET (an fd
+# handoff that would otherwise override it) and clear $DISPLAY so the
+# GPU driver doesn't waste time probing — and warn about — a dead X server.
+X11_ENV := env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET DISPLAY=$(DISPLAY)
+ifeq ($(BACKEND),wayland)
+RUN_ENV := env -u WAYLAND_SOCKET -u DISPLAY WAYLAND_DISPLAY=$(WL_SOCKET)
+else
+RUN_ENV := $(X11_ENV)
+endif
+
+# Native Wayland Vulkan present allocates buffers via GBM on a DRM render
+# node (/dev/dri/renderD*). If that node isn't writable — typically the
+# user is missing from the `render` group — the NVIDIA driver reports
+# zero present modes and bevy panics deep in `create_surfaces`. Catch it
+# up front with an actionable message instead of a core dump.
+WL_PREFLIGHT = if [ "$(BACKEND)" = wayland ] && \
+	[ -z "$$(find /dev/dri -maxdepth 1 -name 'renderD*' -readable -writable 2>/dev/null)" ]; then \
+		echo "make: native Wayland needs a writable DRM render node (/dev/dri/renderD*)."; \
+		echo "      you appear not to be in the 'render' group. fix with:"; \
+		echo "        sudo usermod -aG render,video $$USER   (then log out and back in)"; \
+		echo "      or run via XWayland instead:  make run BACKEND=x11"; \
+		exit 1; \
+	fi
 
 $(info ------------------------------------------)
 $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
+$(info Display: $(BACKEND) backend$(if $(filter wayland,$(BACKEND)), ($(WL_SOCKET))))
 $(info ------------------------------------------)
 
 .PHONY: build b compile c run r run-profile test t test-examples test-differentiable test-gpu test-featherstone-gpu test-featherstone-multidof-gpu test-featherstone-polish-gpu test-articulation-gpu test-autograd-featherstone-gpu test-autograd-featherstone-v3-gpu test-optim-gpu test-robust-loss-gpu test-splat-gpu test-splat-pose-gpu test-tile-primitives-gpu test-xpbd-gpu test-gjk-gpu test-mpr-gpu test-narrow-phase-gpu test-broadphase-lbvh-gpu test-contact-reduction-gpu test-raycast-gpu test-imu-gpu test-contact-gpu test-contact-friction-gpu test-frame-transform-gpu test-tiled-camera-gpu test-actuator-gpu test-actuator-pipeline-gpu test-actuator-neural-lstm-gpu test-equality-gpu test-equality-joint-mimic-gpu test-particles-gpu test-joint-muscle-gpu test-hydroelastic-gpu test-sparse-grid-gpu test-sparse-grid-v3-gpu test-sparse-grid-v4-gpu test-mpm-gpu test-mpm-v3-gpu test-mpm-two-way-gpu test-implicit-mpm-gpu test-vbd-cloth-gpu test-vbd-tets-gpu test-vbd-tets-v3-gpu test-vbd-tets-v4-gpu test-vbd-extended-gpu test-soft-vt-gpu test-soft-friction-gpu test-fem-gpu test-fem-elasticity-gpu test-fem-stokes-gpu test-fem-dg-swe-gpu test-fem-ns-gpu test-fem-ns-lazy-cg-gpu test-fem-fft-ns-gpu test-fem-resident-cg-gpu test-fem-resident-pcg-gpu test-fem-wave-gpu test-fem-apic-gpu test-fem-transient-gpu test-fft-gpu test-bsr-gpu test-spgemm-symbolic-gpu bench-cpu bench-gpu bench-featherstone check fmt clean help h
@@ -38,6 +73,7 @@ c: compile
 RELEASE_FLAG := $(if $(RELEASE),--release,)
 BIN := molla_viewer
 run:
+	@$(WL_PREFLIGHT)
 	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -p $(BIN) -- $(ARGS)
 
 # Run with Tracy instrumentation. Build with `make run-profile RELEASE=1`,
@@ -46,6 +82,7 @@ run:
 # click "Connect". Every Bevy schedule + system + render pass appears
 # on the timeline.
 run-profile:
+	@$(WL_PREFLIGHT)
 	@$(RUN_ENV) $(CARGO) run $(RELEASE_FLAG) -p $(BIN) --features profile -- $(ARGS)
 
 r: run

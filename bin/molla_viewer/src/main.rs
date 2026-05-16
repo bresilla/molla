@@ -133,7 +133,7 @@ const RIBBON_ITEMS: &[RibbonItem] = &[
         cluster: RibbonCluster::Start,
         slot: 0,
         glyph: RibbonGlyph::Icon("settings"),
-        tooltip: "Per-example settings (changes with the active scene)",
+        tooltip: "Description and per-example settings (changes with the active scene)",
         child_ribbon: None,
         role: None,
     },
@@ -350,6 +350,7 @@ fn main() {
         .insert_resource(SimRunState::default())
         .insert_resource(SimStats::default())
         .insert_resource(PendingSceneSwitch(None))
+        .insert_resource(SceneDescriptionPaneState::default())
         .insert_resource(MouseGrab::default())
         .insert_resource(ActivityView::default())
         .insert_resource(WireframeOn(false))
@@ -644,6 +645,20 @@ struct MollaBody(mp::BodyId);
 struct SimRunState {
     paused: bool,
     step_once: bool,
+}
+
+#[derive(Resource)]
+struct SceneDescriptionPaneState {
+    visible: bool,
+}
+
+impl Default for SceneDescriptionPaneState {
+    fn default() -> Self {
+        // Visible by default — the per-scene description is the point
+        // of the pane; hiding it behind a click left users staring at
+        // a bare toggle button.
+        Self { visible: true }
+    }
 }
 
 /// Per-frame physics timing. Each EMA in microseconds.
@@ -1166,7 +1181,8 @@ enum Scene {
     /// procedural rotate + breathe scale.
     WarpMesh,
     /// Port of `core/example_mesh_intersect.py` — two cubes whose
-    /// overlap is reported via GJK; contact points drawn as gizmos.
+    /// overlap is reported via a centre-gap / axis-aligned overlap
+    /// check (the cubes only translate, never rotate).
     WarpMeshIntersect,
     /// Port of `core/example_sample_mesh.py` — uniformly random
     /// barycentric samples on a TriMesh sphere, drawn as gizmo points.
@@ -1202,7 +1218,8 @@ enum Scene {
     /// a 16×16 SPD matrix; verify `‖L Lᵀ − A‖ < 1e-10`.
     WarpTileCholesky,
     /// Port of `optim/example_particle_repulsion.py` — gradient-
-    /// descent repulsion of 32 particles via the autograd tape.
+    /// descent repulsion of 32 particles via a stochastic (SPSA)
+    /// gradient estimate from `molla::compute::tile_mcgp`.
     WarpParticleRepulsion,
     // ── Warp-port scenes (Group C: FEM examples) ────────────────────
     /// Port of `fem/example_diffusion.py` — 2D triangular-mesh heat
@@ -1353,8 +1370,9 @@ enum Scene {
     /// plane. Same base elasticity (E, ν) across all four blocks;
     /// each block is colour-ramped to indicate a damping-sweep slot
     /// (target ζ ∈ {0.1, 0.5, 1.0, 2.0}/s). The global linear
-    /// damping is set to the median; per-block damping is a Stage 41
-    /// v2 follow-up (needs a per-particle slot). VBD tet solver via
+    /// damping is set to 0.5/s (one value from the sweep); per-block
+    /// damping is a Stage 41 v2 follow-up (needs a per-particle
+    /// slot). VBD tet solver via
     /// `add_tet_mesh_per_material`.
     JellyDampingFall,
     /// Stage 43 — 1D Burgers' equation `∂u/∂t + ∂(u²/2)/∂x = 0` on
@@ -1596,7 +1614,7 @@ impl Scene {
             Scene::WarpRaycast => "52 Warp raycast",
             Scene::WarpRaymarch => "53 Warp raymarch",
             Scene::WarpMesh => "54 Warp mesh (animated TriMesh)",
-            Scene::WarpMeshIntersect => "55 Warp mesh-intersect (GJK)",
+            Scene::WarpMeshIntersect => "55 Warp mesh-intersect (overlap)",
             Scene::WarpSampleMesh => "56 Warp sample-mesh (CDF)",
             Scene::WarpMarchingCubes => "57 Warp marching cubes",
             Scene::WarpNvdb => "58 Warp NanoVDB (sparse grid)",
@@ -1607,7 +1625,7 @@ impl Scene {
             Scene::WarpTileMlp => "63 Warp tile MLP",
             Scene::WarpTileNbody => "64 Warp tile N-body",
             Scene::WarpTileCholesky => "65 Warp tile Cholesky",
-            Scene::WarpParticleRepulsion => "66 Warp particle repulsion (autograd)",
+            Scene::WarpParticleRepulsion => "66 Warp particle repulsion (SPSA)",
             Scene::WarpFemDiffusion => "67 Warp FEM 2D diffusion",
             Scene::WarpFemDiffusion3D => "68 Warp FEM 3D diffusion (animated)",
             Scene::WarpFemConvDiff => "69 Warp FEM conv-diff",
@@ -1653,6 +1671,362 @@ impl Scene {
             Scene::AmrHeat => "100 AMR heat (Stage 45 v2)",
             Scene::Magnetostatics => "101 Magnetostatics (Stage 46)",
             Scene::PhaseFieldFracture => "102 Phase-field fracture (Tier C3)",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Scene::Pile => {
+                "Drops a mixed pile of rigid bodies onto the floor to exercise basic contact, friction, and settling. The expected behavior is a noisy stack that loses energy and comes to rest without exploding or drifting away."
+            }
+            Scene::Rope => {
+                "Builds a chain-like rope with distance constraints and lets it sag under gravity. It should bend and swing like a flexible strand while keeping neighboring particles at roughly fixed spacing."
+            }
+            Scene::Tower => {
+                "Stacks rigid blocks into a simple tower and lets the contact solver stabilize it. The tower may wobble or collapse, but it should do so through contacts rather than numerical blow-up."
+            }
+            Scene::Cloth => {
+                "Runs the baseline XPBD cloth patch with pinned vertices and gravity. The cloth should drape smoothly, preserve approximate edge lengths, and show the older cloth path before the higher-fidelity VBD scenes."
+            }
+            Scene::Lidar => {
+                "Scans a procedural obstacle scene with the GPU raycaster and draws ray hits as gizmos. Changing the right-panel range, FOV, or ray count should immediately change the fan of visible hits."
+            }
+            Scene::Imu => {
+                "Mounts an IMU sensor on a dynamic sphere bouncing on the floor. The right panel should show accelerometer and gyro readings that change as the body accelerates, collides, and rotates."
+            }
+            Scene::Contact => {
+                "Shows a small stack of bodies with a GPU contact sensor reporting per-body contacts. The expected behavior is visible contact arrows and counts that update as bodies touch, separate, and settle."
+            }
+            Scene::Arm => {
+                "Runs a six-link articulated arm driven by PD targets through the Featherstone solver. Joint sliders or the auto-sine mode should move the arm smoothly toward commanded angles."
+            }
+            Scene::Shapes => {
+                "Drops cones, convex hulls, spheres, and other primitives onto a wavy heightfield with an SDF torus in the middle. This is mainly a primitive/contact coverage scene: all shapes should collide plausibly with the terrain."
+            }
+            Scene::GpuIkArm => {
+                "Uses the GPU IK solver on a Franka-style arm chasing a target marker. There is no dynamics step here; the arm should kinematically follow target sliders while reporting residual and iteration telemetry."
+            }
+            Scene::GpuNarrowPhase => {
+                "Compares CPU and GPU narrow-phase collision handling on a pile of mixed primitives. When the GPU path is selected, the scene should still produce stable contacts while the panel reports GPU narrow-phase work."
+            }
+            Scene::Camera => {
+                "Renders a procedural scene through a tiled GPU camera sensor. The right panel should show color, depth, normal, albedo, and shape-index thumbnails that update as the camera orbits."
+            }
+            Scene::Actuator => {
+                "Demonstrates a composable actuator pipeline on a single revolute joint: delay, PD control, and motor clamping. The joint should chase its target while commanded and delivered torques are reported separately."
+            }
+            Scene::Quadrotor => {
+                "Simulates a simple free-flying quadrotor body controlled by altitude and attitude PD loops. Rotor thrusts should keep it near a commanded hover rather than immediately falling or tumbling."
+            }
+            Scene::BroadPhase => {
+                "Runs a large shower of spheres through either CPU sweep-and-prune or GPU LBVH broad phase. The visible scene is simple, but the important behavior is stable candidate-pair generation and timing telemetry."
+            }
+            Scene::VbdCloth => {
+                "Runs the high-resolution Vertex Block Descent cloth scene draping over a kinematic sphere. Stretch, bend, contact stiffness, and inner iterations should visibly affect cloth stability and contact behavior."
+            }
+            Scene::ReferencePendulum => {
+                "Runs a native procedural double-pendulum reference scene. It should swing chaotically but continuously, providing a simple articulated baseline without any external wrapper or asset dependency."
+            }
+            Scene::DiffArm => {
+                "Optimizes an open-loop torque sequence for a planar two-link arm to reach a target. Re-running optimization should reduce end-effector error and optionally draw the trajectory over iterations."
+            }
+            Scene::DiffArm6 => {
+                "Runs the differentiable Featherstone arm example with a six-DOF serial chain. It should optimize toward the target in joint space while reporting residuals and convergence telemetry."
+            }
+            Scene::MeshTools => {
+                "Visualizes mesh-processing utilities rather than a live physics solve. It compares an original procedural mesh, a decimated version, a marching-cubes SDF round trip, and a convex-hull overlay."
+            }
+            Scene::NeuralPolicy => {
+                "Drives a cart-pole with a small on-device MLP controller. The pole's rest pose hangs straight down (θ=0); after a perturbation the controller should damp the swing and recenter the cart, while the right panel shows controller inputs and output force."
+            }
+            Scene::NeuralLstm => {
+                "Drives the same cart-pole topology with a single-cell LSTM policy. Hidden and cell state should evolve over time, and the projected output should act as a cart force that damps the pole back toward its hanging rest."
+            }
+            Scene::Cable => {
+                "Runs a pinned cable pulled around a cylinder with soft contact and Dahl-style friction. The strand should drape, slide, and resist motion without stretching excessively."
+            }
+            Scene::Mpm => {
+                "Pours explicit MPM sand particles into a bin. Friction angle, stiffness, and particle count should alter how the pile flows and settles while remaining bounded."
+            }
+            Scene::Jelly => {
+                "Drops a tetrahedral jelly cube onto a plane with optional wireframe and cable comparison overlays. The block should deform elastically, bounce or damp, and preserve a recognizable volume."
+            }
+            Scene::Pendulum => {
+                "Shows a single revolute pendulum beside a three-link chain pendulum using Featherstone dynamics. Both should swing under gravity with constrained joints and no visible link separation."
+            }
+            Scene::JointSampler => {
+                "Displays several joint types side by side: revolute, prismatic, ball, and distance/equality-style motion. It is a quick visual check that each constraint type moves along its intended degrees of freedom."
+            }
+            Scene::Heightfield => {
+                "Drops mixed primitives onto a sinusoidal heightfield. Bodies should collide with the wavy terrain, slide into troughs, and settle without falling through the surface."
+            }
+            Scene::Conveyor => {
+                "Uses a kinematic belt to push dropped boxes along a long surface. The boxes should receive tangential motion from the belt while still colliding and stacking normally."
+            }
+            Scene::Pyramid => {
+                "Builds a large sphere/box pyramid and strikes it with a heavy projectile. The expected behavior is a dramatic but finite collapse driven by rigid contacts."
+            }
+            Scene::ClothBending => {
+                "Compares two hanging cloth strips with independently controlled bending compliance. The visible difference should be stiffness: one strip can fold more easily while the other resists curvature."
+            }
+            Scene::ClothRollers => {
+                "Places a VBD cloth patch over several kinematic rollers. Roller speed should be reported and visualized; full frictional velocity transfer is still a partial solver-side target."
+            }
+            Scene::ClothTwist => {
+                "Pins cloth along opposite edges while rotating one edge to inject twist. The cloth should wind up, wrinkle, and transmit torsion without tearing numerically."
+            }
+            Scene::CablePile => {
+                "Drops multiple flexible cables into a bowl-like support so they pile together. The scene should show cable bending, contact, and settling in a compact heap."
+            }
+            Scene::CableYJunction => {
+                "Builds three cables joined at a central Y connection. The branch junction should remain connected while the free strands swing and settle."
+            }
+            Scene::CableBundleHysteresis => {
+                "Shows several pinned cable strands arranged as a bundle and tied to the Dahl hysteresis oracle. The visual bundle is procedural; full contact-coupled bundled hysteresis remains partial."
+            }
+            Scene::NutBoltSdf => {
+                "Uses a procedural socket, cylinder bolt, and analytic SDF rings to mimic dense threaded nut/bolt contact without imported meshes. The bolt should stay caged by the surrounding geometry and thread-like lips."
+            }
+            Scene::NutBoltHydro => {
+                "Shows the hydroelastic-audit variant of the procedural nut/bolt setup. Geometry is visible in the viewer, while reduced hydroelastic force and moment preservation provide the main correctness proof."
+            }
+            Scene::MpmSnowBall => {
+                "Drops an MPM snow ball using a Stomakhin-style snow rheology. It should deform and clump more like snow than dry sand or liquid."
+            }
+            Scene::MpmTwoWay => {
+                "Drops a heavy rigid sphere into a pit of MPM sand with two-way coupling. The sphere should displace particles and the particle bed should react against the rigid body."
+            }
+            Scene::MpmMultiMaterial => {
+                "Lays out sand, snow, and viscous/Bingham-like MPM particle regions with distinct colors. The current live runtime is still mostly single-rheology, so use this as a visual/material-dispatch parity scene rather than full per-particle GPU material mixing."
+            }
+            Scene::MpmBeamTwist => {
+                "Initializes a beam-shaped MPM particle block with a procedural twist and angle-based colors. It should make torsional initialization visible, while true torsional constitutive response remains future work."
+            }
+            Scene::CartPole => {
+                "Runs a procedural cart-pole with a PD target. The cart should move along its rail and the pole should respond to the controller rather than behaving like an unconstrained falling rod."
+            }
+            Scene::CartPoleSwarm => {
+                "Runs sixteen cart-pole environments side by side with independent controllers. The row should demonstrate batched procedural control with each pole trying to stay balanced."
+            }
+            Scene::FourBar => {
+                "Builds a four-bar linkage with mimic joints enforcing a closed kinematic loop. The driver joint should move the linkage while maintaining loop closure."
+            }
+            Scene::DiffBall => {
+                "Optimizes a projectile launch velocity and angle so a ball approaches a target hoop. Iterations should reduce miss distance while preserving a ballistic trajectory."
+            }
+            Scene::DiffSpring => {
+                "Optimizes spring rest lengths inside a small particle cage to change its final position. The scene should show differentiable design behavior: loss decreases as spring parameters update."
+            }
+            Scene::DiffsimCloth => {
+                "Shows a reduced differentiable cloth example with a pinned procedural patch. The visible cloth is forward-simulated; the gradient proof is a small CPU oracle for pin or force optimization."
+            }
+            Scene::DiffsimSoftBody => {
+                "Shows a reduced differentiable tetrahedral soft-body block. It is meant to connect soft-body deformation to small optimization oracles, not yet to claim full GPU adjoint parity."
+            }
+            Scene::BrickWall => {
+                "Builds a wide brick wall and hits it with a projectile. Bricks should separate through contact impulses and form a finite debris pile."
+            }
+            Scene::SoftbodyDrop => {
+                "Drops a tetrahedral soft cube onto a hanging VBD cloth. The key behavior is soft-on-soft contact: both bodies should deform and interact without tunneling badly."
+            }
+            Scene::ClothCollar => {
+                "Runs a pinned cloth tube or collar collapsing onto itself. It is mainly a self-collision stress test, so folds should collide instead of freely passing through each other."
+            }
+            Scene::FastSoftImpact => {
+                "Fires a fast cube or impactor into a pinned cloth strip to exercise soft-body CCD. The cloth may deform sharply, but the impact should not simply tunnel through."
+            }
+            Scene::SoftBrake => {
+                "Slides a soft tetrahedral block down a soft ramp with adjustable friction. Sweeping friction should move the behavior between slip, stick, and slower sliding."
+            }
+            Scene::FemHeat => {
+                "Solves a P1 FEM heat equation on a tetrahedral cube with fixed temperatures on opposite boundaries. The temperature field should diffuse smoothly between cold and hot sides."
+            }
+            Scene::FemBeam => {
+                "Runs a FEM elasticity cantilever beam pinned on one end and pulled down on the other. The beam should bend under load and respond to material sliders."
+            }
+            Scene::FemHeatP2 => {
+                "Runs the same heat-equation idea with quadratic P2 elements. Compared with the P1 heat scene, this checks higher-order nodal/edge degrees of freedom and smooth diffusion."
+            }
+            Scene::FemDiffBeam => {
+                "Optimizes a FEM beam parameter or control to reduce a deformation loss. The expected behavior is a visible target/response comparison plus decreasing optimization error."
+            }
+            Scene::FemStokes => {
+                "Solves a FEM Stokes lid-driven cavity problem. The velocity field should form a recirculating flow driven by the moving lid and remain stable under solver iterations."
+            }
+            Scene::WarpRaycast => {
+                "Ports Warp's raycast example: a grid of rays is fired at procedural primitives and hit points/normals are drawn. It should reveal which surfaces the GPU raycaster sees."
+            }
+            Scene::WarpRaymarch => {
+                "Raymarches a procedural signed-distance field into a small image shown in the right pane. This is a CPU SDF rendering example, so the important behavior is the rendered SDF silhouette and normals."
+            }
+            Scene::WarpMesh => {
+                "Animates a procedural triangle mesh with rotation and breathing scale. It is mostly a mesh update/rendering sanity check rather than a contact-heavy physics scene."
+            }
+            Scene::WarpMeshIntersect => {
+                "Moves two procedural axis-aligned cube meshes toward and away from each other and reports their overlap with a centre-gap test. The status should flip to INTERSECTING when the cubes touch."
+            }
+            Scene::WarpSampleMesh => {
+                "Samples points uniformly across a procedural triangle mesh surface. The expected behavior is a stable cloud of samples distributed over the visible mesh."
+            }
+            Scene::WarpMarchingCubes => {
+                "Builds an animated SDF from simple shapes and extracts a surface with marching cubes. The mesh should change smoothly as the underlying field moves."
+            }
+            Scene::WarpNvdb => {
+                "Exercises sparse-grid insertion and lookup with NanoVDB-like data. The right panel reports lookup/insert telemetry while the scene shows active sparse samples."
+            }
+            Scene::WarpDem => {
+                "Uses MPM sand with a high friction angle to mimic a DEM-style granular pile. It should form a steeper, more stable angle of repose than the fluid-like scenes."
+            }
+            Scene::WarpFluid => {
+                "Uses the MPM path with a very low friction angle to behave fluid-like. Particles should spread and flow more readily than dry granular sand."
+            }
+            Scene::WarpSph => {
+                "Shows a fluid-like particle layout using the existing MPM-as-fluid path, not a separate SPH solver. Treat it as SPH visual parity rather than a true SPH method."
+            }
+            Scene::WarpTileFft => {
+                "Runs a tile FFT/DFT-style signal example and plots the magnitude spectrum in the right pane. A sinusoidal input should produce clear frequency peaks."
+            }
+            Scene::WarpTileMlp => {
+                "Runs a small tile MLP forward pass on deterministic inputs. The panel should expose the input/output values so the compute primitive can be checked without a physics scene."
+            }
+            Scene::WarpTileNbody => {
+                "Runs a small host-driven N-body gravity simulation. Particles should attract each other while pairwise momentum and center-of-mass behavior remain bounded."
+            }
+            Scene::WarpTileCholesky => {
+                "Performs a dense Cholesky factorization on a small SPD matrix and reports reconstruction error. This is a compute-kernel check rather than a visual dynamics scene."
+            }
+            Scene::WarpParticleRepulsion => {
+                "Optimizes particle positions with a repulsion loss using a stochastic (SPSA) gradient estimate. Points should spread apart over iterations while the loss decreases."
+            }
+            Scene::WarpFemDiffusion => {
+                "Solves 2D FEM heat diffusion on a triangular mesh with fixed boundary values. The visible scalar field should smooth out from boundary constraints."
+            }
+            Scene::WarpFemDiffusion3D => {
+                "Solves 3D FEM diffusion with animated Dirichlet boundary conditions. The volume/point field should follow the changing boundary temperature without becoming unstable."
+            }
+            Scene::WarpFemConvDiff => {
+                "Runs a continuous FEM convection-diffusion solve with advection and diffusion competing. The field should be transported along the flow while diffusion smooths gradients."
+            }
+            Scene::WarpFemConvDiffDg => {
+                "Runs a reduced DG/P0 convection-diffusion variant with limiter telemetry. It should stay bounded in advection-dominated cases and show when the limiter clamps overshoot."
+            }
+            Scene::WarpFemTaylorGreen => {
+                "Shows a Taylor-Green vortex/Stokes initial condition with analytic decay. Velocity arrows should form a structured vortex pattern that damps predictably over time."
+            }
+            Scene::WarpFemKelvinHelmholtz => {
+                "Shows a shear layer with sinusoidal perturbation in a FEM/Stokes-style flow scene. The expected behavior is evolving velocity structure around the perturbed interface."
+            }
+            Scene::WarpFemStreamlines => {
+                "Advects tracer particles through an analytic vortex velocity field. Tracers should follow the flow rather than behaving like independently simulated rigid bodies."
+            }
+            Scene::WarpFemStokesTransfer => {
+                "Transfers a procedural Stokes/FEM velocity grid onto tracer particles. Constant fields should be preserved and tracers should move according to the sampled velocity field."
+            }
+            Scene::WarpFemDeformedGeometry => {
+                "Runs heat diffusion on a curved or annular deformed geometry. The field should respect the curved mesh rather than looking like a flat-grid solve."
+            }
+            Scene::WarpFemDistortion => {
+                "Visualizes distortion energy or strain over an elastic FEM shape. Higher-strain regions should appear clearly in the heatmap as the geometry deforms."
+            }
+            Scene::WarpFemElasticOpt => {
+                "Optimizes an elastic beam shape parameter to reduce a FEM objective. The scene should show the shape or response changing as the optimization progresses."
+            }
+            Scene::WarpFemMixedElasticity => {
+                "Compares a near-incompressible displacement-only proxy with a mixed pressure/displacement response. The mixed version should avoid the severe locking indicated by the simpler proxy."
+            }
+            Scene::WarpFemNonconformingContact => {
+                "Shows reduced load transfer between nonmatching FEM contact surfaces. The important behavior is force and moment preservation across incompatible source and target patches."
+            }
+            Scene::WarpFftFluid => {
+                "Runs a 2D FFT-Poisson/Stokes fallback for fluid pressure projection. The field should remain periodic and smooth while showing pressure/velocity structure from the source."
+            }
+            Scene::WarpDistortion3D => {
+                "Extends the distortion-energy visualization into a 3D geometry. It should highlight strain or distortion in the volume, similar to the 2D FEM distortion scene."
+            }
+            Scene::WarpApicFluid => {
+                "Demonstrates APIC-style particle/mesh velocity transfer in a FEM-MPM hybrid box. Particles should exchange momentum with grid or mesh nodes and report kinetic energy."
+            }
+            Scene::WarpWave => {
+                "Integrates a wave equation on a triangular mesh from an initial pulse. The height-field view should show waves propagating and reflecting from constrained boundaries."
+            }
+            Scene::WarpDiffRay => {
+                "Optimizes a sphere position so a differentiable raycast depth image matches a target. The current and target positions/images should converge as loss decreases."
+            }
+            Scene::WarpTileFilter => {
+                "Applies selectable image filters to a procedural image. The right panel should show input and filtered output so box, Gaussian, Laplacian, and identity modes are easy to compare."
+            }
+            Scene::WarpTileCompaction => {
+                "Runs stream compaction on a set of random points using a radius predicate. Only survivor indices should be highlighted or counted after compaction."
+            }
+            Scene::AdamLandscape => {
+                "Runs Adam on a 2D Rosenbrock landscape and draws the optimization path. The marker should move toward the global minimum while the panel exposes optimizer parameters."
+            }
+            Scene::ClothPokerCards => {
+                "Stacks many stiff VBD cloth cards on a cube and swings a kinematic sphere into them. The cards should behave like bendable sheets and collapse through contact."
+            }
+            Scene::SoftbodyHanging => {
+                "Hangs several tetrahedral soft bodies with different Young's modulus values. Stiffer blocks should sag less than softer ones under gravity."
+            }
+            Scene::CableTwist => {
+                "Pins a cable at both ends while rotating one endpoint around the tangent. Twist should propagate along the strand, though full twist-DOF parity is still partial."
+            }
+            Scene::IkCustom => {
+                "Runs collision-avoidance IK on the GPU arm with a sphere obstacle represented as residuals. The arm should attempt to reach the target while keeping links away from the obstacle."
+            }
+            Scene::IkCubeStacking => {
+                "Moves the GPU IK arm through procedural pick, lift, place, and retreat waypoints while cubes are shown stacking. Full gripper/contact-coupled stacking remains partial, so use the description to check the intended choreography."
+            }
+            Scene::DiffsimDrone => {
+                "Runs a simplified differentiable quadrotor MPC over a point-mass model. Adam should reduce final position error over a short rollout while keeping the control sequence bounded."
+            }
+            Scene::FluidCheckpointOptimization => {
+                "Runs a reduced checkpointed fluid-like scalar rollout and optimizes a source amplitude. It should save bounded checkpoints, replay deterministically, and reduce target-field loss."
+            }
+            Scene::NavierStokesPerturbationOptimization => {
+                "Optimizes a scalar perturbation parameter in a reduced Navier-Stokes-like flow response. The scene should show the perturbation changing the flow and the loss decreasing over iterations."
+            }
+            Scene::WarpFftPoisson2d => {
+                "Solves a 2D periodic Poisson pressure problem with an FFT-based method. A moving Gaussian source should produce a smooth pressure field on the grid."
+            }
+            Scene::WarpTileMatmul => {
+                "Runs a standalone tile matrix multiplication and displays matrices as colored grids. It is a compute correctness scene: output should match deterministic CPU/GPU expectations."
+            }
+            Scene::WarpTileConvolution => {
+                "Runs separable 2D convolution with editable five-tap kernel coefficients. Changing the kernel should visibly alter the filtered image while preserving the side-by-side input/output layout."
+            }
+            Scene::WarpTileMcgp => {
+                "Estimates a Laplace solution with Monte Carlo walk-on-spheres sampling. The colored point grid should approximate the boundary-value solution over the square domain."
+            }
+            Scene::ImplicitMpmBingham => {
+                "Runs an implicit MPM Bingham blob with yield stress and viscosity controls. The material should flow under load but arrest residual motion when stresses fall below yield."
+            }
+            Scene::WarpStableFluid => {
+                "Runs a 2D Stam stable-fluid solver with dye source and swirling body force. Velocity magnitude and plume motion should evolve smoothly under viscosity and force sliders."
+            }
+            Scene::JellyDampingFall => {
+                "Drops several jelly cubes with a damping sweep indicated by color. The cubes should deform similarly but settle with different apparent damping behavior."
+            }
+            Scene::DgBurgersShock => {
+                "Solves 1D Burgers' equation with a finite-volume/DG-style limiter. The smooth initial wave should steepen into a shock while the limiter keeps the profile bounded."
+            }
+            Scene::ShallowWaterDamBreak => {
+                "Runs a radial shallow-water dam-break on a 2D grid. Water height should spread outward from the initial circular dam and form a visible wave front."
+            }
+            Scene::ImplicitMpmFull27 => {
+                "Runs the implicit MPM Bingham setup with the full 27-point Hessian stencil. It is meant as a higher-fidelity implicit solve path, so behavior should be similar but more solver-intensive than the simpler Bingham scene."
+            }
+            Scene::SplatPoseRecovery => {
+                "Optimizes a camera pose against a target Gaussian-splat render. The current thumbnail and target thumbnail should become more similar as the pose loss decreases."
+            }
+            Scene::AmrHeat => {
+                "Solves heat diffusion on an adaptively refined 2D mesh with a moving heat source. Cells near the source should refine and the temperature colormap should follow the source."
+            }
+            Scene::Magnetostatics => {
+                "Solves a small steady magnetostatics problem for a current loop. The rendered cut-plane should show a structured vector-potential or field-magnitude proxy around the loop."
+            }
+            Scene::PhaseFieldFracture => {
+                "Visualizes a reduced phase-field fracture/damage solve on a plate. Damage should stay between zero and one, be irreversible, and concentrate along the expected crack band."
+            }
         }
     }
 
@@ -2081,15 +2455,19 @@ impl Scene {
                 gpu_proof: "make test-fem-apic-gpu for reusable APIC/field-transfer GPU lanes; full Stokes-to-particle transfer GPU scene remains future work",
                 notes: "reduced bilinear Stokes/FEM velocity-grid transfer drives tracers in the viewer; this is not yet a coupled FEM Stokes GPU transfer pipeline",
             },
-            Scene::FemStokes
-            | Scene::WarpFemTaylorGreen
-            | Scene::WarpFemKelvinHelmholtz
-            | Scene::WarpFemStreamlines => ScenePhysicsAudit {
+            Scene::FemStokes | Scene::WarpFemKelvinHelmholtz => ScenePhysicsAudit {
                 status: Complete,
-                reference_case: "Stokes/Navier-Stokes/stable-fluid PDE scenes",
-                cpu_proof: "fem_stokes / fem_ns_transient / stam_fluid tests",
+                reference_case: "Stokes / Navier-Stokes PDE scenes",
+                cpu_proof: "fem_stokes / fem_ns_transient tests",
                 gpu_proof: "make test-fem-stokes-gpu / make test-fem-ns-gpu",
-                notes: "PDE fluid cases have CPU oracles and explicit GPU Stokes/NS lanes",
+                notes: "lid-driven Stokes (Uzawa-CG) and Kelvin-Helmholtz (FEM Navier-Stokes step) run live PDE solvers",
+            },
+            Scene::WarpFemTaylorGreen | Scene::WarpFemStreamlines => ScenePhysicsAudit {
+                status: Partial,
+                reference_case: "Warp fem/example_taylor_green.py / example_streamlines.py",
+                cpu_proof: "scene-build smoke only — these scenes evaluate a closed-form field; no PDE solver is invoked",
+                gpu_proof: "n/a for the analytic formulation; FEM Stokes/NS GPU lanes are make test-fem-stokes-gpu / make test-fem-ns-gpu",
+                notes: "reduced analytic visualizations — Taylor-Green renders the closed-form Stokes decay envelope and streamlines advect tracers through an analytic vortex; neither runs a live FEM solve",
             },
             Scene::WarpFemConvDiff => ScenePhysicsAudit {
                 status: Complete,
@@ -4379,6 +4757,39 @@ fn build_jelly_model() -> (mp::Model, Vec<BodyVisual>) {
     build_jelly_model_with_preset(JellyMaterialPreset::Soft)
 }
 
+/// Per-tet Young's-modulus multiplier for a jelly material preset, in
+/// the exact tet order `build_jelly_model_with_preset` emits them
+/// (k → j → i, six tets per cell). `update_jelly_example` scales the
+/// slider-derived (μ, λ) by this so the Mixed preset's stiff corner
+/// pillars (and the Stiff preset's ×100) survive the per-frame
+/// re-stamp instead of being flattened to a single uniform material.
+fn jelly_tet_e_multipliers(preset: JellyMaterialPreset) -> Vec<f64> {
+    let n = JELLY_GRID;
+    let last = n - 2;
+    let mut mul = Vec::with_capacity(((n - 1) * (n - 1) * (n - 1) * 6) as usize);
+    for kk in 0..n - 1 {
+        for _jj in 0..n - 1 {
+            for ii in 0..n - 1 {
+                let m = match preset {
+                    JellyMaterialPreset::Soft => 1.0,
+                    JellyMaterialPreset::Stiff => 100.0,
+                    JellyMaterialPreset::Mixed => {
+                        if (ii == 0 || ii == last) && (kk == 0 || kk == last) {
+                            100.0
+                        } else {
+                            1.0
+                        }
+                    }
+                };
+                for _ in 0..6 {
+                    mul.push(m);
+                }
+            }
+        }
+    }
+    mul
+}
+
 /// Stage-21 mesh-tools demo. The "model" is empty (no physics step
 /// runs for this scene); all the visual work happens in
 /// `apply_scene_switch` via [`spawn_mesh_tools_entities`], which
@@ -4983,10 +5394,11 @@ fn build_neural_policy_model() -> (mp::Model, Vec<BodyVisual>) {
         .expect("cart prismatic joint");
 
     // ── Pole (revolute to cart, axis +Z) ─────────────────────────────
-    // Pole rest pose at θ=0: hangs straight down (along -Y) from the
-    // cart's top centre. We rotate the joint frame 180° about X so
-    // joint-local +Y points along world -Y, making the pole's body
-    // frame +Y axis = capsule long axis = downward at rest.
+    // Pole rest pose at θ=0: hangs straight DOWN from the cart's top
+    // centre. The joint connects the cart-top frame to the pole's +Y
+    // end (`x_c_pole` offset below), so the capsule dangles below the
+    // pivot at rest — θ=0 is the stable equilibrium, not an inverted
+    // one. The controller damps/recenters about this rest pose.
     let pole_inertia = capsule_inertia(POLE_MASS, POLE_HALF_LEN, POLE_RADIUS);
     let pole = b.add_body(
         mp::BodyParams::new()
@@ -7011,9 +7423,6 @@ fn step_simulation(
             | Scene::WarpTileMatmul
             | Scene::WarpTileConvolution
             | Scene::WarpTileMcgp
-            | Scene::ClothPokerCards
-            | Scene::SoftbodyHanging
-            | Scene::CableTwist
             | Scene::IkCustom
             | Scene::IkCubeStacking
             | Scene::DiffsimDrone
@@ -9358,28 +9767,34 @@ fn update_jelly_example(mut sim: ResMut<Sim>, mut state: ResMut<JellyExampleStat
     // per-tet uniformity here applies on top of whatever per-tet
     // material-id breakdown the preset chose.
     let nu = state.poisson_ratio.clamp(-0.49, 0.49);
-    let e = state.youngs_modulus.max(1.0).min(1.0e9);
-    let mu = e / (2.0 * (1.0 + nu));
-    let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
     let tet_count = sim.model.tet_count;
     if tet_count == 0 {
         return;
     }
-    // Mixed preset has stiff corner cells (E ×100), soft interior.
-    // Apply via per-tet (μ, λ); the multi-material API at build
-    // time already wrote the right initial values, but per-frame
-    // slider tweaks rewrite uniformly here. Future enhancement:
-    // store per-tet material-id at build time for re-stamping.
+    // Re-stamp per-tet (μ, λ) from the sliders. The slider sets the
+    // BASE Young's modulus; the active preset's per-tet multiplier is
+    // applied on top, so the Mixed preset's stiff corner pillars
+    // (E ×100) and the Stiff preset's uniform ×100 survive. A flat
+    // overwrite here used to collapse every preset to one material on
+    // the first frame, making the multi-material picker a no-op.
+    let e_base = state.youngs_modulus;
+    let e_mul = jelly_tet_e_multipliers(state.material_preset);
+    let lame = |mul: f64| -> (f64, f64) {
+        let e = (e_base * mul).max(1.0).min(1.0e9);
+        let mu = e / (2.0 * (1.0 + nu));
+        let lam = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+        (mu, lam)
+    };
     {
         let mu_host = sim.model.tet_mu.host_mut().expect("tet_mu host");
-        for v in mu_host.iter_mut() {
-            *v = mu;
+        for (idx, v) in mu_host.iter_mut().enumerate() {
+            *v = lame(e_mul.get(idx).copied().unwrap_or(1.0)).0;
         }
     }
     {
         let lambda_host = sim.model.tet_lambda.host_mut().expect("tet_lambda host");
-        for v in lambda_host.iter_mut() {
-            *v = lambda;
+        for (idx, v) in lambda_host.iter_mut().enumerate() {
+            *v = lame(e_mul.get(idx).copied().unwrap_or(1.0)).1;
         }
     }
     // Plasticity uniforms — `yield_stress = 0` is the UI sentinel for
@@ -9507,11 +9922,17 @@ fn quadrotor_pd_thrusts(
     let roll_cmd = attitude_kp * roll_err - attitude_kd * frame_w.x;
     let pitch_cmd = attitude_kp * pitch_err - attitude_kd * frame_w.z;
     let l = arm_length.max(1.0e-9);
+    // The ±X (pitch) and ±Z (roll) rotor pairs sit on perpendicular
+    // lever arms, so `r × F` has OPPOSITE sign for the two pairs: the
+    // +X rotor pushed up yields +Z torque, but the +Z rotor pushed up
+    // yields −X torque. The roll pair must therefore be split the
+    // opposite way from the pitch pair, or the attitude loop becomes
+    // positive feedback on roll and the quadrotor tumbles.
     let mut thrusts = [
         baseline + 0.5 * pitch_cmd / l, // rotor 0 (+X)
         baseline - 0.5 * pitch_cmd / l, // rotor 1 (-X)
-        baseline + 0.5 * roll_cmd / l,  // rotor 2 (+Z)
-        baseline - 0.5 * roll_cmd / l,  // rotor 3 (-Z)
+        baseline - 0.5 * roll_cmd / l,  // rotor 2 (+Z)
+        baseline + 0.5 * roll_cmd / l,  // rotor 3 (-Z)
     ];
     for t in thrusts.iter_mut() {
         if *t < 0.0 {
@@ -10410,6 +10831,7 @@ fn control_pane(
         Res<ImuExampleState>,
         Res<ContactExampleState>,
     ),
+    mut description_pane: ResMut<SceneDescriptionPaneState>,
     mut pane_states: PaneSceneStates,
     mut ribbons: RibbonParams,
     mut warp_states: ResMut<WarpExampleStates>,
@@ -10436,112 +10858,9 @@ fn control_pane(
         &mut ribbon_placement,
         &mut ribbon_drag,
         |id| match id {
-            // Right pane is enabled only for scenes that have
-            // per-example settings — Pile/Rope/Tower/Cloth don't.
-            PANE_SCENE => !matches!(
-                scene,
-                Scene::Lidar
-                    | Scene::Imu
-                    | Scene::Contact
-                    | Scene::Arm
-                    | Scene::Shapes
-                    | Scene::GpuIkArm
-                    | Scene::GpuNarrowPhase
-                    | Scene::Camera
-                    | Scene::Actuator
-                    | Scene::Quadrotor
-                    | Scene::BroadPhase
-                    | Scene::VbdCloth
-                    | Scene::ReferencePendulum
-                    | Scene::DiffArm
-                    | Scene::DiffArm6
-                    | Scene::MeshTools
-                    | Scene::NeuralPolicy
-                    | Scene::NeuralLstm
-                    | Scene::Cable
-                    | Scene::Mpm
-                    | Scene::Jelly
-                    | Scene::Pendulum
-                    | Scene::Conveyor
-                    | Scene::ClothBending
-                    | Scene::ClothRollers
-                    | Scene::ClothTwist
-                    | Scene::MpmSnowBall
-                    | Scene::MpmTwoWay
-                    | Scene::MpmMultiMaterial
-                    | Scene::MpmBeamTwist
-                    | Scene::CartPole
-                    | Scene::CartPoleSwarm
-                    | Scene::FourBar
-                    | Scene::DiffBall
-                    | Scene::DiffSpring
-                    | Scene::SoftbodyDrop
-                    | Scene::ClothCollar
-                    | Scene::FastSoftImpact
-                    | Scene::SoftBrake
-                    | Scene::FemHeat
-                    | Scene::FemHeatP2
-                    | Scene::FemBeam
-                    | Scene::FemDiffBeam
-                    | Scene::FemStokes
-                    | Scene::WarpRaycast
-                    | Scene::WarpRaymarch
-                    | Scene::WarpMesh
-                    | Scene::WarpMeshIntersect
-                    | Scene::WarpSampleMesh
-                    | Scene::WarpMarchingCubes
-                    | Scene::WarpNvdb
-                    | Scene::WarpDem
-                    | Scene::WarpFluid
-                    | Scene::WarpSph
-                    | Scene::WarpTileFft
-                    | Scene::WarpTileMlp
-                    | Scene::WarpTileNbody
-                    | Scene::WarpTileCholesky
-                    | Scene::WarpParticleRepulsion
-                    | Scene::WarpFemDiffusion
-                    | Scene::WarpFemDiffusion3D
-                    | Scene::WarpFemConvDiff
-                    | Scene::WarpFemConvDiffDg
-                    | Scene::WarpFemTaylorGreen
-                    | Scene::WarpFemKelvinHelmholtz
-                    | Scene::WarpFemStreamlines
-                    | Scene::WarpFemStokesTransfer
-                    | Scene::WarpFemDeformedGeometry
-                    | Scene::WarpFemDistortion
-                    | Scene::WarpFemElasticOpt
-                    | Scene::WarpFemMixedElasticity
-                    | Scene::WarpFemNonconformingContact
-                    | Scene::WarpFftFluid
-                    | Scene::WarpDistortion3D
-                    | Scene::WarpApicFluid
-                    | Scene::WarpWave
-                    | Scene::WarpDiffRay
-                    | Scene::WarpTileFilter
-                    | Scene::WarpTileCompaction
-                    | Scene::AdamLandscape
-                    | Scene::WarpTileMatmul
-                    | Scene::WarpTileConvolution
-                    | Scene::WarpTileMcgp
-                    | Scene::ClothPokerCards
-                    | Scene::SoftbodyHanging
-                    | Scene::CableTwist
-                    | Scene::IkCustom
-                    | Scene::IkCubeStacking
-                    | Scene::DiffsimDrone
-                    | Scene::FluidCheckpointOptimization
-                    | Scene::NavierStokesPerturbationOptimization
-                    | Scene::WarpFftPoisson2d
-                    | Scene::WarpStableFluid
-                    | Scene::JellyDampingFall
-                    | Scene::DgBurgersShock
-                    | Scene::ShallowWaterDamBreak
-                    | Scene::ImplicitMpmFull27
-                    | Scene::SplatPoseRecovery
-                    | Scene::AmrHeat
-                    | Scene::Magnetostatics
-                    | Scene::PhaseFieldFracture
-            ),
+            // Every scene now has a right-rail description, even if it
+            // has no extra per-example controls.
+            PANE_SCENE => false,
             _ => false,
         },
     );
@@ -10737,7 +11056,7 @@ fn control_pane(
         Scene::WarpRaycast => Some("Warp raycast"),
         Scene::WarpRaymarch => Some("Warp raymarch"),
         Scene::WarpMesh => Some("Warp mesh (animated)"),
-        Scene::WarpMeshIntersect => Some("Warp mesh intersect (GJK)"),
+        Scene::WarpMeshIntersect => Some("Warp mesh intersect (overlap)"),
         Scene::WarpSampleMesh => Some("Warp sample mesh"),
         Scene::WarpMarchingCubes => Some("Warp marching cubes"),
         Scene::WarpNvdb => Some("Warp NanoVDB sparse grid"),
@@ -10794,215 +11113,274 @@ fn control_pane(
         Scene::WarpFftPoisson2d => Some("Warp FFT Poisson 2D"),
         _ => None,
     };
+    let scene_pane_title = scene_pane_title.or(Some(scene.label()));
     if let Some(title) = scene_pane_title {
         if is_open(PANE_SCENE) {
             let anchor = PaneAnchor::RightRail(RailZone::Start);
             Pane2::new(PANE_SCENE, title, anchor, accent_color)
                 .resize(PaneResize::BOTH)
-                .show(ctx, |ui| match scene {
-                    Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
-                    Scene::Imu => imu_pane(ui, &imu_state),
-                    Scene::Contact => contact_pane(ui, &contact_state),
-                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
-                    Scene::Shapes => shapes_pane(ui, &sim),
-                    Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
-                    Scene::GpuNarrowPhase => gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color),
-                    Scene::Camera => camera_pane(ui, &mut pane_states.camera, anchor, accent_color),
-                    Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
-                    Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
-                    Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
-                    Scene::VbdCloth => {
-                        vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+                .show(ctx, |ui| {
+                    scene_description_pane(ui, scene, &mut description_pane);
+                    match scene {
+                        Scene::Lidar => lidar_pane(ui, &mut lidar_config, &lidar_state),
+                        Scene::Imu => imu_pane(ui, &imu_state),
+                        Scene::Contact => contact_pane(ui, &contact_state),
+                        Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
+                        Scene::Shapes => shapes_pane(ui, &sim),
+                        Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
+                        Scene::GpuNarrowPhase => {
+                            gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color)
+                        }
+                        Scene::Camera => {
+                            camera_pane(ui, &mut pane_states.camera, anchor, accent_color)
+                        }
+                        Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
+                        Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
+                        Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
+                        Scene::VbdCloth => {
+                            vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+                        }
+                        Scene::ReferencePendulum => {
+                            reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
+                        }
+                        Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
+                        Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
+                        Scene::MeshTools => {
+                            mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
+                        }
+                        Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
+                        Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
+                        Scene::Cable => {
+                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                        }
+                        Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
+                        Scene::Jelly => jelly_pane(
+                            ui,
+                            &mut pane_states.jelly,
+                            &mut sim,
+                            &mut pending,
+                            accent_color,
+                        ),
+                        Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
+                        Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
+                        Scene::ClothBending => {
+                            cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
+                        }
+                        Scene::ClothRollers => {
+                            cloth_rollers_pane(ui, &mut warp_states.cloth_rollers)
+                        }
+                        Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
+                        Scene::CableBundleHysteresis => {
+                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                        }
+                        Scene::MpmSnowBall => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmTwoWay => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmMultiMaterial => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmBeamTwist => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::CartPole => {
+                            cartpole_pane(ui, &mut pane_states.cartpole, accent_color)
+                        }
+                        Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
+                        Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
+                        Scene::DiffBall => {
+                            diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color)
+                        }
+                        Scene::DiffSpring => {
+                            diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
+                        }
+                        Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
+                        Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
+                        Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
+                        Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
+                        Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
+                        Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
+                        Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
+                        Scene::FemDiffBeam => {
+                            fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam)
+                        }
+                        Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
+                        Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
+                        Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
+                        Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
+                        Scene::WarpMeshIntersect => {
+                            warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
+                        }
+                        Scene::WarpSampleMesh => {
+                            warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
+                        }
+                        Scene::WarpMarchingCubes => {
+                            warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
+                        }
+                        Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
+                        Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
+                        Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
+                        Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
+                        Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
+                        Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
+                        Scene::WarpTileNbody => {
+                            warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody)
+                        }
+                        Scene::WarpTileCholesky => {
+                            warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
+                        }
+                        Scene::WarpParticleRepulsion => {
+                            warp_repulsion_pane(ui, &mut warp_states.repulsion)
+                        }
+                        Scene::WarpFemDiffusion => {
+                            warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
+                        }
+                        Scene::WarpFemDiffusion3D => {
+                            warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
+                        }
+                        Scene::WarpFemConvDiff => {
+                            warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
+                        }
+                        Scene::WarpFemConvDiffDg => {
+                            warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
+                        }
+                        Scene::WarpFemTaylorGreen => {
+                            warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
+                        }
+                        Scene::WarpFemKelvinHelmholtz => {
+                            warp_fem_kh_pane(ui, &mut warp_states.fem_kh)
+                        }
+                        Scene::WarpFemStreamlines => {
+                            warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
+                        }
+                        Scene::WarpFemStokesTransfer => {
+                            warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
+                        }
+                        Scene::WarpFemDeformedGeometry => {
+                            warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
+                        }
+                        Scene::WarpFemDistortion => {
+                            warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
+                        }
+                        Scene::WarpFemElasticOpt => {
+                            warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
+                        }
+                        Scene::WarpFemMixedElasticity => warp_fem_mixed_elasticity_pane(
+                            ui,
+                            &mut warp_states.fem_mixed_elasticity,
+                        ),
+                        Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
+                            ui,
+                            &mut warp_states.fem_nonconforming_contact,
+                        ),
+                        Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
+                        Scene::WarpDistortion3D => {
+                            warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
+                        }
+                        Scene::WarpApicFluid => {
+                            warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid)
+                        }
+                        Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
+                        Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
+                        Scene::WarpTileFilter => {
+                            warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
+                        }
+                        Scene::WarpTileCompaction => {
+                            warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
+                        }
+                        Scene::AdamLandscape => {
+                            adam_landscape_pane(ui, &mut warp_states.adam_landscape)
+                        }
+                        Scene::WarpTileMatmul => {
+                            warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
+                        }
+                        Scene::WarpTileConvolution => {
+                            warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
+                        }
+                        Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
+                        Scene::ImplicitMpmBingham => {
+                            implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
+                        }
+                        Scene::WarpStableFluid => {
+                            warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
+                        }
+                        Scene::JellyDampingFall => {
+                            jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
+                        }
+                        Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
+                        Scene::ShallowWaterDamBreak => {
+                            swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
+                        }
+                        Scene::ImplicitMpmFull27 => {
+                            implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
+                        }
+                        Scene::SplatPoseRecovery => {
+                            splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
+                        }
+                        Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
+                        Scene::Magnetostatics => {
+                            magnetostatics_pane(ui, &mut warp_states.magnetostatics)
+                        }
+                        Scene::ClothPokerCards => {
+                            cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
+                        }
+                        Scene::SoftbodyHanging => {
+                            softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
+                        }
+                        Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
+                        Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
+                        Scene::IkCubeStacking => {
+                            ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
+                        }
+                        Scene::DiffsimDrone => {
+                            diffsim_drone_pane(ui, &mut warp_states.diffsim_drone)
+                        }
+                        Scene::FluidCheckpointOptimization => {
+                            fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
+                        }
+                        Scene::NavierStokesPerturbationOptimization => {
+                            ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
+                        }
+                        Scene::WarpFftPoisson2d => {
+                            warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
+                        }
+                        _ => {}
                     }
-                    Scene::ReferencePendulum => {
-                        reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
-                    }
-                    Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
-                    Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
-                    Scene::MeshTools => {
-                        mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
-                    }
-                    Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
-                    Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
-                    Scene::Cable => cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color),
-                    Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
-                    Scene::Jelly => jelly_pane(
-                        ui,
-                        &mut pane_states.jelly,
-                        &mut sim,
-                        &mut pending,
-                        accent_color,
-                    ),
-                    Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
-                    Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
-                    Scene::ClothBending => {
-                        cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
-                    }
-                    Scene::ClothRollers => cloth_rollers_pane(ui, &mut warp_states.cloth_rollers),
-                    Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
-                    Scene::CableBundleHysteresis => {
-                        cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
-                    }
-                    Scene::MpmSnowBall => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::MpmTwoWay => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
-                    Scene::MpmMultiMaterial => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::MpmBeamTwist => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::CartPole => cartpole_pane(ui, &mut pane_states.cartpole, accent_color),
-                    Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
-                    Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
-                    Scene::DiffBall => diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color),
-                    Scene::DiffSpring => {
-                        diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
-                    }
-                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
-                    Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
-                    Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
-                    Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
-                    Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
-                    Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
-                    Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
-                    Scene::FemDiffBeam => fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam),
-                    Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
-                    Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
-                    Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
-                    Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
-                    Scene::WarpMeshIntersect => {
-                        warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
-                    }
-                    Scene::WarpSampleMesh => {
-                        warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
-                    }
-                    Scene::WarpMarchingCubes => {
-                        warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
-                    }
-                    Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
-                    Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
-                    Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
-                    Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
-                    Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
-                    Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
-                    Scene::WarpTileNbody => warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody),
-                    Scene::WarpTileCholesky => {
-                        warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
-                    }
-                    Scene::WarpParticleRepulsion => {
-                        warp_repulsion_pane(ui, &mut warp_states.repulsion)
-                    }
-                    Scene::WarpFemDiffusion => {
-                        warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
-                    }
-                    Scene::WarpFemDiffusion3D => {
-                        warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
-                    }
-                    Scene::WarpFemConvDiff => {
-                        warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
-                    }
-                    Scene::WarpFemConvDiffDg => {
-                        warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
-                    }
-                    Scene::WarpFemTaylorGreen => {
-                        warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
-                    }
-                    Scene::WarpFemKelvinHelmholtz => warp_fem_kh_pane(ui, &mut warp_states.fem_kh),
-                    Scene::WarpFemStreamlines => {
-                        warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
-                    }
-                    Scene::WarpFemStokesTransfer => {
-                        warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
-                    }
-                    Scene::WarpFemDeformedGeometry => {
-                        warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
-                    }
-                    Scene::WarpFemDistortion => {
-                        warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
-                    }
-                    Scene::WarpFemElasticOpt => {
-                        warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
-                    }
-                    Scene::WarpFemMixedElasticity => {
-                        warp_fem_mixed_elasticity_pane(ui, &mut warp_states.fem_mixed_elasticity)
-                    }
-                    Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
-                        ui,
-                        &mut warp_states.fem_nonconforming_contact,
-                    ),
-                    Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
-                    Scene::WarpDistortion3D => {
-                        warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
-                    }
-                    Scene::WarpApicFluid => warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid),
-                    Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
-                    Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
-                    Scene::WarpTileFilter => {
-                        warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
-                    }
-                    Scene::WarpTileCompaction => {
-                        warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
-                    }
-                    Scene::AdamLandscape => {
-                        adam_landscape_pane(ui, &mut warp_states.adam_landscape)
-                    }
-                    Scene::WarpTileMatmul => {
-                        warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
-                    }
-                    Scene::WarpTileConvolution => {
-                        warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
-                    }
-                    Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
-                    Scene::ImplicitMpmBingham => {
-                        implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
-                    }
-                    Scene::WarpStableFluid => {
-                        warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
-                    }
-                    Scene::JellyDampingFall => {
-                        jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
-                    }
-                    Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
-                    Scene::ShallowWaterDamBreak => {
-                        swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
-                    }
-                    Scene::ImplicitMpmFull27 => {
-                        implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
-                    }
-                    Scene::SplatPoseRecovery => {
-                        splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
-                    }
-                    Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
-                    Scene::Magnetostatics => {
-                        magnetostatics_pane(ui, &mut warp_states.magnetostatics)
-                    }
-                    Scene::ClothPokerCards => {
-                        cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
-                    }
-                    Scene::SoftbodyHanging => {
-                        softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
-                    }
-                    Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
-                    Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
-                    Scene::IkCubeStacking => {
-                        ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
-                    }
-                    Scene::DiffsimDrone => diffsim_drone_pane(ui, &mut warp_states.diffsim_drone),
-                    Scene::FluidCheckpointOptimization => {
-                        fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
-                    }
-                    Scene::NavierStokesPerturbationOptimization => {
-                        ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
-                    }
-                    Scene::WarpFftPoisson2d => {
-                        warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
-                    }
-                    _ => {}
                 });
         }
     }
+}
+
+fn scene_description_pane(ui: &mut egui::Ui, scene: Scene, state: &mut SceneDescriptionPaneState) {
+    // Master toggle for the whole description block. No `ui.horizontal`
+    // and no inline slogan: a horizontal row grows to the combined
+    // intrinsic width of its children, so a non-wrapping string next
+    // to the button used to stretch the right-rail pane past its
+    // anchor and clip everything.
+    let label = if state.visible {
+        "Hide description"
+    } else {
+        "Show description"
+    };
+    if ui.button(label).clicked() {
+        state.visible = !state.visible;
+    }
+
+    if state.visible {
+        // The per-scene description lives inside a collapsing section
+        // — its header is a button directly under the toggle. Click
+        // to fold/unfold; defaults open so the text shows straight
+        // away. The body is a `Label::wrap()` so it reflows to the
+        // pane width and renders multi-line instead of clipping.
+        egui::CollapsingHeader::new("Expected behavior")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(scene.description()).wrap());
+            });
+    }
+    ui.separator();
 }
 
 /// Right-rail pane for the Stage-13 shapes demo. Lists the
@@ -18303,9 +18681,9 @@ fn warp_icosphere_trimesh(r: f64) -> mp::TriMesh {
     m
 }
 
-/// Warp Mesh Intersect scene — two cube TriMeshes overlapping; we
-/// sample a few transforms per frame and report the GJK distance /
-/// overlap fraction in the pane.
+/// Warp Mesh Intersect scene — two axis-aligned cube TriMeshes that
+/// translate toward/away from each other; the pane reports the
+/// centre-gap distance and an INTERSECTING/separate status.
 fn build_warp_mesh_intersect_model() -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
     let mut visuals = Vec::new();
@@ -18831,8 +19209,8 @@ fn warp_mesh_intersect_pane(ui: &mut egui::Ui, st: &mut WarpMeshIntersectState) 
     );
     ui.label("Spin rate");
     let _ = ui.add(egui::Slider::new(&mut st.spin_rate, 0.05..=2.0));
-    ui.small("Two cube TriMeshes orbit each other; overlap monitored");
-    ui.small("via centre-distance (intersection check is GJK-equivalent).");
+    ui.small("Two axis-aligned cube TriMeshes translate toward/away from");
+    ui.small("each other; overlap is the centre-gap test (touch at gap 1.0).");
 }
 
 // ── Scene 56: WarpSampleMesh ──────────────────────────────────────
@@ -19439,7 +19817,19 @@ fn update_warp_tile_nbody(time: Res<Time>, sim: Res<Sim>, mut warp: ResMut<WarpE
                 phi.cos(),
             );
             st.pos.push(p);
-            st.vel.push(Vec3::ZERO);
+        }
+        // Seed a coherent tangential velocity — solid-body rotation
+        // about the +Y axis through the cloud centre — so the system
+        // forms a rotating N-body cloud instead of collapsing straight
+        // to a point under its own gravity. The Warp reference
+        // (example_tile_nbody.py) likewise gives each body an initial
+        // `v_scale * cross(pos, axis)`. `omega ~ sqrt(G·N)` keeps the
+        // seed near orbital speed as the G / N sliders change.
+        let center = Vec3::new(0.0, 1.0, 0.0);
+        let omega = 0.45 * (st.g * n as f32).sqrt();
+        for idx in 0..n {
+            let r = st.pos[idx] - center;
+            st.vel.push(omega * Vec3::new(r.z, 0.0, -r.x));
         }
         st.user_reset = false;
     }
@@ -19897,6 +20287,9 @@ struct WarpFemDiffusion3DState {
     top: Vec<u32>,
     u: Vec<f64>,
     alpha: f64,
+    /// Diffusivity the `stiff` matrix was last assembled with; the
+    /// stiffness is rebuilt when the `alpha` slider moves off it.
+    last_alpha: f64,
     dt: f64,
     sim_t: f64,
     user_reset: bool,
@@ -19930,6 +20323,7 @@ impl Default for WarpFemDiffusion3DState {
             bottom,
             top,
             alpha: 1.0,
+            last_alpha: 1.0,
             dt: 0.02,
             sim_t: 0.0,
             user_reset: false,
@@ -19951,6 +20345,17 @@ fn update_warp_fem_diffusion_3d(
         st.u = vec![0.0; st.mesh.vert_count()];
         st.sim_t = 0.0;
         st.user_reset = false;
+    }
+    // Rebuild the stiffness matrix when the diffusivity slider moves —
+    // `compute_element_stiffness` bakes α in, so a stale matrix would
+    // leave the α slider inert (it was assembled once at α = 1.0).
+    if (st.alpha - st.last_alpha).abs() > 1e-12 {
+        let space = fem::FunctionSpace::P1Nodal;
+        st.stiff = fem::assemble_global(&st.mesh, space, |c, v| {
+            fem::compute_element_stiffness(c, v, st.alpha)
+        })
+        .expect("warp diff3d rebuild");
+        st.last_alpha = st.alpha;
     }
     if run.paused {
         return;
@@ -20556,10 +20961,12 @@ impl Default for WarpFemKhState {
     }
 }
 
-/// Build the static BC list: pin **only** the left + right walls (the
-/// shear flow direction). Top + bottom are open / shear-conserving in
-/// this surrogate (we approximate "periodic-y" via no-pin and rely on
-/// the natural Neumann condition the discretisation gives).
+/// Build the static BC list. All four walls are pinned to the imposed
+/// shear profile `u = ±0.5` (sign chosen by `y > 0.5`): the left/right
+/// walls set the inflow/outflow shear and the top/bottom walls hold a
+/// matching no-slip velocity that keeps the shear layer in the
+/// interior. P2 mid-edge nodes on the boundary get the same imposed
+/// velocity; vertex 0 anchors the pressure null-space.
 fn kh_bcs(mesh: &fem::FemMesh, th: &fem::MixedTaylorHood) -> Vec<fem::StokesBc> {
     let mut bcs: Vec<fem::StokesBc> = Vec::new();
     let target_u = |y: f64| if y > 0.5 { 0.5_f64 } else { -0.5_f64 };
@@ -21817,7 +22224,10 @@ fn warp_fft_fluid_pane(ui: &mut egui::Ui, st: &mut WarpFftFluidState) {
     ui.separator();
     readout(ui, "t", &format!("{:.3} s", st.sim_t));
     ui.label("Viscosity ν");
-    let _ = ui.add(egui::Slider::new(&mut st.viscosity, 0.001..=0.5).logarithmic(true));
+    // Explicit forward-Euler diffusion is stable only while
+    // ν·dt/dx² ≤ 0.25; with dx = 1/16 and dt = 0.002 that caps ν at
+    // ~0.49, so the slider stops at 0.4 to keep a stability margin.
+    let _ = ui.add(egui::Slider::new(&mut st.viscosity, 0.001..=0.4).logarithmic(true));
     if ui.button("Reset (Taylor-Green IC)").clicked() {
         st.needs_reset = true;
     }
@@ -25507,8 +25917,8 @@ fn diffsim_drone_pane(ui: &mut egui::Ui, st: &mut DiffsimDroneState) {
     ui.small(
         "Open-loop control sequence over a point-mass quadrotor. \
          The full Featherstone quadrotor has no autograd path in scope, \
-         so gradients come from central finite differences (2 · 3 · H \
-         forward rollouts per Adam step).",
+         so gradients are the analytic closed-form ∂L/∂u of the damped \
+         point-mass rollout (validated against finite differences in tests).",
     );
 }
 
@@ -25767,7 +26177,7 @@ impl Default for NsPerturbationState {
     fn default() -> Self {
         Self {
             amp: 0.05,
-            target_response: 0.38,
+            target_response: 0.40,
             lr: 1.2,
             response: 0.0,
             loss: f64::INFINITY,
@@ -25808,7 +26218,13 @@ fn ns_perturbation_rollout(amp: f64, n: usize) -> Vec<f64> {
                 let up = old[((j + 1) % n) * n + i];
                 let down = old[((j + n - 1) % n) * n + i];
                 let lap = left + right + up + down - 4.0 * old[idx];
-                field[idx] = 0.992 * old[idx] + 0.035 * lap + amp * decay * pattern[idx] * 0.01;
+                // Source coupling 0.13: the response is linear in
+                // `amp`, so `unit = response(amp=1)` is set by this
+                // factor. It was 0.01, giving `unit ≈ 0.022` — with
+                // `amp` clamped to ±5 the reachable response saturated
+                // near 0.11, far below the slider's target range, and
+                // the optimiser plateaued without ever converging.
+                field[idx] = 0.992 * old[idx] + 0.035 * lap + amp * decay * pattern[idx] * 0.13;
             }
         }
     }
@@ -25831,8 +26247,11 @@ fn ns_perturbation_loss_and_gradient(amp: f64, target_response: f64) -> (f64, f6
     let response = ns_perturbation_response(&field);
     let unit = ns_perturbation_response(&ns_perturbation_rollout(1.0, NS_PERT_N));
     let err = response - target_response;
-    let loss = 0.5 * err * err + 0.002 * amp * amp;
-    let grad = err * unit + 0.004 * amp;
+    // Light L2 regularisation on `amp`. Kept small relative to `unit²`
+    // so the regularised optimum still reaches the target response
+    // rather than being pulled short by the penalty.
+    let loss = 0.5 * err * err + 0.001 * amp * amp;
+    let grad = err * unit + 0.002 * amp;
     (loss, grad, response)
 }
 
@@ -25910,7 +26329,7 @@ fn ns_perturbation_pane(ui: &mut egui::Ui, st: &mut NsPerturbationState) {
     readout(ui, "Loss", &format!("{:.3e}", st.loss));
     readout(ui, "Iterations", &format!("{}", st.iterations));
     let changed_target = ui
-        .add(egui::Slider::new(&mut st.target_response, -0.2..=0.8).text("target response"))
+        .add(egui::Slider::new(&mut st.target_response, -0.6..=0.6).text("target response"))
         .changed();
     let changed_lr = ui
         .add(egui::Slider::new(&mut st.lr, 0.1..=4.0).text("learning rate"))
@@ -26553,8 +26972,8 @@ fn warp_stable_fluid_pane(ui: &mut egui::Ui, st: &mut WarpStableFluidState) {
 // Four identical jelly tet cubes dropped from a height onto the ground,
 // each colour-mapped to a target damping value (0.1, 0.5, 1.0, 2.0
 // 1/s). Same VBD Neo-Hookean material parameters; the global linear
-// damping is set to the median of the sweep — per-block damping needs
-// a per-particle slot (Stage 41 v2 follow-up) so this scene is the
+// damping is set to 0.5/s (the second-lowest swept value) — per-block
+// damping needs a per-particle slot (Stage 41 v2 follow-up) so this scene is the
 // pedagogical "what the sweep should look like" while we wait for
 // that slot to land.
 
@@ -26761,8 +27180,8 @@ fn jelly_damping_fall_pane(ui: &mut egui::Ui, st: &mut JellyDampingFallState) {
     }
     ui.separator();
     ui.small(
-        "Global damping is set to the median (0.5/s); per-block damping \
-         would need a per-particle slot (Stage 41 v2). The colour ramp \
+        "Global damping is set to 0.5/s (one value from the sweep); per-block \
+         damping would need a per-particle slot (Stage 41 v2). The colour ramp \
          (blue→red) still indicates the target damping value for each \
          block — useful for spotting which one is which while watching \
          the fall.",
@@ -27722,10 +28141,10 @@ fn splat_pose_recovery_pane(ui: &mut egui::Ui, st: &mut SplatPoseRecoveryState) 
     }
     ui.small(
         "Left thumbnail = target view; right = current view; gold curve \
-         = loss history. The host-side path uses central FD on the \
-         6-vector pose and `composite_rgb_cpu`. The GPU/release path \
-         (Stage 44 v2 in molla) uses analytic adjoints + Adam — see \
-         `splat_pose_recovery.rs` integration test.",
+         = loss history. The host-side path uses a forward-difference \
+         gradient on the 6-vector pose and `composite_rgb_cpu`. The \
+         GPU/release path (Stage 44 v2 in molla) uses analytic adjoints \
+         + Adam — see `splat_pose_recovery.rs` integration test.",
     );
 }
 
@@ -28125,7 +28544,9 @@ fn magnetostatics_pane(ui: &mut egui::Ui, st: &mut MagnetostaticsState) {
     ui.label("Stage 46 — magnetostatics (current loop, Ned-0)");
     ui.separator();
     readout(ui, "Mesh", &format!("{0}×{0}×{0} tets", MAG_GRID));
-    readout(ui, "DoF", &format!("{}", st.cell_bz.len()));
+    // `cell_bz` is one summed |A| sample per tet — this is the cell
+    // count, not the Nédélec edge-DoF count of the linear system.
+    readout(ui, "Cells", &format!("{}", st.cell_bz.len()));
     readout(ui, "CG residual", &format!("{:.2e}", st.last_residual));
     readout(ui, "CG iters", &format!("{}", st.last_iters));
     readout(ui, "Solve", &format!("{:.2} ms", st.last_solve_ms));
@@ -28217,6 +28638,23 @@ mod tests {
         for scene in Scene::ALL {
             let label = scene.label();
             assert!(seen.insert(label), "duplicate scene label: {label}");
+        }
+    }
+
+    #[test]
+    fn all_viewer_scenes_have_descriptions() {
+        for scene in Scene::ALL {
+            let description = scene.description().trim();
+            assert!(
+                description.len() >= 80,
+                "{}: description is missing or too short",
+                scene.label()
+            );
+            assert!(
+                !description.contains("TODO"),
+                "{}: description still has placeholder text",
+                scene.label()
+            );
         }
     }
 
@@ -28595,6 +29033,34 @@ mod tests {
         assert!(
             (mixed[2] - mixed[3]).abs() > 1.0e-3,
             "roll correction should split +Z/-Z rotor thrusts"
+        );
+
+        // The attitude loop must produce a *restoring* torque: the net
+        // torque from the four +Y rotor forces has to point along the
+        // tilt error `body_y × world_y` so the frame rotates back to
+        // level. A sign error in the roll/pitch mixer makes this an
+        // anti-restoring torque (positive feedback → tumble).
+        let l = QUAD_ARM;
+        // Rotor lever arms: 0=+X, 1=-X, 2=+Z, 3=-Z.
+        let rotor_pos = [
+            MVec3::new(l, 0.0, 0.0),
+            MVec3::new(-l, 0.0, 0.0),
+            MVec3::new(0.0, 0.0, l),
+            MVec3::new(0.0, 0.0, -l),
+        ];
+        let mut torque = MVec3::ZERO;
+        for (p, &f) in rotor_pos.iter().zip(mixed.iter()) {
+            torque += p.cross(MVec3::new(0.0, f, 0.0));
+        }
+        let tilt = tilted_up.cross(MVec3::Y);
+        assert!(
+            torque.dot(tilt) > 1.0e-6,
+            "attitude torque must oppose the tilt (restoring); got torque={torque:?} tilt={tilt:?}"
+        );
+        assert!(
+            torque.x * tilt.x > 0.0 && torque.z * tilt.z > 0.0,
+            "roll (X) and pitch (Z) torques must each be restoring; \
+             torque={torque:?} tilt={tilt:?}"
         );
     }
 

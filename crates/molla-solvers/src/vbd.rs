@@ -670,17 +670,25 @@ impl Solver for VbdSolver {
                 // (Scene::FastSoftImpact) drive the CPU path.
                 self.last_ccd_invocations = 0;
                 self.last_ccd_snaps = 0;
-                // Single substep — straight kernel dispatch. Multi-
-                // substep ping-pong is implemented by dispatching N
-                // times with a chain of state_in → state_out swaps
-                // entirely on the device side.
+                // The GPU backend runs a SINGLE VBD substep per step,
+                // advancing the full `dt` (VBD is an implicit-energy
+                // minimiser, stable at large dt given enough inner
+                // iterations). It cannot honour `self.substeps > 1`:
+                // a device-side substep loop would need to ping-pong
+                // through `state_in`, but `state_in` is an immutable
+                // borrow here. Passing `dt` (not `dt / substeps`)
+                // keeps the GPU path advancing real-time — an earlier
+                // version passed `dt_sub` and ran the sim at
+                // 1/substeps speed. Callers that need multi-substep
+                // accuracy on the GPU must drive the substep loop
+                // externally. `dt_sub` is still used by the CPU arm.
                 gpu.kernel.dispatch(
                     &device,
                     &queue,
                     model,
                     state_in,
                     state_out,
-                    dt_sub,
+                    dt,
                     self.iterations as u32,
                     contact_k,
                     hard,

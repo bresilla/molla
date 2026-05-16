@@ -303,19 +303,22 @@ impl SpatialMatrix6 {
     /// is the 3×3 inertia tensor at COM, expressed in world axes.
     ///
     /// ```text
-    ///        [ m·I_3                     m·skew(c)         ]
-    /// I_s =  [                                               ]
-    ///        [ m·skew(c)^T   I_C - m·skew(c)·skew(c)         ]
+    ///        [ m·I_3        -m·skew(c)               ]
+    /// I_s =  [                                        ]
+    ///        [ m·skew(c)     I_C - m·skew(c)·skew(c)  ]
     /// ```
     /// matching Featherstone (2008) eq. (2.63) for spatial inertia
-    /// about an arbitrary point with `[v; w]` ordering.
+    /// about an arbitrary point with `[v; w]` ordering: spatial
+    /// momentum `h = I_s·[v; w]` gives `h_lin = m·v − m·skew(c)·w`
+    /// and `h_ang = m·skew(c)·v + (I_C − m·skew(c)²)·w`. Matches the
+    /// verified `spatial_inertia_at_world_origin` in CRBA/RNEA.
     #[must_use]
     pub fn from_body(mass: Real, com: Vec3, inertia_world: Mat3) -> Self {
         // Build skew(c).
         let s = skew3(com);
-        // Top-left 3×3: m·I_3
-        // Top-right 3×3: m·skew(c)
-        // Bottom-left 3×3: -m·skew(c) (skew is antisymmetric → skew(c)^T = -skew(c))
+        // Top-left 3×3:     m·I_3
+        // Top-right 3×3:    -m·skew(c)   (h_lin = m·v − m·skew(c)·w)
+        // Bottom-left 3×3:  +m·skew(c)   (h_ang = m·skew(c)·v + …)
         // Bottom-right 3×3: I_C - m·skew(c)·skew(c)
         let s2 = mat3_mul(&s, &s);
         let mut m_out = [[0.0; 6]; 6];
@@ -323,16 +326,16 @@ impl SpatialMatrix6 {
         for i in 0..3 {
             m_out[i][i] = mass;
         }
-        // Top-right: m · skew(c)
+        // Top-right: -m · skew(c)
         for i in 0..3 {
             for j in 0..3 {
-                m_out[i][3 + j] = mass * s[i][j];
+                m_out[i][3 + j] = -mass * s[i][j];
             }
         }
-        // Bottom-left: -m · skew(c)  (because skew is antisymmetric, transpose = negate)
+        // Bottom-left: +m · skew(c)
         for i in 0..3 {
             for j in 0..3 {
-                m_out[3 + i][j] = -mass * s[i][j];
+                m_out[3 + i][j] = mass * s[i][j];
             }
         }
         // Bottom-right: I_C - m·skew(c)·skew(c)

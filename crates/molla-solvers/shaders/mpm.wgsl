@@ -425,12 +425,18 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lam = u.youngs * u.poisson / ((1.0 + u.poisson) * (1.0 - 2.0 * u.poisson));
     // Hardening — sand stiffens with accumulated plastic strain
     // (Klár 2016). p_jp tracks Σ‖dγ‖ ≥ 0; multiplier = exp(h0 * jp)
-    // with h0 = 1 for sand. Snow uses Stomakhin 2013 §6.2 form:
-    // multiplier = exp(snow_hardening * jp_snow) where jp_snow tracks
-    // log(det Fp) and is signed.
-    var h: f32;
+    // with h0 = 1 for sand. Snow uses Stomakhin 2013 §6.2: the
+    // material must STIFFEN under plastic compaction. `jp` tracks
+    // `log(det Fp)`, which is negative under compaction, so the
+    // multiplier is `exp(-snow_hardening * jp)` — for small strain
+    // this is `≈ exp(snow_hardening * (1 - Jp))`, Stomakhin's form.
+    // A `+` sign here softens compacted snow, which is backwards.
+    // Default 1.0 (no elastic hardening) — the Viscous rheology
+    // (`u.rheology == 2u`) takes neither branch below, and a `var`
+    // left unset would feed garbage into `mu_h`/`lam_h` → NaN stress.
+    var h: f32 = 1.0;
     if (u.rheology == 1u) {
-        h = exp(u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
+        h = exp(-u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
     } else if (u.rheology == 0u) {
         h = exp(min(p_jp[pid], 5.0));
     }
@@ -662,9 +668,15 @@ fn p2g_two_pass(
 
         let mu = u.youngs / (2.0 * (1.0 + u.poisson));
         let lam = u.youngs * u.poisson / ((1.0 + u.poisson) * (1.0 - 2.0 * u.poisson));
-        var h: f32;
+        // Default 1.0 (no elastic hardening) — Viscous rheology
+        // (`u.rheology == 2u`) takes neither branch; an unset `var`
+        // would feed garbage into `mu_h`/`lam_h` → NaN stress.
+        var h: f32 = 1.0;
         if (u.rheology == 1u) {
-            h = exp(u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
+            // Snow stiffens under compaction; `jp = log(det Fp)` is
+            // negative there, so the exponent sign is negative (see
+            // the p2g pass above for the Stomakhin §6.2 rationale).
+            h = exp(-u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
         } else if (u.rheology == 0u) {
             h = exp(min(p_jp[pid], 5.0));
         }
@@ -1261,8 +1273,8 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let det_f_old = max(s.x * s.y * s.z, 1.0e-6);
         let det_f_new = max(new_s.x * new_s.y * new_s.z, 1.0e-6);
         let dlog = log(det_f_old) - log(det_f_new);
-        // jp tracks log(det Fp); p2g reads exp(snow_hardening * jp)
-        // (set up host-side via the hardening exponent).
+        // jp tracks log(det Fp) (negative under compaction); p2g
+        // reads exp(-snow_hardening * jp) so compacted snow stiffens.
         jp_replace = true;
         jp_new = clamp(p_jp[pid] + dlog, -5.0, 5.0);
     } else if (u.rheology == 2u) {

@@ -160,12 +160,16 @@ fn smat6_from_body(mass: f32, com: vec3<f32>, i_world: mat3x3<f32>) -> array<f32
         vec3<f32>(com.y, -com.x, 0.0),
     );
     let s2 = sx * sx;
-    m[3u]  = mass * sx[0][0]; m[4u]  = mass * sx[1][0]; m[5u]  = mass * sx[2][0];
-    m[9u]  = mass * sx[0][1]; m[10u] = mass * sx[1][1]; m[11u] = mass * sx[2][1];
-    m[15u] = mass * sx[0][2]; m[16u] = mass * sx[1][2]; m[17u] = mass * sx[2][2];
-    m[18u] = -mass * sx[0][0]; m[19u] = -mass * sx[1][0]; m[20u] = -mass * sx[2][0];
-    m[24u] = -mass * sx[0][1]; m[25u] = -mass * sx[1][1]; m[26u] = -mass * sx[2][1];
-    m[30u] = -mass * sx[0][2]; m[31u] = -mass * sx[1][2]; m[32u] = -mass * sx[2][2];
+    // Spatial inertia about the world origin, [v; w] ordering:
+    // top-right = -m·skew(c), bottom-left = +m·skew(c). The opposite
+    // sign models a body whose COM is at -c and makes the solver
+    // origin-dependent (mirrors the CPU `SpatialMatrix6::from_body`).
+    m[3u]  = -mass * sx[0][0]; m[4u]  = -mass * sx[1][0]; m[5u]  = -mass * sx[2][0];
+    m[9u]  = -mass * sx[0][1]; m[10u] = -mass * sx[1][1]; m[11u] = -mass * sx[2][1];
+    m[15u] = -mass * sx[0][2]; m[16u] = -mass * sx[1][2]; m[17u] = -mass * sx[2][2];
+    m[18u] = mass * sx[0][0]; m[19u] = mass * sx[1][0]; m[20u] = mass * sx[2][0];
+    m[24u] = mass * sx[0][1]; m[25u] = mass * sx[1][1]; m[26u] = mass * sx[2][1];
+    m[30u] = mass * sx[0][2]; m[31u] = mass * sx[1][2]; m[32u] = mass * sx[2][2];
     m[21u] = i_world[0][0] - mass * s2[0][0];
     m[22u] = i_world[1][0] - mass * s2[1][0];
     m[23u] = i_world[2][0] - mass * s2[2][0];
@@ -390,8 +394,13 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let after = transform_compose(xpw, local);
         body_q[child] = transform_compose(after, xc_inv);
 
-        // Motion subspace columns in joint world frame.
+        // Motion subspace columns in joint world frame, referenced at
+        // the WORLD ORIGIN. A unit rotation `w` about an axis through
+        // the joint origin `p_jw` gives spatial velocity (w×(-p); w);
+        // the linear moment-arm term is mandatory or the solver
+        // becomes origin-dependent (mirrors CPU build_motion_subspace).
         let r_jw = xpw.rotation;
+        let p_jw = xpw.position.xyz;
         let ex = quat_rotate(r_jw, vec3<f32>(1.0, 0.0, 0.0));
         let ey = quat_rotate(r_jw, vec3<f32>(0.0, 1.0, 0.0));
         let ez = quat_rotate(r_jw, vec3<f32>(0.0, 0.0, 1.0));
@@ -406,7 +415,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         var n_dof = 0u;
         if (jt == JOINT_REVOLUTE) {
             let axis_w = normalize(quat_rotate(r_jw, axis_l));
-            s_lin[k][0u] = vec3<f32>(0.0);
+            s_lin[k][0u] = cross(axis_w, -p_jw);
             s_ang[k][0u] = axis_w;
             dof_active_arr[k][0u] = 1u;
             n_dof = 1u;
@@ -417,17 +426,17 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             dof_active_arr[k][0u] = 1u;
             n_dof = 1u;
         } else if (jt == JOINT_BALL) {
-            s_ang[k][0u] = ex; dof_active_arr[k][0u] = 1u;
-            s_ang[k][1u] = ey; dof_active_arr[k][1u] = 1u;
-            s_ang[k][2u] = ez; dof_active_arr[k][2u] = 1u;
+            s_lin[k][0u] = cross(ex, -p_jw); s_ang[k][0u] = ex; dof_active_arr[k][0u] = 1u;
+            s_lin[k][1u] = cross(ey, -p_jw); s_ang[k][1u] = ey; dof_active_arr[k][1u] = 1u;
+            s_lin[k][2u] = cross(ez, -p_jw); s_ang[k][2u] = ez; dof_active_arr[k][2u] = 1u;
             n_dof = 3u;
         } else if (jt == JOINT_FREE || jt == JOINT_DISTANCE) {
             s_lin[k][0u] = ex; dof_active_arr[k][0u] = 1u;
             s_lin[k][1u] = ey; dof_active_arr[k][1u] = 1u;
             s_lin[k][2u] = ez; dof_active_arr[k][2u] = 1u;
-            s_ang[k][3u] = ex; dof_active_arr[k][3u] = 1u;
-            s_ang[k][4u] = ey; dof_active_arr[k][4u] = 1u;
-            s_ang[k][5u] = ez; dof_active_arr[k][5u] = 1u;
+            s_lin[k][3u] = cross(ex, -p_jw); s_ang[k][3u] = ex; dof_active_arr[k][3u] = 1u;
+            s_lin[k][4u] = cross(ey, -p_jw); s_ang[k][4u] = ey; dof_active_arr[k][4u] = 1u;
+            s_lin[k][5u] = cross(ez, -p_jw); s_ang[k][5u] = ez; dof_active_arr[k][5u] = 1u;
             n_dof = 6u;
         } else if (jt == JOINT_D6) {
             // Lock-aware: lower==upper (finite) = locked.
@@ -445,6 +454,8 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 else if (d == 3u) { v_a = ex; }
                 else if (d == 4u) { v_a = ey; }
                 else { v_a = ez; }
+                // Angular DOFs (d >= 3) need the world-origin moment arm.
+                if (d >= 3u) { v_l = cross(v_a, -p_jw); }
                 if (!locked) {
                     s_lin[k][d] = v_l;
                     s_ang[k][d] = v_a;
@@ -457,7 +468,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             // joint-world +z, bend about joint-world +x. Mirrors the
             // CPU build_motion_subspace impl.
             s_lin[k][0u] = ez; dof_active_arr[k][0u] = 1u;
-            s_ang[k][1u] = ex; dof_active_arr[k][1u] = 1u;
+            s_lin[k][1u] = cross(ex, -p_jw); s_ang[k][1u] = ex; dof_active_arr[k][1u] = 1u;
             n_dof = 2u;
         }
         n_dof_arr[k] = n_dof;
