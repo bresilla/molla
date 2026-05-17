@@ -107,10 +107,12 @@ fn muscle_force(
     if (!(f_max > 0.0)) { return 0.0; }
     if (!(l_opt > 0.0)) { return 0.0; }
 
-    // Degenerate v_max ⇒ isometric, rigid-tendon.
+    // Degenerate v_max ⇒ isometric, rigid-tendon. Apply the pennation
+    // cos(α) projection, matching the non-degenerate rigid path below
+    // and the CPU `Muscle::torque`.
     if (!(v_max > 0.0)) {
         let l_norm0 = 1.0 + q_local / l_opt;
-        return pol * (-a_c) * f_max * force_length(l_norm0);
+        return pol * (-a_c) * f_max * force_length(l_norm0) * cos(pennation_angle);
     }
 
     // Rigid-tendon fast path.

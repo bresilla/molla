@@ -13,10 +13,10 @@
 //! - `max_depth`    — largest penetration depth across the body's
 //!                    contacts.
 //! - `normal_sum`   — Σ (sign × normal) summed over the body's
-//!                    contacts. The sign is flipped when the body is
-//!                    the b-side of a contact, so the result points
-//!                    along the net contact-force direction acting on
-//!                    *this* body.
+//!                    contacts. molla's contact normal points a→b, so
+//!                    the sign is flipped when the body is the a-side
+//!                    of a contact; the result then points along the
+//!                    net contact-force direction acting on *this* body.
 //! - `centroid`     — mean contact point in world frame.
 //!
 //! What it does **not** measure: actual contact forces / impulses.
@@ -40,9 +40,9 @@ pub struct BodyContactReading {
     /// Largest penetration depth across the body's contacts (m).
     /// Zero when the body has no contacts.
     pub max_depth: Real,
-    /// Sum of contact normals, sign-flipped on the body's b-side of
-    /// each contact, so it points along the net push direction.
-    /// Zero-vector when the body has no contacts.
+    /// Sum of contact normals, sign-flipped on the body's a-side of
+    /// each contact (the normal points a→b), so it points along the
+    /// net push direction. Zero-vector when the body has no contacts.
     pub normal_sum: Vec3,
     /// Mean contact point in world frame. Zero when no contacts.
     pub centroid: Vec3,

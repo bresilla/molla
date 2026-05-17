@@ -124,18 +124,24 @@ pub fn tendon_force(eps: Real, f_max: Real, stiffness_ratio: Real) -> Real {
     f_max * k * eps * eps
 }
 
-/// Slope `df_t/dl_t` (N/m) at strain `eps`. Used by the Newton solve
-/// inside `Muscle::torque`. Zero when the tendon is slack.
+/// Slope `df_t/dl_t` (N/m) at strain `eps`. Zero when the tendon is
+/// slack. `stiffness_ratio` is the per-muscle `E·A / f_max` and must
+/// match the value passed to [`tendon_force`], or this slope is
+/// inconsistent with the force it differentiates.
 #[inline]
 #[must_use]
-pub fn tendon_force_slope(eps: Real, f_max: Real, l_tendon_slack: Real) -> Real {
+pub fn tendon_force_slope(
+    eps: Real,
+    f_max: Real,
+    l_tendon_slack: Real,
+    stiffness_ratio: Real,
+) -> Real {
     if !eps.is_finite() || eps <= 0.0 || l_tendon_slack <= 0.0 {
         return 0.0;
     }
     // f_t = f_max · k · eps² with k = stiffness_ratio² / 4 ⇒
     //   df_t/dl_t = 2·f_max·k·eps · (1/l_t_slack)
-    // Default DEFAULT_TENDON_STIFFNESS_RATIO = 30 → k = 225.
-    let k = 0.25 * DEFAULT_TENDON_STIFFNESS_RATIO * DEFAULT_TENDON_STIFFNESS_RATIO;
+    let k = 0.25 * stiffness_ratio * stiffness_ratio;
     2.0 * f_max * k * eps / l_tendon_slack
 }
 
@@ -183,10 +189,14 @@ impl Muscle {
             self.config.v_max
         } else {
             // Degenerate v_max — treat as isometric, rigid tendon.
+            // The pennation `cos(α)` projects fibre force onto the
+            // tendon line; the non-degenerate rigid path below applies
+            // it too, so this branch must as well.
             return polarity
                 * -a
                 * self.config.f_max
-                * force_length(1.0 + q_local / self.config.l_opt);
+                * force_length(1.0 + q_local / self.config.l_opt)
+                * self.config.pennation_angle.cos();
         };
 
         // Rigid-tendon fast path: tendon doesn't deform, fibre length

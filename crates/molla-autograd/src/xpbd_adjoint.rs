@@ -238,14 +238,16 @@ pub fn xpbd_distance_step_grad(
             // 3. Adjoint through n itself (it scales `dλ`, which is a
             //    constant in this branch — we take dλ as fixed and
             //    differentiate wrt n):
-            //      d p_a'/d n = -wa · dλ · I
-            //      d p_b'/d n = +wb · dλ · I
-            //    ∂n/∂p_b = (I - n nᵀ)/len ; ∂n/∂p_a = -that
-            //    → vector contributions filtered through perp /len:
+            //      d p_a'/d n = -wa · dλ · I  ;  d p_b'/d n = +wb · dλ · I
+            //    so the adjoint of n is
+            //      g_n = -wa·dλ·g_a + wb·dλ·g_b.
+            //    ∂n/∂p_b = (I - n nᵀ)/len ; ∂n/∂p_a = -that, hence
+            //      g_from_n_a = -perp(g_n)/len ,  g_from_n_b = +perp(g_n)/len.
+            //    Expanding perp(g_n) with perp_g{a,b} = perp(g_{a,b})/len:
             let perp_ga = perp(g_a) / len;
             let perp_gb = perp(g_b) / len;
-            let g_from_n_a = -perp_ga * (wa * dlambda) - perp_gb * (wb * dlambda);
-            let g_from_n_b = perp_ga * (wa * dlambda) + perp_gb * (wb * dlambda);
+            let g_from_n_a = perp_ga * (wa * dlambda) - perp_gb * (wb * dlambda);
+            let g_from_n_b = -perp_ga * (wa * dlambda) + perp_gb * (wb * dlambda);
 
             // 4. Combine. The "identity" part (d p_a'/d p_a = I etc.)
             //    is already represented in g_a / g_b — we simply add
@@ -543,5 +545,83 @@ mod tests {
             grad_init[0].x,
             fd_x,
         );
+    }
+
+    /// Regression: the adjoint through the constraint normal `n` must be
+    /// correct for ASYMMETRIC inverse masses and an off-axis spring,
+    /// with BOTH endpoints seeded by gradients not parallel to `n`. An
+    /// earlier version had a flipped sign on the `perp(g_a)` term; that
+    /// bug is invisible to axis-aligned / single-endpoint-seeded tests
+    /// (the `perp(...)` projector kills the parallel component) and only
+    /// shows up in this configuration — exactly the case real cloth /
+    /// soft-body gradient graphs hit.
+    #[test]
+    fn constraint_normal_adjoint_matches_fd_asymmetric_offaxis() {
+        let p_init = vec![Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.8, 1.7, 0.4)];
+        let v_init = vec![Vec3::ZERO; 2];
+        let inv_mass = vec![2.5, 0.7]; // asymmetric → wa ≠ wb
+        let spring_a = vec![0_u32];
+        let spring_b = vec![1_u32];
+        let rest = vec![0.6];
+        let comp = vec![1e-6];
+        let g = Vec3::ZERO;
+        let dt = 0.01;
+        let iters = 3;
+
+        // Loss L = p_final[0].y + p_final[1].x — seeds both endpoints
+        // with gradients that are NOT parallel to the spring direction.
+        let grad_p_final = vec![Vec3::Y, Vec3::X];
+        let grad_init = distance_chain_grad_initial_pos(
+            &p_init,
+            &v_init,
+            &inv_mass,
+            &spring_a,
+            &spring_b,
+            &rest,
+            &comp,
+            g,
+            dt,
+            iters,
+            &grad_p_final,
+        );
+
+        let eps = 1e-6;
+        let loss = |p: &[Vec3]| -> Real {
+            let (pf, _, _) = xpbd_distance_step_with_grad(
+                p, &v_init, &inv_mass, &spring_a, &spring_b, &rest, &comp, g, dt, iters,
+            );
+            pf[0].y + pf[1].x
+        };
+        for idx in 0..2 {
+            for dim in 0..3 {
+                let mut pp = p_init.clone();
+                let mut pm = p_init.clone();
+                match dim {
+                    0 => {
+                        pp[idx].x += eps;
+                        pm[idx].x -= eps;
+                    }
+                    1 => {
+                        pp[idx].y += eps;
+                        pm[idx].y -= eps;
+                    }
+                    _ => {
+                        pp[idx].z += eps;
+                        pm[idx].z -= eps;
+                    }
+                }
+                let fd = (loss(&pp) - loss(&pm)) / (2.0 * eps);
+                let analytic = match dim {
+                    0 => grad_init[idx].x,
+                    1 => grad_init[idx].y,
+                    _ => grad_init[idx].z,
+                };
+                assert!(
+                    (analytic - fd).abs() < 1e-3,
+                    "constraint-normal adjoint mismatch at particle {idx} dim {dim}: \
+                     analytic={analytic} fd={fd}"
+                );
+            }
+        }
     }
 }

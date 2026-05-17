@@ -161,9 +161,16 @@ fn build_hierarchy(@builtin(global_invocation_id) gid: vec3<u32>) {
             nodes[parent_idx].aabb_max.w = bitcast<f32>(right_range);
         }
 
-        // Atomic acquire-release on parent's counter — the
-        // sequencing on this address makes prior writes to the
-        // parent visible to the second arrival.
+        // Rendezvous on the parent's arrival counter: the FIRST child
+        // to arrive returns; the SECOND continues climbing. NOTE: the
+        // second arrival then reads `nodes[parent]` range fields the
+        // first arrival wrote — possibly from another workgroup.
+        // WebGPU's memory model does NOT guarantee cross-workgroup
+        // visibility of those non-atomic writes via this atomic alone;
+        // correctness relies on the coherent memory that real GPU
+        // drivers provide (verified by `make test-broadphase-lbvh-gpu`).
+        // A strictly spec-compliant build would make the handed-off
+        // Node range/AABB fields `atomic<u32>`.
         let visited_idx = parent_idx - n;
         let prior = atomicAdd(&visited[visited_idx], 1u);
         if (prior == 0u) {

@@ -549,8 +549,17 @@ fn apply_vt_penalty(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dq_t_len = length(dq_t);
         if (dq_t_len > 1.0e-9) {
             let v_eps: f32 = 1.0e-3;
-            let coulomb_max = mu * abs(push);
             let dt_safe = max(u.dt, 1.0e-6);
+            // Static-friction support fallback — mirrors the CPU
+            // `vbd_soft_contact::project_vt_contacts`. A steady resting
+            // contact can have near-zero normal penetration push yet
+            // must still resist tangential body forces. Capping the
+            // friction correction only by `μ·|push|` lets a supported
+            // block creep under a load well below μ·mg; the support_cap
+            // floors the cap (in position units) so static friction
+            // can cancel the per-step tangential drift.
+            let support_cap = 20.0 * mu * 9.81 * dt_safe * dt_safe;
+            let coulomb_max = max(mu * abs(push), support_cap);
             let dahl = tanh(dq_t_len / (v_eps * dt_safe));
             let mag = min(dq_t_len * dahl, coulomb_max);
             let push_t = -(dq_t / dq_t_len) * mag;
