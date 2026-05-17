@@ -67,6 +67,10 @@ bevy = { version = "0.18", default-features = false, features = [
     "default_font",
     "zstd_rust",
     "ktx2",
+    # Both winit windowing backends compiled in. `wayland` opens a
+    # native Wayland surface; `x11` covers plain Xorg / XWayland. winit
+    # auto-prefers whichever `use display` (.envrc) wired up via
+    # $WAYLAND_DISPLAY / $DISPLAY.
     "x11",
     "wayland",
     "reflect_auto_register",
