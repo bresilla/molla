@@ -3,7 +3,7 @@
 The APIC (**A**ffine **P**article-**I**n-**C**ell) hybrid couples a
 Material-Point-Method (MPM) particle representation with an FEM
 mesh-side velocity update. It lives in
-`crates/molla/src/fem/apic_coupling.rs` (CPU, Stage 37.6) and
+`crates/molla-fem/src/apic_coupling.rs` (CPU, Stage 37.6) and
 `apic_coupling_gpu.rs` (GPU, Stage 41 v2). Particles transfer
 momentum to mesh nodes via APIC weights, the mesh solves the
 velocity-field step, and particles read the updated node velocities
@@ -90,8 +90,8 @@ For each substep `Δt`:
 
 ## Contract tests
 
-The CPU implementation ships three round-trip tests in
-`crates/molla/tests/`:
+The CPU implementation ships round-trip tests in
+`crates/molla-fem/tests/fem_apic.rs`:
 
 | Test                                | What it verifies                            |
 |-------------------------------------|---------------------------------------------|

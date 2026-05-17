@@ -1,6 +1,6 @@
 # Solvers overview
 
-molla ships **eight** time-integration solvers, all implementing the
+molla ships **seven** time-integration solvers, all implementing the
 common [`Solver`](https://docs.rs/molla/latest/molla/solvers/trait.Solver.html)
 trait so callers can swap integrators without rewiring the host loop:
 
@@ -33,8 +33,6 @@ The matrix below summarises coverage; chapters below dig into each.
 | [`MpmSimulation`](./mpm.md) (explicit) | one-way coupling | — | — | — | ✓ sand / snow | particle-grid floor | — | — | ✓ | — |
 | [`MpmSimulation`](./mpm_semi_implicit.md) (semi-implicit + two-way rigid) | ✓ two-way | — | — | — | ✓ sand / snow | particle-grid + spheres | — | — | ✓ | — |
 | [`ImplicitMpm`](./mpm_implicit.md) (Bingham) | ✓ two-way (v3+) | — | — | — | ✓ Bingham | particle-grid + spheres | — | ✓ | ✓ (v2+) | Stage 38.1 (CPU) |
-| [`MuJoCoSolver`](./mujoco.md)     | ✓ via MuJoCo | — | — | — | — | ✓ MuJoCo PADMM | ✓ all types | ✓ (CPU) | — | — |
-
 Legend: ✓ = supported, — = not applicable / out of scope.
 
 ## Picking a solver
@@ -45,8 +43,6 @@ Legend: ✓ = supported, — = not applicable / out of scope.
                     ├──── articulated, no contact ─────► Featherstone
                     │
  rigid    ──────────┤──── stacked / contact ──────────► XPBD (Jacobi)
-                    │
-                    └──── benchmark vs reference ─────► MuJoCo
  ───────────────────┤
                     ├──── cloth / soft membrane ──────► XPBD or VBD
                     │       (stiffness > 1e6: VBD)

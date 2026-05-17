@@ -16,8 +16,8 @@ Differentiability is the **CPU-acceptable exception** to molla's
 GPU-first rule. Tape recording fundamentally needs heap allocation
 and a dynamic graph structure that doesn't map onto wgpu's
 compute-pipeline-state model — Newton + Warp solve the same problem
-with Python + CUDA graphs, neither of which we have. We use Rust +
-CPU and accept the perf hit (orders of magnitude vs hand-written
+with dynamic host graphs. We use Rust + CPU and accept the perf hit
+(orders of magnitude vs hand-written
 adjoint kernels) in exchange for a working, testable autograd v1.
 
 Crucially, the `TapeOp` enum is engine-agnostic: a GPU port can
@@ -81,16 +81,15 @@ Stage 23.1 added three "Featherstone-sweep" chunks
 (`FeatherstoneFwdKinematics`, `FeatherstoneUpwardInertia`,
 `FeatherstoneDownwardAccel`) that *don't* dispatch through the
 generic backward — see [`Featherstone reverse adjoint`](./featherstone.md).
-The chunks are recorded so a future GPU port can iterate the tape
-and swap each sweep for its own kernel.
+The chunks are recorded so a future GPU port can iterate the tape and swap each
+sweep for its own kernel.
 
 ## Custom adjoints — `wp.func_grad` pattern
 
 Recording every elementary op into the tape is the **slow path**.
 For hot solver loops (XPBD constraint projection, Featherstone
-ABA), molla ships hand-written closed-form adjoints that bypass
-the tape entirely — the same trick Warp's `wp.func_grad` decorator
-gives Python users. These live in their own modules:
+ABA), molla ships hand-written closed-form adjoints that bypass the tape
+entirely. These live in their own modules:
 
 - [`xpbd_adjoint`](./xpbd_vbd.md) — manual reverse pass over the
   XPBD distance-constraint Gauss-Seidel loop.
@@ -109,8 +108,8 @@ but cleans up the heap for every recorded intermediate.
 
 ## Gradient checking
 
-The autograd tests in `crates/molla/tests/autograd_xpbd.rs` and
-`tests/autograd_featherstone.rs` exercise the hand-written gradients
+The autograd tests in `crates/molla-autograd/tests/autograd_xpbd.rs` and
+`crates/molla-autograd/tests/autograd_featherstone.rs` exercise the hand-written gradients
 against central-difference finite differences with tolerance `1e-3`
 (the standard `gradcheck` tolerance Warp ships).
 

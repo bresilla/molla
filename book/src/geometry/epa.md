@@ -11,7 +11,7 @@ Reference: van den Bergen, *Proximity Queries and Penetration
 Depth Computation on 3D Game Objects* (2001).
 
 CPU implementation: `crates/molla/src/geometry/epa.rs`.
-GPU port (Stage 15): `crates/molla/shaders/epa.wgsl`.
+GPU port (Stage 15): `crates/molla-geometry/shaders/epa.wgsl`.
 
 ## Public API
 

@@ -6,7 +6,7 @@ kernel is being tested.
 
 ## The recipe
 
-`crates/molla/tests/cpu_gpu_parity.rs` is the canonical example.
+`crates/molla-solvers/tests/cpu_gpu_parity.rs` is the canonical example.
 Five steps:
 
 1. **Gate the test**. `#![cfg(feature = "gpu")]` at file top.
@@ -22,8 +22,9 @@ Skeleton:
 ```rust
 #![cfg(feature = "gpu")]
 
-use molla::compute::{Backend, Engine};
-use molla::prelude::*;
+use molla_compute::{Backend, Engine};
+use molla_math::{SpatialInertia, Transform, Vec3};
+use molla_sim::{BodyParams, Model, ModelBuilder};
 
 fn build_scene(n: usize) -> Model {
     let mut b = ModelBuilder::new();
@@ -75,7 +76,8 @@ reproducible. No `rand::thread_rng()`. The patterns are:
 - Hand-laid positions (`Vec3::new(i as f64 * 1.5, 10.0, 0.0)`).
 - Deterministic-hash inputs for "random" perturbations
   (`(i * 0x9E3779B9) as f32 / u32::MAX as f32`).
-- Reusable fixtures in `crates/molla/tests/fixtures/`.
+- Reusable fixtures beside the owning crate's tests, or in the facade
+  test tree when the coverage is explicitly facade/product-level.
 
 When a parity test fails, the developer can rerun it bit-for-bit
 identical to reproduce.
@@ -132,9 +134,8 @@ Some test families are intentionally CPU-only:
   No `#[ignore]`. Run in the default lane.
 - **Smoke tests** (`scene_smoke.rs`, `cpu_smoke.rs`) — assert that
   a build + a few steps succeed without crashing. CPU-only.
-- **CPU oracle tests** (`oracle_newton.rs`) — compare molla CPU
-  output against Newton Python output. Need Python venv, gated
-  by `#[ignore]`.
+- **Reference-port tests** (`oracle_newton.rs`) — compare molla CPU
+  output against Rust translations of Newton/Warp fixtures.
 
 Some test families are intentionally GPU-only because the CPU path
 doesn't exist or isn't competitive:

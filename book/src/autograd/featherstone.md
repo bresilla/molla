@@ -8,7 +8,7 @@ integrator + per-step Jacobian) and ships in four iterative cuts
 within Stage 23.1, plus a robust-loss extension at Stage 24b.
 
 Source: `crates/molla/src/autograd/featherstone_adjoint.rs`. Shader
-(GPU scaffold): `crates/molla/shaders/featherstone_adjoint_jacobians.wgsl`.
+(GPU scaffold): `crates/molla-kernels/shaders/featherstone_adjoint_jacobians.wgsl`.
 
 ## What it solves
 

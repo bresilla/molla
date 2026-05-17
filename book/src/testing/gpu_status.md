@@ -26,7 +26,6 @@ Notation:
 | `VbdSolver` (tets)      | yes | yes | `vbd_tets_gpu.rs` + v3 + v4       | Stage 20.2 + 20.3 + 20.4                       |
 | `VbdSolver` (soft VT contact) | yes | yes | `soft_vt_contact_gpu.rs`    | Stage 33.2                                     |
 | `VbdSolver` (soft friction) | yes | yes | `soft_friction_gpu.rs`        | Stage 33.2.1                                   |
-| `MuJoCoSolver`          | external | external | `mujoco_solver.rs`        | Wraps `libmujoco`; not a molla kernel          |
 
 ## Sensors
 

@@ -3,8 +3,8 @@
 //! Stage 23 (P2) — manual reverse-mode autograd built on a CPU tape
 //! that records elementary operations forward and replays adjoint ops
 //! in reverse to produce gradients. Mirrors the pattern from Warp's
-//! `wp.Tape` but in Rust instead of Python: every "tensor" produced
-//! during the forward pass gets a [`TapeId`] that the tape uses as
+//! `wp.Tape` but in Rust: every "tensor" produced during the forward pass gets
+//! a [`TapeId`] that the tape uses as
 //! the key for an adjoint accumulator.
 //!
 //! # Why CPU only
@@ -12,9 +12,8 @@
 //! Differentiability is the **CPU-acceptable exception** to molla's
 //! GPU-first rule. Tape recording fundamentally needs heap allocation
 //! and a dynamic graph structure that doesn't map onto wgpu's compute
-//! pipeline-state model — Newton + Warp solve the same problem with
-//! Python + CUDA-graphs, neither of which we have. We use Rust + CPU
-//! and accept the perf hit (orders of magnitude vs hand-written
+//! pipeline-state model. We use Rust + CPU and accept the perf hit (orders of
+//! magnitude vs hand-written
 //! adjoint kernels) in exchange for a working, testable autograd v1.
 //! GPU-side adjoints are the obvious follow-up — plumb a per-op
 //! kernel queue + adjoint kernels — but the structure of [`Tape`]
@@ -49,12 +48,12 @@ pub mod xpbd_adjoint;
 
 pub use diff_arm::DiffArm;
 pub use featherstone_adjoint::{
-    record_featherstone_step, AutogradError, FeatherstoneRevoluteChain,
-    FeatherstoneStepTrace, FeatherstoneTrace, JacobianScratch, JacobianStrategy, JointKind,
-    JointProjection, RevoluteLink,
+    AutogradError, FeatherstoneRevoluteChain, FeatherstoneStepTrace, FeatherstoneTrace,
+    JacobianScratch, JacobianStrategy, JointKind, JointProjection, RevoluteLink,
+    record_featherstone_step,
 };
 pub use tape::{Tape, TapeId, TapeOp};
 pub use xpbd_adjoint::{
-    DistanceConstraintAdjoint, distance_chain_grad_initial_pos,
-    distance_chain_grad_stiffness, xpbd_distance_step_with_grad,
+    DistanceConstraintAdjoint, distance_chain_grad_initial_pos, distance_chain_grad_stiffness,
+    xpbd_distance_step_with_grad,
 };

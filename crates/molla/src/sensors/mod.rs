@@ -30,7 +30,9 @@ pub mod frame_transform;
 pub mod imu;
 #[cfg(feature = "gpu")]
 pub mod raycast;
-pub mod raycast_adjoint;
+pub mod raycast_adjoint {
+    pub use molla_sensors::raycast_adjoint::*;
+}
 #[cfg(feature = "gpu")]
 pub mod tiled_camera;
 
@@ -40,11 +42,10 @@ pub use contact::{BodyContactReading, ContactSensor};
 pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 #[cfg(feature = "gpu")]
 pub use imu::{ImuMount, ImuReading, ImuSensor};
+pub use molla_sensors::{
+    DiffRay, DiffSdfShape, RayScene, compute_grad_raycast, compute_loss_l2, forward_with_loss,
+};
 #[cfg(feature = "gpu")]
 pub use raycast::{RayHit, Raycaster};
-pub use raycast_adjoint::{
-    compute_grad_raycast, compute_loss_l2, forward_with_loss, Ray as DiffRay,
-    RayScene, SdfShape as DiffSdfShape,
-};
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraChannels, TiledCamera, TiledCameraConfig};

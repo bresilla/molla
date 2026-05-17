@@ -7,7 +7,7 @@ on the ground", "robot tipped over", and proximity-shielding
 controllers consume.
 
 Source: `crates/molla/src/sensors/contact.rs`. Shader:
-`crates/molla/shaders/contact_aggregate.wgsl` (one GPU thread per
+`crates/molla-kernels/shaders/contact_aggregate.wgsl` (one GPU thread per
 body, walks the contact CSR).
 
 ## Reading

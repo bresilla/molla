@@ -194,13 +194,11 @@ The few places `anyhow` shows up — like the former `usd_molla`
 crate that briefly existed — were application-level code, not
 engine.
 
-## 8. No `unsafe` outside Pod / FFI
+## 8. No `unsafe` outside Pod-compatible data
 
 The engine has zero `unsafe` blocks outside of:
 
 - `bytemuck::Pod` / `Zeroable` derives.
-- The MuJoCo FFI shim (`solvers::mujoco`) — bindings to the C
-  library.
 
 Workspace lint `unsafe_op_in_unsafe_fn = "deny"` enforces that any
 new `unsafe` is flagged and reviewed.

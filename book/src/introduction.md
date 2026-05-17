@@ -6,7 +6,7 @@ from-scratch reimplementation of the algorithms that ship in
 [NVIDIA Warp](https://github.com/NVIDIA/warp), expressed in idiomatic
 Rust with WGSL kernels so that the same binary runs on Vulkan, Metal,
 DirectX 12, and (one day) WebGPU. There is no CUDA in the build graph,
-no Python runtime in the hot loop, and no vendor lock-in: a laptop with
+no external runtime in the hot loop, and no vendor lock-in: a laptop with
 an AMD APU, an Intel Arc card, an Apple M-series chip, or an NVIDIA
 discrete GPU are all first-class targets.
 
@@ -20,13 +20,14 @@ exercise every solver and kernel.
 
 ## What molla is, in one paragraph
 
-A workspace of two crates: `molla` (the engine — math, storage, GPU
-runtime, kernels, simulation core, solvers, FEM, sensors, actuators,
-autograd) and `molla_viewer` (a Bevy 0.18 application that loads any of
-~100 scenes and renders them in real time, with sliders, hotkeys, and
-live CPU↔GPU backend toggles). The engine compiles standalone, has no
-Bevy dependency, and is the part you embed in your robot, your VFX
-plugin, or your headless training loop. The viewer is the showroom.
+A modular Cargo workspace with a top-level `molla` facade library, reusable
+functionality crates under `crates/`, and the `molla_viewer` Bevy application
+under `bin/`. The public facade keeps `use molla::prelude::*` stable while
+implementation ownership is split by function: core IDs/errors, math, storage,
+compute runtime, kernels, simulation data, geometry, solvers, FEM, sensors,
+actuators, autograd, and optimizers each live in their own crate.
+The viewer depends on the facade and is the showroom; it is not a reusable
+library crate.
 
 ## Design ethos
 
@@ -59,13 +60,11 @@ molla is opinionated. The choices that shaped the codebase are:
 
 ## Newton / Warp lineage
 
-molla's reference is the Python tree at `xtra/newton/` and
-`xtra/warp/`, both Apache-2.0. We **read** them — we do not port them
-line for line. Algorithms are reimplemented clean-room from the
-documented behaviour and the test fixtures; Newton remains the
-trajectory oracle through release-mode integration tests that run the
-same scene in both engines and assert numerical agreement within a
-documented tolerance.
+molla's references are the read-only `xtra/newton/` and `xtra/warp/`
+trees, both Apache-2.0. We **read** them — we do not port them line for
+line. Algorithms are reimplemented clean-room from the documented behaviour
+and test fixtures; invariants are ported into Rust tests rather than executed
+through an external runtime.
 
 When the same primitive exists in Warp (raycast, FFT, marching cubes,
 sparse-grid, tile primitives, gaussian splats, autograd tape), molla
@@ -92,8 +91,7 @@ Rust as the host language gives us deterministic memory layout via
 `bytemuck`, lifetime-safe buffer ownership through the `Buffer<T>`
 abstraction, and the same `glam` types on host (DVec3 / DMat3 /
 DQuat) and (via codegen) the device side. The codebase has zero
-`unsafe` blocks outside of `Pod`/`Zeroable` derives and the MuJoCo
-FFI shim.
+`unsafe` blocks outside of `Pod`/`Zeroable` derives.
 
 ## Scope: everything below Stage 51
 
@@ -113,16 +111,15 @@ deliverable with tests + benches + a viewer scene (see
   transform), GPU IK, GPU narrow-phase, multi-DOF Featherstone, GPU
   broadphase (LBVH).
 - **20–24**: VBD soft bodies (cloth / cable / tets / jelly), mesh
-  utilities (decimate / SDF bake / marching cubes), MuJoCo wrapper,
+  utilities (decimate / SDF bake / marching cubes),
   differentiable Featherstone, raycast adjoint, MPM (explicit +
   semi-implicit + implicit Bingham + 27-stencil), sparse-grid
   (NanoVDB-equivalent).
-- **25–35**: hardening, multi-schema USD readers, joint-mimic
-  equality, neural LSTM controllers, soft self-collision, soft VT
+- **25–35**: hardening, joint-mimic equality, neural LSTM controllers, soft self-collision, soft VT
   contact GPU, cloth-collar self-collision, fast-impact CCD.
 - **36–46**: FEM framework v1 (P1 nodal scalar), elasticity (linear
   + St.-Venant-Kirchhoff), Stokes (Taylor-Hood + Uzawa-CG),
-  adjoint FEM, GPU FEM, Gmsh import, P2 elements, APIC FEM-MPM
+  adjoint FEM, GPU FEM, P2 elements, APIC FEM-MPM
   hybrid, Navier-Stokes (IMEX), DG (P0 / P1 / P2 + Barth-Jespersen
   + HLL/HLLC/Roe SWE flux), magnetostatics (H(curl) Nedelec),
   eddy currents (time-harmonic Maxwell + AMG + AMS), Gaussian
@@ -143,14 +140,10 @@ engine. The `prelude` re-exports the most common types and you write
 These were considered and deliberately rejected, mostly because they
 are either NVIDIA-only or non-portable:
 
-- **Python bindings.** Newton serves Python users; molla serves Rust.
-  Will revisit only if a concrete user files an issue with their
-  requirements.
 - **Style3D cloth.** Newton's production cloth solver — multi-year
   effort, not needed for molla's audience (robotics + games + VFX
   research).
-- **Kamino PADMM.** Overlaps with the MuJoCo wrapper for the
-  constrained-dynamics use case; we ship the wrapper instead.
+- **Kamino PADMM.** Out of scope for the current native solver set.
 - **TensorCore tile matmul / `cooperative_matrix`.** wgpu does not
   expose the extension portably across the four backends. molla's
   tile-matmul kernel is a plain WGSL implementation.
@@ -161,8 +154,7 @@ are either NVIDIA-only or non-portable:
   type owns one `wgpu::Device` and one `wgpu::Queue`.
 - **General LCP / NLP solver.** Position-based constraints (XPBD)
   and reduced-coordinate articulation (Featherstone) cover the
-  workhorse cases. The MuJoCo wrapper (Stage 22) is there when you
-  need a real LCP / pyramid friction model.
+  workhorse cases.
 - **Own renderer.** Visualization piggybacks on Bevy (in the viewer
   crate) and the Gaussian-splat differentiable renderer for the
   diff-render scenes. The engine has zero renderer dependencies.
@@ -178,8 +170,8 @@ This book is written for:
 - **Graphics + simulation engineers** who want a clean reference
   reimplementation of Newton / Warp's algorithms with readable,
   test-covered Rust.
-- **Anyone porting from Python Newton** — the data model is
-  intentionally familiar and the test fixtures are reused.
+- **Anyone porting Newton/Warp algorithms** — the data model is intentionally
+  familiar and the test fixtures are reused.
 
 What this book is *not*: an introduction to physics simulation in
 general. We assume you know what a quaternion is, what XPBD does in
@@ -203,8 +195,7 @@ for the underlying numerics.
   hydroelastic, sparse grids.
 - **Simulation Core** — `Model` / `State` / `Control` / `Contacts`,
   `ModelBuilder`, joints, articulation, CRBA / RNEA / Jacobian, IK.
-- **Solvers** — semi-implicit, XPBD, VBD, MPM (three flavors),
-  MuJoCo wrapper.
+- **Solvers** — semi-implicit, XPBD, VBD, Featherstone, and MPM.
 - **Finite-Element Method** — the FEM v1 framework and everything
   built on top (P2, DG, Stokes, Navier-Stokes, APIC, adjoint, AMR,
   magnetostatics, eddy currents, multigrid, nonconforming meshes,
@@ -216,7 +207,6 @@ for the underlying numerics.
 - **Differentiable Physics** — tape-based autograd, Featherstone
   reverse adjoint, XPBD / VBD / MPM / FEM / raycast / splat
   adjoints.
-- **Importers** — URDF, MJCF writer, USD bridge, Gmsh.
 - **Viewer** — the Bevy adapter, the scene catalog.
 - **Testing & Performance** — strategy, parity tests, FD gradient
   checks, criterion benches, GPU port status matrix.

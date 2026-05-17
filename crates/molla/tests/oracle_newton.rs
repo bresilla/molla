@@ -17,8 +17,8 @@
 //! - Both follow the same "normal points from geom 0 toward geom 1"
 //!   convention (`a → b`).
 
-use molla::geometry::{pair_contact, BroadPhase, ContactManifold};
-use molla::math::{spatial_cross, spatial_cross_dual, SpatialVector};
+use molla::geometry::{BroadPhase, ContactManifold, pair_contact};
+use molla::math::{SpatialVector, spatial_cross, spatial_cross_dual};
 use molla::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -135,14 +135,13 @@ fn newton_sphere_plane_distances() {
                 manifolds.len(),
                 1,
                 "case {i}: penetrating by {expected}, expected 1 manifold",
-                );
+            );
             let m = manifolds[0];
             let depth_ok = (m.depth - (-expected)).abs() < 1e-5;
             assert!(
                 depth_ok,
                 "case {i}: depth {} != expected {}",
-                m.depth,
-                -expected
+                m.depth, -expected
             );
         }
     }
@@ -230,13 +229,12 @@ const SPHERE_BOX_CASES: &[([f64; 3], f64, [f64; 3], [f64; 3], f64)] = &[
 
 #[test]
 fn newton_sphere_box_distances() {
-    for (i, &(sphere_p, sphere_r, box_p, box_h, expected)) in
-        SPHERE_BOX_CASES.iter().enumerate()
-    {
+    for (i, &(sphere_p, sphere_r, box_p, box_h, expected)) in SPHERE_BOX_CASES.iter().enumerate() {
         let mut b = ModelBuilder::new();
         let a = b.add_body(BodyParams::new().with_position(Vec3::from_array(sphere_p)));
         let bd = b.add_body(BodyParams::new().with_position(Vec3::from_array(box_p)));
-        b.add_shape_sphere(a, sphere_r, Transform::IDENTITY).unwrap();
+        b.add_shape_sphere(a, sphere_r, Transform::IDENTITY)
+            .unwrap();
         b.add_shape_box(bd, Vec3::from_array(box_h), Transform::IDENTITY)
             .unwrap();
         let model = b.build().unwrap();
@@ -278,8 +276,8 @@ fn newton_plane_box_corner_count_and_depth() {
     // → 4 corner contacts at the same depth.
     let cases = [
         // (box_z, expected_count, expected_dist)
-        (2.0, 0, 1.0),    // separated
-        (1.0, 4, 0.0),    // touching — Newton sees 4, molla sees 0 (strict <)
+        (2.0, 0, 1.0), // separated
+        (1.0, 4, 0.0), // touching — Newton sees 4, molla sees 0 (strict <)
         (0.9, 4, -0.1),
         (0.8, 4, -0.2),
         (0.7, 4, -0.3),
@@ -287,11 +285,11 @@ fn newton_plane_box_corner_count_and_depth() {
     ];
     for (i, &(box_z, expected_count, expected_dist)) in cases.iter().enumerate() {
         let mut b = ModelBuilder::new();
-        let bd = b.add_body(
-            BodyParams::new().with_position(Vec3::new(0.0, 0.0, box_z)),
-        );
-        b.add_shape_box(bd, Vec3::splat(1.0), Transform::IDENTITY).unwrap();
-        b.add_shape_plane(BodyId::NONE, Vec3::Z, Transform::IDENTITY).unwrap();
+        let bd = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 0.0, box_z)));
+        b.add_shape_box(bd, Vec3::splat(1.0), Transform::IDENTITY)
+            .unwrap();
+        b.add_shape_plane(BodyId::NONE, Vec3::Z, Transform::IDENTITY)
+            .unwrap();
         let model = b.build().unwrap();
         let manifolds = collide_once(&model);
 
@@ -361,8 +359,10 @@ fn newton_box_box_separated_vs_overlapping() {
         let mut b = ModelBuilder::new();
         let a = b.add_body(BodyParams::new());
         let bd = b.add_body(BodyParams::new().with_position(b_pos));
-        b.add_shape_box(a, Vec3::splat(1.0), Transform::IDENTITY).unwrap();
-        b.add_shape_box(bd, Vec3::splat(1.0), Transform::IDENTITY).unwrap();
+        b.add_shape_box(a, Vec3::splat(1.0), Transform::IDENTITY)
+            .unwrap();
+        b.add_shape_box(bd, Vec3::splat(1.0), Transform::IDENTITY)
+            .unwrap();
         let model = b.build().unwrap();
         let manifolds = collide_once(&model);
         match expected {
@@ -556,8 +556,7 @@ fn newton_joint_drive_prismatic_one_step() {
     s_a.joint_qd.host_mut().unwrap()[0] = qd0;
 
     let mut control = model.control();
-    control.joint_target_mode.host_mut().unwrap()[0] =
-        JointTargetMode::PositionVelocity as u32;
+    control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::PositionVelocity as u32;
     control.joint_target_pos.host_mut().unwrap()[0] = pos_target;
     control.joint_target_vel.host_mut().unwrap()[0] = vel_target;
     control.joint_target_kp.host_mut().unwrap()[0] = ke;
@@ -576,9 +575,8 @@ fn newton_joint_drive_prismatic_one_step() {
     eprintln!(
         "PD prismatic step: qd_actual={qd_actual:.6}, qd_expected={qd_expected:.6}, err={err:.6}"
     );
-    // Newton's test uses absolute tolerance of ~1e-3 between solvers
-    // (MuJoCo vs Featherstone vs analytical). Our analytical match
-    // should be tighter — within 1e-4 since we don't apply Featherstone
+    // Newton's test uses absolute tolerance of ~1e-3 between solvers. Our
+    // analytical match should be tighter — within 1e-4 since we don't apply Featherstone
     // bias/Coriolis terms for a single body.
     assert!(
         err < 1e-3,

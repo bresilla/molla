@@ -6,23 +6,26 @@ multipliers, **tangential** friction follows a Coulomb law that
 constrains the friction force to lie inside a per-contact friction
 disc.
 
-The FEM-side implementation extends `crates/molla/src/fem/signorini.rs`
+The FEM-side implementation extends `crates/molla-fem/src/signorini.rs`
 with `solve_augmented_system_with_friction` + `ContactPair` (carrying
-the slave DoF, master normal, and an orthonormal tangent basis). The
-3-component multiplier per pair (1 normal + 2 tangents) shares a single
+the slave DoF, master normal, and an orthonormal tangent basis). Stage 50 v2
+also exposes `FrictionState` plus separate static/kinetic coefficients
+(`μ_s`, `μ_k`), while `with_friction(μ)` keeps the old `μ_s == μ_k` behaviour.
+The 3-component multiplier per pair (1 normal + 2 tangents) shares a single
 projected-Uzawa loop with the Stage 49 normal-only path. Particle/cloth-
 side Coulomb friction has separate implementations in
-`crates/molla/src/solvers/vbd_soft_contact.rs` and
-`crates/molla/src/kernels/soft_vt_contact.rs` (position-form analogue
+`crates/molla-solvers/src/vbd_soft_contact.rs` and
+`crates/molla-kernels/src/soft_vt_contact.rs` (position-form analogue
 on different state types).
 
 ## The Coulomb friction model
 
-For each active contact pair with normal multiplier \\( \lambda_n \ge 0 \\)
-and friction coefficient \\( \mu \ge 0 \\):
+For each active contact pair with normal multiplier \\( \lambda_n \ge 0 \\),
+static friction coefficient \\( \mu_s \ge 0 \\), and kinetic friction coefficient
+\\( \mu_k \ge 0 \\):
 
 - **Sticking** (no slip):
-  \\( |\boldsymbol\lambda_t| \le \mu \lambda_n \\) with the tangential
+  \\( |\boldsymbol\lambda_t| \le \mu_s \lambda_n \\) with the tangential
   velocity \\( v_t = 0 \\).
 - **Sliding** (kinetic):
   \\( |\boldsymbol\lambda_t| = \mu_k \lambda_n \\) and
@@ -36,20 +39,21 @@ contact:
                             λ_n
                             ↑
                             │
-                            │   ─── friction cone (μ slope)
+                            │   ─── static cone (μ_s slope)
                             │  /
                             │ /
                             │/_______________→
                                                 |λ_t|
             (λ_t, λ_n) feasible iff
-            |λ_t| ≤ μ · λ_n  (stick)
-            |λ_t| = μ · λ_n  (slip)
+            |λ_t| ≤ μ_s · λ_n  (stick)
+            |λ_t| = μ_k · λ_n  (slip)
 ```
 
 For an FEM contact with 3D normal \\( \mathbf{n} \\) and two
 orthonormal in-plane tangents \\( \mathbf{t}_1, \mathbf{t}_2 \\), the
 constraint becomes: \\( (\lambda_{t_1}, \lambda_{t_2}) \\) lies inside
-the **disc** of radius \\( \mu \lambda_n \\).
+the **static disc** of radius \\( \mu_s \lambda_n \\), or on the kinetic
+boundary \\( \mu_k \lambda_n \\) once it slips.
 
 ## Algorithmic plan
 
@@ -92,14 +96,13 @@ Each Uzawa outer iteration:
 2. Normal dual update: \\( \lambda_n \leftarrow \max(0, \lambda_n + \rho_n (g_n - C_n u)) \\)
    — same as Signorini.
 3. Tangent dual update: \\( \boldsymbol\lambda_t \leftarrow \boldsymbol\lambda_t + \rho_t (g_t - C_t u) \\),
-   then **project onto the friction disc** of radius
-   \\( \mu \lambda_n \\):
+   then **project onto the friction disc** using the static/kinetic rule:
 
    \\[
    \boldsymbol\lambda_t \leftarrow
    \begin{cases}
-   \boldsymbol\lambda_t & \text{if } |\boldsymbol\lambda_t| \le \mu \lambda_n \\
-   \mu \lambda_n \cdot \dfrac{\boldsymbol\lambda_t}{|\boldsymbol\lambda_t|} & \text{otherwise}
+   \boldsymbol\lambda_t & \text{if } |\boldsymbol\lambda_t| \le \mu_s \lambda_n \\
+   \mu_k \lambda_n \cdot \dfrac{\boldsymbol\lambda_t}{|\boldsymbol\lambda_t|} & \text{otherwise}
    \end{cases}
    \\]
 
@@ -121,41 +124,100 @@ to *sustain* it). The textbook model treats this as two regimes:
 - **Slip** (kinetic): \\( |\boldsymbol\lambda_t| = \mu_k \lambda_n \\),
   opposing the slip velocity. The projection step uses \\( \mu_k \\).
 
-A simple state-machine over each contact decides which regime applies:
-once \\( |\boldsymbol\lambda_t| \\) reaches \\( \mu_s \lambda_n \\) the
-contact transitions to slip; once \\( v_t \\) drops below a threshold
-it transitions back to stick. In practice molla's particle-side
-friction (`vbd_soft_contact.rs`) uses a single \\( \mu \\) and lets
-the implicit regularisation handle the transition; the FEM version
-will likely follow the same pattern.
+A per-contact `FrictionState` records the final projection regime
+(`Inactive`, `Stick`, or `Slip`). The current implementation classifies
+directly from the projected dual update; it does not yet add a
+velocity-threshold hysteresis loop.
 
 ## Expected API
 
 When the module lands, the signatures will look like:
 
 ```rust
-// Per-pair (slave_dof, normal, tangent1, tangent2, target_gap, mu)
-pub struct FrictionContact {
-    pub active_pairs: Vec<(u32, Vec3, Vec3, Vec3, Real, Real)>,
+pub struct ContactPair {
+    pub slave_dof: u32,
+    pub normal: Vec3,
+    pub tangent_u: Vec3,
+    pub tangent_v: Vec3,
+    pub target_gap: Real,
 }
 
-pub fn assemble_normal_constraint(active_pairs, n_dofs) -> Result<BsrMatrix>;
-pub fn assemble_tangent_constraint(active_pairs, n_dofs) -> Result<BsrMatrix>;
+pub struct SignoriniContact {
+    pub active_pairs: Vec<ContactPair>,
+    pub friction_static_coeff: Real,
+    pub friction_kinetic_coeff: Real,
+}
 
-pub fn solve_signorini_with_friction(
+pub fn solve_augmented_system_with_friction(
     k_global: &BsrMatrix,
-    c_normal: &BsrMatrix,
-    c_tangent: &BsrMatrix,
+    contact: &SignoriniContact,
     f: &[Real],
-    g_normal: &[Real],
-    friction_coeffs: &[Real],   // one μ per active pair
-    config: FrictionConfig,
-) -> Result<FrictionResult>;
+    max_iters: usize,
+    tol: Real,
+) -> Result<FrictionUzawaResult>;
+
+pub fn solve_active_set_signorini_with_friction(
+    k_global: &BsrMatrix,
+    candidates: &SignoriniContactCandidates,
+    f: &[Real],
+    friction_static_coeff: Real,
+    friction_kinetic_coeff: Real,
+    max_outer_iters: usize,
+    gap_tol: Real,
+    inner_max_iters: usize,
+    inner_tol: Real,
+) -> Result<ActiveSetFrictionResult>;
 ```
 
 The result returns both \\( u \\), \\( \boldsymbol\lambda_n \\), and
 \\( \boldsymbol\lambda_t \\) (the projected tangential forces),
 plus the per-pair stick/slip flag for diagnostics.
+
+The active-set variant is the coupled Stage 49/50 path: the PDAS loop
+discovers the current normal active set, and each inner solve uses the
+stacked normal+tangent Coulomb system. Released contacts zero their
+normal multiplier, tangent multipliers, and `FrictionState` in one
+outer iteration, so friction is no longer a post-pass over a
+preselected contact set.
+
+## Rate-and-state friction
+
+For advanced tribology / geology workloads, the FEM crate also exposes
+the Dieterich-Ruina aging law as reusable per-contact helpers:
+
+```rust
+pub struct RateStateFrictionParams {
+    pub mu0: Real,
+    pub a: Real,
+    pub b: Real,
+    pub v0: Real,
+    pub dc: Real,
+}
+
+pub struct RateStateFrictionState {
+    pub theta: Real,
+}
+
+pub fn rate_state_friction_coeff(
+    params: RateStateFrictionParams,
+    state: RateStateFrictionState,
+    slip_rate: Real,
+) -> Real;
+
+pub fn advance_rate_state_friction(
+    params: RateStateFrictionParams,
+    state: RateStateFrictionState,
+    slip_rate: Real,
+    dt: Real,
+) -> (RateStateFrictionState, Real);
+```
+
+The coefficient is
+`μ = μ0 + a ln(v/v0) + b ln(θ v0 / dc)`, and the state evolves with
+the aging law `dθ/dt = 1 - vθ/dc`. The helpers are intentionally
+solver-agnostic: Signorini, VBD, or particle contact pipelines can
+own the state vector and feed the updated coefficient into their
+existing friction-cone projection.
 
 ## What's already in the codebase
 

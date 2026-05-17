@@ -79,9 +79,8 @@ Degenerate inputs are handled defensively:
   GJK a flat Minkowski difference).
 
 These guards mean `convex_hull(points).is_empty() == true` is a
-reliable "input was degenerate" signal. Callers that need to detect
-this (e.g. the URDF importer) check `faces.is_empty()` after the
-call.
+reliable "input was degenerate" signal. Procedural callers that need to detect
+this check `faces.is_empty()` after the call.
 
 ## Cost / vertex caps
 

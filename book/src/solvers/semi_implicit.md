@@ -61,7 +61,7 @@ unchanged — their pose / velocity are user-prescribed.
 
 It does **not** handle:
 
-- Contacts (use XPBD or MuJoCo).
+- Contacts (use XPBD).
 - Joints (use Featherstone).
 - Soft bodies (use VBD or XPBD particles).
 
@@ -79,7 +79,7 @@ the GPU kernel.
 let solver = SemiImplicitSolver::new_gpu(&engine)?;
 ```
 
-Backed by [`IntegrateBodiesKernel`](https://github.com/molla/molla/blob/main/crates/molla/shaders/integrate_bodies.wgsl)
+Backed by [`IntegrateBodiesKernel`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/integrate_bodies.wgsl)
 — one workgroup invocation per body, identical maths. The kernel
 binds:
 

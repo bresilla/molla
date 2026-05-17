@@ -3,7 +3,7 @@
 Two FEM meshes that share no DoFs need a transfer operator to move a
 scalar field from one to the other. The textbook recipe is **L²
 projection mediated by a cross-mesh mass matrix**, which lives in
-`crates/molla/src/fem/nonconforming.rs`. Stages 47 v1–v4 cover scalar
+`crates/molla-fem/src/nonconforming.rs`. Stages 47 v1–v4 cover scalar
 projection, vector projection, surface-only (contact) variant, and a
 penalty-contact force that integrates against it.
 
@@ -78,17 +78,14 @@ Use volume for "field transfer between non-matching solid domains";
 use surface for **contact** formulations where only the boundary
 matters.
 
-### Tet-location strategy (v1)
+### Tet-location strategy (v5)
 
-v1 ships a **brute-force linear scan** over `source.cells` per
-quadrature point. The same approach as
-[`apic_coupling::locate_particle_tet`](./apic.md) and roughly
-\\( O(N_T \cdot N_S) \\) for the matrix build. A
-`TetBvh` follow-up could drop this to
-\\( O(N_T \cdot \log N_S) \\) without changing the public API — the
-crate `crates/molla/src/geometry/tet_bvh.rs` is the candidate. AABB
-filtering on the source side is already in place, which prunes most
-non-overlapping pairs cheaply.
+v5 builds a source-side `molla_geometry::TetBvh` over inflated per-tet
+AABBs once during `NonconformingField` construction. Every target volume
+or surface quadrature point queries that BVH for candidate source tets,
+then runs the exact barycentric containment check only on those
+candidates. The public API stays unchanged, but the source lookup drops
+from a brute-force scan over `source.cells` to a BVH candidate query.
 
 ### `project` / `project_vector`
 

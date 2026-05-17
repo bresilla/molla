@@ -8,7 +8,7 @@ molla in your own Bevy app.
 
 ## What the viewer pulls in
 
-From `crates/molla_viewer/Cargo.toml`:
+From `bin/molla_viewer/Cargo.toml`:
 
 - `bevy = "0.18"` with a curated feature list — ECS, render, PBR,
   scene, picking, gizmos, asset, scene, X11, Wayland.
@@ -73,7 +73,7 @@ struct SceneStates<'w> {
     gpu_np: ResMut<'w, GpuNpExampleState>,
     gpu_bp: ResMut<'w, GpuBpExampleState>,
     quad: ResMut<'w, QuadrotorState>,
-    mujoco: ResMut<'w, MuJoCoExampleState>,
+    reference_pendulum: ResMut<'w, ReferencePendulumState>,
     diff_arm: ResMut<'w, DiffArmExampleState>,
     diff_arm6: ResMut<'w, DiffArm6ExampleState>,
     mesh: ResMut<'w, MeshToolsExampleState>,
@@ -154,7 +154,7 @@ Marquee scenes have single-letter hotkeys mapped via Bevy's
 |-----|-------|
 | `Q` | Quadrotor |
 | `V` | VbdCloth |
-| `J` | MuJoCo |
+| `J` | Native reference pendulum |
 | `G` | DiffArm |
 | `H` | DiffArm6 |
 | `M` | MeshTools |
@@ -171,7 +171,7 @@ Toggle keys for cross-cutting UX:
 - `Space` — pause / resume.
 - `R` — reset current scene.
 
-The full keybinding table is in `crates/molla_viewer/src/main.rs`
+The full keybinding table is in `bin/molla_viewer/src/main.rs`
 in the `handle_hotkeys` system.
 
 ## Embedding molla in your own Bevy app
@@ -194,8 +194,8 @@ fn setup(mut commands: Commands) {
 }
 ```
 
-3. Build a `Model` via `ModelBuilder` (or load via URDF), store it
-   in another resource.
+3. Build a procedural `Model` via `ModelBuilder` and store it in another
+   resource.
 4. Step in a `FixedUpdate` system:
 
 ```rust
@@ -219,6 +219,6 @@ inside Bevy; it doesn't even know Bevy exists.
 - [`viewer/overview.md`](../viewer/overview.md) — full viewer
   architecture.
 - [`viewer/scenes.md`](../viewer/scenes.md) — the scene catalog.
-- `crates/molla_viewer/src/main.rs` — the entire viewer in one
+- `bin/molla_viewer/src/main.rs` — the entire viewer in one
   ~24k-line file. Search by scene name to find the per-scene
   implementation.

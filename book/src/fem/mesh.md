@@ -1,7 +1,7 @@
 # Meshes and function spaces
 
 The geometric substrate of the FEM stack lives in
-`crates/molla/src/fem/mesh.rs` — a flat `Vec<Vec3>` of vertex
+`crates/molla-fem/src/mesh.rs` — a flat `Vec<Vec3>` of vertex
 positions and a `Vec<FemCell>` of cell topologies — together with the
 `FunctionSpace` enum in `function_space.rs` that decides how degrees of
 freedom (DoFs) are attached to the mesh.
@@ -61,24 +61,9 @@ FemMesh::tet_grid_3d(nx: usize, ny: usize, nz: usize, w: Real, h: Real, d: Real)
   `tet_grid_3d_positive_volumes` unit test asserts this on every cell.
 
 The grid builders are deliberately the *only* topology-generating
-helpers in the v1 FEM module — anything more exotic (cantilever beam,
-lid-driven cavity geometry) is built ad-hoc by composing these or by
-loading an external mesh.
-
-### Gmsh MSH 4.1 import
-
-```rust
-FemMesh::from_gmsh_str(s: &str) -> Result<Self>
-FemMesh::from_gmsh_bytes(b: &[u8]) -> Result<Self>
-FemMesh::from_gmsh_path(path: &Path) -> Result<Self>
-```
-
-These parse the Gmsh MSH 4.1 format (ASCII or binary) via the `mshio`
-crate. Only `Tri3` and `Tet4` element blocks are accepted — every
-other element type is logged with `tracing::warn!` and dropped.
-Non-contiguous node tags (which Gmsh allows when a mesh is built
-incrementally) are remapped through a `HashMap<u64, u32>` so the
-returned mesh has dense `0..n` vertex indices.
+helpers in the v1 FEM module. More exotic FEM geometries are built
+procedurally by composing these builders; external mesh importers are
+outside the physics-only scope.
 
 ## Edge enumeration — `compute_edges`
 

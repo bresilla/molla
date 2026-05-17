@@ -80,7 +80,7 @@ field that holds an unset pose initialises to `IDENTITY`.
 ## Glam vs hand-rolled — why not a custom Mat3?
 
 molla's predecessor stacks (Newton / Warp) carry their own
-`wp.transform`/`wp.spatial_*` types because Python forces it. Rust has
+`wp.transform`/`wp.spatial_*` types. Rust has
 glam, glam has been the de-facto game-engine pick for half a decade,
 and `glam::DMat3` already inlines into the same SIMD that a custom
 type would synthesise. The single concession is that **glam stores

@@ -1,6 +1,6 @@
 # Adaptive Mesh Refinement (AMR)
 
-`crates/molla/src/fem/amr_mesh.rs` (~1750 lines) is the second-largest
+`crates/molla-fem/src/amr_mesh.rs` (~1750 lines) is the second-largest
 single source file in the FEM stack. It builds a refinement-tree on
 top of a base `FemMesh`, manages hanging nodes, balances levels 2:1,
 and produces a Galerkin-reduced system `Kc = TᵀKT` that you can hand
@@ -234,6 +234,35 @@ one — used by the **Krylov restart** workflow:
 
 This is how the `AmrHeat` viewer scene (#100) gets to a sharp
 near-source profile without paying for a global fine mesh.
+
+## DG-AMR coarsening — Stage 45 v5
+
+Stage 45 v5 adds two pieces needed by transient DG-AMR runs:
+
+```rust
+pub fn AmrMesh::coarsen_subtree(&mut self, parent_idx: usize) -> Result<()>;
+
+pub fn project_dg_p1_tri_children_to_parent_l2(
+    parent: &FemCell,
+    children: &[FemCell],
+    vertices: &[Vec3],
+    child_values: &[[Real; 3]],
+) -> Result<[Real; 3]>;
+```
+
+`coarsen_subtree` collapses a deep refinement tree from the leaves
+upward before coarsening the requested parent, so callers do not have to
+manually un-refine every descendant first.
+
+`project_dg_p1_tri_children_to_parent_l2` is the DG coarsening transfer
+operator for triangle P1 fields. It solves the parent mass projection
+
+```text
+∫_parent N_i u_parent dx = Σ_child ∫_child N_i u_child dx
+```
+
+using the degree-2-exact triangle quadrature rule, so linear DG fields
+survive child-to-parent coarsening exactly.
 
 ## Cross-references
 

@@ -1,0 +1,94 @@
+[package]
+name = "molla_viewer"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Bevy-based interactive viewer for molla physics scenes."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Build with Tracy instrumentation. Every Bevy system, render pass,
+# and our own scopes emit timeline events to the Tracy server. Run
+# with `make run-profile RELEASE=1`, then point a `tracy` GUI at the
+# process to see what's eating frame time.
+#
+# NOTE: when `profile` is on but no Tracy client is connected, the
+# trace buffer grows without bound and causes huge frame stalls.
+# Connect a `tracy` GUI immediately after launch, or use `log_diag`
+# instead.
+profile = ["bevy/trace_tracy"]
+# Print every diagnostic to stdout each second. No Tracy, no memory
+# growth — just text-mode perf data on stderr.
+log_diag = []
+
+[dependencies]
+# molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the
+# viewer can step on either CPU or GPU based on the user's UI toggle.
+molla = { path = "../../crates/molla" }
+
+# Microsoft's mimalloc — drop-in global allocator. egui's tessellator
+# thrashes the system allocator, and frost's NOTES say mimalloc cuts
+# frame time from ~120 ms to ~13 ms in the heavy demo. Worth the dep.
+mimalloc = { version = "0.1", default-features = false }
+
+bevy = { version = "0.18", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_input_focus",
+    "bevy_render",
+    "bevy_core_pipeline",
+    # Required by WireframePlugin: it adds an edge to `Node3d::PostProcessing`
+    # in the Core3d graph, which is registered by `bevy_post_process`.
+    # Without this feature wireframe init panics with `node PostProcessing
+    # does not exist`.
+    "bevy_post_process",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_mesh",
+    "bevy_camera",
+    "bevy_image",
+    "bevy_picking",
+    "bevy_scene",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "tonemapping_luts",
+    "smaa_luts",
+    "default_font",
+    "zstd_rust",
+    "ktx2",
+    # Both winit windowing backends compiled in. `wayland` opens a
+    # native Wayland surface; `x11` covers plain Xorg / XWayland. winit
+    # auto-prefers whichever `use display` (.envrc) wired up via
+    # $WAYLAND_DISPLAY / $DISPLAY.
+    "x11",
+    "wayland",
+    "reflect_auto_register",
+] }
+
+# egui shell — frost styles it; glacial reads pane rects from it for
+# input-firewall purposes.
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "default_fonts",
+    "render",
+] }
+
+# Glass-themed editor UI kit (themed egui via FrostPlugin).
+bevy_frost = { git = "https://github.com/bresilla/bevy_frost", branch = "develop", package = "bevy_frost" }
+
+# Orbit camera + grid + gizmos.
+bevy_glacial = { git = "https://github.com/bresilla/bevy_glacial", branch = "main" }
+
+[[bin]]
+name = "molla_viewer"
+path = "src/main.rs"

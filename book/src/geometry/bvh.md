@@ -7,8 +7,8 @@ workload:
 |------|--------|-------|--------|
 | [`Bvh`](#broad-phase-bvh) | `geometry/bvh.rs` | shape AABBs (broad phase) | rebuild |
 | [`MeshBvh`](#per-mesh-bvh) | `geometry/mesh_bvh.rs` | per-mesh triangle AABBs | static |
-| [`TetBvh`](#tet-bvh-stage-204) | `geometry/tet_bvh.rs` | per-tet AABBs (deformable) | flat-array |
-| GPU [LBVH](#gpu-lbvh) | `kernels/lbvh.rs` + `shaders/lbvh.wgsl` | shape AABBs (broad phase) | radix-rebuild |
+| [`TetBvh`](#tet-bvh-stage-204) | `geometry/tet_bvh.rs` | per-tet AABBs (deformable) | CPU BVH + flat GPU AABBs |
+| GPU [LBVH](#gpu-lbvh) | `molla-geometry/src/lbvh.rs` + `molla-geometry/shaders/lbvh.wgsl` | shape AABBs (broad phase) | radix-rebuild |
 
 ## Broad-phase `Bvh`
 
@@ -81,18 +81,21 @@ default `max_leaf_size = 4` is Embree's recommendation — small
 enough that leaf scans pull in only a couple of cache lines, big
 enough that the tree stays shallow.
 
-The flat-`Vec` layout matches what a GPU upload would want: each
+The flat-`Vec` layout matches what a GPU upload wants: each
 node fits in 8 × `f32` (32 bytes), and the triangle-order
 permutation gives contiguous triangle ranges per leaf for vectorised
 narrow-phase. The WGSL counterpart
-(`shaders/mesh_bvh_raycast.wgsl`) consumes the same node layout.
+(`crates/molla-geometry/shaders/mesh_bvh_raycast.wgsl`) consumes the same
+node layout.
 
 ## Tet BVH (Stage 20.4)
 
-`tet_bvh.rs` is the lighter-weight cousin used for the soft-body
-tet-vs-tet path. Per Stage 20.4's risk carve-out
-(`tet_bvh.rs:1-19`), the v1 implementation ships **a flat AABB list,
-not a tree**. The reasoning:
+`tet_bvh.rs` is the lighter-weight cousin used for soft-body
+tet-vs-tet paths and source-side nonconforming-contact lookup. Per
+Stage 20.4's risk carve-out, the GPU-facing implementation still keeps
+a flat AABB list for deformable-mesh uploads, while Stage 47 v5 adds a
+CPU median-split `TetBvh` over the same AABBs for point-location
+prefiltering.
 
 * Tet meshes deform every substep — a true BVH would require
   per-substep refit, and a per-vertex GPU traversal of a per-substep
@@ -100,7 +103,11 @@ not a tree**. The reasoning:
 * The demo workload is two ~150-tet jelly cubes (≈ 22 500 per-vertex
   × per-tet checks per substep). At that scale a GPU brute-force
   AABB test against the flat array dispatches in microseconds; the
-  win from a real tree wouldn't justify the refit cost.
+  win from a real GPU tree wouldn't justify the refit cost.
+* CPU-side nonconforming projection has a different profile: many
+  quadrature points query a static source mesh during matrix assembly.
+  There, `TetBvh::point_candidates` avoids a brute-force source-tet
+  scan while leaving the exact barycentric containment test unchanged.
 
 ```rust
 #[repr(C, align(16))]
@@ -118,6 +125,12 @@ pub fn recompute_tet_aabbs(
 pub fn tet_meshes_aabb_overlap(aabbs_a: &[TetAabb], aabbs_b: &[TetAabb]) -> bool;
 pub fn tet_mesh_root_aabb(aabbs: &[TetAabb]) -> Option<(Vec3, Vec3)>;
 pub fn tet_closest_face(p: Vec3, v0: Vec3, v1: Vec3, v2: Vec3, v3: Vec3) -> Option<(Real, Vec3)>;
+
+pub struct TetBvh { /* nodes + tet_order */ }
+impl TetBvh {
+    pub fn build(aabbs: &[TetAabb], max_leaf_size: usize) -> Self;
+    pub fn point_candidates(&self, aabbs: &[TetAabb], p: Vec3, out: &mut Vec<u32>);
+}
 ```
 
 The struct is intentionally `[f32; 8]` (not `Real`) for a clean
@@ -126,12 +139,12 @@ oracle for the GPU per-vertex tet-penalty kernel: it walks the
 tet's four faces, returns the maximum signed distance (positive
 outside, negative inside), and the achieving face's outward normal.
 
-The Stage 20.5 follow-up (proper tree + GPU refit) is queued
+The Stage 20.5 follow-up (proper GPU tree + GPU refit) is queued
 behind the rigid-vs-rigid LBVH that's already in production.
 
 ## GPU LBVH
 
-`crates/molla/src/kernels/lbvh.rs` + `shaders/lbvh.wgsl` implement
+`crates/molla-geometry/src/lbvh.rs` + `crates/molla-geometry/shaders/lbvh.wgsl` implement
 the standard Karras parallel LBVH:
 
 1. **Morton-code AABB centroids** via the existing 64-bit radix

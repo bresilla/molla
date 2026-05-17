@@ -18,14 +18,14 @@
 pub mod actuators;
 pub mod autograd;
 pub mod compute;
-pub mod core;
+pub use molla_core as core;
+pub use molla_sim as sim;
 pub mod fem;
 pub mod geometry;
 pub mod kernels;
 pub mod math;
 pub mod optim;
 pub mod sensors;
-pub mod sim;
 pub mod solvers;
 pub mod storage;
 pub mod utils;

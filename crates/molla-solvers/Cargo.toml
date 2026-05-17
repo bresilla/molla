@@ -1,0 +1,155 @@
+[package]
+name = "molla-solvers"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Solver and dynamics utilities for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+autograd = ["dep:molla-autograd"]
+gpu = [
+    "dep:molla-compute",
+    "dep:molla-kernels",
+    "dep:wgpu",
+    "molla-actuators/gpu",
+    "molla-compute/gpu",
+    "molla-kernels/gpu",
+    "molla-sim/gpu",
+]
+
+[dependencies]
+bytemuck = "1.18"
+glam = "0.30"
+molla-actuators = { path = "../molla-actuators", default-features = false }
+molla-autograd = { path = "../molla-autograd", optional = true }
+molla-core = { path = "../molla-core", default-features = false }
+molla-math = { path = "../molla-math" }
+molla-sim = { path = "../molla-sim", default-features = false }
+molla-compute = { path = "../molla-compute", default-features = false, optional = true }
+molla-geometry = { path = "../molla-geometry", default-features = false }
+molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
+molla-storage = { path = "../molla-storage", default-features = false }
+tracing = "0.1"
+wgpu = { version = "27", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+molla-optim = { path = "../molla-optim" }
+
+[[bench]]
+name = "bench_featherstone_chain"
+harness = false
+
+[[bench]]
+name = "bench_featherstone_tree"
+harness = false
+
+[[bench]]
+name = "bench_ik"
+harness = false
+
+[[bench]]
+name = "bench_mpm_explicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_mpm_implicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_tets"
+harness = false
+
+[[bench]]
+name = "bench_soft_vt_contact_cpu"
+harness = false
+
+[[bench]]
+name = "bench_soft_ee_contact"
+harness = false
+
+[[bench]]
+name = "bench_soft_self_collision"
+harness = false
+
+[[bench]]
+name = "bench_soft_friction"
+harness = false
+
+[[bench]]
+name = "featherstone_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_tets_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_tets_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_soft_vt_contact_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_chain"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_cable_drop"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_stacking"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_pile_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]

@@ -10,7 +10,7 @@ It is a direct port of the structure in Newton's
 `solvers/featherstone/kernels.py`, with spatial-vector primitives
 borrowed from Warp's `_src/math.py` / `builtins.py`. The CPU path is
 the reference oracle; the GPU path (WGSL kernel
-[`featherstone.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/featherstone.wgsl))
+[`featherstone.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/featherstone.wgsl))
 implements the identical three-pass algorithm one workgroup per
 articulation.
 

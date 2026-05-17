@@ -1,7 +1,7 @@
 # Finite-Element Method — overview
 
 Molla ships a substantial, layered Finite-Element Method (FEM) framework
-under `crates/molla/src/fem/`. It is the single largest physical-modelling
+under `crates/molla-fem/src/`. It is the single largest physical-modelling
 subsystem in the engine and is where molla materially **leads** its
 ancestor projects: Nvidia's `newton` has *no* FEM module at all (it is a
 purely particle / soft-rigid solver), and `warp` ships only the bare
@@ -43,7 +43,7 @@ mesh  ──►  function_space  ──►  quadrature  ──►  element  ─�
 The five "core" chapters mirror this layering:
 
 - [mesh](./mesh.md) — `FemMesh` + `FemCell::{Tri, Tet}`, grid builders,
-  Gmsh MSH 4.1 import, `compute_edges`.
+  and `compute_edges`.
 - [quadrature](./quadrature.md) — Gauss rules: 1 / 3 / 6-pt on
   triangles, 1 / 4 / 5 / 11-pt on tets, plus 3D-tri surface rules used
   by the Stage 47 v3 nonconforming projection.
@@ -96,7 +96,7 @@ visitor API kept the dense form for readability.
 
 ## Layered correctness guarantees
 
-Every contract test in `crates/molla/tests/fem_*.rs` exercises one
+Every contract test in `crates/molla-fem/tests/fem_*.rs` exercises one
 layer in isolation:
 
 | Layer            | Test                                            | Property checked                                                              |
@@ -157,5 +157,5 @@ implementation in.
 | [friction.md](./friction.md)                  | (planned, Stage 50)                    |
 
 Cross-references throughout each chapter point you back to the
-matching source file — `crates/molla/src/fem/<file>.rs` — so you can
+matching source file — `crates/molla-fem/src/<file>.rs` — so you can
 read the doc alongside the actual implementation.

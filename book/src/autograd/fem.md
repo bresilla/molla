@@ -8,8 +8,8 @@ dimensionality of `p`. The implementation reuses molla's existing
 sparse-matrix infrastructure (BSR + CG) and exposes a single
 `solve_adjoint(...)` entry-point.
 
-Source: `crates/molla/src/fem/adjoint.rs`. Forward solver:
-`crates/molla/src/fem/elasticity.rs`. Glue with optimisers:
+Source: `crates/molla-fem/src/adjoint.rs`. Forward solver:
+`crates/molla-fem/src/elasticity_gpu.rs` / `crates/molla-fem/src/solver.rs`. Glue with optimisers:
 `molla::math::optim::Adam`.
 
 ## Algorithm (textbook recap)

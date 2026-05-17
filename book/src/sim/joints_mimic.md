@@ -90,12 +90,11 @@ reads `equality_mimic_*` only when `equality_type == JointMimic`.
 
 ### Why 4th-order?
 
-Newton's `JOINT` equality (and MJCF's `<equality type="joint">`)
-defines mimic via a 4-coefficient polynomial up to `q⁴`. molla matches
-the API surface exactly — Stage 32's polynomial form is what URDF /
-MJCF / USD physics-schema imports round-trip into. Anything beyond
-quartic typically signals a kinematic problem better expressed as
-two independent joints + a position equality.
+Newton's `JOINT` equality defines mimic via a polynomial up to `q⁴`.
+molla keeps the same native polynomial form because it is compact,
+GPU-friendly, and covers common gear/linkage relationships. Anything beyond
+quartic typically signals a kinematic problem better expressed as two
+independent joints + a position equality.
 
 ### Examples
 
@@ -142,7 +141,7 @@ inside the kinematic loop is conserved to first order.
 |-----------------------|:------------:|:----------------:|:-------------:|:------------------:|
 | Closed kinematic loop | ✓            | ✓                |              | ✓ (positional)     |
 | Non-linear relation   |              | ✓                |               |                    |
-| URDF / MJCF round-trip| ✓            | ✓                |               | ✓                  |
+| Native serialization  | ✓            | ✓                |               | ✓                  |
 | Hard constraint       | ✓ (projection) | ✓ (projection) |               | XPBD-soft          |
 | Driver chooses force  |              |                  | ✓             |                    |
 

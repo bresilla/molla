@@ -1,7 +1,7 @@
 # Stokes and Navier-Stokes
 
 Incompressible Stokes / Navier–Stokes lives in
-`crates/molla/src/fem/stokes.rs` (~1600 lines) and uses
+`crates/molla-fem/src/stokes.rs` (~1600 lines) and uses
 **Taylor–Hood mixed elements** — P2 vector velocity + P1 scalar
 pressure — solved with a SIMPLE-style projection iteration on the
 pressure-Schur complement. A FFT-based alternative for periodic 2D
@@ -219,13 +219,29 @@ loop with GPU sparse-matvec + resident CG inside each predictor /
 corrector. Stage 41 v5 added async-dot fusion for the inner CG so
 each iteration is a single compute pass.
 
+Stage 41 v7 adds a resident SSP-RK selector:
+
+```rust
+pub enum NavierStokesGpuTimeIntegrator {
+    ImexEuler,
+    SspRk2,
+    SspRk3,
+}
+```
+
+`SspRk2` and `SspRk3` apply the existing GPU IMEX Euler stage multiple
+times and form the Shu-Osher convex combinations with the
+`combine_states` WGSL entry point. Velocity and pressure stage vectors
+stay in device buffers for the whole step; the solver reads back only
+the final `NavierStokesGpuResult`.
+
 The shader pair is:
 
-- `crates/molla/shaders/fem_stokes_assemble.wgsl` — per-cell assembly
+- `crates/molla-fem/shaders/fem_stokes_assemble.wgsl` — per-cell assembly
   of the velocity and divergence blocks (one workgroup per cell).
-- `crates/molla/shaders/fem_ns_advect.wgsl` /
-  `fem_ns_rhs_assemble.wgsl` — Navier-Stokes per-step convection +
-  RHS construction.
+- `crates/molla-fem/shaders/fem_ns_advect.wgsl` /
+  `fem_ns_rhs_assemble.wgsl` — Navier-Stokes per-step convection,
+  RHS construction, zero-mask, and SSP-RK state-combination kernels.
 
 ## Cross-references
 

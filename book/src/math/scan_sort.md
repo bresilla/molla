@@ -2,10 +2,10 @@
 
 molla's GPU pipelines lean on two device-wide primitives:
 
-- **`ScanKernel`** (`crates/molla/src/kernels/scan.rs`) — exclusive
+- **`ScanKernel`** (`crates/molla-kernels/src/scan.rs`) — exclusive
   or inclusive `u32` prefix scan. Three passes, scales to ≈ 16 M
   elements.
-- **`RadixSortKernel64`** (`crates/molla/src/kernels/radix_sort.rs`) —
+- **`RadixSortKernel64`** (`crates/molla-compute-primitives/src/radix_sort.rs`) —
   8 passes of 8-bit radix on `(u64 key, u32 value)` pairs. Plus
   segmented sort via segment-tag prefix.
 
