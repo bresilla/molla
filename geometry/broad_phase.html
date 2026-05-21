@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,7 +190,7 @@ parity-tested against brute force in
 <tr><td>Brute force</td><td><code>geometry/broad_phase.rs::brute_force_pairs</code></td><td>tests only</td><td>parity checks, &lt; 20 shapes</td></tr>
 <tr><td>Sweep-and-Prune (SAP)</td><td><code>geometry/broad_phase.rs::BroadPhase::sap_pairs</code></td><td><strong>yes</strong></td><td>up to a few hundred shapes</td></tr>
 <tr><td>Top-down BVH</td><td><code>geometry/bvh.rs::Bvh::pairs</code></td><td>opt-in</td><td>&gt; few hundred shapes</td></tr>
-<tr><td>GPU LBVH</td><td><code>kernels/lbvh.rs::LbvhBroadPhase</code></td><td>opt-in (<code>gpu</code> feature)</td><td>&gt; 1 k shapes</td></tr>
+<tr><td>GPU LBVH</td><td><code>molla_geometry::LbvhBroadPhase</code></td><td>opt-in (<code>gpu</code> feature)</td><td>&gt; 1 k shapes</td></tr>
 </tbody>
 </table>
 </div>
@@ -280,7 +280,7 @@ over SAP once shape count gets large enough that the sweep’s
 near-linear scan starts to hurt (a few hundred shapes is the
 crossover on a modern CPU).</p>
 <h2 id="gpu-lbvh"><a class="header" href="#gpu-lbvh">GPU LBVH</a></h2>
-<p><code>crates/molla/src/kernels/lbvh.rs</code> ships a Karras-2012 LBVH
+<p><code>crates/molla-geometry/src/lbvh.rs</code> ships a Karras-2012 LBVH
 (“Maximizing parallelism in the construction of BVHs, octrees, and
 k-d trees”) with a parallel pair-finder. Enable via:</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
@@ -355,11 +355,11 @@ extent so the narrow-phase sees fast-moving pairs as candidates.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@ molla provides for 1-DoF linear-stretch DOFs like tendons or
 muscle-tendon units (MTUs). Together they let molla simulate
 musculoskeletal models in the OpenSim / MyoSuite tradition without
 leaving the GPU-first pipeline.</p>
-<p>The muscle ships in four progressive cuts (v1 → v4):</p>
+<p>The muscle ships in five progressive cuts (v1 → v5):</p>
 <ul>
 <li><strong>v1</strong> — Single muscle per joint, instantaneous activation, rigid
 tendon. Hill three-element model only.</li>
@@ -191,9 +191,12 @@ CSR (multiple muscles summed at the solver level).</li>
 <li><strong>v3</strong> — GPU kernel (<code>shaders/muscle.wgsl</code>) for the per-step torque
 computation on host-allocated parallel buffers.</li>
 <li><strong>v4</strong> — SEE Newton solve runs on the GPU with full host parity.</li>
+<li><strong>v5</strong> — Per-muscle tendon stiffness ratio is stored in model buffers and
+consumed by both CPU and GPU SEE paths; pennation remains per-muscle on both
+paths.</li>
 </ul>
-<p>Source: <code>crates/molla/src/actuators/muscle.rs</code>. Shader:
-<code>crates/molla/shaders/muscle.wgsl</code>. The host-side Hill model is
+<p>Source: <code>crates/molla-actuators/src/muscle.rs</code>. Shader:
+<code>crates/molla-kernels/shaders/muscle.wgsl</code>. The host-side Hill model is
 always compiled (no GPU feature gate) so unit tests and the CPU
 solver can use it directly.</p>
 <h2 id="three-element-hill-model"><a class="header" href="#three-element-hill-model">Three-element Hill model</a></h2>
@@ -306,7 +309,8 @@ contributions into a <code>joint_force</code> scatter buffer; the
 Featherstone solver’s torque-injection pass then sums them into the
 joint-space tau vector.</p>
 <p>v4 ships the SEE Newton solve on the GPU too, with full host
-parity (verified by parity tests in <code>tests/muscle_gpu.rs</code>). The same
+parity (verified by parity tests in
+<code>crates/molla-solvers/tests/joint_muscle_gpu.rs</code>). The same
 damped Newton kernel runs across all muscles in lockstep — no
 per-muscle control divergence inside the 8 iterations, because every
 muscle that converges early simply repeats its converged solution
@@ -322,6 +326,7 @@ for the remaining iterations.</p>
     pub excitation: Real,       // u ∈ [0, 1] (initial neural drive)
     pub tau_activation: Real,   // τ_act (s), default 0.020
     pub l_tendon_slack: Real,   // 0 ⇒ rigid tendon, &gt; 0 enables SEE
+    pub tendon_stiffness_ratio: Real, // E·A / f_max, default 30
     pub pennation_angle: Real,  // α₀ at l_opt (rad), default 0
     pub polarity: Real,         // +1 / −1 (antagonist flag)
 }
@@ -388,11 +393,11 @@ Parameters to Simulate Dynamic Contractions in Older Adults”).</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

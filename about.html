@@ -15,8 +15,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/general-0392ca55.css">
+        <link rel="stylesheet" href="css/chrome-fc474251.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-11ed3a3f.js"></script>
+        <script src="toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -206,8 +206,6 @@ the repository root).</p>
 that just works.</li>
 <li>The Bevy maintainers for an ECS that the viewer rides on without
 fighting it.</li>
-<li>The <code>urdf-rs</code>, <code>mshio</code>, <code>openusd</code>, <code>mujoco-rust</code> crate authors —
-every importer in molla stands on one of them.</li>
 <li>The <code>glam</code> team — host <code>f64</code> math + device <code>f32</code> math from the
 same type names is a small thing that saved a lot of churn.</li>
 </ul>
@@ -224,12 +222,20 @@ parity, BSR <code>B=1</code>, persistent buffers, atomic-CAS pattern, no
 <code>cooperative_matrix</code>).</li>
 <li>For new solvers / kernels, follow the existing scaffold:
 <ul>
-<li>Rust dispatcher in <code>crates/molla/src/kernels/&lt;name&gt;.rs</code>.</li>
-<li>WGSL kernel in <code>crates/molla/shaders/&lt;name&gt;.wgsl</code>.</li>
-<li>CPU reference implementation in the same Rust module.</li>
-<li>Parity test in <code>crates/molla/tests/&lt;name&gt;_gpu.rs</code>, gated by
-<code>#[ignore]</code> and <code>#[cfg(feature = "gpu")]</code>.</li>
-<li>Criterion bench in <code>crates/molla/benches/</code>.</li>
+<li>Put reusable implementation in the owning functionality crate
+under <code>crates/</code> (<code>molla-solvers</code>, <code>molla-fem</code>,
+<code>molla-sensors</code>, etc.).</li>
+<li>Put shared WGSL dispatch wrappers and shaders in
+<code>crates/molla-kernels</code> unless the kernel is intentionally owned
+by a functional crate such as <code>molla-fem</code>.</li>
+<li>Keep CPU reference/oracle code beside the functionality it
+verifies.</li>
+<li>Put parity tests and Criterion benches in the owning crate’s
+<code>tests/</code> and <code>benches/</code> directories, gated by <code>#[ignore]</code> /
+<code>#[cfg(feature = "gpu")]</code> and <code>required-features = ["gpu"]</code>
+where appropriate.</li>
+<li>Use <code>crates/molla</code> tests/benches only for facade compatibility
+or top-level product coverage.</li>
 <li>If the feature has a user-visible behaviour: a viewer scene.</li>
 </ul>
 </li>
@@ -286,11 +292,11 @@ parity, BSR <code>B=1</code>, persistent buffers, atomic-CAS pattern, no
 
         <script src="elasticlunr-ef4e11c1.min.js"></script>
         <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="searcher-09f2665d.js"></script>
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

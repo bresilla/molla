@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>MJCF (writer) - molla — Rust + WGPU Physics Engine</title>
+        <title>Phase-field fracture - molla — Rust + WGPU Physics Engine</title>
 
 
         <!-- Custom HTML head -->
@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -174,146 +174,60 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="mjcf-writer"><a class="header" href="#mjcf-writer">MJCF writer</a></h1>
-<p>molla ships a <strong>writer</strong> for MJCF (MuJoCo XML Configuration Format),
-not a reader. MJCF in molla is an internal serialization the
-MuJoCo wrapper solver (Stage 22) emits to bridge a <code>molla::Model</code>
-into the upstream <code>libmujoco</code>. It is not intended as a general
-authoring format — users author in URDF or USD, and (if they need
-MuJoCo semantics) molla writes the corresponding MJCF on the fly.</p>
-<h2 id="where-it-lives"><a class="header" href="#where-it-lives">Where it lives</a></h2>
-<p><code>crates/molla/src/solvers/mujoco.rs</code> — the <code>MjcfWriter</code> struct is
-private to the module and is invoked from <code>MuJoCoSolver::new(...)</code>
-just before handing the document off to <code>mujoco-rust</code>.</p>
+                        <h1 id="phase-field-fracture"><a class="header" href="#phase-field-fracture">Phase-field fracture</a></h1>
+<p><code>molla-fem::phase_field</code> contains the first CPU oracle for brittle
+phase-field fracture. The current model is the standard frozen-history
+AT2 scalar damage update on the same P1 triangle/tetrahedron meshes used
+by the rest of FEM.</p>
+<p>The degradation law is:</p>
+<p>\[
+g(d) = (1-d)^2 + k,\qquad 0 \le d \le 1
+\]</p>
+<p>with history updated irreversibly as:</p>
+<p>\[
+H_{n+1} = \max(H_n, \psi^+).
+\]</p>
+<p>For a frozen tensile-energy history <code>H</code>, the assembled weak form is:</p>
+<p>\[
+\int_\Omega G_c \ell \nabla d \cdot \nabla \eta</p>
+<ul>
+<li>(G_c/\ell + 2H) d\eta,dx
+=
+\int_\Omega 2H\eta,dx.
+\]</li>
+</ul>
+<h2 id="public-api"><a class="header" href="#public-api">Public API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let mjcf: String = MjcfWriter::new(model, &amp;cached_body_q, &amp;body_to_mj).write()?;
+</span>pub struct PhaseFieldFractureParams {
+    pub critical_energy_release_rate: Real,
+    pub length_scale: Real,
+    pub residual_stiffness: Real,
+}
+
+pub fn phase_field_degradation(damage, residual_stiffness) -&gt; Real;
+pub fn update_phase_field_history(previous, tensile_energy_density) -&gt; Real;
+pub fn phase_field_fracture_energy_density(d, grad_d_norm_sq, history, params) -&gt; Real;
+
+pub fn assemble_phase_field_fracture_system(mesh, history, params) -&gt; Result&lt;(BsrMatrix, Vec&lt;Real&gt;)&gt;;
+pub fn solve_phase_field_fracture_jacobi(mesh, damage_old, history, params, max_iters, tol)
+    -&gt; Result&lt;PhaseFieldFractureSolveResult&gt;;
 <span class="boring">}</span></code></pre>
-<p>The output is a UTF-8 string that MuJoCo’s compiler reads via
-<code>mjModel = mj_loadXMLString(mjcf.as_ptr(), ...)</code>. It is intentionally
-not pretty-printed — MuJoCo doesn’t care, and the writer is trivial.</p>
-<h2 id="what-it-emits"><a class="header" href="#what-it-emits">What it emits</a></h2>
-<ul>
-<li><code>&lt;option timestep="0.001" gravity="gx gy gz" integrator="implicitfast"/&gt;</code> —
-picks <code>implicitfast</code> because it matches MuJoCo’s default for
-articulated mechanisms (reasonable energy / stability balance).</li>
-<li><code>&lt;default&gt;</code> — a single tiny block making every geom visible
-(<code>rgba="0.7 0.7 0.7 1"</code>).</li>
-<li><code>&lt;asset&gt;</code> — one <code>&lt;mesh/&gt;</code> per <code>ShapeGeometry::TriMesh</code> / <code>Hull</code>
-with vertices + indices flattened to space-separated floats; one
-<code>&lt;hfield/&gt;</code> per <code>Heightfield</code>. Empty when the model has no
-mesh-bearing shapes.</li>
-<li><code>&lt;worldbody&gt;</code> — the full body tree.
-<ul>
-<li>Each body becomes a <code>&lt;body name=...&gt;</code> with <code>pos</code> + <code>quat</code>
-from <code>body_q</code>.</li>
-<li>Each shape on a body becomes a <code>&lt;geom type=... size=...&gt;</code>
-inside.</li>
-<li>Joints between parent and child bodies become <code>&lt;joint type=...&gt;</code>
-elements inside the child.</li>
-</ul>
-</li>
-<li><code>&lt;equality&gt;</code> — <code>&lt;weld&gt;</code> for each fixed joint (so MuJoCo enforces
-rigid attachment); <code>&lt;connect&gt;</code> for <code>EqualityType::Connect</code>;
-per-pair distance + joint-mimic equality.</li>
-</ul>
-<p>The full mapping table:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>molla <code>ShapeGeometry</code></th><th>MJCF <code>&lt;geom&gt;</code></th></tr>
-</thead>
-<tbody>
-<tr><td><code>Sphere { radius }</code></td><td><code>type="sphere"</code></td></tr>
-<tr><td><code>Box { half_extents }</code></td><td><code>type="box"</code></td></tr>
-<tr><td><code>Capsule { radius, half_height }</code></td><td><code>type="capsule"</code></td></tr>
-<tr><td><code>Cylinder { radius, half_height}</code></td><td><code>type="cylinder"</code></td></tr>
-<tr><td><code>Cone { radius, half_height } </code></td><td>approximated as capsule (MuJoCo has no cone)</td></tr>
-<tr><td><code>Hull { ... }</code></td><td><code>type="mesh"</code> referencing <code>&lt;asset&gt;&lt;mesh/&gt;</code></td></tr>
-<tr><td><code>TriMesh { ... }</code></td><td><code>type="mesh"</code></td></tr>
-<tr><td><code>SdfShape { ... }</code></td><td>discarded — MuJoCo has no SDF primitive</td></tr>
-<tr><td><code>Heightfield { ... }</code></td><td><code>type="hfield"</code> referencing <code>&lt;asset&gt;&lt;hfield/&gt;</code></td></tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>molla <code>JointType</code></th><th>MJCF <code>&lt;joint&gt;</code></th></tr>
-</thead>
-<tbody>
-<tr><td><code>Revolute</code></td><td><code>type="hinge"</code> + <code>axis</code></td></tr>
-<tr><td><code>Prismatic</code></td><td><code>type="slide"</code> + <code>axis</code></td></tr>
-<tr><td><code>Fixed</code></td><td>not a joint; emitted as <code>&lt;weld&gt;</code> equality</td></tr>
-<tr><td><code>Free</code></td><td><code>type="free"</code></td></tr>
-<tr><td><code>Ball</code></td><td><code>type="ball"</code></td></tr>
-<tr><td><code>D6</code></td><td>composite of three slides + three hinges</td></tr>
-<tr><td><code>Distance</code></td><td>not a joint; emitted as a <code>&lt;distance&gt;</code> equality</td></tr>
-<tr><td><code>CABLE</code></td><td>discarded — MuJoCo has no native CABLE; see solvers/mujoco.md</td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="multi-world-collapse"><a class="header" href="#multi-world-collapse">Multi-world collapse</a></h2>
-<p>The writer <strong>collapses any multi-world model onto world 0</strong>. If
-<code>model.world_count &gt; 1</code> it logs:</p>
-<pre><code class="language-text">WARN MuJoCo solver: collapsing multi-world model onto world 0;
-     multi-env dispatch isn't supported in v1
-</code></pre>
-<p>This is a Stage 22 limitation — MuJoCo’s API is single-environment;
-batched / multi-env stepping would need either independent
-<code>mjData</code> instances or the upstream MuJoCo MPC / MJX path (out of
-scope for the wrapper).</p>
-<h2 id="why-a-writer-instead-of-a-reader"><a class="header" href="#why-a-writer-instead-of-a-reader">Why a writer instead of a reader</a></h2>
-<p>molla’s import path is <strong>URDF → ModelBuilder</strong> for ROS workflows
-and <strong>USD → bevy_openusd → Model</strong> for everything else. MJCF as a
-reader was rejected at Stage 22 because:</p>
-<ul>
-<li>MJCF is MuJoCo’s authoring format. USD is the format the
-graphics + simulation ecosystem is converging on. Adding an MJCF
-reader would duplicate the importer maintenance burden without
-serving a use case URDF or USD can’t cover.</li>
-<li><code>mujoco-rust</code> already loads MJCF internally. The wrapper solver
-has a real MuJoCo compiler available; the molla side only needs
-to <strong>emit</strong> MJCF, not parse it.</li>
-</ul>
-<p>The decision is documented in <code>PLAN.md</code> Stage 22 and in commit
-<code>5bf55df</code> (“drop MJCF importer — go through usd_molla instead”).</p>
-<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
-<ul>
-<li><strong>No actuators in the emitted MJCF.</strong> molla’s actuator pipeline
-(PD / PID / DC motor / muscle / neural) runs host-side and writes
-forces into <code>state.body_f</code> before each MuJoCo step. MuJoCo’s
-<code>&lt;actuator&gt;</code> block is not used.</li>
-<li><strong>No tendons, no soft constraints.</strong> MuJoCo’s soft-constraint
-family is rich; molla doesn’t use it. Constraint equalities
-(<code>&lt;weld&gt;</code>, <code>&lt;connect&gt;</code>, <code>&lt;distance&gt;</code>, <code>&lt;joint&gt;</code>) are the only
-ones emitted.</li>
-<li><strong>Materials are minimal.</strong> Friction / restitution per shape are
-not yet pushed into <code>&lt;geom solimp&gt;</code> / <code>&lt;geom friction&gt;</code>; the
-wrapper uses MuJoCo’s default contact response.</li>
-<li><strong>Sensors are not emitted.</strong> molla’s sensor pipeline runs
-host-side over the post-step state; MuJoCo’s <code>&lt;sensor&gt;</code> block is
-not used.</li>
-</ul>
-<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
-<ul>
-<li><a href="../solvers/mujoco.html"><code>solvers/mujoco.md</code></a> — the wrapper solver
-that consumes the MJCF output.</li>
-<li><a href="../architecture/features.html"><code>architecture/features.md</code></a> — the
-<code>mujoco</code> Cargo feature flag.</li>
-<li><code>PLAN.md</code> Stage 22 and 22.1 — full design notes including the
-hydroelastic contact integration.</li>
-</ul>
+<p><code>assemble_phase_field_fracture_system</code> reuses the existing element mass
+and stiffness kernels, averaging nodal history per element. The Jacobi
+solver is deliberately conservative: every iterate is clamped to
+<code>damage_old &lt;= damage &lt;= 1</code>, making it a simple CPU correctness oracle
+for later Newton/AMG/GPU paths.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../importers/urdf.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../fem/friction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../importers/usd.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../sensors/raycaster.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -323,11 +237,11 @@ hydroelastic contact integration.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../importers/urdf.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../fem/friction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../importers/usd.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../sensors/raycaster.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -349,11 +263,11 @@ hydroelastic contact integration.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

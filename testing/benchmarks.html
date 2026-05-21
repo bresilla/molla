@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,9 +175,13 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h1>
-<p>molla ships 43 <a href="https://github.com/bheisler/criterion.rs"><code>criterion</code></a>
-benches in <code>crates/molla/benches/</code>, grouped by stage family. They
-serve two purposes:</p>
+<p>molla ships <a href="https://github.com/bheisler/criterion.rs"><code>criterion</code></a> benches in
+the crate that owns the measured functionality. Most physics benches now live
+under <code>crates/molla-solvers/benches/</code>, geometry benches under
+<code>crates/molla-geometry/benches/</code>, kernel benches under
+<code>crates/molla-kernels/benches/</code>, sensor benches under
+<code>crates/molla-sensors/benches/</code>, and facade/product step benches under
+<code>crates/molla/benches/</code>. They serve two purposes:</p>
 <ol>
 <li><strong>Tracking perf regressions</strong> — criterion saves baseline times
 and reports relative changes per run.</li>
@@ -194,12 +198,12 @@ make bench-gpu              # GPU step bench (needs wgpu adapter)
 make bench-featherstone     # CPU-vs-GPU Featherstone in one criterion group
 </code></pre>
 <p>To run a specific bench:</p>
-<pre><code class="language-bash">nixVulkan cargo bench -p molla --bench bench_xpbd_pile_gpu --features gpu
+<pre><code class="language-bash">nixVulkan cargo bench -p molla-solvers --bench bench_xpbd_pile_gpu --features gpu
 </code></pre>
-<p>Each bench’s name maps 1:1 to a <code>crates/molla/benches/&lt;name&gt;.rs</code>
-file. The Cargo.toml <code>[[bench]]</code> sections set
-<code>required-features = ["gpu"]</code> for the GPU benches so they only
-attempt to build when the feature is on.</p>
+<p>Each bench’s name maps 1:1 to a <code>benches/&lt;name&gt;.rs</code> file in the owning crate.
+The owning crate’s Cargo.toml <code>[[bench]]</code> sections set
+<code>required-features = ["gpu"]</code> for GPU benches so they only attempt to build when
+the feature is on.</p>
 <h2 id="bench-inventory-by-family"><a class="header" href="#bench-inventory-by-family">Bench inventory by family</a></h2>
 <h3 id="stage-a--rigid-xpbd"><a class="header" href="#stage-a--rigid-xpbd">Stage A — rigid XPBD</a></h3>
 <div class="table-wrapper">
@@ -470,11 +474,11 @@ targets for benches.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

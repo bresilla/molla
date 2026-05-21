@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,8 +188,8 @@ gradients.</p>
 GPU-first rule. Tape recording fundamentally needs heap allocation
 and a dynamic graph structure that doesn’t map onto wgpu’s
 compute-pipeline-state model — Newton + Warp solve the same problem
-with Python + CUDA graphs, neither of which we have. We use Rust +
-CPU and accept the perf hit (orders of magnitude vs hand-written
+with dynamic host graphs. We use Rust + CPU and accept the perf hit
+(orders of magnitude vs hand-written
 adjoint kernels) in exchange for a working, testable autograd v1.</p>
 <p>Crucially, the <code>TapeOp</code> enum is engine-agnostic: a GPU port can
 iterate the tape and dispatch one kernel per op without touching
@@ -253,14 +253,13 @@ forcing a CPU-side recompute.</p>
 (<code>FeatherstoneFwdKinematics</code>, <code>FeatherstoneUpwardInertia</code>,
 <code>FeatherstoneDownwardAccel</code>) that <em>don’t</em> dispatch through the
 generic backward — see <a href="./featherstone.html"><code>Featherstone reverse adjoint</code></a>.
-The chunks are recorded so a future GPU port can iterate the tape
-and swap each sweep for its own kernel.</p>
+The chunks are recorded so a future GPU port can iterate the tape and swap each
+sweep for its own kernel.</p>
 <h2 id="custom-adjoints--wpfunc_grad-pattern"><a class="header" href="#custom-adjoints--wpfunc_grad-pattern">Custom adjoints — <code>wp.func_grad</code> pattern</a></h2>
 <p>Recording every elementary op into the tape is the <strong>slow path</strong>.
 For hot solver loops (XPBD constraint projection, Featherstone
-ABA), molla ships hand-written closed-form adjoints that bypass
-the tape entirely — the same trick Warp’s <code>wp.func_grad</code> decorator
-gives Python users. These live in their own modules:</p>
+ABA), molla ships hand-written closed-form adjoints that bypass the tape
+entirely. These live in their own modules:</p>
 <ul>
 <li><a href="./xpbd_vbd.html"><code>xpbd_adjoint</code></a> — manual reverse pass over the
 XPBD distance-constraint Gauss-Seidel loop.</li>
@@ -277,8 +276,8 @@ cost and inline cleanly, but they’re locked to one forward path. The
 tape generalises to anything you can express as a chain of <code>TapeOp</code>s
 but cleans up the heap for every recorded intermediate.</p>
 <h2 id="gradient-checking"><a class="header" href="#gradient-checking">Gradient checking</a></h2>
-<p>The autograd tests in <code>crates/molla/tests/autograd_xpbd.rs</code> and
-<code>tests/autograd_featherstone.rs</code> exercise the hand-written gradients
+<p>The autograd tests in <code>crates/molla-autograd/tests/autograd_xpbd.rs</code> and
+<code>crates/molla-autograd/tests/autograd_featherstone.rs</code> exercise the hand-written gradients
 against central-difference finite differences with tolerance <code>1e-3</code>
 (the standard <code>gradcheck</code> tolerance Warp ships).</p>
 <p>For ad-hoc checks, the pattern is:</p>
@@ -365,11 +364,11 @@ functions backing the elementwise <code>*Loss</code> ops.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

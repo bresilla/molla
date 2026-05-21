@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,7 +175,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="discontinuous-galerkin-dg"><a class="header" href="#discontinuous-galerkin-dg">Discontinuous Galerkin (DG)</a></h1>
-<p>The DG cluster — <code>crates/molla/src/fem/dg_element.rs</code> (~2700 lines)
+<p>The DG cluster — <code>crates/molla-fem/src/dg_element.rs</code> (~2700 lines)
 and <code>dg_time_integrator.rs</code> (~200 lines) — is the second-largest
 chapter set in the FEM stack. DG generalises classical continuous
 Galerkin (CG) by <strong>dropping inter-element continuity</strong>: a vertex shared
@@ -232,6 +232,7 @@ hyperbolic specials (Burgers shock, SWE dam-break).</p>
 <tr><td>43 v2</td><td>SSP-RK2 / RK3 time integration; Nitsche weak Dirichlet</td></tr>
 <tr><td>43 v3</td><td>P2 DG, SWE-specific HLL / HLLC / RoeSwe, Krivodonova limiter</td></tr>
 <tr><td>43 v4</td><td>GPU port of HLL / HLLC / RoeSwe (queued)</td></tr>
+<tr><td>C2</td><td>2D compressible Euler physical / Rusanov / HLL flux helpers</td></tr>
 </tbody>
 </table>
 </div>
@@ -253,6 +254,16 @@ shared DoFs), so the inverse mass is cheap to apply — typically the
 RHS routine inverts it on-the-fly inside <code>du/dt = M⁻¹ R(u)</code> before
 handing to the <a href="./dg_time.html">time integrator</a>.</p>
 <p>The <code>dg_element.rs</code> API exposes the building blocks:</p>
+<p>For compressible-flow follow-ons, the Euler helpers mirror the SWE
+pointwise flux API:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn euler_pressure_2d(u: [Real; 4], gamma: Real) -&gt; Real;
+pub fn euler_flux_dot_n_2d(u: [Real; 4], n: Vec3, gamma: Real) -&gt; [Real; 4];
+pub fn compute_euler_numerical_flux_rusanov_2d(... ) -&gt; [Real; 4];
+pub fn compute_euler_numerical_flux_hll_2d(... ) -&gt; [Real; 4];
+<span class="boring">}</span></code></pre>
+<p>The state is conservative <code>(ρ, ρu, ρv, E)</code>, with an ideal-gas EOS.</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>pub fn compute_element_dg_mass(cell, vertices, degree) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
@@ -360,11 +371,11 @@ formulation for elliptic operators. See
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

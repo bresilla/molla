@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -176,7 +176,7 @@
                     <main>
                         <h1 id="meshes-and-function-spaces"><a class="header" href="#meshes-and-function-spaces">Meshes and function spaces</a></h1>
 <p>The geometric substrate of the FEM stack lives in
-<code>crates/molla/src/fem/mesh.rs</code> — a flat <code>Vec&lt;Vec3&gt;</code> of vertex
+<code>crates/molla-fem/src/mesh.rs</code> — a flat <code>Vec&lt;Vec3&gt;</code> of vertex
 positions and a <code>Vec&lt;FemCell&gt;</code> of cell topologies — together with the
 <code>FunctionSpace</code> enum in <code>function_space.rs</code> that decides how degrees of
 freedom (DoFs) are attached to the mesh.</p>
@@ -229,22 +229,9 @@ and have positive volume under the standard
 <code>tet_grid_3d_positive_volumes</code> unit test asserts this on every cell.</li>
 </ul>
 <p>The grid builders are deliberately the <em>only</em> topology-generating
-helpers in the v1 FEM module — anything more exotic (cantilever beam,
-lid-driven cavity geometry) is built ad-hoc by composing these or by
-loading an external mesh.</p>
-<h3 id="gmsh-msh-41-import"><a class="header" href="#gmsh-msh-41-import">Gmsh MSH 4.1 import</a></h3>
-<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>FemMesh::from_gmsh_str(s: &amp;str) -&gt; Result&lt;Self&gt;
-FemMesh::from_gmsh_bytes(b: &amp;[u8]) -&gt; Result&lt;Self&gt;
-FemMesh::from_gmsh_path(path: &amp;Path) -&gt; Result&lt;Self&gt;
-<span class="boring">}</span></code></pre>
-<p>These parse the Gmsh MSH 4.1 format (ASCII or binary) via the <code>mshio</code>
-crate. Only <code>Tri3</code> and <code>Tet4</code> element blocks are accepted — every
-other element type is logged with <code>tracing::warn!</code> and dropped.
-Non-contiguous node tags (which Gmsh allows when a mesh is built
-incrementally) are remapped through a <code>HashMap&lt;u64, u32&gt;</code> so the
-returned mesh has dense <code>0..n</code> vertex indices.</p>
+helpers in the v1 FEM module. More exotic FEM geometries are built
+procedurally by composing these builders; external mesh importers are
+outside the physics-only scope.</p>
 <h2 id="edge-enumeration--compute_edges"><a class="header" href="#edge-enumeration--compute_edges">Edge enumeration — <code>compute_edges</code></a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -363,11 +350,11 @@ refinement — is described in <a href="./amr.html">amr</a>.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

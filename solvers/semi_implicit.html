@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -225,7 +225,7 @@ ad-hoc wrenches each step (RL “push the cube” tasks).</li>
 </ul>
 <p>It does <strong>not</strong> handle:</p>
 <ul>
-<li>Contacts (use XPBD or MuJoCo).</li>
+<li>Contacts (use XPBD).</li>
 <li>Joints (use Featherstone).</li>
 <li>Soft bodies (use VBD or XPBD particles).</li>
 </ul>
@@ -237,7 +237,7 @@ the GPU kernel.</p>
 <h2 id="gpu-implementation"><a class="header" href="#gpu-implementation">GPU implementation</a></h2>
 <pre><code class="language-rust ignore">#[cfg(feature = "gpu")]
 let solver = SemiImplicitSolver::new_gpu(&amp;engine)?;</code></pre>
-<p>Backed by <a href="https://github.com/molla/molla/blob/main/crates/molla/shaders/integrate_bodies.wgsl"><code>IntegrateBodiesKernel</code></a>
+<p>Backed by <a href="https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/integrate_bodies.wgsl"><code>IntegrateBodiesKernel</code></a>
 — one workgroup invocation per body, identical maths. The kernel
 binds:</p>
 <ul>
@@ -311,11 +311,11 @@ trajectory optimisation against a free-flight rigid target.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

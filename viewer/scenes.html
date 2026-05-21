@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@ Pick one from the dropdown in the top-left of the viewer, or jump
 to a marquee scene via a hotkey.</p>
 <p>This chapter is the index. The scenes are grouped by topic; for the
 strictly numerical ordering see <code>Scene::label()</code> in
-<code>crates/molla_viewer/src/main.rs</code>.</p>
+<code>bin/molla_viewer/src/main.rs</code>.</p>
 <h2 id="group-a--basics--rigid-xpbd"><a class="header" href="#group-a--basics--rigid-xpbd">Group A — basics &amp; rigid (XPBD)</a></h2>
 <div class="table-wrapper">
 <table>
@@ -224,7 +224,7 @@ strictly numerical ordering see <code>Scene::label()</code> in
 <tr><td>10</td><td>GpuIkArm</td><td></td><td>7-DOF Franka chases a draggable target via <code>IkSolver::solve_gpu</code></td></tr>
 <tr><td>13</td><td>Actuator</td><td></td><td>Single revolute joint driven by <code>Delay → ControllerPipelinePd → DcMotor</code></td></tr>
 <tr><td>14</td><td>Quadrotor</td><td><code>Q</code></td><td>FREE-root + 4 fixed rotor bodies; PD altitude + attitude control</td></tr>
-<tr><td>17</td><td>MuJoCo</td><td><code>J</code></td><td>Double pendulum stepped via the MuJoCo wrapper (Stage 22)</td></tr>
+<tr><td>17</td><td>NativePendulum</td><td><code>J</code></td><td>Procedural double pendulum stepped by the native Featherstone solver</td></tr>
 <tr><td>26</td><td>Pendulum</td><td></td><td>1-DoF revolute + 3-link chain pendulum side by side</td></tr>
 <tr><td>27</td><td>JointSampler</td><td></td><td>Revolute / prismatic / ball / distance joints, side by side</td></tr>
 <tr><td>29</td><td>Conveyor</td><td></td><td>Kinematic conveyor belt + dropped boxes that slide</td></tr>
@@ -444,7 +444,7 @@ strictly numerical ordering see <code>Scene::label()</code> in
 <li>The remainder are original molla demos built around specific
 Stage deliverables.</li>
 </ul>
-<p>Each scene’s source lives in <code>crates/molla_viewer/src/main.rs</code>.
+<p>Each scene’s source lives in <code>bin/molla_viewer/src/main.rs</code>.
 Search for the variant name (e.g. <code>Scene::ImplicitMpmBingham</code>) to
 find the <code>build_scene</code> arm, the per-scene state struct, the update
 system (if any), and the control_pane arm.</p>
@@ -496,11 +496,11 @@ for the chronological stage history that produced each scene.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

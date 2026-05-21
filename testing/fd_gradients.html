@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -269,7 +269,7 @@ disagreements and are eventually rewritten to use Moreau-envelope
 smoothing of the projection (Stage 23.1.3 D6 joint adjoint is the
 worked example).</p>
 <h2 id="raycast-adaptive-fd"><a class="header" href="#raycast-adaptive-fd">Raycast adaptive FD</a></h2>
-<p>The raycast adjoint test (<code>crates/molla/tests/raycast_adjoint.rs</code>)
+<p>The raycast adjoint test (<code>crates/molla-sensors/tests/raycast_adjoint.rs</code>)
 uses <strong>adaptive FD</strong> because the residual is sensitive to the step
 size when rays graze the silhouette of a sphere:</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
@@ -327,8 +327,8 @@ relative error before the adjoint shipped.</p>
 <ul>
 <li><a href="./parity.html">Parity testing</a> — for non-adjoint test patterns.</li>
 <li><a href="./strategy.html">Test strategy</a> — the higher-level picture.</li>
-<li><code>crates/molla/tests/autograd_*.rs</code> — the actual FD tests.</li>
-<li><code>crates/molla/tests/splat_*_backward.rs</code> — splat adjoint FD
+<li><code>crates/molla-autograd/tests/autograd_*.rs</code> — the actual FD tests.</li>
+<li><code>crates/molla-kernels/tests/splat_*_backward.rs</code> — splat adjoint FD
 tests, the worked example.</li>
 </ul>
 
@@ -376,11 +376,11 @@ tests, the worked example.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

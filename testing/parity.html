@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
 Every kernel has one. The pattern is the same regardless of what
 kernel is being tested.</p>
 <h2 id="the-recipe"><a class="header" href="#the-recipe">The recipe</a></h2>
-<p><code>crates/molla/tests/cpu_gpu_parity.rs</code> is the canonical example.
+<p><code>crates/molla-solvers/tests/cpu_gpu_parity.rs</code> is the canonical example.
 Five steps:</p>
 <ol>
 <li><strong>Gate the test</strong>. <code>#![cfg(feature = "gpu")]</code> at file top.</li>
@@ -195,8 +195,9 @@ shared).</li>
 </span>#![cfg(feature = "gpu")]
 
 <span class="boring">fn main() {
-</span>use molla::compute::{Backend, Engine};
-use molla::prelude::*;
+</span>use molla_compute::{Backend, Engine};
+use molla_math::{SpatialInertia, Transform, Vec3};
+use molla_sim::{BodyParams, Model, ModelBuilder};
 
 fn build_scene(n: usize) -&gt; Model {
     let mut b = ModelBuilder::new();
@@ -244,7 +245,8 @@ reproducible. No <code>rand::thread_rng()</code>. The patterns are:</p>
 <li>Hand-laid positions (<code>Vec3::new(i as f64 * 1.5, 10.0, 0.0)</code>).</li>
 <li>Deterministic-hash inputs for “random” perturbations
 (<code>(i * 0x9E3779B9) as f32 / u32::MAX as f32</code>).</li>
-<li>Reusable fixtures in <code>crates/molla/tests/fixtures/</code>.</li>
+<li>Reusable fixtures beside the owning crate’s tests, or in the facade
+test tree when the coverage is explicitly facade/product-level.</li>
 </ul>
 <p>When a parity test fails, the developer can rerun it bit-for-bit
 identical to reproduce.</p>
@@ -303,9 +305,8 @@ step.</p>
 No <code>#[ignore]</code>. Run in the default lane.</li>
 <li><strong>Smoke tests</strong> (<code>scene_smoke.rs</code>, <code>cpu_smoke.rs</code>) — assert that
 a build + a few steps succeed without crashing. CPU-only.</li>
-<li><strong>CPU oracle tests</strong> (<code>oracle_newton.rs</code>) — compare molla CPU
-output against Newton Python output. Need Python venv, gated
-by <code>#[ignore]</code>.</li>
+<li><strong>Reference-port tests</strong> (<code>oracle_newton.rs</code>) — compare molla CPU
+output against Rust translations of Newton/Warp fixtures.</li>
 </ul>
 <p>Some test families are intentionally GPU-only because the CPU path
 doesn’t exist or isn’t competitive:</p>
@@ -370,11 +371,11 @@ philosophy.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

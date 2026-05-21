@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -232,8 +232,8 @@ pub struct MlpWeights&lt;'a&gt; {
 </tbody>
 </table>
 </div>
-<p><code>controller.expected_weight_dims()</code> returns the exact tuple so
-exporters can size their tensors without re-deriving the math.</p>
+<p><code>controller.expected_weight_dims()</code> returns the exact tuple so callers can size
+their tensors without re-deriving the math.</p>
 <h3 id="per-step-contract"><a class="header" href="#per-step-contract">Per-step contract</a></h3>
 <p>The MLP forward pass runs as a single WGSL dispatch; the outputs
 are scattered into <code>Control.joint_force[dof_indices[i]]</code> by a
@@ -311,14 +311,12 @@ for episode in 0..n_episodes {
 <h2 id="weight-loading"><a class="header" href="#weight-loading">Weight loading</a></h2>
 <p>Both controllers expect row-major weight slabs and validate the
 total length at <code>set_weights</code> time. The mismatch error includes both
-the expected and actual lengths so an exporter mismatch shows up at
-load rather than at the first frame of inference.</p>
-<p>Reasonable PyTorch / JAX export conventions:</p>
+the expected and actual lengths so a bad weight slab shows up at load rather
+than at the first frame of inference.</p>
+<p>Weight slabs are row-major:</p>
 <ul>
-<li>PyTorch <code>nn.Linear(I, H)</code> ships <code>w</code> as <code>[H, I]</code> already — flatten
-with <code>w.detach().cpu().numpy().flatten()</code> and pass straight into
-the slab.</li>
-<li>JAX / Flax flax-linen uses <code>(I, H)</code> — transpose before flattening.</li>
+<li>Dense layer weights use <code>[out, in]</code> order and flatten row-major.</li>
+<li>Recurrent matrices use the gate order documented on <code>LstmWeights</code>.</li>
 <li>Recurrent state should always be initialised by the controller
 itself (<code>new</code> zeros <code>h_state</code> and <code>c_state</code>); don’t try to load it
 from a checkpoint.</li>
@@ -335,11 +333,7 @@ controllers into the <code>Delay → Controller → Clamping</code> chain.</li>
 <li><a href="./pd_pid.html"><code>PD / PID controllers</code></a> — same per-step contract,
 hand-tuned gains instead of learned weights.</li>
 <li><a href="../autograd/tape.html"><code>Differentiable physics / Tape-based autograd</code></a>
-— train policies inside molla using the autograd tape (vs. PyTorch
-<ul>
-<li>export route).</li>
-</ul>
-</li>
+— train or tune policies inside molla using the autograd tape.</li>
 </ul>
 
                     </main>
@@ -386,11 +380,11 @@ hand-tuned gains instead of learned weights.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

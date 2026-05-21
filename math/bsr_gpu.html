@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -335,7 +335,7 @@ explanation of why bitmaps beat hashtables on FEM-shaped inputs.</p>
 <h2 id="parity-testing"><a class="header" href="#parity-testing">Parity testing</a></h2>
 <p>Every kernel here has an oracle: run the matching <code>BsrMatrix</code> op on
 the host and compare with <code>BsrGpu::read_back</code>. The parity tests in
-<code>crates/molla/tests/sparse_gpu_parity.rs</code> cover matvec, axpy, transpose,
+<code>crates/molla-kernels/tests/bsr_gpu_parity.rs</code> cover matvec, axpy, transpose,
 and SpGEMM at multiple sizes — the contract is <strong>bit-identical CSR
 structure</strong> plus an <code>f32</code>-tolerance comparison on values.</p>
 
@@ -383,11 +383,11 @@ structure</strong> plus an <code>f32</code>-tolerance comparison on values.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,8 +183,11 @@ substeps. The pipeline composes:</p>
    ▲                              │
    └── ClothMeshId / TetMeshId    └── soft_ccd::vt_ccd → root-finder
 </code></pre>
-<p>All entry points live under <code>crates/molla/src/geometry/</code>:
-<code>soft_surface.rs</code>, <code>soft_bvh.rs</code>, <code>soft_ccd.rs</code>.</p>
+<p>Raw registry descriptors live under <code>crates/molla/src/sim/soft_surface.rs</code>
+because they are model data. Geometry re-exports those descriptors for
+compatibility and owns the derived acceleration/contact pieces in
+<code>crates/molla/src/geometry/</code>: <code>soft_surface.rs</code> (<code>boundary_facets</code>),
+<code>soft_bvh.rs</code>, and <code>soft_ccd.rs</code>.</p>
 <h2 id="softsurface-registry"><a class="header" href="#softsurface-registry"><code>SoftSurface</code> registry</a></h2>
 <p>Cloth tris and tet boundary tris are unified under a single
 “soft surface” so the downstream contact gather can treat them
@@ -225,7 +228,7 @@ tet” pass — group by sorted vertex triple, keep tris with count 1.
 The original CCW winding (from outside the tet) is preserved so
 downstream normal queries get the outward direction.</p>
 <p>A key invariant: the resulting tri list is <strong>sorted by sorted-key</strong>
-(<code>soft_surface.rs:172-176</code>). <code>HashMap</code> iteration order isn’t
+(<code>sim/soft_surface.rs</code>). <code>HashMap</code> iteration order isn’t
 stable across runs; without the sort, the per-tri global IDs that
 downstream code (LBVH, soft-VT contact gather, friction warm-start
 LUT keyed on <code>(vertex_global_id, tri_global_id)</code>) computes would
@@ -439,11 +442,11 @@ the per-step cost is well under 0.5 ms on CPU; GPU port (Stage
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
 <p>Two FEM meshes that share no DoFs need a transfer operator to move a
 scalar field from one to the other. The textbook recipe is <strong>L²
 projection mediated by a cross-mesh mass matrix</strong>, which lives in
-<code>crates/molla/src/fem/nonconforming.rs</code>. Stages 47 v1–v4 cover scalar
+<code>crates/molla-fem/src/nonconforming.rs</code>. Stages 47 v1–v4 cover scalar
 projection, vector projection, surface-only (contact) variant, and a
 penalty-contact force that integrates against it.</p>
 <h2 id="the-math"><a class="header" href="#the-math">The math</a></h2>
@@ -248,16 +248,13 @@ on every facet. Interior target DoFs receive zero contribution.</li>
 <p>Use volume for “field transfer between non-matching solid domains”;
 use surface for <strong>contact</strong> formulations where only the boundary
 matters.</p>
-<h3 id="tet-location-strategy-v1"><a class="header" href="#tet-location-strategy-v1">Tet-location strategy (v1)</a></h3>
-<p>v1 ships a <strong>brute-force linear scan</strong> over <code>source.cells</code> per
-quadrature point. The same approach as
-<a href="./apic.html"><code>apic_coupling::locate_particle_tet</code></a> and roughly
-\( O(N_T \cdot N_S) \) for the matrix build. A
-<code>TetBvh</code> follow-up could drop this to
-\( O(N_T \cdot \log N_S) \) without changing the public API — the
-crate <code>crates/molla/src/geometry/tet_bvh.rs</code> is the candidate. AABB
-filtering on the source side is already in place, which prunes most
-non-overlapping pairs cheaply.</p>
+<h3 id="tet-location-strategy-v5"><a class="header" href="#tet-location-strategy-v5">Tet-location strategy (v5)</a></h3>
+<p>v5 builds a source-side <code>molla_geometry::TetBvh</code> over inflated per-tet
+AABBs once during <code>NonconformingField</code> construction. Every target volume
+or surface quadrature point queries that BVH for candidate source tets,
+then runs the exact barycentric containment check only on those
+candidates. The public API stays unchanged, but the source lookup drops
+from a brute-force scan over <code>source.cells</code> to a BVH candidate query.</p>
 <h3 id="project--project_vector"><a class="header" href="#project--project_vector"><code>project</code> / <code>project_vector</code></a></h3>
 <p><code>project</code> runs</p>
 <p>\[
@@ -397,11 +394,11 @@ multipliers.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

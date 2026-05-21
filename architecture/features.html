@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,131 +175,36 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="feature-flags"><a class="header" href="#feature-flags">Feature flags</a></h1>
-<p>molla and <code>molla_viewer</code> together expose five Cargo features. They
-are all additive (turning one on never breaks a build that had it
-off), and none of them is required for a working CPU build of the
-engine.</p>
+<p>molla keeps feature flags small and physics-focused. Importers, external solver
+wrappers, MJCF/USD/URDF pipelines, and FFI bindings are intentionally not feature
+flags in this roadmap.</p>
 <h2 id="engine-crate-features-molla"><a class="header" href="#engine-crate-features-molla">Engine-crate features (<code>molla</code>)</a></h2>
 <h3 id="gpu--the-wgpu-backend-default-on"><a class="header" href="#gpu--the-wgpu-backend-default-on"><code>gpu</code> — the wgpu backend <em>(default-on)</em></a></h3>
-<p>Pulls in:</p>
-<ul>
-<li><code>wgpu = "27"</code> with the <code>wgsl</code>, <code>vulkan</code>, <code>metal</code>, <code>dx12</code>, <code>std</code>
-features (every desktop backend; WebGPU support comes free).</li>
-<li><code>pollster = "0.4"</code> for blocking on <code>wgpu</code> futures in the sync
-API.</li>
-</ul>
-<p>Without <code>gpu</code>, the engine still compiles. Every solver’s <code>new_cpu()</code>
-path works; only <code>new_gpu(&amp;engine)</code> constructors and the <code>compute::Engine</code>
-struct itself are conditionally compiled out. The CPU paths are not
-fallbacks — they are the oracle every parity test runs against.</p>
-<p>The pinned version (<code>wgpu 27</code>) is chosen to match what Bevy 0.18
-ships, so <code>molla</code> + <code>molla_viewer</code> share one <code>wgpu</code> in the linked
-binary. Multiple linked <code>wgpu</code>s cause adapter-mismatch errors at
-runtime.</p>
-<h3 id="mujoco--the-mujoco-wrapper-solver"><a class="header" href="#mujoco--the-mujoco-wrapper-solver"><code>mujoco</code> — the MuJoCo wrapper solver</a></h3>
-<p>Pulls in:</p>
-<ul>
-<li><code>mujoco-rust = "0.0.6"</code> with <code>default-features = false</code> (skips
-the upstream <code>mj-render</code> OpenGL feature).</li>
-</ul>
-<p>With <code>mujoco</code> on, <code>solvers::MuJoCoSolver</code> is available. The wrapper
-serialises a <code>molla::Model</code> to an MJCF document via the in-crate
-<code>MjcfWriter</code>, hands it to <code>libmujoco</code> for stepping, and reads body
-poses back into a <code>molla::State</code>. See
-<a href="./../importers/mjcf.html"><code>importers/mjcf.md</code></a> and
-<a href="./../solvers/mujoco.html"><code>solvers/mujoco.md</code></a>.</p>
-<p>Off by default because <code>mujoco-rust</code> requires <code>libmujoco</code> to be
-system-installed (the build script searches <code>~/.local/mujoco</code> and
-the standard system paths). The molla nix devShell does <strong>not</strong>
-carry <code>libmujoco</code> because bindgen needs a <code>libstdc++.so.6</code> that Nix
-doesn’t drop into the wgpu shell. The MuJoCo wrapper lane is run on
-CI runners that have the <code>libmujoco</code> <code>.deb</code> installed (Ubuntu
-22.04+).</p>
-<p>With <code>mujoco</code> off, <code>solvers::mujoco</code> compiles to an empty module so
-users without MuJoCo still build the rest of the project.</p>
-<h3 id="russell--direct-sparse-solver-stage-367"><a class="header" href="#russell--direct-sparse-solver-stage-367"><code>russell</code> — direct sparse solver <em>(Stage 36.7)</em></a></h3>
-<p>Currently a reserved feature flag. The original Stage 36.7 spec
-called for <code>russell_sparse</code> (SuiteSparse + LAPACKE), but those
-dependencies require hard-coded include paths
-(<code>/usr/include/suitesparse</code>) that aren’t available in molla’s nix
-devShell. The flag presently ships a <strong>pure-Rust dense LU</strong>
-implementation under <code>fem::DirectSolver</code> / <code>fem::solve_steady_state_direct</code>
-so the API surface is in place; the swap-out story to a real
-SuiteSparse-backed solver lives in <code>crate::fem::russell</code>.</p>
-<p>With <code>russell</code> off, the module compiles to nothing and the public
-API is unavailable. Iterative solvers (CG / PCG / BiCGStab / GMRES)
-in <code>math::sparse</code> work without the feature.</p>
+<p>Pulls in <code>wgpu 27</code> and <code>pollster</code>, enabling GPU dispatchers and GPU solver
+constructors. CPU paths still compile and remain the correctness oracle.</p>
+<h3 id="russell--direct-solver-shim"><a class="header" href="#russell--direct-solver-shim"><code>russell</code> — direct solver shim</a></h3>
+<p>Enables <code>fem::DirectSolver</code> / <code>fem::solve_steady_state_direct</code>. The current
+implementation is pure Rust; no SuiteSparse/LAPACKE dependency is required.</p>
 <h2 id="viewer-crate-features-molla_viewer"><a class="header" href="#viewer-crate-features-molla_viewer">Viewer-crate features (<code>molla_viewer</code>)</a></h2>
-<h3 id="profile--tracy-instrumentation"><a class="header" href="#profile--tracy-instrumentation"><code>profile</code> — Tracy instrumentation</a></h3>
-<p>Pulls <code>bevy/trace_tracy</code> through. Every Bevy schedule, system, and
-render pass emits timeline events to the Tracy protocol. To use:</p>
-<pre><code class="language-bash">make run-profile RELEASE=1
-# in another terminal:
-tracy   # connect immediately, or the trace buffer grows unbounded
-</code></pre>
-<p>If no Tracy client is connected when <code>profile</code> is on, the trace
-buffer grows without bound and causes frame stalls. Use <code>log_diag</code>
-instead for plain text-mode perf data.</p>
-<h3 id="log_diag--text-mode-diagnostics"><a class="header" href="#log_diag--text-mode-diagnostics"><code>log_diag</code> — text-mode diagnostics</a></h3>
-<p>Prints every Bevy diagnostic to stdout once per second. No Tracy
-connection, no memory growth — just FPS, frame time, entity counts,
-and the molla-side <code>SimStats</code> resource. Useful on headless CI or
-when Tracy isn’t available.</p>
-<h3 id="mujoco--passthrough-to-engine"><a class="header" href="#mujoco--passthrough-to-engine"><code>mujoco</code> — passthrough to engine</a></h3>
-<p>Forwards the engine’s <code>mujoco</code> feature. When on, the viewer’s
-<code>Scene::MuJoCo</code> runs through the real MuJoCo backend. When off, the
-scene is still listed (for discoverability) but its update system
-logs once and skips — the viewer stays usable.</p>
-<h2 id="the-matrix"><a class="header" href="#the-matrix">The matrix</a></h2>
+<h3 id="profile"><a class="header" href="#profile"><code>profile</code></a></h3>
+<p>Forwards <code>bevy/trace_tracy</code> for Tracy instrumentation.</p>
+<h3 id="log_diag"><a class="header" href="#log_diag"><code>log_diag</code></a></h3>
+<p>Prints Bevy/molla diagnostics once per second without Tracy.</p>
+<h2 id="matrix"><a class="header" href="#matrix">Matrix</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Feature</th><th>Crate</th><th>Default</th><th>Pulls</th><th>Gates</th></tr>
 </thead>
 <tbody>
-<tr><td><code>gpu</code></td><td>molla</td><td>yes</td><td><code>wgpu</code>, <code>pollster</code></td><td><code>compute::Engine</code>, every <code>_gpu</code> kernel + solver</td></tr>
-<tr><td><code>mujoco</code></td><td>molla</td><td>no</td><td><code>mujoco-rust</code></td><td><code>solvers::MuJoCoSolver</code>, <code>solvers::mujoco::MjcfWriter</code></td></tr>
-<tr><td><code>russell</code></td><td>molla</td><td>no</td><td>—</td><td><code>fem::DirectSolver</code>, <code>fem::solve_steady_state_direct</code></td></tr>
-<tr><td><code>profile</code></td><td>molla_viewer</td><td>no</td><td><code>bevy/trace_tracy</code></td><td>Tracy timeline events</td></tr>
-<tr><td><code>log_diag</code></td><td>molla_viewer</td><td>no</td><td>—</td><td>One-second text-mode diagnostics</td></tr>
-<tr><td><code>mujoco</code></td><td>molla_viewer</td><td>no</td><td><code>molla/mujoco</code> passthrough</td><td><code>Scene::MuJoCo</code> real backend</td></tr>
+<tr><td><code>gpu</code></td><td>molla</td><td>yes</td><td><code>wgpu</code>, <code>pollster</code></td><td>GPU kernels, GPU solvers/sensors</td></tr>
+<tr><td><code>russell</code></td><td>molla</td><td>no</td><td>—</td><td>FEM direct solve shim</td></tr>
+<tr><td><code>profile</code></td><td>molla_viewer</td><td>no</td><td><code>bevy/trace_tracy</code></td><td>Tracy spans</td></tr>
+<tr><td><code>log_diag</code></td><td>molla_viewer</td><td>no</td><td>—</td><td>text diagnostics</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="common-combos"><a class="header" href="#common-combos">Common combos</a></h2>
-<h3 id="stock-dev-build-linux--vulkan"><a class="header" href="#stock-dev-build-linux--vulkan">Stock dev build (Linux + Vulkan)</a></h3>
-<pre><code class="language-bash">nixVulkan cargo build --workspace --all-targets
-</code></pre>
-<p><code>gpu</code> is default-on; the nix shell provides the Vulkan loader.
-Everything works.</p>
-<h3 id="headless-ci-lane-cpu-only-no-wgpu-adapter-needed"><a class="header" href="#headless-ci-lane-cpu-only-no-wgpu-adapter-needed">Headless CI lane (CPU only, no wgpu adapter needed)</a></h3>
-<pre><code class="language-bash">cargo build --workspace --no-default-features
-cargo test  --workspace --no-default-features
-</code></pre>
-<p>Skips <code>wgpu</code>; every <code>_gpu</code> test is <code>#[ignore]</code>’d so the default
-<code>cargo test</code> lane runs CPU-only tests + the oracle tests that do
-not touch the adapter.</p>
-<h3 id="full-perf-lane-tracy--real-mujoco"><a class="header" href="#full-perf-lane-tracy--real-mujoco">Full perf lane (Tracy + real MuJoCo)</a></h3>
-<pre><code class="language-bash">make run-profile RELEASE=1 ARGS=""
-# or:
-cargo run --release -p molla_viewer --features "profile,mujoco" -- $ARGS
-</code></pre>
-<p>You need <code>libmujoco</code> installed system-side for <code>--features mujoco</code>
-to link.</p>
-<h2 id="whats-not-a-feature-flag"><a class="header" href="#whats-not-a-feature-flag">What’s NOT a feature flag</a></h2>
-<p>The following are intentionally compile-time constants, not feature
-flags:</p>
-<ul>
-<li><strong>BSR block size <code>B = 1</code></strong>. Every sparse matrix in molla is CSR-shaped.
-See <a href="./design_rules.html">design_rules.md</a> for the rationale.</li>
-<li><strong>Host scalar = <code>f64</code></strong>. <code>math::Real = f64</code> is a <code>pub type</code>, not a
-feature. f32 host would require parallel implementations of every
-solver and is not in scope.</li>
-<li><strong>Device scalar = <code>f32</code></strong>. WGSL has no <code>f64</code>; we don’t pretend it
-does.</li>
-</ul>
-<p>If those need to change in the future they will be runtime knobs,
-not features.</p>
+<p>There is no MuJoCo/MJCF/URDF/USD/Gmsh feature in the physics-only plan.</p>
 
                     </main>
 
@@ -345,11 +250,11 @@ not features.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

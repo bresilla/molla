@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -235,84 +235,53 @@ actually needs this.</p>
 <p><strong>Would change my mind if</strong> a viewer scene needs anisotropic muscles
 (typing-finger biomechanics, soft gripper with antagonist pairs).</p>
 <h3 id="a3-sh-gpu-forward-for-diffuseview-split-stage-44-v5"><a class="header" href="#a3-sh-gpu-forward-for-diffuseview-split-stage-44-v5">A3. SH GPU forward for diffuse/view split (Stage 44 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 44 v3 (<code>00d8083</code>) shipped spherical-harmonic colour on
-CPU; v4 (<code>121c9d3</code>) added SH band 3 + diffuse/view split. The forward
-raytrace currently still uses a per-Gaussian RGB on GPU; the SH evaluation
-runs as a CPU bake. To go end-to-end GPU we need an SH→RGB shader stage
-that evaluates SH at the view direction per pixel.</p>
-<p><strong>Dependencies.</strong> Stage 44 v3 (<code>00d8083</code>), Stage 44 v4 (<code>121c9d3</code>),
-Stage 30 (Gaussian splat primitive).</p>
-<p><strong>Effort.</strong> 1–2 days. WGSL polynomial evaluation, plus per-pixel
-view-vector compute. Bands 0–3 means 16 SH coefficients per channel — fits
-comfortably in workgroup-local memory.</p>
-<p><strong>Priority.</strong> Medium. Without it, GPU diff-Gaussian for view-dependent
-appearance falls back through CPU on every iteration.</p>
-<p><strong>Would change my mind if</strong> Stage 44 v2 pose-recovery (<code>bb42665</code>,
-scene #99) ever needs &gt;100 Adam iterations per second — that’s the
-CPU SH bake budget breaking.</p>
+<p><strong>Status.</strong> Landed in the modular workspace. The GPU path is
+<code>SplatRaytraceKernel::dispatch_sh_diffuse_view</code> with WGSL in
+<code>crates/molla-kernels/shaders/splat_raytrace_sh_diffuse_view.wgsl</code>.</p>
+<p><strong>Result.</strong> Diffuse RGB and the 15 band-1..3 SH-view coefficients are
+bound as separate buffers and evaluated per pixel/view direction on GPU,
+so iterative differentiable-splat workflows no longer need a CPU bake
+into full 16-coefficient band-3 SH.</p>
 <h3 id="a4-dg-limiter-gpu-port-stage-43-v5"><a class="header" href="#a4-dg-limiter-gpu-port-stage-43-v5">A4. DG limiter GPU port (Stage 43 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 43 v4 (<code>bed9c43</code>) shipped the HLL/HLLC/Roe SWE flux on
-GPU. The Barth-Jespersen scalar limiter and Krivodonova characteristic
-limiter (Stage 43 v3, <code>d37995e</code>) still run on CPU between GPU flux
-sweeps. The host round-trip per timestep dominates wall time at fine
-mesh resolution.</p>
-<p><strong>Dependencies.</strong> Stage 43 v3 (<code>d37995e</code>), Stage 43 v4 (<code>bed9c43</code>).</p>
-<p><strong>Effort.</strong> 2 days. The limiters are local — one workgroup per element,
-read 4 neighbour cells. The Krivodonova characteristic decomposition uses
-the same Roe matrix the v4 GPU flux already builds.</p>
-<p><strong>Priority.</strong> Medium. Bottleneck only kicks in once the mesh is large
-enough to amortize dispatch cost.</p>
-<p><strong>Would change my mind if</strong> the DG SWE viewer scene (<code>#97</code>,
-<code>7cd4e06</code>) becomes the runtime baseline for any demo we ship — at
-that point the round-trip is visible.</p>
+<p><strong>Status.</strong> Landed for DG-P1 shallow-water state buffers. The GPU path is
+<code>DgSweLimiterKernel</code> with WGSL in
+<code>crates/molla-fem/shaders/dg_swe_limiter.wgsl</code>.</p>
+<p><strong>Result.</strong> Both scalar component-wise Barth-Jespersen and
+Krivodonova-style characteristic limiting can run as resident GPU passes
+after the Stage 43 v4 flux sweep. The dispatcher reads <code>state_in</code> and
+writes <code>state_out</code> to preserve the CPU snapshot semantics while allowing
+ping-pong buffers between GPU RK stages.</p>
 <h3 id="a5-dg-amr-coarsening--level-gap-recursion-stage-45-v5"><a class="header" href="#a5-dg-amr-coarsening--level-gap-recursion-stage-45-v5">A5. DG-AMR coarsening + level-gap recursion (Stage 45 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 45 v4 (<code>66d976a</code>) shipped AMR coarsening for P1 + Krylov
-restart after re-mesh. The DG case (Stage 45 v3 / <code>4442e3d</code>) handles
-<em>refinement</em> with 2:1 face balance, but coarsening for DG with arbitrary
-level gaps <code>&gt; 1</code> is not yet implemented. This blocks long-running AMR
-runs where transient regions need to <em>un</em>-refine.</p>
-<p><strong>Dependencies.</strong> Stage 45 v3 (<code>4442e3d</code>), Stage 45 v4 (<code>66d976a</code>).</p>
-<p><strong>Effort.</strong> 2–3 days. DG coarsening is an L²-projection of fine DoFs to
-the coarse cell, plus a re-balance sweep. The level-gap recursion is the
-loop that handles <code>level_max − level_min &gt; 1</code> neighbours.</p>
-<p><strong>Priority.</strong> Medium. The static-AMR cases (e.g. scene #100 <code>AmrHeat</code>,
-<code>571934a</code>) work today; this is for time-varying refinement zones.</p>
+<p><strong>Status.</strong> Landed for DG-P1 triangle coarsening helpers.</p>
+<p><strong>Result.</strong> <code>AmrMesh::coarsen_subtree</code> collapses deep trees from the
+leaves upward, and <code>project_dg_p1_tri_children_to_parent_l2</code> performs the
+child-to-parent L² projection for DG-P1 triangle fields. The regression
+coverage lives in <code>crates/molla-fem/tests/fem_amr_v5.rs</code>.</p>
 <p><strong>Would change my mind if</strong> a moving-collider demo (the canonical AMR
 benchmark) is on the demo roadmap — then this is a blocker.</p>
 <h3 id="a6-source-side-surface-quadrature--tetbvh-accel-stage-47-v5"><a class="header" href="#a6-source-side-surface-quadrature--tetbvh-accel-stage-47-v5">A6. Source-side surface quadrature + TetBvh accel (Stage 47 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 47 v3 (<code>0f5a27e</code>) shipped surface-only cross-mesh M_st
-quadrature; v4 (<code>0f9e57e</code>) added the coupled penalty contact
-Newton-Raphson. The source-side quadrature still loops over every source
-triangle per target point; large meshes need a BVH-accelerated query. The
-existing <code>MeshBvh</code> is host-side; molla has all the WGSL machinery but the
-TetBvh that the nonconforming projection needs is not yet wired up on GPU.</p>
-<p><strong>Dependencies.</strong> Stage 47 v3 (<code>0f5a27e</code>), Stage 47 v4 (<code>0f9e57e</code>),
-Stage 15 (GPU mesh BVH).</p>
-<p><strong>Effort.</strong> 2–3 days. The BVH traversal is already proven for raycast;
-extend the kernel signature for “all triangles within distance ε”.</p>
-<p><strong>Priority.</strong> Medium-high. Linear-scan source quadrature scales as
-<code>O(N_tgt · N_src)</code> — fine for unit tests, painful for any real scene.</p>
-<p><strong>Would change my mind if</strong> the user wires NonconformingField into a
-non-toy demo (FSI, hand-on-cloth, tool-on-deformable) — at that
-point this is a perf must-have.</p>
+<p><strong>Status.</strong> Landed for the current nonconforming projection paths.</p>
+<p><strong>Result.</strong> <code>molla_geometry::TetBvh</code> now provides a CPU BVH over per-tet
+AABBs, and <code>molla-fem::NonconformingField</code> builds a source-side
+<code>SourceTetIndex</code> once for volume and target-surface cross-mass assembly.
+Each quadrature point queries BVH candidates before the exact
+barycentric inside-tet test, avoiding the old linear source-tet scan.</p>
 <h3 id="a7-active-set-anti-cycling-hardening-stage-51-v2"><a class="header" href="#a7-active-set-anti-cycling-hardening-stage-51-v2">A7. Active-set anti-cycling hardening (Stage 51 v2)</a></h3>
-<p><strong>Problem.</strong> Stage 51 (<code>4a4fc64</code>) shipped the Signorini active-set update
-loop. The current implementation uses a fixed iteration cap (no
-cycling-detection). Pathological geometry (sharp corners, near-tangent
-contact) can cause set flipping. Newton’s <code>kamino</code> and most production
-solvers use Bland’s rule or a least-index tiebreak.</p>
-<p><strong>Dependencies.</strong> Stage 49 (<code>60a7792</code>), Stage 50 (<code>e751d17</code>),
-Stage 51 (<code>4a4fc64</code>).</p>
-<p><strong>Effort.</strong> 1 day. Bland’s rule is one extra index sort per active-set
-update.</p>
-<p><strong>Priority.</strong> Medium. The active-set already converges on every test
-case in <code>tests/fem_signorini_active_set.rs</code>; cycling is a tail-risk
-hardening.</p>
-<p><strong>Would change my mind if</strong> any user-supplied geometry triggers a
-fixed-iteration cap fallback. That’s the canary for cycling.</p>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_active_set_signorini</code> now records seen active sets and
+uses a Bland-style least-slave-DoF single pivot when a proposed update
+would revisit a previous set. <code>ActiveSetTrace::cycle_breaks</code> and
+<code>ActiveSetIteration::bland_pivot</code> expose the diagnostic path.</p>
 <hr>
 <h2 id="tier-b--algorithmic-upgrades-week-scale"><a class="header" href="#tier-b--algorithmic-upgrades-week-scale">Tier-B — algorithmic upgrades (week-scale)</a></h2>
 <h3 id="b1-π-projection-branch-of-hiptmair-xu-ams-stage-48-v5"><a class="header" href="#b1-π-projection-branch-of-hiptmair-xu-ams-stage-48-v5">B1. Π-projection branch of Hiptmair-Xu AMS (Stage 48 v5)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now builds the vector-nodal interpolation
+operator <code>Π : (P1)^3 -&gt; NedelecEdge</code>, pins the matching vector-P1
+auxiliary Laplacian at Dirichlet-touched vertices, and adds the fixed
+iteration-count Π auxiliary correction inside <code>AmsPreconditioner::apply</code>.
+The old gradient-only action remains available through
+<code>with_pi_projection(false)</code> for comparisons.</p>
 <p><strong>Problem.</strong> Stage 48 v3 (<code>fa3616e</code>) shipped a geometric multigrid V-cycle
 for AMS; v4 (<code>c0cb1a6</code>) added algebraic multigrid (Ruge-Stüben). The
 auxiliary-space AMS preconditioner has two branches: the gradient branch
@@ -330,6 +299,14 @@ masks the curl-free component into the smoother, which doesn’t scale.</p>
 every reasonable eddy-current mesh — at that point AMS is academic
 and we can drop the Π work.</p>
 <h3 id="b2-block-coupled-preconditioning-at-high-ωσ-stage-48-v6"><a class="header" href="#b2-block-coupled-preconditioning-at-high-ωσ-stage-48-v6">B2. Block-coupled preconditioning at high ωσ (Stage 48 v6)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_eddy_current_steady_ams_block</code> adds a high-<code>ωσ</code>
+preconditioner path. Its preconditioner applies AMS to the diagonal
+real/imaginary blocks, then performs a fixed number of stationary
+refinement sweeps against the full block-real operator so the
+off-diagonal <code>±ωM_σ</code> coupling enters <code>M^{-1}r</code>. The fixed sweep count
+is configured by <code>EddyCurrentConfig::block_precond_sweeps</code>, preserving
+linearity for GMRES.</p>
 <p><strong>Problem.</strong> Stage 48’s eddy-current solver decouples real/imaginary
 components in the preconditioner. At high frequency × conductivity
 (<code>ω·σ → ∞</code>), the real-imag coupling becomes dominant and the
@@ -345,6 +322,14 @@ problems (skin-effect at MHz scales, induction heating).</p>
 or motor-laminate-eddy demo and the v4 AMG plateaus at &gt;100 GMRES
 iterations.</p>
 <h3 id="b3-frequency-sweep--coulomb-gauge-enforcement-stage-48-misc"><a class="header" href="#b3-frequency-sweep--coulomb-gauge-enforcement-stage-48-misc">B3. Frequency sweep + Coulomb-gauge enforcement (Stage 48 misc)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_eddy_current_frequency_sweep</code> now runs Jacobi, AMS,
+or block-AMS solves across a list of angular frequencies. Optional
+Coulomb-gauge enforcement projects each real/imaginary potential with
+<code>project_nedelec_coulomb_gauge</code>, which subtracts the least-squares
+gradient component (<code>G^T G φ = G^T a</code>) while preserving pinned edge
+DoFs. <code>coulomb_gauge_residual</code> reports the remaining discrete gauge
+residual for each sample.</p>
 <p><strong>Problem.</strong> The eddy-current solver runs at a single frequency per call.
 Real industrial workflows (motor design, induction heating) need a
 parametric frequency sweep with results stored in a single buffer.
@@ -359,6 +344,13 @@ the sweep is a UX nicety.</p>
 <p><strong>Would change my mind if</strong> anyone uses molla for actual motor /
 transformer design — that’s the workflow this enables.</p>
 <h3 id="b4-full-gpu-ns-time-integrator-with-on-device-ssp-rk-stage-41-v7"><a class="header" href="#b4-full-gpu-ns-time-integrator-with-on-device-ssp-rk-stage-41-v7">B4. Full-GPU NS time integrator with on-device SSP-RK (Stage 41 v7)</a></h3>
+<p><strong>Status.</strong> Implemented in <code>molla-fem</code>: <code>NavierStokesGpuTimeIntegrator</code>
+now exposes <code>ImexEuler</code>, <code>SspRk2</code>, and <code>SspRk3</code>. SSP-RK2/3 keep all
+intermediate velocity/pressure stages in GPU buffers and use the
+<code>combine_states</code> WGSL entry point in <code>fem_ns_rhs_assemble.wgsl</code> for the
+Shu-Osher convex combinations. The host still submits the existing GPU
+stage kernels, but it no longer reads stage vectors back between SSP
+substages; only the final result is downloaded.</p>
 <p><strong>Problem.</strong> Stage 41 v3 (<code>f2ae80f</code>) shipped GPU IMEX Navier-Stokes with
 the time loop on the host. Stage 41 v4 (<code>ccbe5c6</code>) added a fused
 RHS axpy on GPU. Stage 41 v5 (<code>3169fac</code>) folded async-dot into the Uzawa
@@ -376,6 +368,13 @@ is implemented as a single mega-kernel with internal <code>workgroupBarrier</cod
 demo roadmap. At that point the round-trip is a fixed cost per call
 that probably isn’t worth a week.</p>
 <h3 id="b5-coupled-active-set--friction-stage-49-v2--stage-50-integration"><a class="header" href="#b5-coupled-active-set--friction-stage-49-v2--stage-50-integration">B5. Coupled active-set + friction (Stage 49 v2 + Stage 50 integration)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_active_set_signorini_with_friction</code> now combines the
+PDAS active-set contact loop with the stacked normal+tangent Coulomb
+Uzawa solve. The result reports full-length per-candidate normal
+multipliers, interleaved tangent multipliers, and <code>FrictionState</code>
+entries so released contacts automatically release their friction
+state and tangent force.</p>
 <p><strong>Problem.</strong> Stage 49 (<code>60a7792</code>) shipped Signorini with a fixed active
 set. Stage 50 (<code>e751d17</code>) shipped Coulomb friction <em>at</em> Signorini contact
 but assuming the normal active-set is already converged. Stage 51
@@ -393,6 +392,13 @@ test; this is a robustness upgrade for harder geometry.</p>
 <p><strong>Would change my mind if</strong> any reported failure case traces to “the
 friction step destabilizes the active set on the next outer iter.”</p>
 <h3 id="b6-self-contact-for-cross-mesh-contact-pipelines-stage-474950"><a class="header" href="#b6-self-contact-for-cross-mesh-contact-pipelines-stage-474950">B6. Self-contact for cross-mesh contact pipelines (Stage 47/49/50)</a></h3>
+<p><strong>Status.</strong> Landed for the CPU candidate path.</p>
+<p><strong>Result.</strong> <code>molla-geometry</code> now exposes
+<code>detect_vertex_triangle_self_contacts</code>, an <code>O(VT)</code> CPU oracle that
+emits non-adjacent vertex-triangle shell contacts. <code>molla-fem</code> converts
+those into active-set gap planes with
+<code>signorini_candidates_from_self_contacts</code>, reducing multiple contacts
+on the same slave to the deepest candidate.</p>
 <p><strong>Problem.</strong> Every Stage 47–51 contact pipeline (penalty in v3/v4,
 Signorini Lagrange in 49, friction in 50, active-set in 51) operates on
 <strong>cross-mesh</strong> contact only. Self-contact (a single deforming mesh
@@ -413,6 +419,12 @@ cross-mesh by construction.</p>
 <hr>
 <h2 id="tier-c--new-physics-axes-multi-week"><a class="header" href="#tier-c--new-physics-axes-multi-week">Tier-C — new physics axes (multi-week)</a></h2>
 <h3 id="c1-multi-phase-flow-with-surface-tension"><a class="header" href="#c1-multi-phase-flow-with-surface-tension">C1. Multi-phase flow with surface tension</a></h3>
+<p><strong>Status.</strong> Landed for level-set / CSF primitives.</p>
+<p><strong>Result.</strong> <code>molla-fem::multiphase</code> now provides
+<code>level_set_curvature_2d</code>, <code>level_set_smooth_delta</code>, and
+<code>csf_surface_tension_force_2d</code>, giving the FEM/NS stack a CPU oracle
+for continuum-surface-force surface tension from a signed-distance
+interface.</p>
 <p><strong>Problem.</strong> molla has single-phase NS (Stage 36.2 / 41). Two-phase flow
 (water + air, oil + water) needs an interface tracking method (level-set
 or VOF) plus surface tension as a <code>δ</code>-distribution force on the interface.
@@ -430,6 +442,13 @@ been the user need to date.</p>
 liquid, gripper-in-fluid, or any free-surface flow — the existing NS
 can’t even render the free surface.</p>
 <h3 id="c2-compressible--euler-equations-on-dg-stage-43-follow-on"><a class="header" href="#c2-compressible--euler-equations-on-dg-stage-43-follow-on">C2. Compressible / Euler equations on DG (Stage 43 follow-on)</a></h3>
+<p><strong>Status.</strong> Landed for 2D Euler flux primitives.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes ideal-gas 2D Euler physical flux,
+pressure, Rusanov flux, and HLL flux helpers:
+<code>euler_flux_dot_n_2d</code>, <code>euler_pressure_2d</code>,
+<code>compute_euler_numerical_flux_rusanov_2d</code>, and
+<code>compute_euler_numerical_flux_hll_2d</code>. They plug into the existing DG
+face quadrature infrastructure the same way the SWE flux helpers do.</p>
 <p><strong>Problem.</strong> Stage 43 v4 (<code>bed9c43</code>) shipped HLL/HLLC/Roe flux for SWE.
 The same flux library applies to compressible Euler with very few
 changes — a 5-equation system instead of 3, and an EOS (ideal gas)
@@ -445,6 +464,16 @@ aerodynamics. Not on any current workload.</p>
 <p><strong>Would change my mind if</strong> a user shows up wanting compressible flow.
 The DG infra is already 90 % there.</p>
 <h3 id="c3-phase-field-fracture"><a class="header" href="#c3-phase-field-fracture">C3. Phase-field fracture</a></h3>
+<p><strong>Status.</strong> First AT2 scalar-damage CPU oracle landed in <code>molla-fem</code>.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes <code>PhaseFieldFractureParams</code>,
+<code>phase_field_degradation</code>, <code>update_phase_field_history</code>,
+<code>phase_field_fracture_energy_density</code>,
+<code>assemble_phase_field_fracture_system</code>, and
+<code>solve_phase_field_fracture_jacobi</code>. The implementation assembles the
+frozen-history AT2 weak form on P1 triangles/tetrahedra with the
+existing FEM mass/stiffness kernels, then solves a bounded irreversible
+Jacobi update (<code>d_new &gt;= d_old</code>, <code>0 &lt;= d &lt;= 1</code>) as the CPU correctness
+oracle.</p>
 <p><strong>Problem.</strong> Brittle / quasi-brittle fracture as a coupled
 displacement + damage field. The damage field <code>d ∈ [0, 1]</code> is a second
 scalar PDE solved on the same FEM mesh, with a degraded elasticity
@@ -458,6 +487,14 @@ cracking-glass demos). Not on any roadmap.</p>
 <p><strong>Would change my mind if</strong> anyone needs material-failure simulation.
 There’s no proxy in molla today.</p>
 <h3 id="c4-mooney-rivlin--neo-hookean-tangents"><a class="header" href="#c4-mooney-rivlin--neo-hookean-tangents">C4. Mooney-Rivlin / Neo-Hookean tangents</a></h3>
+<p><strong>Status.</strong> Landed for P1 tetrahedra.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes compressible Neo-Hookean and
+Mooney-Rivlin element energies, internal forces, and consistent
+finite-difference tangents:
+<code>compute_element_neo_hookean_*</code> and
+<code>compute_element_mooney_rivlin_*</code>. The Neo-Hookean identity tangent is
+tested against the linear-elasticity stiffness, and the
+Mooney-Rivlin tangent is tested for symmetry / zero identity force.</p>
 <p><strong>Problem.</strong> Stage 36.1 ships linear elasticity + St. Venant-Kirchhoff
 (SVK) stress. SVK is wrong in compression (the strain-energy density
 isn’t convex in the right way) — Neo-Hookean and Mooney-Rivlin are the
@@ -472,6 +509,13 @@ floor; SVK is “rubber-ish for demos.”</p>
 <p><strong>Would change my mind if</strong> the tendon / muscle Stage 42 work expands to
 soft-tissue substrate. Tendons are SVK-OK; muscle bellies aren’t.</p>
 <h3 id="c5-rate-and-state-friction-dieterich-ruina"><a class="header" href="#c5-rate-and-state-friction-dieterich-ruina">C5. Rate-and-state friction (Dieterich-Ruina)</a></h3>
+<p><strong>Status.</strong> Landed as reusable law/state helpers.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes
+<code>RateStateFrictionParams</code>, <code>RateStateFrictionState</code>,
+<code>rate_state_friction_coeff</code>, and <code>advance_rate_state_friction</code> for the
+Dieterich-Ruina aging law. The helper gives contact solvers a
+per-contact evolving friction coefficient without baking the law into a
+specific Signorini or particle pipeline.</p>
 <p><strong>Problem.</strong> Stage 50 ships Coulomb friction. A1 above adds the
 static / kinetic split. Geological / seismic / advanced-tribology
 workloads need rate-and-state friction — a continuum law with an
@@ -485,6 +529,11 @@ present.</p>
 <p><strong>Would change my mind if</strong> anyone targets paleo-seismology or
 advanced bearing tribology — these are the use cases for D-R.</p>
 <h3 id="c6-gpu-port-of-muscle-see-for-non-default-stiffness-ratios"><a class="header" href="#c6-gpu-port-of-muscle-see-for-non-default-stiffness-ratios">C6. GPU port of muscle SEE for non-default stiffness ratios</a></h3>
+<p><strong>Status.</strong> Landed with A2.</p>
+<p><strong>Result.</strong> The muscle GPU path now carries
+<code>tendon_stiffness_ratio</code> through the per-muscle buffers in
+<code>molla-actuators</code>, the solver binding path, and the WGSL kernel, so
+non-default SEE stiffness ratios no longer require CPU fallback.</p>
 <p><strong>Problem.</strong> Stage 42 v4 (<code>0411d0b</code>) shipped SEE (series-elastic element)
 Newton GPU/CPU parity <em>for the default</em> stiffness ratio. The
 <code>d38739e</code> critic fix made non-default ratios work on CPU. The GPU kernel
@@ -499,6 +548,14 @@ single coherent muscle-on-GPU push.</p>
 <p><strong>Would change my mind if</strong> A2’s use case appears — at which point these
 get bundled together.</p>
 <h3 id="c7-krylov-restart-in-transient-fem-steppers"><a class="header" href="#c7-krylov-restart-in-transient-fem-steppers">C7. Krylov restart in transient FEM steppers</a></h3>
+<p><strong>Status.</strong> Landed for the CPU backward-Euler transient PCG path.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes <code>KrylovRestartCache</code> and
+<code>solve_transient_pcg_restarted</code>. The restarted solve keeps a bounded set
+of recent correction directions, computes a tiny minimum-residual
+projection in <code>x0 + span(cache)</code> before PCG, and stores the accepted
+correction for the next time step. This gives the transient steppers a
+real recycled-Krylov contract beyond simply warm-starting with the
+previous solution.</p>
 <p><strong>Problem.</strong> Stage 45 v4 (<code>66d976a</code>) wired Krylov restart into
 <code>solve_after_remesh</code>. The transient steppers (<code>WaveStepperGpu</code>,
 <code>TransientStepperGpu</code>, the IMEX NS stepper) don’t restart Krylov between
@@ -572,11 +629,11 @@ scenes. ~1 day of mechanical work, high marginal demo impact.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

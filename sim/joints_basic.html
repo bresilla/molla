@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -226,14 +226,10 @@ high-stiffness constraint each step. Two common patterns:</p>
 <li><strong>End-effector mount</strong>: bolt a sensor / camera shape to a rigid
 parent. The mount doesn’t move relative to the host, so a Fixed
 joint is faster than two bodies + a WELD equality.</li>
-<li><strong>Sub-mesh aggregation</strong>: importers that unwrap a single rigid
-CAD assembly into multiple component bodies use Fixed joints
-to glue them back together while preserving the visual hierarchy.</li>
+<li><strong>Sub-body aggregation</strong>: procedural builders that split one rigid assembly
+into multiple component bodies use Fixed joints to glue them back together
+while preserving the visual hierarchy.</li>
 </ul>
-<p>The MuJoCo wrapper (Stage 22) translates molla’s <code>Fixed</code> joints to
-MJCF <code>&lt;equality&gt;&lt;weld/&gt;</code> between parent and child (instead of a
-freejoint + a weld, which would be a redundant DoF). Round-trip
-fidelity is preserved.</p>
 <h2 id="free"><a class="header" href="#free">Free</a></h2>
 <pre><code class="language-rust ignore">JointType::Free = 4   // (7 coords, 6 dofs)
 b.add_joint_free(parent, child, x_p, x_c) -&gt; Result&lt;JointId&gt;;</code></pre>
@@ -270,8 +266,7 @@ each step.</p>
 <tr><td>GPU support</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td></tr>
 <tr><td>Joint drive (<code>Control</code>)</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">—</td><td style="text-align: right">✓</td></tr>
 <tr><td>Limits via <code>set_joint_limits</code></td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">—</td><td style="text-align: right">per-axis</td></tr>
-<tr><td>MuJoCo round-trip</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">weld eq</td><td style="text-align: right">✓ (<code>&lt;freejoint&gt;</code>)</td></tr>
-<tr><td>URDF / USD source</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓ (root)</td></tr>
+<tr><td>Procedural builder</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓</td><td style="text-align: right">✓ (root)</td></tr>
 </tbody>
 </table>
 </div>
@@ -322,11 +317,11 @@ each step.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,7 +175,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="top-level-solvers"><a class="header" href="#top-level-solvers">Top-level solvers</a></h1>
-<p><code>crates/molla/src/fem/solver.rs</code> strings the pieces together. Every
+<p><code>crates/molla-fem/src/solver.rs</code> strings the pieces together. Every
 top-level solver in this chapter follows the same pattern:</p>
 <ol>
 <li>Clone the assembled matrix.</li>
@@ -248,10 +248,22 @@ walks both triplet lists and reuses
 <code>BsrMatrix::from_triplets</code> to dedupe; the RHS is built with a single
 matvec of <code>M</code> against <code>u_old</code>. Dirichlet BCs are then applied in
 tandem on <code>(A, b)</code> before CG.</p>
-<p><code>solve_transient_pcg</code> is the Jacobi-preconditioned variant. The PCG
-variants are recommended whenever you run more than ~50 steps of the
-same problem — the diagonal extraction is <code>O(n)</code> and amortises away
-to nothing across that many iterations.</p>
+<p><code>solve_transient_pcg</code> is the Jacobi-preconditioned variant. For repeated
+steps with the same left-hand side, <code>solve_transient_pcg_restarted</code>
+adds a recycled-Krylov initial guess:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct KrylovRestartCache { /* bounded recent correction vectors */ }
+
+pub fn solve_transient_pcg_restarted(
+    m, k, f, u_old, dt, bcs, x0, cache, max_iters, tol,
+) -&gt; CgResult;
+<span class="boring">}</span></code></pre>
+<p>The cache stores recent PCG correction directions. Before each solve,
+the restarted path computes a tiny minimum-residual projection in
+<code>x0 + span(cache)</code> and uses that projected vector as the PCG initial
+guess, then stores the new correction for the next step. This is the
+CPU oracle for Krylov restart/recycling in transient FEM steppers.</p>
 <h2 id="wave-equation--newmark-β"><a class="header" href="#wave-equation--newmark-β">Wave equation — Newmark-β</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -329,7 +341,7 @@ residual norm grows for two consecutive iterations (divergence
 bail-out — emits a <code>tracing::warn!</code>).</li>
 </ol>
 <p>v1 has no line search; small problems only. The hyperelasticity
-contract tests in <code>crates/molla/tests/</code> use this driver against the
+contract tests in <code>crates/molla-fem/tests/</code> use this driver against the
 SVK kernel from <a href="./elements.html#st-venant-kirchhoff-hyperelastic-stress">elements</a>.</p>
 <h2 id="newton-on-distortion-energy"><a class="header" href="#newton-on-distortion-energy">Newton on distortion energy</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
@@ -472,11 +484,11 @@ Cholesky solve plus per-level ω-Jacobi smoothing.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

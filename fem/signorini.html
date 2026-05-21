@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
 <p>Stage 49 added <strong>exact</strong> non-penetration contact via Lagrange
 multipliers, replacing the penalty-spring approximation of
 <a href="./nonconforming.html">Stage 47 nonconforming penalty contact</a>. It
-lives in <code>crates/molla/src/fem/signorini.rs</code>.</p>
+lives in <code>crates/molla-fem/src/signorini.rs</code>.</p>
 <h2 id="why-lagrange-multipliers"><a class="header" href="#why-lagrange-multipliers">Why Lagrange multipliers?</a></h2>
 <p>Penalty contact approximates the Signorini condition
 \( \text{gap}<em>n \ge 0 \) with a soft spring
@@ -323,9 +323,9 @@ along its master normal). A pair whose \( \lambda \) clamps to 0
 is a <strong>candidate for active-set release</strong> — it has no contact force
 and may have separated from the master.</li>
 </ul>
-<h2 id="stage-51--active-set-update-loop-planned"><a class="header" href="#stage-51--active-set-update-loop-planned">Stage 51 — active-set update loop (planned)</a></h2>
-<p>The natural follow-up is the <strong>active-set update</strong> loop — the
-“primal-dual active-set” (PDAS) algorithm:</p>
+<h2 id="stage-51--active-set-update-loop"><a class="header" href="#stage-51--active-set-update-loop">Stage 51 — active-set update loop</a></h2>
+<p>The active-set update loop is a “primal-dual active-set” (PDAS)
+algorithm:</p>
 <ol>
 <li>Initialise active set from a contact-detection pass.</li>
 <li>Solve the augmented system on the current active set (Stage 49).</li>
@@ -338,10 +338,21 @@ would be positive (new contact).</li>
 </ol>
 <p>This is the LCP variant of the Uzawa-Lagrange method and is what
 Wriggers (<em>Computational Contact Mechanics</em>, §6.3) calls the standard
-“semi-smooth Newton” formulation. Status: <strong>planned</strong> — the code for
-the active-set update logic hasn’t landed yet; the Stage 49 v1
-solver returns the multipliers and primal residual that the v2 / v3
-update would key off.</p>
+“semi-smooth Newton” formulation.</p>
+<p>Stage 51 v2 adds anti-cycling hardening: the solver records previously
+seen active sets, and if a proposed add/release update would revisit one
+of them it switches to a Bland-style least-slave-DoF single pivot. The
+trace exposes <code>cycle_breaks</code> on <code>ActiveSetTrace</code> and the selected
+<code>bland_pivot</code> on each <code>ActiveSetIteration</code>.</p>
+<h2 id="self-contact-candidate-path"><a class="header" href="#self-contact-candidate-path">Self-contact candidate path</a></h2>
+<p><code>molla-geometry::detect_vertex_triangle_self_contacts</code> emits CPU
+vertex-triangle self-contact candidates for non-adjacent surface
+features. <code>signorini_candidates_from_self_contacts</code> converts those into
+the active-set candidate interface by keeping the deepest shell
+penetration per slave vertex and building a fixed gap plane from the
+closest triangle point and contact normal. This gives the Signorini
+PDAS and coupled-friction solvers a first self-contact input path
+without changing the solver loop.</p>
 <h2 id="references"><a class="header" href="#references">References</a></h2>
 <ul>
 <li>Wriggers, <em>Computational Contact Mechanics</em>, §6.3 (Uzawa-Lagrange).</li>
@@ -406,11 +417,11 @@ applied before handing to the Uzawa loop; the routine assumes
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

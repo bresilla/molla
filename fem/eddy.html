@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,7 +177,7 @@
                         <h1 id="eddy-currents--time-harmonic-maxwell"><a class="header" href="#eddy-currents--time-harmonic-maxwell">Eddy currents — time-harmonic Maxwell</a></h1>
 <p>Stage 48 added a <strong>time-harmonic eddy-current</strong> solver on top of the
 H(curl) Nedelec basis from <a href="./magneto.html">magnetostatics</a>. It lives
-in <code>crates/molla/src/fem/eddy_current.rs</code> (~1450 lines, including the
+in <code>crates/molla-fem/src/eddy_current.rs</code> (~1450 lines, including the
 AMS preconditioner) and solves the complex curl–curl–mass system that
 arises from the Fourier transform of Maxwell’s equations.</p>
 <h2 id="problem-statement"><a class="header" href="#problem-statement">Problem statement</a></h2>
@@ -236,6 +236,7 @@ magnetostatics) and \( K_{\text{off}} = -\omega M_\sigma \).</p>
     pub tol: Real,
     pub gmres_restart: usize,
     pub use_ams: bool,
+    pub block_precond_sweeps: usize,
 }
 
 pub struct EddyCurrentResult {
@@ -259,7 +260,10 @@ pub fn solve_eddy_current_steady(
 ) -&gt; Result&lt;EddyCurrentResult&gt;;
 
 pub fn solve_eddy_current_steady_ams(...) -&gt; Result&lt;EddyCurrentResult&gt;;
+pub fn solve_eddy_current_steady_ams_block(...) -&gt; Result&lt;EddyCurrentResult&gt;;
 pub fn solve_eddy_current_steady_ams_mg(...) -&gt; Result&lt;EddyCurrentResult&gt;;
+pub fn solve_eddy_current_frequency_sweep(...) -&gt; Result&lt;Vec&lt;EddyFrequencySweepSample&gt;&gt;;
+pub fn project_nedelec_coulomb_gauge(...) -&gt; Result&lt;Vec&lt;Real&gt;&gt;;
 <span class="boring">}</span></code></pre>
 <h2 id="solvers--three-paths"><a class="header" href="#solvers--three-paths">Solvers — three paths</a></h2>
 <h3 id="solve_eddy_current_steady-v1--jacobi-preconditioned-gmres"><a class="header" href="#solve_eddy_current_steady-v1--jacobi-preconditioned-gmres"><code>solve_eddy_current_steady</code> (v1) — Jacobi-preconditioned GMRES</a></h3>
@@ -283,29 +287,77 @@ corrects the divergence-free component.</li>
 </ol>
 <p>The combination is provably <strong>mesh-independent</strong> under the discrete
 Helmholtz decomposition — iteration count stays bounded as <code>h → 0</code>.</p>
-<p><code>build_discrete_gradient</code> and <code>build_p1_vector_laplacian</code> are the
-ingredients:</p>
+<p><code>build_discrete_gradient</code>, <code>build_p1_vector_interpolation</code>, and
+<code>build_p1_vector_laplacian</code> are the ingredients:</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>pub fn build_discrete_gradient(mesh: &amp;FemMesh) -&gt; Result&lt;BsrMatrix&gt;;
+pub fn build_p1_vector_interpolation(mesh: &amp;FemMesh) -&gt; Result&lt;BsrMatrix&gt;;
 pub fn build_p1_vector_laplacian(mesh: &amp;FemMesh, dim: usize) -&gt; Result&lt;BsrMatrix&gt;;
 <span class="boring">}</span></code></pre>
 <p>The first returns the discrete gradient \( G : \mathbb{R}^{n_{\text{verts}}} \to \mathbb{R}^{n_{\text{edges}}} \)
 that maps a nodal scalar to its tangential edge-integral (entries
-\( \pm 1 \) only — orientation-dependent). The second assembles the
+\( \pm 1 \) only — orientation-dependent). The second returns the
+Π interpolation \( \Pi : (P1)^3 \to \text{Nedelec} \) whose edge row
+integrates the average endpoint vector field along the canonical edge:
+\( (\Pi u)_e = \frac{1}{2}(u_a + u_b) \cdot (x_b - x_a) \). The third assembles the
 \( \mu \int \nabla u : \nabla v \) Laplacian on P1 vector space.</p>
+<p>Stage 48 v5 enables the Π branch in <code>AmsPreconditioner::apply</code> by
+default. The preconditioner now combines edge Jacobi smoothing, the
+scalar gradient branch, and the vector-nodal Π branch. The latter uses
+a fixed-iteration CG solve on the pinned vector-P1 Laplacian so the
+overall preconditioner remains linear for GMRES. For compatibility
+experiments, <code>AmsPreconditioner::with_pi_projection(false)</code> restores
+the old gradient-only action.</p>
 <h3 id="solve_eddy_current_steady_ams_mg-v3--ams--multigrid-v-cycle"><a class="header" href="#solve_eddy_current_steady_ams_mg-v3--ams--multigrid-v-cycle"><code>solve_eddy_current_steady_ams_mg</code> (v3) — AMS + Multigrid V-cycle</a></h3>
 <p>The v3 path replaces the auxiliary-block scalar solver with a
 <strong>geometric multigrid V-cycle</strong> on a uniformly refined mesh
 hierarchy. See <a href="./multigrid.html">multigrid</a> for the V-cycle structure.
 Empirically this cuts the iteration count on the larger eddy
 fixtures (32³ tets) by 4–5× over the v2 fixed-iter CG.</p>
+<h3 id="solve_eddy_current_steady_ams_block-v6--block-coupled-ams"><a class="header" href="#solve_eddy_current_steady_ams_block-v6--block-coupled-ams"><code>solve_eddy_current_steady_ams_block</code> (v6) — block-coupled AMS</a></h3>
+<p>The v6 path targets high <code>ωσ</code>, where the off-diagonal
+<code>±ω M_σ</code> block dominates and a purely block-diagonal preconditioner
+stalls. It keeps the AMS action as the approximate inverse for
+<code>K_main</code>, but applies a fixed number of stationary refinement sweeps
+against the full block-real operator:</p>
+<pre><code class="language-text">z0    = D^-1 r
+z{i+1}= z{i} + D^-1 (r - A z{i})
+</code></pre>
+<p>where <code>D^-1</code> means “apply AMS independently to the real and imaginary
+halves”. Because <code>EddyCurrentConfig::block_precond_sweeps</code> is fixed
+for the whole solve, this is still a linear preconditioner and remains
+safe inside GMRES. <code>block_precond_sweeps = 1</code> recovers the old
+decoupled action; the default is <code>2</code>.</p>
+<h2 id="frequency-sweeps-and-coulomb-gauge-projection"><a class="header" href="#frequency-sweeps-and-coulomb-gauge-projection">Frequency sweeps and Coulomb-gauge projection</a></h2>
+<p><code>solve_eddy_current_frequency_sweep</code> runs the same problem over a list
+of angular frequencies, using one of:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub enum EddyCurrentSolveMode {
+    Jacobi,
+    Ams,
+    AmsBlock,
+}
+<span class="boring">}</span></code></pre>
+<p>Each returned <code>EddyFrequencySweepSample</code> records the sampled <code>omega</code>,
+the <code>EddyCurrentResult</code>, and the remaining discrete gauge residual.
+When gauge enforcement is requested, both real and imaginary edge
+potentials are projected by solving</p>
+<pre><code class="language-text">(G^T G) φ = G^T a
+a_gauge = a - Gφ
+</code></pre>
+<p>where <code>G</code> is the discrete P1-to-Nedelec gradient. Pinned edge values
+are restored after projection, so boundary Dirichlet conditions are
+preserved. This removes the report-facing gradient ambiguity without
+changing the curl field used by the physical validation tests.</p>
 <h2 id="amspreconditioner"><a class="header" href="#amspreconditioner"><code>AmsPreconditioner</code></a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>pub struct AmsPreconditioner {
     g: BsrMatrix,                 // discrete gradient
     k_aux_scalar: BsrMatrix,      // H¹ Laplacian
+    pi: BsrMatrix,                // vector-P1 -&gt; Nedelec interpolation
     k_aux_vector: BsrMatrix,      // P1 vector Laplacian
     diag_smoother: Vec&lt;Real&gt;,     // Jacobi smoother diagonal
     aux_solver: AuxSolver,        // CG or V-cycle
@@ -421,11 +473,11 @@ edge-element basis.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

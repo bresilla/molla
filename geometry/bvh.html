@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,8 +185,8 @@ workload:</p>
 <tbody>
 <tr><td><a href="#broad-phase-bvh"><code>Bvh</code></a></td><td><code>geometry/bvh.rs</code></td><td>shape AABBs (broad phase)</td><td>rebuild</td></tr>
 <tr><td><a href="#per-mesh-bvh"><code>MeshBvh</code></a></td><td><code>geometry/mesh_bvh.rs</code></td><td>per-mesh triangle AABBs</td><td>static</td></tr>
-<tr><td><a href="#tet-bvh-stage-204"><code>TetBvh</code></a></td><td><code>geometry/tet_bvh.rs</code></td><td>per-tet AABBs (deformable)</td><td>flat-array</td></tr>
-<tr><td>GPU <a href="#gpu-lbvh">LBVH</a></td><td><code>kernels/lbvh.rs</code> + <code>shaders/lbvh.wgsl</code></td><td>shape AABBs (broad phase)</td><td>radix-rebuild</td></tr>
+<tr><td><a href="#tet-bvh-stage-204"><code>TetBvh</code></a></td><td><code>geometry/tet_bvh.rs</code></td><td>per-tet AABBs (deformable)</td><td>CPU BVH + flat GPU AABBs</td></tr>
+<tr><td>GPU <a href="#gpu-lbvh">LBVH</a></td><td><code>molla-geometry/src/lbvh.rs</code> + <code>molla-geometry/shaders/lbvh.wgsl</code></td><td>shape AABBs (broad phase)</td><td>radix-rebuild</td></tr>
 </tbody>
 </table>
 </div>
@@ -254,16 +254,19 @@ call) and stored on the <a href="../sim/model.html"><code>TriMesh</code></a> ent
 default <code>max_leaf_size = 4</code> is Embree’s recommendation — small
 enough that leaf scans pull in only a couple of cache lines, big
 enough that the tree stays shallow.</p>
-<p>The flat-<code>Vec</code> layout matches what a GPU upload would want: each
+<p>The flat-<code>Vec</code> layout matches what a GPU upload wants: each
 node fits in 8 × <code>f32</code> (32 bytes), and the triangle-order
 permutation gives contiguous triangle ranges per leaf for vectorised
 narrow-phase. The WGSL counterpart
-(<code>shaders/mesh_bvh_raycast.wgsl</code>) consumes the same node layout.</p>
+(<code>crates/molla-geometry/shaders/mesh_bvh_raycast.wgsl</code>) consumes the same
+node layout.</p>
 <h2 id="tet-bvh-stage-204"><a class="header" href="#tet-bvh-stage-204">Tet BVH (Stage 20.4)</a></h2>
-<p><code>tet_bvh.rs</code> is the lighter-weight cousin used for the soft-body
-tet-vs-tet path. Per Stage 20.4’s risk carve-out
-(<code>tet_bvh.rs:1-19</code>), the v1 implementation ships <strong>a flat AABB list,
-not a tree</strong>. The reasoning:</p>
+<p><code>tet_bvh.rs</code> is the lighter-weight cousin used for soft-body
+tet-vs-tet paths and source-side nonconforming-contact lookup. Per
+Stage 20.4’s risk carve-out, the GPU-facing implementation still keeps
+a flat AABB list for deformable-mesh uploads, while Stage 47 v5 adds a
+CPU median-split <code>TetBvh</code> over the same AABBs for point-location
+prefiltering.</p>
 <ul>
 <li>Tet meshes deform every substep — a true BVH would require
 per-substep refit, and a per-vertex GPU traversal of a per-substep
@@ -271,7 +274,11 @@ BVH is the central technical risk Stage 20.4 flags.</li>
 <li>The demo workload is two ~150-tet jelly cubes (≈ 22 500 per-vertex
 × per-tet checks per substep). At that scale a GPU brute-force
 AABB test against the flat array dispatches in microseconds; the
-win from a real tree wouldn’t justify the refit cost.</li>
+win from a real GPU tree wouldn’t justify the refit cost.</li>
+<li>CPU-side nonconforming projection has a different profile: many
+quadrature points query a static source mesh during matrix assembly.
+There, <code>TetBvh::point_candidates</code> avoids a brute-force source-tet
+scan while leaving the exact barycentric containment test unchanged.</li>
 </ul>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -290,16 +297,22 @@ pub fn recompute_tet_aabbs(
 pub fn tet_meshes_aabb_overlap(aabbs_a: &amp;[TetAabb], aabbs_b: &amp;[TetAabb]) -&gt; bool;
 pub fn tet_mesh_root_aabb(aabbs: &amp;[TetAabb]) -&gt; Option&lt;(Vec3, Vec3)&gt;;
 pub fn tet_closest_face(p: Vec3, v0: Vec3, v1: Vec3, v2: Vec3, v3: Vec3) -&gt; Option&lt;(Real, Vec3)&gt;;
+
+pub struct TetBvh { /* nodes + tet_order */ }
+impl TetBvh {
+    pub fn build(aabbs: &amp;[TetAabb], max_leaf_size: usize) -&gt; Self;
+    pub fn point_candidates(&amp;self, aabbs: &amp;[TetAabb], p: Vec3, out: &amp;mut Vec&lt;u32&gt;);
+}
 <span class="boring">}</span></code></pre>
 <p>The struct is intentionally <code>[f32; 8]</code> (not <code>Real</code>) for a clean
 <code>vec4 + vec4</code> GPU upload (32 bytes). <code>tet_closest_face</code> is the CPU
 oracle for the GPU per-vertex tet-penalty kernel: it walks the
 tet’s four faces, returns the maximum signed distance (positive
 outside, negative inside), and the achieving face’s outward normal.</p>
-<p>The Stage 20.5 follow-up (proper tree + GPU refit) is queued
+<p>The Stage 20.5 follow-up (proper GPU tree + GPU refit) is queued
 behind the rigid-vs-rigid LBVH that’s already in production.</p>
 <h2 id="gpu-lbvh"><a class="header" href="#gpu-lbvh">GPU LBVH</a></h2>
-<p><code>crates/molla/src/kernels/lbvh.rs</code> + <code>shaders/lbvh.wgsl</code> implement
+<p><code>crates/molla-geometry/src/lbvh.rs</code> + <code>crates/molla-geometry/shaders/lbvh.wgsl</code> implement
 the standard Karras parallel LBVH:</p>
 <ol>
 <li><strong>Morton-code AABB centroids</strong> via the existing 64-bit radix
@@ -366,11 +379,11 @@ WGSL traversal expects.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

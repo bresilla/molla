@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,7 +194,6 @@ devShell; if you’ve installed the engine outside the devShell, swap
 <tr><td><code>make test</code> / <code>t</code></td><td><code>cargo test --workspace</code> (skips <code>#[ignore]</code>’d GPU tests)</td></tr>
 <tr><td><code>make test-gpu</code></td><td>The flagship CPU/GPU parity test</td></tr>
 <tr><td><code>make test-*-gpu</code></td><td>~25 dedicated GPU lanes, one per major kernel family</td></tr>
-<tr><td><code>make test-oracle</code></td><td>Newton trajectory oracle tests (needs Python venv)</td></tr>
 <tr><td><code>make bench-cpu</code></td><td>CPU semi-implicit step bench</td></tr>
 <tr><td><code>make bench-gpu</code></td><td>GPU semi-implicit step bench</td></tr>
 <tr><td><code>make bench-featherstone</code></td><td>CPU-vs-GPU Featherstone parity bench</td></tr>
@@ -241,10 +240,15 @@ make test-equality-gpu              # XPBD equality projection
 make test-equality-joint-mimic-gpu  # Stage 32 joint mimic
 make test-particles-gpu             # particle XPBD
 make test-hydroelastic-gpu          # Stage 22.1 hydroelastic
-make test-mujoco-gpu                # Stage 22 wrapper — needs libmujoco
 make test-sparse-grid-gpu           # Stage 24e NanoVDB
 make test-mpm-gpu                   # Stage 24d v1 explicit MPM
 make test-mpm-v3-gpu                # Stage 24d.1 semi-implicit MPM + Snow
+make test-implicit-mpm-gpu           # implicit MPM GPU kernels/parity
+make test-vbd-cloth-gpu             # VBD cloth GPU suite
+make test-vbd-tets-gpu              # VBD tetrahedral GPU suite
+make test-vbd-tets-v3-gpu           # VBD tet large-strain/plasticity GPU suite
+make test-vbd-tets-v4-gpu           # VBD tet damping/contact GPU suite
+make test-vbd-extended-gpu          # extended VBD mode/contact GPU suite
 make test-soft-vt-gpu               # Stage 33.2 soft VT contact
 make test-soft-friction-gpu         # Stage 33.2.1 soft friction + restitution
 make test-fem-gpu                   # Stage 36.5 GPU FEM v1
@@ -255,22 +259,20 @@ make test-fem-stokes-gpu            # Stage 41 v2 Stokes parity
 invocation. You can run any of them by hand if you’re not using the
 Makefile.</p>
 <h2 id="benches"><a class="header" href="#benches">Benches</a></h2>
-<p>Benches use <code>criterion</code>. There are 43 of them in
-<code>crates/molla/benches/</code>. The Makefile exposes three convenience
-targets:</p>
+<p>Benches use <code>criterion</code> and live with their owning functionality crates. The
+Makefile exposes three convenience targets:</p>
 <pre><code class="language-bash">make bench-cpu              # CPU step bench
 make bench-gpu              # GPU step bench (needs wgpu adapter)
 make bench-featherstone     # CPU-vs-GPU Featherstone in one criterion group
 </code></pre>
 <p>To run a specific bench:</p>
-<pre><code class="language-bash">nixVulkan cargo bench -p molla --bench bench_xpbd_pile_gpu --features gpu
+<pre><code class="language-bash">nixVulkan cargo bench -p molla-solvers --bench bench_xpbd_pile_gpu --features gpu
 </code></pre>
-<p>The bench inventory is in <code>crates/molla/Cargo.toml</code> under the
-<code>[[bench]]</code> sections, grouped by stage family (A = rigid XPBD,
-B = Featherstone, C = cloth, D = VBD tets, E = cable, F = MPM,
-G = soft contact, H = broadphase, I = narrow phase, J = IK +
-sensors, K = iterative solvers, L = autograd, M = sparse grid,
-N = math + FFT).</p>
+<p>The bench inventory is in each owning crate’s Cargo.toml under its <code>[[bench]]</code>
+sections. For example solver/XPBD/VBD/MPM benches are in
+<code>crates/molla-solvers</code>, geometry benches in <code>crates/molla-geometry</code>, kernel
+benches in <code>crates/molla-kernels</code>, sensor benches in <code>crates/molla-sensors</code>,
+math benches in <code>crates/molla-math</code>, and facade step benches in <code>crates/molla</code>.</p>
 <p>Paired CPU-vs-GPU benches (suffix <code>_cpu_vs_gpu</code>) print side-by-side
 reports in one criterion group so you can eyeball the wall-clock
 ratio at matched problem sizes.</p>
@@ -286,13 +288,6 @@ nix shell).</p>
 </code></pre>
 <p>The viewer also recognises hotkeys for the marquee scenes — see
 <a href="./../viewer/overview.html"><code>viewer/overview.md</code></a>.</p>
-<h2 id="oracle-tests"><a class="header" href="#oracle-tests">Oracle tests</a></h2>
-<pre><code class="language-bash">make test-oracle
-</code></pre>
-<p>Runs <code>crates/molla/tests/oracle/</code>. These compare molla output
-against Python Newton’s. The Newton venv is <em>not</em> managed by the
-nix shell — you need to install it separately (see Newton’s docs).
-The oracle suite is <code>#[ignore]</code>’d in the default <code>cargo test</code> lane.</p>
 <h2 id="common-gotchas"><a class="header" href="#common-gotchas">Common gotchas</a></h2>
 <ul>
 <li><strong>wgpu init fails with “no adapter found”</strong> — you forgot
@@ -301,13 +296,9 @@ fine, but then GPU tests don’t apply).</li>
 <li><strong>Tracy frame stalls</strong> — <code>--features profile</code> is on but no Tracy
 client is connected; the trace buffer grows unbounded. Connect
 immediately on launch, or use <code>--features log_diag</code> instead.</li>
-<li><strong>MuJoCo link failure</strong> — <code>--features mujoco</code> requires
-<code>libmujoco</code> system-installed. The molla nix shell does not carry
-it. See <a href="./../importers/mjcf.html"><code>importers/mjcf.md</code></a> and the
-PLAN.md Stage 22 notes.</li>
 <li><strong>Long initial build</strong> — first compile pulls ~400 Mb of
-dependencies (Bevy, wgpu, egui, glam, criterion, urdf-rs,
-mshio, mujoco-rust, …). Subsequent incremental builds are fast.</li>
+dependencies (Bevy, wgpu, egui, glam, criterion, …). Subsequent
+incremental builds are fast.</li>
 </ul>
 
                     </main>
@@ -354,11 +345,11 @@ mshio, mujoco-rust, …). Subsequent incremental builds are fast.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

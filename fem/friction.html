@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,21 +180,24 @@ once the <strong>normal</strong> force \( \lambda_n \) is known via Lagrange
 multipliers, <strong>tangential</strong> friction follows a Coulomb law that
 constrains the friction force to lie inside a per-contact friction
 disc.</p>
-<p>The FEM-side implementation extends <code>crates/molla/src/fem/signorini.rs</code>
+<p>The FEM-side implementation extends <code>crates/molla-fem/src/signorini.rs</code>
 with <code>solve_augmented_system_with_friction</code> + <code>ContactPair</code> (carrying
-the slave DoF, master normal, and an orthonormal tangent basis). The
-3-component multiplier per pair (1 normal + 2 tangents) shares a single
+the slave DoF, master normal, and an orthonormal tangent basis). Stage 50 v2
+also exposes <code>FrictionState</code> plus separate static/kinetic coefficients
+(<code>μ_s</code>, <code>μ_k</code>), while <code>with_friction(μ)</code> keeps the old <code>μ_s == μ_k</code> behaviour.
+The 3-component multiplier per pair (1 normal + 2 tangents) shares a single
 projected-Uzawa loop with the Stage 49 normal-only path. Particle/cloth-
 side Coulomb friction has separate implementations in
-<code>crates/molla/src/solvers/vbd_soft_contact.rs</code> and
-<code>crates/molla/src/kernels/soft_vt_contact.rs</code> (position-form analogue
+<code>crates/molla-solvers/src/vbd_soft_contact.rs</code> and
+<code>crates/molla-kernels/src/soft_vt_contact.rs</code> (position-form analogue
 on different state types).</p>
 <h2 id="the-coulomb-friction-model"><a class="header" href="#the-coulomb-friction-model">The Coulomb friction model</a></h2>
-<p>For each active contact pair with normal multiplier \( \lambda_n \ge 0 \)
-and friction coefficient \( \mu \ge 0 \):</p>
+<p>For each active contact pair with normal multiplier \( \lambda_n \ge 0 \),
+static friction coefficient \( \mu_s \ge 0 \), and kinetic friction coefficient
+\( \mu_k \ge 0 \):</p>
 <ul>
 <li><strong>Sticking</strong> (no slip):
-\( |\boldsymbol\lambda_t| \le \mu \lambda_n \) with the tangential
+\( |\boldsymbol\lambda_t| \le \mu_s \lambda_n \) with the tangential
 velocity \( v_t = 0 \).</li>
 <li><strong>Sliding</strong> (kinetic):
 \( |\boldsymbol\lambda_t| = \mu_k \lambda_n \) and
@@ -206,19 +209,20 @@ contact:</p>
 <pre><code class="language-text">                            λ_n
                             ↑
                             │
-                            │   ─── friction cone (μ slope)
+                            │   ─── static cone (μ_s slope)
                             │  /
                             │ /
                             │/_______________→
                                                 |λ_t|
             (λ_t, λ_n) feasible iff
-            |λ_t| ≤ μ · λ_n  (stick)
-            |λ_t| = μ · λ_n  (slip)
+            |λ_t| ≤ μ_s · λ_n  (stick)
+            |λ_t| = μ_k · λ_n  (slip)
 </code></pre>
 <p>For an FEM contact with 3D normal \( \mathbf{n} \) and two
 orthonormal in-plane tangents \( \mathbf{t}<em>1, \mathbf{t}<em>2 \), the
 constraint becomes: \( (\lambda</em>{t_1}, \lambda</em>{t_2}) \) lies inside
-the <strong>disc</strong> of radius \( \mu \lambda_n \).</p>
+the <strong>static disc</strong> of radius \( \mu_s \lambda_n \), or on the kinetic
+boundary \( \mu_k \lambda_n \) once it slips.</p>
 <h2 id="algorithmic-plan"><a class="header" href="#algorithmic-plan">Algorithmic plan</a></h2>
 <p>The textbook semi-smooth Newton recipe (Wriggers, §6.5):</p>
 <h3 id="1-tangent-constraint-matrix"><a class="header" href="#1-tangent-constraint-matrix">1. Tangent constraint matrix</a></h3>
@@ -254,13 +258,12 @@ via CG.</p>
 </li>
 <li>
 <p>Tangent dual update: \( \boldsymbol\lambda_t \leftarrow \boldsymbol\lambda_t + \rho_t (g_t - C_t u) \),
-then <strong>project onto the friction disc</strong> of radius
-\( \mu \lambda_n \):</p>
+then <strong>project onto the friction disc</strong> using the static/kinetic rule:</p>
 <p>\[
 \boldsymbol\lambda_t \leftarrow
 \begin{cases}
-\boldsymbol\lambda_t &amp; \text{if } |\boldsymbol\lambda_t| \le \mu \lambda_n \
-\mu \lambda_n \cdot \dfrac{\boldsymbol\lambda_t}{|\boldsymbol\lambda_t|} &amp; \text{otherwise}
+\boldsymbol\lambda_t &amp; \text{if } |\boldsymbol\lambda_t| \le \mu_s \lambda_n \
+\mu_k \lambda_n \cdot \dfrac{\boldsymbol\lambda_t}{|\boldsymbol\lambda_t|} &amp; \text{otherwise}
 \end{cases}
 \]</p>
 </li>
@@ -282,38 +285,93 @@ any value inside the disc is admissible. The projection step uses
 <li><strong>Slip</strong> (kinetic): \( |\boldsymbol\lambda_t| = \mu_k \lambda_n \),
 opposing the slip velocity. The projection step uses \( \mu_k \).</li>
 </ul>
-<p>A simple state-machine over each contact decides which regime applies:
-once \( |\boldsymbol\lambda_t| \) reaches \( \mu_s \lambda_n \) the
-contact transitions to slip; once \( v_t \) drops below a threshold
-it transitions back to stick. In practice molla’s particle-side
-friction (<code>vbd_soft_contact.rs</code>) uses a single \( \mu \) and lets
-the implicit regularisation handle the transition; the FEM version
-will likely follow the same pattern.</p>
+<p>A per-contact <code>FrictionState</code> records the final projection regime
+(<code>Inactive</code>, <code>Stick</code>, or <code>Slip</code>). The current implementation classifies
+directly from the projected dual update; it does not yet add a
+velocity-threshold hysteresis loop.</p>
 <h2 id="expected-api"><a class="header" href="#expected-api">Expected API</a></h2>
 <p>When the module lands, the signatures will look like:</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Per-pair (slave_dof, normal, tangent1, tangent2, target_gap, mu)
-pub struct FrictionContact {
-    pub active_pairs: Vec&lt;(u32, Vec3, Vec3, Vec3, Real, Real)&gt;,
+</span>pub struct ContactPair {
+    pub slave_dof: u32,
+    pub normal: Vec3,
+    pub tangent_u: Vec3,
+    pub tangent_v: Vec3,
+    pub target_gap: Real,
 }
 
-pub fn assemble_normal_constraint(active_pairs, n_dofs) -&gt; Result&lt;BsrMatrix&gt;;
-pub fn assemble_tangent_constraint(active_pairs, n_dofs) -&gt; Result&lt;BsrMatrix&gt;;
+pub struct SignoriniContact {
+    pub active_pairs: Vec&lt;ContactPair&gt;,
+    pub friction_static_coeff: Real,
+    pub friction_kinetic_coeff: Real,
+}
 
-pub fn solve_signorini_with_friction(
+pub fn solve_augmented_system_with_friction(
     k_global: &amp;BsrMatrix,
-    c_normal: &amp;BsrMatrix,
-    c_tangent: &amp;BsrMatrix,
+    contact: &amp;SignoriniContact,
     f: &amp;[Real],
-    g_normal: &amp;[Real],
-    friction_coeffs: &amp;[Real],   // one μ per active pair
-    config: FrictionConfig,
-) -&gt; Result&lt;FrictionResult&gt;;
+    max_iters: usize,
+    tol: Real,
+) -&gt; Result&lt;FrictionUzawaResult&gt;;
+
+pub fn solve_active_set_signorini_with_friction(
+    k_global: &amp;BsrMatrix,
+    candidates: &amp;SignoriniContactCandidates,
+    f: &amp;[Real],
+    friction_static_coeff: Real,
+    friction_kinetic_coeff: Real,
+    max_outer_iters: usize,
+    gap_tol: Real,
+    inner_max_iters: usize,
+    inner_tol: Real,
+) -&gt; Result&lt;ActiveSetFrictionResult&gt;;
 <span class="boring">}</span></code></pre>
 <p>The result returns both \( u \), \( \boldsymbol\lambda_n \), and
 \( \boldsymbol\lambda_t \) (the projected tangential forces),
 plus the per-pair stick/slip flag for diagnostics.</p>
+<p>The active-set variant is the coupled Stage 49/50 path: the PDAS loop
+discovers the current normal active set, and each inner solve uses the
+stacked normal+tangent Coulomb system. Released contacts zero their
+normal multiplier, tangent multipliers, and <code>FrictionState</code> in one
+outer iteration, so friction is no longer a post-pass over a
+preselected contact set.</p>
+<h2 id="rate-and-state-friction"><a class="header" href="#rate-and-state-friction">Rate-and-state friction</a></h2>
+<p>For advanced tribology / geology workloads, the FEM crate also exposes
+the Dieterich-Ruina aging law as reusable per-contact helpers:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct RateStateFrictionParams {
+    pub mu0: Real,
+    pub a: Real,
+    pub b: Real,
+    pub v0: Real,
+    pub dc: Real,
+}
+
+pub struct RateStateFrictionState {
+    pub theta: Real,
+}
+
+pub fn rate_state_friction_coeff(
+    params: RateStateFrictionParams,
+    state: RateStateFrictionState,
+    slip_rate: Real,
+) -&gt; Real;
+
+pub fn advance_rate_state_friction(
+    params: RateStateFrictionParams,
+    state: RateStateFrictionState,
+    slip_rate: Real,
+    dt: Real,
+) -&gt; (RateStateFrictionState, Real);
+<span class="boring">}</span></code></pre>
+<p>The coefficient is
+<code>μ = μ0 + a ln(v/v0) + b ln(θ v0 / dc)</code>, and the state evolves with
+the aging law <code>dθ/dt = 1 - vθ/dc</code>. The helpers are intentionally
+solver-agnostic: Signorini, VBD, or particle contact pipelines can
+own the state vector and feed the updated coefficient into their
+existing friction-cone projection.</p>
 <h2 id="whats-already-in-the-codebase"><a class="header" href="#whats-already-in-the-codebase">What’s already in the codebase</a></h2>
 <p>Friction is implemented (and tested) for these non-FEM paths:</p>
 <div class="table-wrapper">
@@ -373,7 +431,7 @@ the friction extension will plug into.</li>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../sensors/raycaster.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../fem/phase_field.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -387,7 +445,7 @@ the friction extension will plug into.</li>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../sensors/raycaster.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../fem/phase_field.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -409,11 +467,11 @@ the friction extension will plug into.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

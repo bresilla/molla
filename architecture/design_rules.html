@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -345,12 +345,10 @@ matchable.</p>
 <p>The few places <code>anyhow</code> shows up — like the former <code>usd_molla</code>
 crate that briefly existed — were application-level code, not
 engine.</p>
-<h2 id="8-no-unsafe-outside-pod--ffi"><a class="header" href="#8-no-unsafe-outside-pod--ffi">8. No <code>unsafe</code> outside Pod / FFI</a></h2>
+<h2 id="8-no-unsafe-outside-pod-compatible-data"><a class="header" href="#8-no-unsafe-outside-pod-compatible-data">8. No <code>unsafe</code> outside Pod-compatible data</a></h2>
 <p>The engine has zero <code>unsafe</code> blocks outside of:</p>
 <ul>
 <li><code>bytemuck::Pod</code> / <code>Zeroable</code> derives.</li>
-<li>The MuJoCo FFI shim (<code>solvers::mujoco</code>) — bindings to the C
-library.</li>
 </ul>
 <p>Workspace lint <code>unsafe_op_in_unsafe_fn = "deny"</code> enforces that any
 new <code>unsafe</code> is flagged and reviewed.</p>
@@ -413,11 +411,11 @@ common mistake.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

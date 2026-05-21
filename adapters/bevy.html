@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@ Bevy footprint. This chapter documents the Bevy integration patterns
 the viewer uses; they are the same patterns you would use to embed
 molla in your own Bevy app.</p>
 <h2 id="what-the-viewer-pulls-in"><a class="header" href="#what-the-viewer-pulls-in">What the viewer pulls in</a></h2>
-<p>From <code>crates/molla_viewer/Cargo.toml</code>:</p>
+<p>From <code>bin/molla_viewer/Cargo.toml</code>:</p>
 <ul>
 <li><code>bevy = "0.18"</code> with a curated feature list — ECS, render, PBR,
 scene, picking, gizmos, asset, scene, X11, Wayland.</li>
@@ -241,7 +241,7 @@ struct SceneStates&lt;'w&gt; {
     gpu_np: ResMut&lt;'w, GpuNpExampleState&gt;,
     gpu_bp: ResMut&lt;'w, GpuBpExampleState&gt;,
     quad: ResMut&lt;'w, QuadrotorState&gt;,
-    mujoco: ResMut&lt;'w, MuJoCoExampleState&gt;,
+    reference_pendulum: ResMut&lt;'w, ReferencePendulumState&gt;,
     diff_arm: ResMut&lt;'w, DiffArmExampleState&gt;,
     diff_arm6: ResMut&lt;'w, DiffArm6ExampleState&gt;,
     mesh: ResMut&lt;'w, MeshToolsExampleState&gt;,
@@ -315,7 +315,7 @@ pane rects from the egui frame state and clips its own input.</p>
 <tbody>
 <tr><td><code>Q</code></td><td>Quadrotor</td></tr>
 <tr><td><code>V</code></td><td>VbdCloth</td></tr>
-<tr><td><code>J</code></td><td>MuJoCo</td></tr>
+<tr><td><code>J</code></td><td>Native reference pendulum</td></tr>
 <tr><td><code>G</code></td><td>DiffArm</td></tr>
 <tr><td><code>H</code></td><td>DiffArm6</td></tr>
 <tr><td><code>M</code></td><td>MeshTools</td></tr>
@@ -334,7 +334,7 @@ grey).</li>
 <li><code>Space</code> — pause / resume.</li>
 <li><code>R</code> — reset current scene.</li>
 </ul>
-<p>The full keybinding table is in <code>crates/molla_viewer/src/main.rs</code>
+<p>The full keybinding table is in <code>bin/molla_viewer/src/main.rs</code>
 in the <code>handle_hotkeys</code> system.</p>
 <h2 id="embedding-molla-in-your-own-bevy-app"><a class="header" href="#embedding-molla-in-your-own-bevy-app">Embedding molla in your own Bevy app</a></h2>
 <p>If you want a molla simulation inside an existing Bevy app rather
@@ -356,8 +356,8 @@ fn setup(mut commands: Commands) {
 }
 <span class="boring">}</span></code></pre>
 <ol start="3">
-<li>Build a <code>Model</code> via <code>ModelBuilder</code> (or load via URDF), store it
-in another resource.</li>
+<li>Build a procedural <code>Model</code> via <code>ModelBuilder</code> and store it in another
+resource.</li>
 <li>Step in a <code>FixedUpdate</code> system:</li>
 </ol>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
@@ -381,7 +381,7 @@ inside Bevy; it doesn’t even know Bevy exists.</p>
 <li><a href="../viewer/overview.html"><code>viewer/overview.md</code></a> — full viewer
 architecture.</li>
 <li><a href="../viewer/scenes.html"><code>viewer/scenes.md</code></a> — the scene catalog.</li>
-<li><code>crates/molla_viewer/src/main.rs</code> — the entire viewer in one
+<li><code>bin/molla_viewer/src/main.rs</code> — the entire viewer in one
 ~24k-line file. Search by scene name to find the per-scene
 implementation.</li>
 </ul>
@@ -390,7 +390,7 @@ implementation.</li>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../importers/gmsh.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../autograd/splat.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -404,7 +404,7 @@ implementation.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../importers/gmsh.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../autograd/splat.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
@@ -430,11 +430,11 @@ implementation.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

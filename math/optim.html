@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,7 +183,7 @@ in molla all need gradient descent on a flat parameter vector, and
 these are the shared primitives that everyone depends on.</p>
 <p>The shape mirrors Warp’s <code>wp.optim.{Adam, SGD}</code>
 (<code>xtra/warp/warp/_src/optim/{adam,sgd}.py</code>). On the GPU side, the
-fused-update kernels live in <code>crates/molla/shaders/optim_{adam,sgd}.wgsl</code>
+fused-update kernels live in <code>crates/molla-kernels/shaders/optim_{adam,sgd}.wgsl</code>
 and are dispatched by <code>crate::kernels::{optim_adam, optim_sgd}</code>.</p>
 <h2 id="cpu--gpu-precision"><a class="header" href="#cpu--gpu-precision">CPU + GPU precision</a></h2>
 <p>Host paths run on <code>f64</code> (the engine’s <a href="./types.html"><code>Real</code></a>); GPU
@@ -234,7 +234,7 @@ v̂_t = v_t / (1 − β₂^t)
 that may span orders of magnitude, Adam’s scale-invariance breaks down:
 a fixed <code>lr</code> either oscillates wildly when the parameter is small or
 stalls when it’s large. The pattern used across the parameter-ID tests
-in <code>crates/molla/tests/fem_diff_optim.rs</code> is to <strong>optimise in
+in <code>crates/molla-fem/tests/fem_diff_optim.rs</code> is to <strong>optimise in
 log-space</strong>:</p>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -282,8 +282,7 @@ impl SgdState {
     pub fn step(&amp;mut self, params: &amp;mut [Real], grads: &amp;[Real], cfg: &amp;SgdConfig);
 }
 <span class="boring">}</span></code></pre>
-<p>The semantics match PyTorch’s <code>torch.optim.SGD</code> and Warp’s
-<code>sgd_step_kernel</code>:</p>
+<p>The semantics match molla’s GPU <code>sgd_step_kernel</code>:</p>
 <pre><code class="language-text">g̃   = g + wd · θ
 b_t = μ·b_{t-1} + (1−damp)·g̃    if t &gt; 0
     = g̃                          if t == 0
@@ -312,7 +311,7 @@ adapters. The <code>optim_sgd.wgsl</code> kernel follows the same shape.</p>
 the <code>f64 → f32</code> conversion, pipeline + bind-group setup, and the
 single dispatch per call. Stage 38c parity tests pin CPU and GPU
 within <code>f32</code> tolerance after many steps; finite-difference gradient
-checks (<code>crates/molla/tests/optim_gpu_parity.rs</code>) catch shader
+checks (<code>crates/molla-kernels/tests/optim_gpu_parity.rs</code>) catch shader
 regressions early.</p>
 <h2 id="cross-references"><a class="header" href="#cross-references">Cross-references</a></h2>
 <ul>
@@ -366,11 +365,11 @@ per-parameter gradients in parameter-ID experiments.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

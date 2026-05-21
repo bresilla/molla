@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,7 +175,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="gpu-linear-elasticity"><a class="header" href="#gpu-linear-elasticity">GPU linear elasticity</a></h1>
-<p><code>crates/molla/src/fem/elasticity_gpu.rs</code> is the end-to-end GPU port of
+<p><code>crates/molla-fem/src/elasticity_gpu.rs</code> is the end-to-end GPU port of
 the linear-elasticity solve. It builds the BC-reduced sparsity
 pattern on CPU, hands it to the GPU via <code>FemGpuData</code>, dispatches a
 WGSL kernel that computes the 144 per-cell <code>Bᵀ D B</code> values, and
@@ -312,7 +312,7 @@ The Stage 41 v1 measurement on a 16³ tet cantilever (4913 vertices,
 on CPU — about <strong>8× speedup</strong>, dominated by the per-cell <code>Bᵀ D B</code>
 arithmetic on GPU.</p>
 <h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
-<p>The contract tests in <code>crates/molla/tests/fem_elasticity_gpu.rs</code>
+<p>The contract tests in <code>crates/molla-fem/tests/fem_elasticity_gpu.rs</code>
 compare GPU vs CPU on a fixed cantilever fixture:</p>
 <ul>
 <li>Same <code>K</code> values to ~1e-4 relative (f32 vs f64).</li>
@@ -377,11 +377,11 @@ uploads the BSR + mesh in one shot.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

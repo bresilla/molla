@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,7 +175,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="adaptive-mesh-refinement-amr"><a class="header" href="#adaptive-mesh-refinement-amr">Adaptive Mesh Refinement (AMR)</a></h1>
-<p><code>crates/molla/src/fem/amr_mesh.rs</code> (~1750 lines) is the second-largest
+<p><code>crates/molla-fem/src/amr_mesh.rs</code> (~1750 lines) is the second-largest
 single source file in the FEM stack. It builds a refinement-tree on
 top of a base <code>FemMesh</code>, manages hanging nodes, balances levels 2:1,
 and produces a Galerkin-reduced system <code>Kc = TᵀKT</code> that you can hand
@@ -384,6 +384,28 @@ one — used by the <strong>Krylov restart</strong> workflow:</p>
 </ol>
 <p>This is how the <code>AmrHeat</code> viewer scene (#100) gets to a sharp
 near-source profile without paying for a global fine mesh.</p>
+<h2 id="dg-amr-coarsening--stage-45-v5"><a class="header" href="#dg-amr-coarsening--stage-45-v5">DG-AMR coarsening — Stage 45 v5</a></h2>
+<p>Stage 45 v5 adds two pieces needed by transient DG-AMR runs:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn AmrMesh::coarsen_subtree(&amp;mut self, parent_idx: usize) -&gt; Result&lt;()&gt;;
+
+pub fn project_dg_p1_tri_children_to_parent_l2(
+    parent: &amp;FemCell,
+    children: &amp;[FemCell],
+    vertices: &amp;[Vec3],
+    child_values: &amp;[[Real; 3]],
+) -&gt; Result&lt;[Real; 3]&gt;;
+<span class="boring">}</span></code></pre>
+<p><code>coarsen_subtree</code> collapses a deep refinement tree from the leaves
+upward before coarsening the requested parent, so callers do not have to
+manually un-refine every descendant first.</p>
+<p><code>project_dg_p1_tri_children_to_parent_l2</code> is the DG coarsening transfer
+operator for triangle P1 fields. It solves the parent mass projection</p>
+<pre><code class="language-text">∫_parent N_i u_parent dx = Σ_child ∫_child N_i u_child dx
+</code></pre>
+<p>using the degree-2-exact triangle quadrature rule, so linear DG fields
+survive child-to-parent coarsening exactly.</p>
 <h2 id="cross-references"><a class="header" href="#cross-references">Cross-references</a></h2>
 <ul>
 <li><a href="./mesh.html">Mesh</a> — <code>FemMesh</code> is what <code>AmrMesh</code> wraps.</li>
@@ -440,11 +462,11 @@ build the geometric multigrid hierarchy.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

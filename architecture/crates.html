@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,83 +175,101 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="crate-boundaries"><a class="header" href="#crate-boundaries">Crate boundaries</a></h1>
-<p>molla currently ships two member crates and they have a strict
-linear dependency graph.</p>
+<p>molla is being modularized by functionality. The current workspace has the
+foundation crates <code>molla-core</code>, <code>molla-math</code>, <code>molla-storage</code>, runtime-only
+<code>molla-compute</code>, tiled compute primitive crate <code>molla-compute-primitives</code>,
+data-model crate <code>molla-sim</code>, host optimizer crate <code>molla-optim</code>, the first
+<code>molla-actuators</code> slice, the first <code>molla-kernels</code> slices, the first
+<code>molla-sensors</code> slice, the first <code>molla-geometry</code> slice, the first
+<code>molla-solvers</code> slice, the first <code>molla-autograd</code> slice, and the first
+<code>molla-fem</code> slice extracted; <code>molla</code> remains the public facade plus
+remaining engine modules; <code>bin/molla_viewer</code> is the binary-only Bevy
+application.</p>
 <pre><code>            ┌────────────────────┐
             │   molla_viewer     │   Bevy 0.18 application
+            │  bin/molla_viewer  │
             └─────────┬──────────┘
                       │ depends on
                       ▼
             ┌────────────────────┐
-            │       molla        │   the engine — no Bevy / USD
-            └────────────────────┘
+            │       molla        │   public facade + engine modules
+            └─────────┬──────────┘
+                      │ re-exports
+                      ▼
+            ┌──────────────────────────────────────────┐
+            │ molla-core · molla-math · molla-storage │
+            │ molla-compute · molla-compute-primitives │
+            │ molla-sim · molla-optim                 │
+            │ molla-actuators                         │
+            │ molla-kernels                           │
+            │ molla-sensors                           │
+            │ molla-geometry                          │
+            │ molla-solvers                           │
+            │ molla-autograd                          │
+            │ molla-fem                               │
+            └──────────────────────────────────────────┘
 </code></pre>
 <h2 id="the-rules"><a class="header" href="#the-rules">The rules</a></h2>
 <ol>
-<li><strong><code>molla</code> knows nothing about Bevy, USD, ROS, JSON, or YAML.</strong> It
-only knows about <code>Model</code> / <code>State</code> / <code>Control</code> / <code>Contacts</code> and
-the WGSL kernels it owns.</li>
-<li><strong><code>molla_viewer</code> is allowed to depend on Bevy + bevy_egui +
+<li><strong>Library crates know nothing about Bevy, ROS, JSON, YAML, or external asset
+formats.</strong> The main <code>molla</code> facade/engine only knows about simulation data,
+solvers, kernels, and physics modules it owns.</li>
+<li><strong><code>bin/molla_viewer</code> is allowed to depend on Bevy + bevy_egui +
 bevy_frost + bevy_glacial + mimalloc.</strong> That is the full
-surface; the viewer crate is the only place those dependencies
+surface; the viewer binary package is the only place those dependencies
 live.</li>
-<li><strong>Importers live inside <code>molla</code>.</strong> URDF (<code>urdf-rs</code>) lives at
-<code>molla::utils::urdf</code>. Gmsh (<code>mshio</code>) lives at
-<code>molla::fem::FemMesh::from_gmsh_*</code>. The MJCF writer lives at
-<code>molla::solvers::mujoco::MjcfWriter</code> because only the MuJoCo
-wrapper consumes it. They are <em>not</em> a separate crate — that
-would add a workspace member without changing the dep graph
-shape.</li>
+<li><strong>No importer/exporter or external solver-wrapper crates.</strong> Procedural model
+construction is the supported surface; physics modules own physics data and
+kernels only.</li>
 <li><strong>Optional native dependencies are behind Cargo features.</strong> See
 <a href="./features.html">features.md</a>. The features gate compilation of
 whole modules so a clean <code>cargo build</code> on a stock Rust toolchain
-succeeds without MuJoCo / SuiteSparse / LAPACKE installed.</li>
-<li><strong>There is no Python in the build graph.</strong> Newton’s Python tree
-is at <code>xtra/newton/</code> and is <em>not</em> a workspace member. The
-<code>test-oracle</code> Makefile target shells out to a separately-managed
-venv.</li>
+succeeds without SuiteSparse / LAPACKE installed.</li>
+<li><strong>There is no Python in the build graph.</strong> The <code>xtra/</code> trees are read-only
+references and are <em>not</em> workspace members.</li>
 </ol>
-<h2 id="why-so-few-crates"><a class="header" href="#why-so-few-crates">Why so few crates?</a></h2>
-<p>molla started with the option to split into many small crates (a
-<code>molla-math</code>, <code>molla-storage</code>, <code>molla-fem</code>, <code>molla-solvers</code>, etc.)
-and explicitly rejected it. The reasons:</p>
+<h2 id="modularization-direction"><a class="header" href="#modularization-direction">Modularization direction</a></h2>
+<p>The accepted direction is functional crate boundaries, not CPU-vs-GPU splits.
+<code>crates/</code> is for reusable libraries, <code>bin/</code> is for runnable applications, and
+<code>crates/molla</code> remains the public facade that preserves <code>molla::prelude::*</code>.</p>
+<p>Current extraction status:</p>
 <ul>
-<li><strong>One feature graph</strong> is easier to reason about than ten. The
-<code>gpu</code> feature gates every WGSL kernel; if it were spread across
-five crates the gate logic would need to be replicated and kept
-consistent.</li>
-<li><strong>One <code>Cargo.toml</code></strong> keeps version pins consistent (especially
-<code>wgpu</code> + <code>glam</code> + <code>bytemuck</code>, which are tightly coupled).</li>
-<li><strong>Incremental compile times are good.</strong> Rust’s incremental rebuild
-on a single library crate is fast enough that the wallclock
-argument for splitting doesn’t materialise.</li>
-<li><strong>Public API is enforced by <code>prelude</code> + module-level <code>pub use</code>.</strong>
-Even though everything is one crate, the surface a user touches
-is <code>molla::prelude::*</code> and not the 200+ items underneath. If a
-type is not in <code>prelude</code>, the docs note that it is an
-implementation detail.</li>
-</ul>
-<p>When a future user explicitly wants only the <code>math</code> layer (no GPU,
-no <code>wgpu</code>, possibly <code>no_std</code>), we will split <code>crates/molla_math/</code>
-out as a sibling. Until then, splitting is overhead without
-benefit.</p>
-<h2 id="what-used-to-be-a-separate-crate"><a class="header" href="#what-used-to-be-a-separate-crate">What used to be a separate crate</a></h2>
-<ul>
-<li><strong><code>crates/usd_molla/</code></strong> — existed before Stage 8 as the
-UsdPhysics↔molla bridge. It read <code>openusd::Stage</code>, walked the
-<code>UsdPhysics</code> opinions (<code>RigidBodyAPI</code> + <code>MassAPI</code> +
-<code>CollisionAPI</code>, <code>RevoluteJoint</code>, <code>SphericalJoint</code>, etc.) and
-produced a <code>molla::Model</code>. It also implemented <code>project_state_to_stage</code>
-for writing simulation results back as time samples on the same
-prims. It was removed in commit <code>8c81b13</code> — molla now integrates
-with USD via the upstream <code>bevy_openusd</code> ecosystem rather than
-maintaining a sibling crate. See
-<a href="./../importers/usd.html"><code>importers/usd.md</code></a>.</li>
+<li><code>molla-core</code> — done.</li>
+<li><code>molla-math</code> — done.</li>
+<li><code>molla-storage</code> — done.</li>
+<li><code>molla-compute</code> — done for <code>Engine</code>/<code>Backend</code> runtime only.</li>
+<li><code>molla-compute-primitives</code> — done for tiled matmul, block-Cholesky, convolution/filtering, stream compaction, and MC-GP helpers.</li>
+<li><code>molla-sim</code> — done.</li>
+<li><code>molla-optim</code> — done for host Adam/SGD.</li>
+<li><code>molla-actuators</code> — done for host muscle, PD/PID, neural MLP/LSTM, delay, clamping, and actuator pipeline.</li>
+<li><code>molla-kernels</code> — started for dense3, robust-loss, optim, scan, Dahl friction, contact reduction, GPU hydroelastic anchor reduction, sensor dispatch wrappers, actuator/clamping/muscle dispatch wrappers, rigid-body solver kernels (integrate bodies, CRBA, RNEA, Jacobian, XPBD, Featherstone), VBD/soft-contact kernels, implicit-MPM, FFT, sparse-grid kernels, Gaussian splat raytrace kernels, and Featherstone adjoint dispatchers. Radix sort now lives in <code>molla-compute-primitives</code>; geometry GJK/EPA/MPR, mesh-BVH raycast, and LBVH now live in <code>molla-geometry</code>.</li>
+<li><code>molla-sensors</code> — done for raycast, tiled camera, IMU, contact aggregation, frame transforms, and CPU raycast adjoint/oracle.</li>
+<li><code>molla-geometry</code> — started for AABB, spatial hash, broad-phase BVH/LBVH, mesh BVH, tet AABB helpers, convex support functions, convex hull authoring, world-frame shape helpers, QEM mesh decimation, dense mesh SDF baking, sparse volume/SDF storage, marching cubes, CPU/GPU narrow-phase dispatch, GJK/EPA/MPR convex queries, Gaussian splat math, hydroelastic contact, soft BVH/VT CCD, CPU contact reduction, and contact warm-start/matching extras.</li>
+<li><code>molla-solvers</code> — started for the shared <code>Solver</code> trait, CPU/GPU semi-implicit rigid-body integration, CPU/GPU XPBD, CPU/GPU VBD, CPU/GPU Featherstone, implicit MPM CPU driver, explicit GPU MPM driver, VBD soft-contact helpers, inverse kinematics, CPU-only CRBA mass matrices, recursive Newton-Euler inverse dynamics, geometric Jacobians, and optional <code>autograd</code> integration for Featherstone tape helpers.</li>
+<li><code>molla-autograd</code> — started for CPU tape, differentiable arm helper, Featherstone trace/adjoint helpers, XPBD distance adjoints, and differentiable CPU MPM forward/adjoint code.</li>
+<li><code>molla-fem</code> — extracted for the FEM module tree, FEM-specific GPU kernels, the 2-D Stam stable-fluid solver, and facade-flipped behind <code>molla::fem::*</code>.</li>
 </ul>
 <h2 id="workspace-exclusions"><a class="header" href="#workspace-exclusions">Workspace exclusions</a></h2>
 <pre><code class="language-toml">[workspace]
 resolver = "2"
-members = ["crates/molla", "crates/molla_viewer"]
+members = [
+    "crates/molla-core",
+    "crates/molla-math",
+    "crates/molla-storage",
+    "crates/molla-compute",
+    "crates/molla-compute-primitives",
+    "crates/molla-sim",
+    "crates/molla-optim",
+    "crates/molla-actuators",
+    "crates/molla-kernels",
+    "crates/molla-sensors",
+    "crates/molla-geometry",
+    "crates/molla-solvers",
+    "crates/molla-autograd",
+    "crates/molla-fem",
+    "crates/molla",
+    "bin/molla_viewer",
+]
 exclude = ["xtra"]
 </code></pre>
 <p>The <code>exclude = ["xtra"]</code> line is what stops <code>cargo build</code> from ever
@@ -267,10 +285,9 @@ convenience.</p>
 only want the CPU paths.</li>
 </ul>
 </li>
-<li><strong><code>mujoco</code> and <code>russell</code> are off by default</strong> and pull in system
-C dependencies (<code>libmujoco</code> for <code>mujoco</code>; nothing native at the
-moment for <code>russell</code>, but the feature flag is reserved for the
-upstream SuiteSparse-based solver).</li>
+<li><strong><code>russell</code> is off by default</strong> and reserves the direct-solver surface for
+optional sparse-linear-algebra experiments. The current implementation stays
+pure Rust in the nix dev shell.</li>
 <li><strong>The <code>prelude</code> is stable.</strong> Anything outside <code>prelude</code> may move
 between minor releases until 0.1.0.</li>
 </ul>
@@ -323,11 +340,11 @@ unofficial release criterion.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,7 +192,7 @@ energy (Stage 20).</li>
 <li><strong>Per-particle inertia eigendecomposition</strong> for MPM plasticity
 (Stage 24d).</li>
 </ul>
-<p>The matching WGSL kernel lives in <code>crates/molla/shaders/dense3_svd.wgsl</code>
+<p>The matching WGSL kernel lives in <code>crates/molla-kernels/shaders/dense3_svd.wgsl</code>
 and is dispatched by <code>crate::kernels::Dense3Kernel</code>.</p>
 <h2 id="algorithm-choices--jacobi-vs-householder-vs-givens"><a class="header" href="#algorithm-choices--jacobi-vs-householder-vs-givens">Algorithm choices — Jacobi vs Householder vs Givens</a></h2>
 <p>All three forward decompositions deliberately avoid <strong>Householder
@@ -378,11 +378,11 @@ The clamp keeps the solution finite when <code>J</code> becomes rank-deficient
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

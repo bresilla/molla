@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -176,7 +176,7 @@
                     <main>
                         <h1 id="stokes-and-navier-stokes"><a class="header" href="#stokes-and-navier-stokes">Stokes and Navier-Stokes</a></h1>
 <p>Incompressible Stokes / Navier–Stokes lives in
-<code>crates/molla/src/fem/stokes.rs</code> (~1600 lines) and uses
+<code>crates/molla-fem/src/stokes.rs</code> (~1600 lines) and uses
 <strong>Taylor–Hood mixed elements</strong> — P2 vector velocity + P1 scalar
 pressure — solved with a SIMPLE-style projection iteration on the
 pressure-Schur complement. A FFT-based alternative for periodic 2D
@@ -372,13 +372,27 @@ pub fn solve_navier_stokes_gpu(...) -&gt; Result&lt;NavierStokesGpuResult&gt;;
 loop with GPU sparse-matvec + resident CG inside each predictor /
 corrector. Stage 41 v5 added async-dot fusion for the inner CG so
 each iteration is a single compute pass.</p>
+<p>Stage 41 v7 adds a resident SSP-RK selector:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub enum NavierStokesGpuTimeIntegrator {
+    ImexEuler,
+    SspRk2,
+    SspRk3,
+}
+<span class="boring">}</span></code></pre>
+<p><code>SspRk2</code> and <code>SspRk3</code> apply the existing GPU IMEX Euler stage multiple
+times and form the Shu-Osher convex combinations with the
+<code>combine_states</code> WGSL entry point. Velocity and pressure stage vectors
+stay in device buffers for the whole step; the solver reads back only
+the final <code>NavierStokesGpuResult</code>.</p>
 <p>The shader pair is:</p>
 <ul>
-<li><code>crates/molla/shaders/fem_stokes_assemble.wgsl</code> — per-cell assembly
+<li><code>crates/molla-fem/shaders/fem_stokes_assemble.wgsl</code> — per-cell assembly
 of the velocity and divergence blocks (one workgroup per cell).</li>
-<li><code>crates/molla/shaders/fem_ns_advect.wgsl</code> /
-<code>fem_ns_rhs_assemble.wgsl</code> — Navier-Stokes per-step convection +
-RHS construction.</li>
+<li><code>crates/molla-fem/shaders/fem_ns_advect.wgsl</code> /
+<code>fem_ns_rhs_assemble.wgsl</code> — Navier-Stokes per-step convection,
+RHS construction, zero-mask, and SSP-RK state-combination kernels.</li>
 </ul>
 <h2 id="cross-references"><a class="header" href="#cross-references">Cross-references</a></h2>
 <ul>
@@ -435,11 +449,11 @@ velocity block as its mesh-side velocity update (planned for Stage
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

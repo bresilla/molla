@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
 <p>The APIC (<strong>A</strong>ffine <strong>P</strong>article-<strong>I</strong>n-<strong>C</strong>ell) hybrid couples a
 Material-Point-Method (MPM) particle representation with an FEM
 mesh-side velocity update. It lives in
-<code>crates/molla/src/fem/apic_coupling.rs</code> (CPU, Stage 37.6) and
+<code>crates/molla-fem/src/apic_coupling.rs</code> (CPU, Stage 37.6) and
 <code>apic_coupling_gpu.rs</code> (GPU, Stage 41 v2). Particles transfer
 momentum to mesh nodes via APIC weights, the mesh solves the
 velocity-field step, and particles read the updated node velocities
@@ -265,8 +265,8 @@ form — <code>apic_coupling.rs</code> evaluates it inline.</p>
 </li>
 </ol>
 <h2 id="contract-tests"><a class="header" href="#contract-tests">Contract tests</a></h2>
-<p>The CPU implementation ships three round-trip tests in
-<code>crates/molla/tests/</code>:</p>
+<p>The CPU implementation ships round-trip tests in
+<code>crates/molla-fem/tests/fem_apic.rs</code>:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -383,11 +383,11 @@ replacement for the viscous-smoothing placeholder.</li>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

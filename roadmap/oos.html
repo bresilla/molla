@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af30e4df.js";
+            window.path_to_searchindex_js = "../searchindex-241762d7.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-11ed3a3f.js"></script>
+        <script src="../toc-7a47bd5c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,311 +175,33 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="out-of-scope"><a class="header" href="#out-of-scope">Out of scope</a></h1>
-<p>This page is the <strong>definitive list of things molla deliberately does not
-do</strong>. Every entry is a <em>design decision</em>, not a gap. The list is curated
-from <code>PLAN.md</code> §1 (non-goals), §4 (Newton reference inventory),
-§20 Stage 25+ (explicit OOS), and the decision log.</p>
-<p>The structure for each entry:</p>
-<ol>
-<li><strong>What</strong> is being skipped.</li>
-<li><strong>Why</strong> — the design reason it’s out of scope. This is the load-bearing
-part: the same reasoning should re-apply on every re-evaluation.</li>
-<li><strong>When we’d reconsider</strong> — the explicit signal that would re-open the
-decision. If that signal arrives, this page gets edited; otherwise the
-item stays out.</li>
-<li><strong>Source</strong> — the commit / stage / PLAN section that originally locked
-it in.</li>
-</ol>
-<p>The point of writing these down is that an item being missing from molla
-is <strong>almost always one of two things</strong>: it’s in
-<a href="./open.html"><code>./open.md</code></a> (an open item, planned), or it’s here (OOS,
-deliberate). If it’s in neither, the gap analysis missed it.</p>
-<hr>
-<h2 id="oos-1-python-bindings-pyo3"><a class="header" href="#oos-1-python-bindings-pyo3">OOS-1. Python bindings (<code>pyo3</code>)</a></h2>
-<p><strong>What.</strong> A first-class Python API exposing <code>Model</code>, <code>State</code>, the
-solvers, and the autograd surface. Newton ships exactly this.</p>
-<p><strong>Why.</strong> molla is a <strong>Rust-first</strong> engine. Two reasons:</p>
-<ul>
-<li>The user base for molla is Rust apps, including <code>bevy_glacial</code> /
-<code>usd_molla</code> consumers and embedded Rust robotics stacks. None of
-these need Python.</li>
-<li>Newton already covers the “Python-first physics engine on GPU” niche
-better than molla ever could — it has the Warp JIT, the NumPy
-ecosystem, and the existing Newton user base. Building a worse copy
-is not the value-add.</li>
-</ul>
-<p>A Python binding would also infect the surface area: every public type
-in molla would need a wrapper, every callback would need GIL handling,
-and the autograd story would have to bridge with <code>torch.Tensor</code> /
-<code>numpy.ndarray</code>. Implementation cost is large; maintenance cost is
-permanent.</p>
-<p><strong>When we’d reconsider.</strong> A concrete user explicitly asks for the
-bindings <em>and</em> commits to the maintenance burden. “It would be nice to
-have” doesn’t qualify.</p>
-<p><strong>Source.</strong> <code>PLAN.md</code> §1 (“non-goals”), <code>GAP.md</code> §9 (“explicitly out of
-scope”), <code>GAP_v2.md</code> §9. Decision-log entry 2026-05-09.</p>
-<hr>
-<h2 id="oos-2-tensorcore-tile-matmul"><a class="header" href="#oos-2-tensorcore-tile-matmul">OOS-2. TensorCore tile matmul</a></h2>
-<p><strong>What.</strong> GEMM primitives that compile to NVIDIA TensorCore mma
-instructions, the way Warp’s <code>tile_matmul</code> does via libmathdx.</p>
-<p><strong>Why.</strong> <strong>wgpu does not expose the <code>cooperative_matrix</code> WGSL extension
-portably.</strong> The extension is Vulkan-spec and exists in
-<code>VK_KHR_cooperative_matrix</code>, but wgpu’s WGSL surface doesn’t yet bind
-it consistently across the three backends (Vulkan / Metal / DX12). Even
-when it does land, it’ll be vendor-specific: TensorCore on NVIDIA,
-<code>AMX</code> on Apple, <code>XMX</code> on Intel. molla is committed to <em>portable</em> GPU
-compute; a TensorCore-only path is a different engine.</p>
-<p>The pragmatic position from <code>GAP.md</code> §8: “Don’t try to match Warp on
-tensor-core / multi-GPU / CUDA-graph features. Those are CUDA-specific
-and out of scope for a portable wgpu engine.”</p>
-<p>The Stage 37.8 tile primitives shipped on stock WGSL (no cooperative
-matrix). They’re slower than Warp’s TensorCore path on hardware that has
-TensorCore, and faster than a no-tile baseline on hardware that doesn’t.
-That’s the right tradeoff for a portable engine.</p>
-<p><strong>When we’d reconsider.</strong> wgpu lands stable WGSL <code>cooperative_matrix</code>
-support across at least Vulkan + Metal backends, <em>and</em> a user surfaces a
-matmul-bound workload (a neural controller too big for the existing
-<code>ControllerNeuralMLP</code>, an FEM problem whose stiffness assembly is
-GEMM-shaped). Both conditions, not either.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §8, <code>PLAN.md</code> §20 Stage 25+, <code>GAP_v2.md</code> §9.</p>
-<hr>
-<h2 id="oos-3-cuda-graphs-for-command-batching"><a class="header" href="#oos-3-cuda-graphs-for-command-batching">OOS-3. CUDA Graphs for command batching</a></h2>
-<p><strong>What.</strong> A capture-replay pattern that records a sequence of kernel
-launches once and replays them with one host submit. Warp uses this to
-amortize Python launch overhead.</p>
-<p><strong>Why.</strong> <strong>wgpu has no equivalent capture API.</strong> Each <code>CommandEncoder</code>
-is one-shot — record, submit, drop. wgpu does coalesce dispatches into
-fewer submits when the encoder is reused, but there’s no
-record-once-replay-many primitive.</p>
-<p>Building a wgpu-side equivalent would mean either:</p>
-<ul>
-<li>Pre-recording into a “command buffer template” that wgpu doesn’t
-support, or</li>
-<li>Building a JIT that fuses the kernels into a single mega-kernel — which
-is what Stage 41 v6 (<code>2bde182</code>) actually does for the inner CG loop,
-manually.</li>
-</ul>
-<p>The mega-kernel approach is the right pattern for wgpu and is the one
-the Stage 41 v3–v6 sequence has been progressively adopting. CUDA
-Graphs is a different mechanism solving the same problem in a
-different way.</p>
-<p><strong>When we’d reconsider.</strong> wgpu adds a command-buffer-template
-abstraction in a future spec revision <em>and</em> the host-dispatch overhead
-becomes a measurable bottleneck. The current Stage 41 v6 work has
-<em>already</em> eliminated the per-iteration host round-trip via a fused
-kernel, so the bottleneck is moving.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §8 table row, <code>PLAN.md</code> Stage 25+, <code>GAP_v2.md</code> §9.</p>
-<hr>
-<h2 id="oos-4-multi-gpu-peer-access"><a class="header" href="#oos-4-multi-gpu-peer-access">OOS-4. Multi-GPU peer access</a></h2>
-<p><strong>What.</strong> Splitting a single physics scene across multiple GPUs with
-peer-to-peer memory copies, the way Warp’s multi-device API does on
-NVLink hardware.</p>
-<p><strong>Why.</strong> <strong>wgpu is single-device</strong> by construction. Each <code>Instance</code> /
-<code>Adapter</code> / <code>Device</code> triplet binds one physical GPU; cross-device buffer
-sharing is not in the spec.</p>
-<p>The single-device model is the right one for portable consumer hardware
-(laptops, single-GPU workstations, dev machines) where molla actually
-runs. Multi-GPU is a niche for HPC clusters and trading desks. molla is
-not a cluster physics engine and isn’t trying to be one.</p>
-<p>A multi-process / multi-instance model that runs N independent molla
-worlds in parallel (one per GPU) on the host side is a different thing
-— that’s already possible today, no engine changes needed. Real
-multi-GPU peer access (single scene across N GPUs, shared state buffer)
-is the one that’s OOS.</p>
-<p><strong>When we’d reconsider.</strong> wgpu adds multi-device buffer sharing
-<em>and</em> the user base shifts to HPC / cluster workloads. Both are
-unlikely.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §8, <code>PLAN.md</code> Stage 25+, <code>GAP_v2.md</code> §9.</p>
-<hr>
-<h2 id="oos-5-kamino-style-padmm-solver"><a class="header" href="#oos-5-kamino-style-padmm-solver">OOS-5. Kamino-style PADMM solver</a></h2>
-<p><strong>What.</strong> A constrained-dynamics solver in the style of Newton’s
-<code>kamino/</code> — closed-loop kinematics, hard contact via NCP, spatial
-friction, restitution, all wrapped in a PADMM (proximal ADMM) outer
-loop.</p>
-<p><strong>Why.</strong> <strong>It overlaps with the MuJoCo wrapper for the
-constrained-dynamics niche, and we picked the wrapper.</strong> PLAN.md §20
-Stage 22 added the MuJoCo wrapper as molla’s answer to “I need a
-mature, battle-tested constrained-dynamics solver.” MuJoCo is the
-industry standard; Kamino is a research solver. Shipping both means
-maintaining two contact codepaths with overlapping responsibilities and
-diverging APIs.</p>
-<p>A secondary reason: PADMM-on-NCP is research-grade and Kamino itself is
-still beta in Newton (CPU-only, “use at your own risk”). The cost of
-reimplementing it for molla is high; the upside is “we have a research
-solver no one asked for.” For users that need the algorithm, Newton +
-mujoco_warp is right there.</p>
-<p><strong>When we’d reconsider.</strong> A user explicitly wants Kamino-the-algorithm
-(not “a constrained-dynamics solver”) <em>and</em> MuJoCo wrapper is
-insufficient for their use case. Both conditions. The MuJoCo wrapper is
-the default answer; Kamino is the escape hatch we’re not building.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §9, <code>PLAN.md</code> §4 (Newton reference: <code>kamino</code>
-listed as “Research solver — Out of scope”), <code>PLAN.md</code> Stage 25+,
-<code>GAP_v2.md</code> §9.</p>
-<hr>
-<h2 id="oos-6-style3d-cloth-projective-dynamics-for-cloth"><a class="header" href="#oos-6-style3d-cloth-projective-dynamics-for-cloth">OOS-6. Style3D cloth (projective dynamics for cloth)</a></h2>
-<p><strong>What.</strong> Newton’s <code>style3d/</code> — a production cloth solver with
-anisotropic bending, panel sewing, dedicated BVH, and a global PCG
-linear solve. Used in fashion / garment simulation.</p>
-<p><strong>Why.</strong> <strong>Stage 20 picked VBD over Style3D, and the decision still
-stands.</strong> The reasoning (recorded in PLAN.md decision-log entry
-2026-05-09):</p>
-<ul>
-<li>VBD ports more cleanly onto WGSL — per-vertex 3×3 Newton block,
-graph-coloured passes mirror the existing XPBD particles kernel.</li>
-<li>Style3D needs a global PCG linear solve. wgpu has no good primitive
-for that <em>at the granularity Style3D wants</em> (a single global solve
-per cloth body, low-iteration, on a Hessian-structured matrix).
-Stage 38a (BSR algebra) and Stage 39F (GPU SpGEMM) get us there
-<em>now</em>, but two years late vs the Stage 20 ship date.</li>
-<li>Stage 20 + Stage 33 + Stage 33.1–33.4 collectively cover the use
-case Style3D solves — including self-collision, CCD, and friction.
-The cloth that needs Style3D’s anisotropic-bending models is a
-garment-design workflow that molla isn’t targeting.</li>
-</ul>
-<p><strong>When we’d reconsider.</strong> A garment-design / cloth-authoring user
-surfaces who needs anisotropic-bending materials <em>and</em> finds VBD’s
-isotropic-bending model insufficient. The current VBD pipeline can
-already do panel sewing via CONNECT constraints; the missing piece is
-specifically anisotropic bending energy.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §2 (solver inventory), <code>PLAN.md</code> §4 (Newton
-reference: <code>style3d</code> listed as “Production cloth — Out of scope”),
-<code>PLAN.md</code> Stage 25+, <code>PLAN.md</code> decision-log 2026-05-09 (VBD-vs-Style3D
-choice), <code>GAP_v2.md</code> §2 + §9.</p>
-<hr>
-<h2 id="oos-7-nanovdb--warp-volume-parity-beyond-what-stage-24e-shipped"><a class="header" href="#oos-7-nanovdb--warp-volume-parity-beyond-what-stage-24e-shipped">OOS-7. NanoVDB / Warp Volume parity beyond what Stage 24e shipped</a></h2>
-<p><strong>What.</strong> Full Warp <code>Volume</code> API parity, in particular
-<code>volume_sample_grad</code> (analytic gradient of a tri-linear sample) and the
-full set of value-type templates (<code>Vec3f</code>, <code>Mat3f</code>, packed types).</p>
-<p><strong>Why.</strong> <strong>Stage 24e + 24e.1 + 24e.2 already ship a working
-NanoVDB-equivalent.</strong> The remaining items (<code>volume_sample_grad</code>, broader
-templating) are not blocking any current workload. Adding them is
-template-engineering work in WGSL, which is painful — WGSL doesn’t have
-templates, so each value type is a kernel-family copy.</p>
-<p>This is not a permanent OOS; it’s a “we ship what users ask for”
-deferral. The sparse-grid surface in molla today is enough for sand /
-snow / fluid-with-volume workflows; if a workflow appears that needs
-analytic gradients on volume samples or a Mat3 value type, we add it.</p>
-<p><strong>When we’d reconsider.</strong> A user needs analytic volume-sample
-gradients (for differentiable rendering through a volume, e.g.) or a
-non-scalar value type (vector fields stored sparsely). Reactive
-expansion, not proactive.</p>
-<p><strong>Source.</strong> <code>GAP_v2.md</code> §2 (“sparse-grid partial — no
-<code>volume_sample_grad</code>”), Stage 24e history.</p>
-<hr>
-<h2 id="oos-8-differentiable-raycast-with-analytic-adjoint"><a class="header" href="#oos-8-differentiable-raycast-with-analytic-adjoint">OOS-8. Differentiable raycast with analytic adjoint</a></h2>
-<p><strong>What.</strong> A closed-form adjoint of the raycast operator (<code>∂t / ∂scene_params</code>
-where <code>t</code> is the hit distance), as opposed to the finite-difference adjoint
-that Stage 37.7 shipped.</p>
-<p><strong>Why.</strong> <strong>FD adjoint is enough for the current diff-Gaussian use case
-(Stage 44).</strong> Closed-form raycast adjoint requires:</p>
-<ul>
-<li>Triangle / primitive intersection equations differentiated symbolically.</li>
-<li>A consistent treatment of silhouette discontinuities (the hit point
-jumps when the ray transitions across a triangle edge).</li>
-<li>A per-primitive type implementation in WGSL.</li>
-</ul>
-<p>The silhouette-discontinuity handling is the genuinely hard part; the
-solution (edge-aware differentiable rendering) is an active research
-area. molla’s diff-Gaussian path (Stage 44 v1–v4) bypasses this by using
-<em>α-composited Gaussians</em> which are smooth — no silhouettes, no
-discontinuities. The FD raycast adjoint is for the path-tracing /
-hard-surface case that we’re not targeting.</p>
-<p><strong>When we’d reconsider.</strong> A workload appears that needs hard-surface
-differentiable rendering with backprop through opaque mesh
-intersections. At that point we’d evaluate either a closed-form
-implementation or the established libraries (Mitsuba 3, NVIDIA SLANG /
-Falcor).</p>
-<p><strong>Source.</strong> <code>GAP_v2.md</code> §2 (“raycast adjoint partial — analytic adjoint
-deferred”), Stage 37.7 history.</p>
-<hr>
-<h2 id="oos-9-wpkernel-jit-from-python"><a class="header" href="#oos-9-wpkernel-jit-from-python">OOS-9. <code>@wp.kernel</code> JIT from Python</a></h2>
-<p><strong>What.</strong> Compile Python source to GPU kernels at runtime, the way
-Warp’s <code>@wp.kernel</code> decorator does. Lets users author kernels in Python
-without recompiling the engine.</p>
-<p><strong>Why.</strong> <strong>molla is Rust.</strong> Users author kernels by editing WGSL files
-in <code>crates/molla/shaders/</code>. Kernels compile at engine startup
-(<code>include_str!</code> + naga validation); subsequent runs are zero-cost.</p>
-<p>A Rust equivalent would require either:</p>
-<ul>
-<li>A Rust → WGSL transpiler (<code>rust-gpu</code> is the closest thing, and isn’t
-there for compute kernels yet), or</li>
-<li>A runtime DSL embedded in Rust macros — which loses static-type
-checking and IDE integration, the things Rust users actually want.</li>
-</ul>
-<p>The pragmatic stance from <code>GAP.md</code> §8: “molla compiles WGSL at startup;
-comparable cost” to Warp’s JIT. The JIT path is <em>more</em> flexible (kernel
-specialization per call); the AOT path is <em>more</em> predictable (one
-compile, deterministic execution).</p>
-<p><strong>When we’d reconsider.</strong> <code>rust-gpu</code> (or a successor) becomes
-production-ready for compute kernels with full WGSL feature parity. At
-that point we’d evaluate it. Until then, hand-written WGSL is the
-right call.</p>
-<p><strong>Source.</strong> <code>GAP.md</code> §8 (“comparable cost” line).</p>
-<hr>
-<h2 id="oos-10-kinematic-constraint-handling-beyond-whats-shipped"><a class="header" href="#oos-10-kinematic-constraint-handling-beyond-whats-shipped">OOS-10. Kinematic constraint handling beyond what’s shipped</a></h2>
-<p><strong>What.</strong> Newton’s MuJoCo wrapper exposes the full quartic-polynomial
-mimic constraint form <code>q_a = c0 + c1·q_b + c2·q_b² + c3·q_b³ + c4·q_b⁴</code>.
-molla’s Stage 32 mimic constraint supports only the linear form
-<code>q_a = c0 + c1·q_b</code>.</p>
-<p><strong>Why.</strong> <strong>No user has asked for higher-order mimic, and the
-constraint-handling story in molla is intentionally minimal.</strong> PLAN.md
-§1 explicitly lists “complex constraint handling” as a non-goal —
-“complex” meaning anything beyond CONNECT / WELD / linear-mimic +
-joint limits + simple equality.</p>
-<p>The full quartic mimic is for one very specific Newton-via-MuJoCo
-workflow (cam-follower kinematics with non-linear gear trains). It’s a
-day or two of work but it adds a permanent surface to maintain.</p>
-<p><strong>When we’d reconsider.</strong> A user with non-linear gear-train kinematics
-or cam-follower modeling needs it. Until then, linear mimic + multiple
-joints chained together covers every kinematics case we’ve seen.</p>
-<p><strong>Source.</strong> <code>PLAN.md</code> §1 (“non-goals — complex constraint handling”),
-<code>GAP.md</code> §2.2 (“Mimic — molla supports linear; Newton supports full
-quartic”).</p>
-<hr>
-<h2 id="items-that-are-not-on-this-page-and-why"><a class="header" href="#items-that-are-not-on-this-page-and-why">Items that are NOT on this page (and why)</a></h2>
-<p>If you came looking for one of these, you want
-<a href="./open.html"><code>./open.md</code></a>, not this page:</p>
-<ul>
-<li><strong>NonconformingField / nonconforming-mesh contact</strong> — open item; v4
-shipped Newton-Raphson penalty, see open A6 + B6.</li>
-<li><strong>Self-contact in the new contact stack</strong> — open item, B6.</li>
-<li><strong>Phase-field fracture, multi-phase flow, compressible Euler,
-Mooney-Rivlin tangents, rate-and-state friction</strong> — open items, see
-Tier-C of <code>open.md</code>. They’re called “not on this page” because there’s
-no design reason they can’t ship; they’re deferred for lack of demand,
-not by deliberate scope reduction.</li>
-<li><strong>GPU Bingham / NS time integrator on-device / Π-projection AMS / DG
-limiter GPU port / AMR coarsening / DG-AMR level recursion / Krylov
-warm restart / active-set anti-cycling / muscle SH gradient GPU</strong> —
-all open items in <code>open.md</code> Tiers A/B.</li>
-</ul>
-<p>The rule of thumb: if Newton ships it and we don’t, look here first
-(deliberate scope choice). If we don’t and Newton doesn’t either, look
-in <code>open.md</code> Tier-C (genuinely new physics).</p>
-<hr>
-<h2 id="decision-log"><a class="header" href="#decision-log">Decision log</a></h2>
-<p>Every entry above is anchored to one or more of:</p>
-<ul>
-<li><strong><code>PLAN.md</code> §1 (Goals and non-goals).</strong> The originating non-goals
-list. OOS-1 (Python), OOS-2 (TensorCore), OOS-3 (CUDA graphs),
-OOS-4 (multi-GPU), OOS-10 (complex constraints).</li>
-<li><strong><code>PLAN.md</code> §4 (Newton reference inventory).</strong> Lists <code>mujoco</code>,
-<code>style3d</code>, <code>implicit_mpm</code>, <code>kamino</code> as Newton modules with explicit
-“Out of scope” annotations (the first three were OOS-by-design; the
-last is open or has shipped variants).</li>
-<li><strong><code>PLAN.md</code> §20 Stage 25+ (“Out of scope / explicitly deferred”).</strong>
-The roadmap-side OOS list. Mirrors and extends §1.</li>
-<li><strong><code>PLAN.md</code> §22 (Decision log).</strong> Each major OOS decision has a
-dated entry. Notably 2026-05-09 (Stages 14–25 + the explicit OOS
-list) and the Stage 20 VBD-vs-Style3D pick.</li>
-<li><strong><code>GAP.md</code> §8 (wgpu/WGSL limitations) and §9 (OOS).</strong> The
-cross-validated agent-scan version of the OOS list (2026-05-09).</li>
-<li><strong><code>GAP_v2.md</code> §9 (Out-of-scope).</strong> The refreshed list as of
-2026-05-11 evening, post-Stages 39–46.</li>
-</ul>
-<p>If an item on this page is reconsidered and reversed, the reversal
-should be recorded in <code>PLAN.md</code> §22 decision log with date, signal
-that triggered the change, and the resulting roadmap entry.</p>
+<p>This page is the current physics-only non-goal list. Items here are design
+decisions, not gaps.</p>
+<h2 id="external-formats-and-asset-pipelines"><a class="header" href="#external-formats-and-asset-pipelines">External formats and asset pipelines</a></h2>
+<p>molla does not own robot/scene/mesh importers or exporters. Build procedural
+models with <code>ModelBuilder</code> and procedural FEM meshes with the native grid
+builders. Format adapters can live outside this repository if a downstream
+application needs them.</p>
+<h2 id="external-solver-wrappers-and-native-shims"><a class="header" href="#external-solver-wrappers-and-native-shims">External solver wrappers and native shims</a></h2>
+<p>molla ships native Rust + WGSL physics. It does not wrap third-party physics
+engines or add native ABI shims just to reach another solver.</p>
+<h2 id="external-language-bindings-and-tensor-framework-bridges"><a class="header" href="#external-language-bindings-and-tensor-framework-bridges">External language bindings and tensor-framework bridges</a></h2>
+<p>molla is Rust-first. No language binding layer, tensor bridge, or foreign
+autograd framework is part of the engine surface. Learned controllers consume
+plain row-major weight slabs and run through native actuator kernels.</p>
+<h2 id="viewer-backends-and-recordingreplay"><a class="header" href="#viewer-backends-and-recordingreplay">Viewer backends and recording/replay</a></h2>
+<p>The viewer is a single Bevy application under <code>bin/</code>. Alternate viewers,
+record/replay systems, and backend-specific visual pipelines are outside the
+engine plan.</p>
+<h2 id="non-portable-gpu-features"><a class="header" href="#non-portable-gpu-features">Non-portable GPU features</a></h2>
+<p>The GPU contract is portable <code>wgpu</code>/WGSL. Vendor-only matrix units,
+multi-device peer access, and backend-specific command capture stay out until
+they become portable across the backends molla targets.</p>
+<h2 id="generic-constrained-dynamics-mega-solvers"><a class="header" href="#generic-constrained-dynamics-mega-solvers">Generic constrained-dynamics mega-solvers</a></h2>
+<p>The native solver set is Featherstone, XPBD, VBD, MPM, and FEM. General-purpose
+LCP/NLP solver work is not part of this plan unless it becomes a small native
+physics slice with CPU oracle, GPU path where feasible, tests, benches, and a
+viewer scene.</p>
 
                     </main>
 
@@ -525,11 +247,11 @@ that triggered the change, and the resulting roadmap entry.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 
