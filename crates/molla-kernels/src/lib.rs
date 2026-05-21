@@ -87,6 +87,8 @@ mod splat_raytrace;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
+mod tire_fem;
+#[cfg(feature = "gpu")]
 mod vbd_cloth;
 #[cfg(feature = "gpu")]
 mod xpbd;
@@ -214,6 +216,8 @@ pub use splat_raytrace::{
 };
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
+#[cfg(feature = "gpu")]
+pub use tire_fem::{TireFemGpuInput, TireFemGpuKernel, TireFemGpuOutput, TireFemGpuParams};
 #[cfg(feature = "gpu")]
 pub use vbd_cloth::VbdClothKernel;
 #[cfg(feature = "gpu")]

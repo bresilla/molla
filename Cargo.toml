@@ -15,6 +15,7 @@ members = [
     "crates/molla-autograd",
     "crates/molla-fem",
     "crates/molla-compute-primitives",
+    "crates/molla-vehicle",
     "crates/molla",
     "bin/molla_viewer",
 ]

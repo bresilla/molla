@@ -3384,6 +3384,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "molla-vehicle"
+version = "0.0.1"
+
+[[package]]
 name = "molla_viewer"
 version = "0.0.1"
 dependencies = [
@@ -3393,6 +3397,8 @@ dependencies = [
  "bevy_glacial",
  "mimalloc",
  "molla",
+ "molla-vehicle",
+ "wgpu",
 ]
 
 [[package]]

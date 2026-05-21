@@ -127,8 +127,9 @@ pub use molla_kernels::{
     MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE, MPR_STATUS_FALLBACK, MPR_STATUS_NONE, MPR_STATUS_OK,
     MeshBvhGpu, MeshBvhRaycastKernel, MprKernel, MprPairResult, MuscleKernel, RadixSortKernel,
     RadixSortKernel64, RaycastKernel, RobustLossKernel, SPGEMM_GPU_SYMBOLIC_CUTOVER, ScanKernel,
-    SgdGpuKernel, dahl_oracle_step, decode_epa_out, decode_mpr_out, pack_groups_host,
-    radix_sort_pairs, radix_sort_pairs_u64, unpack_output_host,
+    SgdGpuKernel, TireFemGpuInput, TireFemGpuKernel, TireFemGpuOutput, TireFemGpuParams,
+    dahl_oracle_step, decode_epa_out, decode_mpr_out, pack_groups_host, radix_sort_pairs,
+    radix_sort_pairs_u64, unpack_output_host,
 };
 #[cfg(feature = "gpu")]
 pub use rnea::{InverseDynamicsKernel, inverse_dynamics_gpu};

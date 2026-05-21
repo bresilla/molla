@@ -36,6 +36,7 @@ fn tiny_config() -> TiledCameraConfig {
         light_color: Vec3::new(0.8, 0.8, 0.8),
         max_distance: 100.0,
         near: 0.05,
+        optics: Default::default(),
     }
 }
 
@@ -205,7 +206,7 @@ fn multi_camera_dispatches_in_one_call() {
     let depth2 = cam.download_depth(&engine).unwrap().to_vec();
     let centre0 = depth2[cam.pixel_index(0, cx, cy)];
     assert!(
-        centre0 < 0.0 || centre0 > 50.0,
+        !(0.0..=50.0).contains(&centre0),
         "camera 0 should miss (or be far) after teleport, got {centre0}"
     );
     for c in 1..4u32 {

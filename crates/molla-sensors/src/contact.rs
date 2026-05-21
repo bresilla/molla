@@ -9,15 +9,15 @@
 //! # What it measures
 //!
 //! For each body, the sensor reports
-//! - `count`        — number of contacts the body participates in.
-//! - `max_depth`    — largest penetration depth across the body's
-//!                    contacts.
-//! - `normal_sum`   — Σ (sign × normal) summed over the body's
-//!                    contacts. molla's contact normal points a→b, so
-//!                    the sign is flipped when the body is the a-side
-//!                    of a contact; the result then points along the
-//!                    net contact-force direction acting on *this* body.
-//! - `centroid`     — mean contact point in world frame.
+//! - `count` — number of contacts the body participates in.
+//! - `max_depth` — largest penetration depth across the body's
+//!   contacts.
+//! - `normal_sum` — Σ (sign × normal) summed over the body's
+//!   contacts. molla's contact normal points a→b, so the sign is
+//!   flipped when the body is the a-side of a contact; the result
+//!   then points along the net contact-force direction acting on
+//!   *this* body.
+//! - `centroid` — mean contact point in world frame.
 //!
 //! What it does **not** measure: actual contact forces / impulses.
 //! Surfacing per-contact lambdas from the XPBD velocity-projection

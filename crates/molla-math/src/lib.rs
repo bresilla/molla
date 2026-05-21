@@ -10,12 +10,14 @@ pub mod dense_solve;
 pub mod gpu;
 pub mod iterative;
 pub mod robust_loss;
+pub mod solar;
 pub mod sparse;
 mod spatial;
 mod transform;
 
 pub use coloring::{color_constraints, greedy_color, group_by_color, mcs_color};
 pub use gpu::{GpuMat3, GpuSpatialVector, GpuTransform};
+pub use solar::{CivilDateTime, SolarState, julian_day_utc, solar_position};
 pub use spatial::{
     JacobianKind, SpatialInertia, SpatialMatrix6, SpatialVector, spatial_cross, spatial_cross_dual,
     spatial_jacobian_column,

@@ -30,6 +30,14 @@ log_diag = []
 # molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the
 # viewer can step on either CPU or GPU based on the user's UI toggle.
 molla = { path = "../../crates/molla" }
+molla-vehicle = { path = "../../crates/molla-vehicle" }
+wgpu = { version = "27", default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }
 
 # Microsoft's mimalloc — drop-in global allocator. egui's tessellator
 # thrashes the system allocator, and frost's NOTES say mimalloc cuts

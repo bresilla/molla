@@ -27,6 +27,10 @@ pub mod mpm;
 pub mod mpm_oracle;
 pub mod rnea;
 pub mod semi_implicit;
+#[cfg(feature = "gpu")]
+pub mod sph;
+pub mod sph_diff;
+pub mod sph_oracle;
 mod vbd;
 pub mod vbd_soft_contact;
 mod xpbd;
@@ -47,6 +51,9 @@ pub use mpm_oracle::{
 };
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
+#[cfg(feature = "gpu")]
+pub use sph::{SphConfig, SphRigidBody, SphSimulation, box_tank_walls};
+pub use sph_oracle::{SphFsiOracle, SphOracle, SphOracleBody};
 pub use vbd::{VbdMode, VbdSolver};
 pub use vbd_soft_contact::{
     EeContact, SoftContact, VtContact, gather_ee_contacts, gather_soft_contacts,

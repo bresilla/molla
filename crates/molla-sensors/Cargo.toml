@@ -14,8 +14,10 @@ workspace = true
 default = []
 gpu = [
     "dep:wgpu",
+    "dep:molla-geometry",
     "molla-compute/gpu",
     "molla-core/gpu",
+    "molla-geometry/gpu",
     "molla-kernels/gpu",
     "molla-sim/gpu",
     "molla-storage/gpu",
@@ -24,6 +26,8 @@ gpu = [
 [dependencies]
 molla-compute = { path = "../molla-compute", default-features = false, optional = true }
 molla-core = { path = "../molla-core", default-features = false, optional = true }
+# H1 — TriMesh raycasts use molla-geometry's mesh BVH on the GPU.
+molla-geometry = { path = "../molla-geometry", default-features = false, optional = true }
 molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
 molla-math = { path = "../molla-math" }
 molla-sim = { path = "../molla-sim", default-features = false, optional = true }

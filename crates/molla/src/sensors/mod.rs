@@ -9,9 +9,11 @@
 //! Modules:
 //! - [`raycast`] — closest-hit ray vs collision shapes. Lives in
 //!   `shaders/raycast.wgsl` with the [`Raycaster`] orchestrator on
-//!   top. Sphere / Plane / Box / Capsule / Cylinder supported on GPU;
-//!   Triangle / TriMesh skipped (mesh BVH integration TODO — see the
-//!   [`raycast`] module docs).
+//!   top. Sphere / Plane / Box / Capsule / Cylinder / Cone /
+//!   Ellipsoid supported analytically; static TriMesh shapes are
+//!   handled via a second GPU pass over the mesh BVH (H1).
+//! - [`lidar`] — terrestrial-LiDAR scan model: a (θ, φ) angular grid
+//!   on top of `Raycaster`, with metadata-aware [`Scan`] output (H4).
 //! - [`imu`] — body-frame linear acceleration + angular velocity.
 //! - [`contact`] — per-body contact summary.
 //! - [`frame_transform`] — pose tracking with optional smoothing.
@@ -29,6 +31,22 @@ pub mod frame_transform;
 #[cfg(feature = "gpu")]
 pub mod imu;
 #[cfg(feature = "gpu")]
+pub mod camera_post {
+    pub use molla_sensors::camera_post::*;
+}
+#[cfg(feature = "gpu")]
+pub mod dataset {
+    pub use molla_sensors::dataset::*;
+}
+#[cfg(feature = "gpu")]
+pub mod lidar {
+    pub use molla_sensors::lidar::*;
+}
+#[cfg(feature = "gpu")]
+pub mod pointcloud {
+    pub use molla_sensors::pointcloud::*;
+}
+#[cfg(feature = "gpu")]
 pub mod raycast;
 pub mod raycast_adjoint {
     pub use molla_sensors::raycast_adjoint::*;
@@ -42,10 +60,17 @@ pub use contact::{BodyContactReading, ContactSensor};
 pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 #[cfg(feature = "gpu")]
 pub use imu::{ImuMount, ImuReading, ImuSensor};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    AerialLidar, AerialScan, AerialScanMetadata, AnnotationFrame, BoundingBox2D, Compare, Dataset,
+    GridCell, HitPoint, Lidar, MISS_SHAPE_ID, Scan, ScanMetadata, bin_into_grid, distance_filter,
+    read_xyz_rgb, reflectance_filter, rotate_cloud, scalar_filter, transform_cloud,
+    translate_cloud, write_ply_ascii, write_ptx, write_xyz_rgb, xyz_filter,
+};
 pub use molla_sensors::{
     DiffRay, DiffSdfShape, RayScene, compute_grad_raycast, compute_loss_l2, forward_with_loss,
 };
 #[cfg(feature = "gpu")]
 pub use raycast::{RayHit, Raycaster};
 #[cfg(feature = "gpu")]
-pub use tiled_camera::{CameraChannels, TiledCamera, TiledCameraConfig};
+pub use tiled_camera::{CameraChannels, PhysicalOptics, TiledCamera, TiledCameraConfig};

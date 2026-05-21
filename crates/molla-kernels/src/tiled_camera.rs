@@ -30,6 +30,9 @@ struct RaysUniforms {
     fov_y: f32,
     aspect: f32,
     near: f32,
+    lens_radius: f32,
+    focal_distance: f32,
+    aperture_offset: [f32; 2],
     _pad0: f32,
     _pad1: f32,
 }
@@ -87,6 +90,10 @@ impl CameraRaysKernel {
 
     /// Generate `(camera_count × height × width)` rays, written into
     /// `ray_origin` / `ray_direction` row-major (camera-major outer).
+    /// Pinhole when `lens_radius == 0`; otherwise thin-lens
+    /// depth-of-field with the caller-supplied aperture sample
+    /// `(aperture_offset_x, aperture_offset_y)` in `[-1, 1]²` on the
+    /// disc.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -101,6 +108,9 @@ impl CameraRaysKernel {
         fov_y: f32,
         aspect: f32,
         near: f32,
+        lens_radius: f32,
+        focal_distance: f32,
+        aperture_offset: [f32; 2],
     ) -> Result<()> {
         if camera_count == 0 || width == 0 || height == 0 {
             return Ok(());
@@ -113,6 +123,9 @@ impl CameraRaysKernel {
             fov_y,
             aspect,
             near,
+            lens_radius,
+            focal_distance,
+            aperture_offset,
             _pad0: 0.0,
             _pad1: 0.0,
         };

@@ -34,6 +34,11 @@ pub use featherstone::FeatherstoneSolver;
 pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};
 pub use jacobian::jacobian;
 pub use molla_solvers::Solver;
+// Stage F1-F5 — the GPU WCSPH solver lives in `molla-solvers`; re-export
+// it through the umbrella crate so the viewer (which only depends on
+// `molla`) can drive a real SPH scene.
+#[cfg(feature = "gpu")]
+pub use molla_solvers::{SphConfig, SphSimulation, box_tank_walls};
 pub use rnea::inverse_dynamics;
 pub use semi_implicit::SemiImplicitSolver;
 pub use vbd::{VbdMode, VbdSolver};
