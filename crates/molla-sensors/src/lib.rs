@@ -21,6 +21,12 @@ pub mod raycast_adjoint;
 pub mod tiled_camera;
 
 #[cfg(feature = "gpu")]
+pub use camera_post::{
+    apply_brightness_contrast, apply_exposure, apply_gamma, apply_gamma_srgb, apply_gray_world_wb,
+    apply_reinhard_tone_map, apply_reinhard_white_point, apply_saturation, apply_white_patch_wb,
+    linear_to_srgb, pack_rgba8, srgb_to_linear, unpack_rgba8,
+};
+#[cfg(feature = "gpu")]
 pub use contact::{BodyContactReading, ContactSensor};
 #[cfg(feature = "gpu")]
 pub use dataset::{AnnotationFrame, BoundingBox2D, Dataset, MISS_SHAPE_ID};
