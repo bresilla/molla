@@ -13,7 +13,7 @@
 
 use molla_core::{Error, Result};
 use molla_math::Vec3;
-use molla_sim::{Contacts, Model};
+use molla_sim::Model;
 use molla_storage::{Buffer, BufferUsage};
 
 #[repr(C)]
@@ -263,12 +263,6 @@ impl GjkKernel {
         Ok((pair_a, pair_b, overlap))
     }
 }
-
-// `Contacts` parameter dropped — the GPU GJK pass produces overlap
-// flags only, not contacts. Kept the import just in case a follow-up
-// wires the kernel into the pipeline.
-#[allow(dead_code)]
-fn _suppress_contacts(_c: &Contacts) {}
 
 fn buffer_entry<'a>(
     binding: u32,
