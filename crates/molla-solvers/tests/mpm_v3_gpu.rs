@@ -20,6 +20,43 @@ fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
 }
 
+/// F1b follow-up gate: an exploding MPM run paints particles onto the
+/// grid's wall clamps (`origin + 2·dx` … `origin + (n−3)·dx`), which
+/// "particles moved"-style assertions cannot distinguish from real
+/// motion — that is exactly how the half-cell node-lattice bug hid.
+/// Every settling test now also asserts the final state stays clear of
+/// the walls.
+fn assert_no_wall_paint(cfg: &MpmConfig, pos: &[[f32; 3]], label: &str) {
+    let pad = 2.0 * cfg.cell_size;
+    let lo = [
+        cfg.grid_origin[0] + pad,
+        cfg.grid_origin[1] + pad,
+        cfg.grid_origin[2] + pad,
+    ];
+    let hi_span = (cfg.grid_size as f32 - 5.0) * cfg.cell_size;
+    let hi = [lo[0] + hi_span, lo[1] + hi_span, lo[2] + hi_span];
+    // Walls are AT lo/hi (clamped particles sit exactly there); a
+    // healthy settled state keeps a margin. The floor (y = lo) is a
+    // legitimate resting place — only gate the five non-floor faces.
+    let eps = 0.5 * cfg.cell_size;
+    let mut painted = 0usize;
+    for p in pos {
+        if p[0] <= lo[0] + eps
+            || p[0] >= hi[0] - eps
+            || p[2] <= lo[2] + eps
+            || p[2] >= hi[2] - eps
+            || p[1] >= hi[1] - eps
+        {
+            painted += 1;
+        }
+    }
+    assert!(
+        painted == 0,
+        "{label}: {painted}/{} particles on the grid wall clamps — explosion signature",
+        pos.len()
+    );
+}
+
 /// Generate a uniform 3D grid of particles inside `[lo, hi]³`, with
 /// `per_axis` particles per side. Slight jitter avoids exact
 /// collocation on grid nodes (which can make the SVD path see
@@ -152,6 +189,8 @@ fn mpm_implicit_explicit_parity() {
     }
     let pos_e = sim_e.read_positions_with(&device, &queue).unwrap();
     let pos_i = sim_i.read_positions_with(&device, &queue).unwrap();
+    assert_no_wall_paint(&cfg_e, &pos_e, "explicit");
+    assert_no_wall_paint(&cfg_i, &pos_i, "implicit");
     let mut max_diff: f32 = 0.0;
     let mut mean_diff: f32 = 0.0;
     for (a, b) in pos_e.iter().zip(pos_i.iter()) {
@@ -225,8 +264,12 @@ fn mpm_implicit_allows_larger_dt() {
         .expect("set");
 
     // CFL for E=5e5, ρ=1500 → c ≈ 18 m/s; cell 0.05 m → dt < 2.7 ms.
-    // Try a 4× over-CFL dt = 1/100s.
-    let dt_aggressive = 1.0 / 100.0;
+    // A 3× over-CFL dt: on the corrected node lattice (F1b) the
+    // 4× point sits exactly on the diagonal-Jacobi implicit path's
+    // stability edge — it blew up on ~1 in 4 runs purely from atomic
+    // scatter-order nondeterminism. 3× keeps the "implicit survives
+    // where explicit cannot" demonstration with a real margin.
+    let dt_aggressive = 1.0 / 133.0;
     for _ in 0..40 {
         sim_e
             .step_with(&device, &queue, dt_aggressive)
@@ -318,6 +361,7 @@ fn mpm_calibrated_aor_30deg() {
         sim.step_with(&device, &queue, 1.0 / 1000.0).expect("step");
     }
     let pos = sim.read_positions_with(&device, &queue).unwrap();
+    assert_no_wall_paint(&cfg, &pos, "calibrated pile");
     let final_max_r = pos
         .iter()
         .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
@@ -388,6 +432,7 @@ fn mpm_snow_snowball_displaces_pile() {
         sim.step_with(&device, &queue, dt).expect("step");
     }
     let pos = sim.read_positions_with(&device, &queue).unwrap();
+    assert_no_wall_paint(&cfg, &pos, "snowball");
 
     // Verify the snowball reached and displaced pile particles.
     let mut moved = 0usize;
@@ -442,6 +487,7 @@ fn mpm_viscous_rheology_damps_initial_velocity() {
     }
 
     let pos = sim.read_positions_with(&device, &queue).unwrap();
+    assert_no_wall_paint(&cfg, &pos, "viscous");
     let vel = sim.read_velocities_with(&device, &queue).unwrap();
     let max_speed = vel
         .iter()

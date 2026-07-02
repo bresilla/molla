@@ -105,9 +105,9 @@ fn blocks() -> [Vec<[f32; 3]>; 3] {
     ]
 }
 
-// dt note: sand hardening stiffens up to e⁵ ≈ 148×, which shrinks the
-// explicit CFL limit at E = 1.4e5 to ~3.5e-4 s — 2.5e-4 keeps all
-// three rheologies stable.
+// dt note: hardening stiffens the material up to the bounded e³ ≈ 20×
+// multiplier (see mpm.wgsl), which shrinks the explicit CFL limit at
+// E = 1.4e5 — 2e-4 keeps all three rheologies comfortably stable.
 fn run_single(
     engine: &Engine,
     rheology: MpmRheology,

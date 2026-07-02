@@ -452,9 +452,15 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
     let rheo = u32(mrow.p0.x + 0.5);
     var h: f32 = 1.0;
     if (rheo == 1u) {
-        h = exp(-mrow.p1.x * clamp(p_jp[pid], -5.0, 5.0));
+        // Bound the hardening MULTIPLIER, not just jp: with jp ∈ [−5, 5]
+        // and ξ = 10 the raw exponent reaches ±50 (h up to e⁵⁰), which
+        // annihilates the explicit CFL envelope on any real impact —
+        // a 5 m/s snowball at dt = 1/480 wall-paints the grid. e^±3
+        // (≈ 0.05×–20×) keeps compacted snow meaningfully stiffer
+        // while staying integrable.
+        h = exp(clamp(-mrow.p1.x * p_jp[pid], -3.0, 3.0));
     } else if (rheo == 0u) {
-        h = exp(min(p_jp[pid], 5.0));
+        h = exp(clamp(p_jp[pid], -3.0, 3.0));
     }
     let mu_h = mu * h;
     let lam_h = lam * h;
@@ -699,10 +705,11 @@ fn p2g_two_pass(
         if (rheo == 1u) {
             // Snow stiffens under compaction; `jp = log(det Fp)` is
             // negative there, so the exponent sign is negative (see
-            // the p2g pass above for the Stomakhin §6.2 rationale).
-            h = exp(-mrow.p1.x * clamp(p_jp[pid], -5.0, 5.0));
+            // the p2g pass above for the Stomakhin §6.2 rationale and
+            // the e^±3 multiplier bound).
+            h = exp(clamp(-mrow.p1.x * p_jp[pid], -3.0, 3.0));
         } else if (rheo == 0u) {
-            h = exp(min(p_jp[pid], 5.0));
+            h = exp(clamp(p_jp[pid], -3.0, 3.0));
         }
         let mu_h = mu * h;
         let lam_h = lam * h;
