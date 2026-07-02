@@ -1,13 +1,22 @@
 //! V3 — suspension templates.
 //!
 //! A suspension corner is a vertical spring-damper between a chassis
-//! mount and the wheel. The [`SuspensionKind`] templates (rigid axle,
-//! double wishbone, MacPherson) share that spring-damper here; in a
-//! fuller model the kind would also drive the camber/toe kinematics.
-//! This is the "library on top" layer — it composes parts molla
-//! already provides rather than adding engine physics.
+//! mount and the wheel. This is the "library on top" layer — it
+//! composes parts molla already provides rather than adding engine
+//! physics.
+//!
+//! **Scope decision (2026-07-02, INSPECTION.md F9):** the
+//! [`SuspensionKind`] template is a descriptive **label only** — every
+//! kind produces the identical spring-damper [`Suspension::force`].
+//! Kind-driven camber/toe kinematics would need a chassis roll DOF and
+//! a camber input on the vehicle-path tire interface, both of which
+//! the 3-DOF `Vehicle` deliberately excludes (see the force comment in
+//! `vehicle.rs`). If a fuller chassis ever lands, that is the seam
+//! where the kinds diverge.
 
-/// Suspension geometry template.
+/// Suspension geometry template. **Label only in the current model**
+/// — all variants share the same spring-damper physics; see the
+/// module docs for the scope decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SuspensionKind {
     /// Solid axle — both wheels on a rigid beam.
@@ -21,7 +30,8 @@ pub enum SuspensionKind {
 /// A vertical spring-damper suspension corner.
 #[derive(Clone, Copy, Debug)]
 pub struct Suspension {
-    /// Geometry template.
+    /// Geometry template (descriptive label — does not change the
+    /// force law; see module docs).
     pub kind: SuspensionKind,
     /// Free (uncompressed) length (m).
     pub rest_length: f64,

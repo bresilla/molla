@@ -1,7 +1,20 @@
 # Open items
 
-A concrete inventory of work that is **not** shipped on `main` but is on the
-trajectory the recent push has set up. Items are grouped by tier:
+> **Current open set (2026-07-02).** Most entries below have since
+> **landed** and carry an inline `**Status.** Landed` block — they are
+> kept as decision records, not backlog. The genuinely open items are:
+>
+> | Item | What | Effort |
+> |------|------|--------|
+> | A1 (Tier-A below) | Kinetic-vs-static friction split (μ_s > μ_k, per-contact stick/slip state) | 1–2 days |
+> | X1 (bottom of file) | Critic audit round over Stages 39–51 | ~1 day |
+> | X2 (bottom of file) | Viewer scenes for the v3–v6 solver work | ~1 day each |
+>
+> Larger tracked work lives outside this file: the tire stream
+> (zero-host-readback substep loop, 40-wheel realtime — `PROGRESS.md`)
+> and the inspection backlog (`INSPECTION.md` at the repo root).
+
+A concrete inventory of work from the v3–v6 push, grouped by tier:
 
 - **Tier-A — v5 follow-ups.** Small, well-scoped pieces that close out a stage
   already in flight. Each is days, not weeks. Most are "the obvious next
@@ -22,7 +35,10 @@ Every item lists:
    re-rank the item up or down.
 
 Stage numbers and commit hashes refer to entries on `main` as of
-2026-05-11 evening (HEAD `2bde182`, Stage 41 v6).
+2026-05-11 evening (HEAD `2bde182`, Stage 41 v6); the open-set banner
+above reflects 2026-07-02. Note this snapshot predates the entire
+`molla-vehicle` / tire-FEM effort, which is tracked in
+`PLAN_REALTIRE.md` + `PROGRESS.md` instead.
 
 ---
 

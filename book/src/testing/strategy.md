@@ -140,6 +140,20 @@ beats a threshold:
 When a perf gate fails it's the most actionable kind of failure —
 you have a measurement, a threshold, and a target to chase.
 
+## The vehicle crate's embedded harness
+
+`molla-vehicle` carries its own validation layer beyond plain unit
+tests: the `real_tire/rig` + `real_tire/reports` modules are a
+non-`cfg(test)` diagnostic harness (structural truth gates — loaded
+radius, footprint span, pressure distribution, bead drift — plus
+force-shape checks for slip curves, camber thrust, and aligning
+moment), exercised by the crate's test suite (225 tests / 0 ignored as
+of 2026-07-02 — older docs citing 220/2, 221/1, or 222/0 are stale
+snapshots). The GPU twins of the tire physics are validated by the
+`tire_*` hardware lanes in `molla-kernels`, with per-lane status
+recorded in `real_tire/parity_ledger.rs`. See
+[the molla-vehicle chapter](../vehicle/overview.md).
+
 ## What's not covered by tests
 
 Documenting honest gaps:

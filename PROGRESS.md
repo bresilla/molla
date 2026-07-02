@@ -529,7 +529,9 @@ Each extraction step is:
    `mod newmod;` + `pub use newmod::{…};` near the top
 6. `cargo check -p molla-vehicle` (expect a few unresolved-import
    errors; add to `use super::…` until clean)
-7. `cargo test -p molla-vehicle --lib` to confirm 220/2 holds
+7. `cargo test -p molla-vehicle --lib` to confirm the baseline holds
+   (historical note: this guide said 220/2; the split is DONE and the
+   current baseline is 225/0 — see the CURRENT STATE banner at the top)
 
 Each extraction must be re-line-numbered against the CURRENT mod.rs
 because previous extractions shift everything below them.
@@ -653,5 +655,5 @@ sed -n '<from>,<to>p' mod.rs > <target>.rs
 # Run an awk that adds `mod <target>; pub use <target>::{...};` near top
 # and deletes the moved range.
 cargo check -p molla-vehicle  # fix unresolved imports until clean
-cargo test -p molla-vehicle --lib  # 220/2 baseline must hold
+cargo test -p molla-vehicle --lib  # baseline must hold (now 225/0; "220/2" is a stale snapshot)
 ```

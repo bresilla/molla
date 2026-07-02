@@ -16,7 +16,7 @@ scenes (119–123) and the 40-wheel GPU scaling effort build on
 | `terrain` | `FlatTerrain`, `HeightfieldTerrain`, SDF and triangle-mesh terrain, plus the Bekker-pressure-sinkage `DeformableTerrain` and the DEM `GranularBed` (`deformable.rs` / `granular.rs`) |
 | `tire` | Force-element tire models: `RigidTire`, `TmSimpleTire`, `Pac89Tire` (diagnostic shape only — molla ships no fitted Magic-Formula source), and the reusable `RealBrushTireModel` |
 | `real_tire/` | The deformable tire stack: tetra tire FEM (`TetraTireFem`), brush/bristle traction, cavity pressure, thermal/wear state, parity ledger against the GPU kernels in `molla-kernels`, and the embedded validation rig/report harness |
-| `suspension` | Per-corner spring/damper (`force()` from stiffness, damping, max compression). The `SuspensionKind` variants are currently labels — kind-driven camber/toe kinematics is an open item (INSPECTION.md F9) |
+| `suspension` | Per-corner spring/damper (`force()` from stiffness, damping, max compression). The `SuspensionKind` variants are descriptive labels by decision (INSPECTION.md F9): kind-driven camber/toe kinematics needs a chassis roll DOF the 3-DOF `Vehicle` deliberately excludes |
 | `powertrain` | `Engine` (torque curve + redline), `Transmission` (gear ratios + RPM-triggered auto-shift with hysteresis), `Driveline` (FWD/RWD/AWD split), Ackermann steering, and `Vehicle::apply_driver` |
 | `vehicle` | The 3-DOF chassis (`pos`/`vel`/`yaw`/`yaw_rate`, semi-implicit Euler) with four `Corner`s carrying wheel spin, steer, and tire state |
 | `sysid` | Differentiable-simulation demo: recover tyre-ground friction from an observed trajectory by Gauss-Newton over finite-difference rollouts (`identify_friction`). Viewer scene 124 drives it live |
