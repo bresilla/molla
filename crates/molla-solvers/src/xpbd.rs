@@ -73,6 +73,27 @@ pub struct XpbdSolver {
     /// each substep advances `dt/substeps`. Default 1.
     pub substeps: usize,
     backend: XpbdBackend,
+    /// Device-resident scratch state for GPU multi-substep ping-pong
+    /// (host round-trips per substep would defeat the point). Built
+    /// lazily on the first multi-substep GPU step, reused after.
+    #[cfg(feature = "gpu")]
+    gpu_scratch: Option<State>,
+}
+
+/// How a substep obtains the body poses that contact anchors are
+/// expressed against (Müller 2020 §3.2: anchors are frozen at
+/// contact-detection time, i.e. the *outer* step boundary).
+#[derive(Clone, Copy)]
+enum AnchorPose<'a> {
+    /// Anchors from the substep's own input pose — correct for
+    /// `substeps == 1`, where the substep input *is* the outer input.
+    LiveInput,
+    /// Host-side snapshot of the outer input pose (CPU multi-substep).
+    Host(&'a [Transform]),
+    /// Device-side snapshot previously captured via
+    /// `XpbdKernel::capture_contact_pose` (GPU multi-substep).
+    #[cfg(feature = "gpu")]
+    DeviceCaptured,
 }
 
 impl Default for XpbdSolver {
@@ -91,6 +112,8 @@ impl XpbdSolver {
             position_iterations: 4,
             substeps: 1,
             backend: XpbdBackend::Cpu,
+            #[cfg(feature = "gpu")]
+            gpu_scratch: None,
         }
     }
 
@@ -125,6 +148,7 @@ impl XpbdSolver {
                 equality_kernel,
                 particles_kernel: None,
             }),
+            gpu_scratch: None,
         })
     }
 
@@ -141,12 +165,18 @@ impl XpbdSolver {
     /// set across all substeps**.
     ///
     /// **Limitations**: because contacts aren't re-detected per
-    /// substep, this is most useful for contact-free workloads. For
-    /// the Müller (2020) "many small substeps × few iterations"
-    /// stability win on contact-rich stacks, the caller should run
-    /// the substep loop externally — `pipeline.collide` + `solver.step`
-    /// inside an `n`-iteration inner loop, with `solver.substeps = 1`.
-    /// See `tests/xpbd_boxes.rs::external_substeps_box_stack` for the
+    /// substep, this is most useful for contact-free or
+    /// continuous-contact workloads. **Impacts amplify** under
+    /// internal substepping on both backends: the position projection
+    /// pops the full outer-step penetration within one substep and the
+    /// velocity recovery divides that pop by `dt/n`, so a landing body
+    /// picks up n× the separation velocity (measured: a restitution-0
+    /// box drop bounces persistently at `n = 4`). For the Müller
+    /// (2020) "many small substeps × few iterations" stability win on
+    /// contact-rich or impact-heavy scenes, run the substep loop
+    /// externally — `pipeline.collide` + `solver.step` inside an
+    /// `n`-iteration inner loop, with `solver.substeps = 1`. See
+    /// `tests/xpbd_boxes.rs::external_substeps_box_stack` for the
     /// recommended pattern.
     #[must_use]
     pub fn with_substeps(mut self, n: usize) -> Self {
@@ -191,25 +221,26 @@ impl Solver for XpbdSolver {
         let dt_sub = dt / n_sub as Real;
 
         // Single substep: no scratch buffer needed, no contact-pose
-        // override — cpu_step uses state_in.body_q for p_a_local.
+        // override — the substep input pose *is* the contact-time pose.
         if n_sub == 1 {
-            return self.step_inner(model, state_in, control, contacts, dt_sub, state_out, None);
+            return self.step_inner(
+                model,
+                state_in,
+                control,
+                contacts,
+                dt_sub,
+                state_out,
+                AnchorPose::LiveInput,
+            );
         }
 
-        // The GPU dispatch cannot read contact anchors from the
-        // contact-time poses yet, so multi-substep on the GPU backend
-        // would silently recompute `p_a_local` from the drifting
-        // current pose and diverge from the CPU reference. Fail loudly
-        // until the pose override is plumbed into the kernel; callers
-        // can run the substep loop externally (re-colliding per
-        // substep) in the meantime.
+        // GPU multi-substep: capture the contact-time pose on-device
+        // and ping-pong through a device-resident scratch state — no
+        // host readback inside the loop.
+        #[cfg(feature = "gpu")]
         if self.is_gpu() {
-            return Err(Error::Solver(
-                "XPBD GPU multi-substep is not implemented (contact-time pose \
-                 override is CPU-only); set substeps = 1 and run the substep \
-                 loop externally"
-                    .to_string(),
-            ));
+            return self
+                .step_multi_gpu(model, state_in, control, contacts, n_sub, dt_sub, state_out);
         }
 
         // Multi-substep: ping-pong between state_out and a host-side
@@ -228,7 +259,7 @@ impl Solver for XpbdSolver {
             contacts,
             dt_sub,
             state_out,
-            Some(&q_at_contact),
+            AnchorPose::Host(&q_at_contact),
         )?;
         let mut output_in_scratch = false;
         for _ in 1..n_sub {
@@ -240,7 +271,7 @@ impl Solver for XpbdSolver {
                     contacts,
                     dt_sub,
                     state_out,
-                    Some(&q_at_contact),
+                    AnchorPose::Host(&q_at_contact),
                 )?;
             } else {
                 self.step_inner(
@@ -250,7 +281,7 @@ impl Solver for XpbdSolver {
                     contacts,
                     dt_sub,
                     &mut scratch,
-                    Some(&q_at_contact),
+                    AnchorPose::Host(&q_at_contact),
                 )?;
             }
             output_in_scratch = !output_in_scratch;
@@ -263,6 +294,127 @@ impl Solver for XpbdSolver {
 }
 
 impl XpbdSolver {
+    /// GPU multi-substep: freeze the contact-anchor pose on-device at
+    /// the outer step boundary, then ping-pong the substeps between
+    /// `state_out` and a lazily-built device-resident scratch state —
+    /// no host readback inside the loop. If the last substep lands in
+    /// the scratch, its pose/velocity (and particle) buffers are
+    /// copied device-to-device into `state_out`.
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    fn step_multi_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        contacts: &Contacts,
+        n_sub: usize,
+        dt_sub: Real,
+        state_out: &mut State,
+    ) -> Result<()> {
+        let (device, queue) = match &self.backend {
+            XpbdBackend::Gpu(gpu) => (gpu.device.clone(), gpu.queue.clone()),
+            XpbdBackend::Cpu => unreachable!("step_multi_gpu on CPU backend"),
+        };
+        // Freeze the contact-anchor reference (Müller 2020 §3.2).
+        if let XpbdBackend::Gpu(gpu) = &self.backend {
+            gpu.kernel.capture_contact_pose(&device, &queue, state_in)?;
+        }
+        if self.gpu_scratch.is_none() {
+            let mut scratch = model.state()?;
+            scratch.upload_to_device(&device, &queue)?;
+            self.gpu_scratch = Some(scratch);
+        }
+        let mut scratch = self.gpu_scratch.take().expect("scratch just ensured");
+
+        // Seed the intermediate states' external forces from the outer
+        // input (the CPU path's scratch is a clone of `state_in`, so
+        // it carries `body_f`; mirror that).
+        copy_device_buffers(
+            &device,
+            &queue,
+            &[
+                (
+                    state_in.body_f.device_buffer(),
+                    scratch.body_f.device_buffer(),
+                ),
+                (
+                    state_in.body_f.device_buffer(),
+                    state_out.body_f.device_buffer(),
+                ),
+            ],
+        )?;
+
+        let run = |solver: &mut Self, state_out: &mut State, scratch: &mut State| {
+            solver.step_inner(
+                model,
+                state_in,
+                control,
+                contacts,
+                dt_sub,
+                state_out,
+                AnchorPose::DeviceCaptured,
+            )?;
+            let mut output_in_scratch = false;
+            for _ in 1..n_sub {
+                if output_in_scratch {
+                    solver.step_inner(
+                        model,
+                        scratch,
+                        control,
+                        contacts,
+                        dt_sub,
+                        state_out,
+                        AnchorPose::DeviceCaptured,
+                    )?;
+                } else {
+                    solver.step_inner(
+                        model,
+                        state_out,
+                        control,
+                        contacts,
+                        dt_sub,
+                        scratch,
+                        AnchorPose::DeviceCaptured,
+                    )?;
+                }
+                output_in_scratch = !output_in_scratch;
+            }
+            Ok(output_in_scratch)
+        };
+        let result = run(self, state_out, &mut scratch);
+
+        let finalize = if matches!(result, Ok(true)) {
+            // Final substep landed in the scratch — copy it out.
+            let mut pairs = vec![
+                (
+                    scratch.body_q.device_buffer(),
+                    state_out.body_q.device_buffer(),
+                ),
+                (
+                    scratch.body_qd.device_buffer(),
+                    state_out.body_qd.device_buffer(),
+                ),
+            ];
+            if model.particle_count > 0 {
+                pairs.push((
+                    scratch.particle_q.device_buffer(),
+                    state_out.particle_q.device_buffer(),
+                ));
+                pairs.push((
+                    scratch.particle_qd.device_buffer(),
+                    state_out.particle_qd.device_buffer(),
+                ));
+            }
+            copy_device_buffers(&device, &queue, &pairs)
+        } else {
+            Ok(())
+        };
+        self.gpu_scratch = Some(scratch);
+        result?;
+        finalize
+    }
+
     fn step_inner(
         &mut self,
         model: &Model,
@@ -271,7 +423,7 @@ impl XpbdSolver {
         contacts: &Contacts,
         dt: Real,
         state_out: &mut State,
-        q_at_contact: Option<&[Transform]>,
+        anchor: AnchorPose,
     ) -> Result<()> {
         match &mut self.backend {
             XpbdBackend::Cpu => cpu_step(
@@ -282,18 +434,21 @@ impl XpbdSolver {
                 dt,
                 state_out,
                 self.position_iterations,
-                q_at_contact,
+                match anchor {
+                    AnchorPose::Host(q) => Some(q),
+                    _ => None,
+                },
             ),
             #[cfg(feature = "gpu")]
             XpbdBackend::Gpu(gpu) => {
-                // `step()` rejects GPU + substeps > 1, so the
-                // contact-time pose override is never active here.
-                // When the kernel learns to read anchors from
-                // `q_at_contact`, upload it instead of asserting.
+                // GPU multi-substep pre-captures the contact-time pose
+                // on-device (`capture_contact_pose`); a host slice here
+                // would mean a CPU-only path leaked onto the GPU.
                 debug_assert!(
-                    q_at_contact.is_none(),
-                    "GPU XPBD dispatch cannot honor a contact-time pose override yet"
+                    !matches!(anchor, AnchorPose::Host(_)),
+                    "host-side contact poses cannot be bound to the GPU dispatch"
                 );
+                let use_contact_pose = matches!(anchor, AnchorPose::DeviceCaptured);
                 let GpuBackend {
                     device,
                     queue,
@@ -311,6 +466,7 @@ impl XpbdSolver {
                     self.position_iterations,
                     dt,
                     state_out,
+                    use_contact_pose,
                 )?;
                 // Equality constraints (CONNECT / WELD) — GPU dispatch.
                 equality_kernel.dispatch(
@@ -371,6 +527,34 @@ impl XpbdSolver {
             }
         }
     }
+}
+
+/// Batch device-to-device buffer copies in one submitted encoder.
+/// Errors if any state involved has no device mirror (upload states
+/// with `upload_to_device` before multi-substep GPU stepping).
+#[cfg(feature = "gpu")]
+fn copy_device_buffers(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pairs: &[(Option<&wgpu::Buffer>, Option<&wgpu::Buffer>)],
+) -> Result<()> {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("molla::xpbd multi-substep copies"),
+    });
+    for (src, dst) in pairs {
+        let missing = || {
+            Error::Gpu(
+                "xpbd multi-substep: state buffer has no device mirror — call \
+                 upload_to_device on the states first"
+                    .to_string(),
+            )
+        };
+        let src = src.ok_or_else(missing)?;
+        let dst = dst.ok_or_else(missing)?;
+        encoder.copy_buffer_to_buffer(src, 0, dst, 0, src.size().min(dst.size()));
+    }
+    queue.submit(Some(encoder.finish()));
+    Ok(())
 }
 
 fn cpu_step(

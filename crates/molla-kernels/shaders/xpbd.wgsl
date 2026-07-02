@@ -71,6 +71,12 @@ const B_SIDE_BIT:     u32 = 0x80000000u;
 @group(1) @binding(8) var<storage, read_write> body_v_post:  array<vec4<f32>>;
 @group(1) @binding(9) var<storage, read_write> body_w_pred:  array<vec4<f32>>;
 @group(1) @binding(10) var<storage, read_write> body_w_post: array<vec4<f32>>;
+// Body poses at contact-detection time — the anchor reference for
+// contact constraints (Müller 2020 §3.2: contacts are captured once at
+// the outer step boundary and their body-frame anchors must stay fixed
+// across substeps). For substeps == 1 the host binds `body_q_in` here,
+// which is bit-identical to the old behaviour.
+@group(1) @binding(11) var<storage, read>       body_q_contact: array<Transform>;
 
 // ── Group 2 — Control (read-only) ────────────────────────────────────
 @group(2) @binding(0) var<storage, read> body_external_f: array<SpatialVec>;
@@ -205,7 +211,7 @@ fn project_position(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let inv_m_self = body_inv_mass[tid];
     let q_self     = body_q_out[tid];
-    let q_self_in  = body_q_in[tid];
+    let q_self_in  = body_q_contact[tid];
     let com_self   = body_com[tid].xyz;
     let i_inv_self = rotate_inertia_inv(q_self.rotation, mat3_from_cols(body_inv_inertia[tid]));
 
@@ -246,8 +252,8 @@ fn project_position(@builtin(global_invocation_id) gid: vec3<u32>) {
             inv_m_other = body_inv_mass[other];
             q_other_pos = body_q_out[other].position.xyz;
             q_other_rot = body_q_out[other].rotation;
-            q_other_in_pos = body_q_in[other].position.xyz;
-            q_other_in_rot = body_q_in[other].rotation;
+            q_other_in_pos = body_q_contact[other].position.xyz;
+            q_other_in_rot = body_q_contact[other].rotation;
             com_other = body_com[other].xyz;
             i_inv_other = rotate_inertia_inv(q_other_rot, mat3_from_cols(body_inv_inertia[other]));
         }
@@ -351,7 +357,7 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let inv_m_self = body_inv_mass[tid];
     let q_self_pred = body_q_out[tid];
-    let q_self_in   = body_q_in[tid];
+    let q_self_in   = body_q_contact[tid];
     let com_self    = body_com[tid].xyz;
     let i_inv_self  = rotate_inertia_inv(q_self_pred.rotation, mat3_from_cols(body_inv_inertia[tid]));
     let v_self_pred = body_v_pred[tid].xyz;
@@ -396,8 +402,8 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
             inv_m_other = body_inv_mass[other];
             q_other_pos = body_q_out[other].position.xyz;
             q_other_rot = body_q_out[other].rotation;
-            q_other_in_pos = body_q_in[other].position.xyz;
-            q_other_in_rot = body_q_in[other].rotation;
+            q_other_in_pos = body_q_contact[other].position.xyz;
+            q_other_in_rot = body_q_contact[other].rotation;
             com_other = body_com[other].xyz;
             i_inv_other = rotate_inertia_inv(q_other_rot, mat3_from_cols(body_inv_inertia[other]));
         }
@@ -477,11 +483,32 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                             + dot(ra_x_t, i_inv_a * ra_x_t)
                             + dot(rb_x_t, i_inv_b * rb_x_t);
                 if (denom_t > 0.0) {
+                    // Support-impulse floor (mirrors CPU xpbd.rs): a
+                    // body resting on this contact receives ≈ m·|g·n|·dt
+                    // of normal impulse per step even when the velocity
+                    // solve needs no correction (λ_n → 0 in steady
+                    // contact). Without the floor the Coulomb cap
+                    // μ·|λ_n| collapses and sliding friction vanishes
+                    // for resting bodies.
+                    var support_impulse = 0.0;
+                    let a_idx = select(tid, other, is_b);
+                    let b_idx = select(other, tid, is_b);
+                    if (inv_m_a > 0.0 && a_idx != STATIC_BODY) {
+                        let ga = gravity[u32(max(body_world[a_idx], 0))].xyz;
+                        support_impulse = support_impulse
+                            + (1.0 / inv_m_a) * max(dot(ga, n_ab), 0.0) * uniforms.dt;
+                    }
+                    if (inv_m_b > 0.0 && b_idx != STATIC_BODY) {
+                        let gb = gravity[u32(max(body_world[b_idx], 0))].xyz;
+                        support_impulse = support_impulse
+                            + (1.0 / inv_m_b) * max(-dot(gb, n_ab), 0.0) * uniforms.dt;
+                    }
                     // Coulomb cone caps the friction *impulse* λ_t at
-                    // μ|λ_n|. λ_t = dv_t/denom_t, so dv_t must be
-                    // capped at μ|λ_n|·denom_t (matches CPU xpbd.rs) —
-                    // capping dv_t at μ|λ_n| alone is wrong by denom_t.
-                    let cap = mu * abs(lambda_n);
+                    // μ·max(|λ_n|, support). λ_t = dv_t/denom_t, so
+                    // dv_t must be capped at cap·denom_t (matches CPU
+                    // xpbd.rs) — capping dv_t at the impulse alone is
+                    // wrong by denom_t.
+                    let cap = mu * max(abs(lambda_n), support_impulse);
                     let dv_t = min(v_t_len, max(cap, 0.0) * denom_t);
                     let lambda_t = dv_t / denom_t;
                     // self impulses: if self is a, +t_hat ; if self is b, -t_hat.

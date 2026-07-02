@@ -55,6 +55,12 @@ pub struct XpbdKernel {
     body_v_post: wgpu::Buffer,
     body_w_pred: wgpu::Buffer,
     body_w_post: wgpu::Buffer,
+    /// Body poses at contact-detection time — the contact-anchor
+    /// reference the constraint stages read (WGSL binding 11). Filled
+    /// by [`Self::capture_contact_pose`] for multi-substep outer
+    /// steps; single-substep dispatches bind `state_in.body_q` here
+    /// instead (bit-identical to the pre-B1 behaviour).
+    body_q_contact: wgpu::Buffer,
     /// 1-element dummy for empty `Control::body_external_f`.
     external_f_dummy: wgpu::Buffer,
 
@@ -185,6 +191,14 @@ impl XpbdKernel {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let body_q_contact = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::xpbd body_q_contact"),
+            size: 32 * n,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
             pipeline_predict,
@@ -203,9 +217,34 @@ impl XpbdKernel {
             body_v_post,
             body_w_pred,
             body_w_post,
+            body_q_contact,
             external_f_dummy,
             body_count,
         }
+    }
+
+    /// Snapshot `state.body_q`'s device buffer into the contact-anchor
+    /// buffer. Call once at the outer step boundary (contact-detection
+    /// time) before a multi-substep run, then dispatch every substep
+    /// with `use_contact_pose = true` so the body-frame contact
+    /// anchors stay fixed across substeps (Müller 2020 §3.2).
+    pub fn capture_contact_pose(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &State,
+    ) -> Result<()> {
+        let src = state
+            .body_q
+            .device_buffer()
+            .ok_or_else(missing_buf("capture_contact_pose: state.body_q"))?;
+        let bytes = src.size().min(self.body_q_contact.size());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::xpbd capture_contact_pose"),
+        });
+        encoder.copy_buffer_to_buffer(src, 0, &self.body_q_contact, 0, bytes);
+        queue.submit(Some(encoder.finish()));
+        Ok(())
     }
 
     /// Run one full XPBD step on the GPU. Caller must have uploaded
@@ -222,6 +261,7 @@ impl XpbdKernel {
         position_iterations: usize,
         dt: f64,
         state_out: &mut State,
+        use_contact_pose: bool,
     ) -> Result<()> {
         if model.body_count == 0 {
             return Ok(());
@@ -325,6 +365,17 @@ impl XpbdKernel {
                     wgpu::BindGroupEntry {
                         binding: 10,
                         resource: self.body_w_post.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        // Contact-anchor pose: the captured snapshot for
+                        // multi-substep runs, or the live input pose for
+                        // single-substep (identical to pre-B1 behaviour).
+                        resource: if use_contact_pose {
+                            self.body_q_contact.as_entire_binding()
+                        } else {
+                            state_in_q.as_entire_binding()
+                        },
                     },
                 ],
             })
@@ -544,9 +595,11 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
 fn xpbd_state_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     let read = wgpu::BufferBindingType::Storage { read_only: true };
     let rw = wgpu::BufferBindingType::Storage { read_only: false };
-    (0..11u32)
+    // 0-2: state inputs (read), 3-10: working buffers (read-write),
+    // 11: contact-anchor pose (read).
+    (0..12u32)
         .map(|i| {
-            let ty = if i < 3 { read } else { rw };
+            let ty = if i < 3 || i == 11 { read } else { rw };
             wgpu::BindGroupLayoutEntry {
                 binding: i,
                 visibility: wgpu::ShaderStages::COMPUTE,
