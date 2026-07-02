@@ -44,7 +44,8 @@ impl Engine {
     }
 }
 
-/// A gearbox: a set of gear ratios plus a final-drive ratio.
+/// A gearbox: a set of gear ratios plus a final-drive ratio, with an
+/// RPM-triggered automatic shifter.
 #[derive(Clone, Debug)]
 pub struct Transmission {
     /// Gear ratios (gear 0 is first/lowest).
@@ -53,6 +54,16 @@ pub struct Transmission {
     pub final_drive: f64,
     /// Currently selected gear index.
     pub gear: usize,
+    /// Engine speed (rpm) above which [`auto_shift`](Self::auto_shift)
+    /// selects the next-higher gear.
+    pub upshift_rpm: f64,
+    /// Engine speed (rpm) below which [`auto_shift`](Self::auto_shift)
+    /// drops a gear. Must sit well below `upshift_rpm` scaled by the
+    /// largest adjacent-ratio step, or the shifter will hunt: after an
+    /// upshift the rpm falls by `ratio[g+1]/ratio[g]` (≈ 0.6–0.8 for
+    /// the default box), so the post-shift rpm must stay above this
+    /// threshold.
+    pub downshift_rpm: f64,
 }
 
 impl Default for Transmission {
@@ -61,6 +72,12 @@ impl Default for Transmission {
             gear_ratios: vec![3.4, 2.1, 1.4, 1.0, 0.8],
             final_drive: 3.5,
             gear: 0,
+            // 5200 → post-upshift rpm ≈ 3200 (worst adjacent step
+            // 2.1/3.4); 1800 keeps a wide hysteresis band so the
+            // shifter cannot oscillate between two gears at constant
+            // speed.
+            upshift_rpm: 5200.0,
+            downshift_rpm: 1800.0,
         }
     }
 }
@@ -69,6 +86,17 @@ impl Transmission {
     /// Total ratio from the crankshaft to the wheels.
     pub fn ratio(&self) -> f64 {
         self.gear_ratios[self.gear.min(self.gear_ratios.len() - 1)] * self.final_drive
+    }
+
+    /// Advance the automatic shifter one control tick: upshift above
+    /// `upshift_rpm`, downshift below `downshift_rpm`, at most one gear
+    /// per call so a spin spike cannot skip the box to top gear.
+    pub fn auto_shift(&mut self, engine_rpm: f64) {
+        if engine_rpm > self.upshift_rpm && self.gear + 1 < self.gear_ratios.len() {
+            self.gear += 1;
+        } else if engine_rpm < self.downshift_rpm && self.gear > 0 {
+            self.gear -= 1;
+        }
     }
 }
 
@@ -119,12 +147,17 @@ impl Default for Powertrain {
 }
 
 impl Powertrain {
+    /// Engine crank speed (rpm) implied by the driven-wheel spin rate
+    /// `wheel_spin` (rad/s) through the current total ratio.
+    pub fn engine_rpm(&self, wheel_spin: f64) -> f64 {
+        wheel_spin.abs() * self.transmission.ratio() * 60.0 / (2.0 * PI)
+    }
+
     /// Total wheel torque (N·m) for the given `throttle` and the
     /// average driven-wheel spin rate `wheel_spin` (rad/s).
     pub fn wheel_torque(&self, throttle: f64, wheel_spin: f64) -> f64 {
         let ratio = self.transmission.ratio();
-        let rpm = wheel_spin.abs() * ratio * 60.0 / (2.0 * PI);
-        self.engine.torque(rpm, throttle) * ratio
+        self.engine.torque(self.engine_rpm(wheel_spin), throttle) * ratio
     }
 }
 
@@ -160,13 +193,18 @@ pub fn ackermann_steer(steer: f64, wheelbase: f64, track: f64) -> (f64, f64) {
 }
 
 impl Vehicle {
-    /// Apply one tick of driver input through a [`Powertrain`]: set the
-    /// driven wheels' drive torque, every wheel's brake torque, and the
-    /// front wheels' Ackermann steer angles.
-    pub fn apply_driver(&mut self, powertrain: &Powertrain, input: &DriverInput) {
+    /// Apply one tick of driver input through a [`Powertrain`]: advance
+    /// the automatic shifter, set the driven wheels' drive torque, every
+    /// wheel's brake torque, and the front wheels' Ackermann steer
+    /// angles. Takes the powertrain mutably because the gearbox state
+    /// (selected gear) advances with driving — callers that clone the
+    /// powertrain per frame must write it back or the gear resets.
+    pub fn apply_driver(&mut self, powertrain: &mut Powertrain, input: &DriverInput) {
         let driven = powertrain.driveline.driven();
         let avg_spin =
             driven.iter().map(|&i| self.corners[i].spin).sum::<f64>() / driven.len() as f64;
+        let rpm = powertrain.engine_rpm(avg_spin);
+        powertrain.transmission.auto_shift(rpm);
         let total = powertrain.wheel_torque(input.throttle, avg_spin);
         let per_wheel = total / driven.len() as f64;
         for c in &mut self.corners {
@@ -203,6 +241,56 @@ mod tests {
     }
 
     #[test]
+    fn transmission_auto_shifts_with_hysteresis() {
+        let mut t = Transmission::default();
+        assert_eq!(t.gear, 0);
+        // Past the upshift point → next gear, one at a time.
+        t.auto_shift(6000.0);
+        assert_eq!(t.gear, 1, "high rpm → upshift");
+        // Post-upshift rpm for the same road speed drops by the ratio
+        // step (2.1/3.4 → ~3700 rpm): inside the hysteresis band, no
+        // hunting back down.
+        t.auto_shift(6000.0 * 2.1 / 3.4);
+        assert_eq!(t.gear, 1, "post-upshift rpm must not trigger a downshift");
+        // Slowing to near idle drops a gear...
+        t.auto_shift(1000.0);
+        assert_eq!(t.gear, 0, "low rpm → downshift");
+        // ...and the post-downshift rpm (1000·3.4/2.1 ≈ 1600) stays
+        // below the upshift point: no oscillation.
+        t.auto_shift(1000.0 * 3.4 / 2.1);
+        assert_eq!(t.gear, 0, "post-downshift rpm must not re-upshift");
+        // Bounds: can't shift past top gear or below first.
+        t.gear = 4;
+        t.auto_shift(9000.0);
+        assert_eq!(t.gear, 4, "no shift past top gear");
+        t.gear = 0;
+        t.auto_shift(0.0);
+        assert_eq!(t.gear, 0, "no shift below first gear");
+    }
+
+    #[test]
+    fn apply_driver_upshifts_at_high_rpm() {
+        let mut pt = Powertrain::default();
+        let mut car = Vehicle::car();
+        // Wheel spin that puts the engine past the upshift point in
+        // first gear: ω = rpm · 2π / (60 · ratio).
+        let spin =
+            (pt.transmission.upshift_rpm + 300.0) * 2.0 * PI / (60.0 * pt.transmission.ratio());
+        for c in &mut car.corners {
+            c.spin = spin;
+        }
+        let input = DriverInput {
+            throttle: 1.0,
+            ..Default::default()
+        };
+        car.apply_driver(&mut pt, &input);
+        assert_eq!(
+            pt.transmission.gear, 1,
+            "driving past the upshift rpm must engage second gear"
+        );
+    }
+
+    #[test]
     fn ackermann_inner_wheel_turns_more() {
         let (left, right) = ackermann_steer(0.3, 2.6, 1.5);
         assert!(left > 0.0 && right > 0.0, "left turn → both wheels left");
@@ -213,14 +301,14 @@ mod tests {
     #[test]
     fn vehicle_accelerates_under_throttle() {
         let ground = FlatTerrain::new(0.0, 1.0);
-        let pt = Powertrain::default();
+        let mut pt = Powertrain::default();
         let mut car = Vehicle::car();
         let throttle = DriverInput {
             throttle: 1.0,
             ..Default::default()
         };
         for _ in 0..2000 {
-            car.apply_driver(&pt, &throttle);
+            car.apply_driver(&mut pt, &throttle);
             car.step(&ground, 1.0e-3);
         }
         assert!(
@@ -233,7 +321,7 @@ mod tests {
     #[test]
     fn vehicle_brakes_to_a_stop() {
         let ground = FlatTerrain::new(0.0, 1.0);
-        let pt = Powertrain::default();
+        let mut pt = Powertrain::default();
         let mut car = Vehicle::car();
         // Get rolling.
         let go = DriverInput {
@@ -241,7 +329,7 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..2000 {
-            car.apply_driver(&pt, &go);
+            car.apply_driver(&mut pt, &go);
             car.step(&ground, 1.0e-3);
         }
         let moving = car.forward_speed();
@@ -252,7 +340,7 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..4000 {
-            car.apply_driver(&pt, &brake);
+            car.apply_driver(&mut pt, &brake);
             car.step(&ground, 1.0e-3);
         }
         assert!(
@@ -266,14 +354,14 @@ mod tests {
     #[test]
     fn steering_produces_yaw() {
         let ground = FlatTerrain::new(0.0, 1.0);
-        let pt = Powertrain::default();
+        let mut pt = Powertrain::default();
         let mut car = Vehicle::car();
         let drive = DriverInput {
             throttle: 0.8,
             ..Default::default()
         };
         for _ in 0..2500 {
-            car.apply_driver(&pt, &drive);
+            car.apply_driver(&mut pt, &drive);
             car.step(&ground, 1.0e-3);
         }
         assert!(
@@ -287,7 +375,7 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..2000 {
-            car.apply_driver(&pt, &turn);
+            car.apply_driver(&mut pt, &turn);
             car.step(&ground, 1.0e-3);
         }
         assert!(

@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn driven_vehicle_ruts_the_soil_and_is_slowed_by_it() {
-        let pt = Powertrain::default();
+        let mut pt = Powertrain::default();
         let go = DriverInput {
             throttle: 1.0,
             ..Default::default()
@@ -396,7 +396,7 @@ mod tests {
         let mut car = Vehicle::car();
         for _ in 0..4000 {
             soil.apply_wheel_loads(&mut car);
-            car.apply_driver(&pt, &go);
+            car.apply_driver(&mut pt, &go);
             car.step(&soil, 1.0e-3);
         }
 
@@ -427,7 +427,7 @@ mod tests {
         let mut flat_car = Vehicle::car();
         let flat = FlatTerrain::new(0.0, 0.9);
         for _ in 0..4000 {
-            flat_car.apply_driver(&pt, &go);
+            flat_car.apply_driver(&mut pt, &go);
             flat_car.step(&flat, 1.0e-3);
         }
         assert!(

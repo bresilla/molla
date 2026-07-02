@@ -10,8 +10,9 @@
 //! This is the differentiable-simulation showcase: system
 //! identification from a trajectory — estimating what the ground was
 //! like from how the vehicle moved — which a non-differentiable engine
-//! like Chrono cannot do. The viewer scene that drives this vehicle
-//! interactively is the remaining UI-wiring step (see `PLAN_ENGINE.md`).
+//! like Chrono cannot do. Viewer scene 124 (`Scene::VehicleSysid`)
+//! unrolls [`identify_friction`] one Gauss-Newton iteration per frame
+//! with live candidate-vs-ghost cars and a μ-convergence strip chart.
 
 use crate::powertrain::{DriverInput, Powertrain};
 use crate::terrain::FlatTerrain;
@@ -21,7 +22,7 @@ use crate::vehicle::Vehicle;
 /// ground of friction `mu`; return the distance travelled along `x`.
 pub fn drive_distance(mu: f64, steps: usize, dt: f64) -> f64 {
     let terrain = FlatTerrain::new(0.0, mu);
-    let powertrain = Powertrain::default();
+    let mut powertrain = Powertrain::default();
     let mut car = Vehicle::car();
     let go = DriverInput {
         throttle: 1.0,
@@ -29,7 +30,7 @@ pub fn drive_distance(mu: f64, steps: usize, dt: f64) -> f64 {
         steer: 0.0,
     };
     for _ in 0..steps {
-        car.apply_driver(&powertrain, &go);
+        car.apply_driver(&mut powertrain, &go);
         car.step(&terrain, dt);
     }
     car.pos[0]

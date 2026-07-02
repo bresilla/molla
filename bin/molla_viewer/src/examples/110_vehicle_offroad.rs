@@ -134,7 +134,9 @@ fn update_vehicle_offroad_example(
     };
     let frame = (time.delta_secs() as f64).clamp(0.0, 1.0 / 20.0);
     let steps = ((frame / 1.0e-3).round() as u32).clamp(1, 64);
-    let powertrain = state.powertrain.clone();
+    // Clone across the mutable-vehicle borrow, then write back so the
+    // auto-shifter's selected gear persists frame to frame.
+    let mut powertrain = state.powertrain.clone();
     // Take ownership of the terrain across the mutable-vehicle borrow,
     // then put it back. Cheap: `HeightfieldTerrain` is `Vec`-of-`f64`
     // and the swap doesn't touch the heap.
@@ -142,11 +144,12 @@ fn update_vehicle_offroad_example(
     {
         let v = state.vehicle.as_mut().unwrap();
         for _ in 0..steps {
-            v.apply_driver(&powertrain, &input);
+            v.apply_driver(&mut powertrain, &input);
             v.step(&terrain, 1.0e-3);
         }
     }
     state.terrain = Some(terrain);
+    state.powertrain = powertrain;
     let v = state.vehicle.as_ref().unwrap();
     let chassis_pos = MVec3::new(v.pos[0], v.pos[1], v.pos[2]);
     let chassis_rot = MQuat::from_rotation_y(v.yaw);

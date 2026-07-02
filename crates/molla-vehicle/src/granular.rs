@@ -554,7 +554,7 @@ mod tests {
         }
         let surface_before = bed.height(0.4, 0.0);
 
-        let pt = Powertrain::default();
+        let mut pt = Powertrain::default();
         let mut car = Vehicle::car();
         let go = DriverInput {
             throttle: 1.0,
@@ -563,7 +563,7 @@ mod tests {
         for _ in 0..1500 {
             let obstacles = bed.wheel_obstacles(&car);
             bed.step(&obstacles, 5.0e-4);
-            car.apply_driver(&pt, &go);
+            car.apply_driver(&mut pt, &go);
             car.step(&bed, 5.0e-4);
         }
 
