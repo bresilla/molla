@@ -221,6 +221,11 @@ pub struct VbdSolver {
     /// [`super::vbd_soft_contact::warm_start_friction`]).
     pub(crate) prev_vt_contacts: Vec<super::vbd_soft_contact::VtContact>,
     backend: VbdBackend,
+    /// Device-resident scratch state for GPU multi-substep ping-pong
+    /// (same pattern as `XpbdSolver::gpu_scratch`). Built lazily on
+    /// the first multi-substep GPU step, reused after.
+    #[cfg(feature = "gpu")]
+    gpu_scratch: Option<State>,
 }
 
 impl Default for VbdSolver {
@@ -251,6 +256,8 @@ impl VbdSolver {
             last_ccd_snaps: 0,
             prev_vt_contacts: Vec::new(),
             backend: VbdBackend::Cpu,
+            #[cfg(feature = "gpu")]
+            gpu_scratch: None,
         }
     }
 
@@ -301,6 +308,7 @@ impl VbdSolver {
                 soft_bvh_gpu: None,
                 soft_vt_kernel: None,
             }),
+            gpu_scratch: None,
         })
     }
 
@@ -485,6 +493,19 @@ impl Solver for VbdSolver {
         let n_sub = self.substeps.max(1);
         let dt_sub = dt / n_sub as Real;
 
+        // GPU path — handled before the backend match so the substep
+        // driver can re-borrow `self` (scratch state + substep helper).
+        #[cfg(feature = "gpu")]
+        if matches!(self.backend, VbdBackend::Gpu(_)) {
+            if n_sub == 1 {
+                // A single substep advances the full dt (VBD is an
+                // implicit-energy minimiser, stable at large dt given
+                // enough inner iterations).
+                return self.gpu_substep(model, state_in, state_out, dt);
+            }
+            return self.gpu_multi_substep(model, state_in, state_out, dt_sub, n_sub);
+        }
+
         match &mut self.backend {
             VbdBackend::Cpu => {
                 let mut p_in = state_in.particle_q.host()?.to_vec();
@@ -639,212 +660,306 @@ impl Solver for VbdSolver {
                 state_out.body_qd.host_mut()?.copy_from_slice(&qd_in);
             }
             #[cfg(feature = "gpu")]
-            VbdBackend::Gpu(gpu) => {
-                // Body state passes through unchanged. VBD doesn't
-                // touch `body_q` / `body_qd` on the device so we
-                // don't need to copy anything per-step; the kernel
-                // reads `state_in.body_q` directly for AVBD soft
-                // contact transforms. For scenes that swap state
-                // buffers we still need to make sure `state_out`'s
-                // body_q is up-to-date for the next iteration; we
-                // skip the host bounce (which trips the "host stale"
-                // check after a previous GPU dispatch) and instead
-                // rely on the caller to manage body integration.
-
-                // Borrow the bits the kernel dispatch needs separately
-                // from the soft-VT pipeline (which we lazy-construct
-                // below). Splitting the borrow lets us mutate
-                // `gpu.soft_bvh_gpu` / `gpu.soft_vt_kernel` after the
-                // main kernel dispatch.
-                let device = gpu.device.clone();
-                let queue = gpu.queue.clone();
-                let contact_k = self.contact_stiffness as f32;
-                let hard = matches!(self.vbd_mode, VbdMode::Hard);
-                // Stage 33.4 — GPU CCD path is deferred. The kernel
-                // reads `state_in` from device memory and `state_in` is
-                // an immutable borrow at this layer (mutating it would
-                // require download → host CCD → upload, which can't
-                // happen through `&State`). For v1 the GPU backend
-                // surfaces zero CCD activity. The CPU backend ships
-                // the working CCD pass; viewer scenes that need CCD
-                // (Scene::FastSoftImpact) drive the CPU path.
-                self.last_ccd_invocations = 0;
-                self.last_ccd_snaps = 0;
-                // The GPU backend runs a SINGLE VBD substep per step,
-                // advancing the full `dt` (VBD is an implicit-energy
-                // minimiser, stable at large dt given enough inner
-                // iterations). It cannot honour `self.substeps > 1`:
-                // a device-side substep loop would need to ping-pong
-                // through `state_in`, but `state_in` is an immutable
-                // borrow here. Passing `dt` (not `dt / substeps`)
-                // keeps the GPU path advancing real-time — an earlier
-                // version passed `dt_sub` and ran the sim at
-                // 1/substeps speed. Callers that need multi-substep
-                // accuracy on the GPU must drive the substep loop
-                // externally. `dt_sub` is still used by the CPU arm.
-                gpu.kernel.dispatch(
-                    &device,
-                    &queue,
-                    model,
-                    state_in,
-                    state_out,
-                    dt,
-                    self.iterations as u32,
-                    contact_k,
-                    hard,
-                )?;
-                // Stage 33.2 — soft-vs-soft VT contact via a fully-GPU
-                // pipeline. Replaces the Stage 33 host-side post-step
-                // round trip (`particle_q.download → CPU project → upload`)
-                // with three on-device dispatches: `compute_tri_aabbs`
-                // → `LBVH refit_in_place` → `gather_vt + apply_vt_penalty
-                // + commit_dq`. The only host bounce is a 4-byte read
-                // of the contact count between gather and apply.
-                let has_vt = model.soft_surfaces.len() >= 2 && self.contact_stiffness > 0.0;
-                if has_vt {
-                    // Lazy construct the GPU BVH + VT kernel on first use.
-                    if gpu.soft_bvh_gpu.is_none() {
-                        gpu.soft_bvh_gpu = Some(crate::kernels::SoftBvhGpu::new(
-                            device.clone(),
-                            queue.clone(),
-                            model,
-                        )?);
-                    }
-                    if gpu.soft_vt_kernel.is_none() {
-                        gpu.soft_vt_kernel = Some(crate::kernels::SoftVtContactKernel::new(
-                            device.clone(),
-                            queue.clone(),
-                            model,
-                        )?);
-                    }
-                    let soft_bvh = gpu.soft_bvh_gpu.as_mut().unwrap();
-                    let vt_kernel = gpu.soft_vt_kernel.as_ref().unwrap();
-                    // Stage 33.2.1 — snapshot pre-substep state (q + qd)
-                    // BEFORE the sweep loop. The position-form Coulomb
-                    // friction in `apply_vt_penalty` reads the snapshot
-                    // for tangential drift; `commit_velocity_recovery`
-                    // reads it for restitution-aware bounce targets.
-                    // Also resets the per-vertex friction/restitution/
-                    // contact_normal_sum scratches.
-                    vt_kernel.dispatch_snapshot_pre_step(state_in)?;
-                    // Run the gather+apply+commit Jacobi-style sweep
-                    // `vt_contact_sweeps` times per substep — matches
-                    // the CPU `project_vt_contacts` semantics. Each
-                    // sweep refits the BVH against the latest
-                    // post-projection positions so successive contacts
-                    // converge.
-                    let n_sweeps = self.vt_contact_sweeps.max(1);
-                    let mut last_count = 0u32;
-                    for sweep_idx in 0..n_sweeps {
-                        // 1) compute per-tri AABBs from the current
-                        //    state.particle_q (writes directly into the
-                        //    LBVH primitive_aabb buffer).
-                        vt_kernel.dispatch_compute_tri_aabbs(model, state_out, soft_bvh)?;
-                        // 2) refit the LBVH in place against those AABBs.
-                        soft_bvh.refit(model)?;
-                        // 3) gather + apply + commit_dq — fully GPU.
-                        let stats = vt_kernel.dispatch_gather_and_apply(
-                            model,
-                            state_out,
-                            soft_bvh,
-                            self.vt_contact_margin,
-                            self.contact_stiffness,
-                            dt_sub as f64,
-                            sweep_idx == 0,
-                        )?;
-                        last_count = stats.contact_count;
-                        if stats.contact_count == 0 {
-                            // No active contacts — early-out the rest
-                            // of the sweep (matches CPU
-                            // `project_vt_contacts` `break` on empty
-                            // contact list).
-                            break;
-                        }
-                    }
-                    self.last_vt_contact_count = last_count as usize;
-                    // Stage 33.2.1 — restitution-aware velocity recovery
-                    // + Coulomb tangential damping (one-shot, after the
-                    // sweep loop). No-op when no contacts engaged
-                    // because the contact_normal_sum scratch stays at
-                    // zero.
-                    if last_count > 0 {
-                        vt_kernel.dispatch_commit_velocity_recovery(
-                            model,
-                            state_out,
-                            soft_bvh,
-                            self.vt_contact_margin,
-                            self.contact_stiffness,
-                            dt_sub as f64,
-                        )?;
-                    }
-                    // commit_dq mutated state_out.particle_q +
-                    // particle_qd in place. The Buffer<Vec3> wrapper
-                    // still thinks the host is canonical — mark them
-                    // device-dirty so subsequent host reads trip the
-                    // staleness check (and legitimate use cases call
-                    // download).
-                    state_out.particle_q.mark_device_dirty();
-                    state_out.particle_qd.mark_device_dirty();
-                }
-                // Stage 20.4 — host-side fallbacks for tet-vs-tet (when
-                // ≥ 2 tet meshes register but soft surfaces don't yet
-                // expose them as the unified registry) + SDF backings.
-                // These STILL require a `particle_q.download → upload`
-                // round-trip until they're ported (Stage 33.2 spec
-                // explicitly leaves rigid-SDF backings as CPU-only).
-                let has_tet_tet = model.tet_count > 0
-                    && model.tet_mesh_count >= 2
-                    && self.contact_stiffness > 0.0
-                    // Don't double-process: when soft surfaces cover
-                    // the same tet meshes, the GPU VT pipeline above
-                    // already handled them.
-                    && !has_vt;
-                if has_tet_tet || !self.sdf_backings.is_empty() {
-                    state_out.particle_q.download(&device, &queue)?;
-                    if has_tet_tet {
-                        project_tet_tet_contacts(model, state_out)?;
-                    }
-                    if !self.sdf_backings.is_empty() {
-                        let radius_vec = model.particle_radius.host()?.to_vec();
-                        let inv_mass_vec = model.particle_inv_mass.host()?.to_vec();
-                        project_sdf_backings(
-                            &self.sdf_backings,
-                            state_out,
-                            &radius_vec,
-                            &inv_mass_vec,
-                        )?;
-                    }
-                    // VT contacts are handled by the GPU kernel above
-                    // (Stage 33.2 dropped the CPU bounce). EE contacts
-                    // (Stage 33.1) and friction (Stage 33.5) are CPU-only
-                    // and only run on the CPU VBD backend; the GPU path
-                    // skips them in v1.
-                    state_out.particle_q.ensure_device(&device)?;
-                    state_out.particle_q.upload(&queue)?;
-                }
-                if n_sub > 1 {
-                    // Subsequent substeps: alternate buffers using a
-                    // GPU-resident scratch state. We sidestep the
-                    // host download by using `state_out` as the
-                    // scratch (we just wrote to it; it's the
-                    // canonical "previous step" for sub n+1) and
-                    // ping-ponging into a freshly-allocated state.
-                    // For v1 we just chain: dispatch reads state_in,
-                    // writes state_out; the next dispatch reads
-                    // state_out, writes a temp, etc. We need a real
-                    // GPU-resident scratch for this — defer the
-                    // multi-substep optimisation; v1 callers wrap
-                    // the substep loop themselves (same pattern as
-                    // XPBD `external_substeps_box_stack` test).
-                    return Err(Error::Solver(
-                        "VBD GPU multi-substep is not implemented; \
-                         set substeps = 1 and run the substep loop externally"
-                            .into(),
-                    ));
-                }
+            VbdBackend::Gpu(_) => {
+                unreachable!("GPU path returns before the backend match")
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl VbdSolver {
+    /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
+    /// soft-VT contact pipeline, and the host-side tet-tet / SDF
+    /// fallbacks. Extracted from `step` so the multi-substep driver
+    /// can loop it with per-substep input/output states.
+    fn gpu_substep(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            unreachable!("gpu_substep on CPU backend")
+        };
+        // Body state passes through unchanged. VBD doesn't
+        // touch `body_q` / `body_qd` on the device so we
+        // don't need to copy anything per-step; the kernel
+        // reads `state_in.body_q` directly for AVBD soft
+        // contact transforms. For scenes that swap state
+        // buffers we still need to make sure `state_out`'s
+        // body_q is up-to-date for the next iteration; we
+        // skip the host bounce (which trips the "host stale"
+        // check after a previous GPU dispatch) and instead
+        // rely on the caller to manage body integration.
+
+        // Borrow the bits the kernel dispatch needs separately
+        // from the soft-VT pipeline (which we lazy-construct
+        // below). Splitting the borrow lets us mutate
+        // `gpu.soft_bvh_gpu` / `gpu.soft_vt_kernel` after the
+        // main kernel dispatch.
+        let device = gpu.device.clone();
+        let queue = gpu.queue.clone();
+        let contact_k = self.contact_stiffness as f32;
+        let hard = matches!(self.vbd_mode, VbdMode::Hard);
+        // Stage 33.4 — GPU CCD path is deferred. The kernel
+        // reads `state_in` from device memory and `state_in` is
+        // an immutable borrow at this layer (mutating it would
+        // require download → host CCD → upload, which can't
+        // happen through `&State`). For v1 the GPU backend
+        // surfaces zero CCD activity. The CPU backend ships
+        // the working CCD pass; viewer scenes that need CCD
+        // (Scene::FastSoftImpact) drive the CPU path.
+        self.last_ccd_invocations = 0;
+        self.last_ccd_snaps = 0;
+        // The GPU backend runs a SINGLE VBD substep per step,
+        // advancing the full `dt` (VBD is an implicit-energy
+        // minimiser, stable at large dt given enough inner
+        // iterations). It cannot honour `self.substeps > 1`:
+        // a device-side substep loop would need to ping-pong
+        // through `state_in`, but `state_in` is an immutable
+        // borrow here. Passing `dt` (not `dt / substeps`)
+        // keeps the GPU path advancing real-time — an earlier
+        // version passed `dt_sub` and ran the sim at
+        // 1/substeps speed. Callers that need multi-substep
+        // accuracy on the GPU must drive the substep loop
+        // externally. `dt_sub` is still used by the CPU arm.
+        gpu.kernel.dispatch(
+            &device,
+            &queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            self.iterations as u32,
+            contact_k,
+            hard,
+        )?;
+        // Stage 33.2 — soft-vs-soft VT contact via a fully-GPU
+        // pipeline. Replaces the Stage 33 host-side post-step
+        // round trip (`particle_q.download → CPU project → upload`)
+        // with three on-device dispatches: `compute_tri_aabbs`
+        // → `LBVH refit_in_place` → `gather_vt + apply_vt_penalty
+        // + commit_dq`. The only host bounce is a 4-byte read
+        // of the contact count between gather and apply.
+        let has_vt = model.soft_surfaces.len() >= 2 && self.contact_stiffness > 0.0;
+        if has_vt {
+            // Lazy construct the GPU BVH + VT kernel on first use.
+            if gpu.soft_bvh_gpu.is_none() {
+                gpu.soft_bvh_gpu = Some(crate::kernels::SoftBvhGpu::new(
+                    device.clone(),
+                    queue.clone(),
+                    model,
+                )?);
+            }
+            if gpu.soft_vt_kernel.is_none() {
+                gpu.soft_vt_kernel = Some(crate::kernels::SoftVtContactKernel::new(
+                    device.clone(),
+                    queue.clone(),
+                    model,
+                )?);
+            }
+            let soft_bvh = gpu.soft_bvh_gpu.as_mut().unwrap();
+            let vt_kernel = gpu.soft_vt_kernel.as_ref().unwrap();
+            // Stage 33.2.1 — snapshot pre-substep state (q + qd)
+            // BEFORE the sweep loop. The position-form Coulomb
+            // friction in `apply_vt_penalty` reads the snapshot
+            // for tangential drift; `commit_velocity_recovery`
+            // reads it for restitution-aware bounce targets.
+            // Also resets the per-vertex friction/restitution/
+            // contact_normal_sum scratches.
+            vt_kernel.dispatch_snapshot_pre_step(state_in)?;
+            // Run the gather+apply+commit Jacobi-style sweep
+            // `vt_contact_sweeps` times per substep — matches
+            // the CPU `project_vt_contacts` semantics. Each
+            // sweep refits the BVH against the latest
+            // post-projection positions so successive contacts
+            // converge.
+            let n_sweeps = self.vt_contact_sweeps.max(1);
+            let mut last_count = 0u32;
+            for sweep_idx in 0..n_sweeps {
+                // 1) compute per-tri AABBs from the current
+                //    state.particle_q (writes directly into the
+                //    LBVH primitive_aabb buffer).
+                vt_kernel.dispatch_compute_tri_aabbs(model, state_out, soft_bvh)?;
+                // 2) refit the LBVH in place against those AABBs.
+                soft_bvh.refit(model)?;
+                // 3) gather + apply + commit_dq — fully GPU.
+                let stats = vt_kernel.dispatch_gather_and_apply(
+                    model,
+                    state_out,
+                    soft_bvh,
+                    self.vt_contact_margin,
+                    self.contact_stiffness,
+                    dt as f64,
+                    sweep_idx == 0,
+                )?;
+                last_count = stats.contact_count;
+                if stats.contact_count == 0 {
+                    // No active contacts — early-out the rest
+                    // of the sweep (matches CPU
+                    // `project_vt_contacts` `break` on empty
+                    // contact list).
+                    break;
+                }
+            }
+            self.last_vt_contact_count = last_count as usize;
+            // Stage 33.2.1 — restitution-aware velocity recovery
+            // + Coulomb tangential damping (one-shot, after the
+            // sweep loop). No-op when no contacts engaged
+            // because the contact_normal_sum scratch stays at
+            // zero.
+            if last_count > 0 {
+                vt_kernel.dispatch_commit_velocity_recovery(
+                    model,
+                    state_out,
+                    soft_bvh,
+                    self.vt_contact_margin,
+                    self.contact_stiffness,
+                    dt as f64,
+                )?;
+            }
+            // commit_dq mutated state_out.particle_q +
+            // particle_qd in place. The Buffer<Vec3> wrapper
+            // still thinks the host is canonical — mark them
+            // device-dirty so subsequent host reads trip the
+            // staleness check (and legitimate use cases call
+            // download).
+            state_out.particle_q.mark_device_dirty();
+            state_out.particle_qd.mark_device_dirty();
+        }
+        // Stage 20.4 — host-side fallbacks for tet-vs-tet (when
+        // ≥ 2 tet meshes register but soft surfaces don't yet
+        // expose them as the unified registry) + SDF backings.
+        // These STILL require a `particle_q.download → upload`
+        // round-trip until they're ported (Stage 33.2 spec
+        // explicitly leaves rigid-SDF backings as CPU-only).
+        let has_tet_tet = model.tet_count > 0
+            && model.tet_mesh_count >= 2
+            && self.contact_stiffness > 0.0
+            // Don't double-process: when soft surfaces cover
+            // the same tet meshes, the GPU VT pipeline above
+            // already handled them.
+            && !has_vt;
+        if has_tet_tet || !self.sdf_backings.is_empty() {
+            state_out.particle_q.download(&device, &queue)?;
+            if has_tet_tet {
+                project_tet_tet_contacts(model, state_out)?;
+            }
+            if !self.sdf_backings.is_empty() {
+                let radius_vec = model.particle_radius.host()?.to_vec();
+                let inv_mass_vec = model.particle_inv_mass.host()?.to_vec();
+                project_sdf_backings(&self.sdf_backings, state_out, &radius_vec, &inv_mass_vec)?;
+            }
+            // VT contacts are handled by the GPU kernel above
+            // (Stage 33.2 dropped the CPU bounce). EE contacts
+            // (Stage 33.1) and friction (Stage 33.5) are CPU-only
+            // and only run on the CPU VBD backend; the GPU path
+            // skips them in v1.
+            state_out.particle_q.ensure_device(&device)?;
+            state_out.particle_q.upload(&queue)?;
+        }
+        Ok(())
+    }
+
+    /// GPU multi-substep driver: ping-pong [`Self::gpu_substep`]
+    /// through a lazily-built device-resident scratch state (same
+    /// pattern as `XpbdSolver::step_multi_gpu`), then device-copy the
+    /// result into `state_out` if the last substep landed in the
+    /// scratch.
+    fn gpu_multi_substep(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt_sub: Real,
+        n_sub: usize,
+    ) -> Result<()> {
+        let (device, queue) = match &self.backend {
+            VbdBackend::Gpu(gpu) => (gpu.device.clone(), gpu.queue.clone()),
+            VbdBackend::Cpu => unreachable!("gpu_multi_substep on CPU backend"),
+        };
+        if self.gpu_scratch.is_none() {
+            let mut scratch = model.state()?;
+            scratch.upload_to_device(&device, &queue)?;
+            self.gpu_scratch = Some(scratch);
+        }
+        let mut scratch = self.gpu_scratch.take().expect("scratch just ensured");
+        // Bodies pass through VBD untouched, but the kernel reads the
+        // substep INPUT state's body poses for soft-contact transforms
+        // — seed both intermediate states with the outer input poses.
+        if model.body_count > 0 {
+            crate::xpbd::copy_device_buffers(
+                &device,
+                &queue,
+                &[
+                    (
+                        state_in.body_q.device_buffer(),
+                        scratch.body_q.device_buffer(),
+                    ),
+                    (
+                        state_in.body_q.device_buffer(),
+                        state_out.body_q.device_buffer(),
+                    ),
+                ],
+            )?;
+        }
+        let run = |solver: &mut Self, state_out: &mut State, scratch: &mut State| {
+            solver.gpu_substep(model, state_in, state_out, dt_sub)?;
+            let mut output_in_scratch = false;
+            for _ in 1..n_sub {
+                if output_in_scratch {
+                    solver.gpu_substep(model, scratch, state_out, dt_sub)?;
+                } else {
+                    solver.gpu_substep(model, state_out, scratch, dt_sub)?;
+                }
+                output_in_scratch = !output_in_scratch;
+            }
+            Ok(output_in_scratch)
+        };
+        let result = run(self, state_out, &mut scratch);
+        let finalize = if matches!(result, Ok(true)) {
+            // Final substep landed in the scratch — copy it out.
+            let mut pairs = vec![
+                (
+                    scratch.particle_q.device_buffer(),
+                    state_out.particle_q.device_buffer(),
+                ),
+                (
+                    scratch.particle_qd.device_buffer(),
+                    state_out.particle_qd.device_buffer(),
+                ),
+            ];
+            if model.tet_count > 0 {
+                // Plasticity state ping-pongs with the particle state
+                // on the GPU — carry it out of the scratch too.
+                pairs.push((
+                    scratch.tet_f_plastic.device_buffer(),
+                    state_out.tet_f_plastic.device_buffer(),
+                ));
+                pairs.push((
+                    scratch.tet_plastic_strain.device_buffer(),
+                    state_out.tet_plastic_strain.device_buffer(),
+                ));
+                pairs.push((
+                    scratch.tet_back_stress.device_buffer(),
+                    state_out.tet_back_stress.device_buffer(),
+                ));
+            }
+            let copied = crate::xpbd::copy_device_buffers(&device, &queue, &pairs);
+            if copied.is_ok() {
+                state_out.particle_q.mark_device_dirty();
+                state_out.particle_qd.mark_device_dirty();
+            }
+            copied
+        } else {
+            Ok(())
+        };
+        self.gpu_scratch = Some(scratch);
+        result?;
+        finalize
     }
 }
 

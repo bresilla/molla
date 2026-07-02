@@ -533,7 +533,7 @@ impl XpbdSolver {
 /// Errors if any state involved has no device mirror (upload states
 /// with `upload_to_device` before multi-substep GPU stepping).
 #[cfg(feature = "gpu")]
-fn copy_device_buffers(
+pub(crate) fn copy_device_buffers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     pairs: &[(Option<&wgpu::Buffer>, Option<&wgpu::Buffer>)],

@@ -392,3 +392,92 @@ fn vbd_tracks_moving_kinematic_sphere_gpu() {
         q.len()
     );
 }
+
+/// INSPECTION F7 — VBD GPU internal multi-substep. Previously the GPU
+/// backend returned `Error::Solver` for `substeps > 1`; now it
+/// ping-pongs `gpu_substep` through a device-resident scratch state
+/// (same pattern as the XPBD B1 fix). The CPU internal-substep path
+/// (which loops `dt/n` host-side) is the exact semantic twin and the
+/// reference.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=vbd_cloth_gpu`"]
+fn vbd_gpu_multi_substep_matches_cpu() {
+    let n = 8;
+    let size = 1.0;
+    let top_y = 1.5;
+    let compliance = 1.0e-2;
+    let max_stretch = 0.5;
+    let dt: Real = 1.0 / 60.0;
+    let substeps = 4;
+    let outer_steps = 60; // 1 s of sim at 60 Hz outer / 240 Hz substep
+    let iters = 8;
+
+    // CPU internal-substep reference.
+    let model_cpu = build_cloth(n, size, top_y, compliance, max_stretch, None);
+    let mut s_a = model_cpu.state().unwrap();
+    let mut s_b = model_cpu.state().unwrap();
+    let control = model_cpu.control();
+    let contacts = Contacts::with_capacity(0);
+    let mut solver_cpu = VbdSolver::new_cpu()
+        .with_iterations(iters)
+        .with_substeps(substeps);
+    for _ in 0..outer_steps {
+        solver_cpu
+            .step(&model_cpu, &s_a, &control, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let cpu_q = s_a.particle_q.host().unwrap().to_vec();
+
+    // GPU under test — internal substeps on-device.
+    let mut model_gpu = build_cloth(n, size, top_y, compliance, max_stretch, None);
+    let engine = Engine::new_gpu().expect("GPU adapter for VBD test");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model_gpu.upload_to_device(&device, &queue).unwrap();
+    let mut g_a = model_gpu.state().unwrap();
+    let mut g_b = model_gpu.state().unwrap();
+    let mut control_gpu = model_gpu.control();
+    let mut contacts_gpu = Contacts::with_capacity(0);
+    g_a.upload_to_device(&device, &queue).unwrap();
+    g_b.upload_to_device(&device, &queue).unwrap();
+    control_gpu.upload_to_device(&device, &queue).unwrap();
+    contacts_gpu.upload_to_device(&device, &queue).unwrap();
+    let mut solver_gpu = VbdSolver::new_gpu(&engine, &model_gpu)
+        .unwrap()
+        .with_iterations(iters)
+        .with_substeps(substeps);
+    for _ in 0..outer_steps {
+        solver_gpu
+            .step(&model_gpu, &g_a, &control_gpu, &contacts_gpu, dt, &mut g_b)
+            .unwrap();
+        std::mem::swap(&mut g_a, &mut g_b);
+    }
+    g_a.particle_q.download(&device, &queue).unwrap();
+    let gpu_q = g_a.particle_q.host().unwrap().to_vec();
+
+    // Non-vacuous: the cloth must actually have fallen from its spawn.
+    let cpu_mean_y: Real = cpu_q.iter().map(|p| p.y).sum::<Real>() / cpu_q.len() as Real;
+    assert!(
+        cpu_mean_y < top_y - 0.3,
+        "cloth did not drape: mean y = {cpu_mean_y}"
+    );
+
+    let mut max_dp: Real = 0.0;
+    for (c, g) in cpu_q.iter().zip(gpu_q.iter()) {
+        max_dp = max_dp.max((*c - *g).length());
+    }
+    eprintln!(
+        "vbd multi-substep: {} particles, mean y = {cpu_mean_y:.3}, max |Δp| = {max_dp:.4}",
+        cpu_q.len()
+    );
+    // f64 CPU vs f32 GPU over 240 substeps of a draping cloth — the
+    // existing VBD cloth gates use centimetre-scale tolerances; the
+    // failure this guards against (substeps silently rejected or the
+    // scratch ping-pong dropping a substep's state) diverges by
+    // decimetres.
+    assert!(
+        max_dp < 0.05,
+        "GPU internal multi-substep diverged from CPU: max |Δp| = {max_dp}"
+    );
+}
