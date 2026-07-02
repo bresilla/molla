@@ -154,3 +154,134 @@ fn gpu_transient_step_with_nonzero_dirichlet_matches_cpu() {
     );
     assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
 }
+
+/// Interleave a scalar CSR system into `dim` decoupled components:
+/// scalar entry `(i, j, v)` becomes `(i·dim + c, j·dim + c, v)` for
+/// every component `c`. The result is a valid vector-field system
+/// whose per-component dynamics are exactly the scalar system's, so
+/// the scalar CPU solver run once per component is an exact oracle.
+fn interleave_csr(a: &BsrMatrix, dim: usize) -> BsrMatrix {
+    let n = a.nrows();
+    let mut row_offsets = Vec::with_capacity(n * dim + 1);
+    let mut col_idx = Vec::new();
+    let mut values = Vec::new();
+    row_offsets.push(0usize);
+    for i in 0..n {
+        for c in 0..dim {
+            for s in a.row_offsets[i]..a.row_offsets[i + 1] {
+                col_idx.push(a.col_idx[s] * dim + c);
+                values.push(a.values[s]);
+            }
+            row_offsets.push(col_idx.len());
+        }
+    }
+    BsrMatrix {
+        b: 1,
+        block_rows: n * dim,
+        block_cols: n * dim,
+        row_offsets,
+        col_idx,
+        values,
+    }
+}
+
+/// INSPECTION B2 — vector Dirichlet BCs on the GPU transient stepper.
+/// Before the fix, a `DirichletVector` with more than one component
+/// was silently truncated to `values[0]` in release builds; now the
+/// stepper infers `dim = nrows / vert_count` and pins every component.
+/// Each bottom-face vertex is pinned to a *different* value per
+/// component — the exact case the truncation destroyed.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn gpu_transient_vector_dirichlet_matches_componentwise_cpu() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let nx = 6usize;
+    let mesh = FemMesh::tet_grid_3d(nx, nx, nx, 1.0, 1.0, 1.0);
+    let nv = mesh.vert_count();
+    let dim = 3usize;
+    let m = assemble_mass(&mesh);
+    let k = assemble_stiffness(&mesh, 1.0);
+    let m3 = interleave_csr(&m, dim);
+    let k3 = interleave_csr(&k, dim);
+
+    let pin_vals = [0.0 as Real, 0.5, 1.0];
+    let bottom: Vec<u32> = mesh
+        .vertices
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.z <= 1e-9)
+        .map(|(i, _)| i as u32)
+        .collect();
+    let bcs3: Vec<BoundaryCondition> = bottom
+        .iter()
+        .map(|&v| BoundaryCondition::DirichletVector {
+            vertex: v,
+            values: pin_vals.to_vec(),
+        })
+        .collect();
+
+    // Initial state: component c = z + 0.25·c, pinned rows preset to
+    // their BC value so the state starts BC-consistent.
+    let mut u3_init = vec![0.0 as Real; nv * dim];
+    for i in 0..nv {
+        for c in 0..dim {
+            u3_init[i * dim + c] = mesh.vertices[i].z + 0.25 * c as Real;
+        }
+    }
+    for &v in &bottom {
+        for c in 0..dim {
+            u3_init[v as usize * dim + c] = pin_vals[c];
+        }
+    }
+
+    let dt: Real = 0.01;
+    let engine = Engine::new_gpu().expect("gpu");
+    let mut stepper = TransientStepperGpu::new(&engine, &mesh, &m3, &k3, dt, &bcs3, &u3_init)
+        .expect("vector TransientStepperGpu::new");
+
+    let n_steps = 40;
+    for _ in 0..n_steps {
+        stepper.step().expect("gpu transient step");
+    }
+    let u3_gpu = stepper.read_u().expect("gpu read_u");
+
+    // Oracle: the interleaved system is `dim` decoupled copies of the
+    // scalar system — run the scalar CPU path once per component.
+    let f = vec![0.0; nv];
+    let mut max_du: Real = 0.0;
+    for c in 0..dim {
+        let bcs_c: Vec<BoundaryCondition> = bottom
+            .iter()
+            .map(|&v| BoundaryCondition::Dirichlet {
+                vertex: v,
+                value: pin_vals[c],
+            })
+            .collect();
+        let mut u_c: Vec<Real> = (0..nv).map(|i| u3_init[i * dim + c]).collect();
+        for _ in 0..n_steps {
+            u_c = solve_transient(&m, &k, &f, &u_c, dt, &bcs_c);
+        }
+        for i in 0..nv {
+            max_du = max_du.max((u_c[i] - u3_gpu[i * dim + c]).abs());
+        }
+    }
+    eprintln!(
+        "gpu_transient_vector_dirichlet: nv = {nv}, dim = {dim}, {n_steps} steps, \
+         max |Δu| = {max_du:.3e}",
+    );
+    assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
+
+    // The truncation bug's smoking gun: every pinned component must
+    // hold its own value, not component 0's.
+    for &v in &bottom {
+        for c in 0..dim {
+            let got = u3_gpu[v as usize * dim + c];
+            assert!(
+                (got - pin_vals[c]).abs() < 1e-5,
+                "pinned component must hold: vertex {v} comp {c} = {got}, want {}",
+                pin_vals[c]
+            );
+        }
+    }
+}

@@ -738,16 +738,29 @@ impl WaveStepperGpu {
         let bdt2_inv = 1.0 / (beta * dt * dt);
         let half_minus_beta_dt2 = (0.5 - beta) * dt * dt;
 
+        // Per-vertex DoF count inferred from the assembled system —
+        // scalar wave ⇒ dim = 1, interleaved vector fields ⇒
+        // n = vert_count · dim (same layout `FemGpuData::upload`
+        // accepts and the same indexing `apply_bcs` pins).
+        let vc = mesh.vert_count();
+        if vc == 0 || n == 0 || n % vc != 0 {
+            return Err(Error::Gpu(format!(
+                "WaveStepperGpu: system rows ({n}) is not a positive integer \
+                 multiple of mesh vertices ({vc})"
+            )));
+        }
+        let dim = n / vc;
+
         // Build A = M / (β·Δt²) + K, then run BC reduction on a
         // **zero** RHS to extract the column-elimination shift. After
-        // `apply_dirichlet`, `bc_shift[i]` for unpinned `i` equals
+        // the reduction, `bc_shift[i]` for unpinned `i` equals
         // `-Σ_r A_orig[i, r] · value[r]` (sum over pinned rows) and
         // for pinned `i` equals `value[i]`. The reduced `a_red` is
         // what we upload to the GPU; the shift becomes the per-step
         // RHS correction.
         let mut a_red = add_csr_scaled(m, bdt2_inv, k, 1.0);
         let mut bc_shift = vec![0.0; n];
-        super::bc::apply_dirichlet(&mut a_red, &mut bc_shift, bcs);
+        super::bc::apply_bcs(&mut a_red, &mut bc_shift, bcs, &mesh.vertices, dim);
 
         let device = engine
             .device()
@@ -761,34 +774,34 @@ impl WaveStepperGpu {
         // BC reduction here.
         let m_gpu = FemGpuData::upload(device, queue, mesh, m)?;
 
-        // Build the per-row pin bitset + prescribed-value array. The
-        // CPU `apply_dirichlet` path called above pins one row per
-        // `vertex` (it routes through `apply_bcs(..., dim=1)`); the
-        // GPU pin metadata must use the same indexing or it will
-        // address rows the BC-reduced matrix doesn't actually pin.
-        // `DirichletVector` would only be valid if we plumbed `dim`
-        // through both apply_dirichlet *and* this loop — for now we
-        // require `values.len() == 1` (matches the assertion `apply_bcs`
-        // already fires in debug).
+        // Build the per-row pin bitset + prescribed-value array. Must
+        // mirror the `apply_bcs` indexing above exactly or the GPU pin
+        // metadata addresses rows the BC-reduced matrix doesn't pin:
+        // scalar `Dirichlet` pins component 0 of the vertex
+        // (`vertex · dim`), `DirichletVector` pins every component.
         let mut is_pinned_u32 = vec![0u32; n];
         let mut pinned_value_f32 = vec![0.0f32; n];
         for bc in bcs {
             match bc {
                 BoundaryCondition::Dirichlet { vertex, value } => {
-                    let dof = *vertex as usize;
+                    let dof = *vertex as usize * dim;
                     is_pinned_u32[dof] = 1;
                     pinned_value_f32[dof] = *value as f32;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
-                    debug_assert_eq!(
-                        values.len(),
-                        1,
-                        "WaveStepperGpu: DirichletVector with >1 component requires \
-                         vector-aware BC plumbing not yet implemented"
-                    );
-                    let dof = *vertex as usize;
-                    is_pinned_u32[dof] = 1;
-                    pinned_value_f32[dof] = values[0] as f32;
+                    if values.len() != dim {
+                        return Err(Error::Gpu(format!(
+                            "WaveStepperGpu: DirichletVector with {} components on a \
+                             dim-{dim} system; values.len() must equal the per-vertex \
+                             DoF count",
+                            values.len()
+                        )));
+                    }
+                    let base = *vertex as usize * dim;
+                    for (ci, val) in values.iter().enumerate() {
+                        is_pinned_u32[base + ci] = 1;
+                        pinned_value_f32[base + ci] = *val as f32;
+                    }
                 }
                 _ => {}
             }
@@ -1086,11 +1099,21 @@ impl TransientStepperGpu {
 
         let n = m.nrows();
         let inv_dt = 1.0 / dt;
+        // Per-vertex DoF count inferred from the assembled system
+        // (see `WaveStepperGpu::new` — same layout contract).
+        let vc = mesh.vert_count();
+        if vc == 0 || n == 0 || n % vc != 0 {
+            return Err(Error::Gpu(format!(
+                "TransientStepperGpu: system rows ({n}) is not a positive integer \
+                 multiple of mesh vertices ({vc})"
+            )));
+        }
+        let dim = n / vc;
         // Build A = M/Δt + K, then BC-reduce on a zero RHS to extract
         // the column-elimination shift.
         let mut a_red = add_csr_scaled(m, inv_dt, k, 1.0);
         let mut bc_shift = vec![0.0; n];
-        super::bc::apply_dirichlet(&mut a_red, &mut bc_shift, bcs);
+        super::bc::apply_bcs(&mut a_red, &mut bc_shift, bcs, &mesh.vertices, dim);
 
         let device = engine.device().ok_or_else(|| {
             Error::Gpu("TransientStepperGpu::new: engine has no GPU device".into())
@@ -1101,25 +1124,32 @@ impl TransientStepperGpu {
         let a_gpu = FemGpuData::upload(device, queue, mesh, &a_red)?;
         let m_gpu = FemGpuData::upload(device, queue, mesh, m)?;
 
+        // Pin metadata must mirror the `apply_bcs` indexing above
+        // (scalar `Dirichlet` → component 0; `DirichletVector` → every
+        // component of the vertex).
         let mut is_pinned_u32 = vec![0u32; n];
         let mut pinned_value_f32 = vec![0.0f32; n];
         for bc in bcs {
             match bc {
                 BoundaryCondition::Dirichlet { vertex, value } => {
-                    let dof = *vertex as usize;
+                    let dof = *vertex as usize * dim;
                     is_pinned_u32[dof] = 1;
                     pinned_value_f32[dof] = *value as f32;
                 }
                 BoundaryCondition::DirichletVector { vertex, values } => {
-                    debug_assert_eq!(
-                        values.len(),
-                        1,
-                        "TransientStepperGpu: DirichletVector with >1 component requires \
-                         vector-aware BC plumbing not yet implemented"
-                    );
-                    let dof = *vertex as usize;
-                    is_pinned_u32[dof] = 1;
-                    pinned_value_f32[dof] = values[0] as f32;
+                    if values.len() != dim {
+                        return Err(Error::Gpu(format!(
+                            "TransientStepperGpu: DirichletVector with {} components on \
+                             a dim-{dim} system; values.len() must equal the per-vertex \
+                             DoF count",
+                            values.len()
+                        )));
+                    }
+                    let base = *vertex as usize * dim;
+                    for (ci, val) in values.iter().enumerate() {
+                        is_pinned_u32[base + ci] = 1;
+                        pinned_value_f32[base + ci] = *val as f32;
+                    }
                 }
                 _ => {}
             }

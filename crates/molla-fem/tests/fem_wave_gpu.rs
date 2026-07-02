@@ -201,3 +201,142 @@ fn gpu_wave_stepper_accepts_nonzero_dirichlet() {
     );
     assert!((u_gpu[0] - 0.5).abs() < 1e-5, "pinned DoF must hold");
 }
+
+/// Interleave a scalar CSR system into `dim` decoupled components
+/// (same helper as in `fem_transient_gpu.rs`): scalar entry
+/// `(i, j, v)` becomes `(i·dim + c, j·dim + c, v)`, so the scalar CPU
+/// solver run once per component is an exact oracle for the vector
+/// system.
+fn interleave_csr(a: &BsrMatrix, dim: usize) -> BsrMatrix {
+    let n = a.nrows();
+    let mut row_offsets = Vec::with_capacity(n * dim + 1);
+    let mut col_idx = Vec::new();
+    let mut values = Vec::new();
+    row_offsets.push(0usize);
+    for i in 0..n {
+        for c in 0..dim {
+            for s in a.row_offsets[i]..a.row_offsets[i + 1] {
+                col_idx.push(a.col_idx[s] * dim + c);
+                values.push(a.values[s]);
+            }
+            row_offsets.push(col_idx.len());
+        }
+    }
+    BsrMatrix {
+        b: 1,
+        block_rows: n * dim,
+        block_cols: n * dim,
+        row_offsets,
+        col_idx,
+        values,
+    }
+}
+
+/// INSPECTION B2 — vector Dirichlet BCs on the GPU wave stepper (the
+/// Newmark twin of `gpu_transient_vector_dirichlet_matches_componentwise_cpu`).
+/// Each boundary vertex pins a different value per component; before
+/// the fix the stepper truncated to `values[0]` in release builds.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via nixVulkan cargo test"]
+fn gpu_wave_vector_dirichlet_matches_componentwise_cpu() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let (mesh, bcs_scalar, u_init_scalar) = build_warpwave(12);
+    let nv = mesh.vert_count();
+    let dim = 2usize;
+    let m = assemble_mass(&mesh);
+    let k = assemble_wave_stiffness(&mesh, 1.0);
+    let m2 = interleave_csr(&m, dim);
+    let k2 = interleave_csr(&k, dim);
+
+    // Boundary vertices from the scalar fixture, re-pinned per
+    // component: component 0 keeps the scalar zero BC, component 1
+    // pins 0.25.
+    let pin_vals = [0.0 as Real, 0.25];
+    let boundary: Vec<u32> = bcs_scalar
+        .iter()
+        .filter_map(|bc| match bc {
+            BoundaryCondition::Dirichlet { vertex, .. } => Some(*vertex),
+            _ => None,
+        })
+        .collect();
+    let bcs2: Vec<BoundaryCondition> = boundary
+        .iter()
+        .map(|&v| BoundaryCondition::DirichletVector {
+            vertex: v,
+            values: pin_vals.to_vec(),
+        })
+        .collect();
+
+    // Initial state: component 0 = the Gaussian bump, component 1 =
+    // half the bump plus the pin offset; v = a = 0. Pinned rows preset
+    // to their BC value.
+    let mut u2_init = vec![0.0 as Real; nv * dim];
+    for i in 0..nv {
+        u2_init[i * dim] = u_init_scalar[i];
+        u2_init[i * dim + 1] = 0.5 * u_init_scalar[i] + pin_vals[1];
+    }
+    for &v in &boundary {
+        u2_init[v as usize * dim] = pin_vals[0];
+        u2_init[v as usize * dim + 1] = pin_vals[1];
+    }
+    let v0 = vec![0.0; nv * dim];
+    let a0 = vec![0.0; nv * dim];
+
+    let dt: Real = 0.005;
+    let beta = NEWMARK_BETA_DEFAULT;
+    let gamma = NEWMARK_GAMMA_DEFAULT;
+
+    let engine = Engine::new_gpu().expect("gpu");
+    let mut stepper = WaveStepperGpu::new(
+        &engine, &mesh, &m2, &k2, dt, beta, gamma, &bcs2, &u2_init, &v0, &a0,
+    )
+    .expect("vector WaveStepperGpu::new");
+
+    let n_steps = 40;
+    for _ in 0..n_steps {
+        stepper.step().expect("gpu wave step");
+    }
+    let (u2_gpu, _v2_gpu, _a2_gpu) = stepper.read_state().expect("gpu read_state");
+
+    // Oracle: scalar CPU Newmark per component.
+    let mut max_du: Real = 0.0;
+    for c in 0..dim {
+        let bcs_c: Vec<BoundaryCondition> = boundary
+            .iter()
+            .map(|&v| BoundaryCondition::Dirichlet {
+                vertex: v,
+                value: pin_vals[c],
+            })
+            .collect();
+        let mut u_c: Vec<Real> = (0..nv).map(|i| u2_init[i * dim + c]).collect();
+        let mut v_c = vec![0.0; nv];
+        let mut a_c = vec![0.0; nv];
+        for _ in 0..n_steps {
+            let out = solve_wave_transient(&m, &k, &u_c, &v_c, &a_c, dt, beta, gamma, &bcs_c);
+            u_c = out.u_new;
+            v_c = out.v_new;
+            a_c = out.a_new;
+        }
+        for i in 0..nv {
+            max_du = max_du.max((u_c[i] - u2_gpu[i * dim + c]).abs());
+        }
+    }
+    eprintln!(
+        "gpu_wave_vector_dirichlet: nv = {nv}, dim = {dim}, {n_steps} steps, \
+         max |Δu| = {max_du:.3e}",
+    );
+    assert!(max_du < 1e-3, "final max |Δu| = {max_du:.3e}");
+
+    // Every pinned component must hold its own value.
+    for &v in &boundary {
+        for c in 0..dim {
+            let got = u2_gpu[v as usize * dim + c];
+            assert!(
+                (got - pin_vals[c]).abs() < 1e-5,
+                "pinned component must hold: vertex {v} comp {c} = {got}, want {}",
+                pin_vals[c]
+            );
+        }
+    }
+}
