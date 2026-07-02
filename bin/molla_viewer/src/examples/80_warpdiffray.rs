@@ -69,7 +69,7 @@ fn update_warp_diff_ray(sim: Res<Sim>, run: Res<SimRunState>, mut warp: ResMut<W
     st.last_loss = molla::sensors::raycast_adjoint::compute_loss_l2(&current, &st.target_image);
     if st.run_descent {
         let grad = molla::sensors::raycast_adjoint::compute_grad_raycast(
-            &mut st.scene,
+            &st.scene,
             &mut st.params,
             &st.target_image,
             &st.rays,

@@ -105,7 +105,7 @@ impl FemGpuData {
         // `crate::fem::elasticity_gpu::FemElasticityGpuKernel`).
         let nrows = csr.nrows();
         let vc = mesh.vert_count();
-        if vc == 0 || nrows == 0 || nrows % vc != 0 {
+        if vc == 0 || nrows == 0 || !nrows.is_multiple_of(vc) {
             return Err(Error::Build(format!(
                 "FemGpuData::upload: CSR rows ({nrows}) is not a positive integer \
                  multiple of mesh vertices ({vc})",

@@ -13,7 +13,7 @@
 //!
 //! Uses the same A_eff matrix the NS solver assembles internally (M/dt
 //! + νK on a 16×16 cavity grid), so the iter counts here are
-//! representative of what the NS Uzawa inner CG sees per step.
+//!   representative of what the NS Uzawa inner CG sees per step.
 
 #![cfg(feature = "gpu")]
 

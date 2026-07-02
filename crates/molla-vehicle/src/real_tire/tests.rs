@@ -8683,7 +8683,7 @@ fn brush_lateral_grip_sweep_saturates() {
     let mut saw_growth = false;
     let mut saw_saturation = false;
     for alpha_deg in angles_deg {
-        let alpha = (alpha_deg as f64).to_radians();
+        let alpha = alpha_deg.to_radians();
         let v_long = 5.0;
         let v_lat = v_long * alpha.tan();
         let out = evaluate_brush_tire(

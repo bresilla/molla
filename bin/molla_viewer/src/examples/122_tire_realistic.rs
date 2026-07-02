@@ -952,8 +952,8 @@ fn update_tire_realistic_example(
                 if state.transient_kernel.is_none() {
                     state.transient_kernel = Some(molla::kernels::TireTransientGpuKernel::new(device));
                 }
-                if state.transient_batch.is_none() {
-                    if let Some(kernel) = state.transient_kernel.as_ref() {
+                if state.transient_batch.is_none()
+                    && let Some(kernel) = state.transient_kernel.as_ref() {
                         match kernel.create_batch(device, 1) {
                             Ok(batch) => {
                                 state.transient_batch = Some(batch);
@@ -963,7 +963,6 @@ fn update_tire_realistic_example(
                             }
                         }
                     }
-                }
                 if let (Some(kernel), Some(batch)) =
                     (state.transient_kernel.as_ref(), state.transient_batch.as_ref())
                 {
@@ -1551,8 +1550,8 @@ fn update_tire_realistic_example(
                     None
                 }
             };
-            if let Some((device, queue)) = gpu {
-                if let Some(kernel) = state.bekker_kernel.take() {
+            if let Some((device, queue)) = gpu
+                && let Some(kernel) = state.bekker_kernel.take() {
                     if let Some(owner) = state.bekker_owner.as_mut() {
                         match owner.apply_contacts_gpu_resident(
                             &device,
@@ -1572,10 +1571,9 @@ fn update_tire_realistic_example(
                     }
                     state.bekker_kernel = Some(kernel);
                 }
-            }
         }
-        if !used_gpu {
-            if let Some(owner) = state.bekker_owner.as_mut() {
+        if !used_gpu
+            && let Some(owner) = state.bekker_owner.as_mut() {
                 if let Err(err) = owner.apply_contacts_cpu(&contact_cells) {
                     state.last_bekker_error = Some(format!("{err}"));
                 } else {
@@ -1583,7 +1581,6 @@ fn update_tire_realistic_example(
                     state.last_bekker_backend = "CPU Bekker owner fallback";
                 }
             }
-        }
         let (rut_depth, rut_cells, rut_mean) = if let Some(owner) = state.bekker_owner.as_ref() {
             let sinkage = owner.sinkage();
             let rut_depth = sinkage.iter().copied().fold(0.0_f32, f32::max);
@@ -1764,7 +1761,7 @@ fn update_tire_realistic_example(
                 }
                 Err(err) => {
                     state.last_dem_backend = "owned DEM sparse-LBVH step failed";
-                    state.last_dem_error = Some(format!("{err}"));
+                    state.last_dem_error = Some(err.to_string());
                 }
             }
             state.dem_owner = Some(owner);
@@ -1798,8 +1795,8 @@ fn update_tire_realistic_example(
                 if state.thermal_kernel.is_none() {
                     state.thermal_kernel = Some(molla::kernels::TireThermalGpuKernel::new(device));
                 }
-                if state.thermal_batch.is_none() {
-                    if let Some(kernel) = state.thermal_kernel.as_ref() {
+                if state.thermal_batch.is_none()
+                    && let Some(kernel) = state.thermal_kernel.as_ref() {
                         match kernel.create_batch(device, 64) {
                             Ok(batch) => {
                                 state.thermal_batch = Some(batch);
@@ -1809,7 +1806,6 @@ fn update_tire_realistic_example(
                             }
                         }
                     }
-                }
                 if let Some(kernel) = state.thermal_kernel.take() {
                     let input = molla::kernels::TireThermalGpuInput {
                         powers: [
@@ -1903,8 +1899,7 @@ fn update_tire_realistic_example(
                         .thermal_batch
                         .as_ref()
                         .is_none_or(|batch| batch.capacity() < needed)
-                    {
-                        if let Some(kernel) = state.thermal_kernel.as_ref() {
+                        && let Some(kernel) = state.thermal_kernel.as_ref() {
                             match kernel.create_batch(device, needed) {
                                 Ok(batch) => {
                                         state.thermal_batch = Some(batch);
@@ -1914,7 +1909,6 @@ fn update_tire_realistic_example(
                                     }
                                 }
                             }
-                        }
                     if let (Some(kernel), Some(batch)) =
                         (state.thermal_kernel.as_ref(), state.thermal_batch.as_ref())
                     {
@@ -1963,9 +1957,9 @@ fn update_tire_realistic_example(
         // α sweep over ±25°
         let alpha = (-25.0 + 50.0 * frac).to_radians();
         let hub_vel = [
-            (v * (alpha as f32).cos()) as f64,
+            (v * alpha.cos()) as f64,
             0.0,
-            (v * (alpha as f32).sin()) as f64,
+            (v * alpha.sin()) as f64,
         ];
         let omega = v / TB_TIRE_RADIUS as f32;
         let c = molla_vehicle::evaluate_brush_tire(

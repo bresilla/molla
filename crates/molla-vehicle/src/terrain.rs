@@ -878,10 +878,10 @@ impl Terrain for TriangleMeshTerrain {
 
     fn signed_distance_and_normal(&self, p: [f64; 3]) -> (f64, [f64; 3]) {
         let fallback_distance = p[1] - self.fallback_height;
-        if let Some((mesh_distance, mesh_normal, mesh_dist2)) = self.closest_surface(p) {
-            if mesh_dist2.sqrt() < fallback_distance.abs() {
-                return (mesh_distance, mesh_normal);
-            }
+        if let Some((mesh_distance, mesh_normal, mesh_dist2)) = self.closest_surface(p)
+            && mesh_dist2.sqrt() < fallback_distance.abs()
+        {
+            return (mesh_distance, mesh_normal);
         }
         (fallback_distance, [0.0, 1.0, 0.0])
     }

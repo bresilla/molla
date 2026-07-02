@@ -409,10 +409,10 @@ fn muscle_zero_at_zero_activation() {
 /// Two muscles share one CABLE joint:
 ///   * agonist `polarity = +1` pulls `q_l → −`
 ///   * antagonist `polarity = −1` pulls `q_l → +`
-/// Both at activation = 1.0, identical f_max / l_opt / v_max. The
-/// Hill curves are symmetric at q_l = 0 / qd_l = 0, so the net
-/// torque is zero ⇒ no motion. We integrate a free cable (no spring)
-/// for half a second and check `|q_l| < 1 mm`.
+///     Both at activation = 1.0, identical f_max / l_opt / v_max. The
+///     Hill curves are symmetric at q_l = 0 / qd_l = 0, so the net
+///     torque is zero ⇒ no motion. We integrate a free cable (no spring)
+///     for half a second and check `|q_l| < 1 mm`.
 #[test]
 fn cocontraction_antagonist_pair_cancels_torque() {
     let mass: Real = 1.0;
@@ -591,7 +591,7 @@ fn activation_lag_low_pass_filters_step_excitation() {
 /// Two single-muscle models, identical except for `l_tendon_slack`:
 ///   * v1 (rigid tendon): `l_tendon_slack = 0`.
 ///   * v2 (SEE): `l_tendon_slack = 0.1 m` (same order as `l_opt`).
-/// Both at full activation, cable + critically-damped spring.
+///     Both at full activation, cable + critically-damped spring.
 ///
 /// Expectations:
 ///   * **Same steady-state deflection** within 10 % — both balance

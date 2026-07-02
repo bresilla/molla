@@ -162,7 +162,7 @@ fn build_arm_model_with(mimic: bool) -> (mp::Model, Vec<BodyVisual>) {
             .expect("arm joint");
 
         prev_body = body;
-        next_pos = next_pos - MVec3::new(0.0, ARM_LINK_LEN as f64, 0.0);
+        next_pos -= MVec3::new(0.0, ARM_LINK_LEN as f64, 0.0);
     }
 
     // Stage 32 — optional joint-mimic side chain. Append a single

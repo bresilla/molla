@@ -320,7 +320,7 @@ where
 {
     let mut out = vec![0.0; map.ndof()];
     // Build a list of unique edges from the map.
-    let mut edges: Vec<[u32; 2]> = map.edge_id.iter().map(|(k, _)| *k).collect();
+    let mut edges: Vec<[u32; 2]> = map.edge_id.keys().copied().collect();
     edges.sort_unstable_by_key(|e| map.edge_id[e]);
 
     // Gauss-Legendre 2-point on [0, 1]: nodes (3 ± √3) / 6, weights 1/2.

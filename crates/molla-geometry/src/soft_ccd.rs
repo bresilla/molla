@@ -134,10 +134,10 @@ pub fn vt_ccd(
     // projection sits inside the triangle. This catches the
     // pathological "vertex starts on the tri" case without recurring
     // every substep.
-    if prev_f.abs() < ROOT_EPS {
-        if let Some(t) = check_root(0.0, v0, dv, a0, da, b0, db, c0, dc) {
-            return Some(t);
-        }
+    if prev_f.abs() < ROOT_EPS
+        && let Some(t) = check_root(0.0, v0, dv, a0, da, b0, db, c0, dc)
+    {
+        return Some(t);
     }
 
     let mut earliest: Option<Real> = None;
@@ -147,17 +147,17 @@ pub fn vt_ccd(
         // Sign change ⇒ at least one root in `(prev_t, t)`. Bisect.
         if (prev_f >= 0.0) != (curr_f >= 0.0) {
             let root = bisect(&f, prev_t, prev_f, t, curr_f);
-            if let Some(t_root) = root {
-                if let Some(t_hit) = check_root(t_root, v0, dv, a0, da, b0, db, c0, dc) {
-                    match earliest {
-                        Some(e) if e <= t_hit => {}
-                        _ => earliest = Some(t_hit),
-                    }
-                    // First valid root (smallest t) is the earliest;
-                    // we can early-out since subsequent intervals
-                    // strictly have larger t.
-                    return earliest;
+            if let Some(t_root) = root
+                && let Some(t_hit) = check_root(t_root, v0, dv, a0, da, b0, db, c0, dc)
+            {
+                match earliest {
+                    Some(e) if e <= t_hit => {}
+                    _ => earliest = Some(t_hit),
                 }
+                // First valid root (smallest t) is the earliest;
+                // we can early-out since subsequent intervals
+                // strictly have larger t.
+                return earliest;
             }
         }
         prev_t = t;

@@ -530,7 +530,7 @@ mod tests {
 
         // K[0, 1] should now be zero (column elimination).
         let lo = k.row_offsets[0];
-        let hi = k.row_offsets[0 + 1];
+        let hi = k.row_offsets[1];
         for slot in lo..hi {
             let c = k.col_idx[slot];
             if c == 0 {

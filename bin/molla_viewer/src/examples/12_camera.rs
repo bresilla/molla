@@ -715,27 +715,23 @@ fn update_camera_example(
             hi = 1.0;
         }
         state.last_depth_range = Some((lo, hi));
-        if let Some(handle) = state.image_depth.as_ref() {
-            if let Some(img) = images.get_mut(handle) {
+        if let Some(handle) = state.image_depth.as_ref()
+            && let Some(img) = images.get_mut(handle) {
                 write_depth_into_image(img, d, lo, hi);
             }
-        }
     }
-    if let (Ok(n), Some(handle)) = (snapshot_normal.as_ref(), state.image_normal.as_ref()) {
-        if let Some(img) = images.get_mut(handle) {
+    if let (Ok(n), Some(handle)) = (snapshot_normal.as_ref(), state.image_normal.as_ref())
+        && let Some(img) = images.get_mut(handle) {
             write_normal_into_image(img, n);
         }
-    }
-    if let (Ok(a), Some(handle)) = (snapshot_albedo.as_ref(), state.image_albedo.as_ref()) {
-        if let Some(img) = images.get_mut(handle) {
+    if let (Ok(a), Some(handle)) = (snapshot_albedo.as_ref(), state.image_albedo.as_ref())
+        && let Some(img) = images.get_mut(handle) {
             write_rgba_u32_into_image(img, a);
         }
-    }
-    if let (Ok(i), Some(handle)) = (snapshot_index.as_ref(), state.image_index.as_ref()) {
-        if let Some(img) = images.get_mut(handle) {
+    if let (Ok(i), Some(handle)) = (snapshot_index.as_ref(), state.image_index.as_ref())
+        && let Some(img) = images.get_mut(handle) {
             write_shape_index_into_image(img, i);
         }
-    }
 }
 
 // Allocate a `CAMERA_IMG_W × CAMERA_IMG_H` RGBA8 Bevy image and

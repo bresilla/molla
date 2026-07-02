@@ -330,7 +330,7 @@ fn stokes_unit_square_lid_driven_cavity_2d() {
     // the recirculation core sits lower and the profile compresses).
     let mut max_rel_err: Real = 0.0;
     for &(y, u_ref) in GHIA_RE100 {
-        if y < 0.05 || y > 0.95 {
+        if !(0.05..=0.95).contains(&y) {
             continue; // skip near-boundary points
         }
         let u_fem = centerline_velocity_at_y(&mesh, &th, &res.u, y);

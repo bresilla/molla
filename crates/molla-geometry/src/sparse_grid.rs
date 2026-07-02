@@ -452,7 +452,7 @@ impl SparseGridGpu {
                 let base = (slot as usize) * 4;
                 let stored_idx = self.root_table[base + 3] as u32;
                 let stored_key = [
-                    self.root_table[base + 0],
+                    self.root_table[base],
                     self.root_table[base + 1],
                     self.root_table[base + 2],
                 ];
@@ -534,7 +534,7 @@ fn build_root_hash_table(keys: &[([i32; 3], u32)]) -> (Vec<i32>, u32) {
         loop {
             let base = (slot as usize) * 4;
             if (table[base + 3] as u32) == u32::MAX {
-                table[base + 0] = key[0];
+                table[base] = key[0];
                 table[base + 1] = key[1];
                 table[base + 2] = key[2];
                 table[base + 3] = *internal_idx as i32;
@@ -1028,9 +1028,9 @@ mod tests {
         for lz in 0..16 {
             for ly in 0..64 {
                 for lx in 0..64 {
-                    let x = (lx * 8 + 1) as i32;
-                    let y = (ly * 8 + 1) as i32;
-                    let z = (lz * 8 + 1) as i32;
+                    let x = lx * 8 + 1;
+                    let y = ly * 8 + 1;
+                    let z = lz * 8 + 1;
                     g.insert(x, y, z, 1.0);
                 }
             }

@@ -242,10 +242,8 @@ pub fn gather_vt_contacts(
                     _ => *slot = Some(new_contact),
                 }
             }
-            for slot in best_per_surface {
-                if let Some(c) = slot {
-                    out.push(c);
-                }
+            for c in best_per_surface.into_iter().flatten() {
+                out.push(c);
             }
         }
     }
@@ -350,10 +348,10 @@ pub fn gather_ee_contacts(
                 }
                 let tri = tris[tri_global as usize];
                 for &(va, vb) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                    if let Some(eid) = edge_of(va, vb) {
-                        if !seen_edges.contains(&eid) {
-                            seen_edges.push(eid);
-                        }
+                    if let Some(eid) = edge_of(va, vb)
+                        && !seen_edges.contains(&eid)
+                    {
+                        seen_edges.push(eid);
                     }
                 }
             }
@@ -461,10 +459,8 @@ pub fn gather_ee_contacts(
                 }
             }
 
-            for slot in best_per_surface {
-                if let Some(c) = slot {
-                    out.push(c);
-                }
+            for c in best_per_surface.into_iter().flatten() {
+                out.push(c);
             }
         }
     }
@@ -902,14 +898,14 @@ pub fn ccd_pass(
                 let b1 = q_t1[tri[1] as usize];
                 let c1 = q_t1[tri[2] as usize];
                 invocations += 1;
-                if let Some(toi) = vt_ccd(v_t0, v_t1, [a0, b0, c0], [a1, b1, c1]) {
-                    if toi >= 0.0 && toi < 1.0 {
-                        match best_toi {
-                            Some(t) if t <= toi => {}
-                            _ => {
-                                best_toi = Some(toi);
-                                best_tri_idx = tri_global;
-                            }
+                if let Some(toi) = vt_ccd(v_t0, v_t1, [a0, b0, c0], [a1, b1, c1])
+                    && (0.0..1.0).contains(&toi)
+                {
+                    match best_toi {
+                        Some(t) if t <= toi => {}
+                        _ => {
+                            best_toi = Some(toi);
+                            best_tri_idx = tri_global;
                         }
                     }
                 }

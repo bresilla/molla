@@ -115,7 +115,7 @@ fn update_lidar(
     if state.raycaster.is_none() || state.raycaster_capacity < n_rays as u32 {
         // Round up to next multiple of 64 to play nicely with the
         // kernel's workgroup size.
-        let cap = ((n_rays as u32 + 63) / 64) * 64;
+        let cap = (n_rays as u32).div_ceil(64) * 64;
         state.raycaster =
             Some(Raycaster::new(&sim.engine, cap.max(64)).expect("lidar Raycaster init"));
         state.raycaster_capacity = cap.max(64);
@@ -195,10 +195,7 @@ fn update_lidar(
         let d = directions[i];
         let origin = Vec3::new(o.x as f32, o.y as f32, o.z as f32);
         let direction = Vec3::new(d.x as f32, d.y as f32, d.z as f32);
-        let hit_world: Option<Vec3> = match hit_to_world(hit) {
-            Some(p) => Some(p),
-            None => None,
-        };
+        let hit_world: Option<Vec3> = hit_to_world(hit);
         state.rays.push(LidarRay {
             origin,
             direction,

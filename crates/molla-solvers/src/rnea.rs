@@ -5,15 +5,15 @@
 //!
 //!   1. Forward (root → leaf): compute each body's spatial velocity,
 //!      acceleration, and net force.
-//!         v_i = v_p + S_i·q̇_i
-//!         a_i = a_p + S_i·q̈_i + v_i × (S_i·q̇_i)
-//!         f_i = I_i·a_i + v_i ×* (I_i·v_i)
+//!      v_i = v_p + S_i·q̇_i
+//!      a_i = a_p + S_i·q̈_i + v_i × (S_i·q̇_i)
+//!      f_i = I_i·a_i + v_i ×* (I_i·v_i)
 //!   2. Backward (leaf → root): project body forces onto joint motion
 //!      subspaces and accumulate.
-//!         τ_i = S_i^T · f_i
-//!         f_p += f_i  (transferred via parent-child cross terms;
-//!                      handled implicitly by world-origin spatial
-//!                      vectors).
+//!      τ_i = S_i^T · f_i
+//!      f_p += f_i  (transferred via parent-child cross terms;
+//!      handled implicitly by world-origin spatial
+//!      vectors).
 //!
 //! Gravity is folded into the base acceleration `a_root = -g`, so any
 //! body subject to gravity sees an "effective" acceleration of `-g`

@@ -228,8 +228,8 @@ fn update_actuator_example(
                 | ControllerStage::NeuralMlp(_)
                 | ControllerStage::Lstm(_) => {}
             }
-            if let ClampingStage::DcMotor(clamp) = act.clamping_mut() {
-                if let Err(e) = clamp.set_params(
+            if let ClampingStage::DcMotor(clamp) = act.clamping_mut()
+                && let Err(e) = clamp.set_params(
                     &sim.engine,
                     &vec![stall; n],
                     &vec![no_load; n],
@@ -237,7 +237,6 @@ fn update_actuator_example(
                 ) {
                     warn!("actuator: set_params failed: {e}");
                 }
-            }
         }
         state.params_dirty = false;
     }
@@ -317,13 +316,11 @@ fn update_actuator_example(
             // so the cost is negligible.
             let device = engine.device().expect("device").clone();
             let queue = engine.queue().expect("queue").clone();
-            if control.joint_force.download(&device, &queue).is_ok() {
-                if let Ok(jf) = control.joint_force.host() {
-                    if !jf.is_empty() {
+            if control.joint_force.download(&device, &queue).is_ok()
+                && let Ok(jf) = control.joint_force.host()
+                    && !jf.is_empty() {
                         state.last_delivered = jf[0] as f32;
                     }
-                }
-            }
         }
     }
 }

@@ -66,7 +66,7 @@ fn update_warp_repulsion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
         let nn = p.len() / 3;
         for i in 0..nn {
             for j in (i + 1)..nn {
-                let dx = p[i * 3 + 0] - p[j * 3 + 0];
+                let dx = p[i * 3] - p[j * 3];
                 let dy = p[i * 3 + 1] - p[j * 3 + 1];
                 let dz = p[i * 3 + 2] - p[j * 3 + 2];
                 let d = (dx * dx + dy * dy + dz * dz).sqrt().max(1.0e-3);
@@ -91,7 +91,7 @@ fn update_warp_repulsion(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
 
     // Gradient descent: p -= lr · ∇L. Pack back into Vec3.
     for (i, p) in st.pos.iter_mut().enumerate() {
-        let gx = grad[i * 3 + 0] as f32;
+        let gx = grad[i * 3] as f32;
         let gy = grad[i * 3 + 1] as f32;
         let gz = grad[i * 3 + 2] as f32;
         p.x -= lr * gx;

@@ -599,7 +599,7 @@ fn gpu_rope_does_not_tunnel_floor() {
 ///
 /// **Source of the residual ~0.045 m/s divergence (Option C — accept
 /// + document):** CPU and GPU run the substep stages in different
-/// orders by design.
+///   orders by design.
 ///
 /// - CPU `cpu_step`: predict → position-projection → **equality** →
 ///   velocity-recovery → velocity-projection (restitution + friction).

@@ -314,7 +314,7 @@ fn gpu_mesh_bvh_raycast_hits_unit_cube_face() {
     let tri = hit_tri.host().unwrap()[0];
     eprintln!("mesh-bvh ray hit: t={t}, tri={tri}");
     assert!(tri >= 0, "expected a triangle hit");
-    assert!((t as f64 - 1.5).abs() < 1e-3, "expected t ≈ 1.5, got {t}");
+    assert!((t - 1.5).abs() < 1e-3, "expected t ≈ 1.5, got {t}");
 }
 
 #[allow(dead_code)]

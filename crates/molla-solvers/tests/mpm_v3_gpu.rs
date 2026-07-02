@@ -339,7 +339,7 @@ fn mpm_calibrated_aor_30deg() {
     // for full-CG MPM. A finite slope > 0 confirms the pile has a
     // shape (vs a flat puddle).
     assert!(
-        slope >= 0.0 && slope < 90.0,
+        (0.0..90.0).contains(&slope),
         "pile slope {slope:.1}° suspect (NaN or out of range)"
     );
 }
@@ -372,7 +372,7 @@ fn mpm_snow_snowball_displaces_pile() {
     let snowball_n = snowball.len();
     particles.extend_from_slice(&snowball);
     let mut velocities = vec![[0.0_f32; 3]; pile_n];
-    velocities.extend(std::iter::repeat([0.0_f32, -5.0, 0.0_f32]).take(snowball_n));
+    velocities.extend(std::iter::repeat_n([0.0_f32, -5.0, 0.0_f32], snowball_n));
 
     sim.set_particles_with_velocity(&queue, &particles, &velocities)
         .expect("set");

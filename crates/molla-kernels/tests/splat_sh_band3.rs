@@ -312,10 +312,10 @@ fn sample_unit_sphere(rng: &mut Lcg) -> Vec3 {
 }
 
 /// 1. Band-3 basis orthogonality via Monte-Carlo on the unit sphere.
-/// For 256 random unit directions, `(4π / N) Σ Y_l1m1(d) Y_l2m2(d)`
-/// approximates `∫ Y_l1m1 Y_l2m2 dΩ = δ_{l1l2}δ_{m1m2}` (the real
-/// orthonormal basis integrates to 1, not 4π — our basis IS the
-/// orthonormal one).
+///    For 256 random unit directions, `(4π / N) Σ Y_l1m1(d) Y_l2m2(d)`
+///    approximates `∫ Y_l1m1 Y_l2m2 dΩ = δ_{l1l2}δ_{m1m2}` (the real
+///    orthonormal basis integrates to 1, not 4π — our basis IS the
+///    orthonormal one).
 ///
 /// With only 256 samples the noise on off-diagonal entries is
 /// ~O(1/√N) ≈ 0.06; we require off-diagonals < 0.25 and diagonals in
@@ -364,8 +364,8 @@ fn band3_basis_orthogonality_sphere_quadrature() {
 }
 
 /// 2. Forward view-dependence on the red channel — only `c_3,0` is set
-/// (red). Rays through the splat centre along +Z and along +X give
-/// different red values; we require |Δred| ≥ 0.2.
+///    (red). Rays through the splat centre along +Z and along +X give
+///    different red values; we require |Δred| ≥ 0.2.
 ///
 /// `Y_{3,0}(d) = SH_C3D · z·(5z²−3)`. At +Z: `0.3731763·1·(5−3) =
 /// 0.74635`; at +X: `0` (z = 0). Spread = 0.74635 ≫ 0.2.
@@ -406,8 +406,8 @@ fn band3_forward_view_dependent_red_channel() {
 }
 
 /// 3. Backward FD parity over all 16 band-3 SH coefficient triples.
-/// The reverse-mode GPU adjoint must agree with the central-difference
-/// CPU oracle to within 1e-3 relative.
+///    The reverse-mode GPU adjoint must agree with the central-difference
+///    CPU oracle to within 1e-3 relative.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn band3_backward_fd_parity() {
@@ -477,7 +477,7 @@ fn band3_backward_fd_parity() {
     let mut max_rel = 0.0_f64;
     for (i, (a, f)) in analytic.iter().zip(fd.iter()).enumerate() {
         let denom = f.abs().max(1e-6);
-        let rel = ((a - f).abs() as f64) / denom;
+        let rel = (a - f).abs() / denom;
         if rel > max_rel {
             max_rel = rel;
         }
@@ -490,9 +490,9 @@ fn band3_backward_fd_parity() {
 }
 
 /// 4. Diffuse / view-dep split — `diffuse = (1,0,0)`, `sh_view = 0`
-/// returns exactly `(1,0,0)` regardless of view direction. We test
-/// this against the CPU oracle math (`eval_sh_diffuse_view` and
-/// `sh_view_basis`) independent of the GPU path.
+///    returns exactly `(1,0,0)` regardless of view direction. We test
+///    this against the CPU oracle math (`eval_sh_diffuse_view` and
+///    `sh_view_basis`) independent of the GPU path.
 #[test]
 fn diffuse_view_split_isolates_band0() {
     let diffuse = Vec3::new(1.0, 0.0, 0.0);
@@ -555,8 +555,8 @@ fn diffuse_view_split_isolates_band0() {
 }
 
 /// 5. Stage 44 v5 GPU forward parity for the diffuse / view-dependent
-/// split. The shader must evaluate the 15 band-1..3 coefficients per
-/// pixel rather than requiring a CPU bake into full 16-coefficient SH.
+///    split. The shader must evaluate the 15 band-1..3 coefficients per
+///    pixel rather than requiring a CPU bake into full 16-coefficient SH.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn diffuse_view_gpu_forward_matches_cpu() {

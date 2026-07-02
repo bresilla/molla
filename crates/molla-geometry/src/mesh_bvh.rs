@@ -161,11 +161,12 @@ impl MeshBvh {
                     let v0 = vertices[tri[0] as usize];
                     let v1 = vertices[tri[1] as usize];
                     let v2 = vertices[tri[2] as usize];
-                    if let Some((t, n)) = ray_triangle(origin, dir, v0, v1, v2) {
-                        if t > 0.0 && t < best_t {
-                            best_t = t;
-                            best = Some((tri_idx, t, n));
-                        }
+                    if let Some((t, n)) = ray_triangle(origin, dir, v0, v1, v2)
+                        && t > 0.0
+                        && t < best_t
+                    {
+                        best_t = t;
+                        best = Some((tri_idx, t, n));
                     }
                 }
             } else {
@@ -333,7 +334,7 @@ fn ray_triangle(origin: Vec3, dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option
     let f = 1.0 / a;
     let s = origin - v0;
     let u = f * s.dot(h);
-    if u < 0.0 || u > 1.0 {
+    if !(0.0..=1.0).contains(&u) {
         return None;
     }
     let q = s.cross(edge1);

@@ -7,10 +7,10 @@
 //!      forward to get the target final centroid.
 //!   3. Pick a starting guess `E_init = 5 · E_true` (5× too stiff).
 //!   4. Run Adam for up to 200 steps; at each step:
-//!         a. forward + tape recording with current E.
-//!         b. evaluate `J = ‖centroid_final − target‖²`.
-//!         c. backward to get `dJ/dE`.
-//!         d. one Adam update on `E` (treated as a 1D parameter).
+//!      a. forward + tape recording with current E.
+//!      b. evaluate `J = ‖centroid_final − target‖²`.
+//!      c. backward to get `dJ/dE`.
+//!      d. one Adam update on `E` (treated as a 1D parameter).
 //!   5. Assert convergence: either `J_final < 0.01 · J_init` (90%
 //!      loss reduction) or `|E_final − E_true| / E_true < 0.1`.
 //!

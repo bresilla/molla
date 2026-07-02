@@ -235,11 +235,10 @@ fn update_neural_policy_example(
             1.0
         };
         let queue = sim.engine.queue().expect("queue").clone();
-        if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
-            if qd.len() >= 2 {
-                qd[1] += (sign * 1.5) as f64;
+        if let Ok(qd) = sim.state_a.joint_qd.host_mut()
+            && qd.len() >= 2 {
+                qd[1] += sign * 1.5;
             }
-        }
         let _ = sim.state_a.joint_qd.upload(&queue);
     }
 
@@ -284,23 +283,16 @@ fn update_neural_policy_example(
 
         // Read back the network output + post-clamp force for the UI.
         let device = engine.device().expect("device").clone();
-        match act.controller_mut() {
-            ControllerStage::NeuralMlp(mlp) => {
-                if let Ok(outs) = mlp.download_outputs(&device, &queue) {
-                    if !outs.is_empty() {
-                        state.last_output = outs[0] as f32;
-                    }
+        if let ControllerStage::NeuralMlp(mlp) = act.controller_mut()
+            && let Ok(outs) = mlp.download_outputs(&device, &queue)
+                && !outs.is_empty() {
+                    state.last_output = outs[0] as f32;
                 }
-            }
-            _ => {}
-        }
-        if control.joint_force.download(&device, &queue).is_ok() {
-            if let Ok(jf) = control.joint_force.host() {
-                if !jf.is_empty() {
+        if control.joint_force.download(&device, &queue).is_ok()
+            && let Ok(jf) = control.joint_force.host()
+                && !jf.is_empty() {
                     state.last_delivered = jf[0] as f32;
                 }
-            }
-        }
     }
 }
 

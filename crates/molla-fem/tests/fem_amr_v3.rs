@@ -39,10 +39,10 @@ fn locate_lower_tri(amr: &AmrMesh, i: usize, j: usize) -> Option<usize> {
     let v10 = (j * stride + i + 1) as u32;
     let v11 = ((j + 1) * stride + i + 1) as u32;
     for (idx, c) in amr.cells().iter().enumerate() {
-        if let FemCell::Tri(v) = c {
-            if v == &[v00, v10, v11] {
-                return Some(idx);
-            }
+        if let FemCell::Tri(v) = c
+            && v == &[v00, v10, v11]
+        {
+            return Some(idx);
         }
     }
     None
@@ -116,7 +116,7 @@ fn amr_p2_hanging_constraint_preserves_quadratic_field() {
         let hi = t.row_offsets[r + 1];
         if hi - lo == 1 && (t.values[lo] - 1.0).abs() < 1e-15 {
             is_free[r] = true;
-            free_to_total[t.col_idx[lo] as usize] = r;
+            free_to_total[t.col_idx[lo]] = r;
         }
     }
     for (fi, &flat_dof) in free_to_total.iter().enumerate() {

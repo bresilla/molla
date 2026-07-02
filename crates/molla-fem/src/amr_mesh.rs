@@ -785,13 +785,13 @@ impl AmrMesh {
             }
             for (a, b) in leaf_edges(cell) {
                 let key = if a < b { (a, b) } else { (b, a) };
-                if let Some(&m) = self.midpoint_cache.get(&key) {
-                    if seen.insert(m) {
-                        result.push(HangingNode {
-                            dof: m,
-                            parents: [key.0, key.1],
-                        });
-                    }
+                if let Some(&m) = self.midpoint_cache.get(&key)
+                    && seen.insert(m)
+                {
+                    result.push(HangingNode {
+                        dof: m,
+                        parents: [key.0, key.1],
+                    });
                 }
             }
         }

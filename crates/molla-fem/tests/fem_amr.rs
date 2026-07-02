@@ -265,7 +265,7 @@ fn centroid_of(cell: &FemCell, vertices: &[Vec3]) -> Vec3 {
     let n = verts.len() as Real;
     let mut c = Vec3::new(0.0, 0.0, 0.0);
     for &v in verts {
-        c = c + vertices[v as usize];
+        c += vertices[v as usize];
     }
     c * (1.0 / n)
 }

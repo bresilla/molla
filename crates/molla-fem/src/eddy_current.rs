@@ -1573,7 +1573,7 @@ pub fn solve_eddy_current_frequency_sweep(
 ) -> Result<Vec<EddyFrequencySweepSample>> {
     let mut out = Vec::with_capacity(omegas.len());
     for &omega in omegas {
-        let mut cfg = cfg_template.clone();
+        let mut cfg = *cfg_template;
         cfg.omega = omega;
         let mut result = match mode {
             EddyCurrentSolveMode::Jacobi => solve_eddy_current_steady(

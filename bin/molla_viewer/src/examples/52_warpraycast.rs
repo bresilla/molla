@@ -66,7 +66,7 @@ fn update_warp_raycast(time: Res<Time>, sim: Res<Sim>, mut warp: ResMut<WarpExam
     }
     st.spin += time.delta_secs() * 0.4;
     let n = st.ray_grid_n.max(2);
-    let cap = ((n * n + 63) / 64) * 64;
+    let cap = (n * n).div_ceil(64) * 64;
     if st.raycaster.is_none() {
         match Raycaster::new(&sim.engine, cap) {
             Ok(rc) => st.raycaster = Some(rc),

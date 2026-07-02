@@ -279,7 +279,7 @@ fn gpu_csr_matvec_matches_cpu_oracle() {
     let n = k_cpu.nrows();
 
     // Random input vector (deterministic seed for reproducibility).
-    let mut rng = lcg(0xC0FFEE_BEEF);
+    let mut rng = lcg(0x00C0_FFEE_BEEF);
     let x_f64: Vec<Real> = (0..n).map(|_| rng()).collect();
 
     // CPU oracle.

@@ -326,7 +326,7 @@ impl TireThermalGpuKernel {
             return Ok((Vec::new(), Vec::new()));
         }
 
-        let in_bytes = (n * core::mem::size_of::<TireThermalGpuInput>()) as u64;
+        let in_bytes = std::mem::size_of_val(inputs) as u64;
         let state_bytes = (n * core::mem::size_of::<TireThermalGpuState>()) as u64;
         let out_bytes = (n * core::mem::size_of::<TireThermalGpuOutput>()) as u64;
         let uniforms = TireThermalUniforms {

@@ -249,7 +249,7 @@ fn backward_rotation_gradient_matches_fd() {
     let ray_d = Vec3::Z;
     let dl_dc = Vec3::new(1.0, 0.5, -0.7);
     let grads = run_backward(&engine, &[s], ray_o, ray_d, dl_dc, 100.0, 1.0 / 255.0);
-    let analytic = vec![
+    let analytic = [
         grads.d_rotation[0].x,
         grads.d_rotation[0].y,
         grads.d_rotation[0].z,

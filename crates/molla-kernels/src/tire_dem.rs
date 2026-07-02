@@ -2377,13 +2377,14 @@ pub fn tire_dem_raster_surface_velocity_map(
     let surface_band_m = (grain_radius.max(0.0) * 2.25).max(spacing * 0.25);
     let mut sums = vec![[0.0_f32; 4]; n];
     for (&p, &v) in positions.iter().zip(velocities.iter()) {
-        if let Some(idx) = cell_index(p) {
-            if top_y[idx].is_finite() && p[1] >= top_y[idx] - surface_band_m {
-                sums[idx][0] += if v[0].is_finite() { v[0] } else { 0.0 };
-                sums[idx][1] += if v[1].is_finite() { v[1] } else { 0.0 };
-                sums[idx][2] += if v[2].is_finite() { v[2] } else { 0.0 };
-                sums[idx][3] += 1.0;
-            }
+        if let Some(idx) = cell_index(p)
+            && top_y[idx].is_finite()
+            && p[1] >= top_y[idx] - surface_band_m
+        {
+            sums[idx][0] += if v[0].is_finite() { v[0] } else { 0.0 };
+            sums[idx][1] += if v[1].is_finite() { v[1] } else { 0.0 };
+            sums[idx][2] += if v[2].is_finite() { v[2] } else { 0.0 };
+            sums[idx][3] += 1.0;
         }
     }
 

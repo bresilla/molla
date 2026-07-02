@@ -743,7 +743,7 @@ impl WaveStepperGpu {
         // n = vert_count · dim (same layout `FemGpuData::upload`
         // accepts and the same indexing `apply_bcs` pins).
         let vc = mesh.vert_count();
-        if vc == 0 || n == 0 || n % vc != 0 {
+        if vc == 0 || n == 0 || !n.is_multiple_of(vc) {
             return Err(Error::Gpu(format!(
                 "WaveStepperGpu: system rows ({n}) is not a positive integer \
                  multiple of mesh vertices ({vc})"
@@ -1041,8 +1041,8 @@ pub struct TransientStepStats {
 /// **Slice H** keeps `u` resident on the GPU as an `f32` storage
 /// buffer across timesteps. The RHS construction (with mass matvec
 /// + BC shift + pin overwrite) and CG solve all run on GPU
-/// dispatches — zero host↔device traffic per step. Read `u` back via
-/// [`Self::read_u`] when the viewer needs to render.
+///   dispatches — zero host↔device traffic per step. Read `u` back via
+///   [`Self::read_u`] when the viewer needs to render.
 ///
 /// Supports arbitrary Dirichlet values via a precomputed column-
 /// elimination shift baked at construction (same trick as
@@ -1102,7 +1102,7 @@ impl TransientStepperGpu {
         // Per-vertex DoF count inferred from the assembled system
         // (see `WaveStepperGpu::new` — same layout contract).
         let vc = mesh.vert_count();
-        if vc == 0 || n == 0 || n % vc != 0 {
+        if vc == 0 || n == 0 || !n.is_multiple_of(vc) {
             return Err(Error::Gpu(format!(
                 "TransientStepperGpu: system rows ({n}) is not a positive integer \
                  multiple of mesh vertices ({vc})"
@@ -1311,11 +1311,11 @@ impl TransientStepperGpu {
 /// `K_csr_gpu` is expected to be the **already BC-reduced** CSR
 /// matrix — the caller must `apply_dirichlet` to a CPU `BsrMatrix`
 /// + `f` BEFORE uploading via [`FemGpuData::upload`]. v1 does not
-/// re-apply BCs on the GPU side; doing so cleanly requires a
-/// dedicated BC-application kernel which is deferred to a follow-up
-/// (Stage 36.5.1). The `bcs` parameter is consulted ONLY to seed the
-/// initial guess (the CG residual at BC rows is then trivially zero
-/// because the BC-reduced rows are identity).
+///   re-apply BCs on the GPU side; doing so cleanly requires a
+///   dedicated BC-application kernel which is deferred to a follow-up
+///   (Stage 36.5.1). The `bcs` parameter is consulted ONLY to seed the
+///   initial guess (the CG residual at BC rows is then trivially zero
+///   because the BC-reduced rows are identity).
 ///
 /// `f` is the BC-reduced RHS — same one passed to `cg_solve` on the
 /// CPU path.

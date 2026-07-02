@@ -329,7 +329,7 @@ impl TireBrushGpuKernel {
             return Ok(Vec::new());
         }
         let wheels_patched = patched_wheels(wheels, terrain.is_some());
-        let in_bytes = (n * core::mem::size_of::<BrushWheelInput>()) as u64;
+        let in_bytes = std::mem::size_of_val(wheels) as u64;
         let out_bytes = (n * core::mem::size_of::<BrushWheelOutput>()) as u64;
         let in_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tire_brush in"),
@@ -368,10 +368,10 @@ impl TireBrushGpuKernel {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        if let Some(t) = terrain {
-            if let Some(friction_map) = t.friction_map {
-                queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
-            }
+        if let Some(t) = terrain
+            && let Some(friction_map) = t.friction_map
+        {
+            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
         }
         let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tire_brush terrain uniforms"),
@@ -488,10 +488,10 @@ impl TireBrushGpuKernel {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        if let Some(t) = terrain {
-            if let Some(friction_map) = t.friction_map {
-                queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
-            }
+        if let Some(t) = terrain
+            && let Some(friction_map) = t.friction_map
+        {
+            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
         }
         let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tire_brush external-input terrain uniforms"),
@@ -601,10 +601,10 @@ impl TireBrushGpuKernel {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        if let Some(t) = terrain {
-            if let Some(friction_map) = t.friction_map {
-                queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
-            }
+        if let Some(t) = terrain
+            && let Some(friction_map) = t.friction_map
+        {
+            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
         }
         let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tire_brush resident external-input terrain uniforms"),
@@ -740,13 +740,13 @@ fn validate_terrain(
                     t.heights.len()
                 )));
             }
-            if let Some(friction_map) = t.friction_map {
-                if friction_map.len() < expected {
-                    return Err(Error::Solver(format!(
-                        "tire_brush: friction map has {} samples, expected {expected}",
-                        friction_map.len()
-                    )));
-                }
+            if let Some(friction_map) = t.friction_map
+                && friction_map.len() < expected
+            {
+                return Err(Error::Solver(format!(
+                    "tire_brush: friction map has {} samples, expected {expected}",
+                    friction_map.len()
+                )));
             }
             Ok(TerrainUniformsCpu {
                 origin: [t.origin[0], t.origin[1], t.spacing, t.friction.max(1.0e-6)],
@@ -759,6 +759,49 @@ fn validate_terrain(
         }),
     }
 }
+
+fn read_outputs(
+    device: &wgpu::Device,
+    stage: &wgpu::Buffer,
+    out_bytes: u64,
+) -> Result<Vec<BrushWheelOutput>> {
+    let slice = stage.slice(0..out_bytes);
+    let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        sender
+            .send(r.map_err(|e| Error::Gpu(format!("tire_brush readback: {e:?}"))))
+            .ok();
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| Error::Gpu(format!("tire_brush poll: {e:?}")))?;
+    receiver
+        .recv()
+        .map_err(|e| Error::Gpu(format!("tire_brush recv: {e:?}")))??;
+    let data = slice.get_mapped_range();
+    let out: Vec<BrushWheelOutput> = bytemuck::cast_slice(&data).to_vec();
+    drop(data);
+    stage.unmap();
+    Ok(out)
+}
+
+fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+// Silence the `WORKGROUP_SIZE` unused warning in the host code — it
+// matches the WGSL `@workgroup_size(64)` literal.
+#[allow(dead_code)]
+const _WG_DOC: u32 = WORKGROUP_SIZE;
 
 #[cfg(test)]
 mod tests {
@@ -808,46 +851,3 @@ mod tests {
         );
     }
 }
-
-fn read_outputs(
-    device: &wgpu::Device,
-    stage: &wgpu::Buffer,
-    out_bytes: u64,
-) -> Result<Vec<BrushWheelOutput>> {
-    let slice = stage.slice(0..out_bytes);
-    let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        sender
-            .send(r.map_err(|e| Error::Gpu(format!("tire_brush readback: {e:?}"))))
-            .ok();
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| Error::Gpu(format!("tire_brush poll: {e:?}")))?;
-    receiver
-        .recv()
-        .map_err(|e| Error::Gpu(format!("tire_brush recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
-    let out: Vec<BrushWheelOutput> = bytemuck::cast_slice(&data).to_vec();
-    drop(data);
-    stage.unmap();
-    Ok(out)
-}
-
-fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-// Silence the `WORKGROUP_SIZE` unused warning in the host code — it
-// matches the WGSL `@workgroup_size(64)` literal.
-#[allow(dead_code)]
-const _WG_DOC: u32 = WORKGROUP_SIZE;

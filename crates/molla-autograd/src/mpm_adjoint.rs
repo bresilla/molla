@@ -19,8 +19,8 @@
 //!   - The B-spline weight `w(pos)` and the associated `mass_grid =
 //!      Σ_p w·m_p` and `mom_grid = Σ_p w·m·(v + C·(xn-xp)) +
 //!      4w·stress·(xn-xp)/dx²` scatters — chained back into
-//!      `grad_pos_t` so multi-particle / multi-step gradients are
-//!      accurate (FD-verified within 1e-2 relative error).
+//!     `grad_pos_t` so multi-particle / multi-step gradients are
+//!     accurate (FD-verified within 1e-2 relative error).
 //!
 //! # Derivation sketch
 //!
@@ -650,7 +650,7 @@ mod tests {
     ///   - **pre-deformed F** drives elastic stress that feeds back
     ///   - **diverse F** across particles breaks symmetry so centroid
     ///     moves under E
-    /// produces a gradient large enough to FD-discriminate cleanly.
+    ///     produces a gradient large enough to FD-discriminate cleanly.
     ///
     /// Tolerance is 8% (looser than the 5% `gradcheck` standard) — the
     /// adjoint chain is correct to first order in dt but has higher-

@@ -149,8 +149,8 @@ fn update_vehicle_sysid_example(
                 )
             })
             .collect();
-        if let Ok(body_q) = sim.state_a.body_q.host_mut() {
-            if body_q.len() >= 5 {
+        if let Ok(body_q) = sim.state_a.body_q.host_mut()
+            && body_q.len() >= 5 {
                 body_q[0].position = chassis_pos;
                 body_q[0].rotation = chassis_rot;
                 for (i, w) in wheels.iter().enumerate() {
@@ -158,7 +158,6 @@ fn update_vehicle_sysid_example(
                     body_q[1 + i].rotation = w.1;
                 }
             }
-        }
     }
 
     // ── Ghost car: wireframe box offset one lane over (drawn, not

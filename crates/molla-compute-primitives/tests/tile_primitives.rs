@@ -429,7 +429,7 @@ fn tile_mcgp_matches_finite_diff_on_smooth_loss() {
 
     let fd = tile_mcgp::finite_diff_central(&f, &params, 1.0e-3);
     // Analytic = 2(p - target) = [-2, -4, -6].
-    let expected = vec![-2.0, -4.0, -6.0];
+    let expected = [-2.0, -4.0, -6.0];
     for (g, e) in fd.iter().zip(expected.iter()) {
         assert!((g - e).abs() < 1.0e-4);
     }

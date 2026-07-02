@@ -174,7 +174,7 @@ fn draw_magnetostatics_gizmos(sim: Res<Sim>, warp: Res<WarpExampleStates>, mut g
         let col = Color::srgb(0.15 + 0.80 * s, 0.30 + 0.30 * (1.0 - s), 0.95 - 0.80 * s);
         let pos = Vec3::new(
             -half + (c.x as f32) * (2.0 * half),
-            (s * 0.40) as f32,
+            s * 0.40,
             -half + (c.y as f32) * (2.0 * half),
         );
         gizmos.sphere(pos, 0.018, col);

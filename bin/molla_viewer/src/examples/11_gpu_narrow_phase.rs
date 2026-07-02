@@ -52,7 +52,7 @@ fn build_gpu_narrow_phase_model() -> (mp::Model, Vec<BodyVisual>) {
             let x = (ix as f64 - 1.5) * 0.7;
             let z = (iz as f64 - 1.5) * 0.7;
             let y = 3.0 + ((ix + iz) as f64) * 0.3;
-            let kind = ((ix * n_side + iz) % 4) as i32;
+            let kind = (ix * n_side + iz) % 4;
             match kind {
                 0 => {
                     let half = MVec3::splat(0.25);

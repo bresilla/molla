@@ -163,11 +163,9 @@ fn vbd_cloth_pane(
     if ui
         .add(egui::Slider::new(&mut state.contact_stiffness, 1.0e3..=1.0e6).logarithmic(true))
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.contact_stiffness = state.contact_stiffness as f64;
         }
-    }
     ui.label("Inner iterations");
     if ui
         .add(egui::Slider::new(&mut state.inner_iterations, 1..=30))

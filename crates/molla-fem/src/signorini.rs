@@ -1391,25 +1391,26 @@ pub fn solve_active_set_signorini(
         // degenerate grazing contact configurations.
         let mut cycle_detected = false;
         let mut bland_pivot = None;
-        if active != old_active && seen_active_sets.contains(&active) {
-            if let Some((pivoted, pivot_idx)) = bland_cycle_break(
+        if active != old_active
+            && seen_active_sets.contains(&active)
+            && let Some((pivoted, pivot_idx)) = bland_cycle_break(
                 &old_active,
                 &active,
                 &seen_active_sets,
                 &candidates.slave_dofs,
-            ) {
-                active = pivoted;
-                cycle_detected = true;
-                bland_pivot = Some(candidates.slave_dofs[pivot_idx]);
-                trace.cycle_breaks += 1;
-                recompute_active_delta(
-                    &old_active,
-                    &active,
-                    &candidates.slave_dofs,
-                    &mut added,
-                    &mut released,
-                );
-            }
+            )
+        {
+            active = pivoted;
+            cycle_detected = true;
+            bland_pivot = Some(candidates.slave_dofs[pivot_idx]);
+            trace.cycle_breaks += 1;
+            recompute_active_delta(
+                &old_active,
+                &active,
+                &candidates.slave_dofs,
+                &mut added,
+                &mut released,
+            );
         }
 
         // Snapshot the active list for the trace.
@@ -1661,25 +1662,26 @@ pub fn solve_active_set_signorini_with_friction(
 
         let mut cycle_detected = false;
         let mut bland_pivot = None;
-        if active != old_active && seen_active_sets.contains(&active) {
-            if let Some((pivoted, pivot_idx)) = bland_cycle_break(
+        if active != old_active
+            && seen_active_sets.contains(&active)
+            && let Some((pivoted, pivot_idx)) = bland_cycle_break(
                 &old_active,
                 &active,
                 &seen_active_sets,
                 &candidates.slave_dofs,
-            ) {
-                active = pivoted;
-                cycle_detected = true;
-                bland_pivot = Some(candidates.slave_dofs[pivot_idx]);
-                trace.cycle_breaks += 1;
-                recompute_active_delta(
-                    &old_active,
-                    &active,
-                    &candidates.slave_dofs,
-                    &mut added,
-                    &mut released,
-                );
-            }
+            )
+        {
+            active = pivoted;
+            cycle_detected = true;
+            bland_pivot = Some(candidates.slave_dofs[pivot_idx]);
+            trace.cycle_breaks += 1;
+            recompute_active_delta(
+                &old_active,
+                &active,
+                &candidates.slave_dofs,
+                &mut added,
+                &mut released,
+            );
         }
 
         let active_slaves: Vec<u32> = (0..n_cand)

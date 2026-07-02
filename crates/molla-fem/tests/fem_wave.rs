@@ -164,9 +164,9 @@ fn wave_standing_mode_decays_correctly() {
     let mut max_rel_err: f64 = 0.0;
     let mut max_abs_err: f64 = 0.0;
     for i in 0..=nx {
-        let p = mesh.vertices[1 * row_stride + i];
+        let p = mesh.vertices[row_stride + i];
         let want = amp_analytic * (std::f64::consts::PI * p.x).sin();
-        let got = u_cur[1 * row_stride + i];
+        let got = u_cur[row_stride + i];
         let abs_err = (got - want).abs();
         max_abs_err = max_abs_err.max(abs_err);
         // Skip the relative-error denominator near zero.

@@ -54,12 +54,11 @@ fn update_warp_mesh_intersect(
     // Animate the second box closer / farther.
     let phase = (st.sim_time * st.spin_rate).sin() as f64;
     let dx = 0.4 + phase * 0.6;
-    if let Ok(body_q) = sim.state_a.body_q.host_mut() {
-        if body_q.len() >= 2 {
+    if let Ok(body_q) = sim.state_a.body_q.host_mut()
+        && body_q.len() >= 2 {
             body_q[0].position = MVec3::new(-dx * 0.5, 1.0, 0.0);
             body_q[1].position = MVec3::new(dx * 0.5, 1.0, 0.0);
         }
-    }
     // Approximate "overlap" measure as the gap between centres.
     st.overlap_dist = dx;
     st.intersecting = dx < 1.0;

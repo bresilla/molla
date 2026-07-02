@@ -42,13 +42,13 @@
 //! 2. **Predict velocity** — `v_pred = momentum/m + g·dt`.
 //!
 //! 3. **Implicit grid solve** — solve
-//!       `(M + dt · K) · v_new = M · v_pred`
+//!    `(M + dt · K) · v_new = M · v_pred`
 //!    with `K` the full 27-point velocity-domain Hessian (isotropic;
 //!    block entries are `k_ij · I_3`, so we store scalars). Iteration
 //!    is **colored Gauss-Seidel**: each cell is a node, the
 //!    27-stencil produces an 8-coloring on the parity of
 //!    `(ix mod 2, iy mod 2, iz mod 2)`. Per-cell update:
-//!       `v_i ← (M_i · v_pred_i − dt · Σ_{j ≠ i} K_ij · v_j) /
+//!    `v_i ← (M_i · v_pred_i − dt · Σ_{j ≠ i} K_ij · v_j) /
 //!              (M_i + dt · K_ii)`.
 //!
 //! 4. **Bingham projection** — at each particle, compute trial deviatoric

@@ -706,7 +706,7 @@ impl SoftVtContactKernel {
     ///   - `pre_step_qd` (snapshot)         — for `vn_pre = qd_pre · n`
     ///   - `friction_per_v`, `restitution_per_v`, `contact_normal_sum`
     ///     (scattered by `apply_vt_penalty` across all sweeps)
-    /// Writes:
+    ///     Writes:
     ///   - `state.particle_qd` in place
     pub fn dispatch_commit_velocity_recovery(
         &self,

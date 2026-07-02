@@ -37,6 +37,7 @@ const TLAB_RAMP_HEIGHT_M: f64 = 0.50;
 
 /// Per-frame state for [`Scene::TerrainLab`].
 #[derive(Resource)]
+#[derive(Default)]
 struct TerrainLabExampleState {
     tire: Option<molla_vehicle::TetraTireFem>,
     terrain: Option<molla_vehicle::HeightfieldTerrain>,
@@ -44,16 +45,6 @@ struct TerrainLabExampleState {
     was_active: bool,
 }
 
-impl Default for TerrainLabExampleState {
-    fn default() -> Self {
-        Self {
-            tire: None,
-            terrain: None,
-            grid_segments: Vec::new(),
-            was_active: false,
-        }
-    }
-}
 
 const TLAB_DRIVE_TORQUE_N_M: f64 = 160.0;
 const TLAB_BRAKE_TORQUE_N_M: f64 = 240.0;

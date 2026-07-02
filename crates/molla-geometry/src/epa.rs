@@ -179,14 +179,14 @@ fn build_initial_faces_or_fallback(
     xf_b: &Transform,
     hulls: &[Vec<Vec3>],
 ) -> Option<Vec<Face>> {
-    if pad_to_tetra(vertices, geom_a, xf_a, geom_b, xf_b, hulls) {
-        if let Some(f) = build_initial_faces(vertices) {
-            // Reject if origin lies on any face (face.distance == 0).
-            // That signals a degenerate / coplanar tetra that EPA
-            // can't escape from.
-            if f.iter().all(|face| face.distance > 1e-6) {
-                return Some(f);
-            }
+    if pad_to_tetra(vertices, geom_a, xf_a, geom_b, xf_b, hulls)
+        && let Some(f) = build_initial_faces(vertices)
+    {
+        // Reject if origin lies on any face (face.distance == 0).
+        // That signals a degenerate / coplanar tetra that EPA
+        // can't escape from.
+        if f.iter().all(|face| face.distance > 1e-6) {
+            return Some(f);
         }
     }
     // Fallback: 4 cardinal-axis support points.

@@ -629,7 +629,7 @@ fn build_arm_smoke() -> Model {
         b.add_joint_revolute(prev_body, body, x_p, x_c, axis)
             .unwrap();
         prev_body = body;
-        next_pos = next_pos - Vec3::new(0.0, ARM_LINK_LEN, 0.0);
+        next_pos -= Vec3::new(0.0, ARM_LINK_LEN, 0.0);
     }
     b.build().expect("arm model")
 }
@@ -883,7 +883,7 @@ fn build_gpu_narrow_phase_smoke() -> Model {
             let x = (ix as f64 - 1.5) * 0.7;
             let z = (iz as f64 - 1.5) * 0.7;
             let y = 3.0 + ((ix + iz) as f64) * 0.3;
-            let kind = ((ix * n_side + iz) % 4) as i32;
+            let kind = (ix * n_side + iz) % 4;
             match kind {
                 0 => {
                     let half = Vec3::splat(0.25);
@@ -1682,7 +1682,7 @@ fn build_pendulum_smoke() -> Model {
         let x_c = Transform::from_translation(Vec3::new(0.0, -half_h, 0.0));
         b.add_joint_revolute(prev, body, x_p, x_c, Vec3::Z).unwrap();
         prev = body;
-        next_pos = next_pos - Vec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
+        next_pos -= Vec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
     }
     b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
         .unwrap();

@@ -370,8 +370,8 @@ pub fn assemble_velocity_block(
     let n = th.n_velocity;
     let dim = th.dim;
     // Flat scalar triplets — avoids the per-entry `vec![val]` alloc.
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 100 * dim * dim);
+    let mut triplets: Vec<(usize, usize, Real)> =
+        Vec::with_capacity(mesh.cells.len() * 100 * dim * dim);
     for cell in &mesh.cells {
         let local = compute_element_stokes_velocity_block(cell, &mesh.vertices, viscosity, dim);
         let n_local_nodes = match cell {
@@ -402,8 +402,8 @@ pub fn assemble_velocity_mass(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<Bs
     let n = th.n_velocity;
     let dim = th.dim;
     // Flat scalar triplets — see `assemble_velocity_block`.
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 100 * dim * dim);
+    let mut triplets: Vec<(usize, usize, Real)> =
+        Vec::with_capacity(mesh.cells.len() * 100 * dim * dim);
     for cell in &mesh.cells {
         let local = compute_element_mass_p2_vector(cell, &mesh.vertices, dim);
         let n_local_nodes = match cell {
@@ -436,8 +436,7 @@ pub fn assemble_div_block(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<BsrMat
     let n_v = th.n_velocity;
     let dim = th.dim;
     // Flat scalar triplets — see `assemble_velocity_block`.
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 4 * 30);
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cells.len() * 4 * 30);
     for cell in &mesh.cells {
         let local = compute_element_stokes_div_block(cell, &mesh.vertices, dim);
         let (n_p_local, n_v_local, p_verts) = match cell {
@@ -808,13 +807,13 @@ pub fn solve_stokes_with_matrices(
         .max(1.0);
 
     // Pre-compute `A⁻¹ f_red`: shows up in both RHS and the action.
-    let a_inv_f = solve_inner_cg(&a_red, &f_red, &vec![0.0; n_v], &cfg);
+    let a_inv_f = solve_inner_cg(&a_red, &f_red, &vec![0.0; n_v], cfg);
 
     // RHS of pressure-Schur equation: g = B · (A⁻¹ f_red) − (boundary
     // term) — for our enforced-row symmetric pinning, the RHS is
     // simply `B · (A⁻¹ f_red)` because the column-elim already moved
     // BC contributions into f_red.
-    let mut g = matvec(&b_div, &a_inv_f);
+    let mut g = matvec(b_div, &a_inv_f);
     // Pin pressure rows to zero in the equation.
     for &r in p_pinned_set.iter() {
         g[r] = 0.0;
@@ -832,7 +831,7 @@ pub fn solve_stokes_with_matrices(
             q_eff[r] = 0.0;
         }
         // x = Bᵀ q_eff
-        let mut x = matvec_t(&b_div, &q_eff, n_v);
+        let mut x = matvec_t(b_div, &q_eff, n_v);
         // Pinned velocity DoFs: zero (homogeneous Dirichlet on the
         // perturbation Bᵀq side).
         for &dof in pinned_set_ref.iter() {
@@ -841,7 +840,7 @@ pub fn solve_stokes_with_matrices(
         // y = A_red⁻¹ x  (inner CG)
         let y_v = solve_inner_cg(a_red_ref, &x, &vec![0.0; n_v], cfg_ref);
         // p = B y
-        let mut yout = matvec(&b_div, &y_v);
+        let mut yout = matvec(b_div, &y_v);
         // Identity rows for pinned pressures.
         for &r in p_pinned_set_ref.iter() {
             yout[r] = q[r];
@@ -867,14 +866,14 @@ pub fn solve_stokes_with_matrices(
     }
 
     // Recover velocity: u = A⁻¹ (f_red − Bᵀ p).
-    let bt_p = matvec_t(&b_div, &p, n_v);
+    let bt_p = matvec_t(b_div, &p, n_v);
     let mut rhs_u: Vec<Real> = (0..n_v).map(|i| f_red[i] - bt_p[i]).collect();
     for &(dof, val) in &pinned_pairs {
         rhs_u[dof] = val;
     }
-    u = solve_inner_cg(&a_red, &rhs_u, &u, &cfg);
+    u = solve_inner_cg(&a_red, &rhs_u, &u, cfg);
 
-    let bu = matvec(&b_div, &u);
+    let bu = matvec(b_div, &u);
     // Compute the divergence residual on the FREE pressure rows only —
     // the dead/pinned rows carry the BC-driven divergence that the
     // discretisation cannot zero (their pressure was forced to 0).

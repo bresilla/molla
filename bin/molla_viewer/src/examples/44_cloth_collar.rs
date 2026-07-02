@@ -210,17 +210,14 @@ fn cloth_collar_pane(ui: &mut egui::Ui, sim: &mut Sim) {
     if ui
         .add(egui::Slider::new(&mut k_contact, 1.0e3..=1.0e6).logarithmic(true))
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.contact_stiffness = k_contact;
         }
-    }
     ui.label("VT contact sweeps");
-    if ui.add(egui::Slider::new(&mut sweeps, 1..=16)).changed() {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+    if ui.add(egui::Slider::new(&mut sweeps, 1..=16)).changed()
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.vt_contact_sweeps = sweeps.max(1) as usize;
         }
-    }
     ui.separator();
     if ui.button("Reset puller height").clicked() {
         COLLAR_RESET_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);

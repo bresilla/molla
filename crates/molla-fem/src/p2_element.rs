@@ -372,8 +372,7 @@ where
 {
     let n = map.ndof();
     // Flat scalar triplets — see `assemble_global` for the rationale.
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 100);
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cells.len() * 100);
     for cell in &mesh.cells {
         let local = element_visitor(cell, &mesh.vertices);
         let nl = local.len();

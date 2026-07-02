@@ -246,7 +246,7 @@ impl RobustLossKernel {
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
             out.push(LossPair {
-                value: raw[i * 2 + 0],
+                value: raw[i * 2],
                 grad: raw[i * 2 + 1],
             });
         }

@@ -156,12 +156,11 @@ fn update_fem_heat_example(
         // Push the fresh u to the GPU stepper if it's already built.
         // Clone first so we can split the borrow.
         let u_snapshot = state.u.clone();
-        if let Some(s) = state.gpu_stepper.as_mut() {
-            if let Err(e) = s.write_u(&u_snapshot) {
+        if let Some(s) = state.gpu_stepper.as_mut()
+            && let Err(e) = s.write_u(&u_snapshot) {
                 warn!("FemHeat: GPU write_u after reset failed ({e})");
                 state.gpu_stepper = None;
             }
-        }
     }
     let alpha_changed = (state.alpha - state.last_alpha_baked).abs() > 1e-12;
     let dt_changed = (state.dt - state.last_dt_baked).abs() > 1e-9;

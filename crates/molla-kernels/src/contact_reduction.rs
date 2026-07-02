@@ -246,7 +246,7 @@ pub fn pack_groups_host(
             let c = contacts[gi];
             let base = (g * MAX_PER_GROUP + local) * CONTACT_STRIDE * 4;
             // vec4 0: point.xyz, depth
-            in_contacts[base + 0] = c.point.x as Real;
+            in_contacts[base] = c.point.x as Real;
             in_contacts[base + 1] = c.point.y as Real;
             in_contacts[base + 2] = c.point.z as Real;
             in_contacts[base + 3] = c.depth as Real;
@@ -277,7 +277,7 @@ pub fn unpack_output_host(out_contacts: &[Real], out_count: &[u32]) -> Vec<CpuCo
         for local in 0..n {
             let base = (g * MAX_OUT_PER_GROUP + local) * CONTACT_STRIDE * 4;
             let point = Vec3::new(
-                out_contacts[base + 0],
+                out_contacts[base],
                 out_contacts[base + 1],
                 out_contacts[base + 2],
             );

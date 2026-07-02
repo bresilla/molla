@@ -127,7 +127,7 @@ fn run_forward_sh(
 }
 
 /// 1. Band-0 ("diffuse") sanity. SH coeff `sh[0] = c / SH_C0` →
-/// rendered colour ≈ `c · opacity` (ρ_max = 1 for the centred ray).
+///    rendered colour ≈ `c · opacity` (ρ_max = 1 for the centred ray).
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn sh_band0_matches_diffuse_forward() {
@@ -171,9 +171,9 @@ fn sh_band0_matches_diffuse_forward() {
 }
 
 /// 2. Band-1 view dependence. A pure band-1 splat returns a colour
-/// proportional to the view direction's `(x, y, z)`; firing rays
-/// along +Z vs +X (both passing through the splat) gives different
-/// rendered colours.
+///    proportional to the view direction's `(x, y, z)`; firing rays
+///    along +Z vs +X (both passing through the splat) gives different
+///    rendered colours.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn sh_band1_view_dependent_forward() {

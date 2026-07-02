@@ -8,8 +8,8 @@
 //!    relaxation flavour rather than full matrix-free CG over the
 //!    grid Lagrangian — see [`MpmTimeStep::Implicit::jacobi_iters`].
 //!    Each iteration applies
-//!       v_new = (m·v_explicit + dt² · k_diag · v_avg) /
-//!               (m + dt² · k_diag)
+//!    v_new = (m·v_explicit + dt² · k_diag · v_avg) /
+//!    (m + dt² · k_diag)
 //!    where `k_diag` is a particle-scattered diagonal estimate of the
 //!    stress Hessian and `v_avg` is the 6-neighbour grid average.
 //!    The convergence numbers are weaker than Klár-style Newton CG
@@ -214,9 +214,10 @@ impl Default for MpmRheology {
 /// `Explicit` with a smaller dt. The "20-iter cap with residual exit"
 /// in the original brief was for a full-CG plan; with Jacobi we
 /// simply run a fixed number of sweeps.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub enum MpmTimeStep {
     /// Stage 24d v1 explicit symplectic step.
+    #[default]
     Explicit,
     /// Semi-implicit step with `jacobi_iters` Jacobi sweeps. Typical
     /// 1-3 for sand at 1/240 s; 5-10 for snow / stiff materials.
@@ -227,12 +228,6 @@ pub enum MpmTimeStep {
         /// is fixed-iteration Jacobi (no CG, no residual exit).
         jacobi_iters: u32,
     },
-}
-
-impl Default for MpmTimeStep {
-    fn default() -> Self {
-        Self::Explicit
-    }
 }
 
 /// Material configuration. Defaults are tuned for dry sand

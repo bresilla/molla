@@ -97,7 +97,7 @@ fn tire_mpm_owner_exports_fem_sinkage_terrain() {
     assert_eq!(terrain.friction, 0.42);
     assert_eq!(terrain.soil_rolling_resistance_scale, 2.25);
     assert_eq!(terrain.surface_velocity, [0.4, 0.0, 0.0]);
-    let center = 1 * terrain.nx as usize + 1;
+    let center = (terrain.nx as usize) + 1;
     assert!(
         terrain.sinkage_map.as_ref().unwrap()[center] > 0.0,
         "FEM terrain should receive MPM particle compaction sinkage: {:?}",

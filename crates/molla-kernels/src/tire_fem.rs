@@ -2478,16 +2478,16 @@ pub fn tire_fem_gpu_batch_atlas_buffers(
             .map_err(|_| Error::Solver("tire_fem atlas tire index overflow".into()))?;
         buffers
             .node_tire_indices
-            .extend(std::iter::repeat(tire_row).take(row.node_count));
+            .extend(std::iter::repeat_n(tire_row, row.node_count));
         buffers
             .tet_tire_indices
-            .extend(std::iter::repeat(tire_row).take(row.tet_count));
+            .extend(std::iter::repeat_n(tire_row, row.tet_count));
         buffers
             .bead_tire_indices
-            .extend(std::iter::repeat(tire_row).take(row.bead_count));
+            .extend(std::iter::repeat_n(tire_row, row.bead_count));
         buffers
             .tread_tire_indices
-            .extend(std::iter::repeat(tire_row).take(row.tread_count));
+            .extend(std::iter::repeat_n(tire_row, row.tread_count));
         buffers
             .rest_positions
             .extend_from_slice(&input.rest_positions);
@@ -2598,7 +2598,7 @@ pub fn tire_fem_gpu_batch_atlas_buffers(
                 })?;
                 buffers
                     .node_edge_offsets
-                    .extend(std::iter::repeat(current).take(row.node_count));
+                    .extend(std::iter::repeat_n(current, row.node_count));
             } else {
                 for &offset in input.node_edge_offsets.iter().skip(1) {
                     buffers.node_edge_offsets.push(offset_u32(
@@ -2654,7 +2654,7 @@ pub fn tire_fem_gpu_batch_atlas_buffers(
                 })?;
                 buffers
                     .node_dihedral_offsets
-                    .extend(std::iter::repeat(current).take(row.node_count));
+                    .extend(std::iter::repeat_n(current, row.node_count));
             } else {
                 for &offset in input.node_dihedral_offsets.iter().skip(1) {
                     buffers.node_dihedral_offsets.push(offset_u32(
@@ -6116,7 +6116,7 @@ impl TireFemGpuKernel {
             pass.set_pipeline(&self.atlas_hub_params_from_brush_pipeline);
             pass.set_bind_group(0, &bg_io, &[]);
             pass.set_bind_group(1, &bg_uniforms, &[]);
-            pass.dispatch_workgroups(((tire_count as u32) + 63) / 64, 1, 1);
+            pass.dispatch_workgroups((tire_count as u32).div_ceil(64), 1, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -6237,7 +6237,7 @@ impl TireFemGpuKernel {
             pass.set_pipeline(&self.atlas_hub_params_from_contact_pipeline);
             pass.set_bind_group(0, &bg_io, &[]);
             pass.set_bind_group(1, &bg_uniforms, &[]);
-            pass.dispatch_workgroups(((tire_count as u32) + 63) / 64, 1, 1);
+            pass.dispatch_workgroups((tire_count as u32).div_ceil(64), 1, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -6355,7 +6355,7 @@ impl TireFemGpuKernel {
             pass.set_pipeline(&self.atlas_hub_params_from_feedback_pipeline);
             pass.set_bind_group(0, &bg_io, &[]);
             pass.set_bind_group(1, &bg_uniforms, &[]);
-            pass.dispatch_workgroups(((tire_count as u32) + 63) / 64, 1, 1);
+            pass.dispatch_workgroups((tire_count as u32).div_ceil(64), 1, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -6934,28 +6934,26 @@ impl TireFemContactReductionKernel {
                     "tire_fem_contact_reduce: heightfield dimensions must match heights".into(),
                 ));
             }
-            if let Some(map) = &terrain.friction_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_reduce: friction_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.friction_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_reduce: friction_map dimensions must match heights".into(),
+                ));
             }
-            if let Some(map) = &terrain.water_film_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_reduce: water_film_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.water_film_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_reduce: water_film_map dimensions must match heights".into(),
+                ));
             }
-            if let Some(map) = &terrain.sinkage_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_reduce: sinkage_map dimensions must match heights".into(),
-                    ));
-                }
+            if let Some(map) = &terrain.sinkage_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_reduce: sinkage_map dimensions must match heights".into(),
+                ));
             }
         }
         let positions_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -7486,37 +7484,35 @@ impl TireFemContactFeedbackKernel {
                     "tire_fem_contact_feedback: heightfield dimensions must match heights".into(),
                 ));
             }
-            if let Some(map) = &terrain.friction_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_feedback: friction_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.friction_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_feedback: friction_map dimensions must match heights".into(),
+                ));
             }
-            if let Some(map) = &terrain.water_film_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_feedback: water_film_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.water_film_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_feedback: water_film_map dimensions must match heights"
+                        .into(),
+                ));
             }
-            if let Some(map) = &terrain.sinkage_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_feedback: sinkage_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.sinkage_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_feedback: sinkage_map dimensions must match heights".into(),
+                ));
             }
-            if let Some(map) = &terrain.surface_velocity_map {
-                if map.len() != expected {
-                    return Err(Error::Solver(
-                        "tire_fem_contact_feedback: surface_velocity_map dimensions must match heights"
-                            .into(),
-                    ));
-                }
+            if let Some(map) = &terrain.surface_velocity_map
+                && map.len() != expected
+            {
+                return Err(Error::Solver(
+                    "tire_fem_contact_feedback: surface_velocity_map dimensions must match heights"
+                        .into(),
+                ));
             }
         }
 
@@ -8434,7 +8430,7 @@ fn validate_input(input: &TireFemGpuInput) -> Result<()> {
             "tire_fem: rest/position/velocity/mass lengths must match".into(),
         ));
     }
-    if input.tet_indices.len() % 4 != 0 {
+    if !input.tet_indices.len().is_multiple_of(4) {
         return Err(Error::Solver(
             "tire_fem: tet_indices length must be divisible by four".into(),
         ));
@@ -8963,10 +8959,10 @@ impl TireFemMatrixFreeNewtonGpuKernel {
     ///
     /// This is the persistent-batch integration seam: the host keeps GMRES
     /// + Jacobi preconditioning + line search, while every per-DoF residual,
-    /// Jv probe, diagonal sample, and correction application runs on the
-    /// GPU. The loop matches the CPU
-    /// `molla_vehicle::real_tire::matrix_free_newton_correction` helper
-    /// step-by-step so the two paths stay numerically equivalent.
+    ///   Jv probe, diagonal sample, and correction application runs on the
+    ///   GPU. The loop matches the CPU
+    ///   `molla_vehicle::real_tire::matrix_free_newton_correction` helper
+    ///   step-by-step so the two paths stay numerically equivalent.
     ///
     /// `gmres_iterations` caps the inner Krylov budget; the live tire
     /// substep uses the default budget exposed on the contract

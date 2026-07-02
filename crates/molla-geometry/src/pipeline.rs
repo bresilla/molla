@@ -455,10 +455,10 @@ impl CollisionPipeline {
         // call.
         let n_pairs = self.pair_buf.len();
         for i in 0..n_pairs {
-            if let Some(mask) = &prefilter_mask {
-                if mask.get(i).copied().unwrap_or(2) == 0 {
-                    continue;
-                }
+            if let Some(mask) = &prefilter_mask
+                && mask.get(i).copied().unwrap_or(2) == 0
+            {
+                continue;
             }
             let pair = self.pair_buf[i];
             self.dispatch_pair_cpu(model, state, pair);
@@ -526,10 +526,10 @@ impl CollisionPipeline {
             // call it). Equivalent to `MprCpu` for this frame.
             let n_pairs = self.pair_buf.len();
             for i in 0..n_pairs {
-                if let Some(mask) = prefilter_mask {
-                    if mask.get(i).copied().unwrap_or(2) == 0 {
-                        continue;
-                    }
+                if let Some(mask) = prefilter_mask
+                    && mask.get(i).copied().unwrap_or(2) == 0
+                {
+                    continue;
                 }
                 let pair = self.pair_buf[i];
                 let saved = self.narrow_phase_backend;
@@ -544,10 +544,10 @@ impl CollisionPipeline {
         let mut gpu_pairs: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
         let mut cpu_pairs: Vec<usize> = Vec::with_capacity(self.pair_buf.len());
         for (i, p) in self.pair_buf.iter().enumerate() {
-            if let Some(mask) = prefilter_mask {
-                if mask.get(i).copied().unwrap_or(2) == 0 {
-                    continue;
-                }
+            if let Some(mask) = prefilter_mask
+                && mask.get(i).copied().unwrap_or(2) == 0
+            {
+                continue;
             }
             let ka = model.shape_geometry[p.a as usize];
             let kb = model.shape_geometry[p.b as usize];
@@ -973,10 +973,10 @@ impl CollisionPipeline {
 
     /// Stage-19 GPU LBVH broad phase. Runs the LBVH build (or refit)
     /// + pair-finder, then post-filters the raw AABB pairs through
-    /// `pair_passes_filters` (collision groups, self-collision,
-    /// world-id partitioning) so the downstream narrow phase sees the
-    /// same set the CPU SAP would. Returns `true` if the GPU broad
-    /// phase ran (so the caller can skip CPU SAP).
+    ///   `pair_passes_filters` (collision groups, self-collision,
+    ///   world-id partitioning) so the downstream narrow phase sees the
+    ///   same set the CPU SAP would. Returns `true` if the GPU broad
+    ///   phase ran (so the caller can skip CPU SAP).
     #[cfg(feature = "gpu")]
     fn run_gpu_broad_phase(&mut self, model: &Model, state: &State) -> Result<bool> {
         let bp = match self.gpu_broad.as_mut() {

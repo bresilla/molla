@@ -120,7 +120,7 @@ fn spr_render(splats: &[molla::geometry::GaussianSplat3d], pose: &SprPose) -> Ve
                 s.scale,
                 rot,
                 s.color_rgb(),
-                s.opacity as f64,
+                s.opacity,
             )
         })
         .collect();
@@ -134,7 +134,7 @@ fn spr_render(splats: &[molla::geometry::GaussianSplat3d], pose: &SprPose) -> Ve
             let dir = MVec3::new(nx, ny, 1.0).normalize();
             let rgb = molla::geometry::composite_rgb_cpu(MVec3::ZERO, dir, &xformed, 20.0, 1.0e-3);
             let k = (j * SPR_IMG_W + i) * 3;
-            out[k + 0] = rgb.x as f32;
+            out[k] = rgb.x as f32;
             out[k + 1] = rgb.y as f32;
             out[k + 2] = rgb.z as f32;
         }
@@ -222,7 +222,7 @@ fn draw_splat_pose_recovery_gizmos(
         for j in 0..SPR_IMG_H {
             for i in 0..SPR_IMG_W {
                 let k = (j * SPR_IMG_W + i) * 3;
-                let r = img[k + 0].clamp(0.0, 1.0);
+                let r = img[k].clamp(0.0, 1.0);
                 let g = img[k + 1].clamp(0.0, 1.0);
                 let b = img[k + 2].clamp(0.0, 1.0);
                 let col = Color::srgb(r, g, b);

@@ -139,22 +139,17 @@ pub struct TetraTireFemParams {
 /// Defaulting to [`Self::ExplicitDefault`] keeps the existing live viewer /
 /// vehicle path untouched; callers that want to exercise the CPU/debug
 /// implicit timestep opt in via [`Self::MatrixFreeNewtonDebug`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TetraTireFemSolverMode {
     /// The existing explicit / semi-implicit Neo-Hookean stepper with XPBD
     /// constraint projections. Used by all live viewer / vehicle scenes today.
+    #[default]
     ExplicitDefault,
     /// CPU/debug matrix-free Newton timestep that delegates to
     /// [`TetraTireFem::step_on_terrain_matrix_free_newton_debug`]. Still
     /// labelled CPU/debug — production tire stepping continues to use
     /// `ExplicitDefault` until the GPU sparse/matrix-free parity lane lands.
     MatrixFreeNewtonDebug,
-}
-
-impl Default for TetraTireFemSolverMode {
-    fn default() -> Self {
-        Self::ExplicitDefault
-    }
 }
 
 impl Default for TetraTireFemParams {

@@ -35,3 +35,18 @@ correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
+# Physics kernels legitimately take many parameters (state arrays,
+# model arrays, dt, tolerances) and build deep generic types; forcing
+# parameter structs / type aliases across 100+ signatures adds noise,
+# not safety. Same precedent as module_name_repetitions above.
+# (INSPECTION.md T1a, 2026-07-02.)
+too_many_arguments = "allow"
+type_complexity = "allow"
+# Numeric kernels index several arrays by one loop variable
+# (`for i { a[i] += b[i] * c[i] }`); zip/enumerate chains obscure the
+# math the code is transliterating from papers/reference kernels.
+needless_range_loop = "allow"
+# The suggested `clamp()` rewrite is not semantics-preserving for NaN
+# (clamp panics on NaN bounds; max/min chains propagate) — unsafe to
+# bulk-apply across FP physics code paths.
+manual_clamp = "allow"

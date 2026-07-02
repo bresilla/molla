@@ -49,7 +49,7 @@ fn icosphere_mesh(subdivisions: u32) -> TriMesh {
         Vec3::new(-phi, 0.0, 1.0),
     ];
     for v in verts.iter_mut() {
-        *v = *v / v.length();
+        *v /= v.length();
     }
     let mut indices: Vec<[u32; 3]> = vec![
         [0, 11, 5],
@@ -264,10 +264,7 @@ fn sparse_sdf_round_trip_from_dense_sphere() {
     let mut count_in_band = 0;
     let mut max_err: Real = 0.0;
     for _ in 0..100 {
-        let r = |s: &mut Lcg| -> Real {
-            let u = (s.next() >> 11) as Real / ((1u64 << 53) as Real);
-            u
-        };
+        let r = |s: &mut Lcg| -> Real { (s.next() >> 11) as Real / ((1u64 << 53) as Real) };
         let p = mn + Vec3::new(r(&mut rng), r(&mut rng), r(&mut rng)) * extent;
         let d_sparse = sparse.sample(p);
         let d_dense = sample_dense(&dense, p);

@@ -315,13 +315,13 @@ pub struct CorotatedAdjoint {
 ///
 /// - **Through F**: `∂P/∂F = 2μ I` → `adj_F_term = 2μ · δP`.
 ///   Then `F = U Σ Vᵀ` gives:
-///     `adj_U += adj_F_term · V · Σ`
-///     `adj_Σᵢ += (Uᵀ · adj_F_term · V)_{ii}`
-///     `adj_V += adj_F_termᵀ · U · Σ`
+///   `adj_U += adj_F_term · V · Σ`
+///   `adj_Σᵢ += (Uᵀ · adj_F_term · V)_{ii}`
+///   `adj_V += adj_F_termᵀ · U · Σ`
 /// - **Through R**: `∂P/∂R = −2μ I + λ tr(S − I) I` so the R-piece is
 ///   `(−2μ + λ trS_m1) · δP`. With `R = U Vᵀ`:
-///     `adj_U += R_piece · V`
-///     `adj_V += R_pieceᵀ · U`
+///   `adj_U += R_piece · V`
+///   `adj_V += R_pieceᵀ · U`
 /// - **Through Σ (via `tr(S − I)`)**: `tr(S − I) = Σᵢ σᵢ − 3`, so
 ///   `∂tr/∂σᵢ = 1`. The σ contribution to P is `λ · σᵢ · R` per i.
 ///   `adj_Σᵢ += λ · ⟨R, δP⟩`.

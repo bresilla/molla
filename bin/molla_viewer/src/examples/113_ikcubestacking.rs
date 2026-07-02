@@ -206,10 +206,7 @@ fn update_ik_cube_stacking(mut sim: ResMut<Sim>, mut warp: ResMut<WarpExampleSta
     let q0: Vec<f64> = state_a
         .joint_q
         .host()
-        .expect("joint_q")
-        .iter()
-        .copied()
-        .collect();
+        .expect("joint_q").to_vec();
     let solver = IkSolver::new(vec![IkObjective::Position {
         body: ee_body,
         point_local: MVec3::ZERO,

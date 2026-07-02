@@ -798,7 +798,7 @@ impl IkSolver {
                 let m = seed_state.e.len();
                 let mut j_mat = vec![0.0; m * dof_total];
                 let mut row = 0usize;
-                let mut block_idx_local = (si * n_pos) as usize;
+                let mut block_idx_local = si * n_pos;
                 for obj in &self.objectives {
                     match *obj {
                         IkObjective::Position { weight, .. } => {

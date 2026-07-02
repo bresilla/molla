@@ -14,12 +14,12 @@ use molla_storage::{Buffer, BufferUsage};
 /// of the same numbers a roboticist already has on a motor sheet:
 ///
 /// - `stall_torque`        — peak torque at zero velocity
-///                            [N·m or N], `≈ Kt · V / R`
+///   [N·m or N], `≈ Kt · V / R`
 /// - `no_load_speed`       — velocity at which the linear envelope
-///                            crosses zero torque [rad/s or m/s],
-///                            `≈ V / Kt`
+///   crosses zero torque [rad/s or m/s],
+///   `≈ V / Kt`
 /// - `max_motor_effort`    — current-limited torque ceiling
-///                            [N·m or N]; the `min(line, cap)` rail.
+///   [N·m or N]; the `min(line, cap)` rail.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingDcMotorConfig {
     pub dof: u32,
@@ -89,7 +89,8 @@ impl ClampingDcMotor {
         let mut no_load_speed = Buffer::from_vec(nl, BufferUsage::Storage);
         let mut max_motor_effort = Buffer::from_vec(me, BufferUsage::Storage);
         let mut corner_velocity = Buffer::from_vec(corner, BufferUsage::Storage);
-        for buf in [&mut dof_indices as &mut dyn UploadU32] {
+        {
+            let buf = &mut dof_indices as &mut dyn UploadU32;
             buf.ensure_and_upload(&device, &queue)?;
         }
         for buf in [

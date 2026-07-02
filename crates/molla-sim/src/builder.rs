@@ -828,14 +828,14 @@ impl ModelBuilder {
                 tets.len()
             )));
         }
-        if let Some(rv) = rest_volume {
-            if rv.len() != tets.len() {
-                return Err(Error::Build(format!(
-                    "add_tet_mesh: rest_volume.len() = {} ≠ tets.len() = {}",
-                    rv.len(),
-                    tets.len()
-                )));
-            }
+        if let Some(rv) = rest_volume
+            && rv.len() != tets.len()
+        {
+            return Err(Error::Build(format!(
+                "add_tet_mesh: rest_volume.len() = {} ≠ tets.len() = {}",
+                rv.len(),
+                tets.len()
+            )));
         }
         let n_particles = self.particle_mass.len() as u32;
 
@@ -2404,9 +2404,9 @@ impl ModelBuilder {
         c1: Real,
     ) -> Result<usize> {
         if driven.index() >= self.joint_type.len() || driver.index() >= self.joint_type.len() {
-            return Err(Error::Build(format!(
-                "add_mimic_constraint: joint id out of range"
-            )));
+            return Err(Error::Build(
+                "add_mimic_constraint: joint id out of range".to_string(),
+            ));
         }
         let id = self.mimic_joint_a.len();
         self.mimic_joint_a.push(driven.0 as i32);
@@ -3348,8 +3348,8 @@ pub(crate) fn color_particles_with_vt_contacts(
 ///   - they share a tet, or
 ///   - they appear in the same `(v_prev, v_mid, v_next)` bending
 ///     hinge.
-/// Without this, the per-vertex VBD block solve would race within a
-/// colour whenever a non-spring constraint touches both endpoints.
+///     Without this, the per-vertex VBD block solve would race within a
+///     colour whenever a non-spring constraint touches both endpoints.
 #[allow(clippy::too_many_arguments)]
 fn color_particles_with_tets_and_bending(
     particle_count: usize,

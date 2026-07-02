@@ -75,7 +75,7 @@ fn build_scene(cloth_n: u32, tet_n: u32) -> Model {
         cloth_y + 0.02,
         -dx * (tet_n as Real - 1.0) * 0.5,
     );
-    let first_tet_v = (cloth_n * cloth_n) as u32;
+    let first_tet_v = cloth_n * cloth_n;
     for kk in 0..tet_n {
         for jj in 0..tet_n {
             for ii in 0..tet_n {

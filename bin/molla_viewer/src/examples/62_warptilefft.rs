@@ -63,7 +63,7 @@ fn warp_tile_fft_pane(ui: &mut egui::Ui, st: &mut WarpTileFftState) {
         let mut buf = String::new();
         for (k, &m) in st.output_mag.iter().enumerate().take(32) {
             let bars = (m / max * 16.0) as usize;
-            let bar: String = std::iter::repeat('▌').take(bars).collect();
+            let bar: String = std::iter::repeat_n('▌', bars).collect();
             buf.push_str(&format!("{:>3}: {}\n", k, bar));
         }
         ui.add(egui::Label::new(

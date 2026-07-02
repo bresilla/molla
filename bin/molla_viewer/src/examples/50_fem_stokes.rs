@@ -165,7 +165,6 @@ fn update_fem_stokes_example(sim: Res<Sim>, mut state: ResMut<FemStokesExampleSt
         state.solve_now();
         state.needs_reset = false;
         state.user_reset = false;
-        return;
     }
 }
 

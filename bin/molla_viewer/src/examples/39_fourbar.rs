@@ -176,8 +176,8 @@ fn update_fourbar_example(
     // the other joints. Without an actuator the joint won't track —
     // we instead overwrite joint_q / joint_qd directly each frame.
     let queue = sim.engine.queue().expect("queue").clone();
-    if let Ok(q) = sim.state_a.joint_q.host_mut() {
-        if !q.is_empty() {
+    if let Ok(q) = sim.state_a.joint_q.host_mut()
+        && !q.is_empty() {
             q[0] = state.driver_angle as f64;
             // Slave joints — linear mimic factors match the
             // `add_equality_joint_mimic` polynomials in build.
@@ -188,9 +188,8 @@ fn update_fourbar_example(
                 q[2] = state.driver_angle as f64;
             }
         }
-    }
-    if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
-        if !qd.is_empty() {
+    if let Ok(qd) = sim.state_a.joint_qd.host_mut()
+        && !qd.is_empty() {
             qd[0] = state.driver_speed as f64;
             if qd.len() >= 2 {
                 qd[1] = -(state.driver_speed as f64);
@@ -199,7 +198,6 @@ fn update_fourbar_example(
                 qd[2] = state.driver_speed as f64;
             }
         }
-    }
     let _ = sim.state_a.joint_q.upload(&queue);
     let _ = sim.state_a.joint_qd.upload(&queue);
 }

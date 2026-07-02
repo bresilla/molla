@@ -159,7 +159,7 @@ fn self_contact_candidates_convert_to_signorini_gap_planes() {
     let candidates = signorini_candidates_from_self_contacts(&contacts, vertices, 3, 0.1);
     assert_eq!(candidates.slave_dofs, vec![9]);
 
-    let (_n, gap0) = (candidates.master_gap_fn)(9, &vec![0.0; 12]);
+    let (_n, gap0) = (candidates.master_gap_fn)(9, &[0.0; 12]);
     assert!(
         (gap0 + 0.05).abs() < 1.0e-12,
         "zero-displacement gap should equal distance-thickness (-0.05), got {gap0}"

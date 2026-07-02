@@ -1731,8 +1731,8 @@ where
     }
     debug_assert_eq!(running, n);
 
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 16 + mesh.cells.len() * 4 * 64);
+    let mut triplets: Vec<(usize, usize, Real)> =
+        Vec::with_capacity(mesh.cells.len() * 16 + mesh.cells.len() * 4 * 64);
 
     // Cell pass.
     for (ci, cell) in mesh.cells.iter().enumerate() {
@@ -2551,7 +2551,7 @@ pub fn limit_solution_characteristic(
         let mut nodal_w: Vec<[Real; COMPONENTS]> = Vec::with_capacity(n);
         for i in 0..n {
             let u_i = [
-                u_dg[(off + i) * COMPONENTS + 0],
+                u_dg[(off + i) * COMPONENTS],
                 u_dg[(off + i) * COMPONENTS + 1],
                 u_dg[(off + i) * COMPONENTS + 2],
             ];
@@ -2591,8 +2591,8 @@ pub fn limit_solution_characteristic(
                 new_u_dg[(off + i) * COMPONENTS + c] = u_limited[c];
             }
             // Hard clamp h ≥ physical_h_min.
-            if new_u_dg[(off + i) * COMPONENTS + 0] < physical_h_min {
-                new_u_dg[(off + i) * COMPONENTS + 0] = physical_h_min;
+            if new_u_dg[(off + i) * COMPONENTS] < physical_h_min {
+                new_u_dg[(off + i) * COMPONENTS] = physical_h_min;
             }
         }
     }

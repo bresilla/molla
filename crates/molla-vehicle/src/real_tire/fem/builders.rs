@@ -827,7 +827,7 @@ pub fn tetra_cavity_bead_sanity_report() -> TetraCavityBeadSanityReport {
         low_pressure_pa,
         TetraTireFemParams {
             pressure_pa: low_pressure_pa,
-            ..base.clone()
+            ..base
         },
     )
     .diagnostics();
@@ -836,11 +836,11 @@ pub fn tetra_cavity_bead_sanity_report() -> TetraCavityBeadSanityReport {
         high_pressure_pa,
         TetraTireFemParams {
             pressure_pa: high_pressure_pa,
-            ..base.clone()
+            ..base
         },
     )
     .diagnostics();
-    let mut loaded = TetraTireFem::new(0.0, base.pressure_pa, base.clone());
+    let mut loaded = TetraTireFem::new(0.0, base.pressure_pa, base);
     let terrain = FlatTerrain::new(0.0, 1.0);
     let dt = 1.0 / 240.0;
     for _ in 0..8 {

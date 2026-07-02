@@ -20,7 +20,7 @@ const PARITY_TOL: Real = 1.0e-3;
 struct Lcg(u64);
 impl Lcg {
     fn new(seed: u64) -> Self {
-        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xC0FFEE_F00D)
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x00C0_FFEE_F00D)
     }
     fn next(&mut self) -> u64 {
         self.0 = self

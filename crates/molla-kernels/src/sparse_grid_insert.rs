@@ -206,7 +206,7 @@ fn f16_bits_to_f32(half: u16) -> f32 {
         let bits = (sign << 31) | (0xFF << 23) | (mant << 13);
         return f32::from_bits(bits);
     }
-    let bits = (sign << 31) | (((127 + exp - 15) as u32) << 23) | (mant << 13);
+    let bits = (sign << 31) | ((127 + exp - 15) << 23) | (mant << 13);
     f32::from_bits(bits)
 }
 
@@ -979,7 +979,7 @@ pub fn read_storage_to_pairs<V: Value>(
         if internal_idx >= internal_used {
             continue;
         }
-        let key = [root[base + 0], root[base + 1], root[base + 2]];
+        let key = [root[base], root[base + 1], root[base + 2]];
         let mask_off = (internal_idx * INTERNAL_NODE_MASK_U32S) as usize;
         let child_off = (internal_idx * INTERNAL_NODE_VOXELS) as usize;
         for local in 0..(INTERNAL_NODE_VOXELS as usize) {

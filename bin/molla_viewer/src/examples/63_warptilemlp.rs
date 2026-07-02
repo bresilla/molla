@@ -33,9 +33,9 @@ fn update_warp_tile_mlp(sim: Res<Sim>, mut warp: ResMut<WarpExampleStates>) {
     // a 1×16 · 16×8 GEMM is microseconds, well below GPU dispatch
     // overhead.
     let mut w1 = vec![0.0_f32; 16 * 8];
-    let mut b1 = vec![0.0_f32; 8];
+    let mut b1 = [0.0_f32; 8];
     let mut w2 = vec![0.0_f32; 8 * 4];
-    let mut b2 = vec![0.0_f32; 4];
+    let mut b2 = [0.0_f32; 4];
     let mut seed = 0x12345_u32;
     let mut rng = || {
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);

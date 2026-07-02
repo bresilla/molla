@@ -317,7 +317,7 @@ fn splat_pose_recovery_within_tolerance() {
     let kernel = SplatRaytraceKernel::new(&device);
 
     // ── Scene ─────────────────────────────────────────────────
-    let splats_world = make_scene(1024, 0xC0FFEE_BEEF_DEAD);
+    let splats_world = make_scene(1024, 0x00C0_FFEE_BEEF_DEAD);
 
     // 32x24 = 768 pixel grid; small but enough to constrain a
     // 6-DoF pose. Smaller grids = faster GPU dispatch.
@@ -436,9 +436,7 @@ fn splat_pose_recovery_within_tolerance() {
         let delta_omega = Vec3::new(params[3], params[4], params[5]);
         t_c += delta_t;
         q_c = apply_omega(q_c, delta_omega);
-        for p in &mut params {
-            *p = 0.0;
-        }
+        params.fill(0.0);
 
         // (7) Measure pose error vs truth.
         let t_err = (t_c - t_truth).length();

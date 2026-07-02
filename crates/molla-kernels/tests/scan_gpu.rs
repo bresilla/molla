@@ -160,7 +160,7 @@ fn exclusive_scan_matches_cpu_oracle() {
     let gpu = make_gpu();
 
     let n = 65537usize;
-    let mut rng = lcg(0xC0FFEE_FEED);
+    let mut rng = lcg(0x00C0_FFEE_FEED);
     // Small values so the u32 accumulator doesn't overflow in 65k adds.
     let input: Vec<u32> = (0..n).map(|_| rng() & 0xFFFF).collect();
 
@@ -186,7 +186,7 @@ fn inclusive_scan_matches_cpu_oracle() {
     let gpu = make_gpu();
 
     let n = 65537usize;
-    let mut rng = lcg(0xDEADBEEF_F00D);
+    let mut rng = lcg(0xDEAD_BEEF_F00D);
     let input: Vec<u32> = (0..n).map(|_| rng() & 0xFFFF).collect();
 
     let gpu_out = run_inclusive(&gpu, &input);

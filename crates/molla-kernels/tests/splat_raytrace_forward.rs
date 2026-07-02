@@ -122,8 +122,8 @@ fn run_forward(
 }
 
 /// 1. Single Gaussian at origin, ray straight along +Z hits its centre.
-/// Expected colour = colour · opacity (closest-approach ρ_max = 1 →
-/// α = opacity). Depth = projection of (0, 0, 0) - (0, 0, -5) onto +Z = 5.
+///    Expected colour = colour · opacity (closest-approach ρ_max = 1 →
+///    α = opacity). Depth = projection of (0, 0, 0) - (0, 0, -5) onto +Z = 5.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn single_gaussian_centered_hit() {
@@ -164,9 +164,9 @@ fn single_gaussian_centered_hit() {
 
 /// 2. Two Gaussians at the same world position, different opacities
 /// + colours. With identical centres, the camera-distance projection
-/// is identical (degenerate sort key); both will composite. We
-/// pick distinct centres along Z so the front-to-back order is
-/// deterministic and verifiable.
+///   is identical (degenerate sort key); both will composite. We
+///   pick distinct centres along Z so the front-to-back order is
+///   deterministic and verifiable.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn two_gaussians_alpha_composite() {
@@ -228,7 +228,7 @@ fn two_gaussians_alpha_composite() {
 }
 
 /// 3. Ray misses the splat (offset 10σ to the side). Output should be
-/// transparent (alpha == 0).
+///    transparent (alpha == 0).
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn ray_misses_gaussian() {
@@ -251,8 +251,8 @@ fn ray_misses_gaussian() {
 }
 
 /// 4. CPU/GPU parity sweep on a small batch of pixels with
-/// anisotropic scaling and a non-trivial rotation. Confirms the GPU
-/// canonical-frame math matches the CPU oracle within f32 precision.
+///    anisotropic scaling and a non-trivial rotation. Confirms the GPU
+///    canonical-frame math matches the CPU oracle within f32 precision.
 #[test]
 #[ignore = "needs a real wgpu adapter — run via --ignored"]
 fn cpu_gpu_parity_anisotropic() {
@@ -312,6 +312,6 @@ fn cpu_gpu_parity_anisotropic() {
             "pixel {k}: cpu rgb {rgb_cpu:?}, gpu rgb {gpu:?} (Δ = {drgb})"
         );
         // Sanity check: alpha bounded.
-        assert!(cpu_alpha >= 0.0 && cpu_alpha <= 1.0, "cpu α = {cpu_alpha}");
+        assert!((0.0..=1.0).contains(&cpu_alpha), "cpu α = {cpu_alpha}");
     }
 }

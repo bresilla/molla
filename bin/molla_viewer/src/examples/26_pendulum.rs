@@ -76,7 +76,7 @@ fn build_pendulum_model() -> (mp::Model, Vec<BodyVisual>) {
         b.add_joint_revolute(prev, body, x_p, x_c, MVec3::Z)
             .expect("chain joint");
         prev = body;
-        next_pos = next_pos - MVec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
+        next_pos -= MVec3::new(0.0, PENDULUM_LINK_LEN, 0.0);
     }
 
     // Floor.

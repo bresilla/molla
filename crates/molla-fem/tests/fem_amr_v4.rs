@@ -40,10 +40,10 @@ fn locate_lower_tri(amr: &AmrMesh, i: usize, j: usize) -> Option<usize> {
     let v10 = (j * stride + i + 1) as u32;
     let v11 = ((j + 1) * stride + i + 1) as u32;
     for (idx, c) in amr.cells().iter().enumerate() {
-        if let FemCell::Tri(v) = c {
-            if v == &[v00, v10, v11] {
-                return Some(idx);
-            }
+        if let FemCell::Tri(v) = c
+            && v == &[v00, v10, v11]
+        {
+            return Some(idx);
         }
     }
     None
@@ -394,7 +394,7 @@ fn amr_coarsen_cell_rejects_non_leaf_children() {
     );
 
     // Mesh state must be intact.
-    assert!(amr.is_removed_cell(child0) == false);
+    assert!(!amr.is_removed_cell(child0));
     assert_eq!(amr.cell_count(), n_cells_before);
     assert_eq!(amr.refined_cells.len(), n_refined_before);
 
@@ -456,7 +456,7 @@ fn pin_dirichlet_boundary<G: Fn(Vec3) -> Real>(
         let lo = k_full.row_offsets[r];
         let hi = k_full.row_offsets[r + 1];
         for slot in lo..hi {
-            let c = k_full.col_idx[slot] as usize;
+            let c = k_full.col_idx[slot];
             let v = k_full.values[slot];
             let fj = free_idx_of[c];
             if fj < 0 {

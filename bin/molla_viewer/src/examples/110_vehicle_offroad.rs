@@ -4,6 +4,7 @@
 // + the heightfield it drives on. The vehicle is rebuilt on every
 // scene entry (same pattern as [`VehicleExampleState`]).
 #[derive(Resource)]
+#[derive(Default)]
 struct VehicleOffroadExampleState {
     vehicle: Option<molla_vehicle::Vehicle>,
     powertrain: molla_vehicle::Powertrain,
@@ -14,17 +15,6 @@ struct VehicleOffroadExampleState {
     was_active: bool,
 }
 
-impl Default for VehicleOffroadExampleState {
-    fn default() -> Self {
-        Self {
-            vehicle: None,
-            powertrain: molla_vehicle::Powertrain::default(),
-            terrain: None,
-            grid_segments: Vec::new(),
-            was_active: false,
-        }
-    }
-}
 
 fn build_offroad_heightfield() -> molla_vehicle::HeightfieldTerrain {
     // 60×60 m terrain, 1.5 m spacing → 41×41 grid. Smooth-ish
@@ -162,8 +152,8 @@ fn update_vehicle_offroad_example(
             )
         })
         .collect();
-    if let Ok(body_q) = sim.state_a.body_q.host_mut() {
-        if body_q.len() >= 5 {
+    if let Ok(body_q) = sim.state_a.body_q.host_mut()
+        && body_q.len() >= 5 {
             body_q[0].position = chassis_pos;
             body_q[0].rotation = chassis_rot;
             for (i, w) in wheels.iter().enumerate() {
@@ -171,7 +161,6 @@ fn update_vehicle_offroad_example(
                 body_q[1 + i].rotation = w.1;
             }
         }
-    }
 }
 
 // Draw the heightfield grid + (when the wheels are in contact) a

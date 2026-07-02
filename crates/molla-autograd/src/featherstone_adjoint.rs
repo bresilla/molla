@@ -1548,19 +1548,15 @@ impl FeatherstoneRevoluteChain {
 
         // 1. Build M(q) via CRBA on the chain.
         let m_mat = self.mass_matrix(q_t);
-        for i in 0..n * n {
-            scratch.mass_matrix[i] = m_mat[i];
-        }
+        scratch.mass_matrix[..(n * n)].copy_from_slice(&m_mat[..(n * n)]);
 
         // 2. Invert M via dense Cholesky (M is SPD for any healthy
         //    revolute chain). Falls back to eigen-pinv if decomposition
         //    fails — keeps the gradient finite even on a pathological
         //    config.
         let inv_m = invert_spd(&m_mat, n);
-        for i in 0..n * n {
-            scratch.inv_mass_matrix[i] = inv_m[i];
-            scratch.qdd_tau[i] = inv_m[i];
-        }
+        scratch.inv_mass_matrix[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
+        scratch.qdd_tau[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
 
         // 3. Carpentier-Mansard chain rule:
         //      ∂q̈/∂q  = -M⁻¹ · ∂ID(q,qd,q̈₀)/∂q
@@ -1652,14 +1648,10 @@ impl FeatherstoneRevoluteChain {
 
         // 1. Build M(q) via CRBA — same as the closed-form path.
         let m_mat = self.mass_matrix(q_t);
-        for i in 0..n * n {
-            scratch.mass_matrix[i] = m_mat[i];
-        }
+        scratch.mass_matrix[..(n * n)].copy_from_slice(&m_mat[..(n * n)]);
         let inv_m = invert_spd(&m_mat, n);
-        for i in 0..n * n {
-            scratch.inv_mass_matrix[i] = inv_m[i];
-            scratch.qdd_tau[i] = inv_m[i];
-        }
+        scratch.inv_mass_matrix[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
+        scratch.qdd_tau[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
 
         // 2. Analytic dh/dqd via the derivation in this method's
         //    doc-comment. Fills `did_dqd` then chains: qdd_qd = -M⁻¹ · did_dqd.
@@ -1845,14 +1837,10 @@ impl FeatherstoneRevoluteChain {
 
         // 1. Build M(q) via CRBA — same as the closed-form path.
         let m_mat = self.mass_matrix(q_t);
-        for i in 0..n * n {
-            scratch.mass_matrix[i] = m_mat[i];
-        }
+        scratch.mass_matrix[..(n * n)].copy_from_slice(&m_mat[..(n * n)]);
         let inv_m = invert_spd(&m_mat, n);
-        for i in 0..n * n {
-            scratch.inv_mass_matrix[i] = inv_m[i];
-            scratch.qdd_tau[i] = inv_m[i];
-        }
+        scratch.inv_mass_matrix[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
+        scratch.qdd_tau[..(n * n)].copy_from_slice(&inv_m[..(n * n)]);
 
         // 2. Analytic dh/dqd — same routine as AnalyticBiasQd.
         let did_dqd = self.dh_dqd_analytic(q_t, qd_t);

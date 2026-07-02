@@ -189,22 +189,19 @@ fn update_cable_example(
     // Update the kinematic puller body's pose. body 0 is the puller
     // (added via `BodyParams::new().with_flags(KINEMATIC)` in
     // `build_cable_model` after the cable particles).
-    if sim.model.body_count > 0 {
-        if let Ok(bq) = sim.state_a.body_q.host_mut() {
-            if let Some(body) = bq.last_mut() {
+    if sim.model.body_count > 0
+        && let Ok(bq) = sim.state_a.body_q.host_mut()
+            && let Some(body) = bq.last_mut() {
                 *body = mp::Transform::from_translation(puller_pos);
             }
-        }
-    }
 
     // Update the puller-pinned cable particle. It's the LAST particle
     // pushed by `add_cable_polyline`, so index = particle_count - 1.
     let idx = sim.model.particle_count;
-    if idx > 0 {
-        if let Ok(pq) = sim.state_a.particle_q.host_mut() {
+    if idx > 0
+        && let Ok(pq) = sim.state_a.particle_q.host_mut() {
             pq[idx - 1] = puller_pos;
         }
-    }
 
     // Apply the right-rail solver tunings.
     if let SolverBackend::Vbd(s) = &mut sim.solver {
@@ -309,11 +306,10 @@ fn cable_pane(
     readout(ui, "Particles", &format!("{}", sim.model.particle_count));
     readout(ui, "Springs", &format!("{}", sim.model.spring_count));
     readout(ui, "Cables", &format!("{}", sim.model.cable_count));
-    if sim.model.cable_count > 0 {
-        if let Ok(rl) = sim.model.cable_rest_length.host() {
+    if sim.model.cable_count > 0
+        && let Ok(rl) = sim.model.cable_rest_length.host() {
             readout(ui, "Rest length", &format!("{:.3} m", rl[0]));
         }
-    }
     ui.separator();
 
     ui.label("Stretch stiffness (N/m)");
@@ -345,34 +341,28 @@ fn cable_pane(
     if ui
         .add(egui::Slider::new(&mut state.contact_stiffness, 1.0e3..=1.0e6).logarithmic(true))
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.contact_stiffness = state.contact_stiffness;
         }
-    }
     ui.label("Inner iterations");
     if ui
         .add(egui::Slider::new(&mut state.inner_iterations, 1..=30))
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.iterations = state.inner_iterations as usize;
         }
-    }
     ui.separator();
 
     if ui
         .checkbox(&mut state.use_hard_mode, "Hard-mode AVBD (no penetration)")
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.vbd_mode = if state.use_hard_mode {
                 mp::VbdMode::Hard
             } else {
                 mp::VbdMode::Soft
             };
         }
-    }
     ui.checkbox(&mut state.show_pinned, "Show pinned points");
     ui.separator();
 

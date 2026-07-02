@@ -59,8 +59,8 @@ pub struct MuscleKernel {
 impl MuscleKernel {
     /// Build the kernel from a model. The model's `joint_dof_offset`
     /// + `muscle_count` are baked into a per-DOF output buffer of
-    /// length `model.joint_dof_total`. Caller must have uploaded the
-    /// model + muscle buffers before dispatching.
+    ///   length `model.joint_dof_total`. Caller must have uploaded the
+    ///   model + muscle buffers before dispatching.
     pub fn new(device: &wgpu::Device, model: &Model) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::muscle"),

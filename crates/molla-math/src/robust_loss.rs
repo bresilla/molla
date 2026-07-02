@@ -27,9 +27,10 @@ use crate::Real;
 /// Selector for which robust loss to apply during an IRLS-weighted IK
 /// solve (Stage 24b). Default is [`RobustLoss::L2`] so existing call
 /// sites keep their plain Cholesky-+-L2 behaviour.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub enum RobustLoss {
     /// Plain L2 — `½ r²`, gradient `r`, weight `1`.
+    #[default]
     L2,
     /// Absolute-value loss — IRLS weight `1/|r|` (clamped near zero).
     L1,
@@ -43,12 +44,6 @@ pub enum RobustLoss {
     Tukey { c: Real },
     /// Cauchy / Lorentzian: soft down-weighting.
     Cauchy { c: Real },
-}
-
-impl Default for RobustLoss {
-    fn default() -> Self {
-        RobustLoss::L2
-    }
 }
 
 impl RobustLoss {

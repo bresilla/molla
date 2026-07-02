@@ -593,9 +593,9 @@ impl LbvhBroadPhase {
                     for (a, b) in prim_aabbs {
                         let a = a.as_vec3();
                         let b = b.as_vec3();
-                        let cx = ((a.x + b.x) * 0.5) as f32;
-                        let cy = ((a.y + b.y) * 0.5) as f32;
-                        let cz = ((a.z + b.z) * 0.5) as f32;
+                        let cx = (a.x + b.x) * 0.5;
+                        let cy = (a.y + b.y) * 0.5;
+                        let cz = (a.z + b.z) * 0.5;
                         // NaN bounds are an upstream corruption — catch
                         // in debug. Skip non-finite (±∞) coordinates
                         // when growing the scene-extent estimate so
@@ -946,10 +946,8 @@ impl LbvhBroadPhase {
         // build_hierarchy). On refit-only paths, dispatch_kernels
         // reads the cache and re-stamps `pair_count[1]` before the
         // find_pairs dispatch.
-        if do_build {
-            if let Some(cache) = self.cached_topology.as_mut() {
-                cache.root = root;
-            }
+        if do_build && let Some(cache) = self.cached_topology.as_mut() {
+            cache.root = root;
         }
 
         // If we overflowed, grow + re-run once. Drop the cache flag

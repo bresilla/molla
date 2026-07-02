@@ -646,7 +646,7 @@ fn tire_brush_gpu_matches_cpu_heightfield_friction_map() {
     for iz in 0..nz {
         for ix in 0..nx {
             // Low-grip ice band under/just ahead of the wheel centre.
-            if ix >= 2 && ix <= 4 {
+            if (2..=4).contains(&ix) {
                 friction[(iz * nx + ix) as usize] = 0.18;
             }
         }

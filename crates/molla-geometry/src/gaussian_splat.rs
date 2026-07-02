@@ -1075,9 +1075,7 @@ pub fn sh_view_basis(dir: Vec3) -> [Real; SH_VIEW_DEP_COUNT] {
     let full = sh_basis_band3(dir);
     let mut out = [0.0; SH_VIEW_DEP_COUNT];
     // out[k] corresponds to full[k+1].
-    for k in 0..SH_VIEW_DEP_COUNT {
-        out[k] = full[k + 1];
-    }
+    out[..SH_VIEW_DEP_COUNT].copy_from_slice(&full[1..(SH_VIEW_DEP_COUNT + 1)]);
     out
 }
 

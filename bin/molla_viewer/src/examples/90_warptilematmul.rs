@@ -211,7 +211,7 @@ fn warp_tile_matmul_pane(ui: &mut egui::Ui, st: &mut WarpTileMatmulState) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
-        let mut seed = (nanos ^ 0xA110_BEEF) as u32;
+        let mut seed = nanos ^ 0xA110_BEEF;
         let mut rng = || {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             ((seed >> 16) as i32 as f32) / 32768.0

@@ -44,8 +44,8 @@ fn sample_input() -> TireBekkerGpuInput {
 fn tire_bekker_reference_writeback_ratchetes_pressure_and_shear_sinkage() {
     let input = sample_input();
     let out = tire_bekker_reference_writeback(&input).expect("reference writeback");
-    let center = 1 * input.nx as usize + 1;
-    let right = 1 * input.nx as usize + 2;
+    let center = (input.nx as usize) + 1;
+    let right = (input.nx as usize) + 2;
     assert!(
         (out.sinkage[center] - 0.10).abs() < 1.0e-6,
         "center cell should follow Bekker pressure-sinkage: {:?}",
@@ -103,7 +103,7 @@ fn tire_bekker_owner_exports_fem_sinkage_terrain() {
         .apply_contacts_cpu(&sample_input().contacts)
         .expect("owner writeback");
     let terrain = owner.fem_contact_terrain();
-    let center = 1 * terrain.nx as usize + 1;
+    let center = (terrain.nx as usize) + 1;
     assert_eq!(terrain.origin, [-0.5, -0.5]);
     assert_eq!(terrain.spacing, 0.5);
     assert_eq!(terrain.friction, 0.55);

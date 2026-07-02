@@ -47,11 +47,10 @@ fn update_warp_mesh(time: Res<Time>, mut sim: ResMut<Sim>, mut warp: ResMut<Warp
     // Body 0 is the mesh body; rewrite its pose.
     let q = MQuat::from_axis_angle(MVec3::Y, yaw as f64);
     let t = mp::Transform::new(MVec3::new(0.0, 1.0, 0.0), q);
-    if let Ok(body_q) = sim.state_a.body_q.host_mut() {
-        if !body_q.is_empty() {
+    if let Ok(body_q) = sim.state_a.body_q.host_mut()
+        && !body_q.is_empty() {
             body_q[0] = t;
         }
-    }
     // Ignore scale visualization for v1 — we'd need to mutate visuals.
     let _ = scale;
 }

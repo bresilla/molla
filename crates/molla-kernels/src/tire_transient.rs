@@ -246,7 +246,7 @@ impl TireTransientGpuKernel {
         if n == 0 {
             return Ok((Vec::new(), Vec::new()));
         }
-        let in_bytes = (n * core::mem::size_of::<TireTransientGpuInput>()) as u64;
+        let in_bytes = std::mem::size_of_val(inputs) as u64;
         let state_bytes = (n * core::mem::size_of::<TireTransientGpuState>()) as u64;
         let out_bytes = (n * core::mem::size_of::<TireTransientGpuOutput>()) as u64;
         let uniforms = TireTransientUniforms {

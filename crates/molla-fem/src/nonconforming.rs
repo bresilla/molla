@@ -1133,8 +1133,8 @@ fn assemble_cross_mass(
     let ncols = source.vertices.len();
 
     let rule = tet_quadrature_5pt();
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(target.cells.len() * rule.len() * 16);
+    let mut triplets: Vec<(usize, usize, Real)> =
+        Vec::with_capacity(target.cells.len() * rule.len() * 16);
 
     let mut candidates = Vec::new();
     for cell in &target.cells {

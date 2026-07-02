@@ -119,7 +119,7 @@ fn two_jelly_cubes_dont_penetrate() {
     // Pin the bottom layer of cube A.
     for kk in 0..n {
         for ii in 0..n {
-            let pin = first_a + (kk * n + 0) * n + ii;
+            let pin = first_a + (kk * n) * n + ii;
             b.pin_particle(pin);
         }
     }

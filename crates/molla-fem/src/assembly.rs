@@ -61,8 +61,7 @@ where
     // Flat scalar triplets — one allocation total, not one per entry.
     // `from_scalar_triplets` coalesces duplicates the same way
     // `from_triplets` did.
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 16 * d * d);
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cells.len() * 16 * d * d);
 
     for cell in &mesh.cells {
         let local = element_visitor(cell, &mesh.vertices);

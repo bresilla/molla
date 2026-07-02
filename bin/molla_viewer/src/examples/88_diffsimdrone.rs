@@ -98,7 +98,7 @@ fn drone_rollout(p0: MVec3, controls: &[f64]) -> Vec<MVec3> {
         let az_lat = controls[k * 3 + 2];
         let a = MVec3::new(ax_lat, thrust - DRONE_GRAVITY, az_lat);
         v = v + a * dt - v * (DRONE_DRAG * dt);
-        p = p + v * dt;
+        p += v * dt;
         traj.push(p);
     }
     traj

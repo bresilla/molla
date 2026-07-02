@@ -479,9 +479,7 @@ where
         if omega.abs() < 1.0e-30 {
             // ω collapse — accept half-step + restart on next iter.
             axpy(&mut x, alpha, &p);
-            for i in 0..n {
-                r[i] = s[i];
-            }
+            r[..n].copy_from_slice(&s[..n]);
             r_hat = r.clone();
             rho = 1.0;
             alpha = 1.0;

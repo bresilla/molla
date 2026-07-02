@@ -213,7 +213,7 @@ impl JacobianKernel {
 
         let req_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::jacobian requests"),
-            size: (requests.len() * core::mem::size_of::<JacobianRequest>()) as u64,
+            size: std::mem::size_of_val(requests) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

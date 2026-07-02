@@ -297,7 +297,7 @@ fn recenter(mesh: FemMesh, lx: Real, ly: Real, lz: Real) -> FemMesh {
         cells,
     } = mesh;
     for v in &mut vertices {
-        *v = *v + shift;
+        *v += shift;
     }
     FemMesh { vertices, cells }
 }

@@ -135,10 +135,7 @@ fn update_ik_custom(mut sim: ResMut<Sim>, mut warp: ResMut<WarpExampleStates>) {
     let q0: Vec<f64> = state_a
         .joint_q
         .host()
-        .expect("joint_q")
-        .iter()
-        .copied()
-        .collect();
+        .expect("joint_q").to_vec();
     let body_q_now = state_a.body_q.host().expect("body_q").to_vec();
     let c_obs = st.obstacle_center;
     let r_obs = st.obstacle_radius as f64;

@@ -136,11 +136,10 @@ fn update_neural_lstm_example(
             1.0
         };
         let queue = sim.engine.queue().expect("queue").clone();
-        if let Ok(qd) = sim.state_a.joint_qd.host_mut() {
-            if qd.len() >= 2 {
-                qd[1] += (sign * 1.5) as f64;
+        if let Ok(qd) = sim.state_a.joint_qd.host_mut()
+            && qd.len() >= 2 {
+                qd[1] += sign * 1.5;
             }
-        }
         let _ = sim.state_a.joint_qd.upload(&queue);
     }
 
@@ -178,35 +177,27 @@ fn update_neural_lstm_example(
         let device = engine.device().expect("device").clone();
         let mut new_output: Option<f32> = None;
         let mut new_hidden: Option<Vec<f32>> = None;
-        match act.controller_mut() {
-            ControllerStage::Lstm(lstm) => {
-                if let Ok(outs) = lstm.download_outputs(&device, &queue) {
-                    if !outs.is_empty() {
-                        new_output = Some(outs[0] as f32);
-                    }
+        if let ControllerStage::Lstm(lstm) = act.controller_mut() {
+            if let Ok(outs) = lstm.download_outputs(&device, &queue)
+                && !outs.is_empty() {
+                    new_output = Some(outs[0] as f32);
                 }
-                if let Ok(hs) = lstm.download_hidden_state(&device, &queue) {
-                    new_hidden = Some(hs.iter().map(|v| *v as f32).collect());
-                }
+            if let Ok(hs) = lstm.download_hidden_state(&device, &queue) {
+                new_hidden = Some(hs.iter().map(|v| *v as f32).collect());
             }
-            _ => {}
         }
         if let Some(v) = new_output {
             state.last_output = v;
         }
         if let Some(hs) = new_hidden {
             let n = state.last_hidden.len().min(hs.len());
-            for i in 0..n {
-                state.last_hidden[i] = hs[i];
-            }
+            state.last_hidden[..n].copy_from_slice(&hs[..n]);
         }
-        if control.joint_force.download(&device, &queue).is_ok() {
-            if let Ok(jf) = control.joint_force.host() {
-                if !jf.is_empty() {
+        if control.joint_force.download(&device, &queue).is_ok()
+            && let Ok(jf) = control.joint_force.host()
+                && !jf.is_empty() {
                     state.last_delivered = jf[0] as f32;
                 }
-            }
-        }
     }
 }
 

@@ -499,8 +499,7 @@ fn assemble_boundary_nitsche(mesh: &FemMesh, alpha: Real, eta_bnd: Real) -> BsrM
 
     let degree = 1;
     let n = mesh.cell_count() * 3;
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cell_count() * 32);
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cell_count() * 32);
 
     for (face_verts, owners) in &face_to_cells {
         if owners.len() != 1 {

@@ -289,11 +289,11 @@ impl SphOracle {
             }
             if x[0] < self.domain_min[0] {
                 x[0] = self.domain_min[0];
-                v[0] = -e * v[0];
+                v[0] *= -e;
             }
             if x[0] > self.domain_max[0] {
                 x[0] = self.domain_max[0];
-                v[0] = -e * v[0];
+                v[0] *= -e;
             }
             // Floor: reflect the normal velocity, then apply Coulomb
             // basal friction so a granular pile cannot slide off the
@@ -315,15 +315,15 @@ impl SphOracle {
             }
             if x[1] > self.domain_max[1] {
                 x[1] = self.domain_max[1];
-                v[1] = -e * v[1];
+                v[1] *= -e;
             }
             if x[2] < self.domain_min[2] {
                 x[2] = self.domain_min[2];
-                v[2] = -e * v[2];
+                v[2] *= -e;
             }
             if x[2] > self.domain_max[2] {
                 x[2] = self.domain_max[2];
-                v[2] = -e * v[2];
+                v[2] *= -e;
             }
             self.vel[i] = v;
             self.pos[i] = x;
@@ -332,7 +332,7 @@ impl SphOracle {
 
     /// Advance one substep (density → forces → integrate the fluid).
     pub fn step(&mut self, dt: f64) {
-        if self.len() == 0 {
+        if self.is_empty() {
             return;
         }
         self.compute_density();

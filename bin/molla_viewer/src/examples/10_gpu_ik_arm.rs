@@ -147,10 +147,7 @@ fn update_gpu_ik_arm(mut sim: ResMut<Sim>, mut state: ResMut<GpuIkArmState>) {
     let q0: Vec<f64> = state_a
         .joint_q
         .host()
-        .expect("joint_q")
-        .iter()
-        .copied()
-        .collect();
+        .expect("joint_q").to_vec();
     let solver = IkSolver::new(vec![IkObjective::Position {
         body: ee_body,
         point_local: MVec3::ZERO,
@@ -212,13 +209,12 @@ fn gpu_ik_pane(ui: &mut egui::Ui, state: &mut GpuIkArmState, sim: &Sim) {
     );
 
     let ee_body = sim.model.body_count - 1;
-    if let Ok(bq) = sim.state_a.body_q.host() {
-        if ee_body < bq.len() {
+    if let Ok(bq) = sim.state_a.body_q.host()
+        && ee_body < bq.len() {
             let p = bq[ee_body].position;
             let err = (p - state.target).length();
             readout(ui, "EE error", &format!("{:.4} m", err));
         }
-    }
     ui.separator();
 
     ui.checkbox(&mut state.use_gpu, "Use GPU IK");

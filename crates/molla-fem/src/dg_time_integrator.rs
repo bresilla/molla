@@ -151,7 +151,7 @@ mod tests {
         }
         let avg = rates.iter().sum::<Real>() / rates.len() as Real;
         assert!(
-            avg >= 1.9 && avg <= 2.1,
+            (1.9..=2.1).contains(&avg),
             "SSP-RK2 measured order = {avg}, want ~2.0"
         );
     }
@@ -179,7 +179,7 @@ mod tests {
         }
         let avg = rates.iter().sum::<Real>() / rates.len() as Real;
         assert!(
-            avg >= 2.9 && avg <= 3.1,
+            (2.9..=3.1).contains(&avg),
             "SSP-RK3 measured order = {avg}, want ~3.0"
         );
     }

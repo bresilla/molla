@@ -359,9 +359,7 @@ fn ns_advected_passive_scalar() {
         for j in 0..n_verts_y {
             let mut new_row = vec![0.0_f64 as Real; n_verts_x];
             new_row[0] = tracer[j][0];
-            for i in 1..n_verts_x {
-                new_row[i] = tracer[j][i - 1];
-            }
+            new_row[1..n_verts_x].copy_from_slice(&tracer[j][..(n_verts_x - 1)]);
             tracer[j] = new_row;
         }
     }
@@ -375,7 +373,7 @@ fn ns_advected_passive_scalar() {
     for j in 0..n_verts_y {
         let shift = final_max_idx[j] as i32 - initial_max_idx[j] as i32;
         assert_eq!(
-            shift, n_steps as i32,
+            shift, n_steps,
             "row {j}: tracer max shifted by {shift} cells (want {n_steps})"
         );
     }

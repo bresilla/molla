@@ -227,7 +227,7 @@ fn dg_p2_converges_at_cubic_rate() {
     let avg_rate: Real = rates.iter().sum::<Real>() / rates.len() as Real;
     eprintln!("P2 average convergence rate = {avg_rate:.3}");
     assert!(
-        avg_rate >= 2.5 && avg_rate <= 3.5,
+        (2.5..=3.5).contains(&avg_rate),
         "P2 average convergence rate = {avg_rate}, want in [2.5, 3.5]"
     );
 }

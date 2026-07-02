@@ -89,20 +89,12 @@ fn build_face_data(mesh: &FemMesh) -> Vec<FaceData> {
             let raw = Vec3::new(dy / len, -dx / len, 0.0);
             let n_lr = if raw.dot(c_r - c_l) >= 0.0 { raw } else { -raw };
             let local_l = [
-                v_l.iter()
-                    .position(|&q| q as u32 == f.face_verts[0])
-                    .unwrap(),
-                v_l.iter()
-                    .position(|&q| q as u32 == f.face_verts[1])
-                    .unwrap(),
+                v_l.iter().position(|&q| q == f.face_verts[0]).unwrap(),
+                v_l.iter().position(|&q| q == f.face_verts[1]).unwrap(),
             ];
             let local_r = [
-                v_r.iter()
-                    .position(|&q| q as u32 == f.face_verts[0])
-                    .unwrap(),
-                v_r.iter()
-                    .position(|&q| q as u32 == f.face_verts[1])
-                    .unwrap(),
+                v_r.iter().position(|&q| q == f.face_verts[0]).unwrap(),
+                v_r.iter().position(|&q| q == f.face_verts[1]).unwrap(),
             ];
             FaceData {
                 cell_l: cl,
@@ -189,7 +181,7 @@ fn build_state(mesh: &FemMesh, dam_x: Real, h_l: Real, h_r: Real) -> Vec<Real> {
             let h = 0.5 * (h_l + h_r) - 0.5 * (h_l - h_r) * r;
             let hu = 0.05 * h * (1.0 - r * r); // pulse moving right
             let hv = 0.02 * h * (p.y - 0.05).sin();
-            state[(off + i) * 3 + 0] = h;
+            state[(off + i) * 3] = h;
             state[(off + i) * 3 + 1] = hu;
             state[(off + i) * 3 + 2] = hv;
         }

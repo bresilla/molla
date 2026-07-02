@@ -130,9 +130,9 @@ pub enum VbdMode {
 /// [`VbdSolver::with_sparse_sdf`]. Wraps either a baked dense
 /// [`crate::geometry::SdfGrid`] or a sparse [`crate::geometry::SparseSdf`]
 /// + a world-frame [`crate::math::Transform`]. The host-side
-/// post-step fixup pass projects every soft-body vertex out of any
-/// registered SDF surface (delegating the actual sample to the
-/// underlying backing volume's sampler).
+///   post-step fixup pass projects every soft-body vertex out of any
+///   registered SDF surface (delegating the actual sample to the
+///   underlying backing volume's sampler).
 ///
 /// Currently exposed only via the VBD solver — Stage 20.5 will wire
 /// these into the GPU contact kernel directly via a dedicated
@@ -793,7 +793,7 @@ impl VbdSolver {
                     soft_bvh,
                     self.vt_contact_margin,
                     self.contact_stiffness,
-                    dt as f64,
+                    dt,
                     sweep_idx == 0,
                 )?;
                 last_count = stats.contact_count;
@@ -818,7 +818,7 @@ impl VbdSolver {
                     soft_bvh,
                     self.vt_contact_margin,
                     self.contact_stiffness,
-                    dt as f64,
+                    dt,
                 )?;
             }
             // commit_dq mutated state_out.particle_q +

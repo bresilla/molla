@@ -303,8 +303,8 @@ pub struct Model {
     pub tet_dm_inv: Buffer<Mat3>,
     /// Per-tet rest volume (m³). Used to weight the per-tet Hessian
     /// + force contribution: `Ψ_total = rest_volume · Ψ_density`. We
-    /// compute this once at build time as `det(Dm) / 6`; pre-storing
-    /// avoids the determinant in the hot loop.
+    ///   compute this once at build time as `det(Dm) / 6`; pre-storing
+    ///   avoids the determinant in the hot loop.
     pub tet_rest_volume: Buffer<Real>,
     /// Per-tet first Lamé parameter `μ` (shear modulus, N/m²). The
     /// builder converts the user's `(E, ν)` (Young's modulus + Poisson
@@ -465,9 +465,9 @@ pub struct Model {
     /// - Cone      → `(half_height, radius, 0)`
     /// - Ellipsoid → `(ax, ay, az)` (per-axis semi-axes)
     /// - Triangle  → `(0, 0, 0)` (vertices held host-side; see
-    ///                `ShapeGeometry::Triangle`)
+    ///   `ShapeGeometry::Triangle`)
     /// - TriMesh   → `(mesh_id_as_f32, 0, 0)` (mesh BVH lives on host
-    ///                until stage 11 ports it)
+    ///   until stage 11 ports it)
     pub shape_geom_data: Buffer<Vec3>,
     /// Shape transform in owning body frame.
     pub shape_transform: Buffer<Transform>,

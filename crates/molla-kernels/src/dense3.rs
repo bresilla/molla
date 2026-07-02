@@ -313,7 +313,7 @@ impl Dense3Kernel {
             let base = idx * 9;
             Mat3::from_cols(
                 Vec3::new(
-                    raw[base + 0] as Real,
+                    raw[base] as Real,
                     raw[base + 3] as Real,
                     raw[base + 6] as Real,
                 ),
@@ -332,7 +332,7 @@ impl Dense3Kernel {
         let unpack_diag = |raw: &[f32], idx: usize| -> Vec3 {
             let base = idx * 9;
             Vec3::new(
-                raw[base + 0] as Real,
+                raw[base] as Real,
                 raw[base + 1] as Real,
                 raw[base + 2] as Real,
             )
@@ -503,7 +503,7 @@ impl Dense3Kernel {
             // First 3 floats per slot = (x, y, z), pad to 9.
             let mut packed: Vec<f32> = vec![0.0; n * floats_per_mat];
             for (i, vv) in slice.iter().enumerate() {
-                packed[i * 9 + 0] = vv.x as f32;
+                packed[i * 9] = vv.x as f32;
                 packed[i * 9 + 1] = vv.y as f32;
                 packed[i * 9 + 2] = vv.z as f32;
             }
@@ -597,7 +597,7 @@ impl Dense3Kernel {
             let base = i * 9;
             out.push(Mat3::from_cols(
                 Vec3::new(
-                    raw[base + 0] as Real,
+                    raw[base] as Real,
                     raw[base + 3] as Real,
                     raw[base + 6] as Real,
                 ),

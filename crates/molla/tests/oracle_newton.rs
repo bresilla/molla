@@ -305,7 +305,7 @@ fn newton_plane_box_corner_count_and_depth() {
             // Strict < means molla yields zero contacts; Newton 4.
             // Allow either — this is the documented edge-case.
             assert!(
-                manifolds.len() == 0 || manifolds.len() == expected_count,
+                manifolds.is_empty() || manifolds.len() == expected_count,
                 "case {i}: touching, got {} manifolds",
                 manifolds.len()
             );

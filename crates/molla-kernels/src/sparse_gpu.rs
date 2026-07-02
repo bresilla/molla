@@ -899,8 +899,8 @@ impl BsrAlgebraKernel {
     /// v1 splits the symbolic + numeric phases — see module docstring.
     /// Symbolic walks A's pattern host-side to build B's `row_offsets`
     /// + `col_indices` and a per-source-slot destination map; numeric
-    /// dispatches `bsr_transpose_scatter` on the GPU. The symbolic step
-    /// reads A's row/col buffers back ONCE.
+    ///   dispatches `bsr_transpose_scatter` on the GPU. The symbolic step
+    ///   reads A's row/col buffers back ONCE.
     pub fn transpose(&self, a: &BsrGpu) -> Result<BsrGpu> {
         let nrows = a.nrows;
         let ncols = a.ncols;

@@ -117,11 +117,9 @@ fn fast_soft_impact_pane(ui: &mut egui::Ui, sim: &mut Sim) {
     if ui
         .checkbox(&mut ccd_on, "CCD enabled (Stage 33.4)")
         .changed()
-    {
-        if let SolverBackend::Vbd(s) = &mut sim.solver {
+        && let SolverBackend::Vbd(s) = &mut sim.solver {
             s.ccd_enabled = ccd_on;
         }
-    }
 
     if ui.button("Re-launch impact").clicked() {
         sim.reset();

@@ -281,8 +281,7 @@ where
     F: Fn(&FemCell, &[Vec3]) -> Vec<Vec<Real>>,
 {
     let n = map.ndof();
-    let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
-    triplets.reserve(mesh.cells.len() * 36);
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cells.len() * 36);
 
     for cell in &mesh.cells {
         let FemCell::Tet(verts) = cell else { continue };

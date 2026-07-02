@@ -327,10 +327,10 @@ fn locate_lower_tri(amr: &AmrMesh, i: usize, j: usize) -> Option<usize> {
     let v10 = (j * stride + i + 1) as u32;
     let v11 = ((j + 1) * stride + i + 1) as u32;
     for (idx, c) in amr.cells().iter().enumerate() {
-        if let FemCell::Tri(v) = c {
-            if v == &[v00, v10, v11] {
-                return Some(idx);
-            }
+        if let FemCell::Tri(v) = c
+            && v == &[v00, v10, v11]
+        {
+            return Some(idx);
         }
     }
     None

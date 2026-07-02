@@ -164,7 +164,7 @@ impl FftKernel {
         queue.write_buffer(&buf_a, 0, bytemuck::cast_slice(input));
 
         let final_buf = self.run_1d_passes(device, queue, &buf_a, &buf_b, n, 1, n, inverse)?;
-        readback_into(device, queue, &final_buf, output, bytes)?;
+        readback_into(device, queue, final_buf, output, bytes)?;
         Ok(())
     }
 
@@ -336,7 +336,7 @@ impl FftKernel {
             depth,
             inverse,
         )?;
-        readback_into(device, queue, &after, &mut z_pencils_out, bytes)?;
+        readback_into(device, queue, after, &mut z_pencils_out, bytes)?;
 
         // Transpose [Y][X][Z] back to [Z][Y][X].
         for z in 0..depth {
@@ -450,7 +450,7 @@ impl FftKernel {
         queue.submit(std::iter::once(encoder.finish()));
 
         // Result is in buf_a if l is even, buf_b if odd.
-        Ok(if l % 2 == 0 { buf_a } else { buf_b })
+        Ok(if l.is_multiple_of(2) { buf_a } else { buf_b })
     }
 
     fn run_transpose(

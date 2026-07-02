@@ -1234,8 +1234,8 @@ fn update_tire_traction_example(
                     state.transient_kernel =
                         Some(molla::kernels::TireTransientGpuKernel::new(device));
                 }
-                if state.transient_batch.is_none() {
-                    if let Some(kernel) = state.transient_kernel.as_ref() {
+                if state.transient_batch.is_none()
+                    && let Some(kernel) = state.transient_kernel.as_ref() {
                         match kernel.create_batch(device, 16) {
                             Ok(batch) => {
                                 state.transient_batch = Some(batch);
@@ -1246,7 +1246,6 @@ fn update_tire_traction_example(
                             }
                         }
                     }
-                }
                 Some((device.clone(), queue.clone()))
             }
             _ => {

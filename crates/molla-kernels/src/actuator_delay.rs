@@ -105,7 +105,7 @@ impl ActuatorDelayKernel {
     /// Bind groups + uniforms; returns the encoder so the caller can
     /// chain stages without flushing in between.
     #[allow(clippy::too_many_arguments)]
-    fn make_bind_groups<'a>(
+    fn make_bind_groups(
         &self,
         device: &wgpu::Device,
         target_pos: &Buffer<molla_math::Real>,
@@ -118,7 +118,7 @@ impl ActuatorDelayKernel {
         write_idx: &Buffer<u32>,
         out_pos: &Buffer<molla_math::Real>,
         out_vel: &Buffer<molla_math::Real>,
-        uniform_buf: &'a wgpu::Buffer,
+        uniform_buf: &wgpu::Buffer,
     ) -> Result<(
         wgpu::BindGroup,
         wgpu::BindGroup,

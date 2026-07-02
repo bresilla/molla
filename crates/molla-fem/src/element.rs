@@ -964,7 +964,7 @@ pub fn compute_element_distortion_energy(
         let node = coord / 3;
         let comp = coord % 3;
         let mut p = out[node];
-        p[comp] = p[comp] + delta;
+        p[comp] += delta;
         out[node] = p;
         out
     };
@@ -994,10 +994,10 @@ pub fn compute_element_distortion_energy(
             let nj = j / 3;
             let cj = j % 3;
             let mut tmp = p[ni];
-            tmp[ci] = tmp[ci] + h_eps;
+            tmp[ci] += h_eps;
             p[ni] = tmp;
             let mut tmp = p[nj];
-            tmp[cj] = tmp[cj] + h_eps;
+            tmp[cj] += h_eps;
             p[nj] = tmp;
             let e_pp = energy_at(&p);
             let h_ij = (e_pp - e_plus_i[i] - e_plus_i[j] + e0) / h2;
@@ -1144,7 +1144,7 @@ mod tests {
             Vec3::new(0.0, 0.0, 1.0),
         ];
         let k = compute_element_stiffness(&cell, &v, 1.0);
-        let one = vec![1.0, 1.0, 1.0, 1.0];
+        let one = [1.0, 1.0, 1.0, 1.0];
         for i in 0..4 {
             let s: Real = (0..4).map(|j| k[i][j] * one[j]).sum();
             assert!(s.abs() < 1e-12, "row {i}: K·1 = {s}");

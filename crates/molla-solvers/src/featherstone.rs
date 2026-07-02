@@ -1166,9 +1166,9 @@ fn cpu_step(
                         q_dd.get(dof_idx + 1).copied().unwrap_or(0.0),
                         q_dd.get(dof_idx + 2).copied().unwrap_or(0.0),
                     );
-                    omega = omega + alpha * dt;
+                    omega += alpha * dt;
                     let damp = (1.0 - joint_damping * dt).max(0.0);
-                    omega = omega * damp;
+                    omega *= damp;
                     let q_old = Quat::from_xyzw(
                         q_in[coord_idx],
                         q_in[coord_idx + 1],
@@ -1215,11 +1215,11 @@ fn cpu_step(
                         q_dd.get(dof_idx + 4).copied().unwrap_or(0.0),
                         q_dd.get(dof_idx + 5).copied().unwrap_or(0.0),
                     );
-                    v = v + a_lin * dt;
-                    omega = omega + alpha * dt;
+                    v += a_lin * dt;
+                    omega += alpha * dt;
                     let damp = (1.0 - joint_damping * dt).max(0.0);
-                    v = v * damp;
-                    omega = omega * damp;
+                    v *= damp;
+                    omega *= damp;
 
                     let p_old =
                         Vec3::new(q_in[coord_idx], q_in[coord_idx + 1], q_in[coord_idx + 2]);

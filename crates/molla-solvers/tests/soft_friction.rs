@@ -70,7 +70,7 @@ fn build_block_on_cloth(
     // 3×3×3 tet jelly cube above the cloth.
     let nx: u32 = 3;
     let dx: Real = 0.10;
-    let cube_first = (cloth_n * cloth_n) as u32 + cloth_first;
+    let cube_first = (cloth_n * cloth_n) + cloth_first;
     let cube_origin = Vec3::new(
         -dx * (nx as Real - 1.0) * 0.5,
         cloth_y + drop_height,

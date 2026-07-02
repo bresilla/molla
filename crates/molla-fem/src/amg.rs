@@ -420,7 +420,7 @@ pub(crate) fn c_f_split(strong: &StrongGraph, n: usize) -> CfSplit {
                 continue;
             }
             let l = lambda[i];
-            if best.map_or(true, |(bl, _)| l > bl) {
+            if best.is_none_or(|(bl, _)| l > bl) {
                 best = Some((l, i));
             }
         }
@@ -839,7 +839,7 @@ mod tests {
         // n=9 ⇒ 5 C and 4 F (or vice versa depending on tie-breaking).
         let n_c = split.c_to_global.len();
         assert!(
-            n_c >= 3 && n_c <= 6,
+            (3..=6).contains(&n_c),
             "expected ~half coarse, got {n_c} of {n}"
         );
     }

@@ -80,7 +80,7 @@ fn root_hash_table_grows_with_root_count() {
     // → next power of two = 2048.
     let mut grid = SparseGrid::new(0.0);
     for i in 0..1000 {
-        let kx = (i * 256) as i32;
+        let kx = i * 256;
         grid.insert(kx, 0, 0, 1.0);
     }
     let packed = SparseGridGpu::from_grid(&grid);

@@ -389,7 +389,7 @@ pub fn solve_stokes_gpu(
     };
 
     let p_init_buf = alloc_f32_buf("molla::stokes_gpu p_init", n_p as u32);
-    queue.write_buffer(&p_init_buf, 0, &vec![0u8; (n_p as usize).max(1) * 4]);
+    queue.write_buffer(&p_init_buf, 0, &vec![0u8; n_p.max(1) * 4]);
 
     let p_cg = cg_kernel.cg_solve_resident(
         n_p as u32,
@@ -715,20 +715,15 @@ fn clone_bsr(b: &BsrGpu) -> BsrGpu {
 /// same GPU IMEX Euler stage operator multiple times and form the
 /// Shu-Osher convex combinations with a small WGSL combine kernel, so no
 /// intermediate velocity or pressure stage is read back to the host.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum NavierStokesGpuTimeIntegrator {
     /// One first-order IMEX Euler stage per time step.
+    #[default]
     ImexEuler,
     /// Shu-Osher SSP-RK(2,2) using two resident IMEX stages.
     SspRk2,
     /// Shu-Osher SSP-RK(3,3) using three resident IMEX stages.
     SspRk3,
-}
-
-impl Default for NavierStokesGpuTimeIntegrator {
-    fn default() -> Self {
-        Self::ImexEuler
-    }
 }
 
 /// Solver knobs for the transient NS IMEX path.
@@ -1069,7 +1064,7 @@ pub fn solve_navier_stokes_gpu(
                                        dst_p_buf: &wgpu::Buffer|
          -> Result<usize> {
             // (a) zero f_conv on the GPU.
-            zero_buffer(queue, &f_conv_buf, (n_v as usize) * 4);
+            zero_buffer(queue, &f_conv_buf, n_v * 4);
 
             // (b) dispatch convection assembly.
             advect_kernel.assemble(

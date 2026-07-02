@@ -168,7 +168,7 @@ fn shallow_water_dam_break_converges() {
         let off = offsets[ci];
         for (i, p) in nodes.iter().enumerate() {
             let h0 = if p.x < dam_x { h_l } else { h_r };
-            state[(off + i) * components + 0] = h0;
+            state[(off + i) * components] = h0;
             state[(off + i) * components + 1] = 0.0;
             state[(off + i) * components + 2] = 0.0;
         }
@@ -273,13 +273,13 @@ fn shallow_water_dam_break_converges() {
         for ci in 0..mesh_ref.cells.len() {
             let off = offsets_ref[ci];
             let (area, grads) = &cell_data_ref[ci];
-            let u0_h = state[(off + 0) * components + 0];
-            let u0_hu = state[(off + 0) * components + 1];
-            let u0_hv = state[(off + 0) * components + 2];
-            let u1_h = state[(off + 1) * components + 0];
+            let u0_h = state[off * components];
+            let u0_hu = state[off * components + 1];
+            let u0_hv = state[off * components + 2];
+            let u1_h = state[(off + 1) * components];
             let u1_hu = state[(off + 1) * components + 1];
             let u1_hv = state[(off + 1) * components + 2];
-            let u2_h = state[(off + 2) * components + 0];
+            let u2_h = state[(off + 2) * components];
             let u2_hu = state[(off + 2) * components + 1];
             let u2_hv = state[(off + 2) * components + 2];
 
@@ -466,12 +466,12 @@ fn shallow_water_dam_break_converges() {
             for (i, &vi) in v.iter().enumerate() {
                 let xv = mesh.vertices[vi as usize].x;
                 if xv < 1.0e-9 {
-                    state_now[(off + i) * components + 0] = h_l;
+                    state_now[(off + i) * components] = h_l;
                     state_now[(off + i) * components + 1] = 0.0;
                     state_now[(off + i) * components + 2] = 0.0;
                 }
                 if (xv - l_total).abs() < 1.0e-9 {
-                    state_now[(off + i) * components + 0] = h_r;
+                    state_now[(off + i) * components] = h_r;
                     state_now[(off + i) * components + 1] = 0.0;
                     state_now[(off + i) * components + 2] = 0.0;
                 }
@@ -498,7 +498,7 @@ fn shallow_water_dam_break_converges() {
             if b as usize >= nbins {
                 b = (nbins - 1) as isize;
             }
-            sum_h[b as usize] += state_now[(off + i) * components + 0];
+            sum_h[b as usize] += state_now[(off + i) * components];
             count_h[b as usize] += 1;
         }
     }
@@ -671,7 +671,7 @@ fn ssp_rk3_is_3rd_order_in_time() {
     let avg: Real = rates.iter().sum::<Real>() / rates.len() as Real;
     eprintln!("SSP-RK3 average measured order = {avg:.3}");
     assert!(
-        avg >= 2.9 && avg <= 3.1,
+        (2.9..=3.1).contains(&avg),
         "SSP-RK3 measured order = {avg}, want 3.0 ± 0.1"
     );
 

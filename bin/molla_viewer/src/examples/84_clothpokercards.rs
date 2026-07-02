@@ -159,11 +159,10 @@ fn update_cloth_poker_cards(
     }
     let pose =
         mp::Transform::from_translation(MVec3::new(st.sphere_x as f64, POKER_SPHERE_Y as f64, 0.0));
-    if let Ok(bq) = sim.state_a.body_q.host_mut() {
-        if let Some(b) = bq.last_mut() {
+    if let Ok(bq) = sim.state_a.body_q.host_mut()
+        && let Some(b) = bq.last_mut() {
             *b = pose;
         }
-    }
     if let (Some(device), Some(queue)) = (sim.engine.device(), sim.engine.queue()) {
         let device = device.clone();
         let queue = queue.clone();

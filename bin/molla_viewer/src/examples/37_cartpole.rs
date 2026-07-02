@@ -105,12 +105,11 @@ fn update_cartpole_example(
     if state.auto_perturb && state.perturb_timer > 3.0 {
         state.perturb_timer = 0.0;
         let queue = sim.engine.queue().expect("queue").clone();
-        if let Ok(qdh) = sim.state_a.joint_qd.host_mut() {
-            if qdh.len() >= 2 {
+        if let Ok(qdh) = sim.state_a.joint_qd.host_mut()
+            && qdh.len() >= 2 {
                 let sign = if theta >= 0.0 { -1.0 } else { 1.0 };
-                qdh[1] += (sign * 1.5) as f64;
+                qdh[1] += sign * 1.5;
             }
-        }
         let _ = sim.state_a.joint_qd.upload(&queue);
     }
 

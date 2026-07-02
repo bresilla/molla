@@ -136,7 +136,8 @@ impl ControllerNeuralMlp {
         let mut w3 = Buffer::from_vec(vec![0.0 as Real; w3_n], BufferUsage::Storage);
         let mut b3 = Buffer::from_vec(vec![0.0 as Real; b3_n], BufferUsage::Storage);
 
-        for buf in [dof_b.device_buffer().is_some()].iter() {
+        {
+            let buf = &dof_b.device_buffer().is_some();
             let _ = buf;
         }
         dof_b.ensure_device(&device)?;

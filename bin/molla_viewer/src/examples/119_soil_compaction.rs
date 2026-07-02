@@ -333,14 +333,13 @@ fn soil_compaction_sparse_lbvh_step_resident_gpu(
             .map_err(|e| format!("{e}"))?,
         );
     }
-    if let Some(owner) = resident_owner.as_mut() {
-        if owner.positions() != positions.as_slice() || owner.velocities() != velocities.as_slice()
+    if let Some(owner) = resident_owner.as_mut()
+        && (owner.positions() != positions.as_slice() || owner.velocities() != velocities.as_slice())
         {
             owner
                 .reseed_grain_state(device, queue, kernel, &positions, &velocities)
                 .map_err(|e| format!("{e}"))?;
         }
-    }
     let contacts = vec![molla::kernels::TireDemContactCell {
         center_radius: [
             roller_pos[0] as f32,
@@ -447,13 +446,12 @@ fn update_soil_compaction_example(
             }
         }
         state.settle_frames += 1;
-        if state.settle_frames >= 80 {
-            if let Some(b) = state.bed.as_ref() {
+        if state.settle_frames >= 80
+            && let Some(b) = state.bed.as_ref() {
                 initial_surface =
                     soil_compaction_surface_under_wheel(b, 0.0, 0.0, state.roller_width);
                 settled_now = true;
             }
-        }
         if settled_now {
             state.initial_surface = initial_surface;
             state.settled = true;

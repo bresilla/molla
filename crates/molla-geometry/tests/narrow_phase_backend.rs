@@ -221,7 +221,7 @@ fn reduce_per_pair(contacts: &Contacts, n_pairs: usize) -> Vec<Option<(Real, Vec
         }
         let lo = bi_a.min(bi_b) as usize;
         let hi = bi_a.max(bi_b) as usize;
-        if hi != lo + 1 || lo % 2 != 0 {
+        if hi != lo + 1 || !lo.is_multiple_of(2) {
             continue;
         }
         let pair_idx = lo / 2;
