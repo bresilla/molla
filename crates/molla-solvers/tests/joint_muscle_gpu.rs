@@ -458,8 +458,9 @@ fn see_muscle_cpu_gpu_parity() {
 
     // Non-zero tendon slack → exercises the Newton SEE path on both
     // backends. `l_opt = 5 cm`, `l_tendon_slack = 1 cm` ⇒ a fairly
-    // stretchy MTU; full activation, no pennation (cos_α = 1 so the
-    // GPU's pennation-disabled assumption matches CPU exactly).
+    // stretchy MTU; full activation, zero pennation so this scenario
+    // isolates the SEE solve (per-muscle pennation/stiffness parity is
+    // covered by `per_muscle_pennation_and_stiffness_cpu_gpu_parity`).
     let cfg = MuscleConfig {
         f_max,
         l_opt: 0.05,
@@ -599,5 +600,164 @@ fn see_muscle_cpu_gpu_parity() {
     assert!(
         gpu_q_final < 0.0,
         "SEE muscle GPU should have contracted by end of run (q_l = {gpu_q_final})"
+    );
+}
+
+/// Roadmap A2 (Stage 42 v5) validation — the GPU muscle kernel must
+/// honor *per-muscle* `pennation_angle` and `tendon_stiffness_ratio`
+/// storage buffers (`muscle.wgsl` bindings 7/9), not one shared value.
+/// Two muscles on the same cable with deliberately different pennation
+/// and SEE stiffness: the CPU path is the per-muscle reference, so any
+/// GPU lane that falls back to a shared/default parameter diverges and
+/// fails the parity gate. A homogeneous-parameter CPU control run
+/// guards against the scenario being vacuous (parameters not mattering
+/// at all).
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=joint_muscle_gpu`"]
+fn per_muscle_pennation_and_stiffness_cpu_gpu_parity() {
+    let engine = Engine::new(Backend::AutoGpu)
+        .expect("GPU adapter required for this test (gated by #[ignore])");
+    eprintln!("GPU adapter: {:?}", engine.adapter_info());
+
+    let dt: Real = 1.0e-3;
+    let n_steps = 100usize;
+    let k_lin: Real = 4000.0;
+    let mass: Real = 1.0;
+    let c_lin: Real = 2.0 * (k_lin * mass).sqrt();
+
+    // Both muscles pull the same way (forces add) through the SEE
+    // Newton path, with distinct per-muscle parameters on every axis
+    // A2 cares about.
+    let m_stiff = MuscleConfig {
+        f_max: 80.0,
+        l_opt: 0.05,
+        v_max: 0.5,
+        activation: 1.0,
+        l_tendon_slack: 0.01,
+        pennation_angle: 0.0,
+        tendon_stiffness_ratio: 45.0,
+        ..MuscleConfig::default()
+    };
+    let m_pennate = MuscleConfig {
+        f_max: 60.0,
+        l_opt: 0.05,
+        v_max: 0.5,
+        activation: 1.0,
+        l_tendon_slack: 0.01,
+        pennation_angle: 0.35,
+        tendon_stiffness_ratio: 20.0,
+        ..MuscleConfig::default()
+    };
+    let muscles = [m_stiff, m_pennate];
+
+    let run_cpu = |muscles: &[MuscleConfig]| -> Vec<Real> {
+        let model = cable_with_muscles(mass, k_lin, c_lin, muscles);
+        let mut s_a = seed_state(&model, 0.0, 0.0);
+        let mut s_b = model.state().unwrap();
+        let control = model.control();
+        let contacts = Contacts::with_capacity(0);
+        let mut solver = FeatherstoneSolver::new_cpu();
+        let mut q = Vec::with_capacity(n_steps);
+        for _ in 0..n_steps {
+            solver
+                .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
+                .unwrap();
+            std::mem::swap(&mut s_a, &mut s_b);
+            q.push(s_a.joint_q.host().unwrap()[0]);
+        }
+        q
+    };
+
+    // ── CPU reference (heterogeneous parameters) ──
+    let cpu_q = run_cpu(&muscles);
+
+    // ── Non-vacuousness control: homogeneous defaults must produce a
+    // measurably different trajectory, or this scenario would pass
+    // even if both backends ignored the per-muscle buffers. ──
+    let homogeneous = [
+        MuscleConfig {
+            pennation_angle: 0.0,
+            tendon_stiffness_ratio: DEFAULT_TENDON_STIFFNESS_RATIO,
+            ..m_stiff
+        },
+        MuscleConfig {
+            pennation_angle: 0.0,
+            tendon_stiffness_ratio: DEFAULT_TENDON_STIFFNESS_RATIO,
+            ..m_pennate
+        },
+    ];
+    let cpu_q_homog = run_cpu(&homogeneous);
+    let q_final = *cpu_q.last().unwrap();
+    let q_final_homog = *cpu_q_homog.last().unwrap();
+    let control_rel = (q_final - q_final_homog).abs() / q_final.abs().max(1.0e-6);
+    eprintln!(
+        "hetero q_final = {q_final:+.5e}, homogeneous q_final = {q_final_homog:+.5e}, \
+         rel diff = {control_rel:.3e}"
+    );
+    assert!(
+        control_rel > 1.0e-2,
+        "per-muscle parameters had no measurable effect (rel diff {control_rel:.3e}) — \
+         the parity check below would be vacuous"
+    );
+
+    // ── GPU run (heterogeneous parameters) ──
+    let mut model_gpu = cable_with_muscles(mass, k_lin, c_lin, &muscles);
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model_gpu.upload_to_device(&device, &queue).unwrap();
+
+    let mut s_a = seed_state(&model_gpu, 0.0, 0.0);
+    let mut s_b = model_gpu.state().unwrap();
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    let mut control_gpu = model_gpu.control();
+    control_gpu.upload_to_device(&device, &queue).unwrap();
+    let contacts = Contacts::with_capacity(0);
+
+    let mut solver_gpu = FeatherstoneSolver::new_gpu(&engine, &model_gpu).unwrap();
+    let mut gpu_q = Vec::with_capacity(n_steps);
+    for _ in 0..n_steps {
+        solver_gpu
+            .step(&model_gpu, &s_a, &control_gpu, &contacts, dt, &mut s_b)
+            .unwrap();
+        std::mem::swap(&mut s_a, &mut s_b);
+        let _ = s_a.joint_q.download(&device, &queue);
+        gpu_q.push(s_a.joint_q.host().unwrap()[0]);
+    }
+
+    eprintln!("step | cpu_q      | gpu_q      | |Δ|         | rel");
+    for &i in &[0usize, 1, 5, 25, 50, 99] {
+        if i >= cpu_q.len() {
+            continue;
+        }
+        let c = cpu_q[i];
+        let g = gpu_q[i];
+        let d = (c - g).abs();
+        eprintln!(
+            "{:4} | {:+.5e} | {:+.5e} | {:.3e} | {:.3e}",
+            i,
+            c,
+            g,
+            d,
+            d / c.abs().max(1e-12)
+        );
+    }
+
+    let mut max_rel: f64 = 0.0;
+    for (c, g) in cpu_q.iter().zip(gpu_q.iter()) {
+        let rel = (c - g).abs() / c.abs().max(1.0e-6);
+        max_rel = max_rel.max(rel);
+    }
+    // Same f32-rounding budget as the single-muscle lane; the second
+    // muscle roughly doubles the accumulated rounding, so the 5e-5
+    // gate is reused rather than the SEE lane's 1e-5.
+    assert!(
+        max_rel < 5.0e-5,
+        "per-muscle CPU/GPU diverged: max rel = {max_rel} — check that \
+         muscle.wgsl reads bindings 7/9 per muscle id"
+    );
+    assert!(
+        *cpu_q.last().unwrap() < 0.0 && *gpu_q.last().unwrap() < 0.0,
+        "both backends should have contracted"
     );
 }

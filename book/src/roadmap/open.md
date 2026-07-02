@@ -54,7 +54,16 @@ maps cleanly onto distinct `μ_s` / `μ_k`.
 
 ### A2. Variable per-muscle stiffness + pennation on GPU (Stage 42 v5)
 
-**Problem.** Stage 42 v3 (`bbd5c61`) shipped the Hill kernel + cable ABA on
+**Status.** Landed (implementation shipped with the C6 push; validated
+2026-07-02). The WGSL kernel reads per-muscle
+`muscle_pennation_angle`/`muscle_tendon_stiffness_ratio` storage
+buffers (`muscle.wgsl` bindings 7/9) uploaded from the `Model` arrays,
+and the heterogeneous-parameter hardware parity lane
+`per_muscle_pennation_and_stiffness_cpu_gpu_parity` in
+`crates/molla-solvers/tests/joint_muscle_gpu.rs` confirms CPU/GPU
+agreement (with a homogeneous-control guard against a vacuous pass).
+
+**Problem (historical).** Stage 42 v3 (`bbd5c61`) shipped the Hill kernel + cable ABA on
 GPU; v4 (`0411d0b`) added SEE Newton GPU/CPU parity. The remaining gap:
 per-muscle `stiffness_ratio` and pennation angle are honored on CPU but
 read from a single shared parameter on GPU (the `d38739e` critic fix did
