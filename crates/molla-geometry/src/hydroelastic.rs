@@ -129,8 +129,10 @@ pub enum HydroelasticPolicy {
     /// body is sampled at discrete surface points. v1 scope.
     SoftOnRigid,
     /// Both bodies' pressure fields overlap; intersection volume is
-    /// genuinely 3D. **Not implemented in v1** — will return an
-    /// empty manifold with a `tracing::warn`.
+    /// genuinely 3D. **Not implemented in v1.** No entry point accepts
+    /// a policy yet; when one does, it must reject `SoftOnSoft` with a
+    /// typed `Error` — never silently return an empty manifold
+    /// (contacts vanishing without a diagnostic is a correctness trap).
     SoftOnSoft,
 }
 
