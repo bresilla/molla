@@ -55,8 +55,10 @@ regions and an honest scene audit pointing at the existing reduced
 multi-material CPU oracle. The current runtime MPM solver is still
 single-rheology per simulation; true per-particle material IDs in the GPU MPM
 path remain the required follow-up. Verified with the viewer unit suite,
-`reduced_multi_material_oracle_dispatches_distinct_branches`, `make fmt`, and
-`make check`.
+`reduced_multi_material_oracle_dispatches_distinct_branches`, `cargo fmt`, and
+`make check`. (Historical note: `make fmt` / per-family `make test-*-gpu`
+targets were removed when the Makefile was simplified; GPU lanes now run via
+`make test-gpu P=<pkg> T=<test>`.)
 
 Add a procedural viewer scene that mixes at least sand, snow, and viscous/Bingham
 material regions in the same MPM run.
@@ -85,9 +87,9 @@ Status: **partial viewer scene added**. `Scene::CableBundleHysteresis` exists
 with seven procedural pinned bundle strands, a model/topology test, and a
 Dahl-loop CPU oracle test proving positive hysteresis work plus delayed force
 reversal on all strands. Full contact-coupled bundled Dahl integration remains
-future work; the scene audit points at `make test-vbd-extended-gpu` for the
-existing Dahl/cable GPU lane. Verified with the viewer unit suite, `make
-test-vbd-extended-gpu`, `make fmt`, and `make check`.
+future work; the scene audit points at the Dahl/cable GPU lane (now run via
+`make test-gpu P=molla-solvers T=<vbd/dahl test>`). Verified with the viewer
+unit suite, the Dahl/cable GPU lane, `cargo fmt`, and `make check`.
 
 Add a cable-bundle scene with several coupled CABLE/VBD strands and Dahl-style
 hysteresis/friction response.

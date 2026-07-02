@@ -1,5 +1,14 @@
 # Real Tire + Tire/Ground Contact Plan
 
+> **SUPERSESSION NOTE (2026-07-02).** Parts of this plan are superseded by
+> shipped work — always cross-check the top of `PROGRESS.md` before acting
+> on stream framing or status tables below. In particular: Stream A is
+> complete, Stream B (co-rotational mesh rotation) was **dropped** in favor
+> of render-time rotation, Stream C G1–G4 parity is closed
+> (`TireFemTorqueGpuStatus = LiveValidated`), and status tables marking GPU
+> torque / matrix-free-Newton lanes "⏳ not yet" predate the
+> `parity_ledger.rs` Live/LiveValidated records.
+
 ## Goal
 
 Replace the viewer-only "patch factor" tire behavior with reusable tire physics in

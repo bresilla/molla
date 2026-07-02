@@ -267,9 +267,9 @@ the human-readable index.
 
 Each row is a single brick on the wall. The total count is **597
 commits** on `main` at the time of this snapshot, spanning Stage 0
-through Stage 51. Approximately ~100 viewer scenes correspond to a
-subset of these stages (some stages don't add a scene, e.g. infra
-work).
+through Stage 51. 132 viewer scenes (numbered through #124, plus
+unnumbered extras) correspond to a subset of these stages (some
+stages don't add a scene, e.g. infra work).
 
 For the chronological commit log run:
 

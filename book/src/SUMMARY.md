@@ -152,7 +152,7 @@
 
 - [Bevy adapter](./adapters/bevy.md)
 - [Viewer overview](./viewer/overview.md)
-- [Scene catalog (#1-101)](./viewer/scenes.md)
+- [Scene catalog (#1-124)](./viewer/scenes.md)
 
 ---
 

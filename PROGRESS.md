@@ -1,5 +1,20 @@
 # PROGRESS — PLAN_REALTIRE
 
+> **CURRENT STATE (read this first — the log below is reverse-chronological
+> and older sections are superseded by newer ones).**
+> Stream A (real_tire file split): **COMPLETE** — `real_tire.rs` is now a
+> multi-module `real_tire/` tree; the step-by-step split guide further down
+> is historical. Stream B (mesh rotation): **DROPPED** — replaced by the
+> render-time rotation plan (`nodes_rendered()`, see "Stream B replacement"
+> section). Stream C G1–G4: **CLOSED** — `TireFemTorqueGpuStatus =
+> LiveValidated`. Test baseline: **223 passed / 0 ignored** in
+> `molla-vehicle` (any 220/2, 221/1, or 222/0 references below are stale
+> snapshots). Render-time tire rotation **landed**: `nodes_rendered()` on
+> `TetraTireFem` + scene-123 wireframe + rigid-rotation test (the "right
+> next step" paragraph below is done). Remaining open tire work:
+> zero-host-readback substep loop and the real-time 40-wheel target —
+> tracked in `INSPECTION.md` item F2.
+
 ## Stream C G4 — CLOSED (2026-06-12): contact-driven rolling parity landed
 
 The third G4 leg is in:
