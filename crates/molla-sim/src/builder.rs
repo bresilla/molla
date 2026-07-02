@@ -3299,86 +3299,6 @@ pub(crate) fn build_vertex_cable_bending_adjacency(
     (offsets, entries, ks)
 }
 
-/// Greedy graph colouring of particles. Two particles are adjacent
-/// iff at least one constraint connects them. Within a colour, no
-/// two particles share a constraint, so VBD's per-vertex block
-/// solve can be dispatched in parallel without races.
-///
-/// Returns `(color_count, csr_offsets, indices_sorted_by_color)`.
-///
-/// For an N×N cloth with structural + shear + skip-one bending
-/// springs the natural colouring uses ≤ 12 colours and balances
-/// per-colour particle counts well.
-///
-/// Springs-only variant — kept around as the reference implementation
-/// + as a convenience for tests; production builds go through
-/// [`color_particles_with_tets`] which folds tet adjacency in too.
-#[allow(dead_code)]
-fn color_particles(
-    particle_count: usize,
-    vertex_adj_offsets: &[u32],
-    vertex_adj_springs: &[u32],
-    spring_a: &[u32],
-    spring_b: &[u32],
-) -> (usize, Vec<u32>, Vec<u32>) {
-    if particle_count == 0 {
-        return (0, vec![0u32], Vec::new());
-    }
-    let mut color_of = vec![u32::MAX; particle_count];
-    let mut max_color: u32 = 0;
-    let mut used = Vec::<bool>::with_capacity(16);
-
-    for v in 0..particle_count {
-        used.clear();
-        let lo = vertex_adj_offsets[v] as usize;
-        let hi = vertex_adj_offsets[v + 1] as usize;
-        for s in &vertex_adj_springs[lo..hi] {
-            let s = *s as usize;
-            let a = spring_a.get(s).copied().unwrap_or(u32::MAX) as usize;
-            let b = spring_b.get(s).copied().unwrap_or(u32::MAX) as usize;
-            let nbr = if a == v { b } else { a };
-            if nbr >= particle_count {
-                continue;
-            }
-            let nc = color_of[nbr];
-            if nc == u32::MAX {
-                continue;
-            }
-            let nc_idx = nc as usize;
-            if used.len() <= nc_idx {
-                used.resize(nc_idx + 1, false);
-            }
-            used[nc_idx] = true;
-        }
-        let mut chosen: u32 = 0;
-        while (chosen as usize) < used.len() && used[chosen as usize] {
-            chosen += 1;
-        }
-        color_of[v] = chosen;
-        if chosen > max_color {
-            max_color = chosen;
-        }
-    }
-
-    let color_count = (max_color as usize) + 1;
-    let mut counts = vec![0u32; color_count];
-    for &c in &color_of {
-        counts[c as usize] += 1;
-    }
-    let mut offsets = vec![0u32; color_count + 1];
-    for k in 0..color_count {
-        offsets[k + 1] = offsets[k] + counts[k];
-    }
-    let mut cursors = offsets[..color_count].to_vec();
-    let mut indices = vec![0u32; particle_count];
-    for (v, &c) in color_of.iter().enumerate() {
-        let slot = cursors[c as usize] as usize;
-        indices[slot] = v as u32;
-        cursors[c as usize] += 1;
-    }
-    (color_count, offsets, indices)
-}
-
 /// Stage 33 — re-colour `particle_count` particles given a set of
 /// dynamic VT contact pairs (vertex/tri-vertex). Combines the static
 /// constraint adjacency (springs + tets + cable bending) with the
@@ -3416,9 +3336,13 @@ pub(crate) fn color_particles_with_vt_contacts(
     )
 }
 
-/// Stage 20.2 superset of [`color_particles`] — incorporates tet
-/// adjacency edges *and* CABLE bending hinges in addition to
-/// spring-graph edges. Two particles `(u, v)` are coloured
+/// Greedy graph colouring of particles (Stage 20.2). Within a colour,
+/// no two particles share a constraint, so VBD's per-vertex block
+/// solve can be dispatched in parallel without races. Returns
+/// `(color_count, csr_offsets, indices_sorted_by_color)`.
+///
+/// Incorporates tet adjacency edges *and* CABLE bending hinges in
+/// addition to spring-graph edges. Two particles `(u, v)` are coloured
 /// non-adjacent iff *any* of the following pairs them:
 ///   - a spring connects them,
 ///   - they share a tet, or
