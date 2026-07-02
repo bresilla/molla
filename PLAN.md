@@ -49,12 +49,13 @@ Reference:
 xtra/newton/newton/examples/mpm/example_mpm_multi_material.py
 ```
 
-Status: **partial viewer scene added**. `Scene::MpmMultiMaterial` exists in
-`bin/molla_viewer/src/main.rs` with three procedural sand/snow/viscous visual
-regions and an honest scene audit pointing at the existing reduced
-multi-material CPU oracle. The current runtime MPM solver is still
-single-rheology per simulation; true per-particle material IDs in the GPU MPM
-path remain the required follow-up. Verified with the viewer unit suite,
+Status: **COMPLETE (2026-07-03)**. The runtime MPM solver carries true
+per-particle material IDs (Stage 24d.4 `MpmSimulation::set_materials`; the
+sand/snow/viscous branches dispatch per particle in `mpm.wgsl`), and
+`Scene::MpmMultiMaterial` wires the three bands to real material rows at
+reset. Hardware proof: `make test-gpu P=molla-solvers T=mpm_multimaterial_gpu`
+(disjoint-block equality vs single-material runs + ids-change-the-physics
+control). The scene audit is `ManualGpu` with live per-particle ids. Verified with the viewer unit suite,
 `reduced_multi_material_oracle_dispatches_distinct_branches`, `cargo fmt`, and
 `make check`. (Historical note: `make fmt` / per-family `make test-*-gpu`
 targets were removed when the Makefile was simplified; GPU lanes now run via

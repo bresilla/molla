@@ -1,6 +1,8 @@
-// MPM multi-material viewer example.  The current solver still uses a single
-// rheology at a time, so the scene separates the initial block into three
-// visual/audit regions that match the reduced multi-material oracle coverage.
+// MPM multi-material viewer example. Since Stage 24d.4 the runtime
+// solver carries REAL per-particle material ids: the three x-bands run
+// sand / snow / viscous constitutive branches in one simulation
+// (`MpmSimulation::set_materials`, wired at reset in `24_mpm.rs`), and
+// the colors below label the actual material each particle simulates.
 fn mpm_multi_material_particle_layout(
     state: &MpmExampleState,
 ) -> ([f32; 3], [f32; 3], Option<(f32, f32, f32, f32)>) {

@@ -1464,11 +1464,10 @@ enum Scene {
     /// `example_mpm_twoway_coupling.py`.
     MpmTwoWay,
     /// Procedural three-region MPM material showcase for
-    /// `example_mpm_multi_material.py`: sand/snow/viscous particle groups are
-    /// laid out side by side and rendered distinctly. Current runtime uses the
-    /// existing single-rheology MPM solver while the CPU oracle proves
-    /// branch-level multi-material dispatch; per-particle GPU material ids are
-    /// the follow-up.
+    /// `example_mpm_multi_material.py`: sand/snow/viscous particle
+    /// bands run their REAL constitutive branches in one simulation
+    /// via per-particle GPU material ids (Stage 24d.4
+    /// `MpmSimulation::set_materials`).
     MpmMultiMaterial,
     /// Reduced procedural MPM beam twist scene. Initializes a twisted beam-like
     /// particle block and colors torsional angle; true torsional constitutive
@@ -2271,7 +2270,7 @@ impl Scene {
                 "Drops a heavy rigid sphere into a pit of MPM sand with two-way coupling. The sphere should displace particles and the particle bed should react against the rigid body."
             }
             Scene::MpmMultiMaterial => {
-                "Lays out sand, snow, and viscous/Bingham-like MPM particle regions with distinct colors. The current live runtime is still mostly single-rheology, so use this as a visual/material-dispatch parity scene rather than full per-particle GPU material mixing."
+                "Lays out sand, snow, and viscous MPM particle regions with distinct colors — and since Stage 24d.4 each region runs its real constitutive branch in the same simulation via per-particle GPU material ids. Material sliders apply on Reset."
             }
             Scene::MpmBeamTwist => {
                 "Initializes a beam-shaped MPM particle block with a procedural twist and angle-based colors. It should make torsional initialization visible, while true torsional constitutive response remains future work."
@@ -2885,10 +2884,16 @@ impl Scene {
                 gpu_proof: "make test-mpm-gpu / make test-mpm-v3-gpu for existing forward MPM lanes; dedicated torsional beam constitutive setup remains future work",
                 notes: "viewer initializes a twisted procedural beam and torsion coloring over the current MPM runtime; true torsional material response/parity is not complete",
             },
+            Scene::MpmMultiMaterial => ScenePhysicsAudit {
+                status: ManualGpu,
+                reference_case: "Newton example_mpm_multi_material — mixed sand/snow/viscous in one MPM run",
+                cpu_proof: "reduced_multi_material_oracle_dispatches_distinct_branches (branch-level oracle)",
+                gpu_proof: "make test-gpu P=molla-solvers T=mpm_multimaterial_gpu — disjoint-block equality vs single-material runs + ids-change-the-physics control",
+                notes: "per-particle material-id table is LIVE (Stage 24d.4 set_materials): the three bands simulate their own rheologies in one run; sliders re-apply on Reset",
+            },
             Scene::Mpm
             | Scene::MpmSnowBall
             | Scene::MpmTwoWay
-            | Scene::MpmMultiMaterial
             | Scene::WarpDem
             | Scene::WarpFluid
             | Scene::WarpSph
@@ -10098,14 +10103,20 @@ mod tests {
         let audit = Scene::MpmMultiMaterial.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::ManualGpu);
         assert!(
+            audit.gpu_proof.contains("mpm_multimaterial_gpu"),
+            "audit must point at the hardware multi-material lane"
+        );
+        assert!(
             audit
                 .cpu_proof
                 .contains("reduced_multi_material_oracle_dispatches_distinct_branches"),
             "multi-material scene must name the branch-dispatch CPU oracle"
         );
         assert!(
-            audit.notes.contains("per-particle material-id"),
-            "audit must stay honest that runtime material ids are future work"
+            audit
+                .notes
+                .contains("per-particle material-id table is LIVE"),
+            "audit must reflect that runtime material ids are live (Stage 24d.4)"
         );
     }
 

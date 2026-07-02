@@ -197,10 +197,10 @@ fn update_mpm_example(
         //                     particles outside the sphere).
         //   * `MpmTwoWay`   — wider, shallower pile so the rigid
         //                     sphere has room to plunge in.
-        //   * `MpmMultiMaterial` — three adjacent material bands. The current
-        //                         solver is single-rheology; the bands are
-        //                         visual/audit regions tied to the reduced
-        //                         multi-material branch oracle.
+        //   * `MpmMultiMaterial` — three adjacent material bands with REAL
+        //                         per-particle material ids (`set_materials`):
+        //                         sand, snow, and viscous branches run in one
+        //                         simulation.
         //   * `MpmBeamTwist` — elongated beam block with a procedural twist
         //                      stamped into the initial particle positions.
         let (lo, hi, cull_sphere) = match sim.scene {
@@ -236,8 +236,37 @@ fn update_mpm_example(
                 }
             }
         }
+        let is_multi_material = sim.scene == Scene::MpmMultiMaterial;
         if let Some(m) = sim.mpm.as_mut() {
             m.set_particles(&queue, &particles).expect("set particles");
+            // Real per-particle materials (Stage 24d.4): the three
+            // x-bands run sand / snow / viscous constitutive branches
+            // in ONE simulation. Material parameters are sampled from
+            // the sliders at reset time (hit Reset after moving them).
+            if is_multi_material {
+                let ids: Vec<u32> = particles
+                    .iter()
+                    .map(|p| mpm_multi_material_region(*p))
+                    .collect();
+                m.set_materials(
+                    &[
+                        MpmRheology::Sand {
+                            friction_angle: state.friction_angle_deg.to_radians(),
+                        },
+                        MpmRheology::Snow {
+                            theta_c: state.snow_theta_c,
+                            theta_s: state.snow_theta_s,
+                            hardening: state.snow_hardening,
+                        },
+                        MpmRheology::Viscous {
+                            velocity_damping: state.viscous_velocity_damping,
+                            affine_damping: state.viscous_affine_damping,
+                        },
+                    ],
+                    ids,
+                )
+                .expect("set_materials");
+            }
         }
         sim.mpm_rigid_spheres.clear();
         state.particle_count = particles.len() as u32;
