@@ -210,6 +210,7 @@ include!("examples/120_tire_dynamics.rs");
 include!("examples/121_tire_traction.rs");
 include!("examples/122_tire_realistic.rs");
 include!("examples/123_terrain_lab.rs");
+include!("examples/124_vehicle_sysid.rs");
 include!("examples/30_pyramid.rs");
 include!("examples/31_cloth_bending.rs");
 include!("examples/114_cloth_rollers.rs");
@@ -315,6 +316,7 @@ fn main() {
         .insert_resource(PendulumExampleState::default())
         .insert_resource(ConveyorExampleState::default())
         .insert_resource(VehicleExampleState::default())
+        .insert_resource(VehicleSysidState::default())
         .insert_resource(SphExampleState::default())
         .insert_resource(LidarV2ExampleState::default())
         .insert_resource(AerialLidarExampleState::default())
@@ -402,6 +404,7 @@ fn main() {
                     update_cartpole_example,
                     update_conveyor_example,
                     update_vehicle_example,
+                    update_vehicle_sysid_example,
                     update_sph_example,
                     update_cloth_rollers,
                     update_cloth_twist_example,
@@ -1853,6 +1856,13 @@ enum Scene {
     /// heightfield with named zones (flat → speed-bumps → hole → washboard
     /// → ramp) so the wheels visibly bounce, dip, vibrate, and climb.
     TerrainLab,
+    /// 124 — differentiable-vehicle system identification
+    /// (`molla_vehicle::sysid`). A ghost car drove on a hidden
+    /// tyre-ground friction; a live Gauss-Newton loop recovers that μ
+    /// from the travelled distance alone (one iteration per frame),
+    /// while a candidate car drives on the current estimate so the two
+    /// visibly converge. The μ-iteration trace is a gizmo strip chart.
+    VehicleSysid,
 }
 
 impl Scene {
@@ -1992,6 +2002,7 @@ impl Scene {
         Scene::TireTraction,
         Scene::TireRealistic,
         Scene::TerrainLab,
+        Scene::VehicleSysid,
     ];
 
     fn label(self) -> &'static str {
@@ -2129,6 +2140,7 @@ impl Scene {
             Scene::TireTraction => "121 Tire traction (pressure vs slip)",
             Scene::TireRealistic => "122 Realistic tire (cornering + heat + wear)",
             Scene::TerrainLab => "123 Terrain lab (bumps, hole, washboard, ramp)",
+            Scene::VehicleSysid => "124 Vehicle sysid (friction recovery)",
         }
     }
 
@@ -2526,6 +2538,9 @@ impl Scene {
             }
             Scene::TerrainLab => {
                 "A rolling wheeled vehicle on a procedural heightfield laid out as named zones along the +X drive direction: flat run-in, three smooth speed-bumps, a bowl-shaped hole, a tapered washboard ridge section, and a ramp climbing to a plateau. The heightfield is drawn as a wireframe colour-coded by zone, with per-wheel contact dots and a vertical drop-line from each wheel center to its ground contact so suspension travel and bump response are visible. Use the arrow keys to drive across the features."
+            }
+            Scene::VehicleSysid => {
+                "Differentiable-simulation showcase: system identification from a trajectory. A ghost car (green wireframe, far lane) was driven full-throttle on a hidden tyre-ground friction; the only observation is how far it got. A Gauss-Newton loop runs one iteration per frame, finite-differencing the full vehicle rollout to recover that friction, while the solid candidate car drives on the current estimate — watch it converge onto the ghost's pace. The orange strip chart plots the friction iterate against the green hidden-truth line."
             }
         }
     }
@@ -3118,6 +3133,13 @@ impl Scene {
                 gpu_proof: "CPU vehicle integration for this terrain-interaction lab; tire force law is the reusable real brush model, resident GPU vehicle/FEM ownership lives in the tire scenes",
                 notes: "123 viewer scene — Vehicle::car_with(RealBrushTireModel::offroad_soft) driven by arrow keys across a fixed weird-terrain showcase",
             },
+            Scene::VehicleSysid => ScenePhysicsAudit {
+                status: CpuOnly,
+                reference_case: "Gauss-Newton friction identification from a vehicle trajectory (molla_vehicle::sysid)",
+                cpu_proof: "identifies_ground_friction_from_a_trajectory + distance_increases_with_friction (molla-vehicle sysid tests)",
+                gpu_proof: "host-side by design: finite-difference rollouts of the 3-DOF chassis are microseconds of CPU work; no GPU path is meaningful at this size",
+                notes: "124 viewer scene — unrolls identify_friction one iteration per frame; hidden truth 0.75, guess 0.35, live candidate-vs-ghost cars",
+            },
             Scene::WarpRaymarch => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Warp volume/raymarch",
@@ -3504,6 +3526,7 @@ impl Sim {
             Scene::TireTraction => build_tire_traction_model(),
             Scene::TireRealistic => build_tire_realistic_model(),
             Scene::TerrainLab => build_tire_dynamics_model(), // single FEM tire on a floor plane
+            Scene::VehicleSysid => build_vehicle_model(), // same chassis + wheels rig as Scene::Vehicle
             Scene::ClothPokerCards => build_cloth_poker_cards_model(),
             Scene::SoftbodyHanging => build_softbody_hanging_model(),
             Scene::CableTwist => build_cable_twist_model(),
@@ -4450,6 +4473,7 @@ fn step_simulation(
             | Scene::TireTraction
             | Scene::TireRealistic
             | Scene::TerrainLab
+            | Scene::VehicleSysid
     ) {
         return;
     }
