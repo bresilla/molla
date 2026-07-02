@@ -72,18 +72,17 @@ jobs:
     # on tests it physically can't run; promote to a hard gate once a
     # GPU-equipped runner is wired in.
     #
-    # Failure-bucket guide for log triage (May 2026 audit):
+    # Failure-bucket guide for log triage:
     #   1. `Engine::new_gpu()` panic                 → expected on
     #      CPU-only runner; the panic message is the *intent*.
-    #   2. `MOLLA_NEWTON_PYTHON` env-var panic       → expected; the
-    #      Newton oracle needs a venv'd Python install (see
-    #      `Makefile::test-oracle`).
-    #   3. Wall-clock perf-gate failures (LBVH 10k,
+    #   2. Wall-clock perf-gate failures (LBVH 10k,
     #      MPM 50k+64³, etc.) under contended runs   → typically
     #      `--test-threads` contention; perf gates document this with
     #      a hint to re-run single-threaded.
-    #   4. SIGSEGV / kernel panic                    → real GPU bug
+    #   3. SIGSEGV / kernel panic                    → real GPU bug
     #      surfaced by the parallel run; investigate.
+    # (The Newton oracle is pure ported Rust — no Python/venv is
+    # involved; see book/src/testing/strategy.md.)
     name: ignored tests (GPU/perf — visibility only)
     runs-on: ubuntu-latest
     continue-on-error: true
