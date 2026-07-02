@@ -196,6 +196,22 @@ impl Solver for XpbdSolver {
             return self.step_inner(model, state_in, control, contacts, dt_sub, state_out, None);
         }
 
+        // The GPU dispatch cannot read contact anchors from the
+        // contact-time poses yet, so multi-substep on the GPU backend
+        // would silently recompute `p_a_local` from the drifting
+        // current pose and diverge from the CPU reference. Fail loudly
+        // until the pose override is plumbed into the kernel; callers
+        // can run the substep loop externally (re-colliding per
+        // substep) in the meantime.
+        if self.is_gpu() {
+            return Err(Error::Solver(
+                "XPBD GPU multi-substep is not implemented (contact-time pose \
+                 override is CPU-only); set substeps = 1 and run the substep \
+                 loop externally"
+                    .to_string(),
+            ));
+        }
+
         // Multi-substep: ping-pong between state_out and a host-side
         // scratch state. The contact set is reused across substeps —
         // Müller (2020) §3.2: contacts captured once at the outer
@@ -270,10 +286,14 @@ impl XpbdSolver {
             ),
             #[cfg(feature = "gpu")]
             XpbdBackend::Gpu(gpu) => {
-                // GPU substep with contact-relative pose override is
-                // not implemented yet — fall back to using state_in's
-                // body_q (works for substeps == 1).
-                let _ = q_at_contact;
+                // `step()` rejects GPU + substeps > 1, so the
+                // contact-time pose override is never active here.
+                // When the kernel learns to read anchors from
+                // `q_at_contact`, upload it instead of asserting.
+                debug_assert!(
+                    q_at_contact.is_none(),
+                    "GPU XPBD dispatch cannot honor a contact-time pose override yet"
+                );
                 let GpuBackend {
                     device,
                     queue,
