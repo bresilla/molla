@@ -56,6 +56,7 @@ molla-geometry = { path = "../molla-geometry", default-features = false }
 molla-solvers = { path = "../molla-solvers", default-features = false, features = ["autograd"] }
 molla-autograd = { path = "../molla-autograd" }
 molla-fem = { path = "../molla-fem", default-features = false }
+molla-vehicle = { path = "../molla-vehicle" }
 glam = { version = "0.30", features = ["bytemuck"] }
 tracing = "0.1"
 slotmap = "1"

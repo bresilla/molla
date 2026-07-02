@@ -3195,6 +3195,7 @@ dependencies = [
  "molla-sim",
  "molla-solvers",
  "molla-storage",
+ "molla-vehicle",
  "pollster",
  "rayon",
  "rustfft",

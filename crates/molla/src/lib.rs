@@ -28,6 +28,6 @@ pub mod optim;
 pub mod sensors;
 pub mod solvers;
 pub mod storage;
-pub mod utils;
+pub mod vehicle;
 
 pub mod prelude;
