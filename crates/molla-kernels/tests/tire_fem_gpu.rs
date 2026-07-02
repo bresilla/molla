@@ -4592,3 +4592,273 @@ fn tire_fem_gpu_spin_pushes_grounded_tread_backward_in_contact() {
          baseline_x={baseline_x}, spin_x={spin_x}, dx={dx}"
     );
 }
+
+/// F2 (INSPECTION.md) — zero-host-readback substep loop.
+///
+/// The resident chain
+/// `step_persistent → dispatch_resident → step_hub_persistent_with_tread_forces`
+/// must reproduce the blocking readback chain
+/// (`readback_state → dispatch_blocking → upload_state → host wrench
+/// sum → step_hub_persistent`) on the G4 rolling-contact scenario:
+/// same shader, same per-substep uniforms, so the only admissible
+/// divergence is the on-device wrench reduction order (f32 noise,
+/// amplified by 96 substeps of dynamics). The CPU tire steps alongside
+/// purely as the shared per-substep parameter bridge, exactly like the
+/// G4 parity test.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_resident_contact_loop_matches_blocking_chain() {
+    use molla_vehicle::{SurfaceMaterial, TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+    let feedback_kernel = TireFemContactFeedbackKernel::new(&device);
+
+    let params = TetraTireFemParams {
+        surface_material: SurfaceMaterial {
+            mu_static: 1.0,
+            mu_dynamic: 0.85,
+            bristle_damping: 5.0e4,
+            rolling_resistance: 0.0,
+            cohesion: 0.0,
+        },
+        ..TetraTireFemParams::realtime_viewer()
+    };
+    let mut cpu_tire = TetraTireFem::new(0.0, 180_000.0, params);
+    let dt = 1.0 / 8_000.0;
+    let terrain = molla_vehicle::terrain::FlatTerrain::new(0.0, 1.0);
+
+    // Same settle recipe as the G4 rolling parity test.
+    cpu_tire.set_hub_kinematic([0.0, params.outer_radius * 0.982, 0.0], [0.0; 3]);
+    for _ in 0..1_600 {
+        cpu_tire.step_on_terrain(&terrain, dt);
+    }
+    cpu_tire.set_hub_dynamic();
+    let mut settled_in_contact = false;
+    for _ in 0..20 {
+        for _ in 0..1_600 {
+            cpu_tire.step_on_terrain(&terrain, dt);
+        }
+        let nodes = cpu_tire.nodes();
+        if cpu_tire
+            .tread_nodes()
+            .iter()
+            .filter(|&&id| nodes[id][1] < 1.0e-3)
+            .count()
+            >= 2
+        {
+            settled_in_contact = true;
+            break;
+        }
+    }
+    assert!(settled_in_contact, "tire must settle into contact");
+    cpu_tire.set_hub_spin(6.0);
+    cpu_tire.set_drive_torque_n_m(120.0);
+
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        semi_implicit_stiffness_scale: params.semi_implicit_stiffness_scale as f32,
+        ..Default::default()
+    };
+    let gpu_input = tire_fem_gpu_input_from_tetra_fem(&cpu_tire, base_gpu_params);
+    let masses: Vec<f32> = gpu_input.masses.clone();
+    let tread_ids: Vec<u32> = gpu_input.tread_ids.clone();
+    let n_nodes = gpu_input.positions.len() as u32;
+
+    // Two identical persistent meshes: one for each chain.
+    let mut mesh_blocking = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("blocking mesh");
+    let mut mesh_resident = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("resident mesh");
+    let mut resident = feedback_kernel
+        .create_resident(
+            &device,
+            &queue,
+            &mesh_resident,
+            &vec![[0.0_f32; 4]; tread_ids.len()],
+        )
+        .expect("resident contact state");
+
+    let hub_mass = params.hub_mass as f32;
+    let hub_floor_y = (params.inner_radius * 0.75) as f32;
+    let base_hub_params = TireFemHubParams {
+        dt: dt as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        bead_damping: params.bead_damping as f32,
+        hub_mass,
+        hub_damping: 260.0,
+        downforce: params.downforce as f32,
+        gravity_y: -9.81,
+        hub_floor_active: 1.0,
+        hub_floor_y,
+        external_force_xyz: [0.0; 3],
+        lateral_damping: 80.0,
+    };
+
+    let contact_band = 0.012_f32;
+    let in_band = |tire: &TetraTireFem| -> usize {
+        let nodes = tire.nodes();
+        tire.tread_nodes()
+            .iter()
+            .filter(|&&id| (nodes[id][1] as f32) < contact_band)
+            .count()
+            .max(1)
+    };
+
+    let mut blocking_bristles: Vec<[f32; 4]> = vec![[0.0; 4]; tread_ids.len()];
+    let roll_start_x = cpu_tire.hub()[0] as f32;
+
+    for step in 0..96 {
+        let bridged = tire_fem_gpu_input_from_tetra_fem(&cpu_tire, base_gpu_params);
+        let node_params = bridged.params;
+        let hub_pre = cpu_tire.hub();
+        let hub_vel_pre = cpu_tire.hub_velocity();
+        let omega_pre = cpu_tire.hub_omega();
+        let load_per_tread = (params.downforce / in_band(&cpu_tire) as f64) as f32;
+        let fb_params = TireFemContactFeedbackParams {
+            dt: dt as f32,
+            contact_band,
+            ground_y: 0.0,
+            omega: omega_pre as f32,
+            hub: [hub_pre[0] as f32, hub_pre[1] as f32, hub_pre[2] as f32],
+            hub_vel: [
+                hub_vel_pre[0] as f32,
+                hub_vel_pre[1] as f32,
+                hub_vel_pre[2] as f32,
+            ],
+            heading: [1.0, 0.0, 0.0],
+            rolling_radius: params.outer_radius as f32,
+            normal_load_per_tread: load_per_tread,
+            area_per_tread: node_params.pressure_area_per_tread_node,
+            tread_shear_stiffness: params.tread_shear_stiffness as f32,
+            mu_static: 1.0,
+            mu_dynamic: 0.85,
+            bristle_damping: 5.0e4,
+            cohesion: 0.0,
+            bristle_relax_rate: params.bristle_relax_rate as f32,
+        };
+        cpu_tire.step_on_terrain(&terrain, dt);
+
+        // ── Chain A: blocking readback loop (the pre-F2 pattern).
+        kernel.step_persistent(&device, &queue, &mut mesh_blocking, node_params);
+        let gpu_state = kernel
+            .readback_state(&device, &queue, &mesh_blocking)
+            .expect("readback state");
+        let feedback = feedback_kernel
+            .dispatch_blocking(
+                &device,
+                &queue,
+                &TireFemContactFeedbackInput {
+                    positions: gpu_state.positions.clone(),
+                    velocities: gpu_state.velocities.clone(),
+                    masses: masses.clone(),
+                    tread_ids: tread_ids.clone(),
+                    bristles: blocking_bristles.clone(),
+                    terrain: None,
+                    params: fb_params,
+                },
+            )
+            .expect("blocking feedback");
+        let wrench = feedback.patch_accounting().total_force;
+        blocking_bristles = feedback.bristles;
+        kernel.upload_state(
+            &queue,
+            &mesh_blocking,
+            &gpu_state.positions,
+            &feedback.velocities,
+        );
+        kernel.step_hub_persistent(
+            &device,
+            &queue,
+            &mesh_blocking,
+            TireFemHubParams {
+                external_force_xyz: [wrench[0], 0.0, wrench[2]],
+                ..base_hub_params
+            },
+        );
+
+        // ── Chain B: zero-readback resident loop.
+        kernel.step_persistent(&device, &queue, &mut mesh_resident, node_params);
+        feedback_kernel
+            .dispatch_resident(&device, &queue, &mesh_resident, &mut resident, fb_params)
+            .expect("resident feedback");
+        kernel.step_hub_persistent_with_tread_forces(
+            &device,
+            &queue,
+            &mesh_resident,
+            base_hub_params,
+            resident.force_rows(),
+            n_nodes,
+        );
+
+        if step % 8 == 7 {
+            let hub_a = kernel
+                .readback_hub(&device, &queue, &mesh_blocking)
+                .expect("hub A");
+            let hub_b = kernel
+                .readback_hub(&device, &queue, &mesh_resident)
+                .expect("hub B");
+            let dx = (hub_a[0] - hub_b[0]).abs();
+            let dy = (hub_a[1] - hub_b[1]).abs();
+            eprintln!(
+                "step {step}: blocking hub=({:.6},{:.6}) resident hub=({:.6},{:.6}) d=({dx:.2e},{dy:.2e})",
+                hub_a[0], hub_a[1], hub_b[0], hub_b[1]
+            );
+            assert!(
+                dx < 5.0e-3 && dy < 5.0e-3,
+                "step {step}: resident chain hub diverged from blocking chain \
+                 (dx={dx}, dy={dy}) — only reduction-order f32 noise is admissible"
+            );
+        }
+    }
+
+    // Full-state agreement at the end: same shader, same inputs — the
+    // node states may differ only through the hub-coupling noise.
+    let state_a = kernel
+        .readback_state(&device, &queue, &mesh_blocking)
+        .expect("final state A");
+    let state_b = kernel
+        .readback_state(&device, &queue, &mesh_resident)
+        .expect("final state B");
+    let mut max_dp = 0.0_f32;
+    for (a, b) in state_a.positions.iter().zip(state_b.positions.iter()) {
+        for c in 0..3 {
+            max_dp = max_dp.max((a[c] - b[c]).abs());
+        }
+    }
+    let resident_bristles = resident
+        .read_bristles(&device, &queue)
+        .expect("resident bristles");
+    let mut max_db = 0.0_f32;
+    for (a, b) in blocking_bristles.iter().zip(resident_bristles.iter()) {
+        for c in 0..3 {
+            max_db = max_db.max((a[c] - b[c]).abs());
+        }
+    }
+    eprintln!("final: max node |Δp| = {max_dp:.3e}, max bristle |Δ| = {max_db:.3e}");
+    assert!(max_dp < 1.0e-3, "node positions diverged: {max_dp}");
+    assert!(max_db < 1.0e-4, "bristle state diverged: {max_db}");
+
+    // Non-vacuous: the resident tire must actually have rolled
+    // forward from where the settle left it (the hub settles slightly
+    // off-origin, so absolute x is not the right gate).
+    let hub_b = kernel
+        .readback_hub(&device, &queue, &mesh_resident)
+        .expect("hub B final");
+    assert!(
+        hub_b[0] > roll_start_x + 1.0e-4,
+        "resident tire should roll forward under spin + drive torque: \
+         x={} start={roll_start_x}",
+        hub_b[0]
+    );
+}

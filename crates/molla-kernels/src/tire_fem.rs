@@ -1006,6 +1006,65 @@ pub struct TireFemContactReductionKernel {
 
 /// First GPU feedback pass that applies tread brush forces back to FEM node
 /// velocities and persists per-tread bristle state.
+/// GPU-resident buffers for the zero-readback contact-feedback stage
+/// — see [`TireFemContactFeedbackKernel::dispatch_resident`]. Bristle
+/// state ping-pongs across substeps; force rows stay on-device for the
+/// hub tread-wrench reduction.
+pub struct TireFemResidentContact {
+    bristle_a: wgpu::Buffer,
+    bristle_b: wgpu::Buffer,
+    vel_out_buf: wgpu::Buffer,
+    force_buf: wgpu::Buffer,
+    uniform_buf: wgpu::Buffer,
+    terrain_dummy: wgpu::Buffer,
+    friction_dummy: wgpu::Buffer,
+    water_dummy: wgpu::Buffer,
+    sinkage_dummy: wgpu::Buffer,
+    velocity_map_dummy: wgpu::Buffer,
+    sdf_dummy: wgpu::Buffer,
+    /// `false` → next dispatch reads bristle A, writes bristle B.
+    parity: bool,
+    n_tread: u32,
+}
+
+impl TireFemResidentContact {
+    /// Per-node force rows written by the last resident dispatch —
+    /// feed to `step_hub_persistent_with_tread_forces` (row count =
+    /// the mesh node count).
+    #[must_use]
+    pub fn force_rows(&self) -> &wgpu::Buffer {
+        &self.force_buf
+    }
+
+    /// Debug/test readback of the current bristle state (the slot the
+    /// last dispatch wrote). Not part of the zero-readback loop.
+    pub fn read_bristles(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<Vec<[f32; 4]>> {
+        let cur = if self.parity {
+            &self.bristle_b
+        } else {
+            &self.bristle_a
+        };
+        let n = self.n_tread as usize;
+        let stage = stage_vec4(device, "tire_fem resident bristle stage", n);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_fem resident bristle readback"),
+        });
+        encoder.copy_buffer_to_buffer(
+            cur,
+            0,
+            &stage,
+            0,
+            (n.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+        );
+        queue.submit(Some(encoder.finish()));
+        read_vec4(device, &stage, "tire_fem resident bristles")
+    }
+}
+
 pub struct TireFemContactFeedbackKernel {
     pipeline: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
@@ -7817,6 +7876,227 @@ impl TireFemContactFeedbackKernel {
             bristles: read_vec4(device, &stage_bristle, "tire_fem_contact_feedback bristles")?,
             forces: read_vec4(device, &stage_force, "tire_fem_contact_feedback forces")?,
         })
+    }
+
+    /// Create the GPU-resident state for the zero-readback contact
+    /// feedback stage (PLAN_REALTIRE / PROGRESS.md "zero host readback"
+    /// follow-up): persistent ping-pong bristle buffers, a full-node
+    /// velocity output buffer, per-node force rows (consumable by
+    /// [`TireFemGpuKernel::step_hub_persistent_with_tread_forces`]),
+    /// and 1-element flat-ground terrain stand-ins. `initial_bristles`
+    /// must be one row per entry of the mesh's tread table (the same
+    /// `tread_ids` the mesh was created from).
+    pub fn create_resident(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        initial_bristles: &[[f32; 4]],
+    ) -> Result<TireFemResidentContact> {
+        if initial_bristles.is_empty() {
+            return Err(Error::Solver(
+                "tire_fem_contact_feedback: resident state needs at least one tread row".into(),
+            ));
+        }
+        let n = mesh.n_nodes as usize;
+        let n_tread = initial_bristles.len();
+        let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let usage_rw = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+        let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
+        let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes.max(4),
+                usage,
+                mapped_at_creation: false,
+            })
+        };
+        let bristle_a = mk_buf(
+            "tire_fem_contact_feedback resident bristle A",
+            vec4_bytes(n_tread),
+            usage_rw,
+        );
+        let bristle_b = mk_buf(
+            "tire_fem_contact_feedback resident bristle B",
+            vec4_bytes(n_tread),
+            usage_rw,
+        );
+        queue.write_buffer(&bristle_a, 0, bytemuck::cast_slice(initial_bristles));
+        queue.write_buffer(&bristle_b, 0, bytemuck::cast_slice(initial_bristles));
+        let vel_out_buf = mk_buf(
+            "tire_fem_contact_feedback resident vel_out",
+            vec4_bytes(n),
+            usage_rw,
+        );
+        let force_buf = mk_buf(
+            "tire_fem_contact_feedback resident force rows",
+            vec4_bytes(n),
+            usage_rw,
+        );
+        let uniform_buf = mk_buf(
+            "tire_fem_contact_feedback resident uniforms",
+            core::mem::size_of::<ContactFeedbackUniforms>() as u64,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+        // Flat-ground stand-ins for the terrain bindings (matching the
+        // `terrain: None` arm of `dispatch_blocking`). The friction
+        // stand-in is rewritten per dispatch from `params.mu_static`.
+        let terrain_dummy = mk_buf("tire_fem_contact_feedback resident terrain", 4, usage_ro);
+        let friction_dummy = mk_buf("tire_fem_contact_feedback resident friction", 4, usage_ro);
+        let water_dummy = mk_buf("tire_fem_contact_feedback resident water", 4, usage_ro);
+        let sinkage_dummy = mk_buf("tire_fem_contact_feedback resident sinkage", 4, usage_ro);
+        let velocity_map_dummy = mk_buf(
+            "tire_fem_contact_feedback resident surface velocity",
+            16,
+            usage_ro,
+        );
+        let sdf_dummy = mk_buf("tire_fem_contact_feedback resident sdf", 16, usage_ro);
+        queue.write_buffer(&terrain_dummy, 0, bytemuck::cast_slice(&[0.0_f32]));
+        queue.write_buffer(&water_dummy, 0, bytemuck::cast_slice(&[0.0_f32]));
+        queue.write_buffer(&sinkage_dummy, 0, bytemuck::cast_slice(&[0.0_f32]));
+        queue.write_buffer(
+            &velocity_map_dummy,
+            0,
+            bytemuck::cast_slice(&[[0.0_f32; 4]]),
+        );
+        queue.write_buffer(&sdf_dummy, 0, bytemuck::cast_slice(&[[0.0_f32; 4]]));
+        Ok(TireFemResidentContact {
+            bristle_a,
+            bristle_b,
+            vel_out_buf,
+            force_buf,
+            uniform_buf,
+            terrain_dummy,
+            friction_dummy,
+            water_dummy,
+            sinkage_dummy,
+            velocity_map_dummy,
+            sdf_dummy,
+            parity: false,
+            n_tread: n_tread as u32,
+        })
+    }
+
+    /// Zero-readback contact-feedback dispatch: reads the persistent
+    /// mesh's just-written pos/vel slot (same parity rule as
+    /// `step_hub_persistent`), integrates the persistent bristles
+    /// (ping-pong), writes the brush-updated velocities back into the
+    /// mesh's velocity slot with a device-to-device copy, and leaves
+    /// the per-node force rows in `state.force_rows()` for
+    /// [`TireFemGpuKernel::step_hub_persistent_with_tread_forces`].
+    /// Flat ground only in v1 — heightfield/SDF terrain still goes
+    /// through `dispatch_blocking{,_with_gpu_terrain}`.
+    ///
+    /// Call order per substep:
+    /// `step_persistent` → `dispatch_resident` →
+    /// `step_hub_persistent_with_tread_forces`. Nothing crosses back
+    /// to the host.
+    pub fn dispatch_resident(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        state: &mut TireFemResidentContact,
+        params: TireFemContactFeedbackParams,
+    ) -> Result<()> {
+        let n = mesh.n_nodes;
+        if n == 0 {
+            return Err(Error::Solver(
+                "tire_fem_contact_feedback: resident dispatch on empty mesh".into(),
+            ));
+        }
+        // Same slot rule as the hub kernels: the node step just wrote
+        // B when `mesh.parity` is set, A otherwise.
+        let (pos_buf, vel_buf) = if mesh.parity {
+            (&mesh.pos_b, &mesh.vel_b)
+        } else {
+            (&mesh.pos_a, &mesh.vel_a)
+        };
+        let (bristle_in, bristle_out) = if state.parity {
+            (&state.bristle_b, &state.bristle_a)
+        } else {
+            (&state.bristle_a, &state.bristle_b)
+        };
+        queue.write_buffer(
+            &state.friction_dummy,
+            0,
+            bytemuck::cast_slice(&[params.mu_static]),
+        );
+        let p = params;
+        let uniforms = ContactFeedbackUniforms {
+            counts: [n, state.n_tread, 0, 0],
+            phys0: [p.dt, p.contact_band, p.ground_y, p.omega],
+            hub: [p.hub[0], p.hub[1], p.hub[2], p.rolling_radius],
+            hub_vel: [
+                p.hub_vel[0],
+                p.hub_vel[1],
+                p.hub_vel[2],
+                p.normal_load_per_tread,
+            ],
+            heading: [p.heading[0], p.heading[1], p.heading[2], p.area_per_tread],
+            material0: [
+                p.tread_shear_stiffness,
+                p.mu_static,
+                p.mu_dynamic,
+                p.bristle_damping,
+            ],
+            material1: [p.cohesion, p.bristle_relax_rate, 0.0, 0.0],
+            terrain_velocity: [0.0; 4],
+            terrain_origin: [0.0, 0.0, 1.0, p.mu_static],
+            terrain_dims: [1, 1, 0, 0],
+            soil0: [0.0; 4],
+        };
+        queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_contact_feedback resident io bg"),
+            layout: &self.layout_io,
+            entries: &[
+                entry(0, pos_buf),
+                entry(1, vel_buf),
+                entry(2, &mesh.mass_buf),
+                entry(3, &mesh.tread_id_buf),
+                entry(4, bristle_in),
+                entry(5, &state.vel_out_buf),
+                entry(6, bristle_out),
+                entry(7, &state.force_buf),
+                entry(8, &state.terrain_dummy),
+                entry(9, &state.friction_dummy),
+                entry(10, &state.water_dummy),
+                entry(11, &state.sdf_dummy),
+                entry(12, &state.sinkage_dummy),
+                entry(13, &state.velocity_map_dummy),
+            ],
+        });
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_contact_feedback resident uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[entry(0, &state.uniform_buf)],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_fem_contact_feedback resident encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::tire_fem_contact_feedback resident pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_uniforms, &[]);
+            pass.dispatch_workgroups(n.div_ceil(WORKGROUP_SIZE), 1, 1);
+        }
+        // Brush impulses reach the mesh like the CPU bristle term
+        // reaches `self.vel` — replace the mesh's velocity slot with
+        // the brush-updated one, all device-side.
+        let vel_bytes = (n as usize * core::mem::size_of::<[f32; 4]>()) as u64;
+        encoder.copy_buffer_to_buffer(&state.vel_out_buf, 0, vel_buf, 0, vel_bytes);
+        queue.submit(Some(encoder.finish()));
+        state.parity = !state.parity;
+        Ok(())
     }
 
     pub fn dispatch_blocking_with_gpu_terrain(
