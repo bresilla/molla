@@ -247,8 +247,11 @@ pub struct SparseGridStorage<V: Value> {
     pub freelist: wgpu::Buffer,
     /// Stage 24e.2 — leaf indices marked-inactive but not yet
     /// reclaimed. Drained by the `reclaim_empty_leaves` entry point
-    /// into `freelist`. Sized `leaf_capacity` u32s; `counters[4]` is
-    /// the live count.
+    /// into `freelist` (callers normally go through
+    /// `SparseGridDeleteKernel::delete`, which composes mark + drain
+    /// — see its "Reclamation contract" doc for what is and is not
+    /// recycled). Sized `leaf_capacity` u32s; `counters[4]` is the
+    /// live count.
     pub pending_reclaim: wgpu::Buffer,
     pub root_table_capacity: u32,
     pub internal_capacity: u32,

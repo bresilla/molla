@@ -387,3 +387,91 @@ fn delete_then_insert_roundtrip_throughput() {
         (3 * n) as f64 / total.as_secs_f64() / 1000.0,
     );
 }
+
+/// INSPECTION.md F11 — the delete/reclaim CONTRACT, including its
+/// known limit, pinned numerically:
+///
+/// * Leaf slots ARE recycled end-to-end: delete pushes them through
+///   `pending_reclaim` into the freelist and the insert kernel's
+///   `pop_freelist` consumes them, so abandoning one region and
+///   populating another does not grow the leaf pool.
+/// * Internal-node slots are NOT folded (no internal freelist, no
+///   empty-subtree coarsening): abandoning a region leaks its
+///   internal nodes until `SparseGridStorage::reset`. The leak is
+///   bounded by `internal_capacity`. If someone implements folding,
+///   the final assertion here flips — update it and close the F11
+///   follow-up.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn leaf_slots_recycle_but_internal_nodes_leak_known_limit() {
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let n = 512usize;
+    // Two regions with guaranteed-disjoint root keys (2²⁰ apart).
+    let region_a = random_coords(n, 0xA11CE, 4096);
+    let region_b: Vec<[i32; 3]> = random_coords(n, 0xB0B, 4096)
+        .into_iter()
+        .map(|c| [c[0] + (1 << 20), c[1], c[2]])
+        .collect();
+    let values: Vec<f32> = (0..n).map(|i| i as f32).collect();
+
+    let storage = SparseGridStorage::<f32>::new(
+        &device,
+        next_pow2((n as u32) * 4),
+        n as u32 * 4,
+        n as u32 * 4,
+    );
+    let insert = SparseGridInsertKernel::<f32>::new(&device);
+    let delete = SparseGridDeleteKernel::<f32>::new(&device);
+
+    insert
+        .insert(&device, &queue, &storage, &region_a, &values)
+        .expect("insert region A");
+    let after_a = storage.storage_stats(&device, &queue).expect("stats A");
+    assert!(after_a.active_leaves > 0 && after_a.active_internals > 0);
+
+    delete
+        .delete(&device, &queue, &storage, &region_a)
+        .expect("delete region A");
+    let after_delete = storage.storage_stats(&device, &queue).expect("stats del");
+    assert!(
+        after_delete.leaves_in_freelist > 0,
+        "delete must feed the leaf freelist: {after_delete:?}"
+    );
+    assert_eq!(after_delete.pending_reclaim, 0, "reclaim must drain");
+
+    insert
+        .insert(&device, &queue, &storage, &region_b, &values)
+        .expect("insert region B");
+    let after_b = storage.storage_stats(&device, &queue).expect("stats B");
+    eprintln!("A: {after_a:?}\ndel: {after_delete:?}\nB: {after_b:?}");
+
+    // Leaf recycling: region B must be served (at least partly) from
+    // the freelist rather than growing the bump allocator by a full
+    // region's worth.
+    let leaf_growth = after_b.active_leaves - after_a.active_leaves;
+    assert!(
+        leaf_growth < after_a.active_leaves / 2,
+        "leaf slots were not recycled: bump grew by {leaf_growth} \
+         (region A used {})",
+        after_a.active_leaves
+    );
+    assert!(
+        after_b.leaves_in_freelist < after_delete.leaves_in_freelist,
+        "insert did not pop the freelist"
+    );
+
+    // KNOWN LIMIT (F11 follow-up): region A's internal nodes leak —
+    // the internal bump counter grows by a full region even though A
+    // is empty. When empty-subtree folding lands, flip this to assert
+    // near-zero growth instead.
+    let internal_growth = after_b.active_internals - after_a.active_internals;
+    assert!(
+        internal_growth > 0,
+        "internal nodes unexpectedly reused — folding may have landed; \
+         update this test and close the F11 follow-up"
+    );
+    assert_eq!(after_b.error_flags, 0, "no pool exhaustion");
+}

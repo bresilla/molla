@@ -361,6 +361,22 @@ impl<V: Value> SparseGridDeleteKernel<V> {
     /// one call. Two `queue.submit`s under the hood — needed to
     /// guarantee the mark pass globally finishes before the drain
     /// reads the pending list.
+    ///
+    /// # Reclamation contract (INSPECTION.md F11)
+    ///
+    /// * **Leaf slots are recycled end-to-end**: emptied leaves flow
+    ///   through `pending_reclaim` into the freelist, and the insert
+    ///   kernel's `pop_freelist` consumes them before growing the
+    ///   bump allocator — verified by
+    ///   `sparse_grid_v4::leaf_slots_recycle_but_internal_nodes_leak_known_limit`
+    ///   (a full region's re-population grows the leaf pool by ~0).
+    /// * **Internal nodes are NOT folded**: abandoning a region leaks
+    ///   its internal-node slots (there is no internal freelist and no
+    ///   empty-subtree coarsening). The leak is bounded by
+    ///   `internal_capacity`; `SparseGridStorage::reset` reclaims
+    ///   everything. Workloads that continuously migrate across
+    ///   root-key space will exhaust the internal pool and should
+    ///   reset periodically until folding lands.
     pub fn delete(
         &self,
         device: &wgpu::Device,
