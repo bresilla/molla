@@ -6,8 +6,9 @@ foundation crates `molla-core`, `molla-math`, `molla-storage`, runtime-only
 data-model crate `molla-sim`, host optimizer crate `molla-optim`, the first
 `molla-actuators` slice, the first `molla-kernels` slices, the first
 `molla-sensors` slice, the first `molla-geometry` slice, the first
-`molla-solvers` slice, the first `molla-autograd` slice, and the first
-`molla-fem` slice extracted; `molla` remains the public facade plus
+`molla-solvers` slice, the first `molla-autograd` slice, the first
+`molla-fem` slice, and the wheeled-vehicle crate `molla-vehicle`
+extracted; `molla` remains the public facade plus
 remaining engine modules; `bin/molla_viewer` is the binary-only Bevy
 application.
 
@@ -34,6 +35,7 @@ application.
             │ molla-solvers                           │
             │ molla-autograd                          │
             │ molla-fem                               │
+            │ molla-vehicle                           │
             └──────────────────────────────────────────┘
 ```
 
@@ -78,6 +80,7 @@ Current extraction status:
 - `molla-solvers` — started for the shared `Solver` trait, CPU/GPU semi-implicit rigid-body integration, CPU/GPU XPBD, CPU/GPU VBD, CPU/GPU Featherstone, implicit MPM CPU driver, explicit GPU MPM driver, VBD soft-contact helpers, inverse kinematics, CPU-only CRBA mass matrices, recursive Newton-Euler inverse dynamics, geometric Jacobians, and optional `autograd` integration for Featherstone tape helpers.
 - `molla-autograd` — started for CPU tape, differentiable arm helper, Featherstone trace/adjoint helpers, XPBD distance adjoints, and differentiable CPU MPM forward/adjoint code.
 - `molla-fem` — extracted for the FEM module tree, FEM-specific GPU kernels, the 2-D Stam stable-fluid solver, and facade-flipped behind `molla::fem::*`.
+- `molla-vehicle` — wheeled-vehicle simulation: terrain models (flat / heightfield / SDF / trimesh / Bekker-deformable / DEM-granular), tire models (rigid, TmSimple, Pac89-shape, real brush, tetra tire FEM under `real_tire/`), suspension, powertrain (engine / auto-shifting transmission / driveline / Ackermann steering), the 3-DOF `Vehicle` chassis, and the differentiable `sysid` friction-identification demo. Deliberately dependency-free; exposed through the facade as `molla::vehicle::*`. See [the molla-vehicle chapter](../vehicle/overview.md).
 
 ## Workspace exclusions
 
@@ -99,6 +102,7 @@ members = [
     "crates/molla-solvers",
     "crates/molla-autograd",
     "crates/molla-fem",
+    "crates/molla-vehicle",
     "crates/molla",
     "bin/molla_viewer",
 ]
