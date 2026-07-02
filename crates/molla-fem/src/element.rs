@@ -625,18 +625,70 @@ pub fn compute_element_st_venant_kirchhoff_stress(
             }
             out
         }
-        FemCell::Tri(_) => {
-            // 2D plane-strain SVK is intentionally deferred — Stage
-            // 36.1 cantilever uses the linear element for tris and SVK
-            // for tets only. Earlier this returned `vec![0.0; nv*2]`
-            // which silently produced wrong-size output for 3D callers
-            // indexing as `3*i + c` (out-of-bounds reads in release
-            // mode); panic explicitly instead so misuse is loud.
-            unimplemented!(
-                "compute_element_st_venant_kirchhoff_stress: Tri (plane-strain 2D) \
-                 SVK is not implemented — use Tet cells in 3D, or extend this \
-                 function for 2D plane-strain elasticity"
-            )
+        FemCell::Tri(idx) => {
+            // Plane-strain SVK (INSPECTION.md F13). Kinematics are
+            // in-plane only: F₃₃ = 1 and the out-of-plane rows/cols of
+            // the Green strain vanish, so all algebra stays 2×2. The
+            // Lamé trace term uses the in-plane tr(E) — identical to
+            // the full 3D trace under plane strain (E₃₃ = 0).
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+            ];
+            assert_eq!(u_local.len(), 6, "SVK Tri: u_local must be 6-component");
+            // Signed area paired with the signed shape gradients —
+            // same rationale as `tet_signed_volume` above (a flipped
+            // rest triangle must not flip the internal force).
+            let two_area =
+                (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y);
+            let area = 0.5 * two_area;
+            let grads = tri_shape_grads_2d(&p);
+
+            // F = I + Σᵢ uᵢ ⊗ ∇φᵢ (2×2, row-major [row][col]).
+            let mut f = [[1.0, 0.0], [0.0, 1.0]];
+            for i in 0..3 {
+                let ux = u_local[2 * i];
+                let uy = u_local[2 * i + 1];
+                let g = grads[i];
+                f[0][0] += ux * g[0];
+                f[0][1] += ux * g[1];
+                f[1][0] += uy * g[0];
+                f[1][1] += uy * g[1];
+            }
+            // Green strain E = ½(FᵀF − I).
+            let ftf = [
+                [
+                    f[0][0] * f[0][0] + f[1][0] * f[1][0],
+                    f[0][0] * f[0][1] + f[1][0] * f[1][1],
+                ],
+                [
+                    f[0][1] * f[0][0] + f[1][1] * f[1][0],
+                    f[0][1] * f[0][1] + f[1][1] * f[1][1],
+                ],
+            ];
+            let e = [
+                [0.5 * (ftf[0][0] - 1.0), 0.5 * ftf[0][1]],
+                [0.5 * ftf[1][0], 0.5 * (ftf[1][1] - 1.0)],
+            ];
+            // S = λ tr(E) I + 2μ E.
+            let tr_e = e[0][0] + e[1][1];
+            let sxx = lambda * tr_e + 2.0 * mu * e[0][0];
+            let syy = lambda * tr_e + 2.0 * mu * e[1][1];
+            let sxy = 2.0 * mu * e[0][1];
+            // First Piola P = F · S (S symmetric).
+            let p00 = f[0][0] * sxx + f[0][1] * sxy;
+            let p01 = f[0][0] * sxy + f[0][1] * syy;
+            let p10 = f[1][0] * sxx + f[1][1] * sxy;
+            let p11 = f[1][0] * sxy + f[1][1] * syy;
+            // Nodal internal forces f_a = area · P · ∇φ_a.
+            let mut out = vec![0.0; 6];
+            for i in 0..3 {
+                let g = grads[i];
+                out[2 * i] = area * (p00 * g[0] + p01 * g[1]);
+                out[2 * i + 1] = area * (p10 * g[0] + p11 * g[1]);
+            }
+            out
         }
     }
 }
