@@ -29,9 +29,9 @@
 //! XPBD instead.
 
 use crate::core::{Error, Result};
+use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};
 use crate::math::{
-    JacobianKind, Mat3, Real, SpatialMatrix6, SpatialVector, Vec3, spatial_cross,
-    spatial_cross_dual, spatial_jacobian_column,
+    Mat3, Real, SpatialMatrix6, SpatialVector, Vec3, spatial_cross, spatial_cross_dual,
 };
 use crate::sim::{JointType, Model, State};
 
@@ -72,6 +72,8 @@ pub fn inverse_dynamics(
     let body_com = model.body_com.host()?;
     let body_world = model.body_world.host()?;
     let gravity = model.gravity.host()?;
+    let limit_lower = model.joint_limit_lower.host()?;
+    let limit_upper = model.joint_limit_upper.host()?;
 
     let dof_total = (joint_dof_offset[j_end] - joint_dof_offset[j_begin]) as usize;
     if qdd.len() != dof_total {
@@ -99,7 +101,12 @@ pub fn inverse_dynamics(
     }
 
     // ── Pass 1: forward sweep ─────────────────────────────────────
-    let mut s_per_joint = vec![SpatialVector::ZERO; n_joints];
+    // Per-DOF motion subspace shared with Featherstone / CRBA — all
+    // joint types expand to their columns (Ball → 3, Free/Distance/D6
+    // → 6 with lock filtering, Cable → 2, Revolute/Prismatic → 1).
+    let mut s_cols_per_joint: Vec<[SpatialVector; MAX_JOINT_DOFS]> =
+        vec![[SpatialVector::ZERO; MAX_JOINT_DOFS]; n_joints];
+    let mut dof_width = vec![0usize; n_joints];
     let mut v_body = vec![SpatialVector::ZERO; n_joints];
     let mut a_body = vec![SpatialVector::ZERO; n_joints];
     let mut f_body = vec![SpatialVector::ZERO; n_joints];
@@ -110,17 +117,6 @@ pub fn inverse_dynamics(
         let j = j_begin + k;
         local_dof_offset[k] = local_dof_total;
         let jt = decode_joint_type(joint_type[j])?;
-        let dof = match jt {
-            JointType::Revolute | JointType::Prismatic => 1,
-            JointType::Fixed => 0,
-            _ => {
-                return Err(Error::Build(format!(
-                    "RNEA: joint type {:?} not yet supported",
-                    jt
-                )));
-            }
-        };
-        local_dof_total += dof;
 
         let parent_body = joint_parent[j];
         let parent_world = if parent_body < 0 {
@@ -129,28 +125,20 @@ pub fn inverse_dynamics(
             body_q[parent_body as usize]
         };
         let xpw = parent_world.compose(&joint_x_p[j]);
-        let joint_origin_w = xpw.position;
-        let axis_w = xpw.rotation * joint_axis[j];
 
-        // Joint motion subspace at world origin (matches CRBA).
-        let s_k = match jt {
-            JointType::Revolute => {
-                spatial_jacobian_column(JacobianKind::Revolute, axis_w, joint_origin_w, Vec3::ZERO)
-            }
-            JointType::Prismatic => {
-                spatial_jacobian_column(JacobianKind::Prismatic, axis_w, joint_origin_w, Vec3::ZERO)
-            }
-            JointType::Fixed => SpatialVector::ZERO,
-            // Multi-DOF joints (Ball/Free/Distance/D6) bail out at
-            // the dof-count match above (returns Err); reaching this
-            // arm would mean a new JointType variant was added without
-            // updating the dof match. Guard against that drift.
-            _ => unreachable!(
-                "RNEA reached unsupported JointType {:?} after dof guard",
-                jt
-            ),
-        };
-        s_per_joint[k] = s_k;
+        let mut dof_active = [false; MAX_JOINT_DOFS];
+        let width = build_motion_subspace(
+            jt,
+            xpw,
+            joint_axis[j],
+            joint_dof_offset[j] as usize,
+            limit_lower,
+            limit_upper,
+            &mut s_cols_per_joint[k],
+            &mut dof_active,
+        );
+        dof_width[k] = width;
+        local_dof_total += width;
 
         // Parent body's spatial velocity / acceleration. Root: zero
         // velocity, gravity-loaded acceleration so f = I·a yields
@@ -166,17 +154,17 @@ pub fn inverse_dynamics(
             (SpatialVector::ZERO, SpatialVector::new(-g, Vec3::ZERO))
         };
 
-        let qd_idx = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
-        let qd_k = if dof == 0 {
-            0.0
-        } else {
-            joint_qd[joint_dof_offset[j] as usize]
-        };
-        let qdd_k = if dof == 0 { 0.0 } else { qdd[qd_idx] };
-
-        let v_j = s_k.scale(qd_k);
+        let gbase = joint_dof_offset[j] as usize;
+        let lbase = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
+        let mut v_j = SpatialVector::ZERO;
+        let mut a_j = SpatialVector::ZERO;
+        for a in 0..width {
+            let qd_a = joint_qd.get(gbase + a).copied().unwrap_or(0.0);
+            v_j = v_j + s_cols_per_joint[k][a].scale(qd_a);
+            a_j = a_j + s_cols_per_joint[k][a].scale(qdd[lbase + a]);
+        }
         let v_i = v_p + v_j;
-        let a_i = a_p + s_k.scale(qdd_k) + spatial_cross(v_i, v_j);
+        let a_i = a_p + a_j + spatial_cross(v_i, v_j);
         v_body[k] = v_i;
         a_body[k] = a_i;
 
@@ -202,15 +190,18 @@ pub fn inverse_dynamics(
     let mut tau = vec![0.0_f64; local_dof_total];
     for k in (0..n_joints).rev() {
         let j = j_begin + k;
-        let dof_width = local_dof_offset[k + 1] - local_dof_offset[k];
-        if dof_width == 0 {
+        if dof_width[k] == 0 {
+            // Fixed joints still relay force to the parent below.
+            if let Some(p_local) = parent_joint_local[k] {
+                f_body[p_local] = f_body[p_local] + f_body[k];
+            }
             continue;
         }
-        let s_k = s_per_joint[k];
         let f_k = f_body[k];
-        // τ_k = S_k^T · f_k.
-        let tau_k = spatial_dot(s_k, f_k);
-        tau[local_dof_offset[k]] = tau_k;
+        // τ_k[a] = S_k[a]^T · f_k.
+        for a in 0..dof_width[k] {
+            tau[local_dof_offset[k] + a] = spatial_dot(s_cols_per_joint[k][a], f_k);
+        }
 
         // Propagate force to parent.
         if let Some(p_local) = parent_joint_local[k] {
@@ -269,6 +260,7 @@ fn decode_joint_type(v: u32) -> Result<JointType> {
         4 => Ok(JointType::Free),
         5 => Ok(JointType::Distance),
         6 => Ok(JointType::D6),
+        7 => Ok(JointType::Cable),
         _ => Err(Error::Build(format!("RNEA: unknown joint_type {v}"))),
     }
 }

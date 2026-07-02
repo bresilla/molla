@@ -42,7 +42,7 @@ use crate::sim::{Contacts, Control, JointTargetMode, JointType, Model, State, ev
 use super::Solver;
 
 /// Maximum DOFs in any single joint — Free/Distance/D6 hit 6.
-const MAX_JOINT_DOFS: usize = 6;
+pub(crate) const MAX_JOINT_DOFS: usize = 6;
 
 /// Backend selector for [`FeatherstoneSolver`].
 #[allow(
@@ -406,7 +406,7 @@ impl FeatherstoneSolver {
 /// - Cable (Stage 39E): 2 columns — col 0 = (ez; 0) linear stretch along
 ///   the joint-world +z (cable axis), col 1 = (0; ex) bend about the
 ///   joint-world +x (bend axis).
-fn build_motion_subspace(
+pub(crate) fn build_motion_subspace(
     jt: JointType,
     joint_world: Transform,
     axis_local: Vec3,

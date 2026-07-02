@@ -18,7 +18,8 @@
 //! consumer needs the GPU port.
 
 use crate::core::{Error, Result};
-use crate::math::{JacobianKind, Real, SpatialVector, Vec3, spatial_jacobian_column};
+use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};
+use crate::math::{Real, SpatialVector, Vec3};
 use crate::sim::{JointType, Model, State};
 
 /// `6 × N` Jacobian for a body point. Returns a flat row-major
@@ -52,6 +53,8 @@ pub fn jacobian(
     let joint_x_p = model.joint_x_p.host()?;
     let joint_axis = model.joint_axis.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
+    let limit_lower = model.joint_limit_lower.host()?;
+    let limit_upper = model.joint_limit_upper.host()?;
 
     let dof_total = (joint_dof_offset[j_end] - joint_dof_offset[j_begin]) as usize;
     if dof_total == 0 {
@@ -101,44 +104,36 @@ pub fn jacobian(
             body_q[parent_body as usize]
         };
         let xpw = parent_world.compose(&joint_x_p[j]);
-        let joint_origin_w = xpw.position;
-        let axis_w = xpw.rotation * joint_axis[j];
         let jt = decode_joint_type(joint_type[j])?;
         let dof_local = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
-        let col = match jt {
-            JointType::Revolute => spatial_jacobian_column(
-                JacobianKind::Revolute,
-                axis_w,
-                joint_origin_w,
-                target_world,
-            ),
-            JointType::Prismatic => spatial_jacobian_column(
-                JacobianKind::Prismatic,
-                axis_w,
-                joint_origin_w,
-                target_world,
-            ),
-            JointType::Fixed => SpatialVector::ZERO,
-            _ => {
-                return Err(Error::Build(format!(
-                    "jacobian: joint type {:?} not yet supported",
-                    jt
-                )));
-            }
-        };
-        let dof_width = match jt {
-            JointType::Revolute | JointType::Prismatic => 1,
-            _ => 0,
-        };
-        if dof_width == 0 {
-            continue;
+
+        // Per-DOF motion subspace at the WORLD ORIGIN (shared with
+        // Featherstone / CRBA / RNEA), then reference-shifted to the
+        // target point: v(target) = v(origin) + ω × target. Locked D6
+        // columns are ZERO vectors and write zero columns.
+        let mut s_cols = [SpatialVector::ZERO; MAX_JOINT_DOFS];
+        let mut dof_active = [false; MAX_JOINT_DOFS];
+        let width = build_motion_subspace(
+            jt,
+            xpw,
+            joint_axis[j],
+            joint_dof_offset[j] as usize,
+            limit_lower,
+            limit_upper,
+            &mut s_cols,
+            &mut dof_active,
+        );
+        for a in 0..width {
+            let s = s_cols[a];
+            let lin = s.linear + s.angular.cross(target_world);
+            let col_idx = dof_local + a;
+            j_cols[0 * dof_total + col_idx] = lin.x;
+            j_cols[1 * dof_total + col_idx] = lin.y;
+            j_cols[2 * dof_total + col_idx] = lin.z;
+            j_cols[3 * dof_total + col_idx] = s.angular.x;
+            j_cols[4 * dof_total + col_idx] = s.angular.y;
+            j_cols[5 * dof_total + col_idx] = s.angular.z;
         }
-        j_cols[0 * dof_total + dof_local] = col.linear.x;
-        j_cols[1 * dof_total + dof_local] = col.linear.y;
-        j_cols[2 * dof_total + dof_local] = col.linear.z;
-        j_cols[3 * dof_total + dof_local] = col.angular.x;
-        j_cols[4 * dof_total + dof_local] = col.angular.y;
-        j_cols[5 * dof_total + dof_local] = col.angular.z;
     }
     Ok(j_cols)
 }
@@ -152,6 +147,7 @@ fn decode_joint_type(v: u32) -> Result<JointType> {
         4 => Ok(JointType::Free),
         5 => Ok(JointType::Distance),
         6 => Ok(JointType::D6),
+        7 => Ok(JointType::Cable),
         _ => Err(Error::Build(format!("jacobian: unknown joint_type {v}"))),
     }
 }

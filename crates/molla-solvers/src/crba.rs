@@ -18,16 +18,15 @@
 //!   3. For each joint `i`, compute `F = Iᶜᵢ · Sᵢ`, set `M[i,i] = Sᵢ·F`,
 //!      then walk parent chain setting `M[i,p] = M[p,i] = Sₚ·F`.
 //!
-//! Single-articulation. Revolute + Prismatic only (the two 1-DOF joints
-//! Featherstone forward dynamics already supports). `Fixed` is handled
-//! by skipping the joint (it contributes no row/column). Multi-DOF
-//! joints (Ball/Free/D6) are TODO — they need a per-DOF axis split
-//! identical to RNEA's.
+//! Single-articulation. All joint types are supported via the shared
+//! per-DOF motion subspace (`featherstone::build_motion_subspace`):
+//! Revolute / Prismatic (1 DOF), Ball (3), Free / Distance / D6 (6,
+//! with D6 lock filtering), Cable (2). `Fixed` is handled by skipping
+//! the joint (it contributes no row/column).
 
 use crate::core::{Error, Result};
-use crate::math::{
-    JacobianKind, Mat3, Real, SpatialMatrix6, SpatialVector, Vec3, spatial_jacobian_column,
-};
+use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};
+use crate::math::{Mat3, Real, SpatialMatrix6, SpatialVector, Vec3};
 use crate::sim::{JointType, Model, State};
 
 /// Joint-space mass matrix `M(q)` for the requested articulation.
@@ -62,6 +61,8 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     let body_mass = model.body_mass.host()?;
     let body_inertia = model.body_inertia.host()?;
     let body_com = model.body_com.host()?;
+    let limit_lower = model.joint_limit_lower.host()?;
+    let limit_upper = model.joint_limit_upper.host()?;
 
     // ── Local indexing within this articulation ──────────────────
     // For each local joint k, find its parent's local index (or None
@@ -89,10 +90,12 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     }
 
     // ── Per-joint world-frame motion subspace S (at world origin) ─
-    // and joint origin in world. For revolute joints S has nonzero
-    // angular component (the axis); for prismatic, S is purely
-    // linear. Ball / Free / D6 are still TODO.
-    let mut s_per_joint: Vec<SpatialVector> = vec![SpatialVector::ZERO; n_joints];
+    // Shared with Featherstone forward dynamics — every joint type is
+    // expanded to its per-DOF columns (Ball → 3, Free/Distance/D6 → 6
+    // with D6 lock filtering, Cable → 2, Revolute/Prismatic → 1).
+    let mut s_cols_per_joint: Vec<[SpatialVector; MAX_JOINT_DOFS]> =
+        vec![[SpatialVector::ZERO; MAX_JOINT_DOFS]; n_joints];
+    let mut dof_width: Vec<usize> = vec![0; n_joints];
     // Per-joint DOF offset in the local M layout.
     let mut local_dof_offset: Vec<usize> = vec![0; n_joints + 1];
 
@@ -104,21 +107,6 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
         let j = j_begin + k;
         let jt = decode_joint_type(joint_type[j])?;
         local_dof_offset[k] = local_dof_total;
-        let dof_count = match jt {
-            JointType::Revolute | JointType::Prismatic => 1,
-            JointType::Fixed => 0,
-            JointType::Ball
-            | JointType::Free
-            | JointType::Distance
-            | JointType::D6
-            | JointType::Cable => {
-                return Err(Error::Build(format!(
-                    "CRBA: joint type {:?} not yet supported (revolute/prismatic only)",
-                    jt
-                )));
-            }
-        };
-        local_dof_total += dof_count;
 
         // Joint origin in world — parent's body frame composed with x_p.
         let parent_body = joint_parent[j];
@@ -128,25 +116,20 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
             body_q[parent_body as usize]
         };
         let xpw = parent_world.compose(&joint_x_p[j]);
-        let joint_origin_w = xpw.position;
-        let axis_w = xpw.rotation * joint_axis[j];
 
-        s_per_joint[k] = match jt {
-            JointType::Revolute => {
-                spatial_jacobian_column(JacobianKind::Revolute, axis_w, joint_origin_w, Vec3::ZERO)
-            }
-            JointType::Prismatic => {
-                spatial_jacobian_column(JacobianKind::Prismatic, axis_w, joint_origin_w, Vec3::ZERO)
-            }
-            JointType::Fixed => SpatialVector::ZERO,
-            // Multi-DOF joints bail out at the dof-count match above
-            // with `not yet supported`; reaching this arm means a new
-            // JointType variant slipped past that guard.
-            _ => unreachable!(
-                "CRBA reached unsupported JointType {:?} after dof guard",
-                jt
-            ),
-        };
+        let mut dof_active = [false; MAX_JOINT_DOFS];
+        let width = build_motion_subspace(
+            jt,
+            xpw,
+            joint_axis[j],
+            joint_dof_offset[j] as usize,
+            limit_lower,
+            limit_upper,
+            &mut s_cols_per_joint[k],
+            &mut dof_active,
+        );
+        dof_width[k] = width;
+        local_dof_total += width;
 
         // Body spatial inertia at world origin (in `[linear; angular]`
         // convention). Built directly from the parallel-axis formula
@@ -184,34 +167,28 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     }
 
     // ── Fill M ────────────────────────────────────────────────────
+    // Per DOF column a of joint k: F = Iᶜₖ · Sₖ[a]; the joint's own
+    // dof-block gets M[a,b] = Sₖ[b]·F (symmetric since Iᶜ is), and
+    // every ancestor joint p contributes M[ka,pb] = M[pb,ka] = Sₚ[b]·F.
+    // Locked D6 columns are ZERO vectors and produce zero rows/cols.
     let mut m_out = vec![0.0_f64; n * n];
     for k in 0..n_joints {
-        let s_k = s_per_joint[k];
         let dof_k = local_dof_offset[k];
-        let dof_width_k = local_dof_offset[k + 1] - local_dof_offset[k];
-        if dof_width_k == 0 {
-            continue;
-        }
-        // F = Iᶜ · S
-        let f = composite[k].mul_sv(s_k);
-
-        // Diagonal entry M[k,k] = S · F.
-        let m_kk = spatial_dot(s_k, f);
-        m_out[dof_k * n + dof_k] = m_kk;
-
-        // Walk up parent chain — every ancestor joint p contributes
-        // M[k,p] = M[p,k] = Sₚ · F.
-        let mut cur = parent_joint_local[k];
-        while let Some(p) = cur {
-            let s_p = s_per_joint[p];
-            let dof_p = local_dof_offset[p];
-            let dof_width_p = local_dof_offset[p + 1] - local_dof_offset[p];
-            if dof_width_p > 0 {
-                let m_kp = spatial_dot(s_p, f);
-                m_out[dof_k * n + dof_p] = m_kp;
-                m_out[dof_p * n + dof_k] = m_kp;
+        for a in 0..dof_width[k] {
+            let f = composite[k].mul_sv(s_cols_per_joint[k][a]);
+            for b in 0..dof_width[k] {
+                m_out[(dof_k + a) * n + (dof_k + b)] = spatial_dot(s_cols_per_joint[k][b], f);
             }
-            cur = parent_joint_local[p];
+            let mut cur = parent_joint_local[k];
+            while let Some(pj) = cur {
+                let dof_p = local_dof_offset[pj];
+                for b in 0..dof_width[pj] {
+                    let m_ab = spatial_dot(s_cols_per_joint[pj][b], f);
+                    m_out[(dof_k + a) * n + (dof_p + b)] = m_ab;
+                    m_out[(dof_p + b) * n + (dof_k + a)] = m_ab;
+                }
+                cur = parent_joint_local[pj];
+            }
         }
     }
     Ok(m_out)
@@ -288,6 +265,7 @@ fn decode_joint_type(v: u32) -> Result<JointType> {
         4 => Ok(JointType::Free),
         5 => Ok(JointType::Distance),
         6 => Ok(JointType::D6),
+        7 => Ok(JointType::Cable),
         _ => Err(Error::Build(format!("CRBA: unknown joint_type {v}"))),
     }
 }
