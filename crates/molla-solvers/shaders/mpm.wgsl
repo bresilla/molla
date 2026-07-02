@@ -497,11 +497,17 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let iz = base.z + i32(k);
                 if (!in_bounds(ix, iy, iz)) { continue; }
                 let cidx = u32(cell_idx(ix, iy, iz));
-                // node position in world coords (cell centre)
+                // Node position in world coords — the INTEGER lattice the
+                // quadratic weights assume (`base = floor(xp - 0.5)`,
+                // `fx = xp - base`). A +0.5 "cell centre" offset here
+                // shifts every APIC moment arm by dx/2, so the first
+                // moment Σ w·(xn−xp) becomes 0.5·dx instead of 0 and a
+                // uniformly-falling particle manufactures C ≈ 2·v/dx of
+                // spurious affine velocity — the F1b explosion.
                 let node_pos = u.grid_origin + vec3<f32>(
-                    f32(ix) + 0.5,
-                    f32(iy) + 0.5,
-                    f32(iz) + 0.5,
+                    f32(ix),
+                    f32(iy),
+                    f32(iz),
                 ) * dx;
                 let xn_xp = node_pos - pos;
 
@@ -730,9 +736,9 @@ fn p2g_two_pass(
                     if (!in_bounds(ix, iy, iz)) { continue; }
                     let cidx = u32(cell_idx(ix, iy, iz));
                     let node_pos = u.grid_origin + vec3<f32>(
-                        f32(ix) + 0.5,
-                        f32(iy) + 0.5,
-                        f32(iz) + 0.5,
+                        f32(ix),
+                        f32(iy),
+                        f32(iz),
                     ) * dx;
                     let xn_xp = node_pos - pos;
 
@@ -852,9 +858,9 @@ fn rigid_imprint(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = (cidx / n) % n;
     let iz = cidx / (n * n);
     let node_pos = u.grid_origin + vec3<f32>(
-        f32(ix) + 0.5,
-        f32(iy) + 0.5,
-        f32(iz) + 0.5,
+        f32(ix),
+        f32(iy),
+        f32(iz),
     ) * u.cell_size;
     for (var r: u32 = 0u; r < u.rigid_count; r = r + 1u) {
         let cr = rigid_center[r];
@@ -1080,9 +1086,9 @@ fn mpm_rigid_force_integrate(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = (i32(cidx) / n) % n;
     let iz = i32(cidx) / (n * n);
     let node_pos = u.grid_origin + vec3<f32>(
-        f32(ix) + 0.5,
-        f32(iy) + 0.5,
-        f32(iz) + 0.5,
+        f32(ix),
+        f32(iy),
+        f32(iz),
     ) * u.cell_size;
     let v_grid = g_velocity[cidx].xyz;
     for (var r: u32 = 0u; r < u.rigid_count; r = r + 1u) {
@@ -1161,9 +1167,9 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let gv = g_velocity[cidx].xyz;
                 v_new = v_new + w * gv;
                 let node_pos = u.grid_origin + vec3<f32>(
-                    f32(ix) + 0.5,
-                    f32(iy) + 0.5,
-                    f32(iz) + 0.5,
+                    f32(ix),
+                    f32(iy),
+                    f32(iz),
                 ) * dx;
                 let xn_xp = node_pos - pos;
                 // C += 4 * w * v_node * (xn - xp)ᵀ / dx²

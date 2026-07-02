@@ -261,9 +261,9 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cu = u32(ci);
         let w = w27[s];
         let node_pos = origin + vec3<f32>(
-            f32(ix27[s]) + 0.5,
-            f32(iy27[s]) + 0.5,
-            f32(iz27[s]) + 0.5,
+            f32(ix27[s]),
+            f32(iy27[s]),
+            f32(iz27[s]),
         ) * dx;
         let xn_xp = node_pos - pos;
         let aff = C * xn_xp;
@@ -334,7 +334,7 @@ fn predict_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iz = i32(ci) / (gi * gi);
     let iy = (i32(ci) / gi) % gi;
     let ix = i32(ci) % gi;
-    let node_y = U.grid_origin_y + (f32(iy) + 0.5) * U.cell_size;
+    let node_y = U.grid_origin_y + (f32(iy)) * U.cell_size;
     if (node_y < U.floor_y + U.cell_size) {
         let depth = max(U.floor_y + U.cell_size - node_y, 0.0) / U.cell_size;
         if (node_y < U.floor_y && v.y < 0.0) {
@@ -370,7 +370,7 @@ fn floor_reapply(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let gi = i32(g);
     let iy = (i32(ci) / gi) % gi;
-    let node_y = U.grid_origin_y + (f32(iy) + 0.5) * U.cell_size;
+    let node_y = U.grid_origin_y + (f32(iy)) * U.cell_size;
     if (node_y < U.floor_y) {
         var v = v_grid[ci];
         if (v.y < 0.0) { v.y = 0.0; }
@@ -426,7 +426,7 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (cf < 0) { continue; }
                 let cu = u32(cf);
                 let v_node = v_grid[cu];
-                let node_pos = origin + vec3<f32>(f32(xi) + 0.5, f32(yi) + 0.5, f32(zi) + 0.5) * dx;
+                let node_pos = origin + vec3<f32>(f32(xi), f32(yi), f32(zi)) * dx;
                 let xn_xp = node_pos - pos;
                 v_new = v_new + w * v_node;
                 // outer(v_node, xn_xp) columns: col0 = v_node * xn_xp.x, etc.
@@ -721,9 +721,9 @@ fn p2g_125(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cu = u32(ci);
         let w = w27[s];
         let node_pos = origin + vec3<f32>(
-            f32(ix27[s]) + 0.5,
-            f32(iy27[s]) + 0.5,
-            f32(iz27[s]) + 0.5,
+            f32(ix27[s]),
+            f32(iy27[s]),
+            f32(iz27[s]),
         ) * dx;
         let xn_xp = node_pos - pos;
         let aff = C * xn_xp;

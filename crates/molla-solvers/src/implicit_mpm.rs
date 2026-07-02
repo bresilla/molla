@@ -617,8 +617,7 @@ pub fn implicit_mpm_step_with_solver(
             if ci < 0 {
                 continue;
             }
-            let node_pos =
-                origin + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5) * dx;
+            let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
             let xn_xp = node_pos - pos;
             let aff = c * xn_xp;
             let ci = ci as usize;
@@ -688,9 +687,7 @@ pub fn implicit_mpm_step_with_solver(
             for iy in 0..g {
                 for ix in 0..g {
                     let ci = ix + iy * g + iz * g * g;
-                    let node = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let d = node - r.center;
                     if d.dot(d) <= r2 {
                         // Treat the cell as carrying the rigid velocity;
@@ -729,7 +726,7 @@ pub fn implicit_mpm_step_with_solver(
                 // This is critical when the floor lies between two
                 // cell rows: a hard threshold leaves particles in the
                 // upper row free to keep accelerating.
-                let node_y = origin.y + ((iy as Real) + 0.5) * dx;
+                let node_y = origin.y + (iy as Real) * dx;
                 if node_y < cfg.floor_y + dx {
                     let depth = (cfg.floor_y + dx - node_y).max(0.0) / dx;
                     // depth ∈ (0, 1]; weight = 1 below floor, < 1 in the
@@ -1026,7 +1023,7 @@ pub fn implicit_mpm_step_with_solver(
                 if !active[ci] {
                     continue;
                 }
-                let node_y = origin.y + ((iy as Real) + 0.5) * dx;
+                let node_y = origin.y + (iy as Real) * dx;
                 if node_y < cfg.floor_y {
                     let mut v = v_grid[ci];
                     if v.y < 0.0 {
@@ -1064,9 +1061,7 @@ pub fn implicit_mpm_step_with_solver(
                         continue;
                     };
                     let v_node = v_grid[ci];
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     v_new += w * v_node;
                     // APIC affine matrix C = 4/dx² · Σ w · v_node · (xn − xp)ᵀ.
@@ -1203,9 +1198,7 @@ pub fn implicit_mpm_step_with_solver(
                         if !active[ci] {
                             continue;
                         }
-                        let node = origin
-                            + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                                * dx;
+                        let node = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                         let d = node - r.center;
                         if d.dot(d) <= r2 {
                             impulse += g_mass[ci] * (v_grid[ci] - r.vel);
@@ -1304,7 +1297,7 @@ pub fn cpu_p2g_predict_gs_g2p_debug(
                     if !sys.active[ci] {
                         continue;
                     }
-                    let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                    let node_y = origin_y + (iy as Real) * dx;
                     if node_y < cfg.floor_y {
                         let mut v = v_grid[ci];
                         if v.y < 0.0 {
@@ -1348,9 +1341,7 @@ pub fn cpu_p2g_predict_gs_g2p_debug(
                             continue;
                         };
                         let v_node = v_grid[ci];
-                        let node_pos = origin
-                            + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                                * dx;
+                        let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                         let xn_xp = node_pos - pos;
                         v_new[p] += w * v_node;
                         c_new[p] += outer(v_node, xn_xp) * (4.0 * w * inv_dx * inv_dx);
@@ -1515,7 +1506,7 @@ pub fn full_hessian_residual_norm_squared_125(
                     if !sys.active[ci] {
                         continue;
                     }
-                    let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                    let node_y = origin_y + (iy as Real) * dx;
                     if node_y < cfg.floor_y {
                         let mut v = v_grid[ci];
                         if v.y < 0.0 {
@@ -1792,8 +1783,7 @@ fn assemble_grid_system_125(
             if ci < 0 {
                 continue;
             }
-            let node_pos =
-                origin + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5) * dx;
+            let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
             let xn_xp = node_pos - pos;
             let aff = c * xn_xp;
             let ci = ci as usize;
@@ -1832,7 +1822,7 @@ fn assemble_grid_system_125(
                 }
                 let mut v = g_momentum[ci] / m;
                 v.y += cfg.gravity_y * dt;
-                let node_y = origin.y + ((iy as Real) + 0.5) * dx;
+                let node_y = origin.y + (iy as Real) * dx;
                 if node_y < cfg.floor_y + dx {
                     let depth = (cfg.floor_y + dx - node_y).max(0.0) / dx;
                     if node_y < cfg.floor_y && v.y < 0.0 {

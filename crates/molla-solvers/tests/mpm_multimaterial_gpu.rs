@@ -10,14 +10,12 @@
 //! with all-sand ids guards against the per-particle table silently
 //! not dispatching.
 //!
-//! HONESTY NOTE (2026-07-02): the settling scenario itself rides a
-//! PRE-EXISTING MPM instability — the v3 snowball scenario explodes
-//! to the wall clamps on pre-multi-material code too, and the v3
-//! suite's "particles moved" gates pass vacuously under explosion
-//! (INSPECTION.md F1b). The equality gates here are therefore
-//! *dispatch/routing parity* (which is exact and layout-independent),
-//! not proof of physically-settled behaviour; re-tighten into a
-//! settled-pile scenario once F1b is fixed.
+//! History note: writing this test exposed (and led to the fix of)
+//! F1b — the half-cell node-lattice bug that made every MPM settling
+//! scenario explode. On the fixed dynamics the blocks genuinely
+//! settle, the per-block equality gates compare real physics (the
+//! ~1e-6 residual is atomic scatter-order noise), and the ids-matter
+//! control measures centimetres of true sand/snow contrast.
 //!
 //! `#[ignore]` — needs a real wgpu adapter (`make test-gpu
 //! P=molla-solvers T=mpm_multimaterial_gpu`).
@@ -101,9 +99,9 @@ fn viscous() -> MpmRheology {
 /// spacing = 2 particles per cell axis.
 fn blocks() -> [Vec<[f32; 3]>; 3] {
     [
-        fill_box([-0.60, 0.12, -0.075], [-0.45, 0.27, 0.075], 6, 11),
-        fill_box([-0.075, 0.12, -0.075], [0.075, 0.27, 0.075], 6, 22),
-        fill_box([0.45, 0.12, -0.075], [0.60, 0.27, 0.075], 6, 33),
+        fill_box([-0.60, 0.22, -0.075], [-0.45, 0.37, 0.075], 6, 11),
+        fill_box([-0.075, 0.22, -0.075], [0.075, 0.37, 0.075], 6, 22),
+        fill_box([0.45, 0.22, -0.075], [0.60, 0.37, 0.075], 6, 33),
     ]
 }
 
@@ -123,7 +121,7 @@ fn run_single(
     let mut sim = MpmSimulation::new_with_device(&device, cfg).expect("sim");
     sim.set_particles(&queue, block).expect("seed");
     for _ in 0..steps {
-        sim.step_with(&device, &queue, 1.0e-4).expect("step");
+        sim.step_with(&device, &queue, 2.0e-4).expect("step");
     }
     sim.read_positions_with(&device, &queue).expect("read")
 }
@@ -137,7 +135,7 @@ fn multimaterial_disjoint_blocks_match_single_material_runs() {
     };
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
-    let steps = 400usize;
+    let steps = 1600usize;
     let [b_sand, b_snow, b_visc] = blocks();
     let n0 = b_sand.len();
     let n1 = b_snow.len();
@@ -156,7 +154,7 @@ fn multimaterial_disjoint_blocks_match_single_material_runs() {
     sim.set_materials(&[sand(), snow(), viscous()], ids)
         .expect("set_materials");
     for _ in 0..steps {
-        sim.step_with(&device, &queue, 1.0e-4).expect("step");
+        sim.step_with(&device, &queue, 2.0e-4).expect("step");
     }
     let multi = sim.read_positions_with(&device, &queue).expect("read");
 
@@ -201,7 +199,7 @@ fn multimaterial_ids_change_the_physics() {
     };
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
-    let steps = 400usize;
+    let steps = 1600usize;
     let [b_sand, b_snow, b_visc] = blocks();
     let n0 = b_sand.len();
     let mut all: Vec<[f32; 3]> = Vec::new();
@@ -215,7 +213,7 @@ fn multimaterial_ids_change_the_physics() {
         sim.set_materials(&[sand(), snow(), viscous()], ids)
             .expect("set_materials");
         for _ in 0..steps {
-            sim.step_with(&device, &queue, 1.0e-4).expect("step");
+            sim.step_with(&device, &queue, 2.0e-4).expect("step");
         }
         sim.read_positions_with(&device, &queue).expect("read")
     };

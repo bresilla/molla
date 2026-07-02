@@ -17,9 +17,7 @@
 //! Prints progress every 20 steps and an FD-vs-analytic check at the
 //! first iteration (the gradient-quality oracle the brief asks for).
 
-use molla_autograd::mpm_adjoint::{
-    backward, centroid_loss_and_grad, forward_backward_e_centroid_loss,
-};
+use molla_autograd::mpm_adjoint::backward;
 use molla_autograd::mpm_cpu_diff::{MpmCpuConfig, ParticleState, forward, forward_with_tape};
 use molla_math::{Real, Vec3};
 use molla_optim::{AdamConfig, AdamState};
@@ -90,16 +88,20 @@ fn forward_stable_for_demo_cfg() {
 
 #[test]
 fn adam_fits_youngs_modulus_via_reverse_mpm() {
-    let init = make_cube_64();
-    // CFL for explicit MPM with the GPU-WGSL `(ix + 0.5)` node-centre
-    // convention: dt < dx / sqrt(E/ρ) AND the APIC C feedback through
-    // the 27-stencil scatter stays bounded only for short rollouts (the
-    // partition-of-unity offset adds a small fictitious force per step;
-    // by step ~12 the cumulative error has driven particles to a
-    // pathological state). Stage 38.1 deliberately uses a **10-step**
-    // rollout so dynamics stay smooth and the gradient is well-defined.
-    // The Adam optimiser still gets a meaningful loss landscape — the
-    // 10-step centroid varies measurably with E.
+    let mut init = make_cube_64();
+    // Pre-load a per-particle deformation so elastic stress is nonzero
+    // from step 0. Under the corrected node lattice (F1b fix) a
+    // uniformly free-falling cube develops NO stress at all — C stays
+    // exactly zero and F stays I — so an undeformed cube cannot
+    // identify E. (The old comment here documented tuning around the
+    // half-cell moment-arm bug's "small fictitious force"; that force
+    // was the only thing making the previous centroid loss
+    // E-sensitive.)
+    for (idx, f) in init.f.iter_mut().enumerate() {
+        let a = 1.0 + 0.08 * (((idx % 4) as Real) - 1.5) / 1.5;
+        let b = 1.0 - 0.05 * ((((idx / 4) % 4) as Real) - 1.5) / 1.5;
+        *f = molla_math::Mat3::from_diagonal(Vec3::new(a, b, 1.0 / (a * b)));
+    }
     let dt: Real = 5.0e-4;
     let steps = 10;
     let e_true: Real = 1.5e4;
@@ -108,28 +110,34 @@ fn adam_fits_youngs_modulus_via_reverse_mpm() {
     // ── Target: forward with E_true → final centroid. ───────────────
     let cfg_true = demo_cfg(e_true);
     let final_true = forward(&cfg_true, &init, dt, steps);
-    let interior: Vec<usize> = (0..init.n()).collect();
-    let inv_k = 1.0 / (interior.len() as Real);
-    let target_centroid: Vec3 = interior
-        .iter()
-        .map(|&i| final_true.pos[i])
-        .fold(Vec3::ZERO, |a, b| a + b)
-        * inv_k;
-    eprintln!("target_centroid (from E_true={e_true:.3e}) = {target_centroid:?}");
+    // Per-particle position targets from the E_true rollout. A
+    // CENTROID target cannot identify E under momentum-conserving
+    // dynamics (internal stresses never move the centroid) — that
+    // formulation only ever worked through the pre-F1b half-cell
+    // moment-arm bug, which leaked momentum.
+    let targets: Vec<Vec3> = final_true.pos.clone();
+    let per_particle_loss = |pos: &[Vec3]| -> (Real, Vec<Vec3>) {
+        let mut loss = 0.0;
+        let mut grad = vec![Vec3::ZERO; pos.len()];
+        for (i, p) in pos.iter().enumerate() {
+            let d = *p - targets[i];
+            loss += d.dot(d);
+            grad[i] = 2.0 * d;
+        }
+        (loss, grad)
+    };
 
-    // ── Initial loss + FD gradient oracle. ──────────────────────────
     let mut cfg_now = demo_cfg(e_init);
-    let (loss_init, g_e_analytic_init) =
-        forward_backward_e_centroid_loss(&cfg_now, &init, dt, steps, target_centroid, &interior);
+    let tape0 = forward_with_tape(&cfg_now, &init, dt, steps);
+    let (loss_init, grad0) = per_particle_loss(&tape0.final_state.pos);
+    let g_e_analytic_init = backward(&tape0, &grad0).grad_youngs(cfg_now.poisson);
     let h = e_init * 1.0e-3;
     let mut cfg_p = cfg_now;
     cfg_p.youngs += h;
-    let fp = forward(&cfg_p, &init, dt, steps);
-    let (lp, _) = centroid_loss_and_grad(&fp.pos, target_centroid, &interior);
+    let (lp, _) = per_particle_loss(&forward(&cfg_p, &init, dt, steps).pos);
     let mut cfg_m = cfg_now;
     cfg_m.youngs -= h;
-    let fm = forward(&cfg_m, &init, dt, steps);
-    let (lm, _) = centroid_loss_and_grad(&fm.pos, target_centroid, &interior);
+    let (lm, _) = per_particle_loss(&forward(&cfg_m, &init, dt, steps).pos);
     let fd = (lp - lm) / (2.0 * h);
     let denom = g_e_analytic_init.abs().max(fd.abs()).max(1.0e-30);
     let rel_g = (g_e_analytic_init - fd).abs() / denom;
@@ -172,8 +180,7 @@ fn adam_fits_youngs_modulus_via_reverse_mpm() {
         cfg_now = demo_cfg(params[0]);
 
         let tape = forward_with_tape(&cfg_now, &init, dt, steps);
-        let (loss, grad_pos_final) =
-            centroid_loss_and_grad(&tape.final_state.pos, target_centroid, &interior);
+        let (loss, grad_pos_final) = per_particle_loss(&tape.final_state.pos);
         let adj = backward(&tape, &grad_pos_final);
         let g_e = adj.grad_youngs(cfg_now.poisson);
 

@@ -214,9 +214,7 @@ fn backward_step(
                         continue;
                     };
                     let v_node = g_tape.velocity_post[ci];
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     v_acc += w * v_node;
                     c_acc += outer(v_node, xn_xp) * (4.0 * w * inv_dx * inv_dx);
@@ -274,9 +272,7 @@ fn backward_step(
                     let Some(ci) = cell_idx(cfg, ix, iy, iz) else {
                         continue;
                     };
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     let v_node = g_tape.velocity_post[ci];
                     // From v_new: grad_v_node += w · grad_v_post.
@@ -336,7 +332,7 @@ fn backward_step(
                 if m <= 0.0 {
                     continue;
                 }
-                let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                let node_y = origin_y + (iy as Real) * dx;
                 let mut gv = grad_g_vel[ci];
                 // Replay the floor mask: if node is below floor and the
                 // pre-floor v.y would have been negative (i.e., the
@@ -430,9 +426,7 @@ fn backward_step(
                     let Some(ci) = cell_idx(cfg, ix, iy, iz) else {
                         continue;
                     };
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     let gmom = grad_g_momentum[ci];
 
@@ -700,24 +694,47 @@ mod tests {
         init.f.copy_from_slice(&fs);
         let dt = 0.005;
         let steps = 3;
-        let target = Vec3::ZERO;
-        let interior: Vec<usize> = (0..init.n()).collect();
 
-        let (loss0, g_e_analytic) =
-            forward_backward_e_centroid_loss(&cfg, &init, dt, steps, target, &interior);
+        // Per-particle displacement loss J = Σᵢ ‖posᵢ − startᵢ‖². A
+        // CENTROID loss is E-independent under correct dynamics —
+        // internal stresses conserve momentum, so only the pre-F1b
+        // half-cell moment-arm bug (which leaked momentum) ever gave
+        // the centroid an E-gradient. Displacement spread is the
+        // honest E-sensitive observable.
+        let start = init.pos.clone();
+        let displacement_loss = |pos: &[Vec3]| -> (Real, Vec<Vec3>) {
+            let mut loss = 0.0;
+            let mut grad = vec![Vec3::ZERO; pos.len()];
+            for (i, p) in pos.iter().enumerate() {
+                let d = *p - start[i];
+                loss += d.dot(d);
+                grad[i] = 2.0 * d;
+            }
+            (loss, grad)
+        };
+
+        use crate::mpm_cpu_diff::forward_with_tape;
+        let tape = forward_with_tape(&cfg, &init, dt, steps);
+        let (loss0, grad_pos) = displacement_loss(&tape.final_state.pos);
+        let adj = backward(&tape, &grad_pos);
+        let g_e_analytic = adj.grad_youngs(cfg.poisson);
+
         let h = cfg.youngs * 1.0e-3;
         let mut cfg_p = cfg;
         cfg_p.youngs += h;
-        let fp = forward(&cfg_p, &init, dt, steps);
-        let (lp, _) = centroid_loss_and_grad(&fp.pos, target, &interior);
+        let (lp, _) = displacement_loss(&forward(&cfg_p, &init, dt, steps).pos);
         let mut cfg_m = cfg;
         cfg_m.youngs -= h;
-        let fm = forward(&cfg_m, &init, dt, steps);
-        let (lm, _) = centroid_loss_and_grad(&fm.pos, target, &interior);
+        let (lm, _) = displacement_loss(&forward(&cfg_m, &init, dt, steps).pos);
         let fd = (lp - lm) / (2.0 * h);
         let denom = g_e_analytic.abs().max(fd.abs()).max(1.0e-30);
         let rel = (g_e_analytic - fd).abs() / denom;
         eprintln!("loss0={loss0:.6e}  g_E analytic={g_e_analytic:.6e}  fd={fd:.6e}  rel={rel:e}");
+        // Anti-vacuous: the gradient must be a real number, not noise.
+        assert!(
+            g_e_analytic.abs() > 1.0e-16,
+            "E-gradient vanished — scenario no longer exercises stress: {g_e_analytic}"
+        );
         assert!(rel < 5.0e-2, "g_E rel err {rel} too large");
     }
 
@@ -766,24 +783,43 @@ mod tests {
         init.f.copy_from_slice(&fs);
         let dt = 0.001;
         let steps = 3;
-        let target = Vec3::ZERO;
-        let interior: Vec<usize> = (0..init.n()).collect();
 
-        let (loss0, g_e_analytic) =
-            forward_backward_e_centroid_loss(&cfg, &init, dt, steps, target, &interior);
+        // Displacement loss — see the two-step test above for why a
+        // centroid loss is E-independent under momentum-conserving
+        // dynamics (it only ever had a gradient via the pre-F1b bug).
+        let start = init.pos.clone();
+        let displacement_loss = |pos: &[Vec3]| -> (Real, Vec<Vec3>) {
+            let mut loss = 0.0;
+            let mut grad = vec![Vec3::ZERO; pos.len()];
+            for (i, p) in pos.iter().enumerate() {
+                let d = *p - start[i];
+                loss += d.dot(d);
+                grad[i] = 2.0 * d;
+            }
+            (loss, grad)
+        };
+
+        use crate::mpm_cpu_diff::forward_with_tape;
+        let tape = forward_with_tape(&cfg, &init, dt, steps);
+        let (loss0, grad_pos) = displacement_loss(&tape.final_state.pos);
+        let adj = backward(&tape, &grad_pos);
+        let g_e_analytic = adj.grad_youngs(cfg.poisson);
+
         let h = cfg.youngs * 1.0e-3;
         let mut cfg_p = cfg;
         cfg_p.youngs += h;
-        let fp = forward(&cfg_p, &init, dt, steps);
-        let (lp, _) = centroid_loss_and_grad(&fp.pos, target, &interior);
+        let (lp, _) = displacement_loss(&forward(&cfg_p, &init, dt, steps).pos);
         let mut cfg_m = cfg;
         cfg_m.youngs -= h;
-        let fm = forward(&cfg_m, &init, dt, steps);
-        let (lm, _) = centroid_loss_and_grad(&fm.pos, target, &interior);
+        let (lm, _) = displacement_loss(&forward(&cfg_m, &init, dt, steps).pos);
         let fd = (lp - lm) / (2.0 * h);
         let denom = g_e_analytic.abs().max(fd.abs()).max(1.0e-30);
         let rel = (g_e_analytic - fd).abs() / denom;
         eprintln!("loss0={loss0:.6e}  g_E analytic={g_e_analytic:.6e}  fd={fd:.6e}  rel={rel:e}");
+        assert!(
+            g_e_analytic.abs() > 1.0e-16,
+            "E-gradient vanished — scenario no longer exercises stress: {g_e_analytic}"
+        );
         assert!(rel < 5.0e-2, "g_E rel err {rel} too large");
     }
 

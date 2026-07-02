@@ -489,7 +489,7 @@ fn step_once_record(
                     let Some(ci) = cell_idx(cfg, ix, iy, iz) else {
                         continue;
                     };
-                    // Node centre at `(ix + 0.5) · dx + origin`. This
+                    // Grid node at `ix · dx + origin` (integer lattice — the
                     // matches `shaders/mpm.wgsl`'s convention exactly
                     // (see the comment around line 386 of that shader).
                     // The first-moment partition is not exactly zero
@@ -498,9 +498,7 @@ fn step_once_record(
                     // bound. For the diff-MPM forward we accept the
                     // small drift in exchange for byte-identical
                     // behaviour with `shaders/mpm.wgsl::p2g/g2p`.
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     let aff = c * xn_xp;
                     let stress_force = stress * xn_xp * (4.0 * inv_dx * inv_dx);
@@ -528,8 +526,8 @@ fn step_once_record(
                 v.y += cfg.gravity_y * dt;
                 // Floor mask: if the node centre is below floor_y,
                 // clamp v.y to ≥ 0 and dampen tangent. Node centre at
-                // y = origin_y + (iy + 0.5) · dx (matches P2G/G2P).
-                let node_y = origin_y + ((iy as Real) + 0.5) * dx;
+                // y = origin_y + iy · dx (matches P2G/G2P lattice).
+                let node_y = origin_y + (iy as Real) * dx;
                 if node_y < cfg.floor_y {
                     if v.y < 0.0 {
                         v.y = 0.0;
@@ -566,9 +564,7 @@ fn step_once_record(
                         continue;
                     };
                     let v_node = g_velocity[ci];
-                    let node_pos = origin
-                        + Vec3::new((ix as Real) + 0.5, (iy as Real) + 0.5, (iz as Real) + 0.5)
-                            * dx;
+                    let node_pos = origin + Vec3::new(ix as Real, iy as Real, iz as Real) * dx;
                     let xn_xp = node_pos - pos;
                     v_new += w * v_node;
                     // APIC C reconstruction: C = 4/dx² · Σ w · v_node · (xn − xp)ᵀ
@@ -619,7 +615,16 @@ mod tests {
 
     #[test]
     fn forward_runs_and_advances_under_gravity() {
-        let cfg = MpmCpuConfig::default();
+        // The default (volume 1e-3, E 1e4, dt 1/240) parameter set has
+        // a stress→P2G→G2P feedback gain > 1 for an isolated particle,
+        // so f64 roundoff in the (exactly zero) APIC C matrix amplifies
+        // exponentially — it only *looked* stable before the F1b
+        // node-lattice fix because the half-cell moment-arm bias
+        // dominated. A sane volume keeps the loop contractive.
+        let cfg = MpmCpuConfig {
+            particle_volume: 1.0e-5,
+            ..MpmCpuConfig::default()
+        };
         let start = unit_particle_at(Vec3::new(0.0, 0.5, 0.0));
         let dt = 1.0 / 240.0;
         let out = forward(&cfg, &start, dt, 30);
