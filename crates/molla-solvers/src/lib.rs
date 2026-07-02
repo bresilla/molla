@@ -42,7 +42,8 @@ pub use jacobian::jacobian;
 pub use math::robust_loss::RobustLoss;
 #[cfg(feature = "gpu")]
 pub use mpm::{
-    MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams, MpmTireTerrainRaster,
+    MAX_MPM_MATERIALS, MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams,
+    MpmTireTerrainRaster,
 };
 pub use mpm_oracle::{
     MpmRigidBodySample, MpmRigidCellSample, ReducedMpmMaterial, ReducedMpmMaterialState,

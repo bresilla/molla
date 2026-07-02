@@ -129,6 +129,20 @@ struct Uniforms {
 @group(1) @binding(5) var<storage, read_write> p_mass:   array<f32>;
 @group(1) @binding(6) var<storage, read_write> p_jp:     array<f32>; // log(det Fp), tracks hardening
 
+// Stage 24d.4 — per-particle materials (INSPECTION.md F1). `p_material`
+// maps each particle to a row of `materials`; row 0 mirrors the global
+// `MpmConfig::rheology`, so single-material runs behave exactly as
+// before. Row packing (see `material_row` in mpm.rs):
+//   p0 = (rheology_id, dp_alpha, theta_c, theta_s)
+//   p1 = (hardening, velocity_damping, affine_damping, 0)
+// rheology_id: 0 = sand, 1 = snow, 2 = viscous.
+struct MpmMaterialRow {
+    p0: vec4<f32>,
+    p1: vec4<f32>,
+}
+@group(1) @binding(7) var<storage, read_write> p_material: array<u32>;
+@group(1) @binding(8) var<storage, read_write> materials: array<MpmMaterialRow>;
+
 // Grid storage. mass = atomic<u32> (bitcast f32). momentum xyz = 3
 // atomic<u32> (bitcast f32). Layout: [mass, mx, my, mz] per cell.
 @group(2) @binding(0) var<storage, read_write> g_mass:      array<atomic<u32>>;
@@ -434,10 +448,12 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Default 1.0 (no elastic hardening) — the Viscous rheology
     // (`u.rheology == 2u`) takes neither branch below, and a `var`
     // left unset would feed garbage into `mu_h`/`lam_h` → NaN stress.
+    let mrow = materials[p_material[pid]];
+    let rheo = u32(mrow.p0.x + 0.5);
     var h: f32 = 1.0;
-    if (u.rheology == 1u) {
-        h = exp(-u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
-    } else if (u.rheology == 0u) {
+    if (rheo == 1u) {
+        h = exp(-mrow.p1.x * clamp(p_jp[pid], -5.0, 5.0));
+    } else if (rheo == 0u) {
         h = exp(min(p_jp[pid], 5.0));
     }
     let mu_h = mu * h;
@@ -671,13 +687,15 @@ fn p2g_two_pass(
         // Default 1.0 (no elastic hardening) — Viscous rheology
         // (`u.rheology == 2u`) takes neither branch; an unset `var`
         // would feed garbage into `mu_h`/`lam_h` → NaN stress.
+        let mrow = materials[p_material[pid]];
+        let rheo = u32(mrow.p0.x + 0.5);
         var h: f32 = 1.0;
-        if (u.rheology == 1u) {
+        if (rheo == 1u) {
             // Snow stiffens under compaction; `jp = log(det Fp)` is
             // negative there, so the exponent sign is negative (see
             // the p2g pass above for the Stomakhin §6.2 rationale).
-            h = exp(-u.snow_hardening * clamp(p_jp[pid], -5.0, 5.0));
-        } else if (u.rheology == 0u) {
+            h = exp(-mrow.p1.x * clamp(p_jp[pid], -5.0, 5.0));
+        } else if (rheo == 0u) {
             h = exp(min(p_jp[pid], 5.0));
         }
         let mu_h = mu * h;
@@ -1167,9 +1185,10 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
     // and GPU-cheap: damp the gathered particle velocity and the APIC
     // affine velocity gradient exponentially. The caller controls the
     // two rates through the reused rheology parameter slots.
-    if (u.rheology == 2u) {
-        let vel_damp = exp(-max(u.snow_theta_c, 0.0) * u.dt);
-        let aff_damp = exp(-max(u.snow_theta_s, 0.0) * u.dt);
+    let vrow = materials[p_material[pid]];
+    if (u32(vrow.p0.x + 0.5) == 2u) {
+        let vel_damp = exp(-max(vrow.p1.y, 0.0) * u.dt);
+        let aff_damp = exp(-max(vrow.p1.z, 0.0) * u.dt);
         v_new = v_new * vel_damp;
         C_new = mat3x3<f32>(
             C_new[0] * aff_damp,
@@ -1250,6 +1269,8 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pid = gid.x;
     if (pid >= u.particle_count) { return; }
+    let mrow = materials[p_material[pid]];
+    let rheo = u32(mrow.p0.x + 0.5);
     let F = p_F[pid];
     let svd = svd3_jacobi(F);
     let s = svd.s;
@@ -1259,11 +1280,11 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
     var jp_replace: bool = false;
     var jp_new: f32 = 0.0;
 
-    if (u.rheology == 1u) {
+    if (rheo == 1u) {
         // ── Snow (Stomakhin 2013 §6.2) ──────────────────────────
         // Clamp singular values to the elastic envelope.
-        let theta_c = u.snow_theta_c;
-        let theta_s = u.snow_theta_s;
+        let theta_c = mrow.p0.z;
+        let theta_s = mrow.p0.w;
         new_s = vec3<f32>(
             clamp(s.x, 1.0 - theta_c, 1.0 + theta_s),
             clamp(s.y, 1.0 - theta_c, 1.0 + theta_s),
@@ -1277,7 +1298,7 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         // reads exp(-snow_hardening * jp) so compacted snow stiffens.
         jp_replace = true;
         jp_new = clamp(p_jp[pid] + dlog, -5.0, 5.0);
-    } else if (u.rheology == 2u) {
+    } else if (rheo == 2u) {
         // ── Viscous/fluid-like damping ───────────────────────────
         // No Drucker-Prager cone and no snow clamp; keep the updated
         // deformation gradient and reset the hardening accumulator so
@@ -1307,11 +1328,11 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else if (dev_norm == 0.0) {
             new_s = s;
         } else {
-            let f_yield = dev_norm + kappa * trace_eps * u.dp_alpha;
+            let f_yield = dev_norm + kappa * trace_eps * mrow.p0.y;
             if (f_yield <= 0.0) {
                 new_s = s;
             } else {
-                let r_cone = max(0.0, -u.dp_alpha * kappa * trace_eps);
+                let r_cone = max(0.0, -mrow.p0.y * kappa * trace_eps);
                 let new_dev = dev_eps * (r_cone / dev_norm);
                 let new_eps = new_dev + vec3<f32>(mean_eps, mean_eps, mean_eps);
                 new_s = vec3<f32>(exp(new_eps.x), exp(new_eps.y), exp(new_eps.z));

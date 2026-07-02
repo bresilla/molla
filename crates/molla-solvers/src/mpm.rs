@@ -494,6 +494,37 @@ impl MpmConfig {
     }
 }
 
+/// Stage 24d.4 — capacity of the per-particle material table
+/// (`MpmSimulation::set_materials`). The GPU-side buffer is sized for
+/// this many rows so bind groups never need rebuilding.
+pub const MAX_MPM_MATERIALS: usize = 8;
+
+/// Pack one [`MpmRheology`] into the GPU material-row layout
+/// (`MpmMaterialRow` in `mpm.wgsl`):
+/// `p0 = (rheology_id, dp_alpha, theta_c, theta_s)`,
+/// `p1 = (hardening, velocity_damping, affine_damping, 0)`.
+fn material_row(rheology: &MpmRheology) -> [[f32; 4]; 2] {
+    match *rheology {
+        MpmRheology::Sand { friction_angle } => {
+            let sin_phi = friction_angle.sin();
+            let dp_alpha = (2.0_f32 / 3.0).sqrt() * (2.0 * sin_phi) / (3.0 - sin_phi);
+            [[0.0, dp_alpha, 0.0, 0.0], [0.0; 4]]
+        }
+        MpmRheology::Snow {
+            theta_c,
+            theta_s,
+            hardening,
+        } => [[1.0, 0.0, theta_c, theta_s], [hardening, 0.0, 0.0, 0.0]],
+        MpmRheology::Viscous {
+            velocity_damping,
+            affine_damping,
+        } => [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, velocity_damping, affine_damping, 0.0],
+        ],
+    }
+}
+
 /// Owns particle + grid GPU buffers and the compute pipelines for one
 /// MPM simulation. Re-buildable on config change (call [`Self::new`]).
 #[allow(dead_code)]
@@ -530,6 +561,14 @@ pub struct MpmSimulation {
     p_volume: wgpu::Buffer,
     p_mass: wgpu::Buffer,
     p_jp: wgpu::Buffer,
+    p_material: wgpu::Buffer,
+    material_table: wgpu::Buffer,
+    /// Stage 24d.4 — multi-material state. Empty ⇒ the table has one
+    /// row derived from `cfg.rheology` (single-material, the default).
+    material_rows: Vec<MpmRheology>,
+    /// Host copy of per-particle ids pending upload (flushed by the
+    /// next `step_with`).
+    particle_material_dirty: Option<Vec<u32>>,
 
     // Grid buffers.
     g_mass: wgpu::Buffer,
@@ -611,7 +650,7 @@ impl MpmSimulation {
         });
         let layout_particles = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::mpm particles"),
-            entries: &storage_entries(7, false),
+            entries: &storage_entries(9, false),
         });
         // Grid: g_mass, g_momentum, g_velocity, g_rigid_mask, g_kdiag,
         // g_velocity_prev — 6 entries, all read_write.
@@ -684,6 +723,13 @@ impl MpmSimulation {
         let p_volume = mk_buf("mpm.p_volume", n_particles * 4, storage);
         let p_mass = mk_buf("mpm.p_mass", n_particles * 4, storage);
         let p_jp = mk_buf("mpm.p_jp", n_particles * 4, storage);
+        // Stage 24d.4 — per-particle material ids + the material table
+        // (fixed capacity so bind groups never rebuild; see
+        // `MAX_MPM_MATERIALS`). Freshly created buffers are
+        // zero-initialised, so every particle starts on row 0 — the
+        // row `step_with` fills from `cfg.rheology`.
+        let p_material = mk_buf("mpm.p_material", n_particles * 4, storage);
+        let material_table = mk_buf("mpm.materials", MAX_MPM_MATERIALS as u64 * 32, storage);
         let tire_compaction_buf = mk_buf("mpm.tire_compaction", n_particles * 16, storage);
 
         let g_mass = mk_buf("mpm.g_mass", grid_total * 4, storage);
@@ -740,6 +786,8 @@ impl MpmSimulation {
                 buffer_entry(4, &p_volume),
                 buffer_entry(5, &p_mass),
                 buffer_entry(6, &p_jp),
+                buffer_entry(7, &p_material),
+                buffer_entry(8, &material_table),
             ],
         });
         let bg_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -788,6 +836,10 @@ impl MpmSimulation {
             p_volume,
             p_mass,
             p_jp,
+            p_material,
+            material_table,
+            material_rows: Vec::new(),
+            particle_material_dirty: None,
             g_mass,
             g_momentum,
             g_velocity,
@@ -933,6 +985,47 @@ impl MpmSimulation {
     }
 
     /// Stage 24d.1 — replace the rheology selector live.
+    /// Stage 24d.4 — per-particle materials (INSPECTION.md F1). One
+    /// simulation can now mix rheologies: `materials` fills the GPU
+    /// material table (≤ [`MAX_MPM_MATERIALS`] rows) and
+    /// `particle_material[i]` selects the row for particle `i`. Call
+    /// AFTER seeding (`set_particles*`) — the id list must match the
+    /// current particle count. While a multi-material set is active,
+    /// `cfg.rheology` / [`Self::set_rheology`] no longer drive the
+    /// table; pass a 1-row set to return to single-material behaviour.
+    /// Uploads happen on the next `step_with`.
+    pub fn set_materials(
+        &mut self,
+        materials: &[MpmRheology],
+        particle_material: Vec<u32>,
+    ) -> Result<()> {
+        if materials.is_empty() || materials.len() > MAX_MPM_MATERIALS {
+            return Err(Error::Solver(format!(
+                "MPM set_materials: 1..={MAX_MPM_MATERIALS} material rows required, got {}",
+                materials.len()
+            )));
+        }
+        if particle_material.len() != self.particle_count as usize {
+            return Err(Error::Solver(format!(
+                "MPM set_materials: {} particle ids for {} particles — seed particles first",
+                particle_material.len(),
+                self.particle_count
+            )));
+        }
+        if let Some(bad) = particle_material
+            .iter()
+            .find(|&&id| id as usize >= materials.len())
+        {
+            return Err(Error::Solver(format!(
+                "MPM set_materials: particle material id {bad} out of range ({} rows)",
+                materials.len()
+            )));
+        }
+        self.material_rows = materials.to_vec();
+        self.particle_material_dirty = Some(particle_material);
+        Ok(())
+    }
+
     pub fn set_rheology(&mut self, rheology: MpmRheology) {
         self.cfg.rheology = rheology;
         if let MpmRheology::Sand { friction_angle } = rheology {
@@ -1362,6 +1455,26 @@ impl MpmSimulation {
         };
         // Stage 24d.2: persistent uniform buffer — one upload per call.
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        // Stage 24d.4 — material table upload. Row 0 mirrors
+        // `cfg.rheology` unless `set_materials` installed a
+        // multi-material set (256 bytes/step — negligible).
+        let mut table = [[0.0_f32; 4]; 2 * MAX_MPM_MATERIALS];
+        if self.material_rows.is_empty() {
+            let row = material_row(&self.cfg.rheology);
+            table[0] = row[0];
+            table[1] = row[1];
+        } else {
+            for (i, r) in self.material_rows.iter().enumerate() {
+                let row = material_row(r);
+                table[2 * i] = row[0];
+                table[2 * i + 1] = row[1];
+            }
+        }
+        queue.write_buffer(&self.material_table, 0, bytemuck::cast_slice(&table));
+        if let Some(ids) = self.particle_material_dirty.take() {
+            queue.write_buffer(&self.p_material, 0, bytemuck::cast_slice(&ids));
+        }
 
         let grid_total = self.cfg.grid_size.pow(3);
         let groups_grid = grid_total.div_ceil(WORKGROUP_SIZE);
