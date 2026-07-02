@@ -1275,7 +1275,6 @@ mod tests {
         let mut m = TriMesh {
             vertices: v,
             indices: i,
-            ..Default::default()
         };
         m.build_bvh(4);
         m

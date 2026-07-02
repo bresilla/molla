@@ -1228,7 +1228,6 @@ pub fn tire_road_condition_state_report() -> TireRoadConditionStateReport {
 /// qualitative reference-shape properties that racing-sim and tire-rig
 /// workflows care about: smooth force buildup, saturation, combined-slip
 /// tradeoff, friction-budget accounting, and aligning-moment sign.
-
 pub fn tire_frame_convention_report() -> TireFrameConventionReport {
     let params = RealTireParams::passenger_radial().with_segments(96);
     let material = SurfaceMaterial::dry_asphalt();

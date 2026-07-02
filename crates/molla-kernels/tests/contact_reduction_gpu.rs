@@ -150,6 +150,6 @@ fn gpu_contact_reduction_two_independent_pairs() {
     assert_eq!(gpu[0].id, 3);
     assert_eq!(cpu[1].id, 4);
     assert_eq!(gpu[1].id, 4);
-    assert!(MAX_PER_GROUP >= 4);
-    assert!(MAX_OUT_PER_GROUP >= 1);
+    const _: () = assert!(MAX_PER_GROUP >= 4);
+    const _: () = assert!(MAX_OUT_PER_GROUP >= 1);
 }

@@ -1022,10 +1022,14 @@ fn tire_fem_brush_outputs_feed_gpu_hub_external_force_params() {
             ..TireFemHubParams::default()
         },
     ];
-    let mut a = BrushWheelOutput::default();
-    a.world_force = [100.0, 200.0, -50.0, 0.0];
-    let mut b = BrushWheelOutput::default();
-    b.world_force = [-20.0, 40.0, 80.0, 0.0];
+    let a = BrushWheelOutput {
+        world_force: [100.0, 200.0, -50.0, 0.0],
+        ..Default::default()
+    };
+    let b = BrushWheelOutput {
+        world_force: [-20.0, 40.0, 80.0, 0.0],
+        ..Default::default()
+    };
     let coupled = tire_fem_hub_params_with_brush_outputs(&base, &[a, b], 0.25)
         .expect("brush-to-FEM hub handoff");
     assert_eq!(coupled[0].external_force_xyz, [26.0, 52.0, -9.5]);
@@ -1966,10 +1970,14 @@ fn tire_fem_resident_atlas_hub_params_from_brush_output_gpu() {
             ..TireFemHubParams::default()
         },
     ];
-    let mut a = BrushWheelOutput::default();
-    a.world_force = [100.0, 200.0, -50.0, 0.0];
-    let mut b = BrushWheelOutput::default();
-    b.world_force = [-20.0, 40.0, 80.0, 0.0];
+    let a = BrushWheelOutput {
+        world_force: [100.0, 200.0, -50.0, 0.0],
+        ..Default::default()
+    };
+    let b = BrushWheelOutput {
+        world_force: [-20.0, 40.0, 80.0, 0.0],
+        ..Default::default()
+    };
     let brush_rows = [a, b];
     let brush_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("tire_fem_gpu test brush output rows"),
@@ -2039,10 +2047,14 @@ fn tire_fem_resident_atlas_hubs_step_from_brush_output_gpu() {
             ..TireFemHubParams::default()
         },
     ];
-    let mut a = BrushWheelOutput::default();
-    a.world_force = [600.0, 0.0, 0.0, 0.0];
-    let mut b = BrushWheelOutput::default();
-    b.world_force = [-300.0, 0.0, 0.0, 0.0];
+    let a = BrushWheelOutput {
+        world_force: [600.0, 0.0, 0.0, 0.0],
+        ..Default::default()
+    };
+    let b = BrushWheelOutput {
+        world_force: [-300.0, 0.0, 0.0, 0.0],
+        ..Default::default()
+    };
     let brush_rows = [a, b];
     let brush_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("tire_fem_gpu test brush output rows for hub step"),

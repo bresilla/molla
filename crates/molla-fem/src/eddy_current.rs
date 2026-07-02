@@ -693,7 +693,6 @@ pub(crate) fn add_csr(a: &BsrMatrix, alpha: Real, b: &BsrMatrix, beta: Real) -> 
 /// scalar space and prolongate corrections back.
 ///
 /// Output is an `(n_edges × n_verts)` BSR (B = 1) matrix.
-#[must_use]
 pub fn build_discrete_gradient(mesh: &FemMesh) -> Result<BsrMatrix> {
     let (edges, _) = compute_edges(mesh);
     let n_edges = edges.len();
@@ -830,7 +829,6 @@ pub fn project_nedelec_coulomb_gauge(
 ///
 /// Result is sized `(n_verts · dim) × (n_verts · dim)` with the
 /// interleaved layout `dof = vertex · dim + component`.
-#[must_use]
 pub fn build_p1_vector_laplacian(mesh: &FemMesh, dim: usize) -> Result<BsrMatrix> {
     use super::element::compute_element_stiffness;
     let n_verts = mesh.vert_count();
@@ -879,7 +877,6 @@ pub fn build_p1_vector_laplacian(mesh: &FemMesh, dim: usize) -> Result<BsrMatrix
 /// auxiliary-space preconditioner: `Π^T r` restricts an edge residual
 /// into vector P1 space, a vector Laplacian approximately inverts that
 /// component, and `Π` prolongates the correction back to H(curl).
-#[must_use]
 pub fn build_p1_vector_interpolation(mesh: &FemMesh) -> Result<BsrMatrix> {
     let (edges, _) = compute_edges(mesh);
     let n_edges = edges.len();

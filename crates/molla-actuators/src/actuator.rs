@@ -27,6 +27,10 @@ use molla_sim::{Control, State};
 
 /// Concrete enum for the controller stage of the pipeline. Other
 /// controller flavours (neural MLP, neural LSTM) plug in here.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a handful of pipeline stages per model; boxing the big variants adds indirection for no measurable win"
+)]
 pub enum ControllerStage {
     Pd(ControllerPipelinePd),
     Pid(ControllerPipelinePid),

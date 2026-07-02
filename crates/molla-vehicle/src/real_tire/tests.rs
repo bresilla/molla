@@ -209,8 +209,10 @@ fn tire_rig_snapshot_records_inputs_provenance_and_outputs() {
         carcass_c: 39.0,
         ..TireThermalLayers::passenger_road()
     };
-    let mut wear = TireWearState::default();
-    wear.depth_m = 0.0015;
+    let wear = TireWearState {
+        depth_m: 0.0015,
+        ..Default::default()
+    };
 
     let snapshot = point
         .snapshot_on_terrain(

@@ -362,6 +362,7 @@ fn muscle_scaling_walltime() {
 /// can both apply the force *and* report convergence statistics. The
 /// algorithm tracks `muscle.rs::Muscle::torque` and
 /// `shaders/muscle.wgsl::muscle_force` line-for-line.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // `!(x > 0.0)` intentionally treats NaN as invalid input
 fn see_newton_diag(
     f_max: Real,
     l_opt: Real,

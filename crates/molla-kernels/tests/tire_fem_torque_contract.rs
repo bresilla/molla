@@ -53,10 +53,12 @@ fn tire_fem_gpu_params_carry_torque_spin_fields_zeroed_by_default() {
 
 #[test]
 fn tire_fem_gpu_params_torque_spin_fields_round_trip() {
-    let mut params = TireFemGpuParams::default();
-    params.hub_omega = 4.5;
-    params.drive_torque_n_m = 120.0;
-    params.brake_torque_n_m = 60.0;
+    let params = TireFemGpuParams {
+        hub_omega: 4.5,
+        drive_torque_n_m: 120.0,
+        brake_torque_n_m: 60.0,
+        ..Default::default()
+    };
     assert_eq!(params.hub_omega, 4.5);
     assert_eq!(params.drive_torque_n_m, 120.0);
     assert_eq!(params.brake_torque_n_m, 60.0);

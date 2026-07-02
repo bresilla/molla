@@ -23,10 +23,12 @@ struct WarpStableFluidState {
 
 impl Default for WarpStableFluidState {
     fn default() -> Self {
-        let mut cfg = molla::compute::stam_fluid::StamFluidConfig::default();
-        cfg.grid_n = STABLE_FLUID_GRID;
-        cfg.viscosity = 5.0e-4;
-        cfg.dt = 1.0 / 60.0;
+        let cfg = molla::compute::stam_fluid::StamFluidConfig {
+            grid_n: STABLE_FLUID_GRID,
+            viscosity: 5.0e-4,
+            dt: 1.0 / 60.0,
+            ..Default::default()
+        };
         let state = molla::compute::stam_fluid::StamFluidState::new(STABLE_FLUID_GRID);
         Self {
             state,

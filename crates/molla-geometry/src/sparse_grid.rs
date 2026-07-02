@@ -1109,7 +1109,6 @@ mod tests {
         let mut mesh = TriMesh {
             vertices: sphere_verts,
             indices: sphere_idx,
-            ..Default::default()
         };
         mesh.build_bvh(4);
 

@@ -64,7 +64,6 @@ pub fn contact_id(a_shape: u32, b_shape: u32, point: Vec3, voxel_size: Real) -> 
 ///
 /// The application can then carry over per-contact state (XPBD
 /// `λ_n`, friction direction, age) for warm-starting.
-#[must_use]
 pub fn match_contacts(
     current: &Contacts,
     previous: &[(u64, usize)], // (id, slot) sorted by id
@@ -89,7 +88,6 @@ pub fn match_contacts(
 /// Build a sorted (id, slot) lookup table from a finished frame's
 /// `Contacts`. Pass this to `match_contacts` next frame as the
 /// `previous` argument.
-#[must_use]
 pub fn build_contact_id_table(contacts: &Contacts, voxel_size: Real) -> Result<Vec<(u64, usize)>> {
     let n = contacts.count as usize;
     let a_idx = contacts.a_index.host()?;

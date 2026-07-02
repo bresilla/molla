@@ -96,7 +96,6 @@ fn icosphere(subdivisions: u32, radius: Real) -> TriMesh {
     let mut mesh = TriMesh {
         vertices: verts,
         indices: faces,
-        ..Default::default()
     };
     mesh.build_bvh(4);
     mesh

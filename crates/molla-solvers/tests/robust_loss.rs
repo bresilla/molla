@@ -360,9 +360,11 @@ fn ik_tukey_beats_l2_on_outlier_targets() {
     let q0 = vec![0.0; 7];
 
     // L2 baseline.
-    let mut cfg_l2 = IkConfig::default();
-    cfg_l2.loss = RobustLoss::L2;
-    cfg_l2.max_iter = 200;
+    let cfg_l2 = IkConfig {
+        loss: RobustLoss::L2,
+        max_iter: 200,
+        ..Default::default()
+    };
     let solver_l2 = IkSolver::new(objs.clone()).with_config(cfg_l2);
     let mut state_l2 = model.state().unwrap();
     let _ = solver_l2.solve(&model, &mut state_l2, &q0).unwrap();
@@ -372,9 +374,11 @@ fn ik_tukey_beats_l2_on_outlier_targets() {
     // Tukey: c chosen between the inlier residual (~0) and the
     // outlier residual (~1 m) so the outlier sits well past the
     // rejection boundary.
-    let mut cfg_tukey = IkConfig::default();
-    cfg_tukey.loss = RobustLoss::Tukey { c: 0.4 };
-    cfg_tukey.max_iter = 200;
+    let cfg_tukey = IkConfig {
+        loss: RobustLoss::Tukey { c: 0.4 },
+        max_iter: 200,
+        ..Default::default()
+    };
     let solver_tukey = IkSolver::new(objs).with_config(cfg_tukey);
     let mut state_tukey = model.state().unwrap();
     let _ = solver_tukey.solve(&model, &mut state_tukey, &q0).unwrap();

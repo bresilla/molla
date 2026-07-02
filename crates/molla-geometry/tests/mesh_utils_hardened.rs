@@ -102,7 +102,6 @@ fn icosphere(subdivisions: u32, radius: Real) -> TriMesh {
     let mut mesh = TriMesh {
         vertices: verts,
         indices: faces,
-        ..Default::default()
     };
     mesh.build_bvh(4);
     mesh
@@ -153,7 +152,6 @@ fn decimate_50k_tri_completes_under_budget() {
     let mut trimmed = TriMesh {
         vertices: big.vertices.clone(),
         indices: big.indices.iter().take(50_000).copied().collect(),
-        ..Default::default()
     };
     trimmed.build_bvh(4);
     assert_eq!(trimmed.indices.len(), 50_000);
@@ -188,7 +186,6 @@ fn bake_64_cubed_10k_tri_under_budget() {
     let mut mesh = TriMesh {
         vertices: big.vertices.clone(),
         indices: big.indices.iter().take(10_000).copied().collect(),
-        ..Default::default()
     };
     mesh.build_bvh(4);
 

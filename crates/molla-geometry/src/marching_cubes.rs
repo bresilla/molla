@@ -91,11 +91,7 @@ pub fn marching_cubes(sdf: &SdfGrid, iso: Real) -> TriMesh {
         }
     }
 
-    TriMesh {
-        vertices,
-        indices,
-        ..Default::default()
-    }
+    TriMesh { vertices, indices }
 }
 
 fn interp(iso: Real, a: Vec3, b: Vec3, va: Real, vb: Real) -> Vec3 {

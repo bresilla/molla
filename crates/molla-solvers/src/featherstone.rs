@@ -967,7 +967,8 @@ fn cpu_step(
                     // intermediate is column k of D^{-1} U^T.
                     // Compute cols of D^{-1} U^T: for each spatial component
                     // c in 0..6, pack u_c = (U_0[c], U_1[c], …) and solve.
-                    let mut dinv_ut: Vec<Vec<f64>> = vec![Vec::with_capacity(n_act); 6];
+                    let mut dinv_ut: Vec<Vec<f64>> =
+                        (0..6).map(|_| Vec::with_capacity(n_act)).collect();
                     for cc in 0..6 {
                         let mut rhs = vec![0.0_f64; n_act];
                         for ai in 0..n_act {

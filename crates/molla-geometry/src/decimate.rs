@@ -360,11 +360,7 @@ impl DecimateState {
             }
             indices.push(idx);
         }
-        let mut m = TriMesh {
-            vertices,
-            indices,
-            ..Default::default()
-        };
+        let mut m = TriMesh { vertices, indices };
         m.build_bvh(4);
         m
     }
@@ -627,7 +623,6 @@ mod tests {
         let mut m = TriMesh {
             vertices: v,
             indices: i,
-            ..Default::default()
         };
         m.build_bvh(4);
         m

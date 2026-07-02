@@ -1297,8 +1297,10 @@ pub fn tire_rig_standard_non_calibration_run(config: &TireRigRunConfig) -> TireR
         thermal_abuse.acceptance_checks(),
     ));
     let wear_power_temperature = tire_wear_power_temperature_report();
-    let mut wear_power_temperature_wear = TireWearState::default();
-    wear_power_temperature_wear.depth_m = wear_power_temperature.high_power_hot_wear_m;
+    let wear_power_temperature_wear = TireWearState {
+        depth_m: wear_power_temperature.high_power_hot_wear_m,
+        ..Default::default()
+    };
     let wear_power_temperature_thermal = TireThermalLayers {
         surface_c: wear_power_temperature.hot_surface_c,
         tread_c: wear_power_temperature.hot_surface_c,

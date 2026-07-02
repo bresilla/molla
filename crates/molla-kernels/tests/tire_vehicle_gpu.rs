@@ -272,10 +272,11 @@ fn tire_vehicle_planar_from_brush_reference_uses_world_force_and_aligning_moment
     let input = sample_planar_from_brush_input();
     let mut brush_outputs = Vec::with_capacity(input.wheel_offsets.len());
     for i in 0..input.wheel_offsets.len() {
-        let mut out = molla_kernels::BrushWheelOutput::default();
-        out.world_force = [120.0 + i as f32 * 30.0, 0.0, 40.0 - i as f32 * 12.0, 0.0];
-        out.diag2 = [0.0, 7.0 + i as f32, 0.0, 0.0];
-        brush_outputs.push(out);
+        brush_outputs.push(molla_kernels::BrushWheelOutput {
+            world_force: [120.0 + i as f32 * 30.0, 0.0, 40.0 - i as f32 * 12.0, 0.0],
+            diag2: [0.0, 7.0 + i as f32, 0.0, 0.0],
+            ..Default::default()
+        });
     }
     let out =
         tire_vehicle_planar_from_brush_reference(&input, &brush_outputs).expect("brush planar ref");

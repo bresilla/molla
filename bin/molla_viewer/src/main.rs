@@ -1202,6 +1202,10 @@ struct Sim {
 /// Per-scene solver dispatch. Each variant implements the same
 /// `Solver::step` signature, so callers don't need to care which
 /// backend the active scene picked.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "exactly one live instance per scene; boxing the big solver variants buys nothing"
+)]
 enum SolverBackend {
     Xpbd(mp::XpbdSolver),
     Featherstone(FeatherstoneSolver),
@@ -3893,48 +3897,6 @@ impl Sim {
 
 // ---- Scene builders -----------------------------------------------
 
-/// 12×12 mixed sphere / box / capsule rain falling onto a static plane.
-///
-/// Bodies start with **random orientations** and **staggered heights**
-/// — so when they hit the ground they tip onto edges/corners and
-/// produce off-axis impulses, instead of all bouncing straight up
-/// along +Y. Without random rotation a flat-faced box hitting a flat
-/// plane only gets a normal impulse, so it just bounces vertically;
-/// the tumbling behaviour is what makes it look like a real pile.
-/// projection. A small horizontal kick at the bottom makes it swing.
-/// Each column is independent — settles immediately, smooth impact.
-/// works — drag any particle to deform the drape.
-/// for the difference (XPBD wobbles, VBD settles).
-
-/// interior with stiff corner-cell pillars.
-
-/// Lidar example — a static stage with kinematic obstacles for a GPU
-/// [`mp::sensors::Raycaster`] to scan. The lidar config + state lives
-/// in the [`LidarConfig`] / [`LidarState`] resources; the right-rail
-/// pane edits the config and `update_lidar` re-runs the GPU sensor
-/// each frame.
-///
-/// Obstacles are kinematic (mass = 0 + KINEMATIC flag) so they don't
-/// fall under gravity — the lidar wants stable targets, not a
-/// settling pile.
-
-// --- Arm scene -----------------------------------------------------
-
-//   • body 0 — cart (small box)
-
-// --- Stage-13 specialty-shapes scene --------------------------------
-
-/// Contact-sensor example — a small stack of bodies settling on the
-/// plane. The GPU `ContactSensor` runs every frame and the right-rail
-/// pane shows per-body contact counts + max depth + net push
-/// direction. Gizmo arrows visualise the net push direction at each
-/// body's contact centroid.
-
-/// IMU example — a single dynamic sphere bouncing on the floor with
-/// an `ImuSensor` mounted at its COM. Restitution is high so the
-/// accelerometer reading is dramatic on each impact (specific force
-/// spikes when the contact impulse fires).
-
 /// Build a Bevy mesh from a molla `Heightfield` for visualisation.
 fn build_heightfield_mesh(hf: &mp::Heightfield) -> Mesh {
     use bevy::asset::RenderAssetUsages;
@@ -5203,33 +5165,8 @@ fn apply_grab_velocity(sim: &mut Sim, body: mp::BodyId, local_anchor: MVec3, tar
     sim.state_a.body_qd.host_mut().expect("body_qd_mut")[i] = mp::SpatialVector::new(v_lin, w);
 }
 
-/// Lidar example — runs the GPU [`Raycaster`] each frame against the
-/// current scene and stashes the (origin, dir, hit) triplets in
-/// [`LidarState`] for `draw_lidar_gizmos` to render. No-op for any
-/// scene other than [`Scene::Lidar`].
-///
-/// Ray construction: for each `(iy, ix)` cell in a `ray_count_v ×
-/// ray_count_h` grid covering `fov_v × fov_h`, build a unit direction
-/// from yaw + pitch + per-cell offsets, applied to the lidar origin.
-/// readout. No-op for any other scene.
-/// the IK pose remains stable across frames.
-/// No-op for any other scene.
-/// [`molla::autograd::featherstone_adjoint`].
-/// any other scene.
-/// any other scene.
-/// sync with the right-rail sliders.
-/// next solver step).
-
-/// driven by native Featherstone.
-/// scene.
-#[allow(clippy::too_many_arguments)]
-/// the contact scene isn't active.
-///     direction of the lower arm).
-/// `draw_diff_arm_gizmos` — target marker + EE trajectory polyline.
-/// yellow sphere so you can see where the sensor is.
-/// particles when `state.show_pinned` is on.
-///      drawn as a yellow polyline above the cube for A/B feel.
-/// they're holding.
+/// Draw the mouse-grab anchor gizmo for whatever the user is
+/// currently holding (body or particle).
 fn draw_grab_gizmo(grab: Res<MouseGrab>, sim: Res<Sim>, mut gizmos: Gizmos) {
     let Some(state) = grab.state else { return };
     let anchor_world = match state.kind {
@@ -7624,11 +7561,7 @@ fn warp_icosphere_trimesh(r: f64) -> mp::TriMesh {
         [8, 6, 7],
         [9, 8, 1],
     ];
-    let mut m = mp::TriMesh {
-        vertices,
-        indices,
-        ..Default::default()
-    };
+    let mut m = mp::TriMesh { vertices, indices };
     m.build_bvh(4);
     m
 }
@@ -10874,11 +10807,13 @@ mod tests {
 
     #[test]
     fn warp_fem_nonconforming_contact_scene_names_cpu_oracles() {
-        let mut st = WarpFemNonconformingContactState::default();
-        st.contact_u = 0.40;
-        st.contact_v = 0.20;
-        st.load = 1.4;
-        st.user_reset = true;
+        let mut st = WarpFemNonconformingContactState {
+            contact_u: 0.40,
+            contact_v: 0.20,
+            load: 1.4,
+            user_reset: true,
+            ..Default::default()
+        };
         st.recompute();
         assert!(st.net_force_error < 1.0e-12);
         assert!(st.moment_error < 1.0e-12);

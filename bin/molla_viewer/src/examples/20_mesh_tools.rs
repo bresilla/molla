@@ -265,7 +265,6 @@ fn icosphere_mesh(subdivisions: u32, radius: f64) -> molla::sim::TriMesh {
     let mut m = molla::sim::TriMesh {
         vertices: verts,
         indices: faces,
-        ..Default::default()
     };
     m.build_bvh(4);
     m
