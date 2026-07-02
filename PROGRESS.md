@@ -7,12 +7,19 @@
 > is historical. Stream B (mesh rotation): **DROPPED** — replaced by the
 > render-time rotation plan (`nodes_rendered()`, see "Stream B replacement"
 > section). Stream C G1–G4: **CLOSED** — `TireFemTorqueGpuStatus =
-> LiveValidated`. Test baseline: **223 passed / 0 ignored** in
-> `molla-vehicle` (any 220/2, 221/1, or 222/0 references below are stale
-> snapshots). Render-time tire rotation **landed**: `nodes_rendered()` on
-> `TetraTireFem` + scene-123 wireframe + rigid-rotation test (the "right
-> next step" paragraph below is done). Remaining open tire work:
-> zero-host-readback substep loop and the real-time 40-wheel target —
+> LiveValidated`. Test baseline: **225 passed / 0 ignored** in
+> `molla-vehicle` (any 220/2, 221/1, 222/0, or 223/0 references below are
+> stale snapshots). Render-time tire rotation **landed**: `nodes_rendered()`
+> on `TetraTireFem` + scene-123 wireframe + rigid-rotation test (the "right
+> next step" paragraph below is done). **Zero-host-readback substep loop
+> landed (2026-07-02)** for the per-tire persistent path:
+> `step_persistent → TireFemContactFeedbackKernel::dispatch_resident →
+> step_hub_persistent_with_tread_forces` crosses the host zero times and
+> is bit-identical to the blocking readback chain on the G4 rolling
+> scenario (`tire_fem_resident_contact_loop_matches_blocking_chain`).
+> Remaining open tire work: GPU-resident hub XZ/spin integration (the
+> per-substep feedback uniforms still carry host-tracked hub pose/ω),
+> the atlas-path bristle stage, and the real-time 40-wheel perf proof —
 > tracked in `INSPECTION.md` item F2.
 
 ## Stream C G4 — CLOSED (2026-06-12): contact-driven rolling parity landed
