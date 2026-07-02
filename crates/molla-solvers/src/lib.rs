@@ -41,7 +41,9 @@ pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};
 pub use jacobian::jacobian;
 pub use math::robust_loss::RobustLoss;
 #[cfg(feature = "gpu")]
-pub use mpm::{MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep};
+pub use mpm::{
+    MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams, MpmTireTerrainRaster,
+};
 pub use mpm_oracle::{
     MpmRigidBodySample, MpmRigidCellSample, ReducedMpmMaterial, ReducedMpmMaterialState,
     ReducedMpmMaterialStep, RigidCellWrench, SandProjectStep, SnowClampStep, ViscousDampingStep,

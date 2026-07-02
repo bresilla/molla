@@ -108,7 +108,9 @@ fn update_vehicle_offroad_example(
         // Fresh car positioned over the centre of the terrain (the
         // ground at (0, 0) is ≈ 0.55 · sin(0) · cos(0) + … so the
         // starting body_y is set generously in Vehicle::car()).
-        state.vehicle = Some(molla_vehicle::Vehicle::car());
+        state.vehicle = Some(molla_vehicle::Vehicle::car_with(Box::new(
+            molla_vehicle::RealBrushTireModel::offroad_soft().with_nominal_speed(8.0),
+        )));
         state.powertrain = molla_vehicle::Powertrain::default();
         state.was_active = true;
     }
@@ -197,5 +199,4 @@ fn draw_vehicle_offroad_gizmos(
         }
     }
 }
-
 

@@ -208,6 +208,8 @@ include!("examples/118_bekker_sinkage.rs");
 include!("examples/119_soil_compaction.rs");
 include!("examples/120_tire_dynamics.rs");
 include!("examples/121_tire_traction.rs");
+include!("examples/122_tire_realistic.rs");
+include!("examples/123_terrain_lab.rs");
 include!("examples/30_pyramid.rs");
 include!("examples/31_cloth_bending.rs");
 include!("examples/114_cloth_rollers.rs");
@@ -320,10 +322,12 @@ fn main() {
         .insert_resource(SynthAnnotationExampleState::default())
         .insert_resource(TireLabExampleState::default())
         .insert_resource(VehicleOffroadExampleState::default())
+        .insert_resource(TerrainLabExampleState::default())
         .insert_resource(BekkerSinkageState::default())
         .insert_resource(SoilCompactionState::default())
         .insert_resource(TireDynamicsState::default())
         .insert_resource(TireTractionState::default())
+        .insert_resource(TireRealisticState::default())
         .insert_resource(ClothBendingExampleState::default())
         .insert_resource(ClothTwistExampleState::default())
         .insert_resource(CartPoleExampleState::default())
@@ -459,6 +463,8 @@ fn main() {
         .add_systems(Update, draw_tire_lab_gizmos)
         .add_systems(Update, update_vehicle_offroad_example)
         .add_systems(Update, draw_vehicle_offroad_gizmos)
+        .add_systems(Update, update_terrain_lab_example)
+        .add_systems(Update, draw_terrain_lab_gizmos)
         .add_systems(Update, update_bekker_sinkage_example)
         .add_systems(Update, draw_bekker_sinkage_gizmos)
         .add_systems(Update, update_soil_compaction_example)
@@ -467,6 +473,8 @@ fn main() {
         .add_systems(Update, draw_tire_dynamics_gizmos)
         .add_systems(Update, update_tire_traction_example)
         .add_systems(Update, draw_tire_traction_gizmos)
+        .add_systems(Update, update_tire_realistic_example)
+        .add_systems(Update, draw_tire_realistic_gizmos)
         // Warp-port scenes — registered in three groups to dodge the
         // 20-element tuple ceiling. Each tuple is independent (no
         // ordering constraints between them) so we don't bother
@@ -633,6 +641,378 @@ impl Default for SceneDescriptionPaneState {
     }
 }
 
+struct TireSceneTruthNotes {
+    physics_path: &'static str,
+    expected_behavior: &'static str,
+    checklist: &'static [&'static str],
+    physical_controls: &'static str,
+    debug_controls: &'static str,
+    known_approximations: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TireViewerControlKind {
+    PhysicalState,
+    PresetOverride,
+    NumericalStability,
+    DebugToggle,
+    VisualizationOnly,
+}
+
+impl TireViewerControlKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::PhysicalState => "physical_state",
+            Self::PresetOverride => "preset_override",
+            Self::NumericalStability => "numerical_stability",
+            Self::DebugToggle => "debug_toggle",
+            Self::VisualizationOnly => "visualization_only",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TireViewerControlMetadata {
+    telemetry_key: &'static str,
+    name: &'static str,
+    kind: TireViewerControlKind,
+    note: &'static str,
+}
+
+const TIRE_MODEL_LAB_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "tire_lab.normal_load_n",
+        name: "Normal load",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Curve input force used by the reference tire models.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_lab.surface_mu",
+        name: "Friction coefficient",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Surface friction input for force-shape comparisons.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_lab.curve_plot_view",
+        name: "Curve plot controls",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Changes only the diagnostic plot/readout presentation.",
+    },
+];
+
+const VEHICLE_OFFROAD_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "vehicle_offroad.throttle_brake_steer",
+        name: "Throttle / brake / steer",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Driver inputs feed the CPU Vehicle integration and the native real-brush tire adapter.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "vehicle_offroad.heightfield_surface",
+        name: "Heightfield terrain",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Procedural heightfield height/friction drives suspension load and the real-brush contact input.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "vehicle_offroad.legacy_real_brush_adapter",
+        name: "Legacy RealBrush adapter",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "CPU-only bridge coverage for older Vehicle/TireModel scenes; not a resident GPU tire path.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "vehicle_offroad.grid_contact_markers",
+        name: "Grid / contact markers",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Wireframe terrain and contact spheres are viewer inspection aids.",
+    },
+];
+
+const TIRE_DYNAMICS_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.inflation_pressure_pa",
+        name: "Inflation pressure",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Cavity pressure changes tire shape, bead load, and contact patch.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.fem_material_preset_override",
+        name: "FEM material preset",
+        kind: TireViewerControlKind::PresetOverride,
+        note: "Viewer-selected tire preset is an explicit override, not a hidden force multiplier.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.solver_budget_override",
+        name: "Substeps / XPBD values",
+        kind: TireViewerControlKind::NumericalStability,
+        note: "Solver-budget knobs stabilize explicit tetra FEM and are reported as telemetry.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.use_gpu_fem",
+        name: "Use GPU tire FEM kernel",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Switches GPU-first path to CPU fallback for parity/debug.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.use_resident_atlas",
+        name: "Use resident GPU atlas batch",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Selects the fused multi-tire atlas owner; disabling it keeps the old per-tire persistent GPU path for comparison.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.use_resident_vehicle_fem_owner",
+        name: "Use resident vehicle+FEM owner",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Runs Scene 120 through the combined resident vehicle/brush/FEM owner; disabling it keeps the raw resident atlas path for comparison.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.mesh_overlay_mode",
+        name: "Wireframe / diagnostic bars",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Shows mesh, pressure, cavity, XPBD, and CPU/GPU delta readouts.",
+    },
+];
+
+const TIRE_TRACTION_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.user_pressure_pa",
+        name: "User pressure",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Changes patch size and pressure-dependent brush/carcass stiffness.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.payload_weight_n",
+        name: "Payload weight",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Changes normal load and load-sensitive tire response.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.material_tension_preset_override",
+        name: "Tire material tension",
+        kind: TireViewerControlKind::PresetOverride,
+        note: "Explicit user tire-preset override for stiffness/tension inspection.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.surface_slipperiness_preset_override",
+        name: "Surface slipperiness",
+        kind: TireViewerControlKind::PresetOverride,
+        note: "Explicit named surface-preset override that interpolates dirt-to-ice material state for falsification.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.steer_camber_state",
+        name: "Steering / camber",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Feeds tire orientation, camber thrust, and transient relaxation.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.use_gpu_transient_brush",
+        name: "Use GPU transient + brush",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Toggles GPU-first transient plus resident vehicle-to-brush force path against CPU fallback.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.vehicle_brush_row_diagnostics",
+        name: "Vehicle→brush row diagnostics",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Shows the live TireVehicleYawGpuKernel to TireBrushGpuKernel resident-buffer force path.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_traction.tire_debug_overlays",
+        name: "Tire debug overlays",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Draws contact cells, bristle shear, forces, moments, and trail markers.",
+    },
+];
+
+const TIRE_REALISTIC_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.pressure_load_state",
+        name: "Inflation pressure / vertical load",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Primary tire state inputs for patch, deflection, and force response.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.rig_kinematics_state",
+        name: "Belt speed / slip ratio / slip angle",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "Kinematic tire-test-rig inputs that drive contact dissipation and force.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.road_material_preset_override",
+        name: "Road material / water film",
+        kind: TireViewerControlKind::PresetOverride,
+        note: "Explicit surface preset/state overrides for dry, dirt, sand, ice, and wet-film checks.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.deformable_terrain_owner_toggle",
+        name: "Bekker / MPM terrain ownership",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Enables deeper deformable-terrain coupling paths for falsification.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.gpu_condition_coupling_toggles",
+        name: "GPU thermal / transient / Bekker / MPM / DEM toggles",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Selects GPU-first thermal, transient-to-FEM feedback, Bekker/MPM/DEM soil, or CPU fallback diagnostics.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_realistic.auto_sweep_overlay",
+        name: "Auto-sweep and curve overlays",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Diagnostic display helpers for force-shape and operating-point inspection.",
+    },
+];
+
+const SOIL_COMPACTION_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "soil_compaction.roller_motion",
+        name: "Roller motion/load",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "The moving roller applies normal/shear load into the visible granular bed.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "soil_compaction.sparse_lbvh_dem_owner",
+        name: "Sparse-LBVH DEM owner",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Switches the visible bed from the older grid step to the reusable sparse-LBVH DEM owner path.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "soil_compaction.resident_gpu_dem_owner",
+        name: "Resident GPU DEM owner",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Keeps DEM state and height/sinkage/surface-velocity rows resident on GPU when an adapter is available.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "soil_compaction.dem_fem_terrain_telemetry",
+        name: "DEM→FEM terrain telemetry",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "Rows, sinkage, velocity cells, LBVH counts, and reseed counters are readouts for falsifying the DEM bridge.",
+    },
+];
+
+const BEKKER_SINKAGE_CONTROLS: &[TireViewerControlMetadata] = &[
+    TireViewerControlMetadata {
+        telemetry_key: "bekker_sinkage.loading_plate_pressure",
+        name: "Loading plate pressure",
+        kind: TireViewerControlKind::PhysicalState,
+        note: "The plate load produces the pressure-sinkage curve for the deformable soil patch.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "bekker_sinkage.bekker_soil_preset_override",
+        name: "Bekker soil preset",
+        kind: TireViewerControlKind::PresetOverride,
+        note: "Explicit named SCM stiffness/exponent override for the soil law, not a tire-force multiplier.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "bekker_sinkage.pressure_sinkage_curve",
+        name: "Pressure-sinkage curve",
+        kind: TireViewerControlKind::VisualizationOnly,
+        note: "The plotted curve is a falsification readout for the soil law shape.",
+    },
+];
+
+fn tire_viewer_control_metadata(scene: Scene) -> &'static [TireViewerControlMetadata] {
+    match scene {
+        Scene::TireModelLab => TIRE_MODEL_LAB_CONTROLS,
+        Scene::VehicleOffroad => VEHICLE_OFFROAD_CONTROLS,
+        Scene::BekkerSinkage => BEKKER_SINKAGE_CONTROLS,
+        Scene::TireDynamics => TIRE_DYNAMICS_CONTROLS,
+        Scene::TireTraction => TIRE_TRACTION_CONTROLS,
+        Scene::TireRealistic => TIRE_REALISTIC_CONTROLS,
+        Scene::SoilCompaction => SOIL_COMPACTION_CONTROLS,
+        _ => &[],
+    }
+}
+
+fn tire_scene_truth_notes(scene: Scene) -> Option<TireSceneTruthNotes> {
+    match scene {
+        Scene::TireModelLab => Some(TireSceneTruthNotes {
+            physics_path: "CPU molla-vehicle tire curve evaluators: RigidTire, TmSimpleTire, Pac89Tire, and the native RealBrushTireModel adapter. Empirical curves are diagnostic references; the real-brush curve is the reusable native force law bridge.",
+            expected_behavior: "Slip-ratio and slip-angle curves should change smoothly as normal load and friction sliders move; this scene should make model-shape differences visible rather than simulate a full vehicle.",
+            checklist: &[
+                "Slip-ratio curves change smoothly as normal load and friction move.",
+                "Slip-angle curves keep sane sign and saturation; no teleporting force jumps.",
+                "Reference curves remain diagnostic only; the RealBrush curve is explicitly labelled as the native force-law adapter.",
+            ],
+            physical_controls: "Normal load and friction coefficient are physical curve inputs.",
+            debug_controls: "Curve sample density, plot scaling, and display toggles are visualization/debug controls.",
+            known_approximations: "Pacejka/TMeasy-style curves are diagnostic comparisons only; they are not used as the native real tire force source.",
+        }),
+        Scene::VehicleOffroad => Some(TireSceneTruthNotes {
+            physics_path: "CPU molla-vehicle Vehicle::step over HeightfieldTerrain using the native RealBrushTireModel::offroad_soft adapter. This scene is intentionally labelled as the legacy CPU bridge: it exercises the reusable real-brush force law in the old TireModel trait, while resident GPU vehicle/brush/FEM ownership lives in Scenes 120/121 and the kernel parity lanes.",
+            expected_behavior: "The car should follow the heightfield, load and unload its suspension over hills, steer through actual wheel angles, and use the native brush force law rather than the old simple tire. It should not be mistaken for the resident GPU tire/FEM runtime.",
+            checklist: &[
+                "Arrow-key throttle, brake, and steering should move the car over the deterministic heightfield.",
+                "Suspension load should change as wheels climb and descend the terrain; contact markers should sit on the heightfield.",
+                "The right rail should label this as CPU-only legacy RealBrush adapter coverage, not a production GPU tire owner.",
+            ],
+            physical_controls: "Throttle, brake, steer, heightfield height/friction, suspension load, and RealBrushTireModel parameters are physical inputs/state.",
+            debug_controls: "Heightfield wireframe, contact markers, and the legacy-adapter label are visualization/debug aids for bridge coverage.",
+            known_approximations: "This is a CPU-only legacy Vehicle/TireModel bridge with a synthetic flat patch inside RealBrushTireModel. It keeps old off-road scenes on the native brush law but does not replace the resident GPU vehicle/brush/FEM owners.",
+        }),
+        Scene::TireDynamics => Some(TireSceneTruthNotes {
+            physics_path: "GPU-first combined resident vehicle+brush+tetra tire FEM owner for live multi-tire node/brush/hub stepping, with raw resident-atlas, per-tire persistent GPU, and CPU fallback diagnostics. Viewer silhouettes are driven by pressure-aware FEM/readout state so deflation remains visible.",
+            expected_behavior: "Deflated tires should visibly flatten into wider contact patches, high-pressure tires should stay rounder and stiffer, and the animated tire should change pressure/cavity/XPBD readouts without exploding or falling through the ground.",
+            checklist: &[
+                "Low-pressure tires visibly flatten and grow a broader patch.",
+                "High-pressure tires stay rounder/stiffer and should not fall through the ground.",
+                "Animated pressure changes update cavity, hub, XPBD, and CPU/GPU delta readouts without explosions.",
+            ],
+            physical_controls: "Inflation pressure, cavity state, FEM material preset, and solver substep/XPBD values affect the physical tire state.",
+            debug_controls: "Resident vehicle+FEM owner, raw resident-atlas vs per-tire persistent GPU toggle, wireframe, diagnostic bars, CPU/GPU delta display, and exaggerated patch visualization are debug/visualization aids.",
+            known_approximations: "Elasticity is still explicit Neo-Hookean tetra FEM with XPBD stabilizers; sidewall bending is an edge-distance proxy, not a validated laminated tire solver.",
+        }),
+        Scene::TireTraction => Some(TireSceneTruthNotes {
+            physics_path: "GPU transient relaxation plus TireVehicleYawGpuKernel → TireBrushGpuKernel resident vehicle-to-brush rows as the default force path. Direct GPU brush and CPU fallbacks remain for parity, using molla-vehicle pressure/material/load/thermal/wear state rather than viewer-only traction multipliers.",
+            expected_behavior: "The over-inflated red car should make a tiny patch and spin sooner on low-friction ground; the softer blue car should build more patch and pull better when the surface supports it; the green user car should react to pressure, payload, slipperiness, camber, steering, heat, and wear controls.",
+            checklist: &[
+                "Over-inflated red car forms a tiny patch and slips sooner on low-friction ground.",
+                "Softer blue car builds more patch and should pull better when the surface supports shear.",
+                "Green user car responds to pressure, payload, slipperiness, camber, steering, heat, and wear controls.",
+            ],
+            physical_controls: "Pressure, payload, tire stiffness/material tension, slipperiness/material, camber, steering, torque, heat, and wear are physics inputs or state-derived feedback.",
+            debug_controls: "CPU-vs-GPU deltas, resident vehicle-to-brush force-path readouts, patch/cell overlays, force arrows, moment glyphs, and graph bars are inspection aids.",
+            known_approximations: "Vehicle dynamics are compact scene rigs; brush contact is physically grounded but still a reduced tire model and not calibrated as a production vehicle tire.",
+        }),
+        Scene::TireRealistic => Some(TireSceneTruthNotes {
+            physics_path: "Single-wheel real-tire bench using FEM-derived tread-node contact readouts plus GPU transient-relaxed FEM contact feedback in molla-vehicle. When the MPM terrain bridge has resident GPU height/sinkage/surface-velocity buffers, the Bekker owner has resident GPU height/sinkage plus material/film maps, or the DEM bridge has resident GPU height/sinkage/surface-velocity terrain rows, Scene 122 dispatches the resident FEM-feedback path and only reads back through an explicit viewer telemetry seam. The DEM bridge can step a TireDemFemTerrainOwner-owned sparse-LBVH grain bed through the GPU DEM kernel, keep the next DEM state resident, and raster resident height/sinkage/surface-velocity rows to FEM feedback. GPU thermal/wear batch stepping and replay thermal/wear batching run by default for loaded internal rig snapshots.",
+            expected_behavior: "The tire should respond to vertical load, pressure, belt speed, slip ratio, slip angle, water/material state, and temperature. Effective slip should lag raw controls before feeding FEM contact feedback, heat and wear should come from contact dissipation, and curves should update smoothly during sweeps.",
+            checklist: &[
+                "Effective slip lags raw κ/α controls before driving FEM feedback.",
+                "Pressure/load changes alter FEM deflection, pressure-bin spans, and feedback patch rows.",
+                "Ice/water/material, DEM/MPM/Bekker terrain, heat, and wear alter force through state-derived paths.",
+            ],
+            physical_controls: "Inflation pressure, load, belt speed, slip ratio, slip angle, material, water film, thermal state, wear state, and terrain ownership are physical inputs/state.",
+            debug_controls: "Auto-sweep, curve overlays, CPU/GPU thermal/transient/FEM-feedback toggles, replay batch readouts, thermal bars, and telemetry readouts are diagnostic controls.",
+            known_approximations: "This is intentionally one tire, not a four-wheel car. FEM/contact coupling is first-pass and not calibrated to measured tire data.",
+        }),
+        Scene::SoilCompaction => Some(TireSceneTruthNotes {
+            physics_path: "Visible molla-vehicle GranularBed compaction driven by a moving roller, with the default path handing the grain bed to the sparse-LBVH DEM owner. When enabled and a GPU adapter exists, TireDemResidentFemTerrainOwner keeps DEM state plus height/sinkage/surface-velocity terrain rows resident before mirroring only the explicit viewer telemetry seam.",
+            expected_behavior: "The roller should move over the granular bed, compact it into a rut over repeated passes, and report DEM→FEM terrain rows, surface-velocity cells, LBVH counts, and resident reseeds. Disabling sparse/GPU ownership should make the older fallback path explicit rather than silently changing physics.",
+            checklist: &[
+                "The roller visibly crosses the bed and rut depth increases with diminishing returns over passes.",
+                "Sparse-LBVH DEM telemetry reports finite nodes/leaves, sinkage rows, velocity cells, and max Δy.",
+                "Resident GPU mode should report the resident DEM owner path and expose reseed count/fallback errors instead of hiding stale state.",
+            ],
+            physical_controls: "Roller position, roller load/shear, granular bed state, friction, grain radius/mass, and compaction history are physical state.",
+            debug_controls: "Sparse-LBVH owner toggle, resident GPU owner toggle, LBVH telemetry, DEM→FEM row counts, surface-velocity readouts, and reseed counters are debug/falsification controls.",
+            known_approximations: "This is an off-road DEM compaction bridge, not a full tire carcass scene. The roller contact is a compact load proxy, and CPU mirrors remain an explicit viewer/readback seam for visual grain updates.",
+        }),
+        Scene::BekkerSinkage => Some(TireSceneTruthNotes {
+            physics_path: "CPU DeformableTerrain Bekker pressure-sinkage law: a loading plate ramps normal pressure into the named SCM soil model (`p = stiffness · z^n`) and plots the resulting curve. This is a soil-law diagnostic scene; tire/FEM use of Bekker terrain lives in Scene 122 and the GPU Bekker owner parity lanes.",
+            expected_behavior: "As plate pressure rises, sinkage should increase smoothly with the concave sandy-soil shape from the Bekker exponent. The curve should stay finite and monotonic enough to falsify bad soil parameters before those maps feed tire contact.",
+            checklist: &[
+                "Increasing plate pressure should increase sinkage without NaNs or curve jumps.",
+                "The plotted pressure-sinkage line should expose the Bekker exponent shape, not just a flat friction scalar.",
+                "This scene should be labelled as CPU soil-law diagnostics, with GPU Bekker tire/FEM coupling handled by Scene 122 and kernel tests.",
+            ],
+            physical_controls: "Plate pressure/load, Bekker stiffness, Bekker exponent, terrain cell size, and accumulated sinkage are physical soil-state inputs.",
+            debug_controls: "The pressure-sinkage plot and curve readouts are visualization/falsification aids for the SCM soil law.",
+            known_approximations: "Bekker SCM is a heightfield pressure-sinkage soil model, not full granular/MPM soil and not a tire carcass solve. The Scene 118 curve is CPU diagnostic evidence; resident GPU Bekker terrain ownership is exercised in Scene 122.",
+        }),
+        _ => None,
+    }
+}
+
 /// Per-frame physics timing. Each EMA in microseconds.
 #[derive(Resource, Default)]
 struct SimStats {
@@ -786,6 +1166,10 @@ struct PaneSceneStates<'w> {
     tire_traction: ResMut<'w, TireTractionState>,
     /// T1-T3 — tire tetra FEM backend/readouts.
     tire_dynamics: ResMut<'w, TireDynamicsState>,
+    /// T5 — single tire test bench with rolling road + heat/wear.
+    tire_realistic: ResMut<'w, TireRealisticState>,
+    /// V5-deep — granular DEM compaction and sparse-LBVH DEM diagnostics.
+    soil_compaction: ResMut<'w, SoilCompactionState>,
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
@@ -1426,11 +1810,11 @@ enum Scene {
     /// per-instance bounding boxes are overlaid as gizmos so the
     /// downstream dataset export is visually verifiable.
     SyntheticAnnotation,
-    /// V1-V2 — tire-model lab. The three `molla-vehicle` tire models
-    /// (`RigidTire`, `TmSimpleTire`, `Pac89Tire`) are evaluated over
-    /// a slip-ratio sweep and a slip-angle sweep; the resulting Fx /
-    /// Fy curves are drawn as 3-D line plots so the differences are
-    /// visible at a glance.
+    /// V1-V2 plus the native real-brush adapter — tire-model lab.
+    /// `RigidTire`, `TmSimpleTire`, `Pac89Tire`, and `RealBrushTireModel`
+    /// are evaluated over a slip-ratio sweep and a slip-angle sweep; the
+    /// resulting Fx / Fy curves are drawn as 3-D line plots so the differences
+    /// are visible at a glance.
     TireModelLab,
     /// V3-V5 — wheeled vehicle on a procedural heightfield. The same
     /// `molla_vehicle::Vehicle` as `Scene::Vehicle`, but driven over
@@ -1454,11 +1838,21 @@ enum Scene {
     /// width emerges from pressure-loaded tetrahedral carcass dynamics
     /// rather than a Pacejka force element.
     TireDynamics,
-    /// T4 — traction comparison under heavy payload. Two simplified
-    /// car rigs receive the same wheel torque on low-friction ground:
-    /// over-inflated tires spin with a tiny patch, while partially
-    /// inflated tires get enough patch area to pull the load forward.
+    /// T4 — traction comparison under heavy payload. Three car rigs
+    /// receive the same rear-wheel torque on low-friction ground:
+    /// over-inflated tires spin with a tiny patch, partially inflated
+    /// tires get enough patch area to pull the load forward, and the
+    /// user car exposes pressure/load/stiffness/surface/steering while
+    /// visibly steering its front wheels.
     TireTraction,
+    /// T5 — single-tire test bench. One visible spinning tire runs on a
+    /// rolling road with slip ratio/slip-angle controls, force arrows,
+    /// temperature/wear state, and live Fx/Fy curves.
+    TireRealistic,
+    /// 123 — terrain interaction lab. Rolling vehicle on a procedural
+    /// heightfield with named zones (flat → speed-bumps → hole → washboard
+    /// → ramp) so the wheels visibly bounce, dip, vibrate, and climb.
+    TerrainLab,
 }
 
 impl Scene {
@@ -1596,6 +1990,8 @@ impl Scene {
         Scene::SoilCompaction,
         Scene::TireDynamics,
         Scene::TireTraction,
+        Scene::TireRealistic,
+        Scene::TerrainLab,
     ];
 
     fn label(self) -> &'static str {
@@ -1731,6 +2127,8 @@ impl Scene {
             Scene::SoilCompaction => "119 Soil compaction (DEM passes)",
             Scene::TireDynamics => "120 Tire dynamics (inflation, contact)",
             Scene::TireTraction => "121 Tire traction (pressure vs slip)",
+            Scene::TireRealistic => "122 Realistic tire (cornering + heat + wear)",
+            Scene::TerrainLab => "123 Terrain lab (bumps, hole, washboard, ramp)",
         }
     }
 
@@ -2106,22 +2504,28 @@ impl Scene {
                 "A synthetic-annotation dataset preview. Three labelled bodies (cube, sphere, capsule) sit on a ground; their per-instance bounding boxes — derived from the `TiledCamera`'s SHAPE_INDEX channel via the new `Dataset` post-process — are drawn as wireframe gizmos to make the dataset export visually auditable."
             }
             Scene::TireModelLab => {
-                "A wheel-model laboratory. The three molla-vehicle tire models — `RigidTire`, `TmSimpleTire`, `Pac89Tire` — are evaluated across a slip-ratio sweep and a slip-angle sweep; the resulting longitudinal (Fx) and lateral (Fy) force curves are drawn as 3-D line plots so the difference between rigid, TMsimple, and Pacejka becomes visible. Right-rail knobs vary the normal load (Fz) and friction coefficient."
+                "A wheel-model laboratory. The molla-vehicle tire models — `RigidTire`, `TmSimpleTire`, `Pac89Tire`, and the native `RealBrushTireModel` adapter — are evaluated across a slip-ratio sweep and a slip-angle sweep; the resulting longitudinal (Fx) and lateral (Fy) force curves are drawn as 3-D line plots so empirical reference curves can be compared against the reusable real-brush force law. Right-rail knobs vary the normal load (Fz) and friction coefficient."
             }
             Scene::VehicleOffroad => {
-                "The same drivable wheeled vehicle as Scene::Vehicle, but rolling over a procedural heightfield. The hills are deterministic and large enough to load the suspension; the heightfield grid is drawn as a wireframe so the wheel-ground contact is auditable. Arrow keys drive."
+                "The same drivable wheeled vehicle as Scene::Vehicle, but rolling over a procedural heightfield with the reusable RealBrushTireModel off-road tire adapter instead of the older simple tire. The hills are deterministic and large enough to load the suspension; the heightfield grid is drawn as a wireframe so the wheel-ground contact is auditable. Arrow keys drive."
             }
             Scene::BekkerSinkage => {
                 "A loading plate is pressed into a Bekker SCM soil patch at a continuously-ramping load; the resulting (pressure, sinkage) trace is plotted as a 3-D line strip so the canonical pressure-sinkage curve is visible. Uses the new `bekker_n` exponent on `DeformableTerrain` for a concave sandy-soil shape (`p = stiffness · z^n`)."
             }
             Scene::SoilCompaction => {
-                "A heavy kinematic roller sweeps back and forth over a DEM granular bed. After every completed pass the rut depth at the bed centre is sampled and added to a bar chart — the soil compacts more on each pass with diminishing returns, the Proctor-style compaction curve made visible. Real grain rearrangement, two-way roller↔grain coupling via `GrainObstacle`."
+                "A heavy kinematic roller sweeps back and forth over a DEM granular bed. After every completed pass the rut depth at the bed centre is sampled and added to a bar chart — the soil compacts more on each pass with diminishing returns, the Proctor-style compaction curve made visible. The visible bed can now be stepped by the sparse-LBVH DEM owner, with an optional resident GPU DEM terrain owner that keeps DEM state plus height/sinkage/surface-velocity rows GPU-resident before mirroring them back for viewer grains; disable it from the right rail to compare against the older GranularBed grid step."
             }
             Scene::TireDynamics => {
-                "Five volumetric tetra-FEM tire carcasses run side-by-side at five inflation pressures (0, 80, 200, 320 kPa fixed + one animated). Each tire uses `molla_vehicle::TetraTireFem`: a circumferential × radial × width annular tire volume split into tetrahedra, with linear tetra FEM rubber forces, bead/rim coupling, pressure traction, floor contact, and a fixed hub load. The contact patch emerges from the tetra mesh — higher pressure stays rounder with a smaller patch; lower pressure squashes into a wider footprint."
+                "Five tires run side-by-side at five inflation pressures (0, 80, 200, 320 kPa fixed + one animated). The viewer now uses the same obvious pressure silhouette as the traction scene so deflated tires visibly flatten into a wide patch and inflated tires stay round; the tetra-FEM backend still runs for diagnostics/readouts."
             }
             Scene::TireTraction => {
-                "Three simplified cars receive the same wheel torque on a low-friction track. The over-inflated red car has a tiny contact patch and mostly spins; the partially-inflated blue car has a wider patch and pulls forward when the surface can support it; the green car is user-controlled from the right rail with tire-pressure, payload, tire stiffness, and dirt→ice slipperiness sliders. Green bars show effective patch/traction, red bars show slip."
+                "Three compact car rigs receive the same rear-wheel torque on a low-friction track. The over-inflated red car has a tiny contact patch and mostly spins; the partially-inflated blue car has a wider patch and pulls forward when the surface can support it; the green car is user-controlled from the right rail with tire-pressure, payload, tire stiffness, dirt→ice slipperiness, and steering sliders. The viewer defaults to the GPU brush tire kernel with CPU fallback, the front wheels visibly toe with steering, brush tire forces yaw the car, heat/wear feed back into μ, green bars show effective patch/traction, and red bars show slip."
+            }
+            Scene::TireRealistic => {
+                "Single-tire realistic test bench: one visible spinning tire sits on a rolling road while the right rail controls inflation pressure, vertical load, belt speed, slip ratio, slip angle, material, and auto-sweep. The brush model reports Fx/Fy/Mz, heat and wear feed back into friction, and live curves show Fx(kappa) and Fy(alpha). This scene is one tire by design, not a four-wheel car."
+            }
+            Scene::TerrainLab => {
+                "A rolling wheeled vehicle on a procedural heightfield laid out as named zones along the +X drive direction: flat run-in, three smooth speed-bumps, a bowl-shaped hole, a tapered washboard ridge section, and a ramp climbing to a plateau. The heightfield is drawn as a wireframe colour-coded by zone, with per-wheel contact dots and a vertical drop-line from each wheel center to its ground contact so suspension travel and bump response are visible. Use the arrow keys to drive across the features."
             }
         }
     }
@@ -2660,17 +3064,17 @@ impl Scene {
             },
             Scene::TireModelLab => ScenePhysicsAudit {
                 status: CpuOnly,
-                reference_case: "force-element tire models (Rigid / TMsimple / Pac89)",
-                cpu_proof: "molla-vehicle tire module unit tests; magic-formula derivative parity",
-                gpu_proof: "CPU-only tire-model evaluation; the lab is a visual readout, not a sim",
-                notes: "V1-V2 viewer scene — slip-ratio / slip-angle sweep for each tire model drawn as gizmo line strips",
+                reference_case: "force-element tire models plus native real-brush tire adapter (Rigid / TMsimple / Pac89 / RealBrush)",
+                cpu_proof: "molla-vehicle tire module unit tests, magic-formula derivative parity, and RealBrushTireModel adapter force/friction test",
+                gpu_proof: "CPU-only tire-model evaluation; the lab is a visual readout, while GPU brush/FEM parity lives in the tire scenes and kernel tests",
+                notes: "V1-V2 plus real-brush viewer scene — slip-ratio / slip-angle sweep for each tire model drawn as gizmo line strips",
             },
             Scene::VehicleOffroad => ScenePhysicsAudit {
                 status: CpuOnly,
-                reference_case: "wheeled vehicle on a HeightfieldTerrain",
-                cpu_proof: "molla-vehicle Vehicle + HeightfieldTerrain unit tests",
-                gpu_proof: "CPU-only vehicle dynamics; same path as Scene::Vehicle but with a heightfield",
-                notes: "V3-V5 viewer scene — Vehicle::car driven by arrow keys over a procedural heightfield",
+                reference_case: "wheeled vehicle on a HeightfieldTerrain using the native real-brush tire adapter",
+                cpu_proof: "molla-vehicle Vehicle + HeightfieldTerrain unit tests plus RealBrushTireModel adapter force/friction test",
+                gpu_proof: "CPU vehicle integration for this legacy scene; tire force law is the reusable real brush model, while resident GPU vehicle/FEM ownership remains in the tire scenes",
+                notes: "V3-V5 viewer scene — Vehicle::car_with(RealBrushTireModel::offroad_soft) driven by arrow keys over a procedural heightfield",
             },
             Scene::BekkerSinkage => ScenePhysicsAudit {
                 status: CpuOnly,
@@ -2680,11 +3084,11 @@ impl Scene {
                 notes: "V5 viewer scene — loading plate ramps fz, curve drawn as a 3D line strip",
             },
             Scene::SoilCompaction => ScenePhysicsAudit {
-                status: CpuOnly,
-                reference_case: "DEM granular bed under repeated roller passes",
-                cpu_proof: "molla-vehicle GranularBed::step + wheel_obstacles tests",
-                gpu_proof: "CPU-only DEM — rut-depth-vs-pass measured in the viewer loop",
-                notes: "V5-deep viewer scene — roller sweeps the bed; per-pass rut depths plotted",
+                status: Partial,
+                reference_case: "DEM granular bed under repeated roller passes plus sparse-LBVH DEM owned tire-contact stepping",
+                cpu_proof: "molla-vehicle GranularBed::step + wheel_obstacles tests + external owner state replacement; molla-kernels tire_dem sparse-LBVH CPU reference/stress parity tests",
+                gpu_proof: "molla-kernels tire_dem.wgsl has ignored sparse-LBVH and resident DEM terrain owner GPU parity lanes; viewer right rail can select TireDemResidentFemTerrainOwner for resident DEM state plus terrain rows",
+                notes: "V5-deep viewer scene — roller sweeps the bed, per-pass rut depths plotted, and the sparse-LBVH DEM owner writes node/leaf/delta-tracked state back into the visible bed; GPU mode keeps DEM state and terrain rows resident before the explicit viewer mirror",
             },
             Scene::TireDynamics => ScenePhysicsAudit {
                 status: ManualGpu,
@@ -2694,11 +3098,25 @@ impl Scene {
                 notes: "T1-T3 viewer scene defaults to GPU tetra FEM nodes; CPU remains a right-rail fallback/debug toggle",
             },
             Scene::TireTraction => ScenePhysicsAudit {
+                status: ManualGpu,
+                reference_case: "brush tire contact with pressure/material-dependent patch traction, visible steer angle, tire heat, and wear under heavy payload",
+                cpu_proof: "molla-vehicle real_tire brush-contact tests cover pressure, material friction, low-mu traction response, heat, and wear",
+                gpu_proof: "T4 viewer defaults to molla-kernels tire_transient.wgsl via TireTransientGpuBatch before a live TireVehicleYawGpuKernel resident vehicle-to-brush-row force path into TireBrushGpuKernel::dispatch_input_buffer_resident, with direct GPU brush fallback; parity covered by `make test-gpu P=molla-kernels T=tire_transient_gpu`, `make test-gpu P=molla-kernels T=tire_brush_gpu`, and `make test-gpu P=molla-kernels T=tire_vehicle_gpu` lanes",
+                notes: "T4 viewer scene — fixed red/blue cars plus user-controlled green car with pressure, payload, tire stiffness, surface, steering, transient relaxation, and GPU/CPU backend toggle",
+            },
+            Scene::TireRealistic => ScenePhysicsAudit {
+                status: ManualGpu,
+                reference_case: "Full brush/FEM-derived contact (Fx + Fy + Mz) with per-wheel GPU thermal/wear feedback on live Bekker/MPM terrain bridges",
+                cpu_proof: "molla-vehicle real_tire tests cover combined slip cone, lateral grip saturation, thermal heating, wear integration, and load-deflection sweep",
+                gpu_proof: "GPU thermal/wear batch and replay batch via TireThermalGpuKernel/tire_thermal.wgsl, plus GPU Bekker/MPM terrain owners and GPU brush/FEM contact parity lanes in molla-kernels; covered by `make test-gpu P=molla-kernels T=tire_thermal_gpu`, `make test-gpu P=molla-kernels T=tire_bekker_gpu`, `make test-gpu P=molla-kernels T=tire_mpm_gpu`, and `make test-gpu P=molla-kernels T=tire_fem_gpu` lanes",
+                notes: "T5 viewer scene — one FEM tire test bench; contact dissipation updates live and replay thermal/wear state through GPU by default with CPU fallback for parity/debug",
+            },
+            Scene::TerrainLab => ScenePhysicsAudit {
                 status: CpuOnly,
-                reference_case: "brush tire contact with pressure/material-dependent patch traction under heavy payload",
-                cpu_proof: "molla-vehicle real_tire brush-contact tests cover pressure, material friction, and low-mu traction response",
-                gpu_proof: "CPU-only viewer comparison; GPU brush/contact kernel is tracked in PLAN_REALTIRE.md",
-                notes: "T4 viewer scene — fixed red/blue cars plus user-controlled green car with pressure, payload, and material sliders",
+                reference_case: "wheeled vehicle on a HeightfieldTerrain with named bump / hole / washboard / ramp zones, real-brush tire force law",
+                cpu_proof: "molla-vehicle Vehicle + HeightfieldTerrain unit tests plus RealBrushTireModel adapter force/friction test",
+                gpu_proof: "CPU vehicle integration for this terrain-interaction lab; tire force law is the reusable real brush model, resident GPU vehicle/FEM ownership lives in the tire scenes",
+                notes: "123 viewer scene — Vehicle::car_with(RealBrushTireModel::offroad_soft) driven by arrow keys across a fixed weird-terrain showcase",
             },
             Scene::WarpRaymarch => ScenePhysicsAudit {
                 status: Partial,
@@ -3084,6 +3502,8 @@ impl Sim {
             Scene::SoilCompaction => build_soil_compaction_model(),
             Scene::TireDynamics => build_tire_dynamics_model(),
             Scene::TireTraction => build_tire_traction_model(),
+            Scene::TireRealistic => build_tire_realistic_model(),
+            Scene::TerrainLab => build_tire_dynamics_model(), // single FEM tire on a floor plane
             Scene::ClothPokerCards => build_cloth_poker_cards_model(),
             Scene::SoftbodyHanging => build_softbody_hanging_model(),
             Scene::CableTwist => build_cable_twist_model(),
@@ -3262,6 +3682,127 @@ impl Sim {
             },
             visuals,
         )
+    }
+
+    /// Rebuild the active scene against the already-owned GPU device.
+    ///
+    /// Important: scene switches must not call `Engine::new_gpu()` again.
+    /// On some Vulkan/NVIDIA setups the second device request can lose the
+    /// parent device while Bevy is already rendering. Reusing `self.engine`
+    /// keeps all viewer-side kernels (including tire FEM/brush) on the
+    /// original molla compute device.
+    fn rebuild_scene(&mut self, scene: Scene) -> Vec<BodyVisual> {
+        let (mut model, visuals) = Self::build_scene_model(scene);
+        model.default_friction = PLANE_FRICTION;
+        model.default_restitution = PLANE_RESTITUTION;
+        model.contact_margin = 0.02;
+        model.linear_damping = LINEAR_DAMPING;
+
+        if let Ok(fric) = model.shape_friction.host_mut() {
+            for v in fric.iter_mut() {
+                if (*v - 0.5).abs() < 1e-9 {
+                    *v = PLANE_FRICTION;
+                }
+            }
+        }
+        if let Ok(rest) = model.shape_restitution.host_mut() {
+            for v in rest.iter_mut() {
+                if v.abs() < 1e-9 {
+                    *v = PLANE_RESTITUTION;
+                }
+            }
+        }
+
+        let mut state_a = model.state().expect("state");
+        let mut state_b = model.state().expect("state");
+        let mut control = model.control();
+        let mut contacts = mp::Contacts::with_capacity(8192);
+
+        if matches!(scene, Scene::FastSoftImpact) {
+            let v_target = -fast_soft_impact_speed();
+            let cloth_count = (FAST_SOFT_IMPACT_CLOTH_NX * FAST_SOFT_IMPACT_CLOTH_NX) as usize;
+            let p_total = model.particle_count;
+            if let Ok(qd_a) = state_a.particle_qd.host_mut() {
+                for i in cloth_count..p_total {
+                    qd_a[i] = MVec3::new(0.0, v_target, 0.0);
+                }
+            }
+            if let Ok(qd_b) = state_b.particle_qd.host_mut() {
+                for i in cloth_count..p_total {
+                    qd_b[i] = MVec3::new(0.0, v_target, 0.0);
+                }
+            }
+        }
+
+        let device = self.engine.device().unwrap().clone();
+        let queue = self.engine.queue().unwrap().clone();
+        model
+            .upload_to_device(&device, &queue)
+            .expect("model upload");
+        state_a
+            .upload_to_device(&device, &queue)
+            .expect("state_a upload");
+        state_b
+            .upload_to_device(&device, &queue)
+            .expect("state_b upload");
+        control
+            .upload_to_device(&device, &queue)
+            .expect("control upload");
+        contacts
+            .upload_to_device(&device, &queue)
+            .expect("contacts upload");
+
+        let mut solver = build_solver(&self.engine, &model, scene.solver_kind());
+        Self::tune_scene_solver(scene, &mut solver);
+
+        self.scene = scene;
+        self.model = model;
+        self.state_a = state_a;
+        self.state_b = state_b;
+        self.control = control;
+        self.contacts = contacts;
+        self.solver = solver;
+        self.pipeline = CollisionPipeline::new();
+        self.mpm = None;
+        self.mpm_particles.clear();
+        self.mpm_rigid_spheres.clear();
+
+        visuals
+    }
+
+    fn tune_scene_solver(scene: Scene, solver: &mut SolverBackend) {
+        if matches!(scene, Scene::SoftbodyDrop) {
+            if let SolverBackend::Vbd(s) = solver {
+                s.vt_contact_margin = 0.05;
+                s.vt_contact_sweeps = 8;
+                s.contact_stiffness = 1.0e5;
+            }
+        }
+        if matches!(scene, Scene::ClothCollar) {
+            if let SolverBackend::Vbd(s) = solver {
+                s.vt_contact_margin = 0.03;
+                s.vt_contact_sweeps = 8;
+                s.contact_stiffness = 2.0e5;
+            }
+        }
+        if matches!(scene, Scene::FastSoftImpact) {
+            *solver = SolverBackend::Vbd(
+                mp::VbdSolver::new_cpu()
+                    .with_iterations(8)
+                    .with_contact_stiffness(1.0e5)
+                    .with_vt_contact_margin(0.03)
+                    .with_vt_contact_sweeps(8)
+                    .with_ccd(true)
+                    .with_ccd_velocity_threshold(0.5),
+            );
+        }
+        if matches!(scene, Scene::SoftBrake) {
+            if let SolverBackend::Vbd(s) = solver {
+                s.vt_contact_margin = 0.02;
+                s.vt_contact_sweeps = 10;
+                s.contact_stiffness = 2.0e5;
+            }
+        }
     }
 
     /// Replace the active solver while keeping the same model + state
@@ -3527,6 +4068,7 @@ fn apply_scene_switch(
     bodies_q: Query<Entity, With<MollaBody>>,
     cloth_q: Query<Entity, With<ClothMesh>>,
     obstacle_q: Query<Entity, With<ClothObstacle>>,
+    mut sim: ResMut<Sim>,
     mut grab: ResMut<MouseGrab>,
     mut scene_states: SceneStates,
 ) {
@@ -3755,7 +4297,7 @@ fn apply_scene_switch(
         commands.entity(e).despawn();
     }
 
-    let (sim, visuals) = Sim::build_scene(scene);
+    let visuals = sim.rebuild_scene(scene);
     let visuals = BodyVisuals(visuals);
     spawn_body_entities(&mut commands, &mut meshes, &mut materials, &sim, &visuals);
 
@@ -3768,7 +4310,6 @@ fn apply_scene_switch(
         spawn_mesh_tools_entities(&mut commands, &mut meshes, &mut materials, mesh_state);
     }
 
-    commands.insert_resource(sim);
     commands.insert_resource(visuals);
 
     info!("scene switched → {}", scene.label());
@@ -3907,6 +4448,8 @@ fn step_simulation(
             | Scene::SoilCompaction
             | Scene::TireDynamics
             | Scene::TireTraction
+            | Scene::TireRealistic
+            | Scene::TerrainLab
     ) {
         return;
     }
@@ -5115,6 +5658,12 @@ fn control_pane(
                         Scene::TireTraction => {
                             tire_traction_pane(ui, &mut pane_states.tire_traction, accent_color)
                         }
+                        Scene::TireRealistic => {
+                            tire_realistic_pane(ui, &mut pane_states.tire_realistic, accent_color)
+                        }
+                        Scene::SoilCompaction => {
+                            soil_compaction_pane(ui, &mut pane_states.soil_compaction)
+                        }
                         Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
                         Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
                         Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
@@ -5287,8 +5836,1746 @@ fn scene_description_pane(ui: &mut egui::Ui, scene: Scene, state: &mut SceneDesc
             .show(ui, |ui| {
                 ui.add(egui::Label::new(scene.description()).wrap());
             });
+        if let Some(notes) = tire_scene_truth_notes(scene) {
+            egui::CollapsingHeader::new("Tire truth label")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.strong("Physics path");
+                    ui.add(egui::Label::new(notes.physics_path).wrap());
+                    ui.separator();
+                    ui.strong("What should happen");
+                    ui.add(egui::Label::new(notes.expected_behavior).wrap());
+                    ui.separator();
+                    egui::CollapsingHeader::new("Scene checklist")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.small(
+                                "Use these plain-language checks when reporting broken tire behavior.",
+                            );
+                            for item in notes.checklist {
+                                ui.label(format!("• {item}"));
+                            }
+                        });
+                    ui.separator();
+                    ui.strong("Physical controls/state");
+                    ui.add(egui::Label::new(notes.physical_controls).wrap());
+                    ui.separator();
+                    ui.strong("Debug/visual controls");
+                    ui.add(egui::Label::new(notes.debug_controls).wrap());
+                    ui.separator();
+                    egui::CollapsingHeader::new("Control categories")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.small(
+                                "Every tire control is classified so physical state, preset overrides, numerical solver knobs, debug toggles, and visualization-only helpers cannot be confused.",
+                            );
+                            ui.small(
+                                "Each row also carries a stable telemetry key; preset overrides are explicit named inputs, not hidden source-of-truth force multipliers.",
+                            );
+                            for control in tire_viewer_control_metadata(scene) {
+                                ui.horizontal(|ui| {
+                                    ui.monospace(control.kind.label());
+                                    ui.label(control.name);
+                                });
+                                ui.monospace(control.telemetry_key);
+                                ui.small(control.note);
+                            }
+                        });
+                    ui.separator();
+                    ui.strong("Known approximations");
+                    ui.add(egui::Label::new(notes.known_approximations).wrap());
+                    ui.separator();
+                    tire_gpu_parity_matrix_panel(ui);
+                    tire_known_approximation_ledger_panel(ui);
+                    tire_preset_governance_panel(ui);
+                    tire_realism_source_classification_panel(ui);
+                    tire_frame_convention_panel(ui);
+                    tire_layer_ablation_debug_panel(ui);
+                    tire_construction_sanity_panel(ui);
+                    tire_road_condition_state_panel(ui);
+                    tire_force_shape_envelope_panel(ui);
+                    tire_thermal_transient_soil_panel(ui);
+                    tire_fem_terrain_contact_panel(ui);
+                    tire_cavity_bead_sidewall_panel(ui);
+                    tire_resolution_convergence_panel(ui);
+                    tire_parameter_observability_panel(ui);
+                    tire_runtime_production_gate_panel(ui);
+                });
+        }
     }
     ui.separator();
+}
+
+fn tire_gpu_parity_matrix_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("GPU parity checklist")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Reusable molla-vehicle checklist for hot tire paths. Each row must be \
+                     CPU+GPU with proof, CPU-only debug with a reason, or planned GPU with \
+                     a concrete follow-up.",
+                )
+                .wrap(),
+            );
+            for item in molla_vehicle::tire_gpu_parity_checklist() {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.monospace(item.feature_id);
+                    ui.small(item.status.label());
+                });
+                ui.small(format!("CPU: {}", item.cpu_path));
+                if !item.gpu_path.is_empty() {
+                    ui.small(format!("GPU: {}", item.gpu_path));
+                }
+                if !item.proof.is_empty() {
+                    ui.small(format!("Proof: {}", item.proof));
+                }
+                if !item.reason.is_empty() {
+                    ui.small(format!("Reason: {}", item.reason));
+                }
+                if !item.follow_up.is_empty() {
+                    ui.small(format!("Next: {}", item.follow_up));
+                }
+            }
+        });
+}
+
+fn tire_known_approximation_ledger_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Known tire approximation ledger")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Blunt do-not-overclaim ledger from molla-vehicle. These rows document \
+                     approximation consequences and next steps instead of hiding them in \
+                     scene code.",
+                )
+                .wrap(),
+            );
+            for item in molla_vehicle::tire_known_approximation_ledger() {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.monospace(item.item_id);
+                    ui.small(format!(
+                        "{} · {}",
+                        item.status.label(),
+                        item.gpu_status.label()
+                    ));
+                });
+                ui.small(format!("Current: {}", item.current_model));
+                ui.small(format!("Consequence: {}", item.consequence));
+                ui.small(format!("Next: {}", item.next_step));
+            }
+        });
+}
+
+fn tire_realism_source_classification_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Realism source classification")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_realism_source_classification_report();
+            ui.add(
+                egui::Label::new(
+                    "Honest-label report from molla-vehicle. It separates native \
+                     force-producing physics from diagnostic references, hand-tuned presets, \
+                     numerical stabilizers, debug telemetry, and visualization helpers.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!("{} source classes", report.items.len()));
+            });
+            ui.small(format!(
+                "diagnostics_not_force_source={}",
+                report.diagnostics_are_not_force_source
+            ));
+            for item in &report.items {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.monospace(item.item_id.as_str());
+                    ui.small(item.provenance.label());
+                    ui.small(if item.can_drive_forces {
+                        "force source"
+                    } else {
+                        "diagnostic/display only"
+                    });
+                });
+                ui.small(item.description.as_str());
+            }
+        });
+}
+
+fn tire_preset_governance_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Preset provenance/range audit")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_preset_governance_report();
+            ui.add(
+                egui::Label::new(
+                    "Non-calibration preset governance from molla-vehicle. Each named tire, \
+                     surface, thermal, solver, or soil value carries units, provenance, a broad \
+                     range, and pass/fail status so hand-tuned constants are reviewable.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!("{} checks", report.checks.len()));
+            });
+            for check in report.checks.iter().take(24) {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(format!("{}.{}.{}", check.group, check.preset, check.field));
+                    ui.small(check.provenance.label());
+                });
+                ui.small(format!(
+                    "value {:.4} {}  range [{:.4}, {:.4}]",
+                    check.value, check.units, check.min_value, check.max_value
+                ));
+                ui.small(check.note.as_str());
+            }
+            if report.checks.len() > 24 {
+                ui.small(format!(
+                    "... {} more governance checks in tire_preset_governance_report()",
+                    report.checks.len() - 24
+                ));
+            }
+        });
+}
+
+fn tire_parameter_observability_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Parameter observability")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_parameter_observability_report();
+            ui.add(
+                egui::Label::new(
+                    "No-hidden-constants audit from molla-vehicle. It checks named \
+                     unit/range/provenance rows, realism-source labelling, and shader input \
+                     contracts for brush, FEM, thermal/wear, and transient tire paths.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!(
+                    "{} governed rows · {} shader contracts",
+                    report.governance_check_count, report.shader_contracts_checked
+                ));
+            });
+            ui.small(format!("governance_passed={}", report.governance_passed));
+            ui.small(format!(
+                "realism_sources_passed={}",
+                report.realism_sources_passed
+            ));
+            ui.small(format!(
+                "hidden_force_source_blocked={}",
+                report.hidden_force_source_blocked
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_frame_convention_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Frame/sign convention audit")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_frame_convention_report();
+            ui.add(
+                egui::Label::new(
+                    "Steering/sign audit from molla-vehicle. This keeps the wheel frame honest: \
+                     heading is the rolling axis, side is heading × terrain normal, steering/camber \
+                     must rotate tire geometry, and forces/moments must follow documented signs.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!("{} frame/sign samples", report.sample_count));
+            });
+            ui.small(format!(
+                "basis={} drive={} brake={} lateral_opposes={} camber={}",
+                report.basis_is_right_handed,
+                report.positive_drive_slip_fx_positive,
+                report.brake_slip_fx_negative,
+                report.lateral_velocity_force_opposes_slip,
+                report.positive_camber_force_sign
+            ));
+            ui.small(format!(
+                "trail_moment={} moving_ground_work={} max_budget_overrun={:.6} N",
+                report.pneumatic_trail_moment_sign,
+                report.moving_ground_work_sign,
+                report.max_friction_budget_overrun_n
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_layer_ablation_debug_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Layer ablation/debug gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_layer_ablation_debug_report();
+            ui.add(
+                egui::Label::new(
+                    "Debug-only layer isolation report from molla-vehicle. These gates prove \
+                     carcass/inflation, cavity coupling, tread bristles, terrain material, wet film, \
+                     thermal/wear, soil/rut, and transient relaxation are observable native layers, \
+                     not alternate fake force sources.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!("{} layer samples", report.sample_count));
+            });
+            ui.small(format!(
+                "carcass={} cavity={} bristles={} terrain={} wet_film={}",
+                report.carcass_pressure_changes_patch,
+                report.cavity_coupling_changes_bead_load,
+                report.tread_bristles_change_force,
+                report.terrain_material_changes_force,
+                report.wet_film_changes_force
+            ));
+            ui.small(format!(
+                "thermal_wear={} soil_rut={} transient_lag={} finite={}",
+                report.thermal_wear_changes_material,
+                report.soil_rut_feedback_active,
+                report.transient_relaxation_lags_raw,
+                report.finite_outputs
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_construction_sanity_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Construction sanity gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tetra_construction_sanity_report();
+            ui.add(
+                egui::Label::new(
+                    "Loaded-shape construction gate from molla-vehicle. It checks pressure \
+                     ordering, loaded radius, low-pressure footprint growth, widthwise tread \
+                     support, tread-belt stretch, sidewall bulge, bead/rim drift, and sidewall \
+                     fold bounds before drive/brake traction is trusted.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!(
+                    "low {:.0} kPa · high {:.0} kPa",
+                    report.low_pressure_pa / 1000.0,
+                    report.high_pressure_pa / 1000.0
+                ));
+            });
+            ui.small(format!(
+                "loaded_radius low/high = {:.3}/{:.3} m · patch low/high = {:.3}/{:.3} m",
+                report.low_loaded_radius_m,
+                report.high_loaded_radius_m,
+                report.low_patch_length_m,
+                report.high_patch_length_m
+            ));
+            ui.small(format!(
+                "contacts={} width_bins={} belt_mean={:.3} belt_peak={:.3}",
+                report.low_contact_count,
+                report.lateral_loaded_bin_count,
+                report.belt_stretch.mean_relative_error,
+                report.belt_stretch.max_relative_error
+            ));
+            ui.small(format!(
+                "sidewall_bulge={:.4} m bead_drift={:.4} m fold_drift={:.4}/{:.4} rad",
+                report.max_sidewall_axial_bulge_m,
+                report.max_bead_mount_error_m,
+                report.max_sidewall_fold_drift_rad,
+                report.sidewall_fold_limit_rad
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_road_condition_state_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Road-condition state gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_road_condition_state_report();
+            ui.add(
+                egui::Label::new(
+                    "State-derived road-condition report from molla-vehicle. Wet film, ice, \
+                     moving ground, hot/worn rubber, worn tread, and soft soil must change tire \
+                     response through explicit model state and telemetry, not scene-local grip \
+                     labels.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!("{} road-condition samples", report.sample_count));
+            });
+            ui.small(format!(
+                "wet_mu={} wet_force={} water_loss={} ice_cap={}",
+                report.wet_film_reduces_mu,
+                report.wet_film_reduces_force,
+                report.standing_water_adds_rolling_loss,
+                report.ice_caps_force
+            ));
+            ui.small(format!(
+                "moving_ground={} hot_worn_mu={} worn_wet={} soft_soil_loss={} finite={}",
+                report.moving_ground_velocity_recorded,
+                report.hot_worn_condition_reduces_mu,
+                report.worn_tread_worse_on_wet_film,
+                report.soft_soil_adds_rolling_loss,
+                report.finite_outputs
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_force_shape_envelope_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Force-shape envelope gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Native force-shape gates from molla-vehicle. These checks cover load \
+                     sensitivity, shared combined-slip saturation, ice-with-large-patch behavior, \
+                     adhesion/sliding continuity, low-speed launch/lockup/reversal robustness, \
+                     and torque-induced slip outcomes without fitted force curves.",
+                )
+                .wrap(),
+            );
+
+            let load = molla_vehicle::tire_load_combined_slip_law_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if load.passed() { "✓" } else { "!" });
+                ui.monospace("load_combined_slip_law");
+                ui.small(format!(
+                    "load_force_ratio={:.3}/{:.3} combined_budget={:.3}",
+                    load.load_force_ratio, load.load_ratio, load.combined_budget_ratio
+                ));
+            });
+            ui.small(format!(
+                "low_mu_pressure_fx={:.3} patch={:.3} ice/dry={:.3} hot_shear={:.3}",
+                load.low_mu_low_pressure_over_high_pressure_fx,
+                load.low_mu_low_pressure_patch_over_high_pressure,
+                load.ice_over_dry_fx,
+                load.hot_tread_shear_over_healthy
+            ));
+            for check in load.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let ice = molla_vehicle::tire_ice_large_patch_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if ice.passed() { "✓" } else { "!" });
+                ui.monospace("ice_large_patch_grip");
+                ui.small(format!(
+                    "patch_ratio={:.3} ice/dry_fx={:.3}",
+                    ice.low_over_high_patch_ratio, ice.ice_over_dry_fx
+                ));
+            });
+            ui.small(format!(
+                "dry_fx={:.1} N ice_fx={:.1} N dry_slide={:.3} ice_slide={:.3}",
+                ice.low_pressure_dry_abs_fx_n,
+                ice.low_pressure_ice_abs_fx_n,
+                ice.dry_sliding_fraction,
+                ice.ice_sliding_fraction
+            ));
+            for check in ice.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let continuity = molla_vehicle::tire_adhesion_sliding_continuity_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if continuity.passed() { "✓" } else { "!" });
+                ui.monospace("adhesion_sliding_continuity");
+                ui.small(format!("{} samples", continuity.sample_count));
+            });
+            ui.small(format!(
+                "slide {:.3}→{:.3} force_jump/load={:.3} moment_jump={:.3} budget={:.3}",
+                continuity.min_sliding_fraction,
+                continuity.max_sliding_fraction,
+                continuity.max_force_jump_over_load,
+                continuity.max_moment_jump_over_load_radius,
+                continuity.max_budget_ratio
+            ));
+            for check in continuity.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let low_speed = molla_vehicle::tire_low_speed_robustness_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if low_speed.passed() { "✓" } else { "!" });
+                ui.monospace("low_speed_robustness");
+                ui.small(format!("{} launch/lockup/reversal samples", low_speed.sample_count));
+            });
+            ui.small(format!(
+                "force/normal={:.3} raw_slip={:.3} eff_slip={:.3} eff_angle={:.3} reversal_jump={:.3}",
+                low_speed.max_force_over_normal,
+                low_speed.max_abs_raw_slip_ratio,
+                low_speed.max_abs_effective_slip_ratio,
+                low_speed.max_abs_effective_slip_angle_rad,
+                low_speed.max_reversal_force_jump_over_normal
+            ));
+            for check in low_speed.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let torque = molla_vehicle::tire_torque_induced_slip_outcome_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if torque.passed() { "✓" } else { "!" });
+                ui.monospace("torque_induced_slip_outcome");
+                ui.small(format!(
+                    "{:.0} Nm/wheel on {}",
+                    torque.drive_torque_nm_per_wheel, torque.surface_label
+                ));
+            });
+            ui.small(format!(
+                "high_slip={:.3} partial_slip={:.3} high_dist={:.3} m partial_dist={:.3} m patch {:.3}/{:.3} m",
+                torque.high_final_slip_ratio,
+                torque.partial_final_slip_ratio,
+                torque.high_distance_m,
+                torque.partial_distance_m,
+                torque.high_patch_length_m,
+                torque.partial_patch_length_m
+            ));
+            for check in torque.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let spin_balance = molla_vehicle::tire_wheel_spin_torque_balance_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if spin_balance.passed() { "✓" } else { "!" });
+                ui.monospace("wheel_spin_torque_balance");
+                ui.small(format!(
+                    "motor {:.1} - tire {:.1} - bearing {:.2} = net {:.1} Nm",
+                    spin_balance.drive_torque_nm,
+                    spin_balance.tire_reaction_torque_nm,
+                    spin_balance.bearing_loss_nm,
+                    spin_balance.net_torque_nm
+                ));
+            });
+            ui.small(format!(
+                "I={:.2} kg·m² ω={:.2} rad/s ωdot={:.2} rad/s² Δω={:.6}/{:.6} slip={:.3} budget={:.3}",
+                spin_balance.wheel_inertia_kg_m2,
+                spin_balance.initial_omega_rad_s,
+                spin_balance.omega_dot_rad_s2,
+                spin_balance.integrated_delta_omega_rad_s,
+                spin_balance.expected_delta_omega_rad_s,
+                spin_balance.slip_ratio,
+                spin_balance.friction_budget_ratio
+            ));
+            tire_acceptance_checks_panel(ui, spin_balance.acceptance_checks());
+        });
+}
+
+fn tire_acceptance_checks_panel(
+    ui: &mut egui::Ui,
+    checks: Vec<molla_vehicle::TireRigAcceptanceCheck>,
+) {
+    for check in checks {
+        ui.horizontal(|ui| {
+            ui.label(if check.passed { "✓" } else { "!" });
+            ui.monospace(check.check_id.as_str());
+            ui.small(format!(
+                "{} = {:.4}",
+                check.metric_name, check.observed_value
+            ));
+        });
+        ui.small(check.expectation.as_str());
+    }
+}
+
+fn tire_thermal_transient_soil_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Thermal/transient/soil gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "State-derived thermal, transient, and soil gates from molla-vehicle. \
+                     These reports check heat/wear abuse ordering, rolling carcass heating, \
+                     brake-to-rim heat flow, layered tread/belt/carcass lag, and DEM/MPM \
+                     tire-soil feedback without turning those effects into hidden scene switches.",
+                )
+                .wrap(),
+            );
+
+            let thermal_abuse = molla_vehicle::tire_thermal_abuse_envelope_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if thermal_abuse.passed() { "✓" } else { "!" });
+                ui.monospace("thermal_abuse_envelope");
+                ui.small(format!(
+                    "μ healthy/cold/hot/worn/abused {:.3}/{:.3}/{:.3}/{:.3}/{:.3}",
+                    thermal_abuse.healthy_mu_factor,
+                    thermal_abuse.cold_mu_factor,
+                    thermal_abuse.hot_mu_factor,
+                    thermal_abuse.worn_mu_factor,
+                    thermal_abuse.abused_mu_factor
+                ));
+            });
+            ui.small(format!(
+                "flags cold={} hot={} worn={} abused={} wear healthy/hot/abused {:.3}/{:.3}/{:.3}",
+                thermal_abuse.cold_flag,
+                thermal_abuse.overheated_flag,
+                thermal_abuse.worn_flag,
+                thermal_abuse.abused_flag,
+                thermal_abuse.healthy_wear_rate_factor,
+                thermal_abuse.hot_wear_rate_factor,
+                thermal_abuse.abused_wear_rate_factor
+            ));
+            tire_acceptance_checks_panel(ui, thermal_abuse.acceptance_checks());
+
+            let condition_failure = molla_vehicle::tire_condition_failure_mode_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if condition_failure.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("condition_failure_modes");
+                ui.small(format!(
+                    "μ healthy/cold/abused {:.3}/{:.3}/{:.3}",
+                    condition_failure.healthy_mu_factor,
+                    condition_failure.cold_mu_factor,
+                    condition_failure.abused_mu_factor
+                ));
+            });
+            ui.small(format!(
+                "grip healthy/cold/abused {:.3}/{:.3}/{:.3} carcass {:.3}->{:.3} rr {:.4}->{:.4} force {:.1}->{:.1} N",
+                condition_failure.healthy_grip_factor,
+                condition_failure.cold_grip_factor,
+                condition_failure.abused_grip_factor,
+                condition_failure.healthy_carcass_stiffness_factor,
+                condition_failure.abused_carcass_stiffness_factor,
+                condition_failure.healthy_rolling_resistance,
+                condition_failure.abused_rolling_resistance,
+                condition_failure.healthy_force_n,
+                condition_failure.abused_force_n
+            ));
+            tire_acceptance_checks_panel(ui, condition_failure.acceptance_checks());
+
+            let rolling = molla_vehicle::tire_thermal_rolling_carcass_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if rolling.passed() { "✓" } else { "!" });
+                ui.monospace("thermal_rolling_carcass");
+                ui.small(format!(
+                    "{} samples · {:.1}s at {:.1} m/s",
+                    rolling.sample_count, rolling.duration_s, rolling.speed_m_per_s
+                ));
+            });
+            ui.small(format!(
+                "Δsurface={:.2} °C Δtread={:.2} °C Δcarcass={:.2} °C rolling_energy={:.1} J flex_energy={:.1} J",
+                rolling.surface_delta_c(),
+                rolling.tread_delta_c(),
+                rolling.carcass_delta_c(),
+                rolling.rolling_energy_j,
+                rolling.carcass_flex_energy_j
+            ));
+            tire_acceptance_checks_panel(ui, rolling.acceptance_checks());
+
+            let brake = molla_vehicle::tire_thermal_brake_rim_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if brake.passed() { "✓" } else { "!" });
+                ui.monospace("thermal_brake_rim");
+                ui.small(format!(
+                    "{:.0} W brake · {:.1} kJ",
+                    brake.brake_power_w,
+                    brake.brake_energy_j / 1000.0
+                ));
+            });
+            ui.small(format!(
+                "Δrim={:.2} °C Δcarcass={:.2} °C Δsurface={:.2} °C pressure_delta={:.5}",
+                brake.rim_delta_c(),
+                brake.carcass_delta_c(),
+                brake.surface_delta_c(),
+                brake.pressure_factor_delta()
+            ));
+            tire_acceptance_checks_panel(ui, brake.acceptance_checks());
+
+            let terrain = molla_vehicle::FlatTerrain::new(0.0, 1.0);
+            let thermal_run = molla_vehicle::tire_rig_thermal_wear_cycle(
+                &molla_vehicle::RealTireParams::default(),
+                &terrain,
+                &molla_vehicle::SurfaceMaterial::dry_asphalt(),
+                1.0 / 120.0,
+                &[
+                    molla_vehicle::TireRigThermalWearPhase::sustained_slip(
+                        2.0, 4_000.0, 18.0, 0.35,
+                    ),
+                    molla_vehicle::TireRigThermalWearPhase::cooling_recovery(1.0, 4_000.0),
+                ],
+            );
+            let thermal_condition =
+                molla_vehicle::tire_thermal_condition_sanity_report(&thermal_run);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if thermal_condition.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("thermal_condition_sanity");
+                ui.small(format!(
+                    "{} samples · cooling_drop={:.2} °C",
+                    thermal_condition.sample_count, thermal_condition.cooling_drop_c
+                ));
+            });
+            ui.small(format!(
+                "surface peak/final {:.2}/{:.2} °C tread peak/final {:.2}/{:.2} °C wear final/max {:.8}/{:.8} m μ_min={:.3}",
+                thermal_condition.peak_surface_c,
+                thermal_condition.final_surface_c,
+                thermal_condition.peak_tread_c,
+                thermal_condition.final_tread_c,
+                thermal_condition.final_wear_depth_m,
+                thermal_condition.max_wear_depth_m,
+                thermal_condition.min_mu_factor
+            ));
+            tire_acceptance_checks_panel(ui, thermal_condition.acceptance_checks());
+
+            let transient = molla_vehicle::tire_layered_transient_envelope_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if transient.passed() { "✓" } else { "!" });
+                ui.monospace("layered_transient_envelope");
+                ui.small(format!("{} samples", transient.sample_count));
+            });
+            ui.small(format!(
+                "κ tread/belt={:.3} belt/carcass={:.3} α tread/belt={:.3} belt/carcass={:.3} final/first_force={:.3}",
+                transient.tread_over_belt_kappa,
+                transient.belt_over_carcass_kappa,
+                transient.tread_over_belt_alpha,
+                transient.belt_over_carcass_alpha,
+                transient.final_over_first_force
+            ));
+            tire_acceptance_checks_panel(ui, transient.acceptance_checks());
+
+            let soil_coupling = molla_vehicle::tire_soil_normal_shear_coupling_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if soil_coupling.passed() { "✓" } else { "!" });
+                ui.monospace("soil_normal_shear_coupling");
+                ui.small(format!(
+                    "cells roll/slip {}→{}",
+                    soil_coupling.rolling_contact_cells, soil_coupling.driven_contact_cells
+                ));
+            });
+            ui.small(format!(
+                "normal_sink={:.5}→{:.5} m shear_sink_gain={:.5} m rut_gain={:.5} m rr_gain={:.2} N",
+                soil_coupling.rolling_normal_sinkage_m,
+                soil_coupling.driven_normal_sinkage_m,
+                soil_coupling.shear_sinkage_gain_m,
+                soil_coupling.rut_depth_gain_m,
+                soil_coupling.rolling_resistance_gain_n
+            ));
+            tire_acceptance_checks_panel(ui, soil_coupling.acceptance_checks());
+
+            let dem = molla_vehicle::tire_dem_soil_feedback_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if dem.passed() { "✓" } else { "!" });
+                ui.monospace("dem_soil_feedback");
+                ui.small(format!(
+                    "cells roll/slip {}→{} grains {}→{}",
+                    dem.rolling_active_contact_cells,
+                    dem.slipping_active_contact_cells,
+                    dem.rolling_affected_grains,
+                    dem.slipping_affected_grains
+                ));
+            });
+            ui.small(format!(
+                "normal={:.1} N shear={:.1} N shear_ratio={:.3} grain_motion_ratio={:.3} sinkage={:.4} m",
+                dem.slipping_normal_load_n,
+                dem.slipping_shear_load_n,
+                dem.shear_ratio_slip_over_roll,
+                dem.grain_motion_ratio_slip_over_roll,
+                dem.max_grain_sinkage_m
+            ));
+            tire_acceptance_checks_panel(ui, dem.acceptance_checks());
+
+            let mpm = molla_vehicle::tire_mpm_soil_feedback_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if mpm.passed() { "✓" } else { "!" });
+                ui.monospace("mpm_soil_feedback");
+                ui.small(format!(
+                    "points roll/slip {}→{}",
+                    mpm.rolling_active_points, mpm.slipping_active_points
+                ));
+            });
+            ui.small(format!(
+                "compaction={:.6} shear_impulse={:.6} shear_ratio={:.3} velocity_ratio={:.3}",
+                mpm.slipping_total_compaction,
+                mpm.slipping_shear_impulse_n_s,
+                mpm.shear_ratio_slip_over_roll,
+                mpm.surface_velocity_ratio_slip_over_roll
+            ));
+            tire_acceptance_checks_panel(ui, mpm.acceptance_checks());
+        });
+}
+
+fn tire_fem_terrain_contact_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("FEM/terrain contact gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Native FEM and finite-terrain contact gates from molla-vehicle. These \
+                     reports keep deformation-shape force coupling, tread-node slip patches, \
+                     semi-implicit stiffness, and finite-triangle material/manifold behavior \
+                     visible instead of letting realistic tire examples fall back to flat-floor \
+                     or single-point contact assumptions.",
+                )
+                .wrap(),
+            );
+
+            let stiffness = molla_vehicle::tetra_fem_solver_stiffness_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if stiffness.passed() { "✓" } else { "!" });
+                ui.monospace("fem_solver_stiffness_stabilizer");
+                ui.small(format!(
+                    "speed ratio {:.3} · scale {:.3}",
+                    stiffness.speed_ratio_semi_over_explicit,
+                    stiffness.semi_implicit_stiffness_scale
+                ));
+            });
+            ui.small(format!(
+                "explicit_speed={:.2} m/s semi_speed={:.2} m/s high_pressure_speed={:.2} m/s radius_ratio={:.3}",
+                stiffness.explicit_max_node_speed_m_per_s,
+                stiffness.semi_implicit_max_node_speed_m_per_s,
+                stiffness.high_pressure_max_node_speed_m_per_s,
+                stiffness.high_pressure_radius_ratio
+            ));
+            tire_acceptance_checks_panel(ui, stiffness.acceptance_checks());
+
+            let newton = molla_vehicle::tetra_fem_diagonal_newton_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if newton.passed() { "✓" } else { "!" });
+                ui.monospace("fem_diagonal_newton_solver");
+                ui.small(format!(
+                    "iters={} residual {:.2e}→{:.2e}",
+                    newton.iteration_count,
+                    newton.initial_residual_norm,
+                    newton.final_residual_norm
+                ));
+            });
+            ui.small(format!(
+                "explicit_v={:.2} m/s newton_v={:.2} m/s energy_ratio={:.3} tangent_min={:.1} N/m",
+                newton.explicit_velocity_m_per_s,
+                newton.newton_velocity_m_per_s,
+                newton.energy_ratio_implicit_over_explicit,
+                newton.min_tangent_n_per_m
+            ));
+            tire_acceptance_checks_panel(ui, newton.acceptance_checks());
+
+            let element_newton = molla_vehicle::tetra_fem_element_newton_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if element_newton.passed() { "✓" } else { "!" });
+                ui.monospace("fem_element_newton_solver");
+                ui.small(format!(
+                    "dofs={} iters={} offdiag={:.3}",
+                    element_newton.coupled_dof_count,
+                    element_newton.iteration_count,
+                    element_newton.jacobian_offdiag_ratio
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} volume_ratio={:.3} energy_ratio={:.3}",
+                element_newton.initial_residual_norm,
+                element_newton.final_residual_norm,
+                element_newton.final_volume_ratio,
+                element_newton.energy_ratio_implicit_over_explicit
+            ));
+            tire_acceptance_checks_panel(ui, element_newton.acceptance_checks());
+
+            let patch_newton = molla_vehicle::tetra_fem_patch_newton_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if patch_newton.passed() { "✓" } else { "!" });
+                ui.monospace("fem_patch_newton_solver");
+                ui.small(format!(
+                    "nodes={} tets={} offdiag={:.3}",
+                    patch_newton.node_count,
+                    patch_newton.tetra_count,
+                    patch_newton.jacobian_offdiag_ratio
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} volume {:.3}..{:.3} energy_ratio={:.3}",
+                patch_newton.initial_residual_norm,
+                patch_newton.final_residual_norm,
+                patch_newton.min_final_volume_ratio,
+                patch_newton.max_final_volume_ratio,
+                patch_newton.energy_ratio_implicit_over_explicit
+            ));
+            tire_acceptance_checks_panel(ui, patch_newton.acceptance_checks());
+
+            let tiny_mesh_newton = molla_vehicle::tetra_fem_tiny_mesh_newton_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if tiny_mesh_newton.passed() { "✓" } else { "!" });
+                ui.monospace("fem_tiny_mesh_newton_solver");
+                ui.small(format!(
+                    "nodes={} tets={} dofs={}",
+                    tiny_mesh_newton.node_count,
+                    tiny_mesh_newton.tetra_count,
+                    tiny_mesh_newton.coupled_dof_count
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} volume {:.3}..{:.3} energy_ratio={:.3}",
+                tiny_mesh_newton.initial_residual_norm,
+                tiny_mesh_newton.final_residual_norm,
+                tiny_mesh_newton.min_final_volume_ratio,
+                tiny_mesh_newton.max_final_volume_ratio,
+                tiny_mesh_newton.energy_ratio_implicit_over_explicit
+            ));
+            tire_acceptance_checks_panel(ui, tiny_mesh_newton.acceptance_checks());
+
+            let matrix_free_newton = molla_vehicle::tetra_fem_matrix_free_newton_scale_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if matrix_free_newton.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("fem_matrix_free_newton_scale");
+                ui.small(format!(
+                    "nodes={} tets={} dofs={}",
+                    matrix_free_newton.node_count,
+                    matrix_free_newton.tetra_count,
+                    matrix_free_newton.coupled_dof_count
+                ));
+            });
+            ui.small(format!(
+                "residual={:.2e} Jv={:.2e} dense/mfree={:.1}× evals={}",
+                matrix_free_newton.residual_norm,
+                matrix_free_newton.jv_norm,
+                matrix_free_newton.dense_over_matrix_free_bytes,
+                matrix_free_newton.residual_evaluations
+            ));
+            tire_acceptance_checks_panel(ui, matrix_free_newton.acceptance_checks());
+
+            let matrix_free_solve = molla_vehicle::tetra_fem_matrix_free_newton_solve_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if matrix_free_solve.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("fem_matrix_free_newton_solve");
+                ui.small(format!(
+                    "iters={} Jv={} alpha={:.3}",
+                    matrix_free_solve.gmres_iteration_count,
+                    matrix_free_solve.jv_evaluation_count,
+                    matrix_free_solve.line_search_alpha
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} ratio={:.3} correction={:.2e} m dense/mfree={:.1}×",
+                matrix_free_solve.initial_residual_norm,
+                matrix_free_solve.corrected_residual_norm,
+                matrix_free_solve.residual_reduction_ratio,
+                matrix_free_solve.correction_norm_m,
+                matrix_free_solve.dense_over_matrix_free_bytes
+            ));
+            tire_acceptance_checks_panel(ui, matrix_free_solve.acceptance_checks());
+
+            let matrix_free_preconditioner =
+                molla_vehicle::tetra_fem_matrix_free_newton_preconditioner_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if matrix_free_preconditioner.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("fem_matrix_free_newton_preconditioner");
+                ui.small(format!(
+                    "diag={} pos={:.0}% iters {}→{}",
+                    matrix_free_preconditioner.diagonal_sample_count,
+                    100.0 * matrix_free_preconditioner.positive_diagonal_fraction,
+                    matrix_free_preconditioner.unpreconditioned_iteration_count,
+                    matrix_free_preconditioner.preconditioned_iteration_count
+                ));
+            });
+            ui.small(format!(
+                "linear residual {:.2e}→{:.2e} nonlinear ratio={:.3} dense/mfree={:.1}×",
+                matrix_free_preconditioner.unpreconditioned_linear_residual_norm,
+                matrix_free_preconditioner.preconditioned_linear_residual_norm,
+                matrix_free_preconditioner.residual_reduction_ratio,
+                matrix_free_preconditioner.dense_over_matrix_free_bytes
+            ));
+            tire_acceptance_checks_panel(ui, matrix_free_preconditioner.acceptance_checks());
+
+            let matrix_free_step = molla_vehicle::tetra_fem_matrix_free_newton_step_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if matrix_free_step.passed() { "✓" } else { "!" });
+                ui.monospace("fem_matrix_free_newton_step");
+                ui.small(format!(
+                    "alpha={:.3} iters={} correction={:.2e} m",
+                    matrix_free_step.line_search_alpha,
+                    matrix_free_step.krylov_iteration_count,
+                    matrix_free_step.correction_norm_m
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} volume {:.3}..{:.3} energy_ratio={:.3} vmax={:.2} m/s",
+                matrix_free_step.initial_residual_norm,
+                matrix_free_step.corrected_residual_norm,
+                matrix_free_step.min_volume_ratio,
+                matrix_free_step.max_volume_ratio,
+                matrix_free_step.energy_ratio_implicit_over_explicit,
+                matrix_free_step.max_velocity_m_per_s
+            ));
+            tire_acceptance_checks_panel(ui, matrix_free_step.acceptance_checks());
+
+            let matrix_free_timestep =
+                molla_vehicle::tetra_fem_matrix_free_newton_timestep_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if matrix_free_timestep.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("fem_matrix_free_newton_timestep");
+                ui.small(format!(
+                    "callable alpha={:.3} iters={} vmax={:.2}",
+                    matrix_free_timestep.line_search_alpha,
+                    matrix_free_timestep.krylov_iteration_count,
+                    matrix_free_timestep.max_velocity_m_per_s
+                ));
+            });
+            ui.small(format!(
+                "residual {:.2e}→{:.2e} volume {:.3}..{:.3} energy_ratio={:.3}",
+                matrix_free_timestep.initial_residual_norm,
+                matrix_free_timestep.corrected_residual_norm,
+                matrix_free_timestep.min_volume_ratio,
+                matrix_free_timestep.max_volume_ratio,
+                matrix_free_timestep.energy_ratio_implicit_over_explicit
+            ));
+            tire_acceptance_checks_panel(ui, matrix_free_timestep.acceptance_checks());
+
+            let hardening = molla_vehicle::tetra_fem_hardening_envelope_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if hardening.passed() { "✓" } else { "!" });
+                ui.monospace("fem_hardening_envelope");
+                ui.small(format!(
+                    "load_margin={:.4} m radius_ratio={:.3}",
+                    hardening.high_load_hub_floor_margin_m, hardening.high_pressure_radius_ratio
+                ));
+            });
+            ui.small(format!(
+                "patch={:.4} m long_run={} deflection={:.4} m energy_peak/initial={:.2} final/peak={:.3} max_pos={:.3} m",
+                hardening.high_load_patch_width_m,
+                hardening.long_run_steps,
+                hardening.long_run_hub_deflection_m,
+                hardening.energy_peak_over_initial,
+                hardening.energy_final_over_peak,
+                hardening.max_abs_node_position_m
+            ));
+            tire_acceptance_checks_panel(ui, hardening.acceptance_checks());
+
+            let deformation = molla_vehicle::tetra_fem_deformation_force_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if deformation.passed() { "✓" } else { "!" });
+                ui.monospace("fem_deformation_force_shape");
+                ui.small(format!(
+                    "force_delta={:.1} N load_ratio={:.3}",
+                    deformation.force_delta_n, deformation.normal_load_ratio
+                ));
+            });
+            ui.small(format!(
+                "patch high/low={:.4}/{:.4} m contacts high/low={}→{}",
+                deformation.high_patch_length_m,
+                deformation.low_patch_length_m,
+                deformation.high_contact_count,
+                deformation.low_contact_count
+            ));
+            tire_acceptance_checks_panel(ui, deformation.acceptance_checks());
+
+            let slip_patch = molla_vehicle::tetra_fem_contact_slip_patch_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if slip_patch.passed() { "✓" } else { "!" });
+                ui.monospace("fem_contact_slip_patch");
+                ui.small(format!(
+                    "slide {:.3}→{:.3}",
+                    slip_patch.rolling_sliding_fraction, slip_patch.slipping_sliding_fraction
+                ));
+            });
+            ui.small(format!(
+                "patch low/high={:.4}/{:.4} m bins={} contacts roll/slip {}→{} power {:.2}→{:.2} W",
+                slip_patch.low_patch_length_m,
+                slip_patch.high_patch_length_m,
+                slip_patch.low_lateral_loaded_bins,
+                slip_patch.rolling_contact_count,
+                slip_patch.slipping_contact_count,
+                slip_patch.rolling_dissipated_power_w,
+                slip_patch.slipping_dissipated_power_w
+            ));
+            tire_acceptance_checks_panel(ui, slip_patch.acceptance_checks());
+
+            let seam = molla_vehicle::tire_triangle_seam_manifold_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if seam.passed() { "✓" } else { "!" });
+                ui.monospace("triangle_seam_manifold");
+                ui.small(format!(
+                    "patches={} friction {:.2}→{:.2}",
+                    seam.manifold_patch_count, seam.min_friction, seam.max_friction
+                ));
+            });
+            ui.small(format!(
+                "left_plate={} right_plate={} penetration={:.5} m point_gap={:.5} m lift={:.5} m signed_gap={:.5} m",
+                seam.has_left_plate,
+                seam.has_right_plate,
+                seam.min_penetration_m,
+                seam.point_gap_before_m,
+                seam.node_lift_after_step_m,
+                seam.signed_gap_after_step_m
+            ));
+            tire_acceptance_checks_panel(ui, seam.acceptance_checks());
+
+            let triangle_stress = molla_vehicle::tire_triangle_surface_stress_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if triangle_stress.passed() { "✓" } else { "!" });
+                ui.monospace("triangle_surface_stress");
+                ui.small(format!(
+                    "seam_patch={} friction_span={:.3}",
+                    triangle_stress.seam_patch_count, triangle_stress.seam_friction_span
+                ));
+            });
+            ui.small(format!(
+                "left_plate={} right_plate={} max_patch={} min_penetration={:.5} m",
+                triangle_stress.seam_has_left_plate,
+                triangle_stress.seam_has_right_plate,
+                triangle_stress.max_patch_count,
+                triangle_stress.min_positive_penetration_m
+            ));
+            tire_acceptance_checks_panel(ui, triangle_stress.acceptance_checks());
+
+            let triangle_force = molla_vehicle::tire_triangle_surface_force_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if triangle_force.passed() { "✓" } else { "!" });
+                ui.monospace("triangle_surface_force");
+                ui.small(format!(
+                    "Fx left/seam/right {:.1}/{:.1}/{:.1} N",
+                    triangle_force.left_abs_fx_n,
+                    triangle_force.seam_abs_fx_n,
+                    triangle_force.right_abs_fx_n
+                ));
+            });
+            ui.small(format!(
+                "contacts left/seam/right {}→{}→{} seam_manifold={} friction_span={:.3}",
+                triangle_force.left_contact_count,
+                triangle_force.seam_contact_count,
+                triangle_force.right_contact_count,
+                triangle_force.seam_manifold_patch_count,
+                triangle_force.seam_friction_span
+            ));
+            tire_acceptance_checks_panel(ui, triangle_force.acceptance_checks());
+
+            let large = molla_vehicle::tire_triangle_large_manifold_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if large.passed() { "✓" } else { "!" });
+                ui.monospace("triangle_large_manifold");
+                ui.small(format!(
+                    "{} tris · {} bvh nodes",
+                    large.triangle_count, large.bvh_node_count
+                ));
+            });
+            ui.small(format!(
+                "seam_candidates={} seam_manifold={} fem_contacts={} feedback_contacts={} force={:.1} N",
+                large.seam_candidate_count,
+                large.seam_manifold_patch_count,
+                large.fem_contact_count,
+                large.feedback_contact_count,
+                large.feedback_force_norm_n
+            ));
+            ui.small(format!(
+                "force_cells={} bristle sum/mean/max={:.1}/{:.1}/{:.1} N width_span={:.3} m sliding={:.3}",
+                large.feedback_force_cell_count,
+                large.feedback_bristle_force_sum_n,
+                large.feedback_mean_bristle_force_n,
+                large.feedback_max_bristle_force_n,
+                large.feedback_width_span_m,
+                large.feedback_sliding_fraction
+            ));
+            tire_acceptance_checks_panel(ui, large.acceptance_checks());
+        });
+}
+
+fn tire_cavity_bead_sidewall_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Cavity/bead/sidewall gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Structural tire gates from molla-vehicle. These reports keep cavity gas-law \
+                     pressure, bead/rim mounting, cavity-to-carcass coupling, sidewall laminate \
+                     layout, load-case fold/strain, and dihedral XPBD stabilization visible while \
+                     the full laminated shell/bead contact solve remains an approximation.",
+                )
+                .wrap(),
+            );
+
+            let cavity = molla_vehicle::tetra_cavity_bead_sanity_report();
+            let cavity_passed = cavity.acceptance_checks().iter().all(|check| check.passed);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if cavity_passed { "✓" } else { "!" });
+                ui.monospace("cavity_bead_sanity");
+                ui.small(format!(
+                    "pressure {:.0}→{:.0} kPa",
+                    cavity.low_pressure_pa / 1000.0,
+                    cavity.high_pressure_pa / 1000.0
+                ));
+            });
+            ui.small(format!(
+                "bead_load {:.1}→{:.1} N volume_ratio={:.3} effective_pressure={:.0} kPa coupling={:.3}",
+                cavity.low_radial_force_per_bead_n,
+                cavity.high_radial_force_per_bead_n,
+                cavity.loaded_cavity_volume_ratio,
+                cavity.loaded_effective_pressure_pa / 1000.0,
+                cavity.cavity_carcass_coupling
+            ));
+            ui.small(format!(
+                "bead_mount mean/max={:.4}/{:.4} m radial/axial/tangent={:.4}/{:.4}/{:.4} m",
+                cavity.mean_bead_mount_error_m,
+                cavity.max_bead_mount_error_m,
+                cavity.bead_seat.max_abs_radial_error_m,
+                cavity.bead_seat.max_abs_axial_error_m,
+                cavity.bead_seat.max_tangential_error_m
+            ));
+            tire_acceptance_checks_panel(ui, cavity.acceptance_checks());
+
+            let coupling = molla_vehicle::tetra_cavity_coupling_effect_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if coupling.passed() { "✓" } else { "!" });
+                ui.monospace("cavity_coupling_effect");
+                ui.small(format!(
+                    "coupling {:.3}→{:.3}→{:.3}",
+                    coupling.min_coupling, coupling.nominal_coupling, coupling.max_coupling
+                ));
+            });
+            ui.small(format!(
+                "force zero/nominal/high={:.3}/{:.1}/{:.1} N high/nominal={:.3} bead_drift={:.4} m",
+                coupling.zero_force_per_bead_n,
+                coupling.nominal_force_per_bead_n,
+                coupling.high_force_per_bead_n,
+                coupling.high_over_nominal_force,
+                coupling.max_bead_mount_error_m
+            ));
+            tire_acceptance_checks_panel(ui, coupling.acceptance_checks());
+
+            let bead = molla_vehicle::tetra_bead_seat_load_case_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if bead.passed() { "✓" } else { "!" });
+                ui.monospace("bead_seat_load_cases");
+                ui.small(format!("{} bead nodes", bead.bead_node_count));
+            });
+            ui.small(format!(
+                "mount static/loaded/lateral/torque/highP={:.4}/{:.4}/{:.4}/{:.4}/{:.4} m",
+                bead.static_max_mount_error_m,
+                bead.loaded_max_mount_error_m,
+                bead.lateral_max_mount_error_m,
+                bead.torque_max_mount_error_m,
+                bead.high_pressure_max_mount_error_m
+            ));
+            ui.small(format!(
+                "lateral radial/axial/tangent={:.4}/{:.4}/{:.4} m torque_tangent={:.4} m",
+                bead.lateral_max_abs_radial_error_m,
+                bead.lateral_max_abs_axial_error_m,
+                bead.lateral_max_tangential_error_m,
+                bead.torque_max_tangential_error_m
+            ));
+            tire_acceptance_checks_panel(ui, bead.acceptance_checks());
+
+            let sidewall_laminate = molla_vehicle::TetraTireFem::new(
+                0.0,
+                180_000.0,
+                molla_vehicle::TetraTireFemParams::realtime_viewer().with_resolution(20, 5, 5),
+            )
+            .sidewall_laminate_sanity_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if sidewall_laminate.passed {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("sidewall_laminate_sanity");
+                ui.small(format!(
+                    "coverage={:.3} bias_error={:.2}°",
+                    sidewall_laminate.crossed_coverage,
+                    sidewall_laminate.audit.max_bias_angle_error_deg
+                ));
+            });
+            ui.small(format!(
+                "plies={} crossed_pairs={} helper_alignment={:.3} fold_mean/max={:.4}/{:.4} rad strain_tension/compression={:.4}/{:.4}",
+                sidewall_laminate.audit.sidewall_element_count,
+                sidewall_laminate.audit.crossed_pair_count,
+                sidewall_laminate.helper_alignment_min,
+                sidewall_laminate.dihedral.mean_abs_deviation_rad,
+                sidewall_laminate.dihedral.max_abs_deviation_rad,
+                sidewall_laminate.stretch.max_tensile_strain,
+                sidewall_laminate.stretch.max_compressive_strain
+            ));
+            tire_acceptance_checks_panel(ui, sidewall_laminate.acceptance_checks());
+
+            let sidewall = molla_vehicle::tetra_sidewall_dynamic_load_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if sidewall.passed() { "✓" } else { "!" });
+                ui.monospace("sidewall_dynamic_load_cases");
+                ui.small(format!(
+                    "forces lateral/steer={:.1}/{:.1} N",
+                    sidewall.lateral_contact_force_n, sidewall.steer_contact_force_n
+                ));
+            });
+            ui.small(format!(
+                "fold vertical/lateral/steer={:.4}/{:.4}/{:.4} rad strain={:.4}/{:.4}/{:.4}",
+                sidewall.vertical_max_fold_drift_rad,
+                sidewall.lateral_max_fold_drift_rad,
+                sidewall.steer_max_fold_drift_rad,
+                sidewall.vertical_max_ply_strain,
+                sidewall.lateral_max_ply_strain,
+                sidewall.steer_max_ply_strain
+            ));
+            ui.small(format!(
+                "rest crossed_coverage={:.3} bias_error={:.2}° helper_alignment={:.3}",
+                sidewall.rest_report.crossed_coverage,
+                sidewall.rest_report.audit.max_bias_angle_error_deg,
+                sidewall.rest_report.helper_alignment_min
+            ));
+            tire_acceptance_checks_panel(ui, sidewall.acceptance_checks());
+
+            let sidewall_coupling = molla_vehicle::tetra_sidewall_laminate_coupling_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if sidewall_coupling.passed() {
+                    "✓"
+                } else {
+                    "!"
+                });
+                ui.monospace("sidewall_laminate_coupling");
+                ui.small(format!(
+                    "{} sidewall tets",
+                    sidewall_coupling.sidewall_element_count
+                ));
+            });
+            ui.small(format!(
+                "bias_energy={:.3e}/{:.3e} imbalance={:.3} radial/axial_helpers={:.3e}/{:.3e}",
+                sidewall_coupling.balanced_bias_a_energy_j,
+                sidewall_coupling.balanced_bias_b_energy_j,
+                sidewall_coupling.crossed_pair_relative_imbalance,
+                sidewall_coupling.radial_helper_energy_j,
+                sidewall_coupling.axial_helper_energy_j
+            ));
+            ui.small(format!(
+                "fold_energy={:.3e} fold {:.4}→{:.4} rad ratio={:.3}",
+                sidewall_coupling.folded_ply_energy_j,
+                sidewall_coupling.folded_max_fold_drift_rad,
+                sidewall_coupling.projected_max_fold_drift_rad,
+                sidewall_coupling.projected_fold_ratio
+            ));
+            tire_acceptance_checks_panel(ui, sidewall_coupling.acceptance_checks());
+
+            let ply_xpbd = molla_vehicle::tetra_sidewall_ply_strain_xpbd_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if ply_xpbd.passed() { "✓" } else { "!" });
+                ui.monospace("sidewall_ply_strain_xpbd");
+                ui.small(format!("{} sidewall tets", ply_xpbd.sidewall_element_count));
+            });
+            ui.small(format!(
+                "strain {:.4}→{:.4} limit={:.3} ratio={:.3} correction={:.5} m",
+                ply_xpbd.pre_max_tensile_strain,
+                ply_xpbd.post_max_tensile_strain,
+                ply_xpbd.stretch_limit - 1.0,
+                ply_xpbd.strain_reduction_ratio,
+                ply_xpbd.max_projection_correction_m
+            ));
+            tire_acceptance_checks_panel(ui, ply_xpbd.acceptance_checks());
+
+            let dihedral = molla_vehicle::tetra_sidewall_dihedral_xpbd_effect_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if dihedral.passed() { "✓" } else { "!" });
+                ui.monospace("sidewall_dihedral_xpbd_effect");
+                ui.small(format!("{} sidewall quads", dihedral.quad_count));
+            });
+            ui.small(format!(
+                "folded={:.4} rad stabilized={:.4} rad reduction={:.3}",
+                dihedral.folded_max_abs_deviation_rad,
+                dihedral.stabilized_max_abs_deviation_rad,
+                dihedral.reduction_ratio
+            ));
+            tire_acceptance_checks_panel(ui, dihedral.acceptance_checks());
+        });
+}
+
+fn tire_resolution_convergence_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Resolution/convergence gates")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    "Broad non-calibration convergence gates from molla-vehicle. These rows make \
+                     contact segment count, FEM substeps, heightfield resolution, triangle density, \
+                     and thermal/wear contact resolution visible so coarse viewer settings expose \
+                     their error direction instead of silently changing tire behavior.",
+                )
+                .wrap(),
+            );
+
+            let patch = molla_vehicle::tire_contact_patch_convergence_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if patch.passed() { "✓" } else { "!" });
+                ui.monospace("contact_patch_convergence");
+                ui.small(format!(
+                    "{} samples · {}→{} segments",
+                    patch.sample_count, patch.min_segments, patch.max_segments
+                ));
+            });
+            ui.small(format!(
+                "load_err={:.3} patch_delta/R={:.3} force_delta/load={:.3} align_delta={:.3}",
+                patch.max_normal_load_error_ratio,
+                patch.patch_length_delta_over_radius,
+                patch.force_delta_over_load,
+                patch.aligning_delta_over_load_radius
+            ));
+            for check in patch.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let fem = molla_vehicle::tetra_fem_substep_convergence_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if fem.passed() { "✓" } else { "!" });
+                ui.monospace("fem_substep_convergence");
+                ui.small(format!(
+                    "{} samples · {}→{} substeps",
+                    fem.sample_count, fem.min_substeps, fem.max_substeps
+                ));
+            });
+            ui.small(format!(
+                "hub_delta/R={:.3} patch_delta/R={:.3} force_delta/load={:.3} max_volume_err={:.5} m³",
+                fem.coarse_to_fine_hub_delta_over_radius,
+                fem.coarse_to_fine_patch_delta_over_radius,
+                fem.coarse_to_fine_force_delta_over_load,
+                fem.max_volume_error_m3
+            ));
+            for check in fem.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let heightfield = molla_vehicle::tire_heightfield_resolution_convergence_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if heightfield.passed() { "✓" } else { "!" });
+                ui.monospace("heightfield_resolution_convergence");
+                ui.small(format!(
+                    "{} samples · {}→{} grid",
+                    heightfield.sample_count,
+                    heightfield.min_grid_resolution,
+                    heightfield.max_grid_resolution
+                ));
+            });
+            ui.small(format!(
+                "height_delta={:.4} m normal_delta={:.3} patch_delta/R={:.3} force_delta/load={:.3}",
+                heightfield.height_delta_m,
+                heightfield.normal_delta,
+                heightfield.patch_delta_over_radius,
+                heightfield.force_delta_over_load
+            ));
+            for check in heightfield.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let heightfield_velocity = molla_vehicle::tire_heightfield_surface_velocity_map_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if heightfield_velocity.passed() { "✓" } else { "!" });
+                ui.monospace("heightfield_surface_velocity_map");
+                ui.small(format!(
+                    "vx {:.1}→{:.1} m/s",
+                    heightfield_velocity.static_surface_velocity_x_m_per_s,
+                    heightfield_velocity.moving_surface_velocity_x_m_per_s
+                ));
+            });
+            ui.small(format!(
+                "force_delta={:.1} N work={:.1} W velocity_delta={:.2} m/s exported={}",
+                heightfield_velocity.force_delta_n,
+                heightfield_velocity.moving_ground_power_w,
+                heightfield_velocity.surface_velocity_delta_m_per_s,
+                heightfield_velocity.snapshot_velocity_exported
+            ));
+            tire_acceptance_checks_panel(ui, heightfield_velocity.acceptance_checks());
+
+            let triangles = molla_vehicle::tire_triangle_density_convergence_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if triangles.passed() { "✓" } else { "!" });
+                ui.monospace("triangle_density_convergence");
+                ui.small(format!(
+                    "{} samples · {}→{} tris",
+                    triangles.sample_count,
+                    triangles.min_triangle_count,
+                    triangles.max_triangle_count
+                ));
+            });
+            ui.small(format!(
+                "force_delta/load={:.3} patch_delta/R={:.3} seam_manifold={} friction_span={:.3}",
+                triangles.force_delta_over_load,
+                triangles.patch_delta_over_radius,
+                triangles.min_seam_manifold_count,
+                triangles.min_friction_span
+            ));
+            for check in triangles.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+
+            let thermal = molla_vehicle::tire_thermal_wear_convergence_report();
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(if thermal.passed() { "✓" } else { "!" });
+                ui.monospace("thermal_wear_convergence");
+                ui.small(format!(
+                    "{} samples · {}→{} segments",
+                    thermal.sample_count, thermal.min_segments, thermal.max_segments
+                ));
+            });
+            ui.small(format!(
+                "power_delta={:.3} temp_delta={:.2} °C wear_delta={:.6} m budget={:.3}",
+                thermal.dissipated_power_delta_over_load_speed,
+                thermal.surface_temperature_delta_c,
+                thermal.wear_depth_delta_m,
+                thermal.max_budget_ratio
+            ));
+            for check in thermal.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
+}
+
+fn tire_runtime_production_gate_panel(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Runtime production gate")
+        .default_open(false)
+        .show(ui, |ui| {
+            let report = molla_vehicle::tire_runtime_production_gate_report();
+            ui.add(
+                egui::Label::new(
+                    "Physics-plus-runtime gate from molla-vehicle. It ties broad tire sanity \
+                     checks to GPU parity rows, resident buffers, many-wheel batching, fused \
+                     dispatch evidence, readback seams, convergence reports, and explicit \
+                     CPU-only debug accounting.",
+                )
+                .wrap(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(if report.passed() { "✓" } else { "!" });
+                ui.strong(format!(
+                    "{} GPU matrix rows · {}/{} convergence gates",
+                    report.gpu_parity_items,
+                    report.convergence_reports_passed,
+                    report.convergence_reports_required
+                ));
+            });
+            ui.small(format!(
+                "cpu+gpu={} cpu_debug={} planned_gpu={}",
+                report.cpu_and_gpu_items, report.cpu_only_debug_items, report.planned_gpu_items
+            ));
+            ui.small(format!(
+                "resident={} batch={} fused={} readback_seams={}",
+                report.resident_gpu_features,
+                report.many_wheel_batch_features,
+                report.fused_dispatch_features,
+                report.readback_seam_features
+            ));
+            ui.small(format!(
+                "cpu_only_debug_accounted={} gpu_proofs={} broad_physics={}",
+                report.cpu_only_debug_accounted,
+                report.all_gpu_items_have_proof,
+                report.broad_physics_gates_passed
+            ));
+            ui.separator();
+            for check in report.acceptance_checks() {
+                ui.horizontal(|ui| {
+                    ui.label(if check.passed { "✓" } else { "!" });
+                    ui.monospace(check.check_id.as_str());
+                    ui.small(format!(
+                        "{} = {:.4}",
+                        check.metric_name, check.observed_value
+                    ));
+                });
+                ui.small(check.expectation.as_str());
+            }
+        });
 }
 
 fn build_warp_empty_model() -> (mp::Model, Vec<BodyVisual>) {
@@ -5566,6 +7853,1706 @@ mod tests {
     }
 
     #[test]
+    fn tire_viewer_scenes_have_truth_labels() {
+        for scene in [
+            Scene::TireModelLab,
+            Scene::VehicleOffroad,
+            Scene::BekkerSinkage,
+            Scene::SoilCompaction,
+            Scene::TireDynamics,
+            Scene::TireTraction,
+            Scene::TireRealistic,
+        ] {
+            let notes = tire_scene_truth_notes(scene)
+                .unwrap_or_else(|| panic!("{}: missing tire truth label", scene.label()));
+            assert!(
+                notes.physics_path.contains("molla-vehicle")
+                    || notes.physics_path.contains("tetra tire FEM")
+                    || notes.physics_path.contains("GPU brush")
+                    || notes.physics_path.contains("DeformableTerrain")
+                    || notes.physics_path.contains("GranularBed"),
+                "{}: truth label should name the active physics path",
+                scene.label()
+            );
+            assert!(
+                notes.expected_behavior.len() >= 80
+                    && notes.physical_controls.len() >= 40
+                    && notes.debug_controls.len() >= 40
+                    && notes.known_approximations.len() >= 40,
+                "{}: truth label sections are too thin",
+                scene.label()
+            );
+            assert!(
+                notes.checklist.len() >= 3
+                    && notes
+                        .checklist
+                        .iter()
+                        .all(|item| item.len() >= 40 && !item.contains("TODO")),
+                "{}: tire scene should expose a concrete plain-language checklist",
+                scene.label()
+            );
+            assert!(
+                notes.known_approximations.contains("not calibrated")
+                    || notes.known_approximations.contains("not a validated")
+                    || notes
+                        .known_approximations
+                        .contains("diagnostic comparisons")
+                    || notes.known_approximations.contains("CPU-only")
+                    || notes.known_approximations.contains("not full")
+                    || notes.known_approximations.contains("not a full"),
+                "{}: truth label should be explicit about approximation/calibration limits",
+                scene.label()
+            );
+        }
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_gpu_parity_and_approximation_ledgers() {
+        let parity = molla_vehicle::tire_gpu_parity_checklist();
+        assert!(
+            parity
+                .iter()
+                .any(|item| item.feature_id == "brush_combined_slip")
+                && parity
+                    .iter()
+                    .any(|item| item.feature_id == "tetra_fem_contact_feedback"),
+            "viewer tire panel should have meaningful parity rows available"
+        );
+        assert!(
+            parity.iter().all(|item| item.has_required_gpu_accounting()),
+            "viewer must not surface parity rows without proof or explicit follow-up"
+        );
+        let approximations = molla_vehicle::tire_known_approximation_ledger();
+        assert!(
+            approximations
+                .iter()
+                .any(|item| item.item_id == "explicit_fem_elasticity")
+                && approximations
+                    .iter()
+                    .any(|item| item.item_id == "bekker_only_soil"),
+            "viewer tire panel should have solver and soil approximation rows available"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("tire_gpu_parity_matrix_panel")
+                && source.contains("tire_gpu_parity_checklist")
+                && source.contains("Known tire approximation ledger")
+                && source.contains("tire_known_approximation_ledger"),
+            "tire truth label UI should source the reusable parity and approximation ledgers"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_preset_governance_audit() {
+        let report = molla_vehicle::tire_preset_governance_report();
+        assert!(
+            report.passed() && report.is_finite() && report.checks.len() >= 10,
+            "preset governance report should be finite and useful in the viewer: {report:?}"
+        );
+        assert!(
+            report.checks.iter().any(|check| {
+                check.group == "TetraTireFemParams"
+                    && check.field == "pressure_pa"
+                    && !check.units.is_empty()
+            }) && report
+                .checks
+                .iter()
+                .any(|check| check.provenance.label() == "hand_tuned"),
+            "governance report should expose tire pressure units and hand-tuned provenance"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Preset provenance/range audit")
+                && source.contains("tire_preset_governance_report")
+                && source.contains("check.provenance.label()")
+                && source.contains("range [{:.4}, {:.4}]"),
+            "tire truth label UI should render the reusable preset governance audit"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_realism_source_classification() {
+        let report = molla_vehicle::tire_realism_source_classification_report();
+        assert!(
+            report.passed()
+                && report.has_native_physics
+                && report.has_diagnostic_reference
+                && report.has_visualization_helper
+                && report.diagnostics_are_not_force_source,
+            "realism source classification should separate force sources from diagnostics: {report:?}"
+        );
+        assert!(
+            report.items.iter().any(|item| {
+                item.item_id == "native_brush_fem_terrain_force" && item.can_drive_forces
+            }) && report.items.iter().any(|item| {
+                item.item_id == "reference_shape_diagnostics" && !item.can_drive_forces
+            }),
+            "source report should distinguish native physics from diagnostic references"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Realism source classification")
+                && source.contains("tire_realism_source_classification_report")
+                && source.contains("diagnostics_not_force_source")
+                && source.contains("diagnostic/display only"),
+            "tire truth label UI should render the reusable realism-source classification report"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_observability_and_runtime_gates() {
+        let observability = molla_vehicle::tire_parameter_observability_report();
+        assert!(
+            observability.passed()
+                && observability.governance_check_count >= 30
+                && observability.shader_contracts_checked >= 4
+                && observability.hidden_force_source_blocked
+                && observability.acceptance_checks().iter().any(
+                    |check| check.check_id == "parameter_observability_fem_shader_inputs_named"
+                ),
+            "parameter observability should be useful enough for the viewer truth label: {observability:?}"
+        );
+        let runtime = molla_vehicle::tire_runtime_production_gate_report();
+        assert!(
+            runtime.passed()
+                && runtime.cpu_and_gpu_items >= 6
+                && runtime.resident_gpu_features >= 4
+                && runtime.many_wheel_batch_features >= 3
+                && runtime.fused_dispatch_features >= 2
+                && runtime.broad_physics_gates_passed
+                && runtime
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "runtime_gate_gpu_proofs_present"),
+            "runtime production gate should tie GPU evidence to physics gates: {runtime:?}"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Parameter observability")
+                && source.contains("tire_parameter_observability_report")
+                && source.contains("hidden_force_source_blocked")
+                && source.contains("shader contracts")
+                && source.contains("Runtime production gate")
+                && source.contains("tire_runtime_production_gate_report")
+                && source.contains("readback_seams")
+                && source.contains("broad_physics"),
+            "tire truth label UI should render observability and runtime-production gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_frame_and_layer_debug_gates() {
+        let frame = molla_vehicle::tire_frame_convention_report();
+        assert!(
+            frame.passed()
+                && frame.basis_is_right_handed
+                && frame.positive_drive_slip_fx_positive
+                && frame.brake_slip_fx_negative
+                && frame.lateral_velocity_force_opposes_slip
+                && frame.positive_camber_force_sign
+                && frame.pneumatic_trail_moment_sign
+                && frame.moving_ground_work_sign
+                && frame
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "frame_basis_heading_cross_normal"),
+            "frame convention report should catch fake steering/sign regressions: {frame:?}"
+        );
+        let ablation = molla_vehicle::tire_layer_ablation_debug_report();
+        assert!(
+            ablation.passed()
+                && ablation.carcass_pressure_changes_patch
+                && ablation.cavity_coupling_changes_bead_load
+                && ablation.tread_bristles_change_force
+                && ablation.terrain_material_changes_force
+                && ablation.wet_film_changes_force
+                && ablation.thermal_wear_changes_material
+                && ablation.soil_rut_feedback_active
+                && ablation.transient_relaxation_lags_raw
+                && ablation
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "layer_ablation_tread_bristles_change_force"),
+            "layer-ablation report should isolate native model layers without fake force sources: {ablation:?}"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Frame/sign convention audit")
+                && source.contains("tire_frame_convention_report")
+                && source.contains("heading × terrain normal")
+                && source.contains("max_budget_overrun")
+                && source.contains("Layer ablation/debug gates")
+                && source.contains("tire_layer_ablation_debug_report")
+                && source.contains("not alternate fake force sources")
+                && source.contains("transient_lag"),
+            "tire truth label UI should render frame-convention and layer-ablation debug gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_construction_and_road_condition_gates() {
+        let construction = molla_vehicle::tetra_construction_sanity_report();
+        assert!(
+            construction.passed()
+                && construction.high_pressure_pa > construction.low_pressure_pa
+                && construction.low_patch_length_m > construction.high_patch_length_m
+                && construction.low_contact_count >= 4
+                && construction.lateral_loaded_bin_count >= 2
+                && construction
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "construction_low_pressure_patch_grows"),
+            "construction report should expose loaded-shape tire sanity gates: {construction:?}"
+        );
+        let road = molla_vehicle::tire_road_condition_state_report();
+        assert!(
+            road.passed()
+                && road.wet_film_reduces_mu
+                && road.wet_film_reduces_force
+                && road.standing_water_adds_rolling_loss
+                && road.ice_caps_force
+                && road.moving_ground_velocity_recorded
+                && road.hot_worn_condition_reduces_mu
+                && road.worn_tread_worse_on_wet_film
+                && road.soft_soil_adds_rolling_loss
+                && road
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "road_condition_wet_film_reduces_force"),
+            "road-condition report should prove state-derived material/terrain effects: {road:?}"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Construction sanity gates")
+                && source.contains("tetra_construction_sanity_report")
+                && source.contains("low-pressure footprint growth")
+                && source.contains("sidewall_bulge")
+                && source.contains("Road-condition state gates")
+                && source.contains("tire_road_condition_state_report")
+                && source.contains("not scene-local grip")
+                && source.contains("soft_soil_loss"),
+            "tire truth label UI should render construction and road-condition state gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_resolution_convergence_gates() {
+        let patch = molla_vehicle::tire_contact_patch_convergence_report();
+        let fem = molla_vehicle::tetra_fem_substep_convergence_report();
+        let heightfield = molla_vehicle::tire_heightfield_resolution_convergence_report();
+        let triangles = molla_vehicle::tire_triangle_density_convergence_report();
+        let thermal = molla_vehicle::tire_thermal_wear_convergence_report();
+        assert!(
+            patch.passed()
+                && fem.passed()
+                && heightfield.passed()
+                && triangles.passed()
+                && thermal.passed(),
+            "all reusable convergence gates should pass before being shown in the truth label: patch={patch:?} fem={fem:?} heightfield={heightfield:?} triangles={triangles:?} thermal={thermal:?}"
+        );
+        assert!(
+            patch
+                .acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "patch_convergence_contact_count_refines")
+                && fem
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_substep_convergence_hub_stable")
+                && heightfield
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| { check.check_id == "heightfield_resolution_height_stable" })
+                && triangles
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "triangle_density_force_stable")
+                && thermal
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "thermal_wear_convergence_power_stable"),
+            "convergence reports should expose concrete acceptance checks for each resolution axis"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Resolution/convergence gates")
+                && source.contains("tire_contact_patch_convergence_report")
+                && source.contains("tetra_fem_substep_convergence_report")
+                && source.contains("tire_heightfield_resolution_convergence_report")
+                && source.contains("tire_triangle_density_convergence_report")
+                && source.contains("tire_thermal_wear_convergence_report")
+                && source.contains("coarse viewer settings expose")
+                && source.contains("force_delta/load"),
+            "tire truth label UI should render all reusable resolution/convergence gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_force_shape_envelope_gates() {
+        let load = molla_vehicle::tire_load_combined_slip_law_report();
+        let ice = molla_vehicle::tire_ice_large_patch_report();
+        let continuity = molla_vehicle::tire_adhesion_sliding_continuity_report();
+        let low_speed = molla_vehicle::tire_low_speed_robustness_report();
+        let torque = molla_vehicle::tire_torque_induced_slip_outcome_report();
+        let spin_balance = molla_vehicle::tire_wheel_spin_torque_balance_report();
+        assert!(
+            load.passed()
+                && ice.passed()
+                && continuity.passed()
+                && low_speed.passed()
+                && torque.passed()
+                && spin_balance.passed(),
+            "all force-shape envelope reports should pass before truth-label display: load={load:?} ice={ice:?} continuity={continuity:?} low_speed={low_speed:?} torque={torque:?} spin_balance={spin_balance:?}"
+        );
+        assert!(
+            load.acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "combined_slip_single_budget")
+                && ice
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "ice_large_patch_still_caps_force")
+                && continuity
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "adhesion_sliding_force_continuous")
+                && low_speed
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "low_speed_reversal_continuity")
+                && torque
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "torque_slip_high_pressure_slips_more")
+                && spin_balance
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "wheel_spin_integrator_matches_equation"),
+            "force-shape envelope reports should expose the key broad acceptance gates"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Force-shape envelope gates")
+                && source.contains("tire_load_combined_slip_law_report")
+                && source.contains("tire_ice_large_patch_report")
+                && source.contains("tire_adhesion_sliding_continuity_report")
+                && source.contains("tire_low_speed_robustness_report")
+                && source.contains("tire_torque_induced_slip_outcome_report")
+                && source.contains("tire_wheel_spin_torque_balance_report")
+                && source.contains("wheel_spin_torque_balance")
+                && source.contains("without fitted force curves")
+                && source.contains("reversal_jump"),
+            "tire truth label UI should render force-shape envelope gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_thermal_transient_soil_gates() {
+        let thermal = molla_vehicle::tire_thermal_abuse_envelope_report();
+        let condition_failure = molla_vehicle::tire_condition_failure_mode_report();
+        let rolling = molla_vehicle::tire_thermal_rolling_carcass_report();
+        let brake = molla_vehicle::tire_thermal_brake_rim_report();
+        let terrain = molla_vehicle::FlatTerrain::new(0.0, 1.0);
+        let thermal_run = molla_vehicle::tire_rig_thermal_wear_cycle(
+            &molla_vehicle::RealTireParams::default(),
+            &terrain,
+            &molla_vehicle::SurfaceMaterial::dry_asphalt(),
+            1.0 / 120.0,
+            &[
+                molla_vehicle::TireRigThermalWearPhase::sustained_slip(2.0, 4_000.0, 18.0, 0.35),
+                molla_vehicle::TireRigThermalWearPhase::cooling_recovery(1.0, 4_000.0),
+            ],
+        );
+        let thermal_condition = molla_vehicle::tire_thermal_condition_sanity_report(&thermal_run);
+        let transient = molla_vehicle::tire_layered_transient_envelope_report();
+        let soil_coupling = molla_vehicle::tire_soil_normal_shear_coupling_report();
+        let dem = molla_vehicle::tire_dem_soil_feedback_report();
+        let mpm = molla_vehicle::tire_mpm_soil_feedback_report();
+        assert!(
+            thermal.passed()
+                && condition_failure.passed()
+                && rolling.passed()
+                && brake.passed()
+                && thermal_condition.passed()
+                && transient.passed()
+                && soil_coupling.passed()
+                && dem.passed()
+                && mpm.passed(),
+            "thermal/transient/soil reports should pass before truth-label display: thermal={thermal:?} condition_failure={condition_failure:?} rolling={rolling:?} brake={brake:?} thermal_condition={thermal_condition:?} transient={transient:?} soil_coupling={soil_coupling:?} dem={dem:?} mpm={mpm:?}"
+        );
+        assert!(
+            thermal
+                .acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "thermal_abuse_hot_reduces_mu")
+                && condition_failure
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "condition_failure_abuse_reduces_force")
+                && rolling
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "thermal_rolling_carcass_heats_carcass")
+                && brake
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "thermal_brake_rim_heats_rim_first")
+                && thermal_condition
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "thermal_condition_wear_non_healing")
+                && transient
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "layered_transient_tread_faster_than_belt_kappa")
+                && soil_coupling
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "soil_normal_shear_slip_deepens_shear_rut")
+                && dem
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "dem_soil_feedback_slip_increases_shear")
+                && mpm
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "mpm_soil_feedback_slip_increases_shear"),
+            "thermal/transient/soil reports should expose key acceptance gates"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Thermal/transient/soil gates")
+                && source.contains("tire_thermal_abuse_envelope_report")
+                && source.contains("tire_condition_failure_mode_report")
+                && source.contains("condition_failure_modes")
+                && source.contains("tire_thermal_rolling_carcass_report")
+                && source.contains("tire_thermal_brake_rim_report")
+                && source.contains("tire_thermal_condition_sanity_report")
+                && source.contains("thermal_condition_sanity")
+                && source.contains("tire_layered_transient_envelope_report")
+                && source.contains("tire_soil_normal_shear_coupling_report")
+                && source.contains("soil_normal_shear_coupling")
+                && source.contains("shear_sink_gain")
+                && source.contains("tire_dem_soil_feedback_report")
+                && source.contains("tire_mpm_soil_feedback_report")
+                && source.contains("without turning those effects into hidden scene switches"),
+            "tire truth label UI should render thermal/transient/soil gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_fem_terrain_contact_gates() {
+        let stiffness = molla_vehicle::tetra_fem_solver_stiffness_report();
+        let newton = molla_vehicle::tetra_fem_diagonal_newton_report();
+        let element_newton = molla_vehicle::tetra_fem_element_newton_report();
+        let patch_newton = molla_vehicle::tetra_fem_patch_newton_report();
+        let tiny_mesh_newton = molla_vehicle::tetra_fem_tiny_mesh_newton_report();
+        let matrix_free_newton = molla_vehicle::tetra_fem_matrix_free_newton_scale_report();
+        let matrix_free_solve = molla_vehicle::tetra_fem_matrix_free_newton_solve_report();
+        let matrix_free_preconditioner =
+            molla_vehicle::tetra_fem_matrix_free_newton_preconditioner_report();
+        let matrix_free_step = molla_vehicle::tetra_fem_matrix_free_newton_step_report();
+        let matrix_free_timestep = molla_vehicle::tetra_fem_matrix_free_newton_timestep_report();
+        let hardening = molla_vehicle::tetra_fem_hardening_envelope_report();
+        let deformation = molla_vehicle::tetra_fem_deformation_force_report();
+        let slip_patch = molla_vehicle::tetra_fem_contact_slip_patch_report();
+        let heightfield_velocity = molla_vehicle::tire_heightfield_surface_velocity_map_report();
+        let seam = molla_vehicle::tire_triangle_seam_manifold_report();
+        let triangle_stress = molla_vehicle::tire_triangle_surface_stress_report();
+        let triangle_force = molla_vehicle::tire_triangle_surface_force_report();
+        let large = molla_vehicle::tire_triangle_large_manifold_report();
+        assert!(
+            stiffness.passed()
+                && newton.passed()
+                && element_newton.passed()
+                && patch_newton.passed()
+                && tiny_mesh_newton.passed()
+                && matrix_free_newton.passed()
+                && matrix_free_solve.passed()
+                && matrix_free_preconditioner.passed()
+                && matrix_free_step.passed()
+                && matrix_free_timestep.passed()
+                && hardening.passed()
+                && deformation.passed()
+                && slip_patch.passed()
+                && heightfield_velocity.passed()
+                && seam.passed()
+                && triangle_stress.passed()
+                && triangle_force.passed()
+                && large.passed(),
+            "FEM/terrain contact reports should pass before truth-label display: stiffness={stiffness:?} newton={newton:?} element_newton={element_newton:?} patch_newton={patch_newton:?} tiny_mesh_newton={tiny_mesh_newton:?} matrix_free_newton={matrix_free_newton:?} matrix_free_solve={matrix_free_solve:?} matrix_free_preconditioner={matrix_free_preconditioner:?} matrix_free_step={matrix_free_step:?} matrix_free_timestep={matrix_free_timestep:?} hardening={hardening:?} deformation={deformation:?} slip_patch={slip_patch:?} heightfield_velocity={heightfield_velocity:?} seam={seam:?} triangle_stress={triangle_stress:?} triangle_force={triangle_force:?} large={large:?}"
+        );
+        assert!(
+            stiffness
+                .acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "fem_solver_stiffness_reduces_velocity_spike")
+                && newton
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_diagonal_newton_residual_reduced")
+                && element_newton
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_element_newton_offdiag_coupling_present")
+                && patch_newton
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_patch_newton_shared_nodes")
+                && tiny_mesh_newton
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_tiny_mesh_newton_full_mesh_nodes")
+                && matrix_free_newton
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_matrix_free_newton_jv_nonzero")
+                && matrix_free_solve
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_matrix_free_newton_solve_residual_reduced")
+                && matrix_free_preconditioner
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| {
+                        check.check_id == "fem_matrix_free_newton_preconditioner_positive_diagonal"
+                    })
+                && matrix_free_step
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_matrix_free_newton_step_residual_reduced")
+                && matrix_free_timestep
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_matrix_free_newton_step_velocity_bounded")
+                && hardening
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "fem_hardening_energy_damps_from_peak")
+                && deformation
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| { check.check_id == "fem_deformation_force_shape_changes_force" })
+                && slip_patch.acceptance_checks().iter().any(|check| {
+                    check.check_id == "fem_contact_slip_patch_sliding_count_grows"
+                })
+                && heightfield_velocity
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| {
+                        check.check_id == "heightfield_surface_velocity_changes_force"
+                    })
+                && seam
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "triangle_seam_manifold_multi_patch")
+                && triangle_stress
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| { check.check_id == "triangle_surface_stress_seam_multi_patch" })
+                && triangle_force
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| { check.check_id == "triangle_surface_force_seam_multi_patch" })
+                && large
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "triangle_large_manifold_multi_patch")
+                && large
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| { check.check_id == "triangle_large_manifold_bristle_force_sum" }),
+            "FEM/terrain reports should expose key deformation, slip, stiffness, and manifold gates"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("FEM/terrain contact gates")
+                && source.contains("tetra_fem_solver_stiffness_report")
+                && source.contains("tetra_fem_diagonal_newton_report")
+                && source.contains("fem_diagonal_newton_solver")
+                && source.contains("tetra_fem_element_newton_report")
+                && source.contains("fem_element_newton_solver")
+                && source.contains("tetra_fem_patch_newton_report")
+                && source.contains("fem_patch_newton_solver")
+                && source.contains("tetra_fem_tiny_mesh_newton_report")
+                && source.contains("fem_tiny_mesh_newton_solver")
+                && source.contains("tetra_fem_matrix_free_newton_scale_report")
+                && source.contains("fem_matrix_free_newton_scale")
+                && source.contains("dense/mfree")
+                && source.contains("tetra_fem_matrix_free_newton_solve_report")
+                && source.contains("fem_matrix_free_newton_solve")
+                && source.contains("line_search_alpha")
+                && source.contains("tetra_fem_matrix_free_newton_preconditioner_report")
+                && source.contains("fem_matrix_free_newton_preconditioner")
+                && source.contains("positive_diagonal_fraction")
+                && source.contains("tetra_fem_matrix_free_newton_step_report")
+                && source.contains("fem_matrix_free_newton_step")
+                && source.contains("energy_ratio_implicit_over_explicit")
+                && source.contains("tetra_fem_matrix_free_newton_timestep_report")
+                && source.contains("fem_matrix_free_newton_timestep")
+                && source.contains("callable alpha")
+                && source.contains("tetra_fem_hardening_envelope_report")
+                && source.contains("fem_hardening_envelope")
+                && source.contains("tetra_fem_deformation_force_report")
+                && source.contains("tetra_fem_contact_slip_patch_report")
+                && source.contains("tire_heightfield_surface_velocity_map_report")
+                && source.contains("heightfield_surface_velocity_map")
+                && source.contains("force_delta")
+                && source.contains("tire_triangle_seam_manifold_report")
+                && source.contains("triangle_seam_manifold")
+                && source.contains("tire_triangle_surface_stress_report")
+                && source.contains("tire_triangle_surface_force_report")
+                && source.contains("tire_triangle_large_manifold_report")
+                && source.contains("feedback_bristle_force_sum_n")
+                && source.contains("width_span")
+                && source.contains("flat-floor")
+                && source.contains("single-point contact"),
+            "tire truth label UI should render FEM/terrain contact gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_label_panel_surfaces_cavity_bead_sidewall_gates() {
+        let cavity = molla_vehicle::tetra_cavity_bead_sanity_report();
+        let coupling = molla_vehicle::tetra_cavity_coupling_effect_report();
+        let bead = molla_vehicle::tetra_bead_seat_load_case_report();
+        let sidewall_laminate = molla_vehicle::TetraTireFem::new(
+            0.0,
+            180_000.0,
+            molla_vehicle::TetraTireFemParams::realtime_viewer().with_resolution(20, 5, 5),
+        )
+        .sidewall_laminate_sanity_report();
+        let sidewall = molla_vehicle::tetra_sidewall_dynamic_load_report();
+        let sidewall_coupling = molla_vehicle::tetra_sidewall_laminate_coupling_report();
+        let ply_xpbd = molla_vehicle::tetra_sidewall_ply_strain_xpbd_report();
+        let dihedral = molla_vehicle::tetra_sidewall_dihedral_xpbd_effect_report();
+        assert!(
+            cavity.acceptance_checks().iter().all(|check| check.passed)
+                && coupling.passed()
+                && bead.passed()
+                && sidewall_laminate.passed
+                && sidewall.passed()
+                && sidewall_coupling.passed()
+                && ply_xpbd.passed()
+                && dihedral.passed(),
+            "cavity/bead/sidewall reports should pass before truth-label display: cavity={cavity:?} coupling={coupling:?} bead={bead:?} sidewall_laminate={sidewall_laminate:?} sidewall={sidewall:?} sidewall_coupling={sidewall_coupling:?} ply_xpbd={ply_xpbd:?} dihedral={dihedral:?}"
+        );
+        assert!(
+            cavity
+                .acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "cavity_pressure_scales_bead_load")
+                && coupling
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "cavity_coupling_high_increases_load")
+                && bead
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "bead_load_cases_lateral_force_applied")
+                && sidewall_laminate
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "sidewall_laminate_crossed_ply_coverage")
+                && sidewall
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "sidewall_dynamic_steer_aligning_moment")
+                && sidewall_coupling
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id
+                        == "sidewall_laminate_coupling_projected_fold_bounded")
+                && ply_xpbd.acceptance_checks().iter().any(
+                    |check| check.check_id == "sidewall_ply_strain_xpbd_reduces_tensile_strain"
+                )
+                && dihedral
+                    .acceptance_checks()
+                    .iter()
+                    .any(|check| check.check_id == "sidewall_dihedral_xpbd_reduces_fold"),
+            "cavity/bead/sidewall reports should expose key structural gates"
+        );
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Cavity/bead/sidewall gates")
+                && source.contains("tetra_cavity_bead_sanity_report")
+                && source.contains("tetra_cavity_coupling_effect_report")
+                && source.contains("tetra_bead_seat_load_case_report")
+                && source.contains("sidewall_laminate_sanity_report")
+                && source.contains("sidewall_laminate_sanity")
+                && source.contains("tetra_sidewall_dynamic_load_report")
+                && source.contains("tetra_sidewall_laminate_coupling_report")
+                && source.contains("sidewall_laminate_coupling")
+                && source.contains("tetra_sidewall_ply_strain_xpbd_report")
+                && source.contains("sidewall_ply_strain_xpbd")
+                && source.contains("tetra_sidewall_dihedral_xpbd_effect_report")
+                && source.contains("full laminated shell/bead contact solve")
+                && source.contains("bead_mount mean/max"),
+            "tire truth label UI should render cavity/bead/sidewall structural gates"
+        );
+    }
+
+    #[test]
+    fn tire_truth_labels_include_plain_language_scene_checklists() {
+        for (scene, expected_terms) in [
+            (
+                Scene::TireDynamics,
+                ["Low-pressure", "High-pressure", "CPU/GPU delta"],
+            ),
+            (
+                Scene::TireTraction,
+                ["Over-inflated", "Softer", "Green user car"],
+            ),
+            (
+                Scene::TireRealistic,
+                ["Effective slip", "pressure-bin", "MPM/Bekker"],
+            ),
+        ] {
+            let notes = tire_scene_truth_notes(scene).expect("tire truth notes");
+            for term in expected_terms {
+                assert!(
+                    notes.checklist.iter().any(|item| item.contains(term)),
+                    "{} checklist should mention {term}: {:?}",
+                    scene.label(),
+                    notes.checklist
+                );
+            }
+        }
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("Scene checklist")
+                && source.contains("Use these plain-language checks")
+                && source.contains("for item in notes.checklist"),
+            "right rail should render explicit tire scene checklist rows"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_cpu_gpu_force_deltas() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let with_delta = run.snapshots[0].clone().with_cpu_gpu_force_delta([
+            run.snapshots[0].telemetry.force_n[0] + 10.0,
+            run.snapshots[0].telemetry.force_n[1],
+            run.snapshots[0].telemetry.force_n[2],
+        ]);
+        assert!(
+            with_delta.cpu_gpu_force_delta_n.is_some()
+                && with_delta.cpu_gpu_relative_force_error.is_some(),
+            "tire rig snapshots should support optional paired CPU/GPU force-delta fields"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("CPU/GPU force Δ")
+                && source.contains("CPU/GPU rel Δ")
+                && source.contains("cpu_gpu_force_delta_n")
+                && source.contains("cpu_gpu_relative_force_error"),
+            "shared tire rig replay panel should expose optional CPU/GPU force deltas"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_energy_sign_audit() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let moving = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "moving_ground_belt")
+            .expect("default tire rig should include moving-ground energy case");
+        let audit = moving.energy_sign_audit();
+        assert!(
+            audit.is_finite()
+                && audit.dissipated_power_nonnegative
+                && audit.dissipated_energy_nonnegative
+                && audit.friction_budget_not_exceeded
+                && audit.moving_ground_work_sign_ok,
+            "moving-ground replay should pass energy/sign audit: {audit:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("energy_sign_audit")
+                && source.contains("Energy/sign pass")
+                && source.contains("Friction residual")
+                && source.contains("Moving-ground power")
+                && source.contains("Trail sign audit"),
+            "shared tire rig replay panel should expose energy/sign accounting"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_dimensionless_sanity_metrics() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let snapshot = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "longitudinal_slip_dry")
+            .or_else(|| run.snapshots.first())
+            .expect("default tire rig should include at least one replay snapshot");
+        let metrics = snapshot.dimensionless_sanity_metrics(0.32);
+        assert!(
+            metrics.is_finite()
+                && metrics.abs_fx_over_fz >= 0.0
+                && metrics.abs_fy_over_fz >= 0.0
+                && metrics.consumed_over_available_friction >= 0.0
+                && metrics.patch_length_over_radius >= 0.0
+                && metrics.contact_pressure_area_over_load >= 0.0
+                && metrics.dissipated_energy_over_load_radius >= 0.0,
+            "dimensionless tire-rig metrics should be finite, non-negative sanity ratios: {metrics:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("dimensionless_sanity_metrics")
+                && source.contains("Dimensionless sanity")
+                && source.contains("|Fx|/Fz")
+                && source.contains("|Fy|/Fz")
+                && source.contains("Friction budget ratio")
+                && source.contains("Patch length/R")
+                && source.contains("Pressure area/load")
+                && source.contains("Slip energy/(load·R)")
+                && source.contains("CPU/GPU relative error"),
+            "shared tire rig replay panel should expose dimensionless sanity ratios"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_acceptance_envelopes() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let snapshot = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "rolling_obstacle_crest")
+            .or_else(|| run.snapshots.first())
+            .expect("default tire rig should include replay snapshots");
+        let matching_reports = run
+            .reports
+            .iter()
+            .filter(|report| {
+                report.snapshot.scenario_id == snapshot.scenario_id
+                    || (report.snapshot.scenario_id == "rolling_obstacle_sequence"
+                        && matches!(
+                            snapshot.scenario_id.as_str(),
+                            "rolling_obstacle_approach"
+                                | "rolling_obstacle_crest"
+                                | "rolling_obstacle_exit"
+                        ))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !matching_reports.is_empty()
+                && matching_reports
+                    .iter()
+                    .all(|report| !report.checks.is_empty())
+                && matching_reports
+                    .iter()
+                    .flat_map(|report| report.checks.iter())
+                    .all(|check| check.is_finite()),
+            "selected tire replay snapshot should have finite acceptance-envelope checks"
+        );
+        if snapshot.scenario_id == "rolling_obstacle_crest" {
+            assert!(
+                matching_reports
+                    .iter()
+                    .any(|report| report.snapshot.scenario_id == "rolling_obstacle_sequence"),
+                "rolling obstacle snapshots should expose the sequence-level acceptance report"
+            );
+        }
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Acceptance envelopes")
+                && source.contains(".reports")
+                && source.contains("tire_rig_report_matches_snapshot")
+                && source.contains("rolling_obstacle_sequence")
+                && source.contains("Broad non-calibration pass/fail checks")
+                && source.contains("not fitted target data")
+                && source.contains("check.expectation"),
+            "shared tire rig replay panel should expose selected snapshot acceptance-envelope checks"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_viewer_target_coverage() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let coverage = run.viewer_target_coverage_report();
+        assert!(
+            coverage.passed()
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "rolling_over_bump_curb")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "low_pressure_wraps_obstacle")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "ice_patch_then_asphalt")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "soft_soil_rut_compaction")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "soft_tire_flattens_and_grows_patch")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "overinflated_tire_slips_sooner")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "ice_large_patch_still_slips")
+                && coverage
+                    .checks
+                    .iter()
+                    .any(|check| check.target_id == "thermal_wear_state_visible"),
+            "viewer target coverage should pass and cover PLAN_REALTIRE target rows: {coverage:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Viewer target coverage")
+                && source.contains("viewer_target_coverage_report")
+                && source.contains("PLAN_REALTIRE viewer targets")
+                && source.contains("check.target_id")
+                && source.contains("check.expectation")
+                && source.contains("evidence:"),
+            "shared tire rig replay panel should render viewer target coverage evidence"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_replay_artifact_coverage() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let coverage = run.replay_artifact_coverage_report();
+        assert!(
+            coverage.passed()
+                && coverage.snapshot_count >= 20
+                && coverage.csv_header_columns >= 40
+                && coverage.csv_row_column_mismatches == 0
+                && coverage.command_input_rows == coverage.snapshot_count
+                && coverage.terrain_state_rows == coverage.snapshot_count
+                && coverage.provenance_rows == coverage.snapshot_count
+                && coverage.force_moment_rows == coverage.snapshot_count
+                && coverage.patch_telemetry_rows == coverage.snapshot_count
+                && coverage.cpu_gpu_delta_columns_present
+                && coverage.known_approximation_rows >= 5,
+            "replay artifact coverage should prove snapshots are reproducible enough for viewer triage: {coverage:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Replay artifact coverage")
+                && source.contains("replay_artifact_coverage_report")
+                && source.contains("Compact replay snapshot audit")
+                && source.contains("coverage.csv_header_columns")
+                && source.contains("coverage.cpu_gpu_delta_columns_present")
+                && source.contains("coverage.acceptance_checks()"),
+            "shared tire rig replay panel should render reusable replay-artifact coverage"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_text_artifact_reports() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let rig_text = run.to_text_report();
+        let gpu_text = molla_vehicle::tire_gpu_parity_text_report();
+        let approximation_text = molla_vehicle::tire_known_approximation_text_report();
+        let sensitivity_text = molla_vehicle::tire_rig_standard_sensitivity_text_report();
+        assert!(
+            rig_text.contains("non_calibration=true")
+                && rig_text.contains("gpu_parity=")
+                && rig_text.contains("known_approximation=")
+                && rig_text.contains("preset_governance=")
+                && gpu_text.contains("status=")
+                && approximation_text.contains("next_step=")
+                && sensitivity_text.contains("metric="),
+            "text artifact reports should carry non-calibration replay context, GPU parity, approximation, preset, and sensitivity rows"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Text artifact reports")
+                && source.contains("to_text_report")
+                && source.contains("tire_gpu_parity_text_report")
+                && source.contains("tire_known_approximation_text_report")
+                && source.contains("tire_rig_standard_sensitivity_text_report")
+                && source.contains("preset-governance context"),
+            "shared tire rig replay panel should expose compact text-artifact report coverage"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_uses_grouped_case_labels() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        assert!(
+            run.snapshots
+                .iter()
+                .any(|snapshot| snapshot.scenario_id == "rolling_obstacle_approach")
+                && run
+                    .snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.scenario_id == "rolling_obstacle_crest")
+                && run
+                    .snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.scenario_id == "rolling_obstacle_exit"),
+            "default tire rig should expose the ordered rolling-obstacle replay frames"
+        );
+        for scenario_id in [
+            "frame_sign_convention",
+            "construction_sanity",
+            "contact_patch_convergence",
+            "fem_substep_convergence",
+            "heightfield_resolution_convergence",
+            "road_condition_state",
+            "realism_source_classification",
+            "cavity_bead_sanity",
+            "cavity_coupling_effect",
+            "bead_seat_load_cases",
+            "sidewall_laminate_sanity",
+            "sidewall_dynamic_load_cases",
+            "sidewall_laminate_coupling",
+            "sidewall_ply_strain_xpbd",
+            "sidewall_dihedral_xpbd_effect",
+            "triangle_seam_manifold",
+            "triangle_surface_stress",
+            "triangle_surface_force",
+            "triangle_density_convergence",
+            "triangle_large_manifold",
+            "low_speed_robustness",
+            "thermal_wear_heat_peak",
+            "thermal_wear_cooling_recovery",
+            "thermal_abuse_envelope",
+            "thermal_wear_power_temperature",
+            "worn_surface_sensitivity",
+            "condition_failure_modes",
+            "thermal_rolling_carcass",
+            "thermal_brake_rim",
+            "thermal_wear_convergence",
+            "layered_transient_envelope",
+            "load_combined_slip_law",
+            "ice_large_patch_grip",
+            "adhesion_sliding_continuity",
+            "wheel_spin_torque_balance",
+            "vehicle_longitudinal_motion",
+            "vehicle_dynamic_load_transfer",
+            "fem_solver_budget",
+            "fem_solver_stiffness_stabilizer",
+            "fem_diagonal_newton_solver",
+            "fem_element_newton_solver",
+            "fem_patch_newton_solver",
+            "fem_tiny_mesh_newton_solver",
+            "fem_matrix_free_newton_scale",
+            "fem_matrix_free_newton_solve",
+            "fem_matrix_free_newton_preconditioner",
+            "fem_matrix_free_newton_step",
+            "fem_matrix_free_newton_timestep",
+            "fem_deformation_force_shape",
+            "fem_contact_slip_patch",
+            "soil_normal_shear_coupling",
+            "cleat_envelope_contact",
+            "heightfield_surface_velocity_map",
+            "dem_soil_feedback",
+            "mpm_soil_feedback",
+            "pressure_patch_envelope",
+            "surface_grip_envelope",
+            "wet_film_envelope",
+            "surface_transition_sequence",
+            "rolling_loss_drag",
+            "reference_shape_longitudinal_dry",
+            "reference_shape_combined_dry",
+            "step_torque_response",
+            "step_brake_response",
+            "step_steer_response",
+        ] {
+            assert!(
+                run.snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.scenario_id == scenario_id),
+                "default tire rig should expose {scenario_id} as a replayable diagnostic snapshot"
+            );
+            assert!(
+                run.reports
+                    .iter()
+                    .any(|report| report.snapshot.scenario_id == scenario_id),
+                "default tire rig should expose {scenario_id} acceptance checks"
+            );
+        }
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("fn tire_rig_replay_case_label")
+                && source.contains("Pressure/load · high pressure")
+                && source.contains("Surface slip · ice")
+                && source.contains("Surface slip · ice large patch")
+                && source.contains("Heightfield obstacle · cleat")
+                && source.contains("Obstacle sequence · approach")
+                && source.contains("Obstacle sequence · crest")
+                && source.contains("Obstacle sequence · exit")
+                && source.contains("Diagnostics · frame/sign convention")
+                && source.contains("Diagnostics · construction sanity")
+                && source.contains("Diagnostics · patch convergence")
+                && source.contains("Diagnostics · FEM substep convergence")
+                && source.contains("Diagnostics · heightfield resolution")
+                && source.contains("Diagnostics · road-condition state")
+                && source.contains("Diagnostics · realism source labels")
+                && source.contains("Diagnostics · cavity/bead sanity")
+                && source.contains("Diagnostics · cavity coupling")
+                && source.contains("Diagnostics · bead-seat load cases")
+                && source.contains("Diagnostics · sidewall laminate")
+                && source.contains("Diagnostics · sidewall dynamic loads")
+                && source.contains("Diagnostics · sidewall dihedral XPBD")
+                && source.contains("Diagnostics · triangle seam manifold")
+                && source.contains("Diagnostics · triangle surface stress")
+                && source.contains("Diagnostics · triangle surface force")
+                && source.contains("Diagnostics · triangle density")
+                && source.contains("Diagnostics · large triangle manifold")
+                && source.contains("Diagnostics · low-speed robustness")
+                && source.contains("Thermal/wear · heat peak")
+                && source.contains("Thermal/wear · cooling recovery")
+                && source.contains("Thermal/wear · abuse envelope")
+                && source.contains("Thermal/wear · power/temp sensitivity")
+                && source.contains("Thermal/wear · worn surface sensitivity")
+                && source.contains("Transient · layered tread/belt/carcass")
+                && source.contains("Slip/load · combined law")
+                && source.contains("Slip/contact · adhesion to sliding")
+                && source.contains("Vehicle dynamics · longitudinal motion")
+                && source.contains("Vehicle dynamics · load transfer")
+                && source.contains("Diagnostics · FEM solver budget")
+                && source.contains("Diagnostics · FEM stiffness stabilizer")
+                && source.contains("Diagnostics · FEM diagonal Newton")
+                && source.contains("Diagnostics · FEM element Newton")
+                && source.contains("Diagnostics · FEM patch Newton")
+                && source.contains("Diagnostics · FEM tiny-mesh Newton")
+                && source.contains("Diagnostics · FEM matrix-free Newton")
+                && source.contains("Diagnostics · FEM matrix-free solve")
+                && source.contains("Diagnostics · FEM matrix-free preconditioner")
+                && source.contains("Diagnostics · FEM matrix-free step")
+                && source.contains("Diagnostics · FEM matrix-free timestep")
+                && source.contains("Diagnostics · FEM deformation force")
+                && source.contains("Diagnostics · FEM slip patch")
+                && source.contains("Deformable surface · normal/shear coupling")
+                && source.contains("Terrain motion · heightfield velocity map")
+                && source.contains("Deformable surface · DEM feedback")
+                && source.contains("Deformable surface · MPM feedback")
+                && source.contains("Envelope · pressure patch")
+                && source.contains("Envelope · surface transition")
+                && source.contains("Diagnostics · combined-slip shape")
+                && source.contains("Transient · torque step")
+                && source.contains("Transient · brake step")
+                && source.contains("Transient · steer step")
+                && source.contains("Static construction checks should keep loaded radius")
+                && source.contains("Patch convergence should show finite pressure bins")
+                && source.contains("FEM substep convergence should keep hub height")
+                && source.contains("Heightfield resolution convergence should keep terrain height")
+                && source.contains("Triangle seam checks should keep FEM tread contact")
+                && source.contains("Triangle surface stress checks should sample")
+                && source.contains("Triangle surface force checks should prove")
+                && source.contains("Triangle-density convergence should keep height")
+                && source.contains("Large triangle-manifold checks should prove")
+                && source.contains("Low-speed checks should keep slip")
+                && source.contains("hot sliding phase")
+                && source.contains("zero-slip cooling")
+                && source
+                    .contains("Cold, overheated, worn, and abused tire states should reduce grip")
+                && source.contains("sliding power and hot surface temperature")
+                && source.contains("wet-film, ice, and loose-soil drive")
+                && source
+                    .contains("summed tire drive force after rolling loss and aerodynamic drag")
+                && source.contains("Thermal/wear · rolling carcass heat")
+                && source.contains("Sustained zero-slip rolling should heat the carcass")
+                && source.contains("Thermal/wear · brake rim heat")
+                && source.contains("Brake/rim heat should enter the rim first")
+                && source.contains("Thermal/wear · convergence")
+                && source.contains("Thermal/wear convergence should keep dissipated power")
+                && source.contains("Layered transient checks should show fast tread")
+                && source.contains("Load/combined-slip checks should show")
+                && source.contains("Even with a large low-pressure patch")
+                && source.contains("Adhesion-to-sliding checks should sweep")
+                && source.contains("moving-belt force/work from relative ground velocity")
+                && source.contains("Dynamic vehicle load transfer should move normal load")
+                && source.contains("FEM solver-budget telemetry should expose")
+                && source.contains("Matrix-free Newton scaling should probe")
+                && source.contains("Matrix-free Newton solve should use")
+                && source.contains("Matrix-free Newton preconditioner should sample")
+                && source.contains("Matrix-free Newton step should line-search")
+                && source.contains("Matrix-free Newton timestep should exercise")
+                && source.contains("FEM deformation-force checks should show")
+                && source.contains("FEM contact slip/patch checks should show")
+                && source.contains("Bekker soil coupling should show normal load")
+                && source.contains("heightfield surface-velocity map should change tire force")
+                && source.contains("DEM soil feedback should show tire contact cells")
+                && source.contains("packed-dirt/loose-soil")
+                && source.contains("Cavity coupling checks should make the named")
+                && source.contains("Sidewall dynamic cases should keep laminate fold")
+                && source.contains("Sidewall dihedral XPBD checks should deliberately fold")
+                && source.contains("Combined-slip diagnostics should confirm")
+                && source.contains("A torque step should build effective slip")
+                && source.contains(".selected_text(tire_rig_replay_case_label")
+                && source.contains("tire_rig_replay_case_label(&snapshot.scenario_id)"),
+            "shared tire rig replay selector should use grouped human-readable labels, not only raw scenario ids"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_snapshot_provenance_and_commands() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let snapshot = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "moving_ground_belt")
+            .or_else(|| run.snapshots.first())
+            .expect("default tire rig should include replay snapshots");
+        assert!(
+            !snapshot.tire_parameter_provenance.label().is_empty()
+                && !snapshot.surface_parameter_provenance.label().is_empty()
+                && !snapshot.solver_parameter_provenance.label().is_empty()
+                && snapshot.hub_height_m.is_finite()
+                && snapshot.deflection_m.is_finite()
+                && snapshot.speed_m_per_s.is_finite()
+                && snapshot.camber_angle_command_rad.is_finite()
+                && snapshot.terrain_height_m.is_finite()
+                && snapshot.terrain_normal.iter().all(|v| v.is_finite())
+                && snapshot
+                    .terrain_surface_velocity_m_per_s
+                    .iter()
+                    .all(|v| v.is_finite()),
+            "replay snapshot should carry finite provenance/command/terrain fields"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Snapshot provenance / commands")
+                && source.contains("tire_parameter_provenance.label()")
+                && source.contains("surface_parameter_provenance.label()")
+                && source.contains("solver_parameter_provenance.label()")
+                && source.contains("Hub height / deflection")
+                && source.contains("Camber command")
+                && source.contains("Terrain normal")
+                && source.contains("Terrain surface velocity"),
+            "shared tire rig replay panel should expose selected snapshot provenance, commands, and terrain state"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_thermal_wear_snapshot_state() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let thermal = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "thermal_wear_cycle")
+            .expect("default tire rig should include thermal/wear replay snapshot");
+        let heat_peak = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "thermal_wear_heat_peak")
+            .expect("default tire rig should include heat-peak thermal replay snapshot");
+        let cooling_recovery = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "thermal_wear_cooling_recovery")
+            .expect("default tire rig should include cooling-recovery thermal replay snapshot");
+        assert!(
+            thermal.surface_temperature_c.is_some_and(f64::is_finite)
+                && thermal.tread_temperature_c.is_some_and(f64::is_finite)
+                && thermal.carcass_temperature_c.is_some_and(f64::is_finite)
+                && thermal.tread_depth_m.is_some_and(f64::is_finite)
+                && thermal.wear_ratio.is_some_and(f64::is_finite),
+            "thermal/wear replay snapshot should carry finite layered thermal and tread-wear state: {thermal:?}"
+        );
+        assert!(
+            heat_peak
+                .surface_temperature_c
+                .zip(cooling_recovery.surface_temperature_c)
+                .is_some_and(|(hot, cooled)| hot >= cooled)
+                && heat_peak.slip_ratio_command.abs() > cooling_recovery.slip_ratio_command.abs()
+                && cooling_recovery
+                    .tread_depth_m
+                    .zip(heat_peak.tread_depth_m)
+                    .is_some_and(|(cooled_wear, hot_wear)| cooled_wear >= hot_wear),
+            "thermal heat/cool snapshots should expose hot sliding followed by zero-slip non-healing cooling: heat={heat_peak:?} cooling={cooling_recovery:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Thermal / wear snapshot")
+                && source.contains("tread_temperature_c")
+                && source.contains("carcass_temperature_c")
+                && source.contains("tread_depth_m")
+                && source.contains("Surface temperature")
+                && source.contains("Tread temperature")
+                && source.contains("Carcass temperature")
+                && source.contains("Tread depth")
+                && source.contains("model state, not hidden grip multipliers"),
+            "shared tire rig replay panel should expose layered thermal/wear snapshot state"
+        );
+    }
+
+    #[test]
+    fn tire_rig_replay_panel_surfaces_patch_and_friction_telemetry() {
+        let run = molla_vehicle::tire_rig_default_non_calibration_run();
+        let snapshot = run
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.scenario_id == "longitudinal_slip_dry")
+            .or_else(|| run.snapshots.first())
+            .expect("default tire rig should include replay snapshots");
+        let patch = snapshot.telemetry.patch;
+        assert!(
+            patch.is_finite()
+                && patch.contact_count > 0
+                && patch.contact_area_m2 >= 0.0
+                && patch.mean_normal_pressure_pa >= 0.0
+                && patch.peak_normal_pressure_pa >= 0.0
+                && (0.0..=1.0).contains(&patch.adhesion_fraction)
+                && (0.0..=1.0).contains(&patch.sliding_fraction)
+                && snapshot.telemetry.slip_speed_m_per_s.is_finite()
+                && snapshot.telemetry.lateral_slip_speed_m_per_s.is_finite()
+                && snapshot
+                    .telemetry
+                    .effective_longitudinal_stiffness_n_per_m
+                    .is_finite()
+                && snapshot
+                    .telemetry
+                    .effective_cornering_stiffness_n_per_rad
+                    .is_finite()
+                && snapshot.telemetry.rolling_resistance_force_n.is_finite(),
+            "replay snapshot should carry finite patch/friction telemetry: {snapshot:?}"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("Patch / friction telemetry")
+                && source.contains("Contact / sliding cells")
+                && source.contains("Contact area")
+                && source.contains("Mean / peak pressure")
+                && source.contains("Center / resultant / trail")
+                && source.contains("Adhesion / sliding")
+                && source.contains("Slip speeds")
+                && source.contains("Effective stiffness")
+                && source.contains("Rolling resistance"),
+            "shared tire rig replay panel should expose detailed patch and friction telemetry"
+        );
+    }
+
+    #[test]
+    fn tire_viewer_controls_are_classified_by_role() {
+        for scene in [
+            Scene::TireModelLab,
+            Scene::VehicleOffroad,
+            Scene::BekkerSinkage,
+            Scene::SoilCompaction,
+            Scene::TireDynamics,
+            Scene::TireTraction,
+            Scene::TireRealistic,
+        ] {
+            let controls = tire_viewer_control_metadata(scene);
+            assert!(
+                !controls.is_empty(),
+                "{}: tire controls should declare physical/debug/visual roles",
+                scene.label()
+            );
+            assert!(
+                controls.iter().all(|control| {
+                    !control.telemetry_key.is_empty()
+                        && control.telemetry_key.contains('.')
+                        && !control.telemetry_key.contains(' ')
+                        && !control.name.is_empty()
+                        && !control.note.is_empty()
+                        && !control.note.contains("TODO")
+                }),
+                "{}: each tire control classification needs a stable telemetry key, name, and note: {controls:?}",
+                scene.label()
+            );
+            assert!(
+                controls.iter().any(|control| matches!(
+                    control.kind,
+                    TireViewerControlKind::PhysicalState | TireViewerControlKind::PresetOverride
+                )),
+                "{}: controls should include physical state or explicit preset overrides",
+                scene.label()
+            );
+            assert!(
+                controls.iter().any(|control| matches!(
+                    control.kind,
+                    TireViewerControlKind::DebugToggle | TireViewerControlKind::VisualizationOnly
+                )),
+                "{}: controls should identify debug/visualization-only helpers",
+                scene.label()
+            );
+            if scene == Scene::TireDynamics {
+                assert!(
+                    controls.iter().any(|control| {
+                        control.kind == TireViewerControlKind::NumericalStability
+                    }),
+                    "TireDynamics should classify FEM substep/XPBD solver knobs as numerical stability controls"
+                );
+            }
+            for control in controls
+                .iter()
+                .filter(|control| control.kind == TireViewerControlKind::PresetOverride)
+            {
+                assert!(
+                    control.telemetry_key.ends_with("_override")
+                        && control.note.contains("override")
+                        && (control.note.contains("explicit")
+                            || control.note.contains("Explicit")
+                            || control.note.contains("named")),
+                    "{} preset override controls must be explicit named telemetry overrides, not hidden force multipliers: {control:?}",
+                    scene.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tire_realistic_scene_wires_transient_gpu_to_fem_feedback() {
+        let controls = tire_viewer_control_metadata(Scene::TireRealistic);
+        assert!(
+            controls
+                .iter()
+                .any(|control| control.name.contains("transient")),
+            "scene 122 controls should expose the transient-to-FEM feedback toggle"
+        );
+        let notes = tire_scene_truth_notes(Scene::TireRealistic).expect("scene 122 truth label");
+        assert!(
+            notes
+                .physics_path
+                .contains("transient-relaxed FEM contact feedback")
+                && notes
+                    .physics_path
+                    .contains("resident GPU height/sinkage/surface-velocity")
+                && notes
+                    .physics_path
+                    .contains("Bekker owner has resident GPU height/sinkage")
+                && notes.physics_path.contains("TireDemFemTerrainOwner-owned")
+                && notes
+                    .expected_behavior
+                    .contains("Effective slip should lag raw controls"),
+            "scene 122 truth label should describe transient-relaxed and resident terrain FEM feedback"
+        );
+        let source = include_str!("examples/122_tire_realistic.rs");
+        assert!(
+            source.contains("tire_fem_feedback_params_with_transient")
+                && source.contains("tire_fem_contact_terrain_with_transient_surface_velocity")
+                && source.contains("TireFemContactFeedbackKernel")
+                && source.contains("dispatch_resident_with_gpu_terrain")
+                && source.contains("readback_resident_feedback_output")
+                && source.contains("GPU resident FEM feedback + resident MPM terrain velocity")
+                && source.contains("GPU resident FEM feedback + resident Bekker terrain")
+                && source.contains("use_gpu_dem")
+                && source.contains("Use GPU DEM sparse-LBVH step")
+                && source.contains("TireDemResidentFemTerrainOwner")
+                && source.contains("reseed_grain_state")
+                && source.contains("Resident DEM reseeds")
+                && source.contains("step_sparse_lbvh_gpu_mirrored")
+                && source.contains("fem_contact_feedback_gpu_terrain")
+                && source.contains("GPU resident sparse-LBVH DEM")
+                && source.contains("GPU resident FEM feedback + resident DEM terrain")
+                && source.contains("patch_accounting")
+                && source.contains("FEM patch accounting")
+                && source.contains("last_fem_feedback_total_force_n")
+                && source.contains("pressure_distribution(8, 5)")
+                && source.contains("Longitudinal pressure-bin load")
+                && source.contains("Widthwise pressure-bin load")
+                && source.contains("apply_contacts_gpu_resident")
+                && source.contains("last_effective_kappa"),
+            "scene 122 should wire GPU transient output into resident-capable FEM contact feedback and patch-accounting readouts"
+        );
+    }
+
+    #[test]
+    fn soil_compaction_scene_can_use_resident_dem_owner() {
+        let description = Scene::SoilCompaction.description();
+        assert!(
+            description.contains("resident GPU DEM terrain owner")
+                && description.contains("height/sinkage/surface-velocity"),
+            "scene 119 description should advertise the resident DEM terrain owner path"
+        );
+        let audit = Scene::SoilCompaction.physics_audit();
+        assert!(
+            audit.gpu_proof.contains("TireDemResidentFemTerrainOwner")
+                && audit
+                    .notes
+                    .contains("GPU mode keeps DEM state and terrain rows resident"),
+            "scene 119 audit should track resident DEM owner evidence"
+        );
+        let notes = tire_scene_truth_notes(Scene::SoilCompaction).expect("soil truth label");
+        assert!(
+            notes
+                .physics_path
+                .contains("TireDemResidentFemTerrainOwner")
+                && notes.expected_behavior.contains("DEM→FEM terrain rows")
+                && notes
+                    .known_approximations
+                    .contains("roller contact is a compact load proxy")
+                && notes
+                    .checklist
+                    .iter()
+                    .any(|item| item.contains("resident DEM owner path")),
+            "scene 119 truth label should expose resident DEM ownership and approximation boundaries: {:?}",
+            notes.physics_path
+        );
+        let controls = tire_viewer_control_metadata(Scene::SoilCompaction);
+        assert!(
+            controls.iter().any(|control| control.telemetry_key
+                == "soil_compaction.resident_gpu_dem_owner"
+                && control.kind == TireViewerControlKind::DebugToggle)
+                && controls.iter().any(|control| control.telemetry_key
+                    == "soil_compaction.roller_motion"
+                    && control.kind == TireViewerControlKind::PhysicalState),
+            "scene 119 controls should classify roller motion as physical and resident GPU DEM as debug/falsification control"
+        );
+        let source = include_str!("examples/119_soil_compaction.rs");
+        assert!(
+            source.contains("TireDemResidentFemTerrainOwner")
+                && source.contains("reseed_grain_state")
+                && source.contains("Resident DEM reseeds")
+                && source.contains("step_sparse_lbvh_gpu_mirrored")
+                && source.contains("Use resident GPU DEM terrain owner")
+                && source.contains("resident GPU sparse-LBVH DEM owner"),
+            "scene 119 should wire the reusable resident DEM owner as the GPU sparse-LBVH stepper"
+        );
+    }
+
+    #[test]
+    fn bekker_sinkage_scene_labels_soil_law_diagnostic_boundary() {
+        let description = Scene::BekkerSinkage.description();
+        assert!(
+            description.contains("Bekker SCM soil patch")
+                && description.contains("pressure-sinkage curve"),
+            "scene 118 description should name the Bekker pressure-sinkage soil-law diagnostic"
+        );
+        let audit = Scene::BekkerSinkage.physics_audit();
+        assert!(
+            audit.reference_case.contains("Bekker pressure-sinkage")
+                && audit.cpu_proof.contains("DeformableTerrain")
+                && audit.gpu_proof.contains("CPU-only"),
+            "scene 118 audit should honestly mark the CPU Bekker diagnostic path: {:?}",
+            audit
+        );
+        let notes = tire_scene_truth_notes(Scene::BekkerSinkage).expect("bekker truth label");
+        assert!(
+            notes.physics_path.contains("DeformableTerrain")
+                && notes.physics_path.contains("Scene 122")
+                && notes
+                    .known_approximations
+                    .contains("resident GPU Bekker terrain ownership")
+                && notes
+                    .checklist
+                    .iter()
+                    .any(|item| item.contains("CPU soil-law diagnostics")),
+            "scene 118 truth label should distinguish CPU soil-law diagnostics from GPU tire/FEM Bekker ownership: {:?}",
+            notes.physics_path
+        );
+        let controls = tire_viewer_control_metadata(Scene::BekkerSinkage);
+        assert!(
+            controls.iter().any(|control| control.telemetry_key
+                == "bekker_sinkage.loading_plate_pressure"
+                && control.kind == TireViewerControlKind::PhysicalState)
+                && controls.iter().any(|control| control.telemetry_key
+                    == "bekker_sinkage.bekker_soil_preset_override"
+                    && control.kind == TireViewerControlKind::PresetOverride)
+                && controls.iter().any(|control| control.telemetry_key
+                    == "bekker_sinkage.pressure_sinkage_curve"
+                    && control.kind == TireViewerControlKind::VisualizationOnly),
+            "scene 118 controls should classify Bekker soil inputs separately from visualization readouts"
+        );
+        let source = include_str!("examples/118_bekker_sinkage.rs");
+        assert!(
+            source.contains("bekker_n")
+                && source.contains("pressure")
+                && source.contains("curve: Vec<(f32, f32)>"),
+            "scene 118 source should remain a Bekker exponent pressure-sinkage curve scene"
+        );
+    }
+
+    #[test]
+    fn tire_traction_scene_wires_resident_vehicle_to_brush_handoff() {
+        let controls = tire_viewer_control_metadata(Scene::TireTraction);
+        assert!(
+            controls
+                .iter()
+                .any(|control| control.name == "Vehicle→brush row diagnostics"
+                    && control.kind == TireViewerControlKind::DebugToggle),
+            "scene 121 should expose resident vehicle-to-brush force-path diagnostics"
+        );
+        let notes = tire_scene_truth_notes(Scene::TireTraction).expect("scene 121 truth label");
+        assert!(
+            notes
+                .physics_path
+                .contains("TireVehicleYawGpuKernel → TireBrushGpuKernel")
+                && notes
+                    .debug_controls
+                    .contains("resident vehicle-to-brush force-path readouts"),
+            "scene 121 truth label should name the live resident vehicle-to-brush force path"
+        );
+        let source = include_str!("examples/121_tire_traction.rs");
+        assert!(
+            source.contains("TireVehicleYawGpuKernel")
+                && source.contains("dispatch_brush_rows_resident")
+                && source.contains("dispatch_input_buffer_resident")
+                && source.contains("readback_resident_output")
+                && source.contains("eval_brush_pair_gpu_vehicle_handoff")
+                && source.contains("direct GPU brush fallback also failed")
+                && source.contains("Vehicle→brush rows")
+                && source.contains("fn visual_patch_factor")
+                && source.contains("It must never feed the force path")
+                && source.contains("Visual patch factor"),
+            "scene 121 should use the GPU resident vehicle-row to brush-output handoff as the live force path with fallback"
+        );
+        assert!(
+            !source.contains("fn patch_factor"),
+            "scene 121 should not expose an ambiguous patch_factor helper that could be mistaken for force-path physics"
+        );
+    }
+
+    #[test]
+    fn tire_dynamics_scene_prefers_resident_atlas_gpu_path() {
+        let controls = tire_viewer_control_metadata(Scene::TireDynamics);
+        assert!(
+            controls
+                .iter()
+                .any(|control| control.name == "Use resident GPU atlas batch"
+                    && control.kind == TireViewerControlKind::DebugToggle),
+            "scene 120 should expose resident-atlas selection as an explicit debug/fallback toggle"
+        );
+        assert!(
+            controls
+                .iter()
+                .any(|control| control.name == "Use resident vehicle+FEM owner"
+                    && control.kind == TireViewerControlKind::DebugToggle),
+            "scene 120 should expose combined resident vehicle+FEM ownership as an explicit debug/fallback toggle"
+        );
+        let notes = tire_scene_truth_notes(Scene::TireDynamics).expect("scene 120 truth label");
+        assert!(
+            notes
+                .physics_path
+                .contains("combined resident vehicle+brush+tetra tire FEM owner")
+                && notes.debug_controls.contains("raw resident-atlas")
+                && notes.debug_controls.contains("per-tire persistent"),
+            "scene 120 truth label should state combined resident ownership as the preferred path and resident/persistent GPU as fallback"
+        );
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(
+            source.contains("use_resident_atlas: true")
+                && source.contains("use_resident_vehicle_owner: true")
+                && source.contains("TireFemGpuAtlasBatch")
+                && source.contains("TireResidentVehicleFemAtlasOwner")
+                && source.contains("TireVehicleYawGpuKernel")
+                && source.contains("TireBrushGpuKernel")
+                && source.contains("create_resident_vehicle_fem_atlas_owner")
+                && source.contains("step_resident_vehicle_fem_atlas_owner")
+                && source.contains("create_resident_atlas_batch")
+                && source.contains("step_resident_atlas_batch")
+                && source.contains("step_resident_atlas_hubs")
+                && source.contains("Use resident GPU atlas batch")
+                && source.contains("Use resident vehicle+FEM owner")
+                && source.contains("readback_planar_resident_state")
+                && source.contains("readback_vertical_resident_state")
+                && source.contains("readback_wheel_spin_resident")
+                && source.contains("readback_suspension_resident")
+                && source.contains("Resident chassis state")
+                && source.contains("Resident y/spin/susp"),
+            "scene 120 should default to combined resident vehicle+FEM ownership while keeping atlas/persistent fallback toggles"
+        );
+    }
+
+    #[test]
     fn all_viewer_scenes_build_initial_model_without_gpu() {
         for scene in Scene::ALL {
             let (model, visuals) = Sim::build_scene_model(*scene);
@@ -5634,6 +9621,78 @@ mod tests {
                 scene.label()
             );
         }
+    }
+
+    #[test]
+    fn vehicle_offroad_scene_uses_real_brush_tire_adapter() {
+        let source = include_str!("examples/110_vehicle_offroad.rs");
+        assert!(
+            source.contains("RealBrushTireModel::offroad_soft")
+                && source.contains("Vehicle::car_with"),
+            "vehicle offroad scene should use the reusable real-brush tire adapter, not the older simple tire"
+        );
+        let audit = Scene::VehicleOffroad.physics_audit();
+        assert!(
+            audit.reference_case.contains("real-brush")
+                && audit.cpu_proof.contains("RealBrushTireModel")
+                && audit.gpu_proof.contains("legacy scene")
+                && audit.notes.contains("RealBrushTireModel::offroad_soft"),
+            "VehicleOffroad audit should name the real tire adapter honestly: {:?}",
+            audit.notes
+        );
+        let notes = tire_scene_truth_notes(Scene::VehicleOffroad).expect("vehicle offroad notes");
+        assert!(
+            notes.physics_path.contains("legacy CPU bridge")
+                && notes
+                    .physics_path
+                    .contains("resident GPU vehicle/brush/FEM")
+                && notes
+                    .known_approximations
+                    .contains("CPU-only legacy Vehicle/TireModel bridge")
+                && notes
+                    .checklist
+                    .iter()
+                    .any(|item| item.contains("CPU-only legacy RealBrush adapter")),
+            "VehicleOffroad truth label should expose the legacy bridge and GPU-owner follow-up: {:?}",
+            notes.physics_path
+        );
+        let controls = tire_viewer_control_metadata(Scene::VehicleOffroad);
+        assert!(
+            controls.iter().any(|control| control.telemetry_key
+                == "vehicle_offroad.legacy_real_brush_adapter"
+                && control.kind == TireViewerControlKind::DebugToggle)
+                && controls.iter().any(|control| control.telemetry_key
+                    == "vehicle_offroad.heightfield_surface"
+                    && control.kind == TireViewerControlKind::PhysicalState),
+            "VehicleOffroad controls should classify terrain as physical and the legacy adapter as debug-only bridge coverage"
+        );
+    }
+
+    #[test]
+    fn tire_model_lab_includes_native_real_brush_curve() {
+        let source = include_str!("examples/109_tire_model_lab.rs");
+        assert!(
+            source.contains("TIRE_LAB_MODEL_COUNT: usize = 4")
+                && source.contains("RealBrushTireModel::passenger_radial")
+                && source.contains("native real-brush adapter"),
+            "tire model lab should include the native real-brush force-law curve beside empirical references"
+        );
+        let notes = tire_scene_truth_notes(Scene::TireModelLab).expect("tire model lab notes");
+        assert!(
+            notes.physics_path.contains("RealBrushTireModel")
+                && notes
+                    .checklist
+                    .iter()
+                    .any(|item| item.contains("RealBrush")),
+            "TireModelLab truth label should distinguish native real-brush from diagnostic references: {:?}",
+            notes.physics_path
+        );
+        let audit = Scene::TireModelLab.physics_audit();
+        assert!(
+            audit.reference_case.contains("RealBrush")
+                && audit.cpu_proof.contains("RealBrushTireModel"),
+            "TireModelLab audit should include the native real-brush adapter proof"
+        );
     }
 
     #[test]

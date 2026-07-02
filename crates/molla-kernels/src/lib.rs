@@ -87,7 +87,21 @@ mod splat_raytrace;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
+mod tire_bekker;
+#[cfg(feature = "gpu")]
+mod tire_brush;
+#[cfg(feature = "gpu")]
+mod tire_dem;
+#[cfg(feature = "gpu")]
 mod tire_fem;
+#[cfg(feature = "gpu")]
+mod tire_mpm;
+#[cfg(feature = "gpu")]
+mod tire_thermal;
+#[cfg(feature = "gpu")]
+mod tire_transient;
+#[cfg(feature = "gpu")]
+mod tire_vehicle;
 #[cfg(feature = "gpu")]
 mod vbd_cloth;
 #[cfg(feature = "gpu")]
@@ -217,7 +231,107 @@ pub use splat_raytrace::{
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
 #[cfg(feature = "gpu")]
-pub use tire_fem::{TireFemGpuInput, TireFemGpuKernel, TireFemGpuOutput, TireFemGpuParams};
+pub use tire_bekker::{
+    TireBekkerContactCell, TireBekkerFemTerrainOwner, TireBekkerGpuInput, TireBekkerGpuKernel,
+    TireBekkerGpuOutput, TireBekkerGpuResidentTerrain, TireBekkerResidentOutput,
+    tire_bekker_reference_writeback,
+};
+#[cfg(feature = "gpu")]
+pub use tire_brush::{
+    BrushTerrain, BrushWheelInput, BrushWheelOutput, TireBrushGpuBatch, TireBrushGpuKernel,
+    TireBrushResidentOutput,
+};
+#[cfg(feature = "gpu")]
+pub use tire_dem::{
+    TireDemContactCell, TireDemFemTerrainOwner, TireDemFemTerrainStepReport,
+    TireDemGpuBuiltGridStepInput, TireDemGpuInput, TireDemGpuKernel, TireDemGpuLbvhLeafRows,
+    TireDemGpuLbvhTreeRows, TireDemGpuMortonOrder, TireDemGpuOutput, TireDemGpuRadixGridStepInput,
+    TireDemGridStepGpuInput, TireDemLbvhDispatchPlan, TireDemLbvhNode, TireDemLbvhStepGpuInput,
+    TireDemResidentFemTerrainOwner, TireDemResidentLbvh, TireDemResidentOutput,
+    TireDemResidentState, TireDemResidentTerrainOutput, TireDemResidentTerrainParams,
+    TireDemResidentTerrainReadback, TireDemSparseLbvh, TireDemStepGpuInput, TireDemStepParams,
+    TireDemSurfaceVelocityMap, TireDemUnboundedSortedGrid, tire_dem_build_grid_step_input,
+    tire_dem_build_sparse_lbvh, tire_dem_build_sparse_lbvh_leaf_rows_gpu_radix,
+    tire_dem_build_sparse_lbvh_morton_order_gpu_radix, tire_dem_build_sparse_lbvh_step_input,
+    tire_dem_build_sparse_lbvh_tree_rows_gpu_radix,
+    tire_dem_build_unbounded_sorted_grid_step_input,
+    tire_dem_build_unbounded_sorted_grid_step_input_gpu_radix, tire_dem_raster_surface_height_map,
+    tire_dem_raster_surface_velocity_map, tire_dem_reference_grid_step,
+    tire_dem_reference_impulses, tire_dem_reference_sparse_lbvh_step, tire_dem_reference_step,
+    tire_dem_sparse_lbvh_dispatch_plan, tire_dem_sparse_lbvh_gpu_rows,
+};
+#[cfg(feature = "gpu")]
+pub use tire_fem::{
+    TIRE_FEM_ATLAS_SHADER, TIRE_FEM_MATRIX_FREE_NEWTON_DEFAULT_KRYLOV_BUDGET,
+    TIRE_FEM_MATRIX_FREE_NEWTON_LINE_SEARCH_ALPHAS, TIRE_FEM_MATRIX_FREE_NEWTON_SHADER,
+    TIRE_FEM_TORQUE_BRAKE_SOFT_SHOULDER_RAD_S, TIRE_FEM_TORQUE_HUB_MASS_MIN_KG,
+    TireFemContactFeedbackGpuTerrain, TireFemContactFeedbackInput, TireFemContactFeedbackKernel,
+    TireFemContactFeedbackOutput, TireFemContactFeedbackParams,
+    TireFemContactFeedbackPatchAccounting, TireFemContactFeedbackResidentOutput,
+    TireFemContactReductionGpuTerrain, TireFemContactReductionInput, TireFemContactReductionKernel,
+    TireFemContactReductionOutput, TireFemContactReductionParams, TireFemContactSdfPrimitive,
+    TireFemContactTerrain, TireFemContactTriangle, TireFemGpuAtlasBatch,
+    TireFemGpuAtlasHubParamRow, TireFemGpuBatch, TireFemGpuBatchAtlasBindingPlan,
+    TireFemGpuBatchAtlasBuffers, TireFemGpuBatchAtlasDispatchContract, TireFemGpuBatchAtlasLayout,
+    TireFemGpuBatchAtlasOffsetRow, TireFemGpuBatchAtlasOutputRows, TireFemGpuBatchAtlasParamRow,
+    TireFemGpuBatchAtlasRow, TireFemGpuBatchDispatchPlan, TireFemGpuInput, TireFemGpuKernel,
+    TireFemGpuOutput, TireFemGpuParams, TireFemHubParams, TireFemMatrixFreeNewtonGpuContract,
+    TireFemMatrixFreeNewtonGpuInput, TireFemMatrixFreeNewtonGpuKernel,
+    TireFemMatrixFreeNewtonGpuOutcome, TireFemMatrixFreeNewtonGpuOutput,
+    TireFemMatrixFreeNewtonGpuStatus, TireFemPersistentMesh, TireFemTorqueGpuContract,
+    TireFemTorqueGpuStatus, TireFemTransientFeedbackCommand, TireResidentVehicleFemAtlasOwner,
+    tire_fem_contact_terrain_with_dem_surface_velocity,
+    tire_fem_contact_terrain_with_transient_surface_velocity, tire_fem_contact_triangle_bvh_rows,
+    tire_fem_feedback_params_with_transient, tire_fem_gpu_batch_atlas_binding_plan,
+    tire_fem_gpu_batch_atlas_buffers, tire_fem_gpu_batch_atlas_dispatch_contract,
+    tire_fem_gpu_batch_atlas_layout, tire_fem_gpu_batch_atlas_offset_row,
+    tire_fem_gpu_batch_atlas_param_row, tire_fem_gpu_batch_dispatch_plan,
+    tire_fem_gpu_input_from_tetra_fem, tire_fem_hub_params_with_brush_outputs,
+    tire_fem_hub_params_with_contact_reduction, tire_fem_hub_params_with_feedback_output,
+    tire_fem_matrix_free_newton_gpu_contract, tire_fem_torque_gpu_contract,
+    tire_fem_transient_feedback_command,
+};
+#[cfg(feature = "gpu")]
+pub use tire_mpm::{
+    TireMpmContactCell, TireMpmFemTerrainOwner, TireMpmGpuInPlaceParams, TireMpmGpuInput,
+    TireMpmGpuKernel, TireMpmGpuOutput, TireMpmTerrainRasterGpuOutput, TireMpmTerrainRasterParams,
+    tire_mpm_reference_feedback,
+};
+#[cfg(feature = "gpu")]
+pub use tire_thermal::{
+    TireThermalGpuBatch, TireThermalGpuInput, TireThermalGpuKernel, TireThermalGpuOutput,
+    TireThermalGpuState, TireThermalRigReplayBatch, tire_thermal_build_rig_replay_batch,
+    tire_thermal_input_from_rig_snapshot, tire_thermal_reference_rig_replay_batch,
+    tire_thermal_reference_step, tire_thermal_state_from_rig_snapshot,
+};
+#[cfg(feature = "gpu")]
+pub use tire_transient::{
+    TireTransientGpuBatch, TireTransientGpuInput, TireTransientGpuKernel, TireTransientGpuOutput,
+    TireTransientGpuState, tire_transient_reference_step,
+};
+#[cfg(feature = "gpu")]
+pub use tire_vehicle::{
+    TireVehicleBrushRowsFromSpinGpuInput, TireVehicleBrushRowsGpuInput,
+    TireVehicleBrushRowsGpuOutput, TireVehicleBrushRowsResidentOutput,
+    TireVehiclePlanarFromBrushGpuInput, TireVehiclePlanarGpuInput, TireVehiclePlanarGpuOutput,
+    TireVehiclePlanarResidentState, TireVehicleResidentBrushOwner,
+    TireVehicleResidentChassisBrushOwner, TireVehicleSuspensionGpuInput,
+    TireVehicleSuspensionGpuOutput, TireVehicleSuspensionResidentBatch,
+    TireVehicleVerticalGpuInput, TireVehicleVerticalGpuOutput, TireVehicleVerticalResidentState,
+    TireVehicleWheelKinematicsFromSpinGpuInput, TireVehicleWheelKinematicsGpuInput,
+    TireVehicleWheelKinematicsGpuOutput, TireVehicleWheelSpinGpuInput,
+    TireVehicleWheelSpinGpuOutput, TireVehicleWheelSpinResidentBatch,
+    TireVehicleWheelSpinStateGpuOutput, TireVehicleYawGpuInput, TireVehicleYawGpuKernel,
+    TireVehicleYawGpuOutput, tire_vehicle_brush_rows_from_spin_reference,
+    tire_vehicle_brush_rows_from_spin_suspension_reference, tire_vehicle_brush_rows_reference,
+    tire_vehicle_planar_from_brush_reference,
+    tire_vehicle_planar_from_contact_reduction_rows_reference,
+    tire_vehicle_planar_from_feedback_output_reference, tire_vehicle_planar_reference,
+    tire_vehicle_suspension_reference, tire_vehicle_vertical_from_suspension_reference,
+    tire_vehicle_wheel_kinematics_from_spin_reference, tire_vehicle_wheel_kinematics_reference,
+    tire_vehicle_wheel_spin_reference, tire_vehicle_wheel_spin_state_reference,
+    tire_vehicle_yaw_reference,
+};
 #[cfg(feature = "gpu")]
 pub use vbd_cloth::VbdClothKernel;
 #[cfg(feature = "gpu")]

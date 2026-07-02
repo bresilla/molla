@@ -44,6 +44,27 @@ struct SoilCompactionState {
     settled: bool,
     /// Frames spent settling so far.
     settle_frames: u32,
+    /// Step the visible `GranularBed` through the sparse-LBVH DEM owner. This
+    /// broadens offroad ownership from Scene 122's MPM bridge into the DEM
+    /// viewer scene instead of running the sparse path as a read-only probe.
+    use_sparse_lbvh_dem: bool,
+    /// When a GPU device is available, keep the sparse-LBVH DEM grain state
+    /// and DEM→FEM terrain rows in the reusable resident owner rather than
+    /// rebuilding host terrain export on every substep.
+    use_gpu_sparse_lbvh_dem: bool,
+    dem_kernel: Option<molla::kernels::TireDemGpuKernel>,
+    resident_dem_owner: Option<molla::kernels::TireDemResidentFemTerrainOwner>,
+    last_lbvh_backend: &'static str,
+    last_lbvh_nodes: usize,
+    last_lbvh_leaves: usize,
+    last_lbvh_max_leaf: u32,
+    last_lbvh_max_delta_y_m: f32,
+    last_dem_velocity_cells: u32,
+    last_dem_velocity_max_mps: f32,
+    last_dem_fem_sinkage_m: f32,
+    last_dem_fem_rows: usize,
+    last_dem_resident_reseeds: u64,
+    last_lbvh_error: Option<String>,
 }
 
 impl Default for SoilCompactionState {
@@ -64,6 +85,21 @@ impl Default for SoilCompactionState {
             rut_history: Vec::new(),
             settled: false,
             settle_frames: 0,
+            use_sparse_lbvh_dem: true,
+            use_gpu_sparse_lbvh_dem: true,
+            dem_kernel: None,
+            resident_dem_owner: None,
+            last_lbvh_backend: "idle",
+            last_lbvh_nodes: 0,
+            last_lbvh_leaves: 0,
+            last_lbvh_max_leaf: 0,
+            last_lbvh_max_delta_y_m: 0.0,
+            last_dem_velocity_cells: 0,
+            last_dem_velocity_max_mps: 0.0,
+            last_dem_fem_sinkage_m: 0.0,
+            last_dem_fem_rows: 0,
+            last_dem_resident_reseeds: 0,
+            last_lbvh_error: None,
         }
     }
 }
@@ -88,6 +124,282 @@ fn soil_compaction_surface_under_wheel(
         .filter(|g| (g[0] - x).abs() <= x_window && (g[2] - z).abs() <= z_window)
         .map(|g| g[1] + bed.radius)
         .fold(bed.floor_y, f64::max)
+}
+
+fn soil_compaction_sparse_lbvh_step_owned(
+    bed: &mut molla_vehicle::GranularBed,
+    roller_pos: [f64; 3],
+    roller_radius: f64,
+    roller_dir: f64,
+    roller_speed: f64,
+    dt: f64,
+) -> Result<(usize, usize, u32, f32, u32, f32, f32, usize, u64), String> {
+    let positions = bed
+        .grains()
+        .iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, 0.0])
+        .collect::<Vec<_>>();
+    let velocities = bed
+        .grain_velocities()
+        .iter()
+        .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0])
+        .collect::<Vec<_>>();
+    let input = molla::kernels::TireDemStepGpuInput {
+        positions: positions.clone(),
+        velocities,
+        contacts: vec![molla::kernels::TireDemContactCell {
+            center_radius: [
+                roller_pos[0] as f32,
+                (roller_pos[1] - roller_radius) as f32,
+                roller_pos[2] as f32,
+                (roller_radius * 0.75) as f32,
+            ],
+            force: [
+                (roller_dir * roller_speed * bed.mass * 40.0) as f32,
+                -(bed.mass * 9.81 * 80.0) as f32,
+                0.0,
+                0.0,
+            ],
+        }],
+        params: molla::kernels::TireDemStepParams {
+            grain_mass: bed.mass as f32,
+            grain_radius: bed.radius as f32,
+            normal_stiffness: bed.k_n as f32,
+            damping: bed.damping as f32,
+            friction: bed.friction as f32,
+            floor_y: bed.floor_y as f32,
+            gravity: [
+                bed.gravity[0] as f32,
+                bed.gravity[1] as f32,
+                bed.gravity[2] as f32,
+            ],
+            dt: dt as f32,
+            tire_position_push_scale: 0.20,
+        },
+    };
+    let (out, lbvh) =
+        molla::kernels::tire_dem_reference_sparse_lbvh_step(&input).map_err(|e| format!("{e}"))?;
+    let leaves = lbvh.nodes.iter().filter(|n| n.is_leaf()).count();
+    let max_leaf = lbvh
+        .nodes
+        .iter()
+        .filter(|n| n.is_leaf())
+        .map(|n| n.count)
+        .max()
+        .unwrap_or(0);
+    let max_delta_y = out
+        .positions
+        .iter()
+        .zip(positions.iter())
+        .map(|(a, b)| (a[1] - b[1]).abs())
+        .fold(0.0_f32, f32::max);
+    let (min_x, max_x, min_z, max_z) = out.positions.iter().fold(
+        (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ),
+        |(min_x, max_x, min_z, max_z), p| {
+            (
+                min_x.min(p[0]),
+                max_x.max(p[0]),
+                min_z.min(p[2]),
+                max_z.max(p[2]),
+            )
+        },
+    );
+    let velocity_spacing = (bed.radius as f32 * 2.0).max(0.025);
+    let velocity_origin = [min_x - velocity_spacing, min_z - velocity_spacing];
+    let velocity_nx = (((max_x - min_x) / velocity_spacing).ceil() as u32).saturating_add(3);
+    let velocity_nz = (((max_z - min_z) / velocity_spacing).ceil() as u32).saturating_add(3);
+    let mut dem_fem_owner = molla::kernels::TireDemFemTerrainOwner::from_grain_state(
+        velocity_origin,
+        velocity_spacing,
+        velocity_nx.max(1),
+        velocity_nz.max(1),
+        bed.floor_y as f32,
+        bed.friction as f32,
+        bed.radius as f32,
+        &positions,
+        &input.velocities,
+    )
+    .map_err(|e| format!("{e}"))?;
+    dem_fem_owner
+        .update_grain_state(&out.positions, &out.velocities)
+        .map_err(|e| format!("{e}"))?;
+    let dem_fem_terrain = dem_fem_owner
+        .fem_contact_terrain()
+        .map_err(|e| format!("{e}"))?;
+    let velocity_map = dem_fem_owner.surface_velocity_map();
+    let dem_fem_sinkage = dem_fem_owner
+        .sinkage()
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max);
+    let new_positions = out
+        .positions
+        .iter()
+        .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+        .collect::<Vec<_>>();
+    let new_velocities = out
+        .velocities
+        .iter()
+        .map(|v| [v[0] as f64, v[1] as f64, v[2] as f64])
+        .collect::<Vec<_>>();
+    bed.replace_grain_state(&new_positions, &new_velocities)
+        .map_err(|e| e.to_owned())?;
+    Ok((
+        lbvh.nodes.len(),
+        leaves,
+        max_leaf,
+        max_delta_y,
+        velocity_map.active_cells,
+        velocity_map.max_speed_m_per_s,
+        dem_fem_sinkage,
+        dem_fem_terrain.heights.len(),
+        0,
+    ))
+}
+
+fn soil_compaction_resident_terrain_params(
+    bed: &molla_vehicle::GranularBed,
+) -> molla::kernels::TireDemResidentTerrainParams {
+    let (min_x, max_x, min_z, max_z) = bed.grains().iter().fold(
+        (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ),
+        |(min_x, max_x, min_z, max_z), p| {
+            (
+                min_x.min(p[0]),
+                max_x.max(p[0]),
+                min_z.min(p[2]),
+                max_z.max(p[2]),
+            )
+        },
+    );
+    let spacing = (bed.radius as f32 * 2.0).max(0.025);
+    let pad = spacing * 2.0;
+    let origin = [min_x as f32 - pad, min_z as f32 - pad];
+    let nx = (((max_x - min_x) as f32 / spacing).ceil() as u32).saturating_add(5);
+    let nz = (((max_z - min_z) as f32 / spacing).ceil() as u32).saturating_add(5);
+    molla::kernels::TireDemResidentTerrainParams {
+        origin,
+        spacing,
+        nx: nx.max(1),
+        nz: nz.max(1),
+        floor_y: bed.floor_y as f32,
+        grain_radius: bed.radius as f32,
+    }
+}
+
+fn soil_compaction_sparse_lbvh_step_resident_gpu(
+    bed: &mut molla_vehicle::GranularBed,
+    resident_owner: &mut Option<molla::kernels::TireDemResidentFemTerrainOwner>,
+    kernel: &molla::kernels::TireDemGpuKernel,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    roller_pos: [f64; 3],
+    roller_radius: f64,
+    roller_dir: f64,
+    roller_speed: f64,
+    dt: f64,
+) -> Result<(usize, usize, u32, f32, u32, f32, f32, usize, u64), String> {
+    let positions = bed
+        .grains()
+        .iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, 0.0])
+        .collect::<Vec<_>>();
+    let velocities = bed
+        .grain_velocities()
+        .iter()
+        .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0])
+        .collect::<Vec<_>>();
+    if resident_owner.as_ref().is_none_or(|owner| {
+        owner.resident_state().grain_count != positions.len()
+    }) {
+        *resident_owner = Some(
+            molla::kernels::TireDemResidentFemTerrainOwner::from_grain_state(
+                device,
+                queue,
+                kernel,
+                soil_compaction_resident_terrain_params(bed),
+                &positions,
+                &velocities,
+            )
+            .map_err(|e| format!("{e}"))?,
+        );
+    }
+    if let Some(owner) = resident_owner.as_mut() {
+        if owner.positions() != positions.as_slice() || owner.velocities() != velocities.as_slice()
+        {
+            owner
+                .reseed_grain_state(device, queue, kernel, &positions, &velocities)
+                .map_err(|e| format!("{e}"))?;
+        }
+    }
+    let contacts = vec![molla::kernels::TireDemContactCell {
+        center_radius: [
+            roller_pos[0] as f32,
+            (roller_pos[1] - roller_radius) as f32,
+            roller_pos[2] as f32,
+            (roller_radius * 0.75) as f32,
+        ],
+        force: [
+            (roller_dir * roller_speed * bed.mass * 40.0) as f32,
+            -(bed.mass * 9.81 * 80.0) as f32,
+            0.0,
+            0.0,
+        ],
+    }];
+    let params = molla::kernels::TireDemStepParams {
+        grain_mass: bed.mass as f32,
+        grain_radius: bed.radius as f32,
+        normal_stiffness: bed.k_n as f32,
+        damping: bed.damping as f32,
+        friction: bed.friction as f32,
+        floor_y: bed.floor_y as f32,
+        gravity: [
+            bed.gravity[0] as f32,
+            bed.gravity[1] as f32,
+            bed.gravity[2] as f32,
+        ],
+        dt: dt as f32,
+        tire_position_push_scale: 0.20,
+    };
+    let owner = resident_owner
+        .as_mut()
+        .ok_or_else(|| "resident DEM owner missing".to_owned())?;
+    let report = owner
+        .step_sparse_lbvh_gpu_mirrored(device, queue, kernel, &contacts, params, 8)
+        .map_err(|e| format!("{e}"))?;
+    let reseed_count = owner.reseed_count();
+    let new_positions = owner
+        .positions()
+        .iter()
+        .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+        .collect::<Vec<_>>();
+    let new_velocities = owner
+        .velocities()
+        .iter()
+        .map(|v| [v[0] as f64, v[1] as f64, v[2] as f64])
+        .collect::<Vec<_>>();
+    bed.replace_grain_state(&new_positions, &new_velocities)
+        .map_err(|e| e.to_owned())?;
+    Ok((
+        report.lbvh_node_count,
+        report.lbvh_leaf_count,
+        report.lbvh_max_leaf_grains,
+        report.max_position_delta_y_m,
+        report.active_velocity_cells,
+        report.max_surface_speed_m_per_s,
+        report.max_sinkage_m,
+        owner.reference_heights().len(),
+        reseed_count,
+    ))
 }
 
 fn update_soil_compaction_example(
@@ -116,6 +428,7 @@ fn update_soil_compaction_example(
         state.rut_history.clear();
         state.settled = false;
         state.settle_frames = 0;
+        state.resident_dem_owner = None;
         state.roller_pos = [state.x_min, 0.75, 0.0];
         state.roller_dir = 1.0;
         state.roller_angle = 0.0;
@@ -190,10 +503,63 @@ fn update_soil_compaction_example(
             0.0,
         ],
     };
-    if let Some(b) = state.bed.as_mut() {
+    let mut sparse_lbvh_result = None;
+    let roller_pos = state.roller_pos;
+    let roller_radius = state.roller_radius;
+    let roller_dir = state.roller_dir;
+    let roller_speed = state.roller_speed;
+    if state.use_sparse_lbvh_dem {
+        if let Some(mut b) = state.bed.take() {
+            let mut last = Ok((0, 0, 0, 0.0, 0, 0.0, 0.0, 0, 0));
+            for _ in 0..COMPACTION_SUBSTEPS {
+                last = if state.use_gpu_sparse_lbvh_dem {
+                    match (sim.engine.device(), sim.engine.queue()) {
+                        (Some(device), Some(queue)) => {
+                            let kernel = state
+                                .dem_kernel
+                                .take()
+                                .unwrap_or_else(|| molla::kernels::TireDemGpuKernel::new(device));
+                            let result = soil_compaction_sparse_lbvh_step_resident_gpu(
+                                &mut b,
+                                &mut state.resident_dem_owner,
+                                &kernel,
+                                device,
+                                queue,
+                                roller_pos,
+                                roller_radius,
+                                roller_dir,
+                                roller_speed,
+                                COMPACTION_DT,
+                            );
+                            state.dem_kernel = Some(kernel);
+                            result
+                        }
+                        _ => Err("GPU resident DEM requested but no GPU device is available".into()),
+                    }
+                } else {
+                    state.resident_dem_owner = None;
+                    soil_compaction_sparse_lbvh_step_owned(
+                        &mut b,
+                        roller_pos,
+                        roller_radius,
+                        roller_dir,
+                        roller_speed,
+                        COMPACTION_DT,
+                    )
+                };
+                if last.is_err() {
+                    break;
+                }
+            }
+            sparse_lbvh_result = Some(last);
+            state.bed = Some(b);
+        }
+    } else if let Some(mut b) = state.bed.take() {
+        state.resident_dem_owner = None;
         for _ in 0..COMPACTION_SUBSTEPS {
             b.step(std::slice::from_ref(&obstacle), COMPACTION_DT);
         }
+        state.bed = Some(b);
     }
     if crossed_end {
         state.pass_count += 1;
@@ -210,6 +576,92 @@ fn update_soil_compaction_example(
             let drop = state.rut_history.len() - 24;
             state.rut_history.drain(0..drop);
         }
+    }
+    if state.use_sparse_lbvh_dem {
+        if let Some(result) = sparse_lbvh_result {
+            match result {
+                Ok((
+                    nodes,
+                    leaves,
+                    max_leaf,
+                    max_delta_y,
+                    velocity_cells,
+                    velocity_max_mps,
+                    dem_fem_sinkage,
+                    dem_fem_rows,
+                    resident_reseeds,
+                )) => {
+                    state.last_lbvh_backend = if state.use_gpu_sparse_lbvh_dem {
+                        "resident GPU sparse-LBVH DEM owner"
+                    } else {
+                        "owned CPU sparse-LBVH DEM"
+                    };
+                    state.last_lbvh_nodes = nodes;
+                    state.last_lbvh_leaves = leaves;
+                    state.last_lbvh_max_leaf = max_leaf;
+                    state.last_lbvh_max_delta_y_m = max_delta_y;
+                    state.last_dem_velocity_cells = velocity_cells;
+                    state.last_dem_velocity_max_mps = velocity_max_mps;
+                    state.last_dem_fem_sinkage_m = dem_fem_sinkage;
+                    state.last_dem_fem_rows = dem_fem_rows;
+                    state.last_dem_resident_reseeds = resident_reseeds;
+                    state.last_lbvh_error = None;
+                }
+                Err(err) => {
+                    state.last_lbvh_backend = "error";
+                    state.last_lbvh_error = Some(err);
+                }
+            }
+        }
+    } else {
+        state.resident_dem_owner = None;
+        state.last_lbvh_backend = "GranularBed grid";
+        state.last_lbvh_nodes = 0;
+        state.last_lbvh_leaves = 0;
+        state.last_lbvh_max_leaf = 0;
+        state.last_lbvh_max_delta_y_m = 0.0;
+        state.last_dem_velocity_cells = 0;
+        state.last_dem_velocity_max_mps = 0.0;
+        state.last_dem_fem_sinkage_m = 0.0;
+        state.last_dem_fem_rows = 0;
+        state.last_dem_resident_reseeds = 0;
+        state.last_lbvh_error = None;
+    }
+}
+
+fn soil_compaction_pane(ui: &mut egui::Ui, state: &mut SoilCompactionState) {
+    ui.heading("DEM compaction");
+    ui.label("The visible bed is molla-vehicle GranularBed, but the default stepper now hands that bed to the sparse-LBVH DEM owner and writes the resulting grain state back into the scene. Disable it to compare against the older GranularBed grid step.");
+    ui.separator();
+    ui.checkbox(&mut state.use_sparse_lbvh_dem, "Use sparse-LBVH DEM owner");
+    ui.checkbox(
+        &mut state.use_gpu_sparse_lbvh_dem,
+        "Use resident GPU DEM terrain owner",
+    );
+    ui.label(format!("backend: {}", state.last_lbvh_backend));
+    ui.label(format!(
+        "LBVH nodes/leaves: {} / {}",
+        state.last_lbvh_nodes, state.last_lbvh_leaves
+    ));
+    ui.label(format!("max leaf grains: {}", state.last_lbvh_max_leaf));
+    ui.label(format!(
+        "one-step max |Δy|: {:.4} m",
+        state.last_lbvh_max_delta_y_m
+    ));
+    ui.label(format!(
+        "DEM surface velocity map: {} active cells, max {:.2} m/s",
+        state.last_dem_velocity_cells, state.last_dem_velocity_max_mps
+    ));
+    ui.label(format!(
+        "DEM→FEM terrain bridge: {} rows, max sinkage {:.4} m",
+        state.last_dem_fem_rows, state.last_dem_fem_sinkage_m
+    ));
+    ui.label(format!(
+        "Resident DEM reseeds: {}",
+        state.last_dem_resident_reseeds
+    ));
+    if let Some(err) = &state.last_lbvh_error {
+        ui.colored_label(egui::Color32::LIGHT_RED, err);
     }
 }
 

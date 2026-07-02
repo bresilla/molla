@@ -30,6 +30,9 @@ use crate::sim::{JointType, Model, State};
 /// position in the body's local frame. `articulation` selects which
 /// articulation owns the joints — the result is sized to that
 /// articulation's DOF total.
+// The 6×dof J fill below keeps the explicit `row * dof_total + col`
+// row-major idiom for rows 0 and 1 so all six rows read as coordinates.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 pub fn jacobian(
     model: &Model,
     state: &State,

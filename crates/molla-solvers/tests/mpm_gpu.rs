@@ -9,7 +9,8 @@
 #![cfg(feature = "gpu")]
 
 use molla_compute::Engine;
-use molla_solvers::{MpmConfig, MpmSimulation};
+use molla_kernels::{TireMpmContactCell, TireMpmGpuKernel};
+use molla_solvers::{MpmConfig, MpmSimulation, MpmTireFeedbackParams, MpmTireTerrainRaster};
 
 fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
@@ -86,6 +87,129 @@ fn mpm_smoke_steps_dont_explode() {
     // Should have fallen but not flown into orbit.
     assert!(min_y < 0.95, "particles didn't fall (min_y={min_y})");
     assert!(max_speed < 50.0, "runaway speed {max_speed}");
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn mpm_tire_feedback_composes_with_solver_particles() {
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let mut cfg = MpmConfig::sand();
+    cfg.max_particles = 8;
+    cfg.particle_mass = 2.0;
+    let mut sim = MpmSimulation::new(&engine, cfg).expect("mpm new");
+    let particles = [[0.0, 0.05, 0.0], [0.05, 0.02, 0.0], [0.35, 0.05, 0.0]];
+    sim.set_particles(&queue, &particles).expect("set");
+
+    let contacts = [TireMpmContactCell {
+        center_radius: [0.0, 0.06, 0.0, 0.14],
+        force_pressure: [20.0, -120.0, 5.0, 80_000.0],
+    }];
+    let params = MpmTireFeedbackParams {
+        dt: 1.0e-3,
+        plastic_compaction_gain: 2.0e-3,
+        max_compaction: 0.20,
+        damping: 18.0,
+    };
+    let kernel = TireMpmGpuKernel::new(&device);
+    sim.apply_tire_contacts_gpu_resident_with(&device, &queue, &kernel, &contacts, params)
+        .expect("resident tire feedback");
+    let pos_after = sim
+        .read_positions_with(&device, &queue)
+        .expect("positions after feedback");
+    let vel_after = sim
+        .read_velocities_with(&device, &queue)
+        .expect("velocities after feedback");
+    let compaction = sim
+        .read_tire_compaction_with(&device, &queue)
+        .expect("tire compaction after feedback");
+    assert!(
+        vel_after[0][1] < 0.0 && pos_after[0][1] < particles[0][1],
+        "tire feedback should write downward velocity into the MPM particles"
+    );
+    assert!(
+        compaction[0][0] > 0.0 && sim.tire_compaction()[0][0] > 0.0,
+        "tire feedback should persist per-particle compaction diagnostics"
+    );
+    let terrain_cells = 4 * 3;
+    let terrain_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
+    let terrain_heights = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test.mpm_tire terrain heights"),
+        size: (terrain_cells * core::mem::size_of::<f32>()) as u64,
+        usage: terrain_usage,
+        mapped_at_creation: false,
+    });
+    let terrain_sinkage = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test.mpm_tire terrain sinkage"),
+        size: (terrain_cells * core::mem::size_of::<f32>()) as u64,
+        usage: terrain_usage,
+        mapped_at_creation: false,
+    });
+    let terrain_velocity = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test.mpm_tire terrain surface velocity"),
+        size: (terrain_cells * core::mem::size_of::<[f32; 4]>()) as u64,
+        usage: terrain_usage,
+        mapped_at_creation: false,
+    });
+    sim.raster_tire_fem_terrain_gpu_resident_with(
+        &device,
+        &queue,
+        &kernel,
+        MpmTireTerrainRaster {
+            origin: [-0.20, -0.20],
+            spacing: 0.20,
+            nx: 4,
+            nz: 3,
+            rest_height: 0.0,
+            friction: 0.5,
+            soil_rolling_resistance_scale: 2.0,
+            surface_velocity: [0.25, 0.0, 0.0],
+        },
+        &terrain_heights,
+        &terrain_sinkage,
+        &terrain_velocity,
+    )
+    .expect("resident MPM terrain raster");
+
+    sim.step_with(&device, &queue, 1.0 / 480.0)
+        .expect("full MPM step after tire feedback");
+    let terrain = sim
+        .tire_fem_contact_terrain_with(
+            &device,
+            &queue,
+            MpmTireTerrainRaster {
+                origin: [-0.20, -0.20],
+                spacing: 0.20,
+                nx: 4,
+                nz: 3,
+                rest_height: 0.0,
+                friction: 0.5,
+                soil_rolling_resistance_scale: 2.0,
+                surface_velocity: [0.25, 0.0, 0.0],
+            },
+        )
+        .expect("FEM terrain export");
+    assert_eq!(terrain.friction, 0.5);
+    assert_eq!(terrain.surface_velocity, [0.25, 0.0, 0.0]);
+    assert!(
+        terrain
+            .surface_velocity_map
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|v| v[0].abs() > 1.0e-5 || v[1].abs() > 1.0e-5 || v[2].abs() > 1.0e-5),
+        "MPM FEM terrain export should carry spatial material velocity samples"
+    );
+    assert!(
+        terrain
+            .sinkage_map
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|s| *s > 0.0),
+        "MPM tire feedback compaction should be visible to FEM terrain"
+    );
 }
 
 #[test]

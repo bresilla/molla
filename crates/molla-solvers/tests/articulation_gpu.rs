@@ -1,3 +1,6 @@
+// Jacobian rows are read with the explicit `row * dof + col` idiom.
+#![allow(clippy::erasing_op, clippy::identity_op)]
+
 //! GPU articulation-math tests — CRBA mass matrix, RNEA inverse
 //! dynamics, spatial Jacobian, and IK. All `#[ignore]`-marked so they
 //! only run with a real wgpu adapter via:

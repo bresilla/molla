@@ -3302,6 +3302,7 @@ dependencies = [
  "molla-optim",
  "molla-sim",
  "molla-storage",
+ "molla-vehicle",
  "rayon",
  "rustfft",
  "wgpu",

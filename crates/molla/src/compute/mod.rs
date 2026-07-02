@@ -40,4 +40,6 @@ pub mod tile_stream_compaction;
 #[cfg(feature = "gpu")]
 pub use molla_compute::{AdapterInfo, Backend, Engine};
 #[cfg(feature = "gpu")]
-pub use mpm::{MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep};
+pub use mpm::{
+    MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams, MpmTireTerrainRaster,
+};

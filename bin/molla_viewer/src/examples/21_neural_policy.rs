@@ -339,6 +339,9 @@ struct NeuralPolicyWeights {
     b3: Vec<f64>,
 }
 
+// The weight fill uses the explicit `row * stride + col` row-major idiom
+// so every entry reads as a (row, col) coordinate.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 fn build_neural_policy_weights() -> NeuralPolicyWeights {
     // Architecture: 4 → 32 → 32 → 1.
     // Strategy: layer 1 is a slightly-noisy identity passthrough on

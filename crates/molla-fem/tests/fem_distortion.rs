@@ -72,7 +72,7 @@ fn identity_map_zero_energy() {
 
 #[test]
 fn pure_translation_zero_energy() {
-    let offset = Vec3::new(0.42, -1.7, 3.14);
+    let offset = Vec3::new(0.42, -1.7, 3.45);
 
     // Triangle — translation in-plane (the z component is ignored by
     // the in-plane tri kernel, but the test still confirms x/y shift

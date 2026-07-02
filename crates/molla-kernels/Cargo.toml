@@ -21,6 +21,7 @@ gpu = [
     "molla-geometry/gpu",
     "molla-storage/gpu",
     "molla-sim/gpu",
+    "dep:molla-vehicle",
 ]
 
 [dependencies]
@@ -33,6 +34,7 @@ molla-math = { path = "../molla-math" }
 molla-optim = { path = "../molla-optim" }
 molla-sim = { path = "../molla-sim", default-features = false }
 molla-storage = { path = "../molla-storage", default-features = false }
+molla-vehicle = { path = "../molla-vehicle", optional = true }
 bytemuck = { version = "1.18", features = ["derive"] }
 rayon = "1.10"
 wgpu = { version = "27", optional = true, default-features = false, features = [

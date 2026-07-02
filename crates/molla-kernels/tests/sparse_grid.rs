@@ -135,15 +135,15 @@ fn random_insert_lookup_round_trip_10k() {
 
 #[test]
 fn background_returned_outside_active_set() {
-    let mut g = SparseGrid::new(-3.14);
+    let mut g = SparseGrid::new(-3.25);
     g.insert(0, 0, 0, 5.0);
     assert_eq!(g.lookup(0, 0, 0), 5.0);
     // Same leaf, different voxel — inactive.
-    assert_eq!(g.lookup(1, 0, 0), -3.14);
+    assert_eq!(g.lookup(1, 0, 0), -3.25);
     // Different leaf entirely — inactive.
-    assert_eq!(g.lookup(100, 100, 100), -3.14);
+    assert_eq!(g.lookup(100, 100, 100), -3.25);
     // Negative coords.
-    assert_eq!(g.lookup(-1, -1, -1), -3.14);
+    assert_eq!(g.lookup(-1, -1, -1), -3.25);
 }
 
 #[test]

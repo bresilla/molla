@@ -318,7 +318,7 @@ fn tile_filtering_laplacian_kills_constant() {
     // constant, so even edge pixels see a flat stencil.)
     let w = 16;
     let h = 16;
-    let input = vec![3.14_f32; w * h];
+    let input = vec![std::f32::consts::PI; w * h];
     let mut output = vec![0.0_f32; w * h];
     tile_filtering::laplacian_filter_cpu(&input, &mut output, w, h).unwrap();
     for v in output.iter() {

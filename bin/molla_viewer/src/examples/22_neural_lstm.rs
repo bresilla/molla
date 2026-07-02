@@ -272,6 +272,9 @@ struct NeuralLstmWeights {
     b_y: Vec<f64>,
 }
 
+// The weight fill uses the explicit `row * stride + col` row-major idiom
+// so every entry reads as a (row, col) coordinate.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 fn build_neural_lstm_weights() -> NeuralLstmWeights {
     let in_dim: usize = 4;
     let hid_dim: usize = LSTM_HID_DIM; // 16

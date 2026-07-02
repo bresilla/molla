@@ -1,3 +1,6 @@
+// Jacobian rows are read with the explicit `row * dof + col` idiom.
+#![allow(clippy::erasing_op, clippy::identity_op)]
+
 //! IK on a 7-DOF Franka-style serial arm + standalone Jacobian tests.
 //! All CPU; no `--ignored` because nothing here needs a GPU adapter.
 

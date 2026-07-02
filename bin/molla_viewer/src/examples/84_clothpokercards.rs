@@ -192,7 +192,7 @@ fn draw_cloth_poker_cards_gizmos(sim: Res<Sim>, mut gizmos: Gizmos) {
         // Hue cycles around the deck for visual separation.
         let t = c as f32 / POKER_NUM_CARDS as f32;
         let r = 0.85 - 0.5 * t;
-        let g = 0.30 + 0.5 * (t * 6.28).sin().abs();
+        let g = 0.30 + 0.5 * (t * std::f32::consts::TAU).sin().abs();
         let b = 0.20 + 0.7 * t;
         let col = Color::srgb(r, g, b);
         for iy in 0..ny {

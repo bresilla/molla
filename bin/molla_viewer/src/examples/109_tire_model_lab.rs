@@ -14,13 +14,13 @@ struct TireLabExampleState {
     pub fz: f64,
     /// Ground friction coefficient (Coulomb μ).
     pub friction: f64,
-    /// `slip_ratio → Fx` curves for the three tire models, sampled
+    /// `slip_ratio → Fx` curves for the tire models, sampled
     /// over `slip ∈ [-1, 1]` in `N_SLIP_SAMPLES` steps. Order:
-    /// Rigid, TMsimple, Pac89.
-    pub fx_curves: [Vec<f32>; 3],
-    /// `slip_angle → Fy` curves for the three tire models, sampled
+    /// Rigid, TMsimple, Pac89, native real-brush adapter.
+    pub fx_curves: [Vec<f32>; TIRE_LAB_MODEL_COUNT],
+    /// `slip_angle → Fy` curves for the tire models, sampled
     /// over `α ∈ [-30°, 30°]` in `N_SLIP_SAMPLES` steps.
-    pub fy_curves: [Vec<f32>; 3],
+    pub fy_curves: [Vec<f32>; TIRE_LAB_MODEL_COUNT],
 }
 
 impl Default for TireLabExampleState {
@@ -28,27 +28,29 @@ impl Default for TireLabExampleState {
         Self {
             fz: 4000.0,
             friction: 1.0,
-            fx_curves: [Vec::new(), Vec::new(), Vec::new()],
-            fy_curves: [Vec::new(), Vec::new(), Vec::new()],
+            fx_curves: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            fy_curves: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         }
     }
 }
 
 const N_TIRE_LAB_SAMPLES: usize = 121;
+const TIRE_LAB_MODEL_COUNT: usize = 4;
 const TIRE_LAB_PLOT_HALF_WIDTH: f32 = 5.0; // metres along X
 const TIRE_LAB_PLOT_HEIGHT: f32 = 1.5; // visible Fx / Fy span in metres
 
-// V1-V2 — evaluate every tire model over a fixed slip sweep, store
-// the curves for [`draw_tire_lab_gizmos`].
+// V1/V2 plus the native real-brush adapter — evaluate every tire model over
+// a fixed slip sweep, store the curves for [`draw_tire_lab_gizmos`].
 fn update_tire_lab_example(sim: Res<Sim>, mut state: ResMut<TireLabExampleState>) {
     if sim.scene != Scene::TireModelLab {
         return;
     }
-    use molla_vehicle::{Pac89Tire, RigidTire, TireModel, TmSimpleTire};
-    let models: [Box<dyn TireModel>; 3] = [
+    use molla_vehicle::{Pac89Tire, RealBrushTireModel, RigidTire, TireModel, TmSimpleTire};
+    let models: [Box<dyn TireModel>; TIRE_LAB_MODEL_COUNT] = [
         Box::new(RigidTire::default()),
         Box::new(TmSimpleTire::default()),
         Box::new(Pac89Tire::default()),
+        Box::new(RealBrushTireModel::passenger_radial()),
     ];
     for (m_idx, model) in models.iter().enumerate() {
         let mut fx = Vec::with_capacity(N_TIRE_LAB_SAMPLES);
@@ -79,6 +81,7 @@ fn draw_tire_lab_gizmos(sim: Res<Sim>, state: Res<TireLabExampleState>, mut gizm
         Color::srgb(0.85, 0.45, 0.35), // Rigid
         Color::srgb(0.40, 0.85, 0.50), // TMsimple
         Color::srgb(0.45, 0.55, 0.95), // Pac89
+        Color::srgb(0.95, 0.85, 0.25), // native real-brush adapter
     ];
     let plot_origin_fx = Vec3::new(-TIRE_LAB_PLOT_HALF_WIDTH, 1.0, 0.0);
     let plot_origin_fy = Vec3::new(TIRE_LAB_PLOT_HALF_WIDTH, 1.0, 0.0);
@@ -122,4 +125,3 @@ fn draw_tire_lab_gizmos(sim: Res<Sim>, state: Res<TireLabExampleState>, mut gizm
         line_strip(&mut gizmos, plot_origin_fy, samples, colors[i]);
     }
 }
-

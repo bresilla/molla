@@ -117,6 +117,11 @@
 
 use crate::compute::Engine;
 use crate::core::{Error, Result};
+use crate::kernels::{
+    TireFemContactTerrain, TireMpmContactCell, TireMpmFemTerrainOwner, TireMpmGpuInPlaceParams,
+    TireMpmGpuInput, TireMpmGpuKernel, TireMpmGpuOutput, TireMpmTerrainRasterParams,
+    tire_mpm_reference_feedback,
+};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 
@@ -270,6 +275,106 @@ pub struct MpmConfig {
     pub rheology: MpmRheology,
     /// Stage 24d.1 — time-step selector.
     pub time_step: MpmTimeStep,
+}
+
+/// Tire-specific material-point feedback parameters for composing the
+/// tire-contact pass with [`MpmSimulation`].
+///
+/// This is deliberately not calibration data. These are numerical/physical
+/// coupling knobs that decide how tire contact-cell force and pressure are
+/// injected into the MPM particles before the full particle/grid solver keeps
+/// advancing the continuum.
+#[derive(Clone, Copy, Debug)]
+pub struct MpmTireFeedbackParams {
+    /// Tire feedback integration step in seconds.
+    pub dt: f32,
+    /// Plastic compaction increment per pressure·second.
+    pub plastic_compaction_gain: f32,
+    /// Clamp for the accumulated plastic sinkage/compaction diagnostic.
+    pub max_compaction: f32,
+    /// Local velocity damping around active tire contact cells.
+    pub damping: f32,
+}
+
+impl MpmTireFeedbackParams {
+    pub fn new(dt: f32) -> Self {
+        Self {
+            dt,
+            ..Self::default()
+        }
+    }
+
+    fn validate(self) -> Result<Self> {
+        if !self.dt.is_finite() || self.dt < 0.0 {
+            return Err(Error::Solver(
+                "mpm tire feedback: dt must be finite and nonnegative".into(),
+            ));
+        }
+        if !self.plastic_compaction_gain.is_finite() || self.plastic_compaction_gain < 0.0 {
+            return Err(Error::Solver(
+                "mpm tire feedback: plastic_compaction_gain must be finite and nonnegative".into(),
+            ));
+        }
+        if !self.max_compaction.is_finite() || self.max_compaction < 0.0 {
+            return Err(Error::Solver(
+                "mpm tire feedback: max_compaction must be finite and nonnegative".into(),
+            ));
+        }
+        if !self.damping.is_finite() || self.damping < 0.0 {
+            return Err(Error::Solver(
+                "mpm tire feedback: damping must be finite and nonnegative".into(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl Default for MpmTireFeedbackParams {
+    fn default() -> Self {
+        Self {
+            dt: 1.0 / 240.0,
+            plastic_compaction_gain: 2.0e-6,
+            max_compaction: 0.25,
+            damping: 12.0,
+        }
+    }
+}
+
+/// Raster settings for exporting a tire-coupled MPM particle bed as FEM
+/// contact terrain.
+#[derive(Clone, Copy, Debug)]
+pub struct MpmTireTerrainRaster {
+    /// `(x, z)` world origin of the row-major terrain grid.
+    pub origin: [f32; 2],
+    /// Square grid spacing in metres.
+    pub spacing: f32,
+    pub nx: u32,
+    pub nz: u32,
+    /// Undeformed terrain height used where no compacted particle has
+    /// contributed sinkage.
+    pub rest_height: f32,
+    /// Scalar terrain friction exported to FEM contact.
+    pub friction: f32,
+    /// Rolling-loss multiplier applied by FEM contact when sampling the
+    /// exported sinkage map.
+    pub soil_rolling_resistance_scale: f32,
+    /// Surface velocity exported to FEM contact for moving belts/terrain.
+    pub surface_velocity: [f32; 3],
+}
+
+impl MpmTireTerrainRaster {
+    pub fn new(origin: [f32; 2], spacing: f32, nx: u32, nz: u32) -> Self {
+        Self {
+            origin,
+            spacing,
+            nx,
+            nz,
+            rest_height: 0.0,
+            friction: 0.6,
+            soil_rolling_resistance_scale: 1.0,
+            surface_velocity: [0.0; 3],
+        }
+    }
 }
 
 impl MpmConfig {
@@ -474,6 +579,11 @@ pub struct MpmSimulation {
     // Host-side mirrors for tests + viewer.
     host_pos: Vec<[f32; 4]>,
     host_vel: Vec<[f32; 4]>,
+    /// Tire-specific material-point compaction/impulse diagnostics. The GPU
+    /// buffer is the production path; this host mirror is refreshed only for
+    /// readback/terrain-export diagnostics.
+    tire_compaction: Vec<[f32; 4]>,
+    tire_compaction_buf: wgpu::Buffer,
 }
 
 impl MpmSimulation {
@@ -579,6 +689,7 @@ impl MpmSimulation {
         let p_volume = mk_buf("mpm.p_volume", n_particles * 4, storage);
         let p_mass = mk_buf("mpm.p_mass", n_particles * 4, storage);
         let p_jp = mk_buf("mpm.p_jp", n_particles * 4, storage);
+        let tire_compaction_buf = mk_buf("mpm.tire_compaction", n_particles * 16, storage);
 
         let g_mass = mk_buf("mpm.g_mass", grid_total * 4, storage);
         let g_momentum = mk_buf("mpm.g_momentum", grid_total * 12, storage);
@@ -703,6 +814,8 @@ impl MpmSimulation {
             use_two_pass_p2g: true,
             host_pos: vec![],
             host_vel: vec![],
+            tire_compaction: vec![],
+            tire_compaction_buf,
         })
     }
 
@@ -771,10 +884,16 @@ impl MpmSimulation {
         queue.write_buffer(&self.p_volume, 0, bytemuck::cast_slice(&volume));
         queue.write_buffer(&self.p_mass, 0, bytemuck::cast_slice(&mass));
         queue.write_buffer(&self.p_jp, 0, bytemuck::cast_slice(&jp));
+        queue.write_buffer(
+            &self.tire_compaction_buf,
+            0,
+            bytemuck::cast_slice(&vec![[0.0_f32; 4]; n]),
+        );
 
         self.particle_count = n as u32;
         self.host_pos = pos;
         self.host_vel = vel;
+        self.tire_compaction = vec![[0.0; 4]; n];
         Ok(())
     }
 
@@ -843,6 +962,321 @@ impl MpmSimulation {
     /// Stage 24d.3 — query the current p2g dispatch mode.
     pub fn uses_two_pass_p2g(&self) -> bool {
         self.use_two_pass_p2g
+    }
+
+    /// Tire-specific compaction/impulse diagnostics accumulated by the
+    /// tire-MPM feedback bridge. Layout is
+    /// `(plastic_compaction, normal_impulse_n_s, shear_impulse_n_s,
+    /// active_weight)` per particle.
+    pub fn tire_compaction(&self) -> &[[f32; 4]] {
+        &self.tire_compaction
+    }
+
+    /// Reset only the tire-contact compaction diagnostics. The full MPM
+    /// particle/grid state is left unchanged.
+    pub fn reset_tire_compaction(&mut self) {
+        self.tire_compaction = vec![[0.0; 4]; self.particle_count as usize];
+    }
+
+    /// Reset tire-contact compaction diagnostics on both the host mirror and
+    /// the persistent GPU buffer.
+    pub fn reset_tire_compaction_with(&mut self, queue: &wgpu::Queue) {
+        self.reset_tire_compaction();
+        if self.particle_count > 0 {
+            queue.write_buffer(
+                &self.tire_compaction_buf,
+                0,
+                bytemuck::cast_slice(&self.tire_compaction),
+            );
+        }
+    }
+
+    /// Read the persistent GPU tire-compaction buffer back to the host mirror.
+    pub fn read_tire_compaction_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<Vec<[f32; 4]>> {
+        if self.particle_count == 0 {
+            self.tire_compaction.clear();
+            return Ok(vec![]);
+        }
+        let bytes = (self.particle_count as u64) * 16;
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::mpm tire_compaction readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::mpm tire_compaction readback encoder"),
+        });
+        encoder.copy_buffer_to_buffer(&self.tire_compaction_buf, 0, &stage, 0, bytes);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = stage.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            sender
+                .send(r.map_err(|e| Error::Gpu(format!("mpm tire compaction map: {e:?}"))))
+                .ok();
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("mpm tire compaction poll: {e:?}")))?;
+        receiver
+            .recv()
+            .map_err(|e| Error::Gpu(format!("mpm tire compaction recv: {e:?}")))??;
+        let data = slice.get_mapped_range();
+        let out: Vec<[f32; 4]> =
+            bytemuck::cast_slice(&data)[..self.particle_count as usize].to_vec();
+        drop(data);
+        stage.unmap();
+        self.tire_compaction = out.clone();
+        Ok(out)
+    }
+
+    /// Build a tire-MPM feedback input from the current MPM particle state.
+    ///
+    /// This synchronizes positions/velocities from the GPU MPM buffers, then
+    /// attaches the persistent tire compaction diagnostics. It is the first
+    /// explicit composition point between the full particle/grid MPM solver
+    /// and the tire-contact material-point feedback kernel.
+    pub fn tire_feedback_input_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        contacts: &[TireMpmContactCell],
+        params: MpmTireFeedbackParams,
+    ) -> Result<TireMpmGpuInput> {
+        let params = params.validate()?;
+        let positions = self
+            .read_positions_with(device, queue)?
+            .into_iter()
+            .map(|p| [p[0], p[1], p[2], 0.0])
+            .collect::<Vec<_>>();
+        let velocities = self
+            .read_velocities_with(device, queue)?
+            .into_iter()
+            .map(|v| [v[0], v[1], v[2], 0.0])
+            .collect::<Vec<_>>();
+        let compaction = self.read_tire_compaction_with(device, queue)?;
+        if self.tire_compaction.len() != positions.len() {
+            self.tire_compaction = vec![[0.0; 4]; positions.len()];
+        }
+        Ok(TireMpmGpuInput {
+            positions,
+            velocities,
+            compaction,
+            contacts: contacts.to_vec(),
+            particle_mass: self.cfg.particle_mass,
+            dt: params.dt,
+            plastic_compaction_gain: params.plastic_compaction_gain,
+            max_compaction: params.max_compaction,
+            damping: params.damping,
+        })
+    }
+
+    /// Compose tire contact feedback with the full MPM solver using the CPU
+    /// reference feedback path, then write the resulting particle state back
+    /// into this simulation's GPU-owned particle buffers.
+    pub fn apply_tire_contacts_cpu_feedback_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        contacts: &[TireMpmContactCell],
+        params: MpmTireFeedbackParams,
+    ) -> Result<TireMpmGpuOutput> {
+        let input = self.tire_feedback_input_with(device, queue, contacts, params)?;
+        let output = tire_mpm_reference_feedback(&input)?;
+        self.write_tire_feedback_output(queue, &output)?;
+        Ok(output)
+    }
+
+    /// Compose tire contact feedback with the full MPM solver using the GPU
+    /// tire-feedback kernel in-place on this simulation's persistent particle
+    /// buffers. This avoids the previous GPU feedback readback/re-upload
+    /// bridge for the hot path.
+    pub fn apply_tire_contacts_gpu_resident_with(
+        &mut self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireMpmGpuKernel,
+        contacts: &[TireMpmContactCell],
+        params: MpmTireFeedbackParams,
+    ) -> Result<()> {
+        let params = params.validate()?;
+        if self.particle_count == 0 {
+            return Ok(());
+        }
+        kernel.dispatch_in_place(
+            _device,
+            queue,
+            &self.p_pos,
+            &self.p_vel,
+            &self.tire_compaction_buf,
+            contacts,
+            &TireMpmGpuInPlaceParams {
+                particle_count: self.particle_count,
+                particle_mass: self.cfg.particle_mass,
+                dt: params.dt,
+                plastic_compaction_gain: params.plastic_compaction_gain,
+                max_compaction: params.max_compaction,
+                damping: params.damping,
+            },
+        )
+    }
+
+    /// Compose tire contact feedback with the full MPM solver using the GPU
+    /// tire-feedback kernel, then read the updated state back for callers that
+    /// need an immediate diagnostic snapshot. Use
+    /// [`Self::apply_tire_contacts_gpu_resident_with`] when no readback is
+    /// needed.
+    pub fn apply_tire_contacts_gpu_feedback_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireMpmGpuKernel,
+        contacts: &[TireMpmContactCell],
+        params: MpmTireFeedbackParams,
+    ) -> Result<TireMpmGpuOutput> {
+        self.apply_tire_contacts_gpu_resident_with(device, queue, kernel, contacts, params)?;
+        let positions = self
+            .read_positions_with(device, queue)?
+            .into_iter()
+            .map(|p| [p[0], p[1], p[2], 0.0])
+            .collect::<Vec<_>>();
+        let velocities = self
+            .read_velocities_with(device, queue)?
+            .into_iter()
+            .map(|v| [v[0], v[1], v[2], 0.0])
+            .collect::<Vec<_>>();
+        let compaction = self.read_tire_compaction_with(device, queue)?;
+        self.host_pos = positions.clone();
+        self.host_vel = velocities.clone();
+        Ok(TireMpmGpuOutput {
+            positions,
+            velocities,
+            compaction,
+        })
+    }
+
+    /// Export the current MPM particle bed and tire-compaction diagnostics as
+    /// FEM contact terrain through [`TireMpmFemTerrainOwner`].
+    pub fn tire_fem_terrain_owner_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        raster: MpmTireTerrainRaster,
+    ) -> Result<TireMpmFemTerrainOwner> {
+        let input = self.tire_feedback_input_with(
+            device,
+            queue,
+            &[],
+            MpmTireFeedbackParams {
+                dt: 0.0,
+                ..MpmTireFeedbackParams::default()
+            },
+        )?;
+        let mut owner = TireMpmFemTerrainOwner::from_input(
+            input,
+            raster.origin,
+            raster.spacing,
+            raster.nx,
+            raster.nz,
+            raster.rest_height,
+            raster.friction,
+        )?;
+        owner.set_soil_rolling_resistance_scale(raster.soil_rolling_resistance_scale);
+        owner.set_surface_velocity(raster.surface_velocity);
+        Ok(owner)
+    }
+
+    /// Convenience wrapper for callers that only need the FEM contact terrain
+    /// export and not the owning MPM bridge object.
+    pub fn tire_fem_contact_terrain_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        raster: MpmTireTerrainRaster,
+    ) -> Result<TireFemContactTerrain> {
+        Ok(self
+            .tire_fem_terrain_owner_with(device, queue, raster)?
+            .fem_contact_terrain())
+    }
+
+    /// Rasterize live MPM tire compaction into caller-owned GPU
+    /// height/sinkage/surface-velocity buffers without reading particles back
+    /// to the CPU.
+    ///
+    /// The output buffers must be at least `raster.nx * raster.nz * 4` bytes
+    /// and have `STORAGE` usage. Add `COPY_SRC` if the caller wants a
+    /// diagnostic readback. FEM contact feedback/reduction can consume these
+    /// buffers directly through `TireFemContactFeedbackGpuTerrain`; the
+    /// remaining deeper terrain work is to make owners export spatial surface
+    /// velocity maps directly.
+    pub fn raster_tire_fem_terrain_gpu_resident_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireMpmGpuKernel,
+        raster: MpmTireTerrainRaster,
+        heights: &wgpu::Buffer,
+        sinkage: &wgpu::Buffer,
+        surface_velocity_map: &wgpu::Buffer,
+    ) -> Result<()> {
+        if self.particle_count == 0 {
+            return Ok(());
+        }
+        kernel.dispatch_raster_to_buffers(
+            device,
+            queue,
+            &self.p_pos,
+            &self.p_vel,
+            &self.tire_compaction_buf,
+            heights,
+            sinkage,
+            surface_velocity_map,
+            &TireMpmTerrainRasterParams {
+                particle_count: self.particle_count,
+                origin: raster.origin,
+                spacing: raster.spacing,
+                nx: raster.nx,
+                nz: raster.nz,
+                rest_height: raster.rest_height,
+            },
+            raster.surface_velocity,
+        )
+    }
+
+    fn write_tire_feedback_output(
+        &mut self,
+        queue: &wgpu::Queue,
+        output: &TireMpmGpuOutput,
+    ) -> Result<()> {
+        let n = self.particle_count as usize;
+        if output.positions.len() != n
+            || output.velocities.len() != n
+            || output.compaction.len() != n
+        {
+            return Err(Error::Solver(format!(
+                "mpm tire feedback: output length mismatch positions={} velocities={} compaction={} particles={n}",
+                output.positions.len(),
+                output.velocities.len(),
+                output.compaction.len(),
+            )));
+        }
+        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&output.positions));
+        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&output.velocities));
+        queue.write_buffer(
+            &self.tire_compaction_buf,
+            0,
+            bytemuck::cast_slice(&output.compaction),
+        );
+        self.host_pos = output.positions.clone();
+        self.host_vel = output.velocities.clone();
+        self.tire_compaction = output.compaction.clone();
+        Ok(())
     }
 
     /// Run one substep at `dt`. Caller is responsible for sub-stepping

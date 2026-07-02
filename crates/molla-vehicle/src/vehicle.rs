@@ -169,7 +169,7 @@ impl Vehicle {
             let kappa = (c.spin * c.wheel_radius - v_long) / denom;
             let alpha = (v_lat / denom).atan();
             c.slip_ratio = kappa;
-            let (fx, fy, _mz) = self.tire.evaluate(kappa, alpha, f_sus, terrain.friction());
+            let (fx, fy, mz) = self.tire.evaluate(kappa, alpha, f_sus, terrain.friction());
 
             // Accumulate chassis wrench.
             force[1] += f_sus;
@@ -183,6 +183,12 @@ impl Vehicle {
             force[0] -= res * long[0];
             force[2] -= res * long[2];
             yaw_moment += off[0] * fzw - off[2] * fxw;
+            // Couple the tire's self-aligning moment into chassis yaw instead
+            // of leaving it as readout-only telemetry. This keeps steering /
+            // camber / pneumatic-trail effects in the vehicle equations and
+            // gives the future GPU chassis owner a clear scalar yaw-moment
+            // contract to mirror.
+            yaw_moment += mz;
 
             // Wheel spin: drive torque, brake (smooth, opposes spin and
             // bounded so it cannot reverse it), reaction from the tyre.
@@ -204,6 +210,23 @@ impl Vehicle {
 mod tests {
     use super::*;
     use crate::terrain::FlatTerrain;
+
+    #[derive(Clone, Copy, Debug)]
+    struct PureYawMomentTire {
+        mz: f64,
+    }
+
+    impl TireModel for PureYawMomentTire {
+        fn evaluate(
+            &self,
+            _slip_ratio: f64,
+            _slip_angle: f64,
+            _fz: f64,
+            _friction: f64,
+        ) -> (f64, f64, f64) {
+            (0.0, 0.0, self.mz)
+        }
+    }
 
     #[test]
     fn vehicle_settles_to_a_stable_ride_height() {
@@ -241,6 +264,27 @@ mod tests {
             (total_fz - car.mass * 9.81).abs() < car.mass * 9.81 * 0.05,
             "suspension load {total_fz} does not balance weight {}",
             car.mass * 9.81
+        );
+    }
+
+    #[test]
+    fn tire_aligning_moment_couples_into_chassis_yaw() {
+        let ground = FlatTerrain::new(0.0, 0.9);
+        let mut car = Vehicle::car_with(Box::new(PureYawMomentTire { mz: 18.0 }));
+        car.pos[1] = 0.786;
+        let yaw_before = car.yaw;
+        for _ in 0..200 {
+            car.step(&ground, 1.0e-3);
+        }
+        assert!(
+            car.yaw > yaw_before,
+            "positive tire aligning moment should increase chassis yaw: before={yaw_before} after={}",
+            car.yaw
+        );
+        assert!(
+            car.yaw_rate > 0.0,
+            "positive tire aligning moment should produce positive yaw rate: {}",
+            car.yaw_rate
         );
     }
 }

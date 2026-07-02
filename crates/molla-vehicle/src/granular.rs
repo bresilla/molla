@@ -12,6 +12,7 @@
 //! [`GrainObstacle`]s that plough the grains — genuine two-way
 //! vehicle ↔ particle-soil coupling.
 
+use crate::real_tire::{RealTireContact, RealWheelState};
 use crate::terrain::Terrain;
 use crate::vehicle::Vehicle;
 use std::collections::HashMap;
@@ -25,6 +26,43 @@ pub struct GrainObstacle {
     pub radius: f64,
     /// Obstacle velocity (so the grains feel it ploughing).
     pub vel: [f64; 3],
+}
+
+/// Summary returned by direct tire-contact coupling into a DEM bed.
+///
+/// Unlike the older spherical wheel obstacle path, this uses the tire contact
+/// cells from `molla_vehicle::real_tire`: normal pressure pushes grains down
+/// through the local contact normal, while longitudinal/lateral brush shear
+/// transfers impulse into the local grain patch. It is still a first-pass DEM
+/// coupling, but it is tire-contact-cell based instead of just a kinematic
+/// obstacle sphere.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TireDemFeedback {
+    /// Number of tire contact cells that found grains underneath them.
+    pub active_contact_cells: usize,
+    /// Number of individual grain impulses applied across all cells.
+    pub affected_grains: usize,
+    /// Total normal load transferred to DEM grains, N.
+    pub transferred_normal_load_n: f64,
+    /// Total tangential/shear force magnitude transferred to grains, N.
+    pub transferred_shear_load_n: f64,
+    /// Total impulse magnitude applied to grains, N·s.
+    pub impulse_n_s: f64,
+    /// Maximum absolute vertical grain displacement caused by the immediate
+    /// contact push, m.
+    pub max_grain_sinkage_m: f64,
+    /// Deterministic drawbar/rolling-loss proxy from displaced grains, N.
+    pub rolling_resistance_n: f64,
+}
+
+impl TireDemFeedback {
+    pub fn is_finite(self) -> bool {
+        self.transferred_normal_load_n.is_finite()
+            && self.transferred_shear_load_n.is_finite()
+            && self.impulse_n_s.is_finite()
+            && self.max_grain_sinkage_m.is_finite()
+            && self.rolling_resistance_n.is_finite()
+    }
 }
 
 /// A DEM granular bed: a cloud of equal grains on a flat floor.
@@ -105,6 +143,34 @@ impl GranularBed {
     /// Grain positions.
     pub fn grains(&self) -> &[[f64; 3]] {
         &self.pos
+    }
+
+    /// Grain velocities. Exposed for tire/soil regression tests and
+    /// diagnostics; callers should not mutate the returned slice.
+    pub fn grain_velocities(&self) -> &[[f64; 3]] {
+        &self.vel
+    }
+
+    /// Replace grain positions and velocities with an externally computed DEM
+    /// state, preserving material parameters. This is used by accelerated DEM
+    /// owners that step the same granular bed through a sparse/GPU broadphase
+    /// and then hand the state back to the terrain/viewer surface.
+    pub fn replace_grain_state(
+        &mut self,
+        positions: &[[f64; 3]],
+        velocities: &[[f64; 3]],
+    ) -> Result<(), &'static str> {
+        if positions.len() != self.pos.len() || velocities.len() != self.vel.len() {
+            return Err("granular bed replacement state length mismatch");
+        }
+        if positions.iter().flatten().any(|v| !v.is_finite())
+            || velocities.iter().flatten().any(|v| !v.is_finite())
+        {
+            return Err("granular bed replacement state contains non-finite values");
+        }
+        self.pos.copy_from_slice(positions);
+        self.vel.copy_from_slice(velocities);
+        Ok(())
     }
 
     /// Spring-dashpot + Coulomb contact force on body `a` from body `b`
@@ -222,6 +288,115 @@ impl GranularBed {
         }
     }
 
+    /// Apply an evaluated real-tire contact patch directly into the DEM bed.
+    ///
+    /// This complements [`Self::wheel_obstacles`]: the obstacle path gives
+    /// geometric two-way collision with the wheel envelope, while this method
+    /// transfers the actual tire contact-cell normal/shear loads into nearby
+    /// grains. That makes slip, pressure distribution, lateral force, and
+    /// per-cell normals visible to the granular soil instead of treating the
+    /// tire as only one smooth sphere.
+    pub fn apply_tire_contact(
+        &mut self,
+        wheel: &RealWheelState,
+        contact: &RealTireContact,
+        tire_radius: f64,
+        dt: f64,
+    ) -> TireDemFeedback {
+        let dt = finite_nonnegative(dt).min(0.05);
+        if dt <= 0.0 || !contact.in_contact || contact.cells.is_empty() || self.pos.is_empty() {
+            return TireDemFeedback::default();
+        }
+
+        let heading = horizontal_unit(wheel.heading);
+        let side = [-heading[2], 0.0, heading[0]];
+        let mut feedback = TireDemFeedback::default();
+        let mut max_vertical_push: f64 = 0.0;
+
+        for cell in &contact.cells {
+            let area = cell.area.max(1.0e-6);
+            let influence_radius = (area / std::f64::consts::PI).sqrt().max(self.radius * 1.25);
+            let cx = wheel.hub_pos[0] + heading[0] * cell.local_x + side[0] * cell.local_z;
+            let cz = wheel.hub_pos[2] + heading[2] * cell.local_x + side[2] * cell.local_z;
+            let surface_y = self.height(cx, cz);
+            let normal = unit_or(cell.normal, [0.0, 1.0, 0.0]);
+            let force_on_grains = add(
+                add(
+                    scale(normal, -cell.normal_load.max(0.0)),
+                    scale(heading, -cell.tangential_force),
+                ),
+                scale(side, -cell.lateral_force),
+            );
+            let force_mag = norm(force_on_grains);
+            if force_mag <= 1.0e-9 {
+                continue;
+            }
+
+            let mut affected = Vec::new();
+            let mut weight_sum = 0.0;
+            for (i, p) in self.pos.iter().enumerate() {
+                let dx = p[0] - cx;
+                let dz = p[2] - cz;
+                let horizontal = (dx * dx + dz * dz).sqrt();
+                if horizontal > influence_radius + self.radius {
+                    continue;
+                }
+                // Only grains in the active near-surface plug receive the tire
+                // contact load. Deep grains will receive force through normal
+                // DEM grain-grain contacts on subsequent steps.
+                let below_surface = (surface_y + self.radius * 1.5) - p[1];
+                if below_surface < -self.radius || below_surface > self.radius * 5.0 {
+                    continue;
+                }
+                let radial_w =
+                    (1.0 - horizontal / (influence_radius + self.radius)).clamp(0.0, 1.0);
+                let depth_w = (1.0 - below_surface.max(0.0) / (self.radius * 5.0)).clamp(0.15, 1.0);
+                let w = radial_w * radial_w * depth_w;
+                if w > 1.0e-9 {
+                    affected.push((i, w));
+                    weight_sum += w;
+                }
+            }
+
+            if affected.is_empty() || weight_sum <= 1.0e-12 {
+                continue;
+            }
+
+            feedback.active_contact_cells += 1;
+            feedback.transferred_normal_load_n += cell.normal_load.max(0.0);
+            feedback.transferred_shear_load_n += (cell.tangential_force * cell.tangential_force
+                + cell.lateral_force * cell.lateral_force)
+                .sqrt();
+
+            for (i, w) in affected {
+                let share = w / weight_sum;
+                let impulse = scale(force_on_grains, share * dt);
+                for (k, component) in impulse.iter().enumerate() {
+                    self.vel[i][k] += component / self.mass.max(1.0e-9);
+                }
+
+                // A small position-level normal push prevents high-frequency
+                // tire loads from becoming purely invisible velocity spikes in
+                // tiny demo timesteps. It is capped by grain size and tied to
+                // the actual applied impulse, not a viewer-only rut flag.
+                let normal_impulse = cell.normal_load.max(0.0) * share * dt;
+                let vertical_push =
+                    (normal_impulse / self.mass.max(1.0e-9) * dt * 0.25).min(self.radius * 0.35);
+                self.pos[i][1] = (self.pos[i][1] - vertical_push).max(self.floor_y + self.radius);
+                max_vertical_push = max_vertical_push.max(vertical_push);
+
+                feedback.affected_grains += 1;
+                feedback.impulse_n_s += norm(impulse);
+            }
+        }
+
+        feedback.max_grain_sinkage_m = max_vertical_push;
+        feedback.rolling_resistance_n = feedback.transferred_normal_load_n
+            * feedback.max_grain_sinkage_m
+            / tire_radius.max(1.0e-6);
+        feedback
+    }
+
     /// Wheel [`GrainObstacle`]s for `vehicle` — one sphere per wheel,
     /// sitting at the current grain-surface height.
     pub fn wheel_obstacles(&self, vehicle: &Vehicle) -> Vec<GrainObstacle> {
@@ -281,11 +456,34 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
+fn finite_nonnegative(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+fn unit_or(v: [f64; 3], fallback: [f64; 3]) -> [f64; 3] {
+    let n = norm(v);
+    if n > 1.0e-9 && n.is_finite() {
+        scale(v, 1.0 / n)
+    } else {
+        fallback
+    }
+}
+fn horizontal_unit(v: [f64; 3]) -> [f64; 3] {
+    let h = [v[0], 0.0, v[2]];
+    unit_or(h, [1.0, 0.0, 0.0])
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::powertrain::{DriverInput, Powertrain};
+    use crate::real_tire::{
+        RealTireParams, RealWheelState, SurfaceMaterial, evaluate_brush_tire,
+        solve_loaded_tire_hub_height,
+    };
 
     #[test]
     fn dem_column_collapses_into_a_pile() {
@@ -314,6 +512,32 @@ mod tests {
             frictional > frictionless + 0.05,
             "frictional DEM column did not hold a taller pile: \
              frictional={frictional} frictionless={frictionless}"
+        );
+    }
+
+    #[test]
+    fn granular_bed_accepts_external_dem_owner_state() {
+        let mut bed = GranularBed::lattice([0.0, 0.05, 0.0], [0.1, 0.05, 0.0], 0.05, 1.0, 0.7);
+        let positions = bed
+            .grains()
+            .iter()
+            .map(|p| [p[0], p[1] - 0.01, p[2]])
+            .collect::<Vec<_>>();
+        let velocities = bed
+            .grain_velocities()
+            .iter()
+            .map(|v| [v[0] + 0.2, v[1], v[2]])
+            .collect::<Vec<_>>();
+        bed.replace_grain_state(&positions, &velocities)
+            .expect("valid owner state");
+        assert_eq!(bed.grains(), positions.as_slice());
+        assert_eq!(bed.grain_velocities(), velocities.as_slice());
+
+        let mut bad = velocities.clone();
+        bad.pop();
+        assert!(
+            bed.replace_grain_state(&positions, &bad).is_err(),
+            "external DEM owners must not be allowed to desynchronise position/velocity arrays"
         );
     }
 
@@ -363,6 +587,125 @@ mod tests {
         assert!(
             surface_after < surface_before - 1e-3,
             "no rut formed: surface {surface_before} → {surface_after}"
+        );
+    }
+
+    #[test]
+    fn tire_contact_patch_pushes_dem_grains_and_reports_feedback() {
+        let r = 0.035;
+        let mut bed = GranularBed::lattice([-0.35, 0.02, -0.18], [0.35, 0.16, 0.18], r, 0.55, 0.7);
+        bed.jitter(0.006);
+        for _ in 0..300 {
+            bed.step(&[], 5.0e-4);
+        }
+        let y_before = bed
+            .grains()
+            .iter()
+            .map(|p| p[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let params = RealTireParams::offroad_soft().with_segments(64);
+        let material = SurfaceMaterial::soft_soil();
+        let load_n = 3_800.0;
+        let hub_y = solve_loaded_tire_hub_height(&params, &bed, 0.0, 0.0, load_n);
+        let wheel = RealWheelState {
+            hub_pos: [0.0, hub_y, 0.0],
+            hub_vel: [2.5, 0.0, 0.0],
+            heading: [1.0, 0.0, 0.0],
+            omega: (2.5 + 1.2) / params.radius,
+        };
+        let contact = evaluate_brush_tire(&params, &wheel, &bed, &material);
+        let feedback = bed.apply_tire_contact(&wheel, &contact, params.radius, 2.0e-3);
+
+        assert!(
+            feedback.is_finite(),
+            "DEM tire feedback must be finite: {feedback:?}"
+        );
+        assert!(
+            feedback.active_contact_cells > 0 && feedback.affected_grains > 0,
+            "tire patch should find and push grains: {feedback:?}"
+        );
+        assert!(
+            feedback.transferred_normal_load_n > load_n * 0.20,
+            "DEM patch should transfer a meaningful normal load: {feedback:?}"
+        );
+        assert!(
+            feedback.transferred_shear_load_n > 10.0 && feedback.impulse_n_s > 0.0,
+            "driven tire should transfer shear impulse into grains: {feedback:?}"
+        );
+        assert!(
+            feedback.max_grain_sinkage_m > 0.0 && feedback.rolling_resistance_n > 0.0,
+            "normal patch impulse should create finite DEM sinkage/loss: {feedback:?}"
+        );
+
+        let y_after = bed
+            .grains()
+            .iter()
+            .map(|p| p[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            y_after <= y_before + r,
+            "DEM contact push should remain bounded: before={y_before} after={y_after}"
+        );
+    }
+
+    #[test]
+    fn slipping_tire_transfers_more_dem_shear_than_free_rolling_tire() {
+        let r = 0.04;
+        let make_bed = || {
+            let mut bed =
+                GranularBed::lattice([-0.32, 0.02, -0.16], [0.32, 0.18, 0.16], r, 0.65, 0.75);
+            bed.jitter(0.004);
+            for _ in 0..250 {
+                bed.step(&[], 5.0e-4);
+            }
+            bed
+        };
+        let params = RealTireParams::offroad_soft().with_segments(64);
+        let material = SurfaceMaterial::soft_soil();
+        let load_n = 3_500.0;
+
+        let mut roll_bed = make_bed();
+        let roll_y = solve_loaded_tire_hub_height(&params, &roll_bed, 0.0, 0.0, load_n);
+        let roll_wheel = RealWheelState {
+            hub_pos: [0.0, roll_y, 0.0],
+            hub_vel: [2.0, 0.0, 0.0],
+            heading: [1.0, 0.0, 0.0],
+            omega: 2.0 / params.radius,
+        };
+        let rolling = evaluate_brush_tire(&params, &roll_wheel, &roll_bed, &material);
+        let roll_feedback =
+            roll_bed.apply_tire_contact(&roll_wheel, &rolling, params.radius, 2.0e-3);
+
+        let mut slip_bed = make_bed();
+        let slip_y = solve_loaded_tire_hub_height(&params, &slip_bed, 0.0, 0.0, load_n);
+        let slip_wheel = RealWheelState {
+            omega: (2.0 + 2.2) / params.radius,
+            hub_pos: [0.0, slip_y, 0.0],
+            ..roll_wheel
+        };
+        let slipping = evaluate_brush_tire(&params, &slip_wheel, &slip_bed, &material);
+        let slip_feedback =
+            slip_bed.apply_tire_contact(&slip_wheel, &slipping, params.radius, 2.0e-3);
+
+        assert!(
+            slip_feedback.transferred_shear_load_n > roll_feedback.transferred_shear_load_n * 1.5,
+            "slipping tire should inject more DEM shear: roll={roll_feedback:?} slip={slip_feedback:?}"
+        );
+        let horizontal_speed = |v: [f64; 3]| (v[0] * v[0] + v[2] * v[2]).sqrt();
+        let roll_speed_sum: f64 = roll_bed
+            .grain_velocities()
+            .iter()
+            .map(|v| horizontal_speed(*v))
+            .sum();
+        let slip_speed_sum: f64 = slip_bed
+            .grain_velocities()
+            .iter()
+            .map(|v| horizontal_speed(*v))
+            .sum();
+        assert!(
+            slip_speed_sum > roll_speed_sum * 1.10,
+            "slipping tire should leave more horizontal grain motion: roll={roll_speed_sum} slip={slip_speed_sum}"
         );
     }
 }

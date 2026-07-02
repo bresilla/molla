@@ -268,6 +268,9 @@ pub fn dense_psd_pinv_solve(a: &[Real], b: &[Real], n: usize) -> Result<Vec<Real
 }
 
 #[cfg(test)]
+// Test matrices are written in the explicit `row * n + col` row-major
+// idiom even when row or col is 0, so every entry reads as a coordinate.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 mod tests {
     use super::*;
 
