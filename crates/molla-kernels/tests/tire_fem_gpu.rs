@@ -4862,3 +4862,113 @@ fn tire_fem_resident_contact_loop_matches_blocking_chain() {
         hub_b[0]
     );
 }
+
+/// F2 (INSPECTION.md) — the 40-wheel realtime *measurement* the atlas
+/// smoke test never took. Times the fused-atlas substep dispatch for
+/// 10 vehicles × 4 wheels and reports substeps/second against the
+/// realtime budget (`dt = 1/8000` ⇒ 8 000 substeps/s). The hard gate
+/// is deliberately loose (catastrophic-regression floor); the printed
+/// realtime factor is the number that matters — record it in
+/// PROGRESS.md when the target hardware changes. Run with `RELEASE=1`:
+///   make test-gpu P=molla-kernels T=tire_fem_gpu RELEASE=1 A=forty_wheel_walltime
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_atlas_forty_wheel_walltime() {
+    use molla_vehicle::{TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+
+    let params = TetraTireFemParams::realtime_viewer();
+    let dt = 1.0 / 8_000.0_f64;
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        ..Default::default()
+    };
+
+    let mut inputs: Vec<TireFemGpuInput> = Vec::with_capacity(40);
+    let mut total_nodes = 0usize;
+    for veh in 0..10 {
+        for wheel in 0..4 {
+            let hub_x_base = veh as f64 * 4.0;
+            let along_axle = match wheel {
+                0 | 2 => -1.4,
+                _ => 1.4,
+            };
+            let hub_x = hub_x_base + along_axle;
+            let hub_z = match wheel {
+                0 | 1 => -0.7,
+                _ => 0.7,
+            };
+            let mut tire = TetraTireFem::new(hub_x, 180_000.0, params);
+            tire.set_hub_kinematic([hub_x, 1.0, hub_z], [0.0; 3]);
+            let input = tire_fem_gpu_input_from_tetra_fem(&tire, base_gpu_params);
+            total_nodes += input.positions.len();
+            inputs.push(input);
+        }
+    }
+    let mut batch = kernel
+        .create_resident_atlas_batch(&device, &queue, &inputs)
+        .expect("create resident atlas batch");
+    let step_params: Vec<TireFemGpuParams> = inputs.iter().map(|i| i.params).collect();
+
+    // Warm-up (pipeline compilation, first-dispatch overheads).
+    for _ in 0..32 {
+        kernel
+            .step_resident_atlas_batch(&device, &queue, &mut batch, &step_params)
+            .expect("warm-up substep");
+    }
+    let _ = kernel
+        .readback_resident_atlas_batch(&device, &queue, &batch)
+        .expect("warm-up sync");
+
+    // Timed run: N substeps, then a readback to force completion so
+    // the clock covers GPU execution, not just submission.
+    let n_steps = 2_000u32;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n_steps {
+        kernel
+            .step_resident_atlas_batch(&device, &queue, &mut batch, &step_params)
+            .expect("timed substep");
+    }
+    let outputs = kernel
+        .readback_resident_atlas_batch(&device, &queue, &batch)
+        .expect("timed sync");
+    let elapsed = t0.elapsed();
+
+    for (wheel_idx, out) in outputs.iter().enumerate() {
+        for p in &out.positions {
+            assert!(
+                p.iter().all(|x| x.is_finite()),
+                "wheel {wheel_idx}: non-finite position after timed run"
+            );
+        }
+    }
+
+    let secs = elapsed.as_secs_f64();
+    let substeps_per_sec = n_steps as f64 / secs.max(1.0e-9);
+    // Realtime budget: dt = 1/8000 ⇒ 8000 substeps of the WHOLE
+    // 40-wheel batch per simulated second.
+    let realtime_factor = substeps_per_sec / 8_000.0;
+    eprintln!(
+        "atlas 40-wheel walltime: {total_nodes} nodes, {n_steps} substeps in {:.3} s \
+         → {substeps_per_sec:.0} substeps/s → realtime factor {realtime_factor:.2}x \
+         (>= 1.0 means 40 live FEM tires run realtime at dt = 1/8000)",
+        secs
+    );
+    // Catastrophic-regression floor only — absolute throughput is
+    // hardware-dependent and belongs in the printed record, not a gate.
+    assert!(
+        realtime_factor > 0.05,
+        "atlas substep throughput collapsed: {substeps_per_sec:.0} substeps/s \
+         ({realtime_factor:.3}x realtime)"
+    );
+}
