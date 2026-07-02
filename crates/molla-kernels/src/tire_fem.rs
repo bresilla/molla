@@ -109,18 +109,20 @@ pub struct TireFemGpuParams {
     /// wheel's spin axis (rad/s). Mirrors `TetraTireFem::hub_omega`. The
     /// WGSL kernel uses this to inject the spin contribution
     /// `v_spin = ω·r_y` into per-tread tangential slip so the GPU brush
-    /// reaction matches the CPU path. Until the WGSL physics lands, the
-    /// host-side field is plumbed through but ignored on dispatch.
+    /// reaction matches the CPU path. The WGSL step kernel reads this
+    /// slot (`spin_omega = u.phys5.x`); validated by the Stream C G4
+    /// rolling-parity hardware lane (see [`TireFemTorqueGpuStatus`]).
     pub hub_omega: f32,
     /// PLAN_TOURQUE Stage G — commanded drive torque at the wheel hub
-    /// (N·m, signed). Stage G part 2 will integrate this into
-    /// `hub_omega` inside the WGSL step the same way
-    /// `TetraTireFem::integrate_spin_dof` does on CPU.
+    /// (N·m, signed). Hub spin integration stays host-side by design
+    /// (`TetraTireFem::integrate_spin_dof`); the host integrates
+    /// `hub_omega` from this torque each substep and forwards the
+    /// result to the GPU via this params block.
     pub drive_torque_n_m: f32,
     /// PLAN_TOURQUE Stage G — commanded brake torque magnitude (N·m,
-    /// ≥0). Always opposes the current `hub_omega` once Stage G part 2
-    /// lands; until then it is recorded by the host and reflected in
-    /// per-tire telemetry but not yet integrated GPU-side.
+    /// ≥0). Always opposes the current `hub_omega`. Integrated
+    /// host-side alongside `drive_torque_n_m` and reflected in
+    /// per-tire telemetry.
     pub brake_torque_n_m: f32,
 }
 
@@ -2998,16 +3000,14 @@ pub fn tire_fem_gpu_batch_atlas_dispatch_contract(
 /// GPU-parity status for the matrix-free Newton tire-FEM debug timestep.
 ///
 /// Reflects the same parity row the host crate records in
-/// `tire_gpu_parity_checklist_*` and `tire_known_approximation_ledger_*`:
-/// today only the CPU/debug callable timestep exists, the WGSL source-guard
-/// shader has not landed, and the GPU dispatch is not live.
+/// `tire_gpu_parity_checklist_*` and `tire_known_approximation_ledger_*`.
+/// The contract builder resolves the current status from the shader
+/// source; as of the matrix-free Newton GPU landing it resolves `Live`
+/// (WGSL kernel + dispatch wrapper + hardware test all present).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TireFemMatrixFreeNewtonGpuStatus {
     /// Only the CPU/debug callable timestep exists. No WGSL, no GPU dispatch.
     CpuOnlyDebug,
-    /// A WGSL source-guard shader exists with the expected entry points, but
-    /// the hardware dispatch is not wired through the persistent batch yet.
-    WgslSourceGuardOnly,
     /// The GPU dispatch is live and used by the persistent batch / viewer.
     Live,
 }
@@ -3017,11 +3017,12 @@ pub enum TireFemMatrixFreeNewtonGpuStatus {
 ///
 /// This is the GPU-parity seam for
 /// `molla_vehicle::TetraTireFem::step_on_terrain_matrix_free_newton_debug`.
-/// The hardware path is intentionally not implemented yet — this contract
-/// pins the dispatch shape (workgroup size, node/DoF counts, per-stage
-/// workgroup counts, line-search alpha sweep, Krylov budget) so the WGSL
-/// kernel cannot silently drift from the CPU reference once it lands. The
-/// `status` field records where the GPU work currently sits in
+/// The hardware path is live (`TireFemMatrixFreeNewtonGpuKernel` + the
+/// `tire_fem_matrix_free_newton_gpu_residual_matches_cpu_oracle` hardware
+/// test) — this contract pins the dispatch shape (workgroup size, node/DoF
+/// counts, per-stage workgroup counts, line-search alpha sweep, Krylov
+/// budget) so the WGSL kernel cannot silently drift from the CPU reference.
+/// The `status` field records where the GPU work currently sits in
 /// [`TireFemMatrixFreeNewtonGpuStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TireFemMatrixFreeNewtonGpuContract {
@@ -3103,9 +3104,12 @@ pub fn tire_fem_matrix_free_newton_gpu_contract(
 ///
 /// Mirrors the matrix-free-Newton enum (`TireFemMatrixFreeNewtonGpuStatus`)
 /// so the same staging language applies. The host-side
-/// [`TireFemGpuParams`] now carries `hub_omega`, `drive_torque_n_m`, and
-/// `brake_torque_n_m`, but the WGSL step kernel does not yet integrate
-/// them — that is Stage G part 2.
+/// [`TireFemGpuParams`] carries `hub_omega`, `drive_torque_n_m`, and
+/// `brake_torque_n_m`; the WGSL step kernel reads the spin slot, and the
+/// contract builder currently resolves
+/// [`TireFemTorqueGpuStatus::LiveValidated`] via the Stream C G4
+/// rolling-parity closure flag. Hub torque→spin integration itself stays
+/// host-side by design.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TireFemTorqueGpuStatus {
     /// Host-side params carry the torque/spin fields; the WGSL step
