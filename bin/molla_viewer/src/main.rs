@@ -2798,8 +2798,8 @@ impl Scene {
                 status: Partial,
                 reference_case: "Newton diffsim/example_diffsim_cloth.py",
                 cpu_proof: "diffsim_cloth_reduced_pin_gradient_matches_finite_difference + diffsim_cloth_reduced_optimization_reduces_loss",
-                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu for forward cloth; no GPU cloth adjoint yet",
-                notes: "procedural pinned cloth viewer scene plus reduced CPU differentiable oracle; full cloth adjoint/MPC parity remains future work",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu for forward cloth; make test-gpu P=molla-kernels T=cloth_diff_gpu for the GPU cloth adjoint (FD gradcheck on ∂J/∂k and ∂J/∂v0)",
+                notes: "procedural pinned cloth viewer scene plus reduced CPU differentiable oracle; the GPU adjoint (ClothDiffGpu, Warp-style force-based cloth) is FD-validated — scene wiring + MPC parity remain future work",
             },
             Scene::DiffsimSoftBody => ScenePhysicsAudit {
                 status: Partial,
@@ -10580,8 +10580,12 @@ mod tests {
             "diffsim cloth audit must name the forward GPU cloth target"
         );
         assert!(
-            audit.notes.contains("full cloth adjoint"),
-            "audit must stay honest about missing full cloth adjoint parity"
+            audit.gpu_proof.contains("cloth_diff_gpu"),
+            "audit must name the FD-validated GPU cloth adjoint lane"
+        );
+        assert!(
+            audit.notes.contains("MPC parity remain future work"),
+            "audit must stay honest about the remaining scene/MPC gap"
         );
     }
 

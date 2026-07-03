@@ -27,6 +27,8 @@ mod clamping_max_effort;
 #[cfg(feature = "gpu")]
 mod clamping_position_based;
 #[cfg(feature = "gpu")]
+mod cloth_diff;
+#[cfg(feature = "gpu")]
 mod contact_reduction;
 #[cfg(feature = "gpu")]
 mod contact_sensor;
@@ -76,7 +78,6 @@ mod soft_bvh_gpu;
 mod soft_vt_contact;
 #[cfg(feature = "gpu")]
 mod sparse_gpu;
-#[cfg(feature = "gpu")]
 mod sparse_grid;
 #[cfg(feature = "gpu")]
 mod sparse_grid_delete;
@@ -131,6 +132,8 @@ pub use clamping_dc_motor::ClampingDcMotorKernel;
 pub use clamping_max_effort::ClampingMaxEffortKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_position_based::ClampingPositionBasedKernel;
+#[cfg(feature = "gpu")]
+pub use cloth_diff::{ClothDiffGpu, ClothSpring};
 #[cfg(feature = "gpu")]
 pub use contact_reduction::{
     CONTACT_STRIDE, ContactReductionKernel, MAX_OUT_PER_GROUP, MAX_PER_GROUP, pack_groups_host,
@@ -217,7 +220,6 @@ pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu}
 pub use sparse_gpu::{BsrAlgebraKernel, BsrGpu, SPGEMM_GPU_SYMBOLIC_CUTOVER};
 #[cfg(feature = "gpu")]
 pub use sparse_grid::SparseGridKernel;
-#[cfg(feature = "gpu")]
 pub use sparse_grid_delete::SparseGridDeleteKernel;
 #[cfg(feature = "gpu")]
 pub use sparse_grid_insert::{
