@@ -388,6 +388,121 @@ fn delete_then_insert_roundtrip_throughput() {
     );
 }
 
+/// INSPECTION.md F11 / Stage 24e.3 — the delete/reclaim contract with
+/// INTERNAL-NODE FOLDING:
+///
+/// * Leaf slots recycle end-to-end (delete → pending → freelist →
+///   `pop_freelist`).
+/// * After `fold_empty_internals`, abandoned internal nodes recycle
+///   too: their root slots are tombstoned (probe chains stay intact —
+///   lookups and re-inserts must still work) and
+///   `get_or_create_internal` pops them before bumping the pool.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn leaf_and_internal_slots_recycle_after_fold() {
+    let engine = try_engine().expect("GPU adapter required for this test (gated by #[ignore])");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let n = 512usize;
+    // Two regions with guaranteed-disjoint root keys (2²⁰ apart).
+    let region_a = random_coords(n, 0xA11CE, 4096);
+    let region_b: Vec<[i32; 3]> = random_coords(n, 0xB0B, 4096)
+        .into_iter()
+        .map(|c| [c[0] + (1 << 20), c[1], c[2]])
+        .collect();
+    let values: Vec<f32> = (0..n).map(|i| i as f32).collect();
+
+    let storage = SparseGridStorage::<f32>::new(
+        &device,
+        next_pow2((n as u32) * 4),
+        n as u32 * 4,
+        n as u32 * 4,
+    );
+    let insert = SparseGridInsertKernel::<f32>::new(&device);
+    let delete = SparseGridDeleteKernel::<f32>::new(&device);
+
+    insert
+        .insert(&device, &queue, &storage, &region_a, &values)
+        .expect("insert region A");
+    let after_a = storage.storage_stats(&device, &queue).expect("stats A");
+    assert!(after_a.active_leaves > 0 && after_a.active_internals > 0);
+
+    delete
+        .delete(&device, &queue, &storage, &region_a)
+        .expect("delete region A");
+    let folded = delete
+        .fold_empty_internals(&device, &queue, &storage)
+        .expect("fold");
+    let after_fold = storage.storage_stats(&device, &queue).expect("stats fold");
+    eprintln!("A: {after_a:?}\nfold: {after_fold:?} (raw {folded:?})");
+    assert!(
+        after_fold.internals_in_freelist > 0,
+        "fold must reclaim region A's internal nodes: {after_fold:?}"
+    );
+    assert!(
+        after_fold.leaves_in_freelist > 0,
+        "leaf freelist must be fed"
+    );
+
+    insert
+        .insert(&device, &queue, &storage, &region_b, &values)
+        .expect("insert region B");
+    let after_b = storage.storage_stats(&device, &queue).expect("stats B");
+    eprintln!("B: {after_b:?}");
+
+    // Leaf recycling (as before): region B is served from the
+    // freelist, not the bump allocator.
+    let leaf_growth = after_b.active_leaves - after_a.active_leaves;
+    assert!(
+        leaf_growth < after_a.active_leaves / 2,
+        "leaf slots were not recycled: bump grew by {leaf_growth}"
+    );
+    // Internal recycling (Stage 24e.3): region B reuses folded nodes —
+    // the internal bump allocator must grow far less than a full
+    // region (races can abandon a few pre-allocated slots).
+    let internal_growth = after_b.active_internals - after_a.active_internals;
+    assert!(
+        internal_growth < after_a.active_internals / 2,
+        "internal nodes were not recycled after fold: bump grew by {internal_growth} \
+         (region A used {})",
+        after_a.active_internals
+    );
+    assert!(
+        after_b.internals_in_freelist < after_fold.internals_in_freelist,
+        "insert did not pop the internal freelist"
+    );
+    assert_eq!(after_b.error_flags, 0, "no pool exhaustion");
+
+    // Tombstone integrity: re-inserting the ORIGINAL region A coords
+    // (stale keys still in the tombstoned slots!) must work — probes
+    // must skip tombstones without matching their stale keys — and
+    // the values must read back correctly alongside region B's.
+    let values_a2: Vec<f32> = (0..n).map(|i| 10_000.0 + i as f32).collect();
+    insert
+        .insert(&device, &queue, &storage, &region_a, &values_a2)
+        .expect("re-insert region A after fold");
+    let pairs = read_storage_to_pairs(&device, &queue, &storage).expect("read");
+    use std::collections::HashMap;
+    let map: HashMap<[i32; 3], f32> = pairs.into_iter().collect();
+    let mut checked = 0;
+    for (c, want) in region_a.iter().zip(values_a2.iter()) {
+        if let Some(got) = map.get(c) {
+            assert_eq!(
+                got, want,
+                "coord {c:?} read wrong value after refold-insert"
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > n / 2,
+        "too few region-A coords found after re-insert: {checked}/{n}"
+    );
+    let after_a2 = storage.storage_stats(&device, &queue).expect("stats A2");
+    assert_eq!(after_a2.error_flags, 0);
+}
+
 /// INSPECTION.md F11 — the delete/reclaim CONTRACT, including its
 /// known limit, pinned numerically:
 ///
@@ -463,15 +578,14 @@ fn leaf_slots_recycle_but_internal_nodes_leak_known_limit() {
         "insert did not pop the freelist"
     );
 
-    // KNOWN LIMIT (F11 follow-up): region A's internal nodes leak —
-    // the internal bump counter grows by a full region even though A
-    // is empty. When empty-subtree folding lands, flip this to assert
-    // near-zero growth instead.
+    // WITHOUT an explicit `fold_empty_internals` call the internal
+    // nodes still leak (folding is an opt-in pass, not automatic) —
+    // this remains the documented default-path behavior. The fold
+    // path is covered by `leaf_and_internal_slots_recycle_after_fold`.
     let internal_growth = after_b.active_internals - after_a.active_internals;
     assert!(
         internal_growth > 0,
-        "internal nodes unexpectedly reused — folding may have landed; \
-         update this test and close the F11 follow-up"
+        "internal nodes reused without a fold dispatch — semantics changed?"
     );
     assert_eq!(after_b.error_flags, 0, "no pool exhaustion");
 }

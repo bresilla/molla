@@ -125,15 +125,22 @@ fn root_lookup_hashed(key: vec3<i32>, cap: u32) -> u32 {
     var hit: u32 = INVALID_CHILD;
     for (var probe: u32 = 0u; probe < cap; probe = probe + 1u) {
         let base = slot * 4u;
-        let stored_idx = u32(root_table[base + 3u]);
+        let stored_raw = root_table[base + 3u];
         // Empty slot — terminate the probe sequence (uniform exit
         // is fine here because the loop bound `cap` is uniform
         // and break is allowed when the condition is uniform-
         // derived — every lane independently evaluates the same
         // key/table state).
-        if (stored_idx == INVALID_CHILD) {
+        if (stored_raw == -1) {
             return INVALID_CHILD;
         }
+        // Tombstone (folded internal, Stage 24e.3): stale keys — skip
+        // WITHOUT key comparison; not a chain terminator.
+        if (stored_raw == -2) {
+            slot = (slot + 1u) & mask;
+            continue;
+        }
+        let stored_idx = u32(stored_raw);
         let kx = root_table[base + 0u];
         let ky = root_table[base + 1u];
         let kz = root_table[base + 2u];

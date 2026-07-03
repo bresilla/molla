@@ -245,6 +245,15 @@ pub struct SparseGridStorage<V: Value> {
     /// Stage 24e.2 — LIFO of reclaimed leaf indices, sized
     /// `leaf_capacity` u32s. `counters[3]` is the live count.
     pub freelist: wgpu::Buffer,
+    /// Stage 24e.3 — LIFO of folded internal-node indices
+    /// (`counters[5]` is the live count).
+    pub internal_freelist: wgpu::Buffer,
+    /// Stage 24e.3 — per-internal live-leaf counters.
+    pub internal_live: wgpu::Buffer,
+    /// Stage 24e.3 — per-leaf parent backrefs (internal index / child
+    /// slot) written by the leaf-claim winner.
+    pub leaf_parent_internal: wgpu::Buffer,
+    pub leaf_parent_slot: wgpu::Buffer,
     /// Stage 24e.2 — leaf indices marked-inactive but not yet
     /// reclaimed. Drained by the `reclaim_empty_leaves` entry point
     /// into `freelist` (callers normally go through
@@ -279,6 +288,8 @@ pub struct SparseGridStorageStats {
     /// Bit-mask of the per-dispatch error flags
     /// (`1=internal_full | 2=leaf_full | 4=root_full`).
     pub error_flags: u32,
+    /// Stage 24e.3 — folded internal nodes awaiting recycling.
+    pub internals_in_freelist: u32,
 }
 
 const INTERNAL_NODE_VOXELS: u32 = 32_768; // 32³
@@ -405,6 +416,39 @@ impl<V: Value> SparseGridStorage<V> {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         });
+        // Stage 24e.3 — internal-node reclamation state. Freelist and
+        // parent backrefs carry INVALID_CHILD sentinels (index 0 is
+        // legal); live-leaf counters start at zero.
+        let internal_invalid: Vec<u32> = vec![INVALID_CHILD; internal_capacity as usize];
+        let internal_freelist = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage internal_freelist"),
+            contents: bytemuck::cast_slice(&internal_invalid),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
+        let internal_live = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage internal_live"),
+            contents: bytemuck::cast_slice(&vec![0u32; internal_capacity as usize]),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
+        let leaf_invalid: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
+        let leaf_parent_internal = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage leaf_parent_internal"),
+            contents: bytemuck::cast_slice(&leaf_invalid),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
+        let leaf_parent_slot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_storage leaf_parent_slot"),
+            contents: bytemuck::cast_slice(&leaf_invalid),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
 
         Self {
             root_table,
@@ -415,6 +459,10 @@ impl<V: Value> SparseGridStorage<V> {
             counters,
             freelist,
             pending_reclaim,
+            internal_freelist,
+            internal_live,
+            leaf_parent_internal,
+            leaf_parent_slot,
             root_table_capacity,
             internal_capacity,
             leaf_capacity,
@@ -457,6 +505,28 @@ impl<V: Value> SparseGridStorage<V> {
         queue.write_buffer(&self.freelist, 0, bytemuck::cast_slice(&invalid_pool));
         queue.write_buffer(
             &self.pending_reclaim,
+            0,
+            bytemuck::cast_slice(&invalid_pool),
+        );
+        // Stage 24e.3 — internal reclamation state back to pristine.
+        let internal_invalid: Vec<u32> = vec![INVALID_CHILD; self.internal_capacity as usize];
+        queue.write_buffer(
+            &self.internal_freelist,
+            0,
+            bytemuck::cast_slice(&internal_invalid),
+        );
+        queue.write_buffer(
+            &self.internal_live,
+            0,
+            bytemuck::cast_slice(&vec![0u32; self.internal_capacity as usize]),
+        );
+        queue.write_buffer(
+            &self.leaf_parent_internal,
+            0,
+            bytemuck::cast_slice(&invalid_pool),
+        );
+        queue.write_buffer(
+            &self.leaf_parent_slot,
             0,
             bytemuck::cast_slice(&invalid_pool),
         );
@@ -526,6 +596,7 @@ impl<V: Value> SparseGridStorage<V> {
             error_flags: c[2],
             leaves_in_freelist: c[3],
             pending_reclaim: c[4],
+            internals_in_freelist: c[5],
         })
     }
 }
@@ -557,7 +628,7 @@ impl<V: Value> SparseGridInsertKernel<V> {
         // Stage 24e.2 — 6 storage entries (added freelist at binding 5).
         let layout_storage = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid_insert storage"),
-            entries: &storage_entries(6, false),
+            entries: &storage_entries(10, false),
         });
         let layout_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid_insert io"),
@@ -725,6 +796,23 @@ impl<V: Value> SparseGridInsertKernel<V> {
                     binding: 5,
                     resource: storage.freelist.as_entire_binding(),
                 },
+                // Stage 24e.3 — internal-node reclamation state.
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: storage.internal_freelist.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: storage.internal_live.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: storage.leaf_parent_internal.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: storage.leaf_parent_slot.as_entire_binding(),
+                },
             ],
         });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -874,6 +962,23 @@ impl<V: Value> SparseGridInsertKernel<V> {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: storage.freelist.as_entire_binding(),
+                },
+                // Stage 24e.3 — internal-node reclamation state.
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: storage.internal_freelist.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: storage.internal_live.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: storage.leaf_parent_internal.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: storage.leaf_parent_slot.as_entire_binding(),
                 },
             ],
         });

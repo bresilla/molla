@@ -100,6 +100,20 @@ struct Uniforms {
 @group(0) @binding(3) var<storage, read_write> leaf_values:       array<VALUE_TYPE>;
 @group(0) @binding(4) var<storage, read_write> leaf_masks:        array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> freelist:          array<atomic<u32>>;
+// Stage 24e.3 — internal-node reclamation (INSPECTION.md F11 fold):
+//   binding 6: LIFO of folded internal-node indices (counters[5] is
+//              the live count); popped by `get_or_create_internal`
+//              before the bump allocator.
+//   binding 7: per-internal live-leaf counters — incremented by the
+//              leaf-claim winner, decremented at drain time.
+//   binding 8/9: per-leaf parent backrefs (internal index + child
+//              slot), written by the claim winner so the drain can
+//              clear the parent pointer + mask bit and decrement the
+//              live count without a tree walk.
+@group(0) @binding(6) var<storage, read_write> internal_freelist:  array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> internal_live:      array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> leaf_parent_internal: array<atomic<u32>>;
+@group(0) @binding(9) var<storage, read_write> leaf_parent_slot:     array<atomic<u32>>;
 
 @group(1) @binding(0) var<storage, read_write> counters:     array<atomic<u32>>;
 @group(1) @binding(1) var<storage, read>       query_coords: array<vec4<i32>>;
@@ -114,6 +128,13 @@ const COUNTER_ERRORS:           u32 = 2u;
 // `pop_freelist` to recycle leaf slots.
 const COUNTER_FREELIST_COUNT:   u32 = 3u;
 const COUNTER_PENDING_RECLAIM:  u32 = 4u;
+const COUNTER_INTERNAL_FREELIST: u32 = 5u;
+// Root slots whose internal node was folded. Lookup/insert probes
+// SKIP these (they are not chain terminators — clearing them outright
+// would break open-addressing probe chains); the 16-byte slot leaks
+// until `reset`, a deliberate trade for reclaiming the ~132 KB
+// internal node.
+const ROOT_TOMBSTONE: i32 = -2;
 
 const ERR_INTERNAL_FULL: u32 = 1u;
 const ERR_LEAF_FULL:     u32 = 2u;
@@ -207,18 +228,58 @@ fn allocate_pool_slot(counter: u32, capacity: u32, err_bit: u32) -> u32 {
 // marker; the host caller is documented to never insert exactly that
 // root key (rare in practice — root key (0, 0, 0) maps to the first
 // 256³ block of voxel space, not a typical asset placement).
+// Stage 24e.3 — pop a folded internal-node index, or INVALID_CHILD
+// when empty. Mirrors `pop_freelist` (CAS decrement + payload spin).
+fn pop_internal_freelist() -> u32 {
+    loop {
+        let count = atomicLoad(&counters[COUNTER_INTERNAL_FREELIST]);
+        if (count == 0u) {
+            return INVALID_CHILD;
+        }
+        let cas = atomicCompareExchangeWeak(
+            &counters[COUNTER_INTERNAL_FREELIST],
+            count,
+            count - 1u,
+        );
+        if (cas.exchanged) {
+            let slot = count - 1u;
+            var spin: u32 = 4096u;
+            loop {
+                let v = atomicLoad(&internal_freelist[slot]);
+                if (v != INVALID_CHILD) {
+                    atomicStore(&internal_freelist[slot], INVALID_CHILD);
+                    return v;
+                }
+                if (spin == 0u) {
+                    return INVALID_CHILD;
+                }
+                spin = spin - 1u;
+            }
+        }
+        // CAS lost — retry with a fresh snapshot.
+    }
+    // Unreachable — Naga still requires a return.
+    return INVALID_CHILD;
+}
+
 fn get_or_create_internal(key: vec3<i32>) -> u32 {
     let cap = uniforms.root_table_capacity;
     let mask = cap - 1u;
     let invalid_i = i32(INVALID_CHILD);
     var slot: u32 = root_hash3(key) & mask;
 
-    // Pre-allocate. May fail (pool full) — return INVALID then.
-    let new_internal = allocate_pool_slot(
-        COUNTER_NEXT_INTERNAL,
-        uniforms.internal_capacity,
-        ERR_INTERNAL_FULL,
-    );
+    // Pre-allocate: recycle a folded internal first, else bump. May
+    // fail (pool full) — return INVALID then. (On a lost claim race
+    // the pre-allocated slot is abandoned — same pre-existing
+    // behavior as the bump path; rare and non-corrupting.)
+    var new_internal = pop_internal_freelist();
+    if (new_internal == INVALID_CHILD) {
+        new_internal = allocate_pool_slot(
+            COUNTER_NEXT_INTERNAL,
+            uniforms.internal_capacity,
+            ERR_INTERNAL_FULL,
+        );
+    }
     if (new_internal == INVALID_CHILD) {
         return INVALID_CHILD;
     }
@@ -251,6 +312,27 @@ fn get_or_create_internal(key: vec3<i32>) -> u32 {
         let observed = cas.old_value;
         if (observed == invalid_i) {
             // Spurious failure — retry same slot.
+            continue;
+        }
+        if (observed == ROOT_TOMBSTONE) {
+            // Folded slot (keys zeroed at fold time): CLAIMABLE —
+            // reusing it keeps probe chains intact (the slot was
+            // non-terminating before and stays non-terminating) and
+            // stops root-slot leakage on re-insert. Same
+            // claim-then-publish protocol as a fresh slot.
+            let cas2 = atomicCompareExchangeWeak(
+                &root_table[base + 3u],
+                ROOT_TOMBSTONE,
+                i32(new_internal),
+            );
+            if (cas2.exchanged) {
+                atomicStore(&root_table[base + 0u], key.x);
+                atomicStore(&root_table[base + 1u], key.y);
+                atomicStore(&root_table[base + 2u], key.z);
+                return new_internal;
+            }
+            // Lost to another claimer (or spurious) — retry the same
+            // slot so the key-compare path can inspect the winner.
             continue;
         }
         // Read key cells; spin briefly if they're still zero
@@ -360,6 +442,13 @@ fn get_or_create_leaf(internal_idx: u32, p: vec3<i32>) -> u32 {
             uniforms.leaf_capacity,
             ERR_LEAF_FULL,
         );
+    }
+    if (new_leaf != INVALID_CHILD) {
+        // Stage 24e.3 — parent backrefs + live-leaf count for the
+        // drain/fold path. Winner-only writes (no races).
+        atomicStore(&leaf_parent_internal[new_leaf], internal_idx);
+        atomicStore(&leaf_parent_slot[new_leaf], child_slot);
+        atomicAdd(&internal_live[internal_idx], 1u);
     }
     atomicStore(&internal_children[child_slot], new_leaf);
     return new_leaf;

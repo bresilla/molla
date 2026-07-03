@@ -78,6 +78,9 @@ pub struct SparseGridDeleteKernel<V: Value> {
     pipeline_mark_inactive: wgpu::ComputePipeline,
     pipeline_reclaim: wgpu::ComputePipeline,
     pipeline_reset_pending: wgpu::ComputePipeline,
+    /// Stage 24e.3 — root-slot scan that tombstones and recycles
+    /// internal nodes whose live-leaf count reached zero.
+    pipeline_fold: wgpu::ComputePipeline,
     layout_storage: wgpu::BindGroupLayout,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
@@ -97,7 +100,7 @@ impl<V: Value> SparseGridDeleteKernel<V> {
         // (No leaf_values — delete never reads/writes them.)
         let layout_storage = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::sparse_grid_delete storage"),
-            entries: &(0..6)
+            entries: &(0..10)
                 .map(|i| wgpu::BindGroupLayoutEntry {
                     binding: i,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -169,6 +172,7 @@ impl<V: Value> SparseGridDeleteKernel<V> {
         Self {
             pipeline_mark_inactive: make_pipeline("mark_inactive_voxel"),
             pipeline_reclaim: make_pipeline("reclaim_empty_leaves"),
+            pipeline_fold: make_pipeline("fold_empty_internals"),
             pipeline_reset_pending: make_pipeline("reset_pending_counter"),
             layout_storage,
             layout_io,
@@ -357,6 +361,80 @@ impl<V: Value> SparseGridDeleteKernel<V> {
         storage.read_all_counters(device, queue)
     }
 
+    /// Stage 24e.3 — fold empty internal nodes: one thread per
+    /// root-table slot; nodes whose live-leaf count reached zero are
+    /// tombstoned out of the root table (probe chains stay intact)
+    /// and pushed onto the internal freelist for
+    /// `get_or_create_internal` to recycle. Dispatch between
+    /// insert/delete submits (host-ordered), typically after
+    /// [`Self::reclaim`]. The 16-byte tombstoned root slot leaks
+    /// until `SparseGridStorage::reset` — a deliberate trade for the
+    /// ~132 KB internal node.
+    pub fn fold_empty_internals(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        storage: &SparseGridStorage<V>,
+    ) -> Result<[u32; COUNTER_SLOTS as usize]> {
+        let stub_coords = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::sparse_grid_delete fold stub_coords"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniforms = DeleteUniforms {
+            count: 0,
+            root_table_capacity: storage.root_table_capacity,
+            internal_capacity: storage.internal_capacity,
+            leaf_capacity: storage.leaf_capacity,
+        };
+        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("molla::sparse_grid_delete fold uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bg_storage = self.bg_storage(device, storage, "fold");
+        let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::sparse_grid_delete fold io bg"),
+            layout: &self.layout_io,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: storage.counters.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: stub_coords.as_entire_binding(),
+                },
+            ],
+        });
+        let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::sparse_grid_delete fold uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf_uniforms.as_entire_binding(),
+            }],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::sparse_grid_delete fold encoder"),
+        });
+        {
+            let groups = storage.root_table_capacity.div_ceil(WORKGROUP_SIZE);
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::sparse_grid_delete fold pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline_fold);
+            pass.set_bind_group(0, &bg_storage, &[]);
+            pass.set_bind_group(1, &bg_io, &[]);
+            pass.set_bind_group(2, &bg_u, &[]);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        storage.read_all_counters(device, queue)
+    }
+
     /// Convenience helper: `mark_inactive` followed by `reclaim` in
     /// one call. Two `queue.submit`s under the hood — needed to
     /// guarantee the mark pass globally finishes before the drain
@@ -370,13 +448,15 @@ impl<V: Value> SparseGridDeleteKernel<V> {
     ///   bump allocator — verified by
     ///   `sparse_grid_v4::leaf_slots_recycle_but_internal_nodes_leak_known_limit`
     ///   (a full region's re-population grows the leaf pool by ~0).
-    /// * **Internal nodes are NOT folded**: abandoning a region leaks
-    ///   its internal-node slots (there is no internal freelist and no
-    ///   empty-subtree coarsening). The leak is bounded by
-    ///   `internal_capacity`; `SparseGridStorage::reset` reclaims
-    ///   everything. Workloads that continuously migrate across
-    ///   root-key space will exhaust the internal pool and should
-    ///   reset periodically until folding lands.
+    /// * **Internal nodes fold on demand (Stage 24e.3)**: call
+    ///   [`Self::fold_empty_internals`] after `delete`/`reclaim` to
+    ///   tombstone emptied internal nodes out of the root table and
+    ///   recycle them through the internal freelist (verified by
+    ///   `sparse_grid_v4::leaf_and_internal_slots_recycle_after_fold`,
+    ///   including re-insert through claimable tombstoned slots).
+    ///   Folding is an explicit pass, not automatic — without it the
+    ///   default path still leaks internal slots (bounded by
+    ///   `internal_capacity`, cleared by `reset`).
     pub fn delete(
         &self,
         device: &wgpu::Device,
@@ -421,6 +501,22 @@ impl<V: Value> SparseGridDeleteKernel<V> {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: storage.pending_reclaim.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: storage.internal_freelist.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: storage.internal_live.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: storage.leaf_parent_internal.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: storage.leaf_parent_slot.as_entire_binding(),
                 },
             ],
         })

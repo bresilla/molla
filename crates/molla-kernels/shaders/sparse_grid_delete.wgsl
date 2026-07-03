@@ -87,6 +87,13 @@ struct Uniforms {
 @group(0) @binding(3) var<storage, read_write> leaf_masks:        array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read_write> freelist:          array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> pending_reclaim:   array<atomic<u32>>;
+// Stage 24e.3 — internal-node reclamation (see sparse_grid_insert.wgsl
+// for the binding contract; layouts mirror so the same storage binds
+// to both kernels).
+@group(0) @binding(6) var<storage, read_write> internal_freelist:  array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> internal_live:      array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> leaf_parent_internal: array<atomic<u32>>;
+@group(0) @binding(9) var<storage, read_write> leaf_parent_slot:     array<atomic<u32>>;
 
 @group(1) @binding(0) var<storage, read_write> counters:     array<atomic<u32>>;
 @group(1) @binding(1) var<storage, read>       query_coords: array<vec4<i32>>;
@@ -95,6 +102,8 @@ struct Uniforms {
 
 const COUNTER_FREELIST_COUNT:  u32 = 3u;
 const COUNTER_PENDING_RECLAIM: u32 = 4u;
+const COUNTER_INTERNAL_FREELIST: u32 = 5u;
+const ROOT_TOMBSTONE: i32 = -2;
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -153,6 +162,11 @@ fn root_lookup_hashed(key: vec3<i32>) -> u32 {
         let stored_idx = atomicLoad(&root_table[base + 3u]);
         if (stored_idx == invalid_i) {
             return INVALID_CHILD;
+        }
+        if (stored_idx == ROOT_TOMBSTONE) {
+            // Folded slot — stale keys, skip without comparing.
+            slot = (slot + 1u) & mask;
+            continue;
         }
         let kx = atomicLoad(&root_table[base + 0u]);
         let ky = atomicLoad(&root_table[base + 1u]);
@@ -306,6 +320,64 @@ fn reclaim_empty_leaves(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     atomicStore(&freelist[pos], leaf_idx);
+
+    // Stage 24e.3 — detach the leaf from its parent so (a) a future
+    // reuse of this leaf slot under a DIFFERENT internal can't alias
+    // through the stale pointer, (b) a re-insert at the old coords
+    // re-claims the child slot cleanly (mask bit cleared), and (c)
+    // the internal's live-leaf count reaches zero when its last leaf
+    // drains, arming `fold_empty_internals`.
+    let parent = atomicLoad(&leaf_parent_internal[leaf_idx]);
+    if (parent != INVALID_CHILD && parent < uniforms.internal_capacity) {
+        let child_slot = atomicLoad(&leaf_parent_slot[leaf_idx]);
+        atomicStore(&internal_children[child_slot], INVALID_CHILD);
+        let local = child_slot - parent * INTERNAL_NODE_VOXELS;
+        let mbit = 1u << (local & 31u);
+        atomicAnd(
+            &internal_masks[parent * INTERNAL_NODE_MASK_U32S + (local >> 5u)],
+            ~mbit,
+        );
+        atomicSub(&internal_live[parent], 1u);
+        atomicStore(&leaf_parent_internal[leaf_idx], INVALID_CHILD);
+    }
+}
+
+// ── Entry point: fold empty internal nodes (Stage 24e.3) ──────────
+//
+// One thread per ROOT-TABLE SLOT (avoids any reverse lookup): when the
+// slot's internal node has zero live leaves, tombstone the root slot
+// (probe chains must not break — see ROOT_TOMBSTONE) and push the
+// internal index onto the internal freelist for
+// `get_or_create_internal` to recycle. Host-ordered: dispatch only
+// between insert/delete submits, never concurrently.
+@compute @workgroup_size(64)
+fn fold_empty_internals(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let slot = gid.x;
+    if (slot >= uniforms.root_table_capacity) { return; }
+    let base = slot * 4u;
+    let stored = atomicLoad(&root_table[base + 3u]);
+    if (stored < 0) {
+        // Empty or already tombstoned.
+        return;
+    }
+    let internal_idx = u32(stored);
+    if (internal_idx >= uniforms.internal_capacity) { return; }
+    if (atomicLoad(&internal_live[internal_idx]) != 0u) { return; }
+    // All leaves drained: masks are already all-zero (the drain
+    // clears each bit) and stale children pointers are gated by the
+    // mask, so the node is reusable as-is. Zero the keys so a future
+    // tombstone-claim gets the same "spin while keys are zero"
+    // publication semantics as a fresh slot (fold is host-ordered —
+    // no concurrent probes are in flight).
+    atomicStore(&root_table[base + 0u], 0);
+    atomicStore(&root_table[base + 1u], 0);
+    atomicStore(&root_table[base + 2u], 0);
+    atomicStore(&root_table[base + 3u], ROOT_TOMBSTONE);
+    let pos = atomicAdd(&counters[COUNTER_INTERNAL_FREELIST], 1u);
+    if (pos >= uniforms.internal_capacity) {
+        return;
+    }
+    atomicStore(&internal_freelist[pos], internal_idx);
 }
 
 // ── Entry point: zero out the pending counter ──────────────────────
