@@ -73,6 +73,21 @@ pub struct ApicGpuState {
 
     // Pipelines (one per WGSL entry point).
     pipe_locate: wgpu::ComputePipeline,
+    // Stage 37.6.1 — pressure-projection pipelines.
+    pipe_proj_reset_tets: wgpu::ComputePipeline,
+    pipe_proj_reset_nodes: wgpu::ComputePipeline,
+    pipe_proj_mark_fluid: wgpu::ComputePipeline,
+    pipe_proj_setup: wgpu::ComputePipeline,
+    pipe_proj_zero_f: wgpu::ComputePipeline,
+    pipe_proj_scatter_d: wgpu::ComputePipeline,
+    pipe_proj_scatter_q: wgpu::ComputePipeline,
+    pipe_proj_gather_sd: wgpu::ComputePipeline,
+    pipe_proj_dot_init: wgpu::ComputePipeline,
+    pipe_proj_dot_dsd: wgpu::ComputePipeline,
+    pipe_proj_dot_rr: wgpu::ComputePipeline,
+    pipe_proj_update_qr: wgpu::ComputePipeline,
+    pipe_proj_update_d: wgpu::ComputePipeline,
+    pipe_proj_correct: wgpu::ComputePipeline,
     pipe_reset: wgpu::ComputePipeline,
     pipe_p2g: wgpu::ComputePipeline,
     pipe_grid_update: wgpu::ComputePipeline,
@@ -196,8 +211,11 @@ impl ApicGpuState {
             // g_mass, g_mom_x, g_mom_y, g_mom_z, g_vel, g_vel_next,
             // g_neighbour_offsets, g_neighbour_indices, g_bc_mask,
             // g_bc_values
+            // + Stage 37.6.1 projection state: t_fluid, t_q, t_r,
+            // t_d, t_sd, n_lumped, cg_scalars.
             entries: &storage_entries(&[
-                false, false, false, false, false, false, true, true, true, true,
+                false, false, false, false, false, false, true, true, true, true, false, false,
+                false, false, false, false, false,
             ]),
         });
 
@@ -223,6 +241,20 @@ impl ApicGpuState {
             })
         };
         let pipe_locate = mk_pipe("locate_tet");
+        let pipe_proj_reset_tets = mk_pipe("proj_reset_tets");
+        let pipe_proj_reset_nodes = mk_pipe("proj_reset_nodes");
+        let pipe_proj_mark_fluid = mk_pipe("proj_mark_fluid");
+        let pipe_proj_setup = mk_pipe("proj_setup");
+        let pipe_proj_zero_f = mk_pipe("proj_zero_f");
+        let pipe_proj_scatter_d = mk_pipe("proj_scatter_d");
+        let pipe_proj_scatter_q = mk_pipe("proj_scatter_q");
+        let pipe_proj_gather_sd = mk_pipe("proj_gather_sd");
+        let pipe_proj_dot_init = mk_pipe("proj_dot_init");
+        let pipe_proj_dot_dsd = mk_pipe("proj_dot_dsd");
+        let pipe_proj_dot_rr = mk_pipe("proj_dot_rr");
+        let pipe_proj_update_qr = mk_pipe("proj_update_qr");
+        let pipe_proj_update_d = mk_pipe("proj_update_d");
+        let pipe_proj_correct = mk_pipe("proj_correct");
         let pipe_reset = mk_pipe("reset_grid");
         let pipe_p2g = mk_pipe("p2g");
         let pipe_grid_update = mk_pipe("grid_update");
@@ -412,6 +444,25 @@ impl ApicGpuState {
             contents: bytemuck::cast_slice(&bc_mask_data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
+        // Stage 37.6.1 — projection state (per-tet CG vectors, lumped
+        // node weights, on-device CG scalars).
+        let mk_zero = |label: &str, bytes: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let tet_bytes = (cell_count.max(1) as u64) * 4;
+        let t_fluid = mk_zero("apic.t_fluid", tet_bytes);
+        let t_q = mk_zero("apic.t_q", tet_bytes);
+        let t_r = mk_zero("apic.t_r", tet_bytes);
+        let t_d = mk_zero("apic.t_d", tet_bytes);
+        let t_sd = mk_zero("apic.t_sd", tet_bytes);
+        let n_lumped = mk_zero("apic.n_lumped", (vert_count.max(1) as u64) * 4);
+        let cg_scalars = mk_zero("apic.cg_scalars", 32);
+
         let g_bc_values = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("apic.g_bc_values"),
             contents: bytemuck::cast_slice(&bc_values_data),
@@ -468,6 +519,13 @@ impl ApicGpuState {
                 buffer_entry(7, &g_neighbour_indices),
                 buffer_entry(8, &g_bc_mask),
                 buffer_entry(9, &g_bc_values),
+                buffer_entry(10, &t_fluid),
+                buffer_entry(11, &t_q),
+                buffer_entry(12, &t_r),
+                buffer_entry(13, &t_d),
+                buffer_entry(14, &t_sd),
+                buffer_entry(15, &n_lumped),
+                buffer_entry(16, &cg_scalars),
             ],
         });
 
@@ -496,6 +554,20 @@ impl ApicGpuState {
             device,
             queue,
             pipe_locate,
+            pipe_proj_reset_tets,
+            pipe_proj_reset_nodes,
+            pipe_proj_mark_fluid,
+            pipe_proj_setup,
+            pipe_proj_zero_f,
+            pipe_proj_scatter_d,
+            pipe_proj_scatter_q,
+            pipe_proj_gather_sd,
+            pipe_proj_dot_init,
+            pipe_proj_dot_dsd,
+            pipe_proj_dot_rr,
+            pipe_proj_update_qr,
+            pipe_proj_update_d,
+            pipe_proj_correct,
             pipe_reset,
             pipe_p2g,
             pipe_grid_update,
@@ -546,6 +618,20 @@ impl ApicGpuState {
     /// Submits a single command encoder; per-step host overhead is
     /// one uniform `write_buffer` + one `queue.submit`.
     pub fn step(&self, hybrid: &ApicHybrid, dt: f32, viscosity: f32) -> Result<()> {
+        self.step_projected(hybrid, dt, viscosity, 0)
+    }
+
+    /// Stage 37.6.1 — full step with the per-tet (P0) pressure
+    /// projection between the grid update and G2P (mirrors
+    /// `ApicHybrid::step_projected`; `pressure_iters` CG iterations
+    /// recorded entirely on-device — zero readbacks).
+    pub fn step_projected(
+        &self,
+        hybrid: &ApicHybrid,
+        dt: f32,
+        viscosity: f32,
+        pressure_iters: u32,
+    ) -> Result<()> {
         if self.particle_count == 0 {
             return Ok(());
         }
@@ -613,6 +699,51 @@ impl ApicGpuState {
             // 6. Apply Dirichlet BCs.
             pass.set_pipeline(&self.pipe_apply_bcs);
             pass.dispatch_workgroups(groups_v, 1, 1);
+
+            // 6b. Stage 37.6.1 — pressure projection (CG on the
+            // lumped-mass Schur operator over deposit-supported fluid
+            // tets), fully device-side. Sequential dispatches in one
+            // pass have implicit barriers.
+            if pressure_iters > 0 {
+                let groups_t = self.cell_count.div_ceil(WG_SIZE).max(1);
+                pass.set_pipeline(&self.pipe_proj_reset_tets);
+                pass.dispatch_workgroups(groups_t, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_reset_nodes);
+                pass.dispatch_workgroups(groups_v, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_mark_fluid);
+                pass.dispatch_workgroups(groups_p, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_setup);
+                pass.dispatch_workgroups(groups_t, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_dot_init);
+                pass.dispatch_workgroups(1, 1, 1);
+                for _ in 0..pressure_iters {
+                    pass.set_pipeline(&self.pipe_proj_zero_f);
+                    pass.dispatch_workgroups(groups_v, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_scatter_d);
+                    pass.dispatch_workgroups(groups_t, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_gather_sd);
+                    pass.dispatch_workgroups(groups_t, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_dot_dsd);
+                    pass.dispatch_workgroups(1, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_update_qr);
+                    pass.dispatch_workgroups(groups_t, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_dot_rr);
+                    pass.dispatch_workgroups(1, 1, 1);
+                    pass.set_pipeline(&self.pipe_proj_update_d);
+                    pass.dispatch_workgroups(groups_t, 1, 1);
+                }
+                pass.set_pipeline(&self.pipe_proj_zero_f);
+                pass.dispatch_workgroups(groups_v, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_scatter_q);
+                pass.dispatch_workgroups(groups_t, 1, 1);
+                pass.set_pipeline(&self.pipe_proj_correct);
+                pass.dispatch_workgroups(groups_v, 1, 1);
+                // Re-pin no-slip walls (the correction can add a
+                // wall-normal component on boundary nodes) — mirrors
+                // the CPU step_projected.
+                pass.set_pipeline(&self.pipe_apply_bcs);
+                pass.dispatch_workgroups(groups_v, 1, 1);
+            }
 
             // 7. G2P: gather, recompute affine matrix, advect.
             pass.set_pipeline(&self.pipe_g2p);
@@ -776,8 +907,22 @@ impl ApicHybrid {
         viscosity: f32,
         bcs: &[BoundaryCondition],
     ) -> Result<()> {
+        self.step_gpu_projected(engine, dt, viscosity, bcs, 0)
+    }
+
+    /// Stage 37.6.1 — GPU step with the per-tet pressure projection
+    /// (see [`ApicHybrid::step_projected`] for the formulation; the CG
+    /// loop runs entirely on-device).
+    pub fn step_gpu_projected(
+        &mut self,
+        engine: &Engine,
+        dt: f32,
+        viscosity: f32,
+        bcs: &[BoundaryCondition],
+        pressure_iters: u32,
+    ) -> Result<()> {
         let state = ApicGpuState::new(engine, self, bcs)?;
-        state.step(self, dt, viscosity)?;
+        state.step_projected(self, dt, viscosity, pressure_iters)?;
         state.sync_to_host(self)
     }
 }

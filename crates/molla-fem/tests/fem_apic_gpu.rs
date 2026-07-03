@@ -164,3 +164,83 @@ fn apic_gpu_single_step_is_finite() {
         );
     }
 }
+
+/// Stage 37.6.1 — GPU pressure projection parity. The compressing
+/// blob from the CPU contract test (radially inward velocities,
+/// div v = −6) runs one projected step on both backends; the GPU CG
+/// loop is recorded entirely on-device. f32-vs-f64 divergence over a
+/// 120-iteration Krylov solve is the tolerance driver, so the gate is
+/// looser than the smoothing-only parity above — but an unprojected
+/// GPU run is asserted to be FAR from the CPU projected result, so
+/// the gate cannot pass vacuously.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-fem T=fem_apic_gpu`"]
+fn apic_gpu_pressure_projection_matches_cpu() {
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mesh = FemMesh::tet_grid_3d(5, 5, 5, 1.0, 1.0, 1.0);
+    let center = Vec3::new(0.5, 0.5, 0.5);
+    let mut particles = Vec::new();
+    for i in 0..6 {
+        for j in 0..6 {
+            for k in 0..6 {
+                let x = Vec3::new(
+                    0.2531 + 0.09973 * i as Real,
+                    0.2547 + 0.09931 * j as Real,
+                    0.2513 + 0.09959 * k as Real,
+                );
+                let mut p = ApicParticle::at_rest(x, 1.0e-3);
+                p.v = -2.0 * (x - center);
+                particles.push(p);
+            }
+        }
+    }
+    let dt: Real = 1.0 / 240.0;
+    let iters = 120u32;
+
+    let mut cpu = ApicHybrid::new(mesh.clone(), particles.clone());
+    cpu.gravity = Vec3::ZERO;
+    cpu.step_projected(dt, 0.0, &[], iters);
+
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let mut gpu_proj = ApicHybrid::new(mesh.clone(), particles.clone());
+    gpu_proj.gravity = Vec3::ZERO;
+    gpu_proj
+        .step_gpu_projected(&engine, dt as f32, 0.0, &[], iters)
+        .expect("gpu projected step");
+
+    let mut gpu_plain = ApicHybrid::new(mesh, particles);
+    gpu_plain.gravity = Vec3::ZERO;
+    gpu_plain
+        .step_gpu(&engine, dt as f32, 0.0, &[])
+        .expect("gpu plain step");
+
+    let mut max_dv_proj: Real = 0.0;
+    let mut max_dv_plain: Real = 0.0;
+    for ((cp, gp), gpl) in cpu
+        .particles
+        .iter()
+        .zip(gpu_proj.particles.iter())
+        .zip(gpu_plain.particles.iter())
+    {
+        max_dv_proj = max_dv_proj.max((cp.v - gp.v).length());
+        max_dv_plain = max_dv_plain.max((cp.v - gpl.v).length());
+    }
+    eprintln!(
+        "projection parity: max |Δv| projected = {max_dv_proj:.4e}, unprojected control = {max_dv_plain:.4e}"
+    );
+    // Non-vacuous: skipping the projection must visibly diverge from
+    // the CPU projected oracle (the blob is strongly compressing).
+    assert!(
+        max_dv_plain > 0.05,
+        "control: unprojected GPU should differ strongly from projected CPU"
+    );
+    assert!(
+        max_dv_proj < 1.0e-4,
+        "GPU projection diverges from CPU oracle: {max_dv_proj:.4e} (control {max_dv_plain:.4e})"
+    );
+    assert!(
+        max_dv_proj < max_dv_plain / 20.0,
+        "projection parity not clearly better than the unprojected control"
+    );
+}

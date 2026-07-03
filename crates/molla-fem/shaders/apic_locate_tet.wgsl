@@ -88,6 +88,25 @@ struct Uniforms {
 @group(3) @binding(7) var<storage, read> g_neighbour_indices : array<u32>;
 @group(3) @binding(8) var<storage, read> g_bc_mask : array<u32>;       // 1 if BC
 @group(3) @binding(9) var<storage, read> g_bc_values : array<vec4<f32>>;
+// ─── Stage 37.6.1 GPU — per-tet (P0) pressure projection ─────────────
+// Mirrors the CPU `apply_pressure_projection`: CG on the lumped-mass
+// Schur operator S = D M⁻¹ Dᵀ over deposit-supported fluid tets, then
+// v ← v − M⁻¹ Dᵀ q. The g_mom_x/y/z atomics are REUSED as the nodal
+// force scratch `f` (they are dead after `grid_update`).
+@group(3) @binding(10) var<storage, read_write> t_fluid : array<u32>;
+@group(3) @binding(11) var<storage, read_write> t_q  : array<f32>;
+@group(3) @binding(12) var<storage, read_write> t_r  : array<f32>;
+@group(3) @binding(13) var<storage, read_write> t_d  : array<f32>;
+@group(3) @binding(14) var<storage, read_write> t_sd : array<f32>;
+@group(3) @binding(15) var<storage, read_write> n_lumped : array<atomic<u32>>; // f32 bitcast
+// [0]=dsd, [1]=alpha, [2]=beta, [3]=rr_old, [4]=rr_init. Written only
+// by the single-workgroup reduction entries — no cross-workgroup
+// races. rr_init powers the convergence FREEZE: f32 CG breaks down if
+// iterated past convergence (rounding destroys conjugacy — measured:
+// 40 iters ≈ 1e-5 parity vs CPU f64, 120 iters diverged to O(1)), so
+// once rr_old ≤ 1e-12·rr_init both alpha and beta clamp to zero and
+// further iterations are no-ops.
+@group(3) @binding(16) var<storage, read_write> cg_scalars : array<f32>;
 
 const WG_SIZE : u32 = 64u;
 const INVALID_TET : u32 = 0xFFFFFFFFu;
@@ -417,4 +436,331 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
     p_C[pid * 3u + 0u] = vec4<f32>(cr0.x, cr0.y, cr0.z, 0.0);
     p_C[pid * 3u + 1u] = vec4<f32>(cr1.x, cr1.y, cr1.z, 0.0);
     p_C[pid * 3u + 2u] = vec4<f32>(cr2.x, cr2.y, cr2.z, 0.0);
+}
+
+
+// ─── Stage 37.6.1 GPU — pressure-projection entry points ─────────────
+
+fn atomic_add_lumped(slot: u32, value: f32) {
+    var old = atomicLoad(&n_lumped[slot]);
+    loop {
+        let new_val = bitcast<f32>(old) + value;
+        let res = atomicCompareExchangeWeak(&n_lumped[slot], old, bitcast<u32>(new_val));
+        if (res.exchanged) { break; }
+        old = res.old_value;
+    }
+}
+
+// Per-tet geometry: vertex ids, P1 shape gradients, |volume|.
+struct TetGeom {
+    v: vec4<u32>,
+    g0: vec3<f32>,
+    g1: vec3<f32>,
+    g2: vec3<f32>,
+    g3: vec3<f32>,
+    vol: f32,
+}
+
+fn tet_geom(cid: u32) -> TetGeom {
+    let off = mesh_cell_offsets[cid];
+    let i0 = mesh_cells[off + 0u];
+    let i1 = mesh_cells[off + 1u];
+    let i2 = mesh_cells[off + 2u];
+    let i3 = mesh_cells[off + 3u];
+    let p0 = mesh_vertices[i0].xyz;
+    let p1 = mesh_vertices[i1].xyz;
+    let p2 = mesh_vertices[i2].xyz;
+    let p3 = mesh_vertices[i3].xyz;
+    let d0 = p1 - p0;
+    let d1 = p2 - p0;
+    let d2 = p3 - p0;
+    let det = dot(d0, cross(d1, d2));
+    var out: TetGeom;
+    out.v = vec4<u32>(i0, i1, i2, i3);
+    out.vol = abs(det) / 6.0;
+    if (abs(det) > 1.0e-20) {
+        let inv_det = 1.0 / det;
+        out.g1 = cross(d1, d2) * inv_det;
+        out.g2 = cross(d2, d0) * inv_det;
+        out.g3 = cross(d0, d1) * inv_det;
+        out.g0 = -(out.g1 + out.g2 + out.g3);
+    } else {
+        out.vol = 0.0;
+        out.g0 = vec3<f32>(0.0);
+        out.g1 = vec3<f32>(0.0);
+        out.g2 = vec3<f32>(0.0);
+        out.g3 = vec3<f32>(0.0);
+    }
+    return out;
+}
+
+@compute @workgroup_size(WG_SIZE)
+fn proj_reset_tets(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    t_fluid[t] = 0u;
+    t_q[t] = 0.0;
+    t_r[t] = 0.0;
+    t_d[t] = 0.0;
+    t_sd[t] = 0.0;
+}
+
+@compute @workgroup_size(WG_SIZE)
+fn proj_reset_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = gid.x;
+    if (n >= u.vert_count) { return; }
+    atomicStore(&n_lumped[n], bitcast<u32>(0.0));
+}
+
+// One thread per particle: mark its deposit tet fluid (first-match
+// locate == the P2G deposit target, mirroring the CPU
+// `first_match_fluid_mask`).
+@compute @workgroup_size(WG_SIZE)
+fn proj_mark_fluid(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pid = gid.x;
+    if (pid >= u.particle_count) { return; }
+    let tet = p_loc[pid * 3u + 0u].x;
+    if (tet != INVALID_TET && tet < u.cell_count) {
+        t_fluid[tet] = 1u;
+    }
+}
+
+// Per tet: keep the fluid flag only when all 4 nodes carry deposit
+// mass (a face-sitting particle gives zero weight to the off-face
+// node — its velocity slot is not fluid data). For surviving tets,
+// accumulate the lumped node weights and seed the CG state
+// (rhs = D v; q = 0; r = d = rhs).
+@compute @workgroup_size(WG_SIZE)
+fn proj_setup(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) { return; }
+    let geo = tet_geom(t);
+    if (geo.vol <= 0.0) {
+        t_fluid[t] = 0u;
+        return;
+    }
+    let m0 = bitcast<f32>(atomicLoad(&g_mass[geo.v.x]));
+    let m1 = bitcast<f32>(atomicLoad(&g_mass[geo.v.y]));
+    let m2 = bitcast<f32>(atomicLoad(&g_mass[geo.v.z]));
+    let m3 = bitcast<f32>(atomicLoad(&g_mass[geo.v.w]));
+    let eps = 1.0e-12;
+    if (m0 <= eps || m1 <= eps || m2 <= eps || m3 <= eps) {
+        t_fluid[t] = 0u;
+        return;
+    }
+    let quarter = geo.vol / 4.0;
+    atomic_add_lumped(geo.v.x, quarter);
+    atomic_add_lumped(geo.v.y, quarter);
+    atomic_add_lumped(geo.v.z, quarter);
+    atomic_add_lumped(geo.v.w, quarter);
+    let div = dot(g_vel[geo.v.x].xyz, geo.g0)
+            + dot(g_vel[geo.v.y].xyz, geo.g1)
+            + dot(g_vel[geo.v.z].xyz, geo.g2)
+            + dot(g_vel[geo.v.w].xyz, geo.g3);
+    let rhs = geo.vol * div;
+    t_r[t] = rhs;
+    t_d[t] = rhs;
+}
+
+// Zero the nodal force scratch (the reused g_mom_* atomics).
+@compute @workgroup_size(WG_SIZE)
+fn proj_zero_f(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = gid.x;
+    if (n >= u.vert_count) { return; }
+    atomicStore(&g_mom_x[n], bitcast<u32>(0.0));
+    atomicStore(&g_mom_y[n], bitcast<u32>(0.0));
+    atomicStore(&g_mom_z[n], bitcast<u32>(0.0));
+}
+
+// f += vol · g_j · d[t]  (Dᵀ d, scattered to nodes).
+@compute @workgroup_size(WG_SIZE)
+fn proj_scatter_d(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) { return; }
+    let geo = tet_geom(t);
+    let s = geo.vol * t_d[t];
+    let ids = array<u32, 4>(geo.v.x, geo.v.y, geo.v.z, geo.v.w);
+    let gs = array<vec3<f32>, 4>(geo.g0, geo.g1, geo.g2, geo.g3);
+    for (var j = 0u; j < 4u; j = j + 1u) {
+        atomic_add_mom_x(ids[j], s * gs[j].x);
+        atomic_add_mom_y(ids[j], s * gs[j].y);
+        atomic_add_mom_z(ids[j], s * gs[j].z);
+    }
+}
+
+// f += vol · g_j · q[t]  (final correction scatter).
+@compute @workgroup_size(WG_SIZE)
+fn proj_scatter_q(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) { return; }
+    let geo = tet_geom(t);
+    let s = geo.vol * t_q[t];
+    let ids = array<u32, 4>(geo.v.x, geo.v.y, geo.v.z, geo.v.w);
+    let gs = array<vec3<f32>, 4>(geo.g0, geo.g1, geo.g2, geo.g3);
+    for (var j = 0u; j < 4u; j = j + 1u) {
+        atomic_add_mom_x(ids[j], s * gs[j].x);
+        atomic_add_mom_y(ids[j], s * gs[j].y);
+        atomic_add_mom_z(ids[j], s * gs[j].z);
+    }
+}
+
+fn node_f_over_m(n: u32) -> vec3<f32> {
+    let lm = bitcast<f32>(atomicLoad(&n_lumped[n]));
+    if (lm <= 1.0e-20) { return vec3<f32>(0.0); }
+    return vec3<f32>(
+        bitcast<f32>(atomicLoad(&g_mom_x[n])),
+        bitcast<f32>(atomicLoad(&g_mom_y[n])),
+        bitcast<f32>(atomicLoad(&g_mom_z[n])),
+    ) / lm;
+}
+
+// sd[t] = vol · Σ_j (f_j / m_j) · g_j   (S d = D M⁻¹ Dᵀ d).
+@compute @workgroup_size(WG_SIZE)
+fn proj_gather_sd(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) {
+        t_sd[t] = 0.0;
+        return;
+    }
+    let geo = tet_geom(t);
+    t_sd[t] = geo.vol * (
+        dot(node_f_over_m(geo.v.x), geo.g0)
+        + dot(node_f_over_m(geo.v.y), geo.g1)
+        + dot(node_f_over_m(geo.v.z), geo.g2)
+        + dot(node_f_over_m(geo.v.w), geo.g3)
+    );
+}
+
+var<workgroup> red_a: array<f32, 256>;
+var<workgroup> red_b: array<f32, 256>;
+
+// Single-workgroup reduction: rr_old = Σ r² (CG bootstrap).
+@compute @workgroup_size(256)
+fn proj_dot_init(@builtin(local_invocation_id) lid: vec3<u32>) {
+    var acc = 0.0;
+    var t = lid.x;
+    loop {
+        if (t >= u.cell_count) { break; }
+        acc = acc + t_r[t] * t_r[t];
+        t = t + 256u;
+    }
+    red_a[lid.x] = acc;
+    workgroupBarrier();
+    var stride = 128u;
+    loop {
+        if (stride == 0u) { break; }
+        if (lid.x < stride) { red_a[lid.x] = red_a[lid.x] + red_a[lid.x + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+    if (lid.x == 0u) {
+        cg_scalars[3] = red_a[0];
+        cg_scalars[4] = red_a[0];
+    }
+}
+
+// dsd = Σ d·sd; alpha = rr_old / dsd.
+@compute @workgroup_size(256)
+fn proj_dot_dsd(@builtin(local_invocation_id) lid: vec3<u32>) {
+    var acc = 0.0;
+    var t = lid.x;
+    loop {
+        if (t >= u.cell_count) { break; }
+        acc = acc + t_d[t] * t_sd[t];
+        t = t + 256u;
+    }
+    red_a[lid.x] = acc;
+    workgroupBarrier();
+    var stride = 128u;
+    loop {
+        if (stride == 0u) { break; }
+        if (lid.x < stride) { red_a[lid.x] = red_a[lid.x] + red_a[lid.x + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+    if (lid.x == 0u) {
+        let dsd = red_a[0];
+        cg_scalars[0] = dsd;
+        let converged = cg_scalars[3] <= 1.0e-12 * cg_scalars[4];
+        if (!converged && abs(dsd) > 1.0e-30) {
+            cg_scalars[1] = cg_scalars[3] / dsd;
+        } else {
+            cg_scalars[1] = 0.0;
+        }
+    }
+}
+
+// q += alpha d; r -= alpha sd.
+@compute @workgroup_size(WG_SIZE)
+fn proj_update_qr(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) { return; }
+    let alpha = cg_scalars[1];
+    t_q[t] = t_q[t] + alpha * t_d[t];
+    t_r[t] = t_r[t] - alpha * t_sd[t];
+}
+
+// rr_new = Σ r²; beta = rr_new / rr_old; rr_old = rr_new.
+@compute @workgroup_size(256)
+fn proj_dot_rr(@builtin(local_invocation_id) lid: vec3<u32>) {
+    var acc = 0.0;
+    var t = lid.x;
+    loop {
+        if (t >= u.cell_count) { break; }
+        acc = acc + t_r[t] * t_r[t];
+        t = t + 256u;
+    }
+    red_b[lid.x] = acc;
+    workgroupBarrier();
+    var stride = 128u;
+    loop {
+        if (stride == 0u) { break; }
+        if (lid.x < stride) { red_b[lid.x] = red_b[lid.x] + red_b[lid.x + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+    if (lid.x == 0u) {
+        let rr_new = red_b[0];
+        let rr_old = cg_scalars[3];
+        let converged = rr_new <= 1.0e-12 * cg_scalars[4];
+        if (!converged && rr_old > 1.0e-30) {
+            cg_scalars[2] = rr_new / rr_old;
+        } else {
+            // Frozen: d collapses to r (small) and stays there.
+            cg_scalars[2] = 0.0;
+        }
+        cg_scalars[3] = rr_new;
+    }
+}
+
+// d = r + beta d.
+@compute @workgroup_size(WG_SIZE)
+fn proj_update_d(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.cell_count) { return; }
+    if (t_fluid[t] == 0u) { return; }
+    t_d[t] = t_r[t] + cg_scalars[2] * t_d[t];
+}
+
+// v ← v − f / m (nodes with lumped support), preserving the packed
+// mass in g_vel.w.
+@compute @workgroup_size(WG_SIZE)
+fn proj_correct(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = gid.x;
+    if (n >= u.vert_count) { return; }
+    let lm = bitcast<f32>(atomicLoad(&n_lumped[n]));
+    if (lm <= 1.0e-20) { return; }
+    let f = vec3<f32>(
+        bitcast<f32>(atomicLoad(&g_mom_x[n])),
+        bitcast<f32>(atomicLoad(&g_mom_y[n])),
+        bitcast<f32>(atomicLoad(&g_mom_z[n])),
+    );
+    let v = g_vel[n];
+    let v_new = v.xyz - f / lm;
+    g_vel[n] = vec4<f32>(v_new.x, v_new.y, v_new.z, v.w);
 }
