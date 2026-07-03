@@ -407,6 +407,11 @@ impl VbdSolver {
     }
 
     /// Stage 33.4 — toggle the pre-substep CCD pass on / off.
+    ///
+    /// CPU-only (INSPECTION.md F14): CCD has no GPU kernel, so a GPU
+    /// backend with CCD enabled and ≥ 2 soft surfaces refuses to step
+    /// (loud error) instead of silently tunneling. Use [`Vbd::cpu`]
+    /// (or the `new_cpu` constructor) for CCD scenes.
     #[must_use]
     pub fn with_ccd(mut self, enabled: bool) -> Self {
         self.ccd_enabled = enabled;
@@ -497,6 +502,19 @@ impl Solver for VbdSolver {
         // driver can re-borrow `self` (scratch state + substep helper).
         #[cfg(feature = "gpu")]
         if matches!(self.backend, VbdBackend::Gpu(_)) {
+            // Stage 33.4.1 (INSPECTION.md F14) — CCD is a CPU-only
+            // stage (BVH build + TOI root-finds; no GPU kernel yet).
+            // Refuse loudly rather than silently tunnel: a caller who
+            // opted into `with_ccd(true)` is depending on it for
+            // correctness at high impact speeds.
+            if self.ccd_enabled && model.soft_surfaces.len() >= 2 {
+                return Err(Error::Solver(
+                    "VBD CCD (`with_ccd(true)`) is CPU-only — it has no GPU kernel and \
+                     would silently tunnel on the GPU backend. Use `Vbd::cpu()` for \
+                     CCD scenes, or disable CCD for this solver."
+                        .into(),
+                ));
+            }
             if n_sub == 1 {
                 // A single substep advances the full dt (VBD is an
                 // implicit-energy minimiser, stable at large dt given

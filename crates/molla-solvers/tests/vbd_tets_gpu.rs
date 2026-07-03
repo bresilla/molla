@@ -452,3 +452,64 @@ fn cable_bending_stiffness_sweep() {
         sag_no * 0.97
     );
 }
+
+/// INSPECTION.md F14 — CCD is CPU-only. The GPU backend must refuse
+/// loudly (instead of silently tunneling) when a caller opts into
+/// `with_ccd(true)` on a model with ≥ 2 soft surfaces.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn gpu_backend_refuses_ccd_instead_of_silently_tunneling() {
+    let mut b = ModelBuilder::new();
+    for y in [0.5_f64, 1.0] {
+        b.add_cloth_grid(
+            Vec3::new(-0.2, y as Real, -0.2),
+            Vec3::new(0.4, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.4),
+            4,
+            4,
+            0.05,
+            0.02,
+            5.0e-6,
+            0.05,
+            WorldId(0),
+        );
+    }
+    let mut model = b.build().unwrap();
+    assert!(
+        model.soft_surfaces.len() >= 2,
+        "two cloth grids must register two soft surfaces"
+    );
+    let engine = Engine::new_gpu().expect("GPU adapter");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    model.upload_to_device(&device, &queue).unwrap();
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    s_a.upload_to_device(&device, &queue).unwrap();
+    s_b.upload_to_device(&device, &queue).unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(8);
+
+    let mut solver = VbdSolver::new_gpu(&engine, &model)
+        .unwrap()
+        .with_iterations(4)
+        .with_contact_stiffness(1.0e5)
+        .with_ccd(true);
+    let err = solver
+        .step(&model, &s_a, &control, &contacts, 1.0 / 240.0, &mut s_b)
+        .expect_err("GPU + CCD must refuse to step");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("CPU-only"),
+        "error must explain the CPU-only contract: {msg}"
+    );
+
+    // Same configuration WITHOUT CCD steps fine on the GPU backend.
+    let mut solver_ok = VbdSolver::new_gpu(&engine, &model)
+        .unwrap()
+        .with_iterations(4)
+        .with_contact_stiffness(1.0e5);
+    solver_ok
+        .step(&model, &s_a, &control, &contacts, 1.0 / 240.0, &mut s_b)
+        .expect("GPU without CCD must step");
+}
