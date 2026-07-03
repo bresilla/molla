@@ -590,3 +590,75 @@ fn sdf_world_aabb_grows_with_torus_dims() {
     assert!((extent.z - 2.0 * 0.6).abs() < 1e-9);
     assert!((extent.y - 2.0 * 0.1).abs() < 1e-9);
 }
+
+/// INSPECTION.md F15 / NutBoltSdf — the analytic helical-thread SDF.
+///
+/// Oracles:
+/// 1. SCREW SYMMETRY: rotating by α about +Y while translating by
+///    `pitch·α/τ` along +Y maps the thread onto itself, so the
+///    distance field must be invariant (up to fp noise) for any α —
+///    this is the property a stack of torus rings (the old proxy)
+///    fails, since rings have no axial coupling.
+/// 2. Surface points (profile-plane circle) sit at distance ≈ 0;
+///    the helix core line sits at ≈ −minor; far points are positive.
+/// 3. The cap plane truncates the thread.
+#[test]
+fn helical_thread_sdf_screw_symmetry_and_surface() {
+    use molla_sim::SdfShape;
+    let major = 0.30_f64;
+    let minor = 0.05_f64;
+    let pitch = 0.12_f64;
+    let tau = std::f64::consts::TAU;
+    let sdf = SdfShape::HelicalThread {
+        major,
+        minor,
+        pitch,
+        half_height: 1.0,
+    };
+
+    // 1. Screw symmetry.
+    let probe = V3::new(0.27, 0.13, 0.11);
+    let d0 = sdf.signed_distance(probe);
+    for k in 1..24 {
+        let alpha = k as f64 * 0.261799; // 15° steps
+        let (s, c) = alpha.sin_cos();
+        let rotated = V3::new(
+            c * probe.x - s * probe.z,
+            probe.y + pitch * alpha / tau,
+            s * probe.x + c * probe.z,
+        );
+        let d = sdf.signed_distance(rotated);
+        assert!(
+            (d - d0).abs() < 1.0e-9,
+            "screw symmetry broken at α={alpha:.3}: {d} vs {d0}"
+        );
+    }
+
+    // 2. Surface + core: at angle θ the thread crest passes through
+    //    y = pitch·θ/τ; the swept circle in the profile plane is
+    //    (r, y) = (major + minor·cosφ, crest_y + minor·sinφ).
+    for k in 0..16 {
+        let theta = k as f64 * tau / 16.0;
+        let crest_y = pitch * theta / tau;
+        let core = V3::new(major * theta.cos(), crest_y, major * theta.sin());
+        let d_core = sdf.signed_distance(core);
+        assert!(
+            (d_core + minor).abs() < 2.0e-3,
+            "helix core at θ={theta:.2} should be ≈ −minor: {d_core}"
+        );
+        for j in 0..8 {
+            let phi = j as f64 * tau / 8.0;
+            let r = major + minor * phi.cos();
+            let y = crest_y + minor * phi.sin();
+            let p = V3::new(r * theta.cos(), y, r * theta.sin());
+            let d = sdf.signed_distance(p);
+            assert!(
+                d.abs() < 2.0e-3,
+                "surface point θ={theta:.2} φ={phi:.2} should be ≈ 0: {d}"
+            );
+        }
+    }
+    // Far point positive, capped region positive.
+    assert!(sdf.signed_distance(V3::new(1.0, 0.0, 0.0)) > 0.5);
+    assert!(sdf.signed_distance(V3::new(major, 2.0, 0.0)) > 0.5);
+}

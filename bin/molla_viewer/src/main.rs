@@ -2859,9 +2859,9 @@ impl Scene {
             Scene::NutBoltSdf => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton contacts/example_nut_bolt_sdf.py",
-                cpu_proof: "procedural_socket_bolt_dense_contact_stays_finite_and_caged + nut_bolt_sdf_thread_ring_has_expected_signs",
+                cpu_proof: "procedural_socket_bolt_dense_contact_stays_finite_and_caged + nut_bolt_sdf_thread_ring_has_expected_signs + helical_thread_sdf_screw_symmetry_and_surface (molla-solvers)",
                 gpu_proof: "make test-gpu P=molla-kernels T=contact_reduction_gpu / make test-gpu P=molla-kernels T=sparse_grid_v4 for reduction/grid lanes; analytic SDF narrow phase is CPU-only today",
-                notes: "procedural socket/bolt plus analytic torus SDF thread lips; no imported threaded mesh, and full threaded SDF GPU contact remains future work",
+                notes: "procedural socket/bolt with a REAL analytic helical-thread SDF (screw-symmetric, pitch-coupled — replaces the old torus-ring proxy); no imported threaded mesh, and full threaded SDF GPU contact remains future work",
             },
             Scene::NutBoltHydro => ScenePhysicsAudit {
                 status: Partial,
@@ -10316,7 +10316,7 @@ mod tests {
         let (model, visuals) = build_nut_bolt_sdf_model();
         assert_eq!(model.body_count, NUT_BOLT_SOCKET_WALLS + 1);
         assert_eq!(visuals.len(), model.body_count);
-        assert_eq!(model.sdfs.len(), NUT_BOLT_THREAD_RINGS);
+        assert_eq!(model.sdfs.len(), 1, "one helical thread SDF");
 
         let boxes = model
             .shape_geometry
@@ -10341,7 +10341,7 @@ mod tests {
 
         assert_eq!(boxes, NUT_BOLT_SOCKET_WALLS);
         assert_eq!(cylinders, 1);
-        assert_eq!(sdfs, NUT_BOLT_THREAD_RINGS);
+        assert_eq!(sdfs, 1, "one helical thread SDF shape");
         assert_eq!(planes, 1);
         assert!(model.contact_margin >= 0.02);
 
@@ -10363,9 +10363,14 @@ mod tests {
 
     #[test]
     fn nut_bolt_sdf_thread_ring_has_expected_signs() {
-        let sdf = mp::SdfShape::Torus {
+        // Helical thread (F15): probes sit at θ = 0 where the crest
+        // passes y = 0, so the old torus expectations carry over
+        // exactly in the x/z plane.
+        let sdf = mp::SdfShape::HelicalThread {
             major: NUT_BOLT_THREAD_MAJOR,
             minor: NUT_BOLT_THREAD_MINOR,
+            pitch: NUT_BOLT_THREAD_PITCH,
+            half_height: 1.0,
         };
 
         let tube_center = MVec3::new(NUT_BOLT_THREAD_MAJOR, 0.0, 0.0);
@@ -10434,7 +10439,7 @@ mod tests {
         let (model, visuals) = build_nut_bolt_hydro_model();
         assert_eq!(model.body_count, NUT_BOLT_SOCKET_WALLS + 1);
         assert_eq!(visuals.len(), model.body_count);
-        assert_eq!(model.sdfs.len(), NUT_BOLT_THREAD_RINGS);
+        assert_eq!(model.sdfs.len(), 1, "one helical thread SDF");
 
         let audit = Scene::NutBoltHydro.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);

@@ -86,6 +86,19 @@ pub enum SdfShape {
     /// Sphere of radius `r` — useful as a smoke test against the
     /// existing analytic Sphere primitive.
     Sphere { r: Real },
+    /// Helical thread around the local +Y axis (INSPECTION.md F15 /
+    /// NutBoltSdf): a circle of radius `minor` swept along the helix
+    /// of radius `major` with pitch `pitch` (advance per turn, m),
+    /// capped to `|y| ≤ half_height`. The distance is evaluated in
+    /// the wrapped profile plane `(r − major, y − pitch·θ/τ mod
+    /// pitch)` — exact in that plane, with the standard small swept
+    /// error on steep helices (`pitch ≪ τ·major` keeps it tight).
+    HelicalThread {
+        major: Real,
+        minor: Real,
+        pitch: Real,
+        half_height: Real,
+    },
 }
 
 impl SdfShape {
@@ -99,6 +112,24 @@ impl SdfShape {
                 (q.x * q.x + q.y * q.y).sqrt() - minor
             }
             SdfShape::Sphere { r } => p.length() - r,
+            SdfShape::HelicalThread {
+                major,
+                minor,
+                pitch,
+                half_height,
+            } => {
+                let r_xz = (p.x * p.x + p.z * p.z).sqrt();
+                let theta = p.z.atan2(p.x);
+                let tau = core::f64::consts::TAU as Real;
+                // Screw coordinate: distance along Y from the nearest
+                // thread crest passing at angle θ.
+                let v_raw = p.y - pitch * theta / tau;
+                let v = v_raw - pitch * (v_raw / pitch).round();
+                let d_profile = ((r_xz - major) * (r_xz - major) + v * v).sqrt();
+                let d_thread = d_profile - minor;
+                // Cap the helix to a finite bolt segment.
+                d_thread.max(p.y.abs() - half_height)
+            }
         }
     }
 

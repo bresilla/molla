@@ -201,6 +201,12 @@ pub fn shape_world_aabb(model: &Model, state: &State, shape_idx: usize, margin: 
             };
             let h_local = match sdf {
                 SdfShape::Torus { major, minor } => Vec3::new(major + minor, minor, major + minor),
+                SdfShape::HelicalThread {
+                    major,
+                    minor,
+                    half_height,
+                    ..
+                } => Vec3::new(major + minor, half_height + minor, major + minor),
                 SdfShape::Sphere { r } => Vec3::splat(r),
             };
             // Rotate the AABB into world (uses the box rotation trick).

@@ -49,7 +49,8 @@ fn build_cable_bundle_hysteresis_model() -> (mp::Model, Vec<BodyVisual>) {
 }
 
 const NUT_BOLT_SOCKET_WALLS: usize = 6;
-const NUT_BOLT_THREAD_RINGS: usize = 3;
+const NUT_BOLT_THREAD_RINGS: usize = 3; // retained: helix spans the same 3-ring band
+const NUT_BOLT_THREAD_PITCH: f64 = 0.20; // was the ring spacing — now the helix pitch
 const NUT_BOLT_BOLT_RADIUS: f64 = 0.24;
 const NUT_BOLT_BOLT_HALF_HEIGHT: f64 = 0.32;
 const NUT_BOLT_SOCKET_RADIUS: f64 = 0.34;

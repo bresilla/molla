@@ -29,21 +29,26 @@ fn build_nut_bolt_sdf_model() -> (mp::Model, Vec<BodyVisual>) {
         )));
     }
 
-    // Thread-like analytic SDF lips. The current SDF narrow phase is CPU-only,
-    // so the scene audit names GPU reduction/grid lanes separately instead of
-    // pretending the analytic SDF contact itself is GPU resident.
-    for i in 0..NUT_BOLT_THREAD_RINGS {
-        let sdf_id = b.add_sdf(mp::SdfShape::Torus {
+    // A REAL helical thread SDF (F15/NutBoltSdf — replaces the old
+    // torus-ring proxy stack, which had no axial coupling and thus no
+    // screw kinematics). One analytic helix spans the same band the
+    // three rings used to cover; the SDF narrow phase is CPU-only, so
+    // the scene audit names GPU reduction/grid lanes separately.
+    {
+        let half_span = NUT_BOLT_THREAD_PITCH * (NUT_BOLT_THREAD_RINGS as f64 - 1.0) / 2.0;
+        let sdf_id = b.add_sdf(mp::SdfShape::HelicalThread {
             major: NUT_BOLT_THREAD_MAJOR,
             minor: NUT_BOLT_THREAD_MINOR,
+            pitch: NUT_BOLT_THREAD_PITCH,
+            half_height: half_span + NUT_BOLT_THREAD_MINOR,
         });
-        let y = 0.30 + i as f64 * 0.20;
+        let y_center = 0.30 + half_span;
         b.add_shape_sdf(
             mp::BodyId::NONE,
             sdf_id,
-            mp::Transform::from_translation(MVec3::new(0.0, y, 0.0)),
+            mp::Transform::from_translation(MVec3::new(0.0, y_center, 0.0)),
         )
-        .expect("nut thread SDF ring");
+        .expect("nut helical thread SDF");
     }
 
     let bolt_mass = 1.0;
