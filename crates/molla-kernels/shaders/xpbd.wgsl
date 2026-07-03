@@ -42,7 +42,11 @@ struct Uniforms {
     body_count:         u32,
     has_external_force: u32,
     linear_damping:     f32,
-    _pad0:              f32,
+    // 1.0 on the FINAL velocity sweep only: friction (tangential,
+    // rolling, torsional) applies once so the Coulomb caps bound the
+    // TOTAL impulse; iterated sweeps handle restitution/normal only
+    // (B1b). Other passes ignore this field.
+    friction_pass:      f32,
     _pad1:              f32,
     _pad2:              f32,
 };
@@ -472,7 +476,30 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         ang_acc = ang_acc + ang_imp_self;
         weight  = weight + 1.0;
 
-        if (mu > 0.0) {
+        // Support-impulse floor (mirrors CPU xpbd.rs): a body resting
+        // on this contact receives ≈ m·|g·n|·dt of normal impulse per
+        // step even when the velocity solve needs no correction
+        // (λ_n → 0 in steady contact). Without the floor the Coulomb
+        // caps μ·|λ_n| collapse and ALL friction modes (tangential,
+        // rolling, torsional) vanish for resting bodies. Hoisted to
+        // contact scope so the rolling/torsional caps share it.
+        var support_impulse = 0.0;
+        {
+            let a_idx = select(tid, other, is_b);
+            let b_idx = select(other, tid, is_b);
+            if (inv_m_a > 0.0 && a_idx != STATIC_BODY) {
+                let ga = gravity[u32(max(body_world[a_idx], 0))].xyz;
+                support_impulse = support_impulse
+                    + (1.0 / inv_m_a) * max(dot(ga, n_ab), 0.0) * uniforms.dt;
+            }
+            if (inv_m_b > 0.0 && b_idx != STATIC_BODY) {
+                let gb = gravity[u32(max(body_world[b_idx], 0))].xyz;
+                support_impulse = support_impulse
+                    + (1.0 / inv_m_b) * max(-dot(gb, n_ab), 0.0) * uniforms.dt;
+            }
+        }
+
+        if (mu > 0.0 && uniforms.friction_pass > 0.5) {
             let v_t = v_rel - n_ab * v_n;
             let v_t_len = length(v_t);
             if (v_t_len > 1e-9) {
@@ -483,26 +510,6 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                             + dot(ra_x_t, i_inv_a * ra_x_t)
                             + dot(rb_x_t, i_inv_b * rb_x_t);
                 if (denom_t > 0.0) {
-                    // Support-impulse floor (mirrors CPU xpbd.rs): a
-                    // body resting on this contact receives ≈ m·|g·n|·dt
-                    // of normal impulse per step even when the velocity
-                    // solve needs no correction (λ_n → 0 in steady
-                    // contact). Without the floor the Coulomb cap
-                    // μ·|λ_n| collapses and sliding friction vanishes
-                    // for resting bodies.
-                    var support_impulse = 0.0;
-                    let a_idx = select(tid, other, is_b);
-                    let b_idx = select(other, tid, is_b);
-                    if (inv_m_a > 0.0 && a_idx != STATIC_BODY) {
-                        let ga = gravity[u32(max(body_world[a_idx], 0))].xyz;
-                        support_impulse = support_impulse
-                            + (1.0 / inv_m_a) * max(dot(ga, n_ab), 0.0) * uniforms.dt;
-                    }
-                    if (inv_m_b > 0.0 && b_idx != STATIC_BODY) {
-                        let gb = gravity[u32(max(body_world[b_idx], 0))].xyz;
-                        support_impulse = support_impulse
-                            + (1.0 / inv_m_b) * max(-dot(gb, n_ab), 0.0) * uniforms.dt;
-                    }
                     // Coulomb cone caps the friction *impulse* λ_t at
                     // μ·max(|λ_n|, support). λ_t = dv_t/denom_t, so
                     // dv_t must be capped at cap·denom_t (matches CPU
@@ -524,7 +531,7 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         // to the contact normal. Cap = μ_rolling · |λ_n|. Per-body
         // Jacobi: each thread accumulates only its own ang_acc.
         let mu_roll = contact_rolling_friction[c];
-        if (mu_roll > 0.0) {
+        if (mu_roll > 0.0 && uniforms.friction_pass > 0.5) {
             // w_a / w_b in global terms (kinematic = 0 for missing body).
             var w_a_g = w_self;
             var w_b_g = vec3<f32>(0.0);
@@ -542,8 +549,11 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dir = w_perp / w_perp_len;
                 let denom_r = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
                 if (denom_r > 0.0) {
-                    let cap_r = mu_roll * abs(lambda_n);
-                    // Cap the rolling-friction impulse at μ_roll|λ_n|
+                    // Support-impulse floor (same rationale as the
+                    // tangential cap above; the CPU caps ALL friction
+                    // modes at μ·max(|λ_n|, m·g·dt)).
+                    let cap_r = mu_roll * max(abs(lambda_n), support_impulse);
+                    // Cap the rolling-friction impulse
                     // (= dw capped at cap_r·denom_r), matching CPU.
                     let dw = min(w_perp_len, max(cap_r, 0.0) * denom_r);
                     let lambda_r = dw / denom_r;
@@ -558,7 +568,7 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         // ── Torsional friction: damp angular velocity component ──
         // ALONG the normal. Cap = μ_torsional · |λ_n|.
         let mu_tors = contact_torsional_friction[c];
-        if (mu_tors > 0.0) {
+        if (mu_tors > 0.0 && uniforms.friction_pass > 0.5) {
             var w_a_g = w_self;
             var w_b_g = vec3<f32>(0.0);
             if (!other_kin) {
@@ -574,9 +584,9 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dir = n_ab * sign(w_n);
                 let denom_t = dot(dir, i_inv_a * dir) + dot(dir, i_inv_b * dir);
                 if (denom_t > 0.0) {
-                    let cap_t = mu_tors * abs(lambda_n);
-                    // Cap the torsional-friction impulse at μ_tors|λ_n|
-                    // (= dw capped at cap_t·denom_t), matching CPU.
+                    let cap_t = mu_tors * max(abs(lambda_n), support_impulse);
+                    // Cap the torsional-friction impulse (support
+                    // floor matches CPU), matching CPU semantics.
                     let dw = min(w_n_abs, max(cap_t, 0.0) * denom_t);
                     let lambda_t = dw / denom_t;
                     let ang_t_self = select(dir, -dir, is_b) * lambda_t;

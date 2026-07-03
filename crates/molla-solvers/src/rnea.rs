@@ -22,11 +22,17 @@
 //! convention throughout — same as `crba::mass_matrix` so the two
 //! algorithms compose trivially.
 //!
-//! Single-articulation, single-DoF joints (Revolute / Prismatic /
-//! Fixed). Multi-DoF joints (Ball / Free / Distance / D6) are not
-//! yet supported by this routine — callers receive `Err(Build)` from
-//! the upstream DOF guard so they can fall back to Featherstone /
-//! XPBD instead.
+//! Single articulation. Multi-DoF joints (Ball / Free / Distance /
+//! D6 with lock filtering / Cable = 2 DoF) are supported through the
+//! shared `featherstone::build_motion_subspace` — the same subspace
+//! construction CRBA, the Jacobian, and the Featherstone forward pass
+//! use, so the four algorithms cannot drift apart per-joint.
+//!
+//! Honesty note (2026-07-03 critic audit): the multi-DoF blocks are
+//! verified for internal consistency (CRBA ↔ Featherstone cross-checks
+//! on revolute chains, shared subspace builder) but have NO analytic
+//! multi-DoF oracle test yet — see INSPECTION.md for the open
+//! follow-up.
 
 use crate::core::{Error, Result};
 use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};

@@ -1612,6 +1612,14 @@ pub fn solve_eddy_current_frequency_sweep(
             &cfg,
         )?;
         if enforce_coulomb_gauge {
+            // POST-PROCESSING ONLY (2026-07-03 critic audit): with
+            // σ > 0 the iωσA mass term fixes the gauge, so the
+            // projected potential is NOT a solution of the discrete
+            // eddy equation — its PDE residual grows by O(ωσ‖Gφ‖).
+            // The projection preserves B = curl A exactly (gradients
+            // are curl-free), so use the projected field for B /
+            // visualization, but derive eddy current density
+            // J = −iωσA and ohmic loss from the UNPROJECTED solve.
             result.a_re = project_nedelec_coulomb_gauge(mesh, &result.a_re, &pinned_edges)?;
             result.a_im = project_nedelec_coulomb_gauge(mesh, &result.a_im, &pinned_edges)?;
         }

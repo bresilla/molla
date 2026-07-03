@@ -68,6 +68,12 @@ pub struct XpbdSolver {
     /// help when many contacts share a body (e.g. a stack), but the
     /// preferred way to scale is to **add substeps** (Müller 2020 §3.2).
     pub position_iterations: usize,
+    /// Velocity-pass (restitution + friction) Jacobi sweeps per
+    /// substep. One sweep under-relaxes by the per-contact
+    /// effective-mass ratio (INSPECTION.md B1b — a box landing on
+    /// corner contacts kept ~3/4 of its position-projection pop and
+    /// bounced); 8 sweeps converge that geometrically. Default 8.
+    pub velocity_iterations: usize,
     /// Number of substeps per outer `step` call. The contact set
     /// from the caller is held fixed across all substeps, while
     /// each substep advances `dt/substeps`. Default 1.
@@ -110,6 +116,7 @@ impl XpbdSolver {
     pub fn new_cpu() -> Self {
         Self {
             position_iterations: 4,
+            velocity_iterations: 8,
             substeps: 1,
             backend: XpbdBackend::Cpu,
             #[cfg(feature = "gpu")]
@@ -140,6 +147,7 @@ impl XpbdSolver {
         let equality_kernel = crate::kernels::XpbdEqualityKernel::new(&device);
         Ok(Self {
             position_iterations: 4,
+            velocity_iterations: 8,
             substeps: 1,
             backend: XpbdBackend::Gpu(GpuBackend {
                 device,
@@ -157,6 +165,13 @@ impl XpbdSolver {
     #[must_use]
     pub fn with_iterations(mut self, n: usize) -> Self {
         self.position_iterations = n.max(1);
+        self
+    }
+
+    /// Set the velocity-pass sweep count (see `velocity_iterations`).
+    #[must_use]
+    pub fn with_velocity_iterations(mut self, n: usize) -> Self {
+        self.velocity_iterations = n.max(1);
         self
     }
 
@@ -434,6 +449,7 @@ impl XpbdSolver {
                 dt,
                 state_out,
                 self.position_iterations,
+                self.velocity_iterations,
                 match anchor {
                     AnchorPose::Host(q) => Some(q),
                     _ => None,
@@ -464,6 +480,7 @@ impl XpbdSolver {
                     control,
                     contacts,
                     self.position_iterations,
+                    self.velocity_iterations,
                     dt,
                     state_out,
                     use_contact_pose,
@@ -565,6 +582,7 @@ fn cpu_step(
     dt: Real,
     state_out: &mut State,
     position_iterations: usize,
+    velocity_iterations: usize,
     q_at_contact: Option<&[Transform]>,
 ) -> Result<()> {
     let n = model.body_count;
@@ -819,7 +837,25 @@ fn cpu_step(
     // Jacobi-style: for each contact compute Δv_lin / Δω contributions,
     // accumulate per body, then average. Targets the *pre-projection*
     // contact-point relative normal velocity for restitution.
-    if n_contacts > 0 {
+    //
+    // ITERATED (INSPECTION.md B1b): a single Jacobi sweep under-relaxes
+    // by the per-contact effective-mass ratio — a unit box landing on
+    // four corner contacts has denom ≈ 4·inv_m, so one sweep removes
+    // only ~1/4 of the position-projection pop velocity and the rest
+    // escapes as a bounce (an energy PUMP under internal substepping,
+    // where the pop is divided by dt/n and later substeps gate out on
+    // `v_n_pre ≥ 0`). Iterating converges geometrically.
+    let n_vel_sweeps = velocity_iterations.max(1);
+    for velocity_sweep in 0..n_vel_sweeps {
+        if n_contacts == 0 {
+            break;
+        }
+        // Friction (tangential/rolling/torsional) applies exactly once,
+        // on the FINAL sweep — the Coulomb caps bound the TOTAL
+        // impulse, so re-applying per sweep would overshoot the cone
+        // by up to `n_sweeps×`. Earlier sweeps converge the normal /
+        // restitution response only.
+        let friction_sweep = velocity_sweep + 1 == n_vel_sweeps;
         let a_idx = contacts.a_index.host()?;
         let b_idx = contacts.b_index.host()?;
         let normal = contacts.normal.host()?;
@@ -954,7 +990,7 @@ fn cpu_step(
 
             // Coulomb tangential — same Jacobi accumulation.
             let mu = friction_arr[c];
-            if mu > 0.0 {
+            if mu > 0.0 && friction_sweep {
                 let v_t = v_rel - n_ab * v_n;
                 let v_t_len = v_t.length();
                 if v_t_len > 1e-9 {
@@ -987,7 +1023,7 @@ fn cpu_step(
             // velocities at the contact (relative angular velocity
             // = ω_b - ω_a). Newton/PhysX use the same impulse cap.
             let mu_roll = rolling_arr[c];
-            if mu_roll > 0.0 {
+            if mu_roll > 0.0 && friction_sweep {
                 let w_a = if kin_a { Vec3::ZERO } else { w_post[a] };
                 let w_b = if kin_b || b >= w_post.len() {
                     Vec3::ZERO
@@ -1018,7 +1054,7 @@ fn cpu_step(
             // Torsional friction: damp angular velocity component
             // ALONG the normal (spinning).
             let mu_tors = torsional_arr[c];
-            if mu_tors > 0.0 {
+            if mu_tors > 0.0 && friction_sweep {
                 let w_a = if kin_a { Vec3::ZERO } else { w_post[a] };
                 let w_b = if kin_b || b >= w_post.len() {
                     Vec3::ZERO

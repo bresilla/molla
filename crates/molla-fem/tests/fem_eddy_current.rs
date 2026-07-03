@@ -446,13 +446,55 @@ fn frequency_sweep_sets_omega_and_can_enforce_gauge() {
     )
     .expect("frequency sweep");
     assert_eq!(samples.len(), omegas.len());
-    for (sample, omega) in samples.iter().zip(omegas) {
+    // Reference sweep WITHOUT the gauge projection: the projection is
+    // post-processing (it is NOT gauge-free once ωσ ≠ 0 — the iωσA
+    // term fixes the gauge), so the meaningful contract is (a) the
+    // gauge residual of the projected potential is ~0 and (b) the
+    // physical field B = curl A is bit-for-bit UNCHANGED by the
+    // projection (gradients are curl-free). Gate (b) is the
+    // non-vacuous one: (a) alone is true by construction.
+    let samples_raw = solve_eddy_current_frequency_sweep(
+        &mesh,
+        &j_re,
+        &j_im,
+        &nu,
+        &sigma,
+        &[],
+        &cfg,
+        &omegas,
+        EddyCurrentSolveMode::Jacobi,
+        false,
+    )
+    .expect("frequency sweep (unprojected)");
+    let map = NedelecDofMap::build(&mesh);
+    for ((sample, raw), omega) in samples.iter().zip(samples_raw.iter()).zip(omegas) {
         assert_eq!(sample.omega, omega);
         assert!(
             sample.gauge_residual < 1.0e-7,
             "sample at ω={omega} has gauge residual {:.3e}",
             sample.gauge_residual
         );
+        for (a_proj, a_raw) in [
+            (&sample.result.a_re, &raw.result.a_re),
+            (&sample.result.a_im, &raw.result.a_im),
+        ] {
+            let b_proj = compute_curl_per_cell(&mesh, &map, a_proj);
+            let b_raw = compute_curl_per_cell(&mesh, &map, a_raw);
+            let mut max_db = 0.0_f64;
+            let mut max_b = 0.0_f64;
+            for (bp, br) in b_proj.iter().zip(b_raw.iter()) {
+                max_db = max_db.max((*bp - *br).length());
+                max_b = max_b.max(br.length());
+            }
+            assert!(
+                max_b > 1.0e-10,
+                "ω={omega}: solve produced a zero B field — vacuous"
+            );
+            assert!(
+                max_db < 1.0e-9 * max_b.max(1.0),
+                "ω={omega}: gauge projection changed B (max |ΔB| = {max_db:.3e}) — it must be curl-preserving post-processing"
+            );
+        }
     }
 }
 

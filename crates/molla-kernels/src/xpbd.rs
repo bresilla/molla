@@ -7,8 +7,9 @@
 //!    bound as "current" via two pre-built bind groups.
 //! 3. `recover_velocity` — derives `v_post` from the final
 //!    `q_pred` via `(q_pred - q_in) / dt`.
-//! 4. M iterations of `project_velocity` — applies restitution +
-//!    friction. Mutates `v_post` in place each iteration.
+//! 4. `velocity_iterations` Jacobi sweeps of `project_velocity` —
+//!    applies restitution + friction, mutating `v_post` in place each
+//!    sweep (B1b: one sweep under-relaxes multi-contact bodies).
 //! 5. `write_final` — copies into the user's `state_out.body_qd`,
 //!    preserves angular component.
 //!
@@ -26,7 +27,9 @@ struct Uniforms {
     body_count: u32,
     has_external_force: u32,
     linear_damping: f32,
-    _pad0: f32,
+    /// 1.0 on the final velocity sweep (friction applies once —
+    /// Coulomb caps bound the TOTAL impulse); 0.0 on earlier sweeps.
+    friction_pass: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -259,6 +262,7 @@ impl XpbdKernel {
         control: &Control,
         contacts: &Contacts,
         position_iterations: usize,
+        velocity_iterations: usize,
         dt: f64,
         state_out: &mut State,
         use_contact_pose: bool,
@@ -438,7 +442,7 @@ impl XpbdKernel {
             body_count: model.body_count as u32,
             has_external_force: has_external,
             linear_damping: model.linear_damping as f32,
-            _pad0: 0.0,
+            friction_pass: 1.0,
             _pad1: 0.0,
             _pad2: 0.0,
         };
@@ -449,12 +453,35 @@ impl XpbdKernel {
             mapped_at_creation: false,
         });
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        // Friction-off twin for the non-final velocity sweeps (B1b):
+        // iterated sweeps must only handle restitution/normal — the
+        // Coulomb caps bound the TOTAL friction impulse, so friction
+        // applies exactly once, on the last sweep.
+        let uniforms_nofric = Uniforms {
+            friction_pass: 0.0,
+            ..uniforms
+        };
+        let uniform_buf_nofric = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::xpbd uniforms (no-friction sweep)"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf_nofric, 0, bytemuck::bytes_of(&uniforms_nofric));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::xpbd uniforms bg"),
             layout: &self.layout_uniforms,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+        let bg_uniforms_nofric = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::xpbd uniforms bg (no-friction sweep)"),
+            layout: &self.layout_uniforms,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf_nofric.as_entire_binding(),
             }],
         });
 
@@ -517,9 +544,14 @@ impl XpbdKernel {
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
-        // 4. Velocity projection — single iteration (in-place mutation
-        // is fine because each thread only writes its own v_post).
-        {
+        // 4. Velocity projection — ITERATED Jacobi sweeps (B1b: one
+        // sweep under-relaxes by the per-contact effective-mass ratio
+        // and lets the position-projection pop escape as a bounce).
+        // Sequential dispatches in one encoder have implicit barriers;
+        // in-place mutation is fine because each thread only writes
+        // its own v_post.
+        let n_vel = velocity_iterations.max(1);
+        for sweep in 0..n_vel {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("molla::xpbd::project_velocity"),
                 timestamp_writes: None,
@@ -529,7 +561,12 @@ impl XpbdKernel {
             pass.set_bind_group(1, &bg_state_a, &[]);
             pass.set_bind_group(2, &bg_control, &[]);
             pass.set_bind_group(3, &bg_contacts, &[]);
-            pass.set_bind_group(4, &bg_uniforms, &[]);
+            // Friction only on the final sweep.
+            if sweep + 1 == n_vel {
+                pass.set_bind_group(4, &bg_uniforms, &[]);
+            } else {
+                pass.set_bind_group(4, &bg_uniforms_nofric, &[]);
+            }
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
