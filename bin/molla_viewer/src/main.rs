@@ -2742,8 +2742,8 @@ impl Scene {
                 status: Partial,
                 reference_case: "Newton ik/example_ik_cube_stacking.py",
                 cpu_proof: "ik_cube_stacking_targets_are_reachable_and_audited + ik_cube_stacking_stack_is_supported_and_finite + ik_cube_stacking_reports_obstacle_residuals",
-                gpu_proof: "make test-gpu P=molla-solvers T=articulation_gpu for the GPU IK arm solve; cube contact/stacking is reduced viewer telemetry, not a coupled GPU manipulation solve",
-                notes: "procedural cubes and pick/place waypoints are shown in the viewer; full gripper contact, coupled stacking dynamics, and obstacle-aware GPU IK objective remain future work",
+                gpu_proof: "make test-gpu P=molla-solvers T=articulation_gpu for the GPU IK arm solve; ik_sphere_avoid_objective_pushes_ee_out_of_obstacle for the avoidance objective; cube contact/stacking is reduced viewer telemetry, not a coupled GPU manipulation solve",
+                notes: "procedural cubes and pick/place waypoints are shown in the viewer with the obstacle wired as a live SphereAvoid IK objective; full gripper contact and coupled stacking dynamics remain future work",
             },
             Scene::GpuNarrowPhase | Scene::BroadPhase => ScenePhysicsAudit {
                 status: Complete,

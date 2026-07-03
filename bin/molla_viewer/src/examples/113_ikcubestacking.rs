@@ -207,12 +207,25 @@ fn update_ik_cube_stacking(mut sim: ResMut<Sim>, mut warp: ResMut<WarpExampleSta
         .joint_q
         .host()
         .expect("joint_q").to_vec();
-    let solver = IkSolver::new(vec![IkObjective::Position {
-        body: ee_body,
-        point_local: MVec3::ZERO,
-        target_world: st.ee_target,
-        weight: 1.0,
-    }])
+    // F15 (INSPECTION.md) — the obstacle is a real avoidance
+    // OBJECTIVE in the live GPU solve (SphereAvoid row projected from
+    // the GPU Jacobian block), not just reported telemetry.
+    let solver = IkSolver::new(vec![
+        IkObjective::Position {
+            body: ee_body,
+            point_local: MVec3::ZERO,
+            target_world: st.ee_target,
+            weight: 1.0,
+        },
+        IkObjective::SphereAvoid {
+            body: ee_body,
+            point_local: MVec3::ZERO,
+            center: st.obstacle_center,
+            radius: st.obstacle_radius,
+            margin: st.obstacle_margin,
+            weight: 12.0,
+        },
+    ])
     .with_config(IkConfig {
         max_iter: 30,
         residual_tol: 6.0e-4,

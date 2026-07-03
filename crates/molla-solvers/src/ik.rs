@@ -91,6 +91,19 @@ pub enum IkObjective {
         hi: Real,
         weight: Real,
     },
+    /// Sphere-avoidance penalty (INSPECTION.md F15 / scene 113): when
+    /// `body`'s `point_local` enters the inflated sphere
+    /// (`radius + margin` around `center`), one residual row
+    /// `weight · (radius + margin − ‖p − center‖)` pushes it back out
+    /// along the center→point direction. Zero row (inactive) outside.
+    SphereAvoid {
+        body: usize,
+        point_local: Vec3,
+        center: Vec3,
+        radius: Real,
+        margin: Real,
+        weight: Real,
+    },
 }
 
 /// Solver configuration.
@@ -357,6 +370,19 @@ impl IkSolver {
                     // Use Huber gradient for smooth fall-off.
                     out.push(weight * norm_huber_grad(viol, 0.05));
                 }
+                IkObjective::SphereAvoid {
+                    body,
+                    point_local,
+                    center,
+                    radius,
+                    margin,
+                    weight,
+                } => {
+                    let cw = body_q[body];
+                    let p_world = cw.position + cw.rotation * point_local;
+                    let viol = (radius + margin - (p_world - center).length()).max(0.0);
+                    out.push(weight * viol);
+                }
             }
         }
         Ok(out)
@@ -370,6 +396,7 @@ impl IkSolver {
             .map(|o| match o {
                 IkObjective::Position { .. } => 3,
                 IkObjective::JointLimit { .. } => 1,
+                IkObjective::SphereAvoid { .. } => 1,
             })
             .sum();
         let mut j = vec![0.0; m * dof_total];
@@ -396,6 +423,34 @@ impl IkSolver {
                     // ∂(q[dof])/∂(q[k]) = δ_{dof,k}.
                     if dof < dof_total {
                         j[row * dof_total + dof] = weight;
+                    }
+                    row += 1;
+                }
+                IkObjective::SphereAvoid {
+                    body,
+                    point_local,
+                    center,
+                    radius,
+                    margin,
+                    weight,
+                } => {
+                    // Residual = weight·(R − ‖p − c‖) inside; its
+                    // gradient wrt p is −weight·d̂, chained through the
+                    // linear point Jacobian. Zero row when inactive.
+                    let body_q = state.body_q.host()?;
+                    let cw = body_q[body];
+                    let p_world = cw.position + cw.rotation * point_local;
+                    let d = p_world - center;
+                    let dist = d.length();
+                    if dist > 1.0e-9 && dist < radius + margin {
+                        let dir = d / dist;
+                        let jcols =
+                            jacobian(model, state, self.config.articulation, body, point_local)?;
+                        for k in 0..dof_total {
+                            let jp =
+                                Vec3::new(jcols[k], jcols[dof_total + k], jcols[2 * dof_total + k]);
+                            j[row * dof_total + k] = -weight * dir.dot(jp);
+                        }
                     }
                     row += 1;
                 }
@@ -498,7 +553,12 @@ impl IkSolver {
         let n_pos = self
             .objectives
             .iter()
-            .filter(|o| matches!(o, IkObjective::Position { .. }))
+            .filter(|o| {
+                matches!(
+                    o,
+                    IkObjective::Position { .. } | IkObjective::SphereAvoid { .. }
+                )
+            })
             .count();
         let block_floats = 6 * dof_total;
         let total_floats = block_floats * n_pos.max(1);
@@ -521,6 +581,9 @@ impl IkSolver {
             let mut block_idx = 0u32;
             for obj in &self.objectives {
                 if let IkObjective::Position {
+                    body, point_local, ..
+                }
+                | IkObjective::SphereAvoid {
                     body, point_local, ..
                 } = *obj
                 {
@@ -565,6 +628,37 @@ impl IkSolver {
                             j[row * dof_total + dof] = weight;
                         }
                         row += 1;
+                    }
+                    IkObjective::SphereAvoid {
+                        body,
+                        point_local,
+                        center,
+                        radius,
+                        margin,
+                        weight,
+                    } => {
+                        // Project the GPU linear-Jacobian block onto
+                        // −d̂ (center→point direction); zero row when
+                        // the point is outside the inflated sphere.
+                        let body_q_h = state.body_q.host()?;
+                        let cw = body_q_h[body];
+                        let p_world = cw.position + cw.rotation * point_local;
+                        let d = p_world - center;
+                        let dist = d.length();
+                        if dist > 1.0e-9 && dist < radius + margin {
+                            let dir = d / dist;
+                            let off = block_idx * block_floats;
+                            for k in 0..dof_total {
+                                let jp = Vec3::new(
+                                    j_blocks[off + k] as Real,
+                                    j_blocks[off + dof_total + k] as Real,
+                                    j_blocks[off + 2 * dof_total + k] as Real,
+                                );
+                                j[row * dof_total + k] = -weight * dir.dot(jp);
+                            }
+                        }
+                        row += 1;
+                        block_idx += 1;
                     }
                 }
             }
@@ -661,6 +755,17 @@ impl IkSolver {
         }
         let cfg = &self.config;
         let dof_total = articulation_dof_total(model, cfg.articulation)?;
+        if self
+            .objectives
+            .iter()
+            .any(|o| matches!(o, IkObjective::SphereAvoid { .. }))
+        {
+            return Err(Error::Build(
+                "ik::solve_gpu_with_seeds: SphereAvoid objectives are not supported in \
+                 the multi-seed GPU path yet — use solve() or solve_gpu()"
+                    .into(),
+            ));
+        }
         for (i, s) in seeds.iter().enumerate() {
             if s.len() != dof_total {
                 return Err(Error::Build(format!(
@@ -817,6 +922,9 @@ impl IkSolver {
                                 j_mat[row * dof_total + dof] = weight;
                             }
                             row += 1;
+                        }
+                        IkObjective::SphereAvoid { .. } => {
+                            unreachable!("rejected at solve_gpu_with_seeds entry")
                         }
                     }
                 }

@@ -240,3 +240,73 @@ fn ik_solver_health_fallback_rate_is_low() {
         "expected zero psd fallbacks on a well-conditioned solve, got {dpsd} of {dchol}"
     );
 }
+
+/// INSPECTION.md F15 / scene 113 — `IkObjective::SphereAvoid` as a
+/// real avoidance OBJECTIVE (previously the obstacle residual was
+/// report-only). A target sits reachable in free space; an obstacle
+/// sphere is placed so the plain solution's elbow-free EE pose ends
+/// INSIDE the inflated sphere. With the avoidance objective the
+/// solver must keep the EE outside the inflated radius while still
+/// tracking the target to a loose tolerance.
+#[test]
+fn ik_sphere_avoid_objective_pushes_ee_out_of_obstacle() {
+    let (model, ee_body) = build_franka();
+    let mut state = model.state().unwrap();
+    molla_sim::eval_fk(&model, &mut state).unwrap();
+    let ee_at_zero = state.body_q.host().unwrap()[ee_body].position;
+
+    let target = ee_at_zero + V3::new(0.2, 0.1, -0.15);
+    // Plain solve first — obstacle centered ON its solution's EE.
+    let plain = IkSolver::new(vec![IkObjective::Position {
+        body: ee_body,
+        point_local: V3::ZERO,
+        target_world: target,
+        weight: 1.0,
+    }]);
+    let q0 = vec![0.0; 7];
+    let _ = plain.solve(&model, &mut state, &q0).unwrap();
+    let plain_ee = state.body_q.host().unwrap()[ee_body].position;
+
+    let radius = 0.05;
+    let margin = 0.02;
+    let center = plain_ee + V3::new(0.03, 0.0, 0.0);
+    assert!(
+        (plain_ee - center).length() < radius + margin,
+        "setup: plain solution must violate the obstacle"
+    );
+
+    let avoid = IkSolver::new(vec![
+        IkObjective::Position {
+            body: ee_body,
+            point_local: V3::ZERO,
+            target_world: target,
+            weight: 1.0,
+        },
+        IkObjective::SphereAvoid {
+            body: ee_body,
+            point_local: V3::ZERO,
+            center,
+            radius,
+            margin,
+            weight: 20.0,
+        },
+    ]);
+    let mut state2 = model.state().unwrap();
+    let r = avoid.solve(&model, &mut state2, &q0).unwrap();
+    let ee = state2.body_q.host().unwrap()[ee_body].position;
+    let clearance = (ee - center).length();
+    let target_err = (ee - target).length();
+    eprintln!(
+        "avoidance: clearance = {clearance:.4} (inflated r = {:.4}), target err = {target_err:.4}, iters = {}",
+        radius + margin,
+        r.iters
+    );
+    assert!(
+        clearance > radius + margin * 0.5,
+        "EE still inside the obstacle: {clearance:.4}"
+    );
+    assert!(
+        target_err < 0.12,
+        "avoidance destroyed target tracking: {target_err:.4} m"
+    );
+}
