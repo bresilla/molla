@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-241762d7.js";
+            window.path_to_searchindex_js = "searchindex-204bfdc6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7a47bd5c.js"></script>
+        <script src="toc-ac7b0e4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -772,8 +772,9 @@ foundation crates <code>molla-core</code>, <code>molla-math</code>, <code>molla-
 data-model crate <code>molla-sim</code>, host optimizer crate <code>molla-optim</code>, the first
 <code>molla-actuators</code> slice, the first <code>molla-kernels</code> slices, the first
 <code>molla-sensors</code> slice, the first <code>molla-geometry</code> slice, the first
-<code>molla-solvers</code> slice, the first <code>molla-autograd</code> slice, and the first
-<code>molla-fem</code> slice extracted; <code>molla</code> remains the public facade plus
+<code>molla-solvers</code> slice, the first <code>molla-autograd</code> slice, the first
+<code>molla-fem</code> slice, and the wheeled-vehicle crate <code>molla-vehicle</code>
+extracted; <code>molla</code> remains the public facade plus
 remaining engine modules; <code>bin/molla_viewer</code> is the binary-only Bevy
 application.</p>
 <pre><code>            ┌────────────────────┐
@@ -798,6 +799,7 @@ application.</p>
             │ molla-solvers                           │
             │ molla-autograd                          │
             │ molla-fem                               │
+            │ molla-vehicle                           │
             └──────────────────────────────────────────┘
 </code></pre>
 <h2 id="the-rules"><a class="header" href="#the-rules">The rules</a></h2>
@@ -839,6 +841,7 @@ references and are <em>not</em> workspace members.</li>
 <li><code>molla-solvers</code> — started for the shared <code>Solver</code> trait, CPU/GPU semi-implicit rigid-body integration, CPU/GPU XPBD, CPU/GPU VBD, CPU/GPU Featherstone, implicit MPM CPU driver, explicit GPU MPM driver, VBD soft-contact helpers, inverse kinematics, CPU-only CRBA mass matrices, recursive Newton-Euler inverse dynamics, geometric Jacobians, and optional <code>autograd</code> integration for Featherstone tape helpers.</li>
 <li><code>molla-autograd</code> — started for CPU tape, differentiable arm helper, Featherstone trace/adjoint helpers, XPBD distance adjoints, and differentiable CPU MPM forward/adjoint code.</li>
 <li><code>molla-fem</code> — extracted for the FEM module tree, FEM-specific GPU kernels, the 2-D Stam stable-fluid solver, and facade-flipped behind <code>molla::fem::*</code>.</li>
+<li><code>molla-vehicle</code> — wheeled-vehicle simulation: terrain models (flat / heightfield / SDF / trimesh / Bekker-deformable / DEM-granular), tire models (rigid, TmSimple, Pac89-shape, real brush, tetra tire FEM under <code>real_tire/</code>), suspension, powertrain (engine / auto-shifting transmission / driveline / Ackermann steering), the 3-DOF <code>Vehicle</code> chassis, and the differentiable <code>sysid</code> friction-identification demo. Deliberately dependency-free; exposed through the facade as <code>molla::vehicle::*</code>. See <a href="#molla-vehicle-overview">the molla-vehicle chapter</a>.</li>
 </ul>
 <h2 id="workspace-exclusions"><a class="header" href="#workspace-exclusions">Workspace exclusions</a></h2>
 <pre><code class="language-toml">[workspace]
@@ -858,6 +861,7 @@ members = [
     "crates/molla-solvers",
     "crates/molla-autograd",
     "crates/molla-fem",
+    "crates/molla-vehicle",
     "crates/molla",
     "bin/molla_viewer",
 ]
@@ -921,10 +925,10 @@ implementation is pure Rust; no SuiteSparse/LAPACKE dependency is required.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="build--test-commands"><a class="header" href="#build--test-commands">Build &amp; test commands</a></h1>
 <p>The Makefile at the repository root is the canonical entry point for
-every build, test, run, and bench command. Every target prepends
-<code>nixVulkan</code> so the <code>wgpu</code> Vulkan loader is reachable from the nix
-devShell; if you’ve installed the engine outside the devShell, swap
-<code>nixVulkan cargo</code> for plain <code>cargo</code>.</p>
+building, testing, and running. GPU-touching targets go through the
+<code>RUN_WITH</code> wrapper (default <code>nixVulkan</code>) so the <code>wgpu</code> Vulkan loader is
+reachable from the nix devShell; outside the devShell, override it with
+<code>RUN_WITH=</code> (empty) to run plain <code>cargo</code>.</p>
 <h2 id="quick-reference"><a class="header" href="#quick-reference">Quick reference</a></h2>
 <div class="table-wrapper">
 <table>
@@ -932,22 +936,26 @@ devShell; if you’ve installed the engine outside the devShell, swap
 <tr><th>Target</th><th>What it does</th></tr>
 </thead>
 <tbody>
-<tr><td><code>make build</code> / <code>b</code></td><td><code>cargo build --workspace --all-targets</code></td></tr>
+<tr><td><code>make build</code> / <code>b</code></td><td><code>cargo build -p molla_viewer</code> (the viewer pulls in every crate)</td></tr>
 <tr><td><code>make compile</code> / <code>c</code></td><td><code>cargo clean</code> then build</td></tr>
-<tr><td><code>make run</code> / <code>r</code></td><td>Launch <code>molla_viewer</code> (set <code>RELEASE=1</code> for optimised build)</td></tr>
-<tr><td><code>make run-profile</code></td><td>Launch with Tracy instrumentation (Bevy <code>trace_tracy</code>)</td></tr>
-<tr><td><code>make test</code> / <code>t</code></td><td><code>cargo test --workspace</code> (skips <code>#[ignore]</code>’d GPU tests)</td></tr>
-<tr><td><code>make test-gpu</code></td><td>The flagship CPU/GPU parity test</td></tr>
-<tr><td><code>make test-*-gpu</code></td><td>~25 dedicated GPU lanes, one per major kernel family</td></tr>
-<tr><td><code>make bench-cpu</code></td><td>CPU semi-implicit step bench</td></tr>
-<tr><td><code>make bench-gpu</code></td><td>GPU semi-implicit step bench</td></tr>
-<tr><td><code>make bench-featherstone</code></td><td>CPU-vs-GPU Featherstone parity bench</td></tr>
-<tr><td><code>make check</code></td><td><code>cargo check --workspace --all-targets</code></td></tr>
-<tr><td><code>make fmt</code></td><td><code>cargo fmt --all</code></td></tr>
+<tr><td><code>make run</code> / <code>r</code></td><td><code>nixVulkan cargo run -p molla_viewer</code></td></tr>
+<tr><td><code>make test</code> / <code>t</code></td><td><code>cargo test -p molla_viewer</code> (viewer suite; skips <code>#[ignore]</code> GPU)</td></tr>
+<tr><td><code>make test-gpu</code></td><td>One GPU test lane: <code>P=&lt;crate&gt; T=&lt;test-file&gt; A=&lt;extra args&gt;</code></td></tr>
+<tr><td><code>make test-all</code></td><td><code>cargo test --workspace --all-targets</code></td></tr>
+<tr><td><code>make check</code></td><td><code>cargo check -p molla_viewer</code></td></tr>
+<tr><td><code>make check-all</code></td><td><code>cargo check --workspace --all-targets</code></td></tr>
+<tr><td><code>make harden</code></td><td>The full gate: whitespace check, <code>fmt --check</code>, no-default-features build+test, <code>clippy --all-features -D warnings</code>, all-feature tests</td></tr>
+<tr><td><code>make bench</code></td><td><code>nixVulkan cargo bench</code></td></tr>
+<tr><td><code>make docs</code></td><td>Build the mdBook into <code>docs/</code></td></tr>
 <tr><td><code>make clean</code></td><td><code>cargo clean</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>There is no <code>make fmt</code> target — run <code>cargo fmt --all</code> directly (or rely
+on <code>make harden</code>, which checks formatting).</p>
+<p>Useful variables: <code>RUN_WITH=</code> (drop the nixVulkan wrapper), <code>RUN_WITH=nixGL</code>
+(OpenGL instead of Vulkan), <code>APP_PKG=&lt;pkg&gt;</code> (build/run/test a different
+package), <code>BACKEND=x11</code> (display backend; <code>.envrc</code> auto-detects).</p>
 <h2 id="the-two-cargo-modes"><a class="header" href="#the-two-cargo-modes">The two cargo modes</a></h2>
 <p>molla has two effective build modes, gated by Cargo features.</p>
 <h3 id="default-mode--gpu-on"><a class="header" href="#default-mode--gpu-on">Default mode — <code>gpu</code> on</a></h3>
@@ -967,50 +975,29 @@ wgpu adapter (cloud CI runners, docker images without GPU
 passthrough).</p>
 <h2 id="running-gpu-parity-tests"><a class="header" href="#running-gpu-parity-tests">Running GPU parity tests</a></h2>
 <p>GPU tests are gated behind <code>#[ignore]</code> because they need a real
-<code>wgpu::Adapter</code>. The Makefile has one target per major kernel family;
-all run via <code>nixVulkan</code> to give wgpu the Vulkan loader:</p>
-<pre><code class="language-bash">make test-gpu                       # CPU/GPU parity (the canonical lane)
-make test-featherstone-gpu          # Featherstone ABA parity
-make test-featherstone-multidof-gpu # multi-DOF Featherstone
-make test-autograd-featherstone-gpu # Stage 23.1 — diff Featherstone
-make test-xpbd-gpu                  # XPBD rigid parity
-make test-raycast-gpu               # Stage 14 raycaster
-make test-imu-gpu                   # Stage 14 IMU
-make test-contact-gpu               # Stage 14 contact sensor
-make test-frame-transform-gpu       # Stage 14 frame xform
-make test-tiled-camera-gpu          # Stage 14 5-channel camera
-make test-actuator-gpu              # Stage 18 actuator pipeline
-make test-actuator-pipeline-gpu     # full pipeline
-make test-equality-gpu              # XPBD equality projection
-make test-equality-joint-mimic-gpu  # Stage 32 joint mimic
-make test-particles-gpu             # particle XPBD
-make test-hydroelastic-gpu          # Stage 22.1 hydroelastic
-make test-sparse-grid-gpu           # Stage 24e NanoVDB
-make test-mpm-gpu                   # Stage 24d v1 explicit MPM
-make test-mpm-v3-gpu                # Stage 24d.1 semi-implicit MPM + Snow
-make test-implicit-mpm-gpu           # implicit MPM GPU kernels/parity
-make test-vbd-cloth-gpu             # VBD cloth GPU suite
-make test-vbd-tets-gpu              # VBD tetrahedral GPU suite
-make test-vbd-tets-v3-gpu           # VBD tet large-strain/plasticity GPU suite
-make test-vbd-tets-v4-gpu           # VBD tet damping/contact GPU suite
-make test-vbd-extended-gpu          # extended VBD mode/contact GPU suite
-make test-soft-vt-gpu               # Stage 33.2 soft VT contact
-make test-soft-friction-gpu         # Stage 33.2.1 soft friction + restitution
-make test-fem-gpu                   # Stage 36.5 GPU FEM v1
-make test-fem-elasticity-gpu        # Stage 41.1 elasticity + resident CG
-make test-fem-stokes-gpu            # Stage 41 v2 Stokes parity
+<code>wgpu::Adapter</code>. They all run through one generic Makefile lane —
+pick the package with <code>P=</code>, the integration-test file with <code>T=</code>,
+optional extra test-binary args with <code>A=</code>, and <code>RELEASE=1</code> for the
+perf-gated lanes:</p>
+<pre><code class="language-bash">make test-gpu                                        # default: molla-solvers cpu_gpu_parity
+make test-gpu P=molla-solvers T=xpbd_gpu_parity      # XPBD rigid parity
+make test-gpu P=molla-solvers T=vbd_cloth_gpu        # VBD cloth suite
+make test-gpu P=molla-solvers T=joint_muscle_gpu     # Hill muscle parity
+make test-gpu P=molla-fem     T=fem_transient_gpu    # GPU FEM heat stepper
+make test-gpu P=molla-fem     T=fem_wave_gpu         # GPU FEM Newmark wave
+make test-gpu P=molla-geometry T=gjk_gpu A=--nocapture
+make test-gpu P=molla-kernels T=tire_fem_gpu A=tire_fem_cpu_vs_gpu_rolling_contact_hub_x_parity
+make test-gpu P=molla-fem T=fem_ns_gpu RELEASE=1 A='--skip gpu_ns_perf'
 </code></pre>
-<p>Each line is just a <code>cargo test --features gpu --test &lt;name&gt; -- --ignored</code>
-invocation. You can run any of them by hand if you’re not using the
-Makefile.</p>
+<p>Each invocation expands to
+<code>nixVulkan cargo test -p $(P) --features gpu --test $(T) -- --ignored $(A)</code>,
+so any lane can also be run by hand. To discover the available lanes,
+list the GPU test files:</p>
+<pre><code class="language-bash">ls crates/*/tests | grep gpu
+</code></pre>
 <h2 id="benches"><a class="header" href="#benches">Benches</a></h2>
-<p>Benches use <code>criterion</code> and live with their owning functionality crates. The
-Makefile exposes three convenience targets:</p>
-<pre><code class="language-bash">make bench-cpu              # CPU step bench
-make bench-gpu              # GPU step bench (needs wgpu adapter)
-make bench-featherstone     # CPU-vs-GPU Featherstone in one criterion group
-</code></pre>
-<p>To run a specific bench:</p>
+<p>Benches use <code>criterion</code> and live with their owning functionality
+crates. <code>make bench</code> runs the whole inventory; to run a specific bench:</p>
 <pre><code class="language-bash">nixVulkan cargo bench -p molla-solvers --bench bench_xpbd_pile_gpu --features gpu
 </code></pre>
 <p>The bench inventory is in each owning crate’s Cargo.toml under its <code>[[bench]]</code>
@@ -1022,25 +1009,22 @@ math benches in <code>crates/molla-math</code>, and facade step benches in <code
 reports in one criterion group so you can eyeball the wall-clock
 ratio at matched problem sizes.</p>
 <h2 id="running-the-viewer"><a class="header" href="#running-the-viewer">Running the viewer</a></h2>
-<pre><code class="language-bash">make run RELEASE=1
+<pre><code class="language-bash">make run
 </code></pre>
-<p><code>RELEASE=1</code> is recommended — debug builds are noticeably laggy under
-Bevy. The Makefile sets <code>DISPLAY=:1 WAYLAND_DISPLAY=</code> to pin winit
-to X11 (Bevy’s Wayland path has had stability issues in the molla
-nix shell).</p>
-<p>To pass CLI args:</p>
-<pre><code class="language-bash">make run RELEASE=1 ARGS="--some-flag"
+<p>For an optimised build, run cargo directly:</p>
+<pre><code class="language-bash">nixVulkan cargo run -p molla_viewer --release
 </code></pre>
-<p>The viewer also recognises hotkeys for the marquee scenes — see
+<p>The viewer recognises hotkeys for the marquee scenes — see
 <a href="#viewer-overview"><code>viewer/overview.md</code></a>.</p>
 <h2 id="common-gotchas"><a class="header" href="#common-gotchas">Common gotchas</a></h2>
 <ul>
-<li><strong>wgpu init fails with “no adapter found”</strong> — you forgot
-<code>nixVulkan</code>. Or you’re in <code>--no-default-features</code> mode (which is
-fine, but then GPU tests don’t apply).</li>
-<li><strong>Tracy frame stalls</strong> — <code>--features profile</code> is on but no Tracy
-client is connected; the trace buffer grows unbounded. Connect
-immediately on launch, or use <code>--features log_diag</code> instead.</li>
+<li><strong>wgpu init fails with “no adapter found”</strong> — you forgot the
+<code>nixVulkan</code> wrapper (<code>RUN_WITH</code> was overridden to empty). Or you’re
+in <code>--no-default-features</code> mode (which is fine, but then GPU tests
+don’t apply).</li>
+<li><strong><code>cargo test --features gpu</code> run directly hangs or panics</strong> — GPU
+tests must go through <code>make test-gpu</code> (or a manual <code>nixVulkan</code>
+prefix) so a real adapter is reachable.</li>
 <li><strong>Long initial build</strong> — first compile pulls ~400 Mb of
 dependencies (Bevy, wgpu, egui, glam, criterion, …). Subsequent
 incremental builds are fast.</li>
@@ -14312,6 +14296,56 @@ Scaling…”), Thelen 2003 (“Adjustment of Muscle Mechanics Model
 Parameters to Simulate Dynamic Contractions in Older Adults”).</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="molla-vehicle-overview"><a class="header" href="#molla-vehicle-overview">molla-vehicle overview</a></h1>
+<p><code>crates/molla-vehicle</code> is the wheeled-vehicle simulation crate: terrain,
+tires, suspension, driveline, a lightweight chassis, and the
+differentiable system-identification demo. It is deliberately
+<strong>dependency-free</strong> (no other workspace crates), and is re-exported
+through the facade as <code>molla::vehicle::*</code>. It is also the home of the
+<code>real_tire/</code> tree — the deformable tetra-FEM tire that the tire viewer
+scenes (119–123) and the 40-wheel GPU scaling effort build on
+(<code>PLAN_REALTIRE.md</code> / <code>PROGRESS.md</code> at the repo root track that work).</p>
+<h2 id="subsystems"><a class="header" href="#subsystems">Subsystems</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Module</th><th>What it provides</th></tr>
+</thead>
+<tbody>
+<tr><td><code>terrain</code></td><td><code>FlatTerrain</code>, <code>HeightfieldTerrain</code>, SDF and triangle-mesh terrain, plus the Bekker-pressure-sinkage <code>DeformableTerrain</code> and the DEM <code>GranularBed</code> (<code>deformable.rs</code> / <code>granular.rs</code>)</td></tr>
+<tr><td><code>tire</code></td><td>Force-element tire models: <code>RigidTire</code>, <code>TmSimpleTire</code>, <code>Pac89Tire</code> (diagnostic shape only — molla ships no fitted Magic-Formula source), and the reusable <code>RealBrushTireModel</code></td></tr>
+<tr><td><code>real_tire/</code></td><td>The deformable tire stack: tetra tire FEM (<code>TetraTireFem</code>), brush/bristle traction, cavity pressure, thermal/wear state, parity ledger against the GPU kernels in <code>molla-kernels</code>, and the embedded validation rig/report harness</td></tr>
+<tr><td><code>suspension</code></td><td>Per-corner spring/damper (<code>force()</code> from stiffness, damping, max compression). The <code>SuspensionKind</code> variants are descriptive labels by decision (INSPECTION.md F9): kind-driven camber/toe kinematics needs a chassis roll DOF the 3-DOF <code>Vehicle</code> deliberately excludes</td></tr>
+<tr><td><code>powertrain</code></td><td><code>Engine</code> (torque curve + redline), <code>Transmission</code> (gear ratios + RPM-triggered auto-shift with hysteresis), <code>Driveline</code> (FWD/RWD/AWD split), Ackermann steering, and <code>Vehicle::apply_driver</code></td></tr>
+<tr><td><code>vehicle</code></td><td>The 3-DOF chassis (<code>pos</code>/<code>vel</code>/<code>yaw</code>/<code>yaw_rate</code>, semi-implicit Euler) with four <code>Corner</code>s carrying wheel spin, steer, and tire state</td></tr>
+<tr><td><code>sysid</code></td><td>Differentiable-simulation demo: recover tyre-ground friction from an observed trajectory by Gauss-Newton over finite-difference rollouts (<code>identify_friction</code>). Viewer scene 124 drives it live</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="gpu-relationship"><a class="header" href="#gpu-relationship">GPU relationship</a></h2>
+<p>The crate itself is host-side; its GPU twins live in <code>molla-kernels</code>
+(<code>tire_brush.wgsl</code>, <code>tire_fem*.wgsl</code>, bekker/DEM/thermal/transient tire
+kernels) and are validated by the <code>tire_*</code> hardware lanes:</p>
+<pre><code class="language-bash">make test-gpu P=molla-kernels T=tire_fem_gpu
+make test-gpu P=molla-kernels T=tire_brush_gpu
+</code></pre>
+<p>The CPU↔GPU status of each tire lane is recorded in
+<code>real_tire/parity_ledger.rs</code> and the <code>TireFemTorqueGpuStatus</code> /
+<code>TireFemMatrixFreeNewtonGpuStatus</code> contracts in <code>molla-kernels</code>.</p>
+<h2 id="viewer-scenes"><a class="header" href="#viewer-scenes">Viewer scenes</a></h2>
+<p>Scenes 103 (flat-ground car), 110 (offroad heightfield), 118–122 (Bekker
+sinkage, soil compaction, tire FEM dynamics/traction/test-bench), 123
+(terrain lab), and 124 (sysid friction recovery) exercise the crate
+interactively.</p>
+<h2 id="testing"><a class="header" href="#testing">Testing</a></h2>
+<p>The crate is CPU-testable with plain <code>cargo test -p molla-vehicle</code>.
+The suite also hosts the tire validation harness (<code>real_tire/rig</code>,
+<code>real_tire/reports</code>) — structural truth gates (loaded radius, footprint,
+pressure distribution, bead drift) and force-shape checks that guard the
+tire physics without external measured-data calibration (that scope is
+deliberately excluded — see the “Calibration stance” section of
+<code>PLAN_REALTIRE.md</code>).</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="tape-based-autograd"><a class="header" href="#tape-based-autograd">Tape-based autograd</a></h1>
 <p><code>molla::autograd</code> ships tape-style reverse-mode automatic
 differentiation modelled on Warp’s <code>wp.Tape</code>
@@ -16129,6 +16163,18 @@ beats a threshold:</p>
 </ul>
 <p>When a perf gate fails it’s the most actionable kind of failure —
 you have a measurement, a threshold, and a target to chase.</p>
+<h2 id="the-vehicle-crates-embedded-harness"><a class="header" href="#the-vehicle-crates-embedded-harness">The vehicle crate’s embedded harness</a></h2>
+<p><code>molla-vehicle</code> carries its own validation layer beyond plain unit
+tests: the <code>real_tire/rig</code> + <code>real_tire/reports</code> modules are a
+non-<code>cfg(test)</code> diagnostic harness (structural truth gates — loaded
+radius, footprint span, pressure distribution, bead drift — plus
+force-shape checks for slip curves, camber thrust, and aligning
+moment), exercised by the crate’s test suite (225 tests / 0 ignored as
+of 2026-07-02 — older docs citing 220/2, 221/1, or 222/0 are stale
+snapshots). The GPU twins of the tire physics are validated by the
+<code>tire_*</code> hardware lanes in <code>molla-kernels</code>, with per-lane status
+recorded in <code>real_tire/parity_ledger.rs</code>. See
+<a href="#molla-vehicle-overview">the molla-vehicle chapter</a>.</p>
 <h2 id="whats-not-covered-by-tests"><a class="header" href="#whats-not-covered-by-tests">What’s not covered by tests</a></h2>
 <p>Documenting honest gaps:</p>
 <ul>
@@ -16220,7 +16266,7 @@ test file:</p>
 is around.</li>
 </ul>
 <p>The Makefile has one target per parity test family
-(<code>make test-gpu</code>, <code>make test-featherstone-gpu</code>, etc.) — each is just
+(<code>make test-gpu</code>, <code>make test-gpu P=molla-solvers T=featherstone_gpu_parity</code>, etc.) — each is just
 a <code>cargo test --features gpu --test &lt;name&gt; -- --ignored</code> invocation.</p>
 <h2 id="fixed-seeds-deterministic-inputs"><a class="header" href="#fixed-seeds-deterministic-inputs">Fixed seeds, deterministic inputs</a></h2>
 <p>Parity tests use <strong>fixed-seed inputs</strong> to make failures
@@ -17337,9 +17383,9 @@ the human-readable index.</p>
 <h2 id="reading-the-table"><a class="header" href="#reading-the-table">Reading the table</a></h2>
 <p>Each row is a single brick on the wall. The total count is <strong>597
 commits</strong> on <code>main</code> at the time of this snapshot, spanning Stage 0
-through Stage 51. Approximately ~100 viewer scenes correspond to a
-subset of these stages (some stages don’t add a scene, e.g. infra
-work).</p>
+through Stage 51. 132 viewer scenes (numbered through #124, plus
+unnumbered extras) correspond to a subset of these stages (some
+stages don’t add a scene, e.g. infra work).</p>
 <p>For the chronological commit log run:</p>
 <pre><code class="language-bash">git log --oneline main
 </code></pre>
@@ -17350,8 +17396,27 @@ deliverable list, and DoD (definition-of-done), open <code>PLAN.md</code>.</p>
 that are <em>not</em> on this list.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="open-items"><a class="header" href="#open-items">Open items</a></h1>
-<p>A concrete inventory of work that is <strong>not</strong> shipped on <code>main</code> but is on the
-trajectory the recent push has set up. Items are grouped by tier:</p>
+<blockquote>
+<p><strong>Current open set (2026-07-02).</strong> Most entries below have since
+<strong>landed</strong> and carry an inline <code>**Status.** Landed</code> block — they are
+kept as decision records, not backlog. The genuinely open items are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Item</th><th>What</th><th>Effort</th></tr>
+</thead>
+<tbody>
+<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k, per-contact stick/slip state)</td><td>1–2 days</td></tr>
+<tr><td>X1 (bottom of file)</td><td>Critic audit round over Stages 39–51</td><td>~1 day</td></tr>
+<tr><td>X2 (bottom of file)</td><td>Viewer scenes for the v3–v6 solver work</td><td>~1 day each</td></tr>
+</tbody>
+</table>
+</div>
+<p>Larger tracked work lives outside this file: the tire stream
+(zero-host-readback substep loop, 40-wheel realtime — <code>PROGRESS.md</code>)
+and the inspection backlog (<code>INSPECTION.md</code> at the repo root).</p>
+</blockquote>
+<p>A concrete inventory of work from the v3–v6 push, grouped by tier:</p>
 <ul>
 <li><strong>Tier-A — v5 follow-ups.</strong> Small, well-scoped pieces that close out a stage
 already in flight. Each is days, not weeks. Most are “the obvious next
@@ -17372,7 +17437,10 @@ Open unless / until a concrete user need surfaces.</li>
 re-rank the item up or down.</li>
 </ol>
 <p>Stage numbers and commit hashes refer to entries on <code>main</code> as of
-2026-05-11 evening (HEAD <code>2bde182</code>, Stage 41 v6).</p>
+2026-05-11 evening (HEAD <code>2bde182</code>, Stage 41 v6); the open-set banner
+above reflects 2026-07-02. Note this snapshot predates the entire
+<code>molla-vehicle</code> / tire-FEM effort, which is tracked in
+<code>PLAN_REALTIRE.md</code> + <code>PROGRESS.md</code> instead.</p>
 <hr>
 <h2 id="tier-a--v5-follow-ups-small-well-scoped"><a class="header" href="#tier-a--v5-follow-ups-small-well-scoped">Tier-A — v5 follow-ups (small, well-scoped)</a></h2>
 <h3 id="a1-kinetic-vs-static-friction-split-stage-50-v2"><a class="header" href="#a1-kinetic-vs-static-friction-split-stage-50-v2">A1. Kinetic-vs-static friction split (Stage 50 v2)</a></h3>
@@ -17394,7 +17462,15 @@ stick-slip resonance / chatter (e.g. a robot finger gripping a smooth
 glass surface, or a tendon-driven gripper at the friction limit) — that
 maps cleanly onto distinct <code>μ_s</code> / <code>μ_k</code>.</p>
 <h3 id="a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5"><a class="header" href="#a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5">A2. Variable per-muscle stiffness + pennation on GPU (Stage 42 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 42 v3 (<code>bbd5c61</code>) shipped the Hill kernel + cable ABA on
+<p><strong>Status.</strong> Landed (implementation shipped with the C6 push; validated
+2026-07-02). The WGSL kernel reads per-muscle
+<code>muscle_pennation_angle</code>/<code>muscle_tendon_stiffness_ratio</code> storage
+buffers (<code>muscle.wgsl</code> bindings 7/9) uploaded from the <code>Model</code> arrays,
+and the heterogeneous-parameter hardware parity lane
+<code>per_muscle_pennation_and_stiffness_cpu_gpu_parity</code> in
+<code>crates/molla-solvers/tests/joint_muscle_gpu.rs</code> confirms CPU/GPU
+agreement (with a homogeneous-control guard against a vacuous pass).</p>
+<p><strong>Problem (historical).</strong> Stage 42 v3 (<code>bbd5c61</code>) shipped the Hill kernel + cable ABA on
 GPU; v4 (<code>0411d0b</code>) added SEE Newton GPU/CPU parity. The remaining gap:
 per-muscle <code>stiffness_ratio</code> and pennation angle are honored on CPU but
 read from a single shared parameter on GPU (the <code>d38739e</code> critic fix did

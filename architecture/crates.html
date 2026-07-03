@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-241762d7.js";
+            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7a47bd5c.js"></script>
+        <script src="../toc-ac7b0e4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,8 +181,9 @@ foundation crates <code>molla-core</code>, <code>molla-math</code>, <code>molla-
 data-model crate <code>molla-sim</code>, host optimizer crate <code>molla-optim</code>, the first
 <code>molla-actuators</code> slice, the first <code>molla-kernels</code> slices, the first
 <code>molla-sensors</code> slice, the first <code>molla-geometry</code> slice, the first
-<code>molla-solvers</code> slice, the first <code>molla-autograd</code> slice, and the first
-<code>molla-fem</code> slice extracted; <code>molla</code> remains the public facade plus
+<code>molla-solvers</code> slice, the first <code>molla-autograd</code> slice, the first
+<code>molla-fem</code> slice, and the wheeled-vehicle crate <code>molla-vehicle</code>
+extracted; <code>molla</code> remains the public facade plus
 remaining engine modules; <code>bin/molla_viewer</code> is the binary-only Bevy
 application.</p>
 <pre><code>            ┌────────────────────┐
@@ -207,6 +208,7 @@ application.</p>
             │ molla-solvers                           │
             │ molla-autograd                          │
             │ molla-fem                               │
+            │ molla-vehicle                           │
             └──────────────────────────────────────────┘
 </code></pre>
 <h2 id="the-rules"><a class="header" href="#the-rules">The rules</a></h2>
@@ -248,6 +250,7 @@ references and are <em>not</em> workspace members.</li>
 <li><code>molla-solvers</code> — started for the shared <code>Solver</code> trait, CPU/GPU semi-implicit rigid-body integration, CPU/GPU XPBD, CPU/GPU VBD, CPU/GPU Featherstone, implicit MPM CPU driver, explicit GPU MPM driver, VBD soft-contact helpers, inverse kinematics, CPU-only CRBA mass matrices, recursive Newton-Euler inverse dynamics, geometric Jacobians, and optional <code>autograd</code> integration for Featherstone tape helpers.</li>
 <li><code>molla-autograd</code> — started for CPU tape, differentiable arm helper, Featherstone trace/adjoint helpers, XPBD distance adjoints, and differentiable CPU MPM forward/adjoint code.</li>
 <li><code>molla-fem</code> — extracted for the FEM module tree, FEM-specific GPU kernels, the 2-D Stam stable-fluid solver, and facade-flipped behind <code>molla::fem::*</code>.</li>
+<li><code>molla-vehicle</code> — wheeled-vehicle simulation: terrain models (flat / heightfield / SDF / trimesh / Bekker-deformable / DEM-granular), tire models (rigid, TmSimple, Pac89-shape, real brush, tetra tire FEM under <code>real_tire/</code>), suspension, powertrain (engine / auto-shifting transmission / driveline / Ackermann steering), the 3-DOF <code>Vehicle</code> chassis, and the differentiable <code>sysid</code> friction-identification demo. Deliberately dependency-free; exposed through the facade as <code>molla::vehicle::*</code>. See <a href="../vehicle/overview.html">the molla-vehicle chapter</a>.</li>
 </ul>
 <h2 id="workspace-exclusions"><a class="header" href="#workspace-exclusions">Workspace exclusions</a></h2>
 <pre><code class="language-toml">[workspace]
@@ -267,6 +270,7 @@ members = [
     "crates/molla-solvers",
     "crates/molla-autograd",
     "crates/molla-fem",
+    "crates/molla-vehicle",
     "crates/molla",
     "bin/molla_viewer",
 ]

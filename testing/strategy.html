@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-241762d7.js";
+            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7a47bd5c.js"></script>
+        <script src="../toc-ac7b0e4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -304,6 +304,18 @@ beats a threshold:</p>
 </ul>
 <p>When a perf gate fails it’s the most actionable kind of failure —
 you have a measurement, a threshold, and a target to chase.</p>
+<h2 id="the-vehicle-crates-embedded-harness"><a class="header" href="#the-vehicle-crates-embedded-harness">The vehicle crate’s embedded harness</a></h2>
+<p><code>molla-vehicle</code> carries its own validation layer beyond plain unit
+tests: the <code>real_tire/rig</code> + <code>real_tire/reports</code> modules are a
+non-<code>cfg(test)</code> diagnostic harness (structural truth gates — loaded
+radius, footprint span, pressure distribution, bead drift — plus
+force-shape checks for slip curves, camber thrust, and aligning
+moment), exercised by the crate’s test suite (225 tests / 0 ignored as
+of 2026-07-02 — older docs citing 220/2, 221/1, or 222/0 are stale
+snapshots). The GPU twins of the tire physics are validated by the
+<code>tire_*</code> hardware lanes in <code>molla-kernels</code>, with per-lane status
+recorded in <code>real_tire/parity_ledger.rs</code>. See
+<a href="../vehicle/overview.html">the molla-vehicle chapter</a>.</p>
 <h2 id="whats-not-covered-by-tests"><a class="header" href="#whats-not-covered-by-tests">What’s not covered by tests</a></h2>
 <p>Documenting honest gaps:</p>
 <ul>

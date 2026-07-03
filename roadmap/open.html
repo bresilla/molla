@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-241762d7.js";
+            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7a47bd5c.js"></script>
+        <script src="../toc-ac7b0e4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -175,8 +175,27 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="open-items"><a class="header" href="#open-items">Open items</a></h1>
-<p>A concrete inventory of work that is <strong>not</strong> shipped on <code>main</code> but is on the
-trajectory the recent push has set up. Items are grouped by tier:</p>
+<blockquote>
+<p><strong>Current open set (2026-07-02).</strong> Most entries below have since
+<strong>landed</strong> and carry an inline <code>**Status.** Landed</code> block — they are
+kept as decision records, not backlog. The genuinely open items are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Item</th><th>What</th><th>Effort</th></tr>
+</thead>
+<tbody>
+<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k, per-contact stick/slip state)</td><td>1–2 days</td></tr>
+<tr><td>X1 (bottom of file)</td><td>Critic audit round over Stages 39–51</td><td>~1 day</td></tr>
+<tr><td>X2 (bottom of file)</td><td>Viewer scenes for the v3–v6 solver work</td><td>~1 day each</td></tr>
+</tbody>
+</table>
+</div>
+<p>Larger tracked work lives outside this file: the tire stream
+(zero-host-readback substep loop, 40-wheel realtime — <code>PROGRESS.md</code>)
+and the inspection backlog (<code>INSPECTION.md</code> at the repo root).</p>
+</blockquote>
+<p>A concrete inventory of work from the v3–v6 push, grouped by tier:</p>
 <ul>
 <li><strong>Tier-A — v5 follow-ups.</strong> Small, well-scoped pieces that close out a stage
 already in flight. Each is days, not weeks. Most are “the obvious next
@@ -197,7 +216,10 @@ Open unless / until a concrete user need surfaces.</li>
 re-rank the item up or down.</li>
 </ol>
 <p>Stage numbers and commit hashes refer to entries on <code>main</code> as of
-2026-05-11 evening (HEAD <code>2bde182</code>, Stage 41 v6).</p>
+2026-05-11 evening (HEAD <code>2bde182</code>, Stage 41 v6); the open-set banner
+above reflects 2026-07-02. Note this snapshot predates the entire
+<code>molla-vehicle</code> / tire-FEM effort, which is tracked in
+<code>PLAN_REALTIRE.md</code> + <code>PROGRESS.md</code> instead.</p>
 <hr>
 <h2 id="tier-a--v5-follow-ups-small-well-scoped"><a class="header" href="#tier-a--v5-follow-ups-small-well-scoped">Tier-A — v5 follow-ups (small, well-scoped)</a></h2>
 <h3 id="a1-kinetic-vs-static-friction-split-stage-50-v2"><a class="header" href="#a1-kinetic-vs-static-friction-split-stage-50-v2">A1. Kinetic-vs-static friction split (Stage 50 v2)</a></h3>
@@ -219,7 +241,15 @@ stick-slip resonance / chatter (e.g. a robot finger gripping a smooth
 glass surface, or a tendon-driven gripper at the friction limit) — that
 maps cleanly onto distinct <code>μ_s</code> / <code>μ_k</code>.</p>
 <h3 id="a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5"><a class="header" href="#a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5">A2. Variable per-muscle stiffness + pennation on GPU (Stage 42 v5)</a></h3>
-<p><strong>Problem.</strong> Stage 42 v3 (<code>bbd5c61</code>) shipped the Hill kernel + cable ABA on
+<p><strong>Status.</strong> Landed (implementation shipped with the C6 push; validated
+2026-07-02). The WGSL kernel reads per-muscle
+<code>muscle_pennation_angle</code>/<code>muscle_tendon_stiffness_ratio</code> storage
+buffers (<code>muscle.wgsl</code> bindings 7/9) uploaded from the <code>Model</code> arrays,
+and the heterogeneous-parameter hardware parity lane
+<code>per_muscle_pennation_and_stiffness_cpu_gpu_parity</code> in
+<code>crates/molla-solvers/tests/joint_muscle_gpu.rs</code> confirms CPU/GPU
+agreement (with a homogeneous-control guard against a vacuous pass).</p>
+<p><strong>Problem (historical).</strong> Stage 42 v3 (<code>bbd5c61</code>) shipped the Hill kernel + cable ABA on
 GPU; v4 (<code>0411d0b</code>) added SEE Newton GPU/CPU parity. The remaining gap:
 per-muscle <code>stiffness_ratio</code> and pennation angle are honored on CPU but
 read from a single shared parameter on GPU (the <code>d38739e</code> critic fix did

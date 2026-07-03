@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-241762d7.js";
+            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7a47bd5c.js"></script>
+        <script src="../toc-ac7b0e4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,7 +236,7 @@ test file:</p>
 is around.</li>
 </ul>
 <p>The Makefile has one target per parity test family
-(<code>make test-gpu</code>, <code>make test-featherstone-gpu</code>, etc.) — each is just
+(<code>make test-gpu</code>, <code>make test-gpu P=molla-solvers T=featherstone_gpu_parity</code>, etc.) — each is just
 a <code>cargo test --features gpu --test &lt;name&gt; -- --ignored</code> invocation.</p>
 <h2 id="fixed-seeds-deterministic-inputs"><a class="header" href="#fixed-seeds-deterministic-inputs">Fixed seeds, deterministic inputs</a></h2>
 <p>Parity tests use <strong>fixed-seed inputs</strong> to make failures
