@@ -14,7 +14,7 @@
 //! All GPU-bound tests are `#[ignore]` because they need a real wgpu
 //! adapter; run with
 //!
-//!   `make test-sparse-grid-v4-gpu`.
+//!   `make test-gpu P=molla-kernels T=sparse_grid_v4`.
 
 #![cfg(feature = "gpu")]
 

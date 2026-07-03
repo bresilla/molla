@@ -65,7 +65,7 @@ test file:
   is around.
 
 The Makefile has one target per parity test family
-(`make test-gpu`, `make test-featherstone-gpu`, etc.) — each is just
+(`make test-gpu`, `make test-gpu P=molla-solvers T=featherstone_gpu_parity`, etc.) — each is just
 a `cargo test --features gpu --test <name> -- --ignored` invocation.
 
 ## Fixed seeds, deterministic inputs

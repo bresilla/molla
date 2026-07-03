@@ -1,6 +1,6 @@
 //! Stage-18 composable actuator pipeline — GPU parity + clamp tests.
 //! `#[ignore]` because they need a real wgpu adapter; run with
-//! `make test-actuator-pipeline-gpu` (or the equivalent
+//! `make test-gpu P=molla-actuators T=actuator_pipeline_gpu` (or the equivalent
 //! `cargo test -p molla-actuators --features gpu --test actuator_pipeline_gpu -- --ignored`).
 
 #![cfg(feature = "gpu")]
@@ -83,7 +83,7 @@ fn read_force(engine: &Engine, control: &mut Control) -> Real {
 /// `Actuator { delay=0, ctrl=PipelinePd, clamp=MaxEffort(cap) }`
 /// for the same `(q, qd, target_q, target_qd)`.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn pipeline_matches_standalone_pd() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -164,7 +164,7 @@ fn pipeline_matches_standalone_pd() {
 /// direction of motion) to zero. Sweeps a few velocities and checks
 /// the clamp follows `effort_max(qd) = stall · (1 − qd / no_load)`.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn dc_motor_clamp_torque_speed_curve() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -242,7 +242,7 @@ fn dc_motor_clamp_torque_speed_curve() {
 /// most-recently-pushed value. Before that, the read clamps to the
 /// oldest available sample (Newton semantics).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn delay_holds_step_response_for_n_substeps() {
     let (engine, _model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -305,7 +305,7 @@ fn delay_holds_step_response_for_n_substeps() {
 /// always emit the current target (matches the "no delay" Newton
 /// case).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn delay_zero_steps_is_passthrough() {
     let (engine, _model, _state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -345,7 +345,7 @@ fn delay_zero_steps_is_passthrough() {
 // term so the test runs ≥ a few substeps to give the integral a
 // chance to wind up — single-shot parity is too easy.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn pid_pipeline_matches_standalone_pid() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -441,7 +441,7 @@ fn pid_pipeline_matches_standalone_pid() {
 // test sweeps `joint_q` across 0 → 1.1 rad and checks the per-step
 // torque envelope matches the analytic linear envelope.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn position_based_clamp_smooth_envelope() {
     let (engine, _model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -511,7 +511,7 @@ fn position_based_clamp_smooth_envelope() {
 //   • linear output
 //   • input → hidden → output dimension routing all match
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn mlp_forward_matches_cpu_reference() {
     let (engine, _model, _state, _control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -590,7 +590,7 @@ fn mlp_forward_matches_cpu_reference() {
 // per-call wall-clock plus the GPU-queue submit. Don't fail on slow
 // machines — adapters vary 10× across the test fleet.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-pipeline-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pipeline_gpu"]
 fn mlp_forward_timing_log_only() {
     use std::time::Instant;
     let (engine, _model, _state, _control) =

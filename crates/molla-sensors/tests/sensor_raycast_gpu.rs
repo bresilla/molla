@@ -1,7 +1,7 @@
 //! GPU ray-cast sensor — golden-value tests against hand-computed
 //! expectations. Each test is `#[ignore]` because it requires a real
 //! wgpu adapter (CI doesn't have one); run with
-//! `make test-raycast-gpu` (forwards `-- --ignored` to the test binary).
+//! `make test-gpu P=molla-sensors T=raycast_trimesh_gpu` (forwards `-- --ignored` to the test binary).
 //!
 //! Each `#[test]` brings up its own `Engine::new_gpu()`. When the
 //! cargo `--workspace -- --ignored` lane runs all five concurrently
@@ -51,7 +51,7 @@ fn lock_gpu() -> std::sync::MutexGuard<'static, ()> {
 /// Sphere of radius 0.5 at origin; ray from (0, 5, 0) straight down.
 /// Expected hit at y = 0.5, t = 4.5, normal = +Y.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=raycast_trimesh_gpu"]
 fn ray_hits_sphere_at_expected_distance() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -92,7 +92,7 @@ fn ray_hits_sphere_at_expected_distance() {
 
 /// Ray that misses the sphere returns `shape_id = None`.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=raycast_trimesh_gpu"]
 fn ray_misses_sphere() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -125,7 +125,7 @@ fn ray_misses_sphere() {
 /// Box of half-extents (1, 0.5, 1) at origin; ray from (0, 5, 0) down.
 /// Expected hit at y = 0.5, t = 4.5, normal = +Y.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=raycast_trimesh_gpu"]
 fn ray_hits_box_top_face() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -162,7 +162,7 @@ fn ray_hits_box_top_face() {
 /// Ray from (0, 5, 0) down should hit the upper (closer) sphere
 /// first.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=raycast_trimesh_gpu"]
 fn ray_takes_closer_of_two_spheres() {
     let mut b = ModelBuilder::new();
     let lower = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -195,7 +195,7 @@ fn ray_takes_closer_of_two_spheres() {
 /// a sphere to (5, 0, 0) by writing its initial pose, then cast a
 /// horizontal ray from the world origin and expect to hit at t ≈ 4.5.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-raycast-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=raycast_trimesh_gpu"]
 fn ray_hits_translated_body() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(

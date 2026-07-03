@@ -11,7 +11,7 @@
 //! All GPU-bound tests are `#[ignore]` because they need a real wgpu
 //! adapter; run with
 //!
-//!   `make test-sparse-grid-v3-gpu`.
+//!   `make test-gpu P=molla-kernels T=sparse_grid_v3`.
 
 use molla_geometry::{SparseGrid, SparseGridGpu, root_hash3};
 use std::collections::HashMap;

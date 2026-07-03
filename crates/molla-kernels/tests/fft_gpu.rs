@@ -4,7 +4,7 @@
 //! (CI doesn't have one). Run with:
 //!
 //! ```text
-//! make test-fft-gpu
+//! make test-gpu P=molla-kernels T=fft_gpu
 //! ```
 //!
 //! Convention: the kernel applies **no normalisation**, so

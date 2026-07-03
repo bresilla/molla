@@ -5,7 +5,7 @@
 //!   `nixVulkan cargo test -p molla-solvers --features gpu --test mpm_v3_gpu -- --ignored`
 //!
 //! All tests are `#[ignore]` (CI lacks a real wgpu adapter); the
-//! `make test-mpm-v3-gpu` lane on the dev box exercises them.
+//! `make test-gpu P=molla-solvers T=mpm_v3_gpu` lane on the dev box exercises them.
 //!
 //! These tests *extend* (don't replace) the v1 `mpm_gpu.rs` suite —
 //! the explicit-only smoke / momentum / pile / one-way-rigid tests

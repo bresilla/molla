@@ -3,7 +3,7 @@
 //! wgpu adapter (CI doesn't have one). Run with:
 //!
 //! ```text
-//! make test-fem-fft-ns-gpu
+//! make test-gpu P=molla-fem T=fft_ns_coupling
 //! ```
 //!
 //! 1. **`fft_pressure_poisson_recovers_constant_div_zero`** —

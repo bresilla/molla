@@ -6,7 +6,7 @@
 //! only run with a real wgpu adapter via:
 //!
 //! ```bash
-//! make test-articulation-gpu
+//! make test-gpu P=molla-solvers T=articulation_gpu
 //! ```
 
 #![cfg(feature = "gpu")]

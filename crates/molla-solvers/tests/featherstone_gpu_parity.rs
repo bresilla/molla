@@ -2,7 +2,7 @@
 //! backend requires a real wgpu adapter — run via:
 //!
 //! ```bash
-//! make test-featherstone-gpu
+//! make test-gpu P=molla-solvers T=featherstone_gpu_parity
 //! # or:
 //! cargo test -p molla --test featherstone_gpu_parity --features gpu -- --ignored
 //! ```
@@ -35,7 +35,7 @@ fn build_pendulum() -> Model {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn pendulum_cpu_gpu_match_within_1e_3_rad() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -137,7 +137,7 @@ fn build_pd_pendulum_with_limits() -> (Model, molla_core::JointId) {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn pd_pendulum_with_limits_cpu_gpu_match() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -208,7 +208,7 @@ fn pd_pendulum_with_limits_cpu_gpu_match() {
 /// propagation. If parent→child force coupling is wrong on either
 /// backend, the two solvers diverge fast.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn double_pendulum_cpu_gpu_match() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -307,7 +307,7 @@ fn double_pendulum_cpu_gpu_match() {
 /// per-articulation parallelism of the GPU kernel — each chain runs
 /// on its own workgroup invocation.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn many_articulations_cpu_gpu_match() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -399,7 +399,7 @@ fn many_articulations_cpu_gpu_match() {
 /// Prismatic-joint single-step parity (we mostly tested revolute up
 /// to here). Sliding mass with PD drive.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn prismatic_pd_cpu_gpu_match() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -483,7 +483,7 @@ fn prismatic_pd_cpu_gpu_match() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn joint_limits_clamp_on_gpu() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -530,7 +530,7 @@ fn joint_limits_clamp_on_gpu() {
 /// values, which catches the bug class "kernel runs but FK doesn't
 /// reach `body_q.host()`".
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-featherstone-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=featherstone_gpu_parity`"]
 fn arm_six_link_pd_drives_motion_on_gpu() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");

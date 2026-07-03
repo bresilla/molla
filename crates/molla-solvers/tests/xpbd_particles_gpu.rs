@@ -4,7 +4,7 @@
 //! confirm the per-particle positions match.
 //!
 //! `#[ignore]` because it needs a real wgpu adapter; run with
-//! `make test-particles-gpu`.
+//! `make test-gpu P=molla-solvers T=xpbd_particles_gpu`.
 
 #![cfg(feature = "gpu")]
 
@@ -68,7 +68,7 @@ fn build_uniform_damping_cloth(damping: Real) -> Model {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn cpu_gpu_cloth_match() {
     let model_cpu = build_cloth();
     let model_gpu = build_cloth();
@@ -158,7 +158,7 @@ fn cpu_gpu_cloth_match() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn cpu_gpu_uniform_cloth_damping_match() {
     let damping: Real = 6.0;
     let dt: Real = 0.005;
@@ -262,7 +262,7 @@ fn cpu_gpu_uniform_cloth_damping_match() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn pinned_cloth_corners_stay_put() {
     // Sanity check: a cloth pinned at corners should keep those
     // corners exactly where we placed them, on both CPU and GPU.
@@ -313,7 +313,7 @@ fn pinned_cloth_corners_stay_put() {
 /// to at least `2 * radius` apart after a few XPBD substeps. Tests
 /// the WGSL `hash_insert` + `self_collide` passes end-to-end.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn self_collision_pushes_overlapping_particles_apart() {
     let engine =
         Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -368,7 +368,7 @@ fn self_collision_pushes_overlapping_particles_apart() {
 /// pass projects it out to the shape surface within tolerance.
 /// Covers sphere, plane (offset), box, capsule, cylinder.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn single_particle_projected_off_each_primitive() {
     let engine =
         Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -507,7 +507,7 @@ fn single_particle_projected_off_each_primitive() {
 /// inside the sphere. Exercises the WGSL `particle_vs_shapes`
 /// collision pass.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-particles-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_particles_gpu"]
 fn cloth_drapes_over_sphere_without_penetration() {
     let engine =
         Engine::new_gpu().expect("GPU adapter required for this test (gated by #[ignore])");

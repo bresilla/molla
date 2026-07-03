@@ -1,7 +1,7 @@
 //! Stage 14 — multi-channel raytraced camera sensor (GPU).
 //!
 //! All `#[ignore]`-marked because they need a real wgpu adapter; run
-//! via `make test-tiled-camera-gpu` (or the workspace-wide
+//! via `make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu` (or the workspace-wide
 //! `make test-gpu`).
 
 #![cfg(feature = "gpu")]
@@ -43,7 +43,7 @@ fn tiny_config() -> TiledCameraConfig {
 /// Camera at +Z looking down -Z at a sphere at the origin. Centre
 /// pixel should hit the sphere at depth ≈ (eye_z - radius).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-tiled-camera-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu"]
 fn camera_hits_sphere_centre_returns_correct_depth() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -80,7 +80,7 @@ fn camera_hits_sphere_centre_returns_correct_depth() {
 /// half of the image should report the left sphere's index; right
 /// half the right sphere's index.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-tiled-camera-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu"]
 fn shape_index_distinguishes_two_spheres() {
     let mut b = ModelBuilder::new();
     let left_body = b.add_body(BodyParams::new().with_position(Vec3::new(-1.0, 0.0, 0.0)));
@@ -127,7 +127,7 @@ fn shape_index_distinguishes_two_spheres() {
 /// Sphere coloured red via `set_shape_visual_material`. The albedo
 /// channel at the centre pixel should pack red as `(255, 0, 0, 255)`.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-tiled-camera-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu"]
 fn albedo_matches_set_color() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));
@@ -162,7 +162,7 @@ fn albedo_matches_set_color() {
 /// world-space direction. Each camera's centre pixel should hit the
 /// shared sphere at the same depth.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-tiled-camera-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu"]
 fn multi_camera_dispatches_in_one_call() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::ZERO));

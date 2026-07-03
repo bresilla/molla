@@ -1,6 +1,6 @@
 //! GPU contact sensor — golden-value tests against hand-computed
 //! expectations. `#[ignore]` because they need a real wgpu adapter;
-//! run with `make test-contact-gpu`.
+//! run with `make test-gpu P=molla-solvers T=contact_friction_modes_gpu`.
 
 #![cfg(feature = "gpu")]
 
@@ -27,7 +27,7 @@ fn setup(model: Model) -> Option<(Engine, Model, State, Contacts)> {
 /// Sphere of radius 0.5 sits exactly on the static plane at y = 0.5.
 /// One contact, normal +Y on the sphere side, depth ≈ 0.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-contact-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=contact_friction_modes_gpu"]
 fn sensor_sphere_on_plane_one_contact() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(
@@ -74,7 +74,7 @@ fn sensor_sphere_on_plane_one_contact() {
 
 /// Sphere floating well above the plane → zero contacts.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-contact-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=contact_friction_modes_gpu"]
 fn sensor_floating_sphere_zero_contacts() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(
@@ -108,7 +108,7 @@ fn sensor_floating_sphere_zero_contacts() {
 /// plane + with upper), upper sphere has 1 contact (with lower). Their
 /// normal_sum vectors point in opposite directions.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-contact-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=contact_friction_modes_gpu"]
 fn sensor_stack_of_two_spheres() {
     let mut b = ModelBuilder::new();
     // Lower sphere just barely overlapping the plane.

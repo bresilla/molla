@@ -44,7 +44,7 @@ fn build_stack(count: usize) -> Model {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-xpbd-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=xpbd_boxes`"]
 fn box_stack_cpu_gpu_match() {
     let count = 4;
     let model_cpu = build_stack(count);

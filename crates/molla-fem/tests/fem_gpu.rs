@@ -13,7 +13,7 @@
 //!      result within 1e-3.
 //!
 //! All tests are `#[ignore]` because they need a real wgpu adapter.
-//! Run with `make test-fem-gpu` (added in this stage) or directly:
+//! Run with `make test-gpu P=molla-fem T=fem_gpu` (added in this stage) or directly:
 //!
 //! ```sh
 //! nixVulkan cargo test -p molla-fem --features gpu --test fem_gpu -- --ignored
@@ -81,7 +81,7 @@ fn lcg(seed: u64) -> impl FnMut() -> Real {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_p1_assembly_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -145,7 +145,7 @@ fn gpu_p1_assembly_matches_cpu_oracle() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_p1_mass_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -189,7 +189,7 @@ fn gpu_p1_mass_matches_cpu_oracle() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_p1_stiffness_tri_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -230,7 +230,7 @@ fn gpu_p1_stiffness_tri_matches_cpu_oracle() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_p1_mass_tri_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -269,7 +269,7 @@ fn gpu_p1_mass_tri_matches_cpu_oracle() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_csr_matvec_matches_cpu_oracle() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -320,7 +320,7 @@ fn gpu_csr_matvec_matches_cpu_oracle() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu"]
 fn gpu_solve_steady_state_3d_cube_matches_cpu() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -430,7 +430,7 @@ fn gpu_solve_steady_state_3d_cube_matches_cpu() {
 /// because at 16³ the f32 accumulation in the matvec compounds over
 /// more iterations.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-gpu (16³ smoke)"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu (16³ smoke)"]
 fn gpu_solve_steady_state_3d_cube_16_smoke() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

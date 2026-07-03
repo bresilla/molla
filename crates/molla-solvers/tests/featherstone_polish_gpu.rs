@@ -17,7 +17,7 @@
 //!  wgpu adapter; run them via:
 //!
 //!  ```bash
-//!  make test-featherstone-polish-gpu
+//!  make test-gpu P=molla-solvers T=featherstone_polish_gpu
 //!  ```
 
 #![cfg(feature = "gpu")]

@@ -1,6 +1,6 @@
 //! Stage 31 — `ControllerNeuralLstm` GPU forward-pass + hidden-state
 //! persistence tests. `#[ignore]` because they need a real wgpu
-//! adapter; run with `make test-actuator-neural-lstm-gpu`.
+//! adapter; run with `make test-gpu P=molla-actuators T=actuator_neural_lstm_gpu`.
 
 #![cfg(feature = "gpu")]
 

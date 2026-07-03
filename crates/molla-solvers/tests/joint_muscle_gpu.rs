@@ -84,7 +84,7 @@ fn seed_state(model: &Model, q_l: Real, qd_l: Real) -> State {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-joint-muscle-gpu` or `nixVulkan cargo test ...`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=joint_muscle_gpu` or `nixVulkan cargo test ...`"]
 fn single_muscle_cpu_gpu_parity_100_steps() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -197,7 +197,7 @@ fn single_muscle_cpu_gpu_parity_100_steps() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-joint-muscle-gpu` or `nixVulkan cargo test ...`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=joint_muscle_gpu` or `nixVulkan cargo test ...`"]
 fn antagonist_pair_cancels_on_gpu() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -269,7 +269,7 @@ fn antagonist_pair_cancels_on_gpu() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-joint-muscle-gpu` or `nixVulkan cargo test ...`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=joint_muscle_gpu` or `nixVulkan cargo test ...`"]
 fn muscle_scaling_walltime() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");

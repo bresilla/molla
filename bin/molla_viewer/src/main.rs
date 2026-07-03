@@ -2665,56 +2665,56 @@ impl Scene {
                 status: Complete,
                 reference_case: "rigid pile / stacking",
                 cpu_proof: "scene_smoke + scene_correctness pile",
-                gpu_proof: "make test-gpu / make test-xpbd-gpu",
+                gpu_proof: "make test-gpu / make test-gpu P=molla-solvers T=xpbd_boxes",
                 notes: "XPBD rigid contact stack",
             },
             Scene::Rope => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "rope/particle constraints",
                 cpu_proof: "scene_correctness rope floor/taut gates",
-                gpu_proof: "make test-particles-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=xpbd_particles_gpu",
                 notes: "XPBD particle/equality coverage",
             },
             Scene::Tower => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "rigid tower stability",
                 cpu_proof: "scene_correctness tower",
-                gpu_proof: "make test-xpbd-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=xpbd_boxes",
                 notes: "stress stack under gravity",
             },
             Scene::Cloth => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "XPBD cloth",
                 cpu_proof: "scene_smoke cloth",
-                gpu_proof: "make test-particles-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=xpbd_particles_gpu",
                 notes: "particle cloth path",
             },
             Scene::Lidar | Scene::WarpRaycast => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "raycast sensor / Warp raycast",
                 cpu_proof: "raycast_adjoint + scene smoke",
-                gpu_proof: "make test-raycast-gpu",
+                gpu_proof: "make test-gpu P=molla-sensors T=raycast_trimesh_gpu",
                 notes: "GPU ray sensor has dedicated parity tests",
             },
             Scene::Imu => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "IMU sensor",
                 cpu_proof: "scene_smoke imu",
-                gpu_proof: "make test-imu-gpu",
+                gpu_proof: "make test-gpu P=molla-sensors T=sensor_imu_gpu",
                 notes: "GPU IMU tests cover gravity/freefall/gyro axes",
             },
             Scene::Contact => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "contact sensor",
                 cpu_proof: "scene_smoke contact",
-                gpu_proof: "make test-contact-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=contact_friction_modes_gpu",
                 notes: "GPU contact sensor tests cover zero/one/stacked contacts",
             },
             Scene::Arm | Scene::Actuator => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "PD/PID actuator articulation",
                 cpu_proof: "actuator and Featherstone tests",
-                gpu_proof: "make test-actuator-gpu / make test-actuator-pipeline-gpu",
+                gpu_proof: "make test-gpu P=molla-actuators T=actuator_pd_gpu / make test-gpu P=molla-actuators T=actuator_pipeline_gpu",
                 notes: "Featherstone + actuator pipeline",
             },
             Scene::Shapes | Scene::Heightfield => ScenePhysicsAudit {
@@ -2728,21 +2728,21 @@ impl Scene {
                 status: Complete,
                 reference_case: "GPU IK arm",
                 cpu_proof: "ik_franka CPU IK/Jacobian tests + scene smoke",
-                gpu_proof: "make test-articulation-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=articulation_gpu",
                 notes: "Franka-style IK has CPU oracle and GPU multi-seed/Jacobian/IK parity gates",
             },
             Scene::IkCustom => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "IK with collision-avoidance",
                 cpu_proof: "ik_franka + viewer collision-objective smoke",
-                gpu_proof: "make test-articulation-gpu for base IK path",
+                gpu_proof: "make test-gpu P=molla-solvers T=articulation_gpu for base IK path",
                 notes: "collision avoidance is a reduced synthesized position-residual objective, not full Newton objective parity",
             },
             Scene::IkCubeStacking => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton ik/example_ik_cube_stacking.py",
                 cpu_proof: "ik_cube_stacking_targets_are_reachable_and_audited + ik_cube_stacking_stack_is_supported_and_finite + ik_cube_stacking_reports_obstacle_residuals",
-                gpu_proof: "make test-articulation-gpu for the GPU IK arm solve; cube contact/stacking is reduced viewer telemetry, not a coupled GPU manipulation solve",
+                gpu_proof: "make test-gpu P=molla-solvers T=articulation_gpu for the GPU IK arm solve; cube contact/stacking is reduced viewer telemetry, not a coupled GPU manipulation solve",
                 notes: "procedural cubes and pick/place waypoints are shown in the viewer; full gripper contact, coupled stacking dynamics, and obstacle-aware GPU IK objective remain future work",
             },
             Scene::GpuNarrowPhase | Scene::BroadPhase => ScenePhysicsAudit {
@@ -2756,56 +2756,56 @@ impl Scene {
                 status: Complete,
                 reference_case: "tiled camera sensor",
                 cpu_proof: "scene_smoke camera",
-                gpu_proof: "make test-tiled-camera-gpu",
+                gpu_proof: "make test-gpu P=molla-sensors T=sensor_tiled_camera_gpu",
                 notes: "GPU camera channels covered by sensor tests",
             },
             Scene::Quadrotor => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "procedural quadrotor control",
                 cpu_proof: "scene_smoke quadrotor + quadrotor_pd_mixer_balances_hover_and_attitude_torques",
-                gpu_proof: "make test-featherstone-multidof-gpu / make test-featherstone-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=featherstone_multidof_gpu / make test-gpu P=molla-solvers T=featherstone_gpu_parity",
                 notes: "native Featherstone FREE-root quadrotor control; differentiable MPC is tracked by DiffsimDrone",
             },
             Scene::VbdCloth => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "VBD cloth",
                 cpu_proof: "vbd_cloth_cpu pinned/wrap/contact tests",
-                gpu_proof: "make test-vbd-cloth-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu",
                 notes: "core VBD cloth path has CPU contact/stability gates and GPU parity lanes",
             },
             Scene::ClothBending | Scene::ClothTwist => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "VBD cloth bending/twist response",
                 cpu_proof: "vbd_cloth_bending_compliance_changes_cantilever_sag / vbd_cloth_bending_springs_change_twist_response",
-                gpu_proof: "make test-vbd-cloth-gpu / make test-vbd-extended-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu / make test-gpu P=molla-solvers T=vbd_extended_gpu",
                 notes: "bending and twist-response variants are test-backed reduced cloth physics scenes",
             },
             Scene::ClothPokerCards => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "Newton cloth-over-card/box contact",
                 cpu_proof: "vbd_cloth_cpu_drapes_over_kinematic_box_without_penetration",
-                gpu_proof: "make test-vbd-cloth-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu",
                 notes: "procedural cloth-over-box/card contact is complete; garment/Style3D asset parity is out of scope",
             },
             Scene::ReferencePendulum => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "native procedural double pendulum",
                 cpu_proof: "scene smoke / Featherstone articulation tests",
-                gpu_proof: "make test-featherstone-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=featherstone_gpu_parity",
                 notes: "external wrappers are explicitly out of scope",
             },
             Scene::DiffsimCloth => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton diffsim/example_diffsim_cloth.py",
                 cpu_proof: "diffsim_cloth_reduced_pin_gradient_matches_finite_difference + diffsim_cloth_reduced_optimization_reduces_loss",
-                gpu_proof: "make test-vbd-cloth-gpu for forward cloth; no GPU cloth adjoint yet",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu for forward cloth; no GPU cloth adjoint yet",
                 notes: "procedural pinned cloth viewer scene plus reduced CPU differentiable oracle; full cloth adjoint/MPC parity remains future work",
             },
             Scene::DiffsimSoftBody => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton diffsim/example_diffsim_soft_body.py",
                 cpu_proof: "diffsim_softbody_reduced_velocity_gradient_matches_finite_difference + diffsim_softbody_reduced_optimization_reduces_loss",
-                gpu_proof: "make test-vbd-tets-gpu for forward tet softbody; no GPU softbody adjoint yet",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_tets_gpu for forward tet softbody; no GPU softbody adjoint yet",
                 notes: "procedural tet block viewer scene plus reduced CPU differentiable oracle; full tet adjoint/material optimization parity remains future work",
             },
             Scene::DiffArm | Scene::DiffArm6 | Scene::DiffBall | Scene::DiffSpring => {
@@ -2832,56 +2832,56 @@ impl Scene {
                 status: Complete,
                 reference_case: "neural actuator/control",
                 cpu_proof: "actuator/controller tests",
-                gpu_proof: "make test-actuator-pipeline-gpu",
+                gpu_proof: "make test-gpu P=molla-actuators T=actuator_pipeline_gpu",
                 notes: "procedural cart-pole controller",
             },
             Scene::Cable | Scene::CablePile | Scene::CableYJunction => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "Newton cable/cable-pile/y-junction",
                 cpu_proof: "joint_cable + vbd_cables_cpu tests",
-                gpu_proof: "make test-vbd-tets-gpu / make test-vbd-extended-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_tets_gpu / make test-gpu P=molla-solvers T=vbd_extended_gpu",
                 notes: "stretch/bend cable chains, piles, and branching are covered by CPU gates plus cable GPU lanes",
             },
             Scene::CableBundleHysteresis => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton cable bundle hysteresis",
                 cpu_proof: "cable_bundle_hysteresis_loop_has_positive_area + dahl_oracle tests",
-                gpu_proof: "make test-vbd-extended-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_extended_gpu",
                 notes: "procedural bundle scene plus Dahl hysteresis oracle exist; full contact-coupled bundled Dahl integration remains future work",
             },
             Scene::ClothRollers => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton cloth/example_cloth_rollers.py",
                 cpu_proof: "cloth_rollers_scene_has_kinematic_rollers_and_cloth + cloth_roller_surface_velocity_transfers_tangential_speed + cloth_rollers_support_gap_oracle_is_finite",
-                gpu_proof: "make test-vbd-cloth-gpu for the forward cloth lane; roller friction/kinematic velocity coupling remains a reduced CPU oracle",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu for the forward cloth lane; roller friction/kinematic velocity coupling remains a reduced CPU oracle",
                 notes: "procedural VBD cloth plus kinematic roller bodies are in the viewer; full roller friction/tangential-velocity coupling needs stronger solver-side parity",
             },
             Scene::NutBoltSdf => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton contacts/example_nut_bolt_sdf.py",
                 cpu_proof: "procedural_socket_bolt_dense_contact_stays_finite_and_caged + nut_bolt_sdf_thread_ring_has_expected_signs",
-                gpu_proof: "make test-contact-reduction-gpu / make test-sparse-grid-gpu for reduction/grid lanes; analytic SDF narrow phase is CPU-only today",
+                gpu_proof: "make test-gpu P=molla-kernels T=contact_reduction_gpu / make test-gpu P=molla-kernels T=sparse_grid_v4 for reduction/grid lanes; analytic SDF narrow phase is CPU-only today",
                 notes: "procedural socket/bolt plus analytic torus SDF thread lips; no imported threaded mesh, and full threaded SDF GPU contact remains future work",
             },
             Scene::NutBoltHydro => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton contacts/example_nut_bolt_hydro.py",
                 cpu_proof: "plane_patch_hydroelastic_force_grows_with_penetration_depth + hydroelastic_offset_patch_reduction_preserves_force_and_moment + procedural_socket_bolt_dense_contact_stays_finite_and_caged",
-                gpu_proof: "make test-hydroelastic-gpu",
+                gpu_proof: "make test-gpu P=molla-kernels T=hydroelastic_gpu",
                 notes: "hydroelastic patch force/reduction is proven with reduced CPU/GPU kernels; the viewer reuses the procedural nut/bolt contact geometry until hydroelastic forces are coupled into the live solver",
             },
             Scene::CableTwist => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton cable twist",
                 cpu_proof: "reduced_cable_twist_stiffness_controls_torsional_return",
-                gpu_proof: "no full twist DoF/kernel yet; VBD cable bending remains covered by make test-vbd-tets-gpu",
+                gpu_proof: "no full twist DoF/kernel yet; VBD cable bending remains covered by make test-gpu P=molla-solvers T=vbd_tets_gpu",
                 notes: "twist has a reduced scalar CPU oracle only; full articulated cable twist remains future work",
             },
             Scene::MpmBeamTwist => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Newton mpm/example_mpm_beam_twist.py",
                 cpu_proof: "mpm_beam_twist_initialization_has_bounded_torsion + mpm_beam_twist_color_tracks_angle + mpm_beam_twist_audit_is_partial",
-                gpu_proof: "make test-mpm-gpu / make test-mpm-v3-gpu for existing forward MPM lanes; dedicated torsional beam constitutive setup remains future work",
+                gpu_proof: "make test-gpu P=molla-solvers T=mpm_gpu / make test-gpu P=molla-solvers T=mpm_v3_gpu for existing forward MPM lanes; dedicated torsional beam constitutive setup remains future work",
                 notes: "viewer initializes a twisted procedural beam and torsion coloring over the current MPM runtime; true torsional material response/parity is not complete",
             },
             Scene::MpmMultiMaterial => ScenePhysicsAudit {
@@ -2902,7 +2902,7 @@ impl Scene {
                 status: ManualGpu,
                 reference_case: "MPM granular/fluid/snow/two-way/implicit",
                 cpu_proof: "implicit_mpm and reduced MPM tests; reduced_multi_material_oracle_dispatches_distinct_branches for multi-material",
-                gpu_proof: "make test-mpm-gpu / make test-mpm-v3-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=mpm_gpu / make test-gpu P=molla-solvers T=mpm_v3_gpu",
                 notes: "multi-material viewer currently visualizes material regions over the single-rheology MPM runtime; per-particle material-id GPU dispatch remains future work",
             },
             Scene::Jelly
@@ -2915,7 +2915,7 @@ impl Scene {
                 status: Complete,
                 reference_case: "VBD tet/softbody/contact/friction/CCD",
                 cpu_proof: "soft_vt_contact / soft_friction / soft_ccd tests",
-                gpu_proof: "make test-vbd-tets-gpu / make test-soft-vt-gpu / make test-soft-friction-gpu where supported",
+                gpu_proof: "make test-gpu P=molla-solvers T=vbd_tets_gpu / make test-gpu P=molla-solvers T=soft_vt_contact_gpu / make test-gpu P=molla-solvers T=soft_friction_gpu where supported",
                 notes: "EE/CCD pieces may remain CPU-only until practical GPU kernels exist",
             },
             Scene::Pendulum | Scene::JointSampler | Scene::CartPole | Scene::CartPoleSwarm => {
@@ -2923,7 +2923,7 @@ impl Scene {
                     status: Complete,
                     reference_case: "basic articulated mechanics/control",
                     cpu_proof: "Featherstone and scene smoke tests",
-                    gpu_proof: "make test-featherstone-gpu",
+                    gpu_proof: "make test-gpu P=molla-solvers T=featherstone_gpu_parity",
                     notes: "procedural articulated stress tests",
                 }
             }
@@ -2938,7 +2938,7 @@ impl Scene {
                 status: Complete,
                 reference_case: "stacking / closed-chain stress",
                 cpu_proof: "scene_correctness + equality_joint_mimic tests",
-                gpu_proof: "make test-equality-gpu / make test-equality-joint-mimic-gpu",
+                gpu_proof: "make test-gpu P=molla-solvers T=xpbd_equality_gpu / make test-gpu P=molla-solvers T=equality_joint_mimic",
                 notes: "hard-contact and closure stress scenes",
             },
             Scene::FemHeat
@@ -2948,21 +2948,21 @@ impl Scene {
                 status: Complete,
                 reference_case: "FEM heat/diffusion",
                 cpu_proof: "fem_v1 / fem_p2 heat tests and viewer heat recipe",
-                gpu_proof: "make test-fem-gpu / make test-fem-transient-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_gpu / make test-gpu P=molla-fem T=fem_transient_gpu",
                 notes: "procedural P1/P2 heat diffusion has CPU oracles and explicit GPU assembly/transient lanes",
             },
             Scene::FemBeam | Scene::FemDiffBeam | Scene::WarpFemElasticOpt => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "FEM elasticity / differentiable shape optimization",
                 cpu_proof: "fem_elasticity / fem_diff_optim / fem_shape_optim / fem_adjoint tests",
-                gpu_proof: "make test-fem-elasticity-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_elasticity_gpu",
                 notes: "elasticity and reduced shape/load optimization are tested; GPU lane covers assembly/solve parity",
             },
             Scene::WarpFemMixedElasticity => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Warp fem/example_mixed_elasticity.py",
                 cpu_proof: "warp_fem_mixed_elasticity_reduced_near_incompressible_stays_finite + warp_fem_mixed_elasticity_pressure_split_beats_locking",
-                gpu_proof: "make test-fem-elasticity-gpu for displacement elasticity assembly; mixed pressure GPU solve remains future work",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_elasticity_gpu for displacement elasticity assembly; mixed pressure GPU solve remains future work",
                 notes: "reduced pressure-split oracle and viewer comparison exist; full mixed finite-element pressure/displacement solve is not implemented yet",
             },
             Scene::WarpFemNonconformingContact => ScenePhysicsAudit {
@@ -2976,21 +2976,21 @@ impl Scene {
                 status: Partial,
                 reference_case: "Warp fem/example_stokes_transfer.py",
                 cpu_proof: "warp_fem_stokes_transfer_preserves_constant_field + warp_fem_stokes_transfer_linear_rotation_is_bounded + warp_fem_stokes_transfer_tracers_follow_velocity",
-                gpu_proof: "make test-fem-apic-gpu for reusable APIC/field-transfer GPU lanes; full Stokes-to-particle transfer GPU scene remains future work",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_apic_gpu for reusable APIC/field-transfer GPU lanes; full Stokes-to-particle transfer GPU scene remains future work",
                 notes: "reduced bilinear Stokes/FEM velocity-grid transfer drives tracers in the viewer; this is not yet a coupled FEM Stokes GPU transfer pipeline",
             },
             Scene::FemStokes | Scene::WarpFemKelvinHelmholtz => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "Stokes / Navier-Stokes PDE scenes",
                 cpu_proof: "fem_stokes / fem_ns_transient tests",
-                gpu_proof: "make test-fem-stokes-gpu / make test-fem-ns-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_stokes_gpu / make test-gpu P=molla-fem T=fem_ns_gpu",
                 notes: "lid-driven Stokes (Uzawa-CG) and Kelvin-Helmholtz (FEM Navier-Stokes step) run live PDE solvers",
             },
             Scene::WarpFemTaylorGreen | Scene::WarpFemStreamlines => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Warp fem/example_taylor_green.py / example_streamlines.py",
                 cpu_proof: "scene-build smoke only — these scenes evaluate a closed-form field; no PDE solver is invoked",
-                gpu_proof: "n/a for the analytic formulation; FEM Stokes/NS GPU lanes are make test-fem-stokes-gpu / make test-fem-ns-gpu",
+                gpu_proof: "n/a for the analytic formulation; FEM Stokes/NS GPU lanes are make test-gpu P=molla-fem T=fem_stokes_gpu / make test-gpu P=molla-fem T=fem_ns_gpu",
                 notes: "reduced analytic visualizations — Taylor-Green renders the closed-form Stokes decay envelope and streamlines advect tracers through an analytic vortex; neither runs a live FEM solve",
             },
             Scene::WarpFemConvDiff => ScenePhysicsAudit {
@@ -3004,7 +3004,7 @@ impl Scene {
                 status: Partial,
                 reference_case: "Warp fem/example_convection_diffusion_dg.py",
                 cpu_proof: "warp_fem_convdiff_dg_reduced_step_stays_bounded_and_monotone + warp_fem_convdiff_dg_limiter_clamps_overshoot",
-                gpu_proof: "make test-fem-dg-swe-gpu for reusable DG flux/limiter GPU lanes; scalar conv-diff DG GPU kernel remains future work",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_dg_swe_gpu for reusable DG flux/limiter GPU lanes; scalar conv-diff DG GPU kernel remains future work",
                 notes: "reduced DG-P0 advection-diffusion viewer scene separate from continuous SUPG scene; full DG convection-diffusion assembly/GPU parity remains future work",
             },
             Scene::WarpFemDeformedGeometry | Scene::WarpFemDistortion | Scene::WarpDistortion3D => {
@@ -3020,7 +3020,7 @@ impl Scene {
                 status: Complete,
                 reference_case: "DG Burgers/shallow-water",
                 cpu_proof: "fem_dg / fem_dg_advanced / fem_dg_v2 / fem_dg_v3 tests",
-                gpu_proof: "make test-fem-dg-swe-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_dg_swe_gpu",
                 notes: "DG scalar/SWE physics has CPU shock/dam-break oracles and GPU flux/limiter parity",
             },
             Scene::AmrHeat => ScenePhysicsAudit {
@@ -3160,7 +3160,7 @@ impl Scene {
                 status: Partial,
                 reference_case: "Warp NanoVDB / sparse-SDF lookup",
                 cpu_proof: "warp_nvdb_sparse_sdf_lookup_has_active_band_and_normals",
-                gpu_proof: "make test-sparse-grid-gpu",
+                gpu_proof: "make test-gpu P=molla-kernels T=sparse_grid_v4",
                 notes: "sparse-grid CPU/GPU lookup parity exists; this is not true NanoVDB file/brick-layout parity",
             },
             Scene::WarpTileNbody => ScenePhysicsAudit {
@@ -3174,14 +3174,14 @@ impl Scene {
                 status: Complete,
                 reference_case: "Warp tile FFT",
                 cpu_proof: "viewer host DFT readout + FFT CPU/GPU parity references",
-                gpu_proof: "make test-fft-gpu",
+                gpu_proof: "make test-gpu P=molla-kernels T=fft_gpu",
                 notes: "viewer pane uses host DFT for a tiny live readout; reusable GPU FFT is covered by the FFT GPU lane",
             },
             Scene::WarpTileMlp => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "Warp tile MLP",
                 cpu_proof: "MLP forward routed through tile_matmul CPU primitive",
-                gpu_proof: "make test-tile-primitives-gpu / make test-actuator-gpu",
+                gpu_proof: "make test-gpu P=molla-compute-primitives T=tile_primitives_gpu / make test-gpu P=molla-actuators T=actuator_pd_gpu",
                 notes: "tiny demo is CPU due dispatch overhead; reusable tiled GEMM and neural actuator GPU paths are covered",
             },
             Scene::WarpTileCholesky
@@ -3192,7 +3192,7 @@ impl Scene {
                 status: Complete,
                 reference_case: "Warp tile compute primitives",
                 cpu_proof: "molla-compute-primitives tests",
-                gpu_proof: "make test-tile-primitives-gpu",
+                gpu_proof: "make test-gpu P=molla-compute-primitives T=tile_primitives_gpu",
                 notes: "tiled Cholesky/filter/compaction/matmul/convolution have CPU oracles and explicit GPU parity",
             },
             Scene::WarpTileMcgp => ScenePhysicsAudit {
@@ -3207,7 +3207,7 @@ impl Scene {
                     status: Complete,
                     reference_case: "optimization/differentiable geometry",
                     cpu_proof: "autograd/optim/raycast-adjoint tests",
-                    gpu_proof: "make test-optim-gpu / make test-robust-loss-gpu where applicable",
+                    gpu_proof: "make test-gpu P=molla-kernels T=optim_gpu_parity / make test-gpu P=molla-kernels T=robust_loss_gpu where applicable",
                     notes: "reduced optimization demos have CPU gradient/optimizer oracles and explicit GPU optimizer/loss lanes",
                 }
             }
@@ -3215,35 +3215,35 @@ impl Scene {
                 status: Complete,
                 reference_case: "differentiable 3D Gaussian splat pose recovery",
                 cpu_proof: "splat SH/basis CPU pieces in kernel tests",
-                gpu_proof: "make test-splat-gpu / make test-splat-pose-gpu",
+                gpu_proof: "make test-gpu P=molla-kernels T=splat_raytrace_forward / make test-gpu P=molla-kernels T=splat_pose_recovery",
                 notes: "3DGS forward/backward/SH kernels and pose recovery have explicit GPU acceptance lanes",
             },
             Scene::WarpFftFluid | Scene::WarpFftPoisson2d => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "FFT Poisson / fractional-step fluid",
                 cpu_proof: "fft_ns_coupling analytic Poisson/Taylor-Green tests",
-                gpu_proof: "make test-fem-fft-ns-gpu / make test-fft-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fft_ns_coupling / make test-gpu P=molla-kernels T=fft_gpu",
                 notes: "GPU FFT pressure solve and fractional-step Taylor-Green decay have explicit parity gates",
             },
             Scene::WarpWave => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "FEM wave equation",
                 cpu_proof: "fem_wave tests",
-                gpu_proof: "make test-fem-wave-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_wave_gpu",
                 notes: "wave stepper has CPU oracle and GPU parity/nonzero-Dirichlet gates",
             },
             Scene::WarpApicFluid => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "APIC FEM/MPM transfer",
                 cpu_proof: "fem_apic tests",
-                gpu_proof: "make test-fem-apic-gpu",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_apic_gpu",
                 notes: "APIC transfer and falling-particle GPU parity are explicit; full fluid solve remains a higher-level coupling feature",
             },
             Scene::WarpStableFluid => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "Stam stable fluid",
                 cpu_proof: "stam_fluid tests",
-                gpu_proof: "CPU-owned reduced stable-fluid demo; spectral/NS GPU path covered by make test-fem-fft-ns-gpu",
+                gpu_proof: "CPU-owned reduced stable-fluid demo; spectral/NS GPU path covered by make test-gpu P=molla-fem T=fft_ns_coupling",
                 notes: "stable-fluid CPU solver has mass/source/force/diffusion/projection gates; GPU fluid acceleration is covered by the FFT/NS lane",
             },
             Scene::DiffsimDrone => ScenePhysicsAudit {
@@ -3257,14 +3257,14 @@ impl Scene {
                 status: Partial,
                 reference_case: "Warp optim/example_fluid_checkpoint.py",
                 cpu_proof: "fluid_checkpoint_bounds_saved_windows + fluid_checkpoint_optimization_reduces_loss + fluid_checkpoint_replay_is_deterministic",
-                gpu_proof: "make test-differentiable for checkpoint/autograd lanes; make test-fem-ns-gpu / make test-fft-gpu cover related forward fluid/PDE GPU paths",
+                gpu_proof: "make test-differentiable for checkpoint/autograd lanes; make test-gpu P=molla-fem T=fem_ns_gpu / make test-gpu P=molla-kernels T=fft_gpu cover related forward fluid/PDE GPU paths",
                 notes: "reduced scalar fluid-like checkpoint optimization exists; full GPU fluid adjoint/checkpoint replay remains future work",
             },
             Scene::NavierStokesPerturbationOptimization => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Warp optim/example_navier_stokes_perturbation.py",
                 cpu_proof: "ns_perturbation_parameter_changes_flow_response + ns_perturbation_gradient_matches_finite_difference + ns_perturbation_optimization_reduces_loss",
-                gpu_proof: "make test-fem-ns-gpu / make test-fem-fft-ns-gpu for related forward Navier-Stokes GPU lanes; reduced perturbation gradient remains CPU",
+                gpu_proof: "make test-gpu P=molla-fem T=fem_ns_gpu / make test-gpu P=molla-fem T=fft_ns_coupling for related forward Navier-Stokes GPU lanes; reduced perturbation gradient remains CPU",
                 notes: "reduced scalar perturbation optimizer over a procedural flow response; full GPU NS adjoint/perturbation optimization remains future work",
             },
         }
@@ -9755,7 +9755,9 @@ mod tests {
         let audit = Scene::IkCubeStacking.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-articulation-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-solvers T=articulation_gpu"),
             "cube stacking IK audit must name the existing GPU IK/articulation lane"
         );
         assert!(
@@ -10064,7 +10066,9 @@ mod tests {
         let audit = Scene::NavierStokesPerturbationOptimization.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-fem-ns-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-fem T=fem_ns_gpu"),
             "NS perturbation audit must name forward NS GPU lane"
         );
     }
@@ -10153,7 +10157,9 @@ mod tests {
         let audit = Scene::MpmBeamTwist.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-mpm-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-solvers T=mpm_gpu"),
             "MPM beam twist audit must name existing MPM GPU lanes"
         );
     }
@@ -10267,7 +10273,9 @@ mod tests {
         let audit = Scene::ClothRollers.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-vbd-cloth-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-solvers T=vbd_cloth_gpu"),
             "cloth rollers audit must name the forward cloth GPU lane"
         );
     }
@@ -10442,7 +10450,9 @@ mod tests {
             "hydro scene must name the force/moment reduction oracle"
         );
         assert!(
-            audit.gpu_proof.contains("make test-hydroelastic-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-kernels T=hydroelastic_gpu"),
             "hydro scene must point at the dedicated GPU hydroelastic target"
         );
         assert!(
@@ -10558,7 +10568,9 @@ mod tests {
         let audit = Scene::DiffsimCloth.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-vbd-cloth-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-solvers T=vbd_cloth_gpu"),
             "diffsim cloth audit must name the forward GPU cloth target"
         );
         assert!(
@@ -10642,7 +10654,9 @@ mod tests {
         let audit = Scene::DiffsimSoftBody.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-vbd-tets-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-solvers T=vbd_tets_gpu"),
             "diffsim softbody audit must name the forward GPU tet target"
         );
         assert!(
@@ -10747,7 +10761,9 @@ mod tests {
         let audit = Scene::WarpFemConvDiffDg.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-fem-dg-swe-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-fem T=fem_dg_swe_gpu"),
             "DG conv-diff scene must name the reusable DG GPU lane"
         );
         assert!(
@@ -10769,7 +10785,9 @@ mod tests {
         let audit = Scene::WarpFemMixedElasticity.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-fem-elasticity-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-fem T=fem_elasticity_gpu"),
             "mixed elasticity audit must name the reusable elasticity GPU lane"
         );
     }
@@ -10912,7 +10930,9 @@ mod tests {
         let audit = Scene::WarpFemStokesTransfer.physics_audit();
         assert_eq!(audit.status, PhysicsAuditStatus::Partial);
         assert!(
-            audit.gpu_proof.contains("make test-fem-apic-gpu"),
+            audit
+                .gpu_proof
+                .contains("make test-gpu P=molla-fem T=fem_apic_gpu"),
             "Stokes transfer audit must name the reusable APIC/transfer GPU lane"
         );
     }

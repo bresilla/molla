@@ -260,7 +260,7 @@ fn run_cpu_steps(model: &Model, n_steps: usize) -> Vec<Vec3> {
 /// the cloth and engage contacts. Asserts the cube doesn't free-fall
 /// past the cloth.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-vt-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_vt_contact_gpu"]
 fn gpu_small_jelly_rests_on_cloth() {
     let (model_in, cube_first, cube_total) = build_small_jelly_on_cloth();
     let (engine, model, s_a, s_b) =
@@ -294,7 +294,7 @@ fn gpu_small_jelly_rests_on_cloth() {
 /// both paths). For a contact-engaged comparison see the larger
 /// `gpu_jelly_rests_on_cloth_no_passthrough` smoke test below.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-vt-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_vt_contact_gpu"]
 fn gpu_vt_contacts_match_cpu_reference() {
     let (model_cpu, _, _) = build_small_jelly_on_cloth();
     let (model_gpu_in, _, _) = build_small_jelly_on_cloth();
@@ -335,7 +335,7 @@ fn gpu_vt_contacts_match_cpu_reference() {
 /// test on the GPU path — proves the live viewer scene rests instead
 /// of free-falling.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-vt-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_vt_contact_gpu"]
 fn gpu_jelly_rests_on_cloth_no_passthrough() {
     let (model_in, cube_first, cube_total) = build_jelly_drop_scene();
 

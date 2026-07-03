@@ -15,7 +15,7 @@
 //! the v1 `solve_steady_state_gpu` test uses.
 //!
 //! Marked `#[ignore]` because it needs a real wgpu adapter — run with
-//! `make test-fem-resident-cg-gpu`.
+//! `make test-gpu P=molla-fem T=fem_gpu_resident_cg`.
 //!
 //! Wall-clock telemetry is emitted via `eprintln!` for the post-stage
 //! summary (resident CG should beat per-iter readback by a healthy
@@ -48,7 +48,7 @@ fn assemble_stiffness(mesh: &FemMesh, alpha: Real) -> BsrMatrix {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-resident-cg-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu_resident_cg"]
 fn gpu_resident_cg_matches_cpu_and_streamed_paths() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -174,7 +174,7 @@ fn gpu_resident_cg_matches_cpu_and_streamed_paths() {
 /// run. Good for CI / first-pass validation when iterating on the
 /// CG kernel.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-resident-cg-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu_resident_cg"]
 fn gpu_resident_cg_matches_cpu_8_cube() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

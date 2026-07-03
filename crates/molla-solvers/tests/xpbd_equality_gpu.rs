@@ -1,7 +1,7 @@
 //! GPU equality-constraint projection — golden / parity tests for
 //! the WGSL `XpbdEqualityKernel` that replaced the host-side
 //! `apply_equality_post_gpu` shim. `#[ignore]` because they need a
-//! real wgpu adapter; run with `make test-equality-gpu`.
+//! real wgpu adapter; run with `make test-gpu P=molla-solvers T=xpbd_equality_gpu`.
 
 #![cfg(feature = "gpu")]
 
@@ -167,7 +167,7 @@ fn double_four_bar_closure_error(f: &DoubleFourBarFixture, q: &[Transform]) -> R
 /// body should hang directly under the anchor. The GPU equality
 /// kernel is what makes this work end-to-end on device.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-equality-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_equality_gpu"]
 fn gpu_connect_pins_two_bodies_under_gravity() {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
@@ -232,7 +232,7 @@ fn gpu_connect_pins_two_bodies_under_gravity() {
 
 /// Mirror of `weld_keeps_orientation_aligned`, GPU-driven.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-equality-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_equality_gpu"]
 fn gpu_weld_keeps_orientation_aligned() {
     let mut b = ModelBuilder::new();
     b.set_angular_damping(0.05);
@@ -314,7 +314,7 @@ fn gpu_weld_keeps_orientation_aligned() {
 /// linear velocity (the constraint snapped the position back, the
 /// recovery pass must reflect that as ≈ zero net displacement / dt).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-equality-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_equality_gpu"]
 fn gpu_equality_velocity_recovery_zeros_drift() {
     let mut b = ModelBuilder::new();
     let anchor = b.add_body(
@@ -381,7 +381,7 @@ fn gpu_equality_velocity_recovery_zeros_drift() {
 /// multi-loop closed-chain requirement tied to the WGSL equality kernel instead
 /// of only the host XPBD path.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-equality-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=xpbd_equality_gpu"]
 fn gpu_double_four_bar_shared_link_keeps_multi_loop_closure_bounded() {
     let mut fixture = build_double_four_bar_fixture();
     let engine =

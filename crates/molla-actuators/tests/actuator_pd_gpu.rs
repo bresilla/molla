@@ -1,6 +1,6 @@
 //! GPU PD / PID actuator — golden-value tests against hand-computed
 //! expectations. `#[ignore]` because they need a real wgpu adapter;
-//! run with `make test-actuator-gpu`.
+//! run with `make test-gpu P=molla-actuators T=actuator_pd_gpu`.
 
 #![cfg(feature = "gpu")]
 
@@ -77,7 +77,7 @@ fn read_force(engine: &Engine, control: &mut Control) -> Real {
 /// PD: effort = kp·(target_q - q) + kd·(target_qd - qd).
 /// q=0.0, qd=0.0, target=1.0 → effort = kp·1.0 = 50.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pd_gpu"]
 fn pd_basic_position_error() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -102,7 +102,7 @@ fn pd_basic_position_error() {
 /// PD: derivative term — q=0.0, qd=2.0, target=0.0, target_qd=0.0
 /// effort = 0 + kd·(0 - 2) = -10.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pd_gpu"]
 fn pd_velocity_error() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -125,7 +125,7 @@ fn pd_velocity_error() {
 
 /// PD: effort cap clamps a huge error.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pd_gpu"]
 fn pd_effort_cap_clamps() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -157,7 +157,7 @@ fn pd_effort_cap_clamps() {
 /// integral_max). With ki=10 → integral contributes 10·0.4 = 4.0.
 /// Plus kp=20·1.0 = 20. Total effort = 24.0 (no cap, no kd term).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pd_gpu"]
 fn pid_integral_accumulates() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");
@@ -189,7 +189,7 @@ fn pid_integral_accumulates() {
 /// persists. With integral_max=0.2, after 10 steps · dt=0.1 · err=1
 /// the raw integral would be 1.0, but clamp pins it at 0.2.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-actuator-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-actuators T=actuator_pd_gpu"]
 fn pid_anti_windup_clamp() {
     let (engine, model, mut state, mut control) =
         setup_one_joint().expect("GPU adapter required for this test (gated by #[ignore])");

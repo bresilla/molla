@@ -150,7 +150,7 @@ Status: **partial viewer scene added**. `Scene::NutBoltHydro` exists as the
 hydroelastic-audit variant of the procedural nut/bolt contact case. It reuses
 the asset-free socket/bolt/SDF-thread geometry and points at reduced
 hydroelastic patch oracles for penetration force growth and force/moment
-preservation, plus `make test-hydroelastic-gpu` for the GPU kernel lane.
+preservation, plus `make test-gpu P=molla-kernels T=hydroelastic_gpu` for the GPU kernel lane.
 Hydroelastic forces are not yet coupled into the live viewer solver, so this
 stays partial until the scene applies the distributed/anchored hydro contacts
 during simulation.
@@ -182,7 +182,7 @@ procedural pinned cloth patch using the existing cloth/VBD topology. The
 correctness proof is a reduced CPU differentiable oracle that checks a
 low-dimensional pinned-edge control gradient against finite differences and
 verifies optimization decreases loss. Forward GPU cloth coverage is named via
-`make test-vbd-cloth-gpu`; full cloth adjoints/GPU adjoints remain future work.
+`make test-gpu P=molla-solvers T=vbd_cloth_gpu`; full cloth adjoints/GPU adjoints remain future work.
 
 Add a reduced differentiable cloth viewer example, e.g. optimize pin positions,
 rest lengths, or a low-dimensional force/control vector to match a cloth target.
@@ -211,7 +211,7 @@ Status: **partial viewer scene added**. `Scene::DiffsimSoftBody` exists with a
 small procedural tetrahedral soft block. The correctness proof is a reduced CPU
 differentiable oracle for low-dimensional initial-velocity/material response:
 gradient matches finite differences and optimization decreases loss. Forward
-tet GPU coverage is named via `make test-vbd-tets-gpu`; full tet adjoints,
+tet GPU coverage is named via `make test-gpu P=molla-solvers T=vbd_tets_gpu`; full tet adjoints,
 material optimization, and GPU adjoints remain future work.
 
 Add a reduced differentiable tet-softbody scene, e.g. optimize material,
@@ -244,7 +244,7 @@ Status: **partial viewer scene added**. `Scene::WarpFemConvDiffDg` exists as a
 separate reduced DG-P0/FV advection-diffusion viewer scene, distinct from the
 continuous SUPG `WarpFemConvDiff` scene. It includes limiter telemetry and CPU
 tests for bounded/monotone behavior plus limiter clamping. The GPU audit points
-at reusable DG flux/limiter coverage through `make test-fem-dg-swe-gpu`; a
+at reusable DG flux/limiter coverage through `make test-gpu P=molla-fem T=fem_dg_swe_gpu`; a
 dedicated scalar convection-diffusion DG GPU kernel remains future work.
 
 Add a DG convection-diffusion viewer scene separate from the current continuous
@@ -275,7 +275,7 @@ as a reduced pressure/displacement split viewer scene comparing a
 displacement-only locking proxy against a mixed pressure proxy for
 near-incompressible material. CPU tests verify finite near-incompressible
 behavior and that the mixed response avoids the severe locking of the
-displacement-only proxy. GPU audit points at `make test-fem-elasticity-gpu` for
+displacement-only proxy. GPU audit points at `make test-gpu P=molla-fem T=fem_elasticity_gpu` for
 the existing displacement elasticity lane; full mixed pressure/displacement FE
 solve and GPU parity remain future work.
 
@@ -332,7 +332,7 @@ Status: **partial viewer scene added**. `Scene::WarpFemStokesTransfer` exists
 as a reduced Stokes/FEM velocity-grid transfer scene: a procedural bilinear
 velocity grid is sampled onto particle tracers, with constant-field,
 linear/rotational boundedness, and tracer-Euler-step CPU tests. The GPU audit
-names `make test-fem-apic-gpu` for the reusable APIC/field-transfer lane; a
+names `make test-gpu P=molla-fem T=fem_apic_gpu` for the reusable APIC/field-transfer lane; a
 full coupled Stokes-to-particle GPU transfer pipeline remains future work.
 
 Add a viewer scene for transferring a Stokes/FEM velocity field to particles or
@@ -361,7 +361,7 @@ reduced procedural pick/place scene: the existing GPU IK arm follows
 pick/lift/place waypoints while procedural cubes are shown stacking in the
 viewer. CPU tests cover waypoint reachability/audit linkage,
 finite/supporting stack layout, and honest obstacle-residual telemetry. The GPU audit names
-`make test-articulation-gpu` for the reusable GPU IK/articulation lane; full
+`make test-gpu P=molla-solvers T=articulation_gpu` for the reusable GPU IK/articulation lane; full
 gripper contact, coupled stack dynamics, and obstacle-aware IK objective parity
 remain future work.
 
@@ -393,7 +393,7 @@ procedural VBD cloth and three kinematic roller bodies. The viewer drives roller
 angular velocity and reports tangential surface speed/support-gap telemetry.
 CPU tests cover kinematic roller/cloth topology, the `ωr` surface-velocity
 oracle, and finite initial support gap. The GPU audit names
-`make test-vbd-cloth-gpu` for forward cloth; full frictional
+`make test-gpu P=molla-solvers T=vbd_cloth_gpu` for forward cloth; full frictional
 cloth/roller tangential-velocity coupling remains future solver-side work.
 
 Add a cloth-over-rollers scene using procedural kinematic cylinders.
@@ -420,7 +420,7 @@ Status: **partial viewer scene added**. `Scene::MpmBeamTwist` exists as a
 procedural twisted beam initialization over the current MPM runtime, with
 torsion-colored particles in the viewer. CPU tests cover bounded twist
 initialization, angle/color monotonicity, and audit honesty. Existing forward
-MPM GPU lanes are named through `make test-mpm-gpu` / `make test-mpm-v3-gpu`;
+MPM GPU lanes are named through `make test-gpu P=molla-solvers T=mpm_gpu` / `make test-gpu P=molla-solvers T=mpm_v3_gpu`;
 a dedicated torsional beam constitutive/material setup remains future work.
 
 Add a procedural MPM beam twist scene.
@@ -450,8 +450,8 @@ rollout checkpoints, optimizes a single source/control amplitude against a
 target field, and renders the optimized field versus target. CPU tests prove
 checkpoint count is bounded, replay is deterministic, and loss decreases.
 `make test-differentiable` is the named checkpoint/autograd verification lane;
-related forward fluid/PDE GPU coverage is named through `make test-fem-ns-gpu`
-and `make test-fft-gpu`. Full GPU fluid adjoint/checkpoint replay remains
+related forward fluid/PDE GPU coverage is named through `make test-gpu P=molla-fem T=fem_ns_gpu`
+and `make test-gpu P=molla-kernels T=fft_gpu`. Full GPU fluid adjoint/checkpoint replay remains
 future work.
 
 Add a reduced viewer example demonstrating checkpointed differentiable rollout
@@ -480,8 +480,8 @@ Status: **partial viewer scene added**.
 flow-response optimizer over a scalar perturbation amplitude. CPU tests prove
 the perturbation changes the flow response in the expected direction, the
 analytic scalar gradient matches finite differences, and optimization decreases
-loss. Forward Navier-Stokes GPU lanes are named through `make test-fem-ns-gpu`
-and `make test-fem-fft-ns-gpu`; full GPU NS adjoint/perturbation optimization
+loss. Forward Navier-Stokes GPU lanes are named through `make test-gpu P=molla-fem T=fem_ns_gpu`
+and `make test-gpu P=molla-fem T=fft_ns_coupling`; full GPU NS adjoint/perturbation optimization
 remains future work.
 
 Add a reduced NS perturbation optimization scene.

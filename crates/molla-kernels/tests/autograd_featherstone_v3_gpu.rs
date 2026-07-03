@@ -5,7 +5,7 @@
 //! stays fast. Run via:
 //!
 //! ```bash
-//! make test-autograd-featherstone-v3-gpu
+//! make test-gpu P=molla-kernels T=autograd_featherstone_v3_gpu
 //! # or:
 //! cargo test --release -p molla-kernels --features gpu --test autograd_featherstone_v3_gpu \
 //!   -- --ignored --nocapture

@@ -8,7 +8,7 @@
 //!
 //! Run with:
 //! ```sh
-//! make test-bsr-gpu
+//! make test-gpu P=molla-kernels T=bsr_gpu_parity
 //! ```
 //!
 //! A `GPU_LOCK` mutex serialises adapter ownership so the test binary

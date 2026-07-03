@@ -14,7 +14,7 @@
 //!      on the solution + PCG iters ≤ CG iters.
 //!
 //! Marked `#[ignore]` because they need a real wgpu adapter — run with
-//! `make test-fem-resident-pcg-gpu`.
+//! `make test-gpu P=molla-fem T=fem_gpu_resident_pcg`.
 
 #![cfg(feature = "gpu")]
 
@@ -73,7 +73,7 @@ fn build_heat_eq(nx: usize) -> (FemMesh, Vec<BoundaryCondition>, BsrMatrix, Vec<
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-resident-pcg-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu_resident_pcg"]
 fn pcg_matches_cg_and_takes_fewer_iters_16_cube() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -117,7 +117,7 @@ fn pcg_matches_cg_and_takes_fewer_iters_16_cube() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-fem-resident-pcg-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-fem T=fem_gpu_resident_pcg"]
 fn extract_diagonal_matches_cpu() {
     let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

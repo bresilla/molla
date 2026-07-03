@@ -194,7 +194,7 @@ fn run_cpu_steps(model: &Model, n_steps: usize) -> Vec<Vec3> {
 /// of measured sim time. GPU port of the CPU
 /// `coulomb_stick_below_threshold` test.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-friction-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_friction_gpu"]
 fn gpu_coulomb_stick_below_threshold() {
     let mu: Real = 0.5;
     let alpha: Real = 0.02;
@@ -255,7 +255,7 @@ fn gpu_coulomb_stick_below_threshold() {
 /// Block must slide far (> 50 mm). GPU port of the CPU
 /// `coulomb_slip_above_threshold` test.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-friction-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_friction_gpu"]
 fn gpu_coulomb_slip_above_threshold() {
     let mu: Real = 0.5;
     let alpha: Real = 1.5;
@@ -312,7 +312,7 @@ fn gpu_coulomb_slip_above_threshold() {
 /// Jacobi-vs-Gauss-Seidel differences past 5 mm even though both
 /// paths converge to the same rest configuration.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-friction-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_friction_gpu"]
 fn gpu_friction_matches_cpu_oracle() {
     let mu: Real = 0.5;
     let drop_height: Real = 0.001;
@@ -379,7 +379,7 @@ fn gpu_friction_matches_cpu_oracle() {
 /// (impulse-form normal-force estimate instead of `μ · g · dt` per
 /// substep) would tighten the bound to 5 mm.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-soft-friction-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=soft_friction_gpu"]
 fn gpu_soft_brake_matches_cpu() {
     let mut b = ModelBuilder::new();
     b.set_linear_damping(0.05);

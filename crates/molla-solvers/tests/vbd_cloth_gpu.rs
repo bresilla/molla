@@ -287,7 +287,7 @@ fn vbd_wraps_kinematic_sphere() {
 }
 
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-vbd-cloth-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-solvers T=vbd_cloth_gpu"]
 fn vbd_tracks_moving_kinematic_sphere_gpu() {
     let n = 9u32;
     let size = 1.1;

@@ -4,7 +4,7 @@
 //! real wgpu adapter — run via:
 //!
 //! ```bash
-//! make test-autograd-featherstone-gpu
+//! make test-gpu P=molla-kernels T=autograd_featherstone_gpu
 //! # or:
 //! cargo test -p molla-kernels --features gpu --test autograd_featherstone_gpu -- --ignored
 //! ```
@@ -39,7 +39,7 @@ const PARITY_TOL: Real = 1e-4;
 const FD_TO_CLOSED_FORM_SPEEDUP_BUDGET: f64 = 1.8;
 
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn pendulum_gpu_matches_cpu() {
     let chain = FeatherstoneRevoluteChain::pendulum(0.5, 1.0, 0.01, 8);
     let q0 = vec![0.2_f64];
@@ -49,7 +49,7 @@ fn pendulum_gpu_matches_cpu() {
 }
 
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn two_link_arm_gpu_matches_cpu() {
     let chain = FeatherstoneRevoluteChain::two_link_arm(0.5, 0.4, 1.0, 0.02, 6);
     let q0 = vec![0.4_f64, -0.3_f64];
@@ -59,7 +59,7 @@ fn two_link_arm_gpu_matches_cpu() {
 }
 
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn franka_6dof_gpu_matches_cpu() {
     let chain = FeatherstoneRevoluteChain::franka6(0.02, 5);
     let q0 = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -74,7 +74,7 @@ fn franka_6dof_gpu_matches_cpu() {
 /// per-step FD-on-RNEA); 23.1.1 ships the closed-form-vs-FD speedup
 /// bar instead.
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn franka_closed_form_beats_fd() {
     let chain = FeatherstoneRevoluteChain::franka6(0.005, 60);
     let q0 = vec![0.1_f64, -0.2, 0.15, -0.25, 0.05, 0.1];
@@ -148,7 +148,7 @@ fn franka_closed_form_beats_fd() {
 /// Spec's "Ball-joint gradient" DoD bullet — spherical pendulum
 /// dispatched through the GPU adjoint backend, parity vs CPU.
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn ball_joint_gpu_matches_cpu() {
     let chain = FeatherstoneRevoluteChain::spherical_pendulum(0.5, 1.0, 0.005, 5);
     let q0 = vec![0.1_f64, 0.05, -0.1];
@@ -160,7 +160,7 @@ fn ball_joint_gpu_matches_cpu() {
 /// Spec's "Free-joint gradient" DoD bullet — 6-DoF floating body
 /// dispatched through the GPU adjoint backend, parity vs CPU.
 #[test]
-#[ignore = "needs wgpu adapter — run via `make test-autograd-featherstone-gpu`"]
+#[ignore = "needs wgpu adapter — run via `make test-gpu P=molla-kernels T=autograd_featherstone_gpu`"]
 fn free_joint_gpu_matches_cpu() {
     let mut chain = FeatherstoneRevoluteChain::free_body(1.0, 0.05, 0.005, 4);
     chain.gravity = Vec3::ZERO;

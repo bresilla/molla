@@ -7,7 +7,7 @@
 //!
 //! Run with:
 //! ```sh
-//! make test-spgemm-symbolic-gpu
+//! make test-gpu P=molla-kernels T=spgemm_symbolic_gpu
 //! ```
 
 #![cfg(feature = "gpu")]

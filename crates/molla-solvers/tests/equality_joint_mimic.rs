@@ -530,7 +530,7 @@ fn build_mimic_model_gpu(poly: [Real; 5]) -> Model {
 
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-equality-joint-mimic-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=equality_joint_mimic`"]
 fn gpu_linear_mimic_matches_cpu_reference() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");
@@ -589,7 +589,7 @@ fn gpu_linear_mimic_matches_cpu_reference() {
 
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "needs a real wgpu adapter — run via `make test-equality-joint-mimic-gpu`"]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=equality_joint_mimic`"]
 fn gpu_quadratic_mimic_matches_cpu_reference() {
     let engine = Engine::new(Backend::AutoGpu)
         .expect("GPU adapter required for this test (gated by #[ignore])");

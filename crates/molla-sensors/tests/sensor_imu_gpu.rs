@@ -1,6 +1,6 @@
 //! GPU IMU sensor — golden-value tests against hand-computed
 //! expectations. `#[ignore]` because they need a real wgpu adapter;
-//! run with `make test-imu-gpu`.
+//! run with `make test-gpu P=molla-sensors T=sensor_imu_gpu`.
 
 #![cfg(feature = "gpu")]
 
@@ -25,7 +25,7 @@ fn setup(model: Model) -> Option<(Engine, Model, State)> {
 /// then read `-gravity` (gravity in molla's default world is -Y, so
 /// the sensor reads +9.81 along its local Y-axis with identity mount).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-imu-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_imu_gpu"]
 fn imu_at_rest_reads_minus_gravity() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 1.0, 0.0)));
@@ -72,7 +72,7 @@ fn imu_at_rest_reads_minus_gravity() {
 /// second; the finite-difference linear accel approaches `(0, -g, 0)`.
 /// Specific force = a - g = 0, so the accelerometer reads zero.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-imu-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_imu_gpu"]
 fn imu_in_free_fall_reads_zero() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 5.0, 0.0)));
@@ -125,7 +125,7 @@ fn imu_in_free_fall_reads_zero() {
 /// IMU mounted with a 90° rotation around Z reads the same magnitudes
 /// but on swapped axes — verifies the world→sensor frame transform.
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-imu-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_imu_gpu"]
 fn imu_local_rotation_swaps_axes() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 1.0, 0.0)));
@@ -165,7 +165,7 @@ fn imu_local_rotation_swaps_axes() {
 /// sensor frame. A body spinning at ω_world = (0, 1, 0) rad/s with
 /// identity sensor mount should read gyro = (0, 1, 0).
 #[test]
-#[ignore = "needs a real wgpu adapter — run via make test-imu-gpu"]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu P=molla-sensors T=sensor_imu_gpu"]
 fn imu_gyro_reads_body_angular_velocity() {
     let mut b = ModelBuilder::new();
     let body = b.add_body(BodyParams::new().with_position(Vec3::new(0.0, 1.0, 0.0)));
