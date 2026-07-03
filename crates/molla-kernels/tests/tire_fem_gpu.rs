@@ -4972,3 +4972,110 @@ fn tire_fem_atlas_forty_wheel_walltime() {
          ({realtime_factor:.3}x realtime)"
     );
 }
+
+/// F2a — resident wheel-spin DOF. `step_hub_persistent_spinning`
+/// integrates `(ω, θ)` in `hub_state[1].zw` on-device with exactly the
+/// `TetraTireFem::integrate_spin_dof` formula (soft-sign brake
+/// saturator); a host-side f32 mirror of that formula is the oracle.
+/// The plain (non-`_spinning`) entry point must pass the zw slots
+/// through untouched — the pre-F2a bit-compatibility guarantee.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_hub_spin_resident_matches_cpu_reference() {
+    use molla_vehicle::{TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+
+    let params = TetraTireFemParams::realtime_viewer();
+    let cpu_tire = TetraTireFem::new(0.0, 180_000.0, params);
+    let dt = 1.0 / 8_000.0_f32;
+    let gpu_input = tire_fem_gpu_input_from_tetra_fem(
+        &cpu_tire,
+        TireFemGpuParams {
+            dt,
+            ..Default::default()
+        },
+    );
+    let mesh_spin = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("spin mesh");
+    let mesh_plain = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("plain mesh");
+
+    let hub_params = TireFemHubParams {
+        dt,
+        bead_stiffness: params.bead_stiffness as f32,
+        bead_damping: params.bead_damping as f32,
+        hub_mass: params.hub_mass as f32,
+        hub_damping: 260.0,
+        downforce: params.downforce as f32,
+        gravity_y: -9.81,
+        hub_floor_active: 1.0,
+        hub_floor_y: (params.inner_radius * 0.75) as f32,
+        external_force_xyz: [0.0; 3],
+        lateral_damping: 80.0,
+    };
+    let spin = molla_kernels::TireFemHubSpinParams {
+        drive_torque_n_m: 120.0,
+        brake_torque_n_m: 30.0,
+        spin_inertia: 1.2,
+    };
+
+    // Seed both meshes: ω = 6 rad/s, θ = 0.25 rad.
+    kernel.write_hub_spin(&queue, &mesh_spin, 6.0, 0.25);
+    kernel.write_hub_spin(&queue, &mesh_plain, 6.0, 0.25);
+
+    // Host mirror of `integrate_spin_dof`, in f32 like the shader.
+    let mut omega_ref = 6.0_f32;
+    let mut angle_ref = 0.25_f32;
+    let inertia = spin.spin_inertia.max(1.0e-6);
+    let n_steps = 300;
+    for step in 0..n_steps {
+        kernel.step_hub_persistent_spinning(&device, &queue, &mesh_spin, hub_params, spin);
+        kernel.step_hub_persistent(&device, &queue, &mesh_plain, hub_params);
+
+        let brake_soft = omega_ref / (omega_ref.abs() + 0.5);
+        let alpha = (spin.drive_torque_n_m - spin.brake_torque_n_m * brake_soft) / inertia;
+        omega_ref += alpha * dt;
+        angle_ref += omega_ref * dt;
+
+        if step % 60 == 59 {
+            let hub = kernel
+                .readback_hub(&device, &queue, &mesh_spin)
+                .expect("readback spin");
+            let d_omega = (hub[6] - omega_ref).abs();
+            let d_angle = (hub[7] - angle_ref).abs();
+            eprintln!(
+                "step {step}: gpu (ω={:.6}, θ={:.6}) ref (ω={omega_ref:.6}, θ={angle_ref:.6})",
+                hub[6], hub[7]
+            );
+            assert!(
+                d_omega < 1.0e-4 * omega_ref.abs().max(1.0),
+                "step {step}: ω drift {d_omega}"
+            );
+            assert!(
+                d_angle < 1.0e-4 * angle_ref.abs().max(1.0),
+                "step {step}: θ drift {d_angle}"
+            );
+        }
+    }
+    // The spin must have accelerated under net positive torque
+    // (non-vacuous) …
+    assert!(omega_ref > 6.0, "reference did not accelerate");
+    // … and the plain entry point must have passed (ω, θ) through
+    // untouched across all 300 substeps.
+    let hub_plain = kernel
+        .readback_hub(&device, &queue, &mesh_plain)
+        .expect("readback plain");
+    assert_eq!(
+        (hub_plain[6], hub_plain[7]),
+        (6.0, 0.25),
+        "non-spinning entry point must not touch hub_state[1].zw"
+    );
+}

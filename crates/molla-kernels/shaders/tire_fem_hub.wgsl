@@ -20,7 +20,14 @@
 //    convention where only `net_contact_fx/fz` integrate `hub_v_xz`.
 //
 // `hub_state[0] = (hub_x, hub_y, hub_z, hub_v_y)`
-// `hub_state[1] = (hub_v_x, hub_v_z, _, _)`
+// `hub_state[1] = (hub_v_x, hub_v_z, hub_omega, hub_angle)`
+//
+// Spin DOF (F2a): when `spin.w > 0.5` the kernel integrates the wheel
+// spin on-device, mirroring `TetraTireFem::integrate_spin_dof`
+// exactly: `ω += (drive − brake·soft_sign(ω))/I · dt; θ += ω·dt` with
+// the ω/(|ω|+0.5) soft-sign saturator and NaN guards. When the flag is
+// 0 the zw slots pass through untouched (bit-compatible with the
+// pre-F2a host-integrated spin).
 
 const WG: u32 = 128u;
 
@@ -33,6 +40,9 @@ struct HubUniforms {
     load: vec4<f32>,
     // xyz=external hub force (N), w=lateral damping coefficient
     extf: vec4<f32>,
+    // x=drive torque (N·m), y=brake torque (N·m, ≥0),
+    // z=wheel spin inertia (kg·m²), w=spin-DOF active flag (1.0/0.0)
+    spin: vec4<f32>,
 };
 
 @group(0) @binding(0) var<storage, read>       bead_ids:     array<u32>;
@@ -137,7 +147,20 @@ fn integrate_hub(i: u32, extra_force: vec3<f32>) {
             }
         }
         hub_state[0u] = vec4<f32>(x_new, y_new, z_new, v_new_y);
-        hub_state[1u] = vec4<f32>(v_new_x, v_new_z, 0.0, 0.0);
+
+        // Spin DOF — resident when enabled, passthrough otherwise.
+        var omega = hub_v_xz.z;
+        var angle = hub_v_xz.w;
+        if (h.spin.w > 0.5) {
+            let inertia = max(h.spin.z, 1.0e-6);
+            let brake_soft = omega / (abs(omega) + 0.5);
+            let alpha = (h.spin.x - h.spin.y * brake_soft) / inertia;
+            omega = omega + alpha * dt;
+            if (!(omega == omega)) { omega = 0.0; }
+            angle = angle + omega * dt;
+            if (!(angle == angle)) { angle = 0.0; }
+        }
+        hub_state[1u] = vec4<f32>(v_new_x, v_new_z, omega, angle);
     }
 }
 

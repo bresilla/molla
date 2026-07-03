@@ -1109,6 +1109,21 @@ pub struct TireFemGpuKernel {
     hub_tread_layout_io: wgpu::BindGroupLayout,
 }
 
+/// F2a — on-device wheel-spin integration parameters for
+/// [`TireFemGpuKernel::step_hub_persistent_spinning`]. Mirrors
+/// `TetraTireFem::integrate_spin_dof` exactly (soft-sign brake
+/// saturator, NaN guards); `hub_state[1].zw` carries `(ω, θ)` and is
+/// passed through untouched by the non-`_spinning` entry points.
+#[derive(Copy, Clone, Debug)]
+pub struct TireFemHubSpinParams {
+    /// Commanded drive torque (N·m, signed).
+    pub drive_torque_n_m: f32,
+    /// Commanded brake torque magnitude (N·m, ≥ 0); always opposes ω.
+    pub brake_torque_n_m: f32,
+    /// Wheel moment of inertia about the spin axis (kg·m²).
+    pub spin_inertia: f32,
+}
+
 /// Hub-integration parameters consumed by `step_hub_persistent`.
 #[derive(Clone, Copy, Debug)]
 pub struct TireFemHubParams {
@@ -1348,6 +1363,8 @@ struct HubUniforms {
     mech: [f32; 4],
     load: [f32; 4],
     extf: [f32; 4],
+    /// F2a — (drive torque, brake torque, spin inertia, active flag).
+    spin: [f32; 4],
 }
 
 #[repr(C)]
@@ -5632,6 +5649,30 @@ impl TireFemGpuKernel {
         mesh: &TireFemPersistentMesh,
         params: TireFemHubParams,
     ) {
+        self.step_hub_persistent_impl(device, queue, mesh, params, None)
+    }
+
+    /// F2a — like [`Self::step_hub_persistent`] but with the wheel
+    /// spin DOF integrated on-device (see [`TireFemHubSpinParams`]).
+    pub fn step_hub_persistent_spinning(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        params: TireFemHubParams,
+        spin: TireFemHubSpinParams,
+    ) {
+        self.step_hub_persistent_impl(device, queue, mesh, params, Some(spin))
+    }
+
+    fn step_hub_persistent_impl(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        params: TireFemHubParams,
+        spin: Option<TireFemHubSpinParams>,
+    ) {
         if mesh.n_bead == 0 {
             return;
         }
@@ -5655,6 +5696,16 @@ impl TireFemGpuKernel {
                 params.external_force_xyz[2],
                 params.lateral_damping,
             ],
+            spin: spin
+                .map(|sp| {
+                    [
+                        sp.drive_torque_n_m,
+                        sp.brake_torque_n_m,
+                        sp.spin_inertia,
+                        1.0,
+                    ]
+                })
+                .unwrap_or([0.0; 4]),
         };
         queue.write_buffer(&mesh.hub_uniform_buf, 0, bytemuck::bytes_of(&hub_u));
 
@@ -5706,6 +5757,52 @@ impl TireFemGpuKernel {
         tread_forces: &wgpu::Buffer,
         force_row_count: u32,
     ) {
+        self.step_hub_persistent_with_tread_forces_impl(
+            device,
+            queue,
+            mesh,
+            params,
+            tread_forces,
+            force_row_count,
+            None,
+        )
+    }
+
+    /// F2a — like [`Self::step_hub_persistent_with_tread_forces`] but
+    /// with the wheel spin DOF integrated on-device.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_hub_persistent_with_tread_forces_spinning(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        params: TireFemHubParams,
+        tread_forces: &wgpu::Buffer,
+        force_row_count: u32,
+        spin: TireFemHubSpinParams,
+    ) {
+        self.step_hub_persistent_with_tread_forces_impl(
+            device,
+            queue,
+            mesh,
+            params,
+            tread_forces,
+            force_row_count,
+            Some(spin),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn step_hub_persistent_with_tread_forces_impl(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        params: TireFemHubParams,
+        tread_forces: &wgpu::Buffer,
+        force_row_count: u32,
+        spin: Option<TireFemHubSpinParams>,
+    ) {
         if mesh.n_bead == 0 {
             return;
         }
@@ -5734,6 +5831,16 @@ impl TireFemGpuKernel {
                 params.external_force_xyz[2],
                 params.lateral_damping,
             ],
+            spin: spin
+                .map(|sp| {
+                    [
+                        sp.drive_torque_n_m,
+                        sp.brake_torque_n_m,
+                        sp.spin_inertia,
+                        1.0,
+                    ]
+                })
+                .unwrap_or([0.0; 4]),
         };
         queue.write_buffer(&mesh.hub_uniform_buf, 0, bytemuck::bytes_of(&hub_u));
 
@@ -5794,6 +5901,24 @@ impl TireFemGpuKernel {
     /// Stage (f) ext — read back the 3-DOF hub state. Returns
     /// `(x, y, z, v_y, v_x, v_z, _, _)` matching `hub_state` slots [0]
     /// and [1].
+    /// F2a — seed the resident spin state: `hub_state[1].zw = (ω, θ)`.
+    /// GPU analogue of `TetraTireFem::set_hub_spin` (vehicles hand
+    /// wheels over at road speed). The xy slots (hub XZ velocity) are
+    /// left untouched.
+    pub fn write_hub_spin(
+        &self,
+        queue: &wgpu::Queue,
+        mesh: &TireFemPersistentMesh,
+        omega: f32,
+        angle: f32,
+    ) {
+        queue.write_buffer(
+            &mesh.hub_state_buf,
+            24,
+            bytemuck::cast_slice(&[omega, angle]),
+        );
+    }
+
     pub fn readback_hub(
         &self,
         device: &wgpu::Device,
