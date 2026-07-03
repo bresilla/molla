@@ -1097,6 +1097,9 @@ pub struct TireFemGpuKernel {
     // from GPU-resident FEM contact-feedback per-node force rows.
     atlas_hub_params_from_feedback_pipeline: wgpu::ComputePipeline,
     atlas_hub_params_from_feedback_layout_io: wgpu::BindGroupLayout,
+    // F2b — fused-atlas contact-feedback (bristle) stage.
+    atlas_feedback_pipeline: wgpu::ComputePipeline,
+    atlas_feedback_layout_io: wgpu::BindGroupLayout,
     // Stage (f) — secondary pipeline that reduces bead reactions and
     // integrates the 1-DOF hub on the GPU between substeps.
     hub_pipeline: wgpu::ComputePipeline,
@@ -1122,6 +1125,56 @@ pub struct TireFemHubSpinParams {
     pub brake_torque_n_m: f32,
     /// Wheel moment of inertia about the spin axis (kg·m²).
     pub spin_inertia: f32,
+}
+
+/// F2b — per-tire parameters for the fused-atlas contact-feedback
+/// stage ([`TireFemGpuKernel::step_resident_atlas_feedback`]). Flat
+/// ground v1 — the per-tire scalar subset of
+/// [`TireFemContactFeedbackParams`]; ω comes from the resident hub
+/// rows when the dispatch runs with `use_resident_spin`.
+#[derive(Copy, Clone, Debug)]
+pub struct TireFemAtlasFeedbackParams {
+    pub dt: f32,
+    pub contact_band: f32,
+    pub ground_y: f32,
+    pub rolling_radius: f32,
+    pub normal_load_per_tread: f32,
+    pub area_per_tread: f32,
+    pub tread_shear_stiffness: f32,
+    pub bristle_damping: f32,
+    pub mu_static: f32,
+    pub mu_dynamic: f32,
+    pub cohesion: f32,
+    pub bristle_relax_rate: f32,
+    pub heading: [f32; 3],
+    /// Wheel spin (rad/s) — read only when the dispatch is NOT in
+    /// resident-spin mode.
+    pub omega: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct TireFemGpuAtlasFeedbackParamRow {
+    p0: [f32; 4],
+    p1: [f32; 4],
+    p2: [f32; 4],
+    p3: [f32; 4],
+}
+
+fn tire_fem_gpu_atlas_feedback_param_row(
+    p: TireFemAtlasFeedbackParams,
+) -> TireFemGpuAtlasFeedbackParamRow {
+    TireFemGpuAtlasFeedbackParamRow {
+        p0: [p.dt, p.contact_band, p.ground_y, p.rolling_radius],
+        p1: [
+            p.normal_load_per_tread,
+            p.area_per_tread,
+            p.tread_shear_stiffness,
+            p.bristle_damping,
+        ],
+        p2: [p.mu_static, p.mu_dynamic, p.cohesion, p.bristle_relax_rate],
+        p3: [p.heading[0], p.heading[1], p.heading[2], p.omega],
+    }
 }
 
 /// Hub-integration parameters consumed by `step_hub_persistent`.
@@ -1270,15 +1323,39 @@ pub fn tire_fem_hub_params_with_feedback_output(
 }
 
 fn tire_fem_gpu_atlas_hub_param_row(params: TireFemHubParams) -> TireFemGpuAtlasHubParamRow {
+    tire_fem_gpu_atlas_hub_param_row_with_spin(params, None)
+}
+
+/// F2b — atlas hub-param row with the resident spin DOF enabled.
+/// `cfg.x` carries the spin inertia (> 0 activates on-device ω/θ
+/// integration in `hub_reduce_atlas`); `load.zw` carry drive/brake.
+fn tire_fem_gpu_atlas_hub_param_row_with_spin(
+    params: TireFemHubParams,
+    spin: Option<TireFemHubSpinParams>,
+) -> TireFemGpuAtlasHubParamRow {
+    let (inertia, drive, brake) = spin
+        .map(|sp| {
+            (
+                sp.spin_inertia.max(1.0e-6),
+                sp.drive_torque_n_m,
+                sp.brake_torque_n_m,
+            )
+        })
+        .unwrap_or((0.0, 0.0, 0.0));
     TireFemGpuAtlasHubParamRow {
-        cfg: [0.0, params.hub_floor_active, params.hub_floor_y, params.dt],
+        cfg: [
+            inertia,
+            params.hub_floor_active,
+            params.hub_floor_y,
+            params.dt,
+        ],
         mech: [
             params.bead_stiffness,
             params.bead_damping,
             params.hub_mass,
             params.hub_damping,
         ],
-        load: [params.downforce, params.gravity_y, 0.0, 0.0],
+        load: [params.downforce, params.gravity_y, drive, brake],
         extf: [
             params.external_force_xyz[0],
             params.external_force_xyz[1],
@@ -1507,6 +1584,15 @@ pub struct TireFemGpuAtlasBatch {
     atlas_offset_rows_buf: wgpu::Buffer,
     hub_state_buf: wgpu::Buffer,
     atlas_hub_param_rows_buf: wgpu::Buffer,
+    // F2b — retained for the fused feedback stage's bind group.
+    mass_buf: wgpu::Buffer,
+    tread_id_buf: wgpu::Buffer,
+    node_tire_buf: wgpu::Buffer,
+    fb_param_rows_buf: wgpu::Buffer,
+    fb_bristle_a: wgpu::Buffer,
+    fb_bristle_b: wgpu::Buffer,
+    fb_forces_buf: wgpu::Buffer,
+    fb_parity: bool,
     bg_a_to_b: wgpu::BindGroup,
     bg_b_to_a: wgpu::BindGroup,
     atlas_hub_bg_a: wgpu::BindGroup,
@@ -1517,6 +1603,13 @@ pub struct TireFemGpuAtlasBatch {
 impl TireFemGpuAtlasBatch {
     pub fn tire_count(&self) -> usize {
         self.atlas.layout.plan.tire_count
+    }
+
+    /// F2b — the packed per-tire hub-state buffer (2 vec4 rows per
+    /// tire, same layout as the single-tire `hub_state`). Exposed for
+    /// spin seeding and diagnostics.
+    pub fn hub_state_buffer(&self) -> &wgpu::Buffer {
+        &self.hub_state_buf
     }
 
     pub fn total_node_count(&self) -> usize {
@@ -3525,6 +3618,46 @@ impl TireFemGpuKernel {
                 cache: None,
             });
 
+        // F2b — fused-atlas contact feedback (one dispatch, all tires).
+        let atlas_feedback_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::tire_fem_atlas_feedback"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/tire_fem_atlas_feedback.wgsl").into(),
+            ),
+        });
+        let atlas_feedback_layout_io =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("molla::tire_fem_atlas_feedback io"),
+                entries: &[
+                    storage_entry(0, true),  // pos_in
+                    storage_entry(1, false), // vel_inout
+                    storage_entry(2, true),  // mass_in
+                    storage_entry(3, true),  // tread_ids
+                    storage_entry(4, true),  // node_tire_indices
+                    storage_entry(5, true),  // offset rows
+                    storage_entry(6, true),  // feedback param rows
+                    storage_entry(7, true),  // bristle in
+                    storage_entry(8, false), // bristle out
+                    storage_entry(9, false), // force rows out
+                    storage_entry(10, true), // hub state (resident spin)
+                ],
+            });
+        let atlas_feedback_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("molla::tire_fem_atlas_feedback pipeline layout"),
+                bind_group_layouts: &[&atlas_feedback_layout_io, &layout_uniforms],
+                push_constant_ranges: &[],
+            });
+        let atlas_feedback_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::tire_fem_atlas_feedback::atlas_contact_feedback"),
+                layout: Some(&atlas_feedback_pipeline_layout),
+                module: &atlas_feedback_module,
+                entry_point: Some("atlas_contact_feedback"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
         // Stage (f) — hub reduction pipeline.
         let hub_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::tire_fem_hub"),
@@ -3611,6 +3744,8 @@ impl TireFemGpuKernel {
             atlas_hub_params_from_contact_layout_io,
             atlas_hub_params_from_feedback_pipeline,
             atlas_hub_params_from_feedback_layout_io,
+            atlas_feedback_pipeline,
+            atlas_feedback_layout_io,
             hub_pipeline,
             hub_layout_io,
             hub_layout_uniforms,
@@ -5619,6 +5754,34 @@ impl TireFemGpuKernel {
             ],
         });
 
+        // F2b — fused feedback stage state: per-tire param rows,
+        // ping-pong bristles (one row per atlas tread entry), and the
+        // per-node force rows consumed by the hub-param bridge.
+        let usage_rw_src = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+        let tire_count = atlas.layout.plan.tire_count;
+        let total_nodes = atlas.layout.plan.total_node_count;
+        let total_treads = atlas.tread_ids.len();
+        let fb_param_rows_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_atlas feedback param rows"),
+            size: (tire_count.max(1) * core::mem::size_of::<TireFemGpuAtlasFeedbackParamRow>())
+                as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mk_fb = |label: &str, len: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+                usage: usage_rw_src,
+                mapped_at_creation: false,
+            })
+        };
+        let fb_bristle_a = mk_fb("tire_fem_atlas feedback bristles a", total_treads);
+        let fb_bristle_b = mk_fb("tire_fem_atlas feedback bristles b", total_treads);
+        let fb_forces_buf = mk_fb("tire_fem_atlas feedback force rows", total_nodes);
+
         Ok(TireFemGpuAtlasBatch {
             atlas,
             pos_a,
@@ -5630,6 +5793,14 @@ impl TireFemGpuKernel {
             atlas_offset_rows_buf: offset_rows_buf,
             hub_state_buf,
             atlas_hub_param_rows_buf,
+            mass_buf,
+            tread_id_buf,
+            node_tire_buf,
+            fb_param_rows_buf,
+            fb_bristle_a,
+            fb_bristle_b,
+            fb_forces_buf,
+            fb_parity: false,
             bg_a_to_b,
             bg_b_to_a,
             atlas_hub_bg_a,
@@ -5958,6 +6129,59 @@ impl TireFemGpuKernel {
         Ok(out)
     }
 
+    /// F2b — read one tire's packed hub rows out of a fused atlas
+    /// batch (same 8-float layout as [`Self::readback_hub`]).
+    pub fn readback_atlas_hub(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &TireFemGpuAtlasBatch,
+        tire: usize,
+    ) -> Result<[f32; 8]> {
+        if tire >= batch.atlas.layout.plan.tire_count {
+            return Err(Error::Solver(format!(
+                "tire_fem atlas hub readback: tire {tire} out of range"
+            )));
+        }
+        let bytes = (8 * core::mem::size_of::<f32>()) as u64;
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem atlas hub readback stage"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_fem atlas hub readback"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &batch.hub_state_buf,
+            (tire as u64) * bytes,
+            &stage,
+            0,
+            bytes,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = stage.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<()>>();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            sender
+                .send(r.map_err(|e| Error::Gpu(format!("atlas hub readback: {e:?}"))))
+                .ok();
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("atlas hub readback poll: {e:?}")))?;
+        receiver
+            .recv()
+            .map_err(|e| Error::Gpu(format!("atlas hub readback recv: {e:?}")))??;
+        let data = slice.get_mapped_range();
+        let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        let out: [f32; 8] = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]];
+        drop(data);
+        stage.unmap();
+        Ok(out)
+    }
+
     /// Stage (f) — overwrite the GPU-resident 3-DOF hub state.
     pub fn upload_hub(&self, queue: &wgpu::Queue, mesh: &TireFemPersistentMesh, hub: [f32; 8]) {
         queue.write_buffer(&mesh.hub_state_buf, 0, bytemuck::bytes_of(&hub));
@@ -6208,6 +6432,190 @@ impl TireFemGpuKernel {
             };
             pass.set_bind_group(0, bg, &[]);
             pass.dispatch_workgroups(tire_count as u32, 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// F2b — fused-atlas contact-feedback stage: one dispatch runs the
+    /// bristle/friction physics for every tire in the batch against the
+    /// CURRENT atlas position/velocity slots. Velocities are updated in
+    /// place; per-node XZ force rows land in the batch's feedback-force
+    /// buffer for [`Self::update_resident_atlas_hub_params_from_feedback_forces_with_spin`].
+    /// With `use_resident_spin` the wheel ω is read live from the packed
+    /// hub rows (enable the spin DOF via the hub-param spin fields), so
+    /// the whole loop needs no per-substep host values.
+    ///
+    /// Call AFTER [`Self::step_resident_atlas_batch`] each substep.
+    pub fn step_resident_atlas_feedback(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &mut TireFemGpuAtlasBatch,
+        params: &[TireFemAtlasFeedbackParams],
+        use_resident_spin: bool,
+    ) -> Result<()> {
+        let tire_count = batch.atlas.layout.plan.tire_count;
+        if params.len() != tire_count {
+            return Err(Error::Solver(format!(
+                "tire_fem atlas feedback: params length {} must match tire count {tire_count}",
+                params.len()
+            )));
+        }
+        if tire_count == 0 {
+            return Ok(());
+        }
+        let rows = params
+            .iter()
+            .copied()
+            .map(tire_fem_gpu_atlas_feedback_param_row)
+            .collect::<Vec<_>>();
+        queue.write_buffer(&batch.fb_param_rows_buf, 0, bytemuck::cast_slice(&rows));
+
+        let total_nodes = batch.atlas.layout.plan.total_node_count as u32;
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_atlas feedback uniforms"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &uniforms,
+            0,
+            bytemuck::cast_slice(&[total_nodes, u32::from(use_resident_spin), 0, 0]),
+        );
+        // Current node slots: `step_resident_atlas_batch` flips parity
+        // after writing, so parity==true means the fresh data is in b.
+        let (pos, vel) = if batch.parity {
+            (&batch.pos_b, &batch.vel_b)
+        } else {
+            (&batch.pos_a, &batch.vel_a)
+        };
+        let (bristle_in, bristle_out) = if batch.fb_parity {
+            (&batch.fb_bristle_b, &batch.fb_bristle_a)
+        } else {
+            (&batch.fb_bristle_a, &batch.fb_bristle_b)
+        };
+        let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_atlas feedback io bg"),
+            layout: &self.atlas_feedback_layout_io,
+            entries: &[
+                entry(0, pos),
+                entry(1, vel),
+                entry(2, &batch.mass_buf),
+                entry(3, &batch.tread_id_buf),
+                entry(4, &batch.node_tire_buf),
+                entry(5, &batch.atlas_offset_rows_buf),
+                entry(6, &batch.fb_param_rows_buf),
+                entry(7, bristle_in),
+                entry(8, bristle_out),
+                entry(9, &batch.fb_forces_buf),
+                entry(10, &batch.hub_state_buf),
+            ],
+        });
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_atlas feedback uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[entry(0, &uniforms)],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_fem_atlas feedback encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::tire_fem_atlas feedback pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.atlas_feedback_pipeline);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_uniforms, &[]);
+            pass.dispatch_workgroups(total_nodes.div_ceil(64), 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        batch.fb_parity = !batch.fb_parity;
+        Ok(())
+    }
+
+    /// F2b — write spin-aware hub-param rows, then fold the fused
+    /// feedback stage's force rows into each tire's `extf` on-device
+    /// (same bridge pipeline as
+    /// [`Self::update_resident_atlas_hub_params_from_feedback_output`]).
+    /// Follow with [`Self::step_resident_atlas_hubs_with_resident_params`].
+    pub fn update_resident_atlas_hub_params_from_feedback_forces_with_spin(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &TireFemGpuAtlasBatch,
+        base_hub_params: &[TireFemHubParams],
+        spins: &[TireFemHubSpinParams],
+        force_scale: f32,
+    ) -> Result<()> {
+        let tire_count = batch.atlas.layout.plan.tire_count;
+        if base_hub_params.len() != tire_count || spins.len() != tire_count {
+            return Err(Error::Solver(format!(
+                "tire_fem atlas feedback hub params: params {} / spins {} must match tire count {tire_count}",
+                base_hub_params.len(),
+                spins.len()
+            )));
+        }
+        if tire_count == 0 {
+            return Ok(());
+        }
+        let rows = base_hub_params
+            .iter()
+            .zip(spins.iter())
+            .map(|(p, sp)| tire_fem_gpu_atlas_hub_param_row_with_spin(*p, Some(*sp)))
+            .collect::<Vec<_>>();
+        queue.write_buffer(
+            &batch.atlas_hub_param_rows_buf,
+            0,
+            bytemuck::cast_slice(&rows),
+        );
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_atlas feedback-force-to-hub-param uniforms"),
+            size: core::mem::size_of::<BrushHubUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &uniforms,
+            0,
+            bytemuck::bytes_of(&BrushHubUniforms {
+                counts: [tire_count as u32, 0, 0, 0],
+                params: [
+                    finite_f32_or(force_scale, 1.0).clamp(-10.0, 10.0),
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            }),
+        );
+        let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_atlas feedback-force-to-hub-param io bg"),
+            layout: &self.atlas_hub_params_from_feedback_layout_io,
+            entries: &[
+                entry(43, &batch.atlas_offset_rows_buf),
+                entry(46, &batch.atlas_hub_param_rows_buf),
+                entry(48, &batch.fb_forces_buf),
+            ],
+        });
+        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::tire_fem_atlas feedback-force-to-hub-param uniforms bg"),
+            layout: &self.layout_uniforms,
+            entries: &[entry(0, &uniforms)],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_fem_atlas feedback-force-to-hub-param encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::tire_fem_atlas feedback-force-to-hub-param pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.atlas_hub_params_from_feedback_pipeline);
+            pass.set_bind_group(0, &bg_io, &[]);
+            pass.set_bind_group(1, &bg_uniforms, &[]);
+            pass.dispatch_workgroups((tire_count as u32).div_ceil(64), 1, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())

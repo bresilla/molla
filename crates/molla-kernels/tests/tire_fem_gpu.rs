@@ -5298,3 +5298,366 @@ fn tire_fem_autonomous_resident_loop_matches_host_bridged_spin() {
     // Non-vacuous: spin accelerated under drive torque.
     assert!(omega_ref > omega0);
 }
+
+/// F2b — the fused-atlas bristle stage. Oracle: a tire_count=1 atlas
+/// running the fully fused autonomous loop
+/// (`step_resident_atlas_batch → step_resident_atlas_feedback →
+/// feedback-force hub bridge → step_resident_atlas_hubs_with_resident_params`)
+/// against the per-tire fully autonomous resident chain proven
+/// bit-exact earlier. The node pipelines differ (atlas contract vs
+/// per-tire persistent) and the hub wrench is folded via `extf`
+/// instead of an in-kernel reduction, so the gate is tight-tolerance
+/// rather than bitwise.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_atlas_feedback_single_tire_matches_per_tire_chain() {
+    use molla_vehicle::{SurfaceMaterial, TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+    let feedback_kernel = TireFemContactFeedbackKernel::new(&device);
+
+    let params = TetraTireFemParams {
+        surface_material: SurfaceMaterial {
+            mu_static: 1.0,
+            mu_dynamic: 0.85,
+            bristle_damping: 5.0e4,
+            rolling_resistance: 0.0,
+            cohesion: 0.0,
+        },
+        ..TetraTireFemParams::realtime_viewer()
+    };
+    let mut cpu_tire = TetraTireFem::new(0.0, 180_000.0, params);
+    let dt = 1.0 / 8_000.0;
+    let terrain = molla_vehicle::terrain::FlatTerrain::new(0.0, 1.0);
+    cpu_tire.set_hub_kinematic([0.0, params.outer_radius * 0.982, 0.0], [0.0; 3]);
+    for _ in 0..1_600 {
+        cpu_tire.step_on_terrain(&terrain, dt);
+    }
+    cpu_tire.set_hub_dynamic();
+    for _ in 0..6_400 {
+        cpu_tire.step_on_terrain(&terrain, dt);
+    }
+
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        semi_implicit_stiffness_scale: params.semi_implicit_stiffness_scale as f32,
+        ..Default::default()
+    };
+    let gpu_input = tire_fem_gpu_input_from_tetra_fem(&cpu_tire, base_gpu_params);
+    let node_params = gpu_input.params;
+    let n_nodes = gpu_input.positions.len() as u32;
+    let tread_n = gpu_input.tread_ids.len();
+
+    // ── Per-tire autonomous chain (the proven reference).
+    let mut mesh_ref = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("ref mesh");
+    let mut fb_ref = feedback_kernel
+        .create_resident(&device, &queue, &mesh_ref, &vec![[0.0_f32; 4]; tread_n])
+        .expect("ref contact state");
+
+    // ── Single-tire fused atlas chain.
+    let inputs = vec![gpu_input.clone()];
+    let mut batch = kernel
+        .create_resident_atlas_batch(&device, &queue, &inputs)
+        .expect("atlas batch");
+
+    let hub_params = TireFemHubParams {
+        dt: dt as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        bead_damping: params.bead_damping as f32,
+        hub_mass: params.hub_mass as f32,
+        hub_damping: 260.0,
+        downforce: params.downforce as f32,
+        gravity_y: -9.81,
+        hub_floor_active: 1.0,
+        hub_floor_y: (params.inner_radius * 0.75) as f32,
+        external_force_xyz: [0.0; 3],
+        lateral_damping: 80.0,
+    };
+    let spin = molla_kernels::TireFemHubSpinParams {
+        drive_torque_n_m: 120.0,
+        brake_torque_n_m: 0.0,
+        spin_inertia: 1.2,
+    };
+    let fb_atlas = molla_kernels::TireFemAtlasFeedbackParams {
+        dt: dt as f32,
+        contact_band: 0.012,
+        ground_y: 0.0,
+        rolling_radius: params.outer_radius as f32,
+        normal_load_per_tread: (params.downforce / 12.0) as f32,
+        area_per_tread: node_params.pressure_area_per_tread_node,
+        tread_shear_stiffness: params.tread_shear_stiffness as f32,
+        bristle_damping: 5.0e4,
+        mu_static: 1.0,
+        mu_dynamic: 0.85,
+        cohesion: 0.0,
+        bristle_relax_rate: params.bristle_relax_rate as f32,
+        heading: [1.0, 0.0, 0.0],
+        omega: 0.0,
+    };
+    let fb_per_tire = TireFemContactFeedbackParams {
+        dt: dt as f32,
+        contact_band: 0.012,
+        ground_y: 0.0,
+        omega: 0.0,
+        hub: [0.0, (params.outer_radius * 0.982) as f32, 0.0],
+        hub_vel: [0.0; 3],
+        heading: [1.0, 0.0, 0.0],
+        rolling_radius: params.outer_radius as f32,
+        normal_load_per_tread: (params.downforce / 12.0) as f32,
+        area_per_tread: node_params.pressure_area_per_tread_node,
+        tread_shear_stiffness: params.tread_shear_stiffness as f32,
+        mu_static: 1.0,
+        mu_dynamic: 0.85,
+        bristle_damping: 5.0e4,
+        cohesion: 0.0,
+        bristle_relax_rate: params.bristle_relax_rate as f32,
+    };
+
+    let omega0 = 6.0_f32;
+    kernel.write_hub_spin(&queue, &mesh_ref, omega0, 0.0);
+    // Atlas hub rows: same seed, via a direct hub-state write (rows
+    // are packed 2-per-tire; tire 0 row 1 zw).
+    queue.write_buffer(
+        batch.hub_state_buffer(),
+        24,
+        bytemuck::cast_slice(&[omega0, 0.0_f32]),
+    );
+
+    let step_params = vec![node_params];
+    let hub_rows = vec![hub_params];
+    let spins = vec![spin];
+    for step in 0..96 {
+        // Per-tire reference.
+        kernel.step_persistent(&device, &queue, &mut mesh_ref, node_params);
+        feedback_kernel
+            .dispatch_resident(&device, &queue, &mesh_ref, &mut fb_ref, fb_per_tire, true)
+            .expect("ref feedback");
+        kernel.step_hub_persistent_with_tread_forces_spinning(
+            &device,
+            &queue,
+            &mesh_ref,
+            hub_params,
+            fb_ref.force_rows(),
+            n_nodes,
+            spin,
+        );
+
+        // Fused atlas chain.
+        kernel
+            .step_resident_atlas_batch(&device, &queue, &mut batch, &step_params)
+            .expect("atlas nodes");
+        kernel
+            .step_resident_atlas_feedback(&device, &queue, &mut batch, &[fb_atlas], true)
+            .expect("atlas feedback");
+        kernel
+            .update_resident_atlas_hub_params_from_feedback_forces_with_spin(
+                &device, &queue, &batch, &hub_rows, &spins, 1.0,
+            )
+            .expect("atlas hub bridge");
+        kernel
+            .step_resident_atlas_hubs_with_resident_params(&device, &queue, &batch)
+            .expect("atlas hubs");
+
+        if step % 24 == 23 {
+            let hr = kernel
+                .readback_hub(&device, &queue, &mesh_ref)
+                .expect("ref hub");
+            let ha = kernel
+                .readback_atlas_hub(&device, &queue, &batch, 0)
+                .expect("atlas hub");
+            eprintln!(
+                "step {step}: atlas (x={:.6}, y={:.6}, ω={:.5}) per-tire (x={:.6}, y={:.6}, ω={:.5})",
+                ha[0], ha[1], ha[6], hr[0], hr[1], hr[6]
+            );
+            for c in 0..8 {
+                assert!(
+                    (ha[c] - hr[c]).abs() <= 2.0e-4 * hr[c].abs().max(1.0),
+                    "step {step}: hub slot {c} diverged: atlas {} vs per-tire {}",
+                    ha[c],
+                    hr[c]
+                );
+            }
+        }
+    }
+    // ω must have accelerated on-device in BOTH chains (non-vacuous).
+    let ha = kernel
+        .readback_atlas_hub(&device, &queue, &batch, 0)
+        .expect("atlas hub final");
+    assert!(
+        ha[6] > omega0 + 0.5,
+        "atlas spin did not accelerate: {}",
+        ha[6]
+    );
+}
+
+/// F2b — 40-wheel FULL autonomous loop walltime: node step + fused
+/// bristle feedback + hub-param bridge + fused hub integration, per
+/// substep, zero per-substep host-computed values. The original
+/// walltime figure (1.00x) covered the node step only; this is the
+/// honest number for the complete loop.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_atlas_forty_wheel_full_loop_walltime() {
+    use molla_vehicle::{TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+
+    let params = TetraTireFemParams::realtime_viewer();
+    let dt = 1.0 / 8_000.0_f64;
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        semi_implicit_stiffness_scale: params.semi_implicit_stiffness_scale as f32,
+        ..Default::default()
+    };
+    let mut inputs: Vec<TireFemGpuInput> = Vec::with_capacity(40);
+    for veh in 0..10 {
+        for wheel in 0..4 {
+            let hub_x_base = veh as f64 * 4.0;
+            let along_axle = match wheel {
+                0 | 2 => -1.4,
+                _ => 1.4,
+            };
+            let hub_x = hub_x_base + along_axle;
+            let hub_z = match wheel {
+                0 | 1 => -0.7,
+                _ => 0.7,
+            };
+            let mut tire = TetraTireFem::new(hub_x, 180_000.0, params);
+            tire.set_hub_kinematic([hub_x, params.outer_radius * 0.982, hub_z], [0.0; 3]);
+            inputs.push(tire_fem_gpu_input_from_tetra_fem(&tire, base_gpu_params));
+        }
+    }
+    let mut batch = kernel
+        .create_resident_atlas_batch(&device, &queue, &inputs)
+        .expect("create resident atlas batch");
+    let step_params: Vec<TireFemGpuParams> = inputs.iter().map(|i| i.params).collect();
+    let fb_rows: Vec<molla_kernels::TireFemAtlasFeedbackParams> = inputs
+        .iter()
+        .map(|i| molla_kernels::TireFemAtlasFeedbackParams {
+            dt: dt as f32,
+            contact_band: 0.012,
+            ground_y: 0.0,
+            rolling_radius: params.outer_radius as f32,
+            normal_load_per_tread: (params.downforce / 12.0) as f32,
+            area_per_tread: i.params.pressure_area_per_tread_node,
+            tread_shear_stiffness: params.tread_shear_stiffness as f32,
+            bristle_damping: params.surface_material.bristle_damping as f32,
+            mu_static: params.surface_material.mu_static as f32,
+            mu_dynamic: params.surface_material.mu_dynamic as f32,
+            cohesion: 0.0,
+            bristle_relax_rate: params.bristle_relax_rate as f32,
+            heading: [1.0, 0.0, 0.0],
+            omega: 0.0,
+        })
+        .collect();
+    let hub_rows: Vec<TireFemHubParams> = inputs
+        .iter()
+        .map(|_| TireFemHubParams {
+            dt: dt as f32,
+            bead_stiffness: params.bead_stiffness as f32,
+            bead_damping: params.bead_damping as f32,
+            hub_mass: params.hub_mass as f32,
+            hub_damping: 260.0,
+            downforce: params.downforce as f32,
+            gravity_y: -9.81,
+            hub_floor_active: 1.0,
+            hub_floor_y: (params.inner_radius * 0.75) as f32,
+            external_force_xyz: [0.0; 3],
+            lateral_damping: 80.0,
+        })
+        .collect();
+    let spins = vec![
+        molla_kernels::TireFemHubSpinParams {
+            drive_torque_n_m: 90.0,
+            brake_torque_n_m: 0.0,
+            spin_inertia: 1.2,
+        };
+        inputs.len()
+    ];
+
+    let full_substep = |batch: &mut molla_kernels::TireFemGpuAtlasBatch| {
+        kernel
+            .step_resident_atlas_batch(&device, &queue, batch, &step_params)
+            .expect("nodes");
+        kernel
+            .step_resident_atlas_feedback(&device, &queue, batch, &fb_rows, true)
+            .expect("feedback");
+        kernel
+            .update_resident_atlas_hub_params_from_feedback_forces_with_spin(
+                &device, &queue, batch, &hub_rows, &spins, 1.0,
+            )
+            .expect("bridge");
+        kernel
+            .step_resident_atlas_hubs_with_resident_params(&device, &queue, batch)
+            .expect("hubs");
+    };
+
+    for _ in 0..32 {
+        full_substep(&mut batch);
+    }
+    let _ = kernel
+        .readback_resident_atlas_batch(&device, &queue, &batch)
+        .expect("warm-up sync");
+
+    let n_steps = 2_000u32;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n_steps {
+        full_substep(&mut batch);
+    }
+    let outputs = kernel
+        .readback_resident_atlas_batch(&device, &queue, &batch)
+        .expect("timed sync");
+    let elapsed = t0.elapsed();
+
+    for (wheel_idx, out) in outputs.iter().enumerate() {
+        for p in &out.positions {
+            assert!(
+                p.iter().all(|x| x.is_finite()),
+                "wheel {wheel_idx}: non-finite position after full-loop run"
+            );
+        }
+    }
+    // Spin must be advancing on-device for every wheel.
+    for tire in [0usize, 19, 39] {
+        let hub = kernel
+            .readback_atlas_hub(&device, &queue, &batch, tire)
+            .expect("hub");
+        assert!(
+            hub[6] > 0.5,
+            "tire {tire}: spin did not advance: {}",
+            hub[6]
+        );
+    }
+
+    let sim_time = n_steps as f64 * dt;
+    let ratio = elapsed.as_secs_f64() / sim_time;
+    eprintln!(
+        "40-wheel FULL loop: {n_steps} substeps ({sim_time:.3}s sim) in {:.3}s wall — {:.2}x realtime",
+        elapsed.as_secs_f64(),
+        ratio
+    );
+    assert!(
+        ratio < 40.0,
+        "full loop is catastrophically off realtime: {ratio:.1}x"
+    );
+}

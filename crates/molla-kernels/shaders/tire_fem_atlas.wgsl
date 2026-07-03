@@ -37,11 +37,12 @@ struct AtlasOffsetRow {
 };
 
 struct AtlasHubParamRow {
-    // x=reserved, y=hub_floor_active, z=hub_floor_y, w=dt
+    // x=spin inertia (kg·m², > 0 enables the resident spin DOF — F2a/b),
+    // y=hub_floor_active, z=hub_floor_y, w=dt
     cfg: vec4<f32>,
     // x=bead_stiffness, y=bead_damping, z=hub_mass, w=hub_damping
     mech: vec4<f32>,
-    // x=downforce, y=gravity_y, zw=reserved
+    // x=downforce, y=gravity_y, z=drive torque (N·m), w=brake torque (N·m)
     load: vec4<f32>,
     // xyz=external hub force (N), w=lateral damping coefficient
     extf: vec4<f32>,
@@ -783,7 +784,21 @@ fn hub_reduce_atlas(
             }
         }
         hub_state[hub_row] = vec4<f32>(x_new, y_new, z_new, v_new_y);
-        hub_state[hub_row + 1u] = vec4<f32>(v_new_x, v_new_z, 0.0, 0.0);
+
+        // Resident spin DOF (F2a/b) — same integration as
+        // tire_fem_hub.wgsl; passthrough when inactive.
+        var omega = hub_v_xz.z;
+        var angle = hub_v_xz.w;
+        if (hp.cfg.x > 0.0) {
+            let inertia = max(hp.cfg.x, 1.0e-6);
+            let brake_soft = omega / (abs(omega) + 0.5);
+            let alpha = (hp.load.z - hp.load.w * brake_soft) / inertia;
+            omega = omega + alpha * dt;
+            if (!(omega == omega)) { omega = 0.0; }
+            angle = angle + omega * dt;
+            if (!(angle == angle)) { angle = 0.0; }
+        }
+        hub_state[hub_row + 1u] = vec4<f32>(v_new_x, v_new_z, omega, angle);
     }
 }
 
