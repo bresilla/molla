@@ -2961,9 +2961,9 @@ impl Scene {
             Scene::WarpFemMixedElasticity => ScenePhysicsAudit {
                 status: Partial,
                 reference_case: "Warp fem/example_mixed_elasticity.py",
-                cpu_proof: "warp_fem_mixed_elasticity_reduced_near_incompressible_stays_finite + warp_fem_mixed_elasticity_pressure_split_beats_locking",
+                cpu_proof: "warp_fem_mixed_elasticity_reduced_near_incompressible_stays_finite + warp_fem_mixed_elasticity_pressure_split_beats_locking + fem_mixed_elasticity (solve_mixed_elasticity_steady: machine-exact constant-strain patch test + anti-locking cantilever)",
                 gpu_proof: "make test-gpu P=molla-fem T=fem_elasticity_gpu for displacement elasticity assembly; mixed pressure GPU solve remains future work",
-                notes: "reduced pressure-split oracle and viewer comparison exist; full mixed finite-element pressure/displacement solve is not implemented yet",
+                notes: "full mixed (u, p) Taylor-Hood elasticity solve now lives in molla-fem (solve_mixed_elasticity_steady); the viewer scene still shows the reduced comparison pending the maintainer GUI split",
             },
             Scene::WarpFemNonconformingContact => ScenePhysicsAudit {
                 status: Partial,

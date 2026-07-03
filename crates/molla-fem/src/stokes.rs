@@ -397,6 +397,172 @@ pub fn assemble_velocity_block(
     BsrMatrix::from_scalar_triplets(n, n, &triplets)
 }
 
+/// Local **mixed-elasticity velocity block**
+/// `K^e = ∫ 2μ ε(u):ε(v) dx` on P2 elements (Stage: INSPECTION.md
+/// F15 / WarpFemMixedElasticity). Unlike the Stokes full-gradient
+/// block this couples components:
+/// `K[(i,a),(j,b)] = μ ∫ (δ_ab ∇φᵢ·∇φⱼ + ∂_b φᵢ ∂_a φⱼ)`.
+/// The λ div·div term is deliberately ABSENT — the pressure carries
+/// it through the saddle constraint `p = λ div u`, which is what
+/// prevents volumetric locking as ν → ½.
+#[must_use]
+pub fn compute_element_mixed_elastic_block(
+    cell: &FemCell,
+    vertices: &[Vec3],
+    mu: Real,
+    dim: usize,
+) -> Vec<Vec<Real>> {
+    debug_assert!(dim == 2 || dim == 3);
+    let axis = |g: &Vec3, c: usize| -> Real {
+        match c {
+            0 => g.x,
+            1 => g.y,
+            _ => g.z,
+        }
+    };
+    match cell {
+        FemCell::Tri(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+            ];
+            let area = super::element::tri_area_2d(&p);
+            let qpts = tri_quadrature_6pt();
+            let n = 6;
+            let n_dof = n * dim;
+            let mut k = vec![vec![0.0_f64 as Real; n_dof]; n_dof];
+            for q in &qpts {
+                let g = p2_tri_shape_gradients(q.bary, &p);
+                let w = q.weight * area * mu;
+                for i in 0..n {
+                    for j in 0..n {
+                        let gg = g[i].x * g[j].x + g[i].y * g[j].y;
+                        for a in 0..dim {
+                            for b in 0..dim {
+                                let mut val = axis(&g[i], b) * axis(&g[j], a);
+                                if a == b {
+                                    val += gg;
+                                }
+                                k[i * dim + a][j * dim + b] += w * val;
+                            }
+                        }
+                    }
+                }
+            }
+            k
+        }
+        FemCell::Tet(idx) => {
+            let p = [
+                vertices[idx[0] as usize],
+                vertices[idx[1] as usize],
+                vertices[idx[2] as usize],
+                vertices[idx[3] as usize],
+            ];
+            let vol = super::element::tet_volume(&p);
+            let qpts = tet_quadrature_11pt();
+            let n = 10;
+            let n_dof = n * dim;
+            let mut k = vec![vec![0.0_f64 as Real; n_dof]; n_dof];
+            for q in &qpts {
+                let g = p2_tet_shape_gradients(q.bary, &p);
+                let w = q.weight * vol * mu;
+                for i in 0..n {
+                    for j in 0..n {
+                        let gg = g[i].dot(g[j]);
+                        for a in 0..dim {
+                            for b in 0..dim {
+                                let mut val = axis(&g[i], b) * axis(&g[j], a);
+                                if a == b {
+                                    val += gg;
+                                }
+                                k[i * dim + a][j * dim + b] += w * val;
+                            }
+                        }
+                    }
+                }
+            }
+            k
+        }
+    }
+}
+
+/// Assemble the global mixed-elasticity block `A = ∫ 2μ ε:ε`.
+pub fn assemble_mixed_elastic_block(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    mu: Real,
+) -> Result<BsrMatrix> {
+    let n = th.n_velocity;
+    let dim = th.dim;
+    let mut triplets: Vec<(usize, usize, Real)> =
+        Vec::with_capacity(mesh.cells.len() * 100 * dim * dim);
+    for cell in &mesh.cells {
+        let local = compute_element_mixed_elastic_block(cell, &mesh.vertices, mu, dim);
+        let n_local_nodes = match cell {
+            FemCell::Tri(_) => 6,
+            FemCell::Tet(_) => 10,
+        };
+        for i in 0..n_local_nodes {
+            let gi_node = th.map.local_to_global(cell, i);
+            for j in 0..n_local_nodes {
+                let gj_node = th.map.local_to_global(cell, j);
+                for ci in 0..dim {
+                    for cj in 0..dim {
+                        let val = local[i * dim + ci][j * dim + cj];
+                        if val == 0.0 {
+                            continue;
+                        }
+                        triplets.push((gi_node * dim + ci, gj_node * dim + cj, val));
+                    }
+                }
+            }
+        }
+    }
+    BsrMatrix::from_scalar_triplets(n, n, &triplets)
+}
+
+/// Assemble the P1 pressure mass matrix `M_p` (consistent):
+/// `∫ N_q N_r = |E|/12·(1+δ_qr)` on tris, `|E|/20·(1+δ_qr)` on tets.
+pub fn assemble_pressure_mass(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<BsrMatrix> {
+    let n = th.n_pressure;
+    let mut triplets: Vec<(usize, usize, Real)> = Vec::with_capacity(mesh.cells.len() * 16);
+    for cell in &mesh.cells {
+        match cell {
+            FemCell::Tri(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                ];
+                let area = super::element::tri_area_2d(&p);
+                for q in 0..3 {
+                    for r in 0..3 {
+                        let val = area / 12.0 * if q == r { 2.0 } else { 1.0 };
+                        triplets.push((idx[q] as usize, idx[r] as usize, val));
+                    }
+                }
+            }
+            FemCell::Tet(idx) => {
+                let p = [
+                    mesh.vertices[idx[0] as usize],
+                    mesh.vertices[idx[1] as usize],
+                    mesh.vertices[idx[2] as usize],
+                    mesh.vertices[idx[3] as usize],
+                ];
+                let vol = super::element::tet_volume(&p);
+                for q in 0..4 {
+                    for r in 0..4 {
+                        let val = vol / 20.0 * if q == r { 2.0 } else { 1.0 };
+                        triplets.push((idx[q] as usize, idx[r] as usize, val));
+                    }
+                }
+            }
+        }
+    }
+    BsrMatrix::from_scalar_triplets(n, n, &triplets)
+}
+
 /// Assemble the global P2-vector velocity-mass matrix `M` (consistent).
 pub fn assemble_velocity_mass(mesh: &FemMesh, th: &MixedTaylorHood) -> Result<BsrMatrix> {
     let n = th.n_velocity;
@@ -707,6 +873,57 @@ pub fn solve_stokes_with_matrices(
     bcs: &[StokesBc],
     cfg: &StokesSimpleConfig,
 ) -> Result<StokesResult> {
+    solve_saddle_with_matrices(th, a, b_div, f_velocity, bcs, cfg, None)
+}
+
+/// INSPECTION.md F15 / WarpFemMixedElasticity — nearly-incompressible
+/// mixed (u, p) linear elasticity on Taylor-Hood elements:
+///
+/// ```text
+///   ∫ 2μ ε(u):ε(v) + ∫ p div v = ∫ f·v      (momentum)
+///   ∫ q div u − (1/λ) ∫ p q    = 0          (p = λ div u)
+/// ```
+///
+/// The λ div·div term never enters the displacement operator, so the
+/// formulation cannot volumetrically lock as ν → ½ (λ → ∞ recovers
+/// exact incompressibility / Stokes). `f_velocity` is the assembled
+/// P2 load vector; `bcs` reuse the Stokes Dirichlet plumbing.
+pub fn solve_mixed_elasticity_steady(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    mu: Real,
+    lambda: Real,
+    f_velocity: &[Real],
+    bcs: &[StokesBc],
+    cfg: &StokesSimpleConfig,
+) -> Result<StokesResult> {
+    let a = assemble_mixed_elastic_block(mesh, th, mu)?;
+    let b = assemble_div_block(mesh, th)?;
+    let m_p = assemble_pressure_mass(mesh, th)?;
+    let scale = if lambda.is_finite() && lambda > 0.0 {
+        1.0 / lambda
+    } else {
+        0.0
+    };
+    solve_saddle_with_matrices(th, &a, &b, f_velocity, bcs, cfg, Some((&m_p, scale)))
+}
+
+/// Shared Uzawa-CG saddle solver. With `compliance = Some((M_p, s))`
+/// the constraint becomes `B u − s·M_p p = 0` (Schur gains `+ s·M_p`),
+/// which is the nearly-incompressible mixed-elasticity relaxation
+/// `p = λ div u` at `s = 1/λ` (INSPECTION.md F15 /
+/// WarpFemMixedElasticity); `None` is exact incompressibility
+/// (Stokes).
+#[allow(clippy::too_many_arguments)]
+fn solve_saddle_with_matrices(
+    th: &MixedTaylorHood,
+    a: &BsrMatrix,
+    b_div: &BsrMatrix,
+    f_velocity: &[Real],
+    bcs: &[StokesBc],
+    cfg: &StokesSimpleConfig,
+    compliance: Option<(&BsrMatrix, Real)>,
+) -> Result<StokesResult> {
     debug_assert_eq!(f_velocity.len(), th.n_velocity);
     debug_assert_eq!(a.nrows(), th.n_velocity);
     debug_assert_eq!(b_div.nrows(), th.n_pressure);
@@ -743,7 +960,15 @@ pub fn solve_stokes_with_matrices(
         .fold(0.0_f64, Real::max);
     let dead_threshold = (1e-12 * b_inf_norm).max(1e-30);
     let mut dead_pressure_rows: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // With a compliance term the Schur operator is `B A⁻¹ Bᵀ + s·M_p`,
+    // whose M_p part keeps every row definite — pinning "dead" rows
+    // would wrongly force boundary pressures to zero (breaks the
+    // constant-strain patch test).
+    let detect_dead = compliance.is_none();
     for r in 0..n_p {
+        if !detect_dead {
+            break;
+        }
         let lo = b_div.row_offsets[r];
         let hi = b_div.row_offsets[r + 1];
         let mut alive = false;
@@ -760,6 +985,13 @@ pub fn solve_stokes_with_matrices(
     }
 
     // Pressure pin (default: vertex 0).
+    // Default pressure pin: required for exact incompressibility
+    // (constant pressure nullspace) but WRONG with a compliance term —
+    // there `S = B A⁻¹ Bᵀ + s·M_p` is already definite, and pinning a
+    // vertex to zero corrupts the solution (caught by the mixed-
+    // elasticity constant-strain patch test, where the exact pressure
+    // is a nonzero constant). Explicit `PressureZero` BCs are always
+    // honored.
     let p_pin = bcs
         .iter()
         .find_map(|b| {
@@ -769,12 +1001,14 @@ pub fn solve_stokes_with_matrices(
                 None
             }
         })
-        .unwrap_or(0);
+        .or(if compliance.is_none() { Some(0) } else { None });
 
     // Treat all "dead" pressure rows + the explicit pin as one set of
     // pressure DoFs to enforce-as-zero in the Schur complement.
     let mut p_pinned_set: std::collections::HashSet<usize> = dead_pressure_rows.clone();
-    p_pinned_set.insert(p_pin);
+    if let Some(pp) = p_pin {
+        p_pinned_set.insert(pp);
+    }
 
     let mut u = vec![0.0; n_v];
     for &(dof, val) in &pinned_pairs {
@@ -841,6 +1075,13 @@ pub fn solve_stokes_with_matrices(
         let y_v = solve_inner_cg(a_red_ref, &x, &vec![0.0; n_v], cfg_ref);
         // p = B y
         let mut yout = matvec(b_div, &y_v);
+        // Mixed-elasticity compliance: Schur = B A⁻¹ Bᵀ + s·M_p.
+        if let Some((m_p, scale)) = compliance {
+            let mq = matvec(m_p, &q_eff);
+            for (o, m) in yout.iter_mut().zip(mq.iter()) {
+                *o += scale * m;
+            }
+        }
         // Identity rows for pinned pressures.
         for &r in p_pinned_set_ref.iter() {
             yout[r] = q[r];

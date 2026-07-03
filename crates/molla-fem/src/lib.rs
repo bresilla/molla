@@ -223,9 +223,11 @@ pub use stam_fluid::{StamFluidConfig, StamFluidState};
 pub use stokes::{
     MixedTaylorHood, NavierStokesConfig, StokesBc, StokesResult, StokesSimpleConfig,
     apply_stokes_velocity_bcs, assemble_convection_block, assemble_convection_block_with_supg,
-    assemble_div_block, assemble_velocity_block, assemble_velocity_mass, build_cavity_bcs_2d,
-    collect_velocity_pins_pub, compute_element_mass_p2_vector, compute_element_stokes_div_block,
-    compute_element_stokes_velocity_block, solve_navier_stokes_step, solve_navier_stokes_transient,
+    assemble_div_block, assemble_mixed_elastic_block, assemble_pressure_mass,
+    assemble_velocity_block, assemble_velocity_mass, build_cavity_bcs_2d,
+    collect_velocity_pins_pub, compute_element_mass_p2_vector, compute_element_mixed_elastic_block,
+    compute_element_stokes_div_block, compute_element_stokes_velocity_block,
+    solve_mixed_elasticity_steady, solve_navier_stokes_step, solve_navier_stokes_transient,
     solve_stokes_steady, solve_stokes_with_matrices,
 };
 #[cfg(feature = "gpu")]
