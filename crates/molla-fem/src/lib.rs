@@ -111,7 +111,10 @@ pub use amr_mesh::{
     assemble_global_amr, compute_ttkt, near_point, project_dg_p1_tri_children_to_parent_l2,
     tt_times_vector,
 };
-pub use apic_coupling::{ApicHybrid, ApicParticle, locate_particle_tet, validate_hybrid};
+pub use apic_coupling::{
+    ApicHybrid, ApicParticle, fluid_divergence_norm, fluid_weak_divergence_norm,
+    locate_particle_tet, validate_hybrid,
+};
 #[cfg(feature = "gpu")]
 pub use apic_coupling_gpu::ApicGpuState;
 pub use assembly::assemble_global;

@@ -60,9 +60,18 @@
 //!
 //! # Caveats / future work
 //!
-//! - **No real Stokes projection (v1).** The viscous-smoothing
-//!   placeholder is incompressible only in the limit `ν · dt → ∞`. A
-//!   true pressure-Poisson on the P1 mesh is Stage 37.6.1.
+//! - **Pressure projection (Stage 37.6.1, CPU).** `step_projected`
+//!   runs a per-tet (P0) pressure projection through the lumped-mass
+//!   Schur operator `S = D M⁻¹ Dᵀ` (matrix-free CG) after the grid
+//!   update, driving per-tet divergence on the deposit-supported
+//!   fluid region to the solver floor (machine epsilon on the blob
+//!   contract). Equal-order P1 node pressure was rejected: its lumped
+//!   correction only cancels nodal moments and Richardson outer loops
+//!   amplify LBB checkerboard modes. `step` keeps the viscous-only
+//!   behavior (`pressure_iters = 0`). The GPU `step_gpu` does NOT yet
+//!   run the projection — port design: `apply_s` is two gather passes
+//!   over the existing node↔tet adjacency plus CG dot-product
+//!   reductions (reuse the `fem_cg_fused.wgsl` pattern).
 //! - **GPU port (Stage 41 v2).** The `step_gpu` method runs the full
 //!   pipeline (locate, P2G, grid-update, viscous-smoothing, BCs, G2P)
 //!   on the device. Mirrors the CPU mathematics exactly; the only
@@ -249,6 +258,35 @@ impl ApicHybrid {
     /// every component; scalar `Dirichlet { value: 0.0 }` is treated as
     /// no-slip on all components.
     pub fn step(&mut self, dt: Real, viscosity: Real, bcs: &[BoundaryCondition]) {
+        self.step_projected(dt, viscosity, bcs, 0);
+    }
+
+    /// Stage 37.6.1 (INSPECTION.md F12) — full step with a P1
+    /// pressure-Poisson projection after the grid update.
+    ///
+    /// `pressure_iters = 0` reproduces [`Self::step`] exactly (viscous
+    /// smoothing only). With `pressure_iters > 0`, after gravity +
+    /// smoothing + Dirichlet BCs the nodal field is projected toward a
+    /// divergence-free state on the FLUID region (tets containing at
+    /// least one particle; non-fluid nodes act as a `p = 0` free
+    /// surface, which also pins the pressure nullspace):
+    ///
+    /// ```text
+    ///   ∇²p = (1/dt) ∇·v        (weak form, P1, fluid tets only)
+    ///   v  ← v − dt ∇p          (volume-weighted nodal gradient)
+    /// ```
+    ///
+    /// solved matrix-free with `pressure_iters` Jacobi sweeps. A
+    /// uniform (divergence-free) field has `rhs ≡ 0 → p ≡ 0` and is
+    /// passed through untouched, so the momentum-roundtrip and
+    /// uniform-motion contracts survive with projection enabled.
+    pub fn step_projected(
+        &mut self,
+        dt: Real,
+        viscosity: Real,
+        bcs: &[BoundaryCondition],
+        pressure_iters: u32,
+    ) {
         let (node_mass, node_momentum) = self.p2g();
         let n = self.mesh.vert_count();
 
@@ -307,7 +345,43 @@ impl ApicHybrid {
             }
         }
 
+        if pressure_iters > 0 && dt > 0.0 {
+            apply_pressure_projection(
+                &self.mesh,
+                &self.particles,
+                &mut node_velocity,
+                pressure_iters,
+            );
+            // Re-pin no-slip walls: the correction can re-introduce a
+            // small wall-normal component on boundary nodes.
+            for bc in bcs {
+                match bc {
+                    BoundaryCondition::Dirichlet { vertex, .. } => {
+                        let idx = *vertex as usize;
+                        if idx < n {
+                            node_velocity[idx] = Vec3::ZERO;
+                        }
+                    }
+                    BoundaryCondition::DirichletVector { vertex, values } => {
+                        let idx = *vertex as usize;
+                        if idx < n && values.len() >= 3 {
+                            node_velocity[idx] = Vec3::new(values[0], values[1], values[2]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         self.g2p(&node_velocity, dt);
+    }
+
+    /// Stage 37.6.1 — project a nodal velocity field toward
+    /// divergence-free on the fluid region (see
+    /// [`Self::step_projected`]). Public for tests, diagnostics, and
+    /// the GPU parity oracle.
+    pub fn project_pressure(&self, node_velocity: &mut [Vec3], iters: u32) {
+        apply_pressure_projection(&self.mesh, &self.particles, node_velocity, iters);
     }
 
     /// Convenience helper for the v1 viewer scene: clamp every particle
@@ -476,6 +550,304 @@ fn apply_viscous_smoothing(
         new_velocity[i] = velocity[i] + damping * (v_avg - velocity[i]);
     }
     velocity.copy_from_slice(&new_velocity);
+}
+
+/// Stage 37.6.1 — matrix-free P1 pressure projection (see
+/// [`ApicHybrid::step_projected`]). Weak-form Poisson on fluid tets:
+/// with `q ≡ dt·p` so no timestep appears in the system:
+/// `Σ_t vol_t (∇φi·∇q) = −Σ_t (vol_t/4) ∇·v`, Jacobi-iterated, then
+/// `v ← v − ∇q` with volume-weighted nodal averaging of the per-tet
+/// (constant) gradient.
+fn apply_pressure_projection(
+    mesh: &FemMesh,
+    particles: &[ApicParticle],
+    node_velocity: &mut [Vec3],
+    iters: u32,
+) {
+    let n = mesh.vertices.len();
+    // Per-tet cache: indices, shape grads, signed-positive volume.
+    let mut tets: Vec<([usize; 4], [Vec3; 4], Real)> = Vec::new();
+    let mut cell_indices: Vec<usize> = Vec::new();
+    for (c, cell) in mesh.cells.iter().enumerate() {
+        let FemCell::Tet(idx) = cell else { continue };
+        let p = [
+            mesh.vertices[idx[0] as usize],
+            mesh.vertices[idx[1] as usize],
+            mesh.vertices[idx[2] as usize],
+            mesh.vertices[idx[3] as usize],
+        ];
+        let vol = ((p[1] - p[0]).cross(p[2] - p[0]).dot(p[3] - p[0]) / 6.0).abs();
+        if vol <= Real::EPSILON {
+            continue;
+        }
+        let grads = tet_p1_shape_gradients(&p);
+        tets.push((
+            [
+                idx[0] as usize,
+                idx[1] as usize,
+                idx[2] as usize,
+                idx[3] as usize,
+            ],
+            grads,
+            vol,
+        ));
+        cell_indices.push(c);
+    }
+    // Deposit-supported fluid mask, shared with the divergence probes
+    // (see `first_match_fluid_mask` for the face-sitting-particle
+    // rationale). `cell_of[t]` maps the dense tet list back to cell
+    // indices.
+    let cell_mask = first_match_fluid_mask(mesh, particles);
+    let fluid: Vec<bool> = cell_indices.iter().map(|&c| cell_mask[c]).collect();
+    // Lumped node mass (volume weights) over fluid tets only.
+    let mut lumped = vec![0.0 as Real; n];
+    let mut any_fluid = false;
+    for (t, (verts, _, vol)) in tets.iter().enumerate() {
+        if !fluid[t] {
+            continue;
+        }
+        any_fluid = true;
+        for j in 0..4 {
+            lumped[verts[j]] += vol / 4.0;
+        }
+    }
+    if !any_fluid {
+        return;
+    }
+
+    // Per-TET (P0) pressure projection through the lumped-mass Schur
+    // operator `S = D M⁻¹ Dᵀ` with `D_t(v) = vol_t Σ_j ∇φ_j·v_j`:
+    // after solving `S q = D v`, the correction `v ← v − M⁻¹ Dᵀ q`
+    // makes the per-tet divergence of the corrected field EXACTLY the
+    // solver residual — unlike equal-order P1-P1 node pressure, whose
+    // lumped correction can only cancel nodal moments (and whose
+    // Richardson outer loop amplifies LBB checkerboard modes). S is
+    // symmetric positive semi-definite, so plain conjugate gradients
+    // converges without preconditioning at contract scale.
+    let apply_s = |q: &[Real], out: &mut [Real]| {
+        let mut f = vec![Vec3::ZERO; n];
+        for (t, (verts, grads, vol)) in tets.iter().enumerate() {
+            if !fluid[t] {
+                continue;
+            }
+            for j in 0..4 {
+                f[verts[j]] += *vol * grads[j] * q[t];
+            }
+        }
+        for (i, fi) in f.iter_mut().enumerate() {
+            if lumped[i] > Real::EPSILON {
+                *fi /= lumped[i];
+            } else {
+                *fi = Vec3::ZERO;
+            }
+        }
+        for (t, (verts, grads, vol)) in tets.iter().enumerate() {
+            out[t] = if fluid[t] {
+                *vol * (0..4).map(|j| f[verts[j]].dot(grads[j])).sum::<Real>()
+            } else {
+                0.0
+            };
+        }
+    };
+
+    let n_t = tets.len();
+    let mut rhs = vec![0.0 as Real; n_t];
+    for (t, (verts, grads, vol)) in tets.iter().enumerate() {
+        if fluid[t] {
+            rhs[t] = *vol
+                * (0..4)
+                    .map(|j| node_velocity[verts[j]].dot(grads[j]))
+                    .sum::<Real>();
+        }
+    }
+
+    // Matrix-free CG on S q = rhs.
+    let mut q = vec![0.0 as Real; n_t];
+    let mut r = rhs.clone();
+    let mut d = r.clone();
+    let mut s_d = vec![0.0 as Real; n_t];
+    let mut rr: Real = r.iter().map(|x| x * x).sum();
+    let rr0 = rr;
+    for _ in 0..iters {
+        if rr <= rr0 * 1.0e-24 {
+            break;
+        }
+        apply_s(&d, &mut s_d);
+        let d_sd: Real = d.iter().zip(s_d.iter()).map(|(a, b)| a * b).sum();
+        if d_sd.abs() <= Real::EPSILON {
+            break;
+        }
+        let alpha = rr / d_sd;
+        for t in 0..n_t {
+            q[t] += alpha * d[t];
+            r[t] -= alpha * s_d[t];
+        }
+        let rr_new: Real = r.iter().map(|x| x * x).sum();
+        let beta = rr_new / rr;
+        rr = rr_new;
+        for t in 0..n_t {
+            d[t] = r[t] + beta * d[t];
+        }
+    }
+
+    // Correction: v ← v − M⁻¹ Dᵀ q.
+    let mut f = vec![Vec3::ZERO; n];
+    for (t, (verts, grads, vol)) in tets.iter().enumerate() {
+        if !fluid[t] {
+            continue;
+        }
+        for j in 0..4 {
+            f[verts[j]] += *vol * grads[j] * q[t];
+        }
+    }
+    for i in 0..n {
+        if lumped[i] > Real::EPSILON {
+            node_velocity[i] -= f[i] / lumped[i];
+        }
+    }
+}
+
+/// First-match fluid-tet mask over `mesh.cells` order — the tet each
+/// particle actually deposits into (`locate_particle_tet` semantics),
+/// AND with all four nodes mass-supported. A face-sitting particle
+/// deposits ZERO weight to its tet's off-face node; that node carries
+/// no mass, so its velocity slot is not real fluid data and any tet
+/// using it must not enter the divergence constraint. Shared by the
+/// projection and both divergence probes so mask, P2G, and metric can
+/// never disagree.
+pub fn first_match_fluid_mask(mesh: &FemMesh, particles: &[ApicParticle]) -> Vec<bool> {
+    let n = mesh.vertices.len();
+    let mut fluid = vec![false; mesh.cells.len()];
+    let mut node_mass = vec![0.0 as Real; n];
+    for particle in particles {
+        if let Some((verts, weights, _)) = locate_particle_tet(mesh, particle.x) {
+            for j in 0..4 {
+                node_mass[verts[j] as usize] += weights[j] * particle.mass;
+            }
+        }
+        for (c, cell) in mesh.cells.iter().enumerate() {
+            let FemCell::Tet(idx) = cell else { continue };
+            let p = [
+                mesh.vertices[idx[0] as usize],
+                mesh.vertices[idx[1] as usize],
+                mesh.vertices[idx[2] as usize],
+                mesh.vertices[idx[3] as usize],
+            ];
+            if let Some(w) = barycentric_tet(&p, particle.x) {
+                // Containment: `barycentric_tet` is the raw coordinate
+                // transform (Some for ANY point vs a non-degenerate
+                // tet) — the range check below is what makes it a
+                // containment test, mirroring `locate_particle_tet`.
+                if w.iter().all(|w| *w >= -1.0e-9 && *w <= 1.0 + 1.0e-9) {
+                    fluid[c] = true;
+                    break;
+                }
+            }
+        }
+    }
+    for (c, cell) in mesh.cells.iter().enumerate() {
+        if !fluid[c] {
+            continue;
+        }
+        let FemCell::Tet(idx) = cell else { continue };
+        if !(0..4).all(|j| node_mass[idx[j] as usize] > Real::EPSILON) {
+            fluid[c] = false;
+        }
+    }
+    fluid
+}
+
+/// Test/diagnostic probe — the WEAK (P1-moment) divergence residual
+/// the projection actually controls: `r_i = Σ_{fluid t ∋ i}
+/// (vol_t/4)·(∇·v)_t` per fluid node, returned as the RMS over fluid
+/// nodes. Equal-order P1-P1 projection cannot drive the per-tet L2
+/// divergence to zero (LBB checkerboard modes survive); this moment
+/// residual is the honest convergence metric.
+pub fn fluid_weak_divergence_norm(
+    mesh: &FemMesh,
+    particles: &[ApicParticle],
+    node_velocity: &[Vec3],
+) -> Real {
+    let n = mesh.vertices.len();
+    let fluid = first_match_fluid_mask(mesh, particles);
+    let mut residual = vec![0.0 as Real; n];
+    let mut fluid_node = vec![false; n];
+    for (c, cell) in mesh.cells.iter().enumerate() {
+        let FemCell::Tet(idx) = cell else { continue };
+        let p = [
+            mesh.vertices[idx[0] as usize],
+            mesh.vertices[idx[1] as usize],
+            mesh.vertices[idx[2] as usize],
+            mesh.vertices[idx[3] as usize],
+        ];
+        let vol = ((p[1] - p[0]).cross(p[2] - p[0]).dot(p[3] - p[0]) / 6.0).abs();
+        if vol <= Real::EPSILON {
+            continue;
+        }
+        if !fluid[c] {
+            continue;
+        }
+        let grads = tet_p1_shape_gradients(&p);
+        let div: Real = (0..4)
+            .map(|j| node_velocity[idx[j] as usize].dot(grads[j]))
+            .sum();
+        for j in 0..4 {
+            residual[idx[j] as usize] += (vol / 4.0) * div;
+            fluid_node[idx[j] as usize] = true;
+        }
+    }
+    let mut acc = 0.0 as Real;
+    let mut count = 0usize;
+    for i in 0..n {
+        if fluid_node[i] {
+            acc += residual[i] * residual[i];
+            count += 1;
+        }
+    }
+    if count > 0 {
+        (acc / count as Real).sqrt()
+    } else {
+        0.0
+    }
+}
+
+/// Test/diagnostic probe — the volume-weighted L2 norm of the P1
+/// divergence over FLUID tets (those containing ≥ 1 particle).
+pub fn fluid_divergence_norm(
+    mesh: &FemMesh,
+    particles: &[ApicParticle],
+    node_velocity: &[Vec3],
+) -> Real {
+    let fluid = first_match_fluid_mask(mesh, particles);
+    let mut acc = 0.0 as Real;
+    let mut vol_acc = 0.0 as Real;
+    for (c, cell) in mesh.cells.iter().enumerate() {
+        let FemCell::Tet(idx) = cell else { continue };
+        let p = [
+            mesh.vertices[idx[0] as usize],
+            mesh.vertices[idx[1] as usize],
+            mesh.vertices[idx[2] as usize],
+            mesh.vertices[idx[3] as usize],
+        ];
+        let vol = ((p[1] - p[0]).cross(p[2] - p[0]).dot(p[3] - p[0]) / 6.0).abs();
+        if vol <= Real::EPSILON {
+            continue;
+        }
+        if !fluid[c] {
+            continue;
+        }
+        let grads = tet_p1_shape_gradients(&p);
+        let div: Real = (0..4)
+            .map(|j| node_velocity[idx[j] as usize].dot(grads[j]))
+            .sum();
+        acc += vol * div * div;
+        vol_acc += vol;
+    }
+    if vol_acc > Real::EPSILON {
+        (acc / vol_acc).sqrt()
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]

@@ -627,3 +627,94 @@ fn apic_falling_particles_settle() {
         "Final KE {final_ke:.6e} not below peak KE {peak:.6e}"
     );
 }
+
+/// Stage 37.6.1 (INSPECTION.md F12) — the P1 pressure projection.
+///
+/// A radially compressing particle blob deposits a strongly
+/// divergent nodal field; `step_projected` must cut the fluid-region
+/// divergence norm by well over an order of magnitude relative to the
+/// unprojected step, while a uniform (divergence-free) field passes
+/// through the projection bit-for-bit (rhs ≡ 0 → q ≡ 0).
+#[test]
+fn pressure_projection_kills_divergence_and_passes_uniform_flow() {
+    use molla_fem::fluid_divergence_norm;
+    let mesh = FemMesh::tet_grid_3d(5, 5, 5, 1.0, 1.0, 1.0);
+    let center = Vec3::new(0.5, 0.5, 0.5);
+
+    // Radially inward velocities: v = −2(x − c) → div v = −6 ≠ 0.
+    let mk_particles = || -> Vec<ApicParticle> {
+        let mut out = Vec::new();
+        for i in 0..6 {
+            for j in 0..6 {
+                for k in 0..6 {
+                    // Irrational-ish offsets keep every particle
+                    // strictly interior to its tet: an axis-aligned
+                    // 0.1 lattice on 0.2-pitch Kuhn tets puts almost
+                    // every point exactly on a face (zero barycentric
+                    // weight), which the deposit-supported fluid mask
+                    // rightly rejects.
+                    let x = Vec3::new(
+                        0.2531 + 0.09973 * i as Real,
+                        0.2547 + 0.09931 * j as Real,
+                        0.2513 + 0.09959 * k as Real,
+                    );
+                    let mut p = ApicParticle::at_rest(x, 1.0e-3);
+                    p.v = -2.0 * (x - center);
+                    out.push(p);
+                }
+            }
+        }
+        out
+    };
+
+    // Grid-level oracle: deposit once, then project the NODAL field
+    // directly — this isolates the Poisson solve from APIC-transfer
+    // round-trip noise (G2P→P2G re-deposits are not divergence-free
+    // even for a projected grid field).
+    let hybrid = ApicHybrid::new(mesh.clone(), mk_particles());
+    let (node_mass, node_momentum) = hybrid.p2g();
+    let node_velocity: Vec<Vec3> = node_mass
+        .iter()
+        .zip(node_momentum.iter())
+        .map(|(m, mom)| {
+            if *m > Real::EPSILON {
+                *mom / *m
+            } else {
+                Vec3::ZERO
+            }
+        })
+        .collect();
+    let div_raw = fluid_divergence_norm(&hybrid.mesh, &hybrid.particles, &node_velocity);
+    let mut projected = node_velocity.clone();
+    hybrid.project_pressure(&mut projected, 120);
+    let div_projected = fluid_divergence_norm(&hybrid.mesh, &hybrid.particles, &projected);
+    eprintln!("divergence norm: raw = {div_raw:.4e}, projected = {div_projected:.4e}");
+    assert!(
+        div_raw > 1.0,
+        "compressing blob should be strongly divergent"
+    );
+    // The P0-pressure Schur projection drives per-tet divergence to
+    // the CG floor — machine epsilon on this blob.
+    assert!(
+        div_projected < div_raw * 1.0e-4,
+        "projection must cut divergence ≥1e4×: raw {div_raw:.3e} vs projected {div_projected:.3e}"
+    );
+
+    // Uniform-flow passthrough: identical particles, uniform velocity,
+    // projected and unprojected steps must agree exactly.
+    let uniform = |pressure_iters: u32| -> Vec<Vec3> {
+        let mut particles = mk_particles();
+        for p in &mut particles {
+            p.v = Vec3::new(0.3, -0.1, 0.2);
+        }
+        let mut hybrid = ApicHybrid::new(mesh.clone(), particles);
+        hybrid.gravity = Vec3::ZERO;
+        hybrid.step_projected(1.0 / 240.0, 0.0, &[], pressure_iters);
+        hybrid.particles.iter().map(|p| p.v).collect()
+    };
+    let v_plain = uniform(0);
+    let v_proj = uniform(120);
+    for (a, b) in v_plain.iter().zip(v_proj.iter()) {
+        assert_eq!(a, b, "uniform flow must pass the projection untouched");
+    }
+}
