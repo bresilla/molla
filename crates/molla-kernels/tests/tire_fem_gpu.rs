@@ -5661,3 +5661,150 @@ fn tire_fem_atlas_forty_wheel_full_loop_walltime() {
         "full loop is catastrophically off realtime: {ratio:.1}x"
     );
 }
+
+/// F2(d) — the zero-readback resident feedback path over a REAL GPU
+/// heightfield (with a surface-velocity map) had no hardware test.
+/// Oracle: `dispatch_resident_with_gpu_terrain` runs the identical
+/// shader as `dispatch_blocking_with_gpu_terrain`; only the output
+/// handling differs (device-resident buffers vs host readback), so the
+/// two must agree BITWISE on velocities, bristles, and forces.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_resident_gpu_terrain_matches_blocking_bitwise() {
+    let engine = try_engine().expect("GPU adapter required for ignored test");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemContactFeedbackKernel::new(&device);
+
+    // A sloped 3×3 heightfield + a moving-surface cell, several tread
+    // nodes in and out of contact.
+    let input = TireFemContactFeedbackInput {
+        positions: vec![
+            [0.2, 0.015, 0.3, 0.0],
+            [1.1, 0.060, 0.4, 0.0],
+            [1.9, 0.120, 1.2, 0.0],
+            [0.7, 0.900, 0.8, 0.0], // airborne
+        ],
+        velocities: vec![
+            [0.3, -0.1, 0.05, 0.0],
+            [-0.2, 0.0, 0.1, 0.0],
+            [0.0, -0.3, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        masses: vec![2.0; 4],
+        tread_ids: vec![0, 1, 2, 3],
+        bristles: vec![[0.002, 0.0, -0.001, 0.0]; 4],
+        terrain: None,
+        params: TireFemContactFeedbackParams {
+            dt: 1.0 / 240.0,
+            contact_band: 0.05,
+            omega: 3.0,
+            heading: [1.0, 0.0, 0.0],
+            rolling_radius: 0.32,
+            normal_load_per_tread: 650.0,
+            area_per_tread: 0.01,
+            tread_shear_stiffness: 4.0e5,
+            mu_static: 1.0,
+            mu_dynamic: 0.8,
+            bristle_damping: 5.0e3,
+            bristle_relax_rate: 8.0,
+            ..Default::default()
+        },
+    };
+    let mk_f32 = |label: &str, data: &[f32]| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (data.len().max(1) * core::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        buffer
+    };
+    let mk_vec4 = |label: &str, data: &[[f32; 4]]| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (data.len().max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        buffer
+    };
+    let heights = mk_f32(
+        "test.feedback.resident_terrain.heights",
+        &[0.0, 0.05, 0.10, 0.01, 0.06, 0.11, 0.02, 0.07, 0.12],
+    );
+    let velocity_map = mk_vec4(
+        "test.feedback.resident_terrain.velmap",
+        &[
+            [0.0; 4],
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+        ],
+    );
+    let terrain = TireFemContactFeedbackGpuTerrain {
+        origin: [0.0, 0.0],
+        spacing: 1.0,
+        nx: 3,
+        nz: 3,
+        heights: &heights,
+        friction: 1.0,
+        friction_map: None,
+        water_film_map: None,
+        sinkage_map: None,
+        surface_velocity_map: Some(&velocity_map),
+        soil_rolling_resistance_scale: 1.0,
+        surface_velocity: [0.0; 3],
+    };
+
+    let blocking = kernel
+        .dispatch_blocking_with_gpu_terrain(&device, &queue, &input, &terrain)
+        .expect("blocking terrain feedback");
+    let resident = kernel
+        .dispatch_resident_with_gpu_terrain(&device, &queue, &input, &terrain)
+        .expect("resident terrain feedback");
+    let resident_read = kernel
+        .readback_resident_feedback_output(&device, &queue, &resident)
+        .expect("resident readback");
+
+    assert_eq!(blocking.velocities.len(), resident_read.velocities.len());
+    assert_eq!(blocking.bristles.len(), resident_read.bristles.len());
+    assert_eq!(blocking.forces.len(), resident_read.forces.len());
+    let mut contact_nodes = 0;
+    for i in 0..blocking.velocities.len() {
+        assert_eq!(
+            blocking.velocities[i], resident_read.velocities[i],
+            "velocity row {i} not bitwise-equal"
+        );
+        assert_eq!(
+            blocking.forces[i], resident_read.forces[i],
+            "force row {i} not bitwise-equal"
+        );
+        if blocking.forces[i].iter().any(|f| f.abs() > 1.0e-6) {
+            contact_nodes += 1;
+        }
+    }
+    for i in 0..blocking.bristles.len() {
+        assert_eq!(
+            blocking.bristles[i], resident_read.bristles[i],
+            "bristle row {i} not bitwise-equal"
+        );
+    }
+    // Non-vacuous: the sloped field must have real contact activity,
+    // and the airborne node must have none.
+    assert!(
+        contact_nodes >= 2,
+        "expected ≥2 contact nodes, got {contact_nodes}"
+    );
+    assert!(
+        blocking.forces[3].iter().all(|f| f.abs() < 1.0e-6),
+        "airborne node has force"
+    );
+}
