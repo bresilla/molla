@@ -28,6 +28,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # The hosted runner's linker OOMs (ld bus error) on the full-debuginfo
+  # Bevy viewer binary; line-tables keep backtraces useful at a fraction
+  # of the link memory. CI-only — local builds keep full debuginfo.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 concurrency:
   group: rust-${{ github.ref }}
