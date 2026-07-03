@@ -92,7 +92,7 @@ pub fn decimate_lod_chain(mesh: &TriMesh, factors: &[f64]) -> Vec<TriMesh> {
             (n.min(total), i)
         })
         .collect();
-    targets.sort_by(|a, b| b.0.cmp(&a.0));
+    targets.sort_by_key(|t| std::cmp::Reverse(t.0));
 
     let mut state = DecimateState::new(mesh);
     state.seed_heap();
