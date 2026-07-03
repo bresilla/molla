@@ -2901,9 +2901,9 @@ impl Scene {
             | Scene::ImplicitMpmFull27 => ScenePhysicsAudit {
                 status: ManualGpu,
                 reference_case: "MPM granular/fluid/snow/two-way/implicit",
-                cpu_proof: "implicit_mpm and reduced MPM tests; reduced_multi_material_oracle_dispatches_distinct_branches for multi-material",
+                cpu_proof: "implicit_mpm and reduced MPM tests",
                 gpu_proof: "make test-gpu P=molla-solvers T=mpm_gpu / make test-gpu P=molla-solvers T=mpm_v3_gpu",
-                notes: "multi-material viewer currently visualizes material regions over the single-rheology MPM runtime; per-particle material-id GPU dispatch remains future work",
+                notes: "forward MPM scene family over the hardware-tested explicit/implicit runtime (per-particle materials live in the dedicated MpmMultiMaterial audit entry)",
             },
             Scene::Jelly
             | Scene::SoftbodyDrop
@@ -4180,8 +4180,9 @@ fn apply_scene_switch(
     } else if scene == Scene::MpmTwoWay {
         scene_states.mpm.rheology_idx = 0;
     } else if scene == Scene::MpmMultiMaterial {
-        // The runtime is still single-rheology, but the scene lays out three
-        // material regions and points at the branch-dispatch CPU oracle.
+        // Stage 24d.4 — the reset path wires the three bands to real
+        // per-particle material rows via `set_materials`; the slider
+        // rheology only styles the fallback single-material scenes.
         scene_states.mpm.rheology_idx = 0;
         scene_states.mpm.friction_angle_deg = 30.0;
         scene_states.mpm.pour_axis_count = 8;
