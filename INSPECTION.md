@@ -326,15 +326,20 @@ The workspace is clean (zero cargo warnings; the ~60 `#[allow(dead_code)]` sites
 
 # A — Architecture & structural debt
 
-> **MAINTAINER DECISION (2026-07-03): A1–A4 are OUT OF SCOPE.** The viewer/GUI
-> will move to an external crate with substantial rework; restructuring the
-> current `main.rs`/examples layout (A1), gathering tire panels (A2), sharing
-> scene bodies (A3), or rewiring the two inline-PDE scenes (A4) would be
-> churn against a codebase about to be replaced. Do not start these. The
-> CORE-side residue remains valid work independent of any viewer: GPU
-> adjoints in molla-autograd (diffsim scenes' missing half), true mixed /
-> nonconforming FEM kernels in molla-fem, and a threaded-SDF narrow phase in
-> molla-geometry.
+> **MAINTAINER DECISION (2026-07-03, clarified): hold A1–A4 pending the
+> maintainer's GUI split.** The plan: GUI chrome (egui panels, buttons,
+> sliders, controls) moves OUT to an external crate with substantial rework
+> by the maintainer; scene-level visualization (lines, objects, gizmos,
+> particle/mesh rendering, physics wiring) STAYS internal. Consequences for
+> these items: do NOT do wholesale restructuring (A1's module split, A3's
+> scene-body dedup, A4's scene rewiring) — that churns code the maintainer
+> is about to reshape around the split. A2's *identification* of the ~1,700
+> panel lines embedded in `main.rs` (the 20 `fn tire_*` egui panels) is
+> useful as a MAP of what will be externalized, but the move itself belongs
+> to the maintainer's split, not to an agent. The CORE-side residue remains
+> valid work independent of all this: GPU adjoints in molla-autograd
+> (diffsim scenes' missing half), true mixed / nonconforming FEM kernels in
+> molla-fem, and a threaded-SDF narrow phase in molla-geometry.
 
 ### A1. The viewer is one ~44k-line module (God-file via `include!`)
 - **Where:** `bin/molla_viewer/src/main.rs` (11,067 lines) textually `include!`s all 131 files under `src/examples/` (33,027 lines) at `main.rs:170-300`. No `mod` boundaries except `mod tests` (`:7825`). One flat namespace: helper names must be globally unique; incremental compiles touch everything.
