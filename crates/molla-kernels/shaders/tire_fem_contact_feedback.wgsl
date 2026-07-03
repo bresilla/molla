@@ -46,6 +46,10 @@ struct Uniforms {
 @group(0) @binding(11) var<storage, read>      contact_primitives: array<vec4<f32>>;
 @group(0) @binding(12) var<storage, read>      terrain_sinkage: array<f32>;
 @group(0) @binding(13) var<storage, read>      terrain_velocity_map: array<vec4<f32>>;
+// F2a — persistent hub state (same layout as tire_fem_hub.wgsl:
+// row 0 = (x, y, z, v_y), row 1 = (v_x, v_z, ω, θ)). Read only when
+// `u.material1.z > 0.5`; the blocking paths bind a dummy.
+@group(0) @binding(14) var<storage, read>      hub_state_in: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> u: Uniforms;
 
@@ -557,7 +561,15 @@ fn contact_feedback(@builtin(global_invocation_id) gid: vec3<u32>) {
             let v_long = dot(rel_v, heading);
             let v_lat = dot(rel_v, side);
             let radius = max(u.hub.w, 1.0e-4);
-            let wheel_speed = u.phys0.w * radius;
+            // F2a — resident-hub mode reads the live spin from the
+            // persistent hub state instead of the host-set uniform,
+            // severing the last per-substep host dependency of the
+            // zero-readback loop.
+            var omega_spin = u.phys0.w;
+            if (u.material1.z > 0.5) {
+                omega_spin = hub_state_in[1u].z;
+            }
+            let wheel_speed = omega_spin * radius;
             let slip_speed = wheel_speed - v_long;
             let lateral_slip_speed = -v_lat;
 

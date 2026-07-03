@@ -7604,6 +7604,7 @@ impl TireFemContactFeedbackKernel {
                 storage_entry(11, true), // SDF primitive rows
                 storage_entry(12, true), // terrain sinkage map
                 storage_entry(13, true), // terrain surface velocity map
+                storage_entry(14, true), // persistent hub state (F2a; dummy on blocking paths)
             ],
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -7938,6 +7939,12 @@ impl TireFemContactFeedbackKernel {
         };
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
+        let hub_state_dummy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_contact_feedback hub-state dummy"),
+            size: 32,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_fem_contact_feedback io bg"),
             layout: &self.layout_io,
@@ -7956,6 +7963,7 @@ impl TireFemContactFeedbackKernel {
                 entry(11, &sdf_buf),
                 entry(12, &sinkage_buf),
                 entry(13, &velocity_map_buf),
+                entry(14, &hub_state_dummy),
             ],
         });
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -8125,6 +8133,7 @@ impl TireFemContactFeedbackKernel {
         mesh: &TireFemPersistentMesh,
         state: &mut TireFemResidentContact,
         params: TireFemContactFeedbackParams,
+        use_resident_spin: bool,
     ) -> Result<()> {
         let n = mesh.n_nodes;
         if n == 0 {
@@ -8167,7 +8176,16 @@ impl TireFemContactFeedbackKernel {
                 p.mu_dynamic,
                 p.bristle_damping,
             ],
-            material1: [p.cohesion, p.bristle_relax_rate, 0.0, 0.0],
+            material1: [
+                p.cohesion,
+                p.bristle_relax_rate,
+                // F2a — when set, the shader reads ω from the
+                // persistent hub state (binding 14) instead of
+                // `params.omega`, making the substep loop fully
+                // autonomous once the hub runs `_spinning`.
+                if use_resident_spin { 1.0 } else { 0.0 },
+                0.0,
+            ],
             terrain_velocity: [0.0; 4],
             terrain_origin: [0.0, 0.0, 1.0, p.mu_static],
             terrain_dims: [1, 1, 0, 0],
@@ -8193,6 +8211,7 @@ impl TireFemContactFeedbackKernel {
                 entry(11, &state.sdf_dummy),
                 entry(12, &state.sinkage_dummy),
                 entry(13, &state.velocity_map_dummy),
+                entry(14, &mesh.hub_state_buf),
             ],
         });
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -8432,6 +8451,12 @@ impl TireFemContactFeedbackKernel {
         let water_buf = terrain.water_film_map.unwrap_or(&water_default);
         let sinkage_buf = terrain.sinkage_map.unwrap_or(&sinkage_default);
         let velocity_map_buf = terrain.surface_velocity_map.unwrap_or(&velocity_default);
+        let hub_state_dummy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_contact_feedback hub-state dummy"),
+            size: 32,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_fem_contact_feedback gpu-terrain io bg"),
             layout: &self.layout_io,
@@ -8450,6 +8475,7 @@ impl TireFemContactFeedbackKernel {
                 entry(11, &sdf_buf),
                 entry(12, sinkage_buf),
                 entry(13, velocity_map_buf),
+                entry(14, &hub_state_dummy),
             ],
         });
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -8777,6 +8803,12 @@ impl TireFemContactFeedbackKernel {
         let water_buf = terrain.water_film_map.unwrap_or(&water_default);
         let sinkage_buf = terrain.sinkage_map.unwrap_or(&sinkage_default);
         let velocity_map_buf = terrain.surface_velocity_map.unwrap_or(&velocity_default);
+        let hub_state_dummy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tire_fem_contact_feedback hub-state dummy"),
+            size: 32,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_fem_contact_feedback resident io bg"),
             layout: &self.layout_io,
@@ -8795,6 +8827,7 @@ impl TireFemContactFeedbackKernel {
                 entry(11, &sdf_buf),
                 entry(12, sinkage_buf),
                 entry(13, velocity_map_buf),
+                entry(14, &hub_state_dummy),
             ],
         });
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {

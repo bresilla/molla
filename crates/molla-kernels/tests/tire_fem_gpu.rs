@@ -4790,7 +4790,14 @@ fn tire_fem_resident_contact_loop_matches_blocking_chain() {
         // ── Chain B: zero-readback resident loop.
         kernel.step_persistent(&device, &queue, &mut mesh_resident, node_params);
         feedback_kernel
-            .dispatch_resident(&device, &queue, &mesh_resident, &mut resident, fb_params)
+            .dispatch_resident(
+                &device,
+                &queue,
+                &mesh_resident,
+                &mut resident,
+                fb_params,
+                false,
+            )
             .expect("resident feedback");
         kernel.step_hub_persistent_with_tread_forces(
             &device,
@@ -5078,4 +5085,216 @@ fn tire_fem_hub_spin_resident_matches_cpu_reference() {
         (6.0, 0.25),
         "non-spinning entry point must not touch hub_state[1].zw"
     );
+}
+
+/// F2a capstone — the FULLY AUTONOMOUS resident substep loop:
+/// `step_persistent → dispatch_resident(use_resident_spin) →
+/// step_hub_persistent_with_tread_forces_spinning`, with constant
+/// parameters and NO per-substep host-computed values at all (the
+/// wheel spin that drives bristle slip lives in `hub_state[1].z`).
+/// Reference: the same chain with the spin mirrored on the host in
+/// f32 (exact hub-kernel formula) and fed through `params.omega` /
+/// the non-spinning hub entry point. The two chains run identical
+/// arithmetic in identical order, so they must agree to the last bit.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_autonomous_resident_loop_matches_host_bridged_spin() {
+    use molla_vehicle::{SurfaceMaterial, TetraTireFem, TetraTireFemParams};
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+    let feedback_kernel = TireFemContactFeedbackKernel::new(&device);
+
+    let params = TetraTireFemParams {
+        surface_material: SurfaceMaterial {
+            mu_static: 1.0,
+            mu_dynamic: 0.85,
+            bristle_damping: 5.0e4,
+            rolling_resistance: 0.0,
+            cohesion: 0.0,
+        },
+        ..TetraTireFemParams::realtime_viewer()
+    };
+    let mut cpu_tire = TetraTireFem::new(0.0, 180_000.0, params);
+    let dt = 1.0 / 8_000.0;
+    let terrain = molla_vehicle::terrain::FlatTerrain::new(0.0, 1.0);
+    cpu_tire.set_hub_kinematic([0.0, params.outer_radius * 0.982, 0.0], [0.0; 3]);
+    for _ in 0..1_600 {
+        cpu_tire.step_on_terrain(&terrain, dt);
+    }
+    cpu_tire.set_hub_dynamic();
+    for _ in 0..6_400 {
+        cpu_tire.step_on_terrain(&terrain, dt);
+    }
+
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        semi_implicit_stiffness_scale: params.semi_implicit_stiffness_scale as f32,
+        ..Default::default()
+    };
+    let gpu_input = tire_fem_gpu_input_from_tetra_fem(&cpu_tire, base_gpu_params);
+    let node_params = gpu_input.params;
+    let n_nodes = gpu_input.positions.len() as u32;
+    let tread_n = gpu_input.tread_ids.len();
+
+    let mut mesh_auto = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("auto mesh");
+    let mut mesh_ref = kernel
+        .create_persistent(&device, &queue, &gpu_input)
+        .expect("ref mesh");
+    let mut fb_auto = feedback_kernel
+        .create_resident(&device, &queue, &mesh_auto, &vec![[0.0_f32; 4]; tread_n])
+        .expect("auto contact state");
+    let mut fb_ref = feedback_kernel
+        .create_resident(&device, &queue, &mesh_ref, &vec![[0.0_f32; 4]; tread_n])
+        .expect("ref contact state");
+
+    let hub_params = TireFemHubParams {
+        dt: dt as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        bead_damping: params.bead_damping as f32,
+        hub_mass: params.hub_mass as f32,
+        hub_damping: 260.0,
+        downforce: params.downforce as f32,
+        gravity_y: -9.81,
+        hub_floor_active: 1.0,
+        hub_floor_y: (params.inner_radius * 0.75) as f32,
+        external_force_xyz: [0.0; 3],
+        lateral_damping: 80.0,
+    };
+    let spin = molla_kernels::TireFemHubSpinParams {
+        drive_torque_n_m: 120.0,
+        brake_torque_n_m: 0.0,
+        spin_inertia: 1.2,
+    };
+    let omega0 = 6.0_f32;
+    kernel.write_hub_spin(&queue, &mesh_auto, omega0, 0.0);
+    kernel.write_hub_spin(&queue, &mesh_ref, omega0, 0.0);
+
+    // Constant feedback params — `omega` here is only consumed by the
+    // reference chain (the autonomous chain reads hub_state instead).
+    let base_fb = |omega: f32| TireFemContactFeedbackParams {
+        dt: dt as f32,
+        contact_band: 0.012,
+        ground_y: 0.0,
+        omega,
+        hub: [0.0, (params.outer_radius * 0.982) as f32, 0.0],
+        hub_vel: [0.0; 3],
+        heading: [1.0, 0.0, 0.0],
+        rolling_radius: params.outer_radius as f32,
+        normal_load_per_tread: (params.downforce / 12.0) as f32,
+        area_per_tread: node_params.pressure_area_per_tread_node,
+        tread_shear_stiffness: params.tread_shear_stiffness as f32,
+        mu_static: 1.0,
+        mu_dynamic: 0.85,
+        bristle_damping: 5.0e4,
+        cohesion: 0.0,
+        bristle_relax_rate: params.bristle_relax_rate as f32,
+    };
+
+    // Host f32 mirror of the hub kernel's spin integration.
+    let mut omega_ref = omega0;
+    let mut _angle_ref = 0.0_f32;
+    let inertia = spin.spin_inertia.max(1.0e-6);
+
+    for step in 0..96 {
+        // ── Autonomous chain: no host-computed values anywhere.
+        kernel.step_persistent(&device, &queue, &mut mesh_auto, node_params);
+        feedback_kernel
+            .dispatch_resident(
+                &device,
+                &queue,
+                &mesh_auto,
+                &mut fb_auto,
+                base_fb(0.0),
+                true,
+            )
+            .expect("auto feedback");
+        kernel.step_hub_persistent_with_tread_forces_spinning(
+            &device,
+            &queue,
+            &mesh_auto,
+            hub_params,
+            fb_auto.force_rows(),
+            n_nodes,
+            spin,
+        );
+
+        // ── Reference chain: identical dispatches, spin on the host.
+        kernel.step_persistent(&device, &queue, &mut mesh_ref, node_params);
+        feedback_kernel
+            .dispatch_resident(
+                &device,
+                &queue,
+                &mesh_ref,
+                &mut fb_ref,
+                base_fb(omega_ref),
+                false,
+            )
+            .expect("ref feedback");
+        kernel.step_hub_persistent_with_tread_forces(
+            &device,
+            &queue,
+            &mesh_ref,
+            hub_params,
+            fb_ref.force_rows(),
+            n_nodes,
+        );
+        let brake_soft = omega_ref / (omega_ref.abs() + 0.5);
+        let alpha = (spin.drive_torque_n_m - spin.brake_torque_n_m * brake_soft) / inertia;
+        omega_ref += alpha * (dt as f32);
+        _angle_ref += omega_ref * (dt as f32);
+        // Mirror the reference hub's spin slots so the (untouched)
+        // passthrough zw matches the autonomous mesh for readback
+        // comparison below.
+        kernel.write_hub_spin(&queue, &mesh_ref, omega_ref, _angle_ref);
+
+        if step % 16 == 15 {
+            let ha = kernel
+                .readback_hub(&device, &queue, &mesh_auto)
+                .expect("hub auto");
+            let hr = kernel
+                .readback_hub(&device, &queue, &mesh_ref)
+                .expect("hub ref");
+            eprintln!(
+                "step {step}: auto (x={:.6}, y={:.6}, ω={:.5}) ref (x={:.6}, y={:.6}, ω={:.5})",
+                ha[0], ha[1], ha[6], hr[0], hr[1], hr[6]
+            );
+            for c in 0..8 {
+                assert!(
+                    (ha[c] - hr[c]).abs() <= 1.0e-5 * hr[c].abs().max(1.0),
+                    "step {step}: hub slot {c} diverged: auto {} vs ref {}",
+                    ha[c],
+                    hr[c]
+                );
+            }
+        }
+    }
+
+    // Final node-state agreement.
+    let sa = kernel
+        .readback_state(&device, &queue, &mesh_auto)
+        .expect("state auto");
+    let sr = kernel
+        .readback_state(&device, &queue, &mesh_ref)
+        .expect("state ref");
+    let mut max_dp = 0.0_f32;
+    for (a, b) in sa.positions.iter().zip(sr.positions.iter()) {
+        for c in 0..3 {
+            max_dp = max_dp.max((a[c] - b[c]).abs());
+        }
+    }
+    eprintln!("final max node |Δp| = {max_dp:.3e}");
+    assert!(max_dp < 1.0e-5, "node state diverged: {max_dp}");
+    // Non-vacuous: spin accelerated under drive torque.
+    assert!(omega_ref > omega0);
 }
