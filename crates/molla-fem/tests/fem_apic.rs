@@ -718,3 +718,56 @@ fn pressure_projection_kills_divergence_and_passes_uniform_flow() {
         assert_eq!(a, b, "uniform flow must pass the projection untouched");
     }
 }
+
+/// Stage 37.6.1 — the hashed tet lookup must be EXACTLY equivalent to
+/// the brute-force `locate_particle_tet` (same first-match tet, same
+/// weights bitwise) across interior, face-sitting, boundary, and
+/// outside points.
+#[test]
+fn tet_lookup_grid_matches_brute_force_exactly() {
+    use molla_fem::{TetLookupGrid, locate_particle_tet};
+    let mesh = FemMesh::tet_grid_3d(4, 3, 5, 1.2, 0.7, 1.9);
+    let grid = TetLookupGrid::build(&mesh);
+    let mut s = 0x12345u64;
+    let mut next = || {
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (s >> 33) as f64 / (1u64 << 31) as f64
+    };
+    let mut hits = 0;
+    let mut misses = 0;
+    for i in 0..4000 {
+        // Mix of interior points, lattice/face points, and outside points.
+        let x = match i % 4 {
+            0 => Vec3::new(next() * 1.2, next() * 0.7, next() * 1.9),
+            1 => Vec3::new(
+                (i % 5) as Real * 0.3,
+                (i % 3) as Real * 0.2333333,
+                (i % 7) as Real * 0.3,
+            ),
+            2 => Vec3::new(next() * 2.0 - 0.4, next() * 1.4 - 0.35, next() * 2.6 - 0.35),
+            _ => Vec3::new(next() * 1.2, -0.5 - next(), next() * 1.9),
+        };
+        let brute = locate_particle_tet(&mesh, x);
+        let hashed = grid.locate(&mesh, x);
+        match (&brute, &hashed) {
+            (None, None) => misses += 1,
+            (Some((bv, bw, _)), Some((hv, hw, _))) => {
+                assert_eq!(bv, hv, "different tet at {x:?}");
+                assert_eq!(bw, hw, "different weights at {x:?}");
+                hits += 1;
+            }
+            _ => panic!(
+                "hashed/brute disagree on containment at {x:?}: brute={:?} hashed={:?}",
+                brute.is_some(),
+                hashed.is_some()
+            ),
+        }
+    }
+    eprintln!("lookup equivalence: {hits} hits, {misses} misses");
+    assert!(
+        hits > 500 && misses > 200,
+        "test must exercise both outcomes"
+    );
+}

@@ -112,7 +112,7 @@ pub use amr_mesh::{
     tt_times_vector,
 };
 pub use apic_coupling::{
-    ApicHybrid, ApicParticle, fluid_divergence_norm, fluid_weak_divergence_norm,
+    ApicHybrid, ApicParticle, TetLookupGrid, fluid_divergence_norm, fluid_weak_divergence_norm,
     locate_particle_tet, validate_hybrid,
 };
 #[cfg(feature = "gpu")]

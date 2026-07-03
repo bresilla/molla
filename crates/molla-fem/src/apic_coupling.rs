@@ -51,12 +51,17 @@
 //!
 //! 4. **Advect**: `x_p += dt · v_p_new`.
 //!
-//! # Particle-in-tet localisation (v1)
+//! # Particle-in-tet localisation
 //!
-//! v1 ships a naive O(P · T) brute-force barycentric test
-//! ([`locate_particle_tet`]). Acceptable for the contract tests
-//! (≤ 200 particles, ≤ a few hundred tets); a spatial hash lives in
-//! the deferred Stage 37.6.1 follow-up.
+//! [`TetLookupGrid`] (Stage 37.6.1) hashes tets into a uniform grid
+//! (CSR candidate lists sorted by cell index) so localisation is
+//! O(k) per particle while preserving `locate_particle_tet`'s
+//! first-match-in-cell-order semantics EXACTLY (equivalence test:
+//! identical tet + bitwise-identical weights across 4000 mixed
+//! interior/face/outside points). P2G, G2P, and the fluid mask all
+//! use it; the GPU `locate_tet` kernel consumes the same CSR. The
+//! brute-force [`locate_particle_tet`] remains as the public
+//! stateless API and the equivalence oracle.
 //!
 //! # Caveats / future work
 //!
@@ -178,8 +183,9 @@ impl ApicHybrid {
         let mut node_mass: Vec<Real> = vec![0.0; n];
         let mut node_momentum = vec![Vec3::ZERO; n];
 
+        let lookup = TetLookupGrid::build(&self.mesh);
         for particle in &self.particles {
-            let Some((tet_verts, weights, positions)) = locate_particle_tet(&self.mesh, particle.x)
+            let Some((tet_verts, weights, positions)) = lookup.locate(&self.mesh, particle.x)
             else {
                 continue;
             };
@@ -208,8 +214,9 @@ impl ApicHybrid {
             self.mesh.vert_count(),
             "g2p: node-velocity length mismatch"
         );
+        let lookup = TetLookupGrid::build(&self.mesh);
         for particle in &mut self.particles {
-            let Some((tet_verts, weights, positions)) = locate_particle_tet(&self.mesh, particle.x)
+            let Some((tet_verts, weights, positions)) = lookup.locate(&self.mesh, particle.x)
             else {
                 // Out-of-mesh particle: leave v / C alone, just advect.
                 particle.x += dt * particle.v;
@@ -429,6 +436,174 @@ pub fn validate_hybrid(hybrid: &ApicHybrid) -> Result<()> {
 /// with O(P) lookup; for now the brute-force scan is fine at the
 /// contract-test scale (≤ 200 particles, ≤ a few hundred tets ⇒
 /// ≤ ~50k inner iterations per substep).
+/// Stage 37.6.1 — uniform-grid accelerator for particle→tet lookup.
+///
+/// Replaces the O(P·T) brute-force scan with an O(P·k) cell lookup
+/// while preserving `locate_particle_tet`'s FIRST-MATCH-IN-CELL-ORDER
+/// semantics exactly: each grid cell's candidate list holds every tet
+/// whose AABB overlaps the cell, sorted by cell index — containment
+/// implies AABB overlap, so the first containing candidate in sorted
+/// order is the first containing tet in global order.
+pub struct TetLookupGrid {
+    pub(crate) origin: Vec3,
+    pub(crate) inv_cell: Real,
+    pub(crate) dims: [usize; 3],
+    /// CSR: `starts[c]..starts[c+1]` indexes into `entries`.
+    pub(crate) starts: Vec<u32>,
+    pub(crate) entries: Vec<u32>,
+}
+
+impl TetLookupGrid {
+    pub fn build(mesh: &FemMesh) -> Self {
+        let mut lo = Vec3::splat(Real::INFINITY);
+        let mut hi = Vec3::splat(Real::NEG_INFINITY);
+        let mut edge_sum = 0.0 as Real;
+        let mut tet_count = 0usize;
+        for cell in &mesh.cells {
+            let FemCell::Tet(idx) = cell else { continue };
+            tet_count += 1;
+            for j in 0..4 {
+                let p = mesh.vertices[idx[j] as usize];
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            edge_sum += (mesh.vertices[idx[1] as usize] - mesh.vertices[idx[0] as usize]).length();
+        }
+        if tet_count == 0 || !lo.x.is_finite() {
+            return Self {
+                origin: Vec3::ZERO,
+                inv_cell: 1.0,
+                dims: [1, 1, 1],
+                starts: vec![0, 0],
+                entries: Vec::new(),
+            };
+        }
+        // Cell size ≈ mean first-edge length keeps k small without
+        // exploding the table on stretched meshes.
+        let cell = (edge_sum / tet_count as Real).max(1.0e-6);
+        let inv_cell = 1.0 / cell;
+        let span = hi - lo;
+        let dims = [
+            ((span.x * inv_cell).ceil() as usize + 1).clamp(1, 256),
+            ((span.y * inv_cell).ceil() as usize + 1).clamp(1, 256),
+            ((span.z * inv_cell).ceil() as usize + 1).clamp(1, 256),
+        ];
+        let n_cells = dims[0] * dims[1] * dims[2];
+        let clamp_axis =
+            |v: Real, axis: usize| -> usize { (v.max(0.0) as usize).min(dims[axis] - 1) };
+        // Count pass then fill pass (CSR).
+        let mut counts = vec![0u32; n_cells + 1];
+        let mut ranges: Vec<([usize; 3], [usize; 3])> = Vec::with_capacity(tet_count);
+        let mut tet_cells: Vec<u32> = Vec::with_capacity(tet_count);
+        for (c, cell_ref) in mesh.cells.iter().enumerate() {
+            let FemCell::Tet(idx) = cell_ref else {
+                continue;
+            };
+            let mut tlo = Vec3::splat(Real::INFINITY);
+            let mut thi = Vec3::splat(Real::NEG_INFINITY);
+            for j in 0..4 {
+                let p = mesh.vertices[idx[j] as usize];
+                tlo = tlo.min(p);
+                thi = thi.max(p);
+            }
+            let a = [
+                clamp_axis((tlo.x - lo.x) * inv_cell, 0),
+                clamp_axis((tlo.y - lo.y) * inv_cell, 1),
+                clamp_axis((tlo.z - lo.z) * inv_cell, 2),
+            ];
+            let b = [
+                clamp_axis((thi.x - lo.x) * inv_cell, 0),
+                clamp_axis((thi.y - lo.y) * inv_cell, 1),
+                clamp_axis((thi.z - lo.z) * inv_cell, 2),
+            ];
+            for gz in a[2]..=b[2] {
+                for gy in a[1]..=b[1] {
+                    for gx in a[0]..=b[0] {
+                        counts[gx + dims[0] * (gy + dims[1] * gz) + 1] += 1;
+                    }
+                }
+            }
+            ranges.push((a, b));
+            tet_cells.push(c as u32);
+        }
+        for i in 1..counts.len() {
+            counts[i] += counts[i - 1];
+        }
+        let starts = counts.clone();
+        let mut cursor = counts;
+        let mut entries = vec![0u32; *starts.last().unwrap() as usize];
+        // Fill in ascending cell order (mesh.cells order) so each
+        // per-cell list is already sorted by cell index.
+        for (t, (a, b)) in ranges.iter().enumerate() {
+            let cell_idx = tet_cells[t];
+            for gz in a[2]..=b[2] {
+                for gy in a[1]..=b[1] {
+                    for gx in a[0]..=b[0] {
+                        let g = gx + dims[0] * (gy + dims[1] * gz);
+                        entries[cursor[g] as usize] = cell_idx;
+                        cursor[g] += 1;
+                    }
+                }
+            }
+        }
+        Self {
+            origin: lo,
+            inv_cell,
+            dims,
+            starts,
+            entries,
+        }
+    }
+
+    /// Hashed twin of [`locate_particle_tet`] — identical result,
+    /// O(k) candidates instead of O(T).
+    pub fn locate(&self, mesh: &FemMesh, x: Vec3) -> Option<([u32; 4], [Real; 4], [Vec3; 4])> {
+        self.locate_cell(mesh, x).map(|(_, verts, weights)| {
+            let p = [
+                mesh.vertices[verts[0] as usize],
+                mesh.vertices[verts[1] as usize],
+                mesh.vertices[verts[2] as usize],
+                mesh.vertices[verts[3] as usize],
+            ];
+            (verts, weights, p)
+        })
+    }
+
+    /// Like [`Self::locate`] but returns the containing CELL index —
+    /// the fluid-mask code keys on cells, not vertex tuples.
+    pub fn locate_cell(&self, mesh: &FemMesh, x: Vec3) -> Option<(usize, [u32; 4], [Real; 4])> {
+        const EPS: Real = 1.0e-9;
+        let gx = (((x.x - self.origin.x) * self.inv_cell).max(0.0) as usize).min(self.dims[0] - 1);
+        let gy = (((x.y - self.origin.y) * self.inv_cell).max(0.0) as usize).min(self.dims[1] - 1);
+        let gz = (((x.z - self.origin.z) * self.inv_cell).max(0.0) as usize).min(self.dims[2] - 1);
+        // A point outside the mesh AABB cannot be inside any tet.
+        if x.x < self.origin.x - EPS || x.y < self.origin.y - EPS || x.z < self.origin.z - EPS {
+            return None;
+        }
+        let g = gx + self.dims[0] * (gy + self.dims[1] * gz);
+        let begin = self.starts[g] as usize;
+        let end = self.starts[g + 1] as usize;
+        for &c in &self.entries[begin..end] {
+            let FemCell::Tet(verts) = &mesh.cells[c as usize] else {
+                continue;
+            };
+            let p = [
+                mesh.vertices[verts[0] as usize],
+                mesh.vertices[verts[1] as usize],
+                mesh.vertices[verts[2] as usize],
+                mesh.vertices[verts[3] as usize],
+            ];
+            let Some(weights) = barycentric_tet(&p, x) else {
+                continue;
+            };
+            if weights.iter().all(|w| *w >= -EPS && *w <= 1.0 + EPS) {
+                return Some((c as usize, *verts, weights));
+            }
+        }
+        None
+    }
+}
+
 pub fn locate_particle_tet(mesh: &FemMesh, x: Vec3) -> Option<([u32; 4], [Real; 4], [Vec3; 4])> {
     const EPS: Real = 1.0e-9;
     for cell in &mesh.cells {
@@ -722,30 +897,16 @@ pub fn first_match_fluid_mask(mesh: &FemMesh, particles: &[ApicParticle]) -> Vec
     let n = mesh.vertices.len();
     let mut fluid = vec![false; mesh.cells.len()];
     let mut node_mass = vec![0.0 as Real; n];
+    // Stage 37.6.1 — hashed lookup; ONE locate per particle covers
+    // both the mass deposit and the fluid mark (they were always the
+    // same first-match tet, previously found by two separate scans).
+    let lookup = TetLookupGrid::build(mesh);
     for particle in particles {
-        if let Some((verts, weights, _)) = locate_particle_tet(mesh, particle.x) {
+        if let Some((c, verts, weights)) = lookup.locate_cell(mesh, particle.x) {
             for j in 0..4 {
                 node_mass[verts[j] as usize] += weights[j] * particle.mass;
             }
-        }
-        for (c, cell) in mesh.cells.iter().enumerate() {
-            let FemCell::Tet(idx) = cell else { continue };
-            let p = [
-                mesh.vertices[idx[0] as usize],
-                mesh.vertices[idx[1] as usize],
-                mesh.vertices[idx[2] as usize],
-                mesh.vertices[idx[3] as usize],
-            ];
-            if let Some(w) = barycentric_tet(&p, particle.x) {
-                // Containment: `barycentric_tet` is the raw coordinate
-                // transform (Some for ANY point vs a non-degenerate
-                // tet) — the range check below is what makes it a
-                // containment test, mirroring `locate_particle_tet`.
-                if w.iter().all(|w| *w >= -1.0e-9 && *w <= 1.0 + 1.0e-9) {
-                    fluid[c] = true;
-                    break;
-                }
-            }
+            fluid[c] = true;
         }
     }
     for (c, cell) in mesh.cells.iter().enumerate() {

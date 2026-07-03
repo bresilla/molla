@@ -53,9 +53,14 @@ struct Uniforms {
     gravity_y: f32,
 
     gravity_z: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
+    grid_inv_cell: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+
+    grid_origin_z: f32,
+    grid_dim_x: u32,
+    grid_dim_y: u32,
+    grid_dim_z: u32,
 }
 
 const WG_SIZE: u32 = 64;
@@ -129,6 +134,11 @@ pub struct ApicGpuState {
     // Persistent uniforms + bind groups.
     uniform_buf: wgpu::Buffer,
     bg_uniforms: wgpu::BindGroup,
+    // Stage 37.6.1 — uniform-grid lookup params (buffers are owned by
+    // bg_mesh).
+    grid_origin: [f32; 3],
+    grid_inv_cell: f32,
+    grid_dims: [u32; 3],
     bg_mesh: wgpu::BindGroup,
     bg_particles: wgpu::BindGroup,
     bg_grid: wgpu::BindGroup,
@@ -199,7 +209,7 @@ impl ApicGpuState {
         });
         let layout_mesh = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::apic mesh"),
-            entries: &storage_entries(&[true, true, true]),
+            entries: &storage_entries(&[true, true, true, true, true]),
         });
         let layout_particles = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::apic particles"),
@@ -485,6 +495,26 @@ impl ApicGpuState {
                 resource: uniform_buf.as_entire_binding(),
             }],
         });
+        // Stage 37.6.1 — uniform-grid tet lookup (CPU-built CSR).
+        let lookup = crate::apic_coupling::TetLookupGrid::build(&hybrid.mesh);
+        let lookup_starts_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apic.lookup_starts"),
+            contents: bytemuck::cast_slice(&lookup.starts),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let lookup_entries_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("apic.lookup_entries"),
+            contents: bytemuck::cast_slice(if lookup.entries.is_empty() {
+                &[0u32][..]
+            } else {
+                &lookup.entries[..]
+            }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let grid_origin = lookup.origin;
+        let grid_inv_cell = lookup.inv_cell as f32;
+        let grid_dims = lookup.dims;
+
         let bg_mesh = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("apic.bg_mesh"),
             layout: &layout_mesh,
@@ -492,6 +522,8 @@ impl ApicGpuState {
                 buffer_entry(0, &mesh_vertices),
                 buffer_entry(1, &mesh_cells),
                 buffer_entry(2, &mesh_cell_offsets),
+                buffer_entry(3, &lookup_starts_buf),
+                buffer_entry(4, &lookup_entries_buf),
             ],
         });
         let bg_particles = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -599,6 +631,17 @@ impl ApicGpuState {
             g_bc_values,
             uniform_buf,
             bg_uniforms,
+            grid_origin: [
+                grid_origin.x as f32,
+                grid_origin.y as f32,
+                grid_origin.z as f32,
+            ],
+            grid_inv_cell,
+            grid_dims: [
+                grid_dims[0] as u32,
+                grid_dims[1] as u32,
+                grid_dims[2] as u32,
+            ],
             bg_mesh,
             bg_particles,
             bg_grid,
@@ -646,9 +689,13 @@ impl ApicGpuState {
             gravity_x: g.x as f32,
             gravity_y: g.y as f32,
             gravity_z: g.z as f32,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            grid_inv_cell: self.grid_inv_cell,
+            grid_origin_x: self.grid_origin[0],
+            grid_origin_y: self.grid_origin[1],
+            grid_origin_z: self.grid_origin[2],
+            grid_dim_x: self.grid_dims[0],
+            grid_dim_y: self.grid_dims[1],
+            grid_dim_z: self.grid_dims[2],
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

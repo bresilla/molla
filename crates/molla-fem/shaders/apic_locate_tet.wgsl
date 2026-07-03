@@ -59,9 +59,17 @@ struct Uniforms {
     gravity_y: f32,
 
     gravity_z: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
+    // Stage 37.6.1 — uniform-grid tet lookup (mirrors the CPU
+    // `TetLookupGrid`; candidate lists sorted by cell index preserve
+    // first-match semantics).
+    grid_inv_cell: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+
+    grid_origin_z: f32,
+    grid_dim_x: u32,
+    grid_dim_y: u32,
+    grid_dim_z: u32,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -69,6 +77,9 @@ struct Uniforms {
 @group(1) @binding(0) var<storage, read> mesh_vertices : array<vec4<f32>>;
 @group(1) @binding(1) var<storage, read> mesh_cells : array<u32>;
 @group(1) @binding(2) var<storage, read> mesh_cell_offsets : array<u32>;
+// Stage 37.6.1 — CSR candidate lists of the uniform lookup grid.
+@group(1) @binding(3) var<storage, read> lookup_starts : array<u32>;
+@group(1) @binding(4) var<storage, read> lookup_entries : array<u32>;
 
 @group(2) @binding(0) var<storage, read_write> p_x : array<vec4<f32>>;
 @group(2) @binding(1) var<storage, read_write> p_v : array<vec4<f32>>;
@@ -196,7 +207,18 @@ fn locate_tet(@builtin(global_invocation_id) gid: vec3<u32>) {
     var found_v: vec4<u32> = vec4<u32>(0u, 0u, 0u, 0u);
     var found_v3: u32 = 0u;
 
-    for (var cid: u32 = 0u; cid < u.cell_count; cid = cid + 1u) {
+    // Uniform-grid candidates (Stage 37.6.1): candidate lists are
+    // sorted by cell index, so first-match order equals the previous
+    // full O(T) scan's.
+    let gx = min(u32(max((x.x - u.grid_origin_x) * u.grid_inv_cell, 0.0)), u.grid_dim_x - 1u);
+    let gy = min(u32(max((x.y - u.grid_origin_y) * u.grid_inv_cell, 0.0)), u.grid_dim_y - 1u);
+    let gz = min(u32(max((x.z - u.grid_origin_z) * u.grid_inv_cell, 0.0)), u.grid_dim_z - 1u);
+    let g = gx + u.grid_dim_x * (gy + u.grid_dim_y * gz);
+    let cand_begin = lookup_starts[g];
+    let cand_end = lookup_starts[g + 1u];
+
+    for (var ci: u32 = cand_begin; ci < cand_end; ci = ci + 1u) {
+        let cid = lookup_entries[ci];
         let off = mesh_cell_offsets[cid];
         let i0 = mesh_cells[off + 0u];
         let i1 = mesh_cells[off + 1u];
