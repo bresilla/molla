@@ -68,10 +68,13 @@
 //!   contract). Equal-order P1 node pressure was rejected: its lumped
 //!   correction only cancels nodal moments and Richardson outer loops
 //!   amplify LBB checkerboard modes. `step` keeps the viscous-only
-//!   behavior (`pressure_iters = 0`). The GPU `step_gpu` does NOT yet
-//!   run the projection — port design: `apply_s` is two gather passes
-//!   over the existing node↔tet adjacency plus CG dot-product
-//!   reductions (reuse the `fem_cg_fused.wgsl` pattern).
+//!   behavior (`pressure_iters = 0`). The GPU twin is
+//!   `ApicHybrid::step_gpu_projected` — the CG loop is recorded fully
+//!   on-device (scatter/gather S-apply + single-workgroup dot
+//!   reductions + a convergence FREEZE clamping α/β to zero once
+//!   rr ≤ 1e-12·rr_init, because f32 CG diverges when iterated past
+//!   convergence). Parity: ~1e-6 max |Δv| vs this f64 oracle on the
+//!   compressing-blob contract.
 //! - **GPU port (Stage 41 v2).** The `step_gpu` method runs the full
 //!   pipeline (locate, P2G, grid-update, viscous-smoothing, BCs, G2P)
 //!   on the device. Mirrors the CPU mathematics exactly; the only
