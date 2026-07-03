@@ -194,7 +194,7 @@ fn cloth_adjoint_matches_finite_differences() {
             springs: setup.springs.clone(),
         };
         let jm = loss(&mk(&s_m), steps);
-        let fd = (jp - jm) as f64 / (2.0 * h as f64);
+        let fd = (jp - jm) / (2.0 * f64::from(h));
         let got = grad_v0[pi][c] as f64;
         let denom = fd.abs().max(got.abs());
         if denom < 1.0e-6 {
