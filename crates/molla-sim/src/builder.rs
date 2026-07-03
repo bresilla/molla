@@ -863,7 +863,7 @@ impl ModelBuilder {
             lame.push((mu, lambda, yield_stress, hardening, kin_hard));
         }
 
-        let mesh_id = self.tet_mesh_offsets.len().saturating_sub(1).max(0);
+        let mesh_id = self.tet_mesh_offsets.len().saturating_sub(1);
         if self.tet_mesh_offsets.is_empty() {
             self.tet_mesh_offsets.push(0);
         }
