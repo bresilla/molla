@@ -127,7 +127,7 @@ fn amr_near_point_criterion_refines_only_nearby() {
 
     // Every original base cell whose centroid is *outside* the radius
     // must still be a leaf at level 0.
-    let base_cells = amr.cells()[..n_base.max(0)].to_vec();
+    let base_cells = amr.cells()[..n_base].to_vec();
     let total_base = amr.cells().len()
         - amr
             .cells()
