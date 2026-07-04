@@ -390,9 +390,15 @@ host Newton loop on 4-byte readbacks. GPU passes the phase-1 contract:
 impact penetration-free + arrested; drop holds the invariant and lands in a
 13% DEEPER energy minimum than the f64 oracle (parity gated on energy —
 drapes are non-unique). f32 reality encoded in defaults: Newton stalls at
-~1e-2 relative gradient (tighter ⇒ line-search noise jitter). Phases 3–5
-(VT/EE self-collision — where the TOI kernel generalizes and F14 truly
-closes, tets + strain limiting + μ_s/μ_k, scale) remain as below. Subsumes the F14 GPU-CCD item
+~1e-2 relative gradient (tighter ⇒ line-search noise jitter). **Phase 3 CPU oracle
+LANDED 2026-07-04** — VT/EE self-contact pairs on `BarrierShell`
+(clamped closest-point weights, exact-a.e. gradients FD-verified to
+3.5e-7; 3·d̂ candidates + α·max|p| ≤ d̂ travel cap = airtight additive-CCD
+argument; true DoF-removal pinning replacing the huge-mass fallacy). The
+two-layer stack and crossed-ribbon EE oracles hold the invariant
+throughout. Remaining: 3b GPU pair port over the LBVH (where the TOI
+kernel generalizes and F14 truly closes), then tets + strain limiting +
+μ_s/μ_k (4), scale (5) — as below. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
