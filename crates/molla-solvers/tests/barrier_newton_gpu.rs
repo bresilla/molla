@@ -650,7 +650,7 @@ fn gpu_friction_strain_and_tets_match_contracts() {
             &device,
             &queue,
             &pos,
-            &vec![0.1; 8],
+            &[0.1; 8],
             &springs,
             &[BarrierGpuObstacle::HalfSpace {
                 n: [0.0, 1.0, 0.0],
