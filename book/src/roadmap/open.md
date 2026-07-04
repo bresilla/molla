@@ -1,18 +1,38 @@
 # Open items
 
-> **Current open set (2026-07-02).** Most entries below have since
+> **Current open set (2026-07-04).** Most entries below have since
 > **landed** and carry an inline `**Status.** Landed` block — they are
-> kept as decision records, not backlog. The genuinely open items are:
+> kept as decision records, not backlog. Since 2026-07-02: X1 (critic
+> audit over Stages 39–51) ran — three real findings, all fixed
+> (see INSPECTION.md); the tire stream is COMPLETE (fully autonomous
+> zero-readback loop, 40-wheel fused atlas at 1.53× realtime with
+> heightfield terrain); the INSPECTION.md backlog is CLOSED. Remaining:
 >
 > | Item | What | Effort |
 > |------|------|--------|
-> | A1 (Tier-A below) | Kinetic-vs-static friction split (μ_s > μ_k, per-contact stick/slip state) | 1–2 days |
-> | X1 (bottom of file) | Critic audit round over Stages 39–51 | ~1 day |
-> | X2 (bottom of file) | Viewer scenes for the v3–v6 solver work | ~1 day each |
+> | A1 (Tier-A below) | Kinetic-vs-static friction split (μ_s > μ_k) in the rigid XPBD contact pass | 1–2 days |
 >
-> Larger tracked work lives outside this file: the tire stream
-> (zero-host-readback substep loop, 40-wheel realtime — `PROGRESS.md`)
-> and the inspection backlog (`INSPECTION.md` at the repo root).
+> **A1 attempt notes (2026-07-04, reverted — start here next time).** A
+> velocity-pass-only split does NOT discriminate stick from slip: on an
+> incline with tan θ between μ_k and μ_s, the box creeps identically in
+> both cases because single-application friction under-relaxes on corner
+> contacts (the friction cousin of the B1b finding) — a per-contact
+> ACCUMULATED tangential impulse clamped to the cone across sweeps
+> (PGS-style) fixes the velocity side and is worth keeping. But true
+> stick then still leaks `g·sinθ·dt²` of POSITIONAL creep per step, and
+> naive Müller §3.5 positional friction (tangential anchor correction
+> gated on λ_t ≤ μ_s·λ_n per position iteration) OVER-STICKS: with
+> contacts regenerated every outer step, the detected depth carries the
+> contact margin + settled penetration, inflating λ_n so the ratio test
+> `λ_t/λ_n vs tan θ` always passes and even tan θ > μ_s holds. The
+> correct implementation needs contact-LIFETIME normal/tangential λ
+> accumulation (persistent contact identity across steps — the contact
+> reduction module already threads persistent IDs) so the cone ratio
+> compares displacements accumulated over the same window. That is the
+> real 1–2 day scope; the WGSL side additionally needs a per-(contact,
+> side) accumulator buffer indexed by the body-contact CSR entry to stay
+> race-free under the per-body threading model.
+> | X2 (bottom of file) | Viewer scenes for the v3–v6 solver work — HELD with the maintainer's GUI split (see GUI_SPLIT.md) | held |
 
 A concrete inventory of work from the v3–v6 push, grouped by tier:
 
