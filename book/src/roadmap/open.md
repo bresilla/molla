@@ -426,9 +426,12 @@ FEATURE-COMPLETE** — book chapter at `solvers/barrier_newton.md`.
 1 kN elastic-press oracle holds 11.4× more band margin than mass-only
 κ, friction λ now shares the barrier's κ, pinned vertices are
 boundary conditions (excluded from barriers/invariant), and the f32
-Newton gained a noise-floor exit. Remaining follow-ons: LBVH for
-adversarial distributions, warm-started PCG, rigid two-way coupling,
-GPU behind viewer scene 125. Subsumes the F14 GPU-CCD item
+Newton gained a noise-floor exit. **Rigid two-way coupling LANDED 2026-07-04**: body-attached obstacles
+follow live poses, third-law-exact reaction wrenches (momentum drift
+1.4e-7 through a real impact), and a rigid-side TOI that closes the
+weak-coupling tunneling hole (ball-on-trampoline rests supported).
+Remaining follow-ons: LBVH for adversarial distributions, warm-started
+PCG, GPU behind viewer scene 125, strong (monolithic/ABD) coupling. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

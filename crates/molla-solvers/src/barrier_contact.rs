@@ -225,6 +225,8 @@ pub struct BarrierShell {
 #[derive(Copy, Clone, Debug)]
 struct FrictionContact {
     vertex: u32,
+    /// Index into `obstacles` (reaction attribution).
+    obstacle: u32,
     /// Contact normal at the lag anchor.
     n: Vec3,
     /// Anchor position (u = tangential part of x − anchor).
@@ -1006,7 +1008,7 @@ impl BarrierShell {
             if self.pinned[i] {
                 continue;
             }
-            for ob in &self.obstacles {
+            for (o_idx, ob) in self.obstacles.iter().enumerate() {
                 let (gap, n) = ob.distance(*xi);
                 if gap < self.params.dhat {
                     let s = (self.params.dhat - gap).max(0.0);
@@ -1020,6 +1022,7 @@ impl BarrierShell {
                         / (self.params.dhat * self.params.dhat);
                     self.lagged_friction.push(FrictionContact {
                         vertex: i as u32,
+                        obstacle: o_idx as u32,
                         n,
                         anchor: *xi,
                         lambda,
@@ -1075,6 +1078,55 @@ impl BarrierShell {
                 + (mu_k - mu_s) * lambda * t2 * t2 / (2.0 * e)
                 + mu_k * lambda * (s - 2.0 * e)
         }
+    }
+
+    /// Physical reaction wrench each obstacle receives from the shell
+    /// at the CURRENT positions: per obstacle, (Σ force, Σ torque
+    /// about the WORLD ORIGIN) in Newtons / N·m. Includes the barrier
+    /// normal forces and the lagged friction forces. Because implicit
+    /// Euler gives the shell exactly `h·F(x_new)` of impulse, sampling
+    /// the same final-state forces here makes the exchange satisfy
+    /// Newton's third law to Newton-solver tolerance — the weak
+    /// rigid-coupling contract.
+    pub fn obstacle_reactions(&self, h: Real) -> Vec<(Vec3, Vec3)> {
+        let mut out = vec![(Vec3::ZERO, Vec3::ZERO); self.obstacles.len()];
+        for (i, xi) in self.positions.iter().enumerate() {
+            if self.pinned[i] {
+                continue;
+            }
+            let kappa = self.barrier_kappa(i, h);
+            for (o, ob) in self.obstacles.iter().enumerate() {
+                let (gap, n) = ob.distance(*xi);
+                let (_, db, _) = self.barrier(gap, kappa);
+                if db != 0.0 {
+                    // Force ON the vertex is (−b′)·n; the obstacle
+                    // receives the negation.
+                    let f_obstacle = n * db; // db < 0 ⇒ pushes obstacle away
+                    out[o].0 += f_obstacle;
+                    out[o].1 += xi.cross(f_obstacle);
+                }
+            }
+        }
+        // Friction: lagged contacts know their obstacle only through
+        // the anchor frame; re-associate by matching normals is
+        // fragile, so the lag records the obstacle index.
+        let ew = self.params.friction_epsv * h;
+        for fc in &self.lagged_friction {
+            let i = fc.vertex as usize;
+            let u = self.positions[i] - fc.anchor;
+            let ut = u - fc.n * fc.n.dot(u);
+            let s = ut.length();
+            if s > 1.0e-15 {
+                let (g, _) = self.friction_g(fc.lambda, s, ew);
+                // Friction force on the VERTEX is −(g/h²)·û (energy
+                // has no h² prefix); the obstacle receives +.
+                let f_obstacle = (ut / s) * (g / (h * h));
+                let o = fc.obstacle as usize;
+                out[o].0 += f_obstacle;
+                out[o].1 += self.positions[i].cross(f_obstacle);
+            }
+        }
+        out
     }
 
     /// Largest spring strain (len/rest) — the strain-limit invariant

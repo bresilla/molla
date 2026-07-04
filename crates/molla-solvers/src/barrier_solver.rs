@@ -8,10 +8,17 @@
 //! penetration is impossible at every Newton iterate, hard strain
 //! limits and μ_s/μ_k friction come along for free.
 //!
+//! Rigid coupling (v1.5, weak/explicit): obstacles attached to
+//! DYNAMIC bodies follow their body's live pose each step, and the
+//! reaction wrench the shell reports at the converged state (implicit
+//! Euler gives the shell exactly `h·F(x_new)` of impulse, so sampling
+//! the same forces makes the exchange third-law-exact to Newton
+//! tolerance) integrates the body semi-implicitly. Bodies not owning
+//! barrier obstacles pass through. Strong (monolithic ABD-style)
+//! coupling is the eventual upgrade; the weak scheme is conditionally
+//! stable — heavy cloth on a light body wants smaller h.
+//!
 //! v1 scope (documented, honest):
-//! * static analytic obstacles only — Plane/Sphere shapes attached to
-//!   `BodyId::NONE`; rigid-body state passes through untouched (no
-//!   two-way coupling yet);
 //! * cloth/shell surfaces (`SoftSurface` triangles); Model tets use
 //!   VBD's Neo-Hookean material and are NOT consumed here (the
 //!   barrier backend's own `BarrierTet` volume energy is a different
@@ -22,8 +29,24 @@
 use crate::Solver;
 use crate::barrier_contact::{BarrierObstacle, BarrierParams, BarrierShell, BarrierSpring};
 use crate::core::Result;
-use crate::math::Real;
+use crate::math::{Real, Vec3};
 use molla_sim::{Contacts, Control, Model, ShapeGeometry, State};
+
+/// One obstacle's provenance: which body owns it (−1 = world/static)
+/// and the shape's body-local geometry, so poses can be refreshed and
+/// reactions attributed each step.
+#[derive(Copy, Clone, Debug)]
+struct ObstacleBinding {
+    body: i32,
+    local: molla_math::Transform,
+    geom: ObstacleGeom,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum ObstacleGeom {
+    Plane { normal: Vec3 },
+    Sphere { radius: Real },
+}
 
 /// Barrier-Newton deformable solver (see module docs).
 pub struct BarrierSolver {
@@ -37,6 +60,8 @@ pub struct BarrierSolver {
     /// Stats from the most recent step (viewer/diagnostics surface).
     pub last_newton_iters: usize,
     pub last_min_gap: Real,
+    /// Obstacle provenance parallel to the shell's obstacle list.
+    bindings: Vec<ObstacleBinding>,
 }
 
 impl Default for BarrierSolver {
@@ -52,6 +77,7 @@ impl BarrierSolver {
             params: BarrierParams::default(),
             last_newton_iters: 0,
             last_min_gap: Real::INFINITY,
+            bindings: Vec::new(),
         }
     }
 
@@ -61,7 +87,7 @@ impl BarrierSolver {
     }
 
     /// Build the shell topology from the model + initial state.
-    fn build_shell(&self, model: &Model, state: &State) -> Result<BarrierShell> {
+    fn build_shell(&mut self, model: &Model, state: &State) -> Result<BarrierShell> {
         let positions = state.particle_q.host()?.to_vec();
         let velocities = state.particle_qd.host()?.to_vec();
         let masses = model.particle_mass.host()?.to_vec();
@@ -89,25 +115,44 @@ impl BarrierSolver {
             });
         }
 
-        // Static analytic obstacles from world-attached shapes.
+        // Analytic obstacles: world-attached shapes are static;
+        // body-attached Plane/Sphere shapes follow their body's live
+        // pose (weak two-way coupling — see module docs).
         let mut obstacles = Vec::new();
+        self.bindings.clear();
+        let shape_body = model.shape_body.host()?;
+        let shape_xf = model.shape_transform.host()?;
+        let body_q = state.body_q.host()?;
         for s in 0..model.shape_count {
-            if model.shape_body.host()?[s] >= 0 {
-                continue; // body-attached: rigid coupling is future work
-            }
-            let xf = model.shape_transform.host()?[s];
+            let body = shape_body[s];
+            let local = shape_xf[s];
+            let world = if body >= 0 {
+                body_q[body as usize].compose(&local)
+            } else {
+                local
+            };
             match model.shape_geometry[s] {
                 ShapeGeometry::Plane { normal } => {
-                    let n = (xf.rotation * normal).normalize();
+                    let n = (world.rotation * normal).normalize();
                     obstacles.push(BarrierObstacle::HalfSpace {
                         n,
-                        offset: n.dot(xf.position),
+                        offset: n.dot(world.position),
+                    });
+                    self.bindings.push(ObstacleBinding {
+                        body,
+                        local,
+                        geom: ObstacleGeom::Plane { normal },
                     });
                 }
                 ShapeGeometry::Sphere { radius } => {
                     obstacles.push(BarrierObstacle::Sphere {
-                        center: xf.position,
+                        center: world.position,
                         radius,
+                    });
+                    self.bindings.push(ObstacleBinding {
+                        body,
+                        local,
+                        geom: ObstacleGeom::Sphere { radius },
                     });
                 }
                 _ => {} // other shapes: not representable analytically (v1)
@@ -168,6 +213,95 @@ impl Solver for BarrierSolver {
             shell.velocities.copy_from_slice(qd);
         }
 
+        // Weak-coupling sequencing with a RIGID-SIDE TOI: tentatively
+        // integrate each coupled body under gravity, cap its
+        // displacement so no owned obstacle can cross into the barrier
+        // band unseen (the cloth-side CCD only guards a FROZEN
+        // obstacle — without this cap a fast ball tunnels straight
+        // through the cloth between steps), then run the deformable
+        // solve against the capped poses. The reaction then builds
+        // over the following steps; resting contact converges to
+        // force balance with α → the honest fraction.
+        let inv_mass = model.body_inv_mass.host()?;
+        let mut q = state_in.body_q.host()?.to_vec();
+        let mut qd = state_in.body_qd.host()?.to_vec();
+        let mut coupled = vec![false; q.len()];
+        for b in &self.bindings {
+            if b.body >= 0 && inv_mass[b.body as usize] > 0.0 {
+                coupled[b.body as usize] = true;
+            }
+        }
+        let mut v_tent: Vec<Vec3> = qd.iter().map(|v| v.linear).collect();
+        let mut alpha_body = vec![1.0 as Real; q.len()];
+        for (i, coupled_i) in coupled.iter().enumerate() {
+            if !coupled_i {
+                continue;
+            }
+            v_tent[i] += self.params.gravity * dt;
+            let disp = v_tent[i] * dt;
+            let dlen = disp.length();
+            if dlen <= 1.0e-12 {
+                continue;
+            }
+            // Conservative TOI: an obstacle can close a vertex gap by
+            // at most |disp|; keep 10% of the band in reserve.
+            let mut min_gap = Real::INFINITY;
+            for (o, b) in self.bindings.iter().enumerate() {
+                if b.body as usize != i || b.body < 0 {
+                    continue;
+                }
+                for (v_idx, xv) in shell.positions.iter().enumerate() {
+                    if shell.pinned[v_idx] {
+                        continue;
+                    }
+                    let (gap, n_dir) = match shell.obstacles[o] {
+                        BarrierObstacle::Sphere { center, radius } => {
+                            let d = *xv - center;
+                            let len = d.length().max(1.0e-12);
+                            (len - radius, d / len)
+                        }
+                        BarrierObstacle::HalfSpace { n, offset } => (n.dot(*xv) - offset, n),
+                    };
+                    // Only gaps the motion actually closes matter.
+                    if disp.dot(n_dir) > 0.0 {
+                        min_gap = min_gap.min(gap);
+                    }
+                }
+            }
+            if min_gap.is_finite() {
+                let usable = (min_gap - 0.1 * self.params.dhat).max(0.0);
+                alpha_body[i] = (usable / dlen).min(1.0);
+            }
+        }
+        // Advance body poses by the capped displacement and refresh
+        // obstacle world poses for the deformable solve.
+        for (i, coupled_i) in coupled.iter().enumerate() {
+            if *coupled_i {
+                q[i].position += v_tent[i] * (dt * alpha_body[i]);
+            }
+        }
+        {
+            for (o, b) in self.bindings.iter().enumerate() {
+                if b.body < 0 {
+                    continue;
+                }
+                let world = q[b.body as usize].compose(&b.local);
+                shell.obstacles[o] = match b.geom {
+                    ObstacleGeom::Plane { normal } => {
+                        let n = (world.rotation * normal).normalize();
+                        BarrierObstacle::HalfSpace {
+                            n,
+                            offset: n.dot(world.position),
+                        }
+                    }
+                    ObstacleGeom::Sphere { radius } => BarrierObstacle::Sphere {
+                        center: world.position,
+                        radius,
+                    },
+                };
+            }
+        }
+
         let stats = shell.step(dt)?;
         self.last_newton_iters = stats.newton_iters;
         self.last_min_gap = stats.min_gap;
@@ -181,11 +315,40 @@ impl Solver for BarrierSolver {
             .host_mut()?
             .copy_from_slice(&shell.velocities);
 
-        // Rigid-body state passes through (static obstacles only).
-        let q_in = state_in.body_q.host()?.to_vec();
-        let qd_in = state_in.body_qd.host()?.to_vec();
-        state_out.body_q.host_mut()?.copy_from_slice(&q_in);
-        state_out.body_qd.host_mut()?.copy_from_slice(&qd_in);
+        // Reaction wrench (third-law-exact — see `obstacle_reactions`)
+        // → velocity update; position already advanced by the capped
+        // displacement above. Torque about the body origin (v1 treats
+        // it as the COM — documented).
+        let inv_inertia = model.body_inv_inertia.host()?;
+        let reactions = shell.obstacle_reactions(dt);
+        let mut wrench: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); q.len()];
+        for (o, b) in self.bindings.iter().enumerate() {
+            if b.body >= 0 && inv_mass[b.body as usize] > 0.0 {
+                let bi = b.body as usize;
+                let (f, tau_origin) = reactions[o];
+                wrench[bi].0 += f;
+                wrench[bi].1 += tau_origin - q[bi].position.cross(f);
+            }
+        }
+        for i in 0..q.len() {
+            if !coupled[i] {
+                continue;
+            }
+            let r = q[i].rotation;
+            let i_inv_world = molla_math::Mat3::from_quat(r)
+                * inv_inertia[i]
+                * molla_math::Mat3::from_quat(r).transpose();
+            qd[i].linear = v_tent[i] + wrench[i].0 * (inv_mass[i] * dt);
+            qd[i].angular += i_inv_world * wrench[i].1 * dt;
+            let w = qd[i].angular;
+            let wlen = w.length();
+            if wlen > 1.0e-12 {
+                let dq = molla_math::Quat::from_axis_angle(w / wlen, wlen * dt);
+                q[i].rotation = (dq * q[i].rotation).normalize();
+            }
+        }
+        state_out.body_q.host_mut()?.copy_from_slice(&q);
+        state_out.body_qd.host_mut()?.copy_from_slice(&qd);
         Ok(())
     }
 }

@@ -68,3 +68,190 @@ fn cloth_grid_drapes_over_sphere_via_solver_trait() {
         "resting gap must sit in the barrier band: {gap:.3e}"
     );
 }
+
+/// Rigid two-way coupling (weak/explicit): a dynamic rigid ball
+/// dropped onto a pinned-edge cloth trampoline. The cloth must hold
+/// the ball up (reaction wrench = ball weight at rest), the invariant
+/// must hold throughout, and the ball must come to rest ABOVE the
+/// sagged cloth rather than falling through.
+#[test]
+fn rigid_ball_rests_on_cloth_trampoline() {
+    let mut b = ModelBuilder::new();
+    let n = 9u32;
+    let size = 0.36_f64;
+    b.add_cloth_grid(
+        Vec3::new(-size * 0.5, 0.0, -size * 0.5),
+        Vec3::X * size,
+        Vec3::Z * size,
+        n,
+        n,
+        0.02,
+        0.005,
+        1.0e-3, // k = 1000 — taut trampoline
+        1.5,
+        WorldId(0),
+    );
+    let ball_r = 0.05;
+    let ball_mass = 0.3;
+    let ball = b.add_body(
+        molla_sim::BodyParams::new()
+            .with_spatial_inertia(molla_math::SpatialInertia {
+                mass: ball_mass,
+                com: Vec3::ZERO,
+                inertia: molla_math::Mat3::from_diagonal(Vec3::splat(
+                    0.4 * ball_mass * ball_r * ball_r,
+                )),
+            })
+            .with_pose(Transform::from_translation(Vec3::new(0.0, 0.12, 0.0))),
+    );
+    b.add_shape_sphere(ball, ball_r, Transform::IDENTITY)
+        .unwrap();
+    let mut model = b.build().unwrap();
+
+    // Pin the trampoline's boundary ring (inv_mass = 0 → the solver
+    // treats them as true DoF removals).
+    {
+        let inv = model.particle_inv_mass.host_mut().unwrap();
+        for j in 0..n {
+            for i in 0..n {
+                if i == 0 || j == 0 || i == n - 1 || j == n - 1 {
+                    inv[(j * n + i) as usize] = 0.0;
+                }
+            }
+        }
+    }
+    let model = model;
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(4);
+    let mut solver = BarrierSolver::new();
+
+    let h: Real = 1.0 / 240.0;
+    for step in 0..360 {
+        solver
+            .step(&model, &s_a, &control, &contacts, h, &mut s_b)
+            .unwrap();
+        assert!(
+            solver.last_min_gap > 0.0,
+            "step {step}: cloth-ball INVARIANT violated — gap {}",
+            solver.last_min_gap
+        );
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+
+    let ball_q = s_a.body_q.host().unwrap()[0];
+    let ball_qd = s_a.body_qd.host().unwrap()[0];
+    let cloth_min_y = s_a
+        .particle_q
+        .host()
+        .unwrap()
+        .iter()
+        .map(|p| p.y)
+        .fold(Real::INFINITY, Real::min);
+    eprintln!(
+        "trampoline: ball y {:.4}, |v| {:.3e}, cloth sag to {:.4}",
+        ball_q.position.y,
+        ball_qd.linear.length(),
+        cloth_min_y
+    );
+    // Supported: the ball must NOT have fallen through (free fall over
+    // 1.5 s would put it below −10 m); it rests with its center about
+    // one radius above the sagged cloth.
+    assert!(
+        ball_qd.linear.length() < 0.2,
+        "ball did not come to rest: |v| = {}",
+        ball_qd.linear.length()
+    );
+    assert!(
+        ball_q.position.y > cloth_min_y,
+        "ball fell through the cloth: {} vs sag {}",
+        ball_q.position.y,
+        cloth_min_y
+    );
+    assert!(
+        ball_q.position.y > -0.2,
+        "ball not supported: y = {}",
+        ball_q.position.y
+    );
+}
+
+/// Newton's third law under the weak coupling: zero gravity, a free
+/// (unpinned) cloth, a ball flying into it. Total linear momentum
+/// (ball + cloth) must be conserved through the impact to Newton
+/// tolerance — implicit Euler gives the cloth exactly h·F(x_new) and
+/// the reaction samples the same forces.
+#[test]
+fn ball_cloth_impact_conserves_momentum() {
+    let mut b = ModelBuilder::new();
+    let n = 7u32;
+    let size = 0.3_f64;
+    b.add_cloth_grid(
+        Vec3::new(-size * 0.5, 0.0, -size * 0.5),
+        Vec3::X * size,
+        Vec3::Z * size,
+        n,
+        n,
+        0.02,
+        0.005,
+        2.5e-3,
+        1.5,
+        WorldId(0),
+    );
+    let ball_r = 0.05;
+    let ball_mass = 0.4;
+    let ball = b.add_body(
+        molla_sim::BodyParams::new()
+            .with_spatial_inertia(molla_math::SpatialInertia {
+                mass: ball_mass,
+                com: Vec3::ZERO,
+                inertia: molla_math::Mat3::from_diagonal(Vec3::splat(
+                    0.4 * ball_mass * ball_r * ball_r,
+                )),
+            })
+            .with_pose(Transform::from_translation(Vec3::new(0.0, 0.09, 0.0))),
+    );
+    b.add_shape_sphere(ball, ball_r, Transform::IDENTITY)
+        .unwrap();
+    let model = b.build().unwrap();
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    s_a.body_qd.host_mut().unwrap()[0].linear = Vec3::new(0.0, -2.0, 0.0);
+    let control = model.control();
+    let contacts = Contacts::with_capacity(4);
+    let mut solver = BarrierSolver::new();
+    solver.params.gravity = Vec3::ZERO;
+
+    let cloth_mass = 0.02;
+    let p_total = |st: &molla_sim::State| -> Vec3 {
+        let mut p = st.body_qd.host().unwrap()[0].linear * ball_mass;
+        for v in st.particle_qd.host().unwrap().iter() {
+            p += *v * cloth_mass;
+        }
+        p
+    };
+    let p0 = p_total(&s_a);
+
+    let h: Real = 1.0 / 240.0;
+    for step in 0..120 {
+        solver
+            .step(&model, &s_a, &control, &contacts, h, &mut s_b)
+            .unwrap();
+        assert!(solver.last_min_gap > 0.0, "step {step}: penetrated");
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let p1 = p_total(&s_a);
+    let drift = (p1 - p0).length() / p0.length().max(1.0e-12);
+    eprintln!(
+        "momentum: |p0| {:.4}, |p1| {:.4}, drift {:.3e}",
+        p0.length(),
+        p1.length(),
+        drift
+    );
+    assert!(
+        drift < 0.02,
+        "third law violated: momentum drift {drift:.3e}"
+    );
+}
