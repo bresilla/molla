@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9189d053.js";
+            window.path_to_searchindex_js = "searchindex-6007d9b7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6df35734.js"></script>
@@ -17853,8 +17853,16 @@ a 50 m/s impact whose free-flight step crosses the floor ~16× stays
 penetration-free at every accepted iterate and arrests on the surface; a
 draped drop settles with the resting gap INSIDE the barrier band
 (9.99e-4 &lt; d̂ = 1e-3); every test ends with an explicit intersection scan.
-Phases 2–5 (GPU port + F14 TOI kernel, VT/EE self-collision, tets + strain
-limiting + μ_s/μ_k, scale) remain as below. Subsumes the F14 GPU-CCD item
+<strong>Phase 2 LANDED 2026-07-04</strong> — <code>molla-kernels::BarrierNewtonGpu</code>
+(barrier_newton.wgsl, 18 entries): device gradient/Hessian/PCG (single
+submission, f32 freeze)/TOI min-reduce/fused energy+gap+grad reductions;
+host Newton loop on 4-byte readbacks. GPU passes the phase-1 contract:
+impact penetration-free + arrested; drop holds the invariant and lands in a
+13% DEEPER energy minimum than the f64 oracle (parity gated on energy —
+drapes are non-unique). f32 reality encoded in defaults: Newton stalls at
+~1e-2 relative gradient (tighter ⇒ line-search noise jitter). Phases 3–5
+(VT/EE self-collision — where the TOI kernel generalizes and F14 truly
+closes, tets + strain limiting + μ_s/μ_k, scale) remain as below. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

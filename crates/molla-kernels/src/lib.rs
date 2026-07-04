@@ -21,12 +21,13 @@ mod actuator_pipeline_pd;
 #[cfg(feature = "gpu")]
 mod actuator_pipeline_pid;
 #[cfg(feature = "gpu")]
+mod barrier_newton;
+#[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
 mod clamping_max_effort;
 #[cfg(feature = "gpu")]
 mod clamping_position_based;
-#[cfg(feature = "gpu")]
 mod cloth_diff;
 #[cfg(feature = "gpu")]
 mod contact_reduction;
@@ -127,12 +128,15 @@ pub use actuator_pipeline_pd::ActuatorPipelinePdKernel;
 #[cfg(feature = "gpu")]
 pub use actuator_pipeline_pid::ActuatorPipelinePidKernel;
 #[cfg(feature = "gpu")]
+pub use barrier_newton::{
+    BarrierGpuObstacle, BarrierGpuParams, BarrierGpuSpring, BarrierGpuStats, BarrierNewtonGpu,
+};
+#[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_max_effort::ClampingMaxEffortKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_position_based::ClampingPositionBasedKernel;
-#[cfg(feature = "gpu")]
 pub use cloth_diff::{ClothDiffGpu, ClothSpring, SoftTet};
 #[cfg(feature = "gpu")]
 pub use contact_reduction::{
