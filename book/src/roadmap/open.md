@@ -436,8 +436,12 @@ the GPU barrier lane, gates unchanged). **GPU behind scene 125 LANDED 2026-07-05
 engine-GPU-path oracle in the lane). **LBVH broad phase LANDED 2026-07-05**
 (`use_lbvh`: step-granularity `LbvhBroadPhase` reuse with travel-cap
 inflation, per-iterate candidate filters; graded-mesh stress oracle).
-Remaining follow-on: strong (monolithic/ABD) coupling — which would
-also carry the rigid side onto the device. Subsumes the F14 GPU-CCD item
+**ABD strong coupling LANDED 2026-07-05** (CPU oracle): affine bodies
+inside the Newton solve via proxy vertices — machinery reuse total,
+momentum machine-exact (5e-15), the weak path's tunneling case handled
+by the unified line search alone. The GPU port of the composite solve
+is the natural next slice when a scene demands it. **C0 has no open
+items; the technical roadmap is CLEAR.** Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

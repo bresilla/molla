@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-571f2937.js";
+            window.path_to_searchindex_js = "searchindex-876b1dda.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f4239cce.js"></script>
@@ -17999,8 +17999,12 @@ the GPU barrier lane, gates unchanged). <strong>GPU behind scene 125 LANDED 2026
 engine-GPU-path oracle in the lane). <strong>LBVH broad phase LANDED 2026-07-05</strong>
 (<code>use_lbvh</code>: step-granularity <code>LbvhBroadPhase</code> reuse with travel-cap
 inflation, per-iterate candidate filters; graded-mesh stress oracle).
-Remaining follow-on: strong (monolithic/ABD) coupling — which would
-also carry the rigid side onto the device. Subsumes the F14 GPU-CCD item
+<strong>ABD strong coupling LANDED 2026-07-05</strong> (CPU oracle): affine bodies
+inside the Newton solve via proxy vertices — machinery reuse total,
+momentum machine-exact (5e-15), the weak path’s tunneling case handled
+by the unified line search alone. The GPU port of the composite solve
+is the natural next slice when a scene demands it. <strong>C0 has no open
+items; the technical roadmap is CLEAR.</strong> Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

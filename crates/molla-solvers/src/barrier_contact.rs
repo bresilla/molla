@@ -41,7 +41,7 @@
 //! (phase 2) will be measured against.
 
 use crate::core::{Error, Result};
-use crate::math::{Real, Vec3};
+use crate::math::{Mat3, Real, Vec3};
 
 /// Analytic obstacle for phase 1 (static, infinite mass).
 #[derive(Copy, Clone, Debug)]
@@ -71,6 +71,32 @@ impl BarrierObstacle {
 // exactly; for the sphere ∇²d is PSD outside but is multiplied by
 // b' ≤ 0, so the product is NSD and projecting it away keeps the
 // Newton operator positive definite.
+
+/// One affine body (ABD, Lan et al. 2022) for STRONG rigid coupling:
+/// 12 DOF — translation `p` and a free 3×3 `a_mat` held near rotation
+/// by the stiff orthogonality potential `κ_o·‖AᵀA − I‖²_F`. The body's
+/// surface samples live as PROXY vertices in the shell's position
+/// array (positions = A·x̄ + p, exactly, since the map is linear), so
+/// barriers, self-pairs, friction and the CCD line search all apply
+/// unchanged — one Newton solve couples everything, with no explicit
+/// force exchange and no rigid-side TOI patch.
+#[derive(Clone, Debug)]
+pub struct AffineBody {
+    /// Proxy range in `positions`.
+    pub proxy_start: usize,
+    pub proxy_count: usize,
+    /// COM-centred rest shape x̄.
+    pub rest: Vec<Vec3>,
+    pub p: Vec3,
+    pub a_mat: Mat3,
+    pub v_p: Vec3,
+    pub v_a: Mat3,
+    /// Total mass and the affine inertia J = Σ mᵢ x̄ᵢx̄ᵢᵀ.
+    pub mass: Real,
+    pub j_mat: Mat3,
+    /// Orthogonality stiffness κ_o.
+    pub kappa_ortho: Real,
+}
 
 /// One volumetric tet with a volume-preservation energy
 /// `½·k_v·(V − V₀)²` (rest volume measured at attach time). Same
@@ -199,6 +225,10 @@ pub struct BarrierShell {
     /// Per-vertex Σ of incident spring stiffnesses (the local elastic
     /// eigen-stiffness bound feeding the elasticity-inclusive κ).
     vertex_ksum: Vec<Real>,
+    /// Affine bodies (strong coupling); `proxy_of[i]` marks vertex i
+    /// as a derived proxy of body `proxy_of[i]`.
+    pub affine_bodies: Vec<AffineBody>,
+    pub proxy_of: Vec<Option<u32>>,
     /// Pinned vertices are true DoF removals: x̃ = x (no predictor
     /// gravity — a huge mass does NOT pin under an incremental
     /// potential, since the predictor free-falls independently of
@@ -293,6 +323,8 @@ impl BarrierShell {
             lagged_friction: Vec::new(),
             lagged_pair_friction: Vec::new(),
             vertex_ksum,
+            affine_bodies: Vec::new(),
+            proxy_of: vec![None; n],
             pinned: vec![false; n],
             params,
         })
@@ -327,6 +359,70 @@ impl BarrierShell {
         let gc = (pd - pa).cross(pb - pa) / 6.0;
         let gd = (pb - pa).cross(pc - pa) / 6.0;
         [-(gb + gc + gd), gb, gc, gd]
+    }
+
+    /// Add an affine body from world-space surface samples. Returns
+    /// the body index; the samples are appended to `positions` as
+    /// PROXY vertices (their triangles/edges can then be registered
+    /// through [`Self::with_triangles`] exactly like cloth).
+    pub fn add_affine_body(
+        &mut self,
+        samples: Vec<Vec3>,
+        sample_masses: Vec<Real>,
+        kappa_ortho: Real,
+    ) -> usize {
+        assert_eq!(samples.len(), sample_masses.len());
+        let mass: Real = sample_masses.iter().sum();
+        let com = samples
+            .iter()
+            .zip(sample_masses.iter())
+            .fold(Vec3::ZERO, |acc, (x, &m)| acc + *x * m)
+            / mass;
+        let rest: Vec<Vec3> = samples.iter().map(|x| *x - com).collect();
+        let mut j_mat = Mat3::ZERO;
+        for (x, &m) in rest.iter().zip(sample_masses.iter()) {
+            j_mat += Mat3::from_cols(*x * x.x, *x * x.y, *x * x.z) * m;
+        }
+        let body_idx = self.affine_bodies.len();
+        let start = self.positions.len();
+        for (x, &m) in samples.iter().zip(sample_masses.iter()) {
+            self.positions.push(*x);
+            self.velocities.push(Vec3::ZERO);
+            self.masses.push(m);
+            self.vertex_ksum.push(0.0);
+            self.pinned.push(false);
+            self.proxy_of.push(Some(body_idx as u32));
+        }
+        self.affine_bodies.push(AffineBody {
+            proxy_start: start,
+            proxy_count: samples.len(),
+            rest,
+            p: com,
+            a_mat: Mat3::IDENTITY,
+            v_p: Vec3::ZERO,
+            v_a: Mat3::ZERO,
+            mass,
+            j_mat,
+            kappa_ortho,
+        });
+        body_idx
+    }
+
+    /// Orthogonality energy, gradient and Gauss-projected
+    /// Hessian-vector product for `A` (κ_o·‖AᵀA − I‖²_F; the
+    /// residual-times-second-derivative term vanishes at AᵀA = I and
+    /// is projected away — same SPD discipline as everything else).
+    fn ortho_terms(a: Mat3, kappa: Real) -> (Real, Mat3) {
+        let r = a.transpose() * a - Mat3::IDENTITY;
+        let e = kappa
+            * (r.col(0).length_squared() + r.col(1).length_squared() + r.col(2).length_squared());
+        let grad = a * r * (4.0 * kappa);
+        (e, grad)
+    }
+
+    fn ortho_hess_mul(a: Mat3, x: Mat3, kappa: Real) -> Mat3 {
+        // Gauss part: 4κ·A·(XᵀA + AᵀX).
+        a * (x.transpose() * a + a.transpose() * x) * (4.0 * kappa)
     }
 
     /// Pin vertices in place (true DoF removal — see `pinned`).
@@ -602,7 +698,11 @@ impl BarrierShell {
     fn energy(&self, x: &[Vec3], x_tilde: &[Vec3], h: Real, pairs: &[SelfPair]) -> Real {
         let mut e = 0.0;
         for i in 0..x.len() {
-            e += 0.5 * self.masses[i] * (x[i] - x_tilde[i]).length_squared();
+            // Proxy vertices carry no per-vertex inertia — theirs
+            // lives in the owning body's 12-DOF mass terms.
+            if self.proxy_of[i].is_none() {
+                e += 0.5 * self.masses[i] * (x[i] - x_tilde[i]).length_squared();
+            }
         }
         let h2 = h * h;
         for s in &self.springs {
@@ -661,7 +761,9 @@ impl BarrierShell {
             *g = Vec3::ZERO;
         }
         for i in 0..x.len() {
-            out[i] += (x[i] - x_tilde[i]) * self.masses[i];
+            if self.proxy_of[i].is_none() {
+                out[i] += (x[i] - x_tilde[i]) * self.masses[i];
+            }
         }
         let h2 = h * h;
         for s in &self.springs {
@@ -747,7 +849,9 @@ impl BarrierShell {
             *yi = Vec3::ZERO;
         }
         for i in 0..x.len() {
-            y[i] += v[i] * self.masses[i];
+            if self.proxy_of[i].is_none() {
+                y[i] += v[i] * self.masses[i];
+            }
         }
         let h2 = h * h;
         for s in &self.springs {
@@ -1190,8 +1294,63 @@ impl BarrierShell {
         g
     }
 
+    /// Expand a composite direction (cloth verts free, proxies
+    /// derived from their body's (dp, dA)) into the full vertex array.
+    fn abd_expand(&self, dv: &[Vec3], dbody: &[(Vec3, Mat3)], out: &mut [Vec3]) {
+        out.copy_from_slice(dv);
+        for (bi, body) in self.affine_bodies.iter().enumerate() {
+            let (dp, da) = dbody[bi];
+            for k in 0..body.proxy_count {
+                out[body.proxy_start + k] = da * body.rest[k] + dp;
+            }
+        }
+    }
+
+    /// Reduce per-proxy vectors into per-body 12-DOF blocks:
+    /// (Σ yᵢ, Σ yᵢ x̄ᵢᵀ).
+    fn abd_reduce(&self, y: &[Vec3]) -> Vec<(Vec3, Mat3)> {
+        self.affine_bodies
+            .iter()
+            .map(|body| {
+                let mut fp = Vec3::ZERO;
+                let mut fa = Mat3::ZERO;
+                for k in 0..body.proxy_count {
+                    let yi = y[body.proxy_start + k];
+                    fp += yi;
+                    let xb = body.rest[k];
+                    fa += Mat3::from_cols(yi * xb.x, yi * xb.y, yi * xb.z);
+                }
+                (fp, fa)
+            })
+            .collect()
+    }
+
+    /// Body-side incremental energy (inertia + h²·orthogonality) for
+    /// trial poses.
+    fn abd_energy(&self, poses: &[(Vec3, Mat3)], tilde: &[(Vec3, Mat3)], h: Real) -> Real {
+        let mut e = 0.0;
+        for (bi, body) in self.affine_bodies.iter().enumerate() {
+            let (p, a) = poses[bi];
+            let (pt, at) = tilde[bi];
+            e += 0.5 * body.mass * (p - pt).length_squared();
+            let da = a - at;
+            // ½ tr(ΔA J ΔAᵀ) — affine rotational inertia.
+            let daj = da * body.j_mat;
+            e += 0.5
+                * (daj.col(0).dot(da.col(0))
+                    + daj.col(1).dot(da.col(1))
+                    + daj.col(2).dot(da.col(2)));
+            let (eo, _) = Self::ortho_terms(a, body.kappa_ortho);
+            e += h * h * eo;
+        }
+        e
+    }
+
     /// One implicit step of size `h`.
     pub fn step(&mut self, h: Real) -> Result<BarrierStepStats> {
+        if !self.affine_bodies.is_empty() {
+            return self.step_abd(h);
+        }
         let n = self.positions.len();
         self.rebuild_friction_lag(h);
         let x_prev = self.positions.clone();
@@ -1336,5 +1495,292 @@ impl BarrierShell {
             }
         }
         Ok(p_out)
+    }
+
+    /// The ABD-coupled Newton step: ONE incremental potential over
+    /// cloth vertices AND affine-body DOFs — barriers/pairs/friction
+    /// evaluated on the derived proxy vertices, directions expanded /
+    /// forces reduced through the linear map, the SAME CCD-truncated
+    /// line search protecting everything (this is what removes the
+    /// weak path's rigid-side TOI patch: a fast body simply shortens
+    /// the unified step).
+    fn step_abd(&mut self, h: Real) -> Result<BarrierStepStats> {
+        let n = self.positions.len();
+        self.rebuild_friction_lag(h);
+        let x_prev = self.positions.clone();
+        let bodies_prev: Vec<(Vec3, Mat3)> =
+            self.affine_bodies.iter().map(|b| (b.p, b.a_mat)).collect();
+        let x_tilde: Vec<Vec3> = (0..n)
+            .map(|i| {
+                if self.pinned[i] || self.proxy_of[i].is_some() {
+                    x_prev[i]
+                } else {
+                    x_prev[i] + self.velocities[i] * h + self.params.gravity * (h * h)
+                }
+            })
+            .collect();
+        let body_tilde: Vec<(Vec3, Mat3)> = self
+            .affine_bodies
+            .iter()
+            .map(|b| {
+                (
+                    b.p + b.v_p * h + self.params.gravity * (h * h),
+                    b.a_mat + b.v_a * h,
+                )
+            })
+            .collect();
+
+        let mut x = x_prev.clone();
+        let mut poses = bodies_prev.clone();
+        let mut grad = vec![Vec3::ZERO; n];
+        let mut stats = BarrierStepStats {
+            min_gap: self.min_gap(),
+            ..Default::default()
+        };
+        let m_max = self.masses.iter().cloned().fold(0.0, Real::max);
+        let tol = self.params.newton_tol * (m_max * self.params.dhat).max(1.0e-30);
+        let nb = self.affine_bodies.len();
+        let j_inv: Vec<Mat3> = self
+            .affine_bodies
+            .iter()
+            .map(|b| b.j_mat.inverse())
+            .collect();
+
+        for it in 0..self.params.max_newton_iters {
+            // Sync proxies from poses (exact — linear map).
+            for (bi, body) in self.affine_bodies.iter().enumerate() {
+                let (p, a) = poses[bi];
+                for k in 0..body.proxy_count {
+                    x[body.proxy_start + k] = a * body.rest[k] + p;
+                }
+            }
+            let pairs = self.self_candidates(&x);
+            self.gradient(&x, &x_tilde, h, &pairs, &mut grad);
+            // Body gradients: reduced proxy forces + inertia + ortho.
+            let mut gbody = self.abd_reduce(&grad);
+            for bi in 0..nb {
+                let body = &self.affine_bodies[bi];
+                let (p, a) = poses[bi];
+                let (pt, at) = body_tilde[bi];
+                gbody[bi].0 += (p - pt) * body.mass;
+                gbody[bi].1 += (a - at) * body.j_mat;
+                let (_, go) = Self::ortho_terms(a, body.kappa_ortho);
+                gbody[bi].1 += go * (h * h);
+            }
+            let mut g_inf: Real = 0.0;
+            for (i, g) in grad.iter().enumerate() {
+                if self.proxy_of[i].is_none() {
+                    g_inf = g_inf.max(g.x.abs().max(g.y.abs()).max(g.z.abs()));
+                }
+            }
+            for (gp, ga) in &gbody {
+                g_inf = g_inf.max(gp.x.abs().max(gp.y.abs()).max(gp.z.abs()));
+                for c in 0..3 {
+                    let col = ga.col(c);
+                    g_inf = g_inf.max(col.x.abs().max(col.y.abs()).max(col.z.abs()));
+                }
+            }
+            if g_inf <= tol {
+                stats.newton_iters = it;
+                break;
+            }
+            stats.newton_iters = it + 1;
+
+            // ── composite PCG on H·d = −g.
+            let mut dv = vec![Vec3::ZERO; n];
+            let mut dbody = vec![(Vec3::ZERO, Mat3::ZERO); nb];
+            {
+                let mut r_v: Vec<Vec3> = grad
+                    .iter()
+                    .enumerate()
+                    .map(|(i, g)| {
+                        if self.proxy_of[i].is_none() {
+                            -*g
+                        } else {
+                            Vec3::ZERO
+                        }
+                    })
+                    .collect();
+                let mut r_b: Vec<(Vec3, Mat3)> =
+                    gbody.iter().map(|(p, a)| (-*p, *a * -1.0)).collect();
+                let prec = |rv: &[Vec3], rb: &[(Vec3, Mat3)]| -> (Vec<Vec3>, Vec<(Vec3, Mat3)>) {
+                    let zv = rv
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            if self.proxy_of[i].is_none() {
+                                *r / self.masses[i]
+                            } else {
+                                Vec3::ZERO
+                            }
+                        })
+                        .collect();
+                    let zb = rb
+                        .iter()
+                        .enumerate()
+                        .map(|(bi, (rp, ra))| (*rp / self.affine_bodies[bi].mass, *ra * j_inv[bi]))
+                        .collect();
+                    (zv, zb)
+                };
+                let dot =
+                    |av: &[Vec3], ab: &[(Vec3, Mat3)], bv: &[Vec3], bb: &[(Vec3, Mat3)]| -> Real {
+                        let mut s: Real = av.iter().zip(bv.iter()).map(|(a, b)| a.dot(*b)).sum();
+                        for ((ap, aa), (bp, ba)) in ab.iter().zip(bb.iter()) {
+                            s += ap.dot(*bp);
+                            for c in 0..3 {
+                                s += aa.col(c).dot(ba.col(c));
+                            }
+                        }
+                        s
+                    };
+                let (mut z_v, mut z_b) = prec(&r_v, &r_b);
+                let mut d_v = z_v.clone();
+                let mut d_b = z_b.clone();
+                let mut rz = dot(&r_v, &r_b, &z_v, &z_b);
+                let r0 = dot(&r_v, &r_b, &r_v, &r_b);
+                let mut full = vec![Vec3::ZERO; n];
+                let mut hy = vec![Vec3::ZERO; n];
+                if r0 > 0.0 {
+                    for _ in 0..self.params.max_cg_iters {
+                        // H·d: expand, per-vertex Hessian, reduce, add
+                        // body inertia + ortho blocks.
+                        self.abd_expand(&d_v, &d_b, &mut full);
+                        self.hessian_mul(&x, h, &pairs, &full, &mut hy);
+                        let mut hb = self.abd_reduce(&hy);
+                        for bi in 0..nb {
+                            let body = &self.affine_bodies[bi];
+                            let (dp, da) = d_b[bi];
+                            hb[bi].0 += dp * body.mass;
+                            hb[bi].1 += da * body.j_mat;
+                            hb[bi].1 +=
+                                Self::ortho_hess_mul(poses[bi].1, da, body.kappa_ortho) * (h * h);
+                        }
+                        let hv: Vec<Vec3> = hy
+                            .iter()
+                            .enumerate()
+                            .map(|(i, y)| {
+                                if self.proxy_of[i].is_none() {
+                                    *y
+                                } else {
+                                    Vec3::ZERO
+                                }
+                            })
+                            .collect();
+                        let dhd = dot(&d_v, &d_b, &hv, &hb);
+                        if dhd <= 0.0 {
+                            break;
+                        }
+                        let alpha = rz / dhd;
+                        for i in 0..n {
+                            dv[i] += d_v[i] * alpha;
+                            r_v[i] -= hv[i] * alpha;
+                        }
+                        for bi in 0..nb {
+                            dbody[bi].0 += d_b[bi].0 * alpha;
+                            dbody[bi].1 += d_b[bi].1 * alpha;
+                            r_b[bi].0 -= hb[bi].0 * alpha;
+                            r_b[bi].1 -= hb[bi].1 * alpha;
+                        }
+                        if dot(&r_v, &r_b, &r_v, &r_b)
+                            <= self.params.cg_tol * self.params.cg_tol * r0
+                        {
+                            break;
+                        }
+                        let (z2v, z2b) = prec(&r_v, &r_b);
+                        z_v = z2v;
+                        z_b = z2b;
+                        let rz_new = dot(&r_v, &r_b, &z_v, &z_b);
+                        let beta = rz_new / rz;
+                        rz = rz_new;
+                        for i in 0..n {
+                            d_v[i] = z_v[i] + d_v[i] * beta;
+                        }
+                        for bi in 0..nb {
+                            d_b[bi].0 = z_b[bi].0 + d_b[bi].0 * beta;
+                            d_b[bi].1 = z_b[bi].1 + d_b[bi].1 * beta;
+                        }
+                    }
+                }
+            }
+
+            // ── unified CCD-truncated Armijo line search.
+            let mut full_dir = vec![Vec3::ZERO; n];
+            self.abd_expand(&dv, &dbody, &mut full_dir);
+            let alpha_max = self.ccd_alpha(&x, &full_dir, &pairs);
+            let e0 = self.energy(&x, &x_tilde, h, &pairs) + self.abd_energy(&poses, &body_tilde, h);
+            let slope: Real = grad
+                .iter()
+                .zip(full_dir.iter())
+                .enumerate()
+                .filter(|&(i, _)| self.proxy_of[i].is_none())
+                .map(|(_, (g, d))| g.dot(*d))
+                .sum::<Real>()
+                + gbody
+                    .iter()
+                    .zip(dbody.iter())
+                    .map(|((gp, ga), (dp, da))| {
+                        gp.dot(*dp) + (0..3).map(|c| ga.col(c).dot(da.col(c))).sum::<Real>()
+                    })
+                    .sum::<Real>();
+            let mut alpha = alpha_max;
+            let mut accepted = false;
+            for _ in 0..30 {
+                let x_try: Vec<Vec3> = (0..n).map(|i| x[i] + full_dir[i] * alpha).collect();
+                let poses_try: Vec<(Vec3, Mat3)> = poses
+                    .iter()
+                    .zip(dbody.iter())
+                    .map(|((p, a), (dp, da))| (*p + *dp * alpha, *a + *da * alpha))
+                    .collect();
+                let e_try = self.energy(&x_try, &x_tilde, h, &pairs)
+                    + self.abd_energy(&poses_try, &body_tilde, h);
+                if e_try <= e0 + 1.0e-4 * alpha * slope {
+                    x = x_try;
+                    poses = poses_try;
+                    accepted = true;
+                    break;
+                }
+                alpha *= 0.5;
+            }
+            if !accepted {
+                stats.hit_iter_cap = true;
+                break;
+            }
+            let gap_now = {
+                let mut g = Real::INFINITY;
+                for (i, xi) in x.iter().enumerate() {
+                    if self.pinned[i] {
+                        continue;
+                    }
+                    for ob in &self.obstacles {
+                        g = g.min(ob.distance(*xi).0);
+                    }
+                }
+                g.min(self.min_self_gap(&x))
+            };
+            stats.min_gap = stats.min_gap.min(gap_now);
+            if it + 1 == self.params.max_newton_iters {
+                stats.hit_iter_cap = true;
+            }
+        }
+
+        stats.energy = self.energy(&x, &x_tilde, h, &self.self_candidates(&x))
+            + self.abd_energy(&poses, &body_tilde, h);
+        for i in 0..n {
+            self.velocities[i] = if self.pinned[i] {
+                Vec3::ZERO
+            } else {
+                (x[i] - x_prev[i]) / h
+            };
+        }
+        for (bi, body) in self.affine_bodies.iter_mut().enumerate() {
+            let (p, a) = poses[bi];
+            let (pp, ap) = bodies_prev[bi];
+            body.v_p = (p - pp) / h;
+            body.v_a = (a - ap) * (1.0 / h);
+            body.p = p;
+            body.a_mat = a;
+        }
+        self.positions = x;
+        Ok(stats)
     }
 }
