@@ -10,6 +10,7 @@
 >
 > | Item | What | Effort |
 > |------|------|--------|
+> | **C0** (Tier-C below) | **Barrier-Newton contact backend (IPC-family, GPU)** — penetration-free invariant + CCD line search; subsumes F14 and obsoletes A1 for deformables. The flagship next feature; full design in the C0 entry. | multi-week (phase 1 = 1–2 sessions) |
 > | A1 (Tier-A below) | Kinetic-vs-static friction split (μ_s > μ_k) in the rigid XPBD contact pass | 1–2 days |
 >
 > **A1 attempt notes (2026-07-04, reverted — start here next time).** A
@@ -369,6 +370,93 @@ cross-mesh by construction.
 ---
 
 ## Tier-C — new physics axes (multi-week)
+
+### C0. Barrier-Newton contact backend (IPC-family, GPU) — flagship
+
+**Status.** Designed 2026-07-04 (this entry). Not started. Subsumes the F14
+GPU-CCD item (currently a loud refusal on the GPU VBD backend).
+
+**Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
+barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
+molla's one real deficit against the contact state of the art:
+XPBD/VBD are local projection/impulse methods with **no penetration-free
+invariant** — under speed, stiff stacking, or thin geometry they can tunnel
+or hold residual penetration (B1b, the CCD gate, and contact margins are all
+symptoms of the same class). Barrier-Newton contact makes interpenetration
+*mathematically impossible* at every intermediate state, not just at
+convergence. Their other advantages (offline scale, CUDA) are design points
+we don't want; this one is a capability we lack.
+
+**What it is.** A new solver backend, peer to `XpbdSolver`/`VbdSolver`:
+
+1. **Energy.** Incremental potential per step:
+   `E(x) = ½‖x − x̃‖²_M + h²·[ elastic(x) + Σ_contacts barrier(d(x)) ]`
+   with the cubic barrier `b(d) = κ·(d − d̂)³/d̂²` for `d < d̂` (zero at and
+   beyond d̂ — compact support, no log singularity), and
+   **elasticity-inclusive dynamic stiffness**: κ per contact derived from the
+   local elastic eigen-stiffness so soft and stiff materials get consistent
+   barrier response without hand-tuned global κ (this is the TOG 43.6
+   contribution — do not substitute plain IPC log-barrier κ scheduling).
+   Friction: lagged Coulomb à la IPC (tangential quadratic mollifier around
+   the previous iterate's normal force; μ_s/μ_k split composes here
+   naturally — see the A1 findings, which this backend obsoletes for
+   deformables).
+2. **Newton loop (per step, all on device).**
+   a. Broad phase: reuse the LBVH (`molla-geometry/lbvh.rs`, already GPU).
+   b. Constraint set: vertex-triangle + edge-edge pairs within d̂ (GPU
+      pair kernels exist in the soft-contact pipeline; extend to EE).
+   c. Assemble gradient + Hessian: elastic blocks (the FEM element
+      Hessians we already assemble on GPU for `elasticity_gpu`) + per-pair
+      barrier Hessians (4×4 blocks of 3×3 — new WGSL, analytic, with the
+      standard SPD projection of indefinite pair blocks).
+   d. Solve `H Δx = −g` with the **existing** device-resident PCG
+      (`fem_cg_fused.wgsl` / `BsrAlgebraKernel` — the same machinery the
+      mixed-elasticity GPU saddle uses). Block-Jacobi preconditioner v1.
+   e. **CCD line search**: α ← min(1, 0.9·TOI(x, Δx)) then backtrack on
+      energy. TOI = GPU kernel: per-pair conservative CCD (additive-CCD is
+      the pragmatic choice over exact root-finding — monotone, GPU-friendly,
+      and sufficient for the invariant); min-reduce α across pairs
+      (single-workgroup reduction, same pattern as the APIC CG dots).
+      This kernel IS the F14 deliverable — land it here, then also wire it
+      into the VBD pre-substep pass to lift the GPU CCD refusal.
+   f. Converge on ‖g‖_∞ or Newton-decrement; f32 with the convergence
+      freeze discipline from the APIC CG port (f32 Krylov diverges past
+      convergence — proven twice in this codebase).
+3. **Strain limiting** (phase 2): singular-value constraints on F per
+   triangle folded into the same Newton solve as barrier terms on
+   `σ_max − σ_limit` — gives ZOZO-style "strict 1–5%, not rubbery" cloth.
+4. **Invariant enforcement in tests, not just code**: every test ends with
+   an explicit intersection scan (their practice, worth copying verbatim).
+
+**What we already have** (why this is tractable): GPU LBVH broad phase,
+VT soft-contact pair kernels, GPU FEM element Hessians + BSR assembly,
+device-resident PCG with on-device dots, the f32-freeze lesson, per-body
+CSR threading patterns, and a large deformable test corpus with oracles.
+The genuinely new pieces are: the barrier energy/Hessian WGSL, EE pairs,
+the additive-CCD TOI kernel + α-reduction, and the Newton driver loop.
+
+**Phasing** (each phase lands green independently):
+1. CPU oracle: barrier-Newton for a triangle-mesh shell vs a plane +
+   sphere, f64, with FD-validated gradient/Hessian and the intersection
+   scan. (Small — this is the correctness anchor for everything after.)
+2. GPU port of phase 1 (assembly + PCG + CCD line search), parity vs the
+   CPU oracle; land the TOI kernel into VBD's CCD path (closes F14).
+3. EE pairs + self-collision (the cursed cases: cloth-on-cloth, twist).
+4. Tets (reuse `elasticity_gpu` Hessians) + strain limiting + μ_s/μ_k.
+5. Scale pass: pair compaction, warm-started PCG, Hessian reuse across
+   Newton iterations where the constraint set is stable.
+
+**Oracles.** Phase 1: FD gradcheck (the `cloth_diff` recipe); analytic
+sphere-drop rest depth → barrier gap ∈ (0, d̂); intersection scan after
+every test. Phase 3: the twisted-cloth-cylinder stress test (their
+`curriculum` scenes are Apache-2.0 — port the setups, compare
+qualitative outcomes). Performance target: real-time for viewer-scale
+scenes (10k–50k vertices) — we are NOT chasing their 180M-contact offline
+regime; we are chasing their *invariant* at our scale.
+
+**Effort.** Multi-week (largest single item in the roadmap). Phase 1 is a
+1–2 session start with standalone value.
+
 
 ### C1. Multi-phase flow with surface tension
 
