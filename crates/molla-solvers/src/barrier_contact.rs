@@ -72,6 +72,16 @@ impl BarrierObstacle {
 // b' ≤ 0, so the product is NSD and projecting it away keeps the
 // Newton operator positive definite.
 
+/// One volumetric tet with a volume-preservation energy
+/// `½·k_v·(V − V₀)²` (rest volume measured at attach time). Same
+/// energy family as `molla-kernels::SoftTet`, whose gradients this
+/// oracle re-derives and the FD test re-verifies.
+#[derive(Copy, Clone, Debug)]
+pub struct BarrierTet {
+    pub ids: [u32; 4],
+    pub kv: Real,
+}
+
 /// One stretch spring.
 #[derive(Copy, Clone, Debug)]
 pub struct BarrierSpring {
@@ -96,6 +106,18 @@ pub struct BarrierParams {
     pub cg_tol: Real,
     pub max_cg_iters: usize,
     pub gravity: Vec3,
+    /// Hard per-spring strain limit (length/rest), e.g. 1.05 = 5%.
+    /// Enforced the same way contact is: a strain barrier keeps
+    /// springs from pressing against the bound, and the LINE SEARCH
+    /// truncates any step that would cross it — the finite cubic
+    /// barrier alone cannot guarantee a hard bound; the truncation
+    /// can. `None` disables.
+    pub strain_limit: Option<Real>,
+    /// Barrier stiffness scale for the strain limit, multiplying the
+    /// elasticity-derived κ_s = k_spring·rest² (the same
+    /// "stiffness from the material, not a global knob" philosophy
+    /// as the contact κ).
+    pub strain_barrier_scale: Real,
 }
 
 impl Default for BarrierParams {
@@ -108,6 +130,8 @@ impl Default for BarrierParams {
             cg_tol: 1.0e-10,
             max_cg_iters: 2000,
             gravity: Vec3::new(0.0, -9.81, 0.0),
+            strain_limit: None,
+            strain_barrier_scale: 10.0,
         }
     }
 }
@@ -137,6 +161,10 @@ pub struct BarrierShell {
     pub triangles: Vec<[u32; 3]>,
     /// Unique triangle edges, derived by [`Self::with_triangles`].
     pub collision_edges: Vec<[u32; 2]>,
+    /// Volumetric tets (volume-preservation energy).
+    pub tets: Vec<BarrierTet>,
+    /// Rest volumes, measured by [`Self::with_tets`].
+    pub tet_v0: Vec<Real>,
     /// Pinned vertices are true DoF removals: x̃ = x (no predictor
     /// gravity — a huge mass does NOT pin under an incremental
     /// potential, since the predictor free-falls independently of
@@ -194,9 +222,42 @@ impl BarrierShell {
             obstacles,
             triangles: Vec::new(),
             collision_edges: Vec::new(),
+            tets: Vec::new(),
+            tet_v0: Vec::new(),
             pinned: vec![false; n],
             params,
         })
+    }
+
+    /// Attach volumetric tets; rest volumes measured from the
+    /// CURRENT positions.
+    pub fn with_tets(mut self, tets: Vec<BarrierTet>) -> Self {
+        self.tet_v0 = tets
+            .iter()
+            .map(|t| Self::tet_volume(&self.positions, t.ids))
+            .collect();
+        self.tets = tets;
+        self
+    }
+
+    fn tet_volume(x: &[Vec3], ids: [u32; 4]) -> Real {
+        let a = x[ids[0] as usize];
+        (x[ids[1] as usize] - a)
+            .cross(x[ids[2] as usize] - a)
+            .dot(x[ids[3] as usize] - a)
+            / 6.0
+    }
+
+    /// Volume gradients g_b, g_c, g_d (g_a = −Σ) at `x`.
+    fn tet_volume_grads(x: &[Vec3], ids: [u32; 4]) -> [Vec3; 4] {
+        let pa = x[ids[0] as usize];
+        let pb = x[ids[1] as usize];
+        let pc = x[ids[2] as usize];
+        let pd = x[ids[3] as usize];
+        let gb = (pc - pa).cross(pd - pa) / 6.0;
+        let gc = (pd - pa).cross(pb - pa) / 6.0;
+        let gd = (pb - pa).cross(pc - pa) / 6.0;
+        [-(gb + gc + gd), gb, gc, gd]
     }
 
     /// Pin vertices in place (true DoF removal — see `pinned`).
@@ -410,7 +471,10 @@ impl BarrierShell {
 
     /// b, b', b'' of the cubic compact-support barrier at gap `d`.
     fn barrier(&self, d: Real, kappa: Real) -> (Real, Real, Real) {
-        let dhat = self.params.dhat;
+        Self::barrier_with(d, self.params.dhat, kappa)
+    }
+
+    fn barrier_with(d: Real, dhat: Real, kappa: Real) -> (Real, Real, Real) {
         if d >= dhat {
             return (0.0, 0.0, 0.0);
         }
@@ -423,6 +487,20 @@ impl BarrierShell {
         )
     }
 
+    /// Strain-limit barrier band and stiffness for a spring: the gap
+    /// is `limit − strain` (dimensionless), the activation band the
+    /// last 20% of the allowed over-strain, κ_s from the spring's own
+    /// stiffness (`k·rest²` is the energy scale of a unit strain).
+    fn strain_barrier_terms(&self, s: &BarrierSpring, strain: Real) -> (Real, Real, Real) {
+        let Some(limit) = self.params.strain_limit else {
+            return (0.0, 0.0, 0.0);
+        };
+        let gap = limit - strain;
+        let band = 0.2 * (limit - 1.0).max(1.0e-6);
+        let kappa = self.params.strain_barrier_scale * s.k * s.rest * s.rest;
+        Self::barrier_with(gap, band, kappa)
+    }
+
     /// Incremental potential at `x` (with predicted target `x_tilde`).
     fn energy(&self, x: &[Vec3], x_tilde: &[Vec3], h: Real, pairs: &[SelfPair]) -> Real {
         let mut e = 0.0;
@@ -432,8 +510,17 @@ impl BarrierShell {
         let h2 = h * h;
         for s in &self.springs {
             let d = x[s.b as usize] - x[s.a as usize];
-            let c = d.length() - s.rest;
+            let len = d.length();
+            let c = len - s.rest;
             e += h2 * 0.5 * s.k * c * c;
+            if self.params.strain_limit.is_some() {
+                let (b, _, _) = self.strain_barrier_terms(s, len / s.rest);
+                e += h2 * b;
+            }
+        }
+        for (t, &v0) in self.tets.iter().zip(self.tet_v0.iter()) {
+            let dv = Self::tet_volume(x, t.ids) - v0;
+            e += h2 * 0.5 * t.kv * dv * dv;
         }
         for (i, xi) in x.iter().enumerate() {
             let kappa = self.barrier_kappa(i, h);
@@ -472,9 +559,24 @@ impl BarrierShell {
             let len = d.length().max(1.0e-12);
             let dir = d / len;
             // ∂E/∂x_b = +h²k(len − rest)·d̂ ; ∂E/∂x_a is the negation.
-            let f = h2 * s.k * (len - s.rest);
+            let mut f = h2 * s.k * (len - s.rest);
+            if self.params.strain_limit.is_some() {
+                // gap = limit − len/rest ⇒ ∂gap/∂len = −1/rest, so the
+                // barrier ADDS +(−b′)/rest of tension along d̂.
+                let (_, db, _) = self.strain_barrier_terms(s, len / s.rest);
+                f -= h2 * db / s.rest;
+            }
             out[s.a as usize] -= dir * f;
             out[s.b as usize] += dir * f;
+        }
+        for (t, &v0) in self.tets.iter().zip(self.tet_v0.iter()) {
+            let dv = Self::tet_volume(x, t.ids) - v0;
+            if dv != 0.0 {
+                let g = Self::tet_volume_grads(x, t.ids);
+                for (k, gk) in g.iter().enumerate() {
+                    out[t.ids[k] as usize] += *gk * (h2 * t.kv * dv);
+                }
+            }
         }
         for (i, xi) in x.iter().enumerate() {
             let kappa = self.barrier_kappa(i, h);
@@ -523,9 +625,31 @@ impl BarrierShell {
             let t = (1.0 - s.rest / len).max(0.0);
             let dv = v[s.b as usize] - v[s.a as usize];
             let dv_par = dir * dir.dot(dv);
-            let jdv = (dv - dv_par) * (h2 * s.k * t) + dv_par * (h2 * s.k);
+            let mut jdv = (dv - dv_par) * (h2 * s.k * t) + dv_par * (h2 * s.k);
+            if self.params.strain_limit.is_some() {
+                // Convex part of the strain barrier: b″/rest² along
+                // d̂d̂ᵀ (the b′ curvature term is dropped — same
+                // projection discipline as contact).
+                let (_, _, ddb) = self.strain_barrier_terms(s, len / s.rest);
+                if ddb > 0.0 {
+                    jdv += dv_par * (h2 * ddb / (s.rest * s.rest));
+                }
+            }
             y[s.a as usize] -= jdv;
             y[s.b as usize] += jdv;
+        }
+        for t in &self.tets {
+            // Gauss (SPD) part only: k_v·g·gᵀ — the geometric part
+            // k_v(V−V₀)·∂g/∂x is indefinite and projected away, same
+            // discipline as every other Hessian here.
+            let g = Self::tet_volume_grads(x, t.ids);
+            let mut s_acc = 0.0;
+            for (k, gk) in g.iter().enumerate() {
+                s_acc += gk.dot(v[t.ids[k] as usize]);
+            }
+            for (k, gk) in g.iter().enumerate() {
+                y[t.ids[k] as usize] += *gk * (h2 * t.kv * s_acc);
+            }
         }
         for (i, xi) in x.iter().enumerate() {
             let kappa = self.barrier_kappa(i, h);
@@ -575,6 +699,18 @@ impl BarrierShell {
             let p_max = p.iter().map(|q| q.length()).fold(0.0, Real::max);
             if p_max > 0.0 {
                 alpha = alpha.min(self.params.dhat / p_max);
+            }
+        }
+        // HARD strain bound: truncate any step that would cross the
+        // limit. Conservative: |Δstrain| ≤ (|p_a| + |p_b|)/rest.
+        if let Some(limit) = self.params.strain_limit {
+            for s in &self.springs {
+                let len = (x[s.b as usize] - x[s.a as usize]).length();
+                let gap = limit - len / s.rest;
+                let rate = (p[s.a as usize].length() + p[s.b as usize].length()) / s.rest;
+                if rate > 0.0 && gap > 0.0 {
+                    alpha = alpha.min(0.9 * gap / rate);
+                }
             }
         }
         // Per-candidate conservative TOI: the pair gap can close at
@@ -643,6 +779,17 @@ impl BarrierShell {
 
     pub fn fd_probe_hessian_mul(&self, x: &[Vec3], h: Real, v: &[Vec3], y: &mut [Vec3]) {
         self.hessian_mul(x, h, &self.self_candidates(x), v, y)
+    }
+
+    /// Largest spring strain (len/rest) — the strain-limit invariant
+    /// counterpart to [`Self::min_gap`].
+    pub fn max_strain(&self) -> Real {
+        self.springs
+            .iter()
+            .map(|s| {
+                (self.positions[s.b as usize] - self.positions[s.a as usize]).length() / s.rest
+            })
+            .fold(0.0, Real::max)
     }
 
     /// Smallest gap between any vertex and any obstacle — THE

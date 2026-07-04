@@ -403,8 +403,14 @@ cap in the CCD reduction, device pinning; the GPU two-layer stack matches
 the CPU oracle to the digit and the final intersection scan runs
 host-side with the oracle's exact machinery. **F14 is closed as
 superseded**: for deformables the barrier backend IS the penetration-free
-GPU path; VBD's CPU-only CCD gate stays by design. Remaining: tets +
-strain limiting + μ_s/μ_k (4), LBVH pair scale-out (5) — as below. Subsumes the F14 GPU-CCD item
+GPU path; VBD's CPU-only CCD gate stays by design. **Phase 4a
+LANDED 2026-07-04** — volumetric tets (exact volume gradients, Gauss-part
+SPD Hessian) and HARD strain limiting where the hard bound comes from
+LINE-SEARCH truncation (a strain-limit crossing is a TOI), with the
+barrier κ_s derived from the spring's own stiffness: an unlimited 15.8×
+stretch holds at 1.0486 < 1.05 under the same load. Remaining: 4b lagged
+IPC friction (μ_s/μ_k), GPU port of tets+strain, LBVH pair scale-out
+(5) — as below. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
