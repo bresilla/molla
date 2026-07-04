@@ -18,6 +18,7 @@ pub use molla_sim as sim;
 pub use molla_storage as storage;
 
 pub mod barrier_contact;
+pub mod barrier_solver;
 pub mod crba;
 mod featherstone;
 pub mod ik;
@@ -36,6 +37,7 @@ mod vbd;
 pub mod vbd_soft_contact;
 mod xpbd;
 
+pub use barrier_solver::BarrierSolver;
 pub use crba::mass_matrix;
 pub use featherstone::FeatherstoneSolver;
 pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};

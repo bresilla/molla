@@ -13,7 +13,8 @@ pub use crate::sim::{
     ShapeGeometry, State, TetMeshId, TriMesh, eval_fk,
 };
 pub use crate::solvers::{
-    FeatherstoneSolver, SemiImplicitSolver, Solver, VbdMode, VbdSolver, XpbdSolver,
+    BarrierParams, BarrierSolver, FeatherstoneSolver, SemiImplicitSolver, Solver, VbdMode,
+    VbdSolver, XpbdSolver,
 };
 pub use crate::storage::{Buffer, BufferUsage};
 

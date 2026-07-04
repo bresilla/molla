@@ -211,6 +211,7 @@ include!("examples/121_tire_traction.rs");
 include!("examples/122_tire_realistic.rs");
 include!("examples/123_terrain_lab.rs");
 include!("examples/124_vehicle_sysid.rs");
+include!("examples/125_barrier_cloth.rs");
 include!("examples/30_pyramid.rs");
 include!("examples/31_cloth_bending.rs");
 include!("examples/114_cloth_rollers.rs");
@@ -1212,6 +1213,9 @@ enum SolverBackend {
     /// Stage-20 Vertex Block Descent solver. Used by `Scene::VbdCloth`
     /// for high-fidelity cloth + soft-on-rigid coupling.
     Vbd(mp::VbdSolver),
+    /// Roadmap-C0 barrier-Newton (IPC-family) contact — the
+    /// penetration-free deformable backend. CPU f64 v1.
+    Barrier(mp::BarrierSolver),
 }
 
 impl SolverBackend {
@@ -1228,6 +1232,7 @@ impl SolverBackend {
             Self::Xpbd(s) => s.step(model, state_in, control, contacts, dt, state_out),
             Self::Featherstone(s) => s.step(model, state_in, control, contacts, dt, state_out),
             Self::Vbd(s) => s.step(model, state_in, control, contacts, dt, state_out),
+            Self::Barrier(s) => s.step(model, state_in, control, contacts, dt, state_out),
         }
     }
 }
@@ -1516,6 +1521,7 @@ enum Scene {
     ClothCollar,
     /// Stage 33.4 — fast-impact CCD demo (cube into pinned cloth strip).
     FastSoftImpact,
+    BarrierCloth,
     /// Stage 33.5 — soft tet block sliding down a soft tet ramp;
     /// friction-coefficient slider sweeps stick → slip → slide.
     SoftBrake,
@@ -1925,6 +1931,7 @@ impl Scene {
         Scene::SoftbodyDrop,
         Scene::ClothCollar,
         Scene::FastSoftImpact,
+        Scene::BarrierCloth,
         Scene::SoftBrake,
         Scene::FemHeat,
         Scene::FemBeam,
@@ -2026,6 +2033,7 @@ impl Scene {
             Scene::Quadrotor => "14 Quadrotor (Stage 17 multi-DOF)",
             Scene::BroadPhase => "15 GPU broad phase (Stage 19)",
             Scene::VbdCloth => "16 VBD cloth (Stage 20)",
+            Scene::BarrierCloth => "125 Barrier-Newton cloth (C0)",
             Scene::ReferencePendulum => "17 Native double pendulum",
             Scene::DiffArm => "18 Differentiable arm (Stage 23)",
             Scene::DiffArm6 => "19 Differentiable Featherstone (Stage 23.1)",
@@ -2196,6 +2204,9 @@ impl Scene {
             }
             Scene::VbdCloth => {
                 "Runs the high-resolution Vertex Block Descent cloth scene draping over a kinematic sphere. Stretch, bend, contact stiffness, and inner iterations should visibly affect cloth stability and contact behavior."
+            }
+            Scene::BarrierCloth => {
+                "Drapes a cloth grid over a sphere using the barrier-Newton (IPC-family) backend from roadmap C0. Interpenetration is impossible at every Newton iterate: the CCD-truncated line search cannot cross a surface, so the cloth rests exactly one barrier band above the obstacles with no contact-stiffness tuning."
             }
             Scene::ReferencePendulum => {
                 "Runs a native procedural double-pendulum reference scene. It should swing chaotically but continuously, providing a simple articulated baseline without any external wrapper or asset dependency."
@@ -2592,6 +2603,7 @@ impl Scene {
             | Scene::SoftbodyHanging
             | Scene::CableTwist
             | Scene::JellyDampingFall => SolverKind::Vbd,
+            Scene::BarrierCloth => SolverKind::Barrier,
             Scene::ReferencePendulum => SolverKind::Featherstone,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2606,6 +2618,7 @@ enum SolverKind {
     Xpbd,
     Featherstone,
     Vbd,
+    Barrier,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2772,6 +2785,13 @@ impl Scene {
                 cpu_proof: "vbd_cloth_cpu pinned/wrap/contact tests",
                 gpu_proof: "make test-gpu P=molla-solvers T=vbd_cloth_gpu",
                 notes: "core VBD cloth path has CPU contact/stability gates and GPU parity lanes",
+            },
+            Scene::BarrierCloth => ScenePhysicsAudit {
+                status: CpuOnly,
+                reference_case: "barrier-Newton cloth drape (C0)",
+                cpu_proof: "barrier_engine + barrier_contact/self_contact/tet_strain/friction suites",
+                gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (kernel parity; viewer path is CPU v1)",
+                notes: "penetration-free invariant asserted every step; scene drives the CPU f64 oracle via the Solver trait",
             },
             Scene::ClothBending | Scene::ClothTwist => ScenePhysicsAudit {
                 status: Complete,
@@ -3393,6 +3413,7 @@ fn build_solver(engine: &Engine, model: &mp::Model, kind: SolverKind) -> SolverB
                 .with_iterations(10)
                 .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
         ),
+        SolverKind::Barrier => SolverBackend::Barrier(mp::BarrierSolver::new()),
     }
 }
 
@@ -3420,6 +3441,7 @@ impl Sim {
             Scene::Quadrotor => build_quadrotor_model(),
             Scene::BroadPhase => build_broad_phase_model(),
             Scene::VbdCloth => build_vbd_cloth_model(),
+            Scene::BarrierCloth => build_barrier_cloth_model(),
             Scene::ReferencePendulum => build_reference_pendulum_model(),
             Scene::DiffArm => build_diff_arm_model(),
             Scene::DiffArm6 => build_diff_arm6_model(),
@@ -5599,6 +5621,7 @@ fn control_pane(
                     Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
                     Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
                     Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
+                    Scene::BarrierCloth => barrier_cloth_pane(ui, &mut sim),
                     Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
                     Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
                     Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),

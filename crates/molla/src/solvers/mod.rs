@@ -18,6 +18,7 @@
 //! [`rnea::inverse_dynamics`], the geometric [`jacobian::jacobian`],
 //! and the differentiable [`ik::IkSolver`].
 
+mod barrier;
 pub mod crba;
 mod featherstone;
 pub mod ik;
@@ -37,6 +38,7 @@ pub use molla_solvers::Solver;
 // Stage F1-F5 — the GPU WCSPH solver lives in `molla-solvers`; re-export
 // it through the umbrella crate so the viewer (which only depends on
 // `molla`) can drive a real SPH scene.
+pub use barrier::{BarrierParams, BarrierSolver};
 #[cfg(feature = "gpu")]
 pub use molla_solvers::{SphConfig, SphSimulation, box_tank_walls};
 pub use rnea::inverse_dynamics;
