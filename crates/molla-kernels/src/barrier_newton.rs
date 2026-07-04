@@ -17,7 +17,7 @@ struct Uniforms {
     vertex_count: u32,
     spring_count: u32,
     obstacle_count: u32,
-    _pad0: u32,
+    tri_count: u32,
     h: f32,
     dhat: f32,
     kappa_scale: f32,
@@ -26,6 +26,10 @@ struct Uniforms {
     gravity_y: f32,
     gravity_z: f32,
     _pad1: f32,
+    edge_count: u32,
+    pair_capacity: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 const WG: u32 = 64;
@@ -93,11 +97,18 @@ pub struct BarrierNewtonGpu {
     vertex_count: u32,
     spring_count: u32,
     obstacle_count: u32,
+    tri_count: u32,
+    edge_count: u32,
+    pair_capacity: u32,
+    pair_count_buf: wgpu::Buffer,
     mass_max: f32,
     pub params: BarrierGpuParams,
 }
 
 const ENTRIES: &[&str] = &[
+    "find_pairs_vt",
+    "find_pairs_ee",
+    "energy_pairs",
     "predict",
     "gradient",
     "hessian_mul",
@@ -125,6 +136,34 @@ impl BarrierNewtonGpu {
         masses: &[f32],
         springs: &[BarrierGpuSpring],
         obstacles: &[BarrierGpuObstacle],
+        params: BarrierGpuParams,
+    ) -> Result<Self> {
+        Self::new_with_mesh(
+            device,
+            queue,
+            positions,
+            masses,
+            springs,
+            obstacles,
+            &[],
+            &[],
+            params,
+        )
+    }
+
+    /// Phase 3b — self-collision: `triangles` become VT/EE barrier
+    /// pairs discovered ON DEVICE each Newton iterate; `pinned_idx`
+    /// vertices are true DoF removals (see the CPU oracle).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_mesh(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions: &[[f32; 3]],
+        masses: &[f32],
+        springs: &[BarrierGpuSpring],
+        obstacles: &[BarrierGpuObstacle],
+        triangles: &[[u32; 3]],
+        pinned_idx: &[u32],
         params: BarrierGpuParams,
     ) -> Result<Self> {
         let n = positions.len();
@@ -167,6 +206,20 @@ impl BarrierNewtonGpu {
             ob_rows.push([0.0; 4]);
             ob_rows.push([0.0; 4]);
         }
+        // Unique edges from the triangle set (same as the CPU oracle).
+        let mut edge_set = std::collections::BTreeSet::new();
+        for t in triangles {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                edge_set.insert((a.min(b), a.max(b)));
+            }
+        }
+        let edge_rows: Vec<[u32; 4]> = edge_set.iter().map(|&(a, b)| [a, b, 0, 0]).collect();
+        let tri_rows: Vec<[u32; 4]> = triangles.iter().map(|t| [t[0], t[1], t[2], 0]).collect();
+        let mut pinned_mask = vec![0u32; n];
+        for &i in pinned_idx {
+            pinned_mask[i as usize] = 1;
+        }
+        let pair_capacity = (32 * (n + edge_rows.len())).max(64) as u32;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::barrier_newton"),
@@ -197,7 +250,7 @@ impl BarrierNewtonGpu {
         });
         let layout_topology = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton topology"),
-            entries: &(0..9).map(|i| storage_entry(i, true)).collect::<Vec<_>>(),
+            entries: &(0..12).map(|i| storage_entry(i, true)).collect::<Vec<_>>(),
         });
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton state"),
@@ -205,7 +258,7 @@ impl BarrierNewtonGpu {
         });
         let layout_work = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton work"),
-            entries: &(0..7).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
+            entries: &(0..10).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::barrier_newton pl"),
@@ -280,6 +333,26 @@ impl BarrierNewtonGpu {
             contents: bytemuck::cast_slice(&ob_rows),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        let dummy_u4 = [[0u32; 4]];
+        let tri_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bn.tris"),
+            contents: bytemuck::cast_slice(if tri_rows.is_empty() {
+                &dummy_u4[..]
+            } else {
+                &tri_rows
+            }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let edge_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bn.edges"),
+            contents: bytemuck::cast_slice(if edge_rows.is_empty() {
+                &dummy_u4[..]
+            } else {
+                &edge_rows
+            }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let pinned_buf = init_u32("bn.pinned", &pinned_mask);
 
         let slab = (n.max(1) * 16) as u64;
         let mk = |label: &str, bytes: u64| {
@@ -300,8 +373,14 @@ impl BarrierNewtonGpu {
         let cg_r = mk("bn.r", slab);
         let cg_d = mk("bn.d", slab);
         let cg_hd = mk("bn.hd", slab);
-        let part = mk("bn.part", ((n + springs.len()).max(1) * 4) as u64);
+        let part = mk(
+            "bn.part",
+            ((n + springs.len() + pair_capacity as usize).max(1) * 4) as u64,
+        );
         let scalars = mk("bn.scalars", 64);
+        let pair_meta = mk("bn.pair_meta", u64::from(pair_capacity) * 16);
+        let pair_wts = mk("bn.pair_wts", u64::from(pair_capacity) * 16);
+        let pair_count_buf = mk("bn.pair_count", 16);
         let p0: Vec<[f32; 4]> = positions.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
         queue.write_buffer(&x_pos, 0, bytemuck::cast_slice(&p0));
         queue.write_buffer(&vel, 0, &vec![0u8; slab as usize]);
@@ -336,6 +415,9 @@ impl BarrierNewtonGpu {
                 entry(6, &csr_off),
                 entry(7, &csr_ent),
                 entry(8, &ob_buf),
+                entry(9, &tri_buf),
+                entry(10, &edge_buf),
+                entry(11, &pinned_buf),
             ],
         });
         let bg_state = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -360,6 +442,9 @@ impl BarrierNewtonGpu {
                 entry(4, &cg_hd),
                 entry(5, &part),
                 entry(6, &scalars),
+                entry(7, &pair_meta),
+                entry(8, &pair_wts),
+                entry(9, &pair_count_buf),
             ],
         });
 
@@ -378,6 +463,10 @@ impl BarrierNewtonGpu {
             vertex_count: n as u32,
             spring_count: springs.len() as u32,
             obstacle_count: obstacles.len() as u32,
+            tri_count: triangles.len() as u32,
+            edge_count: edge_rows.len() as u32,
+            pair_capacity,
+            pair_count_buf,
             mass_max: masses.iter().cloned().fold(0.0, f32::max),
             params,
         })
@@ -388,7 +477,7 @@ impl BarrierNewtonGpu {
             vertex_count: self.vertex_count,
             spring_count: self.spring_count,
             obstacle_count: self.obstacle_count,
-            _pad0: 0,
+            tri_count: self.tri_count,
             h,
             dhat: self.params.dhat,
             kappa_scale: self.params.kappa_scale,
@@ -397,6 +486,10 @@ impl BarrierNewtonGpu {
             gravity_y: self.params.gravity[1],
             gravity_z: self.params.gravity[2],
             _pad1: 0.0,
+            edge_count: self.edge_count,
+            pair_capacity: self.pair_capacity,
+            _pad2: 0,
+            _pad3: 0,
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
@@ -425,7 +518,7 @@ impl BarrierNewtonGpu {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    fn read_scalars(&self) -> Result<[f32; 10]> {
+    fn read_scalars(&self) -> Result<[f32; 16]> {
         let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bn.stage"),
             size: 64,
@@ -452,8 +545,8 @@ impl BarrierNewtonGpu {
         let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
-        let mut out = [0.0f32; 10];
-        out.copy_from_slice(&v[..10]);
+        let mut out = [0.0f32; 16];
+        out.copy_from_slice(&v[..16]);
         Ok(out)
     }
 
@@ -463,12 +556,16 @@ impl BarrierNewtonGpu {
         self.write_uniforms(h, alpha);
         let gv = self.vertex_count.div_ceil(WG).max(1);
         let gs = self.spring_count.div_ceil(WG).max(1);
-        self.run(&[
+        let mut plan: Vec<(&str, u32)> = vec![
             ("make_trial", gv),
             ("energy_vertex", gv),
             ("energy_spring", gs),
-            ("reduce_energy_gap", 1),
-        ]);
+        ];
+        if self.tri_count > 0 {
+            plan.push(("energy_pairs", self.pair_capacity.div_ceil(WG).max(1)));
+        }
+        plan.push(("reduce_energy_gap", 1));
+        self.run(&plan);
     }
 
     /// One implicit step. Mirrors `BarrierShell::step`.
@@ -489,12 +586,24 @@ impl BarrierNewtonGpu {
         let tol = self.params.newton_tol * (self.mass_max * self.params.dhat).max(1.0e-20);
 
         for it in 0..self.params.max_newton_iters {
-            // Gradient + baseline energy/gap/grad_inf (α = 0 trial).
+            // Rebuild the self-pair active set ON DEVICE, then
+            // gradient + baseline energy/gap/grad_inf (α = 0 trial).
             self.write_uniforms(h, 0.0);
+            if self.tri_count > 0 {
+                self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
+                let g_vt = (self.vertex_count * self.tri_count).div_ceil(WG).max(1);
+                let g_ee = (self.edge_count * self.edge_count).div_ceil(WG).max(1);
+                self.run(&[("find_pairs_vt", g_vt), ("find_pairs_ee", g_ee)]);
+            }
             self.run(&[("gradient", gv)]);
             self.eval_trial(h, 0.0);
             let s = self.read_scalars()?;
             let (e0, gap0, g_inf) = (s[7], s[8], s[9]);
+            if s[10] != 0.0 {
+                return Err(Error::Solver(
+                    "barrier_newton: self-pair buffer overflow — raise pair capacity".into(),
+                ));
+            }
             stats.min_gap = stats.min_gap.min(gap0);
             if g_inf <= tol {
                 stats.newton_iters = it;

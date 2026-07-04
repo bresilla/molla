@@ -396,9 +396,15 @@ LANDED 2026-07-04** — VT/EE self-contact pairs on `BarrierShell`
 3.5e-7; 3·d̂ candidates + α·max|p| ≤ d̂ travel cap = airtight additive-CCD
 argument; true DoF-removal pinning replacing the huge-mass fallacy). The
 two-layer stack and crossed-ribbon EE oracles hold the invariant
-throughout. Remaining: 3b GPU pair port over the LBVH (where the TOI
-kernel generalizes and F14 truly closes), then tets + strain limiting +
-μ_s/μ_k (4), scale (5) — as below. Subsumes the F14 GPU-CCD item
+throughout. **Phase 3b LANDED 2026-07-04** —
+device pair discovery (atomic compaction + overflow flag), gather-form
+pair gradient/Hessian (deterministic, no f32 atomics), pair TOI + travel
+cap in the CCD reduction, device pinning; the GPU two-layer stack matches
+the CPU oracle to the digit and the final intersection scan runs
+host-side with the oracle's exact machinery. **F14 is closed as
+superseded**: for deformables the barrier backend IS the penetration-free
+GPU path; VBD's CPU-only CCD gate stays by design. Remaining: tets +
+strain limiting + μ_s/μ_k (4), LBVH pair scale-out (5) — as below. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

@@ -19,7 +19,7 @@ struct Uniforms {
     vertex_count: u32,
     spring_count: u32,
     obstacle_count: u32,
-    _pad0: u32,
+    tri_count: u32,
     h: f32,          // step size
     dhat: f32,
     kappa_scale: f32,
@@ -28,6 +28,10 @@ struct Uniforms {
     gravity_y: f32,
     gravity_z: f32,
     _pad1: f32,
+    edge_count: u32,
+    pair_capacity: u32,
+    _pad2: u32,
+    _pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -45,6 +49,11 @@ struct Uniforms {
 //   row0 = (kind, p0, p1, p2)  kind 0 = half-space(n=p, offset=row1.x)
 //                              kind 1 = sphere(center=p, radius=row1.x)
 @group(1) @binding(8) var<storage, read> obstacles: array<vec4<f32>>;
+// Self-contact mesh (phase 3b): triangles as vec4<u32> rows (a,b,c,0),
+// unique edges as vec4<u32> rows (a,b,0,0), and the pinned mask.
+@group(1) @binding(9) var<storage, read> tris: array<vec4<u32>>;
+@group(1) @binding(10) var<storage, read> edges: array<vec4<u32>>;
+@group(1) @binding(11) var<storage, read> pinned: array<u32>;
 
 // State (vec4-packed vec3s).
 @group(2) @binding(0) var<storage, read_write> x_pos: array<vec4<f32>>;   // committed x
@@ -61,6 +70,15 @@ struct Uniforms {
 @group(3) @binding(4) var<storage, read_write> cg_hd: array<vec4<f32>>;
 @group(3) @binding(5) var<storage, read_write> part: array<f32>;          // per-element partials
 @group(3) @binding(6) var<storage, read_write> scalars: array<f32>;
+// Self-contact pairs, rebuilt on device every Newton iterate:
+// meta = (kind 0=VT/1=EE, first index, second index, 0),
+// wts  = VT (w0,w1,w2,0) / EE (s,t,0,0) — clamped closest-point
+// weights FROZEN at discovery (exact-a.e. gradients, same contract
+// as the CPU oracle).
+@group(3) @binding(7) var<storage, read_write> pair_meta: array<vec4<u32>>;
+@group(3) @binding(8) var<storage, read_write> pair_wts: array<vec4<f32>>;
+// [0] = pair count (atomic), [1] = overflow flag.
+@group(3) @binding(9) var<storage, read_write> pair_count: array<atomic<u32>>;
 
 const WG: u32 = 64u;
 
@@ -94,12 +112,209 @@ fn barrier_energy(d: f32, kappa: f32) -> f32 {
     return kappa * s * s * s / (3.0 * u.dhat * u.dhat);
 }
 
+// Ericson §5.1.5 — closest point on tri (a,b,c) to p, barycentric.
+fn tri_closest(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = p - a;
+    let d1 = dot(ab, ap);
+    let d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) { return vec3<f32>(1.0, 0.0, 0.0); }
+    let bp = p - b;
+    let d3 = dot(ab, bp);
+    let d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) { return vec3<f32>(0.0, 1.0, 0.0); }
+    let vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        let v = d1 / (d1 - d3);
+        return vec3<f32>(1.0 - v, v, 0.0);
+    }
+    let cp = p - c;
+    let d5 = dot(ab, cp);
+    let d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) { return vec3<f32>(0.0, 0.0, 1.0); }
+    let vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        let w = d2 / (d2 - d6);
+        return vec3<f32>(1.0 - w, 0.0, w);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return vec3<f32>(0.0, 1.0 - w, w);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    return vec3<f32>(1.0 - v - w, v, w);
+}
+
+// Ericson §5.1.9 — closest params (s, t) between two segments.
+fn seg_closest(p1: vec3<f32>, q1: vec3<f32>, p2: vec3<f32>, q2: vec3<f32>) -> vec2<f32> {
+    let d1 = q1 - p1;
+    let d2 = q2 - p2;
+    let r = p1 - p2;
+    let a = dot(d1, d1);
+    let e = dot(d2, d2);
+    let f = dot(d2, r);
+    let tiny = 1.0e-12;
+    if (a <= tiny && e <= tiny) { return vec2<f32>(0.0, 0.0); }
+    if (a <= tiny) { return vec2<f32>(0.0, clamp(f / e, 0.0, 1.0)); }
+    let c = dot(d1, r);
+    if (e <= tiny) { return vec2<f32>(clamp(-c / a, 0.0, 1.0), 0.0); }
+    let b = dot(d1, d2);
+    let denom = a * e - b * b;
+    var s = 0.0;
+    if (denom > tiny) { s = clamp((b * f - c * e) / denom, 0.0, 1.0); }
+    var t = (b * s + f) / e;
+    if (t < 0.0) {
+        t = 0.0;
+        s = clamp(-c / a, 0.0, 1.0);
+    } else if (t > 1.0) {
+        t = 1.0;
+        s = clamp((b - c) / a, 0.0, 1.0);
+    }
+    return vec2<f32>(s, t);
+}
+
+// Pair difference vector (first side − second side) and the 4-vertex
+// stencil at positions from `use_try` (x_try) or x_iter.
+fn pair_diff(p: u32, use_try: bool) -> vec3<f32> {
+    let m = pair_meta[p];
+    let w = pair_wts[p];
+    if (m.x == 0u) {
+        let t = tris[m.z];
+        var cp: vec3<f32>;
+        var pv: vec3<f32>;
+        if (use_try) {
+            cp = x_try[t.x].xyz * w.x + x_try[t.y].xyz * w.y + x_try[t.z].xyz * w.z;
+            pv = x_try[m.y].xyz;
+        } else {
+            cp = x_iter[t.x].xyz * w.x + x_iter[t.y].xyz * w.y + x_iter[t.z].xyz * w.z;
+            pv = x_iter[m.y].xyz;
+        }
+        return pv - cp;
+    }
+    let e1 = edges[m.y];
+    let e2 = edges[m.z];
+    var pa: vec3<f32>;
+    var pb: vec3<f32>;
+    if (use_try) {
+        pa = x_try[e1.x].xyz * (1.0 - w.x) + x_try[e1.y].xyz * w.x;
+        pb = x_try[e2.x].xyz * (1.0 - w.y) + x_try[e2.y].xyz * w.y;
+    } else {
+        pa = x_iter[e1.x].xyz * (1.0 - w.x) + x_iter[e1.y].xyz * w.x;
+        pb = x_iter[e2.x].xyz * (1.0 - w.y) + x_iter[e2.y].xyz * w.y;
+    }
+    return pa - pb;
+}
+
+// Signed weight of vertex `v` in pair `p`'s stencil (0 if absent).
+fn pair_weight_of(p: u32, v: u32) -> f32 {
+    let m = pair_meta[p];
+    let w = pair_wts[p];
+    if (m.x == 0u) {
+        if (v == m.y) { return 1.0; }
+        let t = tris[m.z];
+        if (v == t.x) { return -w.x; }
+        if (v == t.y) { return -w.y; }
+        if (v == t.z) { return -w.z; }
+        return 0.0;
+    }
+    let e1 = edges[m.y];
+    let e2 = edges[m.z];
+    if (v == e1.x) { return 1.0 - w.x; }
+    if (v == e1.y) { return w.x; }
+    if (v == e2.x) { return -(1.0 - w.y); }
+    if (v == e2.y) { return -w.y; }
+    return 0.0;
+}
+
+// Reduced-mass κ of a pair (harmonic mean, same as the CPU oracle).
+fn pair_kappa(p: u32) -> f32 {
+    let m = pair_meta[p];
+    var m1: f32;
+    var m2: f32;
+    if (m.x == 0u) {
+        let t = tris[m.z];
+        m1 = mass[m.y];
+        m2 = (mass[t.x] + mass[t.y] + mass[t.z]) / 3.0;
+    } else {
+        let e1 = edges[m.y];
+        let e2 = edges[m.z];
+        m1 = 0.5 * (mass[e1.x] + mass[e1.y]);
+        m2 = 0.5 * (mass[e2.x] + mass[e2.y]);
+    }
+    let m_red = 2.0 * m1 * m2 / max(m1 + m2, 1.0e-30);
+    return u.kappa_scale * m_red / (u.h * u.h);
+}
+
+fn active_pair_count() -> u32 {
+    return min(atomicLoad(&pair_count[0]), u.pair_capacity);
+}
+
+// Thread per (vertex × triangle): emit non-adjacent VT candidates
+// within 3·d̂ (the additive-CCD margin — see the CPU oracle).
+@compute @workgroup_size(WG)
+fn find_pairs_vt(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let total = u.vertex_count * u.tri_count;
+    if (idx >= total) { return; }
+    let v = idx / u.tri_count;
+    let t_idx = idx % u.tri_count;
+    let t = tris[t_idx];
+    if (v == t.x || v == t.y || v == t.z) { return; }
+    let a = x_iter[t.x].xyz;
+    let b = x_iter[t.y].xyz;
+    let c = x_iter[t.z].xyz;
+    let w = tri_closest(x_iter[v].xyz, a, b, c);
+    let cp = a * w.x + b * w.y + c * w.z;
+    if (length(x_iter[v].xyz - cp) < 3.0 * u.dhat) {
+        let slot = atomicAdd(&pair_count[0], 1u);
+        if (slot < u.pair_capacity) {
+            pair_meta[slot] = vec4<u32>(0u, v, t_idx, 0u);
+            pair_wts[slot] = vec4<f32>(w, 0.0);
+        } else {
+            atomicStore(&pair_count[1], 1u);
+        }
+    }
+}
+
+// Thread per (edge × edge) flat index, j > i, no shared vertices.
+@compute @workgroup_size(WG)
+fn find_pairs_ee(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let total = u.edge_count * u.edge_count;
+    if (idx >= total) { return; }
+    let i = idx / u.edge_count;
+    let j = idx % u.edge_count;
+    if (j <= i) { return; }
+    let e1 = edges[i];
+    let e2 = edges[j];
+    if (e1.x == e2.x || e1.x == e2.y || e1.y == e2.x || e1.y == e2.y) { return; }
+    let st = seg_closest(
+        x_iter[e1.x].xyz, x_iter[e1.y].xyz, x_iter[e2.x].xyz, x_iter[e2.y].xyz,
+    );
+    let pa = x_iter[e1.x].xyz * (1.0 - st.x) + x_iter[e1.y].xyz * st.x;
+    let pb = x_iter[e2.x].xyz * (1.0 - st.y) + x_iter[e2.y].xyz * st.y;
+    if (length(pa - pb) < 3.0 * u.dhat) {
+        let slot = atomicAdd(&pair_count[0], 1u);
+        if (slot < u.pair_capacity) {
+            pair_meta[slot] = vec4<u32>(1u, i, j, 0u);
+            pair_wts[slot] = vec4<f32>(st.x, st.y, 0.0, 0.0);
+        } else {
+            atomicStore(&pair_count[1], 1u);
+        }
+    }
+}
+
 @compute @workgroup_size(WG)
 fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= u.vertex_count) { return; }
     let g = vec3<f32>(u.gravity_x, u.gravity_y, u.gravity_z);
-    let xt = x_pos[i].xyz + vel[i].xyz * u.h + g * (u.h * u.h);
+    var xt = x_pos[i].xyz + vel[i].xyz * u.h + g * (u.h * u.h);
+    if (pinned[i] != 0u) { xt = x_pos[i].xyz; }
     x_tilde[i] = vec4<f32>(xt, 0.0);
     x_iter[i] = x_pos[i];
 }
@@ -128,6 +343,22 @@ fn gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
         let gd = obstacle_distance(o, xi);
         g = g + gd.xyz * (h2 * barrier_d1(gd.w, kappa));
     }
+    // Self-pairs: race-free GATHER — each vertex scans the pair list
+    // and accumulates its own signed-weight contribution. O(V·P), the
+    // pre-LBVH tradeoff for determinism (no f32 atomics in WGSL).
+    let np = active_pair_count();
+    for (var p = 0u; p < np; p = p + 1u) {
+        let w = pair_weight_of(p, i);
+        if (w != 0.0) {
+            let diff = pair_diff(p, false);
+            let dist = max(length(diff), 1.0e-9);
+            let db = barrier_d1(dist, pair_kappa(p));
+            if (db != 0.0) {
+                g = g + (diff / dist) * (h2 * db * w);
+            }
+        }
+    }
+    if (pinned[i] != 0u) { g = vec3<f32>(0.0); }
     grad[i] = vec4<f32>(g, 0.0);
 }
 
@@ -161,6 +392,36 @@ fn hessian_mul(@builtin(global_invocation_id) gid: vec3<u32>) {
             y = y + gd.xyz * (h2 * ddb * dot(gd.xyz, vi));
         }
     }
+    // Rank-1 pair blocks, gathered: s = Σ_j w_j n·v_j needs the OTHER
+    // stencil vertices' v — recomputed per vertex (deterministic).
+    let np = active_pair_count();
+    for (var p = 0u; p < np; p = p + 1u) {
+        let wi = pair_weight_of(p, i);
+        if (wi != 0.0) {
+            let diff = pair_diff(p, false);
+            let dist = max(length(diff), 1.0e-9);
+            let ddb2 = barrier_d2(dist, pair_kappa(p));
+            if (ddb2 > 0.0) {
+                let n = diff / dist;
+                let m = pair_meta[p];
+                var s = 0.0;
+                if (m.x == 0u) {
+                    let t = tris[m.z];
+                    let w = pair_wts[p];
+                    s = dot(n, cg_d[m.y].xyz) - w.x * dot(n, cg_d[t.x].xyz)
+                        - w.y * dot(n, cg_d[t.y].xyz) - w.z * dot(n, cg_d[t.z].xyz);
+                } else {
+                    let e1 = edges[m.y];
+                    let e2 = edges[m.z];
+                    let w = pair_wts[p];
+                    s = (1.0 - w.x) * dot(n, cg_d[e1.x].xyz) + w.x * dot(n, cg_d[e1.y].xyz)
+                        - (1.0 - w.y) * dot(n, cg_d[e2.x].xyz) - w.y * dot(n, cg_d[e2.y].xyz);
+                }
+                y = y + n * (h2 * ddb2 * wi * s);
+            }
+        }
+    }
+    if (pinned[i] != 0u) { y = vi * mass[i]; }
     cg_hd[i] = vec4<f32>(y, 0.0);
 }
 
@@ -312,6 +573,14 @@ fn ccd_alpha(@builtin(local_invocation_id) lid: vec3<u32>) {
         if (i >= u.vertex_count) { break; }
         let xi = x_iter[i].xyz;
         let pi = p_dir[i].xyz;
+        // Global travel cap (with a mesh): no vertex moves more than
+        // d̂ per accepted step — makes the 3·d̂ margin airtight.
+        if (u.tri_count > 0u) {
+            let speed0 = length(pi);
+            if (speed0 > 0.0) {
+                a_min = min(a_min, u.dhat / speed0);
+            }
+        }
         for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
             let r0 = obstacles[o * 2u];
             let r1 = obstacles[o * 2u + 1u];
@@ -331,6 +600,30 @@ fn ccd_alpha(@builtin(local_invocation_id) lid: vec3<u32>) {
             }
         }
         i = i + 256u;
+    }
+    // Per-pair conservative TOI (summed max side speeds).
+    let np = active_pair_count();
+    var p = lid.x;
+    loop {
+        if (p >= np) { break; }
+        let gap = length(pair_diff(p, false));
+        let m = pair_meta[p];
+        var closing: f32;
+        if (m.x == 0u) {
+            let t = tris[m.z];
+            closing = length(p_dir[m.y].xyz)
+                + max(length(p_dir[t.x].xyz),
+                      max(length(p_dir[t.y].xyz), length(p_dir[t.z].xyz)));
+        } else {
+            let e1 = edges[m.y];
+            let e2 = edges[m.z];
+            closing = max(length(p_dir[e1.x].xyz), length(p_dir[e1.y].xyz))
+                + max(length(p_dir[e2.x].xyz), length(p_dir[e2.y].xyz));
+        }
+        if (closing > 0.0) {
+            a_min = min(a_min, 0.9 * gap / closing);
+        }
+        p = p + 256u;
     }
     red[lid.x] = a_min;
     workgroupBarrier();
@@ -402,12 +695,22 @@ fn energy_spring(@builtin(global_invocation_id) gid: vec3<u32>) {
     part[u.vertex_count + s] = u.h * u.h * 0.5 * spring_k[s] * c * c;
 }
 
+// Per-pair barrier energies of x_try into part[NV + NS + p].
+@compute @workgroup_size(WG)
+fn energy_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let p = gid.x;
+    if (p >= active_pair_count()) { return; }
+    let dist = length(pair_diff(p, true));
+    part[u.vertex_count + u.spring_count + p] =
+        u.h * u.h * barrier_energy(dist, pair_kappa(p));
+}
+
 // Sum partials into scalars[7]; also min-gap of x_try into scalars[8]
 // and ‖grad‖_∞ into scalars[9] (used by the host for convergence and
 // the invariant WITHOUT extra passes).
 @compute @workgroup_size(256)
 fn reduce_energy_gap(@builtin(local_invocation_id) lid: vec3<u32>) {
-    let total = u.vertex_count + u.spring_count;
+    let total = u.vertex_count + u.spring_count + active_pair_count();
     var e = 0.0;
     var i = lid.x;
     loop {
@@ -426,7 +729,7 @@ fn reduce_energy_gap(@builtin(local_invocation_id) lid: vec3<u32>) {
     }
     if (lid.x == 0u) { scalars[7] = red[0]; }
     workgroupBarrier();
-    // min gap over x_try
+    // min gap over x_try: obstacles + frozen-topology self pairs.
     var g_min = 3.4e38;
     i = lid.x;
     loop {
@@ -435,6 +738,13 @@ fn reduce_energy_gap(@builtin(local_invocation_id) lid: vec3<u32>) {
             g_min = min(g_min, obstacle_distance(o, x_try[i].xyz).w);
         }
         i = i + 256u;
+    }
+    var pp = lid.x;
+    let npg = active_pair_count();
+    loop {
+        if (pp >= npg) { break; }
+        g_min = min(g_min, length(pair_diff(pp, true)));
+        pp = pp + 256u;
     }
     red[lid.x] = g_min;
     workgroupBarrier();
@@ -464,7 +774,10 @@ fn reduce_energy_gap(@builtin(local_invocation_id) lid: vec3<u32>) {
         workgroupBarrier();
         stride = stride / 2u;
     }
-    if (lid.x == 0u) { scalars[9] = red[0]; }
+    if (lid.x == 0u) {
+        scalars[9] = red[0];
+        scalars[10] = f32(atomicLoad(&pair_count[1])); // overflow flag
+    }
 }
 
 // Accept the trial: x_iter ← x_try.
@@ -480,6 +793,8 @@ fn accept_trial(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn commit(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= u.vertex_count) { return; }
-    vel[i] = vec4<f32>((x_iter[i].xyz - x_pos[i].xyz) / u.h, 0.0);
+    var v = (x_iter[i].xyz - x_pos[i].xyz) / u.h;
+    if (pinned[i] != 0u) { v = vec3<f32>(0.0); }
+    vel[i] = vec4<f32>(v, 0.0);
     x_pos[i] = x_iter[i];
 }

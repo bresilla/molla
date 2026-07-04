@@ -287,3 +287,143 @@ fn gpu_high_speed_impact_cannot_tunnel() {
     assert!(y_min > 0.0, "final intersection scan failed: y_min {y_min}");
     assert!(y_max < 0.1, "gpu shell should have landed: {y_max}");
 }
+
+/// C0 phase 3b — GPU self-collision: the two-layer stack and crossed
+/// ribbons from the CPU phase-3 contract, with pairs discovered and
+/// resolved ON DEVICE. Final intersection scan runs host-side with the
+/// CPU oracle's exact O(V·T + E²) `min_self_gap` on read-back
+/// positions — the GPU cannot grade its own homework.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=barrier_newton_gpu`"]
+fn gpu_self_collision_stacks_and_crosses_without_penetration() {
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // Triangulated patch helper (mirrors the CPU phase-3 tests).
+    #[allow(clippy::type_complexity)]
+    let patch = |n: usize,
+                 m: usize,
+                 y: f64,
+                 origin: [f64; 2]|
+     -> (Vec<[f64; 3]>, Vec<(u32, u32)>, Vec<[u32; 3]>) {
+        let spacing = 0.03;
+        let mut pos = Vec::new();
+        for j in 0..m {
+            for i in 0..n {
+                pos.push([
+                    origin[0] + i as f64 * spacing,
+                    y,
+                    origin[1] + j as f64 * spacing,
+                ]);
+            }
+        }
+        let idx = |i: usize, j: usize| (j * n + i) as u32;
+        let mut tris = Vec::new();
+        for j in 0..m - 1 {
+            for i in 0..n - 1 {
+                tris.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                tris.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut edges = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    edges.push((a, b));
+                }
+            }
+        }
+        (pos, edges, tris)
+    };
+
+    // Two layers: free 5×5 above a pinned 7×7.
+    let (mut pos, mut edges, mut tris) = patch(5, 5, 0.02, [-0.06, -0.06]);
+    let n_top = pos.len();
+    let (pos_b, edges_b, tris_b) = patch(7, 7, 0.0, [-0.09, -0.09]);
+    let base = n_top as u32;
+    pos.extend(pos_b.iter().copied());
+    edges.extend(edges_b.iter().map(|&(a, b)| (a + base, b + base)));
+    tris.extend(
+        tris_b
+            .iter()
+            .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+    );
+    let n_total = pos.len();
+
+    let springs: Vec<BarrierGpuSpring> = edges
+        .iter()
+        .map(|&(a, b)| {
+            let pa = Vec3::from_array(pos[a as usize]);
+            let pb = Vec3::from_array(pos[b as usize]);
+            BarrierGpuSpring {
+                a,
+                b,
+                rest: (pa - pb).length() as f32,
+                k: 400.0,
+            }
+        })
+        .collect();
+    let pos_f32: Vec<[f32; 3]> = pos
+        .iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .collect();
+    let pinned: Vec<u32> = (n_top as u32..n_total as u32).collect();
+    let gpu = BarrierNewtonGpu::new_with_mesh(
+        &device,
+        &queue,
+        &pos_f32,
+        &vec![0.02; n_total],
+        &springs,
+        &[],
+        &tris,
+        &pinned,
+        BarrierGpuParams::default(),
+    )
+    .expect("gpu shell");
+
+    let h = 1.0_f32 / 240.0;
+    for step in 0..200 {
+        let stats = gpu.step(h).expect("gpu step");
+        assert!(
+            stats.min_gap > 0.0,
+            "step {step}: GPU layers interpenetrated — gap {}",
+            stats.min_gap
+        );
+    }
+    let p = gpu.read_positions().expect("read");
+    let v = gpu.read_velocities().expect("read v");
+    let y_top: f32 = p[..n_top].iter().map(|q| q[1]).sum::<f32>() / n_top as f32;
+    let v_max = v[..n_top]
+        .iter()
+        .map(|q| (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt())
+        .fold(0.0_f32, f32::max);
+    eprintln!("gpu two-layer: y_top {y_top:.4}, v_max {v_max:.3e}");
+    assert!(v_max < 0.05, "gpu top layer did not settle: {v_max}");
+    assert!(
+        y_top > 0.0 && y_top < 5.0e-3,
+        "gpu top layer should rest just above the pinned layer: {y_top:.4}"
+    );
+
+    // HOST-side final intersection scan with the CPU oracle's exact
+    // O(V·T + E²) machinery — includes the pinned mesh.
+    let mut scan = BarrierShell::new(
+        p.iter()
+            .map(|q| Vec3::new(f64::from(q[0]), f64::from(q[1]), f64::from(q[2])))
+            .collect(),
+        vec![0.02; n_total],
+        Vec::new(),
+        Vec::new(),
+        BarrierParams::default(),
+    )
+    .expect("scan shell")
+    .with_triangles(tris.clone());
+    scan.velocities = vec![Vec3::ZERO; n_total];
+    let final_gap = scan.min_self_gap(&scan.positions);
+    eprintln!("gpu two-layer: host-side final scan gap {final_gap:.3e}");
+    assert!(
+        final_gap > 0.0,
+        "host-side intersection scan failed: {final_gap:.3e}"
+    );
+}
