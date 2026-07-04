@@ -107,7 +107,7 @@ fn gpu_drop_matches_cpu_oracle_and_keeps_invariant() {
         .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
         .collect();
     let mass_f32: Vec<f32> = mass.iter().map(|&m| m as f32).collect();
-    let gpu = BarrierNewtonGpu::new(
+    let mut gpu = BarrierNewtonGpu::new(
         &device,
         &queue,
         &pos_f32,
@@ -260,7 +260,7 @@ fn gpu_high_speed_impact_cannot_tunnel() {
         .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
         .collect();
     let mass_f32: Vec<f32> = mass.iter().map(|&m| m as f32).collect();
-    let gpu = BarrierNewtonGpu::new(
+    let mut gpu = BarrierNewtonGpu::new(
         &device,
         &queue,
         &pos_f32,
@@ -375,7 +375,7 @@ fn gpu_self_collision_stacks_and_crosses_without_penetration() {
         .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
         .collect();
     let pinned: Vec<u32> = (n_top as u32..n_total as u32).collect();
-    let gpu = BarrierNewtonGpu::new_with_mesh(
+    let mut gpu = BarrierNewtonGpu::new_with_mesh(
         &device,
         &queue,
         &pos_f32,
@@ -572,7 +572,7 @@ fn gpu_friction_strain_and_tets_match_contracts() {
                 }
             }
         }
-        let gpu = BarrierNewtonGpu::new_with_mesh(
+        let mut gpu = BarrierNewtonGpu::new_with_mesh(
             &device,
             &queue,
             &pos,
@@ -651,7 +651,7 @@ fn gpu_friction_strain_and_tets_match_contracts() {
             }
         }
         let tets: Vec<([u32; 4], f32)> = tet_ids.iter().map(|&ids| (ids, 5000.0)).collect();
-        let gpu = BarrierNewtonGpu::new_full(
+        let mut gpu = BarrierNewtonGpu::new_full(
             &device,
             &queue,
             &pos,

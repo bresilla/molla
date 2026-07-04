@@ -82,6 +82,14 @@ pub struct BarrierGpuParams {
     pub strain_barrier_scale: f32,
     /// Elasticity-inclusive κ (TOG 43.6): κ = scale·(m + h²·Σk)/h².
     pub elasticity_inclusive_kappa: bool,
+    /// Seed each Newton solve's CG from the previous direction
+    /// (r = −g − H·p_prev). Near-converged steps then exit after one
+    /// block.
+    pub warm_start: bool,
+    /// CG runs in blocks of this many iterations with a 4-byte
+    /// residual readback between blocks — converged solves stop
+    /// dispatching instead of running frozen no-ops.
+    pub cg_block: usize,
 }
 
 impl Default for BarrierGpuParams {
@@ -99,6 +107,8 @@ impl Default for BarrierGpuParams {
             strain_limit: 0.0,
             strain_barrier_scale: 10.0,
             elasticity_inclusive_kappa: true,
+            warm_start: true,
+            cg_block: 15,
         }
     }
 }
@@ -135,6 +145,9 @@ pub struct BarrierNewtonGpu {
     pair_capacity: u32,
     pair_count_buf: wgpu::Buffer,
     mass_max: f32,
+    /// True once any CG solve has produced a direction (warm-start
+    /// seed validity).
+    warmed: bool,
     pub params: BarrierGpuParams,
 }
 
@@ -152,6 +165,8 @@ const ENTRIES: &[&str] = &[
     "gradient",
     "hessian_mul",
     "cg_init",
+    "copy_p_to_d",
+    "cg_init_warm",
     "cg_dot_init",
     "cg_dot_dhd",
     "cg_update_pr",
@@ -621,6 +636,7 @@ impl BarrierNewtonGpu {
             pair_capacity,
             pair_count_buf,
             mass_max: masses.iter().cloned().fold(0.0, f32::max),
+            warmed: false,
             params,
         })
     }
@@ -730,7 +746,7 @@ impl BarrierNewtonGpu {
     }
 
     /// One implicit step. Mirrors `BarrierShell::step`.
-    pub fn step(&self, h: f32) -> Result<BarrierGpuStats> {
+    pub fn step(&mut self, h: f32) -> Result<BarrierGpuStats> {
         let gv = self.vertex_count.div_ceil(WG).max(1);
         self.write_uniforms(h, 0.0);
         self.run(&[("predict", gv)]);
@@ -788,20 +804,45 @@ impl BarrierNewtonGpu {
 
             // Device PCG (fixed iterations; the freeze makes overshoot
             // a no-op — the APIC lesson).
-            // One submission for the entire PCG: dispatches in a
-            // compute pass are ordered, and the freeze turns
-            // past-convergence iterations into no-ops.
-            let mut cg_plan: Vec<(&str, u32)> = vec![("cg_init", gv), ("cg_dot_init", 1)];
-            for _ in 0..self.params.cg_iters {
-                cg_plan.extend_from_slice(&[
+            // Warm start (r = −g − H·p_prev) unless this is the very
+            // first solve; then BLOCKED CG — one submission per block,
+            // a 4-byte residual readback between blocks, early exit on
+            // convergence (the freeze already makes overshoot safe;
+            // blocking stops paying for it).
+            if self.params.warm_start && (it > 0 || self.warmed) {
+                self.run(&[
+                    ("copy_p_to_d", gv),
                     ("hessian_mul", gv),
-                    ("cg_dot_dhd", 1),
-                    ("cg_update_pr", gv),
-                    ("cg_dot_rz", 1),
-                    ("cg_update_d", gv),
+                    ("cg_init_warm", gv),
+                    ("cg_dot_init", 1),
                 ]);
+            } else {
+                self.run(&[("cg_init", gv), ("cg_dot_init", 1)]);
             }
-            self.run(&cg_plan);
+            let block = self.params.cg_block.max(1);
+            let mut done = 0;
+            while done < self.params.cg_iters {
+                let iters = block.min(self.params.cg_iters - done);
+                let mut cg_plan: Vec<(&str, u32)> = Vec::with_capacity(iters * 5);
+                for _ in 0..iters {
+                    cg_plan.extend_from_slice(&[
+                        ("hessian_mul", gv),
+                        ("cg_dot_dhd", 1),
+                        ("cg_update_pr", gv),
+                        ("cg_dot_rz", 1),
+                        ("cg_update_d", gv),
+                    ]);
+                }
+                self.run(&cg_plan);
+                done += iters;
+                let sc = self.read_scalars()?;
+                // rz vs the solve's initial ‖r‖² — same scale the
+                // freeze uses.
+                if sc[4] <= 1.0e-10 * sc[5].max(1.0e-30) {
+                    break;
+                }
+            }
+            self.warmed = true;
 
             // CCD cap + slope, then Armijo backtracking.
             self.run(&[("ccd_alpha", 1), ("dot_grad_p", 1)]);

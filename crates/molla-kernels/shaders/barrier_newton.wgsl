@@ -816,6 +816,26 @@ fn cg_init(@builtin(global_invocation_id) gid: vec3<u32>) {
     p_dir[i] = vec4<f32>(0.0);
 }
 
+// Warm start: keep the PREVIOUS Newton direction in p_dir and start
+// CG from it — r = −grad − H·p_prev (H·p_prev arrives in cg_hd from a
+// hessian_mul on the copied direction). Near-converged steps (resting
+// contact) then need almost no refinement.
+@compute @workgroup_size(WG)
+fn copy_p_to_d(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.vertex_count) { return; }
+    cg_d[i] = p_dir[i];
+}
+
+@compute @workgroup_size(WG)
+fn cg_init_warm(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.vertex_count) { return; }
+    let r = -grad[i].xyz - cg_hd[i].xyz;
+    cg_r[i] = vec4<f32>(r, 0.0);
+    cg_d[i] = vec4<f32>(r / mass[i], 0.0);
+}
+
 var<workgroup> red: array<f32, 256>;
 
 // scalars[4] = rz = Σ r·(M⁻¹r); scalars[5] = rr_init (‖r‖²).
