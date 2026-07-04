@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
+            window.path_to_searchindex_js = "../searchindex-eac20c8b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6df35734.js"></script>
@@ -176,24 +176,44 @@
                     <main>
                         <h1 id="open-items"><a class="header" href="#open-items">Open items</a></h1>
 <blockquote>
-<p><strong>Current open set (2026-07-02).</strong> Most entries below have since
+<p><strong>Current open set (2026-07-04).</strong> Most entries below have since
 <strong>landed</strong> and carry an inline <code>**Status.** Landed</code> block — they are
-kept as decision records, not backlog. The genuinely open items are:</p>
+kept as decision records, not backlog. Since 2026-07-02: X1 (critic
+audit over Stages 39–51) ran — three real findings, all fixed
+(see INSPECTION.md); the tire stream is COMPLETE (fully autonomous
+zero-readback loop, 40-wheel fused atlas at 1.53× realtime with
+heightfield terrain); the INSPECTION.md backlog is CLOSED. Remaining:</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Item</th><th>What</th><th>Effort</th></tr>
 </thead>
 <tbody>
-<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k, per-contact stick/slip state)</td><td>1–2 days</td></tr>
-<tr><td>X1 (bottom of file)</td><td>Critic audit round over Stages 39–51</td><td>~1 day</td></tr>
-<tr><td>X2 (bottom of file)</td><td>Viewer scenes for the v3–v6 solver work</td><td>~1 day each</td></tr>
+<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k) in the rigid XPBD contact pass</td><td>1–2 days</td></tr>
 </tbody>
 </table>
 </div>
-<p>Larger tracked work lives outside this file: the tire stream
-(zero-host-readback substep loop, 40-wheel realtime — <code>PROGRESS.md</code>)
-and the inspection backlog (<code>INSPECTION.md</code> at the repo root).</p>
+<p><strong>A1 attempt notes (2026-07-04, reverted — start here next time).</strong> A
+velocity-pass-only split does NOT discriminate stick from slip: on an
+incline with tan θ between μ_k and μ_s, the box creeps identically in
+both cases because single-application friction under-relaxes on corner
+contacts (the friction cousin of the B1b finding) — a per-contact
+ACCUMULATED tangential impulse clamped to the cone across sweeps
+(PGS-style) fixes the velocity side and is worth keeping. But true
+stick then still leaks <code>g·sinθ·dt²</code> of POSITIONAL creep per step, and
+naive Müller §3.5 positional friction (tangential anchor correction
+gated on λ_t ≤ μ_s·λ_n per position iteration) OVER-STICKS: with
+contacts regenerated every outer step, the detected depth carries the
+contact margin + settled penetration, inflating λ_n so the ratio test
+<code>λ_t/λ_n vs tan θ</code> always passes and even tan θ &gt; μ_s holds. The
+correct implementation needs contact-LIFETIME normal/tangential λ
+accumulation (persistent contact identity across steps — the contact
+reduction module already threads persistent IDs) so the cone ratio
+compares displacements accumulated over the same window. That is the
+real 1–2 day scope; the WGSL side additionally needs a per-(contact,
+side) accumulator buffer indexed by the body-contact CSR entry to stay
+race-free under the per-body threading model.
+| X2 (bottom of file) | Viewer scenes for the v3–v6 solver work — HELD with the maintainer’s GUI split (see GUI_SPLIT.md) | held |</p>
 </blockquote>
 <p>A concrete inventory of work from the v3–v6 push, grouped by tier:</p>
 <ul>
