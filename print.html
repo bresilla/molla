@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-be3ea690.js";
+            window.path_to_searchindex_js = "searchindex-4b7e0c29.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb488059.js"></script>
@@ -18088,7 +18088,13 @@ aerodynamics. Not on any current workload.</p>
 <p><strong>Would change my mind if</strong> a user shows up wanting compressible flow.
 The DG infra is already 90 % there.</p>
 <h3 id="c3-phase-field-fracture"><a class="header" href="#c3-phase-field-fracture">C3. Phase-field fracture</a></h3>
-<p><strong>Status.</strong> First AT2 scalar-damage CPU oracle landed in <code>molla-fem</code>.</p>
+<p><strong>Status.</strong> COMPLETE 2026-07-04 — the coupled staggered
+displacement↔damage driver (<code>solve_phase_field_coupled_step</code>) landed on
+top of the AT2 oracle: exact homogeneous identity, 8.8× notch
+localization, monotone irreversibility, 13.6% softening over 4 load
+steps. v1 drives history with the full energy density
+(tension-dominated); the spectral tensile split and 3D tets are the
+documented follow-ons. Original oracle notes below.</p>
 <p><strong>Result.</strong> <code>molla-fem</code> now exposes <code>PhaseFieldFractureParams</code>,
 <code>phase_field_degradation</code>, <code>update_phase_field_history</code>,
 <code>phase_field_fracture_energy_density</code>,
