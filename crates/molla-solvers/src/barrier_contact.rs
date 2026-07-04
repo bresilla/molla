@@ -207,11 +207,14 @@ pub struct BarrierShell {
     pub springs: Vec<BarrierSpring>,
     pub obstacles: Vec<BarrierObstacle>,
     /// Collision triangles (phase 3 — self-contact). Empty = obstacle
-    /// contacts only.
+    /// contacts only. SET VIA [`Self::with_triangles`] — assigning
+    /// this field directly desyncs the derived `collision_edges`.
     pub triangles: Vec<[u32; 3]>,
     /// Unique triangle edges, derived by [`Self::with_triangles`].
     pub collision_edges: Vec<[u32; 2]>,
-    /// Volumetric tets (volume-preservation energy).
+    /// Volumetric tets (volume-preservation energy). SET VIA
+    /// [`Self::with_tets`] — assigning directly desyncs the derived
+    /// rest volumes `tet_v0`.
     pub tets: Vec<BarrierTet>,
     /// Rest volumes, measured by [`Self::with_tets`].
     pub tet_v0: Vec<Real>,
@@ -372,7 +375,12 @@ impl BarrierShell {
         kappa_ortho: Real,
     ) -> usize {
         assert_eq!(samples.len(), sample_masses.len());
+        assert!(!samples.is_empty(), "affine body needs samples");
         let mass: Real = sample_masses.iter().sum();
+        assert!(
+            mass > 0.0 && mass.is_finite(),
+            "affine body needs positive total mass"
+        );
         let com = samples
             .iter()
             .zip(sample_masses.iter())
@@ -688,6 +696,11 @@ impl BarrierShell {
         let Some(limit) = self.params.strain_limit else {
             return (0.0, 0.0, 0.0);
         };
+        // A limit at or below the rest strain (1.0) is nonsensical —
+        // treat as disabled, matching the GPU convention.
+        if limit <= 1.0 {
+            return (0.0, 0.0, 0.0);
+        }
         let gap = limit - strain;
         let band = 0.2 * (limit - 1.0).max(1.0e-6);
         let kappa = self.params.strain_barrier_scale * s.k * s.rest * s.rest;

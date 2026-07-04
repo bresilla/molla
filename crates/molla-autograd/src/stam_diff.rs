@@ -232,7 +232,24 @@ impl StamFluidDiff {
         }
     }
 
-    /// One forward step, recording checkpoints.
+    /// Clear the recorded tape (checkpoints). Call between rollouts:
+    /// [`Self::backward`] walks EVERY recorded step, so reusing a sim
+    /// for a second rollout without clearing replays the first
+    /// rollout's checkpoints into the gradients (and the tape grows
+    /// without bound).
+    pub fn clear_tape(&mut self) {
+        self.ckpt_u_pre.clear();
+        self.ckpt_u_adv.clear();
+        self.ckpt_rho_pre.clear();
+    }
+
+    /// Number of steps currently on the tape.
+    pub fn tape_len(&self) -> usize {
+        self.ckpt_u_pre.len()
+    }
+
+    /// One forward step, recording checkpoints (see [`Self::clear_tape`]
+    /// for multi-rollout usage).
     pub fn step(&mut self, force: &[[Real; 2]], source: &[Real]) {
         let n = self.cfg.grid_n;
         let dt = self.cfg.dt;

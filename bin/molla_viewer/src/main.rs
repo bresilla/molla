@@ -2787,11 +2787,11 @@ impl Scene {
                 notes: "core VBD cloth path has CPU contact/stability gates and GPU parity lanes",
             },
             Scene::BarrierCloth => ScenePhysicsAudit {
-                status: CpuOnly,
+                status: Complete,
                 reference_case: "barrier-Newton cloth drape (C0)",
-                cpu_proof: "barrier_engine + barrier_contact/self_contact/tet_strain/friction suites",
-                gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (kernel parity; viewer path is CPU v1)",
-                notes: "penetration-free invariant asserted every step; scene drives the CPU f64 oracle via the Solver trait",
+                cpu_proof: "barrier_engine + barrier_contact/self_contact/tet_strain/friction/abd suites",
+                gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (incl. the engine-GPU-path drape the viewer runs)",
+                notes: "penetration-free invariant asserted every step; scene drives BarrierNewtonGpu via BarrierSolver::new_gpu",
             },
             Scene::ClothBending | Scene::ClothTwist => ScenePhysicsAudit {
                 status: Complete,
@@ -5457,6 +5457,7 @@ fn control_pane(
         Scene::Quadrotor => Some("Quadrotor (Stage 17)"),
         Scene::BroadPhase => Some("GPU broad phase"),
         Scene::VbdCloth => Some("VBD cloth (Stage 20)"),
+        Scene::BarrierCloth => Some("Barrier-Newton cloth (C0)"),
         Scene::ReferencePendulum => Some("Native double pendulum"),
         Scene::DiffArm => Some("Diff arm (Stage 23)"),
         Scene::DiffArm6 => Some("Diff Featherstone (Stage 23.1)"),

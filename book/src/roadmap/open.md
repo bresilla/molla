@@ -10,8 +10,8 @@
 >
 > | Item | What | Effort |
 > |------|------|--------|
-> | **C0** (Tier-C below) | **Barrier-Newton contact backend (IPC-family, GPU)** — penetration-free invariant + CCD line search; subsumes F14 and obsoletes A1 for deformables. The flagship next feature; full design in the C0 entry. | multi-week (phase 1 = 1–2 sessions) |
-> | A1 (Tier-A below) | Kinetic-vs-static friction split (μ_s > μ_k) in the rigid XPBD contact pass | 1–2 days |
+> | ~~C0~~ | **COMPLETE 2026-07-05** — barrier-Newton backend fully landed (all phases + κ + both couplings + LBVH + perf); see the C0 entry. Optional future slices: GPU ABD composite solve, on-device pair friction. | done |
+> | ~~A1~~ | RETIRED for deformables by C0's μ_s/μ_k friction (2026-07-04); only a rigid-XPBD variant would remain, and C0 is the recommended path. | closed |
 >
 > **A1 attempt notes (2026-07-04, reverted — start here next time).** A
 > velocity-pass-only split does NOT discriminate stick from slip: on an
@@ -439,9 +439,11 @@ inflation, per-iterate candidate filters; graded-mesh stress oracle).
 **ABD strong coupling LANDED 2026-07-05** (CPU oracle): affine bodies
 inside the Newton solve via proxy vertices — machinery reuse total,
 momentum machine-exact (5e-15), the weak path's tunneling case handled
-by the unified line search alone. The GPU port of the composite solve
-is the natural next slice when a scene demands it. **C0 has no open
-items; the technical roadmap is CLEAR.** Subsumes the F14 GPU-CCD item
+by the unified line search alone. **C0 is complete; the technical
+roadmap has no open items.** Two OPTIONAL enhancement slices are noted
+for whenever a scene demands them (not open work): the GPU port of the
+ABD composite solve, and on-device pair (cloth-on-cloth) friction —
+the one documented CPU/GPU behavioural difference. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

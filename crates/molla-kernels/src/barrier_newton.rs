@@ -171,8 +171,6 @@ pub struct BarrierNewtonGpu {
 }
 
 const ENTRIES: &[&str] = &[
-    "find_pairs_vt",
-    "find_pairs_ee",
     "energy_pairs",
     "friction_lag",
     "grid_clear",
@@ -887,6 +885,9 @@ impl BarrierNewtonGpu {
             min_gap: f32::INFINITY,
             ..Default::default()
         };
+        // A zero Newton budget would commit the predictor with the
+        // invariant unreported — always evaluate at least one iterate.
+        let newton_budget = self.params.max_newton_iters.max(1);
         // Same characteristic scale as the CPU oracle: the inertia
         // term of moving the heaviest vertex by one dhat. newton_tol
         // is much looser than the f64 oracle's — f32 gradient noise
@@ -894,7 +895,7 @@ impl BarrierNewtonGpu {
         // at ~1e-2 relative and burns the full iteration budget).
         let tol = self.params.newton_tol * (self.mass_max * self.params.dhat).max(1.0e-20);
 
-        for it in 0..self.params.max_newton_iters {
+        for it in 0..newton_budget {
             // Rebuild the self-pair active set ON DEVICE, then
             // gradient + baseline energy/gap/grad_inf (α = 0 trial).
             self.write_uniforms(h, 0.0);
@@ -1011,7 +1012,7 @@ impl BarrierNewtonGpu {
             if (e0 - e_new).abs() <= 1.0e-5 * e0.abs().max(1.0e-12) {
                 break;
             }
-            if it + 1 == self.params.max_newton_iters {
+            if it + 1 == newton_budget {
                 stats.hit_iter_cap = true;
             }
         }
@@ -1055,6 +1056,11 @@ impl BarrierNewtonGpu {
         drop(data);
         stage.unmap();
         Ok(v.into_iter().take(n).map(|r| [r[0], r[1], r[2]]).collect())
+    }
+
+    /// Vertex count (topology identity for rebuild detection).
+    pub fn vertex_count(&self) -> usize {
+        self.vertex_count as usize
     }
 
     pub fn read_positions(&self) -> Result<Vec<[f32; 3]>> {

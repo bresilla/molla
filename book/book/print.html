@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-876b1dda.js";
+            window.path_to_searchindex_js = "searchindex-fc79cb2d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f4239cce.js"></script>
@@ -9109,11 +9109,15 @@ x̃    = x_prev + h·v + h²·g
 </code></pre>
 <p>with the <strong>cubic compact-support barrier</strong> <code>b(d) = κ(d̂−d)³/(3d̂²)</code> — C²
 at d̂, convex, zero outside the activation band (no log singularity, no
-global κ tuning; κ is per-contact, mass-consistent v1). Damped Newton
-with matrix-free PCG (block mass-diagonal preconditioner), and the piece
-that carries the guarantee: a <strong>CCD-truncated line search</strong> — step
-length capped at 0.9×TOI <em>before</em> Armijo backtracking, so no trial
-state ever crosses a surface.</p>
+global κ tuning). κ is per-contact and <strong>elasticity-inclusive</strong> by
+default: <code>κ = scale·(m + h²·Σk_incident)/h²</code>, the TOG 43.6 scheme — a
+stiff material meets a proportionally stiff barrier (the 1 kN
+elastic-press oracle holds 11.4× more band margin than mass-only κ).
+Damped Newton with matrix-free PCG (block mass-diagonal preconditioner,
+<strong>warm-started</strong> from the previous direction with blocked early exit on
+the GPU), and the piece that carries the guarantee: a <strong>CCD-truncated
+line search</strong> — step length capped at 0.9×TOI <em>before</em> Armijo
+backtracking, so no trial state ever crosses a surface.</p>
 <p>Every Hessian term follows one projection discipline (SPD only):
 compression-clamped springs, convex-part barriers, Gauss-part tet
 volumes, positive-slope friction.</p>
@@ -9139,6 +9143,13 @@ cloth) friction uses the same recipe on the relative stencil slip.</li>
 <li><strong>True pinning</strong>: DoF removal (x̃ = x, zero gradient row, identity
 Hessian row). A huge mass does NOT pin under an incremental
 potential — the predictor free-falls independently of mass.</li>
+<li><strong>Rigid coupling, two ways</strong>: WEAK (<code>BarrierSolver</code>) — obstacles
+follow body poses, third-law-exact reaction wrenches, and a
+rigid-side TOI that closes the tunneling hole; and STRONG (ABD) —
+bodies as 12-DOF affine transforms INSIDE the Newton solve via
+proxy vertices (<code>add_affine_body</code>), one line search protecting
+everything, momentum machine-exact (5e-15) with no exchange
+approximation.</li>
 </ul>
 <h2 id="api-2"><a class="header" href="#api-2">API</a></h2>
 <p>CPU f64 oracle: <code>molla_solvers::barrier_contact::BarrierShell</code>
@@ -9149,7 +9160,14 @@ invariants <code>min_gap</code> / <code>max_strain</code>). GPU f32:
 with 4-byte scalar readbacks and the f32 convergence freeze.</p>
 <p>Pair discovery runs on device through Teschner-hash uniform grids
 (cell ≥ primitive extent + 3d̂ ⇒ single-ring probes are complete; hash
-collisions only add candidates; bucket overflow is a hard error).</p>
+collisions only add candidates; bucket overflow is a hard error), or —
+for adversarial primitive-size distributions — through a
+step-granularity <strong>LBVH broad phase</strong> (<code>use_lbvh</code>): AABBs inflated by
+the travel-cap bound keep the candidate set a superset for the whole
+step, and per-iterate filter kernels do the exact tests.</p>
+<p><strong>Known GPU limitation</strong>: pair (cloth-on-cloth) FRICTION is CPU-only —
+the GPU implements obstacle friction; a friction + self-contact scene
+differs between backends until the pair-friction lag moves on-device.</p>
 <h2 id="parity-philosophy"><a class="header" href="#parity-philosophy">Parity philosophy</a></h2>
 <p>f32-vs-f64 drapes are <em>non-unique equilibria</em>: the GPU drop test gates
 on ENERGY (the f32 drape found a 13% deeper minimum than the oracle),
@@ -17046,6 +17064,7 @@ agreement.</li>
 <tr><td><code>VbdSolver</code> (tets)</td><td>yes</td><td>yes</td><td><code>vbd_tets_gpu.rs</code> + v3 + v4</td><td>Stage 20.2 + 20.3 + 20.4</td></tr>
 <tr><td><code>VbdSolver</code> (soft VT contact)</td><td>yes</td><td>yes</td><td><code>soft_vt_contact_gpu.rs</code></td><td>Stage 33.2</td></tr>
 <tr><td><code>VbdSolver</code> (soft friction)</td><td>yes</td><td>yes</td><td><code>soft_friction_gpu.rs</code></td><td>Stage 33.2.1</td></tr>
+<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates; pair friction CPU-only (documented)</td></tr>
 </tbody>
 </table>
 </div>
@@ -17655,8 +17674,8 @@ heightfield terrain); the INSPECTION.md backlog is CLOSED. Remaining:</p>
 <tr><th>Item</th><th>What</th><th>Effort</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>C0</strong> (Tier-C below)</td><td><strong>Barrier-Newton contact backend (IPC-family, GPU)</strong> — penetration-free invariant + CCD line search; subsumes F14 and obsoletes A1 for deformables. The flagship next feature; full design in the C0 entry.</td><td>multi-week (phase 1 = 1–2 sessions)</td></tr>
-<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k) in the rigid XPBD contact pass</td><td>1–2 days</td></tr>
+<tr><td><del>C0</del></td><td><strong>COMPLETE 2026-07-05</strong> — barrier-Newton backend fully landed (all phases + κ + both couplings + LBVH + perf); see the C0 entry. Optional future slices: GPU ABD composite solve, on-device pair friction.</td><td>done</td></tr>
+<tr><td><del>A1</del></td><td>RETIRED for deformables by C0’s μ_s/μ_k friction (2026-07-04); only a rigid-XPBD variant would remain, and C0 is the recommended path.</td><td>closed</td></tr>
 </tbody>
 </table>
 </div>
@@ -18002,9 +18021,11 @@ inflation, per-iterate candidate filters; graded-mesh stress oracle).
 <strong>ABD strong coupling LANDED 2026-07-05</strong> (CPU oracle): affine bodies
 inside the Newton solve via proxy vertices — machinery reuse total,
 momentum machine-exact (5e-15), the weak path’s tunneling case handled
-by the unified line search alone. The GPU port of the composite solve
-is the natural next slice when a scene demands it. <strong>C0 has no open
-items; the technical roadmap is CLEAR.</strong> Subsumes the F14 GPU-CCD item
+by the unified line search alone. <strong>C0 is complete; the technical
+roadmap has no open items.</strong> Two OPTIONAL enhancement slices are noted
+for whenever a scene demands them (not open work): the GPU port of the
+ABD composite solve, and on-device pair (cloth-on-cloth) friction —
+the one documented CPU/GPU behavioural difference. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

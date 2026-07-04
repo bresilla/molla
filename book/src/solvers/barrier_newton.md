@@ -17,11 +17,15 @@ x̃    = x_prev + h·v + h²·g
 
 with the **cubic compact-support barrier** `b(d) = κ(d̂−d)³/(3d̂²)` — C²
 at d̂, convex, zero outside the activation band (no log singularity, no
-global κ tuning; κ is per-contact, mass-consistent v1). Damped Newton
-with matrix-free PCG (block mass-diagonal preconditioner), and the piece
-that carries the guarantee: a **CCD-truncated line search** — step
-length capped at 0.9×TOI *before* Armijo backtracking, so no trial
-state ever crosses a surface.
+global κ tuning). κ is per-contact and **elasticity-inclusive** by
+default: `κ = scale·(m + h²·Σk_incident)/h²`, the TOG 43.6 scheme — a
+stiff material meets a proportionally stiff barrier (the 1 kN
+elastic-press oracle holds 11.4× more band margin than mass-only κ).
+Damped Newton with matrix-free PCG (block mass-diagonal preconditioner,
+**warm-started** from the previous direction with blocked early exit on
+the GPU), and the piece that carries the guarantee: a **CCD-truncated
+line search** — step length capped at 0.9×TOI *before* Armijo
+backtracking, so no trial state ever crosses a surface.
 
 Every Hessian term follows one projection discipline (SPD only):
 compression-clamped springs, convex-part barriers, Gauss-part tet
@@ -49,6 +53,13 @@ volumes, positive-slope friction.
 - **True pinning**: DoF removal (x̃ = x, zero gradient row, identity
   Hessian row). A huge mass does NOT pin under an incremental
   potential — the predictor free-falls independently of mass.
+- **Rigid coupling, two ways**: WEAK (`BarrierSolver`) — obstacles
+  follow body poses, third-law-exact reaction wrenches, and a
+  rigid-side TOI that closes the tunneling hole; and STRONG (ABD) —
+  bodies as 12-DOF affine transforms INSIDE the Newton solve via
+  proxy vertices (`add_affine_body`), one line search protecting
+  everything, momentum machine-exact (5e-15) with no exchange
+  approximation.
 
 ## API
 
@@ -61,7 +72,15 @@ with 4-byte scalar readbacks and the f32 convergence freeze.
 
 Pair discovery runs on device through Teschner-hash uniform grids
 (cell ≥ primitive extent + 3d̂ ⇒ single-ring probes are complete; hash
-collisions only add candidates; bucket overflow is a hard error).
+collisions only add candidates; bucket overflow is a hard error), or —
+for adversarial primitive-size distributions — through a
+step-granularity **LBVH broad phase** (`use_lbvh`): AABBs inflated by
+the travel-cap bound keep the candidate set a superset for the whole
+step, and per-iterate filter kernels do the exact tests.
+
+**Known GPU limitation**: pair (cloth-on-cloth) FRICTION is CPU-only —
+the GPU implements obstacle friction; a friction + self-contact scene
+differs between backends until the pair-friction lag moves on-device.
 
 ## Parity philosophy
 

@@ -181,7 +181,7 @@ fn strain_limit_is_a_hard_bound_under_load() {
         }
     }
 
-    let run = |limit: Option<Real>| -> (Real, BarrierShell) {
+    let run = |limit: Option<Real>| -> Real {
         let params = BarrierParams {
             strain_limit: limit,
             ..Default::default()
@@ -201,11 +201,11 @@ fn strain_limit_is_a_hard_bound_under_load() {
             shell.step(h).expect("step");
             worst = worst.max(shell.max_strain());
         }
-        (worst, shell)
+        worst
     };
 
-    let (strain_free, _) = run(None);
-    let (strain_limited, _) = run(Some(1.05));
+    let strain_free = run(None);
+    let strain_limited = run(Some(1.05));
     eprintln!("strip strain: unlimited {strain_free:.4}, limited {strain_limited:.4}");
     assert!(
         strain_free > 1.10,

@@ -431,6 +431,101 @@ fn gpu_self_collision_stacks_and_crosses_without_penetration() {
         final_gap > 0.0,
         "host-side intersection scan failed: {final_gap:.3e}"
     );
+
+    // ── crossed ribbons (EE-dominant contact) on device — the case
+    // the test name promises: a falling ribbon meets a pinned one
+    // edge-on at 90°.
+    let (pos2, edges2, tris2) = {
+        let mut pos = Vec::new();
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        // ribbon A along x (falling), 9×2; ribbon B along z (pinned).
+        let mk = |pos: &mut Vec<[f64; 3]>,
+                  tris: &mut Vec<[u32; 3]>,
+                  nx: usize,
+                  nz: usize,
+                  y: f64,
+                  ox: f64,
+                  oz: f64| {
+            let base = pos.len() as u32;
+            for j in 0..nz {
+                for i in 0..nx {
+                    pos.push([ox + i as f64 * 0.03, y, oz + j as f64 * 0.03]);
+                }
+            }
+            let idx = |i: usize, j: usize| base + (j * nx + i) as u32;
+            for j in 0..nz - 1 {
+                for i in 0..nx - 1 {
+                    tris.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                    tris.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+                }
+            }
+        };
+        mk(&mut pos, &mut tris, 9, 2, 0.02, -0.12, -0.015);
+        mk(&mut pos, &mut tris, 2, 9, 0.0, -0.015, -0.12);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut edges = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    edges.push((a, b));
+                }
+            }
+        }
+        (pos, edges, tris)
+    };
+    let n_ribbon_a = 18usize;
+    let n_total2 = pos2.len();
+    let springs2: Vec<BarrierGpuSpring> = edges2
+        .iter()
+        .map(|&(a, b)| {
+            let pa = pos2[a as usize];
+            let pb = pos2[b as usize];
+            let rest = ((pa[0] - pb[0]).powi(2) + (pa[1] - pb[1]).powi(2) + (pa[2] - pb[2]).powi(2))
+                .sqrt() as f32;
+            BarrierGpuSpring {
+                a,
+                b,
+                rest,
+                k: 400.0,
+            }
+        })
+        .collect();
+    let pos2_f32: Vec<[f32; 3]> = pos2
+        .iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .collect();
+    let pinned2: Vec<u32> = (n_ribbon_a as u32..n_total2 as u32).collect();
+    let mut gpu2 = BarrierNewtonGpu::new_with_mesh(
+        &device,
+        &queue,
+        &pos2_f32,
+        &vec![0.02; n_total2],
+        &springs2,
+        &[],
+        &tris2,
+        &pinned2,
+        BarrierGpuParams::default(),
+    )
+    .expect("gpu ribbons");
+    for step in 0..200 {
+        let stats = gpu2.step(h).expect("ribbon step");
+        assert!(
+            stats.min_gap > 0.0,
+            "step {step}: GPU ribbons crossed — gap {}",
+            stats.min_gap
+        );
+    }
+    let pr = gpu2.read_positions().expect("read");
+    let center_y = pr[..n_ribbon_a]
+        .iter()
+        .filter(|p| p[0].abs() < 0.02 && p[2].abs() < 0.02)
+        .map(|p| p[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    eprintln!("gpu ribbons: center y {center_y:.4}");
+    assert!(
+        center_y > 0.0,
+        "GPU EE contact failed to hold the crossing: {center_y:.4}"
+    );
 }
 
 /// C0 phase 5a — tets, hard strain limiting and lagged IPC friction on

@@ -113,3 +113,12 @@ move out while their `update_*` physics systems stay.
 
 Steps 1–4 keep the binary working at every commit; step 5 is the actual split
 and is small once the seams are cut.
+
+---
+
+**Addendum (2026-07-05, post-pin):** scene 125 (`barrier_cloth_pane`,
+`bin/molla_viewer/src/examples/125_barrier_cloth.rs`) added a NINTH
+`&mut Sim` pane of the same class as `softbody_drop_pane` — it reads
+`SolverBackend::Barrier` stats and mutates solver params through
+`&mut sim.solver`. Fold it into the §1 HARD-seams migration alongside
+the original eight; the snapshot/command pattern applies unchanged.

@@ -614,60 +614,7 @@ fn filter_pairs_ee_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Thread per (vertex × triangle): emit non-adjacent VT candidates
-// within 3·d̂ (the additive-CCD margin — see the CPU oracle).
-@compute @workgroup_size(WG)
-fn find_pairs_vt(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    let total = u.vertex_count * u.tri_count;
-    if (idx >= total) { return; }
-    let v = idx / u.tri_count;
-    let t_idx = idx % u.tri_count;
-    let t = tris[t_idx];
-    if (v == t.x || v == t.y || v == t.z) { return; }
-    let a = x_iter[t.x].xyz;
-    let b = x_iter[t.y].xyz;
-    let c = x_iter[t.z].xyz;
-    let w = tri_closest(x_iter[v].xyz, a, b, c);
-    let cp = a * w.x + b * w.y + c * w.z;
-    if (length(x_iter[v].xyz - cp) < 3.0 * u.dhat) {
-        let slot = atomicAdd(&pair_count[0], 1u);
-        if (slot < u.pair_capacity) {
-            pair_meta[slot] = vec4<u32>(0u, v, t_idx, 0u);
-            pair_wts[slot] = vec4<f32>(w, 0.0);
-        } else {
-            atomicStore(&pair_count[1], 1u);
-        }
-    }
-}
 
-// Thread per (edge × edge) flat index, j > i, no shared vertices.
-@compute @workgroup_size(WG)
-fn find_pairs_ee(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    let total = u.edge_count * u.edge_count;
-    if (idx >= total) { return; }
-    let i = idx / u.edge_count;
-    let j = idx % u.edge_count;
-    if (j <= i) { return; }
-    let e1 = edges[i];
-    let e2 = edges[j];
-    if (e1.x == e2.x || e1.x == e2.y || e1.y == e2.x || e1.y == e2.y) { return; }
-    let st = seg_closest(
-        x_iter[e1.x].xyz, x_iter[e1.y].xyz, x_iter[e2.x].xyz, x_iter[e2.y].xyz,
-    );
-    let pa = x_iter[e1.x].xyz * (1.0 - st.x) + x_iter[e1.y].xyz * st.x;
-    let pb = x_iter[e2.x].xyz * (1.0 - st.y) + x_iter[e2.y].xyz * st.y;
-    if (length(pa - pb) < 3.0 * u.dhat) {
-        let slot = atomicAdd(&pair_count[0], 1u);
-        if (slot < u.pair_capacity) {
-            pair_meta[slot] = vec4<u32>(1u, i, j, 0u);
-            pair_wts[slot] = vec4<f32>(st.x, st.y, 0.0, 0.0);
-        } else {
-            atomicStore(&pair_count[1], 1u);
-        }
-    }
-}
 
 @compute @workgroup_size(WG)
 fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {

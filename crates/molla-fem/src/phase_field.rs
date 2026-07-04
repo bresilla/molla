@@ -281,10 +281,10 @@ pub struct PhaseFieldCoupledResult {
 /// 1. displacement — linear elasticity with per-element stiffness
 ///    degraded by `g(d̄_e)` (element-mean damage), prescribed
 ///    displacements via symmetric Dirichlet elimination, CG solve;
-/// 2. history — nodal `H ← max(H, ψ(ε))` (v1 drives H with the FULL
-///    strain energy density, the standard tension-dominated
-///    simplification; the spectral tensile split is the documented
-///    upgrade for compression-heavy loading);
+/// 2. history — nodal `H ← max(H, ψ⁺(ε))`, where ψ⁺ is the Miehe
+///    SPECTRAL TENSILE energy by default (`cfg.tensile_split`, so
+///    compression cannot drive damage) or the full density when the
+///    split is disabled;
 /// 3. damage — the existing bounded, irreversible AT2 screened-Poisson
 ///    Jacobi solve,
 ///
@@ -432,7 +432,7 @@ pub fn solve_phase_field_coupled_step(
             let verts = cell.verts();
             // Per-element measure, P1 strain and tensile energy —
             // dimension-generic (2D tri plane strain / 3D tet).
-            let (measure, psi) = match cell {
+            let (measure, psi_hist, psi_full) = match cell {
                 FemCell::Tri(idx) => {
                     let p0 = mesh.vertices[idx[0] as usize];
                     let p1 = mesh.vertices[idx[1] as usize];
@@ -458,8 +458,12 @@ pub fn solve_phase_field_coupled_step(
                         exy += 0.5 * (grads[a][1] * ux + grads[a][0] * uy);
                     }
                     let tr = exx + eyy;
-                    // Tensile split via analytic 2×2 principal strains.
-                    let psi = if cfg.tensile_split {
+                    let psi_full =
+                        0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy);
+                    // Tensile split via analytic 2×2 principal strains
+                    // (drives HISTORY only; reported energy stays the
+                    // full physical density).
+                    let psi_hist = if cfg.tensile_split {
                         let mean = 0.5 * tr;
                         let r = (0.25 * (exx - eyy) * (exx - eyy) + exy * exy).sqrt();
                         let e1 = (mean + r).max(0.0);
@@ -467,9 +471,9 @@ pub fn solve_phase_field_coupled_step(
                         let tr_pos = tr.max(0.0);
                         0.5 * lambda * tr_pos * tr_pos + mu * (e1 * e1 + e2 * e2)
                     } else {
-                        0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy)
+                        psi_full
                     };
-                    (area, psi)
+                    (area, psi_hist, psi_full)
                 }
                 FemCell::Tet(idx) => {
                     let p = [
@@ -526,7 +530,18 @@ pub fn solve_phase_field_coupled_step(
                         ),
                     );
                     let tr = gu[0][0] + gu[1][1] + gu[2][2];
-                    let psi = if cfg.tensile_split {
+                    let fro2 = (0..3)
+                        .map(|r| {
+                            (0..3)
+                                .map(|c| {
+                                    let e_rc = 0.5 * (gu[r][c] + gu[c][r]);
+                                    e_rc * e_rc
+                                })
+                                .sum::<Real>()
+                        })
+                        .sum::<Real>();
+                    let psi_full = 0.5 * lambda * tr * tr + mu * fro2;
+                    let psi_hist = if cfg.tensile_split {
                         // Principal strains via the symmetric 3×3
                         // eigen-solver, Macaulay brackets per mode.
                         let (evals, _) = crate::math::dense3::eig3_sym(eps);
@@ -537,27 +552,19 @@ pub fn solve_phase_field_coupled_step(
                                 + pos(evals.y) * pos(evals.y)
                                 + pos(evals.z) * pos(evals.z))
                     } else {
-                        let fro2 = (0..3)
-                            .map(|r| {
-                                (0..3)
-                                    .map(|c| {
-                                        let e_rc = 0.5 * (gu[r][c] + gu[c][r]);
-                                        e_rc * e_rc
-                                    })
-                                    .sum::<Real>()
-                            })
-                            .sum::<Real>();
-                        0.5 * lambda * tr * tr + mu * fro2
+                        psi_full
                     };
-                    (vol, psi)
+                    (vol, psi_hist, psi_full)
                 }
             };
             let d_bar =
                 verts.iter().map(|&v| damage[v as usize]).sum::<Real>() / verts.len() as Real;
+            // Reported energy is the FULL physical elastic density —
+            // the split feeds only the damage-driving history.
             strain_energy +=
-                measure * psi * phase_field_degradation(d_bar, params.residual_stiffness);
+                measure * psi_full * phase_field_degradation(d_bar, params.residual_stiffness);
             for &vi in verts {
-                psi_node[vi as usize] += measure * psi;
+                psi_node[vi as usize] += measure * psi_hist;
                 area_node[vi as usize] += measure;
             }
         }

@@ -158,13 +158,24 @@ impl BarrierSolver {
             .iter()
             .map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
+        let inv_mass = model.particle_inv_mass.host()?;
         let masses: Vec<f32> = model
             .particle_mass
             .host()?
             .iter()
-            .map(|&m| if m > 0.0 { m as f32 } else { 1.0 })
-            .collect();
-        let inv_mass = model.particle_inv_mass.host()?;
+            .zip(inv_mass.iter())
+            .map(|(&m, &w)| {
+                if m > 0.0 {
+                    Ok(m as f32)
+                } else if w == 0.0 {
+                    Ok(1.0) // pinned: mass only scales preconditioning
+                } else {
+                    Err(molla_core::Error::Solver(
+                        "barrier gpu: non-positive mass on a free particle".into(),
+                    ))
+                }
+            })
+            .collect::<Result<_>>()?;
         let pinned: Vec<u32> = inv_mass
             .iter()
             .enumerate()
@@ -353,8 +364,27 @@ impl Solver for BarrierSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        // Topology change (particle count) invalidates the lazily
+        // built backends — rebuild instead of panicking on a length
+        // mismatch (scene edits / model swaps).
+        let n_particles = state_in.particle_q.host()?.len();
+        if self
+            .shell
+            .as_ref()
+            .is_some_and(|s| s.positions.len() != n_particles)
+        {
+            self.shell = None;
+        }
         #[cfg(feature = "gpu")]
         if self.gpu.is_some() {
+            let stale = self
+                .gpu
+                .as_ref()
+                .and_then(|g| g.sim.as_ref())
+                .is_some_and(|s| s.vertex_count() != n_particles);
+            if stale && let Some(g) = self.gpu.as_mut() {
+                g.sim = None;
+            }
             if self.gpu.as_ref().is_some_and(|g| g.sim.is_none()) {
                 let sim = self.build_gpu(model, state_in)?;
                 if let Some(g) = self.gpu.as_mut() {
