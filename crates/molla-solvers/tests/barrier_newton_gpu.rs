@@ -1088,3 +1088,122 @@ fn lbvh_broad_phase_parity_and_graded_stress() {
         eprintln!("hash graded outcome: {outcome}");
     }
 }
+
+/// C0 — pair (cloth-on-cloth) friction ON DEVICE: the layer-on-layer
+/// discriminator from the CPU contract (barrier_friction.rs), run on
+/// the GPU. A free patch rests on a pinned patch; gravity tilts to
+/// tan θ = 0.5 with μ_k = 0.4, μ_s = 0.6. With friction the top layer
+/// must hold (the tangential force comes ENTIRELY from VT/EE pair
+/// friction — no obstacles in the scene); with μ = 0 it slides away.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=barrier_newton_gpu`"]
+fn gpu_pair_friction_holds_layer_on_layer() {
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    let run = |mu: f32| -> f32 {
+        let mk = |n: usize, y: f64, o: f64| -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+            let spacing = 0.03;
+            let mut pos = Vec::new();
+            for j in 0..n {
+                for i in 0..n {
+                    pos.push([o + i as f64 * spacing, y, o + j as f64 * spacing]);
+                }
+            }
+            let idx = |i: usize, j: usize| (j * n + i) as u32;
+            let mut tris = Vec::new();
+            for j in 0..n - 1 {
+                for i in 0..n - 1 {
+                    tris.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                    tris.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+                }
+            }
+            (pos, tris)
+        };
+        let (mut pos, mut tris) = mk(4, 0.5e-3, -0.045);
+        let n_top = pos.len();
+        let (pos_b, tris_b) = mk(6, 0.0, -0.075);
+        let base = n_top as u32;
+        pos.extend(pos_b.iter().copied());
+        tris.extend(
+            tris_b
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+        let n_total = pos.len();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut springs = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    let pa = pos[a as usize];
+                    let pb = pos[b as usize];
+                    let rest = ((pa[0] - pb[0]).powi(2)
+                        + (pa[1] - pb[1]).powi(2)
+                        + (pa[2] - pb[2]).powi(2))
+                    .sqrt() as f32;
+                    springs.push(BarrierGpuSpring {
+                        a,
+                        b,
+                        rest,
+                        k: 400.0,
+                    });
+                }
+            }
+        }
+        let pos_f32: Vec<[f32; 3]> = pos
+            .iter()
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect();
+        let pinned: Vec<u32> = (n_top as u32..n_total as u32).collect();
+        let mut gpu = BarrierNewtonGpu::new_with_mesh(
+            &device,
+            &queue,
+            &pos_f32,
+            &vec![0.02; n_total],
+            &springs,
+            &[],
+            &tris,
+            &pinned,
+            BarrierGpuParams {
+                friction_mu: mu,
+                friction_mu_s_scale: 1.5,
+                ..Default::default()
+            },
+        )
+        .expect("gpu layers");
+
+        let h = 1.0f32 / 240.0;
+        // Settle straight down, then tilt gravity (tan θ = 0.5).
+        for _ in 0..60 {
+            gpu.step(h).expect("settle");
+        }
+        let theta = 0.5f32.atan();
+        gpu.params.gravity = [9.81 * theta.sin(), -9.81 * theta.cos(), 0.0];
+        gpu.set_velocities(&vec![[0.0; 3]; n_total]).expect("v0");
+        let p0 = gpu.read_positions().expect("read");
+        for step in 0..180 {
+            let stats = gpu.step(h).expect("step");
+            assert!(stats.min_gap > 0.0, "step {step}: layers crossed");
+        }
+        let p1 = gpu.read_positions().expect("read");
+        let mut dx = 0.0f32;
+        for (a, b) in p1[..n_top].iter().zip(p0[..n_top].iter()) {
+            dx += a[0] - b[0];
+        }
+        dx / n_top as f32
+    };
+
+    let d_frict = run(0.4);
+    let d_slide = run(0.0);
+    eprintln!("gpu layer friction: μ=0.4 moved {d_frict:.5} m, μ=0 moved {d_slide:.5} m");
+    assert!(
+        d_frict.abs() < 5.0e-3,
+        "GPU pair friction must hold the top layer: {d_frict:.5}"
+    );
+    assert!(
+        d_slide > 0.02 && d_slide > 5.0 * d_frict.abs(),
+        "frictionless layers must slide on GPU: {d_slide:.5}"
+    );
+}

@@ -78,9 +78,10 @@ step-granularity **LBVH broad phase** (`use_lbvh`): AABBs inflated by
 the travel-cap bound keep the candidate set a superset for the whole
 step, and per-iterate filter kernels do the exact tests.
 
-**Known GPU limitation**: pair (cloth-on-cloth) FRICTION is CPU-only —
-the GPU implements obstacle friction; a friction + self-contact scene
-differs between backends until the pair-friction lag moves on-device.
+Pair (cloth-on-cloth) friction runs on BOTH backends: the device
+freezes the pair set, frames, λ and anchors at step start
+(`pair_friction_lag`) — the layer-on-layer discriminator lands the
+same 0.62 mm hold on GPU as the f64 oracle.
 
 ## Parity philosophy
 

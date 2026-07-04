@@ -114,6 +114,14 @@ struct Uniforms {
 @group(3) @binding(15) var<storage, read> cand_vt_b: array<u32>;
 @group(3) @binding(16) var<storage, read> cand_ee_a: array<u32>;
 @group(3) @binding(17) var<storage, read> cand_ee_b: array<u32>;
+// Lagged PAIR friction (cloth-on-cloth), frozen at step start:
+// meta = (kind, a, b, 0); wts = frozen closest-point weights;
+// nl = (contact normal, λ); anchors = 4 rows per pair (stencil vertex
+// positions at lag time). Count in pair_count[2], overflow [3].
+@group(3) @binding(18) var<storage, read_write> lag_meta: array<vec4<u32>>;
+@group(3) @binding(19) var<storage, read_write> lag_wts: array<vec4<f32>>;
+@group(3) @binding(20) var<storage, read_write> lag_nl: array<vec4<f32>>;
+@group(3) @binding(21) var<storage, read_write> lag_anchors: array<vec4<f32>>;
 
 const WG: u32 = 64u;
 
@@ -616,6 +624,82 @@ fn filter_pairs_ee_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 
 
+// Signed weight of vertex v in LAG pair p's stencil (mirror of
+// pair_weight_of over the frozen arrays).
+fn lag_weight_of(p: u32, v: u32) -> f32 {
+    let m = lag_meta[p];
+    let w = lag_wts[p];
+    if (m.x == 0u) {
+        if (v == m.y) { return 1.0; }
+        let t = tris[m.z];
+        if (v == t.x) { return -w.x; }
+        if (v == t.y) { return -w.y; }
+        if (v == t.z) { return -w.z; }
+        return 0.0;
+    }
+    let e1 = edges[m.y];
+    let e2 = edges[m.z];
+    if (v == e1.x) { return 1.0 - w.x; }
+    if (v == e1.y) { return w.x; }
+    if (v == e2.x) { return -(1.0 - w.y); }
+    if (v == e2.y) { return -w.y; }
+    return 0.0;
+}
+
+// The four stencil vertex ids of lag pair p.
+fn lag_stencil(p: u32) -> vec4<u32> {
+    let m = lag_meta[p];
+    if (m.x == 0u) {
+        let t = tris[m.z];
+        return vec4<u32>(m.y, t.x, t.y, t.z);
+    }
+    let e1 = edges[m.y];
+    let e2 = edges[m.z];
+    return vec4<u32>(e1.x, e1.y, e2.x, e2.y);
+}
+
+// Tangential relative slip of lag pair p at positions from
+// x_try/x_iter: T·Σ wⱼ(xⱼ − anchorⱼ), n and w FROZEN.
+fn lag_slip(p: u32, use_try: bool) -> vec3<f32> {
+    let ids = lag_stencil(p);
+    let nrm = lag_nl[p].xyz;
+    var u_rel = vec3<f32>(0.0);
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        let v = ids[k];
+        let w = lag_weight_of(p, v);
+        var xv: vec3<f32>;
+        if (use_try) { xv = x_try[v].xyz; } else { xv = x_iter[v].xyz; }
+        u_rel = u_rel + (xv - lag_anchors[p * 4u + k].xyz) * w;
+    }
+    return u_rel - nrm * dot(nrm, u_rel);
+}
+
+// Freeze the discovered pair set into the lag arrays (thread per
+// discovered pair; run ONCE at step start, after discovery at the
+// committed positions).
+@compute @workgroup_size(WG)
+fn pair_friction_lag(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gid.x;
+    if (c >= min(atomicLoad(&pair_count[0]), u.pair_capacity)) { return; }
+    let diff = pair_diff(c, false);
+    let dist = length(diff);
+    if (dist >= u.dhat || dist <= 1.0e-9) { return; }
+    let s = u.dhat - dist;
+    let lambda = u.h * u.h * pair_kappa(c) * s * s / (u.dhat * u.dhat);
+    let slot = atomicAdd(&pair_count[2], 1u);
+    if (slot >= u.pair_capacity) {
+        atomicStore(&pair_count[3], 1u);
+        return;
+    }
+    lag_meta[slot] = pair_meta[c];
+    lag_wts[slot] = pair_wts[c];
+    lag_nl[slot] = vec4<f32>(diff / dist, lambda);
+    let ids = lag_stencil(slot);
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        lag_anchors[slot * 4u + k] = x_iter[ids[k]];
+    }
+}
+
 @compute @workgroup_size(WG)
 fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -701,6 +785,21 @@ fn gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (sl > 1.0e-12) {
                     let gg = friction_g(row.w, sl, ew);
                     g = g + (ut / sl) * gg.x;
+                }
+            }
+        }
+    }
+    if (u.mu_k > 0.0) {
+        let ew2 = u.epsv * u.h;
+        let nl = min(atomicLoad(&pair_count[2]), u.pair_capacity);
+        for (var p = 0u; p < nl; p = p + 1u) {
+            let w = lag_weight_of(p, i);
+            if (w != 0.0) {
+                let ut = lag_slip(p, false);
+                let sl = length(ut);
+                if (sl > 1.0e-12) {
+                    let gg = friction_g(lag_nl[p].w, sl, ew2);
+                    g = g + (ut / sl) * (gg.x * w);
                 }
             }
         }
@@ -812,6 +911,35 @@ fn hessian_mul(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let mu_s = u.mu_k * max(u.mu_s_scale, 1.0);
                     y = y + vt * (mu_s * row.w / ew);
                 }
+            }
+        }
+    }
+    if (u.mu_k > 0.0) {
+        let ew2 = u.epsv * u.h;
+        let nl = min(atomicLoad(&pair_count[2]), u.pair_capacity);
+        for (var p = 0u; p < nl; p = p + 1u) {
+            let wi2 = lag_weight_of(p, i);
+            if (wi2 != 0.0) {
+                let nrm = lag_nl[p].xyz;
+                let ids = lag_stencil(p);
+                var vrel = vec3<f32>(0.0);
+                for (var k = 0u; k < 4u; k = k + 1u) {
+                    vrel = vrel + cg_d[ids[k]].xyz * lag_weight_of(p, ids[k]);
+                }
+                let vt = vrel - nrm * dot(nrm, vrel);
+                let ut = lag_slip(p, false);
+                let sl = length(ut);
+                var hv: vec3<f32>;
+                if (sl > 1.0e-12) {
+                    let gg = friction_g(lag_nl[p].w, sl, ew2);
+                    let uhat = ut / sl;
+                    let v_par = uhat * dot(uhat, vt);
+                    hv = v_par * gg.y + (vt - v_par) * (gg.x / sl);
+                } else {
+                    let mu_s = u.mu_k * max(u.mu_s_scale, 1.0);
+                    hv = vt * (mu_s * lag_nl[p].w / ew2);
+                }
+                y = y + hv * wi2;
             }
         }
     }
@@ -1123,6 +1251,15 @@ fn energy_vertex(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+    if (u.mu_k > 0.0) {
+        let ew2 = u.epsv * u.h;
+        let nl = min(atomicLoad(&pair_count[2]), u.pair_capacity);
+        for (var p = 0u; p < nl; p = p + 1u) {
+            if (lag_stencil(p).x == i) {
+                e = e + friction_energy_of(lag_nl[p].w, length(lag_slip(p, true)), ew2);
+            }
+        }
+    }
     // Tet energies, owned by the slot-0 vertex's thread.
     for (var t = 0u; t < u.tet_count; t = t + 1u) {
         let ids = tet_ids[t];
@@ -1231,7 +1368,8 @@ fn reduce_energy_gap(@builtin(local_invocation_id) lid: vec3<u32>) {
     }
     if (lid.x == 0u) {
         scalars[9] = red[0];
-        scalars[10] = f32(atomicLoad(&pair_count[1])); // overflow flag
+        scalars[10] = f32(atomicLoad(&pair_count[1])); // pair overflow
+        scalars[11] = f32(atomicLoad(&pair_count[3])); // lag overflow
     }
 }
 

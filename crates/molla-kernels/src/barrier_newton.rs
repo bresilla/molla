@@ -173,6 +173,7 @@ pub struct BarrierNewtonGpu {
 const ENTRIES: &[&str] = &[
     "energy_pairs",
     "friction_lag",
+    "pair_friction_lag",
     "grid_clear",
     "grid_insert_tris",
     "grid_insert_edges",
@@ -379,8 +380,8 @@ impl BarrierNewtonGpu {
         });
         let layout_work = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton work"),
-            entries: &(0..18)
-                .map(|i| storage_entry(i, i >= 13))
+            entries: &(0..22)
+                .map(|i| storage_entry(i, (13..=17).contains(&i)))
                 .collect::<Vec<_>>(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -574,6 +575,18 @@ impl BarrierNewtonGpu {
         };
         let cand_vt = (mk_cand("bn.cand_vt_a"), mk_cand("bn.cand_vt_b"));
         let cand_ee = (mk_cand("bn.cand_ee_a"), mk_cand("bn.cand_ee_b"));
+        let mk_lag = |label: &str, stride: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: cand_cap * 16 * stride,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let lag_meta = mk_lag("bn.lag_meta", 1);
+        let lag_wts = mk_lag("bn.lag_wts", 1);
+        let lag_nl = mk_lag("bn.lag_nl", 1);
+        let lag_anchors = mk_lag("bn.lag_anchors", 4);
         let lbvh = if params.use_lbvh && !triangles.is_empty() {
             let dev = std::sync::Arc::new(device.clone());
             let qu = std::sync::Arc::new(queue.clone());
@@ -672,6 +685,10 @@ impl BarrierNewtonGpu {
                 entry(15, &cand_vt.1),
                 entry(16, &cand_ee.0),
                 entry(17, &cand_ee.1),
+                entry(18, &lag_meta),
+                entry(19, &lag_wts),
+                entry(20, &lag_nl),
+                entry(21, &lag_anchors),
             ],
         });
 
@@ -824,6 +841,32 @@ impl BarrierNewtonGpu {
                 .max(1);
             self.run(&[("friction_lag", gf)]);
         }
+        // Pair-friction lag: discover pairs ONCE at the committed
+        // positions (x_iter = x_pos after predict) and freeze the set,
+        // frames, λ and anchors for the whole step — the IPC
+        // semi-implicit lag, now on device.
+        if self.params.friction_mu > 0.0 && self.tri_count > 0 {
+            self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
+            let g_cap = self.pair_capacity.div_ceil(WG).max(1);
+            if self.params.use_lbvh && self.lbvh.is_some() {
+                // (candidate buffers are filled by the LBVH block
+                // below at the same committed positions — run the lag
+                // AFTER it; handled by ordering: the LBVH block comes
+                // next, then the lag dispatch.)
+            } else {
+                let g_clear = (2 * self.grid_slots).div_ceil(WG).max(1);
+                let g_tri = self.tri_count.div_ceil(WG).max(1);
+                let g_edge = self.edge_count.div_ceil(WG).max(1);
+                self.run(&[
+                    ("grid_clear", g_clear),
+                    ("grid_insert_tris", g_tri),
+                    ("grid_insert_edges", g_edge),
+                    ("find_pairs_vt_grid", gv),
+                    ("find_pairs_ee_grid", g_edge),
+                    ("pair_friction_lag", g_cap),
+                ]);
+            }
+        }
         // LBVH broad phase, ONCE per step: AABBs from committed
         // positions, inflated so the candidate set stays a superset
         // for every Newton iterate (3·d̂ margin + the travel cap's
@@ -879,6 +922,14 @@ impl BarrierNewtonGpu {
             enc.copy_buffer_to_buffer(ee_a, 0, &self.cand_ee.0, 0, cap_bytes);
             enc.copy_buffer_to_buffer(ee_b, 0, &self.cand_ee.1, 0, cap_bytes);
             self.queue.submit(std::iter::once(enc.finish()));
+            if self.params.friction_mu > 0.0 {
+                let g_cap = self.pair_capacity.div_ceil(WG).max(1);
+                self.run(&[
+                    ("filter_pairs_vt_cand", g_cap),
+                    ("filter_pairs_ee_cand", g_cap),
+                    ("pair_friction_lag", g_cap),
+                ]);
+            }
         }
 
         let mut stats = BarrierGpuStats {
@@ -900,7 +951,9 @@ impl BarrierNewtonGpu {
             // gradient + baseline energy/gap/grad_inf (α = 0 trial).
             self.write_uniforms(h, 0.0);
             if self.tri_count > 0 {
-                self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
+                // Zero only the per-iterate slots (count + overflow) —
+                // slots [2]/[3] hold the step-level friction lag.
+                self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 8]);
                 if self.params.use_lbvh && self.lbvh.is_some() {
                     let g_cand = self.pair_capacity.div_ceil(WG).max(1);
                     self.run(&[
@@ -927,6 +980,11 @@ impl BarrierNewtonGpu {
             if s[10] != 0.0 {
                 return Err(Error::Solver(
                     "barrier_newton: self-pair buffer overflow — raise pair capacity".into(),
+                ));
+            }
+            if s[11] != 0.0 {
+                return Err(Error::Solver(
+                    "barrier_newton: friction-lag buffer overflow — raise pair capacity".into(),
                 ));
             }
             stats.min_gap = stats.min_gap.min(gap0);

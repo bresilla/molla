@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fc79cb2d.js";
+            window.path_to_searchindex_js = "../searchindex-90bb36fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f4239cce.js"></script>
@@ -204,7 +204,7 @@ agreement.</li>
 <tr><td><code>VbdSolver</code> (tets)</td><td>yes</td><td>yes</td><td><code>vbd_tets_gpu.rs</code> + v3 + v4</td><td>Stage 20.2 + 20.3 + 20.4</td></tr>
 <tr><td><code>VbdSolver</code> (soft VT contact)</td><td>yes</td><td>yes</td><td><code>soft_vt_contact_gpu.rs</code></td><td>Stage 33.2</td></tr>
 <tr><td><code>VbdSolver</code> (soft friction)</td><td>yes</td><td>yes</td><td><code>soft_friction_gpu.rs</code></td><td>Stage 33.2.1</td></tr>
-<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates; pair friction CPU-only (documented)</td></tr>
+<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates incl. on-device pair friction</td></tr>
 </tbody>
 </table>
 </div>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fc79cb2d.js";
+            window.path_to_searchindex_js = "searchindex-90bb36fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f4239cce.js"></script>
@@ -9165,9 +9165,10 @@ for adversarial primitive-size distributions — through a
 step-granularity <strong>LBVH broad phase</strong> (<code>use_lbvh</code>): AABBs inflated by
 the travel-cap bound keep the candidate set a superset for the whole
 step, and per-iterate filter kernels do the exact tests.</p>
-<p><strong>Known GPU limitation</strong>: pair (cloth-on-cloth) FRICTION is CPU-only —
-the GPU implements obstacle friction; a friction + self-contact scene
-differs between backends until the pair-friction lag moves on-device.</p>
+<p>Pair (cloth-on-cloth) friction runs on BOTH backends: the device
+freezes the pair set, frames, λ and anchors at step start
+(<code>pair_friction_lag</code>) — the layer-on-layer discriminator lands the
+same 0.62 mm hold on GPU as the f64 oracle.</p>
 <h2 id="parity-philosophy"><a class="header" href="#parity-philosophy">Parity philosophy</a></h2>
 <p>f32-vs-f64 drapes are <em>non-unique equilibria</em>: the GPU drop test gates
 on ENERGY (the f32 drape found a 13% deeper minimum than the oracle),
@@ -17064,7 +17065,7 @@ agreement.</li>
 <tr><td><code>VbdSolver</code> (tets)</td><td>yes</td><td>yes</td><td><code>vbd_tets_gpu.rs</code> + v3 + v4</td><td>Stage 20.2 + 20.3 + 20.4</td></tr>
 <tr><td><code>VbdSolver</code> (soft VT contact)</td><td>yes</td><td>yes</td><td><code>soft_vt_contact_gpu.rs</code></td><td>Stage 33.2</td></tr>
 <tr><td><code>VbdSolver</code> (soft friction)</td><td>yes</td><td>yes</td><td><code>soft_friction_gpu.rs</code></td><td>Stage 33.2.1</td></tr>
-<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates; pair friction CPU-only (documented)</td></tr>
+<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates incl. on-device pair friction</td></tr>
 </tbody>
 </table>
 </div>
@@ -18022,10 +18023,12 @@ inflation, per-iterate candidate filters; graded-mesh stress oracle).
 inside the Newton solve via proxy vertices — machinery reuse total,
 momentum machine-exact (5e-15), the weak path’s tunneling case handled
 by the unified line search alone. <strong>C0 is complete; the technical
-roadmap has no open items.</strong> Two OPTIONAL enhancement slices are noted
-for whenever a scene demands them (not open work): the GPU port of the
-ABD composite solve, and on-device pair (cloth-on-cloth) friction —
-the one documented CPU/GPU behavioural difference. Subsumes the F14 GPU-CCD item
+roadmap has no open items.</strong> <strong>On-device pair friction landed
+2026-07-05</strong> (the last CPU/GPU behavioural difference — the GPU
+layer-on-layer discriminator matches the f64 oracle’s 0.62 mm hold to
+the digit). One OPTIONAL enhancement slice remains noted for whenever
+a scene demands it (not open work): the GPU port of the ABD composite
+solve. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

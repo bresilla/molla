@@ -440,10 +440,12 @@ inflation, per-iterate candidate filters; graded-mesh stress oracle).
 inside the Newton solve via proxy vertices — machinery reuse total,
 momentum machine-exact (5e-15), the weak path's tunneling case handled
 by the unified line search alone. **C0 is complete; the technical
-roadmap has no open items.** Two OPTIONAL enhancement slices are noted
-for whenever a scene demands them (not open work): the GPU port of the
-ABD composite solve, and on-device pair (cloth-on-cloth) friction —
-the one documented CPU/GPU behavioural difference. Subsumes the F14 GPU-CCD item
+roadmap has no open items.** **On-device pair friction landed
+2026-07-05** (the last CPU/GPU behavioural difference — the GPU
+layer-on-layer discriminator matches the f64 oracle's 0.62 mm hold to
+the digit). One OPTIONAL enhancement slice remains noted for whenever
+a scene demands it (not open work): the GPU port of the ABD composite
+solve. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
