@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4496661f.js";
+            window.path_to_searchindex_js = "../searchindex-9189d053.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6df35734.js"></script>
@@ -470,8 +470,19 @@ cross-mesh by construction.</p>
 <hr>
 <h2 id="tier-c--new-physics-axes-multi-week"><a class="header" href="#tier-c--new-physics-axes-multi-week">Tier-C — new physics axes (multi-week)</a></h2>
 <h3 id="c0-barrier-newton-contact-backend-ipc-family-gpu--flagship"><a class="header" href="#c0-barrier-newton-contact-backend-ipc-family-gpu--flagship">C0. Barrier-Newton contact backend (IPC-family, GPU) — flagship</a></h3>
-<p><strong>Status.</strong> Designed 2026-07-04 (this entry). Not started. Subsumes the F14
-GPU-CCD item (currently a loud refusal on the GPU VBD backend).</p>
+<p><strong>Status.</strong> Designed 2026-07-04. <strong>Phase 1 LANDED same day</strong> —
+<code>molla-solvers::barrier_contact</code> (<code>BarrierShell</code>): f64 incremental-potential
+Newton with the cubic compact-support barrier, mass-consistent per-contact κ,
+SPD-projected spring/barrier Hessians, matrix-free PCG (block mass-diagonal
+preconditioner), and the CCD-truncated Armijo line search. Contract tests
+(<code>tests/barrier_contact.rs</code>): FD gradient 8.8e-7 / Hessian-operator 1.2e-11;
+a 50 m/s impact whose free-flight step crosses the floor ~16× stays
+penetration-free at every accepted iterate and arrests on the surface; a
+draped drop settles with the resting gap INSIDE the barrier band
+(9.99e-4 &lt; d̂ = 1e-3); every test ends with an explicit intersection scan.
+Phases 2–5 (GPU port + F14 TOI kernel, VT/EE self-collision, tets + strain
+limiting + μ_s/μ_k, scale) remain as below. Subsumes the F14 GPU-CCD item
+(currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
 molla’s one real deficit against the contact state of the art:
