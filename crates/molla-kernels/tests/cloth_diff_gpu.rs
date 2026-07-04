@@ -210,3 +210,153 @@ fn cloth_adjoint_matches_finite_differences() {
     }
     assert!(checked_v >= 3, "too few non-trivial v0 checks");
 }
+
+/// Softbody volume-term adjoint gradcheck: a 5-tet cube (edge springs
+/// plus per-tet volume preservation) squeezed by inward initial
+/// velocities. FD on ∂J/∂k_v (all five tets carry signal since the
+/// cube is compressing) and re-check ∂J/∂v₀ with the volume term
+/// active — the adjoint must chain through BOTH force families.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn softbody_volume_adjoint_matches_finite_differences() {
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // Unit cube, 8 corners, 5-tet decomposition.
+    let positions: Vec<[f32; 3]> = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ];
+    let center = [0.5_f32, 0.5, 0.5];
+    let velocities: Vec<[f32; 3]> = positions
+        .iter()
+        .map(|p| {
+            [
+                -0.8 * (p[0] - center[0]),
+                -0.8 * (p[1] - center[1]),
+                -0.8 * (p[2] - center[2]),
+            ]
+        })
+        .collect();
+    let inv_mass = vec![1.0 / 0.1; 8];
+    let tets_ids: [[u32; 4]; 5] = [
+        [0, 1, 3, 5],
+        [0, 3, 2, 6],
+        [0, 5, 4, 6],
+        [3, 5, 6, 7],
+        [0, 3, 5, 6],
+    ];
+    let mk_setup = |kvs: &[f32; 5], vels: &[[f32; 3]]| -> ClothDiffGpu {
+        let mut springs = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for t in &tets_ids {
+            for a in 0..4 {
+                for b in (a + 1)..4 {
+                    let (x, y) = (t[a].min(t[b]), t[a].max(t[b]));
+                    if seen.insert((x, y)) {
+                        let pa = positions[x as usize];
+                        let pb = positions[y as usize];
+                        let rest = ((pa[0] - pb[0]).powi(2)
+                            + (pa[1] - pb[1]).powi(2)
+                            + (pa[2] - pb[2]).powi(2))
+                        .sqrt();
+                        springs.push(ClothSpring {
+                            a: x,
+                            b: y,
+                            rest,
+                            k: 40.0,
+                        });
+                    }
+                }
+            }
+        }
+        let tets: Vec<molla_kernels::SoftTet> = tets_ids
+            .iter()
+            .zip(kvs.iter())
+            .map(|(ids, &kv)| molla_kernels::SoftTet { ids: *ids, kv })
+            .collect();
+        ClothDiffGpu::new_with_tets(
+            &device,
+            &queue,
+            &positions,
+            vels,
+            &inv_mass,
+            &springs,
+            &tets,
+            40,
+            1.0 / 240.0,
+            [0.0, 0.0, 0.0],
+        )
+        .expect("softbody diff")
+    };
+
+    let steps = 40u32;
+    let base_kv = [300.0_f32, 320.0, 340.0, 360.0, 500.0];
+    let sim = mk_setup(&base_kv, &velocities);
+    let base_loss = loss(&sim, steps);
+    let p_t = sim.read_positions(steps).expect("read");
+    let seed_p: Vec<[f32; 3]> = p_t
+        .iter()
+        .map(|p| [2.0 * p[0], 2.0 * p[1], 2.0 * p[2]])
+        .collect();
+    sim.backward(steps, &seed_p, &[[0.0_f32; 3]; 8])
+        .expect("backward");
+    let grad_kv = sim.read_grad_kv().expect("grad kv");
+    let grad_v0 = sim.read_grad_v0().expect("grad v0");
+    eprintln!("softbody J = {base_loss:.6}, grad_kv = {grad_kv:?}");
+
+    let mut checked = 0;
+    for t_idx in 0..5 {
+        let h = base_kv[t_idx] * 5.0e-3;
+        let mut kp = base_kv;
+        kp[t_idx] += h;
+        let jp = loss(&mk_setup(&kp, &velocities), steps);
+        let mut km = base_kv;
+        km[t_idx] -= h;
+        let jm = loss(&mk_setup(&km, &velocities), steps);
+        let fd = (jp - jm) / (2.0 * f64::from(h));
+        let got = f64::from(grad_kv[t_idx]);
+        let denom = fd.abs().max(got.abs());
+        if denom < 3.0e-5 {
+            continue;
+        }
+        let rel = (fd - got).abs() / denom;
+        eprintln!("dJ/dkv[{t_idx}]: analytic {got:.6e} fd {fd:.6e} rel {rel:.3e}");
+        assert!(rel < 2.0e-2, "kv gradient mismatch at {t_idx}: {rel:.3e}");
+        checked += 1;
+    }
+    assert!(checked >= 3, "too few non-trivial kv checks: {checked}");
+
+    // v0 gradients with the volume term active.
+    let mut checked_v = 0;
+    for (pi, c) in [(1usize, 0usize), (6, 1), (7, 2)] {
+        let h = 1.0e-3_f32;
+        let mut vp = velocities.clone();
+        vp[pi][c] += h;
+        let jp = loss(&mk_setup(&base_kv, &vp), steps);
+        let mut vm = velocities.clone();
+        vm[pi][c] -= h;
+        let jm = loss(&mk_setup(&base_kv, &vm), steps);
+        let fd = (jp - jm) / (2.0 * f64::from(h));
+        let got = f64::from(grad_v0[pi][c]);
+        let denom = fd.abs().max(got.abs());
+        if denom < 3.0e-5 {
+            continue;
+        }
+        let rel = (fd - got).abs() / denom;
+        eprintln!("dJ/dv0[{pi}][{c}]: analytic {got:.6e} fd {fd:.6e} rel {rel:.3e}");
+        assert!(rel < 2.0e-2, "v0 gradient mismatch: {rel:.3e}");
+        checked_v += 1;
+    }
+    assert!(checked_v >= 2, "too few v0 checks");
+}

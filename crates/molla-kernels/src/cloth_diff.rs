@@ -25,7 +25,7 @@ struct Uniforms {
     particle_count: u32,
     spring_count: u32,
     step: u32,
-    _pad0: u32,
+    tet_count: u32,
     dt: f32,
     gravity_x: f32,
     gravity_y: f32,
@@ -43,12 +43,21 @@ pub struct ClothSpring {
     pub k: f32,
 }
 
+/// One softbody tet for the volume-preservation term
+/// `½·k_v·(V − V₀)²` (V₀ measured from the initial positions).
+#[derive(Copy, Clone, Debug)]
+pub struct SoftTet {
+    pub ids: [u32; 4],
+    pub kv: f32,
+}
+
 pub struct ClothDiffGpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipe_forward: wgpu::ComputePipeline,
     pipe_hat: wgpu::ComputePipeline,
     pipe_stiffness: wgpu::ComputePipeline,
+    pipe_volume_stiffness: wgpu::ComputePipeline,
     pipe_backward: wgpu::ComputePipeline,
     bg_uniforms: wgpu::BindGroup,
     bg_topology: wgpu::BindGroup,
@@ -63,9 +72,11 @@ pub struct ClothDiffGpu {
     adj_p: wgpu::Buffer,
     adj_v: wgpu::Buffer,
     adj_k: wgpu::Buffer,
+    adj_kv: wgpu::Buffer,
     spring_k: wgpu::Buffer,
     particle_count: u32,
     spring_count: u32,
+    tet_count: u32,
     max_steps: u32,
     dt: f32,
     gravity: [f32; 3],
@@ -80,6 +91,35 @@ impl ClothDiffGpu {
         velocities: &[[f32; 3]],
         inv_mass: &[f32],
         springs: &[ClothSpring],
+        max_steps: u32,
+        dt: f32,
+        gravity: [f32; 3],
+    ) -> Result<Self> {
+        Self::new_with_tets(
+            device,
+            queue,
+            positions,
+            velocities,
+            inv_mass,
+            springs,
+            &[],
+            max_steps,
+            dt,
+            gravity,
+        )
+    }
+
+    /// Like [`Self::new`] with an additional per-tet volume term
+    /// (softbody diffsim). Rest volumes are measured from `positions`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_tets(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions: &[[f32; 3]],
+        velocities: &[[f32; 3]],
+        inv_mass: &[f32],
+        springs: &[ClothSpring],
+        tets: &[SoftTet],
         max_steps: u32,
         dt: f32,
         gravity: [f32; 3],
@@ -110,6 +150,39 @@ impl ClothDiffGpu {
                 cursor[node] += 1;
             }
         }
+        // Tet CSR + rest volumes.
+        let nt = tets.len();
+        let mut t_counts = vec![0u32; n + 1];
+        for t in tets {
+            for &id in &t.ids {
+                t_counts[id as usize + 1] += 1;
+            }
+        }
+        for i in 1..t_counts.len() {
+            t_counts[i] += t_counts[i - 1];
+        }
+        let t_offsets = t_counts.clone();
+        let mut t_cursor = t_counts;
+        let mut t_entries = vec![0u32; t_offsets[n] as usize];
+        for (tid, t) in tets.iter().enumerate() {
+            for &id in &t.ids {
+                t_entries[t_cursor[id as usize] as usize] = tid as u32;
+                t_cursor[id as usize] += 1;
+            }
+        }
+        let vol = |t: &SoftTet| -> f32 {
+            let p = |k: usize| positions[t.ids[k] as usize];
+            let e = |a: [f32; 3], b: [f32; 3]| [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let u = e(p(0), p(1));
+            let v = e(p(0), p(2));
+            let w = e(p(0), p(3));
+            (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+                + u[2] * (v[0] * w[1] - v[1] * w[0]))
+                / 6.0
+        };
+        let tet_v0: Vec<f32> = tets.iter().map(vol).collect();
+        let tet_kvs: Vec<f32> = tets.iter().map(|t| t.kv).collect();
+        let tet_id_rows: Vec<[u32; 4]> = tets.iter().map(|t| t.ids).collect();
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::cloth_diff"),
@@ -148,6 +221,11 @@ impl ClothDiffGpu {
                 storage_entry(4, true),
                 storage_entry(5, true),
                 storage_entry(6, true),
+                storage_entry(7, true),
+                storage_entry(8, true),
+                storage_entry(9, false), // tet_kv (optimised parameter)
+                storage_entry(10, true),
+                storage_entry(11, true),
             ],
         });
         let layout_traj = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -161,6 +239,7 @@ impl ClothDiffGpu {
                 storage_entry(1, false),
                 storage_entry(2, false),
                 storage_entry(3, false),
+                storage_entry(4, false), // adj_kv
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -213,6 +292,47 @@ impl ClothDiffGpu {
             mk_init_f32("cloth_diff.inv_mass", inv_mass, wgpu::BufferUsages::STORAGE);
         let csr_off = mk_init_u32("cloth_diff.csr_offsets", &offsets);
         let csr_ent = mk_init_u32("cloth_diff.csr_entries", &entries);
+        let tet_ids_buf = if nt > 0 {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("cloth_diff.tet_ids"),
+                contents: bytemuck::cast_slice(&tet_id_rows),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        } else {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("cloth_diff.tet_ids dummy"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let tet_v0_buf = mk_init_f32(
+            "cloth_diff.tet_v0",
+            if tet_v0.is_empty() {
+                &[0.0][..]
+            } else {
+                &tet_v0
+            },
+            wgpu::BufferUsages::STORAGE,
+        );
+        let tet_kv_buf = mk_init_f32(
+            "cloth_diff.tet_kv",
+            if tet_kvs.is_empty() {
+                &[0.0][..]
+            } else {
+                &tet_kvs
+            },
+            usage_rw,
+        );
+        let tet_csr_off = mk_init_u32("cloth_diff.tet_csr_offsets", &t_offsets);
+        let tet_csr_ent = mk_init_u32(
+            "cloth_diff.tet_csr_entries",
+            if t_entries.is_empty() {
+                &[0][..]
+            } else {
+                &t_entries
+            },
+        );
 
         let slab = (n.max(1) * 16) as u64;
         let traj_bytes = slab * (max_steps as u64 + 1);
@@ -236,6 +356,7 @@ impl ClothDiffGpu {
         let adj_v = mk_buf("cloth_diff.adj_v", slab);
         let adj_vh = mk_buf("cloth_diff.adj_vh", slab);
         let adj_k = mk_buf("cloth_diff.adj_k", (ns.max(1) * 4) as u64);
+        let adj_kv = mk_buf("cloth_diff.adj_kv", (nt.max(1) * 4) as u64);
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cloth_diff.uniforms"),
@@ -266,6 +387,11 @@ impl ClothDiffGpu {
                 entry(4, &inv_mass_buf),
                 entry(5, &csr_off),
                 entry(6, &csr_ent),
+                entry(7, &tet_ids_buf),
+                entry(8, &tet_v0_buf),
+                entry(9, &tet_kv_buf),
+                entry(10, &tet_csr_off),
+                entry(11, &tet_csr_ent),
             ],
         });
         let bg_traj = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -281,6 +407,7 @@ impl ClothDiffGpu {
                 entry(1, &adj_v),
                 entry(2, &adj_k),
                 entry(3, &adj_vh),
+                entry(4, &adj_kv),
             ],
         });
 
@@ -290,6 +417,7 @@ impl ClothDiffGpu {
             pipe_forward: mk_pipe("forward_step"),
             pipe_hat: mk_pipe("backward_hat"),
             pipe_stiffness: mk_pipe("backward_stiffness"),
+            pipe_volume_stiffness: mk_pipe("backward_volume_stiffness"),
             pipe_backward: mk_pipe("backward_step"),
             bg_uniforms,
             bg_topology,
@@ -301,9 +429,11 @@ impl ClothDiffGpu {
             adj_p,
             adj_v,
             adj_k,
+            adj_kv,
             spring_k,
             particle_count: n as u32,
             spring_count: ns as u32,
+            tet_count: nt as u32,
             max_steps,
             dt,
             gravity,
@@ -315,7 +445,7 @@ impl ClothDiffGpu {
             particle_count: self.particle_count,
             spring_count: self.spring_count,
             step,
-            _pad0: 0,
+            tet_count: self.tet_count,
             dt: self.dt,
             gravity_x: self.gravity[0],
             gravity_y: self.gravity[1],
@@ -391,12 +521,21 @@ impl ClothDiffGpu {
             0,
             bytemuck::cast_slice(&vec![0.0_f32; self.spring_count.max(1) as usize]),
         );
+        self.queue.write_buffer(
+            &self.adj_kv,
+            0,
+            bytemuck::cast_slice(&vec![0.0_f32; self.tet_count.max(1) as usize]),
+        );
         let groups_p = self.particle_count.div_ceil(WG).max(1);
         let groups_s = self.spring_count.div_ceil(WG).max(1);
+        let groups_t = self.tet_count.div_ceil(WG).max(1);
         for t in (0..steps).rev() {
             self.write_uniforms(t);
             self.dispatch(&self.pipe_hat, groups_p, "cloth_diff hat");
             self.dispatch(&self.pipe_stiffness, groups_s, "cloth_diff dk");
+            if self.tet_count > 0 {
+                self.dispatch(&self.pipe_volume_stiffness, groups_t, "cloth_diff dkv");
+            }
             self.dispatch(&self.pipe_backward, groups_p, "cloth_diff backward");
         }
         Ok(())
@@ -477,9 +616,17 @@ impl ClothDiffGpu {
         self.read_vec4(&self.adj_v, self.particle_count as usize)
     }
 
+    /// ∂J/∂k_v (per tet) after [`Self::backward`].
+    pub fn read_grad_kv(&self) -> Result<Vec<f32>> {
+        self.read_scalars(&self.adj_kv, self.tet_count as usize)
+    }
+
     /// ∂J/∂k after [`Self::backward`].
     pub fn read_grad_k(&self) -> Result<Vec<f32>> {
-        let ns = self.spring_count as usize;
+        self.read_scalars(&self.adj_k, self.spring_count as usize)
+    }
+
+    fn read_scalars(&self, src: &wgpu::Buffer, ns: usize) -> Result<Vec<f32>> {
         let bytes = (ns.max(1) * 4) as u64;
         let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cloth_diff.stage_k"),
@@ -490,7 +637,7 @@ impl ClothDiffGpu {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(&self.adj_k, 0, &stage, 0, bytes);
+        encoder.copy_buffer_to_buffer(src, 0, &stage, 0, bytes);
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = stage.slice(..);
         let (tx, rx) = std::sync::mpsc::channel::<Result<()>>();

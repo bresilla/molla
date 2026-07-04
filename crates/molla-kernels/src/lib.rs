@@ -133,7 +133,7 @@ pub use clamping_max_effort::ClampingMaxEffortKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_position_based::ClampingPositionBasedKernel;
 #[cfg(feature = "gpu")]
-pub use cloth_diff::{ClothDiffGpu, ClothSpring};
+pub use cloth_diff::{ClothDiffGpu, ClothSpring, SoftTet};
 #[cfg(feature = "gpu")]
 pub use contact_reduction::{
     CONTACT_STRIDE, ContactReductionKernel, MAX_OUT_PER_GROUP, MAX_PER_GROUP, pack_groups_host,
