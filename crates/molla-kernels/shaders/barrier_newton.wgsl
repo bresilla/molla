@@ -31,7 +31,7 @@ struct Uniforms {
     edge_count: u32,
     pair_capacity: u32,
     tet_count: u32,
-    _pad3: u32,
+    kappa_elastic: u32, // 1 = elasticity-inclusive κ
     mu_s_scale: f32, // μ_s = scale·μ_k (≥ 1)
     epsv: f32,       // stick-well width as velocity (e = ε_v·h)
     strain_limit: f32, // hard strain bound (0 = off)
@@ -53,7 +53,9 @@ struct Uniforms {
 @group(1) @binding(1) var<storage, read> spring_b: array<u32>;
 @group(1) @binding(2) var<storage, read> spring_rest: array<f32>;
 @group(1) @binding(3) var<storage, read> spring_k: array<f32>;
-@group(1) @binding(4) var<storage, read> inv_mass_unused: array<f32>; // reserved
+// Per-vertex Σ incident spring k — the local elastic eigen-stiffness
+// bound for the elasticity-inclusive κ (TOG 43.6 scheme).
+@group(1) @binding(4) var<storage, read> vertex_ksum: array<f32>;
 @group(1) @binding(5) var<storage, read> mass: array<f32>;
 @group(1) @binding(6) var<storage, read> csr_offsets: array<u32>;
 @group(1) @binding(7) var<storage, read> csr_entries: array<u32>;
@@ -258,18 +260,28 @@ fn pair_kappa(p: u32) -> f32 {
     let m = pair_meta[p];
     var m1: f32;
     var m2: f32;
+    var k1 = 0.0;
+    var k2 = 0.0;
     if (m.x == 0u) {
         let t = tris[m.z];
         m1 = mass[m.y];
         m2 = (mass[t.x] + mass[t.y] + mass[t.z]) / 3.0;
+        k1 = vertex_ksum[m.y];
+        k2 = (vertex_ksum[t.x] + vertex_ksum[t.y] + vertex_ksum[t.z]) / 3.0;
     } else {
         let e1 = edges[m.y];
         let e2 = edges[m.z];
         m1 = 0.5 * (mass[e1.x] + mass[e1.y]);
         m2 = 0.5 * (mass[e2.x] + mass[e2.y]);
+        k1 = 0.5 * (vertex_ksum[e1.x] + vertex_ksum[e1.y]);
+        k2 = 0.5 * (vertex_ksum[e2.x] + vertex_ksum[e2.y]);
     }
-    let m_red = 2.0 * m1 * m2 / max(m1 + m2, 1.0e-30);
-    return u.kappa_scale * m_red / (u.h * u.h);
+    if (u.kappa_elastic != 0u) {
+        m1 = m1 + u.h * u.h * k1;
+        m2 = m2 + u.h * u.h * k2;
+    }
+    let s_red = 2.0 * m1 * m2 / max(m1 + m2, 1.0e-30);
+    return u.kappa_scale * s_red / (u.h * u.h);
 }
 
 fn active_pair_count() -> u32 {
@@ -363,11 +375,23 @@ fn friction_lag(@builtin(global_invocation_id) gid: vec3<u32>) {
         let gd = obstacle_distance(o, x_pos[v].xyz);
         if (gd.w < u.dhat) {
             let s = max(u.dhat - gd.w, 0.0);
-            let lambda = u.kappa_scale * mass[v] * s * s / (u.dhat * u.dhat);
+            // λ = h²·(−b′) with the SAME κ the barrier uses (a
+            // mass-only λ under the inclusive barrier makes friction
+            // proportionally weak — the CPU oracle's lesson).
+            let lambda = u.h * u.h * vertex_kappa(v) * s * s / (u.dhat * u.dhat);
             row = vec4<f32>(x_pos[v].xyz, lambda);
         }
     }
     fric_lag[idx] = row;
+}
+
+// Elasticity-inclusive κ: scale·(m + h²·Σk)/h²; mass-only fallback.
+fn vertex_kappa(i: u32) -> f32 {
+    var m_eff = mass[i];
+    if (u.kappa_elastic != 0u) {
+        m_eff = m_eff + u.h * u.h * vertex_ksum[i];
+    }
+    return u.kappa_scale * m_eff / (u.h * u.h);
 }
 
 fn cell_hash(cx: i32, cy: i32, cz: i32) -> u32 {
@@ -612,7 +636,7 @@ fn gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         g = g - d / len * f;
     }
-    let kappa = u.kappa_scale * mass[i] / (u.h * u.h);
+    let kappa = vertex_kappa(i);
     for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
         let gd = obstacle_distance(o, xi);
         g = g + gd.xyz * (h2 * barrier_d1(gd.w, kappa));
@@ -698,7 +722,7 @@ fn hessian_mul(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         y = y + jdv;
     }
-    let kappa = u.kappa_scale * mass[i] / (u.h * u.h);
+    let kappa = vertex_kappa(i);
     for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
         let gd = obstacle_distance(o, xi);
         let ddb = barrier_d2(gd.w, kappa);
@@ -1046,7 +1070,7 @@ fn energy_vertex(@builtin(global_invocation_id) gid: vec3<u32>) {
     let xi = x_try[i].xyz;
     let dx = xi - x_tilde[i].xyz;
     var e = 0.5 * mass[i] * dot(dx, dx);
-    let kappa = u.kappa_scale * mass[i] / (u.h * u.h);
+    let kappa = vertex_kappa(i);
     for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
         let gd = obstacle_distance(o, xi);
         e = e + u.h * u.h * barrier_energy(gd.w, kappa);

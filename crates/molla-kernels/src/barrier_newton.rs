@@ -29,7 +29,7 @@ struct Uniforms {
     edge_count: u32,
     pair_capacity: u32,
     tet_count: u32,
-    _pad3: u32,
+    kappa_elastic: u32,
     mu_s_scale: f32,
     epsv: f32,
     strain_limit: f32,
@@ -80,6 +80,8 @@ pub struct BarrierGpuParams {
     /// Hard strain limit (len/rest); 0 disables.
     pub strain_limit: f32,
     pub strain_barrier_scale: f32,
+    /// Elasticity-inclusive κ (TOG 43.6): κ = scale·(m + h²·Σk)/h².
+    pub elasticity_inclusive_kappa: bool,
 }
 
 impl Default for BarrierGpuParams {
@@ -96,6 +98,7 @@ impl Default for BarrierGpuParams {
             friction_epsv: 1.0e-3,
             strain_limit: 0.0,
             strain_barrier_scale: 10.0,
+            elasticity_inclusive_kappa: true,
         }
     }
 }
@@ -401,7 +404,12 @@ impl BarrierNewtonGpu {
         );
         let rest_buf = init_f32("bn.rest", if rests.is_empty() { &one[..] } else { &rests });
         let k_buf = init_f32("bn.k", if ks.is_empty() { &one[..] } else { &ks });
-        let inv_mass_buf = init_f32("bn.inv_mass_reserved", &vec![0.0; n.max(1)]);
+        let mut ksum = vec![0.0f32; n.max(1)];
+        for s in springs {
+            ksum[s.a as usize] += s.k;
+            ksum[s.b as usize] += s.k;
+        }
+        let ksum_buf = init_f32("bn.vertex_ksum", &ksum);
         let mass_buf = init_f32("bn.mass", masses);
         let csr_off = init_u32("bn.csr_off", &offsets);
         let csr_ent = init_u32(
@@ -547,7 +555,7 @@ impl BarrierNewtonGpu {
                 entry(1, &spring_b),
                 entry(2, &rest_buf),
                 entry(3, &k_buf),
-                entry(4, &inv_mass_buf),
+                entry(4, &ksum_buf),
                 entry(5, &mass_buf),
                 entry(6, &csr_off),
                 entry(7, &csr_ent),
@@ -634,7 +642,7 @@ impl BarrierNewtonGpu {
             edge_count: self.edge_count,
             pair_capacity: self.pair_capacity,
             tet_count: self.tet_count,
-            _pad3: 0,
+            kappa_elastic: u32::from(self.params.elasticity_inclusive_kappa),
             mu_s_scale: self.params.friction_mu_s_scale,
             epsv: self.params.friction_epsv,
             strain_limit: self.params.strain_limit,
@@ -802,6 +810,7 @@ impl BarrierNewtonGpu {
             let slope = s2[1];
             let mut alpha = alpha_max;
             let mut accepted = false;
+            let mut e_new = e0;
             for _ in 0..30 {
                 self.eval_trial(h, alpha);
                 let st = self.read_scalars()?;
@@ -809,13 +818,22 @@ impl BarrierNewtonGpu {
                     stats.min_gap = stats.min_gap.min(st[8]);
                     self.run(&[("accept_trial", gv)]);
                     accepted = true;
-                    stats.energy = st[7];
+                    e_new = st[7];
+                    stats.energy = e_new;
                     break;
                 }
                 alpha *= 0.5;
             }
             if !accepted {
                 stats.hit_iter_cap = true;
+                break;
+            }
+            // f32 noise-floor exit: when an accepted step no longer
+            // buys meaningful energy decrease, further Newton
+            // iterations only pump line-search noise into velocities
+            // (measured: raising the iteration budget made settling
+            // WORSE, 0.114 → 0.187 m/s jitter). Stop at the floor.
+            if (e0 - e_new).abs() <= 1.0e-5 * e0.abs().max(1.0e-12) {
                 break;
             }
             if it + 1 == self.params.max_newton_iters {

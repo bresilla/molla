@@ -259,3 +259,63 @@ fn high_speed_impact_cannot_tunnel() {
         "shell should have landed near the floor: {y_max}"
     );
 }
+
+/// Elasticity-inclusive dynamic stiffness (TOG 43.6 scheme): a vertex
+/// pressed into the floor by a HARD elastic load (stiff spring to an
+/// anchor pinned below the floor — force ~1 kN, constant to within
+/// the band width). With κ sized for inertia alone (mass-only) the
+/// elastic press drives the vertex deep into the activation band,
+/// nearly to the wall; the inclusive κ = scale·(m + h²·Σk)/h² meets
+/// the press with matched stiffness and holds most of the band.
+/// `kappa_scale = 1` so the contrast is measurable (the default 1e3
+/// hides any realistic load).
+#[test]
+fn elasticity_inclusive_kappa_holds_gap_under_elastic_press() {
+    let run = |inclusive: bool| -> Real {
+        let params = BarrierParams {
+            kappa_scale: 1.0,
+            elasticity_inclusive_kappa: inclusive,
+            gravity: Vec3::ZERO,
+            ..Default::default()
+        };
+        let pos = vec![
+            Vec3::new(0.0, 0.5e-3, 0.0),  // pressed vertex, in-band
+            Vec3::new(0.0, -0.0499, 0.0), // anchor below the floor
+        ];
+        let springs = vec![BarrierSpring {
+            a: 0,
+            b: 1,
+            rest: 0.0,
+            k: 2.0e4, // press ≈ k·0.05 ≈ 1 kN
+        }];
+        let mut shell = BarrierShell::new(
+            pos,
+            vec![0.02, 0.02],
+            springs,
+            vec![BarrierObstacle::HalfSpace {
+                n: Vec3::Y,
+                offset: 0.0,
+            }],
+            params,
+        )
+        .expect("shell");
+        shell.pin_vertices(&[1]);
+        let h = 1.0 / 240.0;
+        for step in 0..120 {
+            let stats = shell.step(h).expect("step");
+            assert!(stats.min_gap > 0.0, "step {step}: pressed through");
+        }
+        shell.positions[0].y
+    };
+
+    let gap_mass_only = run(false);
+    let gap_inclusive = run(true);
+    eprintln!(
+        "elastic press: mass-only gap {gap_mass_only:.3e}, inclusive gap {gap_inclusive:.3e}"
+    );
+    assert!(gap_mass_only > 0.0 && gap_inclusive > 0.0);
+    assert!(
+        gap_inclusive > 5.0 * gap_mass_only,
+        "inclusive κ should resist the elastic press: {gap_inclusive:.3e} vs {gap_mass_only:.3e}"
+    );
+}

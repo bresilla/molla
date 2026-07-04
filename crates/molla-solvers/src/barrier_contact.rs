@@ -130,6 +130,14 @@ pub struct BarrierParams {
     /// displacement well is e = ε_v·h. Smaller ⇒ less creep,
     /// stiffer friction Hessian.
     pub friction_epsv: Real,
+    /// Elasticity-inclusive dynamic stiffness (the TOG 43.6 scheme):
+    /// κ_c = scale·(m_c + h²·k_local)/h², where k_local is the Σ of
+    /// incident spring stiffnesses — an upper bound on the local
+    /// elastic eigen-stiffness. A stiff material then meets a
+    /// proportionally stiff barrier instead of pressing through the
+    /// activation band under its own elastic forces. `false` falls
+    /// back to the mass-consistent κ = scale·m/h².
+    pub elasticity_inclusive_kappa: bool,
 }
 
 impl Default for BarrierParams {
@@ -147,6 +155,7 @@ impl Default for BarrierParams {
             friction_mu: 0.0,
             friction_mu_s_scale: 1.0,
             friction_epsv: 1.0e-3,
+            elasticity_inclusive_kappa: true,
         }
     }
 }
@@ -187,6 +196,9 @@ pub struct BarrierShell {
     /// FD-checkable).
     lagged_friction: Vec<FrictionContact>,
     lagged_pair_friction: Vec<PairFrictionContact>,
+    /// Per-vertex Σ of incident spring stiffnesses (the local elastic
+    /// eigen-stiffness bound feeding the elasticity-inclusive κ).
+    vertex_ksum: Vec<Real>,
     /// Pinned vertices are true DoF removals: x̃ = x (no predictor
     /// gravity — a huge mass does NOT pin under an incremental
     /// potential, since the predictor free-falls independently of
@@ -261,6 +273,11 @@ impl BarrierShell {
             ));
         }
         let n = positions.len();
+        let mut vertex_ksum = vec![0.0; n];
+        for s in &springs {
+            vertex_ksum[s.a as usize] += s.k;
+            vertex_ksum[s.b as usize] += s.k;
+        }
         Ok(Self {
             velocities: vec![Vec3::ZERO; n],
             positions,
@@ -273,6 +290,7 @@ impl BarrierShell {
             tet_v0: Vec::new(),
             lagged_friction: Vec::new(),
             lagged_pair_friction: Vec::new(),
+            vertex_ksum,
             pinned: vec![false; n],
             params,
         })
@@ -492,30 +510,58 @@ impl BarrierShell {
     /// Reduced mass of a pair's stencil (harmonic mean of the two
     /// sides' effective masses) for the per-contact κ.
     fn pair_kappa(&self, pair: &SelfPair, h: Real) -> Real {
-        let (m1, m2) = match *pair {
+        // Per-side effective stiffness: mass, plus h²·(local elastic
+        // eigen-stiffness bound) under the elasticity-inclusive
+        // scheme; sides combine harmonically (series compliance).
+        let side = |m: Real, ks: Real| -> Real {
+            if self.params.elasticity_inclusive_kappa {
+                m + h * h * ks
+            } else {
+                m
+            }
+        };
+        let (s1, s2) = match *pair {
             SelfPair::VertTri(v, t, _) => {
                 let tri = self.triangles[t as usize];
                 let mt = (self.masses[tri[0] as usize]
                     + self.masses[tri[1] as usize]
                     + self.masses[tri[2] as usize])
                     / 3.0;
-                (self.masses[v as usize], mt)
+                let kt = (self.vertex_ksum[tri[0] as usize]
+                    + self.vertex_ksum[tri[1] as usize]
+                    + self.vertex_ksum[tri[2] as usize])
+                    / 3.0;
+                (
+                    side(self.masses[v as usize], self.vertex_ksum[v as usize]),
+                    side(mt, kt),
+                )
             }
             SelfPair::EdgeEdge(ea, eb, _, _) => {
                 let e1 = self.collision_edges[ea as usize];
                 let e2 = self.collision_edges[eb as usize];
                 (
-                    0.5 * (self.masses[e1[0] as usize] + self.masses[e1[1] as usize]),
-                    0.5 * (self.masses[e2[0] as usize] + self.masses[e2[1] as usize]),
+                    side(
+                        0.5 * (self.masses[e1[0] as usize] + self.masses[e1[1] as usize]),
+                        0.5 * (self.vertex_ksum[e1[0] as usize] + self.vertex_ksum[e1[1] as usize]),
+                    ),
+                    side(
+                        0.5 * (self.masses[e2[0] as usize] + self.masses[e2[1] as usize]),
+                        0.5 * (self.vertex_ksum[e2[0] as usize] + self.vertex_ksum[e2[1] as usize]),
+                    ),
                 )
             }
         };
-        let m_red = 2.0 * m1 * m2 / (m1 + m2).max(1.0e-30);
-        self.params.kappa_scale * m_red / (h * h)
+        let s_red = 2.0 * s1 * s2 / (s1 + s2).max(1.0e-30);
+        self.params.kappa_scale * s_red / (h * h)
     }
 
     fn barrier_kappa(&self, vertex: usize, h: Real) -> Real {
-        self.params.kappa_scale * self.masses[vertex] / (h * h)
+        let m_eff = if self.params.elasticity_inclusive_kappa {
+            self.masses[vertex] + h * h * self.vertex_ksum[vertex]
+        } else {
+            self.masses[vertex]
+        };
+        self.params.kappa_scale * m_eff / (h * h)
     }
 
     /// b, b', b'' of the cubic compact-support barrier at gap `d`.
@@ -572,6 +618,9 @@ impl BarrierShell {
             e += h2 * 0.5 * t.kv * dv * dv;
         }
         for (i, xi) in x.iter().enumerate() {
+            if self.pinned[i] {
+                continue; // pinned = boundary condition, not a contact
+            }
             let kappa = self.barrier_kappa(i, h);
             for ob in &self.obstacles {
                 let (dist, _) = ob.distance(*xi);
@@ -638,6 +687,9 @@ impl BarrierShell {
             }
         }
         for (i, xi) in x.iter().enumerate() {
+            if self.pinned[i] {
+                continue;
+            }
             let kappa = self.barrier_kappa(i, h);
             for ob in &self.obstacles {
                 let (dist, grad_d) = ob.distance(*xi);
@@ -733,6 +785,9 @@ impl BarrierShell {
             }
         }
         for (i, xi) in x.iter().enumerate() {
+            if self.pinned[i] {
+                continue;
+            }
             let kappa = self.barrier_kappa(i, h);
             for ob in &self.obstacles {
                 let (dist, grad_d) = ob.distance(*xi);
@@ -818,6 +873,8 @@ impl BarrierShell {
     /// (straight-line vs ball) for spheres. Returns α ∈ (0, 1].
     fn ccd_alpha(&self, x: &[Vec3], p: &[Vec3], pairs: &[SelfPair]) -> Real {
         let mut alpha: Real = 1.0;
+        // (Pinned vertices never move — p is zero on their rows — so
+        // their below-surface anchors cannot truncate the step.)
         // Global travel cap: no vertex moves more than d̂ in one
         // accepted line-search step. This is what makes the 3·d̂
         // candidate margin airtight (see `self_candidates`).
@@ -909,7 +966,7 @@ impl BarrierShell {
 
     /// Rebuild the lagged friction state from the CURRENT positions
     /// (called by [`Self::step`]; public so FD tests can pin the lag).
-    pub fn rebuild_friction_lag(&mut self) {
+    pub fn rebuild_friction_lag(&mut self, h: Real) {
         self.lagged_friction.clear();
         self.lagged_pair_friction.clear();
         if self.params.friction_mu <= 0.0 {
@@ -925,11 +982,10 @@ impl BarrierShell {
                 if dist >= self.params.dhat || dist <= 1.0e-12 {
                     continue;
                 }
-                let kappa = self.pair_kappa(&pair, 1.0); // h cancels in λ
                 let s = self.params.dhat - dist;
-                // λ = h²·(−b′) with κ ∝ 1/h² ⇒ h-free (mirror of the
-                // obstacle path); pair_kappa(h=1) carries κ·h² = scale·m_red.
-                let lambda = kappa * s * s / (self.params.dhat * self.params.dhat);
+                // λ = h²·(−b′) with the SAME pair κ the barrier uses.
+                let lambda = h * h * self.pair_kappa(&pair, h) * s * s
+                    / (self.params.dhat * self.params.dhat);
                 let mut anchors = [Vec3::ZERO; 4];
                 for (k, (idx, _)) in stencil.iter().enumerate() {
                     anchors[k] = x[*idx as usize];
@@ -954,7 +1010,13 @@ impl BarrierShell {
                 let (gap, n) = ob.distance(*xi);
                 if gap < self.params.dhat {
                     let s = (self.params.dhat - gap).max(0.0);
-                    let lambda = self.params.kappa_scale * self.masses[i] * s * s
+                    // λ = h²·(−b′) with THE SAME κ the barrier uses —
+                    // a mass-only λ under the elasticity-inclusive
+                    // barrier underestimates the true normal force by
+                    // the (m + h²k_sum)/m factor and friction goes
+                    // proportionally weak (measured: the incline
+                    // discriminator slid in BOTH cases).
+                    let lambda = h * h * self.barrier_kappa(i, h) * s * s
                         / (self.params.dhat * self.params.dhat);
                     self.lagged_friction.push(FrictionContact {
                         vertex: i as u32,
@@ -1030,7 +1092,10 @@ impl BarrierShell {
     /// invariant. Positive at all times or the solver is wrong.
     pub fn min_gap(&self) -> Real {
         let mut g = Real::INFINITY;
-        for xi in &self.positions {
+        for (i, xi) in self.positions.iter().enumerate() {
+            if self.pinned[i] {
+                continue; // boundary condition, not a contact
+            }
             for ob in &self.obstacles {
                 g = g.min(ob.distance(*xi).0);
             }
@@ -1076,7 +1141,7 @@ impl BarrierShell {
     /// One implicit step of size `h`.
     pub fn step(&mut self, h: Real) -> Result<BarrierStepStats> {
         let n = self.positions.len();
-        self.rebuild_friction_lag();
+        self.rebuild_friction_lag(h);
         let x_prev = self.positions.clone();
         let x_tilde: Vec<Vec3> = (0..n)
             .map(|i| {
@@ -1145,7 +1210,10 @@ impl BarrierShell {
             // Invariant bookkeeping at the ACCEPTED iterate.
             let gap_now = {
                 let mut g = Real::INFINITY;
-                for xi in &x {
+                for (i, xi) in x.iter().enumerate() {
+                    if self.pinned[i] {
+                        continue;
+                    }
                     for ob in &self.obstacles {
                         g = g.min(ob.distance(*xi).0);
                     }

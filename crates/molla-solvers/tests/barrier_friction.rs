@@ -63,7 +63,7 @@ fn incline_patch(mu_s_scale: Real) -> BarrierShell {
 #[test]
 fn fd_validates_friction_potential_in_all_regions() {
     let mut shell = incline_patch(1.5);
-    shell.rebuild_friction_lag();
+    shell.rebuild_friction_lag(1.0 / 240.0);
     let h = 1.0 / 240.0;
     let e_w = shell.params.friction_epsv * h; // stick-well width
 

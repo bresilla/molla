@@ -421,9 +421,14 @@ frictionless — pure VT/EE friction), and device Teschner-hash pair
 pruning replacing the brute-force sweeps (single-ring-complete cells,
 collisions only add candidates, overflow is a hard error). **C0 is
 FEATURE-COMPLETE** — book chapter at `solvers/barrier_newton.md`.
-Follow-ons (new entries when taken up): elasticity-inclusive κ (the
-TOG 43.6 eigen-stiffness scheme replacing the mass-consistent v1),
-LBVH for adversarial distributions, warm-started PCG. Subsumes the F14 GPU-CCD item
+**Elasticity-inclusive κ LANDED 2026-07-04** (same-day follow-on):
+κ = scale·(m + h²·Σk_incident)/h² on both backends, default on — the
+1 kN elastic-press oracle holds 11.4× more band margin than mass-only
+κ, friction λ now shares the barrier's κ, pinned vertices are
+boundary conditions (excluded from barriers/invariant), and the f32
+Newton gained a noise-floor exit. Remaining follow-ons: LBVH for
+adversarial distributions, warm-started PCG, rigid two-way coupling,
+GPU behind viewer scene 125. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
