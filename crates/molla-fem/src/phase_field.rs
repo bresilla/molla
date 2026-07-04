@@ -241,6 +241,12 @@ pub struct PhaseFieldCoupledConfig {
     /// Damage Jacobi controls (existing bounded/irreversible solve).
     pub damage_iters: usize,
     pub damage_tol: Real,
+    /// Drive the history field with the SPECTRAL TENSILE energy
+    /// `ψ⁺ = ½λ⟨tr ε⟩₊² + μ Σ⟨εᵢ⟩₊²` (Miehe split, from the analytic
+    /// 2×2 strain eigenvalues) instead of the full density — damage
+    /// then cannot grow under compression. Default on; disable only
+    /// to reproduce the tension-dominated v1 behaviour.
+    pub tensile_split: bool,
 }
 
 impl Default for PhaseFieldCoupledConfig {
@@ -254,6 +260,7 @@ impl Default for PhaseFieldCoupledConfig {
             cg_tol: 1.0e-10,
             damage_iters: 400,
             damage_tol: 1.0e-10,
+            tensile_split: true,
         }
     }
 }
@@ -439,7 +446,19 @@ pub fn solve_phase_field_coupled_step(
                 exy += 0.5 * (grads[a][1] * ux + grads[a][0] * uy);
             }
             let tr = exx + eyy;
-            let psi = 0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy);
+            // Full density uses the strain invariants; the tensile
+            // split uses the principal strains (analytic 2×2 eigen:
+            // mean ± r) with Macaulay brackets ⟨·⟩₊.
+            let psi = if cfg.tensile_split {
+                let mean = 0.5 * tr;
+                let r = (0.25 * (exx - eyy) * (exx - eyy) + exy * exy).sqrt();
+                let e1 = (mean + r).max(0.0);
+                let e2 = (mean - r).max(0.0);
+                let tr_pos = tr.max(0.0);
+                0.5 * lambda * tr_pos * tr_pos + mu * (e1 * e1 + e2 * e2)
+            } else {
+                0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy)
+            };
             let d_bar =
                 (damage[idx[0] as usize] + damage[idx[1] as usize] + damage[idx[2] as usize]) / 3.0;
             strain_energy += area * psi * phase_field_degradation(d_bar, params.residual_stiffness);

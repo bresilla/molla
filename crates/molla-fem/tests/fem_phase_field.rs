@@ -296,3 +296,49 @@ fn notch_localizes_damage_and_softens() {
         "no softening: {energies:?}"
     );
 }
+
+/// Spectral tensile split: biaxial COMPRESSION must produce (near)
+/// zero damage with the split active — compressed material does not
+/// crack — while the full-density v1 misreads the compressive energy
+/// as crack driving force. Tension behaviour is covered by the
+/// existing identity/notch tests (which run WITH the split).
+#[test]
+fn tensile_split_blocks_compression_damage() {
+    use molla_fem::{PhaseFieldCoupledConfig, solve_phase_field_coupled_step};
+    let mesh = FemMesh::tri_grid_2d(6, 6, 1.0, 1.0);
+    let params = PhaseFieldFractureParams {
+        critical_energy_release_rate: 5.0,
+        length_scale: 0.2,
+        residual_stiffness: 1.0e-6,
+    };
+    let run = |split: bool| -> f64 {
+        let cfg = PhaseFieldCoupledConfig {
+            tensile_split: split,
+            ..Default::default()
+        };
+        let eps = 0.04;
+        let mut dirichlet = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            dirichlet.push((2 * i, -eps * p.x));
+            dirichlet.push((2 * i + 1, -eps * p.y));
+        }
+        let n = mesh.vert_count();
+        let mut history = vec![0.0; n];
+        let mut damage = vec![0.0; n];
+        solve_phase_field_coupled_step(&mesh, params, cfg, &dirichlet, &mut history, &mut damage)
+            .expect("coupled step");
+        damage.iter().cloned().fold(0.0, f64::max)
+    };
+
+    let d_split = run(true);
+    let d_full = run(false);
+    eprintln!("biaxial compression: d_split {d_split:.3e}, d_full {d_full:.3e}");
+    assert!(
+        d_split < 1.0e-9,
+        "split must block compression damage: {d_split:.3e}"
+    );
+    assert!(
+        d_full > 0.05,
+        "full density should misfire under compression (the v1 gap): {d_full:.3e}"
+    );
+}
