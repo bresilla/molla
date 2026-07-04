@@ -118,6 +118,18 @@ pub struct BarrierParams {
     /// "stiffness from the material, not a global knob" philosophy
     /// as the contact κ).
     pub strain_barrier_scale: Real,
+    /// Kinetic Coulomb coefficient μ_k for obstacle contacts
+    /// (lagged IPC friction). 0 disables.
+    pub friction_mu: Real,
+    /// μ_s = scale·μ_k with scale ≥ 1. The stick well peaks at
+    /// μ_s·λ before blending down to the kinetic plateau μ_k·λ —
+    /// the split the roadmap A1 attempt showed velocity-level
+    /// solvers cannot express.
+    pub friction_mu_s_scale: Real,
+    /// Stick-well half-width as a velocity (m/s): the per-step
+    /// displacement well is e = ε_v·h. Smaller ⇒ less creep,
+    /// stiffer friction Hessian.
+    pub friction_epsv: Real,
 }
 
 impl Default for BarrierParams {
@@ -132,6 +144,9 @@ impl Default for BarrierParams {
             gravity: Vec3::new(0.0, -9.81, 0.0),
             strain_limit: None,
             strain_barrier_scale: 10.0,
+            friction_mu: 0.0,
+            friction_mu_s_scale: 1.0,
+            friction_epsv: 1.0e-3,
         }
     }
 }
@@ -165,6 +180,12 @@ pub struct BarrierShell {
     pub tets: Vec<BarrierTet>,
     /// Rest volumes, measured by [`Self::with_tets`].
     pub tet_v0: Vec<Real>,
+    /// Lagged friction contacts, rebuilt at each step start from the
+    /// committed positions (IPC semi-implicit friction: the normal
+    /// force λ and the contact frame are FROZEN for the whole step's
+    /// Newton solve, which keeps the potential smooth and
+    /// FD-checkable).
+    lagged_friction: Vec<FrictionContact>,
     /// Pinned vertices are true DoF removals: x̃ = x (no predictor
     /// gravity — a huge mass does NOT pin under an incremental
     /// potential, since the predictor free-falls independently of
@@ -187,6 +208,19 @@ pub struct BarrierShell {
 /// grids, 3.5e-7 after any generic jitter). Newton tolerates this —
 /// the configuration is measure-zero and the line search only needs
 /// descent.
+/// One lagged obstacle-friction contact (see `lagged_friction`).
+#[derive(Copy, Clone, Debug)]
+struct FrictionContact {
+    vertex: u32,
+    /// Contact normal at the lag anchor.
+    n: Vec3,
+    /// Anchor position (u = tangential part of x − anchor).
+    anchor: Vec3,
+    /// Lagged normal force magnitude in energy-gradient units
+    /// (h²·(−b′) at the anchor gap).
+    lambda: Real,
+}
+
 #[derive(Copy, Clone, Debug)]
 enum SelfPair {
     /// (vertex, tri-index, barycentric weights of the closest point)
@@ -224,6 +258,7 @@ impl BarrierShell {
             collision_edges: Vec::new(),
             tets: Vec::new(),
             tet_v0: Vec::new(),
+            lagged_friction: Vec::new(),
             pinned: vec![false; n],
             params,
         })
@@ -535,6 +570,12 @@ impl BarrierShell {
             let (b, _, _) = self.barrier(diff.length(), self.pair_kappa(pair, h));
             e += h2 * b;
         }
+        let ew = self.params.friction_epsv * h;
+        for fc in &self.lagged_friction {
+            let u = x[fc.vertex as usize] - fc.anchor;
+            let ut = u - fc.n * fc.n.dot(u);
+            e += self.friction_energy_of(fc.lambda, ut.length(), ew);
+        }
         e
     }
 
@@ -595,6 +636,17 @@ impl BarrierShell {
                 for (idx, w) in stencil {
                     out[idx as usize] += n * (h2 * db * w);
                 }
+            }
+        }
+        let ew = self.params.friction_epsv * h;
+        for fc in &self.lagged_friction {
+            let i = fc.vertex as usize;
+            let u = x[i] - fc.anchor;
+            let ut = u - fc.n * fc.n.dot(u);
+            let s = ut.length();
+            if s > 1.0e-15 {
+                let (g, _) = self.friction_g(fc.lambda, s, ew);
+                out[i] += (ut / s) * g;
             }
         }
         for (i, g) in out.iter_mut().enumerate() {
@@ -678,6 +730,27 @@ impl BarrierShell {
                 for (idx, w) in stencil {
                     y[idx as usize] += n * (h2 * ddb * w * s);
                 }
+            }
+        }
+        let ew = self.params.friction_epsv * h;
+        for fc in &self.lagged_friction {
+            let i = fc.vertex as usize;
+            let u = x[i] - fc.anchor;
+            let ut = u - fc.n * fc.n.dot(u);
+            let s = ut.length();
+            let vt = v[i] - fc.n * fc.n.dot(v[i]);
+            if s > 1.0e-15 {
+                let (g, gp) = self.friction_g(fc.lambda, s, ew);
+                let uhat = ut / s;
+                let v_par = uhat * uhat.dot(vt);
+                // H = g′₊·ûûᵀ + (g/s)·(T − ûûᵀ) on the tangent plane
+                // T = I − nnᵀ; both coefficients are ≥ 0 (g′ already
+                // projected in friction_g).
+                y[i] += v_par * gp + (vt - v_par) * (g / s);
+            } else {
+                // s → 0 limit: (μ_s λ / e)·T.
+                let mu_s = self.params.friction_mu * self.params.friction_mu_s_scale.max(1.0);
+                y[i] += vt * (mu_s * fc.lambda / ew);
             }
         }
         for (i, yi) in y.iter_mut().enumerate() {
@@ -781,6 +854,77 @@ impl BarrierShell {
         self.hessian_mul(x, h, &self.self_candidates(x), v, y)
     }
 
+    /// Rebuild the lagged friction state from the CURRENT positions
+    /// (called by [`Self::step`]; public so FD tests can pin the lag).
+    pub fn rebuild_friction_lag(&mut self) {
+        self.lagged_friction.clear();
+        if self.params.friction_mu <= 0.0 {
+            return;
+        }
+        // λ needs a step scale; use the same h the barrier κ uses
+        // implicitly — the caller's h is not known here, so store λ
+        // in h-free units (−b′·h² has κ ∝ 1/h², cancelling h²): with
+        // κ = kappa_scale·m/h², h²·(−b′) = kappa_scale·m·(d̂−g)²/d̂².
+        for (i, xi) in self.positions.iter().enumerate() {
+            if self.pinned[i] {
+                continue;
+            }
+            for ob in &self.obstacles {
+                let (gap, n) = ob.distance(*xi);
+                if gap < self.params.dhat {
+                    let s = (self.params.dhat - gap).max(0.0);
+                    let lambda = self.params.kappa_scale * self.masses[i] * s * s
+                        / (self.params.dhat * self.params.dhat);
+                    self.lagged_friction.push(FrictionContact {
+                        vertex: i as u32,
+                        n,
+                        anchor: *xi,
+                        lambda,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Friction force-magnitude profile g(s) and its (projected)
+    /// slope g′₊(s) at tangential slip s, with stick well e:
+    /// `s ≤ e`: ramp to μ_s·λ; `e < s ≤ 2e`: C⁰ blend down to the
+    /// kinetic plateau; `s > 2e`: μ_k·λ. The blend slope is negative
+    /// (the stick-slip drop) and is PROJECTED to 0 in the Hessian —
+    /// the same discipline as every other indefinite term here.
+    fn friction_g(&self, lambda: Real, s: Real, e: Real) -> (Real, Real) {
+        let mu_k = self.params.friction_mu;
+        let mu_s = mu_k * self.params.friction_mu_s_scale.max(1.0);
+        if s <= e {
+            let slope = mu_s * lambda / e;
+            (slope * s, slope)
+        } else if s <= 2.0 * e {
+            let g = mu_s * lambda + (mu_k - mu_s) * lambda * (s - e) / e;
+            (g, 0.0)
+        } else {
+            (mu_k * lambda, 0.0)
+        }
+    }
+
+    /// ∫g — the friction potential at slip s.
+    fn friction_energy_of(&self, lambda: Real, s: Real, e: Real) -> Real {
+        let mu_k = self.params.friction_mu;
+        let mu_s = mu_k * self.params.friction_mu_s_scale.max(1.0);
+        let d_stick = |t: Real| mu_s * lambda * t * t / (2.0 * e);
+        if s <= e {
+            d_stick(s)
+        } else if s <= 2.0 * e {
+            let t = s - e;
+            d_stick(e) + mu_s * lambda * t + (mu_k - mu_s) * lambda * t * t / (2.0 * e)
+        } else {
+            let t2 = e;
+            d_stick(e)
+                + mu_s * lambda * t2
+                + (mu_k - mu_s) * lambda * t2 * t2 / (2.0 * e)
+                + mu_k * lambda * (s - 2.0 * e)
+        }
+    }
+
     /// Largest spring strain (len/rest) — the strain-limit invariant
     /// counterpart to [`Self::min_gap`].
     pub fn max_strain(&self) -> Real {
@@ -842,6 +986,7 @@ impl BarrierShell {
     /// One implicit step of size `h`.
     pub fn step(&mut self, h: Real) -> Result<BarrierStepStats> {
         let n = self.positions.len();
+        self.rebuild_friction_lag();
         let x_prev = self.positions.clone();
         let x_tilde: Vec<Vec3> = (0..n)
             .map(|i| {

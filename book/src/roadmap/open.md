@@ -408,9 +408,14 @@ LANDED 2026-07-04** — volumetric tets (exact volume gradients, Gauss-part
 SPD Hessian) and HARD strain limiting where the hard bound comes from
 LINE-SEARCH truncation (a strain-limit crossing is a TOI), with the
 barrier κ_s derived from the spring's own stiffness: an unlimited 15.8×
-stretch holds at 1.0486 < 1.05 under the same load. Remaining: 4b lagged
-IPC friction (μ_s/μ_k), GPU port of tets+strain, LBVH pair scale-out
-(5) — as below. Subsumes the F14 GPU-CCD item
+stretch holds at 1.0486 < 1.05 under the same load. **Phase 4b LANDED
+2026-07-04** — lagged IPC friction with the μ_s/μ_k split on the CPU
+oracle: FD 4.7e-6 across all three mollifier regions; the discriminating
+incline (tan θ between μ_k and μ_s) holds at 0.83 mm creep vs 0.44 m
+slide — a 530× split, the oracle velocity-level friction (the A1
+attempt) cannot pass in principle. **A1 is retired for deformables.**
+Remaining: GPU port of tets/strain/friction, pair (cloth-cloth)
+friction, LBVH pair scale-out (5) — as below. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
