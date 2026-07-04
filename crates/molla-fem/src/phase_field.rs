@@ -306,16 +306,30 @@ pub fn solve_phase_field_coupled_step(
             "solve_phase_field_coupled_step: history/damage length must be {n}"
         )));
     }
-    for c in &mesh.cells {
-        if !matches!(c, FemCell::Tri(_)) {
+    let dim = match mesh.cells.first() {
+        Some(FemCell::Tri(_)) => 2,
+        Some(FemCell::Tet(_)) => 3,
+        _ => {
             return Err(Error::Fem(
-                "solve_phase_field_coupled_step: v1 supports 2D tri meshes".into(),
+                "solve_phase_field_coupled_step: tri or tet meshes".into(),
+            ));
+        }
+    };
+    for c in &mesh.cells {
+        let ok = match c {
+            FemCell::Tri(_) => dim == 2,
+            FemCell::Tet(_) => dim == 3,
+            _ => false,
+        };
+        if !ok {
+            return Err(Error::Fem(
+                "solve_phase_field_coupled_step: mixed/unsupported cell types".into(),
             ));
         }
     }
     let lambda = cfg.youngs * cfg.poisson / ((1.0 + cfg.poisson) * (1.0 - 2.0 * cfg.poisson));
     let mu = cfg.youngs / (2.0 * (1.0 + cfg.poisson));
-    let ndof = 2 * n;
+    let ndof = dim * n;
     let constrained: std::collections::HashMap<usize, Real> = dirichlet.iter().copied().collect();
 
     let mut displacement = vec![0.0; ndof];
@@ -330,11 +344,9 @@ pub fn solve_phase_field_coupled_step(
         //       Dirichlet lift).
         let mut triplets: Vec<(usize, usize, Real)> = Vec::new();
         for cell in &mesh.cells {
-            let FemCell::Tri(idx) = cell else {
-                unreachable!()
-            };
+            let verts = cell.verts();
             let d_bar =
-                (damage[idx[0] as usize] + damage[idx[1] as usize] + damage[idx[2] as usize]) / 3.0;
+                verts.iter().map(|&v| damage[v as usize]).sum::<Real>() / verts.len() as Real;
             let g = phase_field_degradation(d_bar, params.residual_stiffness);
             let ke = crate::element::compute_element_elasticity_stiffness(
                 cell,
@@ -343,9 +355,9 @@ pub fn solve_phase_field_coupled_step(
                 mu,
             );
             for (a, row) in ke.iter().enumerate() {
-                let ga = 2 * idx[a / 2] as usize + (a % 2);
+                let ga = dim * verts[a / dim] as usize + (a % dim);
                 for (b, &v) in row.iter().enumerate() {
-                    let gb = 2 * idx[b / 2] as usize + (b % 2);
+                    let gb = dim * verts[b / dim] as usize + (b % dim);
                     if v != 0.0 {
                         triplets.push((ga, gb, g * v));
                     }
@@ -418,53 +430,137 @@ pub fn solve_phase_field_coupled_step(
         let mut area_node = vec![0.0; n];
         strain_energy = 0.0;
         for cell in &mesh.cells {
-            let FemCell::Tri(idx) = cell else {
-                unreachable!()
-            };
-            let p0 = mesh.vertices[idx[0] as usize];
-            let p1 = mesh.vertices[idx[1] as usize];
-            let p2 = mesh.vertices[idx[2] as usize];
-            let det = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
-            let area = 0.5 * det.abs();
-            if area <= 0.0 {
-                continue;
-            }
-            let inv = 1.0 / det;
-            // P1 shape gradients.
-            let g0 = [(p1.y - p2.y) * inv, (p2.x - p1.x) * inv];
-            let g1 = [(p2.y - p0.y) * inv, (p0.x - p2.x) * inv];
-            let g2 = [(p0.y - p1.y) * inv, (p1.x - p0.x) * inv];
-            let grads = [g0, g1, g2];
-            let mut exx = 0.0;
-            let mut eyy = 0.0;
-            let mut exy = 0.0;
-            for a in 0..3 {
-                let ux = displacement[2 * idx[a] as usize];
-                let uy = displacement[2 * idx[a] as usize + 1];
-                exx += grads[a][0] * ux;
-                eyy += grads[a][1] * uy;
-                exy += 0.5 * (grads[a][1] * ux + grads[a][0] * uy);
-            }
-            let tr = exx + eyy;
-            // Full density uses the strain invariants; the tensile
-            // split uses the principal strains (analytic 2×2 eigen:
-            // mean ± r) with Macaulay brackets ⟨·⟩₊.
-            let psi = if cfg.tensile_split {
-                let mean = 0.5 * tr;
-                let r = (0.25 * (exx - eyy) * (exx - eyy) + exy * exy).sqrt();
-                let e1 = (mean + r).max(0.0);
-                let e2 = (mean - r).max(0.0);
-                let tr_pos = tr.max(0.0);
-                0.5 * lambda * tr_pos * tr_pos + mu * (e1 * e1 + e2 * e2)
-            } else {
-                0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy)
+            let verts = cell.verts();
+            // Per-element measure, P1 strain and tensile energy —
+            // dimension-generic (2D tri plane strain / 3D tet).
+            let (measure, psi) = match cell {
+                FemCell::Tri(idx) => {
+                    let p0 = mesh.vertices[idx[0] as usize];
+                    let p1 = mesh.vertices[idx[1] as usize];
+                    let p2 = mesh.vertices[idx[2] as usize];
+                    let det = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+                    let area = 0.5 * det.abs();
+                    if area <= 0.0 {
+                        continue;
+                    }
+                    let inv = 1.0 / det;
+                    let g0 = [(p1.y - p2.y) * inv, (p2.x - p1.x) * inv];
+                    let g1 = [(p2.y - p0.y) * inv, (p0.x - p2.x) * inv];
+                    let g2 = [(p0.y - p1.y) * inv, (p1.x - p0.x) * inv];
+                    let grads = [g0, g1, g2];
+                    let mut exx = 0.0;
+                    let mut eyy = 0.0;
+                    let mut exy = 0.0;
+                    for a in 0..3 {
+                        let ux = displacement[2 * idx[a] as usize];
+                        let uy = displacement[2 * idx[a] as usize + 1];
+                        exx += grads[a][0] * ux;
+                        eyy += grads[a][1] * uy;
+                        exy += 0.5 * (grads[a][1] * ux + grads[a][0] * uy);
+                    }
+                    let tr = exx + eyy;
+                    // Tensile split via analytic 2×2 principal strains.
+                    let psi = if cfg.tensile_split {
+                        let mean = 0.5 * tr;
+                        let r = (0.25 * (exx - eyy) * (exx - eyy) + exy * exy).sqrt();
+                        let e1 = (mean + r).max(0.0);
+                        let e2 = (mean - r).max(0.0);
+                        let tr_pos = tr.max(0.0);
+                        0.5 * lambda * tr_pos * tr_pos + mu * (e1 * e1 + e2 * e2)
+                    } else {
+                        0.5 * lambda * tr * tr + mu * (exx * exx + eyy * eyy + 2.0 * exy * exy)
+                    };
+                    (area, psi)
+                }
+                FemCell::Tet(idx) => {
+                    let p = [
+                        mesh.vertices[idx[0] as usize],
+                        mesh.vertices[idx[1] as usize],
+                        mesh.vertices[idx[2] as usize],
+                        mesh.vertices[idx[3] as usize],
+                    ];
+                    let e1 = p[1] - p[0];
+                    let e2 = p[2] - p[0];
+                    let e3 = p[3] - p[0];
+                    let det = e1.cross(e2).dot(e3);
+                    let vol = det.abs() / 6.0;
+                    if vol <= 0.0 {
+                        continue;
+                    }
+                    // P1 gradients: rows of the inverse edge matrix.
+                    let g1v = e2.cross(e3) / det;
+                    let g2v = e3.cross(e1) / det;
+                    let g3v = e1.cross(e2) / det;
+                    let g0v = -(g1v + g2v + g3v);
+                    let grads = [g0v, g1v, g2v, g3v];
+                    // ∇u (3×3), then ε = sym(∇u).
+                    let mut gu = [[0.0; 3]; 3];
+                    for a in 0..4 {
+                        let base = 3 * idx[a] as usize;
+                        let ua = [
+                            displacement[base],
+                            displacement[base + 1],
+                            displacement[base + 2],
+                        ];
+                        let ga = [grads[a].x, grads[a].y, grads[a].z];
+                        for (r, u_r) in ua.iter().enumerate() {
+                            for (c, g_c) in ga.iter().enumerate() {
+                                gu[r][c] += u_r * g_c;
+                            }
+                        }
+                    }
+                    let eps = crate::math::Mat3::from_cols(
+                        crate::math::Vec3::new(
+                            gu[0][0],
+                            0.5 * (gu[0][1] + gu[1][0]),
+                            0.5 * (gu[0][2] + gu[2][0]),
+                        ),
+                        crate::math::Vec3::new(
+                            0.5 * (gu[0][1] + gu[1][0]),
+                            gu[1][1],
+                            0.5 * (gu[1][2] + gu[2][1]),
+                        ),
+                        crate::math::Vec3::new(
+                            0.5 * (gu[0][2] + gu[2][0]),
+                            0.5 * (gu[1][2] + gu[2][1]),
+                            gu[2][2],
+                        ),
+                    );
+                    let tr = gu[0][0] + gu[1][1] + gu[2][2];
+                    let psi = if cfg.tensile_split {
+                        // Principal strains via the symmetric 3×3
+                        // eigen-solver, Macaulay brackets per mode.
+                        let (evals, _) = crate::math::dense3::eig3_sym(eps);
+                        let pos = |x: Real| if x > 0.0 { x } else { 0.0 };
+                        let tr_pos = tr.max(0.0);
+                        0.5 * lambda * tr_pos * tr_pos
+                            + mu * (pos(evals.x) * pos(evals.x)
+                                + pos(evals.y) * pos(evals.y)
+                                + pos(evals.z) * pos(evals.z))
+                    } else {
+                        let fro2 = (0..3)
+                            .map(|r| {
+                                (0..3)
+                                    .map(|c| {
+                                        let e_rc = 0.5 * (gu[r][c] + gu[c][r]);
+                                        e_rc * e_rc
+                                    })
+                                    .sum::<Real>()
+                            })
+                            .sum::<Real>();
+                        0.5 * lambda * tr * tr + mu * fro2
+                    };
+                    (vol, psi)
+                }
+                _ => continue,
             };
             let d_bar =
-                (damage[idx[0] as usize] + damage[idx[1] as usize] + damage[idx[2] as usize]) / 3.0;
-            strain_energy += area * psi * phase_field_degradation(d_bar, params.residual_stiffness);
-            for &vi in idx {
-                psi_node[vi as usize] += area * psi;
-                area_node[vi as usize] += area;
+                verts.iter().map(|&v| damage[v as usize]).sum::<Real>() / verts.len() as Real;
+            strain_energy +=
+                measure * psi * phase_field_degradation(d_bar, params.residual_stiffness);
+            for &vi in verts {
+                psi_node[vi as usize] += measure * psi;
+                area_node[vi as usize] += measure;
             }
         }
         for i in 0..n {

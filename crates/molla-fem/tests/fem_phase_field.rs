@@ -342,3 +342,71 @@ fn tensile_split_blocks_compression_damage() {
         "full density should misfire under compression (the v1 gap): {d_full:.3e}"
     );
 }
+
+/// 3D tets: the coupled solve on a tet grid.
+/// 1. Homogeneous AT2 identity in 3D (linear field on every node ⇒
+///    uniform strain ⇒ homogeneous damage matching the closed form).
+/// 2. Triaxial compression with the spectral split ⇒ zero damage.
+#[test]
+fn coupled_solve_works_on_3d_tets() {
+    use molla_fem::{PhaseFieldCoupledConfig, solve_phase_field_coupled_step};
+    let mesh = FemMesh::tet_grid_3d(3, 3, 3, 1.0, 1.0, 1.0);
+    let params = PhaseFieldFractureParams {
+        critical_energy_release_rate: 5.0,
+        length_scale: 0.25,
+        residual_stiffness: 1.0e-6,
+    };
+    let cfg = PhaseFieldCoupledConfig::default();
+    let n = mesh.vert_count();
+
+    // ── 1. Tension identity.
+    let eps = 0.05;
+    let nu = 0.3;
+    let mut dirichlet = Vec::new();
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        dirichlet.push((3 * i, eps * p.x));
+        dirichlet.push((3 * i + 1, -nu * eps * p.y));
+        dirichlet.push((3 * i + 2, -nu * eps * p.z));
+    }
+    let mut history = vec![0.0; n];
+    let mut damage = vec![0.0; n];
+    solve_phase_field_coupled_step(&mesh, params, cfg, &dirichlet, &mut history, &mut damage)
+        .expect("3d coupled step");
+    let h_ref = history[n / 2];
+    let d_expect =
+        2.0 * h_ref / (params.critical_energy_release_rate / params.length_scale + 2.0 * h_ref);
+    let d_min = damage.iter().cloned().fold(f64::INFINITY, f64::min);
+    let d_max = damage.iter().cloned().fold(0.0, f64::max);
+    eprintln!("3d tension: d ∈ [{d_min:.5}, {d_max:.5}], closed form {d_expect:.5}");
+    assert!(d_expect > 0.03, "3d load too weak: {d_expect}");
+    assert!((d_max - d_min).abs() < 1.0e-6, "3d damage not homogeneous");
+    assert!(
+        ((d_max - d_expect) / d_expect).abs() < 1.0e-6,
+        "3d AT2 identity violated"
+    );
+
+    // ── 2. Triaxial compression: split blocks damage entirely.
+    let mut dirichlet_c = Vec::new();
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        dirichlet_c.push((3 * i, -eps * p.x));
+        dirichlet_c.push((3 * i + 1, -eps * p.y));
+        dirichlet_c.push((3 * i + 2, -eps * p.z));
+    }
+    let mut history_c = vec![0.0; n];
+    let mut damage_c = vec![0.0; n];
+    solve_phase_field_coupled_step(
+        &mesh,
+        params,
+        cfg,
+        &dirichlet_c,
+        &mut history_c,
+        &mut damage_c,
+    )
+    .expect("3d compression step");
+    let d_comp = damage_c.iter().cloned().fold(0.0, f64::max);
+    eprintln!("3d compression: max damage {d_comp:.3e}");
+    assert!(
+        d_comp < 1.0e-9,
+        "3d split must block compression damage: {d_comp:.3e}"
+    );
+}

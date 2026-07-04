@@ -588,9 +588,9 @@ displacement↔damage driver (`solve_phase_field_coupled_step`) landed on
 top of the AT2 oracle: exact homogeneous identity, 8.8× notch
 localization, monotone irreversibility, 13.6% softening over 4 load
 steps. The spectral tensile split landed same-day
-(default on — compression produces exactly zero damage, full-density
-misfire 0.198 demonstrated); 3D tets remain the documented follow-on.
-Original oracle notes below.
+(compression → exactly zero damage) and 3D tets followed 2026-07-05
+(dimension-generic driver, exact 3D identity, eig3_sym split). C3 has
+NO remaining documented gaps. Original oracle notes below.
 
 **Result.** `molla-fem` now exposes `PhaseFieldFractureParams`,
 `phase_field_degradation`, `update_phase_field_history`,
