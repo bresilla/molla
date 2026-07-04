@@ -431,9 +431,11 @@ follow live poses, third-law-exact reaction wrenches (momentum drift
 1.4e-7 through a real impact), and a rigid-side TOI that closes the
 weak-coupling tunneling hole (ball-on-trampoline rests supported).
 **Warm-started PCG + blocked early exit LANDED 2026-07-05** (−30% on
-the GPU barrier lane, gates unchanged). Remaining follow-ons: LBVH for
-adversarial distributions, GPU behind viewer scene 125, strong
-(monolithic/ABD) coupling. Subsumes the F14 GPU-CCD item
+the GPU barrier lane, gates unchanged). **GPU behind scene 125 LANDED 2026-07-05**
+(`BarrierSolver::new_gpu`, same Solver interface, live param mapping,
+engine-GPU-path oracle in the lane). Remaining follow-ons: LBVH for
+adversarial distributions, strong (monolithic/ABD) coupling, on-device
+rigid coupling for the GPU path. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

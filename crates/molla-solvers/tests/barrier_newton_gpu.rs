@@ -705,3 +705,75 @@ fn gpu_friction_strain_and_tets_match_contracts() {
         assert!(drift < 0.05, "gpu volume not preserved: {drift:.3e}");
     }
 }
+
+/// C0 — the GPU backend behind the engine-facing `BarrierSolver`
+/// (viewer scene 125's path): cloth grid via the real ModelBuilder,
+/// stepped through `Solver::step` with the f32 kernel owning the
+/// trajectory. Invariant per step (kernel-side) + HOST-side final
+/// intersection scan on the state the viewer would render.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=barrier_newton_gpu`"]
+fn engine_gpu_backend_drapes_and_holds_invariant() {
+    use molla_core::WorldId;
+    use molla_sim::{Contacts, ModelBuilder};
+    use molla_solvers::{BarrierSolver, Solver};
+
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let mut b = ModelBuilder::new();
+    b.add_cloth_grid(
+        Vec3::new(-0.105, 0.15, -0.105),
+        Vec3::X * 0.21,
+        Vec3::Z * 0.21,
+        8,
+        8,
+        0.02,
+        0.005,
+        2.5e-3,
+        1.5,
+        WorldId(0),
+    );
+    b.add_shape_plane(
+        molla_core::BodyId::NONE,
+        Vec3::Y,
+        molla_math::Transform::IDENTITY,
+    )
+    .unwrap();
+    b.add_shape_sphere(
+        molla_core::BodyId::NONE,
+        0.06,
+        molla_math::Transform::IDENTITY,
+    )
+    .unwrap();
+    let model = b.build().unwrap();
+
+    let mut s_a = model.state().unwrap();
+    let mut s_b = model.state().unwrap();
+    let control = model.control();
+    let contacts = Contacts::with_capacity(4);
+    let mut solver = BarrierSolver::new_gpu(&engine).expect("gpu solver");
+
+    let h = 1.0 / 240.0;
+    for step in 0..240 {
+        solver
+            .step(&model, &s_a, &control, &contacts, h, &mut s_b)
+            .unwrap();
+        assert!(
+            solver.last_min_gap > 0.0,
+            "step {step}: GPU engine-path INVARIANT violated — gap {}",
+            solver.last_min_gap
+        );
+        std::mem::swap(&mut s_a, &mut s_b);
+    }
+    let q = s_a.particle_q.host().unwrap();
+    let qd = s_a.particle_qd.host().unwrap();
+    let v_max = qd.iter().map(|v| v.length()).fold(0.0_f64, f64::max);
+    let gap = q
+        .iter()
+        .map(|p| p.y.min(p.length() - 0.06))
+        .fold(f64::INFINITY, f64::min);
+    eprintln!("gpu engine drape: final gap {gap:.2e}, v_max {v_max:.3e}");
+    assert!(gap > 0.0, "host-side final scan failed: {gap:.3e}");
+    assert!(gap < 2.0e-3, "resting gap outside band: {gap:.3e}");
+    // f32 barrier-band jitter floor (see the kernel drop test).
+    assert!(v_max < 0.13, "gpu engine path did not settle: {v_max}");
+}

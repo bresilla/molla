@@ -48,11 +48,24 @@ enum ObstacleGeom {
     Sphere { radius: Real },
 }
 
+/// GPU backend state (feature-gated): device handles + the lazily
+/// built kernel sim. The GPU path owns its trajectory (uploaded once,
+/// read back each step for consumers) and supports STATIC obstacles
+/// only — rigid two-way coupling stays on the CPU path.
+#[cfg(feature = "gpu")]
+struct GpuBackend {
+    device: std::sync::Arc<wgpu::Device>,
+    queue: std::sync::Arc<wgpu::Queue>,
+    sim: Option<molla_kernels::BarrierNewtonGpu>,
+}
+
 /// Barrier-Newton deformable solver (see module docs).
 pub struct BarrierSolver {
     /// Topology-carrying shell, built lazily from the `Model` on the
     /// first step (positions/velocities are streamed per step).
     shell: Option<BarrierShell>,
+    #[cfg(feature = "gpu")]
+    gpu: Option<GpuBackend>,
     /// Solver parameters applied when the shell is (re)built, and
     /// pushed into the live shell every step so viewer panes can
     /// mutate them.
@@ -74,6 +87,8 @@ impl BarrierSolver {
     pub fn new() -> Self {
         Self {
             shell: None,
+            #[cfg(feature = "gpu")]
+            gpu: None,
             params: BarrierParams::default(),
             last_newton_iters: 0,
             last_min_gap: Real::INFINITY,
@@ -84,6 +99,146 @@ impl BarrierSolver {
     pub fn with_params(mut self, params: BarrierParams) -> Self {
         self.params = params;
         self
+    }
+
+    /// GPU-backed variant: the f32 `BarrierNewtonGpu` kernel owns the
+    /// trajectory (state read back each step). Static obstacles only —
+    /// scenes with dynamic obstacle-owning bodies should use the CPU
+    /// solver until the coupling moves on-device.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu(engine: &molla_compute::Engine) -> Result<Self> {
+        use molla_core::Error;
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
+            .clone();
+        let mut s = Self::new();
+        s.gpu = Some(GpuBackend {
+            device,
+            queue,
+            sim: None,
+        });
+        Ok(s)
+    }
+
+    /// Map the f64 solver params onto the f32 kernel params (Newton
+    /// budget stays at the kernel's f32-calibrated defaults).
+    #[cfg(feature = "gpu")]
+    fn gpu_params(&self) -> molla_kernels::BarrierGpuParams {
+        molla_kernels::BarrierGpuParams {
+            dhat: self.params.dhat as f32,
+            kappa_scale: self.params.kappa_scale as f32,
+            gravity: [
+                self.params.gravity.x as f32,
+                self.params.gravity.y as f32,
+                self.params.gravity.z as f32,
+            ],
+            friction_mu: self.params.friction_mu as f32,
+            friction_mu_s_scale: self.params.friction_mu_s_scale as f32,
+            friction_epsv: self.params.friction_epsv as f32,
+            strain_limit: self.params.strain_limit.unwrap_or(0.0) as f32,
+            strain_barrier_scale: self.params.strain_barrier_scale as f32,
+            elasticity_inclusive_kappa: self.params.elasticity_inclusive_kappa,
+            ..Default::default()
+        }
+    }
+
+    /// Build the GPU sim from the same Model extraction the CPU shell
+    /// uses.
+    #[cfg(feature = "gpu")]
+    fn build_gpu(&self, model: &Model, state: &State) -> Result<molla_kernels::BarrierNewtonGpu> {
+        use molla_kernels::{BarrierGpuObstacle, BarrierGpuSpring, BarrierNewtonGpu};
+        let positions: Vec<[f32; 3]> = state
+            .particle_q
+            .host()?
+            .iter()
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .collect();
+        let masses: Vec<f32> = model
+            .particle_mass
+            .host()?
+            .iter()
+            .map(|&m| if m > 0.0 { m as f32 } else { 1.0 })
+            .collect();
+        let inv_mass = model.particle_inv_mass.host()?;
+        let pinned: Vec<u32> = inv_mass
+            .iter()
+            .enumerate()
+            .filter(|&(_, &w)| w == 0.0)
+            .map(|(i, _)| i as u32)
+            .collect();
+        let spring_a = model.spring_a.host()?;
+        let spring_b = model.spring_b.host()?;
+        let spring_rest = model.spring_rest_length.host()?;
+        let spring_comp = model.spring_compliance.host()?;
+        let mut springs = Vec::with_capacity(model.spring_count);
+        for i in 0..model.spring_count {
+            let k = if spring_comp[i] > 1.0e-12 {
+                (1.0 / spring_comp[i]).min(1.0e5)
+            } else {
+                1.0e5
+            };
+            springs.push(BarrierGpuSpring {
+                a: spring_a[i],
+                b: spring_b[i],
+                rest: spring_rest[i] as f32,
+                k: k as f32,
+            });
+        }
+        let shape_body = model.shape_body.host()?;
+        let shape_xf = model.shape_transform.host()?;
+        let mut obstacles = Vec::new();
+        for s in 0..model.shape_count {
+            if shape_body[s] >= 0 {
+                continue; // GPU path: static obstacles only (documented)
+            }
+            let xf = shape_xf[s];
+            match model.shape_geometry[s] {
+                ShapeGeometry::Plane { normal } => {
+                    let n = (xf.rotation * normal).normalize();
+                    obstacles.push(BarrierGpuObstacle::HalfSpace {
+                        n: [n.x as f32, n.y as f32, n.z as f32],
+                        offset: n.dot(xf.position) as f32,
+                    });
+                }
+                ShapeGeometry::Sphere { radius } => {
+                    obstacles.push(BarrierGpuObstacle::Sphere {
+                        center: [
+                            xf.position.x as f32,
+                            xf.position.y as f32,
+                            xf.position.z as f32,
+                        ],
+                        radius: radius as f32,
+                    });
+                }
+                _ => {}
+            }
+        }
+        let triangles: Vec<[u32; 3]> = model.soft_surface_tris.clone();
+        let gpu = self.gpu.as_ref().expect("gpu backend present");
+        let sim = BarrierNewtonGpu::new_with_mesh(
+            &gpu.device,
+            &gpu.queue,
+            &positions,
+            &masses,
+            &springs,
+            &obstacles,
+            &triangles,
+            &pinned,
+            self.gpu_params(),
+        )?;
+        let velocities: Vec<[f32; 3]> = state
+            .particle_qd
+            .host()?
+            .iter()
+            .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+            .collect();
+        sim.set_velocities(&velocities)?;
+        Ok(sim)
     }
 
     /// Build the shell topology from the model + initial state.
@@ -198,6 +353,48 @@ impl Solver for BarrierSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        #[cfg(feature = "gpu")]
+        if self.gpu.is_some() {
+            if self.gpu.as_ref().is_some_and(|g| g.sim.is_none()) {
+                let sim = self.build_gpu(model, state_in)?;
+                if let Some(g) = self.gpu.as_mut() {
+                    g.sim = Some(sim);
+                }
+            }
+            let gp = self.gpu_params();
+            let Some(sim) = self.gpu.as_mut().and_then(|g| g.sim.as_mut()) else {
+                unreachable!("built above");
+            };
+            sim.params = gp;
+            let stats = sim.step(dt as f32)?;
+            self.last_newton_iters = stats.newton_iters;
+            self.last_min_gap = Real::from(stats.min_gap);
+            let p = sim.read_positions()?;
+            let v = sim.read_velocities()?;
+            {
+                let q_out = state_out.particle_q.host_mut()?;
+                for (dst, src) in q_out.iter_mut().zip(p.iter()) {
+                    *dst = crate::math::Vec3::new(
+                        Real::from(src[0]),
+                        Real::from(src[1]),
+                        Real::from(src[2]),
+                    );
+                }
+                let qd_out = state_out.particle_qd.host_mut()?;
+                for (dst, src) in qd_out.iter_mut().zip(v.iter()) {
+                    *dst = crate::math::Vec3::new(
+                        Real::from(src[0]),
+                        Real::from(src[1]),
+                        Real::from(src[2]),
+                    );
+                }
+            }
+            let q_in = state_in.body_q.host()?.to_vec();
+            let qd_in = state_in.body_qd.host()?.to_vec();
+            state_out.body_q.host_mut()?.copy_from_slice(&q_in);
+            state_out.body_qd.host_mut()?.copy_from_slice(&qd_in);
+            return Ok(());
+        }
         if self.shell.is_none() {
             self.shell = Some(self.build_shell(model, state_in)?);
         }

@@ -3413,7 +3413,9 @@ fn build_solver(engine: &Engine, model: &mp::Model, kind: SolverKind) -> SolverB
                 .with_iterations(10)
                 .with_contact_stiffness(VBD_CLOTH_CONTACT_STIFFNESS),
         ),
-        SolverKind::Barrier => SolverBackend::Barrier(mp::BarrierSolver::new()),
+        SolverKind::Barrier => SolverBackend::Barrier(
+            mp::BarrierSolver::new_gpu(engine).expect("barrier GPU solver init"),
+        ),
     }
 }
 

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-672e6f75.js";
+            window.path_to_searchindex_js = "../searchindex-8de7a868.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f4239cce.js"></script>
@@ -528,9 +528,11 @@ follow live poses, third-law-exact reaction wrenches (momentum drift
 1.4e-7 through a real impact), and a rigid-side TOI that closes the
 weak-coupling tunneling hole (ball-on-trampoline rests supported).
 <strong>Warm-started PCG + blocked early exit LANDED 2026-07-05</strong> (−30% on
-the GPU barrier lane, gates unchanged). Remaining follow-ons: LBVH for
-adversarial distributions, GPU behind viewer scene 125, strong
-(monolithic/ABD) coupling. Subsumes the F14 GPU-CCD item
+the GPU barrier lane, gates unchanged). <strong>GPU behind scene 125 LANDED 2026-07-05</strong>
+(<code>BarrierSolver::new_gpu</code>, same Solver interface, live param mapping,
+engine-GPU-path oracle in the lane). Remaining follow-ons: LBVH for
+adversarial distributions, strong (monolithic/ABD) coupling, on-device
+rigid coupling for the GPU path. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

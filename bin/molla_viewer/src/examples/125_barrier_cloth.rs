@@ -38,6 +38,7 @@ fn build_barrier_cloth_model() -> (mp::Model, Vec<BodyVisual>) {
 
 fn barrier_cloth_pane(ui: &mut egui::Ui, sim: &mut Sim) {
     ui.label("Barrier-Newton contact (IPC-family, roadmap C0).");
+    ui.label("Backend: GPU (f32 kernel, device-resident trajectory).");
     ui.label("Interpenetration is impossible at every Newton iterate:");
     ui.label("the CCD-truncated line search cannot cross a surface.");
     ui.separator();
