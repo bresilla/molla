@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-204bfdc6.js";
+            window.path_to_searchindex_js = "searchindex-d16009f2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-ac7b0e4a.js"></script>
+        <script src="toc-6df35734.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -3691,6 +3691,17 @@ the touching triangles on the fly, and dispatches as for TriMesh.</li>
 <code>SdfGrid</code> voxelised fields go through the
 <a href="#hydroelastic-contact">hydroelastic</a> path).</li>
 </ul>
+<h2 id="helical-thread-sdf"><a class="header" href="#helical-thread-sdf">Helical thread SDF</a></h2>
+<p><code>SdfShape::HelicalThread { major, minor, pitch, half_height }</code> — a circle
+of radius <code>minor</code> swept along the helix of radius <code>major</code> with pitch
+<code>pitch</code>, capped to <code>|y| ≤ half_height</code>. Distance is evaluated in the
+wrapped screw-profile plane <code>(r − major, y − pitch·θ/τ mod pitch)</code> — the
+standard swept-circle screw SDF, exact in the profile plane. The oracle
+that distinguishes it from a torus-ring stack is <strong>screw symmetry</strong>:
+rotating by α about +Y while translating by <code>pitch·α/τ</code> leaves the
+distance field invariant (checked to 1e-9 over 24 angles in
+<code>heightfield_and_sdf.rs</code>) — rings have no axial coupling, so a bolt can
+never <em>thread</em> through them.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="convex-hull-builder"><a class="header" href="#convex-hull-builder">Convex hull builder</a></h1>
 <p><code>crates/molla/src/geometry/hull.rs</code> implements an incremental
@@ -5197,6 +5208,19 @@ surface where samples are kept — typical value 3-4 for collision
 queries (close enough to capture the surface, far enough not to
 miss). <code>sparse_sdf_from_dense</code> is the trivial down-conversion: walk
 the dense grid, keep cells whose <code>|sdf| &lt; narrow_band * cell_size</code>.</p>
+<h2 id="reclamation-stage-24e224e3"><a class="header" href="#reclamation-stage-24e224e3">Reclamation (Stage 24e.2/24e.3)</a></h2>
+<p>Leaf slots recycle end-to-end: <code>SparseGridDeleteKernel::delete()</code> composes
+mark + drain, and the insert kernel pops the freelist before bumping.
+Internal nodes fold <strong>on demand</strong>: <code>fold_empty_internals</code> (one thread per
+root-table slot) tombstones nodes whose live-leaf count reached zero and
+feeds an internal freelist. Two open-addressing rules make this safe:
+tombstones are probe-chain non-terminators (lookups skip them — clearing
+outright would orphan colliding keys), and they are <em>claimable</em> on insert
+(the fold zeroes the stale keys so tombstone claims share the fresh-slot
+publication protocol; without this, re-inserting a folded region exhausts
+<code>MAX_ROOT_PROBES</code>). Verified by
+<code>sparse_grid_v4::leaf_and_internal_slots_recycle_after_fold</code>, including
+value-correct re-insert through tombstoned slots.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="marching-cubes--sdf-baking"><a class="header" href="#marching-cubes--sdf-baking">Marching cubes &amp; SDF baking</a></h1>
 <p>A pair of asset-load tools that round-trip between meshes and
@@ -10913,6 +10937,55 @@ velocity block as its mesh-side velocity update (planned for Stage
 37.6.1; v1 ships viscous smoothing instead).</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="mixed-u-p-taylor-hood-elasticity"><a class="header" href="#mixed-u-p-taylor-hood-elasticity">Mixed (u, p) Taylor-Hood elasticity</a></h1>
+<p>Nearly-incompressible linear elasticity locks volumetrically when the
+<code>λ div·div</code> term sits inside the displacement operator: as ν → ½, λ → ∞ and
+P1 displacement elements can barely move. The mixed formulation moves that
+term into a pressure field on Taylor-Hood elements (P2 displacement / P1
+pressure):</p>
+<pre><code class="language-text">∫ 2μ ε(u):ε(v) + ∫ p div v = ∫ f·v      (momentum)
+∫ q div u − (1/λ) ∫ p q    = 0          (p = λ div u)
+</code></pre>
+<p>λ never enters the displacement operator, so the formulation cannot lock;
+λ → ∞ recovers exact incompressibility (Stokes).</p>
+<h2 id="api-2"><a class="header" href="#api-2">API</a></h2>
+<ul>
+<li>CPU: <code>molla_fem::solve_mixed_elasticity_steady(mesh, th, mu, lambda, f, bcs, cfg)</code>
+— f64, Uzawa-CG on the pressure Schur complement <code>B A⁻¹ Bᵀ + (1/λ)·M_p</code>.</li>
+<li>GPU: <code>molla_fem::solve_mixed_elasticity_gpu(...)</code> — same saddle machinery as
+<code>solve_stokes_gpu</code> (device-resident inner+outer CG, all matvecs on device)
+with the compliance matvec added inside the Schur closure. The elastic
+<code>ε:ε</code> block is host-assembled (the GPU assembly shader is the <em>viscous</em>
+full-gradient operator, which is wrong for elasticity); the solve is where
+the GPU time goes. v1 shares the Stokes-GPU 2D-tri restriction.</li>
+<li>Building blocks: <code>compute_element_mixed_elastic_block</code> (the coupled
+<code>μ(δ_ab ∇φᵢ·∇φⱼ + ∂_b φᵢ ∂_a φⱼ)</code> element), <code>assemble_mixed_elastic_block</code>,
+<code>assemble_pressure_mass</code> (consistent P1 mass).</li>
+</ul>
+<h2 id="two-solver-rules-the-compliance-term-changes"><a class="header" href="#two-solver-rules-the-compliance-term-changes">Two solver rules the compliance term changes</a></h2>
+<p>Both were caught by the patch test and apply to any compliance-carrying
+saddle you add later:</p>
+<ol>
+<li><strong>No dead-pressure-row pinning.</strong> With <code>+ (1/λ)M_p</code> every Schur row is
+definite; the Stokes-era LBB guard would wrongly force boundary pressures
+to zero.</li>
+<li><strong>No default pressure pin.</strong> Stokes silently pins vertex 0 when the
+caller supplies no <code>PressureZero</code> BC (needed for its constant nullspace).
+Under compliance that pin corrupts the solution — the exact pressure is a
+nonzero constant in the patch test, and the corruption rippled 8e-5 into
+every displacement before the gate was added.</li>
+</ol>
+<h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
+<ul>
+<li><strong>Constant-strain patch test</strong> (<code>fem_mixed_elasticity.rs</code>): the linear
+field <code>u = (ε·x, −ν·ε·y, −ν·ε·z)</code> imposed on every boundary P2 node is
+reproduced in the interior to 2.8e-14 (CPU, f64) / 6.1e-9 (GPU, f32), with
+<code>p = λ·div u</code> constant to machine-level.</li>
+<li><strong>Anti-locking cantilever</strong>: tip deflection at ν = 0.4999 stays within 20%
+of the ν = 0.3 value (a locking element collapses it 10–100×); GPU matches
+the f64 CPU tip to 0.11%.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="apic-fem-mpm-coupling"><a class="header" href="#apic-fem-mpm-coupling">APIC FEM-MPM coupling</a></h1>
 <p>The APIC (<strong>A</strong>ffine <strong>P</strong>article-<strong>I</strong>n-<strong>C</strong>ell) hybrid couples a
 Material-Point-Method (MPM) particle representation with an FEM
@@ -11077,6 +11150,25 @@ variant for the Stokes-free case.</li>
 replacement for the viscous-smoothing placeholder.</li>
 <li><a href="#meshes-and-function-spaces">Mesh</a> — <code>FemMesh</code> is what <code>ApicHybrid</code> owns.</li>
 </ul>
+<h2 id="pressure-projection-stage-3761"><a class="header" href="#pressure-projection-stage-3761">Pressure projection (Stage 37.6.1)</a></h2>
+<p><code>ApicHybrid::step_projected</code> (CPU) and <code>step_gpu_projected</code> (device) add a
+real incompressibility projection between the grid update and G2P: a
+per-tet (P0) pressure solved through the lumped-mass Schur operator
+<code>S = D M⁻¹ Dᵀ</code> over <em>deposit-supported</em> fluid tets, matrix-free CG,
+correction <code>v ← v − M⁻¹ Dᵀ q</code>. Two formulations were rejected on evidence:
+equal-order P1 node pressure only cancels nodal moments (per-tet L2
+divergence stalled at 23%), and Richardson outer loops on it <em>diverge</em>
+(LBB checkerboard amplification). The P0 scheme drives per-tet divergence
+to the solver floor — machine epsilon on the compressing-blob contract.</p>
+<p>The GPU port records the whole CG loop in one compute pass (zero
+readbacks) and carries a <strong>convergence freeze</strong>: once <code>rr ≤ 1e-12·rr_init</code>
+both α and β clamp to zero, because f32 CG <em>diverges past the correct
+answer</em> if iterated beyond convergence (measured: 40 iters ≈ 1e-5 parity
+vs the f64 CPU oracle, 120 iters blew up to O(1) before the freeze;
+9.9e-7 after). Particle→tet localisation uses <code>TetLookupGrid</code> — a uniform
+grid whose cell-sorted CSR candidate lists preserve first-match-in-cell-
+order semantics exactly (bitwise-equal weights vs brute force over 4000
+probe points).</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adjoint--differentiable-fem"><a class="header" href="#adjoint--differentiable-fem">Adjoint / differentiable FEM</a></h1>
 <p><code>crates/molla-fem/src/adjoint.rs</code> implements reverse-mode differentiation
@@ -11531,7 +11623,7 @@ the underlying mesh-graph traversal — the host CPU does it fine. The
 expensive part — computing the 144 values of every per-cell
 \( K_e = \int_K B^T D B , dV \) (4 verts × 3 dofs)² for a tet — is
 what moves to the GPU kernel.</p>
-<h2 id="api-2"><a class="header" href="#api-2">API</a></h2>
+<h2 id="api-3"><a class="header" href="#api-3">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[cfg(feature = "gpu")]
@@ -11652,7 +11744,7 @@ The Stage 41 v1 measurement on a 16³ tet cantilever (4913 vertices,
 14739 DoFs) was ~25 ms per Newton iteration on RTX 4080, vs ~200 ms
 on CPU — about <strong>8× speedup</strong>, dominated by the per-cell <code>Bᵀ D B</code>
 arithmetic on GPU.</p>
-<h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
+<h2 id="validation-1"><a class="header" href="#validation-1">Validation</a></h2>
 <p>The contract tests in <code>crates/molla-fem/tests/fem_elasticity_gpu.rs</code>
 compare GPU vs CPU on a fixed cantilever fixture:</p>
 <ul>
@@ -13034,7 +13126,7 @@ The mesh BVH already ships (Stage 15, see
 <a href="#raycast-adjoint"><code>raycast_adjoint</code></a> CPU module provides a
 finite-difference fallback for inverse-rendering experiments that
 need triangles in the loop.</p>
-<h2 id="api-3"><a class="header" href="#api-3">API</a></h2>
+<h2 id="api-4"><a class="header" href="#api-4">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13192,7 +13284,7 @@ every pixel tells you exactly which body-owned shape lit it up.</li>
 <p>Channels not in the mask are skipped at write time inside the kernel
 (the backing buffers are always allocated, so the mask can be
 flipped per-frame without reallocation).</p>
-<h2 id="api-4"><a class="header" href="#api-4">API</a></h2>
+<h2 id="api-5"><a class="header" href="#api-5">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13320,7 +13412,7 @@ next step.</p>
 frame, <strong>adds the centripetal + tangential terms</strong> that come from
 the IMU not sitting at the body’s COM (<code>a = a_com + α × r + ω × (ω × r)</code> in body frame, where <code>r</code> is the sensor offset), then
 subtracts gravity to produce the specific-force output.</p>
-<h2 id="api-5"><a class="header" href="#api-5">API</a></h2>
+<h2 id="api-6"><a class="header" href="#api-6">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13417,7 +13509,7 @@ impulse via the compliance term <code>α = 1/k·dt²</code>.</li>
 (un-normalised, so its magnitude reflects the spread + count).</li>
 <li><em>Where, on the body, is the push concentrated?</em> — <code>centroid</code>.</li>
 </ul>
-<h2 id="api-6"><a class="header" href="#api-6">API</a></h2>
+<h2 id="api-7"><a class="header" href="#api-7">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13494,7 +13586,7 @@ pre-multiplied by the inverse of the reference frame’s world pose.</p>
 <p>If the sensor was built without a reference (<code>reference = None</code> at
 construction), <code>relative == world</code> for every target — i.e. the
 sensor degenerates to a pure forward-kinematics readout.</p>
-<h2 id="api-7"><a class="header" href="#api-7">API</a></h2>
+<h2 id="api-8"><a class="header" href="#api-8">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13618,7 +13710,7 @@ actuator-physics limits. Variants:</p>
 and write the clipped value back into the same <code>joint_force</code> slot.
 See <a href="#dc-motor-clamping"><code>DC motor clamping</code></a> for the
 torque-vs-speed envelope details.</p>
-<h2 id="api-8"><a class="header" href="#api-8">API</a></h2>
+<h2 id="api-9"><a class="header" href="#api-9">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::actuators::*;
@@ -14039,7 +14131,7 @@ well-defined for arbitrarily high velocities.</p>
 <p>If <code>τ_cap ≥ τ_stall</code> the corner is <code>ω_nl</code> itself (the cap is
 inactive — the linear envelope is the binding constraint
 everywhere).</p>
-<h3 id="validation-1"><a class="header" href="#validation-1">Validation</a></h3>
+<h3 id="validation-2"><a class="header" href="#validation-2">Validation</a></h3>
 <p>The constructor rejects:</p>
 <ul>
 <li><code>no_load_speed &lt;= 0</code> — would divide by zero in the envelope.</li>
@@ -14050,7 +14142,7 @@ everywhere).</p>
 plus the implicit <code>corner_velocity</code> recompute, making it cheap to
 sweep motor sizes during tuning without rebuilding the GPU
 resources.</p>
-<h3 id="api-9"><a class="header" href="#api-9">API</a></h3>
+<h3 id="api-10"><a class="header" href="#api-10">API</a></h3>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::actuators::{ClampingDcMotor, ClampingDcMotorConfig};
@@ -14345,6 +14437,22 @@ pressure distribution, bead drift) and force-shape checks that guard the
 tire physics without external measured-data calibration (that scope is
 deliberately excluded — see the “Calibration stance” section of
 <code>PLAN_REALTIRE.md</code>).</p>
+<h2 id="fully-autonomous-gpu-substep-loop-f2"><a class="header" href="#fully-autonomous-gpu-substep-loop-f2">Fully autonomous GPU substep loop (F2)</a></h2>
+<p>The tire FEM substep loop runs with zero per-substep host values:
+<code>step_persistent → dispatch_resident(resident-spin) → step_hub_persistent_with_tread_forces_spinning</code>. The wheel spin DOF lives
+in <code>hub_state[1].zw</code> (integrated on-device with the exact
+<code>integrate_spin_dof</code> formula, soft-sign brake saturator included), and the
+feedback shader reads ω from the hub rows. Proven bit-identical to a
+host-bridged reference over 96 rolling substeps.</p>
+<p>The fused-atlas path scales this to fleets: one dispatch runs the bristle
+physics for every tire (<code>step_resident_atlas_feedback</code>), the hub-param
+bridge folds per-node force rows into each tire’s <code>extf</code>, and
+<code>hub_reduce_atlas</code> integrates all hubs (spin DOF included). Measured:
+<strong>1.53× realtime for 40 wheels</strong> running the complete loop. A shared fleet
+heightfield (<code>TireFemAtlasTerrain</code>) adds bilinear terrain sampling — an
+all-zero heightfield is bitwise identical to the flat path, and an incline
+makes the wheel drift downhill (the tilted contact normal redirects the
+bristle reaction, which a flat-ground model cannot produce).</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="tape-based-autograd"><a class="header" href="#tape-based-autograd">Tape-based autograd</a></h1>
 <p><code>molla::autograd</code> ships tape-style reverse-mode automatic
@@ -15046,7 +15154,7 @@ amortises across both.</p>
 <p>Neumann (traction) BCs enter through the right-hand side and are
 differentiable per the formula above; the BC structure is otherwise
 unchanged.</p>
-<h2 id="validation-2"><a class="header" href="#validation-2">Validation</a></h2>
+<h2 id="validation-3"><a class="header" href="#validation-3">Validation</a></h2>
 <p>The Stage 38.2 tests compare the analytic gradient against
 central-difference FD at <code>ε = 1e−3 · E</code> and pass to within
 <code>5e−3</code> relative error on the cantilever beam case (<code>hex</code> mesh of
@@ -15391,6 +15499,50 @@ reverse is fully hand-written and GPU-resident, the canonical
 rest of the autograd demos.</li>
 <li>References: Kerbl et al. 2023 (“3D Gaussian Splatting for
 Real-Time Radiance Field Rendering”), Newton <code>gaussians.py</code>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gpu-cloth--softbody-adjoints"><a class="header" href="#gpu-cloth--softbody-adjoints">GPU cloth &amp; softbody adjoints</a></h1>
+<p><code>molla_kernels::ClothDiffGpu</code> is the device-resident differentiable
+mass-spring stack (Warp-style force-based diffsim — the parallel-friendly
+formulation; the XPBD Gauss-Seidel adjoint stays CPU-side in
+<code>molla-autograd</code> because its sequential reverse is GPU-hostile by
+construction).</p>
+<h2 id="forward"><a class="header" href="#forward">Forward</a></h2>
+<p>Semi-implicit Euler, <strong>gather form</strong>: each particle loops its incident
+springs (and tets) via CSR — no atomics, so the forward is
+bit-deterministic. That determinism is load-bearing: it makes central
+finite differences <em>of the GPU forward itself</em> a valid oracle for the
+reverse kernels, with no CPU twin required.</p>
+<ul>
+<li>Springs: <code>f = k (L − rest) d̂</code> per <code>ClothSpring</code>.</li>
+<li>Softbody volume term (<code>SoftTet</code>, via <code>new_with_tets</code>): per-tet energy
+<code>½ k_v (V − V₀)²</code>, rest volumes measured from the initial positions.</li>
+</ul>
+<h2 id="reverse"><a class="header" href="#reverse">Reverse</a></h2>
+<p>Three passes per step, walking the stored trajectory backwards:</p>
+<ol>
+<li><code>backward_hat</code> — stage <code>â_v = adj_v + dt·adj_p</code> into a separate buffer
+(in-place updates would race on neighbours’ values mid-dispatch).</li>
+<li><code>backward_stiffness</code> / <code>backward_volume_stiffness</code> — per-spring ∂J/∂k and
+per-tet ∂J/∂k_v from the staged <code>â_v</code>.</li>
+<li><code>backward_step</code> — the adjoint state update. The spring path applies the
+symmetric spring Jacobian; the volume path applies the full volume
+Hessian in closed form: the Gauss part <code>k_v·gᵢ(Σⱼ gⱼ·xⱼ)</code> plus the
+geometric part <code>k_v(V−V₀)·Σⱼ ∂gᵢ/∂pⱼ xⱼ</code>, where the Hessian blocks are
+edge-cross hat matrices and Hessian symmetry lets the adjoint reuse the
+forward-form blocks (a-row/col recovered by translation invariance).</li>
+</ol>
+<p>Gradients exposed: <code>read_grad_k</code>, <code>read_grad_kv</code>, <code>read_grad_v0</code>,
+<code>read_grad_p0</code>; <code>set_stiffness</code> for optimiser loops.</p>
+<h2 id="validation-cloth_diff_gpurs"><a class="header" href="#validation-cloth_diff_gpurs">Validation (<code>cloth_diff_gpu.rs</code>)</a></h2>
+<p>FD gradchecks against the deterministic GPU forward:</p>
+<ul>
+<li>Cloth: top-5 |∂J/∂k| springs at 1.6e-4…1.2e-3 relative; ∂J/∂v₀ at
+6e-4…6e-3. The test samples the <em>largest</em> gradients — fixed indices can
+land on near-zero-signal springs whose FD drowns in ~1e-7 f32 loss noise.</li>
+<li>Softbody: all five tet ∂J/∂k_v at 2e-3…9.5e-3; ∂J/∂v₀ re-checked with the
+volume term active so the adjoint is proven to chain through both force
+families.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="bevy-adapter"><a class="header" href="#bevy-adapter">Bevy adapter</a></h1>

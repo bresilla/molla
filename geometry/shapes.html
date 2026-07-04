@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ac7b0e4a.js"></script>
+        <script src="../toc-6df35734.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -309,6 +309,17 @@ the touching triangles on the fly, and dispatches as for TriMesh.</li>
 <code>SdfGrid</code> voxelised fields go through the
 <a href="./hydroelastic.html">hydroelastic</a> path).</li>
 </ul>
+<h2 id="helical-thread-sdf"><a class="header" href="#helical-thread-sdf">Helical thread SDF</a></h2>
+<p><code>SdfShape::HelicalThread { major, minor, pitch, half_height }</code> — a circle
+of radius <code>minor</code> swept along the helix of radius <code>major</code> with pitch
+<code>pitch</code>, capped to <code>|y| ≤ half_height</code>. Distance is evaluated in the
+wrapped screw-profile plane <code>(r − major, y − pitch·θ/τ mod pitch)</code> — the
+standard swept-circle screw SDF, exact in the profile plane. The oracle
+that distinguishes it from a torus-ring stack is <strong>screw symmetry</strong>:
+rotating by α about +Y while translating by <code>pitch·α/τ</code> leaves the
+distance field invariant (checked to 1e-9 over 24 angles in
+<code>heightfield_and_sdf.rs</code>) — rings have no axial coupling, so a bolt can
+never <em>thread</em> through them.</p>
 
                     </main>
 

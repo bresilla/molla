@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ac7b0e4a.js"></script>
+        <script src="../toc-6df35734.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -223,6 +223,22 @@ pressure distribution, bead drift) and force-shape checks that guard the
 tire physics without external measured-data calibration (that scope is
 deliberately excluded — see the “Calibration stance” section of
 <code>PLAN_REALTIRE.md</code>).</p>
+<h2 id="fully-autonomous-gpu-substep-loop-f2"><a class="header" href="#fully-autonomous-gpu-substep-loop-f2">Fully autonomous GPU substep loop (F2)</a></h2>
+<p>The tire FEM substep loop runs with zero per-substep host values:
+<code>step_persistent → dispatch_resident(resident-spin) → step_hub_persistent_with_tread_forces_spinning</code>. The wheel spin DOF lives
+in <code>hub_state[1].zw</code> (integrated on-device with the exact
+<code>integrate_spin_dof</code> formula, soft-sign brake saturator included), and the
+feedback shader reads ω from the hub rows. Proven bit-identical to a
+host-bridged reference over 96 rolling substeps.</p>
+<p>The fused-atlas path scales this to fleets: one dispatch runs the bristle
+physics for every tire (<code>step_resident_atlas_feedback</code>), the hub-param
+bridge folds per-node force rows into each tire’s <code>extf</code>, and
+<code>hub_reduce_atlas</code> integrates all hubs (spin DOF included). Measured:
+<strong>1.53× realtime for 40 wheels</strong> running the complete loop. A shared fleet
+heightfield (<code>TireFemAtlasTerrain</code>) adds bilinear terrain sampling — an
+all-zero heightfield is bitwise identical to the flat path, and an incline
+makes the wheel drift downhill (the tilted contact normal redirects the
+bristle reaction, which a flat-ground model cannot produce).</p>
 
                     </main>
 

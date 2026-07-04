@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ac7b0e4a.js"></script>
+        <script src="../toc-6df35734.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -338,12 +338,31 @@ variant for the Stokes-free case.</li>
 replacement for the viscous-smoothing placeholder.</li>
 <li><a href="./mesh.html">Mesh</a> — <code>FemMesh</code> is what <code>ApicHybrid</code> owns.</li>
 </ul>
+<h2 id="pressure-projection-stage-3761"><a class="header" href="#pressure-projection-stage-3761">Pressure projection (Stage 37.6.1)</a></h2>
+<p><code>ApicHybrid::step_projected</code> (CPU) and <code>step_gpu_projected</code> (device) add a
+real incompressibility projection between the grid update and G2P: a
+per-tet (P0) pressure solved through the lumped-mass Schur operator
+<code>S = D M⁻¹ Dᵀ</code> over <em>deposit-supported</em> fluid tets, matrix-free CG,
+correction <code>v ← v − M⁻¹ Dᵀ q</code>. Two formulations were rejected on evidence:
+equal-order P1 node pressure only cancels nodal moments (per-tet L2
+divergence stalled at 23%), and Richardson outer loops on it <em>diverge</em>
+(LBB checkerboard amplification). The P0 scheme drives per-tet divergence
+to the solver floor — machine epsilon on the compressing-blob contract.</p>
+<p>The GPU port records the whole CG loop in one compute pass (zero
+readbacks) and carries a <strong>convergence freeze</strong>: once <code>rr ≤ 1e-12·rr_init</code>
+both α and β clamp to zero, because f32 CG <em>diverges past the correct
+answer</em> if iterated beyond convergence (measured: 40 iters ≈ 1e-5 parity
+vs the f64 CPU oracle, 120 iters blew up to O(1) before the freeze;
+9.9e-7 after). Particle→tet localisation uses <code>TetLookupGrid</code> — a uniform
+grid whose cell-sorted CSR candidate lists preserve first-match-in-cell-
+order semantics exactly (bitwise-equal weights vs brute force over 4000
+probe points).</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../fem/stokes_ns.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../fem/mixed_elasticity.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -357,7 +376,7 @@ replacement for the viscous-smoothing placeholder.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../fem/stokes_ns.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../fem/mixed_elasticity.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

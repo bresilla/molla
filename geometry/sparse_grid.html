@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-204bfdc6.js";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ac7b0e4a.js"></script>
+        <script src="../toc-6df35734.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -389,6 +389,19 @@ surface where samples are kept — typical value 3-4 for collision
 queries (close enough to capture the surface, far enough not to
 miss). <code>sparse_sdf_from_dense</code> is the trivial down-conversion: walk
 the dense grid, keep cells whose <code>|sdf| &lt; narrow_band * cell_size</code>.</p>
+<h2 id="reclamation-stage-24e224e3"><a class="header" href="#reclamation-stage-24e224e3">Reclamation (Stage 24e.2/24e.3)</a></h2>
+<p>Leaf slots recycle end-to-end: <code>SparseGridDeleteKernel::delete()</code> composes
+mark + drain, and the insert kernel pops the freelist before bumping.
+Internal nodes fold <strong>on demand</strong>: <code>fold_empty_internals</code> (one thread per
+root-table slot) tombstones nodes whose live-leaf count reached zero and
+feeds an internal freelist. Two open-addressing rules make this safe:
+tombstones are probe-chain non-terminators (lookups skip them — clearing
+outright would orphan colliding keys), and they are <em>claimable</em> on insert
+(the fold zeroes the stale keys so tombstone claims share the fresh-slot
+publication protocol; without this, re-inserting a folded region exhausts
+<code>MAX_ROOT_PROBES</code>). Verified by
+<code>sparse_grid_v4::leaf_and_internal_slots_recycle_after_fold</code>, including
+value-correct re-insert through tombstoned slots.</p>
 
                     </main>
 
