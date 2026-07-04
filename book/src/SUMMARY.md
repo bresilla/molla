@@ -87,6 +87,7 @@
   - [Explicit](./solvers/mpm_explicit.md)
   - [Semi-implicit](./solvers/mpm_semi_implicit.md)
   - [Implicit Bingham](./solvers/mpm_implicit.md)
+- [Barrier-Newton contact (IPC)](./solvers/barrier_newton.md)
 
 ---
 

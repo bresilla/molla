@@ -414,8 +414,16 @@ oracle: FD 4.7e-6 across all three mollifier regions; the discriminating
 incline (tan θ between μ_k and μ_s) holds at 0.83 mm creep vs 0.44 m
 slide — a 530× split, the oracle velocity-level friction (the A1
 attempt) cannot pass in principle. **A1 is retired for deformables.**
-Remaining: GPU port of tets/strain/friction, pair (cloth-cloth)
-friction, LBVH pair scale-out (5) — as below. Subsumes the F14 GPU-CCD item
+**Phases 5a/5b/5c LANDED 2026-07-04** — full GPU parity for
+tets/strain/friction (the incline discriminator lands IDENTICAL digits
+on device), pair friction (layer-on-layer holds at 0.62 mm vs 1.24 m
+frictionless — pure VT/EE friction), and device Teschner-hash pair
+pruning replacing the brute-force sweeps (single-ring-complete cells,
+collisions only add candidates, overflow is a hard error). **C0 is
+FEATURE-COMPLETE** — book chapter at `solvers/barrier_newton.md`.
+Follow-ons (new entries when taken up): elasticity-inclusive κ (the
+TOG 43.6 eigen-stiffness scheme replacing the mass-consistent v1),
+LBVH for adversarial distributions, warm-started PCG. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
