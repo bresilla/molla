@@ -373,8 +373,19 @@ cross-mesh by construction.
 
 ### C0. Barrier-Newton contact backend (IPC-family, GPU) — flagship
 
-**Status.** Designed 2026-07-04 (this entry). Not started. Subsumes the F14
-GPU-CCD item (currently a loud refusal on the GPU VBD backend).
+**Status.** Designed 2026-07-04. **Phase 1 LANDED same day** —
+`molla-solvers::barrier_contact` (`BarrierShell`): f64 incremental-potential
+Newton with the cubic compact-support barrier, mass-consistent per-contact κ,
+SPD-projected spring/barrier Hessians, matrix-free PCG (block mass-diagonal
+preconditioner), and the CCD-truncated Armijo line search. Contract tests
+(`tests/barrier_contact.rs`): FD gradient 8.8e-7 / Hessian-operator 1.2e-11;
+a 50 m/s impact whose free-flight step crosses the floor ~16× stays
+penetration-free at every accepted iterate and arrests on the surface; a
+draped drop settles with the resting gap INSIDE the barrier band
+(9.99e-4 < d̂ = 1e-3); every test ends with an explicit intersection scan.
+Phases 2–5 (GPU port + F14 TOI kernel, VT/EE self-collision, tets + strain
+limiting + μ_s/μ_k, scale) remain as below. Subsumes the F14 GPU-CCD item
+(currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

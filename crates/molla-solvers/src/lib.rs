@@ -17,6 +17,7 @@ pub use molla_math as math;
 pub use molla_sim as sim;
 pub use molla_storage as storage;
 
+pub mod barrier_contact;
 pub mod crba;
 mod featherstone;
 pub mod ik;
