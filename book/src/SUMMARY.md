@@ -154,6 +154,7 @@
 - [Raycast adjoint](./autograd/raycast.md)
 - [Differentiable Gaussian splat renderer](./autograd/splat.md)
 - [GPU cloth & softbody adjoints](./autograd/cloth_softbody_gpu.md)
+- [Eulerian fluid adjoint](./autograd/stam_fluid.md)
 
 ---
 
