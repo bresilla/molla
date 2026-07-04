@@ -101,8 +101,12 @@ fn bvh_accelerates_sphere_on_grid_mesh() {
     // BVH traversal), so keep a wide debug budget and leave the tight
     // regression signal to release/bench runs rather than making the
     // default `make test` lane fail on machine-dependent wall time.
+    // The debug budget only needs to catch "BVH not wired at all"
+    // (a ~100× regression, tens of ms) — 6 ms proved too tight for
+    // shared CI runners (measured 7.5 ms on a hosted GitHub runner
+    // that passes comfortably on dev machines).
     let budget_us = if cfg!(debug_assertions) {
-        6_000.0
+        20_000.0
     } else {
         200.0
     };
