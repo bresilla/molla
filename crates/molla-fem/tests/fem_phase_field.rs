@@ -155,3 +155,144 @@ fn localized_history_drives_localized_irreversible_crack_growth() {
         "localized high history did not produce localized crack growth"
     );
 }
+
+/// C3 — coupled displacement ↔ damage staggered solve.
+///
+/// 1. Homogeneous AT2 identity: an unnotched patch under uniform
+///    biaxial-free stretch (linear Dirichlet field on every boundary
+///    node) develops HOMOGENEOUS damage matching the closed form
+///    d* = 2H/(G_c/ℓ + 2H) of the AT2 screened Poisson with Δd = 0.
+/// 2. Notch localization + softening: a strip with a pre-seeded
+///    history notch pulled in tension over load steps — damage
+///    localizes at the notch (max d at the notch row ≫ far field) and
+///    grows monotonically; the degraded strain energy per unit
+///    stretch² SOFTENS as the crack develops.
+#[test]
+fn coupled_staggered_solve_matches_at2_homogeneous_identity() {
+    use molla_fem::{PhaseFieldCoupledConfig, solve_phase_field_coupled_step};
+    let mesh = FemMesh::tri_grid_2d(6, 6, 1.0, 1.0);
+    let params = PhaseFieldFractureParams {
+        critical_energy_release_rate: 5.0,
+        length_scale: 0.2,
+        residual_stiffness: 1.0e-6,
+    };
+    let cfg = PhaseFieldCoupledConfig::default();
+    let eps = 0.04;
+    let nu = 0.3;
+    // Linear field u = (ε·x, −ν·ε·y) on EVERY node ⇒ truly homogeneous
+    // strain (constrains the whole field so damage feedback cannot
+    // redistribute it — the identity needs uniform ε).
+    let mut dirichlet = Vec::new();
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        dirichlet.push((2 * i, eps * p.x));
+        dirichlet.push((2 * i + 1, -nu * eps * p.y));
+    }
+    let n = mesh.vert_count();
+    let mut history = vec![0.0; n];
+    let mut damage = vec![0.0; n];
+    solve_phase_field_coupled_step(&mesh, params, cfg, &dirichlet, &mut history, &mut damage)
+        .expect("coupled step");
+
+    // Closed form from the converged history.
+    let h_ref = history[n / 2];
+    let d_expect =
+        2.0 * h_ref / (params.critical_energy_release_rate / params.length_scale + 2.0 * h_ref);
+    let d_min = damage.iter().cloned().fold(f64::INFINITY, f64::min);
+    let d_max = damage.iter().cloned().fold(0.0, f64::max);
+    eprintln!("homogeneous AT2: d ∈ [{d_min:.5}, {d_max:.5}], closed form {d_expect:.5}");
+    assert!(
+        d_expect > 0.05,
+        "load too weak to exercise damage: {d_expect}"
+    );
+    assert!(
+        (d_max - d_min).abs() < 1.0e-6,
+        "damage must be homogeneous: [{d_min}, {d_max}]"
+    );
+    assert!(
+        ((d_max - d_expect) / d_expect).abs() < 1.0e-6,
+        "AT2 closed form violated: {d_max} vs {d_expect}"
+    );
+}
+
+#[test]
+fn notch_localizes_damage_and_softens() {
+    use molla_fem::{PhaseFieldCoupledConfig, solve_phase_field_coupled_step};
+    let (nx, ny) = (16, 8);
+    let mesh = FemMesh::tri_grid_2d(nx, ny, 2.0, 1.0);
+    let params = PhaseFieldFractureParams {
+        critical_energy_release_rate: 1.0,
+        length_scale: 0.12,
+        residual_stiffness: 1.0e-6,
+    };
+    let cfg = PhaseFieldCoupledConfig::default();
+    let n = mesh.vert_count();
+    let mut history = vec![0.0; n];
+    let mut damage = vec![0.0; n];
+    // Pre-seed a history notch: left half of the horizontal midline.
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        if (p.y - 0.5).abs() < 1.0e-6 && p.x < 0.6 {
+            history[i] = 40.0;
+        }
+    }
+
+    let mut energies = Vec::new();
+    let mut peaks = Vec::new();
+    for step in 1..=4 {
+        let stretch = 0.006 * step as f64;
+        let mut dirichlet = Vec::new();
+        for (i, p) in mesh.vertices.iter().enumerate() {
+            if p.y.abs() < 1.0e-9 {
+                dirichlet.push((2 * i, 0.0));
+                dirichlet.push((2 * i + 1, 0.0));
+            } else if (p.y - 1.0).abs() < 1.0e-9 {
+                dirichlet.push((2 * i, 0.0));
+                dirichlet.push((2 * i + 1, stretch));
+            }
+        }
+        let res = solve_phase_field_coupled_step(
+            &mesh,
+            params,
+            cfg,
+            &dirichlet,
+            &mut history,
+            &mut damage,
+        )
+        .expect("coupled step");
+        // Normalized stiffness: energy / stretch² (softening metric).
+        energies.push(res.strain_energy / (stretch * stretch));
+        peaks.push(damage.iter().cloned().fold(0.0, f64::max));
+    }
+
+    // Localization: damage at the notch row far exceeds the far field.
+    let mut d_notch = 0.0f64;
+    let mut d_far = 0.0f64;
+    for (i, p) in mesh.vertices.iter().enumerate() {
+        if (p.y - 0.5).abs() < 1.0e-6 && p.x < 0.6 {
+            d_notch = d_notch.max(damage[i]);
+        }
+        if p.x > 1.6 {
+            d_far = d_far.max(damage[i]);
+        }
+    }
+    eprintln!(
+        "notch: d_notch {d_notch:.4}, d_far {d_far:.4}, peaks {peaks:?}, k_norm {energies:?}"
+    );
+    // Closed form for the H = 40 seed gives d = 0.906 BEFORE the
+    // element-mean degradation on this coarse mesh — 0.8 still means
+    // "strongly damaged"; the physics gates are localization,
+    // monotonicity and softening below.
+    assert!(d_notch > 0.8, "notch must be near-cracked: {d_notch:.4}");
+    assert!(
+        d_far < 0.5 * d_notch,
+        "damage must localize: far {d_far:.4} vs notch {d_notch:.4}"
+    );
+    // Irreversibility: peak damage is monotone across load steps.
+    for w in peaks.windows(2) {
+        assert!(w[1] >= w[0] - 1.0e-12, "damage went backwards: {peaks:?}");
+    }
+    // Softening: the normalized stiffness drops as the crack grows.
+    assert!(
+        energies.last().unwrap() < &(0.9 * energies[0]),
+        "no softening: {energies:?}"
+    );
+}

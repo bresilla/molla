@@ -191,8 +191,9 @@ pub use p2_element::{
     p2_tri_shape_functions, p2_tri_shape_gradients,
 };
 pub use phase_field::{
-    PhaseFieldFractureParams, PhaseFieldFractureSolveResult, assemble_phase_field_fracture_system,
-    phase_field_degradation, phase_field_fracture_energy_density,
+    PhaseFieldCoupledConfig, PhaseFieldCoupledResult, PhaseFieldFractureParams,
+    PhaseFieldFractureSolveResult, assemble_phase_field_fracture_system, phase_field_degradation,
+    phase_field_fracture_energy_density, solve_phase_field_coupled_step,
     solve_phase_field_fracture_jacobi, update_phase_field_history,
 };
 #[cfg(feature = "russell")]

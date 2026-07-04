@@ -579,7 +579,13 @@ The DG infra is already 90 % there.
 
 ### C3. Phase-field fracture
 
-**Status.** First AT2 scalar-damage CPU oracle landed in `molla-fem`.
+**Status.** COMPLETE 2026-07-04 — the coupled staggered
+displacement↔damage driver (`solve_phase_field_coupled_step`) landed on
+top of the AT2 oracle: exact homogeneous identity, 8.8× notch
+localization, monotone irreversibility, 13.6% softening over 4 load
+steps. v1 drives history with the full energy density
+(tension-dominated); the spectral tensile split and 3D tets are the
+documented follow-ons. Original oracle notes below.
 
 **Result.** `molla-fem` now exposes `PhaseFieldFractureParams`,
 `phase_field_degradation`, `update_phase_field_history`,
