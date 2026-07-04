@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3d91e54a.js";
+            window.path_to_searchindex_js = "searchindex-c0d56225.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-6df35734.js"></script>
+        <script src="toc-fb488059.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -9096,6 +9096,67 @@ multigrid (V-cycle / W-cycle over the grid hierarchy) is the next
 performance lever.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="barrier-newton-contact-ipc-family"><a class="header" href="#barrier-newton-contact-ipc-family">Barrier-Newton contact (IPC-family)</a></h1>
+<p>The penetration-free contact backend (roadmap C0): interpenetration is
+<em>mathematically impossible at every Newton iterate</em>, not just at
+convergence. Designed after the comparison with ZOZO’s
+<code>ppf-contact-solver</code>; molla targets the same invariant at viewer scale
+(10k–50k vertices) rather than the 180M-contact offline regime.</p>
+<h2 id="formulation"><a class="header" href="#formulation">Formulation</a></h2>
+<p>Each step minimizes the incremental potential</p>
+<pre><code class="language-text">E(x) = ½‖x − x̃‖²_M + h²·[ elastic(x) + Σ barrier(d_c(x)) + strain(x) ] + friction(x)
+x̃    = x_prev + h·v + h²·g
+</code></pre>
+<p>with the <strong>cubic compact-support barrier</strong> <code>b(d) = κ(d̂−d)³/(3d̂²)</code> — C²
+at d̂, convex, zero outside the activation band (no log singularity, no
+global κ tuning; κ is per-contact, mass-consistent v1). Damped Newton
+with matrix-free PCG (block mass-diagonal preconditioner), and the piece
+that carries the guarantee: a <strong>CCD-truncated line search</strong> — step
+length capped at 0.9×TOI <em>before</em> Armijo backtracking, so no trial
+state ever crosses a surface.</p>
+<p>Every Hessian term follows one projection discipline (SPD only):
+compression-clamped springs, convex-part barriers, Gauss-part tet
+volumes, positive-slope friction.</p>
+<h2 id="what-it-covers"><a class="header" href="#what-it-covers">What it covers</a></h2>
+<ul>
+<li><strong>Obstacles</strong>: analytic half-space + sphere contacts.</li>
+<li><strong>Self-collision</strong>: non-adjacent vertex-triangle and edge-edge pairs
+with clamped closest-point weights (exact-a.e. gradients; the
+measure-zero kinks at aligned-grid degeneracies are documented).
+Candidates at 3·d̂ plus a global travel cap <code>α·max|p| ≤ d̂</code> make the
+additive-CCD argument airtight: an unseen pair cannot reach contact.</li>
+<li><strong>Volumetric tets</strong>: <code>½k_v(V−V₀)²</code> with exact volume gradients.</li>
+<li><strong>Hard strain limiting</strong>: the bound comes from <em>line-search
+truncation</em> (a limit crossing is a TOI); the strain barrier
+(κ_s = scale·k·rest², elasticity-derived) only keeps springs off the
+wall. An unlimited 15.8× stretch holds at 1.0486 &lt; 1.05.</li>
+<li><strong>Lagged IPC friction with a true μ_s/μ_k split</strong>: normal force and
+frame frozen at step start; C¹ mollifier (stick well to μ_s·λ, blend,
+kinetic plateau μ_k·λ). The discriminating incline (tan θ between
+μ_k and μ_s) sticks at 0.83 mm creep vs 0.44 m slide — the oracle
+velocity-level friction cannot pass in principle. Pair (cloth-on-
+cloth) friction uses the same recipe on the relative stencil slip.</li>
+<li><strong>True pinning</strong>: DoF removal (x̃ = x, zero gradient row, identity
+Hessian row). A huge mass does NOT pin under an incremental
+potential — the predictor free-falls independently of mass.</li>
+</ul>
+<h2 id="api-2"><a class="header" href="#api-2">API</a></h2>
+<p>CPU f64 oracle: <code>molla_solvers::barrier_contact::BarrierShell</code>
+(<code>new</code> → <code>with_triangles</code> / <code>with_tets</code> / <code>pin_vertices</code>, <code>step</code>,
+invariants <code>min_gap</code> / <code>max_strain</code>). GPU f32:
+<code>molla_kernels::BarrierNewtonGpu</code> (<code>new</code> / <code>new_with_mesh</code> /
+<code>new_full</code>), host-driven Newton over device gradient/Hessian/PCG/TOI
+with 4-byte scalar readbacks and the f32 convergence freeze.</p>
+<p>Pair discovery runs on device through Teschner-hash uniform grids
+(cell ≥ primitive extent + 3d̂ ⇒ single-ring probes are complete; hash
+collisions only add candidates; bucket overflow is a hard error).</p>
+<h2 id="parity-philosophy"><a class="header" href="#parity-philosophy">Parity philosophy</a></h2>
+<p>f32-vs-f64 drapes are <em>non-unique equilibria</em>: the GPU drop test gates
+on ENERGY (the f32 drape found a 13% deeper minimum than the oracle),
+plus the invariant, the resting-gap band, and — for self-collision —
+a <strong>host-side</strong> exact intersection scan on read-back positions. Every
+test in <code>barrier_*.rs</code> ends with an explicit intersection scan.</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="finite-element-method--overview"><a class="header" href="#finite-element-method--overview">Finite-Element Method — overview</a></h1>
 <p>Molla ships a substantial, layered Finite-Element Method (FEM) framework
 under <code>crates/molla-fem/src/</code>. It is the single largest physical-modelling
@@ -10948,7 +11009,7 @@ pressure):</p>
 </code></pre>
 <p>λ never enters the displacement operator, so the formulation cannot lock;
 λ → ∞ recovers exact incompressibility (Stokes).</p>
-<h2 id="api-2"><a class="header" href="#api-2">API</a></h2>
+<h2 id="api-3"><a class="header" href="#api-3">API</a></h2>
 <ul>
 <li>CPU: <code>molla_fem::solve_mixed_elasticity_steady(mesh, th, mu, lambda, f, bcs, cfg)</code>
 — f64, Uzawa-CG on the pressure Schur complement <code>B A⁻¹ Bᵀ + (1/λ)·M_p</code>.</li>
@@ -11623,7 +11684,7 @@ the underlying mesh-graph traversal — the host CPU does it fine. The
 expensive part — computing the 144 values of every per-cell
 \( K_e = \int_K B^T D B , dV \) (4 verts × 3 dofs)² for a tet — is
 what moves to the GPU kernel.</p>
-<h2 id="api-3"><a class="header" href="#api-3">API</a></h2>
+<h2 id="api-4"><a class="header" href="#api-4">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[cfg(feature = "gpu")]
@@ -13126,7 +13187,7 @@ The mesh BVH already ships (Stage 15, see
 <a href="#raycast-adjoint"><code>raycast_adjoint</code></a> CPU module provides a
 finite-difference fallback for inverse-rendering experiments that
 need triangles in the loop.</p>
-<h2 id="api-4"><a class="header" href="#api-4">API</a></h2>
+<h2 id="api-5"><a class="header" href="#api-5">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13284,7 +13345,7 @@ every pixel tells you exactly which body-owned shape lit it up.</li>
 <p>Channels not in the mask are skipped at write time inside the kernel
 (the backing buffers are always allocated, so the mask can be
 flipped per-frame without reallocation).</p>
-<h2 id="api-5"><a class="header" href="#api-5">API</a></h2>
+<h2 id="api-6"><a class="header" href="#api-6">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13412,7 +13473,7 @@ next step.</p>
 frame, <strong>adds the centripetal + tangential terms</strong> that come from
 the IMU not sitting at the body’s COM (<code>a = a_com + α × r + ω × (ω × r)</code> in body frame, where <code>r</code> is the sensor offset), then
 subtracts gravity to produce the specific-force output.</p>
-<h2 id="api-6"><a class="header" href="#api-6">API</a></h2>
+<h2 id="api-7"><a class="header" href="#api-7">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13509,7 +13570,7 @@ impulse via the compliance term <code>α = 1/k·dt²</code>.</li>
 (un-normalised, so its magnitude reflects the spread + count).</li>
 <li><em>Where, on the body, is the push concentrated?</em> — <code>centroid</code>.</li>
 </ul>
-<h2 id="api-7"><a class="header" href="#api-7">API</a></h2>
+<h2 id="api-8"><a class="header" href="#api-8">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13586,7 +13647,7 @@ pre-multiplied by the inverse of the reference frame’s world pose.</p>
 <p>If the sensor was built without a reference (<code>reference = None</code> at
 construction), <code>relative == world</code> for every target — i.e. the
 sensor degenerates to a pure forward-kinematics readout.</p>
-<h2 id="api-8"><a class="header" href="#api-8">API</a></h2>
+<h2 id="api-9"><a class="header" href="#api-9">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::compute::Engine;
@@ -13710,7 +13771,7 @@ actuator-physics limits. Variants:</p>
 and write the clipped value back into the same <code>joint_force</code> slot.
 See <a href="#dc-motor-clamping"><code>DC motor clamping</code></a> for the
 torque-vs-speed envelope details.</p>
-<h2 id="api-9"><a class="header" href="#api-9">API</a></h2>
+<h2 id="api-10"><a class="header" href="#api-10">API</a></h2>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::actuators::*;
@@ -14142,7 +14203,7 @@ everywhere).</p>
 plus the implicit <code>corner_velocity</code> recompute, making it cheap to
 sweep motor sizes during tuning without rebuilding the GPU
 resources.</p>
-<h3 id="api-10"><a class="header" href="#api-10">API</a></h3>
+<h3 id="api-11"><a class="header" href="#api-11">API</a></h3>
 <pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use molla::actuators::{ClampingDcMotor, ClampingDcMotorConfig};
@@ -17884,8 +17945,16 @@ oracle: FD 4.7e-6 across all three mollifier regions; the discriminating
 incline (tan θ between μ_k and μ_s) holds at 0.83 mm creep vs 0.44 m
 slide — a 530× split, the oracle velocity-level friction (the A1
 attempt) cannot pass in principle. <strong>A1 is retired for deformables.</strong>
-Remaining: GPU port of tets/strain/friction, pair (cloth-cloth)
-friction, LBVH pair scale-out (5) — as below. Subsumes the F14 GPU-CCD item
+<strong>Phases 5a/5b/5c LANDED 2026-07-04</strong> — full GPU parity for
+tets/strain/friction (the incline discriminator lands IDENTICAL digits
+on device), pair friction (layer-on-layer holds at 0.62 mm vs 1.24 m
+frictionless — pure VT/EE friction), and device Teschner-hash pair
+pruning replacing the brute-force sweeps (single-ring-complete cells,
+collisions only add candidates, overflow is a hard error). <strong>C0 is
+FEATURE-COMPLETE</strong> — book chapter at <code>solvers/barrier_newton.md</code>.
+Follow-ons (new entries when taken up): elasticity-inclusive κ (the
+TOG 43.6 eigen-stiffness scheme replacing the mass-consistent v1),
+LBVH for adversarial distributions, warm-started PCG. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
