@@ -319,7 +319,6 @@ pub fn solve_phase_field_coupled_step(
         let ok = match c {
             FemCell::Tri(_) => dim == 2,
             FemCell::Tet(_) => dim == 3,
-            _ => false,
         };
         if !ok {
             return Err(Error::Fem(
@@ -552,7 +551,6 @@ pub fn solve_phase_field_coupled_step(
                     };
                     (vol, psi)
                 }
-                _ => continue,
             };
             let d_bar =
                 verts.iter().map(|&v| damage[v as usize]).sum::<Real>() / verts.len() as Real;
