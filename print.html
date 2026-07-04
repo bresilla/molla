@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4b7e0c29.js";
+            window.path_to_searchindex_js = "searchindex-920c7f89.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-fb488059.js"></script>
+        <script src="toc-f4239cce.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -15605,6 +15605,35 @@ land on near-zero-signal springs whose FD drowns in ~1e-7 f32 loss noise.</li>
 volume term active so the adjoint is proven to chain through both force
 families.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="eulerian-fluid-adjoint-differentiable-smoke"><a class="header" href="#eulerian-fluid-adjoint-differentiable-smoke">Eulerian fluid adjoint (differentiable smoke)</a></h1>
+<p><code>molla_autograd::stam_diff::StamFluidDiff</code> — reverse-mode adjoint of a
+2D periodic inviscid Stam step (force add → pressure projection →
+velocity self-advection → projection → density advection), completing
+the diffsim family coverage (cloth, softbody, MPM, Featherstone,
+XPBD/VBD, rays, splats — and now smoke).</p>
+<p>Two structural facts carry the whole reverse pass:</p>
+<ol>
+<li><strong>The projection is self-adjoint.</strong> <code>P = I − G·L̃⁻¹·D</code> with periodic
+central differences satisfies <code>Dᵀ = −G</code>, and the K-sweep Jacobi
+approximation of <code>L̃⁻¹</code> is a polynomial in the symmetric Laplacian
+(constant diagonal on the periodic grid), hence symmetric. The
+reverse pass literally re-runs the forward projection on the
+adjoint field — no stored state.</li>
+<li><strong>Advection splits cleanly</strong>: the bilinear gather transposes into a
+scatter with the same weights, and the backtrace dependence feeds
+<code>−dt·(∇̃field)(x_back)</code> into the advecting velocity’s adjoint,
+where <code>∇̃</code> is the interpolant’s own gradient — exact a.e., with the
+same measure-zero cell-boundary caveat as the barrier stencils.</li>
+</ol>
+<p>Checkpoints per step: the pre-advection velocity and density fields.
+Gradients exposed: ∂J/∂force, ∂J/∂source, ∂J/∂u₀, ∂J/∂ρ₀.</p>
+<p><strong>Contract</strong> (<code>tests/stam_diff.rs</code>): FD through 12 full steps —
+∂J/∂force to 1.9e-7, ∂J/∂ρ₀ to 5.0e-6; and the use case: 25 gradient
+steps on a per-cell force field steer a smoke blob onto a target,
+nearly doubling the captured mass. Scope notes: inviscid (Gauss-Seidel
+diffusion is not self-adjoint and is deliberately out), f64 CPU; the
+GPU port follows the house recipe when a workload needs it.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="bevy-adapter"><a class="header" href="#bevy-adapter">Bevy adapter</a></h1>
 <p><code>molla_viewer</code> is a Bevy 0.18 application. It is the only crate in
