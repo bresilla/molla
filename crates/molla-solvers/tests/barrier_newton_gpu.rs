@@ -777,3 +777,219 @@ fn engine_gpu_backend_drapes_and_holds_invariant() {
     // f32 barrier-band jitter floor (see the kernel drop test).
     assert!(v_max < 0.13, "gpu engine path did not settle: {v_max}");
 }
+
+/// C0 — LBVH broad phase for barrier pairs:
+/// 1. Parity: the two-layer stack on the LBVH path lands the same
+///    contract as the hash path (invariant, one-band rest height,
+///    host-side scan).
+/// 2. Stress: a GRADED mesh (triangle sizes varying ~8× across the
+///    sheet) — the hash grid's cells are sized by the LARGEST
+///    primitive, so the small-triangle end packs hundreds of prims
+///    per cell and overflows the buckets (hard error, never silent);
+///    the LBVH path handles the same mesh and holds the invariant.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=barrier_newton_gpu`"]
+fn lbvh_broad_phase_parity_and_graded_stress() {
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // ── helpers (uniform patch, as in the self-collision test).
+    #[allow(clippy::type_complexity)]
+    let patch = |n: usize, y: f64, o: f64| -> (Vec<[f64; 3]>, Vec<(u32, u32)>, Vec<[u32; 3]>) {
+        let spacing = 0.03;
+        let mut pos = Vec::new();
+        for j in 0..n {
+            for i in 0..n {
+                pos.push([o + i as f64 * spacing, y, o + j as f64 * spacing]);
+            }
+        }
+        let idx = |i: usize, j: usize| (j * n + i) as u32;
+        let mut tris = Vec::new();
+        for j in 0..n - 1 {
+            for i in 0..n - 1 {
+                tris.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                tris.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut edges = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    edges.push((a, b));
+                }
+            }
+        }
+        (pos, edges, tris)
+    };
+    let springs_of = |pos: &[[f64; 3]], edges: &[(u32, u32)], k: f32| -> Vec<BarrierGpuSpring> {
+        edges
+            .iter()
+            .map(|&(a, b)| {
+                let pa = pos[a as usize];
+                let pb = pos[b as usize];
+                let rest =
+                    ((pa[0] - pb[0]).powi(2) + (pa[1] - pb[1]).powi(2) + (pa[2] - pb[2]).powi(2))
+                        .sqrt() as f32;
+                BarrierGpuSpring { a, b, rest, k }
+            })
+            .collect()
+    };
+    let f32pos = |pos: &[[f64; 3]]| -> Vec<[f32; 3]> {
+        pos.iter()
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect()
+    };
+
+    // ── 1. Parity on the two-layer stack.
+    {
+        let (mut pos, mut edges, mut tris) = patch(5, 0.02, -0.06);
+        let n_top = pos.len();
+        let (pos_b, edges_b, tris_b) = patch(7, 0.0, -0.09);
+        let base = n_top as u32;
+        pos.extend(pos_b.iter().copied());
+        edges.extend(edges_b.iter().map(|&(a, b)| (a + base, b + base)));
+        tris.extend(
+            tris_b
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+        let n_total = pos.len();
+        let springs = springs_of(&pos, &edges, 400.0);
+        let pinned: Vec<u32> = (n_top as u32..n_total as u32).collect();
+        let mut gpu = BarrierNewtonGpu::new_with_mesh(
+            &device,
+            &queue,
+            &f32pos(&pos),
+            &vec![0.02; n_total],
+            &springs,
+            &[],
+            &tris,
+            &pinned,
+            BarrierGpuParams {
+                use_lbvh: true,
+                ..Default::default()
+            },
+        )
+        .expect("lbvh shell");
+        let h = 1.0f32 / 240.0;
+        for step in 0..200 {
+            let stats = gpu.step(h).expect("step");
+            assert!(
+                stats.min_gap > 0.0,
+                "lbvh step {step}: gap {}",
+                stats.min_gap
+            );
+        }
+        let p = gpu.read_positions().expect("read");
+        let y_top: f32 = p[..n_top].iter().map(|q| q[1]).sum::<f32>() / n_top as f32;
+        eprintln!("lbvh two-layer: y_top {y_top:.4}");
+        assert!(
+            y_top > 0.0 && y_top < 5.0e-3,
+            "lbvh parity: top layer should rest one band above: {y_top:.4}"
+        );
+    }
+
+    // ── 2. Graded stress mesh: spacing grows ~8× across the sheet.
+    let graded = |y: f64| -> (Vec<[f64; 3]>, Vec<(u32, u32)>, Vec<[u32; 3]>) {
+        let n = 12usize;
+        let mut xs = vec![0.0f64];
+        let mut dx = 0.004;
+        for _ in 1..n {
+            xs.push(xs.last().unwrap() + dx);
+            dx *= 1.21; // ~8× growth over the strip
+        }
+        let mut pos = Vec::new();
+        for j in 0..2usize {
+            for i in 0..n {
+                pos.push([xs[i] - 0.1, y, j as f64 * 0.01 - 0.005]);
+            }
+        }
+        let idx = |i: usize, j: usize| (j * n + i) as u32;
+        let mut tris = Vec::new();
+        for i in 0..n - 1 {
+            tris.push([idx(i, 0), idx(i + 1, 0), idx(i + 1, 1)]);
+            tris.push([idx(i, 0), idx(i + 1, 1), idx(i, 1)]);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut edges = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    edges.push((a, b));
+                }
+            }
+        }
+        (pos, edges, tris)
+    };
+    let build_graded = |use_lbvh: bool| -> BarrierNewtonGpu {
+        let (mut pos, mut edges, mut tris) = graded(0.004);
+        let n_top = pos.len();
+        let (pos_b, edges_b, tris_b) = graded(0.0);
+        let base = n_top as u32;
+        pos.extend(pos_b.iter().copied());
+        edges.extend(edges_b.iter().map(|&(a, b)| (a + base, b + base)));
+        tris.extend(
+            tris_b
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+        let n_total = pos.len();
+        let springs = springs_of(&pos, &edges, 400.0);
+        let pinned: Vec<u32> = (n_top as u32..n_total as u32).collect();
+        BarrierNewtonGpu::new_with_mesh(
+            &device,
+            &queue,
+            &f32pos(&pos),
+            &vec![0.02; n_total],
+            &springs,
+            &[],
+            &tris,
+            &pinned,
+            BarrierGpuParams {
+                use_lbvh,
+                ..Default::default()
+            },
+        )
+        .expect("graded shell")
+    };
+
+    // LBVH path: must run and hold the invariant.
+    {
+        let mut gpu = build_graded(true);
+        let h = 1.0f32 / 240.0;
+        let mut ok = true;
+        for step in 0..120 {
+            let stats = gpu.step(h).expect("lbvh graded step");
+            if stats.min_gap <= 0.0 {
+                ok = false;
+                eprintln!("lbvh graded: gap violated at step {step}");
+                break;
+            }
+        }
+        assert!(ok, "LBVH path must handle the graded mesh");
+        eprintln!("lbvh graded: invariant held 120 steps");
+    }
+    // Hash path on the same mesh: either it overflows LOUDLY (the
+    // expected failure mode — never silent) or, if capacity happens to
+    // suffice at this size, it must also hold the invariant.
+    {
+        let mut gpu = build_graded(false);
+        let h = 1.0f32 / 240.0;
+        let mut outcome = "held";
+        for _ in 0..120 {
+            match gpu.step(h) {
+                Ok(stats) => {
+                    assert!(stats.min_gap > 0.0, "hash graded: silent penetration");
+                }
+                Err(e) => {
+                    outcome = "loud overflow";
+                    eprintln!("hash graded: expected loud failure: {e}");
+                    break;
+                }
+            }
+        }
+        eprintln!("hash graded outcome: {outcome}");
+    }
+}

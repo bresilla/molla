@@ -433,9 +433,11 @@ weak-coupling tunneling hole (ball-on-trampoline rests supported).
 **Warm-started PCG + blocked early exit LANDED 2026-07-05** (−30% on
 the GPU barrier lane, gates unchanged). **GPU behind scene 125 LANDED 2026-07-05**
 (`BarrierSolver::new_gpu`, same Solver interface, live param mapping,
-engine-GPU-path oracle in the lane). Remaining follow-ons: LBVH for
-adversarial distributions, strong (monolithic/ABD) coupling, on-device
-rigid coupling for the GPU path. Subsumes the F14 GPU-CCD item
+engine-GPU-path oracle in the lane). **LBVH broad phase LANDED 2026-07-05**
+(`use_lbvh`: step-granularity `LbvhBroadPhase` reuse with travel-cap
+inflation, per-iterate candidate filters; graded-mesh stress oracle).
+Remaining follow-on: strong (monolithic/ABD) coupling — which would
+also carry the rigid side onto the device. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).
 
 **Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic

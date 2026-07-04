@@ -37,7 +37,7 @@ struct Uniforms {
     grid_cell: f32,
     grid_slots: u32,
     grid_cap: u32,
-    _pad4: u32,
+    pair_source: u32,
 }
 
 const WG: u32 = 64;
@@ -82,6 +82,12 @@ pub struct BarrierGpuParams {
     pub strain_barrier_scale: f32,
     /// Elasticity-inclusive κ (TOG 43.6): κ = scale·(m + h²·Σk)/h².
     pub elasticity_inclusive_kappa: bool,
+    /// Use an LBVH broad phase (step-granularity, candidate lists
+    /// valid for the whole step via travel-cap inflation) instead of
+    /// the per-iterate hash grid. Robust to adversarial primitive-size
+    /// distributions that overflow hash buckets; costs one position
+    /// readback per step for the AABB build.
+    pub use_lbvh: bool,
     /// Seed each Newton solve's CG from the previous direction
     /// (r = −g − H·p_prev). Near-converged steps then exit after one
     /// block.
@@ -107,6 +113,7 @@ impl Default for BarrierGpuParams {
             strain_limit: 0.0,
             strain_barrier_scale: 10.0,
             elasticity_inclusive_kappa: true,
+            use_lbvh: false,
             warm_start: true,
             cg_block: 15,
         }
@@ -148,6 +155,18 @@ pub struct BarrierNewtonGpu {
     /// True once any CG solve has produced a direction (warm-start
     /// seed validity).
     warmed: bool,
+    /// LBVH broad phases (mixed vert+tri, edges) + candidate buffers,
+    /// present when `use_lbvh`.
+    lbvh: Option<(
+        molla_geometry::LbvhBroadPhase,
+        molla_geometry::LbvhBroadPhase,
+    )>,
+    cand_meta: wgpu::Buffer,
+    cand_vt: (wgpu::Buffer, wgpu::Buffer),
+    cand_ee: (wgpu::Buffer, wgpu::Buffer),
+    /// Host topology copies for the per-step AABB build.
+    tris_host: Vec<[u32; 3]>,
+    edges_host: Vec<[u32; 2]>,
     pub params: BarrierGpuParams,
 }
 
@@ -161,6 +180,8 @@ const ENTRIES: &[&str] = &[
     "grid_insert_edges",
     "find_pairs_vt_grid",
     "find_pairs_ee_grid",
+    "filter_pairs_vt_cand",
+    "filter_pairs_ee_cand",
     "predict",
     "gradient",
     "hessian_mul",
@@ -360,7 +381,9 @@ impl BarrierNewtonGpu {
         });
         let layout_work = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton work"),
-            entries: &(0..13).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
+            entries: &(0..18)
+                .map(|i| storage_entry(i, i >= 13))
+                .collect::<Vec<_>>(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::barrier_newton pl"),
@@ -536,6 +559,42 @@ impl BarrierNewtonGpu {
         let grid_slots = (16 * (triangles.len() + edge_rows.len()))
             .next_power_of_two()
             .max(64) as u32;
+        let cand_cap = pair_capacity as u64;
+        let cand_meta = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bn.cand_meta"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mk_cand = |label: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: cand_cap * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let cand_vt = (mk_cand("bn.cand_vt_a"), mk_cand("bn.cand_vt_b"));
+        let cand_ee = (mk_cand("bn.cand_ee_a"), mk_cand("bn.cand_ee_b"));
+        let lbvh = if params.use_lbvh && !triangles.is_empty() {
+            let dev = std::sync::Arc::new(device.clone());
+            let qu = std::sync::Arc::new(queue.clone());
+            let vt = molla_geometry::LbvhBroadPhase::new(
+                dev.clone(),
+                qu.clone(),
+                (n + triangles.len()).max(2),
+                pair_capacity as usize,
+            )?;
+            let ee = molla_geometry::LbvhBroadPhase::new(
+                dev,
+                qu,
+                edge_rows.len().max(2),
+                pair_capacity as usize,
+            )?;
+            Some((vt, ee))
+        } else {
+            None
+        };
         let grid_count_buf = mk("bn.grid_count", u64::from(2 * grid_slots) * 4);
         let grid_items = mk(
             "bn.grid_items",
@@ -610,6 +669,11 @@ impl BarrierNewtonGpu {
                 entry(10, &fric_lag),
                 entry(11, &grid_count_buf),
                 entry(12, &grid_items),
+                entry(13, &cand_meta),
+                entry(14, &cand_vt.0),
+                entry(15, &cand_vt.1),
+                entry(16, &cand_ee.0),
+                entry(17, &cand_ee.1),
             ],
         });
 
@@ -637,6 +701,12 @@ impl BarrierNewtonGpu {
             pair_count_buf,
             mass_max: masses.iter().cloned().fold(0.0, f32::max),
             warmed: false,
+            lbvh,
+            cand_meta,
+            cand_vt,
+            cand_ee,
+            tris_host: triangles.to_vec(),
+            edges_host: edge_set.iter().map(|&(a, b)| [a, b]).collect(),
             params,
         })
     }
@@ -666,7 +736,7 @@ impl BarrierNewtonGpu {
             grid_cell: self.grid_cell,
             grid_slots: self.grid_slots,
             grid_cap: GRID_CAP,
-            _pad4: 0,
+            pair_source: u32::from(self.params.use_lbvh && self.lbvh.is_some()),
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
@@ -756,6 +826,62 @@ impl BarrierNewtonGpu {
                 .max(1);
             self.run(&[("friction_lag", gf)]);
         }
+        // LBVH broad phase, ONCE per step: AABBs from committed
+        // positions, inflated so the candidate set stays a superset
+        // for every Newton iterate (3·d̂ margin + the travel cap's
+        // ≤ d̂-per-accepted-step bound × the iteration budget).
+        if self.params.use_lbvh && self.lbvh.is_some() && self.tri_count > 0 {
+            let inflate = f64::from(self.params.dhat) * (3.0 + self.params.max_newton_iters as f64);
+            let p = self.read_positions()?;
+            let vpos: Vec<molla_math::Vec3> = p
+                .iter()
+                .map(|q| molla_math::Vec3::new(f64::from(q[0]), f64::from(q[1]), f64::from(q[2])))
+                .collect();
+            let d = molla_math::Vec3::splat(inflate);
+            let mut mixed: Vec<(molla_math::Vec3, molla_math::Vec3)> =
+                Vec::with_capacity(vpos.len() + self.tris_host.len());
+            for v in &vpos {
+                mixed.push((*v - d, *v + d));
+            }
+            for t in &self.tris_host {
+                let (a, b, c) = (
+                    vpos[t[0] as usize],
+                    vpos[t[1] as usize],
+                    vpos[t[2] as usize],
+                );
+                mixed.push((a.min(b).min(c) - d, a.max(b).max(c) + d));
+            }
+            let edges_aabb: Vec<(molla_math::Vec3, molla_math::Vec3)> = self
+                .edges_host
+                .iter()
+                .map(|e| {
+                    let (a, b) = (vpos[e[0] as usize], vpos[e[1] as usize]);
+                    (a.min(b) - d, a.max(b) + d)
+                })
+                .collect();
+            let Some((vt_bvh, ee_bvh)) = self.lbvh.as_mut() else {
+                unreachable!()
+            };
+            vt_bvh.dispatch_no_readback(&mixed)?;
+            ee_bvh.dispatch_no_readback(&edges_aabb)?;
+            // Copy the device pair lists into the barrier's candidate
+            // slots (counts into cand_meta[0], [1]).
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("bn.cand_copy"),
+                });
+            let cap_bytes = u64::from(self.pair_capacity) * 4;
+            let (vt_count, vt_a, vt_b) = vt_bvh.pair_buffers();
+            enc.copy_buffer_to_buffer(vt_count, 0, &self.cand_meta, 0, 4);
+            enc.copy_buffer_to_buffer(vt_a, 0, &self.cand_vt.0, 0, cap_bytes);
+            enc.copy_buffer_to_buffer(vt_b, 0, &self.cand_vt.1, 0, cap_bytes);
+            let (ee_count, ee_a, ee_b) = ee_bvh.pair_buffers();
+            enc.copy_buffer_to_buffer(ee_count, 0, &self.cand_meta, 4, 4);
+            enc.copy_buffer_to_buffer(ee_a, 0, &self.cand_ee.0, 0, cap_bytes);
+            enc.copy_buffer_to_buffer(ee_b, 0, &self.cand_ee.1, 0, cap_bytes);
+            self.queue.submit(std::iter::once(enc.finish()));
+        }
 
         let mut stats = BarrierGpuStats {
             min_gap: f32::INFINITY,
@@ -774,16 +900,24 @@ impl BarrierNewtonGpu {
             self.write_uniforms(h, 0.0);
             if self.tri_count > 0 {
                 self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
-                let g_clear = (2 * self.grid_slots).div_ceil(WG).max(1);
-                let g_tri = self.tri_count.div_ceil(WG).max(1);
-                let g_edge = self.edge_count.div_ceil(WG).max(1);
-                self.run(&[
-                    ("grid_clear", g_clear),
-                    ("grid_insert_tris", g_tri),
-                    ("grid_insert_edges", g_edge),
-                    ("find_pairs_vt_grid", gv),
-                    ("find_pairs_ee_grid", g_edge),
-                ]);
+                if self.params.use_lbvh && self.lbvh.is_some() {
+                    let g_cand = self.pair_capacity.div_ceil(WG).max(1);
+                    self.run(&[
+                        ("filter_pairs_vt_cand", g_cand),
+                        ("filter_pairs_ee_cand", g_cand),
+                    ]);
+                } else {
+                    let g_clear = (2 * self.grid_slots).div_ceil(WG).max(1);
+                    let g_tri = self.tri_count.div_ceil(WG).max(1);
+                    let g_edge = self.edge_count.div_ceil(WG).max(1);
+                    self.run(&[
+                        ("grid_clear", g_clear),
+                        ("grid_insert_tris", g_tri),
+                        ("grid_insert_edges", g_edge),
+                        ("find_pairs_vt_grid", gv),
+                        ("find_pairs_ee_grid", g_edge),
+                    ]);
+                }
             }
             self.run(&[("gradient", gv)]);
             self.eval_trial(h, 0.0);

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b3eb9402.js";
+            window.path_to_searchindex_js = "../searchindex-571f2937.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f4239cce.js"></script>
@@ -530,9 +530,11 @@ weak-coupling tunneling hole (ball-on-trampoline rests supported).
 <strong>Warm-started PCG + blocked early exit LANDED 2026-07-05</strong> (−30% on
 the GPU barrier lane, gates unchanged). <strong>GPU behind scene 125 LANDED 2026-07-05</strong>
 (<code>BarrierSolver::new_gpu</code>, same Solver interface, live param mapping,
-engine-GPU-path oracle in the lane). Remaining follow-ons: LBVH for
-adversarial distributions, strong (monolithic/ABD) coupling, on-device
-rigid coupling for the GPU path. Subsumes the F14 GPU-CCD item
+engine-GPU-path oracle in the lane). <strong>LBVH broad phase LANDED 2026-07-05</strong>
+(<code>use_lbvh</code>: step-granularity <code>LbvhBroadPhase</code> reuse with travel-cap
+inflation, per-iterate candidate filters; graded-mesh stress oracle).
+Remaining follow-on: strong (monolithic/ABD) coupling — which would
+also carry the rigid side onto the device. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed

@@ -43,7 +43,9 @@ struct Uniforms {
     grid_cell: f32,
     grid_slots: u32,   // power of two; 0 = brute force
     grid_cap: u32,     // bucket capacity
-    _pad4: u32,
+    // 1 = pair discovery from EXTERNAL candidate lists (LBVH broad
+    // phase, step-granularity) instead of the per-iterate hash grid.
+    pair_source: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -104,6 +106,14 @@ struct Uniforms {
 // edge grid lives at offset `grid_slots` / `grid_slots*cap`.
 @group(3) @binding(11) var<storage, read_write> grid_count: array<atomic<u32>>;
 @group(3) @binding(12) var<storage, read_write> grid_items: array<u32>;
+// External broad-phase candidates (pair_source = 1): counts in
+// cand_meta[0]/[1], mixed-prim VT pairs (vertex id, V + tri id) and
+// edge pairs. Filled by buffer copies from an LbvhBroadPhase.
+@group(3) @binding(13) var<storage, read> cand_meta: array<u32>;
+@group(3) @binding(14) var<storage, read> cand_vt_a: array<u32>;
+@group(3) @binding(15) var<storage, read> cand_vt_b: array<u32>;
+@group(3) @binding(16) var<storage, read> cand_ee_a: array<u32>;
+@group(3) @binding(17) var<storage, read> cand_ee_b: array<u32>;
 
 const WG: u32 = 64u;
 
@@ -541,6 +551,65 @@ fn find_pairs_ee_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                 }
             }
+        }
+    }
+}
+
+// Filter EXTERNAL VT candidates (mixed prim ids: verts 0..V, tris
+// V..V+T) through the exact 3·d̂ test — replaces the hash probe when
+// pair_source = 1. Vert-vert / tri-tri overlaps from the mixed BVH
+// are skipped by the id-range check.
+@compute @workgroup_size(WG)
+fn filter_pairs_vt_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gid.x;
+    if (c >= cand_meta[0]) { return; }
+    var a = cand_vt_a[c];
+    var b = cand_vt_b[c];
+    if (a > b) { let t0 = a; a = b; b = t0; }
+    if (a >= u.vertex_count || b < u.vertex_count) { return; }
+    let v = a;
+    let t_idx = b - u.vertex_count;
+    let t = tris[t_idx];
+    if (v == t.x || v == t.y || v == t.z) { return; }
+    let pa = x_iter[t.x].xyz;
+    let pb = x_iter[t.y].xyz;
+    let pc = x_iter[t.z].xyz;
+    let w = tri_closest(x_iter[v].xyz, pa, pb, pc);
+    let cp = pa * w.x + pb * w.y + pc * w.z;
+    if (length(x_iter[v].xyz - cp) < 3.0 * u.dhat) {
+        let slot = atomicAdd(&pair_count[0], 1u);
+        if (slot < u.pair_capacity) {
+            pair_meta[slot] = vec4<u32>(0u, v, t_idx, 0u);
+            pair_wts[slot] = vec4<f32>(w, 0.0);
+        } else {
+            atomicStore(&pair_count[1], 1u);
+        }
+    }
+}
+
+@compute @workgroup_size(WG)
+fn filter_pairs_ee_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gid.x;
+    if (c >= cand_meta[1]) { return; }
+    var i = cand_ee_a[c];
+    var j = cand_ee_b[c];
+    if (i > j) { let t0 = i; i = j; j = t0; }
+    if (i == j || j >= u.edge_count) { return; }
+    let e1 = edges[i];
+    let e2 = edges[j];
+    if (e1.x == e2.x || e1.x == e2.y || e1.y == e2.x || e1.y == e2.y) { return; }
+    let st = seg_closest(
+        x_iter[e1.x].xyz, x_iter[e1.y].xyz, x_iter[e2.x].xyz, x_iter[e2.y].xyz,
+    );
+    let pa = x_iter[e1.x].xyz * (1.0 - st.x) + x_iter[e1.y].xyz * st.x;
+    let pb = x_iter[e2.x].xyz * (1.0 - st.y) + x_iter[e2.y].xyz * st.y;
+    if (length(pa - pb) < 3.0 * u.dhat) {
+        let slot = atomicAdd(&pair_count[0], 1u);
+        if (slot < u.pair_capacity) {
+            pair_meta[slot] = vec4<u32>(1u, i, j, 0u);
+            pair_wts[slot] = vec4<f32>(st.x, st.y, 0.0, 0.0);
+        } else {
+            atomicStore(&pair_count[1], 1u);
         }
     }
 }
