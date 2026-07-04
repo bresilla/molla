@@ -26,6 +26,9 @@ Gradients exposed: ∂J/∂force, ∂J/∂source, ∂J/∂u₀, ∂J/∂ρ₀.
 **Contract** (`tests/stam_diff.rs`): FD through 12 full steps —
 ∂J/∂force to 1.9e-7, ∂J/∂ρ₀ to 5.0e-6; and the use case: 25 gradient
 steps on a per-cell force field steer a smoke blob onto a target,
-nearly doubling the captured mass. Scope notes: inviscid (Gauss-Seidel
-diffusion is not self-adjoint and is deliberately out), f64 CPU; the
-GPU port follows the house recipe when a workload needs it.
+nearly doubling the captured mass. Viscosity is
+supported through IMPLICIT JACOBI diffusion — chosen over Gauss-Seidel
+precisely because Jacobi on the constant-diagonal periodic Laplacian is
+symmetric, so the diffusion adjoint is the same free lunch as the
+projection (FD with viscosity active: 2.5e-7). f64 CPU; the GPU port
+follows the house recipe when a workload needs it.

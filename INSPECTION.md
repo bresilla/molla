@@ -154,6 +154,8 @@ Statuses: `TODO` (default — anything not listed here), `DONE`, `PARTIAL`, `BLO
 
 | C3 — spectral tensile split | DONE | 2026-07-04 | `PhaseFieldCoupledConfig::tensile_split` (default ON): the history field is driven by the Miehe tensile energy ψ⁺ = ½λ⟨tr ε⟩₊² + μ Σ⟨εᵢ⟩₊² from the analytic 2×2 principal strains instead of the full density — closing the documented v1 gap. **Oracle:** biaxial compression yields damage EXACTLY 0 with the split vs 0.198 with the full density (the misfire the split exists to prevent); the homogeneous-identity and notch tension suites pass unchanged with the split active (8/8). |
 
+| Viscous term for the fluid adjoint | DONE | 2026-07-04 | `StamDiffConfig::{viscosity, diffusion_iters}`: implicit diffusion `(I − αL)x⁺ = x` via K JACOBI sweeps for both velocity and density — Jacobi chosen over molla-fem's Gauss-Seidel precisely because Jacobi on the constant-diagonal periodic Laplacian is a polynomial in the symmetric operator, i.e. SELF-ADJOINT, so the reverse pass re-runs the forward diffusion with zero stored state (the projection's free lunch, twice). FD contract now runs WITH viscosity active: ∂J/∂force 2.5e-7, ∂J/∂ρ₀ 7.2e-7; steering still converges (0.069 → 0.111). The "inviscid by design" scope note is retired. |
+
 **API change note (F8):** `Vehicle::apply_driver(&Powertrain, …)` → `apply_driver(&mut Powertrain, …)`. Any out-of-tree caller must pass `&mut` and persist the powertrain across frames. Manual gear selection via `DriverInput` was NOT added (auto-only); add `DriverInput::gear_request` if a scene ever needs it.
 
 ### Batch 4 (2026-07-02, same session)

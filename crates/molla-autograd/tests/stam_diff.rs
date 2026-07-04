@@ -30,6 +30,10 @@ fn run_loss(force: &[[Real; 2]], rho0: &[Real], mask: &[Real]) -> (Real, StamFlu
         grid_n: N,
         dt: 0.08,
         pressure_iters: 40,
+        // Viscosity ACTIVE: the diffusion adjoint (self-adjoint
+        // implicit Jacobi) is exercised by the same FD contract.
+        viscosity: 0.15,
+        diffusion_iters: 25,
     };
     let mut sim = StamFluidDiff::new(cfg);
     sim.density = rho0.to_vec();

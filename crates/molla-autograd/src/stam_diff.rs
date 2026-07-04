@@ -4,17 +4,20 @@
 //! this adds smoke).
 //!
 //! Forward pipeline per step (f64, matching `molla-fem`'s
-//! `StamFluidState::step_cpu` minus diffusion — the inviscid
-//! diffsim-standard subset; Gauss-Seidel diffusion is not
-//! self-adjoint and stays out of scope until needed):
+//! `StamFluidState::step_cpu` with one deliberate swap — implicit
+//! JACOBI diffusion instead of Gauss-Seidel, because Jacobi on the
+//! constant-diagonal periodic Laplacian is symmetric and GS is not):
 //!
 //! 1. `u += dt·force` (the control field being optimised),
 //!    `ρ += dt·source`;
-//! 2. pressure projection (K Jacobi sweeps on the periodic
+//! 2. implicit viscosity `(I − αL)u⁺ = u` (K Jacobi sweeps,
+//!    self-adjoint — 0 sweeps when inviscid);
+//! 3. pressure projection (K Jacobi sweeps on the periodic
 //!    central-difference Laplacian);
-//! 3. semi-Lagrangian velocity advection `u ← interp(u, x − dt·u)`;
-//! 4. projection again;
-//! 5. semi-Lagrangian density advection along the projected field.
+//! 4. semi-Lagrangian velocity advection `u ← interp(u, x − dt·u)`;
+//! 5. projection again;
+//! 6. semi-Lagrangian density advection along the projected field;
+//! 7. implicit density diffusion (same self-adjoint scheme).
 //!
 //! Adjoint structure, term by term:
 //! * **Projection is SELF-ADJOINT here** — `P = I − G·L̃⁻¹·D` with
@@ -44,6 +47,16 @@ pub struct StamDiffConfig {
     pub dt: Real,
     /// Jacobi sweeps per projection.
     pub pressure_iters: usize,
+    /// Kinematic viscosity (cell²/step units; 0 = inviscid). Applied
+    /// as IMPLICIT diffusion `(I − α L) x⁺ = x` with K Jacobi sweeps
+    /// — a polynomial in the symmetric constant-diagonal Laplacian,
+    /// hence SELF-ADJOINT: the reverse pass re-runs the forward
+    /// diffusion, the same free lunch as the projection. (This is why
+    /// the module uses Jacobi where molla-fem's forward-only pipeline
+    /// uses Gauss-Seidel — GS is not symmetric.)
+    pub viscosity: Real,
+    /// Jacobi sweeps per diffusion solve.
+    pub diffusion_iters: usize,
 }
 
 impl Default for StamDiffConfig {
@@ -52,6 +65,8 @@ impl Default for StamDiffConfig {
             grid_n: 16,
             dt: 0.05,
             pressure_iters: 60,
+            viscosity: 0.0,
+            diffusion_iters: 30,
         }
     }
 }
@@ -163,6 +178,47 @@ fn project(u: &mut [[Real; 2]], n: usize, iters: usize) {
     }
 }
 
+/// K Jacobi sweeps of implicit diffusion `(I + 4α)x⁺ = x + α·Σnb x⁺`
+/// on the periodic 5-point Laplacian. Linear + self-adjoint (constant
+/// diagonal); used verbatim forward and reverse.
+fn diffuse_scalar(field: &mut [Real], n: usize, alpha: Real, iters: usize) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let src = field.to_vec();
+    let mut x = src.clone();
+    let mut x_new = vec![0.0; n * n];
+    let denom = 1.0 + 4.0 * alpha;
+    for _ in 0..iters {
+        for j in 0..n {
+            for i in 0..n {
+                let ip = wrap(i as isize + 1, n);
+                let im = wrap(i as isize - 1, n);
+                let jp = wrap(j as isize + 1, n);
+                let jm = wrap(j as isize - 1, n);
+                let nb = x[j * n + ip] + x[j * n + im] + x[jp * n + i] + x[jm * n + i];
+                x_new[j * n + i] = (src[j * n + i] + alpha * nb) / denom;
+            }
+        }
+        std::mem::swap(&mut x, &mut x_new);
+    }
+    field.copy_from_slice(&x);
+}
+
+fn diffuse_vec(u: &mut [[Real; 2]], n: usize, alpha: Real, iters: usize) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let mut ux: Vec<Real> = u.iter().map(|v| v[0]).collect();
+    let mut uy: Vec<Real> = u.iter().map(|v| v[1]).collect();
+    diffuse_scalar(&mut ux, n, alpha, iters);
+    diffuse_scalar(&mut uy, n, alpha, iters);
+    for (k, v) in u.iter_mut().enumerate() {
+        v[0] = ux[k];
+        v[1] = uy[k];
+    }
+}
+
 impl StamFluidDiff {
     pub fn new(cfg: StamDiffConfig) -> Self {
         let nn = cfg.grid_n * cfg.grid_n;
@@ -185,6 +241,8 @@ impl StamFluidDiff {
             self.u[k][1] += dt * force[k][1];
             self.density[k] += dt * source[k];
         }
+        let alpha = self.cfg.viscosity * dt;
+        diffuse_vec(&mut self.u, n, alpha, self.cfg.diffusion_iters);
         project(&mut self.u, n, self.cfg.pressure_iters);
         self.ckpt_u_pre.push(self.u.clone());
 
@@ -216,6 +274,7 @@ impl StamFluidDiff {
                 self.density[k] = sample(&rho_old, n, xb, yb).0;
             }
         }
+        diffuse_scalar(&mut self.density, n, alpha, self.cfg.diffusion_iters);
     }
 
     /// Reverse pass over all recorded steps. `adj_u` / `adj_rho` seed
@@ -233,9 +292,13 @@ impl StamFluidDiff {
         let mut adj_force = vec![[0.0; 2]; nn];
         let mut adj_source = vec![0.0; nn];
 
+        let alpha = self.cfg.viscosity * self.cfg.dt;
         for s in (0..self.ckpt_u_pre.len()).rev() {
             let u_adv = &self.ckpt_u_adv[s]; // projected advecting field
             let rho_pre = &self.ckpt_rho_pre[s];
+
+            // ── reverse 6: density diffusion (self-adjoint).
+            diffuse_scalar(&mut adj_rho, n, alpha, self.cfg.diffusion_iters);
 
             // ── reverse 5: density advection.
             let mut adj_rho_pre = vec![0.0; nn];
@@ -298,6 +361,9 @@ impl StamFluidDiff {
 
             // ── reverse 2: first projection (self-adjoint).
             project(&mut adj_u, n, self.cfg.pressure_iters);
+
+            // ── reverse 1b: velocity diffusion (self-adjoint).
+            diffuse_vec(&mut adj_u, n, alpha, self.cfg.diffusion_iters);
 
             // ── reverse 1: force / source adds.
             for k in 0..nn {
