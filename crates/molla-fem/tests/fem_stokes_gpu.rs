@@ -181,3 +181,171 @@ fn gpu_stokes_lid_cavity_matches_cpu_8x8() {
         gpu_res.div_residual,
     );
 }
+
+/// INSPECTION.md F15 — mixed (u, p) Taylor-Hood ELASTICITY on the GPU
+/// (`solve_mixed_elasticity_gpu`). Oracles:
+/// 1. 2D constant-strain patch test: `u = (ε·x, −ν·ε·y)` with the
+///    exact field on every boundary P2 node — interior must reproduce
+///    it to f32 solver tolerance, pressure ≈ λ·ε·(1−ν) constant.
+/// 2. Anti-locking parity vs the f64 CPU `solve_mixed_elasticity_steady`
+///    on the bending cantilever at ν = 0.4999.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-fem T=fem_stokes_gpu`"]
+fn mixed_elasticity_gpu_patch_test_and_cpu_parity() {
+    use molla_fem::{
+        StokesBc, assemble_velocity_mass, compute_edges, solve_mixed_elasticity_gpu,
+        solve_mixed_elasticity_steady,
+    };
+    use molla_math::Vec3;
+    let _gpu_lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().expect("gpu adapter");
+
+    let lame = |e: Real, nu: Real| -> (Real, Real) {
+        (
+            e / (2.0 * (1.0 + nu)),
+            e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu)),
+        )
+    };
+    let p2_nodes = |mesh: &FemMesh| -> Vec<Vec3> {
+        let (edges, _) = compute_edges(mesh);
+        let mut out: Vec<Vec3> = mesh.vertices.clone();
+        for e in &edges {
+            out.push((mesh.vertices[e[0] as usize] + mesh.vertices[e[1] as usize]) * 0.5);
+        }
+        out
+    };
+
+    // ── 1. Patch test on the unit square.
+    {
+        let mesh = FemMesh::tri_grid_2d(6, 6, 1.0, 1.0);
+        let th = MixedTaylorHood::build(&mesh, 2);
+        let (mu, lambda) = lame(1.0e4, 0.3);
+        let eps = 0.01_f64;
+        let nu = 0.3_f64;
+        let exact = |p: Vec3| [eps * p.x, -nu * eps * p.y];
+        let nodes = p2_nodes(&mesh);
+        let on_boundary = |p: Vec3| {
+            p.x.abs() < 1e-9
+                || (p.x - 1.0).abs() < 1e-9
+                || p.y.abs() < 1e-9
+                || (p.y - 1.0).abs() < 1e-9
+        };
+        let mut bcs = Vec::new();
+        let mut interior = Vec::new();
+        for (k, p) in nodes.iter().enumerate() {
+            if on_boundary(*p) {
+                let u = exact(*p);
+                bcs.push(StokesBc::LidVelocity {
+                    node: k as u32,
+                    velocity: vec![u[0], u[1]],
+                });
+            } else {
+                interior.push(k);
+            }
+        }
+        assert!(interior.len() > 20);
+        let f = vec![0.0; th.n_velocity];
+        let cfg = StokesGpuConfig {
+            tol_inner: 1.0e-7,
+            tol_outer: 1.0e-6,
+            ..Default::default()
+        };
+        let res = solve_mixed_elasticity_gpu(&mesh, &th, mu, lambda, &f, &bcs, &cfg, &engine)
+            .expect("gpu mixed solve");
+        let mut max_err: Real = 0.0;
+        for &k in &interior {
+            let want = exact(nodes[k]);
+            let got = [res.u[2 * k], res.u[2 * k + 1]];
+            max_err = max_err
+                .max((got[0] - want[0]).abs())
+                .max((got[1] - want[1]).abs());
+        }
+        let p_expect = lambda * eps * (1.0 - nu);
+        let mut p_err: Real = 0.0;
+        for &pv in &res.p {
+            p_err = p_err.max((pv - p_expect).abs());
+        }
+        eprintln!(
+            "gpu patch: max |Δu| = {max_err:.3e} (field 1e-2), max |Δp| = {p_err:.3e} (p = {p_expect:.3e})"
+        );
+        // f32 assembly readback + f32 CG: expect ~1e-6-scale exactness.
+        assert!(
+            max_err < 5.0e-6,
+            "gpu patch displacement error: {max_err:.3e}"
+        );
+        assert!(
+            p_err < 1.0e-3 * p_expect.abs(),
+            "gpu patch pressure error: {p_err:.3e}"
+        );
+    }
+
+    // ── 2. Anti-locking cantilever parity vs the f64 CPU solver.
+    {
+        let mesh = FemMesh::tri_grid_2d(16, 4, 4.0, 1.0);
+        let th = MixedTaylorHood::build(&mesh, 2);
+        let (mu, lambda) = lame(1.0e4, 0.4999);
+        let nodes = p2_nodes(&mesh);
+        let mut bcs = Vec::new();
+        for (k, p) in nodes.iter().enumerate() {
+            if p.x.abs() < 1e-9 {
+                bcs.push(StokesBc::NoSlip { node: k as u32 });
+            }
+        }
+        let m_v = assemble_velocity_mass(&mesh, &th).expect("mass");
+        let mut b_field = vec![0.0; th.n_velocity];
+        for k in 0..nodes.len() {
+            b_field[2 * k + 1] = -100.0;
+        }
+        let f = molla_fem::assembly::matvec(&m_v, &b_field);
+
+        let cpu = solve_mixed_elasticity_steady(
+            &mesh,
+            &th,
+            mu,
+            lambda,
+            &f,
+            &bcs,
+            &StokesSimpleConfig {
+                tol_inner: 1.0e-11,
+                tol_outer: 1.0e-9,
+                ..Default::default()
+            },
+        )
+        .expect("cpu mixed solve");
+        let gpu = solve_mixed_elasticity_gpu(
+            &mesh,
+            &th,
+            mu,
+            lambda,
+            &f,
+            &bcs,
+            &StokesGpuConfig {
+                tol_inner: 1.0e-7,
+                tol_outer: 1.0e-6,
+                ..Default::default()
+            },
+            &engine,
+        )
+        .expect("gpu mixed solve");
+
+        let tip = |u: &[Real]| -> Real {
+            let mut acc = 0.0;
+            let mut count = 0;
+            for (k, p) in nodes.iter().enumerate() {
+                if (p.x - 4.0).abs() < 1e-9 {
+                    acc += u[2 * k + 1];
+                    count += 1;
+                }
+            }
+            acc / count as Real
+        };
+        let tip_cpu = tip(&cpu.u);
+        let tip_gpu = tip(&gpu.u);
+        eprintln!("cantilever ν=0.4999 tip: cpu {tip_cpu:.5}, gpu {tip_gpu:.5}");
+        assert!(tip_cpu < -1.0, "cpu beam must deflect (anti-locking)");
+        assert!(
+            ((tip_gpu - tip_cpu) / tip_cpu).abs() < 5.0e-3,
+            "gpu tip deflection diverges from cpu: {tip_gpu} vs {tip_cpu}"
+        );
+    }
+}

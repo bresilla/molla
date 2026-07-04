@@ -233,6 +233,7 @@ pub use stokes::{
 #[cfg(feature = "gpu")]
 pub use stokes_gpu::{
     NavierStokesGpuConfig, NavierStokesGpuResult, NavierStokesGpuTimeIntegrator, StokesGpuConfig,
-    StokesGpuResult, assemble_stokes_gpu_only, solve_navier_stokes_gpu, solve_stokes_gpu,
+    StokesGpuResult, assemble_stokes_gpu_only, solve_mixed_elasticity_gpu, solve_navier_stokes_gpu,
+    solve_stokes_gpu,
 };
 pub use surface::boundary_facets;

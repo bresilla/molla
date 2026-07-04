@@ -157,6 +157,61 @@ pub fn solve_stokes_gpu(
     cfg: &StokesGpuConfig,
     engine: &Engine,
 ) -> Result<StokesGpuResult> {
+    let a_cpu = assemble_velocity_block(mesh, th, viscosity)?;
+    solve_saddle_gpu_impl(mesh, th, a_cpu, f_velocity, bcs, cfg, engine, None)
+}
+
+/// INSPECTION.md F15 — mixed (u, p) Taylor-Hood ELASTICITY on the GPU:
+/// the elastic ε:ε block replaces the viscous one and the pressure
+/// Schur gains the compliance term `(1/λ)·M_p` (see the CPU
+/// `solve_mixed_elasticity_steady` for the formulation and the
+/// anti-locking rationale). Same v1 restrictions as the Stokes GPU
+/// path (2D tri meshes).
+pub fn solve_mixed_elasticity_gpu(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    mu: Real,
+    lambda: Real,
+    f_velocity: &[Real],
+    bcs: &[StokesBc],
+    cfg: &StokesGpuConfig,
+    engine: &Engine,
+) -> Result<StokesGpuResult> {
+    let a_cpu = super::stokes::assemble_mixed_elastic_block(mesh, th, mu)?;
+    let m_p = super::stokes::assemble_pressure_mass(mesh, th)?;
+    let scale = if lambda.is_finite() && lambda > 0.0 {
+        (1.0 / lambda) as f32
+    } else {
+        0.0
+    };
+    solve_saddle_gpu_impl(
+        mesh,
+        th,
+        a_cpu,
+        f_velocity,
+        bcs,
+        cfg,
+        engine,
+        Some((m_p, scale)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_saddle_gpu_impl(
+    mesh: &FemMesh,
+    th: &MixedTaylorHood,
+    a_pre: BsrMatrix,
+    f_velocity: &[Real],
+    bcs: &[StokesBc],
+    cfg: &StokesGpuConfig,
+    engine: &Engine,
+    compliance: Option<(BsrMatrix, f32)>,
+) -> Result<StokesGpuResult> {
+    // Stokes re-assembles the velocity block ON DEVICE (viscous
+    // full-gradient shader); the mixed-elasticity path must keep the
+    // host-assembled ε:ε values — the GPU work is the SOLVE.
+    let gpu_assemble_velocity = compliance.is_none();
+    let viscosity: Real = 1.0; // only read by the Stokes GPU assembly
     if th.dim != 2 {
         return Err(Error::Build(format!(
             "solve_stokes_gpu: v1 only supports dim = 2, got dim = {}",
@@ -189,7 +244,7 @@ pub fn solve_stokes_gpu(
     let dim = th.dim;
 
     // ─── (1) CPU pattern build ──────────────────────────────────────
-    let mut a_cpu = assemble_velocity_block(mesh, th, viscosity)?;
+    let mut a_cpu = a_pre;
     let mut b_cpu = assemble_div_block(mesh, th)?;
 
     // ─── (2) Upload mesh + patterns ─────────────────────────────────
@@ -209,21 +264,23 @@ pub fn solve_stokes_gpu(
 
     // ─── (3) Dispatch GPU assembly ──────────────────────────────────
     let asm_kernel = FemStokesGpuKernel::new(Arc::clone(device), Arc::clone(queue));
-    asm_kernel.assemble(
-        StokesEntry::Velocity,
-        &mesh_buffers.vertices,
-        &mesh_buffers.cells,
-        &mesh_buffers.cell_offsets,
-        &p2_dof_buf,
-        &a_gpu.row_offsets,
-        &a_gpu.col_indices,
-        &a_gpu.values,
-        mesh.cells.len() as u32,
-        n_v as u32,
-        n_p as u32,
-        dim as u32,
-        viscosity as f32,
-    )?;
+    if gpu_assemble_velocity {
+        asm_kernel.assemble(
+            StokesEntry::Velocity,
+            &mesh_buffers.vertices,
+            &mesh_buffers.cells,
+            &mesh_buffers.cell_offsets,
+            &p2_dof_buf,
+            &a_gpu.row_offsets,
+            &a_gpu.col_indices,
+            &a_gpu.values,
+            mesh.cells.len() as u32,
+            n_v as u32,
+            n_p as u32,
+            dim as u32,
+            viscosity as f32,
+        )?;
+    }
     asm_kernel.assemble(
         StokesEntry::Divergence,
         &mesh_buffers.vertices,
@@ -241,11 +298,13 @@ pub fn solve_stokes_gpu(
     )?;
 
     // ─── (4) Read GPU values back, apply BCs, re-upload ─────────────
-    let a_vals = read_f32_buf(device, queue, &a_gpu.values, a_gpu.nnz)?;
-    let b_vals = read_f32_buf(device, queue, &b_gpu.values, b_gpu.nnz)?;
-    for (dst, &src) in a_cpu.values.iter_mut().zip(a_vals.iter()) {
-        *dst = src as Real;
+    if gpu_assemble_velocity {
+        let a_vals = read_f32_buf(device, queue, &a_gpu.values, a_gpu.nnz)?;
+        for (dst, &src) in a_cpu.values.iter_mut().zip(a_vals.iter()) {
+            *dst = src as Real;
+        }
     }
+    let b_vals = read_f32_buf(device, queue, &b_gpu.values, b_gpu.nnz)?;
     for (dst, &src) in b_cpu.values.iter_mut().zip(b_vals.iter()) {
         *dst = src as Real;
     }
@@ -284,12 +343,21 @@ pub fn solve_stokes_gpu(
         .fold(0.0_f64, Real::max);
     let dead_threshold = (1.0e-12 * b_inf_norm).max(1.0e-30);
     let mut p_pinned_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // With a compliance term the Schur operator is definite on every
+    // row — dead-row pinning (and the default pressure pin below)
+    // would wrongly force pressures to zero. Mirrors the CPU fix
+    // validated by the mixed-elasticity constant-strain patch test.
+    let detect_dead = compliance.is_none();
     for r in 0..n_p {
         let lo = b_cpu.row_offsets[r];
         let hi = b_cpu.row_offsets[r + 1];
         let mut alive = false;
         for slot in lo..hi {
             let c = b_cpu.col_idx[slot];
+            if !detect_dead {
+                alive = true;
+                break;
+            }
             if !pinned_set.contains(&c) && b_cpu.values[slot].abs() > dead_threshold {
                 alive = true;
                 break;
@@ -308,8 +376,10 @@ pub fn solve_stokes_gpu(
                 None
             }
         })
-        .unwrap_or(0);
-    p_pinned_set.insert(p_pin);
+        .or(if compliance.is_none() { Some(0) } else { None });
+    if let Some(pp) = p_pin {
+        p_pinned_set.insert(pp);
+    }
     let mut p_pin_mask = vec![0u32; n_p];
     for &r in &p_pinned_set {
         p_pin_mask[r] = 1;
@@ -362,6 +432,13 @@ pub fn solve_stokes_gpu(
     let b_for_mv = clone_bsr(&b_gpu);
     let bt_for_mv = clone_bsr(&bt_gpu);
 
+    // Compliance term for mixed elasticity: Schur += s·M_p.
+    let mp_gpu = match &compliance {
+        Some((m_p, _)) => Some(BsrGpu::upload(device, queue, m_p)?),
+        None => None,
+    };
+    let mp_scale = compliance.as_ref().map(|(_, s)| *s).unwrap_or(0.0);
+
     let schur_op = |q_buf: &wgpu::Buffer, y_buf: &wgpu::Buffer| -> Result<()> {
         // scratch_v = Bᵀ · q.
         bsr_kernel.matvec(&bt_for_mv, q_buf, &scratch_v, 1.0, 0.0)?;
@@ -381,6 +458,10 @@ pub fn solve_stokes_gpu(
             |x_buf, y_buf2| bsr_kernel.matvec(&a_for_mv, x_buf, y_buf2, 1.0, 0.0),
         )?;
         bsr_kernel.matvec(&b_for_mv, &inner.x, y_buf, 1.0, 0.0)?;
+        if let Some(mp) = &mp_gpu {
+            // y += s·M_p·q (mixed-elasticity compliance).
+            bsr_kernel.matvec(mp, q_buf, y_buf, mp_scale, 1.0)?;
+        }
         // Pin pressure rows of the Schur result to zero (matches the
         // CPU's `yout[r] = q[r]` identity action for pinned rows,
         // which evaluates to 0 since the CG invariant keeps q[r] = 0).
