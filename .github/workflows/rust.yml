@@ -32,6 +32,10 @@ env:
   # Bevy viewer binary; line-tables keep backtraces useful at a fraction
   # of the link memory. CI-only — local builds keep full debuginfo.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Incremental artifacts double-to-triple target/ size and the hosted
+  # runner's disk is the real constraint (the ld SIGBUS in the
+  # no-default-features lane was mmap-on-full-disk).
+  CARGO_INCREMENTAL: 0
 
 concurrency:
   group: rust-${{ github.ref }}
@@ -79,6 +83,14 @@ jobs:
 
       # CPU-only lane: `gpu` off must keep compiling and passing for
       # headless consumers (also part of `make harden`).
+      # The full-features lanes above leave tens of GB in target/; this
+      # lane builds a second artifact universe, so reclaim the disk
+      # first (the rebuild is cheaper than the SIGBUS).
+      - name: reclaim disk before the CPU-only lane
+        run: |
+          df -h /
+          cargo clean
+          df -h /
       - name: cargo check (no default features)
         run: cargo check --workspace --no-default-features
 
