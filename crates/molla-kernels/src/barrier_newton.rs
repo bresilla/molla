@@ -25,11 +25,15 @@ struct Uniforms {
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
-    _pad1: f32,
+    mu_k: f32,
     edge_count: u32,
     pair_capacity: u32,
-    _pad2: u32,
+    tet_count: u32,
     _pad3: u32,
+    mu_s_scale: f32,
+    epsv: f32,
+    strain_limit: f32,
+    strain_scale: f32,
 }
 
 const WG: u32 = 64;
@@ -58,6 +62,15 @@ pub struct BarrierGpuParams {
     pub max_newton_iters: usize,
     pub cg_iters: usize,
     pub gravity: [f32; 3],
+    /// Kinetic Coulomb μ for obstacle contacts (0 = off).
+    pub friction_mu: f32,
+    /// μ_s = scale·μ_k, scale ≥ 1.
+    pub friction_mu_s_scale: f32,
+    /// Stick-well width as a velocity (e = ε_v·h).
+    pub friction_epsv: f32,
+    /// Hard strain limit (len/rest); 0 disables.
+    pub strain_limit: f32,
+    pub strain_barrier_scale: f32,
 }
 
 impl Default for BarrierGpuParams {
@@ -69,6 +82,11 @@ impl Default for BarrierGpuParams {
             max_newton_iters: 12,
             cg_iters: 60,
             gravity: [0.0, -9.81, 0.0],
+            friction_mu: 0.0,
+            friction_mu_s_scale: 1.0,
+            friction_epsv: 1.0e-3,
+            strain_limit: 0.0,
+            strain_barrier_scale: 10.0,
         }
     }
 }
@@ -98,6 +116,7 @@ pub struct BarrierNewtonGpu {
     spring_count: u32,
     obstacle_count: u32,
     tri_count: u32,
+    tet_count: u32,
     edge_count: u32,
     pair_capacity: u32,
     pair_count_buf: wgpu::Buffer,
@@ -109,6 +128,7 @@ const ENTRIES: &[&str] = &[
     "find_pairs_vt",
     "find_pairs_ee",
     "energy_pairs",
+    "friction_lag",
     "predict",
     "gradient",
     "hessian_mul",
@@ -166,6 +186,35 @@ impl BarrierNewtonGpu {
         pinned_idx: &[u32],
         params: BarrierGpuParams,
     ) -> Result<Self> {
+        Self::new_full(
+            device,
+            queue,
+            positions,
+            masses,
+            springs,
+            obstacles,
+            triangles,
+            &[],
+            pinned_idx,
+            params,
+        )
+    }
+
+    /// Full constructor — adds volumetric tets `(ids, k_v)`; rest
+    /// volumes are measured from `positions`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_full(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions: &[[f32; 3]],
+        masses: &[f32],
+        springs: &[BarrierGpuSpring],
+        obstacles: &[BarrierGpuObstacle],
+        triangles: &[[u32; 3]],
+        tets: &[([u32; 4], f32)],
+        pinned_idx: &[u32],
+        params: BarrierGpuParams,
+    ) -> Result<Self> {
         let n = positions.len();
         if masses.len() != n {
             return Err(Error::Solver("barrier_newton: mass length".into()));
@@ -220,6 +269,25 @@ impl BarrierNewtonGpu {
             pinned_mask[i as usize] = 1;
         }
         let pair_capacity = (32 * (n + edge_rows.len())).max(64) as u32;
+        // Tet rows + rest volumes measured from the initial positions.
+        let tet_id_rows: Vec<[u32; 4]> = tets.iter().map(|(ids, _)| *ids).collect();
+        let tet_kv_v0: Vec<[f32; 2]> = tets
+            .iter()
+            .map(|(ids, kv)| {
+                let p = |k: usize| positions[ids[k] as usize];
+                let sub3 = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                let e1 = sub3(p(1), p(0));
+                let e2 = sub3(p(2), p(0));
+                let e3 = sub3(p(3), p(0));
+                let cx = [
+                    e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0],
+                ];
+                let v0 = (cx[0] * e3[0] + cx[1] * e3[1] + cx[2] * e3[2]) / 6.0;
+                [*kv, v0]
+            })
+            .collect();
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::barrier_newton"),
@@ -250,7 +318,7 @@ impl BarrierNewtonGpu {
         });
         let layout_topology = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton topology"),
-            entries: &(0..12).map(|i| storage_entry(i, true)).collect::<Vec<_>>(),
+            entries: &(0..14).map(|i| storage_entry(i, true)).collect::<Vec<_>>(),
         });
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton state"),
@@ -258,7 +326,7 @@ impl BarrierNewtonGpu {
         });
         let layout_work = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton work"),
-            entries: &(0..10).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
+            entries: &(0..11).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::barrier_newton pl"),
@@ -353,6 +421,25 @@ impl BarrierNewtonGpu {
             usage: wgpu::BufferUsages::STORAGE,
         });
         let pinned_buf = init_u32("bn.pinned", &pinned_mask);
+        let tet_ids_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bn.tet_ids"),
+            contents: bytemuck::cast_slice(if tet_id_rows.is_empty() {
+                &dummy_u4[..]
+            } else {
+                &tet_id_rows
+            }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let dummy_f2 = [[0.0f32; 2]];
+        let tet_kv_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bn.tet_kv_v0"),
+            contents: bytemuck::cast_slice(if tet_kv_v0.is_empty() {
+                &dummy_f2[..]
+            } else {
+                &tet_kv_v0
+            }),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
         let slab = (n.max(1) * 16) as u64;
         let mk = |label: &str, bytes: u64| {
@@ -381,6 +468,10 @@ impl BarrierNewtonGpu {
         let pair_meta = mk("bn.pair_meta", u64::from(pair_capacity) * 16);
         let pair_wts = mk("bn.pair_wts", u64::from(pair_capacity) * 16);
         let pair_count_buf = mk("bn.pair_count", 16);
+        let fric_lag = mk(
+            "bn.fric_lag",
+            (n.max(1) * obstacles.len().max(1) * 16) as u64,
+        );
         let p0: Vec<[f32; 4]> = positions.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
         queue.write_buffer(&x_pos, 0, bytemuck::cast_slice(&p0));
         queue.write_buffer(&vel, 0, &vec![0u8; slab as usize]);
@@ -418,6 +509,8 @@ impl BarrierNewtonGpu {
                 entry(9, &tri_buf),
                 entry(10, &edge_buf),
                 entry(11, &pinned_buf),
+                entry(12, &tet_ids_buf),
+                entry(13, &tet_kv_buf),
             ],
         });
         let bg_state = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -445,6 +538,7 @@ impl BarrierNewtonGpu {
                 entry(7, &pair_meta),
                 entry(8, &pair_wts),
                 entry(9, &pair_count_buf),
+                entry(10, &fric_lag),
             ],
         });
 
@@ -464,6 +558,7 @@ impl BarrierNewtonGpu {
             spring_count: springs.len() as u32,
             obstacle_count: obstacles.len() as u32,
             tri_count: triangles.len() as u32,
+            tet_count: tets.len() as u32,
             edge_count: edge_rows.len() as u32,
             pair_capacity,
             pair_count_buf,
@@ -485,11 +580,15 @@ impl BarrierNewtonGpu {
             gravity_x: self.params.gravity[0],
             gravity_y: self.params.gravity[1],
             gravity_z: self.params.gravity[2],
-            _pad1: 0.0,
+            mu_k: self.params.friction_mu,
             edge_count: self.edge_count,
             pair_capacity: self.pair_capacity,
-            _pad2: 0,
+            tet_count: self.tet_count,
             _pad3: 0,
+            mu_s_scale: self.params.friction_mu_s_scale,
+            epsv: self.params.friction_epsv,
+            strain_limit: self.params.strain_limit,
+            strain_scale: self.params.strain_barrier_scale,
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
@@ -573,6 +672,12 @@ impl BarrierNewtonGpu {
         let gv = self.vertex_count.div_ceil(WG).max(1);
         self.write_uniforms(h, 0.0);
         self.run(&[("predict", gv)]);
+        if self.params.friction_mu > 0.0 && self.obstacle_count > 0 {
+            let gf = (self.vertex_count * self.obstacle_count)
+                .div_ceil(WG)
+                .max(1);
+            self.run(&[("friction_lag", gf)]);
+        }
 
         let mut stats = BarrierGpuStats {
             min_gap: f32::INFINITY,

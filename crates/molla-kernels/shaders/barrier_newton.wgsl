@@ -27,11 +27,15 @@ struct Uniforms {
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
-    _pad1: f32,
+    mu_k: f32,       // kinetic Coulomb μ (0 = friction off)
     edge_count: u32,
     pair_capacity: u32,
-    _pad2: u32,
+    tet_count: u32,
     _pad3: u32,
+    mu_s_scale: f32, // μ_s = scale·μ_k (≥ 1)
+    epsv: f32,       // stick-well width as velocity (e = ε_v·h)
+    strain_limit: f32, // hard strain bound (0 = off)
+    strain_scale: f32, // κ_s multiplier on k·rest²
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -54,6 +58,9 @@ struct Uniforms {
 @group(1) @binding(9) var<storage, read> tris: array<vec4<u32>>;
 @group(1) @binding(10) var<storage, read> edges: array<vec4<u32>>;
 @group(1) @binding(11) var<storage, read> pinned: array<u32>;
+// Volumetric tets (phase 5a): ids as vec4<u32>, per-tet (kv, v0).
+@group(1) @binding(12) var<storage, read> tet_ids: array<vec4<u32>>;
+@group(1) @binding(13) var<storage, read> tet_kv_v0: array<vec2<f32>>;
 
 // State (vec4-packed vec3s).
 @group(2) @binding(0) var<storage, read_write> x_pos: array<vec4<f32>>;   // committed x
@@ -79,6 +86,10 @@ struct Uniforms {
 @group(3) @binding(8) var<storage, read_write> pair_wts: array<vec4<f32>>;
 // [0] = pair count (atomic), [1] = overflow flag.
 @group(3) @binding(9) var<storage, read_write> pair_count: array<atomic<u32>>;
+// Lagged friction rows (phase 5a), one per (vertex, obstacle):
+// (anchor.xyz, λ). λ = 0 marks an inactive row. Rebuilt at step start
+// from the committed positions — the IPC semi-implicit lag.
+@group(3) @binding(10) var<storage, read_write> fric_lag: array<vec4<f32>>;
 
 const WG: u32 = 64u;
 
@@ -253,6 +264,100 @@ fn active_pair_count() -> u32 {
     return min(atomicLoad(&pair_count[0]), u.pair_capacity);
 }
 
+// Friction force profile g(s) and projected slope g′₊ (see the CPU
+// oracle: stick ramp to μ_s·λ, blend down, kinetic plateau μ_k·λ).
+fn friction_g(lambda: f32, s: f32, e: f32) -> vec2<f32> {
+    let mu_s = u.mu_k * max(u.mu_s_scale, 1.0);
+    if (s <= e) {
+        let slope = mu_s * lambda / e;
+        return vec2<f32>(slope * s, slope);
+    }
+    if (s <= 2.0 * e) {
+        return vec2<f32>(mu_s * lambda + (u.mu_k - mu_s) * lambda * (s - e) / e, 0.0);
+    }
+    return vec2<f32>(u.mu_k * lambda, 0.0);
+}
+
+fn friction_energy_of(lambda: f32, s: f32, e: f32) -> f32 {
+    let mu_s = u.mu_k * max(u.mu_s_scale, 1.0);
+    let d_stick_e = mu_s * lambda * e / 2.0;
+    if (s <= e) {
+        return mu_s * lambda * s * s / (2.0 * e);
+    }
+    if (s <= 2.0 * e) {
+        let t = s - e;
+        return d_stick_e + mu_s * lambda * t + (u.mu_k - mu_s) * lambda * t * t / (2.0 * e);
+    }
+    return d_stick_e + mu_s * lambda * e + (u.mu_k - mu_s) * lambda * e / 2.0
+        + u.mu_k * lambda * (s - 2.0 * e);
+}
+
+// Strain-limit barrier terms for spring s at strain: (b, b', b'') with
+// gap = limit − strain, band = 20% of allowed over-strain, κ_s from
+// the spring's own stiffness (elasticity-derived).
+fn strain_barrier(sid: u32, strain: f32) -> vec3<f32> {
+    if (u.strain_limit <= 0.0) { return vec3<f32>(0.0); }
+    let gap = u.strain_limit - strain;
+    let band = 0.2 * max(u.strain_limit - 1.0, 1.0e-6);
+    if (gap >= band) { return vec3<f32>(0.0); }
+    let kappa = u.strain_scale * spring_k[sid] * spring_rest[sid] * spring_rest[sid];
+    let sgap = band - gap;
+    let inv = 1.0 / (band * band);
+    return vec3<f32>(
+        kappa * sgap * sgap * sgap * inv / 3.0,
+        -kappa * sgap * sgap * inv,
+        2.0 * kappa * sgap * inv,
+    );
+}
+
+fn tet_volume_at(ids: vec4<u32>, use_try: bool) -> f32 {
+    var a: vec3<f32>; var b: vec3<f32>; var c: vec3<f32>; var d: vec3<f32>;
+    if (use_try) {
+        a = x_try[ids.x].xyz; b = x_try[ids.y].xyz;
+        c = x_try[ids.z].xyz; d = x_try[ids.w].xyz;
+    } else {
+        a = x_iter[ids.x].xyz; b = x_iter[ids.y].xyz;
+        c = x_iter[ids.z].xyz; d = x_iter[ids.w].xyz;
+    }
+    return dot(cross(b - a, c - a), d - a) / 6.0;
+}
+
+// Volume gradient of vertex-slot `slot` in tet `ids` at x_iter.
+fn tet_grad_slot(ids: vec4<u32>, slot: u32) -> vec3<f32> {
+    let pa = x_iter[ids.x].xyz;
+    let pb = x_iter[ids.y].xyz;
+    let pc = x_iter[ids.z].xyz;
+    let pd = x_iter[ids.w].xyz;
+    let gb = cross(pc - pa, pd - pa) / 6.0;
+    let gc = cross(pd - pa, pb - pa) / 6.0;
+    let gd = cross(pb - pa, pc - pa) / 6.0;
+    if (slot == 1u) { return gb; }
+    if (slot == 2u) { return gc; }
+    if (slot == 3u) { return gd; }
+    return -(gb + gc + gd);
+}
+
+// Rebuild the lagged friction rows from committed positions (called
+// once per step, before the Newton loop).
+@compute @workgroup_size(WG)
+fn friction_lag(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let total = u.vertex_count * u.obstacle_count;
+    if (idx >= total) { return; }
+    let v = idx / u.obstacle_count;
+    let o = idx % u.obstacle_count;
+    var row = vec4<f32>(0.0);
+    if (u.mu_k > 0.0 && pinned[v] == 0u) {
+        let gd = obstacle_distance(o, x_pos[v].xyz);
+        if (gd.w < u.dhat) {
+            let s = max(u.dhat - gd.w, 0.0);
+            let lambda = u.kappa_scale * mass[v] * s * s / (u.dhat * u.dhat);
+            row = vec4<f32>(x_pos[v].xyz, lambda);
+        }
+    }
+    fric_lag[idx] = row;
+}
+
 // Thread per (vertex × triangle): emit non-adjacent VT candidates
 // within 3·d̂ (the additive-CCD margin — see the CPU oracle).
 @compute @workgroup_size(WG)
@@ -336,7 +441,13 @@ fn gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
         let len = max(length(d), 1.0e-9);
         // ∂E/∂x_i = −h²k(len − rest)·(d/len)  (pointing away from the
         // neighbour when stretched — mirror of the CPU sign layout).
-        g = g - d / len * (h2 * spring_k[s] * (len - spring_rest[s]));
+        var f = h2 * spring_k[s] * (len - spring_rest[s]);
+        if (u.strain_limit > 0.0) {
+            // gap = limit − len/rest ⇒ the barrier ADDS tension.
+            let sb = strain_barrier(s, len / spring_rest[s]);
+            f = f - h2 * sb.y / spring_rest[s];
+        }
+        g = g - d / len * f;
     }
     let kappa = u.kappa_scale * mass[i] / (u.h * u.h);
     for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
@@ -355,6 +466,39 @@ fn gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
             let db = barrier_d1(dist, pair_kappa(p));
             if (db != 0.0) {
                 g = g + (diff / dist) * (h2 * db * w);
+            }
+        }
+    }
+    // Volumetric tets: dense scan, membership by id match.
+    for (var t = 0u; t < u.tet_count; t = t + 1u) {
+        let ids = tet_ids[t];
+        var slot = 4u;
+        if (i == ids.x) { slot = 0u; }
+        if (i == ids.y) { slot = 1u; }
+        if (i == ids.z) { slot = 2u; }
+        if (i == ids.w) { slot = 3u; }
+        if (slot < 4u) {
+            let kv0 = tet_kv_v0[t];
+            let dv = tet_volume_at(ids, false) - kv0.y;
+            if (dv != 0.0) {
+                g = g + tet_grad_slot(ids, slot) * (h2 * kv0.x * dv);
+            }
+        }
+    }
+    // Lagged friction rows for this vertex.
+    if (u.mu_k > 0.0) {
+        let ew = u.epsv * u.h;
+        for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
+            let row = fric_lag[i * u.obstacle_count + o];
+            if (row.w > 0.0) {
+                let nrm = obstacle_distance(o, row.xyz).xyz;
+                let uu = xi - row.xyz;
+                let ut = uu - nrm * dot(nrm, uu);
+                let sl = length(ut);
+                if (sl > 1.0e-12) {
+                    let gg = friction_g(row.w, sl, ew);
+                    g = g + (ut / sl) * gg.x;
+                }
             }
         }
     }
@@ -382,7 +526,14 @@ fn hessian_mul(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t = max(1.0 - spring_rest[s] / len, 0.0);
         let dv = vi - cg_d[other].xyz;
         let dv_par = dir * dot(dir, dv);
-        y = y + ((dv - dv_par) * t + dv_par) * (h2 * spring_k[s]);
+        var jdv = ((dv - dv_par) * t + dv_par) * (h2 * spring_k[s]);
+        if (u.strain_limit > 0.0) {
+            let sb = strain_barrier(s, len / spring_rest[s]);
+            if (sb.z > 0.0) {
+                jdv = jdv + dv_par * (h2 * sb.z / (spring_rest[s] * spring_rest[s]));
+            }
+        }
+        y = y + jdv;
     }
     let kappa = u.kappa_scale * mass[i] / (u.h * u.h);
     for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
@@ -418,6 +569,46 @@ fn hessian_mul(@builtin(global_invocation_id) gid: vec3<u32>) {
                         - (1.0 - w.y) * dot(n, cg_d[e2.x].xyz) - w.y * dot(n, cg_d[e2.y].xyz);
                 }
                 y = y + n * (h2 * ddb2 * wi * s);
+            }
+        }
+    }
+    // Tet Gauss blocks: k_v·g·gᵀ, gathered (needs the other slots' v).
+    for (var t = 0u; t < u.tet_count; t = t + 1u) {
+        let ids = tet_ids[t];
+        var slot = 4u;
+        if (i == ids.x) { slot = 0u; }
+        if (i == ids.y) { slot = 1u; }
+        if (i == ids.z) { slot = 2u; }
+        if (i == ids.w) { slot = 3u; }
+        if (slot < 4u) {
+            let kv0 = tet_kv_v0[t];
+            var s_acc = dot(tet_grad_slot(ids, 0u), cg_d[ids.x].xyz);
+            s_acc = s_acc + dot(tet_grad_slot(ids, 1u), cg_d[ids.y].xyz);
+            s_acc = s_acc + dot(tet_grad_slot(ids, 2u), cg_d[ids.z].xyz);
+            s_acc = s_acc + dot(tet_grad_slot(ids, 3u), cg_d[ids.w].xyz);
+            y = y + tet_grad_slot(ids, slot) * (h2 * kv0.x * s_acc);
+        }
+    }
+    // Friction SPD blocks on the tangent plane.
+    if (u.mu_k > 0.0) {
+        let ew = u.epsv * u.h;
+        for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
+            let row = fric_lag[i * u.obstacle_count + o];
+            if (row.w > 0.0) {
+                let nrm = obstacle_distance(o, row.xyz).xyz;
+                let uu = xi - row.xyz;
+                let ut = uu - nrm * dot(nrm, uu);
+                let sl = length(ut);
+                let vt = vi - nrm * dot(nrm, vi);
+                if (sl > 1.0e-12) {
+                    let gg = friction_g(row.w, sl, ew);
+                    let uhat = ut / sl;
+                    let v_par = uhat * dot(uhat, vt);
+                    y = y + v_par * gg.y + (vt - v_par) * (gg.x / sl);
+                } else {
+                    let mu_s = u.mu_k * max(u.mu_s_scale, 1.0);
+                    y = y + vt * (mu_s * row.w / ew);
+                }
             }
         }
     }
@@ -601,6 +792,21 @@ fn ccd_alpha(@builtin(local_invocation_id) lid: vec3<u32>) {
         }
         i = i + 256u;
     }
+    // HARD strain bound: truncate steps that would cross the limit.
+    if (u.strain_limit > 0.0) {
+        var sp = lid.x;
+        loop {
+            if (sp >= u.spring_count) { break; }
+            let len = length(x_iter[spring_b[sp]].xyz - x_iter[spring_a[sp]].xyz);
+            let gap = u.strain_limit - len / spring_rest[sp];
+            let rate = (length(p_dir[spring_a[sp]].xyz) + length(p_dir[spring_b[sp]].xyz))
+                / spring_rest[sp];
+            if (rate > 0.0 && gap > 0.0) {
+                a_min = min(a_min, 0.9 * gap / rate);
+            }
+            sp = sp + 256u;
+        }
+    }
     // Per-pair conservative TOI (summed max side speeds).
     let np = active_pair_count();
     var p = lid.x;
@@ -682,6 +888,27 @@ fn energy_vertex(@builtin(global_invocation_id) gid: vec3<u32>) {
         let gd = obstacle_distance(o, xi);
         e = e + u.h * u.h * barrier_energy(gd.w, kappa);
     }
+    if (u.mu_k > 0.0) {
+        let ew = u.epsv * u.h;
+        for (var o = 0u; o < u.obstacle_count; o = o + 1u) {
+            let row = fric_lag[i * u.obstacle_count + o];
+            if (row.w > 0.0) {
+                let nrm = obstacle_distance(o, row.xyz).xyz;
+                let uu = xi - row.xyz;
+                let ut = uu - nrm * dot(nrm, uu);
+                e = e + friction_energy_of(row.w, length(ut), ew);
+            }
+        }
+    }
+    // Tet energies, owned by the slot-0 vertex's thread.
+    for (var t = 0u; t < u.tet_count; t = t + 1u) {
+        let ids = tet_ids[t];
+        if (ids.x == i) {
+            let kv0 = tet_kv_v0[t];
+            let dv = tet_volume_at(ids, true) - kv0.y;
+            e = e + u.h * u.h * 0.5 * kv0.x * dv * dv;
+        }
+    }
     part[i] = e;
 }
 
@@ -691,8 +918,13 @@ fn energy_spring(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = gid.x;
     if (s >= u.spring_count) { return; }
     let d = x_try[spring_b[s]].xyz - x_try[spring_a[s]].xyz;
-    let c = length(d) - spring_rest[s];
-    part[u.vertex_count + s] = u.h * u.h * 0.5 * spring_k[s] * c * c;
+    let len = length(d);
+    let c = len - spring_rest[s];
+    var e = u.h * u.h * 0.5 * spring_k[s] * c * c;
+    if (u.strain_limit > 0.0) {
+        e = e + u.h * u.h * strain_barrier(s, len / spring_rest[s]).x;
+    }
+    part[u.vertex_count + s] = e;
 }
 
 // Per-pair barrier energies of x_try into part[NV + NS + p].

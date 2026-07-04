@@ -427,3 +427,276 @@ fn gpu_self_collision_stacks_and_crosses_without_penetration() {
         "host-side intersection scan failed: {final_gap:.3e}"
     );
 }
+
+/// C0 phase 5a — tets, hard strain limiting and lagged IPC friction on
+/// the GPU, graded by the CPU phase-4 contracts:
+/// 1. THE discriminating incline on device (tan θ = 0.5 between
+///    μ_k = 0.4 and μ_s = 0.6): stick vs slide.
+/// 2. Hard strain bound under tip load.
+/// 3. Tet block drop: penetration-free + volume preserved.
+#[test]
+#[ignore = "needs a real wgpu adapter — run via `make test-gpu P=molla-solvers T=barrier_newton_gpu`"]
+fn gpu_friction_strain_and_tets_match_contracts() {
+    let engine = Engine::new_gpu().expect("gpu adapter");
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+
+    // ── 1. Incline discrimination.
+    let theta: f64 = 0.5_f64.atan();
+    let n_vec = [theta.sin() as f32, theta.cos() as f32, 0.0f32];
+    let t1 = [theta.cos() as f32, -theta.sin() as f32, 0.0f32];
+    let run_incline = |scale: f32| -> f32 {
+        let spacing = 0.03f32;
+        let (nx, nz) = (4usize, 4usize);
+        let dhat = 1.0e-3f32;
+        let mut pos = Vec::new();
+        for j in 0..nz {
+            for i in 0..nx {
+                let a = i as f32 * spacing;
+                let b = j as f32 * spacing;
+                pos.push([
+                    t1[0] * a + n_vec[0] * 0.5 * dhat,
+                    t1[1] * a + n_vec[1] * 0.5 * dhat,
+                    b,
+                ]);
+            }
+        }
+        let idx = |i: usize, j: usize| (j * nx + i) as u32;
+        let mut springs = Vec::new();
+        for j in 0..nz {
+            for i in 0..nx {
+                for (di, dj) in [(1usize, 0usize), (0, 1), (1, 1)] {
+                    if i + di < nx && j + dj < nz {
+                        let (a, b) = (idx(i, j), idx(i + di, j + dj));
+                        let pa = pos[a as usize];
+                        let pb = pos[b as usize];
+                        let rest = ((pa[0] - pb[0]).powi(2)
+                            + (pa[1] - pb[1]).powi(2)
+                            + (pa[2] - pb[2]).powi(2))
+                        .sqrt();
+                        springs.push(BarrierGpuSpring {
+                            a,
+                            b,
+                            rest,
+                            k: 400.0,
+                        });
+                    }
+                }
+            }
+        }
+        let mut params = BarrierGpuParams {
+            friction_mu: 0.4,
+            friction_mu_s_scale: scale,
+            ..Default::default()
+        };
+        // Settle normal-first (no tangential pull), then load.
+        params.gravity = [-9.81 * n_vec[0], -9.81 * n_vec[1], 0.0];
+        let mut gpu = BarrierNewtonGpu::new(
+            &device,
+            &queue,
+            &pos,
+            &vec![0.02; nx * nz],
+            &springs,
+            &[BarrierGpuObstacle::HalfSpace {
+                n: n_vec,
+                offset: 0.0,
+            }],
+            params,
+        )
+        .expect("gpu shell");
+        let h = 1.0f32 / 240.0;
+        for _ in 0..120 {
+            gpu.step(h).expect("settle");
+        }
+        gpu.params.gravity = [0.0, -9.81, 0.0];
+        gpu.set_velocities(&vec![[0.0; 3]; nx * nz]).expect("v0");
+        let p0 = gpu.read_positions().expect("read");
+        for step in 0..240 {
+            let stats = gpu.step(h).expect("step");
+            assert!(stats.min_gap > 0.0, "step {step}: penetrated");
+        }
+        let p1 = gpu.read_positions().expect("read");
+        let mut com = 0.0f32;
+        for (a, b) in p1.iter().zip(p0.iter()) {
+            com += (a[0] - b[0]) * t1[0] + (a[1] - b[1]) * t1[1];
+        }
+        com / p1.len() as f32
+    };
+    let d_stick = run_incline(1.5);
+    let d_slide = run_incline(1.0);
+    eprintln!("gpu incline: stick {d_stick:.5} m, slide {d_slide:.5} m");
+    assert!(d_stick.abs() < 3.0e-3, "gpu stick case moved: {d_stick:.5}");
+    assert!(
+        d_slide > 0.03 && d_slide > 10.0 * d_stick.abs(),
+        "gpu slide case must slide: {d_slide:.5}"
+    );
+
+    // ── 2. Hard strain bound (strip + heavy tip).
+    {
+        let n = 6usize;
+        let spacing = 0.03f32;
+        let mut pos = Vec::new();
+        let mut masses = Vec::new();
+        for j in 0..2usize {
+            for i in 0..n {
+                pos.push([i as f32 * spacing, 0.0, j as f32 * spacing]);
+                masses.push(0.02f32);
+            }
+        }
+        let idx = |i: usize, j: usize| (j * n + i) as u32;
+        masses[idx(n - 1, 0) as usize] = 0.8;
+        masses[idx(n - 1, 1) as usize] = 0.8;
+        let mut springs = Vec::new();
+        for j in 0..2usize {
+            for i in 0..n {
+                if i + 1 < n {
+                    springs.push(BarrierGpuSpring {
+                        a: idx(i, j),
+                        b: idx(i + 1, j),
+                        rest: spacing,
+                        k: 40.0,
+                    });
+                }
+                if j == 0 {
+                    springs.push(BarrierGpuSpring {
+                        a: idx(i, 0),
+                        b: idx(i, 1),
+                        rest: spacing,
+                        k: 40.0,
+                    });
+                }
+            }
+        }
+        let gpu = BarrierNewtonGpu::new_with_mesh(
+            &device,
+            &queue,
+            &pos,
+            &masses,
+            &springs,
+            &[],
+            &[],
+            &[idx(0, 0), idx(0, 1)],
+            BarrierGpuParams {
+                strain_limit: 1.05,
+                ..Default::default()
+            },
+        )
+        .expect("gpu strip");
+        let h = 1.0f32 / 240.0;
+        let mut worst = 0.0f32;
+        for _ in 0..240 {
+            gpu.step(h).expect("step");
+            let p = gpu.read_positions().expect("read");
+            for s in &springs {
+                let a = p[s.a as usize];
+                let b = p[s.b as usize];
+                let len =
+                    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                worst = worst.max(len / s.rest);
+            }
+        }
+        eprintln!("gpu strip: worst strain {worst:.4}");
+        assert!(worst < 1.05, "gpu HARD BOUND violated: {worst:.4}");
+    }
+
+    // ── 3. Tet block drop.
+    {
+        let e = 0.1f32;
+        let pos: Vec<[f32; 3]> = [
+            [0.0, 0.0, 0.0],
+            [e, 0.0, 0.0],
+            [0.0, e, 0.0],
+            [e, e, 0.0],
+            [0.0, 0.0, e],
+            [e, 0.0, e],
+            [0.0, e, e],
+            [e, e, e],
+        ]
+        .iter()
+        .map(|p| [p[0] - 0.05, p[1] + 0.08, p[2] - 0.05])
+        .collect();
+        let tet_ids: [[u32; 4]; 5] = [
+            [0, 1, 3, 5],
+            [0, 3, 2, 6],
+            [0, 5, 4, 6],
+            [3, 5, 6, 7],
+            [0, 3, 5, 6],
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        let mut springs = Vec::new();
+        for t in &tet_ids {
+            for a in 0..4 {
+                for b in (a + 1)..4 {
+                    let (x, y) = (t[a].min(t[b]), t[a].max(t[b]));
+                    if seen.insert((x, y)) {
+                        let pa = pos[x as usize];
+                        let pb = pos[y as usize];
+                        let rest = ((pa[0] - pb[0]).powi(2)
+                            + (pa[1] - pb[1]).powi(2)
+                            + (pa[2] - pb[2]).powi(2))
+                        .sqrt();
+                        springs.push(BarrierGpuSpring {
+                            a: x,
+                            b: y,
+                            rest,
+                            k: 800.0,
+                        });
+                    }
+                }
+            }
+        }
+        let tets: Vec<([u32; 4], f32)> = tet_ids.iter().map(|&ids| (ids, 5000.0)).collect();
+        let gpu = BarrierNewtonGpu::new_full(
+            &device,
+            &queue,
+            &pos,
+            &vec![0.1; 8],
+            &springs,
+            &[BarrierGpuObstacle::HalfSpace {
+                n: [0.0, 1.0, 0.0],
+                offset: 0.0,
+            }],
+            &[],
+            &tets,
+            &[],
+            BarrierGpuParams::default(),
+        )
+        .expect("gpu block");
+        let h = 1.0f32 / 240.0;
+        for step in 0..240 {
+            let stats = gpu.step(h).expect("step");
+            assert!(stats.min_gap > 0.0, "step {step}: block penetrated");
+            if step % 60 == 0 {
+                let pp = gpu.read_positions().expect("read");
+                let ymin = pp.iter().map(|q| q[1]).fold(f32::INFINITY, f32::min);
+                let ymax = pp.iter().map(|q| q[1]).fold(f32::NEG_INFINITY, f32::max);
+                eprintln!(
+                    "  step {step}: newton {} gap {:.2e} y [{ymin:.4},{ymax:.4}]",
+                    stats.newton_iters, stats.min_gap
+                );
+            }
+        }
+        let p = gpu.read_positions().expect("read");
+        let vol: f32 = tet_ids
+            .iter()
+            .map(|ids| {
+                let g = |k: usize| p[ids[k] as usize];
+                let s3 = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                let e1 = s3(g(1), g(0));
+                let e2 = s3(g(2), g(0));
+                let e3 = s3(g(3), g(0));
+                // |V| per tet — this ordering mixes orientations, and
+                // the SOLVER is consistent in signed volume; the
+                // geometric check must not conflate the two.
+                (((e1[1] * e2[2] - e1[2] * e2[1]) * e3[0]
+                    + (e1[2] * e2[0] - e1[0] * e2[2]) * e3[1]
+                    + (e1[0] * e2[1] - e1[1] * e2[0]) * e3[2])
+                    / 6.0)
+                    .abs()
+            })
+            .sum();
+        let drift = (vol - 0.001).abs() / 0.001;
+        eprintln!("gpu tet block: volume drift {drift:.3e}");
+        assert!(drift < 0.05, "gpu volume not preserved: {drift:.3e}");
+    }
+}
