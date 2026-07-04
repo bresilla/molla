@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-876b1dda.js";
+            window.path_to_searchindex_js = "../searchindex-fc79cb2d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f4239cce.js"></script>
@@ -189,8 +189,8 @@ heightfield terrain); the INSPECTION.md backlog is CLOSED. Remaining:</p>
 <tr><th>Item</th><th>What</th><th>Effort</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>C0</strong> (Tier-C below)</td><td><strong>Barrier-Newton contact backend (IPC-family, GPU)</strong> — penetration-free invariant + CCD line search; subsumes F14 and obsoletes A1 for deformables. The flagship next feature; full design in the C0 entry.</td><td>multi-week (phase 1 = 1–2 sessions)</td></tr>
-<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k) in the rigid XPBD contact pass</td><td>1–2 days</td></tr>
+<tr><td><del>C0</del></td><td><strong>COMPLETE 2026-07-05</strong> — barrier-Newton backend fully landed (all phases + κ + both couplings + LBVH + perf); see the C0 entry. Optional future slices: GPU ABD composite solve, on-device pair friction.</td><td>done</td></tr>
+<tr><td><del>A1</del></td><td>RETIRED for deformables by C0’s μ_s/μ_k friction (2026-07-04); only a rigid-XPBD variant would remain, and C0 is the recommended path.</td><td>closed</td></tr>
 </tbody>
 </table>
 </div>
@@ -536,9 +536,11 @@ inflation, per-iterate candidate filters; graded-mesh stress oracle).
 <strong>ABD strong coupling LANDED 2026-07-05</strong> (CPU oracle): affine bodies
 inside the Newton solve via proxy vertices — machinery reuse total,
 momentum machine-exact (5e-15), the weak path’s tunneling case handled
-by the unified line search alone. The GPU port of the composite solve
-is the natural next slice when a scene demands it. <strong>C0 has no open
-items; the technical roadmap is CLEAR.</strong> Subsumes the F14 GPU-CCD item
+by the unified line search alone. <strong>C0 is complete; the technical
+roadmap has no open items.</strong> Two OPTIONAL enhancement slices are noted
+for whenever a scene demands them (not open work): the GPU port of the
+ABD composite solve, and on-device pair (cloth-on-cloth) friction —
+the one documented CPU/GPU behavioural difference. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
