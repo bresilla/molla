@@ -48,8 +48,13 @@ struct AtlasFeedbackParamRow {
 };
 
 struct AtlasFeedbackUniforms {
-    // x=total node count, y=resident-spin flag (1 → ω from hub_state), zw=reserved
+    // x=total node count, y=resident-spin flag (1 → ω from hub_state),
+    // z=terrain nx (0 → flat ground at row ground_y), w=terrain nz
     counts: vec4<u32>,
+    // x=terrain origin x, y=terrain origin z, z=grid spacing (m),
+    // w=terrain friction coefficient (global; per-tire μ_static is the
+    // reference, mirroring the per-tire shader's friction_scale)
+    terrain: vec4<f32>,
 };
 
 @group(0) @binding(0) var<storage, read>       pos_in:        array<vec4<f32>>;
@@ -63,6 +68,9 @@ struct AtlasFeedbackUniforms {
 @group(0) @binding(8) var<storage, read_write> bristle_out:   array<vec4<f32>>;
 @group(0) @binding(9) var<storage, read_write> force_out:     array<vec4<f32>>;
 @group(0) @binding(10) var<storage, read>      hub_state:     array<vec4<f32>>;
+// F2(d) — shared fleet heightfield (flat paths bind a dummy; gated by
+// counts.z == 0).
+@group(0) @binding(11) var<storage, read>      terrain_heights: array<f32>;
 @group(1) @binding(0) var<uniform>             u:             AtlasFeedbackUniforms;
 
 // Verbatim from tire_fem_contact_feedback.wgsl — the arithmetic must
@@ -91,6 +99,38 @@ fn smooth_combined_force(trial_long: f32, trial_lat: f32, static_cap: f32, dynam
     return vec3<f32>(trial_long * s, trial_lat * s, 1.0);
 }
 
+fn terrain_height(world_x: f32, world_z: f32) -> f32 {
+    let nx = u.counts.z;
+    let nz = u.counts.w;
+    let spacing = max(u.terrain.z, 1.0e-6);
+    let fx = (world_x - u.terrain.x) / spacing;
+    let fz = (world_z - u.terrain.y) / spacing;
+    let ix0_i = i32(floor(fx));
+    let iz0_i = i32(floor(fz));
+    let tx = fx - f32(ix0_i);
+    let tz = fz - f32(iz0_i);
+    let ix0 = u32(clamp(ix0_i, 0, i32(nx) - 1));
+    let iz0 = u32(clamp(iz0_i, 0, i32(nz) - 1));
+    let ix1 = u32(clamp(ix0_i + 1, 0, i32(nx) - 1));
+    let iz1 = u32(clamp(iz0_i + 1, 0, i32(nz) - 1));
+    let h00 = terrain_heights[iz0 * nx + ix0];
+    let h10 = terrain_heights[iz0 * nx + ix1];
+    let h01 = terrain_heights[iz1 * nx + ix0];
+    let h11 = terrain_heights[iz1 * nx + ix1];
+    let h0 = h00 * (1.0 - tx) + h10 * tx;
+    let h1 = h01 * (1.0 - tx) + h11 * tx;
+    return h0 * (1.0 - tz) + h1 * tz;
+}
+
+fn terrain_normal(world_x: f32, world_z: f32) -> vec3<f32> {
+    let d = max(u.terrain.z * 0.5, 1.0e-5);
+    let dhdx = (terrain_height(world_x + d, world_z) - terrain_height(world_x - d, world_z))
+        / (2.0 * d);
+    let dhdz = (terrain_height(world_x, world_z + d) - terrain_height(world_x, world_z - d))
+        / (2.0 * d);
+    return safe_normalize(vec3<f32>(-dhdx, 1.0, -dhdz), vec3<f32>(0.0, 1.0, 0.0));
+}
+
 @compute @workgroup_size(64)
 fn atlas_contact_feedback(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -114,9 +154,17 @@ fn atlas_contact_feedback(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (tread_slot != 0xffffffffu) {
         let p = pos_in[i].xyz;
-        // Flat-ground contact sample (per-tire dummy-map path).
-        let normal = vec3<f32>(0.0, 1.0, 0.0);
-        let clearance = p.y - row.p0.z;
+        // Contact sample: shared fleet heightfield when counts.z > 0,
+        // else the flat plane at the row's ground_y (mirrors the
+        // per-tire shader's dims-gated sampling).
+        var normal = vec3<f32>(0.0, 1.0, 0.0);
+        var clearance = p.y - row.p0.z;
+        var friction_scale = 1.0;
+        if (u.counts.z > 0u) {
+            clearance = p.y - terrain_height(p.x, p.z);
+            normal = terrain_normal(p.x, p.z);
+            friction_scale = clamp(u.terrain.w / max(row.p2.x, 1.0e-3), 0.0, 3.0);
+        }
         let band = max(row.p0.y, 1.0e-6);
         let dt = max(row.p0.x, 0.0);
         if (clearance <= band && dt > 0.0) {
@@ -150,8 +198,8 @@ fn atlas_contact_feedback(@builtin(global_invocation_id) gid: vec3<u32>) {
             let trial_lat = shear_k * area * b_lat + damping * area * lateral_slip_speed;
             // Terrain friction = mu_static reference → scale ≡ 1.
             let cohesion = max(row.p2.z, 0.0);
-            let static_cap = max(row.p2.x, 0.0) * normal_load + cohesion * area;
-            let dynamic_cap = max(row.p2.y, 0.0) * normal_load + cohesion * area;
+            let static_cap = max(row.p2.x, 0.0) * friction_scale * normal_load + cohesion * area;
+            let dynamic_cap = max(row.p2.y, 0.0) * friction_scale * normal_load + cohesion * area;
             let ft = smooth_combined_force(trial_long, trial_lat, static_cap, dynamic_cap);
             if (ft.z > 0.5) {
                 let max_b = dynamic_cap / max(shear_k * area, 1.0e-9);

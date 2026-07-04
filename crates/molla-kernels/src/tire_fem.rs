@@ -1152,6 +1152,19 @@ pub struct TireFemAtlasFeedbackParams {
     pub omega: f32,
 }
 
+/// F2(d) — shared fleet heightfield for the fused-atlas feedback
+/// stage (one terrain per batch; bilinear heights + central-difference
+/// normals, per-tire μ_static as the friction reference).
+#[derive(Copy, Clone, Debug)]
+pub struct TireFemAtlasTerrain<'a> {
+    pub origin: [f32; 2],
+    pub spacing: f32,
+    pub nx: u32,
+    pub nz: u32,
+    pub heights: &'a wgpu::Buffer,
+    pub friction: f32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct TireFemGpuAtlasFeedbackParamRow {
@@ -3640,6 +3653,7 @@ impl TireFemGpuKernel {
                     storage_entry(8, false), // bristle out
                     storage_entry(9, false), // force rows out
                     storage_entry(10, true), // hub state (resident spin)
+                    storage_entry(11, true), // fleet heightfield (dummy when flat)
                 ],
             });
         let atlas_feedback_pipeline_layout =
@@ -6437,6 +6451,18 @@ impl TireFemGpuKernel {
         Ok(())
     }
 
+    /// F2(d) — shared fleet heightfield for the fused-atlas feedback
+    /// stage. One terrain for the whole batch (a fleet drives one
+    /// world); bilinear height + central-difference normals, mirroring
+    /// the per-tire `TireFemContactFeedbackGpuTerrain` sampling.
+    ///
+    /// `friction` is the global terrain friction coefficient; each
+    /// tire's `mu_static` is the reference, so the shader's
+    /// friction_scale = clamp(friction / mu_static, 0, 3) exactly as
+    /// in the per-tire path.
+    ///
+    /// (Declared on the impl for locality; see
+    /// [`Self::step_resident_atlas_feedback_with_terrain`].)
     /// F2b — fused-atlas contact-feedback stage: one dispatch runs the
     /// bristle/friction physics for every tire in the batch against the
     /// CURRENT atlas position/velocity slots. Velocities are updated in
@@ -6454,6 +6480,57 @@ impl TireFemGpuKernel {
         batch: &mut TireFemGpuAtlasBatch,
         params: &[TireFemAtlasFeedbackParams],
         use_resident_spin: bool,
+    ) -> Result<()> {
+        self.step_resident_atlas_feedback_impl(
+            device,
+            queue,
+            batch,
+            params,
+            use_resident_spin,
+            None,
+        )
+    }
+
+    /// F2(d) — like [`Self::step_resident_atlas_feedback`] but the
+    /// contact samples a shared heightfield instead of the per-row
+    /// flat plane.
+    pub fn step_resident_atlas_feedback_with_terrain(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &mut TireFemGpuAtlasBatch,
+        params: &[TireFemAtlasFeedbackParams],
+        use_resident_spin: bool,
+        terrain: &TireFemAtlasTerrain<'_>,
+    ) -> Result<()> {
+        if terrain.nx == 0
+            || terrain.nz == 0
+            || !terrain.spacing.is_finite()
+            || terrain.spacing <= 0.0
+        {
+            return Err(Error::Solver(
+                "tire_fem atlas terrain: nx/nz must be > 0 and spacing positive".into(),
+            ));
+        }
+        self.step_resident_atlas_feedback_impl(
+            device,
+            queue,
+            batch,
+            params,
+            use_resident_spin,
+            Some(terrain),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn step_resident_atlas_feedback_impl(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &mut TireFemGpuAtlasBatch,
+        params: &[TireFemAtlasFeedbackParams],
+        use_resident_spin: bool,
+        terrain: Option<&TireFemAtlasTerrain<'_>>,
     ) -> Result<()> {
         let tire_count = batch.atlas.layout.plan.tire_count;
         if params.len() != tire_count {
@@ -6475,15 +6552,37 @@ impl TireFemGpuKernel {
         let total_nodes = batch.atlas.layout.plan.total_node_count as u32;
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tire_fem_atlas feedback uniforms"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let (t_nx, t_nz, t_row) = match terrain {
+            Some(t) => (
+                t.nx,
+                t.nz,
+                [t.origin[0], t.origin[1], t.spacing, t.friction],
+            ),
+            None => (0, 0, [0.0_f32; 4]),
+        };
         queue.write_buffer(
             &uniforms,
             0,
-            bytemuck::cast_slice(&[total_nodes, u32::from(use_resident_spin), 0, 0]),
+            bytemuck::cast_slice(&[total_nodes, u32::from(use_resident_spin), t_nx, t_nz]),
         );
+        queue.write_buffer(&uniforms, 16, bytemuck::cast_slice(&t_row));
+        let heights_dummy;
+        let heights_buf: &wgpu::Buffer = match terrain {
+            Some(t) => t.heights,
+            None => {
+                heights_dummy = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("tire_fem_atlas feedback heights dummy"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                });
+                &heights_dummy
+            }
+        };
         // Current node slots: `step_resident_atlas_batch` flips parity
         // after writing, so parity==true means the fresh data is in b.
         let (pos, vel) = if batch.parity {
@@ -6511,6 +6610,7 @@ impl TireFemGpuKernel {
                 entry(8, bristle_out),
                 entry(9, &batch.fb_forces_buf),
                 entry(10, &batch.hub_state_buf),
+                entry(11, heights_buf),
             ],
         });
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {

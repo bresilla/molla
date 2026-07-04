@@ -5808,3 +5808,189 @@ fn tire_fem_resident_gpu_terrain_matches_blocking_bitwise() {
         "airborne node has force"
     );
 }
+
+/// F2(d) — fused-atlas heightfield terrain. Oracles:
+/// 1. An all-zero heightfield with terrain friction = μ_static must be
+///    BITWISE identical to the flat path (h ≡ 0 → same clearance;
+///    central-difference normal of a constant field is exactly
+///    (0,1,0); friction_scale = 1.0 exactly).
+/// 2. On an inclined plane (no drive torque) the wheel must drift
+///    DOWNHILL — the tilted contact normal redirects the bristle
+///    reaction, which the flat path cannot produce.
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn tire_fem_atlas_terrain_zero_matches_flat_and_slope_drifts_downhill() {
+    use molla_vehicle::{SurfaceMaterial, TetraTireFem, TetraTireFemParams};
+    use wgpu::util::DeviceExt;
+    let Some(engine) = try_engine() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let device = engine.device().unwrap().clone();
+    let queue = engine.queue().unwrap().clone();
+    let kernel = TireFemGpuKernel::new(&device);
+
+    let params = TetraTireFemParams {
+        surface_material: SurfaceMaterial {
+            mu_static: 1.0,
+            mu_dynamic: 0.85,
+            bristle_damping: 5.0e4,
+            rolling_resistance: 0.0,
+            cohesion: 0.0,
+        },
+        ..TetraTireFemParams::realtime_viewer()
+    };
+    let mut cpu_tire = TetraTireFem::new(0.0, 180_000.0, params);
+    let dt = 1.0 / 8_000.0;
+    let terrain_cpu = molla_vehicle::terrain::FlatTerrain::new(0.0, 1.0);
+    cpu_tire.set_hub_kinematic([0.0, params.outer_radius * 0.982, 0.0], [0.0; 3]);
+    for _ in 0..1_600 {
+        cpu_tire.step_on_terrain(&terrain_cpu, dt);
+    }
+    cpu_tire.set_hub_dynamic();
+    for _ in 0..6_400 {
+        cpu_tire.step_on_terrain(&terrain_cpu, dt);
+    }
+    let base_gpu_params = TireFemGpuParams {
+        dt: dt as f32,
+        node_damping: params.node_damping as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        xpbd_volume_compliance: params.xpbd_volume_compliance as f32,
+        xpbd_bead_compliance: params.xpbd_bead_compliance as f32,
+        semi_implicit_stiffness_scale: params.semi_implicit_stiffness_scale as f32,
+        ..Default::default()
+    };
+    let gpu_input = tire_fem_gpu_input_from_tetra_fem(&cpu_tire, base_gpu_params);
+    let node_params = gpu_input.params;
+
+    let hub_params = TireFemHubParams {
+        dt: dt as f32,
+        bead_stiffness: params.bead_stiffness as f32,
+        bead_damping: params.bead_damping as f32,
+        hub_mass: params.hub_mass as f32,
+        hub_damping: 260.0,
+        downforce: params.downforce as f32,
+        gravity_y: -9.81,
+        hub_floor_active: 0.0,
+        hub_floor_y: 0.0,
+        external_force_xyz: [0.0; 3],
+        lateral_damping: 20.0,
+    };
+    let spin = molla_kernels::TireFemHubSpinParams {
+        drive_torque_n_m: 0.0,
+        brake_torque_n_m: 0.0,
+        spin_inertia: 1.2,
+    };
+    let fb = molla_kernels::TireFemAtlasFeedbackParams {
+        dt: dt as f32,
+        contact_band: 0.012,
+        ground_y: 0.0,
+        rolling_radius: params.outer_radius as f32,
+        normal_load_per_tread: (params.downforce / 12.0) as f32,
+        area_per_tread: node_params.pressure_area_per_tread_node,
+        tread_shear_stiffness: params.tread_shear_stiffness as f32,
+        bristle_damping: 5.0e4,
+        mu_static: 1.0,
+        mu_dynamic: 0.85,
+        cohesion: 0.0,
+        bristle_relax_rate: params.bristle_relax_rate as f32,
+        heading: [1.0, 0.0, 0.0],
+        omega: 0.0,
+    };
+
+    let run = |heights: Option<(&[f32], f32)>| -> ([f32; 8], Vec<[f32; 4]>) {
+        let inputs = vec![gpu_input.clone()];
+        let mut batch = kernel
+            .create_resident_atlas_batch(&device, &queue, &inputs)
+            .expect("batch");
+        let step_params = vec![node_params];
+        let hub_rows = vec![hub_params];
+        let spins = vec![spin];
+        let heights_buf = heights.map(|(h, _)| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("test terrain heights"),
+                contents: bytemuck::cast_slice(h),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        });
+        for _ in 0..320 {
+            kernel
+                .step_resident_atlas_batch(&device, &queue, &mut batch, &step_params)
+                .expect("nodes");
+            match (&heights_buf, heights) {
+                (Some(buf), Some((_, friction))) => {
+                    let terrain = molla_kernels::TireFemAtlasTerrain {
+                        origin: [-4.0, -4.0],
+                        spacing: 0.5,
+                        nx: 17,
+                        nz: 17,
+                        heights: buf,
+                        friction,
+                    };
+                    kernel
+                        .step_resident_atlas_feedback_with_terrain(
+                            &device,
+                            &queue,
+                            &mut batch,
+                            &[fb],
+                            true,
+                            &terrain,
+                        )
+                        .expect("feedback terrain");
+                }
+                _ => {
+                    kernel
+                        .step_resident_atlas_feedback(&device, &queue, &mut batch, &[fb], true)
+                        .expect("feedback flat");
+                }
+            }
+            kernel
+                .update_resident_atlas_hub_params_from_feedback_forces_with_spin(
+                    &device, &queue, &batch, &hub_rows, &spins, 1.0,
+                )
+                .expect("bridge");
+            kernel
+                .step_resident_atlas_hubs_with_resident_params(&device, &queue, &batch)
+                .expect("hubs");
+        }
+        let hub = kernel
+            .readback_atlas_hub(&device, &queue, &batch, 0)
+            .expect("hub");
+        let out = kernel
+            .readback_resident_atlas_batch(&device, &queue, &batch)
+            .expect("state");
+        (hub, out[0].positions.clone())
+    };
+
+    // ── Oracle 1: zero heightfield ≡ flat, bitwise.
+    let zero_heights = vec![0.0_f32; 17 * 17];
+    let (hub_flat, pos_flat) = run(None);
+    let (hub_zero, pos_zero) = run(Some((&zero_heights, 1.0)));
+    assert_eq!(hub_flat, hub_zero, "zero heightfield must be bitwise flat");
+    for (a, b) in pos_flat.iter().zip(pos_zero.iter()) {
+        assert_eq!(a, b, "node positions must be bitwise identical");
+    }
+
+    // ── Oracle 2: inclined plane (rises along +x) → downhill (−x) drift.
+    let slope = 0.4_f32;
+    let sloped: Vec<f32> = (0..17 * 17)
+        .map(|i| {
+            let ix = (i % 17) as f32;
+            (ix * 0.5 - 4.0) * slope
+        })
+        .collect();
+    let (hub_slope, pos_slope) = run(Some((&sloped, 1.0)));
+    for p in &pos_slope {
+        assert!(p.iter().all(|x| x.is_finite()), "slope run went non-finite");
+    }
+    eprintln!(
+        "slope: hub x = {:.5} (flat {:.5}), hub v_x = {:.5}",
+        hub_slope[0], hub_flat[0], hub_slope[4]
+    );
+    assert!(
+        hub_slope[0] < hub_flat[0] - 1.0e-4,
+        "wheel must drift downhill (−x) on a +x incline: slope x {} vs flat x {}",
+        hub_slope[0],
+        hub_flat[0]
+    );
+}

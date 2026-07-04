@@ -262,6 +262,7 @@ pub use tire_dem::{
     tire_dem_reference_impulses, tire_dem_reference_sparse_lbvh_step, tire_dem_reference_step,
     tire_dem_sparse_lbvh_dispatch_plan, tire_dem_sparse_lbvh_gpu_rows,
 };
+pub use tire_fem::TireFemAtlasTerrain;
 #[cfg(feature = "gpu")]
 pub use tire_fem::{
     TIRE_FEM_ATLAS_SHADER, TIRE_FEM_MATRIX_FREE_NEWTON_DEFAULT_KRYLOV_BUDGET,
