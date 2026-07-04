@@ -36,6 +36,14 @@ struct Uniforms {
     epsv: f32,       // stick-well width as velocity (e = ε_v·h)
     strain_limit: f32, // hard strain bound (0 = off)
     strain_scale: f32, // κ_s multiplier on k·rest²
+    // Spatial-hash pair pruning (phase 5c). cell_size ≥ max primitive
+    // extent + 3·d̂ so a primitive spans ≤ 2 cells per axis and a
+    // single-ring probe is COMPLETE; hash collisions only ADD
+    // candidates (Teschner hash), never lose them.
+    grid_cell: f32,
+    grid_slots: u32,   // power of two; 0 = brute force
+    grid_cap: u32,     // bucket capacity
+    _pad4: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -90,6 +98,10 @@ struct Uniforms {
 // (anchor.xyz, λ). λ = 0 marks an inactive row. Rebuilt at step start
 // from the committed positions — the IPC semi-implicit lag.
 @group(3) @binding(10) var<storage, read_write> fric_lag: array<vec4<f32>>;
+// Hash-grid buckets: [0..slots) tri counts, items at slot*cap. The
+// edge grid lives at offset `grid_slots` / `grid_slots*cap`.
+@group(3) @binding(11) var<storage, read_write> grid_count: array<atomic<u32>>;
+@group(3) @binding(12) var<storage, read_write> grid_items: array<u32>;
 
 const WG: u32 = 64u;
 
@@ -356,6 +368,157 @@ fn friction_lag(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     fric_lag[idx] = row;
+}
+
+fn cell_hash(cx: i32, cy: i32, cz: i32) -> u32 {
+    let h = (u32(cx) * 73856093u) ^ (u32(cy) * 19349663u) ^ (u32(cz) * 83492791u);
+    return h & (u.grid_slots - 1u);
+}
+
+fn cell_of(p: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(floor(p / u.grid_cell));
+}
+
+@compute @workgroup_size(WG)
+fn grid_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= 2u * u.grid_slots) { return; }
+    atomicStore(&grid_count[gid.x], 0u);
+}
+
+fn grid_insert(base_slot: u32, lo: vec3<f32>, hi: vec3<f32>, id: u32) {
+    let c0 = cell_of(lo);
+    let c1 = cell_of(hi);
+    for (var cx = c0.x; cx <= c1.x; cx = cx + 1) {
+        for (var cy = c0.y; cy <= c1.y; cy = cy + 1) {
+            for (var cz = c0.z; cz <= c1.z; cz = cz + 1) {
+                let slot = base_slot + cell_hash(cx, cy, cz);
+                let k = atomicAdd(&grid_count[slot], 1u);
+                if (k < u.grid_cap) {
+                    grid_items[slot * u.grid_cap + k] = id;
+                } else {
+                    atomicStore(&pair_count[1], 1u); // shared overflow flag
+                }
+            }
+        }
+    }
+}
+
+@compute @workgroup_size(WG)
+fn grid_insert_tris(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= u.tri_count) { return; }
+    let ids = tris[t];
+    let a = x_iter[ids.x].xyz;
+    let b = x_iter[ids.y].xyz;
+    let c = x_iter[ids.z].xyz;
+    grid_insert(0u, min(a, min(b, c)), max(a, max(b, c)), t);
+}
+
+@compute @workgroup_size(WG)
+fn grid_insert_edges(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let e = gid.x;
+    if (e >= u.edge_count) { return; }
+    let ids = edges[e];
+    let a = x_iter[ids.x].xyz;
+    let b = x_iter[ids.y].xyz;
+    grid_insert(u.grid_slots, min(a, b), max(a, b), e);
+}
+
+// Grid-pruned VT discovery: thread per vertex, probe the cells its
+// 3·d̂ box overlaps, test only bucketed triangles.
+@compute @workgroup_size(WG)
+fn find_pairs_vt_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let v = gid.x;
+    if (v >= u.vertex_count) { return; }
+    let p = x_iter[v].xyz;
+    let m = vec3<f32>(3.0 * u.dhat);
+    let c0 = cell_of(p - m);
+    let c1 = cell_of(p + m);
+    for (var cx = c0.x; cx <= c1.x; cx = cx + 1) {
+        for (var cy = c0.y; cy <= c1.y; cy = cy + 1) {
+            for (var cz = c0.z; cz <= c1.z; cz = cz + 1) {
+                let slot = cell_hash(cx, cy, cz);
+                let cnt = min(atomicLoad(&grid_count[slot]), u.grid_cap);
+                for (var k = 0u; k < cnt; k = k + 1u) {
+                    let t_idx = grid_items[slot * u.grid_cap + k];
+                    let t = tris[t_idx];
+                    if (v == t.x || v == t.y || v == t.z) { continue; }
+                    // A tri can occupy several probed cells — accept it
+                    // only from the FIRST probed cell that contains it
+                    // (its AABB-lo cell clamped into the probe window)
+                    // so duplicates never enter the pair list.
+                    let a = x_iter[t.x].xyz;
+                    let b = x_iter[t.y].xyz;
+                    let c = x_iter[t.z].xyz;
+                    let tlo = cell_of(min(a, min(b, c)));
+                    let owner = vec3<i32>(
+                        max(tlo.x, c0.x), max(tlo.y, c0.y), max(tlo.z, c0.z),
+                    );
+                    if (owner.x != cx || owner.y != cy || owner.z != cz) { continue; }
+                    let w = tri_closest(p, a, b, c);
+                    let cp = a * w.x + b * w.y + c * w.z;
+                    if (length(p - cp) < 3.0 * u.dhat) {
+                        let slot2 = atomicAdd(&pair_count[0], 1u);
+                        if (slot2 < u.pair_capacity) {
+                            pair_meta[slot2] = vec4<u32>(0u, v, t_idx, 0u);
+                            pair_wts[slot2] = vec4<f32>(w, 0.0);
+                        } else {
+                            atomicStore(&pair_count[1], 1u);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Grid-pruned EE discovery: thread per edge i, probe its own AABB+3d̂
+// cells in the EDGE grid, test bucketed edges with j > i.
+@compute @workgroup_size(WG)
+fn find_pairs_ee_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.edge_count) { return; }
+    let e1 = edges[i];
+    let p1 = x_iter[e1.x].xyz;
+    let q1 = x_iter[e1.y].xyz;
+    let m = vec3<f32>(3.0 * u.dhat);
+    let c0 = cell_of(min(p1, q1) - m);
+    let c1 = cell_of(max(p1, q1) + m);
+    for (var cx = c0.x; cx <= c1.x; cx = cx + 1) {
+        for (var cy = c0.y; cy <= c1.y; cy = cy + 1) {
+            for (var cz = c0.z; cz <= c1.z; cz = cz + 1) {
+                let slot = u.grid_slots + cell_hash(cx, cy, cz);
+                let cnt = min(atomicLoad(&grid_count[slot]), u.grid_cap);
+                for (var k = 0u; k < cnt; k = k + 1u) {
+                    let j = grid_items[slot * u.grid_cap + k];
+                    if (j <= i) { continue; }
+                    let e2 = edges[j];
+                    if (e1.x == e2.x || e1.x == e2.y || e1.y == e2.x || e1.y == e2.y) {
+                        continue;
+                    }
+                    let p2 = x_iter[e2.x].xyz;
+                    let q2 = x_iter[e2.y].xyz;
+                    let jlo = cell_of(min(p2, q2));
+                    let owner = vec3<i32>(
+                        max(jlo.x, c0.x), max(jlo.y, c0.y), max(jlo.z, c0.z),
+                    );
+                    if (owner.x != cx || owner.y != cy || owner.z != cz) { continue; }
+                    let st = seg_closest(p1, q1, p2, q2);
+                    let pa = p1 * (1.0 - st.x) + q1 * st.x;
+                    let pb = p2 * (1.0 - st.y) + q2 * st.y;
+                    if (length(pa - pb) < 3.0 * u.dhat) {
+                        let slot2 = atomicAdd(&pair_count[0], 1u);
+                        if (slot2 < u.pair_capacity) {
+                            pair_meta[slot2] = vec4<u32>(1u, i, j, 0u);
+                            pair_wts[slot2] = vec4<f32>(st.x, st.y, 0.0, 0.0);
+                        } else {
+                            atomicStore(&pair_count[1], 1u);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Thread per (vertex × triangle): emit non-adjacent VT candidates

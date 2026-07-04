@@ -34,9 +34,18 @@ struct Uniforms {
     epsv: f32,
     strain_limit: f32,
     strain_scale: f32,
+    grid_cell: f32,
+    grid_slots: u32,
+    grid_cap: u32,
+    _pad4: u32,
 }
 
 const WG: u32 = 64;
+/// Hash-grid bucket capacity (overflow raises the shared flag).
+/// Flat cloth stacks are the worst case — every primitive lives in
+/// one grid slab, so buckets run hot; 128 covers the test corpus with
+/// margin and the overflow flag still guards the cliff.
+const GRID_CAP: u32 = 128;
 
 /// Analytic obstacle (mirror of the CPU oracle's enum).
 #[derive(Copy, Clone, Debug)]
@@ -118,6 +127,8 @@ pub struct BarrierNewtonGpu {
     tri_count: u32,
     tet_count: u32,
     edge_count: u32,
+    grid_cell: f32,
+    grid_slots: u32,
     pair_capacity: u32,
     pair_count_buf: wgpu::Buffer,
     mass_max: f32,
@@ -129,6 +140,11 @@ const ENTRIES: &[&str] = &[
     "find_pairs_ee",
     "energy_pairs",
     "friction_lag",
+    "grid_clear",
+    "grid_insert_tris",
+    "grid_insert_edges",
+    "find_pairs_vt_grid",
+    "find_pairs_ee_grid",
     "predict",
     "gradient",
     "hessian_mul",
@@ -326,7 +342,7 @@ impl BarrierNewtonGpu {
         });
         let layout_work = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::barrier_newton work"),
-            entries: &(0..11).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
+            entries: &(0..13).map(|i| storage_entry(i, false)).collect::<Vec<_>>(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::barrier_newton pl"),
@@ -472,6 +488,36 @@ impl BarrierNewtonGpu {
             "bn.fric_lag",
             (n.max(1) * obstacles.len().max(1) * 16) as u64,
         );
+        // Grid sizing from the REST mesh: cell ≥ max primitive extent
+        // + 3·d̂ (the strain limit bounds growth; without one, a
+        // heavily stretched mesh can outgrow its cells — documented).
+        let mut max_ext = 0.0f32;
+        let ext3 = |a: [f32; 3], b: [f32; 3]| {
+            (a[0] - b[0])
+                .abs()
+                .max((a[1] - b[1]).abs())
+                .max((a[2] - b[2]).abs())
+        };
+        for t in triangles {
+            let (pa, pb, pc) = (
+                positions[t[0] as usize],
+                positions[t[1] as usize],
+                positions[t[2] as usize],
+            );
+            max_ext = max_ext
+                .max(ext3(pa, pb))
+                .max(ext3(pb, pc))
+                .max(ext3(pa, pc));
+        }
+        let grid_cell = (1.5 * max_ext + 3.0 * params.dhat).max(6.0 * params.dhat);
+        let grid_slots = (16 * (triangles.len() + edge_rows.len()))
+            .next_power_of_two()
+            .max(64) as u32;
+        let grid_count_buf = mk("bn.grid_count", u64::from(2 * grid_slots) * 4);
+        let grid_items = mk(
+            "bn.grid_items",
+            u64::from(2 * grid_slots) * u64::from(GRID_CAP) * 4,
+        );
         let p0: Vec<[f32; 4]> = positions.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
         queue.write_buffer(&x_pos, 0, bytemuck::cast_slice(&p0));
         queue.write_buffer(&vel, 0, &vec![0u8; slab as usize]);
@@ -539,6 +585,8 @@ impl BarrierNewtonGpu {
                 entry(8, &pair_wts),
                 entry(9, &pair_count_buf),
                 entry(10, &fric_lag),
+                entry(11, &grid_count_buf),
+                entry(12, &grid_items),
             ],
         });
 
@@ -560,6 +608,8 @@ impl BarrierNewtonGpu {
             tri_count: triangles.len() as u32,
             tet_count: tets.len() as u32,
             edge_count: edge_rows.len() as u32,
+            grid_cell,
+            grid_slots,
             pair_capacity,
             pair_count_buf,
             mass_max: masses.iter().cloned().fold(0.0, f32::max),
@@ -589,6 +639,10 @@ impl BarrierNewtonGpu {
             epsv: self.params.friction_epsv,
             strain_limit: self.params.strain_limit,
             strain_scale: self.params.strain_barrier_scale,
+            grid_cell: self.grid_cell,
+            grid_slots: self.grid_slots,
+            grid_cap: GRID_CAP,
+            _pad4: 0,
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
@@ -696,9 +750,16 @@ impl BarrierNewtonGpu {
             self.write_uniforms(h, 0.0);
             if self.tri_count > 0 {
                 self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
-                let g_vt = (self.vertex_count * self.tri_count).div_ceil(WG).max(1);
-                let g_ee = (self.edge_count * self.edge_count).div_ceil(WG).max(1);
-                self.run(&[("find_pairs_vt", g_vt), ("find_pairs_ee", g_ee)]);
+                let g_clear = (2 * self.grid_slots).div_ceil(WG).max(1);
+                let g_tri = self.tri_count.div_ceil(WG).max(1);
+                let g_edge = self.edge_count.div_ceil(WG).max(1);
+                self.run(&[
+                    ("grid_clear", g_clear),
+                    ("grid_insert_tris", g_tri),
+                    ("grid_insert_edges", g_edge),
+                    ("find_pairs_vt_grid", gv),
+                    ("find_pairs_ee_grid", g_edge),
+                ]);
             }
             self.run(&[("gradient", gv)]);
             self.eval_trial(h, 0.0);
