@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c0d56225.js";
+            window.path_to_searchindex_js = "../searchindex-b74f9b84.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb488059.js"></script>
@@ -518,9 +518,14 @@ frictionless — pure VT/EE friction), and device Teschner-hash pair
 pruning replacing the brute-force sweeps (single-ring-complete cells,
 collisions only add candidates, overflow is a hard error). <strong>C0 is
 FEATURE-COMPLETE</strong> — book chapter at <code>solvers/barrier_newton.md</code>.
-Follow-ons (new entries when taken up): elasticity-inclusive κ (the
-TOG 43.6 eigen-stiffness scheme replacing the mass-consistent v1),
-LBVH for adversarial distributions, warm-started PCG. Subsumes the F14 GPU-CCD item
+<strong>Elasticity-inclusive κ LANDED 2026-07-04</strong> (same-day follow-on):
+κ = scale·(m + h²·Σk_incident)/h² on both backends, default on — the
+1 kN elastic-press oracle holds 11.4× more band margin than mass-only
+κ, friction λ now shares the barrier’s κ, pinned vertices are
+boundary conditions (excluded from barriers/invariant), and the f32
+Newton gained a noise-floor exit. Remaining follow-ons: LBVH for
+adversarial distributions, warm-started PCG, rigid two-way coupling,
+GPU behind viewer scene 125. Subsumes the F14 GPU-CCD item
 (currently a loud refusal on the GPU VBD backend).</p>
 <p><strong>Why.</strong> Comparison against <code>st-tech/ppf-contact-solver</code> (Ando/ZOZO — cubic
 barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
