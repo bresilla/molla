@@ -129,7 +129,11 @@ fn cube_corners() -> Vec<Vec3> {
 /// optimisations).
 fn perf_budget(release_secs: f64) -> f64 {
     if cfg!(debug_assertions) {
-        release_secs * 6.0
+        // Debug budgets only guard "accidentally quadratic" (minutes,
+        // not seconds). ×6 proved too tight for shared CI runners
+        // (measured 6.05 s vs a 6.0 s budget on a hosted GitHub
+        // runner that passes with 2× margin on dev machines).
+        release_secs * 15.0
     } else {
         release_secs
     }
