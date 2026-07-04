@@ -186,6 +186,7 @@ pub struct BarrierShell {
     /// Newton solve, which keeps the potential smooth and
     /// FD-checkable).
     lagged_friction: Vec<FrictionContact>,
+    lagged_pair_friction: Vec<PairFrictionContact>,
     /// Pinned vertices are true DoF removals: x̃ = x (no predictor
     /// gravity — a huge mass does NOT pin under an incremental
     /// potential, since the predictor free-falls independently of
@@ -218,6 +219,18 @@ struct FrictionContact {
     anchor: Vec3,
     /// Lagged normal force magnitude in energy-gradient units
     /// (h²·(−b′) at the anchor gap).
+    lambda: Real,
+}
+
+/// One lagged PAIR-friction contact (cloth-on-cloth): the 4-vertex
+/// stencil, contact normal, per-vertex anchors and λ are all frozen at
+/// step start; friction acts on the RELATIVE tangential slip
+/// `T·Σ w_j (x_j − anchor_j)` of the stencil.
+#[derive(Copy, Clone, Debug)]
+struct PairFrictionContact {
+    stencil: [(u32, Real); 4],
+    n: Vec3,
+    anchors: [Vec3; 4],
     lambda: Real,
 }
 
@@ -259,6 +272,7 @@ impl BarrierShell {
             tets: Vec::new(),
             tet_v0: Vec::new(),
             lagged_friction: Vec::new(),
+            lagged_pair_friction: Vec::new(),
             pinned: vec![false; n],
             params,
         })
@@ -576,6 +590,10 @@ impl BarrierShell {
             let ut = u - fc.n * fc.n.dot(u);
             e += self.friction_energy_of(fc.lambda, ut.length(), ew);
         }
+        for pf in &self.lagged_pair_friction {
+            let ut = self.pair_slip(pf, x);
+            e += self.friction_energy_of(pf.lambda, ut.length(), ew);
+        }
         e
     }
 
@@ -647,6 +665,17 @@ impl BarrierShell {
             if s > 1.0e-15 {
                 let (g, _) = self.friction_g(fc.lambda, s, ew);
                 out[i] += (ut / s) * g;
+            }
+        }
+        for pf in &self.lagged_pair_friction {
+            let ut = self.pair_slip(pf, x);
+            let s = ut.length();
+            if s > 1.0e-15 {
+                let (g, _) = self.friction_g(pf.lambda, s, ew);
+                let dir = ut / s;
+                for (idx, w) in pf.stencil {
+                    out[idx as usize] += dir * (g * w);
+                }
             }
         }
         for (i, g) in out.iter_mut().enumerate() {
@@ -751,6 +780,30 @@ impl BarrierShell {
                 // s → 0 limit: (μ_s λ / e)·T.
                 let mu_s = self.params.friction_mu * self.params.friction_mu_s_scale.max(1.0);
                 y[i] += vt * (mu_s * fc.lambda / ew);
+            }
+        }
+        for pf in &self.lagged_pair_friction {
+            // Relative-slip chain rule: v_rel = T·Σ w_j v_j, block
+            // H_jk = w_j w_k · H_scalar — apply as gather+scatter.
+            let mut vrel = Vec3::ZERO;
+            for (k, (idx, w)) in pf.stencil.iter().enumerate() {
+                let _ = k;
+                vrel += v[*idx as usize] * *w;
+            }
+            let vt = vrel - pf.n * pf.n.dot(vrel);
+            let ut = self.pair_slip(pf, x);
+            let s = ut.length();
+            let hv = if s > 1.0e-15 {
+                let (g, gp) = self.friction_g(pf.lambda, s, ew);
+                let uhat = ut / s;
+                let v_par = uhat * uhat.dot(vt);
+                v_par * gp + (vt - v_par) * (g / s)
+            } else {
+                let mu_s = self.params.friction_mu * self.params.friction_mu_s_scale.max(1.0);
+                vt * (mu_s * pf.lambda / ew)
+            };
+            for (idx, w) in pf.stencil {
+                y[idx as usize] += hv * w;
             }
         }
         for (i, yi) in y.iter_mut().enumerate() {
@@ -858,8 +911,36 @@ impl BarrierShell {
     /// (called by [`Self::step`]; public so FD tests can pin the lag).
     pub fn rebuild_friction_lag(&mut self) {
         self.lagged_friction.clear();
+        self.lagged_pair_friction.clear();
         if self.params.friction_mu <= 0.0 {
             return;
+        }
+        // Self-pair friction: freeze the pair set, frames and λ at the
+        // committed positions.
+        if !self.triangles.is_empty() {
+            let x = self.positions.clone();
+            for pair in self.self_candidates(&x) {
+                let (diff, stencil) = self.pair_geometry(&pair, &x);
+                let dist = diff.length();
+                if dist >= self.params.dhat || dist <= 1.0e-12 {
+                    continue;
+                }
+                let kappa = self.pair_kappa(&pair, 1.0); // h cancels in λ
+                let s = self.params.dhat - dist;
+                // λ = h²·(−b′) with κ ∝ 1/h² ⇒ h-free (mirror of the
+                // obstacle path); pair_kappa(h=1) carries κ·h² = scale·m_red.
+                let lambda = kappa * s * s / (self.params.dhat * self.params.dhat);
+                let mut anchors = [Vec3::ZERO; 4];
+                for (k, (idx, _)) in stencil.iter().enumerate() {
+                    anchors[k] = x[*idx as usize];
+                }
+                self.lagged_pair_friction.push(PairFrictionContact {
+                    stencil,
+                    n: diff / dist,
+                    anchors,
+                    lambda,
+                });
+            }
         }
         // λ needs a step scale; use the same h the barrier κ uses
         // implicitly — the caller's h is not known here, so store λ
@@ -884,6 +965,15 @@ impl BarrierShell {
                 }
             }
         }
+    }
+
+    /// Relative tangential slip of a lagged pair at `x`.
+    fn pair_slip(&self, pf: &PairFrictionContact, x: &[Vec3]) -> Vec3 {
+        let mut u = Vec3::ZERO;
+        for (k, (idx, w)) in pf.stencil.iter().enumerate() {
+            u += (x[*idx as usize] - pf.anchors[k]) * *w;
+        }
+        u - pf.n * pf.n.dot(u)
     }
 
     /// Friction force-magnitude profile g(s) and its (projected)

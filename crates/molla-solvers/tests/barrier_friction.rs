@@ -176,3 +176,107 @@ fn incline_discriminates_static_from_kinetic() {
         "μ_s = μ_k = 0.4 < tanθ must SLIDE: {d_slide:.5}"
     );
 }
+
+/// C0 phase 5b — PAIR friction (cloth-on-cloth): a free patch resting
+/// on a pinned patch, pulled sideways by tilting gravity (the incline
+/// trick applied to layer-on-layer contact). With μ_k = 0.4 and
+/// μ_s = 0.6 > tan θ = 0.5 the top layer must stick to the bottom one;
+/// with friction off it slides away. No obstacles involved — the
+/// tangential hold comes ENTIRELY from the VT/EE pair friction.
+#[test]
+fn layer_on_layer_pair_friction_sticks() {
+    let build = |mu: Real| -> (BarrierShell, usize) {
+        let spacing = 0.03;
+        let mk = |n: usize, y: Real, o: Real| -> (Vec<Vec3>, Vec<[u32; 3]>) {
+            let mut pos = Vec::new();
+            for j in 0..n {
+                for i in 0..n {
+                    pos.push(Vec3::new(
+                        o + i as Real * spacing,
+                        y,
+                        o + j as Real * spacing,
+                    ));
+                }
+            }
+            let idx = |i: usize, j: usize| (j * n + i) as u32;
+            let mut tris = Vec::new();
+            for j in 0..n - 1 {
+                for i in 0..n - 1 {
+                    tris.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+                    tris.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+                }
+            }
+            (pos, tris)
+        };
+        // Top 4×4 free layer half a band above a pinned 6×6.
+        let (mut pos, mut tris) = mk(4, 0.5e-3, -0.045);
+        let n_top = pos.len();
+        let (pos_b, tris_b) = mk(6, 0.0, -0.075);
+        let base = n_top as u32;
+        pos.extend(pos_b.iter().copied());
+        tris.extend(
+            tris_b
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+        let n_total = pos.len();
+        let mut springs = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    springs.push(BarrierSpring {
+                        a,
+                        b,
+                        rest: (pos[a as usize] - pos[b as usize]).length(),
+                        k: 400.0,
+                    });
+                }
+            }
+        }
+        let params = BarrierParams {
+            friction_mu: mu,
+            friction_mu_s_scale: 1.5,
+            ..Default::default()
+        };
+        let mut shell = BarrierShell::new(pos, vec![0.02; n_total], springs, Vec::new(), params)
+            .expect("shell")
+            .with_triangles(tris);
+        shell.pin_vertices(&(n_top..n_total).collect::<Vec<_>>());
+        (shell, n_top)
+    };
+
+    let theta: Real = 0.5_f64.atan();
+    let pull = Vec3::new(9.81 * theta.sin(), -9.81 * theta.cos(), 0.0); // |g| = 9.81, tanθ = 0.5
+    let run = |mu: Real| -> Real {
+        let (mut shell, n_top) = build(mu);
+        let h = 1.0 / 240.0;
+        // Settle straight down first.
+        for _ in 0..60 {
+            shell.step(h).expect("settle");
+        }
+        shell.params.gravity = pull;
+        for v in shell.velocities.iter_mut() {
+            *v = Vec3::ZERO;
+        }
+        let com0: Vec3 = shell.positions[..n_top].iter().copied().sum::<Vec3>() / n_top as Real;
+        for step in 0..180 {
+            let stats = shell.step(h).expect("step");
+            assert!(stats.min_gap > 0.0, "step {step}: layers crossed");
+        }
+        let com: Vec3 = shell.positions[..n_top].iter().copied().sum::<Vec3>() / n_top as Real;
+        (com - com0).x
+    };
+
+    let d_stick = run(0.4); // μ_s = 0.6 > tanθ
+    let d_slide = run(0.0); // frictionless layers
+    eprintln!("layer friction: μ=0.4 moved {d_stick:.5} m, μ=0 moved {d_slide:.5} m");
+    assert!(
+        d_stick.abs() < 3.0e-3,
+        "pair friction must hold the top layer: {d_stick:.5}"
+    );
+    assert!(
+        d_slide > 0.02 && d_slide > 5.0 * d_stick.abs(),
+        "frictionless layers must slide: {d_slide:.5}"
+    );
+}
