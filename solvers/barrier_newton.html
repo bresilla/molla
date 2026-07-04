@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fc79cb2d.js";
+            window.path_to_searchindex_js = "../searchindex-90bb36fc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f4239cce.js"></script>
@@ -243,9 +243,10 @@ for adversarial primitive-size distributions — through a
 step-granularity <strong>LBVH broad phase</strong> (<code>use_lbvh</code>): AABBs inflated by
 the travel-cap bound keep the candidate set a superset for the whole
 step, and per-iterate filter kernels do the exact tests.</p>
-<p><strong>Known GPU limitation</strong>: pair (cloth-on-cloth) FRICTION is CPU-only —
-the GPU implements obstacle friction; a friction + self-contact scene
-differs between backends until the pair-friction lag moves on-device.</p>
+<p>Pair (cloth-on-cloth) friction runs on BOTH backends: the device
+freezes the pair set, frames, λ and anchors at step start
+(<code>pair_friction_lag</code>) — the layer-on-layer discriminator lands the
+same 0.62 mm hold on GPU as the f64 oracle.</p>
 <h2 id="parity-philosophy"><a class="header" href="#parity-philosophy">Parity philosophy</a></h2>
 <p>f32-vs-f64 drapes are <em>non-unique equilibria</em>: the GPU drop test gates
 on ENERGY (the f32 drape found a 13% deeper minimum than the oracle),
