@@ -102,6 +102,7 @@
 - [Higher-order elements (P2)](./fem/p2.md)
 - [Discontinuous Galerkin](./fem/dg.md)
 - [Stokes & Navier-Stokes](./fem/stokes_ns.md)
+- [Mixed (u, p) elasticity](./fem/mixed_elasticity.md)
 - [APIC FEM-MPM coupling](./fem/apic.md)
 - [Adjoint / differentiable FEM](./fem/adjoint.md)
 - [Adaptive mesh refinement (AMR)](./fem/amr.md)
@@ -151,6 +152,7 @@
 - [FEM adjoint](./autograd/fem.md)
 - [Raycast adjoint](./autograd/raycast.md)
 - [Differentiable Gaussian splat renderer](./autograd/splat.md)
+- [GPU cloth & softbody adjoints](./autograd/cloth_softbody_gpu.md)
 
 ---
 

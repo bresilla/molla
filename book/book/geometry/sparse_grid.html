@@ -1,0 +1,462 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Sparse grids (NanoVDB-equivalent) - molla — Rust + WGPU Physics Engine</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-6df35734.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">molla — Rust + WGPU Physics Engine</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="sparse-grids-nanovdb-equivalent"><a class="header" href="#sparse-grids-nanovdb-equivalent">Sparse grids (NanoVDB-equivalent)</a></h1>
+<p>A 1024³ dense SDF needs <code>1024³ × 4 B = 4 GiB</code> even though the
+non-empty (narrow-band) voxels typically cover well under 1% of
+the volume. <code>crates/molla/src/geometry/sparse_grid.rs</code> implements
+a clean-room WGSL-friendly port of NanoVDB’s three-level Root →
+Internal → Leaf topology (Museth 2013, “VDB: High-Resolution
+Sparse Volumes with Dynamic Topology”; the “NanoVDB” name comes
+from NVIDIA’s CUDA-side single-allocation refactor). molla
+maintains its own layout — portable wgpu, no CUDA dependency.</p>
+<h2 id="topology"><a class="header" href="#topology">Topology</a></h2>
+<pre><code class="language-text">Root      ─ HashMap&lt;[i32; 3], u32&gt;     → child internal idx
+Internal  ─ 32 × 32 × 32 u32 children + 1024-u32 activity bitmask
+Leaf      ─ 8  × 8  × 8  f32 values   + 16-u32   activity bitmask
+</code></pre>
+<p>Voxel coord <code>(x, y, z)</code> decomposes as <code>(root_key, internal_idx, leaf_idx)</code> via fixed bit shifts:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub const LEAF_DIM:        i32   = 8;   // 8³ = 512 voxels / leaf
+pub const LEAF_SHIFT:      i32   = 3;   // 2³ = 8 voxels per leaf axis
+pub const LEAF_MASK_U32S:  usize = 16;  // 8³ / 32 bits
+
+pub const INTERNAL_DIM:        i32   = 32;   // 32³ = 32768 children
+pub const INTERNAL_SHIFT:      i32   = 8;    // LEAF_SHIFT + 5
+pub const INTERNAL_MASK_U32S:  usize = 1024; // 32³ / 32 bits
+<span class="boring">}</span></code></pre>
+<pre><code class="language-text">leaf_local(x, y, z)     = (x &amp; 7,        y &amp; 7,        z &amp; 7)
+internal_local(x, y, z) = ((x &gt;&gt; 3) &amp; 31, (y &gt;&gt; 3) &amp; 31, (z &gt;&gt; 3) &amp; 31)
+root_key(x, y, z)       = ( x &gt;&gt; 8,       y &gt;&gt; 8,       z &gt;&gt; 8     )
+</code></pre>
+<p>Each internal node spans <code>2⁸ = 256</code> voxels per axis. A 1024³
+volume fits in <code>(1024 / 256) = 4</code> root keys per axis = 64 root
+entries — well within the linear-search budget of the WGSL
+traversal. NanoVDB ships with three internal levels for arbitrary
+world sizes; molla collapses the upper levels into one root
+because v1 targets 1024³–4096³ assets where the root never gets
+large.</p>
+<h2 id="why-this-layout"><a class="header" href="#why-this-layout">Why this layout</a></h2>
+<ul>
+<li><strong>Leaf 8³</strong> matches NanoVDB’s tile size. A leaf is a contiguous
+<code>512 × 4 = 2048 bytes</code> — easy to fit in shared memory if we
+ever go workgroup-per-leaf.</li>
+<li><strong>Internal 32³</strong> keeps the child-pointer array cache-friendly
+(<code>32 × 32 × 32 × 4 = 128 KiB</code> per internal node). Wider would
+waste storage; narrower would mean more internal nodes.</li>
+<li><strong>Root as a hash map</strong> keeps the top of the tree mutable on the
+CPU without a fixed pre-allocation. The GPU sees the root as a
+flat <code>(key, child_idx)</code> array — Stage 24e.1 adds an
+open-addressing hash table for O(1) GPU lookup; Stage 24e
+shipped a linear-scan fallback.</li>
+</ul>
+<h2 id="mask-bit-layout"><a class="header" href="#mask-bit-layout">Mask bit layout</a></h2>
+<p>Both the leaf and internal masks use the standard “one bit per
+slot, packed into <code>u32</code> words” convention:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Leaf::set (sparse_grid.rs:126-130)
+let idx = leaf_local(x, y, z);                // 0..=511
+self.values[idx] = value;
+self.mask[idx &gt;&gt; 5] |= 1u32 &lt;&lt; (idx &amp; 31);    // word `idx/32`, bit `idx%32`
+
+// Leaf::get (sparse_grid.rs:133-138)
+if (self.mask[idx &gt;&gt; 5] &gt;&gt; (idx &amp; 31)) &amp; 1 == 1 {
+    Some(self.values[idx])
+} else {
+    None
+}
+<span class="boring">}</span></code></pre>
+<p><code>idx &gt;&gt; 5</code> is the <code>u32</code> word index; <code>idx &amp; 31</code> is the bit within
+that word. Same pattern for the internal mask, where <code>idx</code> is the
+flattened <code>(ix, iy, iz)</code> triple (<code>ix + 32 * iy + 32 * 32 * iz</code>).</p>
+<p><code>Leaf::active_count</code> / <code>InternalNode::active_count</code> are sums of
+<code>u32::count_ones()</code> over the mask — the population count
+(popcount) tells you how many voxels are active without walking
+the values.</p>
+<h2 id="public-cpu-api"><a class="header" href="#public-cpu-api">Public CPU API</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct Leaf {
+    pub values: Box&lt;[f32; 512]&gt;,
+    pub mask:   [u32; LEAF_MASK_U32S],
+}
+
+pub struct InternalNode {
+    pub children: Box&lt;[u32; 32 * 32 * 32]&gt;, // u32::MAX = no child
+    pub mask:     Box&lt;[u32; INTERNAL_MASK_U32S]&gt;,
+}
+
+pub struct SparseGrid {
+    pub root:       HashMap&lt;[i32; 3], u32&gt;,
+    pub internals:  Vec&lt;InternalNode&gt;,
+    pub leaves:     Vec&lt;Leaf&gt;,
+    pub background: f32,
+}
+
+impl SparseGrid {
+    pub fn new(background: f32) -&gt; Self;
+    pub fn insert(&amp;mut self, x: i32, y: i32, z: i32, value: f32);
+    pub fn lookup(&amp;self, x: i32, y: i32, z: i32) -&gt; f32;
+    pub fn for_each_active_leaf&lt;F: FnMut(u32, [i32; 3])&gt;(&amp;self, f: F);
+
+    pub fn leaf_count(&amp;self) -&gt; usize;
+    pub fn internal_count(&amp;self) -&gt; usize;
+    pub fn root_count(&amp;self) -&gt; usize;
+    pub fn active_voxel_count(&amp;self) -&gt; u64;
+    pub fn storage_bytes(&amp;self) -&gt; usize;
+}
+<span class="boring">}</span></code></pre>
+<p><code>SparseGrid::insert</code> (Stage 24e.1 — mutable) allocates internal /
+leaf nodes lazily and only on first touch
+(<code>sparse_grid.rs:211-236</code>). The two-step allocation (alloc
+internal if missing, then alloc leaf if missing) keeps the cost
+proportional to the <em>new</em> topology, not the existing structure.
+Stage 24e.2 adds <code>delete</code> for runtime stripping (not yet wired
+up here — the topology is monotonic in v1 plus mutable insert).</p>
+<p><code>for_each_active_leaf</code> is the “do work per active region” hook;
+on the GPU side the equivalent is one workgroup per active leaf.</p>
+<h2 id="gpu-upload--sparsegridgpu"><a class="header" href="#gpu-upload--sparsegridgpu">GPU upload — <code>SparseGridGpu</code></a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct SparseGridGpu {
+    pub root_entries:        Vec&lt;i32&gt;, // [key.x, key.y, key.z, internal_idx]…
+    pub root_table:          Vec&lt;i32&gt;, // open-addressing hash table (Stage 24e.1)
+    pub root_table_capacity: u32,
+    pub internal_children:   Vec&lt;u32&gt;, // 32³ u32 per internal
+    pub internal_masks:      Vec&lt;u32&gt;, // 1024 u32 per internal
+    pub leaf_values:         Vec&lt;f32&gt;, // 512  f32 per leaf
+    pub leaf_masks:          Vec&lt;u32&gt;, // 16   u32 per leaf
+    pub background:          f32,
+}
+
+impl SparseGridGpu {
+    pub fn from_grid(grid: &amp;SparseGrid) -&gt; Self;
+}
+<span class="boring">}</span></code></pre>
+<p>Everything is flat <code>u32</code>/<code>f32</code> so the buffers pack into <code>wgpu::Buffer</code>
+without f64↔f32 conversion shenanigans. <code>from_grid</code> sorts the
+root by key so the layout is byte-deterministic across runs
+(<code>HashMap</code> iteration order isn’t deterministic).</p>
+<h2 id="stage-24e1--root_hash3-gpu-lookup"><a class="header" href="#stage-24e1--root_hash3-gpu-lookup">Stage 24e.1 — <code>root_hash3</code> GPU lookup</a></h2>
+<p>The Stage 24e linear scan over <code>root_entries</code> is fine for ≤ 64
+entries but scales poorly as a 4096³ asset pushes past 1024 roots.
+Stage 24e.1 adds an open-addressing hash table sized to load
+factor 0.7 (power-of-two capacity for cheap <code>slot &amp; mask</code>
+wrap-around). The hash function is the same in Rust and WGSL:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn root_hash3(key: [i32; 3]) -&gt; u32 {
+    let mut h: u32 = 0x9E37_79B9;          // golden-ratio seed
+    for &amp;k in &amp;key {
+        let mut k = k as u32;
+        k = k.wrapping_mul(0xCC9E_2D51);
+        k = k.rotate_left(15);
+        k = k.wrapping_mul(0x1B87_3593);
+        h ^= k;
+        h = h.rotate_left(13);
+        h = h.wrapping_mul(5).wrapping_add(0xE654_6B64);
+    }
+    // Murmur3 finalizer.
+    h ^= h &gt;&gt; 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h &gt;&gt; 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h &gt;&gt; 16;
+    h
+}
+<span class="boring">}</span></code></pre>
+<p>WGSL <code>u32</code> wraps modulo <code>2^32</code> exactly like Rust’s <code>wrapping_*</code>,
+so the two implementations agree byte-for-byte. The choice of
+MurmurHash3 finalizer + golden-ratio seed is dictated by the
+expected workload — sequential coordinates dominate when SDF
+narrow-band voxels are baked in scan order, and the bit-mixing
+above spreads them evenly across the table. The <code>(avg_probes, max_probes)</code> stats helper (<code>sparse_grid.rs:435-480</code>) lets tests
+verify the load factor / probe-length contract without
+instrumenting the GPU.</p>
+<p><code>root_table_capacity == 0</code> selects the linear-scan fallback for
+back-compat with the Stage 24e v1 traversal.</p>
+<h2 id="sparsesdf--narrow-band-sdf-wrapper"><a class="header" href="#sparsesdf--narrow-band-sdf-wrapper"><code>SparseSdf</code> — narrow-band SDF wrapper</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct SparseSdf {
+    pub grid:      SparseGrid,
+    pub origin:    Vec3,    // world position of voxel (0, 0, 0)
+    pub cell_size: Real,
+    pub nx: u32, pub ny: u32, pub nz: u32, // logical voxel extent
+}
+
+impl SparseSdf {
+    pub fn sample(&amp;self, p: Vec3) -&gt; Real;
+    pub fn normal(&amp;self, p: Vec3) -&gt; Vec3;
+    pub fn logical_voxel_count(&amp;self) -&gt; u64;
+}
+
+pub fn bake_mesh_to_sparse_sdf(
+    mesh: &amp;TriMesh, resolution: u32, padding: Real, narrow_band: u32,
+) -&gt; SparseSdf;
+
+pub fn sparse_sdf_from_dense(
+    dense: &amp;crate::geometry::sdf_bake::SdfGrid, narrow_band: u32,
+) -&gt; SparseSdf;
+<span class="boring">}</span></code></pre>
+<p>Thin wrapper mirroring the dense <a href="./sdf.html"><code>SdfGrid</code></a> API.
+Trilinear <code>sample</code> returns the stored value if the surrounding 8
+voxels are all active, otherwise the background. <code>normal</code> uses
+central differences. <code>logical_voxel_count</code> is the dense-equivalent
+voxel count — used by the storage-cost audit (a 1024³ logical SDF
+can be much sparser than its dense equivalent; ratio of
+<code>storage_bytes</code> to <code>logical_voxel_count * 4</code> is the compression
+factor).</p>
+<p><code>bake_mesh_to_sparse_sdf</code> walks the mesh BVH, computes signed
+distances on the narrow-band voxels only, and skips the rest. The
+narrow-band width is the <strong>inflation</strong> in voxels around the
+surface where samples are kept — typical value 3-4 for collision
+queries (close enough to capture the surface, far enough not to
+miss). <code>sparse_sdf_from_dense</code> is the trivial down-conversion: walk
+the dense grid, keep cells whose <code>|sdf| &lt; narrow_band * cell_size</code>.</p>
+<h2 id="reclamation-stage-24e224e3"><a class="header" href="#reclamation-stage-24e224e3">Reclamation (Stage 24e.2/24e.3)</a></h2>
+<p>Leaf slots recycle end-to-end: <code>SparseGridDeleteKernel::delete()</code> composes
+mark + drain, and the insert kernel pops the freelist before bumping.
+Internal nodes fold <strong>on demand</strong>: <code>fold_empty_internals</code> (one thread per
+root-table slot) tombstones nodes whose live-leaf count reached zero and
+feeds an internal freelist. Two open-addressing rules make this safe:
+tombstones are probe-chain non-terminators (lookups skip them — clearing
+outright would orphan colliding keys), and they are <em>claimable</em> on insert
+(the fold zeroes the stale keys so tombstone claims share the fresh-slot
+publication protocol; without this, re-inserting a folded region exhausts
+<code>MAX_ROOT_PROBES</code>). Verified by
+<code>sparse_grid_v4::leaf_and_internal_slots_recycle_after_fold</code>, including
+value-correct re-insert through tombstoned slots.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../geometry/contact_reduction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../geometry/sdf.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../geometry/contact_reduction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../geometry/sdf.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

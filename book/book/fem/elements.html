@@ -1,0 +1,497 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Element matrices - molla — Rust + WGPU Physics Engine</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-6df35734.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">molla — Rust + WGPU Physics Engine</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="element-kernels"><a class="header" href="#element-kernels">Element kernels</a></h1>
+<p>The element kernels in <code>crates/molla-fem/src/element.rs</code> are the
+per-cell building blocks of every assembly: they take a cell + the
+vertex array (+ whatever material parameters the operator needs) and
+return a small dense matrix in row-major
+<code>Vec&lt;Vec&lt;Real&gt;&gt;</code> form. The <a href="./assembly.html">assembly walker</a> then
+scatters those matrices into a global <code>BsrMatrix</code>.</p>
+<p>All kernels follow the same shape — <code>compute_element_*(cell, vertices, …) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;</code> — and they all use the same two geometric helpers:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn tri_area_2d(p: &amp;[Vec3; 3]) -&gt; Real;
+pub fn tet_volume(p: &amp;[Vec3; 4]) -&gt; Real;          // absolute
+pub fn tet_signed_volume(p: &amp;[Vec3; 4]) -&gt; Real;   // signed
+<span class="boring">}</span></code></pre>
+<p>plus two shape-gradient helpers used by every gradient-based operator:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub(super) fn tri_shape_grads_2d(p: &amp;[Vec3; 3]) -&gt; [[Real; 2]; 3];
+pub(super) fn tet_shape_grads(p: &amp;[Vec3; 4]) -&gt; [Vec3; 4];
+<span class="boring">}</span></code></pre>
+<p>The triangle gradient routine returns <code>[gx, gy]</code> pairs only — the
+out-of-plane component is zero by construction for a planar
+\(z = 0\) triangle. The tet routine returns full 3D vectors built
+from the inverse-transpose of <code>D = [v₁−v₀ | v₂−v₀ | v₃−v₀]</code>, with the
+standard \( \nabla \phi_0 = -\sum_{i \ge 1} \nabla \phi_i \)
+identity that the <code>partition_of_zero</code> test verifies.</p>
+<h2 id="mass"><a class="header" href="#mass">Mass</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_mass(cell: &amp;FemCell, vertices: &amp;[Vec3]) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>The consistent P1 mass matrix is closed-form in the cell measure:</p>
+<p>\[
+M_{ij}^{\text{tri}} = \frac{|K|}{12} \begin{pmatrix} 2 &amp; 1 &amp; 1 \ 1 &amp; 2 &amp; 1 \ 1 &amp; 1 &amp; 2 \end{pmatrix},
+\quad
+M_{ij}^{\text{tet}} = \frac{|K|}{20} \begin{pmatrix} 2 &amp; 1 &amp; 1 &amp; 1 \ 1 &amp; 2 &amp; 1 &amp; 1 \ 1 &amp; 1 &amp; 2 &amp; 1 \ 1 &amp; 1 &amp; 1 &amp; 2 \end{pmatrix}
+\]</p>
+<p>The reference matrices <code>TRI_MASS_REF</code> and <code>TET_MASS_REF</code> are stored as
+<code>const</code> arrays; the kernel just multiplies by <code>area / 12</code> or
+<code>vol / 20</code>. Row sums equal the lumped-mass row sums and the total sum
+is the cell measure — the
+<code>mass_matrix_row_sum_equals_lumped_mass</code> test in
+<a href="./assembly.html">assembly</a> checks this on a 4×4 triangle grid.</p>
+<h2 id="laplacian-stiffness"><a class="header" href="#laplacian-stiffness">Laplacian stiffness</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_stiffness(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    coeff: Real,
+) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>For P1 the shape-function gradients are piecewise constant, so</p>
+<p>\[
+K_{ij} = \alpha \int_K \nabla \phi_i \cdot \nabla \phi_j , dx
+= \alpha \cdot |K| \cdot \nabla \phi_i \cdot \nabla \phi_j
+\]</p>
+<p>— one cross product (or 2D dot product) per <code>(i, j)</code> entry. No
+quadrature loop, no allocator churn beyond the output matrix. The
+identity \( \sum_j \nabla \phi_j = 0 \) implies
+\( K \cdot \mathbf{1} = 0 \) per cell, captured by
+<code>unit_tet_stiffness_kills_constant_field</code>.</p>
+<p>The wave-equation operator
+\( c^2 \nabla^2 \) reuses the same code:</p>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_wave_stiffness(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    c2: Real,
+) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>is literally <code>compute_element_stiffness(cell, vertices, c2)</code> —
+re-badged so callers reading the assembly visitor list can tell which
+PDE is being assembled.</p>
+<h2 id="linear-isotropic-elasticity"><a class="header" href="#linear-isotropic-elasticity">Linear isotropic elasticity</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_elasticity_stiffness(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    lambda: Real,
+    mu: Real,
+) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>The full \( \mathbf{B}^T \mathbf{D} \mathbf{B} \) operator:</p>
+<p>\[
+\mathbf{K}_e = \int_K \mathbf{B}^T \mathbf{D} \mathbf{B} , dV
+\]</p>
+<p>with the strain–displacement matrix <code>B</code> in Voigt notation and the
+elasticity tensor</p>
+<p>\[
+\mathbf{D}^{\text{3D}} =
+\begin{pmatrix}
+\lambda + 2\mu &amp; \lambda &amp; \lambda &amp; 0 &amp; 0 &amp; 0 \
+\lambda &amp; \lambda + 2\mu &amp; \lambda &amp; 0 &amp; 0 &amp; 0 \
+\lambda &amp; \lambda &amp; \lambda + 2\mu &amp; 0 &amp; 0 &amp; 0 \
+0 &amp; 0 &amp; 0 &amp; \mu &amp; 0 &amp; 0 \
+0 &amp; 0 &amp; 0 &amp; 0 &amp; \mu &amp; 0 \
+0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 &amp; \mu
+\end{pmatrix}
+\]</p>
+<p>For a tetrahedron \( \mathbf{B} \) is 6×12, so
+\( \mathbf{K}_e \) is 12×12 — three components per vertex,
+interleaved as <code>[ux₀, uy₀, uz₀, ux₁, ...]</code>. The implementation builds
+<code>B</code> once, computes <code>D · B</code> (6×12), then performs the 12×12
+contraction <code>Bᵀ · (D · B)</code> and scales by <code>vol</code>. Triangle elements
+follow the same recipe in plane strain: \( \mathbf{B} \) is 3×6,
+\( \mathbf{D} \) is the in-plane \( (\lambda + 2\mu, \lambda, \mu) \)
+3×3 block, and the output is 6×6.</p>
+<p>Lamé parameters in terms of Young’s modulus and Poisson’s ratio:</p>
+<p>\[
+\lambda = \frac{E \nu}{(1 + \nu)(1 - 2\nu)},
+\quad
+\mu = \frac{E}{2(1 + \nu)}.
+\]</p>
+<h2 id="st-venantkirchhoff-hyperelastic-stress"><a class="header" href="#st-venantkirchhoff-hyperelastic-stress">St Venant–Kirchhoff hyperelastic stress</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_st_venant_kirchhoff_stress(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    u_local: &amp;[Real],
+    lambda: Real,
+    mu: Real,
+) -&gt; Vec&lt;Real&gt;;
+<span class="boring">}</span></code></pre>
+<p>The SVK model is the geometrically-nonlinear extension of linear
+elasticity. Given the deformation gradient
+\( F = \partial x / \partial X = I + \sum_i u_i \otimes \nabla \phi_i \),
+the Green strain is</p>
+<p>\[
+E = \tfrac{1}{2}(F^T F - I),
+\]</p>
+<p>the second Piola–Kirchhoff stress is</p>
+<p>\[
+S = \lambda , \mathrm{tr}(E) , I + 2\mu E,
+\]</p>
+<p>and the first Piola–Kirchhoff stress is \( P = F S \). The nodal
+force on local vertex \( a \) is</p>
+<p>\[
+\mathbf{f}_a = |K| \cdot P \cdot \nabla \phi_a.
+\]</p>
+<p>The implementation uses <strong>signed</strong> volume (<code>tet_signed_volume</code>) so a
+flipped rest tet produces the correct internal-force direction — the
+volume’s sign and the shape-gradient signs cancel.</p>
+<p>Triangle plane-strain SVK is <em>not</em> implemented (the 2D contract tests
+all use linear elasticity); calling it panics with a clear message
+that points the user to the tet path. This is a deliberate “fail
+loud, don’t fail silent with wrong-sized output” choice.</p>
+<h2 id="neo-hookean-and-mooney-rivlin-tet-tangents"><a class="header" href="#neo-hookean-and-mooney-rivlin-tet-tangents">Neo-Hookean and Mooney-Rivlin tet tangents</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_neo_hookean_energy(... ) -&gt; Real;
+pub fn compute_element_neo_hookean_force(... ) -&gt; Vec&lt;Real&gt;;
+pub fn compute_element_neo_hookean_tangent(... ) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+
+pub fn compute_element_mooney_rivlin_energy(... ) -&gt; Real;
+pub fn compute_element_mooney_rivlin_force(... ) -&gt; Vec&lt;Real&gt;;
+pub fn compute_element_mooney_rivlin_tangent(... ) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>The hyperelastic tet path now includes compressible Neo-Hookean and
+Mooney-Rivlin energies. Internal forces are central finite-difference
+gradients of the closed-form element energy, and tangents are central
+finite differences of those forces. This keeps the first implementation
+auditable and gives Newton solves a consistent element tangent while a
+future optimisation pass can swap in analytic fourth-order material
+tangents.</p>
+<p>The Neo-Hookean density is stress-free at identity and has the same
+small-strain tangent as the linear isotropic element. The Mooney-Rivlin
+variant uses two invariants plus a volumetric penalty and is likewise
+stress-free at identity. Both paths currently support P1 tetrahedra.</p>
+<h2 id="convection--supg-stabilisation"><a class="header" href="#convection--supg-stabilisation">Convection + SUPG stabilisation</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_convection(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    b: Vec3,
+) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+
+pub fn compute_element_supg_convection(
+    cell: &amp;FemCell,
+    vertices: &amp;[Vec3],
+    b: Vec3,
+    alpha: Real,
+    h: Real,
+) -&gt; Vec&lt;Vec&lt;Real&gt;&gt;;
+<span class="boring">}</span></code></pre>
+<p>The Galerkin convection block
+\( C_{ij} = \int_K N_i , (\mathbf{b} \cdot \nabla N_j) , dx \)
+with P1 elements has a rank-one structure: \( \mathbf{b} \cdot \nabla N_j \)
+is a single number per column \( j \), and
+\( \int_K N_i , dx = |K| / (n+1) \) for every row — so every row of
+\( C \) is the same column vector.</p>
+<p>The operator is <strong>non-symmetric</strong> and goes oscillatory once the cell
+Péclet number \( |\mathbf{b}| h / (2\alpha) \) exceeds 1. Streamline-
+Upwind Petrov–Galerkin (SUPG) restores monotonicity by adding a
+symmetric stabilisation block</p>
+<p>\[
+S_{ij}^{\text{SUPG}} = \tau \int_K (\mathbf{b} \cdot \nabla N_i)(\mathbf{b} \cdot \nabla N_j) , dx
+\]</p>
+<p>with Hughes’ textbook
+\( \tau = h / (2|\mathbf{b}|) \). The kernel multiplies by an
+optional <code>alpha</code> factor and returns a rank-one symmetric block of
+\( \tau |K| (\mathbf{b} \cdot \nabla N) (\mathbf{b} \cdot \nabla N)^T \).
+Pair <code>compute_element_convection</code> with <code>compute_element_supg_convection</code>
+to recover a textbook Petrov–Galerkin convection–diffusion operator.</p>
+<h2 id="symmetric-dirichlet-distortion-energy"><a class="header" href="#symmetric-dirichlet-distortion-energy">Symmetric-Dirichlet distortion energy</a></h2>
+<pre class="playground"><code class="language-rust edition2021"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn compute_element_distortion_energy(
+    cell: &amp;FemCell,
+    rest_vertices: &amp;[Vec3],
+    deformed_vertices: &amp;[Vec3],
+) -&gt; (Real, Vec&lt;Vec3&gt;, Vec&lt;Vec&lt;Real&gt;&gt;);
+<span class="boring">}</span></code></pre>
+<p>Returns <code>(energy, gradient, hessian)</code>. The energy is</p>
+<p>\[
+E = \tfrac{1}{2} , \mathrm{tr}(F^T F + (F^T F)^{-1}) - \dim
+\]</p>
+<p>where \( F = D_{\text{def}} \cdot D_{\text{rest}}^{-1} \). It is
+zero on the identity map, grows monotonically away from it, and has a
+barrier at every degenerate (zero-volume) configuration — the
+canonical “distortion-aware” objective for parameterisation /
+inverse-deformation tasks.</p>
+<p>The v1 implementation uses <strong>central finite differences</strong> on the
+analytic energy for both gradient and Hessian. This keeps the kernel
+short and easy to audit; finite differences are essentially exact to
+roundoff thanks to the smooth analytic energy. A follow-up stage can
+swap in the analytic \( \partial \Psi / \partial F \) /
+\( \partial^2 \Psi / \partial F^2 \) once the
+\( dF/dx \) chain rule is wired through.</p>
+<p>The Hessian is collected as a <code>(N · 3) × (N · 3)</code> dense matrix in
+interleaved layout — <code>9×9</code> for a triangle, <code>12×12</code> for a tet. The
+<a href="./solvers.html#newton-on-distortion-energy"><code>solve_distortion_minimization</code></a>
+driver runs Newton-Raphson against this block.</p>
+<h2 id="visitor-signature-contract"><a class="header" href="#visitor-signature-contract">Visitor signature contract</a></h2>
+<p>Every kernel returns a row-major <code>Vec&lt;Vec&lt;Real&gt;&gt;</code> with row count and
+column count both equal to <code>cell.vert_count() · dofs_per_vertex</code>:</p>
+<ul>
+<li>Scalar P1 mass / stiffness: 3×3 (Tri) or 4×4 (Tet).</li>
+<li>Elasticity 3D: 12×12.</li>
+<li>Plane-strain elasticity: 6×6.</li>
+<li>Convection / SUPG: same as scalar P1.</li>
+<li>Distortion Hessian: 9×9 / 12×12.</li>
+</ul>
+<p>The choice of <code>Vec&lt;Vec&lt;…&gt;&gt;</code> over a packed <code>[Real; 144]</code> is deliberate:
+the v1 visitor API needs to stay readable and copy-safe, and the
+allocator overhead is dwarfed by the matvec cost downstream. The GPU
+elasticity port in <a href="./elasticity_gpu.html"><code>elasticity_gpu</code></a> drops to a
+packed <code>[f32; 144]</code> payload — but only inside the WGSL shader.</p>
+<h2 id="cross-references"><a class="header" href="#cross-references">Cross-references</a></h2>
+<ul>
+<li>The <a href="./quadrature.html">quadrature</a> chapter lists the Gauss rules
+these kernels invoke.</li>
+<li>The <a href="./assembly.html">assembly</a> chapter shows how the local matrices
+get scattered.</li>
+<li>The <a href="./solvers.html">solvers</a> chapter is where these kernels meet
+CG / PCG / Newton-Raphson.</li>
+<li>The <a href="./p2.html">P2</a> and <a href="./dg.html">DG</a> chapters add their own higher-
+order kernels that share the same <code>Vec&lt;Vec&lt;Real&gt;&gt;</code> shape.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../fem/quadrature.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../fem/assembly.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../fem/quadrature.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../fem/assembly.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

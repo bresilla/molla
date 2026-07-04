@@ -239,3 +239,19 @@ surface where samples are kept — typical value 3-4 for collision
 queries (close enough to capture the surface, far enough not to
 miss). `sparse_sdf_from_dense` is the trivial down-conversion: walk
 the dense grid, keep cells whose `|sdf| < narrow_band * cell_size`.
+
+
+## Reclamation (Stage 24e.2/24e.3)
+
+Leaf slots recycle end-to-end: `SparseGridDeleteKernel::delete()` composes
+mark + drain, and the insert kernel pops the freelist before bumping.
+Internal nodes fold **on demand**: `fold_empty_internals` (one thread per
+root-table slot) tombstones nodes whose live-leaf count reached zero and
+feeds an internal freelist. Two open-addressing rules make this safe:
+tombstones are probe-chain non-terminators (lookups skip them — clearing
+outright would orphan colliding keys), and they are *claimable* on insert
+(the fold zeroes the stale keys so tombstone claims share the fresh-slot
+publication protocol; without this, re-inserting a folded region exhausts
+`MAX_ROOT_PROBES`). Verified by
+`sparse_grid_v4::leaf_and_internal_slots_recycle_after_fold`, including
+value-correct re-insert through tombstoned slots.

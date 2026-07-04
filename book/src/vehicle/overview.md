@@ -52,3 +52,24 @@ pressure distribution, bead drift) and force-shape checks that guard the
 tire physics without external measured-data calibration (that scope is
 deliberately excluded — see the "Calibration stance" section of
 `PLAN_REALTIRE.md`).
+
+
+## Fully autonomous GPU substep loop (F2)
+
+The tire FEM substep loop runs with zero per-substep host values:
+`step_persistent → dispatch_resident(resident-spin) →
+step_hub_persistent_with_tread_forces_spinning`. The wheel spin DOF lives
+in `hub_state[1].zw` (integrated on-device with the exact
+`integrate_spin_dof` formula, soft-sign brake saturator included), and the
+feedback shader reads ω from the hub rows. Proven bit-identical to a
+host-bridged reference over 96 rolling substeps.
+
+The fused-atlas path scales this to fleets: one dispatch runs the bristle
+physics for every tire (`step_resident_atlas_feedback`), the hub-param
+bridge folds per-node force rows into each tire's `extf`, and
+`hub_reduce_atlas` integrates all hubs (spin DOF included). Measured:
+**1.53× realtime for 40 wheels** running the complete loop. A shared fleet
+heightfield (`TireFemAtlasTerrain`) adds bilinear terrain sampling — an
+all-zero heightfield is bitwise identical to the flat path, and an incline
+makes the wheel drift downhill (the tilted contact normal redirects the
+bristle reaction, which a flat-ground model cannot produce).

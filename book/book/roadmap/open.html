@@ -1,0 +1,674 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Open items - molla — Rust + WGPU Physics Engine</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Comprehensive technical documentation for the molla physics engine — a Rust + wgpu/WGSL port of NVIDIA Newton/Warp.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d16009f2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-6df35734.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">molla — Rust + WGPU Physics Engine</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="open-items"><a class="header" href="#open-items">Open items</a></h1>
+<blockquote>
+<p><strong>Current open set (2026-07-02).</strong> Most entries below have since
+<strong>landed</strong> and carry an inline <code>**Status.** Landed</code> block — they are
+kept as decision records, not backlog. The genuinely open items are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Item</th><th>What</th><th>Effort</th></tr>
+</thead>
+<tbody>
+<tr><td>A1 (Tier-A below)</td><td>Kinetic-vs-static friction split (μ_s &gt; μ_k, per-contact stick/slip state)</td><td>1–2 days</td></tr>
+<tr><td>X1 (bottom of file)</td><td>Critic audit round over Stages 39–51</td><td>~1 day</td></tr>
+<tr><td>X2 (bottom of file)</td><td>Viewer scenes for the v3–v6 solver work</td><td>~1 day each</td></tr>
+</tbody>
+</table>
+</div>
+<p>Larger tracked work lives outside this file: the tire stream
+(zero-host-readback substep loop, 40-wheel realtime — <code>PROGRESS.md</code>)
+and the inspection backlog (<code>INSPECTION.md</code> at the repo root).</p>
+</blockquote>
+<p>A concrete inventory of work from the v3–v6 push, grouped by tier:</p>
+<ul>
+<li><strong>Tier-A — v5 follow-ups.</strong> Small, well-scoped pieces that close out a stage
+already in flight. Each is days, not weeks. Most are “the obvious next
+slice” on top of a v3/v4 that already landed.</li>
+<li><strong>Tier-B — algorithmic upgrades.</strong> Larger pieces (typically week-scale) that
+upgrade an existing capability from a working v1 to something competitive
+with Newton / Warp at scale.</li>
+<li><strong>Tier-C — new physics axes.</strong> Genuinely new capabilities. Multi-week.
+Open unless / until a concrete user need surfaces.</li>
+</ul>
+<p>Every item lists:</p>
+<ol>
+<li>A 1–2 sentence problem statement.</li>
+<li>Dependencies (stages / commits that must be in place).</li>
+<li>Estimated effort in days.</li>
+<li>Priority recommendation.</li>
+<li>A <strong>“would change my mind if”</strong> criterion — the signal that would
+re-rank the item up or down.</li>
+</ol>
+<p>Stage numbers and commit hashes refer to entries on <code>main</code> as of
+2026-05-11 evening (HEAD <code>2bde182</code>, Stage 41 v6); the open-set banner
+above reflects 2026-07-02. Note this snapshot predates the entire
+<code>molla-vehicle</code> / tire-FEM effort, which is tracked in
+<code>PLAN_REALTIRE.md</code> + <code>PROGRESS.md</code> instead.</p>
+<hr>
+<h2 id="tier-a--v5-follow-ups-small-well-scoped"><a class="header" href="#tier-a--v5-follow-ups-small-well-scoped">Tier-A — v5 follow-ups (small, well-scoped)</a></h2>
+<h3 id="a1-kinetic-vs-static-friction-split-stage-50-v2"><a class="header" href="#a1-kinetic-vs-static-friction-split-stage-50-v2">A1. Kinetic-vs-static friction split (Stage 50 v2)</a></h3>
+<p><strong>Problem.</strong> Stage 50 (<code>e751d17</code>) shipped Coulomb friction at Signorini
+contact with a single friction coefficient <code>μ</code>. Real materials have
+distinct static (<code>μ_s</code>) and kinetic (<code>μ_k</code>) coefficients with <code>μ_s &gt; μ_k</code>,
+which is what produces stick-slip transitions. The current solver returns
+to “stick” the instant the tangential force drops below <code>μ |λ_n|</code>, which is
+the right answer for <code>μ_s == μ_k</code> only.</p>
+<p><strong>Dependencies.</strong> Stage 50 (<code>e751d17</code>), Stage 51 active-set loop
+(<code>4a4fc64</code>).</p>
+<p><strong>Effort.</strong> 1–2 days. The state machine is per-contact; the only invasive
+change is a <code>friction_state: enum { Stick, Slip }</code> per contact carried
+across the active-set sweep.</p>
+<p><strong>Priority.</strong> Medium. Cheap, but <code>μ_s == μ_k</code> is the right default for
+most robotics workloads.</p>
+<p><strong>Would change my mind if</strong> a user reports inability to reproduce
+stick-slip resonance / chatter (e.g. a robot finger gripping a smooth
+glass surface, or a tendon-driven gripper at the friction limit) — that
+maps cleanly onto distinct <code>μ_s</code> / <code>μ_k</code>.</p>
+<h3 id="a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5"><a class="header" href="#a2-variable-per-muscle-stiffness--pennation-on-gpu-stage-42-v5">A2. Variable per-muscle stiffness + pennation on GPU (Stage 42 v5)</a></h3>
+<p><strong>Status.</strong> Landed (implementation shipped with the C6 push; validated
+2026-07-02). The WGSL kernel reads per-muscle
+<code>muscle_pennation_angle</code>/<code>muscle_tendon_stiffness_ratio</code> storage
+buffers (<code>muscle.wgsl</code> bindings 7/9) uploaded from the <code>Model</code> arrays,
+and the heterogeneous-parameter hardware parity lane
+<code>per_muscle_pennation_and_stiffness_cpu_gpu_parity</code> in
+<code>crates/molla-solvers/tests/joint_muscle_gpu.rs</code> confirms CPU/GPU
+agreement (with a homogeneous-control guard against a vacuous pass).</p>
+<p><strong>Problem (historical).</strong> Stage 42 v3 (<code>bbd5c61</code>) shipped the Hill kernel + cable ABA on
+GPU; v4 (<code>0411d0b</code>) added SEE Newton GPU/CPU parity. The remaining gap:
+per-muscle <code>stiffness_ratio</code> and pennation angle are honored on CPU but
+read from a single shared parameter on GPU (the <code>d38739e</code> critic fix did
+the CPU side). Tendon-driven biomechanics with mixed fast/slow fibers
+needs per-muscle parameter buffers on GPU.</p>
+<p><strong>Dependencies.</strong> Stage 42 v3 (<code>bbd5c61</code>), Stage 42 v4 (<code>0411d0b</code>),
+critic-fix commit <code>d38739e</code>.</p>
+<p><strong>Effort.</strong> 1 day. Add per-muscle parameter array + bind group; the kernel
+math already supports it.</p>
+<p><strong>Priority.</strong> Medium-low. Single-parameter Hill is fine for
+hopper/finger demos; multi-fiber bio-mechanics is the use case that
+actually needs this.</p>
+<p><strong>Would change my mind if</strong> a viewer scene needs anisotropic muscles
+(typing-finger biomechanics, soft gripper with antagonist pairs).</p>
+<h3 id="a3-sh-gpu-forward-for-diffuseview-split-stage-44-v5"><a class="header" href="#a3-sh-gpu-forward-for-diffuseview-split-stage-44-v5">A3. SH GPU forward for diffuse/view split (Stage 44 v5)</a></h3>
+<p><strong>Status.</strong> Landed in the modular workspace. The GPU path is
+<code>SplatRaytraceKernel::dispatch_sh_diffuse_view</code> with WGSL in
+<code>crates/molla-kernels/shaders/splat_raytrace_sh_diffuse_view.wgsl</code>.</p>
+<p><strong>Result.</strong> Diffuse RGB and the 15 band-1..3 SH-view coefficients are
+bound as separate buffers and evaluated per pixel/view direction on GPU,
+so iterative differentiable-splat workflows no longer need a CPU bake
+into full 16-coefficient band-3 SH.</p>
+<h3 id="a4-dg-limiter-gpu-port-stage-43-v5"><a class="header" href="#a4-dg-limiter-gpu-port-stage-43-v5">A4. DG limiter GPU port (Stage 43 v5)</a></h3>
+<p><strong>Status.</strong> Landed for DG-P1 shallow-water state buffers. The GPU path is
+<code>DgSweLimiterKernel</code> with WGSL in
+<code>crates/molla-fem/shaders/dg_swe_limiter.wgsl</code>.</p>
+<p><strong>Result.</strong> Both scalar component-wise Barth-Jespersen and
+Krivodonova-style characteristic limiting can run as resident GPU passes
+after the Stage 43 v4 flux sweep. The dispatcher reads <code>state_in</code> and
+writes <code>state_out</code> to preserve the CPU snapshot semantics while allowing
+ping-pong buffers between GPU RK stages.</p>
+<h3 id="a5-dg-amr-coarsening--level-gap-recursion-stage-45-v5"><a class="header" href="#a5-dg-amr-coarsening--level-gap-recursion-stage-45-v5">A5. DG-AMR coarsening + level-gap recursion (Stage 45 v5)</a></h3>
+<p><strong>Status.</strong> Landed for DG-P1 triangle coarsening helpers.</p>
+<p><strong>Result.</strong> <code>AmrMesh::coarsen_subtree</code> collapses deep trees from the
+leaves upward, and <code>project_dg_p1_tri_children_to_parent_l2</code> performs the
+child-to-parent L² projection for DG-P1 triangle fields. The regression
+coverage lives in <code>crates/molla-fem/tests/fem_amr_v5.rs</code>.</p>
+<p><strong>Would change my mind if</strong> a moving-collider demo (the canonical AMR
+benchmark) is on the demo roadmap — then this is a blocker.</p>
+<h3 id="a6-source-side-surface-quadrature--tetbvh-accel-stage-47-v5"><a class="header" href="#a6-source-side-surface-quadrature--tetbvh-accel-stage-47-v5">A6. Source-side surface quadrature + TetBvh accel (Stage 47 v5)</a></h3>
+<p><strong>Status.</strong> Landed for the current nonconforming projection paths.</p>
+<p><strong>Result.</strong> <code>molla_geometry::TetBvh</code> now provides a CPU BVH over per-tet
+AABBs, and <code>molla-fem::NonconformingField</code> builds a source-side
+<code>SourceTetIndex</code> once for volume and target-surface cross-mass assembly.
+Each quadrature point queries BVH candidates before the exact
+barycentric inside-tet test, avoiding the old linear source-tet scan.</p>
+<h3 id="a7-active-set-anti-cycling-hardening-stage-51-v2"><a class="header" href="#a7-active-set-anti-cycling-hardening-stage-51-v2">A7. Active-set anti-cycling hardening (Stage 51 v2)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_active_set_signorini</code> now records seen active sets and
+uses a Bland-style least-slave-DoF single pivot when a proposed update
+would revisit a previous set. <code>ActiveSetTrace::cycle_breaks</code> and
+<code>ActiveSetIteration::bland_pivot</code> expose the diagnostic path.</p>
+<hr>
+<h2 id="tier-b--algorithmic-upgrades-week-scale"><a class="header" href="#tier-b--algorithmic-upgrades-week-scale">Tier-B — algorithmic upgrades (week-scale)</a></h2>
+<h3 id="b1-π-projection-branch-of-hiptmair-xu-ams-stage-48-v5"><a class="header" href="#b1-π-projection-branch-of-hiptmair-xu-ams-stage-48-v5">B1. Π-projection branch of Hiptmair-Xu AMS (Stage 48 v5)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now builds the vector-nodal interpolation
+operator <code>Π : (P1)^3 -&gt; NedelecEdge</code>, pins the matching vector-P1
+auxiliary Laplacian at Dirichlet-touched vertices, and adds the fixed
+iteration-count Π auxiliary correction inside <code>AmsPreconditioner::apply</code>.
+The old gradient-only action remains available through
+<code>with_pi_projection(false)</code> for comparisons.</p>
+<p><strong>Problem.</strong> Stage 48 v3 (<code>fa3616e</code>) shipped a geometric multigrid V-cycle
+for AMS; v4 (<code>c0cb1a6</code>) added algebraic multigrid (Ruge-Stüben). The
+auxiliary-space AMS preconditioner has two branches: the gradient branch
+(<code>G^T A G</code>, shipped) and the Π-projection branch (vector Laplacian on
+nodal P1 space). Without the Π branch, AMS is incomplete and convergence
+degrades when the curl-free component is non-negligible.</p>
+<p><strong>Dependencies.</strong> Stage 46 (H(curl) elements, <code>e4eab58</code>), Stage 48 v1+v2
+(<code>f6fe6a1</code>), Stage 48 v3 (<code>fa3616e</code>), Stage 48 v4 (<code>c0cb1a6</code>).</p>
+<p><strong>Effort.</strong> 4–5 days. The Π operator is a discrete interpolation from
+edge-DoFs to vector nodal DoFs; the nodal Laplacian solver already exists
+in the FEM stack.</p>
+<p><strong>Priority.</strong> High. Without Π, AMS is a one-trick preconditioner — it
+masks the curl-free component into the smoother, which doesn’t scale.</p>
+<p><strong>Would change my mind if</strong> Stage 48 v4 AMG ends up beating AMS on
+every reasonable eddy-current mesh — at that point AMS is academic
+and we can drop the Π work.</p>
+<h3 id="b2-block-coupled-preconditioning-at-high-ωσ-stage-48-v6"><a class="header" href="#b2-block-coupled-preconditioning-at-high-ωσ-stage-48-v6">B2. Block-coupled preconditioning at high ωσ (Stage 48 v6)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_eddy_current_steady_ams_block</code> adds a high-<code>ωσ</code>
+preconditioner path. Its preconditioner applies AMS to the diagonal
+real/imaginary blocks, then performs a fixed number of stationary
+refinement sweeps against the full block-real operator so the
+off-diagonal <code>±ωM_σ</code> coupling enters <code>M^{-1}r</code>. The fixed sweep count
+is configured by <code>EddyCurrentConfig::block_precond_sweeps</code>, preserving
+linearity for GMRES.</p>
+<p><strong>Problem.</strong> Stage 48’s eddy-current solver decouples real/imaginary
+components in the preconditioner. At high frequency × conductivity
+(<code>ω·σ → ∞</code>), the real-imag coupling becomes dominant and the
+decoupled preconditioner stalls. Newton’s reference impl uses a
+block-preconditioner that lives on <code>(real, imag)</code> pairs.</p>
+<p><strong>Dependencies.</strong> Stage 48 v3 (<code>fa3616e</code>), Stage 48 v4 (<code>c0cb1a6</code>),
+B1 if/when Π-projection lands.</p>
+<p><strong>Effort.</strong> 3–4 days. Reuse the AMG hierarchy; apply it to the 2×2
+block at each level.</p>
+<p><strong>Priority.</strong> Medium. Only matters for explicitly high-frequency
+problems (skin-effect at MHz scales, induction heating).</p>
+<p><strong>Would change my mind if</strong> a user actually tries an induction-furnace
+or motor-laminate-eddy demo and the v4 AMG plateaus at &gt;100 GMRES
+iterations.</p>
+<h3 id="b3-frequency-sweep--coulomb-gauge-enforcement-stage-48-misc"><a class="header" href="#b3-frequency-sweep--coulomb-gauge-enforcement-stage-48-misc">B3. Frequency sweep + Coulomb-gauge enforcement (Stage 48 misc)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_eddy_current_frequency_sweep</code> now runs Jacobi, AMS,
+or block-AMS solves across a list of angular frequencies. Optional
+Coulomb-gauge enforcement projects each real/imaginary potential with
+<code>project_nedelec_coulomb_gauge</code>, which subtracts the least-squares
+gradient component (<code>G^T G φ = G^T a</code>) while preserving pinned edge
+DoFs. <code>coulomb_gauge_residual</code> reports the remaining discrete gauge
+residual for each sample.</p>
+<p><strong>Problem.</strong> The eddy-current solver runs at a single frequency per call.
+Real industrial workflows (motor design, induction heating) need a
+parametric frequency sweep with results stored in a single buffer.
+Additionally, the H(curl) discretization has a null-space (gradients of
+scalar fields) that the GMRES converges through, but reporting expects a
+Coulomb-gauge-projected output.</p>
+<p><strong>Dependencies.</strong> Stage 46 (<code>e4eab58</code>), Stage 48 v1+v2 (<code>f6fe6a1</code>).</p>
+<p><strong>Effort.</strong> 2–3 days. The sweep is a wrapper loop; gauge enforcement is a
+post-solve <code>∇·A = 0</code> projection via the existing nodal Laplacian.</p>
+<p><strong>Priority.</strong> Low-medium. The current solver is correct <em>up to gauge</em>;
+the sweep is a UX nicety.</p>
+<p><strong>Would change my mind if</strong> anyone uses molla for actual motor /
+transformer design — that’s the workflow this enables.</p>
+<h3 id="b4-full-gpu-ns-time-integrator-with-on-device-ssp-rk-stage-41-v7"><a class="header" href="#b4-full-gpu-ns-time-integrator-with-on-device-ssp-rk-stage-41-v7">B4. Full-GPU NS time integrator with on-device SSP-RK (Stage 41 v7)</a></h3>
+<p><strong>Status.</strong> Implemented in <code>molla-fem</code>: <code>NavierStokesGpuTimeIntegrator</code>
+now exposes <code>ImexEuler</code>, <code>SspRk2</code>, and <code>SspRk3</code>. SSP-RK2/3 keep all
+intermediate velocity/pressure stages in GPU buffers and use the
+<code>combine_states</code> WGSL entry point in <code>fem_ns_rhs_assemble.wgsl</code> for the
+Shu-Osher convex combinations. The host still submits the existing GPU
+stage kernels, but it no longer reads stage vectors back between SSP
+substages; only the final result is downloaded.</p>
+<p><strong>Problem.</strong> Stage 41 v3 (<code>f2ae80f</code>) shipped GPU IMEX Navier-Stokes with
+the time loop on the host. Stage 41 v4 (<code>ccbe5c6</code>) added a fused
+RHS axpy on GPU. Stage 41 v5 (<code>3169fac</code>) folded async-dot into the Uzawa
+inner CG; v6 (<code>2bde182</code>) made the inner CG a single dispatch per iter.
+The remaining round-trip is the outer SSP-RK time stepper — it’s host-side
+Rust calling into GPU kernels per substage. Going full-on-device removes
+the round-trip and unlocks long-horizon transient simulations.</p>
+<p><strong>Dependencies.</strong> Stage 41 v3–v6 (<code>f2ae80f</code>, <code>ccbe5c6</code>, <code>3169fac</code>,
+<code>2bde182</code>).</p>
+<p><strong>Effort.</strong> 5–7 days. The on-device time loop needs a “command list
+interpreter” pattern; molla doesn’t have CUDA Graphs (see OOS), so this
+is implemented as a single mega-kernel with internal <code>workgroupBarrier</code>s.</p>
+<p><strong>Priority.</strong> Medium-high. This is the last CPU-touch in the NS path.</p>
+<p><strong>Would change my mind if</strong> transient NS turns out not to be on the
+demo roadmap. At that point the round-trip is a fixed cost per call
+that probably isn’t worth a week.</p>
+<h3 id="b5-coupled-active-set--friction-stage-49-v2--stage-50-integration"><a class="header" href="#b5-coupled-active-set--friction-stage-49-v2--stage-50-integration">B5. Coupled active-set + friction (Stage 49 v2 + Stage 50 integration)</a></h3>
+<p><strong>Status.</strong> Landed.</p>
+<p><strong>Result.</strong> <code>solve_active_set_signorini_with_friction</code> now combines the
+PDAS active-set contact loop with the stacked normal+tangent Coulomb
+Uzawa solve. The result reports full-length per-candidate normal
+multipliers, interleaved tangent multipliers, and <code>FrictionState</code>
+entries so released contacts automatically release their friction
+state and tangent force.</p>
+<p><strong>Problem.</strong> Stage 49 (<code>60a7792</code>) shipped Signorini with a fixed active
+set. Stage 50 (<code>e751d17</code>) shipped Coulomb friction <em>at</em> Signorini contact
+but assuming the normal active-set is already converged. Stage 51
+(<code>4a4fc64</code>) added the active-set update loop. The three pieces work in
+sequence on every test we have, but a fully coupled solver — the
+active-set updates <em>and</em> the friction Lagrangians live in the same
+Newton-Raphson loop — would converge more uniformly on stick-slip
+transitions.</p>
+<p><strong>Dependencies.</strong> Stage 49 (<code>60a7792</code>), Stage 50 (<code>e751d17</code>),
+Stage 51 (<code>4a4fc64</code>), A1 if <code>μ_s</code>/<code>μ_k</code> split is wanted.</p>
+<p><strong>Effort.</strong> 4–6 days. The Schur complement of the friction multipliers
+joins the active-set’s KKT system; the solver structure stays the same.</p>
+<p><strong>Priority.</strong> Medium. The sequential version is correct on every existing
+test; this is a robustness upgrade for harder geometry.</p>
+<p><strong>Would change my mind if</strong> any reported failure case traces to “the
+friction step destabilizes the active set on the next outer iter.”</p>
+<h3 id="b6-self-contact-for-cross-mesh-contact-pipelines-stage-474950"><a class="header" href="#b6-self-contact-for-cross-mesh-contact-pipelines-stage-474950">B6. Self-contact for cross-mesh contact pipelines (Stage 47/49/50)</a></h3>
+<p><strong>Status.</strong> Landed for the CPU candidate path.</p>
+<p><strong>Result.</strong> <code>molla-geometry</code> now exposes
+<code>detect_vertex_triangle_self_contacts</code>, an <code>O(VT)</code> CPU oracle that
+emits non-adjacent vertex-triangle shell contacts. <code>molla-fem</code> converts
+those into active-set gap planes with
+<code>signorini_candidates_from_self_contacts</code>, reducing multiple contacts
+on the same slave to the deepest candidate.</p>
+<p><strong>Problem.</strong> Every Stage 47–51 contact pipeline (penalty in v3/v4,
+Signorini Lagrange in 49, friction in 50, active-set in 51) operates on
+<strong>cross-mesh</strong> contact only. Self-contact (a single deforming mesh
+colliding with itself, e.g. a folding cloth or a curling tongue) is not
+handled. Stage 33.3 (<code>5385</code>) shipped self-collision for the <em>XPBD soft</em>
+pipeline; the new contact stack needs the equivalent.</p>
+<p><strong>Dependencies.</strong> Stage 47 v4 (<code>0f9e57e</code>), Stage 49 (<code>60a7792</code>),
+Stage 50 (<code>e751d17</code>), Stage 51 (<code>4a4fc64</code>), Stage 33.3 (existing
+self-collision BVH).</p>
+<p><strong>Effort.</strong> 5–7 days. Reuses Stage 33.3’s <code>SoftBvhGpu</code> for broad-phase;
+the narrow-phase needs an excluded-pair filter for same-element contact.</p>
+<p><strong>Priority.</strong> High. Self-contact is the canonical hard test for any
+soft-body / FEM contact stack. Currently a real gap on the new
+Signorini path.</p>
+<p><strong>Would change my mind if</strong> a user’s workload is exclusively
+multi-body / hand-on-object / robot-on-environment — those are
+cross-mesh by construction.</p>
+<hr>
+<h2 id="tier-c--new-physics-axes-multi-week"><a class="header" href="#tier-c--new-physics-axes-multi-week">Tier-C — new physics axes (multi-week)</a></h2>
+<h3 id="c1-multi-phase-flow-with-surface-tension"><a class="header" href="#c1-multi-phase-flow-with-surface-tension">C1. Multi-phase flow with surface tension</a></h3>
+<p><strong>Status.</strong> Landed for level-set / CSF primitives.</p>
+<p><strong>Result.</strong> <code>molla-fem::multiphase</code> now provides
+<code>level_set_curvature_2d</code>, <code>level_set_smooth_delta</code>, and
+<code>csf_surface_tension_force_2d</code>, giving the FEM/NS stack a CPU oracle
+for continuum-surface-force surface tension from a signed-distance
+interface.</p>
+<p><strong>Problem.</strong> molla has single-phase NS (Stage 36.2 / 41). Two-phase flow
+(water + air, oil + water) needs an interface tracking method (level-set
+or VOF) plus surface tension as a <code>δ</code>-distribution force on the interface.
+No primitive exists today; even the FEM convection element doesn’t
+support a discontinuous coefficient.</p>
+<p><strong>Dependencies.</strong> Stage 36.2 (FEM NS), Stage 41 v6 (GPU NS) for the
+solver substrate. Would benefit from Stage 45 AMR (refine at the
+interface).</p>
+<p><strong>Effort.</strong> 10–14 days. Level-set advection + reinitialization + CSF
+(continuum surface force) + ghost-fluid for jump conditions.</p>
+<p><strong>Priority.</strong> Low. Only relevant if a real CFD workload appears. The
+current FEM NS is built for “incompressible single-phase” and that’s
+been the user need to date.</p>
+<p><strong>Would change my mind if</strong> a robotics workload involves splashing
+liquid, gripper-in-fluid, or any free-surface flow — the existing NS
+can’t even render the free surface.</p>
+<h3 id="c2-compressible--euler-equations-on-dg-stage-43-follow-on"><a class="header" href="#c2-compressible--euler-equations-on-dg-stage-43-follow-on">C2. Compressible / Euler equations on DG (Stage 43 follow-on)</a></h3>
+<p><strong>Status.</strong> Landed for 2D Euler flux primitives.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes ideal-gas 2D Euler physical flux,
+pressure, Rusanov flux, and HLL flux helpers:
+<code>euler_flux_dot_n_2d</code>, <code>euler_pressure_2d</code>,
+<code>compute_euler_numerical_flux_rusanov_2d</code>, and
+<code>compute_euler_numerical_flux_hll_2d</code>. They plug into the existing DG
+face quadrature infrastructure the same way the SWE flux helpers do.</p>
+<p><strong>Problem.</strong> Stage 43 v4 (<code>bed9c43</code>) shipped HLL/HLLC/Roe flux for SWE.
+The same flux library applies to compressible Euler with very few
+changes — a 5-equation system instead of 3, and an EOS (ideal gas)
+substituted for the SWE depth-pressure relation. This unlocks
+supersonic-flow demos (shock tubes, blunt-body) which the SWE solver
+can’t represent.</p>
+<p><strong>Dependencies.</strong> Stage 39B (DG basis, <code>d97b5c1</code>), Stage 43 v2–v4
+(<code>00f36c1</code>, <code>d37995e</code>, <code>bed9c43</code>).</p>
+<p><strong>Effort.</strong> 6–8 days. Rusanov is straightforward; the limiter is reused
+1:1; Roe + HLLC needs an Euler-flavoured Roe averaging.</p>
+<p><strong>Priority.</strong> Low. SWE is enough for “geometric flow” demos; Euler is for
+aerodynamics. Not on any current workload.</p>
+<p><strong>Would change my mind if</strong> a user shows up wanting compressible flow.
+The DG infra is already 90 % there.</p>
+<h3 id="c3-phase-field-fracture"><a class="header" href="#c3-phase-field-fracture">C3. Phase-field fracture</a></h3>
+<p><strong>Status.</strong> First AT2 scalar-damage CPU oracle landed in <code>molla-fem</code>.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes <code>PhaseFieldFractureParams</code>,
+<code>phase_field_degradation</code>, <code>update_phase_field_history</code>,
+<code>phase_field_fracture_energy_density</code>,
+<code>assemble_phase_field_fracture_system</code>, and
+<code>solve_phase_field_fracture_jacobi</code>. The implementation assembles the
+frozen-history AT2 weak form on P1 triangles/tetrahedra with the
+existing FEM mass/stiffness kernels, then solves a bounded irreversible
+Jacobi update (<code>d_new &gt;= d_old</code>, <code>0 &lt;= d &lt;= 1</code>) as the CPU correctness
+oracle.</p>
+<p><strong>Problem.</strong> Brittle / quasi-brittle fracture as a coupled
+displacement + damage field. The damage field <code>d ∈ [0, 1]</code> is a second
+scalar PDE solved on the same FEM mesh, with a degraded elasticity
+tensor <code>(1−d)² C</code>. Nothing like this exists today.</p>
+<p><strong>Dependencies.</strong> Stage 36.1 (FEM elasticity), Stage 41 (GPU FEM), Stage
+45 (AMR — fracture concentrates in a thin band, AMR is essential).</p>
+<p><strong>Effort.</strong> 14–21 days. Standard reference is Miehe / Bourdin; well-known
+algorithm but a lot of FEM plumbing.</p>
+<p><strong>Priority.</strong> Low. Specialty workload (structural engineering,
+cracking-glass demos). Not on any roadmap.</p>
+<p><strong>Would change my mind if</strong> anyone needs material-failure simulation.
+There’s no proxy in molla today.</p>
+<h3 id="c4-mooney-rivlin--neo-hookean-tangents"><a class="header" href="#c4-mooney-rivlin--neo-hookean-tangents">C4. Mooney-Rivlin / Neo-Hookean tangents</a></h3>
+<p><strong>Status.</strong> Landed for P1 tetrahedra.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes compressible Neo-Hookean and
+Mooney-Rivlin element energies, internal forces, and consistent
+finite-difference tangents:
+<code>compute_element_neo_hookean_*</code> and
+<code>compute_element_mooney_rivlin_*</code>. The Neo-Hookean identity tangent is
+tested against the linear-elasticity stiffness, and the
+Mooney-Rivlin tangent is tested for symmetry / zero identity force.</p>
+<p><strong>Problem.</strong> Stage 36.1 ships linear elasticity + St. Venant-Kirchhoff
+(SVK) stress. SVK is wrong in compression (the strain-energy density
+isn’t convex in the right way) — Neo-Hookean and Mooney-Rivlin are the
+standard hyperelastic models for soft tissue / rubber. The forward stress
+is easy; the consistent material tangent for an implicit Newton solve
+needs the 4th-order tangent moduli, which is per-element work.</p>
+<p><strong>Dependencies.</strong> Stage 36.1 (FEM elasticity, linear + SVK).</p>
+<p><strong>Effort.</strong> 5–7 days. Closed-form 4th-order tangent for Neo-Hookean is
+in every nonlinear FEM textbook; Mooney-Rivlin is one more invariant.</p>
+<p><strong>Priority.</strong> Medium-low. Real biomechanics needs Neo-Hookean as the
+floor; SVK is “rubber-ish for demos.”</p>
+<p><strong>Would change my mind if</strong> the tendon / muscle Stage 42 work expands to
+soft-tissue substrate. Tendons are SVK-OK; muscle bellies aren’t.</p>
+<h3 id="c5-rate-and-state-friction-dieterich-ruina"><a class="header" href="#c5-rate-and-state-friction-dieterich-ruina">C5. Rate-and-state friction (Dieterich-Ruina)</a></h3>
+<p><strong>Status.</strong> Landed as reusable law/state helpers.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes
+<code>RateStateFrictionParams</code>, <code>RateStateFrictionState</code>,
+<code>rate_state_friction_coeff</code>, and <code>advance_rate_state_friction</code> for the
+Dieterich-Ruina aging law. The helper gives contact solvers a
+per-contact evolving friction coefficient without baking the law into a
+specific Signorini or particle pipeline.</p>
+<p><strong>Problem.</strong> Stage 50 ships Coulomb friction. A1 above adds the
+static / kinetic split. Geological / seismic / advanced-tribology
+workloads need rate-and-state friction — a continuum law with an
+internal state variable evolving by an ODE. Earthquake simulation,
+wheel-rail contact, paper-on-paper.</p>
+<p><strong>Dependencies.</strong> Stage 50 (<code>e751d17</code>), Stage 51 (<code>4a4fc64</code>), A1 if
+present.</p>
+<p><strong>Effort.</strong> 5–7 days. The state variable is per-contact; the ODE is
+1-D and stable. Wiring into the active-set Newton step is the work.</p>
+<p><strong>Priority.</strong> Very low. No current workload.</p>
+<p><strong>Would change my mind if</strong> anyone targets paleo-seismology or
+advanced bearing tribology — these are the use cases for D-R.</p>
+<h3 id="c6-gpu-port-of-muscle-see-for-non-default-stiffness-ratios"><a class="header" href="#c6-gpu-port-of-muscle-see-for-non-default-stiffness-ratios">C6. GPU port of muscle SEE for non-default stiffness ratios</a></h3>
+<p><strong>Status.</strong> Landed with A2.</p>
+<p><strong>Result.</strong> The muscle GPU path now carries
+<code>tendon_stiffness_ratio</code> through the per-muscle buffers in
+<code>molla-actuators</code>, the solver binding path, and the WGSL kernel, so
+non-default SEE stiffness ratios no longer require CPU fallback.</p>
+<p><strong>Problem.</strong> Stage 42 v4 (<code>0411d0b</code>) shipped SEE (series-elastic element)
+Newton GPU/CPU parity <em>for the default</em> stiffness ratio. The
+<code>d38739e</code> critic fix made non-default ratios work on CPU. The GPU kernel
+still hard-codes the default ratio; non-default ratios fall back to CPU.</p>
+<p><strong>Dependencies.</strong> Stage 42 v3 (<code>bbd5c61</code>), Stage 42 v4 (<code>0411d0b</code>),
+critic fix <code>d38739e</code>.</p>
+<p><strong>Effort.</strong> 1–2 days — could legitimately be a v5 Tier-A item; lives in
+Tier-C only because the use case (multi-fiber muscle composition) is
+specialty.</p>
+<p><strong>Priority.</strong> Low. Combine with A2 (per-muscle parameter buffers) for a
+single coherent muscle-on-GPU push.</p>
+<p><strong>Would change my mind if</strong> A2’s use case appears — at which point these
+get bundled together.</p>
+<h3 id="c7-krylov-restart-in-transient-fem-steppers"><a class="header" href="#c7-krylov-restart-in-transient-fem-steppers">C7. Krylov restart in transient FEM steppers</a></h3>
+<p><strong>Status.</strong> Landed for the CPU backward-Euler transient PCG path.</p>
+<p><strong>Result.</strong> <code>molla-fem</code> now exposes <code>KrylovRestartCache</code> and
+<code>solve_transient_pcg_restarted</code>. The restarted solve keeps a bounded set
+of recent correction directions, computes a tiny minimum-residual
+projection in <code>x0 + span(cache)</code> before PCG, and stores the accepted
+correction for the next time step. This gives the transient steppers a
+real recycled-Krylov contract beyond simply warm-starting with the
+previous solution.</p>
+<p><strong>Problem.</strong> Stage 45 v4 (<code>66d976a</code>) wired Krylov restart into
+<code>solve_after_remesh</code>. The transient steppers (<code>WaveStepperGpu</code>,
+<code>TransientStepperGpu</code>, the IMEX NS stepper) don’t restart Krylov between
+timesteps — each step starts from <code>x = 0</code> and rebuilds the Krylov basis.
+For slowly varying problems, warm-starting with the previous solution +
+a few Krylov vectors cuts iteration count substantially.</p>
+<p><strong>Dependencies.</strong> Stage 36.5 (GPU FEM v1), Stage 41 v3 (<code>f2ae80f</code>),
+Stage 45 v4 (<code>66d976a</code>).</p>
+<p><strong>Effort.</strong> 3–5 days. The Krylov-basis carry-over is a buffer-management
+problem; the math is standard.</p>
+<p><strong>Priority.</strong> Medium. Quiet 10–30 % speedup on every transient NS / heat
+demo we have.</p>
+<p><strong>Would change my mind if</strong> any benchmark shows iteration count already
+&lt; 5 per step — then there’s no slack to recover.</p>
+<hr>
+<h2 id="cross-cutting-not-tier-specific"><a class="header" href="#cross-cutting-not-tier-specific">Cross-cutting (not tier-specific)</a></h2>
+<h3 id="x1-critic-round-on-stages-3951"><a class="header" href="#x1-critic-round-on-stages-3951">X1. Critic round on Stages 39–51</a></h3>
+<p>The last focused read-only audit was <code>90f3708</code> (Stage 38 critic round,
+two safety-contract fixes). Since then, <strong>~25 stages have shipped without
+a focused audit</strong>. The <code>d38739e</code> round did spot-fixes for Stages 39–46
+but was reactive, not systematic. A planned audit pass (1 day,
+read-only) is overdue. Expect 0–2 critical-math issues and 5–10 contract
+/ doc issues, by historical base rate.</p>
+<h3 id="x2-viewer-scenes-for-the-v3v6-work"><a class="header" href="#x2-viewer-scenes-for-the-v3v6-work">X2. Viewer scenes for the v3–v6 work</a></h3>
+<p>Scenes #94–#101 (<code>0076a36</code> through <code>40e9ed7</code>) cover the v1/v2 capabilities
+of Stages 39–46. The v3–v6 work (Stages 40 v4, 41 v4–v6, 43 v3–v4,
+44 v3–v4, 45 v3–v4, 47 v2–v4, 48 v3–v4, 49, 50, 51) has zero new viewer
+scenes. ~1 day of mechanical work, high marginal demo impact.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../roadmap/stages.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../roadmap/oos.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../roadmap/stages.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../roadmap/oos.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
