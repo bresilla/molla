@@ -212,6 +212,8 @@ include!("examples/122_tire_realistic.rs");
 include!("examples/123_terrain_lab.rs");
 include!("examples/124_vehicle_sysid.rs");
 include!("examples/125_barrier_cloth.rs");
+include!("examples/126_ppf_gallery.rs");
+include!("examples/131_ppf_gallery2.rs");
 include!("examples/30_pyramid.rs");
 include!("examples/31_cloth_bending.rs");
 include!("examples/114_cloth_rollers.rs");
@@ -1522,6 +1524,23 @@ enum Scene {
     /// Stage 33.4 — fast-impact CCD demo (cube into pinned cloth strip).
     FastSoftImpact,
     BarrierCloth,
+    PpfCurtain,
+    PpfTwist,
+    PpfFriction,
+    PpfHang,
+    PpfStack,
+    PpfTrampoline,
+    PpfTrapped,
+    PpfNeedle,
+    PpfBelt,
+    PpfNoodle,
+    PpfWoven,
+    PpfKnot,
+    PpfDomino,
+    PpfCards,
+    PpfCodim,
+    PpfFitting,
+    PpfRibbon,
     /// Stage 33.5 — soft tet block sliding down a soft tet ramp;
     /// friction-coefficient slider sweeps stick → slip → slide.
     SoftBrake,
@@ -1932,6 +1951,23 @@ impl Scene {
         Scene::ClothCollar,
         Scene::FastSoftImpact,
         Scene::BarrierCloth,
+        Scene::PpfCurtain,
+        Scene::PpfTwist,
+        Scene::PpfFriction,
+        Scene::PpfHang,
+        Scene::PpfStack,
+        Scene::PpfTrampoline,
+        Scene::PpfTrapped,
+        Scene::PpfNeedle,
+        Scene::PpfBelt,
+        Scene::PpfNoodle,
+        Scene::PpfWoven,
+        Scene::PpfKnot,
+        Scene::PpfDomino,
+        Scene::PpfCards,
+        Scene::PpfCodim,
+        Scene::PpfFitting,
+        Scene::PpfRibbon,
         Scene::SoftBrake,
         Scene::FemHeat,
         Scene::FemBeam,
@@ -2034,6 +2070,23 @@ impl Scene {
             Scene::BroadPhase => "15 GPU broad phase (Stage 19)",
             Scene::VbdCloth => "16 VBD cloth (Stage 20)",
             Scene::BarrierCloth => "125 Barrier-Newton cloth (C0)",
+            Scene::PpfCurtain => "126 PPF curtain (drape/curtain)",
+            Scene::PpfTwist => "127 PPF five-twist (twist family)",
+            Scene::PpfFriction => "128 PPF friction ramp",
+            Scene::PpfHang => "129 PPF hang (strain limit)",
+            Scene::PpfStack => "130 PPF stack",
+            Scene::PpfTrampoline => "131 PPF trampoline",
+            Scene::PpfTrapped => "132 PPF trapped",
+            Scene::PpfNeedle => "133 PPF needle",
+            Scene::PpfBelt => "134 PPF belt/roller",
+            Scene::PpfNoodle => "135 PPF noodle/yarn",
+            Scene::PpfWoven => "136 PPF woven",
+            Scene::PpfKnot => "137 PPF fishing knot",
+            Scene::PpfDomino => "138 PPF domino",
+            Scene::PpfCards => "139 PPF cards",
+            Scene::PpfCodim => "140 PPF codim",
+            Scene::PpfFitting => "141 PPF fitting",
+            Scene::PpfRibbon => "142 PPF ribbon",
             Scene::ReferencePendulum => "17 Native double pendulum",
             Scene::DiffArm => "18 Differentiable arm (Stage 23)",
             Scene::DiffArm6 => "19 Differentiable Featherstone (Stage 23.1)",
@@ -2207,6 +2260,25 @@ impl Scene {
             }
             Scene::BarrierCloth => {
                 "Drapes a cloth grid over a sphere using the barrier-Newton (IPC-family) backend from roadmap C0. Interpenetration is impossible at every Newton iterate: the CCD-truncated line search cannot cross a surface, so the cloth rests exactly one barrier band above the obstacles with no contact-stiffness tuning."
+            }
+            Scene::PpfCurtain
+            | Scene::PpfTwist
+            | Scene::PpfFriction
+            | Scene::PpfHang
+            | Scene::PpfStack
+            | Scene::PpfTrampoline
+            | Scene::PpfTrapped
+            | Scene::PpfNeedle
+            | Scene::PpfBelt
+            | Scene::PpfNoodle
+            | Scene::PpfWoven
+            | Scene::PpfKnot
+            | Scene::PpfDomino
+            | Scene::PpfCards
+            | Scene::PpfCodim
+            | Scene::PpfFitting
+            | Scene::PpfRibbon => {
+                "PPF gallery: a molla rendition of the corresponding st-tech/ppf-contact-solver example on the barrier-Newton backend. Driven boundaries from the original notebooks (twisting ends, motorized rollers) are replaced by equivalent initial conditions or static stand-ins; sphere stand-ins replace their mesh obstacles where noted. The penetration-free invariant applies throughout; plasticity (plastic.ipynb) is the one intentionally unsupported material and walkthrough.ipynb maps to the book chapter."
             }
             Scene::ReferencePendulum => {
                 "Runs a native procedural double-pendulum reference scene. It should swing chaotically but continuously, providing a simple articulated baseline without any external wrapper or asset dependency."
@@ -2603,7 +2675,19 @@ impl Scene {
             | Scene::SoftbodyHanging
             | Scene::CableTwist
             | Scene::JellyDampingFall => SolverKind::Vbd,
-            Scene::BarrierCloth => SolverKind::Barrier,
+            Scene::BarrierCloth
+            | Scene::PpfCurtain
+            | Scene::PpfTwist
+            | Scene::PpfFriction
+            | Scene::PpfHang
+            | Scene::PpfStack
+            | Scene::PpfTrapped
+            | Scene::PpfNeedle
+            | Scene::PpfFitting
+            | Scene::PpfRibbon => SolverKind::Barrier,
+            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards => SolverKind::BarrierCpu,
+            Scene::PpfBelt | Scene::PpfNoodle | Scene::PpfWoven | Scene::PpfKnot
+            | Scene::PpfCodim => SolverKind::BarrierCpuChains,
             Scene::ReferencePendulum => SolverKind::Featherstone,
             // DiffArm / DiffArm6 are purely host-driven (the optimiser
             // writes body_q each frame); pick the cheap-to-construct
@@ -2618,7 +2702,13 @@ enum SolverKind {
     Xpbd,
     Featherstone,
     Vbd,
+    /// Barrier-Newton, GPU backend (pure cloth + static obstacles).
     Barrier,
+    /// Barrier-Newton, CPU backend (rigid coupling / ABD boxes).
+    BarrierCpu,
+    /// CPU backend with springs registered as collision edges
+    /// (rod/chain scenes).
+    BarrierCpuChains,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2792,6 +2882,39 @@ impl Scene {
                 cpu_proof: "barrier_engine + barrier_contact/self_contact/tet_strain/friction/abd suites",
                 gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (incl. the engine-GPU-path drape the viewer runs)",
                 notes: "penetration-free invariant asserted every step; scene drives BarrierNewtonGpu via BarrierSolver::new_gpu",
+            },
+            Scene::PpfCurtain
+            | Scene::PpfTwist
+            | Scene::PpfFriction
+            | Scene::PpfHang
+            | Scene::PpfStack
+            | Scene::PpfTrapped
+            | Scene::PpfNeedle
+            | Scene::PpfFitting
+            | Scene::PpfRibbon => ScenePhysicsAudit {
+                status: Complete,
+                reference_case: "PPF gallery (cloth family) on the barrier backend",
+                cpu_proof: "barrier_contact/self_contact/tet_strain/friction suites cover every mechanism used",
+                gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (scenes run the GPU backend)",
+                notes: "scene-specific setups over oracle-tested physics; boundary drivers replaced by initial conditions",
+            },
+            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards => ScenePhysicsAudit {
+                status: CpuOnly,
+                reference_case: "PPF gallery (rigid coupling / ABD boxes)",
+                cpu_proof: "barrier_engine trampoline+momentum+domino oracles, barrier_abd suite",
+                gpu_proof: "n/a — ABD boxes and weak rigid coupling are CPU-path v1 (loud GPU guard)",
+                notes: "strong/weak coupling scenes on the CPU f64 backend",
+            },
+            Scene::PpfBelt
+            | Scene::PpfNoodle
+            | Scene::PpfWoven
+            | Scene::PpfKnot
+            | Scene::PpfCodim => ScenePhysicsAudit {
+                status: CpuOnly,
+                reference_case: "PPF gallery (chains/rods via collision edges)",
+                cpu_proof: "barrier_self_contact EE oracles + gallery-enabler suite",
+                gpu_proof: "n/a — springs_as_collision_edges is CPU-path v1",
+                notes: "EE-only contact for 1D strands; chains flag set by SolverKind::BarrierCpuChains",
             },
             Scene::ClothBending | Scene::ClothTwist => ScenePhysicsAudit {
                 status: Complete,
@@ -3416,6 +3539,18 @@ fn build_solver(engine: &Engine, model: &mp::Model, kind: SolverKind) -> SolverB
         SolverKind::Barrier => SolverBackend::Barrier(
             mp::BarrierSolver::new_gpu(engine).expect("barrier GPU solver init"),
         ),
+        SolverKind::BarrierCpu => {
+            let mut s = mp::BarrierSolver::new();
+            s.params.friction_mu = 0.5;
+            s.params.friction_mu_s_scale = 1.2;
+            SolverBackend::Barrier(s)
+        }
+        SolverKind::BarrierCpuChains => {
+            let mut s = mp::BarrierSolver::new();
+            s.params.friction_mu = 0.3;
+            s.springs_as_collision_edges = true;
+            SolverBackend::Barrier(s)
+        }
     }
 }
 
@@ -3444,6 +3579,23 @@ impl Sim {
             Scene::BroadPhase => build_broad_phase_model(),
             Scene::VbdCloth => build_vbd_cloth_model(),
             Scene::BarrierCloth => build_barrier_cloth_model(),
+            Scene::PpfCurtain => build_ppf_curtain_model(),
+            Scene::PpfTwist => build_ppf_twist_model(),
+            Scene::PpfFriction => build_ppf_friction_model(),
+            Scene::PpfHang => build_ppf_hang_model(),
+            Scene::PpfStack => build_ppf_stack_model(),
+            Scene::PpfTrampoline => build_ppf_trampoline_model(),
+            Scene::PpfTrapped => build_ppf_trapped_model(),
+            Scene::PpfNeedle => build_ppf_needle_model(),
+            Scene::PpfBelt => build_ppf_belt_model(),
+            Scene::PpfNoodle => build_ppf_noodle_model(),
+            Scene::PpfWoven => build_ppf_woven_model(),
+            Scene::PpfKnot => build_ppf_knot_model(),
+            Scene::PpfDomino => build_ppf_domino_model(),
+            Scene::PpfCards => build_ppf_cards_model(),
+            Scene::PpfCodim => build_ppf_codim_model(),
+            Scene::PpfFitting => build_ppf_fitting_model(),
+            Scene::PpfRibbon => build_ppf_ribbon_model(),
             Scene::ReferencePendulum => build_reference_pendulum_model(),
             Scene::DiffArm => build_diff_arm_model(),
             Scene::DiffArm6 => build_diff_arm6_model(),
@@ -5624,7 +5776,24 @@ fn control_pane(
                     Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
                     Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
                     Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
-                    Scene::BarrierCloth => barrier_cloth_pane(ui, &mut sim),
+                    Scene::BarrierCloth
+                    | Scene::PpfCurtain
+                    | Scene::PpfTwist
+                    | Scene::PpfFriction
+                    | Scene::PpfHang
+                    | Scene::PpfStack
+                    | Scene::PpfTrampoline
+                    | Scene::PpfTrapped
+                    | Scene::PpfNeedle
+                    | Scene::PpfBelt
+                    | Scene::PpfNoodle
+                    | Scene::PpfWoven
+                    | Scene::PpfKnot
+                    | Scene::PpfDomino
+                    | Scene::PpfCards
+                    | Scene::PpfCodim
+                    | Scene::PpfFitting
+                    | Scene::PpfRibbon => barrier_cloth_pane(ui, &mut sim),
                     Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
                     Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
                     Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
@@ -11001,5 +11170,65 @@ mod tests {
             STOKES_TRANSFER_TRACERS_X * STOKES_TRANSFER_TRACERS_Z
         );
         assert!(st.max_speed.is_finite() && st.max_speed > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod ppf_gallery_smoke {
+    //! Headless smoke tests over the REAL gallery build functions:
+    //! every scene's model must build, and 30 barrier steps must hold
+    //! the penetration-free invariant (CPU solver for all — the GPU
+    //! kind only changes the backend, not the model).
+    use super::*;
+
+    fn smoke(model: mp::Model, chains: bool, friction: bool) {
+        let mut s_a = model.state().expect("state");
+        let mut s_b = model.state().expect("state");
+        let control = model.control();
+        let contacts = mp::Contacts::with_capacity(4);
+        let mut solver = mp::BarrierSolver::new();
+        solver.springs_as_collision_edges = chains;
+        if friction {
+            solver.params.friction_mu = 0.5;
+            solver.params.friction_mu_s_scale = 1.2;
+        }
+        let h = 1.0 / 240.0;
+        for step in 0..30 {
+            solver
+                .step(&model, &s_a, &control, &contacts, h, &mut s_b)
+                .expect("step");
+            assert!(
+                solver.last_min_gap > 0.0,
+                "step {step}: invariant violated — gap {}",
+                solver.last_min_gap
+            );
+            std::mem::swap(&mut s_a, &mut s_b);
+        }
+    }
+
+    #[test]
+    fn all_ppf_gallery_scenes_build_and_hold_the_invariant() {
+        for (name, model, chains, friction) in [
+            ("curtain", build_ppf_curtain_model().0, false, false),
+            ("twist", build_ppf_twist_model().0, false, false),
+            ("friction", build_ppf_friction_model().0, false, true),
+            ("hang", build_ppf_hang_model().0, false, false),
+            ("stack", build_ppf_stack_model().0, false, false),
+            ("trampoline", build_ppf_trampoline_model().0, false, false),
+            ("trapped", build_ppf_trapped_model().0, false, false),
+            ("needle", build_ppf_needle_model().0, false, false),
+            ("belt", build_ppf_belt_model().0, true, true),
+            ("noodle", build_ppf_noodle_model().0, true, true),
+            ("woven", build_ppf_woven_model().0, true, false),
+            ("knot", build_ppf_knot_model().0, true, false),
+            ("domino", build_ppf_domino_model().0, false, true),
+            ("cards", build_ppf_cards_model().0, false, true),
+            ("codim", build_ppf_codim_model().0, true, true),
+            ("fitting", build_ppf_fitting_model().0, false, false),
+            ("ribbon", build_ppf_ribbon_model().0, false, false),
+        ] {
+            eprintln!("smoke: {name}");
+            smoke(model, chains, friction);
+        }
     }
 }

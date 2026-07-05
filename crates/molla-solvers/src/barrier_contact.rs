@@ -212,6 +212,9 @@ pub struct BarrierShell {
     pub triangles: Vec<[u32; 3]>,
     /// Unique triangle edges, derived by [`Self::with_triangles`].
     pub collision_edges: Vec<[u32; 2]>,
+    /// Chain-run provenance per collision edge: `Some((run, index))`
+    /// for explicit rod edges, `None` for triangle-derived ones.
+    edge_run: Vec<Option<(u32, u32)>>,
     /// Volumetric tets (volume-preservation energy). SET VIA
     /// [`Self::with_tets`] — assigning directly desyncs the derived
     /// rest volumes `tet_v0`.
@@ -321,6 +324,7 @@ impl BarrierShell {
             obstacles,
             triangles: Vec::new(),
             collision_edges: Vec::new(),
+            edge_run: Vec::new(),
             tets: Vec::new(),
             tet_v0: Vec::new(),
             lagged_friction: Vec::new(),
@@ -443,8 +447,9 @@ impl BarrierShell {
                 edges.insert((a.min(b), a.max(b)));
             }
         }
-        self.collision_edges
-            .extend(edges.into_iter().map(|(a, b)| [a, b]));
+        let added: Vec<[u32; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
+        self.edge_run.extend(std::iter::repeat_n(None, added.len()));
+        self.collision_edges.extend(added);
         self.triangles.extend(triangles);
         self
     }
@@ -452,9 +457,41 @@ impl BarrierShell {
     /// Register EXPLICIT collision edges (rod/chain segments without
     /// triangles — noodles, yarns, knots). They join the EE pair
     /// machinery exactly like triangle edges; call after
-    /// `with_triangles` if both are used (appends, no dedup against
-    /// triangle edges needed for disjoint chains).
+    /// `with_triangles` if both are used.
+    ///
+    /// Chain RUNS are detected (consecutive edges sharing a vertex)
+    /// and near-neighbours along the same run (≤ 3 hops) are EXCLUDED
+    /// from EE pairing: a straight rod's non-adjacent segments are
+    /// COLINEAR — distance exactly zero — and a taut strand would
+    /// otherwise fight itself with internal barrier pressure. This is
+    /// the standard rod-IPC neighbour exclusion.
     pub fn with_collision_edges(mut self, edges: Vec<[u32; 2]>) -> Self {
+        let base = self.collision_edges.len();
+        // Assign run ids: consecutive appended edges sharing a vertex
+        // belong to the same chain run.
+        let mut run = self
+            .edge_run
+            .iter()
+            .flatten()
+            .map(|r| r.0)
+            .max()
+            .map_or(0, |m| m + 1);
+        let mut pos = 0u32;
+        for (k, e) in edges.iter().enumerate() {
+            if k > 0 {
+                let prev = edges[k - 1];
+                let shares =
+                    e[0] == prev[0] || e[0] == prev[1] || e[1] == prev[0] || e[1] == prev[1];
+                if shares {
+                    pos += 1;
+                } else {
+                    run += 1;
+                    pos = 0;
+                }
+            }
+            self.edge_run.push(Some((run, pos)));
+            let _ = base;
+        }
         self.collision_edges.extend(edges);
         self
     }
@@ -475,6 +512,7 @@ impl BarrierShell {
             }
         }
         self.collision_edges = edges.into_iter().map(|(a, b)| [a, b]).collect();
+        self.edge_run = vec![None; self.collision_edges.len()];
         self.triangles = triangles;
         self
     }
@@ -603,6 +641,17 @@ impl BarrierShell {
     /// Same-rigid-body exclusion: an affine body's proxies are exactly
     /// ON its own surface triangles (face centres!) — internal pairs
     /// are meaningless and would report zero gaps.
+    /// Same-chain near-neighbour exclusion for explicit rod edges.
+    fn chain_neighbors(&self, ei: usize, ej: usize) -> bool {
+        match (
+            self.edge_run.get(ei).copied().flatten(),
+            self.edge_run.get(ej).copied().flatten(),
+        ) {
+            (Some((ra, pa)), Some((rb, pb))) => ra == rb && pa.abs_diff(pb) <= 3,
+            _ => false,
+        }
+    }
+
     fn same_body(&self, a: u32, b: u32) -> bool {
         match (self.proxy_of[a as usize], self.proxy_of[b as usize]) {
             (Some(x), Some(y)) => x == y,
@@ -634,6 +683,9 @@ impl BarrierShell {
                     continue;
                 }
                 if self.same_body(e1[0], e2[0]) {
+                    continue;
+                }
+                if self.chain_neighbors(i, j) {
                     continue;
                 }
                 let (s, t) = Self::seg_closest_params(
@@ -1333,6 +1385,9 @@ impl BarrierShell {
                     continue;
                 }
                 if self.same_body(e1[0], e2[0]) {
+                    continue;
+                }
+                if self.chain_neighbors(i, j) {
                     continue;
                 }
                 let (s, t) = Self::seg_closest_params(

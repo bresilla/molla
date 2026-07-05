@@ -374,7 +374,19 @@ impl BarrierSolver {
             shell = shell.with_triangles(triangles);
         }
         if self.springs_as_collision_edges {
+            // Only CHAIN springs become collision edges: cloth-owned
+            // springs are excluded — a cloth quad's two DIAGONAL
+            // springs cross at distance zero, which would violate the
+            // invariant at t = 0 (cloth already collides through its
+            // soft-surface triangles).
+            let in_cloth = |v: u32| {
+                model
+                    .soft_surfaces
+                    .iter()
+                    .any(|s| v >= s.vertex_offset && v < s.vertex_offset + s.vertex_count)
+            };
             let edges: Vec<[u32; 2]> = (0..model.spring_count)
+                .filter(|&i| !in_cloth(spring_a[i]) || !in_cloth(spring_b[i]))
                 .map(|i| [spring_a[i], spring_b[i]])
                 .collect();
             shell = shell.with_collision_edges(edges);

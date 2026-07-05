@@ -83,6 +83,33 @@ freezes the pair set, frames, λ and anchors at step start
 (`pair_friction_lag`) — the layer-on-layer discriminator lands the
 same 0.62 mm hold on GPU as the f64 oracle.
 
+## The PPF example gallery (viewer scenes 126–142)
+
+Every example from `st-tech/ppf-contact-solver` has a molla rendition
+on this backend: drape/curtain (126), the twist family — twist,
+five-twist and both large variants — as a pre-twisted pinned strip
+(127), friction ramp with live μ sliders (128), strain-limited hang
+(129), sheet stack (130), trampoline via weak rigid coupling (131),
+trapped (132), needle (133, sphere tip), belt/roller over sphere
+pulleys (134), noodle/yarn strand piles (135), a woven lattice held
+together purely by EE contact (136), a tightening fishing knot (137),
+domino chains and card A-frames as ABD boxes (138/139), mixed
+codimension — sheet + strands + rigid box in ONE solve (140), garment
+fitting on a sphere mannequin (141), and a buckling ribbon (142).
+Boundary DRIVERS from the original notebooks (twisting ends, motorized
+rollers) are replaced by equivalent initial conditions or static
+stand-ins, noted per scene; `plastic.ipynb` (yield) is intentionally
+unsupported, `walkthrough.ipynb` maps to this chapter, and their
+`fail-examples/` gallery maps to our loud-failure tests. A headless
+smoke test drives every scene's REAL build code for 30 steps and
+asserts the invariant.
+
+Two rod-modelling facts the gallery forced into the solver: explicit
+collision edges carry chain-run provenance and near-neighbours (≤ 3
+hops) are excluded from EE pairing — and an EXACTLY straight chain is
+degenerate anyway (all segments mutually colinear at distance zero),
+so strand scenes carry natural curvature, as real yarn does.
+
 ## Parity philosophy
 
 f32-vs-f64 drapes are *non-unique equilibria*: the GPU drop test gates
