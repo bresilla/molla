@@ -447,3 +447,50 @@ fn build_ppf_ribbon_model() -> (mp::Model, Vec<BodyVisual>) {
         .expect("floor");
     (b.build().expect("model"), Vec::new())
 }
+
+// ── 143 pdrd chain (blender/pdrd_chain.py, their rigid-dynamics
+// paper's demo): a log-pile of slender ABD boxes dropped in
+// alternating orientations — the rigid many-contact stress test
+// (adaptation: interlocking ring links need torus geometry we don't
+// have; the criss-cross pile exercises the same rigid contact stack).
+fn build_ppf_pdrd_chain_model() -> (mp::Model, Vec<BodyVisual>) {
+    let mut b = mp::ModelBuilder::new();
+    let half_a = MVec3::new(0.06, 0.008, 0.012);
+    let half_b = MVec3::new(0.012, 0.008, 0.06);
+    let mut visuals = Vec::new();
+    for layer in 0..6 {
+        let along_x = layer % 2 == 0;
+        let half = if along_x { half_a } else { half_b };
+        for k in 0..2 {
+            let off = -0.03 + 0.06 * f64::from(k);
+            let (x, z) = if along_x { (0.0, off) } else { (off, 0.0) };
+            let body = b.add_body(
+                mp::BodyParams::new()
+                    .with_spatial_inertia(mp::SpatialInertia {
+                        mass: 0.04,
+                        com: MVec3::ZERO,
+                        inertia: mp::Mat3::from_diagonal(MVec3::new(
+                            0.04 * (half.y * half.y + half.z * half.z) / 3.0,
+                            0.04 * (half.x * half.x + half.z * half.z) / 3.0,
+                            0.04 * (half.x * half.x + half.y * half.y) / 3.0,
+                        )),
+                    })
+                    .with_pose(mp::Transform::from_translation(MVec3::new(
+                        x,
+                        0.02 + 0.022 * f64::from(layer),
+                        z,
+                    ))),
+            );
+            b.add_shape_box(body, half, mp::Transform::IDENTITY)
+                .expect("log");
+            visuals.push(BodyVisual::Box(Vec3::new(
+                half.x as f32,
+                half.y as f32,
+                half.z as f32,
+            )));
+        }
+    }
+    b.add_shape_plane(mp::BodyId::NONE, MVec3::Y, mp::Transform::IDENTITY)
+        .expect("floor");
+    (b.build().expect("model"), visuals)
+}

@@ -99,8 +99,16 @@ fitting on a sphere mannequin (141), and a buckling ribbon (142).
 Boundary DRIVERS from the original notebooks (twisting ends, motorized
 rollers) are replaced by equivalent initial conditions or static
 stand-ins, noted per scene; `plastic.ipynb` (yield) is intentionally
-unsupported, `walkthrough.ipynb` maps to this chapter, and their
-`fail-examples/` gallery maps to our loud-failure tests. A headless
+unsupported and `walkthrough.ipynb` maps to this chapter. Their
+`fail-examples/` gallery is mirrored FAITHFULLY
+(`barrier_fail_examples.rs`): the solver REFUSES intersecting starts —
+distance scan plus a Möller edge–triangle PIERCING scan, since two
+crossed sheets report a positive closest distance — and refuses
+nonsense parameters (`BarrierParams::validate`), with an explicit
+opt-out (`reject_intersecting_start = false`) whose recovery mode lets
+the barrier push out of violation (CCD skips already-violated
+contacts). Their `blender/pdrd_chain.py` becomes scene 143 (rigid
+log-pile — interlocking ring links await torus geometry). A headless
 smoke test drives every scene's REAL build code for 30 steps and
 asserts the invariant.
 

@@ -156,6 +156,12 @@ pub struct BarrierParams {
     /// displacement well is e = ε_v·h. Smaller ⇒ less creep,
     /// stiffer friction Hessian.
     pub friction_epsv: Real,
+    /// Refuse to step from an INTERSECTING initial state (the
+    /// ppf-contact-solver contract, their `fail-examples/`): barrier
+    /// methods guarantee "never crosses", not "recovers from inside" —
+    /// starting inside is a modelling error and silently pushing out
+    /// would hide it. Opt out only for deliberate recovery workflows.
+    pub reject_intersecting_start: bool,
     /// Elasticity-inclusive dynamic stiffness (the TOG 43.6 scheme):
     /// κ_c = scale·(m_c + h²·k_local)/h², where k_local is the Σ of
     /// incident spring stiffnesses — an upper bound on the local
@@ -182,7 +188,33 @@ impl Default for BarrierParams {
             friction_mu_s_scale: 1.0,
             friction_epsv: 1.0e-3,
             elasticity_inclusive_kappa: true,
+            reject_intersecting_start: true,
         }
+    }
+}
+
+impl BarrierParams {
+    /// Parameter validation (their `assertion.ipynb` analogue): the
+    /// solver refuses nonsense configuration up front.
+    pub fn validate(&self) -> Result<()> {
+        if !(self.dhat > 0.0) || !self.dhat.is_finite() {
+            return Err(Error::Solver(format!(
+                "barrier: dhat must be finite and > 0, got {}",
+                self.dhat
+            )));
+        }
+        if !(self.kappa_scale > 0.0) || !self.kappa_scale.is_finite() {
+            return Err(Error::Solver(format!(
+                "barrier: kappa_scale must be finite and > 0, got {}",
+                self.kappa_scale
+            )));
+        }
+        if self.friction_mu < 0.0 || self.friction_mu_s_scale < 1.0 || !(self.friction_epsv > 0.0) {
+            return Err(Error::Solver(
+                "barrier: friction params require μ ≥ 0, μ_s/μ_k ≥ 1, ε_v > 0".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1127,7 +1159,7 @@ impl BarrierShell {
                         + p[e2[0] as usize].length().max(p[e2[1] as usize].length())
                 }
             };
-            if closing > 0.0 {
+            if closing > 0.0 && gap > 0.0 {
                 alpha = alpha.min(0.9 * gap / closing);
             }
         }
@@ -1137,14 +1169,18 @@ impl BarrierShell {
                     BarrierObstacle::HalfSpace { n, offset } => {
                         let gap = n.dot(*xi) - offset;
                         let approach = -n.dot(p[i]);
-                        if approach > 0.0 {
+                        // gap ≤ 0 = already violated (recovery mode
+                        // only — the default REFUSES such starts):
+                        // there is nothing left to protect, and
+                        // clamping would freeze the push-out.
+                        if approach > 0.0 && gap > 0.0 {
                             alpha = alpha.min(0.9 * gap / approach);
                         }
                     }
                     BarrierObstacle::Sphere { center, radius } => {
                         let gap = (*xi - center).length() - radius;
                         let speed = p[i].length();
-                        if speed > 0.0 {
+                        if speed > 0.0 && gap > 0.0 {
                             // Fully conservative: the vertex cannot
                             // close more than |p|·α of gap.
                             alpha = alpha.min(0.9 * gap / speed);
@@ -1348,6 +1384,52 @@ impl BarrierShell {
             .fold(0.0, Real::max)
     }
 
+    /// TRUE if any collision edge PIERCES any non-adjacent triangle
+    /// (segment–triangle intersection, Möller–Trumbore). The distance
+    /// metric cannot see topological crossings — two pierced sheets
+    /// report a positive closest distance — so the intersecting-start
+    /// refusal needs this scan. O(E·T), oracle-grade.
+    pub fn has_intersections(&self) -> bool {
+        let x = &self.positions;
+        for (ei, e) in self.collision_edges.iter().enumerate() {
+            let p0 = x[e[0] as usize];
+            let dir = x[e[1] as usize] - p0;
+            for tri in &self.triangles {
+                if tri.contains(&e[0]) || tri.contains(&e[1]) {
+                    continue;
+                }
+                if self.same_body(e[0], tri[0]) && self.proxy_of[e[0] as usize].is_some() {
+                    continue;
+                }
+                let a = x[tri[0] as usize];
+                let ab = x[tri[1] as usize] - a;
+                let ac = x[tri[2] as usize] - a;
+                let pvec = dir.cross(ac);
+                let det = ab.dot(pvec);
+                if det.abs() < 1.0e-14 {
+                    continue; // parallel
+                }
+                let inv = 1.0 / det;
+                let tvec = p0 - a;
+                let u = tvec.dot(pvec) * inv;
+                if !(0.0..=1.0).contains(&u) {
+                    continue;
+                }
+                let qvec = tvec.cross(ab);
+                let v = dir.dot(qvec) * inv;
+                if v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let t = ac.dot(qvec) * inv;
+                if (0.0..=1.0).contains(&t) {
+                    let _ = ei;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Smallest gap between any vertex and any obstacle — THE
     /// invariant. Positive at all times or the solver is wrong.
     pub fn min_gap(&self) -> Real {
@@ -1458,6 +1540,16 @@ impl BarrierShell {
 
     /// One implicit step of size `h`.
     pub fn step(&mut self, h: Real) -> Result<BarrierStepStats> {
+        self.params.validate()?;
+        if self.params.reject_intersecting_start {
+            let g = self.min_gap();
+            if g <= 0.0 || self.has_intersections() {
+                return Err(Error::Solver(format!(
+                    "barrier: initial state INTERSECTS (min gap {g:.3e}, pierced: {}) —                      barrier methods require penetration-free input (set                      reject_intersecting_start = false only for deliberate recovery)",
+                    self.has_intersections()
+                )));
+            }
+        }
         if !self.affine_bodies.is_empty() {
             return self.step_abd(h);
         }

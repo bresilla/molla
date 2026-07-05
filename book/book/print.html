@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-10876554.js";
+            window.path_to_searchindex_js = "searchindex-53b04dbb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f4239cce.js"></script>
@@ -9184,8 +9184,16 @@ fitting on a sphere mannequin (141), and a buckling ribbon (142).
 Boundary DRIVERS from the original notebooks (twisting ends, motorized
 rollers) are replaced by equivalent initial conditions or static
 stand-ins, noted per scene; <code>plastic.ipynb</code> (yield) is intentionally
-unsupported, <code>walkthrough.ipynb</code> maps to this chapter, and their
-<code>fail-examples/</code> gallery maps to our loud-failure tests. A headless
+unsupported and <code>walkthrough.ipynb</code> maps to this chapter. Their
+<code>fail-examples/</code> gallery is mirrored FAITHFULLY
+(<code>barrier_fail_examples.rs</code>): the solver REFUSES intersecting starts —
+distance scan plus a Möller edge–triangle PIERCING scan, since two
+crossed sheets report a positive closest distance — and refuses
+nonsense parameters (<code>BarrierParams::validate</code>), with an explicit
+opt-out (<code>reject_intersecting_start = false</code>) whose recovery mode lets
+the barrier push out of violation (CCD skips already-violated
+contacts). Their <code>blender/pdrd_chain.py</code> becomes scene 143 (rigid
+log-pile — interlocking ring links await torus geometry). A headless
 smoke test drives every scene’s REAL build code for 30 steps and
 asserts the invariant.</p>
 <p>Two rod-modelling facts the gallery forced into the solver: explicit

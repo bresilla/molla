@@ -1541,6 +1541,7 @@ enum Scene {
     PpfCodim,
     PpfFitting,
     PpfRibbon,
+    PpfPdrdChain,
     /// Stage 33.5 — soft tet block sliding down a soft tet ramp;
     /// friction-coefficient slider sweeps stick → slip → slide.
     SoftBrake,
@@ -1968,6 +1969,7 @@ impl Scene {
         Scene::PpfCodim,
         Scene::PpfFitting,
         Scene::PpfRibbon,
+        Scene::PpfPdrdChain,
         Scene::SoftBrake,
         Scene::FemHeat,
         Scene::FemBeam,
@@ -2087,6 +2089,7 @@ impl Scene {
             Scene::PpfCodim => "140 PPF codim",
             Scene::PpfFitting => "141 PPF fitting",
             Scene::PpfRibbon => "142 PPF ribbon",
+            Scene::PpfPdrdChain => "143 PPF pdrd chain (log pile)",
             Scene::ReferencePendulum => "17 Native double pendulum",
             Scene::DiffArm => "18 Differentiable arm (Stage 23)",
             Scene::DiffArm6 => "19 Differentiable Featherstone (Stage 23.1)",
@@ -2277,7 +2280,8 @@ impl Scene {
             | Scene::PpfCards
             | Scene::PpfCodim
             | Scene::PpfFitting
-            | Scene::PpfRibbon => {
+            | Scene::PpfRibbon
+            | Scene::PpfPdrdChain => {
                 "PPF gallery: a molla rendition of the corresponding st-tech/ppf-contact-solver example on the barrier-Newton backend. Driven boundaries from the original notebooks (twisting ends, motorized rollers) are replaced by equivalent initial conditions or static stand-ins; sphere stand-ins replace their mesh obstacles where noted. The penetration-free invariant applies throughout; plasticity (plastic.ipynb) is the one intentionally unsupported material and walkthrough.ipynb maps to the book chapter."
             }
             Scene::ReferencePendulum => {
@@ -2685,7 +2689,9 @@ impl Scene {
             | Scene::PpfNeedle
             | Scene::PpfFitting
             | Scene::PpfRibbon => SolverKind::Barrier,
-            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards => SolverKind::BarrierCpu,
+            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards | Scene::PpfPdrdChain => {
+                SolverKind::BarrierCpu
+            }
             Scene::PpfBelt | Scene::PpfNoodle | Scene::PpfWoven | Scene::PpfKnot
             | Scene::PpfCodim => SolverKind::BarrierCpuChains,
             Scene::ReferencePendulum => SolverKind::Featherstone,
@@ -2898,13 +2904,15 @@ impl Scene {
                 gpu_proof: "make test-gpu P=molla-solvers T=barrier_newton_gpu (scenes run the GPU backend)",
                 notes: "scene-specific setups over oracle-tested physics; boundary drivers replaced by initial conditions",
             },
-            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards => ScenePhysicsAudit {
-                status: CpuOnly,
-                reference_case: "PPF gallery (rigid coupling / ABD boxes)",
-                cpu_proof: "barrier_engine trampoline+momentum+domino oracles, barrier_abd suite",
-                gpu_proof: "n/a — ABD boxes and weak rigid coupling are CPU-path v1 (loud GPU guard)",
-                notes: "strong/weak coupling scenes on the CPU f64 backend",
-            },
+            Scene::PpfTrampoline | Scene::PpfDomino | Scene::PpfCards | Scene::PpfPdrdChain => {
+                ScenePhysicsAudit {
+                    status: CpuOnly,
+                    reference_case: "PPF gallery (rigid coupling / ABD boxes)",
+                    cpu_proof: "barrier_engine trampoline+momentum+domino oracles, barrier_abd suite",
+                    gpu_proof: "n/a — ABD boxes and weak rigid coupling are CPU-path v1 (loud GPU guard)",
+                    notes: "strong/weak coupling scenes on the CPU f64 backend",
+                }
+            }
             Scene::PpfBelt
             | Scene::PpfNoodle
             | Scene::PpfWoven
@@ -3596,6 +3604,7 @@ impl Sim {
             Scene::PpfCodim => build_ppf_codim_model(),
             Scene::PpfFitting => build_ppf_fitting_model(),
             Scene::PpfRibbon => build_ppf_ribbon_model(),
+            Scene::PpfPdrdChain => build_ppf_pdrd_chain_model(),
             Scene::ReferencePendulum => build_reference_pendulum_model(),
             Scene::DiffArm => build_diff_arm_model(),
             Scene::DiffArm6 => build_diff_arm6_model(),
@@ -5793,7 +5802,8 @@ fn control_pane(
                     | Scene::PpfCards
                     | Scene::PpfCodim
                     | Scene::PpfFitting
-                    | Scene::PpfRibbon => barrier_cloth_pane(ui, &mut sim),
+                    | Scene::PpfRibbon
+                    | Scene::PpfPdrdChain => barrier_cloth_pane(ui, &mut sim),
                     Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
                     Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
                     Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
@@ -11226,6 +11236,7 @@ mod ppf_gallery_smoke {
             ("codim", build_ppf_codim_model().0, true, true),
             ("fitting", build_ppf_fitting_model().0, false, false),
             ("ribbon", build_ppf_ribbon_model().0, false, false),
+            ("pdrd_chain", build_ppf_pdrd_chain_model().0, false, true),
         ] {
             eprintln!("smoke: {name}");
             smoke(model, chains, friction);
