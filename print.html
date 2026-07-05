@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-53b04dbb.js";
+            window.path_to_searchindex_js = "searchindex-11aac3e2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-f4239cce.js"></script>
@@ -9169,7 +9169,7 @@ step, and per-iterate filter kernels do the exact tests.</p>
 freezes the pair set, frames, λ and anchors at step start
 (<code>pair_friction_lag</code>) — the layer-on-layer discriminator lands the
 same 0.62 mm hold on GPU as the f64 oracle.</p>
-<h2 id="the-ppf-example-gallery-viewer-scenes-126142"><a class="header" href="#the-ppf-example-gallery-viewer-scenes-126142">The PPF example gallery (viewer scenes 126–142)</a></h2>
+<h2 id="the-ppf-example-gallery-viewer-scenes-126143"><a class="header" href="#the-ppf-example-gallery-viewer-scenes-126143">The PPF example gallery (viewer scenes 126–143)</a></h2>
 <p>Every example from <code>st-tech/ppf-contact-solver</code> has a molla rendition
 on this backend: drape/curtain (126), the twist family — twist,
 five-twist and both large variants — as a pre-twisted pinned strip
@@ -17097,7 +17097,7 @@ agreement.</li>
 <tr><td><code>VbdSolver</code> (tets)</td><td>yes</td><td>yes</td><td><code>vbd_tets_gpu.rs</code> + v3 + v4</td><td>Stage 20.2 + 20.3 + 20.4</td></tr>
 <tr><td><code>VbdSolver</code> (soft VT contact)</td><td>yes</td><td>yes</td><td><code>soft_vt_contact_gpu.rs</code></td><td>Stage 33.2</td></tr>
 <tr><td><code>VbdSolver</code> (soft friction)</td><td>yes</td><td>yes</td><td><code>soft_friction_gpu.rs</code></td><td>Stage 33.2.1</td></tr>
-<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (6 tests: kernel + engine path)</td><td>Invariant + energy-parity gates incl. on-device pair friction</td></tr>
+<tr><td><code>BarrierSolver</code> (barrier-Newton, C0)</td><td>yes</td><td>yes</td><td><code>barrier_newton_gpu.rs</code> (7 tests: kernel + engine path + pair friction)</td><td>Invariant + energy-parity gates incl. on-device pair friction</td></tr>
 </tbody>
 </table>
 </div>
