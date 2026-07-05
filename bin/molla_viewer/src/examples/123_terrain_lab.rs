@@ -182,7 +182,12 @@ fn update_terrain_lab_example(
         state.tire = Some(tire);
         state.was_active = true;
     }
-    let dt = (time.delta_secs() as f64).clamp(0.0, 1.0 / 30.0);
+    // Fixed physics dt with a frame-derived substep count (scene-110
+    // pattern) — feeding render-frame dt straight into the solver made
+    // the demo frame-rate-dependent (2026-07-05 tire audit).
+    let frame = (time.delta_secs() as f64).clamp(0.0, 1.0 / 30.0);
+    let dt = 1.0 / 240.0;
+    let steps = ((frame / dt).round() as u32).clamp(1, 8);
     // PLAN_TOURQUE Stage E — arrow keys → drive/brake torque at the
     // wheel hub. Throttle ↑ adds drive torque, brake ↓ adds brake
     // torque (the FEM tire's soft-sign saturator keeps brake from
@@ -196,7 +201,7 @@ fn update_terrain_lab_example(
     if let (Some(t), Some(tr)) = (tire.as_mut(), terrain.as_ref()) {
         t.set_drive_torque_n_m(throttle * TLAB_DRIVE_TORQUE_N_M);
         t.set_brake_torque_n_m(brake * TLAB_BRAKE_TORQUE_N_M);
-        if dt > 0.0 {
+        for _ in 0..steps {
             t.step_on_terrain(tr as &dyn molla_vehicle::Terrain, dt);
         }
     }

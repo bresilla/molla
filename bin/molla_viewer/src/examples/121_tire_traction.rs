@@ -1198,7 +1198,7 @@ impl TireTractionState {
 }
 
 fn update_tire_traction_example(
-    time: Res<Time>,
+    _time: Res<Time>,
     sim: Res<Sim>,
     run: Res<SimRunState>,
     mut state: ResMut<TireTractionState>,
@@ -1256,7 +1256,9 @@ fn update_tire_traction_example(
     } else {
         None
     };
-    let dt = time.delta_secs().min(1.0 / 30.0);
+    // Fixed physics dt: render-frame dt made the demo frame-rate-
+    // dependent (2026-07-05 tire audit; scene 120 already did this).
+    let dt = 1.0 / 120.0;
     state.elapsed += dt;
     state.gpu_enabled_now = false;
     state.gpu_error = None;

@@ -759,7 +759,7 @@ fn tb_tire_params(pressure_pa: f32, vertical_load_n: f32) -> molla_vehicle::Tetr
 }
 
 fn update_tire_realistic_example(
-    time: Res<Time>,
+    _time: Res<Time>,
     sim: Res<Sim>,
     run: Res<SimRunState>,
     mut state: ResMut<TireRealisticState>,
@@ -866,7 +866,8 @@ fn update_tire_realistic_example(
     if run.paused {
         return;
     }
-    let dt = time.delta_secs().min(1.0 / 60.0);
+    // Fixed physics dt (2026-07-05 tire audit; matches scene 120).
+    let dt = 1.0 / 120.0;
     let pressure = state.pressure_pa;
     let load = state.vertical_load_n;
     if let Some(t) = state.tire.as_mut() {
