@@ -83,7 +83,7 @@ freezes the pair set, frames, λ and anchors at step start
 (`pair_friction_lag`) — the layer-on-layer discriminator lands the
 same 0.62 mm hold on GPU as the f64 oracle.
 
-## The PPF example gallery (viewer scenes 126–142)
+## The PPF example gallery (viewer scenes 126–143)
 
 Every example from `st-tech/ppf-contact-solver` has a molla rendition
 on this backend: drape/curtain (126), the twist family — twist,
