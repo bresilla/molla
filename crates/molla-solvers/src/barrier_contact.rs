@@ -197,19 +197,19 @@ impl BarrierParams {
     /// Parameter validation (their `assertion.ipynb` analogue): the
     /// solver refuses nonsense configuration up front.
     pub fn validate(&self) -> Result<()> {
-        if !(self.dhat > 0.0) || !self.dhat.is_finite() {
+        if !self.dhat.is_finite() || self.dhat <= 0.0 {
             return Err(Error::Solver(format!(
                 "barrier: dhat must be finite and > 0, got {}",
                 self.dhat
             )));
         }
-        if !(self.kappa_scale > 0.0) || !self.kappa_scale.is_finite() {
+        if !self.kappa_scale.is_finite() || self.kappa_scale <= 0.0 {
             return Err(Error::Solver(format!(
                 "barrier: kappa_scale must be finite and > 0, got {}",
                 self.kappa_scale
             )));
         }
-        if self.friction_mu < 0.0 || self.friction_mu_s_scale < 1.0 || !(self.friction_epsv > 0.0) {
+        if self.friction_mu < 0.0 || self.friction_mu_s_scale < 1.0 || self.friction_epsv <= 0.0 {
             return Err(Error::Solver(
                 "barrier: friction params require μ ≥ 0, μ_s/μ_k ≥ 1, ε_v > 0".into(),
             ));

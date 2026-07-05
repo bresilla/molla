@@ -6,6 +6,7 @@
 //!   self gap at t = 0).
 //! * intersect-3: a chain threaded THROUGH a sheet at t = 0.
 //! * assertion: nonsense parameters rejected up front.
+//!
 //! Plus the opt-out: `reject_intersecting_start = false` steps anyway
 //! (deliberate recovery), and the barrier pushes outward.
 
