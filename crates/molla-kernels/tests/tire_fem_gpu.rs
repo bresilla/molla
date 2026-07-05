@@ -5437,6 +5437,14 @@ fn tire_fem_atlas_feedback_single_tire_matches_per_tire_chain() {
     let step_params = vec![node_params];
     let hub_rows = vec![hub_params];
     let spins = vec![spin];
+    // Production feeds the per-tire node kernel the host-tracked ω
+    // (phys5.x → spin-coupled ground friction). This harness predated
+    // that coupling and ran the per-tire nodes spin-free, which masked
+    // the fused-atlas divergence the 2026-07-05 audit found — now the
+    // atlas reads ω live from hub_state, so the reference side must be
+    // fed its own ω each step to stay a fair twin (same one-step lag).
+    let mut node_params = node_params;
+    node_params.hub_omega = omega0;
     for step in 0..96 {
         // Per-tire reference.
         kernel.step_persistent(&device, &queue, &mut mesh_ref, node_params);
@@ -5468,6 +5476,14 @@ fn tire_fem_atlas_feedback_single_tire_matches_per_tire_chain() {
         kernel
             .step_resident_atlas_hubs_with_resident_params(&device, &queue, &batch)
             .expect("atlas hubs");
+
+        // Refresh the per-tire ω for the NEXT step (mirrors the
+        // production host bridge; the atlas nodes read the previous
+        // substep's hub_state with the same lag).
+        let hr_now = kernel
+            .readback_hub(&device, &queue, &mesh_ref)
+            .expect("ref hub omega");
+        node_params.hub_omega = hr_now[6];
 
         if step % 24 == 23 {
             let hr = kernel

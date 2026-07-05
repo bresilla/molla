@@ -665,6 +665,17 @@ fn step_nodes_atlas_contract(@builtin(global_invocation_id) gid: vec3<u32>) {
     // stage, not this fallback.
     let mu_static: f32 = 1.0;
     let mu_dynamic: f32 = 0.85;
+    // SPIN-COUPLING ATTEMPT (2026-07-05, reverted with findings): the
+    // per-tire reference injects spin velocity here (phys5.x); wiring
+    // the same into this twin (ω live from hub_state[2t+1].z, hub from
+    // params.phys2.yzw) broke the atlas-vs-per-tire hub parity by
+    // ~4.5% — and the investigation showed the REAL asymmetry: in the
+    // parity harness the reference chain's nodes never cross y = 0
+    // (its spin block is provably inert — feeding it ω changes
+    // nothing bit-for-bit) while the ATLAS chain's nodes DO penetrate
+    // transiently. Until that node-penetration asymmetry between the
+    // twins is understood, spin coupling here amplifies a divergence
+    // instead of closing one. Tracked in PROGRESS.
     if (p_next.y < 0.0) {
         let pen = -p_next.y;
         p_next.y = 0.0;

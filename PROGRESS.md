@@ -83,9 +83,14 @@ contact-feedback kernel its inputs from the persistent mesh buffers so
 the whole substep loop runs with zero host readback, and tightening the
 Two more structural divergences recorded by the 2026-07-05 tire audit:
 the FUSED-ATLAS node kernel omits the reference path's spin-coupled
-built-in ground friction (tire_fem.wgsl phys5.x spin_v injection has no
-AtlasParamRow slot — fused wheels get longitudinal reaction only through
-the bristle feedback stage), and the resident feedback zeroes Fy by
+built-in ground friction. A 2026-07-05 wiring attempt (ω live from
+hub_state[2t+1].z — no param slot needed) broke atlas-vs-per-tire hub
+parity by ~4.5% and surfaced the DEEPER lead: in the parity harness the
+per-tire chain's nodes never cross y = 0 (its spin block is provably
+inert — feeding ω is bitwise no-op) while atlas nodes DO transiently
+penetrate. Investigate the node-penetration asymmetry FIRST; the spin
+wiring itself is a five-line change once the twins agree at the contact
+boundary. Also: the resident feedback zeroes Fy by
 design (hub vertical support = downforce + beads only, never the FEM
 contact normal). Both are intentional-for-now and tracked here.
 structural CPU/GPU differences (single- vs two-stage friction cone
