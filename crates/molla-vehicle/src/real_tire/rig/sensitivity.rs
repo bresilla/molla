@@ -177,7 +177,7 @@ impl TireRigSensitivityPoint {
             && self.comparison.is_finite()
     }
 
-    pub fn delta_metric(&self) -> f64 {
+    pub(crate) fn delta_metric(&self) -> f64 {
         self.comparison_metric - self.baseline_metric
     }
 

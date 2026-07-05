@@ -326,7 +326,7 @@ impl TireEnergySignAudit {
         )
     }
 
-    pub fn from_telemetry_with_surface_velocity(
+    pub(crate) fn from_telemetry_with_surface_velocity(
         telemetry: &RealTireTelemetrySample,
         surface_velocity_m_per_s: [f64; 3],
     ) -> Self {
@@ -494,7 +494,7 @@ impl TireRigDimensionlessSanityMetrics {
             && self.cpu_gpu_relative_force_error.is_none_or(f64::is_finite)
     }
 
-    pub fn default_acceptance_checks(&self) -> Vec<TireRigAcceptanceCheck> {
+    pub(crate) fn default_acceptance_checks(&self) -> Vec<TireRigAcceptanceCheck> {
         let mut checks = vec![
             TireRigAcceptanceCheck::between(
                 "fx_over_fz_sane",
@@ -1010,7 +1010,7 @@ impl TireReplayArtifactCoverageReport {
 }
 
 impl TireRigRunOutput {
-    pub fn report_has_replay_context(&self, report: &TireRigAcceptanceReport) -> bool {
+    pub(crate) fn report_has_replay_context(&self, report: &TireRigAcceptanceReport) -> bool {
         let scenario_id = report.snapshot.scenario_id.as_str();
         self.snapshots
             .iter()

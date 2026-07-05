@@ -130,7 +130,13 @@ impl Default for TireFemGpuParams {
     fn default() -> Self {
         Self {
             dt: 1.0 / 240.0,
-            young_modulus: 3.5e5,
+            // Aligned with the CPU TetraTireFemParams default (4.0e6)
+            // by the 2026-07-05 audit. NOTE: this scalar is packed into
+            // phys0.y but the shaders never read it (they use per-tet
+            // tet_mu/tet_lambda) and the CPU→GPU bridge never copies
+            // it — vestigial; do not wire phys0.y into a shader without
+            // revisiting both defaults.
+            young_modulus: 4.0e6,
             poisson_ratio: 0.46,
             pressure_pa: 180_000.0,
             node_damping: 18.0,
@@ -1658,16 +1664,8 @@ impl TireResidentVehicleFemAtlasOwner {
         &self.fem
     }
 
-    pub fn fem_mut(&mut self) -> &mut TireFemGpuAtlasBatch {
-        &mut self.fem
-    }
-
     pub fn vehicle(&self) -> &TireVehicleResidentChassisBrushOwner {
         &self.vehicle
-    }
-
-    pub fn vehicle_mut(&mut self) -> &mut TireVehicleResidentChassisBrushOwner {
-        &mut self.vehicle
     }
 }
 
@@ -3423,10 +3421,6 @@ impl TireFemGpuBatch {
 
     pub fn meshes(&self) -> &[TireFemPersistentMesh] {
         &self.meshes
-    }
-
-    pub fn meshes_mut(&mut self) -> &mut [TireFemPersistentMesh] {
-        &mut self.meshes
     }
 }
 
@@ -6194,11 +6188,6 @@ impl TireFemGpuKernel {
         drop(data);
         stage.unmap();
         Ok(out)
-    }
-
-    /// Stage (f) — overwrite the GPU-resident 3-DOF hub state.
-    pub fn upload_hub(&self, queue: &wgpu::Queue, mesh: &TireFemPersistentMesh, hub: [f32; 8]) {
-        queue.write_buffer(&mesh.hub_state_buf, 0, bytemuck::bytes_of(&hub));
     }
 
     /// Stage (g) — advance one substep on persistent GPU buffers. Reads

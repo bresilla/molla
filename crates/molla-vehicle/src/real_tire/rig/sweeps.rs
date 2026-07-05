@@ -440,11 +440,11 @@ impl TireRigSurfaceTransitionTerrain {
         }
     }
 
-    pub fn material_at(&self, x_m: f64) -> SurfaceMaterial {
+    pub(crate) fn material_at(&self, x_m: f64) -> SurfaceMaterial {
         self.sample(x_m).material
     }
 
-    pub fn label_at(&self, x_m: f64) -> String {
+    pub(crate) fn label_at(&self, x_m: f64) -> String {
         self.sample(x_m).label
     }
 }

@@ -15,8 +15,11 @@
 > landed (2026-07-02)** for the per-tire persistent path:
 > `step_persistent → TireFemContactFeedbackKernel::dispatch_resident →
 > step_hub_persistent_with_tread_forces` crosses the host zero times and
-> is bit-identical to the blocking readback chain on the G4 rolling
-> scenario (`tire_fem_resident_contact_loop_matches_blocking_chain`).
+> matches the blocking readback chain on the G4 rolling scenario to
+> sub-mm parity (hub Δ < 5e-3 m, nodes < 1e-3, bristles < 1e-4 — the
+> test admits reduction-order f32 noise only; "bit-identical" was an
+> overstatement corrected by the 2026-07-05 tire audit;
+> `tire_fem_resident_contact_loop_matches_blocking_chain`).
 > Remaining open tire work: GPU-resident hub XZ/spin integration (the
 > per-substep feedback uniforms still carry host-tracked hub pose/ω),
 > the atlas-path bristle stage, and the real-time 40-wheel perf proof —
@@ -78,6 +81,13 @@ over 4 steps, with poisoned Y rows to catch component leaks). Full
 Remaining (tracked in the ledger follow-up, not G4): feed the
 contact-feedback kernel its inputs from the persistent mesh buffers so
 the whole substep loop runs with zero host readback, and tightening the
+Two more structural divergences recorded by the 2026-07-05 tire audit:
+the FUSED-ATLAS node kernel omits the reference path's spin-coupled
+built-in ground friction (tire_fem.wgsl phys5.x spin_v injection has no
+AtlasParamRow slot — fused wheels get longitudinal reaction only through
+the bristle feedback stage), and the resident feedback zeroes Fy by
+design (hub vertical support = downforce + beads only, never the FEM
+contact normal). Both are intentional-for-now and tracked here.
 structural CPU/GPU differences (single- vs two-stage friction cone
 clipping, penetration- vs load-based bristle caps).
 

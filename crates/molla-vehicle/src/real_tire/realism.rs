@@ -63,7 +63,7 @@ impl TireRealismSourceItem {
         }
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         !self.item_id.is_empty() && !self.description.is_empty()
     }
 }

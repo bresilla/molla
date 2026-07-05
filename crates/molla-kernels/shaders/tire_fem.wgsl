@@ -662,6 +662,10 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
     // sticky branch then reads "stuck = static + spin" so a spinning
     // hub on flat terrain produces a backward slip = forward friction
     // — same chain the CPU bristle integrator runs.
+    // KNOWN HARDCODE (tire audit 2026-07-05): the built-in node-vs-
+    // ground contact pins mu_static/mu_dynamic and the y = 0 plane —
+    // terrain/material params flow only through the bristle feedback
+    // stage, not this fallback.
     let mu_static: f32 = 1.0;
     let mu_dynamic: f32 = 0.85;
     let spin_omega = u.phys5.x;

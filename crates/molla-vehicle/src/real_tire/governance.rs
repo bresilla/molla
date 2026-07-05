@@ -2,6 +2,13 @@
 //!
 //! Moved out of `real_tire/mod.rs` as part of PLAN_REALTIRE Stream A.
 
+//! NOTE (tire audit 2026-07-05): these governance checks are
+//! ADVISORY-ONLY — `tire_preset_governance_report` builds a pass/fail
+//! report consumed by the rig snapshot text summary and one unit test.
+//! NO solver/contact/step path enforces them: a preset outside the
+//! guardrails changes physics silently. Wire `passed()` into preset
+//! ingestion if enforcement is ever wanted.
+
 use super::internal::{csv_token, finite_or};
 use super::{
     RealTireParams, SurfaceFilmState, SurfaceMaterial, TetraTireFemParams, TireModelProvenance,
