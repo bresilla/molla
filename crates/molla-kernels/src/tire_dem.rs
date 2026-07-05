@@ -1364,8 +1364,13 @@ pub fn tire_dem_build_sparse_lbvh(
         .enumerate()
         .map(|(idx, p)| {
             let q = |axis: usize| {
-                (((p[axis] - scene_min[axis]) / extent[axis]).clamp(0.0, 1.0) * 1023.0).round()
-                    as u32
+                // round_ties_even matches WGSL's round() (half-to-even);
+                // Rust's round() is half-AWAY-from-zero — a grain
+                // landing exactly on x.5 would quantize differently on
+                // CPU vs GPU and break the bitwise sorted-Morton parity
+                // contracts.
+                (((p[axis] - scene_min[axis]) / extent[axis]).clamp(0.0, 1.0) * 1023.0)
+                    .round_ties_even() as u32
             };
             (morton3_10(q(0), q(1), q(2)), idx as u32)
         })
@@ -4479,6 +4484,10 @@ impl TireDemGpuKernel {
     /// [`Self::upload_resident_lbvh`]. This keeps the current CPU builder
     /// honest while removing per-substep topology buffer churn for stable DEM
     /// beds; a true GPU LBVH builder is still the next deeper step.
+    /// NOTE (tire audit 2026-07-05): returns `Ok(false)` for BOTH
+    /// "capacity exceeded — reallocate" and "grain count changed" —
+    /// callers cannot distinguish them and ignoring the bool keeps
+    /// stale topology. Splitting into an enum is the tracked cleanup.
     pub fn update_resident_lbvh(
         &self,
         queue: &wgpu::Queue,

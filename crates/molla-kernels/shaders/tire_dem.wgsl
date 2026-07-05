@@ -472,6 +472,12 @@ fn build_dem_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (slot < u.dims.w) {
         gpu_cell_slots[cell * u.dims.w + slot] = i;
     }
+    // KNOWN GAP (documented in the tire audit 2026-07-05): grains
+    // beyond the per-cell capacity dims.w are DROPPED from the
+    // neighbour list with no diagnostic — the consumer clamps to
+    // min(count, dims.w). Overflow means silently lost contacts;
+    // surfacing this needs a flag buffer + host check, tracked as a
+    // follow-up rather than half-plumbed here.
 }
 
 @compute @workgroup_size(64)

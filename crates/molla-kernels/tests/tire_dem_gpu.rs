@@ -1233,12 +1233,38 @@ fn tire_dem_resident_terrain_raster_matches_cpu_export_without_grain_readback() 
 
     assert_eq!(got.heights, expected_heights);
     assert_eq!(got.sinkage, expected_sinkage);
-    assert_eq!(got.surface_velocity_map.rows, expected_velocity.rows);
+    // Averaged velocities (velocity_sum/count on device) are the same
+    // fragility class as the physics-stepped map above: bitwise
+    // GPU-vs-CPU only holds while the fixture's averages are exact in
+    // f32. Compare at the shared 2e-5 physics tolerance instead.
+    assert_eq!(
+        got.surface_velocity_map.rows.len(),
+        expected_velocity.rows.len()
+    );
+    for (i, (g, c)) in got
+        .surface_velocity_map
+        .rows
+        .iter()
+        .zip(expected_velocity.rows.iter())
+        .enumerate()
+    {
+        for k in 0..4 {
+            assert!(
+                (g[k] - c[k]).abs() < 2.0e-5,
+                "terrain velocity map mismatch row={i} k={k}: got={} expected={}",
+                g[k],
+                c[k]
+            );
+        }
+    }
     assert_eq!(
         got.surface_velocity_map.active_cells,
         expected_velocity.active_cells
     );
-    assert_eq!(
+    assert!(
+        (got.surface_velocity_map.max_speed_m_per_s - expected_velocity.max_speed_m_per_s).abs()
+            < 2.0e-5,
+        "max_speed mismatch: got={} expected={}",
         got.surface_velocity_map.max_speed_m_per_s,
         expected_velocity.max_speed_m_per_s
     );
