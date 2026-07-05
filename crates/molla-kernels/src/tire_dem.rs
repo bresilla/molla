@@ -79,6 +79,20 @@ pub struct TireDemResidentState {
 /// rows directly on GPU. The resident DEM step consumes the same buffer
 /// contract in both cases, so topology construction can be moved off the hot
 /// CPU path without changing the traversal kernel.
+/// Outcome of [`TireDemGpuKernel::update_resident_lbvh`] — the two
+/// non-update cases need DIFFERENT remedies.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ResidentLbvhUpdate {
+    /// Topology uploaded; revision bumped.
+    Updated,
+    /// The resident state was built for a different grain count —
+    /// rebuild the resident state, not just the LBVH buffers.
+    GrainCountMismatch,
+    /// Node/index rows exceed the resident capacities — reallocate
+    /// (larger `TireDemResidentLbvh`) and retry.
+    CapacityExceeded,
+}
+
 pub struct TireDemResidentLbvh {
     pub node_rows: wgpu::Buffer,
     pub sorted_indices: wgpu::Buffer,
@@ -4484,27 +4498,27 @@ impl TireDemGpuKernel {
     /// [`Self::upload_resident_lbvh`]. This keeps the current CPU builder
     /// honest while removing per-substep topology buffer churn for stable DEM
     /// beds; a true GPU LBVH builder is still the next deeper step.
-    /// NOTE (tire audit 2026-07-05): returns `Ok(false)` for BOTH
-    /// "capacity exceeded — reallocate" and "grain count changed" —
-    /// callers cannot distinguish them and ignoring the bool keeps
-    /// stale topology. Splitting into an enum is the tracked cleanup.
+    /// Returns a [`ResidentLbvhUpdate`] telling the caller exactly
+    /// what happened — `GrainCountMismatch` and `CapacityExceeded`
+    /// need DIFFERENT remedies (rebuild state vs reallocate buffers);
+    /// the old boolean conflated them (2026-07-05 tire audit).
     pub fn update_resident_lbvh(
         &self,
         queue: &wgpu::Queue,
         resident: &mut TireDemResidentLbvh,
         grain_count: usize,
         lbvh: &TireDemSparseLbvh,
-    ) -> Result<bool> {
+    ) -> Result<ResidentLbvhUpdate> {
         let dispatch_plan = tire_dem_sparse_lbvh_dispatch_plan_from_parts(grain_count, 0, lbvh)?;
         let lbvh_rows = tire_dem_sparse_lbvh_gpu_rows(lbvh);
         debug_assert_eq!(lbvh_rows.len(), dispatch_plan.node_row_count);
         if resident.grain_count != grain_count {
-            return Ok(false);
+            return Ok(ResidentLbvhUpdate::GrainCountMismatch);
         }
         if lbvh_rows.len() > resident.node_row_capacity
             || lbvh.sorted_indices.len() > resident.sorted_index_capacity
         {
-            return Ok(false);
+            return Ok(ResidentLbvhUpdate::CapacityExceeded);
         }
         queue.write_buffer(&resident.node_rows, 0, bytemuck::cast_slice(&lbvh_rows));
         queue.write_buffer(
@@ -4517,7 +4531,7 @@ impl TireDemGpuKernel {
         resident.sorted_index_count = lbvh.sorted_indices.len();
         resident.leaf_size = lbvh.leaf_size;
         resident.topology_revision = resident.topology_revision.saturating_add(1);
-        Ok(true)
+        Ok(ResidentLbvhUpdate::Updated)
     }
 
     pub fn dispatch_lbvh_step_resident_state_with_resident_lbvh(

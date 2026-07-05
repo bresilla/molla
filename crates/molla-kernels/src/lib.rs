@@ -253,7 +253,7 @@ pub use tire_brush::{
 };
 #[cfg(feature = "gpu")]
 pub use tire_dem::{
-    TireDemContactCell, TireDemFemTerrainOwner, TireDemFemTerrainStepReport,
+    ResidentLbvhUpdate, TireDemContactCell, TireDemFemTerrainOwner, TireDemFemTerrainStepReport,
     TireDemGpuBuiltGridStepInput, TireDemGpuInput, TireDemGpuKernel, TireDemGpuLbvhLeafRows,
     TireDemGpuLbvhTreeRows, TireDemGpuMortonOrder, TireDemGpuOutput, TireDemGpuRadixGridStepInput,
     TireDemGridStepGpuInput, TireDemLbvhDispatchPlan, TireDemLbvhNode, TireDemLbvhStepGpuInput,
