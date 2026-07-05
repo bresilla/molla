@@ -75,6 +75,19 @@ pub struct BarrierSolver {
     pub last_min_gap: Real,
     /// Obstacle provenance parallel to the shell's obstacle list.
     bindings: Vec<ObstacleBinding>,
+    /// Treat every Model spring as a COLLISION edge (rod/chain scenes
+    /// — noodles, yarn, knots — where there are no triangles to derive
+    /// edges from). Set before the first step.
+    pub springs_as_collision_edges: bool,
+    /// (model body index, shell affine-body index) for dynamic
+    /// BOX-shape bodies promoted to STRONG (ABD) coupling — their
+    /// corner/face proxies + 12 surface triangles join the barrier
+    /// solve, and poses write back after each step.
+    abd_bodies: Vec<(usize, usize)>,
+    /// Model particle count at shell build time (the shell may hold
+    /// MORE vertices — ABD proxies — so topology-change detection
+    /// must compare against this, not `positions.len()`).
+    built_particles: usize,
 }
 
 impl Default for BarrierSolver {
@@ -93,6 +106,9 @@ impl BarrierSolver {
             last_newton_iters: 0,
             last_min_gap: Real::INFINITY,
             bindings: Vec::new(),
+            springs_as_collision_edges: false,
+            abd_bodies: Vec::new(),
+            built_particles: usize::MAX,
         }
     }
 
@@ -202,9 +218,17 @@ impl BarrierSolver {
         }
         let shape_body = model.shape_body.host()?;
         let shape_xf = model.shape_transform.host()?;
+        let body_inv_mass_g = model.body_inv_mass.host()?;
         let mut obstacles = Vec::new();
         for s in 0..model.shape_count {
             if shape_body[s] >= 0 {
+                if matches!(model.shape_geometry[s], ShapeGeometry::Box { .. })
+                    && body_inv_mass_g[shape_body[s] as usize] > 0.0
+                {
+                    return Err(molla_core::Error::Solver(
+                        "barrier gpu: dynamic box (ABD) bodies are CPU-path only (v1) — use BarrierSolver::new()".into(),
+                    ));
+                }
                 continue; // GPU path: static obstacles only (documented)
             }
             let xf = shape_xf[s];
@@ -349,6 +373,85 @@ impl BarrierSolver {
         if !triangles.is_empty() {
             shell = shell.with_triangles(triangles);
         }
+        if self.springs_as_collision_edges {
+            let edges: Vec<[u32; 2]> = (0..model.spring_count)
+                .map(|i| [spring_a[i], spring_b[i]])
+                .collect();
+            shell = shell.with_collision_edges(edges);
+        }
+        // STRONG coupling: dynamic bodies with a BOX shape become
+        // affine bodies — 8 corner + 6 face-centre proxies and the 12
+        // box surface triangles join the barrier solve (this is what
+        // makes dominoes/cards work: boxes are not analytic obstacles,
+        // they are ABD bodies).
+        self.abd_bodies.clear();
+        let body_inv_mass = model.body_inv_mass.host()?;
+        let body_mass = model.body_mass.host()?;
+        let body_q0 = state.body_q.host()?;
+        for s in 0..model.shape_count {
+            let b = shape_body[s];
+            if b < 0 || body_inv_mass[b as usize] <= 0.0 {
+                continue;
+            }
+            let ShapeGeometry::Box { half_extents } = model.shape_geometry[s] else {
+                continue;
+            };
+            let world = body_q0[b as usize].compose(&shape_xf[s]);
+            let h = half_extents;
+            let mut samples = Vec::with_capacity(14);
+            for &sx in &[-1.0, 1.0] {
+                for &sy in &[-1.0, 1.0] {
+                    for &sz in &[-1.0, 1.0] {
+                        samples.push(world.transform_point(Vec3::new(
+                            sx * h.x,
+                            sy * h.y,
+                            sz * h.z,
+                        )));
+                    }
+                }
+            }
+            for c in 0..3 {
+                for &sgn in &[-1.0, 1.0] {
+                    let mut v = Vec3::ZERO;
+                    v[c] = sgn * h[c];
+                    samples.push(world.transform_point(v));
+                }
+            }
+            let m_each = body_mass[b as usize] / samples.len() as Real;
+            let start = shell.positions.len() as u32;
+            let abd_idx =
+                shell.add_affine_body(samples, vec![m_each; 14], 1.0e5 * body_mass[b as usize]);
+            // Inherit the body's initial motion: v_p from linear, and
+            // v_A = [ω]× · A from angular velocity.
+            let qd0 = state.body_qd.host()?[b as usize];
+            let w = qd0.angular;
+            let a0 = shell.affine_bodies[abd_idx].a_mat;
+            let wx = molla_math::Mat3::from_cols(
+                Vec3::new(0.0, w.z, -w.y),
+                Vec3::new(-w.z, 0.0, w.x),
+                Vec3::new(w.y, -w.x, 0.0),
+            );
+            shell.affine_bodies[abd_idx].v_p = qd0.linear;
+            shell.affine_bodies[abd_idx].v_a = wx * a0;
+            // Corner indexing: (sx,sy,sz) → 4*ix + 2*iy + iz.
+            let c = |ix: u32, iy: u32, iz: u32| start + 4 * ix + 2 * iy + iz;
+            let box_tris = vec![
+                [c(0, 0, 0), c(0, 1, 0), c(0, 1, 1)],
+                [c(0, 0, 0), c(0, 1, 1), c(0, 0, 1)],
+                [c(1, 0, 0), c(1, 1, 1), c(1, 1, 0)],
+                [c(1, 0, 0), c(1, 0, 1), c(1, 1, 1)],
+                [c(0, 0, 0), c(1, 0, 1), c(1, 0, 0)],
+                [c(0, 0, 0), c(0, 0, 1), c(1, 0, 1)],
+                [c(0, 1, 0), c(1, 1, 0), c(1, 1, 1)],
+                [c(0, 1, 0), c(1, 1, 1), c(0, 1, 1)],
+                [c(0, 0, 0), c(1, 0, 0), c(1, 1, 0)],
+                [c(0, 0, 0), c(1, 1, 0), c(0, 1, 0)],
+                [c(0, 0, 1), c(1, 1, 1), c(1, 0, 1)],
+                [c(0, 0, 1), c(0, 1, 1), c(1, 1, 1)],
+            ];
+            shell = shell.with_triangles_appended(box_tris);
+            self.abd_bodies.push((b as usize, abd_idx));
+        }
         shell.pin_vertices(&pinned);
         Ok(shell)
     }
@@ -368,11 +471,7 @@ impl Solver for BarrierSolver {
         // built backends — rebuild instead of panicking on a length
         // mismatch (scene edits / model swaps).
         let n_particles = state_in.particle_q.host()?.len();
-        if self
-            .shell
-            .as_ref()
-            .is_some_and(|s| s.positions.len() != n_particles)
-        {
+        if self.shell.is_some() && self.built_particles != n_particles {
             self.shell = None;
         }
         #[cfg(feature = "gpu")]
@@ -427,17 +526,20 @@ impl Solver for BarrierSolver {
         }
         if self.shell.is_none() {
             self.shell = Some(self.build_shell(model, state_in)?);
+            self.built_particles = n_particles;
         }
         let shell = self.shell.as_mut().expect("shell built above");
         shell.params = self.params;
 
         // Stream state in (positions may have been edited externally,
         // e.g. viewer reset — the topology is what the shell owns).
+        // ABD proxy vertices live BEYOND the Model's particle range
+        // and are owned by the shell — stream only the Model slice.
         {
             let q = state_in.particle_q.host()?;
             let qd = state_in.particle_qd.host()?;
-            shell.positions.copy_from_slice(q);
-            shell.velocities.copy_from_slice(qd);
+            shell.positions[..q.len()].copy_from_slice(q);
+            shell.velocities[..qd.len()].copy_from_slice(qd);
         }
 
         // Weak-coupling sequencing with a RIGID-SIDE TOI: tentatively
@@ -533,14 +635,13 @@ impl Solver for BarrierSolver {
         self.last_newton_iters = stats.newton_iters;
         self.last_min_gap = stats.min_gap;
 
-        state_out
-            .particle_q
-            .host_mut()?
-            .copy_from_slice(&shell.positions);
-        state_out
-            .particle_qd
-            .host_mut()?
-            .copy_from_slice(&shell.velocities);
+        {
+            let q_out = state_out.particle_q.host_mut()?;
+            let np = q_out.len();
+            q_out.copy_from_slice(&shell.positions[..np]);
+            let qd_out = state_out.particle_qd.host_mut()?;
+            qd_out.copy_from_slice(&shell.velocities[..np]);
+        }
 
         // Reaction wrench (third-law-exact — see `obstacle_reactions`)
         // → velocity update; position already advanced by the capped
@@ -556,6 +657,30 @@ impl Solver for BarrierSolver {
                 wrench[bi].0 += f;
                 wrench[bi].1 += tau_origin - q[bi].position.cross(f);
             }
+        }
+        // STRONG-coupled (ABD) bodies: write poses back from the
+        // shell's affine state — position from p, rotation from the
+        // Gram-Schmidt orthonormalization of the near-orthogonal A
+        // (κ_o keeps ‖AᵀA−I‖ ~1e-6; the projection is for rendering
+        // and downstream consumers, the solve itself uses A).
+        for &(bi, ai) in &self.abd_bodies {
+            let body = &shell.affine_bodies[ai];
+            let a = body.a_mat;
+            let c0 = a.col(0).normalize();
+            let c1 = (a.col(1) - c0 * c0.dot(a.col(1))).normalize();
+            let c2 = c0.cross(c1);
+            let rot =
+                molla_math::Quat::from_mat3(&molla_math::Mat3::from_cols(c0, c1, c2)).normalize();
+            q[bi].position = body.p;
+            q[bi].rotation = rot;
+            qd[bi].linear = body.v_p;
+            // ω from the skew part of Ȧ·Aᵀ.
+            let w_mat = body.v_a * a.transpose();
+            qd[bi].angular = Vec3::new(
+                0.5 * (w_mat.col(1).z - w_mat.col(2).y),
+                0.5 * (w_mat.col(2).x - w_mat.col(0).z),
+                0.5 * (w_mat.col(0).y - w_mat.col(1).x),
+            );
         }
         for i in 0..q.len() {
             if !coupled[i] {

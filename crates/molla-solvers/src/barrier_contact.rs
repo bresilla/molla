@@ -433,6 +433,32 @@ impl BarrierShell {
         a * (x.transpose() * a + a.transpose() * x) * (4.0 * kappa)
     }
 
+    /// Append triangles (and their derived unique edges) to the
+    /// EXISTING collision topology — used when several sources
+    /// contribute surfaces (cloth + promoted ABD boxes).
+    pub fn with_triangles_appended(mut self, triangles: Vec<[u32; 3]>) -> Self {
+        let mut edges = std::collections::BTreeSet::new();
+        for t in &triangles {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                edges.insert((a.min(b), a.max(b)));
+            }
+        }
+        self.collision_edges
+            .extend(edges.into_iter().map(|(a, b)| [a, b]));
+        self.triangles.extend(triangles);
+        self
+    }
+
+    /// Register EXPLICIT collision edges (rod/chain segments without
+    /// triangles — noodles, yarns, knots). They join the EE pair
+    /// machinery exactly like triangle edges; call after
+    /// `with_triangles` if both are used (appends, no dedup against
+    /// triangle edges needed for disjoint chains).
+    pub fn with_collision_edges(mut self, edges: Vec<[u32; 2]>) -> Self {
+        self.collision_edges.extend(edges);
+        self
+    }
+
     /// Pin vertices in place (true DoF removal — see `pinned`).
     pub fn pin_vertices(&mut self, indices: &[usize]) {
         for &i in indices {
@@ -574,13 +600,23 @@ impl BarrierShell {
     /// OUTSIDE the margin can close at most 2·d̂ in one Newton step
     /// and therefore can never reach contact unseen (3d̂ − 2d̂ = d̂ of
     /// slack) — the additive-CCD safety argument.
+    /// Same-rigid-body exclusion: an affine body's proxies are exactly
+    /// ON its own surface triangles (face centres!) — internal pairs
+    /// are meaningless and would report zero gaps.
+    fn same_body(&self, a: u32, b: u32) -> bool {
+        match (self.proxy_of[a as usize], self.proxy_of[b as usize]) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+
     fn self_candidates(&self, x: &[Vec3]) -> Vec<SelfPair> {
         let margin = 3.0 * self.params.dhat;
         let mut out = Vec::new();
         for (t_idx, tri) in self.triangles.iter().enumerate() {
             let (a, b, c) = (x[tri[0] as usize], x[tri[1] as usize], x[tri[2] as usize]);
             for v in 0..x.len() as u32 {
-                if tri.contains(&v) {
+                if tri.contains(&v) || self.same_body(v, tri[0]) {
                     continue;
                 }
                 let w = Self::tri_closest_weights(x[v as usize], a, b, c);
@@ -595,6 +631,9 @@ impl BarrierShell {
             for j in (i + 1)..self.collision_edges.len() {
                 let e2 = self.collision_edges[j];
                 if e1[0] == e2[0] || e1[0] == e2[1] || e1[1] == e2[0] || e1[1] == e2[1] {
+                    continue;
+                }
+                if self.same_body(e1[0], e2[0]) {
                     continue;
                 }
                 let (s, t) = Self::seg_closest_params(
@@ -1279,7 +1318,7 @@ impl BarrierShell {
         for tri in &self.triangles {
             let (a, b, c) = (x[tri[0] as usize], x[tri[1] as usize], x[tri[2] as usize]);
             for v in 0..x.len() as u32 {
-                if tri.contains(&v) {
+                if tri.contains(&v) || self.same_body(v, tri[0]) {
                     continue;
                 }
                 let w = Self::tri_closest_weights(x[v as usize], a, b, c);
@@ -1291,6 +1330,9 @@ impl BarrierShell {
             for j in (i + 1)..self.collision_edges.len() {
                 let e2 = self.collision_edges[j];
                 if e1[0] == e2[0] || e1[0] == e2[1] || e1[1] == e2[0] || e1[1] == e2[1] {
+                    continue;
+                }
+                if self.same_body(e1[0], e2[0]) {
                     continue;
                 }
                 let (s, t) = Self::seg_closest_params(
