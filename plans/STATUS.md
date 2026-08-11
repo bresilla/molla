@@ -44,9 +44,14 @@ Work against the "three recurring patterns" below:
     (per-contact Dieterich-Ruina step) — `T=signorini_gpu`
   - **VBD CCD pass** (broad+narrow composed) → `vbd_ccd_earliest_toi_gpu` (swept-BVH query
     + batched VT-CCD → earliest per-vertex TOI) — `T=vbd_ccd_gpu`
-  Remaining `molla-fem` compute is the solver *cores* themselves — the signorini PDAS
-  active-set loop and eddy-current GMRES/AMS multigrid — plus AMR mesh-refinement topology
-  (an inherently sequential/topological op, not a GPU-compute kernel).
+  - **device-side CG core** → `bsr_cg_gpu` (molla-kernels): conjugate gradients over a
+    `BsrMatrix` with the spmv on-device (`BsrAlgebraKernel::matvec`), host-driven recurrence
+    — `T=bsr_cg_gpu`. This is the reusable symmetric-solver infrastructure the CPU-only FEM
+    solves can now route through (magnetostatics curl-curl is SPD → drops straight in).
+  Remaining `molla-fem` compute is the *non-symmetric / constrained* solver cores —
+  eddy-current (needs device-side **GMRES** + AMS multigrid, a further build on top of the CG
+  core above) and signorini PDAS (device-side active-set) — plus AMR mesh-refinement
+  topology (an inherently sequential/topological op, not a GPU-compute kernel).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 

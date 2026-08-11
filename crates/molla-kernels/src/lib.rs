@@ -23,6 +23,8 @@ mod actuator_pipeline_pid;
 #[cfg(feature = "gpu")]
 mod barrier_newton;
 #[cfg(feature = "gpu")]
+mod bsr_solve;
+#[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
 mod clamping_max_effort;
@@ -134,6 +136,8 @@ pub use barrier_newton::{
     BarrierGpuObstacle, BarrierGpuParams, BarrierGpuSpring, BarrierGpuStats, BarrierNewtonGpu,
 };
 #[cfg(feature = "gpu")]
+pub use bsr_solve::{BsrCgResult, bsr_cg_gpu};
+#[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_max_effort::ClampingMaxEffortKernel;
@@ -223,7 +227,6 @@ pub use scan::ScanKernel;
 pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]
 pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu};
-#[cfg(feature = "gpu")]
 pub use sparse_gpu::{BsrAlgebraKernel, BsrGpu, SPGEMM_GPU_SYMBOLIC_CUTOVER};
 #[cfg(feature = "gpu")]
 pub use sparse_grid::SparseGridKernel;
