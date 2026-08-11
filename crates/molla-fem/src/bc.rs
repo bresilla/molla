@@ -10,13 +10,14 @@
 //!   is) so CG retains its convergence guarantee — required for the
 //!   adjoint solve and for non-zero Dirichlet values that previously
 //!   silently relied on row-only elimination.
-//! - **Neumann** — `n · ∇u = flux` over a face. v1 records the
-//!   constraint but does not yet integrate the surface contribution
-//!   into the RHS — the homogeneous (zero-flux) case happens
-//!   automatically because P1 + bilinear weak form drops the
-//!   boundary term when no Neumann is specified. The Neumann variant
-//!   is wired so callers can store the data; full integration lands
-//!   in Stage 36.1 alongside elasticity tractions.
+//! - **Neumann** — `n · ∇u = flux` over a triangular face. The
+//!   consistent P1 surface load `∫_face flux · Nᵢ dS = flux · area/3`
+//!   is added to the RHS at each face vertex (component 0), the same
+//!   lumping the vector `NeumannTraction` variant uses. Integration
+//!   needs the face geometry, so it runs only when the vertex array is
+//!   supplied through [`apply_bcs`]; the geometry-free [`apply_dirichlet`]
+//!   entrypoint leaves it a no-op (the homogeneous zero-flux weak form
+//!   already drops the boundary term).
 //!
 //! All BCs are addressed by global DoF index (= vertex index for
 //! `FunctionSpace::P1Nodal`). The caller is responsible for picking
@@ -76,8 +77,9 @@ pub enum BoundaryCondition {
     /// space's `dofs_per_vertex` (typically 2 or 3 for elasticity).
     DirichletVector { vertex: u32, values: Vec<Real> },
     /// Neumann: prescribe a scalar flux `flux` over the triangular
-    /// `face` (3 vertex indices). Stage 36 v1 stores but does not
-    /// integrate this (zero-flux is the homogeneous default).
+    /// `face` (3 vertex indices). [`apply_bcs`] integrates the
+    /// consistent P1 surface load `flux · area/3` into the RHS at each
+    /// face vertex (component 0); zero flux is the homogeneous default.
     Neumann { face: [u32; 3], flux: Real },
     /// Neumann traction: prescribe a 3D traction vector over the
     /// triangular `face`. The applier integrates `∫ N · t dA` and
@@ -131,9 +133,12 @@ pub fn default_nitsche_sigma(degree: usize) -> Real {
 /// triangular face. `vertices` is the mesh vertex array (needed for
 /// the face area).
 ///
-/// The scalar `Neumann { face, flux }` variant is still a no-op —
-/// zero flux is the homogeneous default and the v1 weak form
-/// already drops the boundary integral.
+/// **Scalar Neumann flux:** for `Neumann { face, flux }`, add
+/// `(area / 3) * flux` to the RHS at each face vertex's component-0
+/// DoF `v * dim` — the P1 lumping of `∫_face flux · Nᵢ dS` for a
+/// constant flux over a flat triangle. Like the tractions, this needs
+/// `vertices`; the geometry-free [`apply_dirichlet`] path leaves it a
+/// no-op.
 ///
 /// `dim` is the per-vertex component count (1 for scalar fields,
 /// `space.dofs_per_vertex()` for vector fields). Pass 1 for the
@@ -175,6 +180,20 @@ pub fn apply_bcs(
                 }
             }
         }
+        // Scalar flux: same P1 area/3 lumping onto component 0. Needs
+        // geometry, so it is skipped on the vertex-free apply_dirichlet path.
+        if let BoundaryCondition::Neumann { face, flux } = bc
+            && !vertices.is_empty()
+        {
+            let a = vertices[face[0] as usize];
+            let b = vertices[face[1] as usize];
+            let c = vertices[face[2] as usize];
+            let area = 0.5 * (b - a).cross(c - a).length();
+            let third = area / 3.0;
+            for v in face {
+                f[*v as usize * dim] += third * flux;
+            }
+        }
     }
 
     // Pass 2: collect every pinned DoF + its value into a flat array.
@@ -201,6 +220,8 @@ pub fn apply_bcs(
                     pinned[base + ci] = Some(*val);
                 }
             }
+            // Neumann fluxes/tractions are integrated into the RHS in
+            // pass 1, before Dirichlet pins any row.
             BoundaryCondition::Neumann { .. } => {}
             BoundaryCondition::NeumannTraction { .. } => {}
             // DG Nitsche BCs are handled by `apply_dg_bcs`, which
@@ -555,7 +576,9 @@ mod tests {
     }
 
     #[test]
-    fn neumann_is_a_noop_in_v1() {
+    fn neumann_is_a_noop_without_geometry() {
+        // apply_dirichlet passes no vertices, so there is no face area
+        // to integrate — the scalar flux stays a no-op there.
         let mut k = build_test_csr();
         let snapshot_values = k.values.clone();
         let mut f = vec![1.0, 2.0, 3.0, 4.0];
@@ -567,5 +590,39 @@ mod tests {
         apply_dirichlet(&mut k, &mut f, &bcs);
         assert_eq!(k.values, snapshot_values);
         assert_eq!(f, f_before);
+    }
+
+    #[test]
+    fn neumann_flux_integrates_the_surface_load() {
+        use crate::math::Vec3;
+        // Unit right triangle in the z = 0 plane: area = 1/2.
+        let verts = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        ];
+        let mut k = build_test_csr();
+        let snapshot_values = k.values.clone();
+        let mut f = vec![0.0; 4];
+        let flux = 0.5;
+        let bcs = [BoundaryCondition::Neumann {
+            face: [0, 1, 2],
+            flux,
+        }];
+        apply_bcs(&mut k, &mut f, &bcs, &verts, 1);
+        // Scalar flux touches only the RHS, never the matrix.
+        assert_eq!(k.values, snapshot_values);
+        // Each of the 3 face vertices gets area/3 * flux = (1/6)*0.5.
+        let expected = (0.5 / 3.0) * flux;
+        for v in 0..3 {
+            assert!(
+                (f[v] - expected).abs() < 1e-15,
+                "f[{v}] = {} (expected {expected})",
+                f[v],
+            );
+        }
+        // The off-face vertex is untouched.
+        assert_eq!(f[3], 0.0);
     }
 }
