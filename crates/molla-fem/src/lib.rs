@@ -88,6 +88,8 @@ pub mod gpu_data;
 #[cfg(feature = "gpu")]
 pub mod gpu_kernels;
 pub mod magneto;
+#[cfg(feature = "gpu")]
+pub mod magneto_gpu;
 pub mod mesh;
 pub mod multigrid;
 pub mod multiphase;

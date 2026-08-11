@@ -38,8 +38,10 @@ Work against the "three recurring patterns" below:
     bounded-irreversible sweeps, ping-ponged) — `T=phase_field_gpu`
   - `multiphase` curvature + CSF force → `level_set_curvature_2d_gpu` /
     `csf_surface_tension_force_2d_gpu` (3 per-cell grid passes) — `T=multiphase_gpu`
-  Remaining `molla-fem` units (Nédélec/magneto, signorini, AMR, eddy-current) + VBD CCD are
-  larger linear solves / active-set iterations driving the GPU CG/PCG (tracked in ROADMAP).
+  - `magneto` Nédélec curl recovery `B=∇×A` → `compute_curl_per_cell_gpu` (per-tet edge-DoF
+    reduction) — `T=magneto_gpu`
+  Remaining `molla-fem` units (signorini active-set, eddy-current GMRES/AMS, AMR topology) +
+  VBD CCD are the heavier solver-driven pieces (tracked in ROADMAP).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -224,7 +226,8 @@ solvers ship documented approximations.
 | Module | Status | Backend | Note |
 |---|---|---|---|
 | P1 elements, solver drivers (steady/transient/wave/nonlinear), apic_coupling, stam_fluid, mesh/quadrature/assembly/bc, dg_element, magneto, signorini (hard contact), nonconforming, amg | complete | mixed | see backends below |
-| p2_element (Taylor-Hood), nedelec (edge/H(curl)) | complete | cpu | no GPU path; no P3 |
+| p2_element (Taylor-Hood) | complete | cpu | no GPU path; no P3 |
+| nedelec (edge/H(curl)) / magneto curl recovery | complete | gpu+cpu | per-cell `B=∇×A` GPU-ported 2026-08-11 (`compute_curl_per_cell_gpu`, parity-tested `T=magneto_gpu`); full curl-curl solve still CPU |
 | adjoint (linear-elasticity) | complete | gpu+cpu | Young's-modulus gradient GPU-ported 2026-08-11 (`compute_grad_youngs_gpu`, tet-only, parity-tested `T=adjoint_gpu`); solve reuses GPU CG |
 | gpu_kernels (resident CG/PCG, elasticity, stokes, NS, wave/transient, DG-SWE) | complete | gpu | f32 (~1e-4 vs f64); coverage matches which CPU modules were ported |
 | **element.rs nonlinear (Neo-Hookean/MR/SVK)** | partial | gpu+cpu | **Tet-only; Tri panics** (`unimplemented!` at :829) |
