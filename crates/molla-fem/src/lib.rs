@@ -91,6 +91,8 @@ pub mod magneto;
 pub mod mesh;
 pub mod multigrid;
 pub mod multiphase;
+#[cfg(feature = "gpu")]
+pub mod multiphase_gpu;
 pub mod nedelec_element;
 pub mod nonconforming;
 pub mod p2_element;

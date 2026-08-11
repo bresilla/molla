@@ -36,6 +36,8 @@ Work against the "three recurring patterns" below:
   - `adjoint` Young's-modulus gradient → `compute_grad_youngs_gpu` (per-cell `λᵀKu`) — `T=adjoint_gpu`
   - `phase_field` damage Jacobi solve → `solve_phase_field_fracture_jacobi_gpu` (per-row
     bounded-irreversible sweeps, ping-ponged) — `T=phase_field_gpu`
+  - `multiphase` curvature + CSF force → `level_set_curvature_2d_gpu` /
+    `csf_surface_tension_force_2d_gpu` (3 per-cell grid passes) — `T=multiphase_gpu`
   Remaining `molla-fem` units (Nédélec/magneto, signorini, AMR, eddy-current) + VBD CCD are
   larger linear solves / active-set iterations driving the GPU CG/PCG (tracked in ROADMAP).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
@@ -231,7 +233,7 @@ solvers ship documented approximations.
 | **multigrid** (geometric) | partial | cpu | v3 stepping-stone, superseded by AMG; non-recursive |
 | **amr_mesh** | partial | cpu | refinement complete; **coarsening is single-level** |
 | phase_field (fracture) | partial | gpu+cpu | damage Jacobi solve GPU-ported 2026-08-11 (`solve_phase_field_fracture_jacobi_gpu`, parity-tested `T=phase_field_gpu`); assembly host-side; 2D-tri, quasi-static |
-| **multiphase** (level-set CSF) | partial | cpu | curvature/surface-tension **primitives only, not a full solver** |
+| multiphase (level-set CSF) | partial | gpu+cpu | curvature + CSF force GPU-ported 2026-08-11 (`level_set_curvature_2d_gpu`, `csf_surface_tension_force_2d_gpu`, parity-tested `T=multiphase_gpu`); primitives only, not a full solver |
 | **russell / DirectSolver** | partial | cpu | named a sparse bridge but is a **dense LU**, capped ~1024 dim, off by default |
 | bc: Neumann flux + traction | complete | cpu | scalar flux and vector traction both integrate the P1 area/3 surface load into the RHS |
 
