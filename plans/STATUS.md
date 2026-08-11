@@ -54,10 +54,14 @@ Work against the "three recurring patterns" below:
   - **signorini Uzawa solve** → `solve_augmented_system_gpu`: the frictionless active-set
     Uzawa loop with every inner SPD solve `K u = f + Cᵀλ` dispatched on-device via `bsr_cg_gpu`;
     the projected-gradient dual update stays host-side — `T=signorini_uzawa_gpu`
-  Only **AMR** mesh-refinement topology remains — hanging-node insertion / 2:1 balance /
-  constraint-matrix construction is inherently sequential graph restructuring, not a
-  GPU-compute kernel. The eddy-current AMS *multigrid preconditioner* is a perf optimization
-  on top of the now-GPU GMRES solve.
+  - **AMR constrained assembly** → `compute_ttkt_gpu`: the `TᵀKT` reduction of a stiffness
+    matrix against the hanging-node prolongation, on-device via transpose + two SpGEMMs — `T=amr_gpu`
+
+  **Pattern 1 GPU-compute surface is complete.** What is left is categorically *not* a
+  GPU-compute kernel: the eddy-current AMS *multigrid preconditioner* (a convergence/perf
+  accelerator on the shipped GPU GMRES), signorini's *active-set combinatorics* (host
+  branching deciding which constraints are active), and AMR's *refinement topology*
+  (hanging-node insertion / 2:1 balance — sequential graph restructuring).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -313,7 +317,7 @@ two enforcement tests. The registry is accurate (agents cross-checked it). Distr
 ## The honest gap list (consolidated "what we don't have / half-have")
 
 **GPU-first violations (CPU-only where the project wants GPU):**
-- FEM: only AMR *topology* remains (mesh-refinement graph restructuring — not a GPU-compute kernel). _(Ported to GPU 2026-08-11: adjoint gradient, phase-field Jacobi, multiphase curvature/CSF, Nédélec curl, rate-state friction, eddy-current block-GMRES solve, and signorini Uzawa inner solves — via the new device CG/GMRES cores.)_
+- FEM: **Pattern-1 GPU-compute surface complete.** Residual is non-compute only (eddy AMS multigrid *preconditioner*, signorini active-set *combinatorics*, AMR refinement *topology*). _(Ported to GPU 2026-08-11: adjoint gradient, phase-field Jacobi, multiphase curvature/CSF, Nédélec curl, rate-state friction, eddy-current block-GMRES solve, signorini Uzawa inner solves, AMR TᵀKT assembly — via the new device CG/GMRES cores + SpGEMM.)_
 - Solvers: VBD CCD/tet-vs-tet/friction; sph_diff.
 - Geometry: gaussian-splat adjoint (partly elsewhere). _(sdf_bake, self_contact, soft_ccd, marching_cubes, soft_bvh query all ported to GPU 2026-08-11 — the geometry CPU-only set is cleared.)_
 - Viewer: the entire PPF rigid/rod gallery + CPU-only FEM band + tile N-body/MCGP.
