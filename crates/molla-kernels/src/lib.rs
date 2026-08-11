@@ -227,6 +227,7 @@ pub use scan::ScanKernel;
 pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]
 pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu};
+#[cfg(feature = "gpu")]
 pub use sparse_gpu::{BsrAlgebraKernel, BsrGpu, SPGEMM_GPU_SYMBOLIC_CUTOVER};
 #[cfg(feature = "gpu")]
 pub use sparse_grid::SparseGridKernel;
