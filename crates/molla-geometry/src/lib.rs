@@ -45,6 +45,8 @@ pub mod sparse_grid;
 pub mod spatial_hash;
 pub mod support;
 pub mod tet_bvh;
+#[cfg(feature = "gpu")]
+mod vbd_ccd_gpu;
 
 pub use aabb::Aabb;
 pub use broad_phase::{BroadPhase, ShapePair, brute_force_pairs};
@@ -127,3 +129,5 @@ pub use tet_bvh::{
     TetAabb, TetBvh, TetBvhNode, recompute_tet_aabbs, tet_closest_face, tet_mesh_root_aabb,
     tet_meshes_aabb_overlap,
 };
+#[cfg(feature = "gpu")]
+pub use vbd_ccd_gpu::vbd_ccd_earliest_toi_gpu;

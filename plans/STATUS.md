@@ -42,9 +42,11 @@ Work against the "three recurring patterns" below:
     reduction) — `T=magneto_gpu`
   - `signorini` rate-and-state friction advance → `advance_rate_state_friction_batch_gpu`
     (per-contact Dieterich-Ruina step) — `T=signorini_gpu`
+  - **VBD CCD pass** (broad+narrow composed) → `vbd_ccd_earliest_toi_gpu` (swept-BVH query
+    + batched VT-CCD → earliest per-vertex TOI) — `T=vbd_ccd_gpu`
   Remaining `molla-fem` compute is the solver *cores* themselves — the signorini PDAS
-  active-set loop, eddy-current GMRES/AMS, and AMR mesh-refinement topology (not a
-  per-element kernel) — plus VBD CCD wiring (its `vt_ccd`/`soft_bvh` blocks are now GPU).
+  active-set loop and eddy-current GMRES/AMS multigrid — plus AMR mesh-refinement topology
+  (an inherently sequential/topological op, not a GPU-compute kernel).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
