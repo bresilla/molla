@@ -108,3 +108,177 @@ pub fn bsr_cg_gpu(
 fn dot(a: &[Real], b: &[Real]) -> Real {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
+
+fn norm(v: &[Real]) -> Real {
+    dot(v, v).sqrt()
+}
+
+fn axpy(y: &mut [Real], a: Real, x: &[Real]) {
+    for (yi, xi) in y.iter_mut().zip(x.iter()) {
+        *yi += a * xi;
+    }
+}
+
+/// Summary of a [`bsr_gmres_gpu`] solve.
+#[derive(Clone, Debug)]
+pub struct BsrGmresResult {
+    pub x: Vec<Real>,
+    pub iters: usize,
+    pub residual: Real,
+    pub converged: bool,
+}
+
+/// Solve `A x = b` for a general (non-symmetric) `A` with restarted
+/// GMRES(`restart`), `x0 = 0`, no preconditioner. The per-Arnoldi
+/// sparse mat-vec runs on the GPU; the Arnoldi/Givens recurrence is
+/// host-side — a faithful mirror of the CPU [`gmres`](molla_math::sparse::gmres)
+/// (unpreconditioned), so it matches within f32 tolerance. This is the
+/// device-side non-symmetric solver core (e.g. for eddy-current).
+pub fn bsr_gmres_gpu(
+    kernel: &BsrAlgebraKernel,
+    a_gpu: &BsrGpu,
+    b: &[Real],
+    tol: Real,
+    max_iter: usize,
+    restart: usize,
+) -> Result<BsrGmresResult> {
+    let n = b.len();
+    let mut x = vec![0.0 as Real; n];
+    if n == 0 {
+        return Ok(BsrGmresResult {
+            x,
+            iters: 0,
+            residual: 0.0,
+            converged: true,
+        });
+    }
+
+    let device = kernel.device().clone();
+    let queue = kernel.queue().clone();
+    let mut p_buf = Buffer::from_vec(vec![0.0 as Real; n], BufferUsage::StorageReadWrite);
+    p_buf.ensure_device(&device)?;
+    let mut ap_buf = Buffer::from_vec(vec![0.0 as Real; n], BufferUsage::StorageReadWrite);
+    ap_buf.ensure_device(&device)?;
+    ap_buf.upload(&queue)?;
+
+    // A·v on the device.
+    let mut mv = |v: &[Real]| -> Result<Vec<Real>> {
+        {
+            let h = p_buf.host_mut()?;
+            h.copy_from_slice(v);
+        }
+        p_buf.upload(&queue)?;
+        kernel.matvec(
+            a_gpu,
+            p_buf.device_buffer().unwrap(),
+            ap_buf.device_buffer().unwrap(),
+            1.0,
+            0.0,
+        )?;
+        ap_buf.mark_device_dirty();
+        ap_buf.download(&device, &queue)?;
+        Ok(ap_buf.host()?.to_vec())
+    };
+
+    let m = restart.max(1).min(n);
+    let bnorm = norm(b).max(1.0e-30);
+    let mut total_iters = 0usize;
+    let mut residual = 1.0;
+
+    while total_iters < max_iter {
+        let ax = mv(&x)?;
+        let mut r = vec![0.0; n];
+        for i in 0..n {
+            r[i] = b[i] - ax[i];
+        }
+        let beta = norm(&r);
+        residual = beta / bnorm;
+        if residual < tol {
+            return Ok(BsrGmresResult {
+                x,
+                iters: total_iters,
+                residual,
+                converged: true,
+            });
+        }
+
+        let mut v_basis: Vec<Vec<Real>> = vec![Vec::new(); m + 1];
+        v_basis[0] = r.iter().map(|z| z / beta).collect();
+        let mut h = vec![0.0; (m + 1) * m];
+        let mut g = vec![0.0; m + 1];
+        g[0] = beta;
+        let mut cs = vec![0.0; m];
+        let mut sn = vec![0.0; m];
+        let mut converged = false;
+        let mut k_done = m;
+
+        for k in 0..m {
+            let mut w = mv(&v_basis[k])?;
+            for j in 0..=k {
+                h[j * m + k] = dot(&v_basis[j], &w);
+                axpy(&mut w, -h[j * m + k], &v_basis[j]);
+            }
+            h[(k + 1) * m + k] = norm(&w);
+            if h[(k + 1) * m + k].abs() > 1.0e-30 {
+                v_basis[k + 1] = w.iter().map(|z| z / h[(k + 1) * m + k]).collect();
+            } else {
+                v_basis[k + 1] = vec![0.0; n];
+            }
+
+            for i in 0..k {
+                let temp = cs[i] * h[i * m + k] + sn[i] * h[(i + 1) * m + k];
+                h[(i + 1) * m + k] = -sn[i] * h[i * m + k] + cs[i] * h[(i + 1) * m + k];
+                h[i * m + k] = temp;
+            }
+            let h_kk = h[k * m + k];
+            let h_k1k = h[(k + 1) * m + k];
+            let r_kk = (h_kk * h_kk + h_k1k * h_k1k).sqrt();
+            cs[k] = h_kk / r_kk;
+            sn[k] = h_k1k / r_kk;
+            h[k * m + k] = r_kk;
+            h[(k + 1) * m + k] = 0.0;
+            let g_temp = cs[k] * g[k] + sn[k] * g[k + 1];
+            g[k + 1] = -sn[k] * g[k] + cs[k] * g[k + 1];
+            g[k] = g_temp;
+
+            total_iters += 1;
+            if total_iters >= max_iter {
+                k_done = k + 1;
+                break;
+            }
+            if g[k + 1].abs() / bnorm < tol {
+                converged = true;
+                k_done = k + 1;
+                break;
+            }
+        }
+
+        let mut y = vec![0.0; k_done];
+        for i in (0..k_done).rev() {
+            let mut s = g[i];
+            for j in (i + 1)..k_done {
+                s -= h[i * m + j] * y[j];
+            }
+            y[i] = s / h[i * m + i];
+        }
+        for i in 0..k_done {
+            axpy(&mut x, y[i], &v_basis[i]);
+        }
+        residual = g[k_done].abs() / bnorm;
+        if converged {
+            return Ok(BsrGmresResult {
+                x,
+                iters: total_iters,
+                residual,
+                converged: true,
+            });
+        }
+    }
+
+    Ok(BsrGmresResult {
+        x,
+        iters: total_iters,
+        residual,
+        converged: false,
+    })
+}

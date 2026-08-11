@@ -136,7 +136,7 @@ pub use barrier_newton::{
     BarrierGpuObstacle, BarrierGpuParams, BarrierGpuSpring, BarrierGpuStats, BarrierNewtonGpu,
 };
 #[cfg(feature = "gpu")]
-pub use bsr_solve::{BsrCgResult, bsr_cg_gpu};
+pub use bsr_solve::{BsrCgResult, BsrGmresResult, bsr_cg_gpu, bsr_gmres_gpu};
 #[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
