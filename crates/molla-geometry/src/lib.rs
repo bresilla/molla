@@ -18,6 +18,8 @@ pub mod hydroelastic;
 #[cfg(feature = "gpu")]
 mod lbvh;
 pub mod marching_cubes;
+#[cfg(feature = "gpu")]
+mod marching_cubes_gpu;
 pub mod mesh_bvh;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast_gpu;
@@ -27,10 +29,18 @@ mod mpr_gpu;
 pub mod narrow_phase;
 pub mod pipeline;
 pub mod sdf_bake;
+#[cfg(feature = "gpu")]
+mod sdf_bake_gpu;
 pub mod self_contact;
+#[cfg(feature = "gpu")]
+mod self_contact_gpu;
 pub mod shape_world;
 pub mod soft_bvh;
+#[cfg(feature = "gpu")]
+mod soft_bvh_gpu;
 pub mod soft_ccd;
+#[cfg(feature = "gpu")]
+mod soft_ccd_gpu;
 pub mod sparse_grid;
 pub mod spatial_hash;
 pub mod support;
@@ -77,6 +87,8 @@ pub use hydroelastic::{
 #[cfg(feature = "gpu")]
 pub use lbvh::{LbvhBroadPhase, LbvhPairs, collect_shape_aabbs};
 pub use marching_cubes::marching_cubes;
+#[cfg(feature = "gpu")]
+pub use marching_cubes_gpu::marching_cubes_gpu;
 pub use mesh_bvh::{BvhNode as MeshBvhNode, MeshBvh};
 #[cfg(feature = "gpu")]
 pub use mesh_bvh_raycast_gpu::{MeshBvhGpu, MeshBvhRaycastKernel};
@@ -89,10 +101,18 @@ pub use mpr_gpu::{
 pub use narrow_phase::{ContactManifold, MAX_MANIFOLD_POINTS, pair_contact};
 pub use pipeline::{CollisionPipeline, NarrowPhaseBackend, STATIC_BODY, collide};
 pub use sdf_bake::{SdfGrid, bake_mesh_to_sdf, closest_point_on_triangle};
+#[cfg(feature = "gpu")]
+pub use sdf_bake_gpu::{SdfBakeKernel, bake_mesh_to_sdf_gpu};
 pub use self_contact::{SelfContactCandidate, detect_vertex_triangle_self_contacts};
+#[cfg(feature = "gpu")]
+pub use self_contact_gpu::{SelfContactKernel, detect_vertex_triangle_self_contacts_gpu};
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use soft_bvh::SoftBvh;
+#[cfg(feature = "gpu")]
+pub use soft_bvh_gpu::soft_bvh_query_points_swept_gpu;
 pub use soft_ccd::{vt_ccd, vt_ccd_normal};
+#[cfg(feature = "gpu")]
+pub use soft_ccd_gpu::{SoftCcdKernel, VtCcdQuery, vt_ccd_batch_gpu};
 pub use sparse_grid::{
     INTERNAL_DIM, INTERNAL_MASK_U32S, INTERNAL_SHIFT, InternalNode, LEAF_DIM, LEAF_MASK_U32S,
     LEAF_SHIFT, Leaf, SparseGrid, SparseGridGpu, SparseSdf, bake_mesh_to_sparse_sdf, root_hash3,
