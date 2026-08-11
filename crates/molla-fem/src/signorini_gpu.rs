@@ -2,10 +2,134 @@
 //! the CPU [`advance_rate_state_friction`](crate::signorini::advance_rate_state_friction)
 //! over many contacts at once (one thread per contact).
 
-use crate::signorini::{RateStateFrictionParams, RateStateFrictionState};
+use crate::assembly::matvec;
+use crate::math::sparse::BsrMatrix;
+use crate::signorini::{
+    DEFAULT_INNER_CG_MAX_ITERS, DEFAULT_INNER_CG_TOL, RateStateFrictionParams,
+    RateStateFrictionState, UzawaResult, estimate_dual_step,
+};
 use molla_core::{Error, Result};
+use molla_kernels::{BsrAlgebraKernel, BsrGpu, bsr_cg_gpu};
 use molla_math::Real;
 use molla_storage::{Buffer, BufferUsage};
+
+/// Cᵀ·x into `n_dofs` (scalar BSR, `b = 1`).
+fn ct_transpose_mul(c: &BsrMatrix, x: &[Real], n_dofs: usize) -> Vec<Real> {
+    let mut y = vec![0.0; n_dofs];
+    for r in 0..c.nrows() {
+        let xr = x[r];
+        for slot in c.row_offsets[r]..c.row_offsets[r + 1] {
+            y[c.col_idx[slot]] += c.values[slot] * xr;
+        }
+    }
+    y
+}
+
+/// GPU counterpart of [`solve_augmented_system`](crate::signorini::solve_augmented_system):
+/// the frictionless Signorini Uzawa loop, with every inner SPD solve
+/// `K u = f + Cᵀλ` dispatched on the device via
+/// [`bsr_cg_gpu`](molla_kernels::bsr_cg_gpu). The projected-gradient
+/// dual update (active-set logic) stays host-side. Matches the CPU
+/// result within f32 tolerance.
+pub fn solve_augmented_system_gpu(
+    engine: &molla_compute::Engine,
+    k_global: &BsrMatrix,
+    c_matrix: &BsrMatrix,
+    f: &[Real],
+    g: &[Real],
+    max_iters: usize,
+    tol: Real,
+) -> Result<UzawaResult> {
+    let n_dofs = f.len();
+    let n_active = g.len();
+    let rho = estimate_dual_step(
+        k_global,
+        c_matrix,
+        n_active,
+        DEFAULT_INNER_CG_TOL,
+        DEFAULT_INNER_CG_MAX_ITERS,
+    );
+
+    let device = engine
+        .device()
+        .ok_or_else(|| Error::Gpu("signorini_gpu: engine has no device".into()))?
+        .clone();
+    let queue = engine
+        .queue()
+        .ok_or_else(|| Error::Gpu("signorini_gpu: engine has no queue".into()))?
+        .clone();
+    let k_gpu = BsrGpu::upload(&device, &queue, k_global)?;
+    let kernel = BsrAlgebraKernel::new(device, queue);
+
+    let inner = |rhs: &[Real]| -> Result<Vec<Real>> {
+        Ok(bsr_cg_gpu(
+            &kernel,
+            &k_gpu,
+            rhs,
+            DEFAULT_INNER_CG_TOL,
+            DEFAULT_INNER_CG_MAX_ITERS,
+        )?
+        .x)
+    };
+
+    let mut lambda = vec![0.0; n_active];
+    let mut u = inner(f)?;
+    let mut primal_residual = Real::INFINITY;
+    let mut dual_residual = 0.0;
+    let mut outer_iters = 0;
+
+    for it in 0..max_iters {
+        outer_iters = it + 1;
+        let cu = if n_active > 0 {
+            matvec(c_matrix, &u)
+        } else {
+            Vec::new()
+        };
+        let mut residual = vec![0.0; n_active];
+        let mut max_violation: Real = 0.0;
+        for k in 0..n_active {
+            residual[k] = g[k] - cu[k];
+            let v = if lambda[k] > 0.0 {
+                residual[k].abs()
+            } else {
+                residual[k].max(0.0)
+            };
+            max_violation = max_violation.max(v);
+        }
+        primal_residual = max_violation;
+
+        let mut max_dlam: Real = 0.0;
+        lambda = (0..n_active)
+            .map(|k| {
+                let proj = (lambda[k] + rho * residual[k]).max(0.0);
+                max_dlam = max_dlam.max((proj - lambda[k]).abs());
+                proj
+            })
+            .collect();
+        dual_residual = max_dlam;
+
+        if primal_residual < tol && dual_residual < tol {
+            break;
+        }
+
+        let mut rhs = f.to_vec();
+        if n_active > 0 {
+            let ct_lambda = ct_transpose_mul(c_matrix, &lambda, n_dofs);
+            for i in 0..n_dofs {
+                rhs[i] += ct_lambda[i];
+            }
+        }
+        u = inner(&rhs)?;
+    }
+
+    Ok(UzawaResult {
+        u,
+        lambda,
+        iters: outer_iters,
+        primal_residual,
+        dual_residual,
+    })
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
