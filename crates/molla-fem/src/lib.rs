@@ -78,6 +78,8 @@ pub mod dg_element;
 pub mod dg_time_integrator;
 pub mod eddy_current;
 #[cfg(feature = "gpu")]
+pub mod eddy_current_gpu;
+#[cfg(feature = "gpu")]
 pub mod elasticity_gpu;
 pub mod element;
 #[cfg(feature = "gpu")]

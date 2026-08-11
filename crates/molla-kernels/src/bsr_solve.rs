@@ -129,15 +129,17 @@ pub struct BsrGmresResult {
 }
 
 /// Solve `A x = b` for a general (non-symmetric) `A` with restarted
-/// GMRES(`restart`), `x0 = 0`, no preconditioner. The per-Arnoldi
-/// sparse mat-vec runs on the GPU; the Arnoldi/Givens recurrence is
-/// host-side — a faithful mirror of the CPU [`gmres`](molla_math::sparse::gmres)
-/// (unpreconditioned), so it matches within f32 tolerance. This is the
-/// device-side non-symmetric solver core (e.g. for eddy-current).
+/// GMRES(`restart`), `x0 = 0`, optional diagonal (Jacobi) left
+/// preconditioner `m_inv_diag`. The per-Arnoldi sparse mat-vec runs on
+/// the GPU; the Arnoldi/Givens recurrence is host-side — a faithful
+/// mirror of the CPU [`gmres`](molla_math::sparse::gmres), so it matches
+/// within f32 tolerance. This is the device-side non-symmetric solver
+/// core (e.g. for eddy-current).
 pub fn bsr_gmres_gpu(
     kernel: &BsrAlgebraKernel,
     a_gpu: &BsrGpu,
     b: &[Real],
+    m_inv_diag: Option<&[Real]>,
     tol: Real,
     max_iter: usize,
     restart: usize,
@@ -180,6 +182,13 @@ pub fn bsr_gmres_gpu(
         Ok(ap_buf.host()?.to_vec())
     };
 
+    let apply_m_inv = |r: &[Real]| -> Vec<Real> {
+        match m_inv_diag {
+            Some(d) => r.iter().zip(d.iter()).map(|(ri, di)| ri * di).collect(),
+            None => r.to_vec(),
+        }
+    };
+
     let m = restart.max(1).min(n);
     let bnorm = norm(b).max(1.0e-30);
     let mut total_iters = 0usize;
@@ -191,7 +200,8 @@ pub fn bsr_gmres_gpu(
         for i in 0..n {
             r[i] = b[i] - ax[i];
         }
-        let beta = norm(&r);
+        let z = apply_m_inv(&r);
+        let beta = norm(&z);
         residual = beta / bnorm;
         if residual < tol {
             return Ok(BsrGmresResult {
@@ -203,7 +213,7 @@ pub fn bsr_gmres_gpu(
         }
 
         let mut v_basis: Vec<Vec<Real>> = vec![Vec::new(); m + 1];
-        v_basis[0] = r.iter().map(|z| z / beta).collect();
+        v_basis[0] = z.iter().map(|zi| zi / beta).collect();
         let mut h = vec![0.0; (m + 1) * m];
         let mut g = vec![0.0; m + 1];
         g[0] = beta;
@@ -213,7 +223,8 @@ pub fn bsr_gmres_gpu(
         let mut k_done = m;
 
         for k in 0..m {
-            let mut w = mv(&v_basis[k])?;
+            let w_raw = mv(&v_basis[k])?;
+            let mut w = apply_m_inv(&w_raw);
             for j in 0..=k {
                 h[j * m + k] = dot(&v_basis[j], &w);
                 axpy(&mut w, -h[j * m + k], &v_basis[j]);

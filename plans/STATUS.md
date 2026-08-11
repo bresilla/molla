@@ -47,11 +47,14 @@ Work against the "three recurring patterns" below:
   - **device-side Krylov cores** (molla-kernels, spmv on-device via `BsrAlgebraKernel::matvec`,
     host-driven recurrence — the reusable infrastructure the CPU-only FEM solves route through):
     - `bsr_cg_gpu` — conjugate gradients for SPD systems (magnetostatics curl-curl, Poisson) — `T=bsr_cg_gpu`
-    - `bsr_gmres_gpu` — restarted GMRES for non-symmetric systems (eddy-current) — `T=bsr_gmres_gpu`
+    - `bsr_gmres_gpu` — restarted GMRES (+ optional Jacobi) for non-symmetric systems — `T=bsr_gmres_gpu`
+  - **eddy-current steady solve** → `solve_eddy_current_steady_gpu`: assembles the block-real
+    `[[K_main,K_off],[-K_off,K_main]]` system, solves it on-device via `bsr_gmres_gpu` with the
+    same Jacobi preconditioner as the CPU path; validated gauge-invariantly (curl) — `T=eddy_current_gpu`
   Remaining: **signorini PDAS** (the host-side active-set *logic*; its inner linear solves can
   now use the CG/GMRES cores above), and **AMR** mesh-refinement topology (inherently
   sequential graph restructuring — not a GPU-compute kernel). The eddy-current AMS *multigrid
-  preconditioner* is a perf optimization on top of the now-available GMRES core.
+  preconditioner* is a perf optimization on top of the now-GPU GMRES solve.
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -307,7 +310,7 @@ two enforcement tests. The registry is accurate (agents cross-checked it). Distr
 ## The honest gap list (consolidated "what we don't have / half-have")
 
 **GPU-first violations (CPU-only where the project wants GPU):**
-- FEM: eddy-current, AMR, signorini active-set *solve core*, full curl-curl/Stokes solves — still CPU. _(Ported to GPU 2026-08-11: adjoint gradient, phase-field Jacobi, multiphase curvature/CSF, Nédélec curl recovery, rate-state friction.)_
+- FEM: signorini active-set *combinatorics* + AMR *topology* — not GPU-compute kernels. _(Ported to GPU 2026-08-11: adjoint gradient, phase-field Jacobi, multiphase curvature/CSF, Nédélec curl, rate-state friction, and the full eddy-current block-GMRES solve via the new device CG/GMRES cores.)_
 - Solvers: VBD CCD/tet-vs-tet/friction; sph_diff.
 - Geometry: gaussian-splat adjoint (partly elsewhere). _(sdf_bake, self_contact, soft_ccd, marching_cubes, soft_bvh query all ported to GPU 2026-08-11 — the geometry CPU-only set is cleared.)_
 - Viewer: the entire PPF rigid/rod gallery + CPU-only FEM band + tile N-body/MCGP.

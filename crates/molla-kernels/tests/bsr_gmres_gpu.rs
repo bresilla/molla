@@ -41,8 +41,16 @@ fn gpu_bsr_gmres_matches_cpu() {
     let a_gpu = BsrGpu::upload(&device, &queue, &a).unwrap();
     let kernel = BsrAlgebraKernel::new(device, queue);
 
-    let gpu =
-        bsr_gmres_gpu(&kernel, &a_gpu, &b, cfg.tol, cfg.max_iter, cfg.restart).expect("gpu gmres");
+    let gpu = bsr_gmres_gpu(
+        &kernel,
+        &a_gpu,
+        &b,
+        None,
+        cfg.tol,
+        cfg.max_iter,
+        cfg.restart,
+    )
+    .expect("gpu gmres");
     assert!(
         gpu.converged,
         "gpu gmres did not converge (res {})",
