@@ -31,10 +31,12 @@ Work against the "three recurring patterns" below:
   - `marching_cubes` → `marching_cubes_gpu` (uploads the Lorensen tables; exact index
     topology) — `T=marching_cubes_gpu`
   - `soft_bvh` (swept broad-phase query) → `soft_bvh_query_points_swept_gpu` — `T=soft_bvh_gpu`
-  Remaining Pattern-1 work lives in **`molla-fem`** (Nédélec, signorini, phase-field, AMR,
-  eddy-current, adjoint) + VBD CCD — these are linear solves / active-set iterations that
-  drive the existing GPU CG/PCG, each a multi-step numerical port validated against an f64
-  oracle (genuinely days-per-unit; a multi-session program, tracked in ROADMAP).
+
+  **FEM band started:** `adjoint` Young's-modulus gradient → `compute_grad_youngs_gpu`
+  (tet, per-cell `λᵀKu` reduction) ported + hardware-validated — `T=adjoint_gpu`.
+  Remaining `molla-fem` units (Nédélec, signorini, phase-field, AMR, eddy-current) + VBD CCD
+  are linear solves / active-set iterations driving the GPU CG/PCG, each validated against
+  an f64 oracle (tracked in ROADMAP).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -219,7 +221,8 @@ solvers ship documented approximations.
 | Module | Status | Backend | Note |
 |---|---|---|---|
 | P1 elements, solver drivers (steady/transient/wave/nonlinear), apic_coupling, stam_fluid, mesh/quadrature/assembly/bc, dg_element, magneto, signorini (hard contact), nonconforming, amg | complete | mixed | see backends below |
-| p2_element (Taylor-Hood), nedelec (edge/H(curl)), adjoint (linear-elasticity) | complete | cpu | no GPU path; no P3 |
+| p2_element (Taylor-Hood), nedelec (edge/H(curl)) | complete | cpu | no GPU path; no P3 |
+| adjoint (linear-elasticity) | complete | gpu+cpu | Young's-modulus gradient GPU-ported 2026-08-11 (`compute_grad_youngs_gpu`, tet-only, parity-tested `T=adjoint_gpu`); solve reuses GPU CG |
 | gpu_kernels (resident CG/PCG, elasticity, stokes, NS, wave/transient, DG-SWE) | complete | gpu | f32 (~1e-4 vs f64); coverage matches which CPU modules were ported |
 | **element.rs nonlinear (Neo-Hookean/MR/SVK)** | partial | gpu+cpu | **Tet-only; Tri panics** (`unimplemented!` at :829) |
 | **stokes / stokes_gpu** | partial | gpu+cpu | simplified Laplacian (exact only all-Dirichlet) + diagonal-Schur SIMPLE |

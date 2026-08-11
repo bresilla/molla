@@ -65,6 +65,8 @@ pub mod fem {
 }
 
 pub mod adjoint;
+#[cfg(feature = "gpu")]
+pub mod adjoint_gpu;
 pub mod amg;
 pub mod amr_mesh;
 pub mod apic_coupling;
