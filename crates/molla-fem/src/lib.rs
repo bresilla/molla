@@ -105,6 +105,8 @@ pub mod quadrature;
 #[cfg(feature = "russell")]
 pub mod russell;
 pub mod signorini;
+#[cfg(feature = "gpu")]
+pub mod signorini_gpu;
 pub mod solver;
 pub mod stam_fluid;
 pub mod stokes;

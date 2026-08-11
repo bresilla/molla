@@ -40,8 +40,11 @@ Work against the "three recurring patterns" below:
     `csf_surface_tension_force_2d_gpu` (3 per-cell grid passes) — `T=multiphase_gpu`
   - `magneto` Nédélec curl recovery `B=∇×A` → `compute_curl_per_cell_gpu` (per-tet edge-DoF
     reduction) — `T=magneto_gpu`
-  Remaining `molla-fem` units (signorini active-set, eddy-current GMRES/AMS, AMR topology) +
-  VBD CCD are the heavier solver-driven pieces (tracked in ROADMAP).
+  - `signorini` rate-and-state friction advance → `advance_rate_state_friction_batch_gpu`
+    (per-contact Dieterich-Ruina step) — `T=signorini_gpu`
+  Remaining `molla-fem` compute is the solver *cores* themselves — the signorini PDAS
+  active-set loop, eddy-current GMRES/AMS, and AMR mesh-refinement topology (not a
+  per-element kernel) — plus VBD CCD wiring (its `vt_ccd`/`soft_bvh` blocks are now GPU).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -297,7 +300,7 @@ two enforcement tests. The registry is accurate (agents cross-checked it). Distr
 ## The honest gap list (consolidated "what we don't have / half-have")
 
 **GPU-first violations (CPU-only where the project wants GPU):**
-- FEM: Nédélec/EM, signorini contact, AMR, phase-field, multiphase, adjoint, eddy-current — all CPU-only.
+- FEM: eddy-current, AMR, signorini active-set *solve core*, full curl-curl/Stokes solves — still CPU. _(Ported to GPU 2026-08-11: adjoint gradient, phase-field Jacobi, multiphase curvature/CSF, Nédélec curl recovery, rate-state friction.)_
 - Solvers: VBD CCD/tet-vs-tet/friction; sph_diff.
 - Geometry: gaussian-splat adjoint (partly elsewhere). _(sdf_bake, self_contact, soft_ccd, marching_cubes, soft_bvh query all ported to GPU 2026-08-11 — the geometry CPU-only set is cleared.)_
 - Viewer: the entire PPF rigid/rod gallery + CPU-only FEM band + tile N-body/MCGP.
