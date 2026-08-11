@@ -32,11 +32,12 @@ Work against the "three recurring patterns" below:
     topology) — `T=marching_cubes_gpu`
   - `soft_bvh` (swept broad-phase query) → `soft_bvh_query_points_swept_gpu` — `T=soft_bvh_gpu`
 
-  **FEM band started:** `adjoint` Young's-modulus gradient → `compute_grad_youngs_gpu`
-  (tet, per-cell `λᵀKu` reduction) ported + hardware-validated — `T=adjoint_gpu`.
-  Remaining `molla-fem` units (Nédélec, signorini, phase-field, AMR, eddy-current) + VBD CCD
-  are linear solves / active-set iterations driving the GPU CG/PCG, each validated against
-  an f64 oracle (tracked in ROADMAP).
+  **FEM band in progress** (each hardware-validated against its f64 oracle):
+  - `adjoint` Young's-modulus gradient → `compute_grad_youngs_gpu` (per-cell `λᵀKu`) — `T=adjoint_gpu`
+  - `phase_field` damage Jacobi solve → `solve_phase_field_fracture_jacobi_gpu` (per-row
+    bounded-irreversible sweeps, ping-ponged) — `T=phase_field_gpu`
+  Remaining `molla-fem` units (Nédélec/magneto, signorini, AMR, eddy-current) + VBD CCD are
+  larger linear solves / active-set iterations driving the GPU CG/PCG (tracked in ROADMAP).
 - **Pattern 2 investigated → not a defect pattern** (see the gap list below): all three
   "not-the-default" items are intentional, reachable, tested opt-ins; nothing to fix.
 
@@ -229,7 +230,7 @@ solvers ship documented approximations.
 | **eddy_current** | partial | cpu | AMS preconditioner approximates diagonal block only (documented) |
 | **multigrid** (geometric) | partial | cpu | v3 stepping-stone, superseded by AMG; non-recursive |
 | **amr_mesh** | partial | cpu | refinement complete; **coarsening is single-level** |
-| **phase_field** (fracture) | partial | cpu | 2D-tri only, quasi-static, explicit "CPU oracle awaiting GPU" |
+| phase_field (fracture) | partial | gpu+cpu | damage Jacobi solve GPU-ported 2026-08-11 (`solve_phase_field_fracture_jacobi_gpu`, parity-tested `T=phase_field_gpu`); assembly host-side; 2D-tri, quasi-static |
 | **multiphase** (level-set CSF) | partial | cpu | curvature/surface-tension **primitives only, not a full solver** |
 | **russell / DirectSolver** | partial | cpu | named a sparse bridge but is a **dense LU**, capped ~1024 dim, off by default |
 | bc: Neumann flux + traction | complete | cpu | scalar flux and vector traction both integrate the P1 area/3 surface load into the RHS |

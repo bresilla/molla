@@ -95,6 +95,8 @@ pub mod nedelec_element;
 pub mod nonconforming;
 pub mod p2_element;
 pub mod phase_field;
+#[cfg(feature = "gpu")]
+pub mod phase_field_gpu;
 pub mod quadrature;
 #[cfg(feature = "russell")]
 pub mod russell;
