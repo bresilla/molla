@@ -1,0 +1,322 @@
+{
+  "scout": "D",
+  "region": "crates/molla-kernels, crates/molla-vehicle, crates/molla-actuators",
+  "audit_kind": "blind, read-only, independent of plans/MAP.md, REPORT.md, GUI_SPLIT.md, plans/STATUS.md",
+
+  "crates": [
+    {
+      "name": "molla-kernels",
+      "purpose_one_line": "WGSL compute-kernel catalog plus per-shader Rust dispatch wrappers (bind groups, uniform packing, upload/readback) — a GPU-primitive library, not a simulator.",
+      "loc_by_language": {
+        "rust_src": 48167,
+        "rust_tests_and_benches": 19881,
+        "wgsl_shaders": 22866,
+        "cargo_toml": 61,
+        "total_physical": 90975,
+        "note": "68048 rs / 22866 wgsl / 61 toml = 90975. Rust splits 48167 src vs 19881 tests+benches. Tests are 29% of the Rust and 22% of all physical lines."
+      },
+      "files": {"rs": 95, "wgsl": 71, "toml": 1, "total": 167},
+      "main_modules": {
+        "actuator_* (7)": "actuator_delay, actuator_neural_lstm, actuator_neural_mlp, actuator_pd, actuator_pid, actuator_pipeline_pd, actuator_pipeline_pid — GPU halves of the controllers whose host halves live in molla-actuators",
+        "rigid_body_dynamics": "crba, rnea, featherstone, featherstone_adjoint, featherstone_adjoint_gpu, jacobian, integrate_bodies, dense3",
+        "contact_and_broadphase": "barrier_newton, contact_reduction, contact_sensor, hydroelastic, soft_bvh_gpu, soft_vt_contact, raycast, splat_raytrace",
+        "cloth_softbody": "xpbd, xpbd_equality, xpbd_particles, vbd_cloth, cloth_diff",
+        "sparse_linear_algebra": "bsr_solve, sparse_gpu, sparse_grid, sparse_grid_insert, sparse_grid_delete",
+        "optim": "optim_adam, optim_sgd, robust_loss, dahl_friction, dahl_oracle, scan, fft",
+        "sensors_render": "imu, frame_transform, tiled_camera",
+        "muscle": "muscle",
+        "tire_family (11, largest block)": "tire_bekker, tire_brush, tire_dem, tire_fem, tire_mpm, tire_thermal, tire_transient, tire_vehicle, plus supporting modules; tire_fem.rs alone is the single biggest file in the crate"
+      },
+      "top_public_types": "128 re-exported names in src/lib.rs:101-300. Largest clusters: TireFem* (~50 names), TireDem* (~35), TireVehicle* (~30), the geometry re-exports (EpaKernel/GjkKernel/MprKernel/LbvhBroadPhase) and the actuator kernels.",
+      "feature_note": "Almost everything is behind `gpu` (src/lib.rs, every module is #[cfg(feature = \"gpu\")]). Only three modules compile without it: dahl_oracle (100 loc), featherstone_adjoint (288 loc), and their re-exports. So the crate is effectively empty on a CPU-only build."
+    },
+    {
+      "name": "molla-vehicle",
+      "purpose_one_line": "Wheeled-vehicle / tire physics on the CPU: terrain queries, tire force models, suspension, driveline, plus a very large tire-validation and report-generation rig.",
+      "loc_by_language": {
+        "rust_src": 41780,
+        "rust_tests_embedded": 9124,
+        "wgsl_shaders": 0,
+        "cargo_toml": 13,
+        "total_physical": 41793,
+        "note": "real_tire/ is 37306 of 41780 src lines (89%). real_tire/tests.rs (9124 lines, #[cfg(test)]-gated at real_tire/mod.rs:224) is 22% of the crate by itself."
+      },
+      "files": {"rs": 52, "toml": 1, "total": 53},
+      "main_modules": {
+        "terrain.rs (1571)": "Terrain trait + FlatTerrain, HeightfieldTerrain, SdfTerrain, TriangleMeshTerrain",
+        "tire.rs": "quasi-static tire models: RigidTire, Pac89Tire, TmSimpleTire, magic_formula",
+        "suspension.rs / shaft.rs / powertrain.rs": "the V3/V0/V4 driveline and chassis parts",
+        "vehicle.rs": "Vehicle + Corner assembly; DriverInput",
+        "sysid.rs": "friction identification (identify_friction, drive_distance)",
+        "deformable.rs / granular.rs": "soft-soil and granular-bed terrain coupling",
+        "real_tire/ (37306)": "the dominant subsystem — brush model, FEM carcass, surface material/film, thermal/wear, transient layer, plus sub-dirs: fem/ (10 files, solvers & builders), reports/ (7 files, ~6.4k loc of report generators), rig/ (6 files, ~5.6k loc of validation runs/sweeps/snapshots), and governance/observability/parity_ledger/viewer_target singletons"
+      },
+      "top_public_types": "src/lib.rs re-exports ~250 names (lib.rs:19-140). Dominated by `Tire*Report` / `Tire*Diagnostics` types and `tire_*_report()` functions from real_tire/reports/ and rig/."
+    },
+    {
+      "name": "molla-actuators",
+      "purpose_one_line": "Host-side actuator/controller layer: config structs and orchestration that dispatch the molla-kernels actuator shaders, plus a CPU-only muscle model.",
+      "loc_by_language": {
+        "rust_src": 4311,
+        "wgsl_shaders": 0,
+        "cargo_toml": 37,
+        "tests_separate": "3 test files (tests/), not counted in src",
+        "total_physical": 4348
+      },
+      "files": {"rs": 17, "toml": 1, "total": 18},
+      "main_modules": {
+        "actuator.rs": "Actuator trait + ControllerStage",
+        "controller_* (6)": "controller_pd, controller_pid, controller_pipeline_pd, controller_pipeline_pid, controller_neural_mlp, controller_neural_lstm",
+        "clamping/ (4)": "clamping/mod.rs, dc_motor, max_effort, position_based",
+        "delay.rs": "Delay actuator",
+        "muscle.rs": "CPU muscle model — the ONLY module compiled without `gpu` (lib.rs:24)"
+      },
+      "top_public_types": "20 public re-exports (src/lib.rs:26-52): ControllerPd/Pid/Pipeline*/NeuralMlp/NeuralLstm/Config, Clamping*, Delay, Muscle/MuscleConfig."
+    }
+  ],
+
+  "dependency_edges": [
+    {
+      "from": "molla-kernels",
+      "to": "molla-vehicle",
+      "cargo_claims": "YES — crates/molla-kernels/Cargo.toml:37 `molla-vehicle = { path = \"../molla-vehicle\", optional = true }`, pulled in by the gpu feature at crates/molla-kernels/Cargo.toml:24 `\"dep:molla-vehicle\"`",
+      "source_evidence": "Only 4 real code tokens, all GPU-gated: crates/molla-kernels/src/tire_thermal.rs:505 and :539 (`snapshot: &molla_vehicle::TireRigSnapshot`), :579 (`snapshots: &[molla_vehicle::TireRigSnapshot]`), and crates/molla-kernels/src/tire_fem.rs:1404 (`tire: &molla_vehicle::TetraTireFem` in `tire_fem_gpu_input_from_tetra_fem`). 45 further hits are doc-comment cross-references only.",
+      "verdict": "REAL but INVERTED",
+      "direction_assessment": "This is the single most important structural defect in the region. molla-kernels is the low-level GPU-primitive crate (dispatch wrappers over WGSL; 5138 `wgpu::` tokens vs 45 vehicle tokens). molla-vehicle is a high-level application/simulation crate that depends on NOTHING at all. So the arrow points low→high: the primitive library depends on the application. It is not a cycle — nothing in vehicle depends on kernels in Cargo — but the direction is backwards. All four uses are snapshot-adapter helpers (`*_from_rig_snapshot`, `*_from_tetra_fem`) that translate a vehicle-owned struct into a kernels-owned GPU input; they are vehicle-boundary code living in the kernel crate. Correct fix: delete the dep and move those four helpers into molla-vehicle (which already does `include_str!` on kernels' shaders anyway, observability.rs:124)."
+    },
+    {
+      "from": "molla-actuators",
+      "to": "molla-kernels",
+      "cargo_claims": "YES — crates/molla-actuators/Cargo.toml:27 `molla-kernels = { path = \"../molla-kernels\", default-features = false, optional = true }`, enabled via crates/molla-actuators/Cargo.toml:19 `\"molla-kernels/gpu\"`",
+      "source_evidence": "10 real `molla_kernels::` tokens, e.g. crates/molla-actuators/src/controller_pd.rs:19 `use molla_kernels::ActuatorPdKernel;`, and the same pattern in controller_pid, controller_neural_mlp, controller_neural_lstm, controller_pipeline_pd, controller_pipeline_pid, delay, clamping/dc_motor, clamping/max_effort, clamping/position_based.",
+      "verdict": "REAL and CORRECT",
+      "direction_assessment": "Points the right way: high-level host orchestration → low-level GPU dispatch. Each actuators controller owns a kernel and drives it (controller_pd.rs:38 `pub struct ControllerPd { kernel: ActuatorPdKernel, ... }`). No inversion."
+    },
+    {
+      "from": "molla-kernels",
+      "to": "molla-vehicle (filesystem, undeclared)",
+      "cargo_claims": "NONE in molla-vehicle's Cargo.toml — the file is `[dependencies]` empty (crates/molla-vehicle/Cargo.toml:19-20)",
+      "source_evidence": "crates/molla-vehicle/src/real_tire/observability.rs:124-127 does `include_str!(\"../../../molla-kernels/shaders/tire_brush.wgsl\")` and the three sibling shaders tire_fem/thermal/transient, to assert shader-contract strings.",
+      "verdict": "HIDDEN EDGE — vehicle→kernels at the filesystem level",
+      "direction_assessment": "This is the inverse of the Cargo edge above and nobody declared it. vehicle reaches into kernels' source tree; kernels reaches into vehicle's public API. Together they form a mutual entanglement that a Cargo-only reading misses entirely. It is unique in the workspace: no other crate include_str!'s across a crate boundary (every other include_str! is `../shaders/` within its own crate)."
+    },
+    {
+      "from": "molla",
+      "to": "molla-kernels / molla-vehicle / molla-actuators",
+      "cargo_claims": "YES — crates/molla/Cargo.toml:53 molla-kernels, :59 molla-vehicle, :52 molla-actuators",
+      "source_evidence": "Three facade forwarding surfaces: crates/molla/src/kernels/mod.rs:118 `pub use molla_kernels::...`, crates/molla/src/vehicle.rs:4 `pub use molla_vehicle::*;`, crates/molla/src/actuators/mod.rs:41,66 `pub use molla_actuators::{...}`.",
+      "verdict": "REAL and CORRECT",
+      "direction_assessment": "The facade sits above all three and forwards them. It treats kernels and vehicle as independent siblings (both direct deps of `molla`), which is the intended shape — and the exact shape the kernels→vehicle edge violates."
+    },
+    {
+      "from": "molla-solvers",
+      "to": "molla-kernels",
+      "cargo_claims": "YES — crates/molla-solvers/Cargo.toml:36 optional, gpu-gated at :18/:22",
+      "source_evidence": "Genuine production use, not just re-export: crates/molla-solvers/src/semi_implicit.rs:38,45 (`molla_kernels::IntegrateBodiesKernel`), crates/molla-solvers/src/barrier_solver.rs:59,147,148,169,170.",
+      "verdict": "REAL and CORRECT",
+      "direction_assessment": "Correct high→low. This is one of only two crates that use kernels for actual computation rather than re-export."
+    },
+    {
+      "from": "molla-sensors / molla-fem",
+      "to": "molla-kernels",
+      "cargo_claims": "YES — crates/molla-sensors/Cargo.toml:31, crates/molla-fem/Cargo.toml:27 (both gpu-gated)",
+      "source_evidence": "molla-sensors: src/tiled_camera.rs:21, src/raycast.rs:38, src/imu.rs:26, src/frame_transform.rs:17, src/contact.rs:30 — 5 of the 8 sensor modules dispatch a kernel. molla-fem: src/signorini_gpu.rs:12, src/eddy_current_gpu.rs:14, src/amr_gpu.rs:11.",
+      "verdict": "REAL and CORRECT",
+      "direction_assessment": "Correct high→low; domains (sensors, FEM) dispatch their kernels."
+    },
+    {
+      "from": "molla-vehicle",
+      "to": "(nothing)",
+      "cargo_claims": "crates/molla-vehicle/Cargo.toml:19-20 — `[dependencies]` is empty. Zero deps, not even molla-core or molla-math.",
+      "source_evidence": "Confirmed by `cargo metadata --no-deps` (see build_probe): molla-vehicle 'deps: []'. It defines its own scalar math helpers on raw `[f64; 3]` arrays instead: crates/molla-vehicle/src/real_tire/internal.rs:47 `pub(crate) fn dot`, :51 `pub(crate) fn cross`, plus duplicates in crates/molla-vehicle/src/tire.rs:290,299 and crates/molla-vehicle/src/granular.rs:453.",
+      "verdict": "MISSING EDGE",
+      "direction_assessment": "A 41k-loc physics crate that reimplements dot/cross locally and shares no type with molla-core/molla-math/molla-sim is disconnected from the engine it is named for. It is a self-contained island — which is why it could be depended on by kernels without a cycle, and also why its 'GPU parity' story is stitched together with include_str! and hand-rolled `[f64;3]` conversions rather than shared types."
+    }
+  ],
+
+  "unused_cargo_deps": [
+    {
+      "crate": "molla-kernels",
+      "dep": "molla-optim",
+      "evidence": "crates/molla-kernels/Cargo.toml:33 declares it; grep of crates/molla-kernels for `molla_optim::` returns 4 hits, all inside optim_adam.rs/optim_sgd.rs which are re-export shells — but the crate also pulls molla-optim unconditionally (not gpu-gated). Low-confidence as a removal: the 4 hits are real.",
+      "risk": "LOW — verify the 4 hits are not just doc links before removing; likely genuine but small."
+    },
+    {
+      "crate": "molla-kernels",
+      "dep": "rayon",
+      "evidence": "crates/molla-kernels/Cargo.toml:39 `rayon = \"1.10\"` — only 3 `rayon::` tokens in the whole crate. Near-dead weight; consider whether host-side parallel loops belong here at all.",
+      "risk": "LOW"
+    },
+    {
+      "crate": "molla-actuators",
+      "dep": "molla-compute",
+      "evidence": "crates/molla-actuators/Cargo.toml:25 optional; 15 `molla_compute::` tokens (e.g. controller_pd.rs:17 `use molla_compute::Engine;`) — genuinely used.",
+      "risk": "N/A — used; listed only to show it was checked."
+    },
+    {
+      "crate": "molla-kernels",
+      "dep": "molla-vehicle",
+      "evidence": "crates/molla-kernels/Cargo.toml:37. Not unused (4 real tokens) but misplaced: the dependency itself, not the tokens, is the removal candidate. See dependency_edges[0].",
+      "risk": "MEDIUM — removing requires relocating 4 adapter functions; see removal_candidates."
+    },
+    {
+      "crate": "molla-actuators",
+      "dep": "molla-storage",
+      "evidence": "crates/molla-actuators/Cargo.toml:28 optional; 10 `molla_storage::` tokens (e.g. controller_pd.rs:20 `use molla_storage::{Buffer, BufferUsage};`) — used.",
+      "risk": "N/A — used."
+    }
+  ],
+
+  "dead_or_dormant": [
+    {
+      "item": "molla-kernels non-`gpu` surface: dahl_oracle (100 loc) + featherstone_adjoint (288 loc)",
+      "kind": "conditionally-compiled",
+      "evidence": "crates/molla-kernels/src/lib.rs:43,48 are the only un-gated `mod` lines; every other module is `#[cfg(feature = \"gpu\")]`. `dahl_oracle` is used only by crates/molla-solvers/tests/vbd_extended_gpu.rs:29,188,222 (a test) and the viewer at bin/molla_viewer/src/main.rs:10403 via the facade. So the only non-GPU-compilable part of a 90k-loc GPU crate is a 388-loc CPU oracle tail.",
+      "external_refs": "1 test file + 1 viewer line",
+      "risk": "LOW — harmless; but it means `cargo check -p molla-kernels` with default features compiles almost nothing."
+    },
+    {
+      "item": "molla-kernels' production use is mostly facade re-export, not dispatch",
+      "kind": "dormant-in-practice",
+      "evidence": "Of the ~56 `molla_kernels::` tokens outside the crate, 24 are one-line `pub use molla_kernels` forwards in crates/molla/src/kernels/*.rs and crates/molla/src/math/sparse_gpu.rs. Only molla-solvers (2 files), molla-sensors (5 files), molla-fem (3 files) and molla-actuators (10 files) actually dispatch a kernel. `grep -rn \"molla_kernels::\" bin/` returns ZERO — the viewer never names kernels directly; it goes through `molla::kernels`.",
+      "external_refs": "solvers, sensors, fem, actuators",
+      "risk": "MEDIUM — a large share of kernels' 128 public types have no caller outside the facade forwarding them. Cannot prove per-type deadness without running `cargo check` (blocked; see build_probe), so this is a coverage limit, not a per-item verdict."
+    },
+    {
+      "item": "molla-vehicle::real_tire report/rig layer (~12k loc across reports/ + rig/)",
+      "kind": "diagnostic-only, likely dormant for simulation",
+      "evidence": "reports/ is 7 files / ~6.4k loc and rig/ is 6 files / ~5.6k loc; lib.rs:19-140 exports ~130 `Tire*Report` types and `tire_*_report()` functions. Their consumers are almost exclusively bin/molla_viewer/src/main.rs (100+ call sites, e.g. main.rs:6067-7676) and vehicle's own tests. Nothing in molla-solvers/molla-sim/molla-fem calls them.",
+      "external_refs": "viewer + vehicle's own tests only",
+      "risk": "HIGH if removed blindly — the viewer's diagnostic panes depend on it. But this is validation scaffolding, not simulation physics, and it is ~29% of the vehicle crate."
+    },
+    {
+      "item": "molla-vehicle has no molla-core/molla-math/molla-sim linkage",
+      "kind": "disconnected island",
+      "evidence": "Cargo.toml:19-20 empty; local `dot`/`cross` reimplementations at real_tire/internal.rs:47,51, tire.rs:290,299, granular.rs:453.",
+      "external_refs": "none — nothing imports vehicle's math",
+      "risk": "MEDIUM — the duplication is small in lines but signals the crate was built outside the engine's type system."
+    }
+  ],
+
+  "redundancy": [
+    {
+      "what": "kernels' actuator_* shader wrappers vs actuators' controller_* host layer",
+      "evidence": "kernels/src/actuator_pd.rs (201 loc, exports ActuatorPdKernel) vs actuators/src/controller_pd.rs (141 loc, `use molla_kernels::ActuatorPdKernel`). This is NOT duplication — it is a clean two-layer split. Worth stating because the near-identical names invite a mistaken merge."
+    },
+    {
+      "what": "The molla facade's crates/molla/src/kernels/*.rs are almost all 3-line `pub use` shims",
+      "evidence": "24 of the 29 files in crates/molla/src/kernels/ are ≤6 lines and forward verbatim (e.g. lbvh.rs is 3 lines, fft.rs 3 lines). The genuinely local ones forward to molla_fem, not molla_kernels: dg_swe_flux.rs, fem.rs, fem_*.rs (`pub use molla_fem::...`).",
+      "note": "Facade scaffolding, not logic duplication — but it inflates apparent module count."
+    },
+    {
+      "what": "kernels' tire_* family (11 modules, 20+ shaders) overlaps molla-vehicle's real_tire/",
+      "evidence": "Every tire kernel has a CPU counterpart in vehicle: tire_brush.rs mirrors `molla_vehicle::real_tire::evaluate_brush_tire` (stated at kernels/src/tire_brush.rs:3), tire_fem.rs mirrors `molla_vehicle::TetraTireFem` (kernels/src/tire_fem.rs:3,1388,3199), tire_bekker.rs mirrors `DeformableTerrain` (tire_bekker.rs:3). CPU/GPU parity pairs are intentional, but the CPU side lives in vehicle and the GPU side in kernels — which is precisely why the inverted edge exists.",
+      "note": "This is the redundancy that CAUSES the inversion; fixing the layering addresses both."
+    }
+  ],
+
+  "connection_health": {
+    "summary": "The region has one real inversion and one undeclared hidden edge; everything else is layered correctly.",
+    "correct_edges": [
+      "molla → molla-kernels (facade, kernels/mod.rs:118)",
+      "molla → molla-vehicle (facade, vehicle.rs:4)",
+      "molla → molla-actuators (facade, actuators/mod.rs:41)",
+      "molla-actuators → molla-kernels (controller_*.rs)",
+      "molla-solvers → molla-kernels (semi_implicit.rs:38)",
+      "molla-sensors → molla-kernels (5 files)",
+      "molla-fem → molla-kernels (3 files)"
+    ],
+    "inverted_edges": [
+      "molla-kernels → molla-vehicle (Cargo.toml:37) — primitive crate depends on application crate"
+    ],
+    "undeclared_edges": [
+      "molla-vehicle → molla-kernels via include_str! (observability.rs:124-127) — filesystem, not Cargo"
+    ],
+    "missing_edges": [
+      "molla-vehicle depends on nothing; it shares no type with molla-core/molla-math/molla-sim and reimplements dot/cross locally (internal.rs:47,51)"
+    ],
+    "cycle": "NO true cycle in Cargo — nothing in vehicle declares kernels. But there IS a mutual entanglement once the include_str! edge is counted: kernels→vehicle (API) and vehicle→kernels (source files). Cargo cannot see it, so a Cargo-only layering check would pass while the code is still tangled.",
+    "proposed_layering": [
+      "L0 (no molla deps): molla-core, molla-math, molla-storage",
+      "L1 (device plumbing): molla-compute, molla-compute-primitives",
+      "L2 (GPU primitives): molla-kernels — must depend ONLY on L0/L1. No molla-vehicle, ever.",
+      "L3 (domain host layers, parallel siblings): molla-actuators → kernels; molla-geometry → compute; molla-sim",
+      "L4 (domains dispatching kernels): molla-sensors, molla-fem, molla-solvers → kernels + actuators",
+      "L5 (application): molla-vehicle → core/math/sim (currently MISSING) + kernels (for GPU input types it already owns). It should own the snapshot-adapter functions.",
+      "L6 (facade): molla → all of L2-L5, keeping kernels and vehicle as independent siblings.",
+      "Concretely: (a) delete molla-kernels/Cargo.toml:37 and its gpu-feature entry at :24; (b) move tire_thermal_input_from_rig_snapshot / tire_thermal_state_from_rig_snapshot / tire_thermal_build_rig_replay_batch (tire_thermal.rs:504,538,578) and tire_fem_gpu_input_from_tetra_fem (tire_fem.rs:1403) into molla-vehicle::real_tire, which then depends on molla-kernels — the direction actually intended; (c) give molla-vehicle a real molla-core/molla-math dep so it stops reimplementing dot/cross; (d) replace the four include_str! reaches (observability.rs:124-127) with a declared shared shader-contract mechanism or move the assertion into kernels' own tests."
+    ],
+    "vehicle_consumers": "Besides the viewer (bin/molla_viewer, 300+ call sites) and the `molla` facade re-export (crates/molla/src/vehicle.rs:4), NOTHING depends on vehicles. crates/molla-vehicle is a dependency of exactly three artifacts: molla, molla_viewer, and (wrongly) molla-kernels. molla-solvers, molla-sim, molla-fem, molla-sensors do not use it.",
+    "actuators_genericity": "molla-actuators is GENUINELY GENERIC. grep for vehicle|terrain|tire across crates/molla-actuators/src returns 2 hits, both the word 'entirely' in a doc comment (controller_neural_lstm.rs:26, controller_neural_mlp.rs:4). Zero tire/terrain/vehicle coupling. It is correctly generic and reusable."
+  },
+
+  "removal_candidates": [
+    {
+      "candidate": "molla-kernels' optional dependency on molla-vehicle (the dependency, not the code)",
+      "evidence": "crates/molla-kernels/Cargo.toml:37 `molla-vehicle = { path = \"../molla-vehicle\", optional = true }` + Cargo.toml:24 `\"dep:molla-vehicle\"`. Consumed by exactly 4 functions: kernels/src/tire_thermal.rs:504,538,578 and kernels/src/tire_fem.rs:1403.",
+      "risk": "MEDIUM — moving 4 functions changes public paths; those functions are called from the facade and the viewer.",
+      "decision_needed": "Confirm the snapshot-adapters belong to vehicle (they take vehicle types and only shuffle fields into kernel input structs — yes), then move and delete the dep. This is the highest-value structural fix in the region."
+    },
+    {
+      "candidate": "molla-vehicle's include_str! of kernels' shaders",
+      "evidence": "crates/molla-vehicle/src/real_tire/observability.rs:124,125,126,127.",
+      "risk": "LOW structurally, MEDIUM behaviourally — the strings back `tire_parameter_observability_report()`, whose output the viewer renders (bin/molla_viewer/src/main.rs:6199). Removing the assertions changes reported diagnostics.",
+      "decision_needed": "Either move these four shader-contract assertions into molla-kernels' test suite, or add an explicit declared dep. Today the path is invisible to Cargo and breaks silently if either crate moves."
+    },
+    {
+      "candidate": "molla-vehicle's real_tire/reports/ + rig/ (~12k loc, ~29% of the crate)",
+      "evidence": "7 report files (~6.4k) + 6 rig files (~5.6k); consumed only by the viewer and vehicle's own tests.",
+      "risk": "HIGH — the viewer's diagnostic panes (main.rs:6067-7676, ~60 report call sites) depend on this. Removing it is a viewer decision, not a library decision.",
+      "decision_needed": "Decide whether tire validation scaffolding belongs in the shipped library or in the viewer/dev tooling. If the latter, this is the single biggest LOC reduction available in the region."
+    },
+    {
+      "candidate": "molla-kernels' rayon dependency (3 tokens)",
+      "evidence": "crates/molla-kernels/Cargo.toml:39.",
+      "risk": "LOW",
+      "decision_needed": "Check the 3 call sites; likely a host-side parallel loop that does not belong in a dispatch-wrapper crate."
+    },
+    {
+      "candidate": "molla-vehicle's local dot/cross reimplementations",
+      "evidence": "crates/molla-vehicle/src/real_tire/internal.rs:47,51; crates/molla-vehicle/src/tire.rs:290,299; crates/molla-vehicle/src/granular.rs:453.",
+      "risk": "LOW-MEDIUM — replacing `[f64;3]` helpers with molla-math types touches many call sites in a 41k-loc crate.",
+      "decision_needed": "Only worth doing together with giving vehicle a real molla-core/molla-math dependency; not on its own."
+    }
+  ],
+
+  "build_probe": {
+    "commands": [
+      {
+        "cmd": "cargo metadata --no-deps --format-version 1",
+        "exit": 0,
+        "output_excerpt": "108764 bytes of JSON on stdout; empty stderr. Parsed confirmation: molla-kernels deps include ('molla-vehicle','*',None); molla-actuators deps include ('molla-kernels','*',None); molla-vehicle deps == []."
+      },
+      {
+        "cmd": "cargo check -p molla-kernels",
+        "exit": 101,
+        "output_excerpt": "warning: spurious network error (3 tries remaining): failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)\nwarning: spurious network error (2 tries remaining): failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)\nwarning: spurious network error (1 try remaining): failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)\nerror: failed to get `bevy_frost` as a dependency of package `molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)`\nCaused by: failed to load source for dependency `bevy_frost`\nCaused by: Unable to update https://github.com/bresilla/bevy_frost?branch=develop#001fc84a\nCaused by: failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)"
+      },
+      {
+        "cmd": "CARGO_HOME=$HOME/.cargo_probe cargo fetch   # retry with a writable mirror of /pkg/cargo",
+        "exit": 101,
+        "output_excerpt": "Updating git repository `https://github.com/bresilla/bevy_frost`\nwarning: spurious network error (3 tries remaining): failed to resolve address for github.com: Temporary failure in name resolution; class=Net (12)\n...(3, 2, 1 remaining, same error)...\nerror: failed to get `bevy_frost` as a dependency of package `molla_viewer v0.0.1 (.../bin/molla_viewer)`\nCaused by: Unable to update https://github.com/bresilla/bevy_frost?branch=develop#001fc84a\nCaused by: failed to clone into: /home/bresilla/.cargo_probe/git/db/bevy_frost-7cd5eeeaf3285665\nCaused by: revision 001fc84aedcad2d9eebf4f4c1b093d7aa8acb9f1 not found\nCaused by: network failure seems to have happened ... failed to resolve address for github.com: Temporary failure in name resolution; class=Net (12)"
+      },
+      {
+        "cmd": "CARGO_HOME=$HOME/.cargo_probe cargo check -p molla-kernels --offline",
+        "exit": 101,
+        "output_excerpt": "error: failed to get `bevy_frost` as a dependency of package `molla_viewer v0.0.1 (...)`\nCaused by: failed to load source for dependency `bevy_frost`\nCaused by: Unable to update https://github.com/bresilla/bevy_frost?branch=develop#001fc84a\nCaused by: can't checkout from 'https://github.com/bresilla/bevy_frost': you are in the offline mode (--offline)"
+      }
+    ],
+    "conclusion": "No compilation was achieved. Exit 101 is a RESOLUTION failure, not a compile error: cargo must resolve the whole workspace before it can build any single package, and the workspace contains bin/molla_viewer, which depends on the git dependency bevy_frost (branch develop, rev 001fc84aedcad2d9eebf4f4c1b093d7aa8acb9f1). That checkout cannot be created because CARGO_HOME (/pkg/cargo) has a read-only git/checkouts directory (/pkg/cargo itself is writable, but /pkg/cargo/git and /pkg/cargo/git/checkouts are read-only). A retry with a writable mirror of CARGO_HOME reached the network but failed DNS ('Temporary failure in name resolution' for github.com), and offline mode cannot checkout a rev absent from the local git db. Therefore every statement in this report about which kernel types are dead is derived from source greps, NOT from a compiler call graph — that is the main coverage limit. cargo metadata --no-deps DID succeed (exit 0), and it is what confirms molla-vehicle's empty dependency list."
+  },
+
+  "limits": [
+    "No compile or type-check completed (exit 101 at resolution, bevy_frost git checkout blocked by a read-only cargo cache; DNS fails on retry). All deadness claims are grep-derived, so a type used only through a generic/trait indirection or reached via a re-export alias I did not grep could be misclassified.",
+    "I did not read plans/MAP.md, REPORT.md, plans/_prior_execution_record.md, GUI_SPLIT.md, or plans/STATUS.md, and did not encounter them incidentally. I also did not read PLAN.md, PROJECT, or PLAN_ENGINE.md beyond what cargo metadata and Makefile showed.",
+    "I did not audit the other 13 crates except where a grep result crossed the boundary; my statements about consumers (solvers/sensors/fem) are based on grep hits, not full reads of those crates.",
+    "The per-type dead-code question ('how much of kernels has a production caller') is answered only at module granularity. I could not do it per public type without a compiler. The 128 public names in kernels/lib.rs:101-300 were counted but not individually traced.",
+    "src/lib.rs of molla-vehicle is a 140-line wall of re-exports; I counted ~250 names by reading it but did not verify each is reachable from a consumer.",
+    "The 'reports/rig is dormant' finding is inferred from call-site location (viewer + tests), not from a build graph.",
+    "I did not run any test, lint, or clippy; no GPU adapter was available and the resolution failure blocks all cargo subcommands that touch the viewer.",
+    "No file outside assets/scans/D.json and assets/scans/D.md was created or modified. I created and then deleted temporary probe paths ($HOME/.cargo_probe, /tmp/meta.json, /tmp/ck.out, /tmp/ck.err) and confirmed /pkg/cargo was untouched (it is read-only by the filesystem, so no writes could have landed)."
+  ]
+}

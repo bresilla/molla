@@ -1,0 +1,476 @@
+{
+  "scout": "E",
+  "region": "crates/molla (facade), crates/molla-sim, bin/molla_viewer (incl. src/examples/*)",
+  "crates": [
+    {
+      "name": "molla",
+      "purpose_one_line": "Public facade: re-exports core/sim/math/storage/compute subcrates plus the in-crate scenes (geometry, solvers, kernels, actuators, sensors, fem, optim, autograd, compute); it is a namespace plus glue, not an implementation.",
+      "loc": 5580,
+      "files": 123,
+      "main_modules": [
+        "src/lib.rs:18-33 (11 pub mods + 4 re-exports)",
+        "src/prelude.rs:7-22",
+        "src/kernels/mod.rs (221 lines, ~400-name re-export wall)",
+        "src/geometry/mod.rs (136 lines)",
+        "src/solvers/mod.rs (54 lines)",
+        "src/compute/mod.rs (45 lines)",
+        "src/actuators/mod.rs, src/sensors/mod.rs, src/autograd/mod.rs, src/fem/mod.rs",
+        "tests/ (5 files), examples/ (2 files), benches/ (2 files)"
+      ],
+      "top_public_types": [
+        "molla::prelude::{Model, ModelBuilder, State, Control, Contacts}",
+        "molla::solvers::{XpbdSolver, FeatherstoneSolver, VbdSolver, BarrierSolver, SphSimulation, IkSolver}",
+        "molla::compute::{Engine, MpmSimulation, MpmConfig}",
+        "molla::sensors::{Lidar, ImuSensor, ContactSensor, TiledCamera, Raycaster, AerialLidar}",
+        "molla::actuators::{Actuator, ControllerPd, ControllerNeuralMlp, ControllerNeuralLstm, ClampingDcMotor}",
+        "molla::geometry::CollisionPipeline",
+        "molla::fem::* (re-export), molla::vehicle::* (re-export)"
+      ]
+    },
+    {
+      "name": "molla-sim",
+      "purpose_one_line": "Pure data contract (Model/State/Control/Contacts + builder + flags + joint enums); the only real logic is builder validation, one FK/CRBA pass, and cloth-edge derivation.",
+      "loc": 6208,
+      "files": 12,
+      "main_modules": [
+        "src/lib.rs:1-37 (the 'contract every solver consumes' doc)",
+        "src/model.rs (1255) — Model, ShapeGeometry, TriMesh, SdfShape, Heightfield, device upload",
+        "src/builder.rs (3699) — ModelBuilder: bodies, shapes, joints, equalities, muscles, tet meshes; all validation lives here",
+        "src/state.rs (258), src/contacts.rs (126), src/control.rs (94), src/joint.rs (197), src/articulation.rs (312), src/soft_surface.rs (132), src/muscle.rs (45), src/flags.rs (24)"
+      ],
+      "top_public_types": [
+        "Model, ModelBuilder, BodyParams, ShapeGeometry, TriMesh, SdfShape, Heightfield, TetMeshId",
+        "State, Control, Contacts",
+        "JointType, JointTargetMode, EqualityType, MuscleConfig",
+        "BodyFlags, ShapeFlags, ParticleFlags",
+        "SoftSurface, SoftSurfaceKind, ClothMeshId, INVALID_VERT",
+        "eval_fk (articulation.rs:31), compute_surface_edges, compute_tet_surface_triangles"
+      ]
+    },
+    {
+      "name": "molla_viewer (bin/molla_viewer)",
+      "purpose_one_line": "Bevy+egui app that include!s 135 scene fragments into one crate-root namespace, dispatches scene->builder/solver/audit/label/pane through six parallel match statements, and drives CPU/GPU molla through the fixed-substep pipeline.",
+      "loc": null,
+      "files": 136,
+      "main_modules": [
+        "src/main.rs (11245 lines; app wiring 221-655, include! block 170-7902, Scene ALL 1898-2053, label 2056-2211, description 2214-2635, solver_kind 2645-2704, physics_audit 2770-3413, build_scene_model 3566-3731, finalize 3739-3988, reset 4031-4091, step_simulation 4494-4793, control_pane 5417-5957, tests 7940-11245)",
+        "src/examples/*.rs (135 files, 33950 lines, include!d from main.rs:170-7902)"
+      ],
+      "top_public_types": [
+        "enum Scene (151 variants, main.rs:1284-1895)",
+        "enum SolverKind (main.rs:2707-2718), enum SolverBackend (main.rs:1212-1221)",
+        "struct Sim (main.rs:1180-1198) — model/state_a/state_b/control/contacts/solver/pipeline/engine/adapter_label",
+        "struct ScenePhysicsAudit / enum PhysicsAuditStatus (main.rs:2720-2766)",
+        "struct TireSceneTruthNotes + 7 control-metadata tables (main.rs:730-932)"
+      ]
+    }
+  ],
+  "dependency_edges": [
+    {
+      "from": "molla",
+      "to": "molla-sim",
+      "cargo_claims": "crates/molla/Cargo.toml:50 (path dep, default-features=false); optional gpu pass-through at Cargo.toml:25",
+      "source_evidence": "crates/molla/src/lib.rs:22 `pub use molla_sim as sim;`; crates/molla/src/geometry/soft_surface.rs:7 `pub use molla_sim::{...}`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-core",
+      "cargo_claims": "crates/molla/Cargo.toml:44",
+      "source_evidence": "crates/molla/src/lib.rs:21 `pub use molla_core as core;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-math",
+      "cargo_claims": "crates/molla/Cargo.toml:45",
+      "source_evidence": "crates/molla/src/math/mod.rs:3 `pub use molla_math::*;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-storage",
+      "cargo_claims": "crates/molla/Cargo.toml:46",
+      "source_evidence": "crates/molla/src/storage.rs:3 `pub use molla_storage::*;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-optim",
+      "cargo_claims": "crates/molla/Cargo.toml:51",
+      "source_evidence": "crates/molla/src/optim.rs:3 `pub use molla_optim::*;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-vehicle",
+      "cargo_claims": "crates/molla/Cargo.toml:58",
+      "source_evidence": "crates/molla/src/vehicle.rs:4 `pub use molla_vehicle::*;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-fem",
+      "cargo_claims": "crates/molla/Cargo.toml:56-57",
+      "source_evidence": "crates/molla/src/fem/mod.rs:6 `pub use molla_fem::*;`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-compute",
+      "cargo_claims": "crates/molla/Cargo.toml:47",
+      "source_evidence": "crates/molla/src/compute/mod.rs:41-45 `pub use molla_compute::{AdapterInfo, Backend, Engine}` under cfg(gpu)",
+      "verdict": "live, thin re-export (gpu only)"
+    },
+    {
+      "from": "molla",
+      "to": "molla-kernels",
+      "cargo_claims": "crates/molla/Cargo.toml:53",
+      "source_evidence": "crates/molla/src/kernels/mod.rs:118-120 `pub use molla_kernels::{...}` — a ~400-identifier wall (actuator, tire FEM/DEM/Bekker/thermal/brush kernels)",
+      "verdict": "live but overloaded: the facade owns one flat namespace for every kernel"
+    },
+    {
+      "from": "molla",
+      "to": "molla-solvers",
+      "cargo_claims": "crates/molla/Cargo.toml:55 (with features=[autograd])",
+      "source_evidence": "crates/molla/src/solvers/mod.rs:32 `pub use molla_solvers::Solver;`; solvers/mod.rs:37 `pub use molla_solvers::{SphConfig, SphSimulation, box_tank_walls}`",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-autograd / molla-actuators / molla-sensors / molla-compute-primitives",
+      "cargo_claims": "Cargo.toml:52, 54, 52, 48",
+      "source_evidence": "grep of crates/molla/src shows only the facade module files referencing the underscore tokens (actuators 14, sensors 12, autograd 7, compute_primitives 6 — all inside the corresponding src/<mod>/mod.rs)",
+      "verdict": "live, thin re-export"
+    },
+    {
+      "from": "molla",
+      "to": "molla-geometry",
+      "cargo_claims": "crates/molla/Cargo.toml:54",
+      "source_evidence": "24 underscore-token hits in crates/molla/src, concentrated in src/geometry/*.rs — the geometry subcrate types are named directly per module rather than re-exported wholesale",
+      "verdict": "live, real code edge"
+    },
+    {
+      "from": "molla-sim",
+      "to": "molla-core, molla-math, molla-storage",
+      "cargo_claims": "crates/molla-sim/Cargo.toml:14-16",
+      "source_evidence": "crates/molla-sim/src/model.rs:3-5 uses molla_core::Result, molla_math::{Mat3, Real, Transform, Vec3}, molla_storage::{Buffer, BufferUsage}; state.rs/contacts.rs/control.rs do the same",
+      "verdict": "live; molla-sim depends on nothing else (no geometry, no solvers) — builder.rs:1399 comment confirms the intent"
+    },
+    {
+      "from": "crates/{geometry,kernels,solvers,actuators,sensors,fem}",
+      "to": "molla-sim",
+      "cargo_claims": "molla-geometry/Cargo.toml:31, molla-kernels/Cargo.toml:35, molla-solvers/Cargo.toml:33, molla-actuators/Cargo.toml:29, molla-sensors/Cargo.toml:33 (optional=true), molla-fem/Cargo.toml:29",
+      "source_evidence": "molla-geometry/src/pipeline.rs:8 `use molla_sim::{Contacts, Model, ShapeGeometry, State};`; molla-kernels/src/integrate_bodies.rs:6 `use molla_sim::{Control, Model, State};`; molla-kernels/src/tiled_camera.rs:19 `use molla_sim::Model;`; geometry/broad_phase.rs:14, narrow_phase.rs:9, shape_world.rs:5, sdf_bake.rs:37, lbvh.rs:54",
+      "verdict": "live; molla-sim is a leaf-side contract consumed by 6 sibling crates (23 files in geometry alone)"
+    },
+    {
+      "from": "molla_viewer",
+      "to": "molla, molla-vehicle",
+      "cargo_claims": "bin/molla_viewer/Cargo.toml:34-35",
+      "source_evidence": "main.rs:44-70 `use molla::{actuators, autograd, compute, fem, geometry, math, prelude as mp, sensors, solvers}`; examples/121_tire_traction.rs:1 `use molla_vehicle::{Pac89Tire, ...}`; examples/*.rs use molla_vehicle::Terrain twice. The viewer never touches molla-sim or any subcrate directly.",
+      "verdict": "live; the facade is the viewer's single entry point — no edge is exercised anywhere else in the workspace, so molla_viewer is the facade's only in-repo consumer"
+    }
+  ],
+  "unused_cargo_deps": [
+    {
+      "crate": "molla_viewer",
+      "dep": "wgpu 27",
+      "evidence": "bin/molla_viewer/Cargo.toml:36-41 declares it explicitly; grep of the whole src (main.rs + 135 example files) finds no `wgpu::` path, no `use wgpu`, and no `WgpuSettings` — every GPU call goes through the molla facade (`molla::compute::Engine`) or Bevy's own renderer.",
+      "risk": "low. Removing it may change feature unification for Bevy's wgpu (the pin is documented as 'so molla and Bevy share one wgpu'); verify that molla's `gpu` feature still selects the vulkan/metal/dx12 features before deleting."
+    },
+    {
+      "crate": "molla",
+      "dep": "rayon 1.10",
+      "evidence": "crates/molla/Cargo.toml:66-69 comment claims 'Used only inside crate::geometry authoring code; not on the per-frame hot path'; grep for `rayon`, `par_iter`, `into_par` over crates/molla/src, tests, examples, benches returns zero hits (module-file self-references only). The only rayon user in-repo is elsewhere.",
+      "risk": "low to remove the direct dep from crates/molla; the comment is stale and the dependency is at best transitively needed."
+    },
+    {
+      "crate": "molla",
+      "dep": "tracing 0.1",
+      "evidence": "crates/molla/Cargo.toml:60; zero `tracing` tokens in src/tests/examples/benches.",
+      "risk": "low. The crate has no logging facade at all today."
+    },
+    {
+      "crate": "molla",
+      "dep": "slotmap 1",
+      "evidence": "crates/molla/Cargo.toml:61; zero `slotmap` tokens in src/tests/examples/benches. ID types actually come from molla-core (prelude.rs:7).",
+      "risk": "low; likely a leftover from when ID allocation lived in the facade."
+    },
+    {
+      "crate": "molla",
+      "dep": "bytemuck 1.18",
+      "evidence": "crates/molla/Cargo.toml:62; zero `bytemuck` tokens in src/tests/examples/benches — every buffer lives in molla-storage.",
+      "risk": "low; without assertions it is inert."
+    },
+    {
+      "crate": "molla",
+      "dep": "glam 0.30",
+      "evidence": "crates/molla/Cargo.toml:59; zero `glam` tokens in src/tests/examples/benches (host math is `molla::math`, lib.rs:12-14). The viewer uses Bevy's glam through bevy, not through this dep.",
+      "risk": "low; removing shrinks the facade's public dependency surface."
+    },
+    {
+      "crate": "molla",
+      "dep": "rustfft 6 (dev)",
+      "evidence": "crates/molla/Cargo.toml:76-78 comment says 'CPU oracle for the GPU FFT kernel. Test-only'; zero `rustfft` tokens in tests/ or benches/ (criterion is used in benches/step_cpu.rs:9 and step_gpu.rs:14; criterion is live).",
+      "risk": "low; either the oracle moved into molla-kernels or the dep is orphaned."
+    }
+  ],
+  "viewer_structure": {
+    "scene_files": {
+      "example_fragments": 135,
+      "included": 135,
+      "not_included": 0,
+      "git_tracked_under_bin_molla_viewer": 137,
+      "largest": "examples/122_tire_realistic.rs (2683), 120_tire_dynamics.rs (2248), 121_tire_traction.rs (1945), 12_camera.rs (986)",
+      "smallest": "59_warp_dem.rs (10), 60_warp_fluid.rs (7), 61_warp_sph.rs (7), 106_nut_bolt_hydro.rs (8), 35_mpm_snow_ball.rs (11), 36_mpm_two_way.rs (11)"
+    },
+    "scene_variants": 151,
+    "include_mechanism": "`include!(\"examples/NN_name.rs\")` at crate root, main.rs:170-7902 (135 lines), interleaved in no order (29 is followed by 103..126, then 30..36, then 104..108, then 37..51). Fragments are not modules: every fn/struct/const lands in the bin crate root namespace.",
+    "main_file_lines": 11245,
+    "dispatch_mechanism": "No registry, no trait objects. Six parallel match statements keyed on `enum Scene`, plus a string match for panel titles and a second match for pane bodies: (1) build_scene_model main.rs:3566-3731, (2) solver_kind main.rs:2645-2704 (default `_ => Xpbd`), (3) physics_audit main.rs:2770-3413, (4) label main.rs:2056-2211, (5) description main.rs:2214-2635, (6) scene-pane title main.rs:5608-5714, and (7) the pane-body match main.rs:5724-5957 (125 Scene arms). Scene::ALL (main.rs:1898-2053) is a third hand-maintained list of all 151 variants, used only for the dropdown.",
+    "execution_loop_summary": "Startup: `Sim::build_scene(Scene::Pile)` (main.rs:385) -> build_scene_model -> finalize: Engine::new_gpu().expect(...) at main.rs:3803, adapter_label from engine.adapter_info() (3807-3810), `device`/`queue` cloned (3811-3812), then unconditional `upload_to_device` of model, state_a, state_b, control, contacts (3814-3827), then build_solver(engine, model, scene.solver_kind()) at 3830 and four scene-specific `matches!(scene, ...)` retunes (3835-3885). Per frame the Update chain is: pre-step controllers -> step_simulation -> sync_transforms/sync_cloth_mesh (main.rs:406-419). step_simulation (4494-4793) first early-returns for ~110 of the 151 scenes via seven consecutive `if sim.scene == ...` / `matches!` blocks (4520-4670) — each host-driven scene runs its own update_* system instead. Otherwise, for SUBSTEPS_PER_FRAME=10 substeps of FIXED_DT=1/600 s: pipeline.collide(model, state_a, contacts) then contacts.upload_to_device(), an XPBD-only host->device upload of body_q/body_qd (4704-4707, gated by `matches!(solver, SolverBackend::Xpbd(_))`), solver.step(...) into state_b, `std::mem::swap(state_a, state_b)`, then a full body_q/body_qd (and joint_q/joint_qd, particle_q/particle_qd) download_from_device per substep (4714-4740).",
+    "cpu_gpu_boundary": "Every scene's model/state/control/contacts buffers are uploaded once in finalize (main.rs:3814-3827) regardless of whether the scene ever steps. Readback happens inside step_simulation's substep loop (main.rs:4714-4740) and the renderer only reads `state_a.body_q.host()` in sync_transforms (4795-4800) and `particle_q.host()` in sync_cloth_mesh. Scene switches reuse the same Engine (`Sim::rebuild` comment main.rs:3906-3910: 'scene switches must not call Engine::new_gpu() again')."
+  },
+  "scene_truth": {
+    "aliases_mismatched": [
+      {
+        "alias": "Scene::WarpSph (\"61 Warp SPH (MPM-as-fluid)\")",
+        "dispatches_to": "build_mpm_model() (main.rs:3702)",
+        "evidence": "main.rs:3702 and the description at 2290 explicitly admit 'same MPM-as-fluid pattern as WarpFluid'; the real WCSPH solver is Scene::SphDamBreak (label 104 at main.rs:2223, builder main.rs:3735)"
+      },
+      {
+        "alias": "Scene::WarpDem / WarpFluid / WarpSph / MpmSnowBall / MpmBeamTwist / MpmMultiMaterial / VehicleOffroad / VehicleSysid / TerrainLab",
+        "dispatches_to": "build_mpm_model() (9 call sites) and build_vehicle_model() (3 call sites, main.rs:3722-3727)",
+        "evidence": "label strings imply distinct cases ('59 Warp DEM (MPM sand)', '60 Warp fluid (MPM low-friction)', '123 Terrain lab (bumps, hole, washboard, ramp)'); the MPM distinctions are per-particle layout/rheology only, and TerrainLab reuses the tire-FEM model with the comment '// single FEM tire on a floor plane'"
+      },
+      {
+        "alias": "BarrierCloth label \"125 Barrier-Newton cloth (C0)\" and the 18 Ppf* labels 126-143",
+        "dispatches_to": "18 distinct build_ppf_*_model functions, but the Ppf* labels do not map onto their files: label 126..130 belong to 126_ppf_gallery.rs, labels 131..143 come from 131_ppf_gallery2.rs",
+        "evidence": "label arms main.rs:2074-2092 vs. builders 126_ppf_gallery.rs:64-169 and 131_ppf_gallery2.rs:5,93,214,432"
+      },
+      {
+        "alias": "Scene::FastSoftImpact label \"45 Fast soft impact (CCD)\"",
+        "dispatches_to": "SolverKind::Vbd (main.rs:2663) but finalize overrides the solver to the CPU VBD path (main.rs:3861-3870) while every other Vbd scene runs the GPU solver (main.rs:3541-3546)",
+        "evidence": "main.rs:3855-3870 comment: 'Stage 33.4 ... CPU-only until the GPU CCD lands'"
+      }
+    ],
+    "hardcoded_labels": [
+      {
+        "label": "\"Solver: XPBD-GPU\"",
+        "location": "main.rs:5559 `readout(ui, \"Solver\", \"XPBD-GPU\");`",
+        "truth": "false for 97 of the 151 scenes where `_ => SolverKind::Xpbd` is never reached — Arm/Actuator/Quadrotor/Pendulum/... run Featherstone (main.rs:2649-2667), the cloth/cable/jelly family runs Vbd (2668-2688), the PPF gallery runs Barrier/BarrierCpu/BarrierCpuChains (2689-2697), and FastSoftImpact runs a CPU VBD solver. It is also false in the other direction: `SolverKind::Xpbd` still builds the GPU XPBD solver even for host-driven scenes that never call step (main.rs:3533-3537).",
+        "fix": "make `label()` on SolverKind/SolverBackend the single source and call `sim.solver.kind().label()` at main.rs:5559"
+      },
+      {
+        "label": "startup panic message \"molla viewer is GPU-first; wgpu adapter required.\"",
+        "location": "main.rs:3803-3806",
+        "truth": "accurate as behaviour (no CPU fallback) but the pane claim at 5559 contradicts it for the BarrierCpu/PpfCpu/CPU-VBD/Vbd::new_cpu scenes"
+      },
+      {
+        "label": "MpmMultiMaterial label \"103 MPM multi-material\" (main.rs:2070) vs Vehicle label \"103 Vehicle (drivable car)\" (main.rs:2224)",
+        "location": "label match, duplicates at 103/104/105/106/107/108/109/110",
+        "truth": "duplicate numbering: 103=MpmMultiMaterial & Vehicle, 104=CableBundleHysteresis & SphDamBreak, 105=NutBoltSdf & LidarV2, 106=NutBoltHydro & AerialLidarPass, 107=DiffsimCloth & SolarSky, 108=DiffsimSoftBody & SyntheticAnnotation, 109=WarpFemConvDiffDg & TireModelLab, 110=WarpFemMixedElasticity & VehicleOffroad. Number 117 is unused; 150 numbered labels for 142 distinct numbers and 151 scenes. The example filenames collide the same way (103_mpm_multi_material.rs vs 103_vehicle.rs, 104_cable_bundle_hysteresis.rs vs 104_sph_dam_break.rs, ... 110_warpfemmixedelasticity.rs vs 110_vehicle_offroad.rs).",
+        "fix": "re-number the LABEL-QUANTUM-PHYS camera-scene block (105/106/107/108) to 127-130 and shift the PPF gallery, or drop the numeric prefix from labels entirely and show the dropdown index instead"
+      },
+      {
+        "label": "physics_audit strings (main.rs:2773-3413) name make targets and test names",
+        "location": "e.g. main.rs:2777 'make test-gpu / make test-gpu P=molla-solvers T=xpbd_boxes'",
+        "truth": "cannot be verified from this region; these are capability claims rendered in the UI and they are stringly-checked by tests (main.rs:10283-10300 asserts ManualGpu scenes contain 'make test-'). No build was possible to confirm any of them.",
+        "fix": "derive status from a test-registry manifest instead of prose, or move the strings out of the shipping binary"
+      }
+    ],
+    "capability_claims": [
+      "main.rs:5559 'XPBD-GPU' — hardcoded, contradicted by solver_kind at 2645-2704 and by the CPU barrier/VBD overrides at 3810-3885.",
+      "main.rs:2159-2161 '51 FEM diff beam (Stage 36.4)', main.rs:286-300 comments and audit strings throughout physics_audit assert GPU proof for scenes that step_simulation explicitly never steps (e.g. main.rs:4536-4545 skips all FEM scenes).",
+      "main.rs:2090-2126 physics_audit is a complete 151-arm table stating CPU/GPU proof for every scene; it is the only 'what is real' surface and it is prose inside the binary.",
+      "bin/molla_viewer/Cargo.toml:69-76 comments claim mimalloc cuts frame time from ~120 ms to ~13 ms 'in the heavy demo' — unverifiable claim embedded in the manifest.",
+      "crates/molla/Cargo.toml:30-33 claims wgpu is pinned 'so molla + Bevy can share one wgpu in the viewer binary' — consistent with Cargo.lock (both resolve wgpu 27 by way of the workspace), but no build was run to confirm."
+    ]
+  },
+  "dead_or_dormant": [
+    {
+      "item": "molla_viewer dependency wgpu 27 (bin/molla_viewer/Cargo.toml:36-41)",
+      "kind": "unused cargo dep",
+      "evidence": "no wgpu token anywhere under bin/molla_viewer/src",
+      "external_refs": "documented as a version-pin device in the same manifest's comment",
+      "risk": "low"
+    },
+    {
+      "item": "molla deps glam, tracing, slotmap, bytemuck, rayon, rustfft(dev)",
+      "kind": "unused cargo dep",
+      "evidence": "zero source tokens in src/tests/examples/benches (see unused_cargo_deps)",
+      "external_refs": "rayon's Cargo.toml:66-69 comment names decimate/SDF bake as consumers, but those files no longer contain a single rayon call",
+      "risk": "low"
+    },
+    {
+      "item": "body/state buffer upload for scenes that never step",
+      "kind": "dormant work per frame / per scene",
+      "evidence": "finalize uploads model+state_a+state_b+control+contacts (main.rs:3814-3827) before knowing whether step_simulation will early-return; ~110 of 151 scenes return immediately (main.rs:4520-4670)",
+      "external_refs": "none",
+      "risk": "low (startup only), medium if scene switches become frequent"
+    },
+    {
+      "item": "SolverKind::Xpbd construction for host-driven scenes",
+      "kind": "dormant allocation",
+      "evidence": "`_ => SolverKind::Xpbd` (main.rs:2701) + build_solver Xpbd arm (3533-3537) allocates a GPU XPBD solver for every DiffArm/DiffsimDrone/FEM/Radial scene whose update_* system writes body_q on the host",
+      "external_refs": "comment at main.rs:2698-2700 admits it: 'pick the cheap-to-construct XPBD solver — step_simulation skips these scenes anyway'",
+      "risk": "low"
+    },
+    {
+      "item": "Scene::WarpNvdb / WarpSph / WarpDem / WarpFluid pane bodies",
+      "kind": "dormant UI",
+      "evidence": "59_warp_dem.rs:10, 60_warp_fluid.rs:7, 61_warp_sph.rs:7 are label-only panes that tell the user to open the MPM pane instead; WarpNvdb's builder is build_warp_empty_model (main.rs:3688)",
+      "external_refs": "none",
+      "risk": "low"
+    },
+    {
+      "item": "PhysicsAuditStatus::Placeholder",
+      "kind": "dormant enum arm",
+      "evidence": "main.rs:2731-2732 carries `#[allow(dead_code)]`; test main.rs:9779-9792 asserts the set of Placeholder scenes is empty",
+      "external_refs": "the status vocabulary is load-bearing for the audit table",
+      "risk": "low"
+    },
+    {
+      "item": "BodyVisual::GaussianSplat",
+      "kind": "dormant visual variant",
+      "evidence": "main.rs:1259-1271 `#[allow(dead_code)]` and the comment 'Stage 30: stub — viewer renders as a fixed-size billboarded sphere; full anisotropic-Gaussian rendering deferred'",
+      "external_refs": "Scene::SplatPoseRecovery (label 99) uses it",
+      "risk": "medium — a scene exists whose visualisation is explicitly a stub"
+    }
+  ],
+  "redundancy": [
+    "Six per-scene parallel matches over the same 151 variants (build_scene_model:3566, solver_kind:2645, physics_audit:2770, label:2056, description:2214, pane title:5608 plus pane body:5724) — adding one scene means touching six to eight places. Verified exhaustive: all six cover all 151 variants (scripted check of the enum, ALL, label, build_scene_model, description, physics_audit).",
+    "`Scene::ALL` (main.rs:1898-2053) restates the enum a third time and is used only for the dropdown; the enum's declaration order and ALL's order already differ (BarrierCloth and the Ppf* block sit at #17 in ALL but are declared after Jelly in the enum), so the dropdown order is not the label order.",
+    "build_scene_model and step_simulation encode the same 'which scenes are real physics' partition twice, in opposite directions: 151 builder arms vs. ~110 skip arms.",
+    "finalize (3739-3988) and Sim::rebuild/tune_scene_solver (3990-4026) duplicate the same four scene-specific VBD retunes (SoftbodyDrop, ClothCollar, FastSoftImpact, SoftBrake) verbatim.",
+    "`WarpFluid`/`WarpDem`/`WarpSph` reuse build_mpm_model + the MPM pane (their own panes are text); `Vehicle`/`VehicleOffroad`/`VehicleSysid` reuse build_vehicle_model; `NeuralLstm` reuses build_neural_policy_model; `TerrainLab` reuses build_tire_dynamics_model — 20 of the 151 labels have no builder of their own.",
+    "example file numbering is duplicated (103..110 used twice) and the fragments are ordered arbitrarily in the include block, so file order and scene order disagree."
+  ],
+  "connection_health": {
+    "summary": "The three crates are connected by exactly two real edges: molla->all subcrates (mostly one-line re-exports) and molla_viewer->molla. molla-sim is the only subcrate with a clean, widely-consumed contract (6 sibling crates, 23 files in molla-geometry alone) and no outbound dependency beyond core/math/storage. The facade is where the wiring goes wrong: it is a re-export trampoline whose kernels/prelude give 400+ names one flat namespace, and it is exercised in-repo only by the viewer.",
+    "broken_or_weak_links": [
+      "molla's dependency list is 7/15 stale (see unused_cargo_deps) — half the declared edges exist only on paper.",
+      "crates/molla/src/kernels/mod.rs:118-120 re-exports ~400 identifiers from molla-kernels in one `pub use`, including a whole embedded tire simulation stack; the facade cannot be consumed without admitting all of it.",
+      "molla_viewer never depends on molla-sim, molla-core, molla-solvers or molla-kernels directly, so the facade's shape is never pressure-tested by a second consumer.",
+      "No workspace crate other than molla_viewer depends on molla, so there is no in-tree consumer proving the public surface is coherent."
+    ],
+    "missing_coverage": [
+      "No reset/pause/step contract per scene: `R` maps to Sim::reset (main.rs:4218) which only restores body_q/body_qd/particle_q from model.initial_* (4031-4091). Only 8 of 135 fragments define their own `fn reset` (109_warpfemconvdiffdg.rs:3486, 112_warpfemstokestransfer.rs, 121_tire_traction.rs, 47_fem_heat.rs, 48_fem_beam.rs, 50_fem_stokes.rs, 96_dgburgersshock.rs, 97_shallowwaterdambreak.rs); the rest expose ad-hoc `user_reset: bool` flags inside their own state structs, so every scene resets differently and most have no reset at all.",
+      "PhysicsAuditStatus has no arm for 'host-driven CPU demo that is not physics' — scene_smoke/scene_correctness in crates/molla/tests exercise solver scenes, not viewer scenes, so the audit table is the only per-scene record and nothing checks it against behaviour."
+    ]
+  },
+  "removal_candidates": [
+    {
+      "candidate": "the five unused runtime deps in crates/molla (glam, tracing, slotmap, bytemuck, rayon) and dev-dep rustfft",
+      "evidence": "zero source tokens in src/tests/examples/benches; rayon's declared consumer no longer calls it",
+      "risk": "low — pure build-time reduction; re-add if a warning surfaces under `cargo check -p molla`",
+      "decision_needed": "confirm rayon is not needed transitively by molla-geometry through this manifest"
+    },
+    {
+      "candidate": "wgpu 27 from bin/molla_viewer/Cargo.toml",
+      "evidence": "no `wgpu::` use in any viewer source; the actual GPU entry point is molla::compute::Engine",
+      "risk": "medium — feature unification with Bevy's wgpu"
+    },
+    {
+      "candidate": "8 duplicate scene label numbers + 8 duplicate example-file numbers (103-110)",
+      "evidence": "scripted label scan: 150 numbered labels, 142 distinct numbers, duplicates at 103-110, 117 unused",
+      "risk": "low — affects dropdown text and file naming only",
+      "decision_needed": "decide the PPF/Newton block numbering scheme first"
+    },
+    {
+      "candidate": "the ~15 host-only WebGPU/Warp port scenes whose builder is build_warp_empty_model (65_warp*mcgp*, 56, 57, 58, 66, 67-84, 89-92, 93, 94, 96-102 ...)",
+      "evidence": "main.rs:3684-3720 routes 42 variants to build_warp_empty_model and step_simulation skips another ~50; several fragments are under 20 lines and exist only to draw into the right rail",
+      "risk": "high — the pane/gizmo code is 33950 lines of the 45200 total and some of it is the only coverage for molla-compute primitives; removing the scenes removes their only in-repo demonstrator",
+      "decision_needed": "is the viewer a physics demonstrator or a compute-primitive gallery?"
+    },
+    {
+      "candidate": "Scene::WarpSph (label 61) as a separate scene",
+      "evidence": "identical builder and solver to WarpFluid/WarpDem; the real SPH scene is SphDamBreak",
+      "risk": "low",
+      "decision_needed": "keep as an alias or delete the variant"
+    },
+    {
+      "candidate": "PhysicsAuditStatus::Placeholder",
+      "evidence": "no scene uses it; a test enforces emptiness (main.rs:9779-9792) and it carries #[allow(dead_code)]",
+      "risk": "low"
+    }
+  ],
+  "obstacles_to_change": [
+    {
+      "obstacle": "One 11245-line bin crate root: 135 `include!`s dump 1194 top-level definitions into a single flat namespace, so 'which file owns this function' stops being a module boundary and any rename is a whole-repo grep.",
+      "evidence": "main.rs:170-7902 (includes); scripted count: 1194 top-level fn/struct/enum/const/type/impl across examples; examples/131_ppf_gallery2.rs:5 calls ppf_add_cloth defined in examples/126_ppf_gallery.rs:9 with no `use`, only because include! is textual",
+      "smallest_fix": "declare `mod examples { mod e01; mod e02; ... }` (one generated file) and replace each include! with `use examples::eNN::*;`, one file per commit — no behaviour change, and the namespace leaks become compile errors"
+    },
+    {
+      "obstacle": "Six-to-eight parallel matches over `Scene`: build_scene_model (3566), solver_kind (2645), label (2056), description (2214), physics_audit (2770), pane title (5608), pane body (5724), plus Scene::ALL (1898). Adding one scene means editing all of them, and nothing but exhaustiveness keeps them in step — the label list and the enum order already disagree.",
+      "evidence": "verified exhaustive today: all six matches cover all 151 variants; `Scene::ALL` order differs from enum declaration order for the BarrierCloth/Ppf* block (ALL #17-35 vs enum after Jelly)",
+      "smallest_fix": "introduce a `struct SceneSpec { variant, label, build, solver, audit, pane }` and one `const SCENES: &[SceneSpec]`, then make `Scene::ALL` = the projection of it; do it for the two cheapest tables first (label + ALL) to prove the shape"
+    },
+    {
+      "obstacle": "The UI asserts a backend that is not derived from the scene: main.rs:5559 prints exactly \"XPBD-GPU\" for all 151 scenes while solver_kind (2645-2704) plus the CPU overrides in finalize (3855-3885) actually select XPBD/Featherstone/VBD/Barrier/BarrierCpu/BarrierCpuChains/CPU-VBD.",
+      "evidence": "main.rs:5559 vs. main.rs:2645-2704, 3810-3885; step_simulation itself distinguishes backends at 4695 (`matches!(solver, SolverBackend::Xpbd(_))`) so the truth is one method call away",
+      "smallest_fix": "add `fn label(&self) -> &'static str` to SolverKind/SolverBackend and replace the literal at 5559 — a ~10-line change that also fixes the Audit pane's credibility"
+    },
+    {
+      "obstacle": "There is no lifecycle contract: reset is `Sim::reset` (4031-4091) restoring only model.initial_body_q/particle_q, and per-scene state is reset by 8 bespoke functions and ~20 ad-hoc `user_reset` booleans scattered in the fragments, so `R` silently does nothing meaningful in most scenes.",
+      "evidence": "grep `fn reset` finds 8 files (109_warpfemconvdiffdg.rs:3486, 112_warpfemstokestransfer.rs, 121_tire_traction.rs, 47_fem_heat.rs, 48_fem_beam.rs, 50_fem_stokes.rs, 96_dgburgersshock.rs, 97_shallowwaterdambreak.rs); user_reset flags appear in 100_amrheat.rs:1732, 101_magnetostatics.rs:1930, 109_warpfemconvdiffdg.rs:3387, 110_warpfemmixedelasticity.rs:4068, 111_warpfemnonconformingcontact.rs:4200, ...",
+      "smallest_fix": "add `reset: Option<fn(&mut SimState)>` to the SceneSpec above and route `R` through it, falling back to Sim::reset; migrate two scenes (FemHeat, DgBurgersShock) first"
+    },
+    {
+      "obstacle": "Scene names are stage numbers, not implementations: the dropdown says '51 FEM diff beam (Stage 36.4)', '109 Tire model lab', '110 Vehicle off-road' while eight label numbers are duplicated and several labels describe a technique the builder does not use (WarpSph -> MPM; TerrainLab -> single FEM tire; VehicleOffroad -> the same rig as Vehicle).",
+      "evidence": "main.rs:2056-2211 labels vs. 3566-3731 builders; duplicates at 103-110 from the scripted scan; main.rs:2290 description for WarpSph",
+      "smallest_fix": "add a `builder: &'static str` field to the label table and render it in the Audit pane (`readout(ui, \"Builder\", scene.builder())`) so the claim and the code are visible side by side"
+    },
+    {
+      "obstacle": "Startup requires a GPU for every scene, including the ~50 pure-CPU ones: finalize calls Engine::new_gpu().expect(...) unconditionally (3803) and uploads every buffer (3814-3827) before build_solver.",
+      "evidence": "main.rs:1180-1182 doc comment 'GPU-first per the project rule — Engine::new_gpu() is hard-required at startup, no CPU fallback'; main.rs:3803-3806 panic text; step_simulation's skip list (4520-4670) returns before touching the device for those scenes",
+      "smallest_fix": "in finalize, if `scene.solver_kind()` is a CPU kind and the scene is in the host-driven set, skip the expect and the uploads; or gate with a `--cpu` flag that sets an Option<Engine>. The device handles are only unwrapped at 3811-3812 and 4681-4682"
+    },
+    {
+      "obstacle": "Dead Cargo edges and a 400-name re-export wall make the facade look bigger and more coupled than it is; `molla::kernels` in particular hides the embedded tire simulation stack behind one `pub use`.",
+      "evidence": "crates/molla/Cargo.toml:59-69 (glam/tracing/slotmap/bytemuck/rayon with no users); crates/molla/src/kernels/mod.rs:118-200",
+      "smallest_fix": "delete the six unused deps, then split kernels/mod.rs into `pub mod tire { ... }` + `pub use` per family so the tire stack becomes opt-in"
+    }
+  ],
+  "build_probe": {
+    "commands": [
+      {
+        "cmd": "cargo metadata --no-deps --format-version 1",
+        "exit": 0,
+        "output_excerpt": "exit 0, no diagnostics; parsed: 17 packages, including molla (10 targets: lib + 5 integration tests + 2 examples + 2 benches), molla-sim (1 target), molla_viewer (1 target, path src/main.rs)"
+      },
+      {
+        "cmd": "cargo check -p molla",
+        "exit": 101,
+        "output_excerpt": "warning: spurious network error (3 tries remaining): failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)\nwarning: spurious network error (2 tries remaining): ... Read-only file system ...\nwarning: spurious network error (1 tries remaining): ... Read-only file system ...\nerror: failed to get `bevy_frost` as a dependency of package `molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)`\nCaused by: failed to load source for dependency `bevy_frost`\nCaused by: Unable to update https://github.com/bresilla/bevy_frost?branch=develop#001fc84a\nCaused by: failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system; class=Os (2)"
+      },
+      {
+        "cmd": "CARGO_NET_OFFLINE=true cargo check -p molla",
+        "exit": 101,
+        "output_excerpt": "identical failure; --offline does not help because the git checkout is absent and the cache is unwritable: 'failed to make directory '/pkg/cargo/git/checkouts/bevy_frost-7cd5eeeaf3285665/001fc84': Read-only file system'"
+      },
+      {
+        "cmd": "CARGO_HOME=/tmp/cargo-scout-e cargo check -p molla",
+        "exit": 101,
+        "output_excerpt": "'failed to initialize repository with template 'description': No space left on device' and '[6] Could not resolve hostname (Could not resolve host: index.crates.io)'. NOTE: /tmp on this host is a 5.9 GB tmpfs that reports 100% used with 0 available, so this fallback was unusable."
+      },
+      {
+        "cmd": "CARGO_HOME=/dev/shm/cargo-scout-e cargo check -p molla",
+        "exit": 101,
+        "output_excerpt": "failed to resolve address for github.com: Temporary failure in name resolution; class=Net (12) / failed to clone into: /dev/shm/cargo-scout-e/git/db/bevy_frost-7cd5eeeaf3285665 / revision 001fc84aedcad2d9eebf4f4c1b093d7aa8acb9f1 not found"
+      }
+    ],
+    "conclusion": "Exactly as the brief warned. Cargo resolution dies on the pinned bevy_frost git checkout (branch=develop, rev 001fc84aedcad2d9eebf4f4c1b093d7aa8acb9f1) before any compilation: the shared cargo cache under /pkg is read-only, /tmp is a full tmpfs, and a fresh CARGO_HOME cannot reach github.com (DNS failure). No compiler ever ran on this region, so every claim in this file about compile-time properties (unused deps, unused variants, the include! namespace) is derived from source text and one successful `cargo metadata --no-deps` (exit 0), not from a build. `cargo metadata --no-deps` does succeed because it does not need the git sources.",
+    "hazard_is_structural": "Because the git deps are pulled by the by-default workspace member bin/molla_viewer, `cargo check -p molla` cannot even restrict to the facade without resolving the whole workspace graph. This is itself an obstacle to change: no one can type-check molla in a sandbox without the viewer's git deps."
+  },
+  "limits": [
+    "No build was possible (see build_probe): unused-dep, dead_code and unused-variant verdicts are text-derived.",
+    "Per the brief I did not read plans/MAP.md, plans/STATUS.md, plans/_prior_execution_record.md, REPORT.md or GUI_SPLIT.md. I incidentally observed that plans/ contains MAP.md, STATUS.md, ROADMAP.md, TIRE.md, _prior_execution_record.md and that assets/scans/ contains D.json and D.md (a sibling scout's output); none of these were opened. I also did not read xtra/ or book/.",
+    "bin/molla_viewer has 137 git-tracked files but only 136 exist on disk (135 examples + main.rs + Cargo.toml is 137 with Cargo.toml; `find` counted 136 src files) — the difference is the manifest itself; nothing appears missing.",
+    "crates/molla's declared 5580 loc/123 files and molla-sim's 6208/12 count comments plus tests; my per-file totals (molla src = 1078 lines across 111 .rs files) are source-only and are given for structure, not to dispute those numbers.",
+    "I did not trace what `molla::kernels`' ~400 re-exported names cost at compile time, nor whether the facade re-exports are all reachable (needs a build).",
+    "The physics_audit strings' make-target claims were not run; the Makefile was not read.",
+    "I did not verify the molla-* sibling crates' internals, only the edges from this region into them."
+  ]
+}
