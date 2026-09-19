@@ -97,6 +97,26 @@ impl RigidWorld {
         collider_query::collider_shape_view(&self.scene, id)
     }
 
+    pub fn collider_mass_properties(
+        &self,
+        id: ColliderHandle,
+    ) -> Result<molla_sim::MassProperties> {
+        let collider = self
+            .scene
+            .collider(id)
+            .ok_or_else(|| Error::Build("unknown runtime collider handle".into()))?;
+        molla_geometry::mass_properties::collider_mass_properties(collider)
+    }
+
+    /// Replace the total with collider contributions plus the supplied additional component.
+    pub fn recompute_body_mass(
+        &mut self,
+        id: BodyHandle,
+        additional: molla_sim::MassProperties,
+    ) -> Result<()> {
+        molla_geometry::mass_properties::recompute_body_mass(&mut self.scene, id, additional)
+    }
+
     /// Advance the scene atomically; `true` excludes all contacts for that body pair.
     pub fn step_filtered(
         &mut self,

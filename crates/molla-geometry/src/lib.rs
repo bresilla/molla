@@ -22,6 +22,7 @@ mod lbvh;
 pub mod marching_cubes;
 #[cfg(feature = "gpu")]
 mod marching_cubes_gpu;
+pub mod mass_properties;
 pub mod mesh_bvh;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast_gpu;

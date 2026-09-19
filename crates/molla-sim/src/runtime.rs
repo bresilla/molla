@@ -7,8 +7,8 @@ use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
 use crate::{
-    BodyFlags, BodyParams, CoefficientCombineRule, ContactMaterial, Control, Heightfield,
-    JointType, Model, ModelBuilder, ShapeFlags, State, TriMesh,
+    BodyFlags, BodyParams, CoefficientCombineRule, ColliderMass, ContactMaterial, Control,
+    Heightfield, JointType, MassProperties, Model, ModelBuilder, ShapeFlags, State, TriMesh,
 };
 
 macro_rules! handle {
@@ -162,6 +162,8 @@ pub fn validate_convex_points(points: &[Vec3]) -> Result<()> {
 pub struct ColliderDesc {
     pub parent: Option<BodyHandle>,
     pub geometry: ColliderGeometry,
+    /// Authored density or total collider mass; body totals change on explicit recomputation.
+    pub mass: ColliderMass,
     pub pose: Transform,
     pub friction: Real,
     pub restitution: Real,
@@ -178,6 +180,7 @@ impl ColliderDesc {
         Self {
             parent: None,
             geometry,
+            mass: ColliderMass::default(),
             pose: Transform::IDENTITY,
             friction: 0.5,
             restitution: 0.0,
@@ -403,6 +406,27 @@ impl RigidScene {
         })
     }
 
+    pub fn body_mass_properties(&self, id: BodyHandle) -> Result<MassProperties> {
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        Ok(MassProperties {
+            mass: self.model().body_mass.host()?[i],
+            local_com: self.model().body_com.host()?[i],
+            inertia: self.model().body_inertia.host()?[i],
+        })
+    }
+
+    /// Replace total mass while preserving the velocity field and world force application points.
+    pub fn set_body_mass_properties(&mut self, id: BodyHandle, mass: MassProperties) -> Result<()> {
+        mass.validate()?;
+        self.edit(|d| {
+            let params = &mut d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?.params;
+            params.mass = mass.mass;
+            params.com = mass.local_com;
+            params.inertia = mass.inertia;
+            Ok(())
+        })
+    }
+
     pub fn insert_collider(&mut self, desc: ColliderDesc) -> Result<ColliderHandle> {
         self.edit(|d| {
             let id = ColliderHandle(d.allocate()?);
@@ -418,6 +442,17 @@ impl RigidScene {
                 .get_mut(&id)
                 .ok_or_else(|| missing("collider"))? = desc;
             d.collider_stamps.insert(id, SceneStamp(Arc::new(())));
+            Ok(())
+        })
+    }
+
+    pub fn set_collider_mass(&mut self, id: ColliderHandle, mass: ColliderMass) -> Result<()> {
+        mass.validate()?;
+        self.edit(|d| {
+            d.colliders
+                .get_mut(&id)
+                .ok_or_else(|| missing("collider"))?
+                .mass = mass;
             Ok(())
         })
     }
@@ -490,6 +525,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     let mut shape_colliders = Vec::new();
     for (&id, desc) in &d.colliders {
         validate_pose(desc.pose)?;
+        desc.mass.validate()?;
         let parent = dense_body(&bodies, desc.parent)?;
         let shapes = add_shapes(&mut builder, parent, desc)?;
         if desc.friction < 0.0 || !(0.0..=1.0).contains(&desc.restitution) {
@@ -582,7 +618,18 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     if visited.len() != d.bodies.len() {
         return Err(Error::Build("runtime joint cycle".into()));
     }
-    let model = builder.build()?;
+    let mut model = builder.build()?;
+    for (&id, index) in &bodies {
+        if d.bodies[&id].kind == BodyKind::Dynamic {
+            let p = &d.bodies[&id].params;
+            model.body_inv_inertia.host_mut()?[index.index()] = MassProperties {
+                mass: p.mass,
+                local_com: p.com,
+                inertia: p.inertia,
+            }
+            .inverse_inertia()?;
+        }
+    }
     let mut state = model.state()?;
     let mut control = model.control();
     for (&id, index) in &bodies {
@@ -593,6 +640,24 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             state.body_f.host_mut()?[i] = s.state.body_f.host()?[index.index()];
             control.body_external_f.host_mut()?[i] =
                 s.control.body_external_f.host()?[index.index()];
+            let shift = state.body_q.host()?[i].rotation
+                * (model.body_com.host()?[i] - s.model.body_com.host()?[index.index()]);
+            if shift != Vec3::ZERO {
+                let velocity = &mut state.body_qd.host_mut()?[i];
+                velocity.linear += velocity.angular.cross(shift);
+                if !shift.is_finite() || !velocity.linear.is_finite() {
+                    return Err(Error::Build("mass edit overflowed body velocity".into()));
+                }
+                for force in [
+                    &mut state.body_f.host_mut()?[i],
+                    &mut control.body_external_f.host_mut()?[i],
+                ] {
+                    force.angular -= shift.cross(force.linear);
+                    if !force.angular.is_finite() {
+                        return Err(Error::Build("mass edit overflowed body torque".into()));
+                    }
+                }
+            }
         }
         if d.bodies[&id].kind == BodyKind::Fixed {
             state.body_qd.host_mut()?[i] = SpatialVector::ZERO;
@@ -648,6 +713,12 @@ fn validate_pose(pose: Transform) -> Result<()> {
 
 fn validate_body(desc: &BodyDesc) -> Result<()> {
     validate_pose(desc.params.pose)?;
+    MassProperties {
+        mass: desc.params.mass,
+        local_com: desc.params.com,
+        inertia: desc.params.inertia,
+    }
+    .validate()?;
     if desc.params.world != WorldId(0)
         || !desc.params.mass.is_finite()
         || desc.params.mass < 0.0

@@ -19,6 +19,7 @@ mod contacts;
 mod control;
 pub mod flags;
 mod joint;
+mod mass;
 mod model;
 mod muscle;
 pub mod runtime;
@@ -32,6 +33,7 @@ pub use contacts::Contacts;
 pub use control::Control;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};
 pub use joint::{EqualityType, JointTargetMode, JointType};
+pub use mass::{ColliderMass, MassProperties};
 pub use model::{Heightfield, Model, SdfShape, TriMesh};
 pub use muscle::{DEFAULT_TAU_ACTIVATION, DEFAULT_TENDON_STIFFNESS_RATIO, MuscleConfig};
 pub use soft_surface::{

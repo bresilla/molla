@@ -50,6 +50,32 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   local/world pose reads and local/world pose writes are available without
   stepping. Geometry-frame, world and arbitrary-pose AABBs use the same shape
   bounds as broad phase, including the capsule's canonical-frame offset.
+- Collider descriptors now carry validated density or explicit total mass,
+  defaulting to density 1. Mass-only edits retain prepared query geometry.
+  `molla_geometry::mass_properties` computes collider-frame COM/full inertia
+  and combines enabled colliders (including sensors) in the parent body frame.
+  Primitive/hull/indexed-mesh integrals use the existing pinned Parry geometry
+  dependency; compounds sum pieces and explicit mass scales the whole collider,
+  not each piece. Mesh calculations normalize coordinates and exclude unused
+  vertices. Rounded cylinders use their inner cylinder's mass, matching Parry;
+  heightfields have zero volume (an explicit mass can still supply point mass).
+- `molla_sim::MassProperties` validates finite nonnegative mass and symmetric,
+  physically admissible inertia; it exposes principal moments/axes, transformed
+  properties, parallel-axis combination and a scale-relative pseudoinverse.
+  Runtime dynamic inverse tensors remain finite for singular principal axes;
+  fixed/kinematic inverse tensors remain zero. This does not yet establish
+  Featherstone/Rapier torque-response parity for singular-inertia bodies.
+- `RigidWorld::recompute_body_mass(body, additional)` replaces the total with
+  enabled collider contributions plus the supplied additional component.
+  Repeated calls do not accumulate previous totals. Recompute is explicit:
+  shape/density/pose edits alone do not change body mass, and the caller still
+  owns/persists the additional component. Complete BodyMut/adapter lifecycle
+  semantics remain pending. Existing explicitly authored body totals retain
+  their behavior until recomputation is requested.
+- Runtime total-mass edits rebase COM velocity and both applied-wrench buffers
+  to preserve the body-origin velocity field and world force application
+  points. Joint coordinates/rates/controls remain unchanged. Invalid mass,
+  inertia or rebasing overflow rejects the entire edit transactionally.
 - `molla_geometry::collider_query` supplies primitive/convex/other shape views.
   Convex views have compact hull vertices and sorted true edges, excluding
   coplanar triangulation diagonals. `RigidWorld` exposes the shape-view and
@@ -146,8 +172,8 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.2: live mutation | Foundation implemented and tested; re-rooting and complete mutable descriptors remain. |
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
-| 2: bodies | Pose/mass/COM/inertia/initial velocity/tag available in model/state/descriptors. Full read/write API, enabled/quarantine, damping, sleep/wake, additional-mass replacement, force/impulse helpers, CCD option, collider mass recomputation and no-step synchronization remain. |
-| 3: colliders | All requested shape kinds now have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Primitive/convex/other views, pose access, AABBs, material mutation, friction rules, two-way masks and enabled/sensor flags implemented. Collider density/mass and body mass recomputation remain. Gearbox consumption still requires integration tests. |
+| 2: bodies | Runtime total-mass edits and explicit collider-plus-additional recomputation implemented with full tensors, COM velocity/wrench rebasing and atomic rejection. Complete body read/write API, enabled/quarantine, damping, sleep/wake, persistent additional-mass lifecycle, force/impulse helpers, CCD option and no-step synchronization remain. Singular-inertia solver parity needs verification. |
+| 3: colliders | All requested shape kinds have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Views, pose access, AABBs, materials, friction rules, two-way masks, enabled/sensor flags and density/total-mass editing implemented. Explicit body mass recomputation implemented. Gearbox consumption still requires integration tests. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
 | 5: world | Gravity access, CPU world step with configurable substeps, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
 | 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
@@ -279,12 +305,37 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   solvers 75 selected tests (242 CPU tests/doctests total). Tractor-scale,
   mass-ratio and full Gearbox acceptance are still unproven.
 
+### Collider mass / body recomputation verification
+
+- Seven sim `runtime_mass` tests cover parallel-axis combination, rotated full
+  tensors, scale-relative principal decomposition, singular inverse tensors,
+  fixed mass retention, invalid/overflowing edit atomicity, COM velocity/wrench
+  rebasing, and free/articulated FK consistency after COM changes.
+- Seven geometry `collider_mass` tests cover analytic primitive inertias,
+  endpoint/collapsed capsules, rounded-cylinder reference semantics, compound
+  mass assignment, translated small hulls, closed indexed meshes with unused
+  remote vertices, sensor/disabled filtering, repeated recomputation and
+  zero-volume terrain. The world `runtime_mass` test verifies changed totals
+  actually change Featherstone's force/acceleration response on successive
+  steps, and mass-only changes preserve the geometry-cache identity.
+- Selected regression lanes passed: sim 30 tests/doctests, geometry 151 tests,
+  solvers 76 tests, totaling 257 CPU tests/doctests. Workspace `make check-all`
+  and strict scoped Clippy with all features and with no default features pass.
+  One initial solver command used shortened/nonexistent target names; the
+  corrected repo-native target names were then run successfully.
+- No dependency, environment, Makefile, Gearbox or specification edits. Engram
+  tools remain unavailable in this session; this tracked checkpoint records
+  the work rather than pretending a persistent-memory tool call succeeded.
+- Relevant new files: `crates/molla-sim/src/mass.rs`,
+  `crates/molla-geometry/src/mass_properties.rs`, sim/solvers
+  `tests/runtime_mass.rs`, and geometry `tests/collider_mass.rs`.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Complete collider density/mass, body editing, mass recomputation and
-   force/impulse APIs; benchmark the prepared query path with the tyre adapter.
+2. Complete body editing, persistent additional-mass lifecycle and force/impulse
+   APIs; verify singular-inertia dynamics and benchmark queries with tyres.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
