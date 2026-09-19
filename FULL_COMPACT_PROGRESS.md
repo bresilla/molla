@@ -1149,6 +1149,74 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Engram save/session-summary tools are still unavailable; this entry retains
   the findings and session handoff. The full objective remains incomplete.
 
+### Pressure snapshot work interrupted for visual feedback (2026-09-19)
+
+- Uncommitted isolated Gearbox work adds `machine save` configuration export
+  and `spawn from` restoration of applied/target tyre pressure and variants.
+  Source assets and original Gearbox remain untouched. This is configuration
+  persistence, not a solver-state checkpoint; live restoration is unverified.
+- Snapshot validation is all-wheel atomic, restored loads remain paused, and
+  reset/delete clear stale pressure values. Binary tests passed 69 and CLI
+  snapshot tests passed 2 before the final cleanup patch. The final native
+  build passed (`/tmp/gearbox-pressure-save-build.log`).
+- Pending files: isolated `bin/gearbox/src/load.rs`, API `tyres.rs`, CLI
+  `machine.rs` and `spawn.rs`. Finish failure-event handling, live save/reload,
+  documentation and regression validation before committing that feature.
+- User reports no visible tyre deformation. Prioritize checking the actual
+  running instance and visible meshes over further persistence work. Initial
+  process inspection found only original Gearbox running; the isolated tyre
+  build was not open. Engram summary/context tools remain unavailable.
+
+### Recheck reported invisible tyre deformation (2026-09-19)
+
+#### Goal and instructions
+
+- Investigate the user's repeated report that pressure does not visibly
+  inflate/deflate machine tyres. Leave original Gearbox and source assets
+  untouched; keep all viewer changes in the isolated physics worktree.
+
+#### Discoveries
+
+- Initially only the original Gearbox instance was running. The isolated
+  tyre build had been stopped after the prior checks. Launched a separate
+  `molla-tyres` instance; the original remained independently running.
+- Applied pressure advances with simulation time, not slider movement or
+  wall time. Paused target edits cannot animate deformation. Low debug FPS
+  also slows the inflation ramp relative to wall time.
+- Kubota rubber does deform in the isolated build: at 0.5 bar front/rear
+  deflections were 83.7/79.0 mm; at 4.0 bar they were 35.2/36.5 mm.
+  Inspected rendered low/high screenshots, including the changing lower
+  sidewall/contact shape. This is not acceptance for arbitrary asset names.
+
+#### Accomplished
+
+- Isolated commit `2e518c8` identifies instance and actual physics backend
+  in the machine sidebar; shows paused/adjusting/at-target status, applied
+  group pressure, and per-wheel deflection in mm. No solver changes here.
+- Native Molla binary tests pass 70; native build passes. Logs:
+  `/tmp/gearbox-tyre-status-{tests,build}.log`.
+- Evidence: `/tmp/molla-tyres-low-detail.png`,
+  `/tmp/molla-tyres-high-detail.png` (mid-inflation),
+  `/tmp/molla-tyres-high-settled.{png,json}` and
+  `/tmp/molla-tyres-low.json`. The camera changed before the final high
+  screenshot, so the final pair is not a strict same-camera image diff.
+- Reopened only the owned isolated instance on the updated build with a
+  Kubota and low-pressure target. Original Gearbox was not edited/stopped.
+
+#### Next steps
+
+- User's exact affected machine and paused/playing state remain unconfirmed;
+  a clarification question was sent. Do not claim all machines fixed.
+- Resume the uncommitted snapshot work described above independently.
+  Full-goal physics, traction, GPU and performance gates remain open.
+
+#### Relevant files
+
+- Isolated `bin/gearbox/src/host/panes/machine.rs`: live pressure status,
+  instance/backend identity, deflection readout and status regression test.
+- Isolated `specs/TYRE_PRESSURE.md`: explicit isolated launch and clock semantics.
+- Engram save/summary tools are unavailable; this entry preserves the handoff.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
