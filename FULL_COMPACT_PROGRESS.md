@@ -914,6 +914,55 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `/tmp/molla-pressure-paused-final.log`, `/tmp/molla-pressure-check-final.log`,
   `/tmp/molla-pressure-lint-final.log`.
 
+### Isolated Gearbox pressure integration
+
+- All Gearbox changes remain in `robolibs/gearbox-physics`, branch
+  `feat/physics-backend`. The original `robolibs/gearbox` checkout was not
+  edited, merged, switched or pushed. No assets, Mara dependency source or
+  environment/recipe files were changed.
+- Discovered wheels now pass measured width/radius and optional authored
+  `gearbox:value:tyre_*` properties into the pressure model. Reference values
+  are explicitly uncalibrated: 1.8 gauge bar, 0.5–4.0 bar range and 0.2 bar/s
+  transition rate. They are not real-machine inflation recommendations.
+- Backend grouped target edits, per-wheel CLI controls and actual/target
+  readback are wired. The Machine pane's separate Tyres tab has all-wheel and
+  individual sliders. Rejected requests republish accepted targets. Drive and
+  traction calculations use loaded radius and pressure brush grip; field
+  stamping consumes physical patch length/width with legacy fallback.
+- Two UI integration traps were found: collapsed nested controller sections
+  omit response entries, so pressure controls need their own tab response
+  namespace; Mara's typed state map is separate from egui's direct persisted
+  store, so synchronizing the latter does not update displayed sliders.
+  New regression tests cover response routing and the actual Mara memory API.
+- Verification: isolated Gearbox binary suites pass 62/62 with Molla and
+  Rapier, fields library passes 8/8, and native build passes. Logs:
+  `/tmp/gearbox-pressure-controls-{molla,rapier}-tests.log`,
+  `/tmp/gearbox-pressure-fields-final.log` and
+  `/tmp/gearbox-pressure-controls-build.log`.
+- Gearbox's strict no-dependency Clippy lane still fails on eight pre-existing
+  findings outside the new tyre code; no lint suppressions or unrelated fixes
+  were added. See `/tmp/gearbox-pressure-controls-clippy.log`.
+- Live pressure tyres drive the Kubota straight at approximately 2.01 m/s
+  for a 2 m/s zero-turn command. Settled fronts at 1.0 bar deflect about
+  67 mm versus 53 mm at 1.8 bar; rears at 2.4 bar deflect about 47 mm. Total
+  support is about 48.2 kN. Earlier live JSON is in
+  `/tmp/molla-pressure-{before-edit,paused-edit,after-edit}.json`.
+- A captured UI all-wheel edit changed all accepted targets to 2.58427 bar
+  while paused actual pressure stayed 1.8 bar and contact deflection stayed
+  unchanged: `/tmp/molla-pressure-controls-all.{json,png}`. The subsequent
+  per-wheel mixed view exposed stale UI memory; the typed-memory fix is
+  unit-tested, but final live CLI-to-slider verification was interrupted when
+  the owned test instance disappeared. Do not report that last check as passed.
+- Still incomplete: per-axle UI grouping, save/reload state, visible tyre
+  deformation, visual pressure-sweep track comparison, per-cell field friction,
+  nonplanar/camber response, calibrated presets and reference data, pressure
+  extreme slope/towing checks, deterministic replay, timing and GPU parity.
+  Original towing/resume failure and <1 ms acceptance remain unresolved.
+- Relevant isolated files: `physics/backend.rs`, `physics/molla/{mod,wheel,tests}.rs`,
+  `controller.rs`, `controller/wheel_forces.rs`, `services.rs`,
+  `host/panes/{machine,mod}.rs`, `gearbox-fields/src/{contacts,render}.rs` and
+  `docs/MOLLA_BACKEND.md`. The full objective remains active.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
