@@ -982,6 +982,38 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Strict simulation Clippy passes both all-feature and no-default lanes.
 - Evidence: `/tmp/molla-pose-batch-{regression,solvers,check,lint}.log`.
 
+### Live towing: teleport corruption and fictitious axle tyre
+
+- Isolated Gearbox attachment/terrain-lift teleports now use the atomic core
+  batch API. Paused backend changes publish through writeback. Resume compares
+  current transforms with the last publication, applying only actual external
+  edits and preserving untouched velocities. A two-backend ECS regression
+  covers paused publication, ancestor gizmo edits, same-frame teleport/resume
+  and unrelated moving bodies.
+- The repaired batch-only build attached, resumed and detached the real
+  Kubota/Krampe without rejected steps, but towing stalled at about 0.06 m/s.
+  Live readout showed a fictitious front-axle tyre carrying 42 kN and all four
+  actual trailer wheels unloaded. Authored wheel links were already known,
+  but the fallback larger-collider heuristic added the axle too. Wheel pairs
+  with an already known wheel endpoint now skip that inference.
+- The final build's eight-second 2 m/s, 0.4 rad/s command reached about
+  2.05 m/s and 0.44 rad/s, with the trailer following the turn and all four
+  real trailer tyres supporting load. Screenshot/JSON:
+  `/tmp/molla-tow-wheels-driven*`; log:
+  `/tmp/gearbox-tow-wheels-live.log`. No rejected-step/quarantine messages
+  appear. Debug two-machine timing is approximately 7.55 ms/step, not <1 ms.
+- The final-build detach recheck timed out on the control plane; authoritative
+  instance listing later showed no running instances. It is not passed.
+  Earlier batch-only detach evidence remains in `/tmp/molla-tow-batch-detached*`.
+  Rapier live parity, repeated detach, pressure extremes and replay remain.
+- Both isolated backend binary suites pass 64/64, including the axle-selection
+  regression; native build passes. Logs:
+  `/tmp/gearbox-tow-batch-{molla,rapier}-tests.log` and
+  `/tmp/gearbox-tow-batch-build.log`. Only the isolated Gearbox checkout changed.
+- The user explicitly wants tyre pressure directly in the sidebar and liked
+  those controls. Next UI change: move pressure pods into the Machine sidebar
+  before collapsible controller sections, retaining stable response indices.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
