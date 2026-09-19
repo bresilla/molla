@@ -50,6 +50,8 @@ pub enum BodyKind {
 pub struct BodyDesc {
     pub params: BodyParams,
     pub kind: BodyKind,
+    pub enabled: bool,
+    pub ccd_enabled: bool,
     pub velocity: SpatialVector,
     pub linear_damping: Real,
     pub angular_damping: Real,
@@ -62,6 +64,8 @@ impl Default for BodyDesc {
         Self {
             params: BodyParams::new(),
             kind: BodyKind::Dynamic,
+            enabled: true,
+            ccd_enabled: false,
             velocity: SpatialVector::ZERO,
             linear_damping: 0.0,
             angular_damping: 0.0,
@@ -213,6 +217,21 @@ pub struct JointDesc {
     pub axis: Vec3,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JointSettings {
+    pub enabled: bool,
+    pub contacts_enabled: bool,
+}
+
+impl Default for JointSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            contacts_enabled: false,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct Description {
     next_id: u64,
@@ -220,6 +239,7 @@ struct Description {
     colliders: BTreeMap<ColliderHandle, ColliderDesc>,
     collider_stamps: BTreeMap<ColliderHandle, SceneStamp>,
     joints: BTreeMap<JointHandle, JointDesc>,
+    joint_settings: BTreeMap<JointHandle, JointSettings>,
 }
 
 impl Description {
@@ -242,6 +262,64 @@ struct Snapshot {
     shape_colliders: Vec<ColliderHandle>,
     joints: BTreeMap<JointHandle, JointId>,
     roots: BTreeMap<BodyHandle, JointId>,
+    drives: BTreeMap<DriveOwner, DriveState>,
+    valid_poses: BTreeMap<BodyHandle, Transform>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+enum DriveOwner {
+    Body(BodyHandle),
+    Joint(JointHandle),
+}
+
+#[derive(Clone)]
+struct DriveState {
+    mode: Vec<u32>,
+    position: Vec<Real>,
+    velocity: Vec<Real>,
+    kp: Vec<Real>,
+    kd: Vec<Real>,
+    force: Vec<Real>,
+}
+
+impl DriveState {
+    fn capture(snapshot: &Snapshot, joint: JointId) -> Result<Self> {
+        let offsets = snapshot.model.joint_dof_offset.host()?;
+        let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
+        let clean = |values: &[Real]| {
+            values[range.clone()]
+                .iter()
+                .map(|&v| if v.is_finite() { v } else { 0.0 })
+                .collect()
+        };
+        Ok(Self {
+            mode: snapshot.control.joint_target_mode.host()?[range.clone()].to_vec(),
+            position: clean(snapshot.control.joint_target_pos.host()?),
+            velocity: clean(snapshot.control.joint_target_vel.host()?),
+            kp: clean(snapshot.control.joint_target_kp.host()?),
+            kd: clean(snapshot.control.joint_target_kd.host()?),
+            force: clean(snapshot.control.joint_force.host()?),
+        })
+    }
+
+    fn restore(&self, model: &Model, control: &mut Control, joint: JointId) -> Result<()> {
+        let offsets = model.joint_dof_offset.host()?;
+        let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
+        if range.len() != self.mode.len() {
+            return Ok(());
+        }
+        control.joint_target_mode.host_mut()?[range.clone()].copy_from_slice(&self.mode);
+        for (destination, source) in [
+            (&mut control.joint_target_pos, &self.position),
+            (&mut control.joint_target_vel, &self.velocity),
+            (&mut control.joint_target_kp, &self.kp),
+            (&mut control.joint_target_kd, &self.kd),
+            (&mut control.joint_force, &self.force),
+        ] {
+            destination.host_mut()?[range.clone()].copy_from_slice(source);
+        }
+        Ok(())
+    }
 }
 
 /// CPU-owned rigid scene. Successful edits invalidate dense indices, not handles.
@@ -298,6 +376,88 @@ impl RigidScene {
         self.description.bodies.get(&id)
     }
 
+    pub fn set_body_enabled(&mut self, id: BodyHandle, enabled: bool) -> Result<()> {
+        self.edit(|d| {
+            d.bodies
+                .get_mut(&id)
+                .ok_or_else(|| missing("body"))?
+                .enabled = enabled;
+            Ok(())
+        })
+    }
+
+    /// Store the CCD request; CPU penalty-contact stepping currently uses discrete collision.
+    pub fn set_body_ccd(&mut self, id: BodyHandle, enabled: bool) -> Result<()> {
+        self.description
+            .bodies
+            .get_mut(&id)
+            .ok_or_else(|| missing("body"))?
+            .ccd_enabled = enabled;
+        Ok(())
+    }
+
+    /// Disable bodies with invalid kinematics, forces or incident generalized state/control.
+    pub fn quarantine_non_finite(&mut self) -> Result<Vec<BodyHandle>> {
+        let mut invalid = BTreeSet::new();
+        let state = self.state();
+        for (&id, index) in &self.snapshot.bodies {
+            let i = index.index();
+            if validate_pose(state.body_q.host()?[i]).is_err()
+                || !finite_spatial(state.body_qd.host()?[i])
+                || !finite_spatial(state.body_f.host()?[i])
+                || !finite_spatial(self.control().body_external_f.host()?[i])
+            {
+                invalid.insert(id);
+            }
+        }
+        let model = self.model();
+        let coordinates = model.joint_coord_offset.host()?;
+        let dofs = model.joint_dof_offset.host()?;
+        for joint in 0..model.joint_count {
+            let q = coordinates[joint] as usize..coordinates[joint + 1] as usize;
+            let v = dofs[joint] as usize..dofs[joint + 1] as usize;
+            let values = &state.joint_q.host()?[q];
+            let rotation = match model.joint_type.host()?[joint] {
+                x if x == JointType::Ball as u32 => Some(&values[..4]),
+                x if x == JointType::Free as u32 || x == JointType::D6 as u32 => {
+                    Some(&values[3..7])
+                }
+                _ => None,
+            };
+            let bad_coordinates = values.iter().any(|v| !v.is_finite())
+                || rotation.is_some_and(|q| {
+                    let norm: Real = q.iter().map(|v| v * v).sum();
+                    !norm.is_finite() || norm <= 1e-24
+                });
+            let bad_rates = [
+                state.joint_qd.host()?,
+                self.control().joint_target_pos.host()?,
+                self.control().joint_target_vel.host()?,
+                self.control().joint_target_kp.host()?,
+                self.control().joint_target_kd.host()?,
+                self.control().joint_force.host()?,
+            ]
+            .iter()
+            .any(|values| values[v.clone()].iter().any(|v| !v.is_finite()));
+            if bad_coordinates || bad_rates {
+                let body = BodyId::from_index(model.joint_child.host()?[joint] as usize);
+                if let Some(id) = self.body_handle(body) {
+                    invalid.insert(id);
+                }
+            }
+        }
+        if invalid.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.edit(|d| {
+            for id in &invalid {
+                d.bodies.get_mut(id).ok_or_else(|| missing("body"))?.enabled = false;
+            }
+            Ok(())
+        })?;
+        Ok(invalid.into_iter().collect())
+    }
+
     pub fn body_pose(&self, id: BodyHandle) -> Result<Transform> {
         let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
         Ok(self.state().body_q.host()?[i])
@@ -344,7 +504,10 @@ impl RigidScene {
         let mut moved = BTreeSet::from([id]);
         let mut pending = vec![id];
         while let Some(parent) = pending.pop() {
-            for (_, joint) in self.joints().filter(|(_, j)| j.parent == Some(parent)) {
+            for (_, joint) in self
+                .joints()
+                .filter(|(id, j)| j.parent == Some(parent) && self.snapshot.joints.contains_key(id))
+            {
                 if moved.insert(joint.child) {
                     pending.push(joint.child);
                 }
@@ -375,6 +538,24 @@ impl RigidScene {
     }
 
     fn commit_body_state(&mut self, next: State) -> Result<()> {
+        self.commit_step(next)?;
+        self.snapshot.stamp = SceneStamp(Arc::new(()));
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Commit finite rigid state while retaining the scene identity and last valid poses.
+    pub fn commit_step(&mut self, next: State) -> Result<()> {
+        if next.body_q.host()?.len() != self.model().body_count
+            || next.body_qd.host()?.len() != self.model().body_count
+            || next.body_f.host()?.len() != self.model().body_count
+            || next.joint_q.host()?.len() != self.model().joint_coord_total
+            || next.joint_qd.host()?.len() != self.model().joint_dof_total
+        {
+            return Err(Error::Solver(
+                "rigid state dimensions do not match scene".into(),
+            ));
+        }
         for &pose in next.body_q.host()? {
             validate_pose(pose)?;
         }
@@ -382,7 +563,8 @@ impl RigidScene {
             .body_qd
             .host()?
             .iter()
-            .any(|v| !v.linear.is_finite() || !v.angular.is_finite())
+            .chain(next.body_f.host()?)
+            .any(|v| !finite_spatial(*v))
             || next
                 .joint_q
                 .host()?
@@ -392,9 +574,11 @@ impl RigidScene {
         {
             return Err(Error::Build("body edit produced non-finite state".into()));
         }
+        let poses = next.body_q.host()?;
+        for (&id, index) in &self.snapshot.bodies {
+            self.snapshot.valid_poses.insert(id, poses[index.index()]);
+        }
         self.snapshot.state = next;
-        self.snapshot.stamp = SceneStamp(Arc::new(()));
-        self.revision += 1;
         Ok(())
     }
 
@@ -483,6 +667,14 @@ impl RigidScene {
         self.description.colliders.get(&id)
     }
 
+    pub fn collider_is_enabled(&self, id: ColliderHandle) -> Result<bool> {
+        let collider = self.collider(id).ok_or_else(|| missing("collider"))?;
+        Ok(collider.enabled
+            && collider
+                .parent
+                .is_none_or(|id| self.body(id).is_some_and(|b| b.enabled)))
+    }
+
     /// Identity of collider geometry/material authoring, preserved by pose-only edits.
     pub fn collider_stamp(&self, id: ColliderHandle) -> Option<SceneStamp> {
         self.description.collider_stamps.get(&id).cloned()
@@ -539,8 +731,40 @@ impl RigidScene {
         self.snapshot.shape_colliders.get(index.index()).copied()
     }
 
+    /// Dense index of an active joint; suspended authored joints return `None`.
     pub fn joint_index(&self, id: JointHandle) -> Option<JointId> {
         self.snapshot.joints.get(&id).copied()
+    }
+
+    pub fn joint(&self, id: JointHandle) -> Option<&JointDesc> {
+        self.description.joints.get(&id)
+    }
+
+    pub fn joint_settings(&self, id: JointHandle) -> Option<JointSettings> {
+        self.description.joint_settings.get(&id).copied()
+    }
+
+    pub fn set_joint_settings(&mut self, id: JointHandle, settings: JointSettings) -> Result<()> {
+        self.edit(|d| {
+            *d.joint_settings
+                .get_mut(&id)
+                .ok_or_else(|| missing("joint"))? = settings;
+            Ok(())
+        })
+    }
+
+    pub fn set_joint_frames(
+        &mut self,
+        id: JointHandle,
+        parent: Transform,
+        child: Transform,
+    ) -> Result<()> {
+        self.edit(|d| {
+            let joint = d.joints.get_mut(&id).ok_or_else(|| missing("joint"))?;
+            joint.frame_parent = parent;
+            joint.frame_child = child;
+            Ok(())
+        })
     }
 
     pub fn bodies(&self) -> impl Iterator<Item = (BodyHandle, &BodyDesc)> {
@@ -581,6 +805,7 @@ impl RigidScene {
                 .retain(|id, _| d.colliders.contains_key(id));
             d.joints
                 .retain(|_, j| j.parent != Some(id) && j.child != id);
+            d.joint_settings.retain(|id, _| d.joints.contains_key(id));
             Ok(())
         })
     }
@@ -674,6 +899,7 @@ impl RigidScene {
         self.edit(|d| {
             let id = JointHandle(d.allocate()?);
             d.joints.insert(id, desc);
+            d.joint_settings.insert(id, JointSettings::default());
             Ok(id)
         })
     }
@@ -681,6 +907,7 @@ impl RigidScene {
     pub fn remove_joint(&mut self, id: JointHandle) -> Result<()> {
         self.edit(|d| {
             d.joints.remove(&id).ok_or_else(|| missing("joint"))?;
+            d.joint_settings.remove(&id);
             Ok(())
         })
     }
@@ -709,21 +936,35 @@ fn missing(kind: &str) -> Error {
     Error::Build(format!("unknown runtime {kind} handle"))
 }
 
+fn finite_spatial(value: SpatialVector) -> bool {
+    value.linear.is_finite() && value.angular.is_finite()
+}
+
 fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Snapshot> {
     let mut builder = ModelBuilder::new();
     builder.set_world_gravity(WorldId(0), gravity);
     let mut bodies = BTreeMap::new();
+    let mut poses = BTreeMap::new();
     for (&id, desc) in &d.bodies {
         validate_body(desc)?;
         let mut params = desc.params.clone();
         if let Some(previous) = old.and_then(|s| s.bodies.get(&id).map(|i| (s, i))) {
             params.pose = previous.0.state.body_q.host()?[previous.1.index()];
+            if !desc.enabled && validate_pose(params.pose).is_err() {
+                params.pose = previous.0.valid_poses[&id];
+            }
         }
-        params.flags = match desc.kind {
-            BodyKind::Dynamic => BodyFlags::DYNAMIC,
-            BodyKind::Kinematic => BodyFlags::KINEMATIC,
-            BodyKind::Fixed => BodyFlags::FIXED,
+        validate_pose(params.pose)?;
+        params.flags = if !desc.enabled {
+            BodyFlags::KINEMATIC
+        } else {
+            match desc.kind {
+                BodyKind::Dynamic => BodyFlags::DYNAMIC,
+                BodyKind::Kinematic => BodyFlags::KINEMATIC,
+                BodyKind::Fixed => BodyFlags::FIXED,
+            }
         };
+        poses.insert(id, params.pose);
         bodies.insert(id, builder.add_body(params));
     }
     let mut colliders = BTreeMap::new();
@@ -738,7 +979,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
                 "invalid runtime friction or restitution".into(),
             ));
         }
-        let flags = if desc.enabled {
+        let flags = if desc.enabled && desc.parent.is_none_or(|p| d.bodies[&p].enabled) {
             ShapeFlags::COLLIDES
         } else {
             0
@@ -752,18 +993,51 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         }
         colliders.insert(id, shapes);
     }
-    let mut incoming = BTreeMap::new();
-    let mut children: BTreeMap<BodyHandle, Vec<JointHandle>> = BTreeMap::new();
+    let mut authored_incoming = BTreeMap::new();
     for (&id, joint) in &d.joints {
         dense_body(&bodies, joint.parent)?;
         dense_body(&bodies, Some(joint.child))?;
         validate_pose(joint.frame_parent)?;
         validate_pose(joint.frame_child)?;
-        if joint.parent == Some(joint.child) || incoming.insert(joint.child, id).is_some() {
+        if matches!(joint.kind, JointType::Distance | JointType::Cable) {
+            return Err(Error::Build("runtime joint kind is not supported".into()));
+        }
+        if matches!(joint.kind, JointType::Revolute | JointType::Prismatic)
+            && (!joint.axis.length().is_finite() || joint.axis.length() < 1e-9)
+        {
+            return Err(Error::Build(
+                "runtime joint axis must be finite and nonzero".into(),
+            ));
+        }
+        if joint.parent == Some(joint.child) || authored_incoming.insert(joint.child, id).is_some()
+        {
             return Err(Error::Build(
                 "runtime joints require a forest with one parent per body".into(),
             ));
         }
+    }
+    for &body in d.bodies.keys() {
+        let mut visited = BTreeSet::new();
+        let mut cursor = Some(body);
+        while let Some(body) = cursor {
+            if !visited.insert(body) {
+                return Err(Error::Build("runtime joint cycle".into()));
+            }
+            cursor = authored_incoming
+                .get(&body)
+                .and_then(|id| d.joints[id].parent);
+        }
+    }
+    let mut incoming = BTreeMap::new();
+    let mut children: BTreeMap<BodyHandle, Vec<JointHandle>> = BTreeMap::new();
+    for (&id, joint) in &d.joints {
+        if !d.joint_settings[&id].enabled
+            || !d.bodies[&joint.child].enabled
+            || joint.parent.is_some_and(|p| !d.bodies[&p].enabled)
+        {
+            continue;
+        }
+        incoming.insert(joint.child, id);
         if d.bodies[&joint.child].kind != BodyKind::Dynamic {
             return Err(Error::Build(
                 "an immovable body must be an articulation root".into(),
@@ -793,12 +1067,8 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
                 let j = add_joint(&mut builder, &bodies, &d.joints[&joint])?;
                 joints.insert(joint, j);
             } else {
-                let pose = old
-                    .and_then(|s| s.bodies.get(&body).map(|i| (s, i)))
-                    .map(|(s, i)| s.state.body_q.host().map(|q| q[i.index()]))
-                    .transpose()?
-                    .unwrap_or(desc.params.pose);
-                let j = if desc.kind == BodyKind::Dynamic {
+                let pose = poses[&body];
+                let j = if desc.enabled && desc.kind == BodyKind::Dynamic {
                     builder.add_joint_free(
                         BodyId::NONE,
                         bodies[&body],
@@ -823,9 +1093,26 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     if visited.len() != d.bodies.len() {
         return Err(Error::Build("runtime joint cycle".into()));
     }
+    for (&id, joint) in &d.joints {
+        if !d.joint_settings[&id].contacts_enabled
+            && let Some(parent) = joint.parent
+        {
+            let shapes_for = |body| {
+                d.colliders
+                    .iter()
+                    .filter(move |(_, c)| c.parent == Some(body))
+                    .flat_map(|(id, _)| colliders[id].iter().copied())
+            };
+            for a in shapes_for(parent) {
+                for b in shapes_for(joint.child) {
+                    builder.add_shape_collision_exclusion(a, b);
+                }
+            }
+        }
+    }
     let mut model = builder.build()?;
     for (&id, index) in &bodies {
-        if d.bodies[&id].kind == BodyKind::Dynamic {
+        if d.bodies[&id].enabled && d.bodies[&id].kind == BodyKind::Dynamic {
             let p = &d.bodies[&id].params;
             model.body_inv_inertia.host_mut()?[index.index()] = MassProperties {
                 mass: p.mass,
@@ -845,6 +1132,17 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             state.body_f.host_mut()?[i] = s.state.body_f.host()?[index.index()];
             control.body_external_f.host_mut()?[i] =
                 s.control.body_external_f.host()?[index.index()];
+            if !d.bodies[&id].enabled {
+                for value in [
+                    &mut state.body_qd.host_mut()?[i],
+                    &mut state.body_f.host_mut()?[i],
+                    &mut control.body_external_f.host_mut()?[i],
+                ] {
+                    if !finite_spatial(*value) {
+                        *value = SpatialVector::ZERO;
+                    }
+                }
+            }
             let shift = state.body_q.host()?[i].rotation
                 * (model.body_com.host()?[i] - s.model.body_com.host()?[index.index()]);
             if shift != Vec3::ZERO {
@@ -869,7 +1167,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         }
     }
     for (&body, &joint) in &roots {
-        if d.bodies[&body].kind == BodyKind::Dynamic {
+        if d.bodies[&body].enabled && d.bodies[&body].kind == BodyKind::Dynamic {
             if let Some((s, &previous)) = old.and_then(|s| s.roots.get(&body).map(|j| (s, j)))
                 && s.model.joint_type.host()?[previous.index()] == JointType::Free as u32
             {
@@ -886,6 +1184,37 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             seed_joint(&model, &mut state, joint)?;
         }
     }
+    let mut drives = old.map(|s| s.drives.clone()).unwrap_or_default();
+    if let Some(old) = old {
+        for (owner, joint) in old
+            .roots
+            .iter()
+            .map(|(&id, &j)| (DriveOwner::Body(id), j))
+            .chain(
+                old.joints
+                    .iter()
+                    .map(|(&id, &j)| (DriveOwner::Joint(id), j)),
+            )
+        {
+            let drive = DriveState::capture(old, joint)?;
+            if !drive.mode.is_empty() {
+                drives.insert(owner, drive);
+            }
+        }
+    }
+    drives.retain(|owner, _| match owner {
+        DriveOwner::Body(id) => d.bodies.contains_key(id),
+        DriveOwner::Joint(id) => d.joints.contains_key(id),
+    });
+    for (owner, joint) in roots
+        .iter()
+        .map(|(&id, &j)| (DriveOwner::Body(id), j))
+        .chain(joints.iter().map(|(&id, &j)| (DriveOwner::Joint(id), j)))
+    {
+        if let Some(drive) = drives.get(&owner) {
+            drive.restore(&model, &mut control, joint)?;
+        }
+    }
     Ok(Snapshot {
         stamp: SceneStamp(Arc::new(())),
         model,
@@ -896,6 +1225,8 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         shape_colliders,
         joints,
         roots,
+        drives,
+        valid_poses: poses,
     })
 }
 

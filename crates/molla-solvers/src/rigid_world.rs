@@ -32,6 +32,7 @@ pub struct RigidWorld {
     contacts: Contacts,
     contact_revision: Option<SceneStamp>,
     queries: Mutex<CpuRaycaster>,
+    quarantined: Vec<BodyHandle>,
 }
 
 impl RigidWorld {
@@ -49,11 +50,17 @@ impl RigidWorld {
             contacts: Contacts::with_capacity(64),
             contact_revision: None,
             queries: Mutex::new(CpuRaycaster::default()),
+            quarantined: Vec::new(),
         })
     }
 
     pub fn step(&mut self, dt: Real) -> Result<()> {
         self.step_filtered(dt, |_, _| false)
+    }
+
+    /// Bodies isolated before the latest step attempt with a valid time increment.
+    pub fn quarantined_bodies(&self) -> &[BodyHandle] {
+        &self.quarantined
     }
 
     pub fn cast_ray(
@@ -128,7 +135,7 @@ impl RigidWorld {
         if !impulse.linear.is_finite() || !impulse.angular.is_finite() {
             return Err(Error::Build("non-finite body impulse".into()));
         }
-        if desc.kind != molla_sim::runtime::BodyKind::Dynamic {
+        if !desc.enabled || desc.kind != molla_sim::runtime::BodyKind::Dynamic {
             return Ok(());
         }
         let i = self
@@ -138,7 +145,7 @@ impl RigidWorld {
             .index();
         let mut next = self.scene.state().clone_host()?;
         crate::rigid_impulse::apply_impulse(self.scene.model(), &mut next, i, impulse)?;
-        *self.scene.state_mut() = next;
+        self.scene.commit_step(next)?;
         Ok(())
     }
 
@@ -152,7 +159,7 @@ impl RigidWorld {
         self.apply_body_impulse(id, SpatialVector::new(impulse, torque))
     }
 
-    /// Advance the scene atomically; `true` excludes all contacts for that body pair.
+    /// Quarantine invalid input, then advance atomically; `true` excludes that body pair.
     pub fn step_filtered(
         &mut self,
         dt: Real,
@@ -170,6 +177,10 @@ impl RigidWorld {
         mut forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
         self.contact_revision = None;
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(Error::Solver("step dt must be positive and finite".into()));
+        }
+        self.quarantined = self.scene.quarantine_non_finite()?;
         let scene = &self.scene;
         let mut next = scene.model().state()?;
         self.solver.step_with_collision_and_forces(
@@ -192,7 +203,7 @@ impl RigidWorld {
                 let masses = model.body_mass.host()?;
                 let inertias = model.body_inertia.host()?;
                 for (id, desc) in scene.bodies() {
-                    if desc.kind != molla_sim::runtime::BodyKind::Dynamic {
+                    if !desc.enabled || desc.kind != molla_sim::runtime::BodyKind::Dynamic {
                         continue;
                     }
                     let i = scene
@@ -217,26 +228,7 @@ impl RigidWorld {
                 forces(scene, state, sub_dt, wrenches)
             },
         )?;
-        if next
-            .body_q
-            .host()?
-            .iter()
-            .any(|p| !p.position.is_finite() || !p.rotation.is_finite())
-            || next
-                .body_qd
-                .host()?
-                .iter()
-                .any(|v| !v.linear.is_finite() || !v.angular.is_finite())
-            || next
-                .joint_q
-                .host()?
-                .iter()
-                .chain(next.joint_qd.host()?)
-                .any(|x| !x.is_finite())
-        {
-            return Err(Error::Solver("rigid step produced non-finite state".into()));
-        }
-        *self.scene.state_mut() = next;
+        self.scene.commit_step(next)?;
         self.contact_revision = Some(self.scene.stamp());
         Ok(())
     }

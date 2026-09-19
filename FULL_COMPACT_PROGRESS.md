@@ -22,6 +22,35 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   immovable roots get fixed world anchors. Dynamic/fixed root transitions keep
   the current pose; fixing zeroes velocity. Changing a non-root to fixed is
   currently rejected and still needs a re-rooting implementation.
+- Body enable/disable is now separate from body kind. Disabled bodies lower
+  to immovable, noncolliding placeholders while retaining physical mass, pose,
+  pending velocity and authored collider flags. Incident joints are suspended,
+  not deleted; healthy neighboring bodies become independent roots and continue
+  simulating. Re-enable restores the authored connections with coordinates
+  reseeded from current kinematics. Pose edits traverse active connections only.
+- `RigidWorld` quarantines invalid input before collision detection, including
+  invalid poses, non-finite body velocities/wrenches, bad generalized rates/
+  controls and degenerate joint quaternions. The invalid bodies are disabled,
+  bad wrenches/velocities are zeroed, and bad poses use the latest committed
+  valid pose rather than teleporting back to spawn. Healthy bodies still step.
+  `quarantined_bodies` exposes handles isolated before the latest valid-dt step
+  attempt. Invalid dt does not quarantine; quarantine precedes the subsequent
+  atomic time advance, so a later solver/callback failure does not undo isolation.
+- `RigidScene::commit_step` validates rigid state dimensions/finite values and
+  retains last-valid poses without changing scene identity. Manual body edits
+  additionally change the scene stamp. Disabled-body CCD requests are stored
+  alongside ordinary requests; CCD remains an explicitly permitted no-op.
+- Runtime `JointSettings` separates enabled and connected-body collision flags
+  from topology. Joints default to enabled with connected contacts disabled,
+  matching Gearbox's descriptor. Collision exclusions cover every shape piece
+  and remain authored even while the joint is disabled, matching Rapier's
+  narrow-phase behavior. Removing the joint removes its exclusions.
+- Joint local frames are readable/writable while active or suspended. Dormant
+  joint/free-root motor controls survive body toggles, joint toggles and unrelated
+  rebuilds; non-finite control values are sanitized during quarantine. Logical
+  joint handles remain readable while `joint_index` returns `None` for suspended
+  joints. Authored cycles, multiple parents and invalid axes/frames remain
+  rejected even when the affected bodies/joints are disabled.
 - Runtime collider replacement supports ball, cuboid, Y capsule, endpoint
   capsule, Y cylinder, round cylinder, convex hull, triangle mesh and native
   rectangular heightfield, with local pose, friction, restitution and tags.
@@ -199,10 +228,10 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.2: live mutation | Foundation implemented and tested; re-rooting and complete mutable descriptors remain. |
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
-| 2: bodies | Body reads, subtree teleports, reduced-coordinate velocity edits, no-step collider queries, per-body damping, persistent additional mass, explicit recomputation, force/reset and articulated impulse APIs implemented. Enabled/quarantine, sleep/wake, CCD option, non-root fixed transitions and Gearbox accessor wiring remain. Continuous-force singular-inertia parity needs verification. |
+| 2: bodies | Body reads, subtree teleports, reduced-coordinate velocity edits, no-step collider queries, per-body damping, persistent additional mass, explicit recomputation, force/reset, articulated impulses, enabled/quarantine and stored CCD option implemented. Sleep/wake, non-root fixed transitions and Gearbox accessor wiring remain. Continuous-force singular-inertia parity needs verification. |
 | 3: colliders | All requested shape kinds have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Views, pose access, AABBs, materials, friction rules, two-way masks, enabled/sensor flags and density/total-mass editing implemented. Explicit body mass recomputation implemented. Gearbox consumption still requires integration tests. |
-| 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
-| 5: world | Gravity access, CPU world step with configurable substeps, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
+| 4: joints | Stable-ID insert/remove, directed-tree merge/split, readable/writable frames, enabled/suspended state and connected-body collision flags implemented. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, softness, re-rooting and full body-pair queries remain. |
+| 5: world | Gravity access, CPU step with configurable substeps, pre-collision invalid-input quarantine/readout, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
 | 6.1-6.3: tyres | Per-substep transient force-element hook implemented. Wheel force elements, ground masking, scene terrain adapter with per-cell friction and wheel output readback remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
@@ -380,12 +409,34 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - The original objective remains incomplete. No tractor-scale performance,
   driving, hitch, Kubota-controller, slope, or full Gearbox acceptance is claimed.
 
+### Enable / quarantine / joint lifecycle verification
+
+- Thirteen `body_enable` tests verify disabled mass/motion retention, collision
+  and ray exclusion without changing authored flags, middle-body graph splitting,
+  healthy-neighbor motion, dormant control preservation, invalid-input quarantine
+  and readout, corrupt motor/zero-quaternion handling, inactive-graph validation,
+  disabled pose/velocity/CCD edits, explicit joint toggles, all-collider contact
+  flags, active/suspended frame edits, last-committed-pose recovery and atomic
+  state/dt validation. Tests exercise actual Featherstone steps and CPU queries.
+- Selected regression lanes passed: sim 30 tests/doctests, geometry 151 tests,
+  and solvers 115 tests (296 total). Workspace `make check-all` and strict scoped
+  Clippy with all features and no default features pass. These remain library
+  gates, not Gearbox/live-tractor acceptance.
+- Main files: `crates/molla-sim/src/runtime.rs` (enabled state, dormant controls,
+  last-valid poses, joint settings/frames and transactional commits),
+  `crates/molla-geometry/src/raycast_cpu.rs` (effective collider enablement),
+  `crates/molla-solvers/src/rigid_world.rs` (quarantine ordering/readout), and new
+  `crates/molla-solvers/tests/body_enable.rs`.
+- No Gearbox, dependency, environment, Makefile or specification edits. Engram
+  tools remain unavailable; progress is recorded here. Full objective remains
+  active, including all original named integration and acceptance gates.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Implement body enabled/quarantine, sleep/wake and CCD surface; verify
-   continuous-force singular-inertia dynamics and benchmark queries with tyres.
+2. Implement sleep/wake/islands; verify continuous-force singular-inertia
+   dynamics and benchmark queries with tyres.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.

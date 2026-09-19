@@ -115,7 +115,7 @@ fn cast_prepared(
     let mut best: Option<RayHit> = None;
     let mut limit = max_distance;
     for (id, desc) in scene.colliders() {
-        if !desc.enabled || !include(id) {
+        if !scene.collider_is_enabled(id)? || !include(id) {
             continue;
         }
         let pose = scene.collider_world_pose(id)?;
