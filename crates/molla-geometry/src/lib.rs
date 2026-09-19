@@ -24,6 +24,7 @@ pub mod marching_cubes;
 mod marching_cubes_gpu;
 pub mod mass_properties;
 pub mod mesh_bvh;
+mod mesh_cache;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast_gpu;
 pub mod mpr;

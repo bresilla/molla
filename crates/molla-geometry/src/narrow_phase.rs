@@ -12,6 +12,7 @@ use crate::broad_phase::ShapePair;
 use crate::epa::epa_with_hulls;
 use crate::gjk::{GjkResult, gjk_with_hulls};
 use crate::mesh_bvh::MeshBvh;
+use crate::mesh_cache::MeshBvhCache;
 use crate::shape_world::shape_world_transform;
 use crate::support::support_ellipsoid;
 
@@ -53,6 +54,18 @@ pub fn pair_contact(
     _default_friction: Real,
     default_restitution: Real,
     out: &mut Vec<ContactManifold>,
+) {
+    pair_contact_cached(model, state, pair, _default_friction, default_restitution, out, None);
+}
+
+pub(crate) fn pair_contact_cached(
+    model: &Model,
+    state: &State,
+    pair: ShapePair,
+    _default_friction: Real,
+    default_restitution: Real,
+    out: &mut Vec<ContactManifold>,
+    mesh_cache: Option<&mut MeshBvhCache>,
 ) {
     let geom_a = model.shape_geometry[pair.a as usize];
     let geom_b = model.shape_geometry[pair.b as usize];
@@ -309,10 +322,10 @@ pub fn pair_contact(
         // these would route e.g. Cone-vs-Heightfield into GJK with a
         // broken Heightfield support function.)
         (ShapeGeometry::TriMesh { mesh_id }, _) => {
-            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out);
+            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out, mesh_cache);
         }
         (_, ShapeGeometry::TriMesh { mesh_id }) => {
-            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out);
+            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out, mesh_cache);
         }
         (ShapeGeometry::Heightfield { field_id }, _) => {
             heightfield_pair(model, field_id, &xf_a, geom_b, &xf_b, pair, false, out);
@@ -1453,6 +1466,7 @@ fn trimesh_pair(
     pair: ShapePair,
     flip_output: bool,
     out: &mut Vec<ContactManifold>,
+    cache: Option<&mut MeshBvhCache>,
 ) {
     let mesh = match model.meshes.get(mesh_id as usize) {
         Some(m) => m,
@@ -1500,13 +1514,16 @@ fn trimesh_pair(
         }
         return;
     }
-    // BVH-accelerated triangle iteration: compute the other shape's world AABB,
-    // transform it into the mesh's local frame, then query a geometry-side BVH
-    // built from raw `TriMesh` data. A future `GeometryCache` can persist this
-    // across queries; the important boundary is that sim data no longer owns it.
+    // Query candidate triangles in the mesh's local frame.
     let (other_min, other_max) = shape_world_aabb_quick(other_geom, other_xf);
     let local_aabb = transform_aabb_to_mesh_local(other_min, other_max, mesh_xf);
-    let bvh = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
+    let temporary;
+    let bvh = if let Some(cache) = cache {
+        cache.get(mesh_id as usize, mesh)
+    } else {
+        temporary = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
+        &temporary
+    };
     let mut candidates = Vec::new();
     bvh.triangles_overlapping_aabb(local_aabb.0, local_aabb.1, &mut candidates);
     for &tri_idx in &candidates {

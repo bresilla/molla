@@ -9,7 +9,7 @@ use molla_sim::{Contacts, Model, ShapeGeometry, State};
 use molla_storage::BufferUsage;
 
 use super::broad_phase::{BroadPhase, ShapePair, brute_force_pairs};
-use super::narrow_phase::{ContactManifold, pair_contact};
+use super::narrow_phase::{ContactManifold, pair_contact, pair_contact_cached};
 use super::shape_world::shape_world_transform;
 
 /// Selectable narrow-phase backend used by [`CollisionPipeline`].
@@ -79,6 +79,7 @@ pub struct CollisionPipeline {
     broad: BroadPhase,
     pair_buf: Vec<ShapePair>,
     manifolds: Vec<ContactManifold>,
+    mesh_cache: crate::mesh_cache::MeshBvhCache,
     /// Narrow-phase algorithm used for each pair. Defaults to
     /// [`NarrowPhaseBackend::Gjk`] so existing behaviour is unchanged.
     narrow_phase_backend: NarrowPhaseBackend,
@@ -163,6 +164,11 @@ impl CollisionPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Number of triangle-mesh BVHs built by this pipeline since construction.
+    pub fn mesh_bvh_build_count(&self) -> usize {
+        self.mesh_cache.builds()
     }
 
     /// Include sensor geometry for overlap queries or solvers that suppress sensor forces.
@@ -428,6 +434,7 @@ impl CollisionPipeline {
         contacts.clear();
         self.last_cpu_np_calls = 0;
         self.last_broad_phase_pairs = 0;
+        self.mesh_cache.begin_query(model.meshes.len());
         if model.shape_count < 2 {
             // No pairs possible; still write an empty body-contact
             // CSR so `body_contact_offsets` / `body_contact_indices`
@@ -537,13 +544,14 @@ impl CollisionPipeline {
             return;
         }
 
-        pair_contact(
+        pair_contact_cached(
             model,
             state,
             pair,
             model.default_friction,
             model.default_restitution,
             &mut self.manifolds,
+            Some(&mut self.mesh_cache),
         );
         self.last_cpu_np_calls += 1;
     }
@@ -607,13 +615,14 @@ impl CollisionPipeline {
         // Triangle / ConvexHull / Ellipsoid).
         for &i in &cpu_pairs {
             let pair = self.pair_buf[i];
-            pair_contact(
+            pair_contact_cached(
                 model,
                 state,
                 pair,
                 model.default_friction,
                 model.default_restitution,
                 &mut self.manifolds,
+                Some(&mut self.mesh_cache),
             );
             self.last_cpu_np_calls += 1;
         }
@@ -701,13 +710,14 @@ impl CollisionPipeline {
                     continue;
                 }
                 // FALLBACK / NaN / non-positive depth: re-run on CPU.
-                pair_contact(
+                pair_contact_cached(
                     model,
                     state,
                     pair,
                     model.default_friction,
                     model.default_restitution,
                     &mut self.manifolds,
+                    Some(&mut self.mesh_cache),
                 );
                 self.last_cpu_np_calls += 1;
                 continue;
@@ -778,13 +788,14 @@ impl CollisionPipeline {
         // sphere/box fast paths). Tracks the call counter.
         for &i in &cpu_indices {
             let pair = self.pair_buf[i];
-            pair_contact(
+            pair_contact_cached(
                 model,
                 state,
                 pair,
                 model.default_friction,
                 model.default_restitution,
                 &mut self.manifolds,
+                Some(&mut self.mesh_cache),
             );
             self.last_cpu_np_calls += 1;
         }
@@ -882,13 +893,14 @@ impl CollisionPipeline {
                 || res.status == crate::EPA_STATUS_FALLBACK
                 || res.status == crate::EPA_STATUS_NONE
             {
-                pair_contact(
+                pair_contact_cached(
                     model,
                     state,
                     pair,
                     model.default_friction,
                     model.default_restitution,
                     &mut self.manifolds,
+                    Some(&mut self.mesh_cache),
                 );
                 self.last_cpu_np_calls += 1;
                 continue;

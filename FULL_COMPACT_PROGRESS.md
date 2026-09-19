@@ -1778,6 +1778,60 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   APP_TARGET='-p molla-solvers --release --test rigid_performance --
   --include-ignored --nocapture --test-threads=1'` (join onto one command line).
 
+### Triangle-mesh collision cache checkpoint (2026-09-20)
+
+#### Goal
+
+- Continue `FULL_COMPACT.md`, prioritizing performance against Gearbox/Rapier.
+
+#### Instructions
+
+- Keep original Gearbox untouched; use only the isolated physics worktree.
+- Preserve tyre behavior and existing performance thresholds.
+
+#### Discoveries
+
+- Stateful collision rebuilt raw triangle-mesh BVHs for each pair/query.
+- Raw mesh data is publicly mutable; pointer identity cannot safely detect
+  same-length vertex/index edits or replacement models.
+
+#### Accomplished
+
+- Added geometry-owned pipeline BVH reuse with exact source-data comparison
+  once per queried mesh per collision call, shared across shape pairs.
+- Covered positive contacts, both mesh pair orientations, CPU GJK/MPR,
+  pose/material changes, same-length vertex/index edits, resizing, model
+  replacement, empty scenes, exclusions, and GPU-selected CPU mesh fallbacks.
+- Initial release grid benchmark improved from 238–256 to 31.8 microseconds
+  per call. The 200-microsecond budget remains unchanged. Added an assertion
+  that 1,000 repeated collision calls build the mesh BVH exactly once.
+  Standalone release repeat: 28.9 microseconds/call, one BVH build.
+- Native release geometry/solver suite: 557 passed, 0 failed, 2 ignored across
+  111 binaries. Native GPU mesh-fallback test: 1 passed, covering MPR, full
+  narrow phase and GJK prefilter selection. Isolated Gearbox Molla binary
+  tests: 78 passed, 1 ignored. Logs are in `/tmp/molla-bvh-cache-full-tests.log`,
+  `/tmp/molla-bvh-cache-gpu-tests.log`, and
+  `/tmp/gearbox-bvh-cache-molla-tests.log`.
+- Isolated Gearbox Rapier selection also passes 78 binary tests, one ignored:
+  `/tmp/gearbox-bvh-cache-rapier-tests.log`.
+
+#### Next Steps
+
+- Commit the reviewed cache changes and rebuild isolated Gearbox for live
+  real-machine measurements.
+- Source comparison and broad-phase mesh-bound calculation still scan raw
+  geometry. This is not a claim of constant-time terrain handling.
+- Rebuild and benchmark real-machine/fleet scenes; synthetic improvements
+  and flat-scene FPS do not establish general Rapier performance parity.
+- Continue all outstanding full-plan acceptance requirements.
+
+#### Relevant Files
+
+- `crates/molla-geometry/src/mesh_cache.rs` — persistent source/BVH cache.
+- `crates/molla-geometry/src/narrow_phase.rs`, `src/pipeline.rs` — cached dispatch.
+- `crates/molla-geometry/tests/collision_mesh_cache.rs` — lifecycle/parity tests.
+- `crates/molla-solvers/tests/mesh_bvh_perf.rs` — existing timing gate/build count.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

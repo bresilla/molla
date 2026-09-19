@@ -84,6 +84,7 @@ fn bvh_accelerates_sphere_on_grid_mesh() {
         pipeline.collide(&model, &state, &mut contacts).unwrap();
     }
     let dt_us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
+    assert_eq!(pipeline.mesh_bvh_build_count(), 1);
     eprintln!(
         "32x32 mesh + 1 sphere narrow-phase: {dt_us:.1} µs / call ({} contacts)",
         contacts.count
