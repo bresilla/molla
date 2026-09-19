@@ -1014,6 +1014,25 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   those controls. Next UI change: move pressure pods into the Machine sidebar
   before collapsible controller sections, retaining stable response indices.
 
+### Sidebar placement and missing visible deformation
+
+- At the user's explicit request, pressure controls now appear directly in
+  the isolated Machine sidebar before variants/controllers, not a separate
+  tab. Top-level pod offsets stay independent of collapsed controller blocks.
+  Screenshot inspected: `/tmp/molla-sidebar-pressure.png`. Binary tests pass
+  64/64 and native build passes; `/tmp/gearbox-sidebar-pressure-{tests,build}.log`.
+- The user then reported that tyres do not visibly change with pressure.
+  This is a real missing integration: the physical brush supports pressure-
+  dependent deflection, but the imported rendered meshes remain rigid. The
+  subsequent sidebar interaction recheck could not run because its owned
+  instance had disappeared; do not report it as passed.
+- Next work is visible contact flattening/sidewall deformation driven by the
+  same loaded radius and deflection, without scaling entire rigid wheel/rim
+  assemblies or changing shared imported meshes across instances. Kubota
+  separates `radial_tyre`, `swept_traction_tread`, `mould_line` meshes from
+  hubs and rims, allowing targeted rubber geometry updates. Assets remain
+  unchanged; implement in Molla's reusable tyre layer and isolated viewer.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
