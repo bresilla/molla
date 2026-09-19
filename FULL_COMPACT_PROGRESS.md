@@ -1618,6 +1618,85 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   fields, enforcement gaps and acceptance gates.
 - Molla `FULL_COMPACT.md` — consulted only, remains untracked and unchanged.
 
+### Performance parity work (2026-09-20, in progress)
+
+#### Goal and instructions
+
+- User requires Molla performance comparable to original Gearbox/Rapier;
+  optimise actual frame latency/responsiveness, not only solver timings.
+- Original checkout and its active instance must remain untouched. Benchmark
+  a pinned copy of its existing executable in a separate named instance.
+
+#### Initial discoveries
+
+- Current Kubota scene runs around 2.1 FPS. Per-frame rubber processing costs
+  roughly 85–95 ms (75–85 ms deformation); physics is about 1.4 ms per step.
+  Those do not explain the entire roughly 450 ms frame, so capture a system
+  trace before attributing all cost to the solver.
+- Kernel perf sampling is blocked (`perf_event_paranoid=4`); do not change
+  system permissions. Use the existing `oslo make build-profile` Chrome-trace
+  lane instead. Engram tools remain unavailable.
+
+#### Accomplished / next steps
+
+- Pinned a read-only copy of the original Gearbox executable in the isolated
+  worktree's `target/perf-artifacts/gearbox-original`; SHA256
+  `f311de5b3e1e5bca81185ade3134cd67064592f78f0306c82550f5012d273959`.
+  Original checkout and its independently running instance remain untouched.
+- At 1280x800, flat ground and one Kubota, CPU rubber rendering measured about
+  8 FPS versus about 40 FPS for the original executable. A Chrome system trace
+  measured 88.64 ms/frame in tyre processing plus 19.96 ms in mesh allocation.
+- Added a viewer-only WGSL contact-envelope path in isolated Gearbox. Meshes
+  remain resident, with 320-byte per-mesh storage buffers carrying current and
+  previous deformation frames. Persistent buffers avoid rebuilding full PBR
+  materials on pressure/pose changes. CPU fallback remains available through
+  `GEARBOX_TYRE_RENDER=cpu`; no physics rate or tyre feature was disabled.
+- Per-frame ancestor lookup memoization avoids classifying unrelated meshes;
+  wheel/link lookup now resolves the machine's body paths once per frame rather
+  than repeatedly scanning every USD prim for each wheel/link combination.
+- Intermediate GPU trace: tyre update 1.23 ms/frame versus 88.64 ms before;
+  full PBR material recreation still cost 2.21 + 1.39 ms/frame. This motivated
+  the persistent-buffer refinement. Its unchanged-view rolling FPS samples were
+  41.59 and 42.48 versus about 40–44 for original Gearbox. Exclude the later
+  69 FPS reading after camera/window interaction. This is a single-scene
+  checkpoint, not a general parity result.
+- 78 binary tests pass, including bounds, source mesh preservation, pressure
+  changes in both directions, material modification/reassignment/restoration,
+  stable buffer/material handles and previous-frame tracking. A Vulkan test
+  executed 124,416 production WGSL deformation cases; maximum CPU/GPU position
+  difference was 0.0000001562 m. Final targeted tests passed with both Molla and
+  Rapier selection (78 each), the Vulkan test passed again, and native
+  `oslo make build` passed. Low/high-pressure screenshots were inspected on the
+  final storage-buffer path: front deflection 82.61 -> 35.70 mm and rear
+  78.54 -> 37.17 mm for 0.5 -> 4 bar. Driving reached the requested 2 m/s.
+  Close-up pressure/driving runs were approximately 35–38 FPS.
+- Native `oslo make test` is blocked compiling existing
+  `bin/gearbox/tests/oxbo_transforms.rs`: removed `openusd::Stage` and
+  `usd_schema` APIs. Do not report the full workspace suite as passing.
+- Isolated Gearbox commit `3aca1a4` (`perf(tyres): keep deformation on the GPU`)
+  contains the implementation, regression tests and detailed reproduction/
+  caveats in `specs/TYRE_PERFORMANCE.md`. It is unsigned and not pushed/merged.
+  The `molla-fast` instance was left running for user inspection; latest native
+  binary also includes the small CPU reference-position memory saving.
+- Next: controlled multi-machine/terrain benchmarks and solver profiling.
+  Molla physics remains approximately 1.5–1.6 ms/step versus 0.35–0.46 ms for
+  original Rapier. Background user work and original-renderer changes prevent
+  laboratory-clean comparisons. General performance parity remains open.
+
+#### Relevant Files
+
+- Isolated Gearbox `viewer/tyre_mesh.rs`, `viewer/tyre_gpu.rs`,
+  `viewer/tyre_gpu.wgsl`, `viewer/tyre_deform.wgsl`, `viewer/tyre_gpu_test.rs`,
+  `controller/wheel_forces.rs`, `specs/TYRE_PRESSURE.md`,
+  `specs/TYRE_PERFORMANCE.md`.
+- `/tmp/molla-before-trace.json`, `/tmp/molla-gpu-final-trace.json`,
+  `/tmp/perf-rapier-matched.log`, `/tmp/perf-molla-buffers.log`,
+  `/tmp/gearbox-gpu-parity.log`, `/tmp/tyre-buffer-tests.log`,
+  `/tmp/gearbox-perf-workspace-tests.log`, `/tmp/molla-fast.log`,
+  `/tmp/tyre-buffer-low.png`, `/tmp/tyre-buffer-high.png`,
+  `/tmp/tyre-final-molla-tests.log`, `/tmp/tyre-final-rapier-tests.log`,
+  `/tmp/tyre-final-gpu-parity.log`, `/tmp/tyre-final-native-build.log`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
