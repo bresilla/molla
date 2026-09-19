@@ -357,7 +357,33 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         state_out: &mut State,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+    ) -> Result<()> {
+        self.step_with_collision_and_forces(
+            model,
+            state_in,
+            control,
+            pipeline,
+            contacts,
+            dt,
+            state_out,
+            excluded,
+            |_, _, _, _| Ok(()),
+        )
+    }
+
+    /// Refresh collision and transient COM wrenches every substep without accumulating them.
+    pub fn step_with_collision_and_forces(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        pipeline: &mut crate::geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        state_out: &mut State,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if !dt.is_finite() || dt <= 0.0 {
@@ -376,9 +402,23 @@ impl FeatherstoneSolver {
         eval_fk(model, &mut scratch)?;
         eval_body_velocities(model, &mut scratch)?;
         let mut samples = Vec::new();
+        let persistent = state_in.body_f.host()?.to_vec();
+        let mut applied = persistent.clone();
         for substep in 0..n {
             pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)?;
+            applied.copy_from_slice(&persistent);
+            forces(model, &scratch, sub_dt, &mut applied)?;
+            if applied
+                .iter()
+                .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
+            {
+                return Err(crate::core::Error::Solver(
+                    "non-finite transient body force".into(),
+                ));
+            }
+            scratch.body_f.host_mut()?.copy_from_slice(&applied);
             self.step_inner(model, &scratch, control, contacts, sub_dt, state_out)?;
+            state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
             if substep + 1 < n {
                 std::mem::swap(&mut scratch, state_out);

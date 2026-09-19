@@ -27,7 +27,7 @@
 use crate::core::{Error, Result};
 use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};
 use crate::math::{Mat3, Real, SpatialMatrix6, SpatialVector, Vec3};
-use crate::sim::{JointType, Model, State};
+use crate::sim::{BodyFlags, JointType, Model, State};
 
 /// Joint-space mass matrix `M(q)` for the requested articulation.
 ///
@@ -52,6 +52,7 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     // immediately after a Featherstone step (which writes `body_q`
     // via FK in pass 4) or after explicit `eval_fk(model, state)`.
     let body_q = state.body_q.host()?;
+    let origin = body_q[model.joint_child.host()?[j_begin] as usize].position;
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
@@ -115,7 +116,13 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
         } else {
             body_q[parent_body as usize]
         };
-        let xpw = parent_world.compose(&joint_x_p[j]);
+        let mut xpw = parent_world.compose(&joint_x_p[j]);
+        if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+            let c = model.joint_coord_offset.host()?[j] as usize;
+            let q = state.joint_q.host()?;
+            xpw.position += xpw.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
+        }
+        xpw.position -= origin;
 
         let mut dof_active = [false; MAX_JOINT_DOFS];
         let width = build_motion_subspace(
@@ -129,6 +136,11 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
             &mut dof_active,
         );
         dof_width[k] = width;
+        if model.joint_enabled.host()?[j] == 0
+            || model.body_flags.host()?[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0
+        {
+            s_cols_per_joint[k].fill(SpatialVector::ZERO);
+        }
         local_dof_total += width;
 
         // Body spatial inertia at world origin (in `[linear; angular]`
@@ -139,7 +151,7 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
         // a sign flip in the off-diagonal blocks.
         let child = joint_child[j] as usize;
         let cw = body_q[child];
-        let com_world = cw.position + cw.rotation * body_com[child];
+        let com_world = (cw.position - origin) + cw.rotation * body_com[child];
         let r = Mat3::from_quat(cw.rotation);
         let i_world = r * body_inertia[child] * r.transpose();
         body_inertia_world[k] =

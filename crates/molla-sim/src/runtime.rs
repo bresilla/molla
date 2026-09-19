@@ -51,6 +51,9 @@ pub struct BodyDesc {
     pub params: BodyParams,
     pub kind: BodyKind,
     pub velocity: SpatialVector,
+    pub linear_damping: Real,
+    pub angular_damping: Real,
+    pub additional_mass: Option<MassProperties>,
     pub user_tag: u64,
 }
 
@@ -60,6 +63,9 @@ impl Default for BodyDesc {
             params: BodyParams::new(),
             kind: BodyKind::Dynamic,
             velocity: SpatialVector::ZERO,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            additional_mass: None,
             user_tag: 0,
         }
     }
@@ -288,6 +294,180 @@ impl RigidScene {
         self.snapshot.bodies.get(&id).copied()
     }
 
+    pub fn body(&self, id: BodyHandle) -> Option<&BodyDesc> {
+        self.description.bodies.get(&id)
+    }
+
+    pub fn body_pose(&self, id: BodyHandle) -> Result<Transform> {
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        Ok(self.state().body_q.host()?[i])
+    }
+
+    pub fn body_velocity(&self, id: BodyHandle) -> Result<SpatialVector> {
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        Ok(self.state().body_qd.host()?[i])
+    }
+
+    /// Set COM velocity projected onto the body's joint freedoms; descendants follow.
+    pub fn set_body_velocity(&mut self, id: BodyHandle, velocity: SpatialVector) -> Result<()> {
+        if !velocity.linear.is_finite() || !velocity.angular.is_finite() {
+            return Err(Error::Build("non-finite body velocity".into()));
+        }
+        let kind = self.body(id).ok_or_else(|| missing("body"))?.kind;
+        if kind == BodyKind::Fixed {
+            return Ok(());
+        }
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        let mut next = self.state().clone_host()?;
+        next.body_qd.host_mut()?[i] = velocity;
+        if kind == BodyKind::Dynamic {
+            let joint = self
+                .model()
+                .joint_child
+                .host()?
+                .iter()
+                .position(|&child| child as usize == i)
+                .ok_or_else(|| missing("body joint"))?;
+            let coordinates = next.joint_q.host()?.to_vec();
+            seed_joint(self.model(), &mut next, JointId::from_index(joint))?;
+            next.joint_q.host_mut()?.copy_from_slice(&coordinates);
+        }
+        crate::eval_body_velocities(self.model(), &mut next)?;
+        self.commit_body_state(next)
+    }
+
+    /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
+    pub fn set_body_pose(&mut self, id: BodyHandle, pose: Transform) -> Result<()> {
+        validate_pose(pose)?;
+        let kind = self.body(id).ok_or_else(|| missing("body"))?.kind;
+        let delta = pose.compose(&self.body_pose(id)?.inverse());
+        let mut moved = BTreeSet::from([id]);
+        let mut pending = vec![id];
+        while let Some(parent) = pending.pop() {
+            for (_, joint) in self.joints().filter(|(_, j)| j.parent == Some(parent)) {
+                if moved.insert(joint.child) {
+                    pending.push(joint.child);
+                }
+            }
+        }
+        let mut next = self.state().clone_host()?;
+        for body in moved {
+            let i = self
+                .body_index(body)
+                .ok_or_else(|| missing("body"))?
+                .index();
+            next.body_q.host_mut()?[i] = delta.compose(&next.body_q.host()?[i]);
+        }
+        if kind == BodyKind::Dynamic {
+            let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+            let joint = self
+                .model()
+                .joint_child
+                .host()?
+                .iter()
+                .position(|&child| child as usize == i)
+                .ok_or_else(|| missing("body joint"))?;
+            seed_joint(self.model(), &mut next, JointId::from_index(joint))?;
+        }
+        crate::eval_fk(self.model(), &mut next)?;
+        crate::eval_body_velocities(self.model(), &mut next)?;
+        self.commit_body_state(next)
+    }
+
+    fn commit_body_state(&mut self, next: State) -> Result<()> {
+        for &pose in next.body_q.host()? {
+            validate_pose(pose)?;
+        }
+        if next
+            .body_qd
+            .host()?
+            .iter()
+            .any(|v| !v.linear.is_finite() || !v.angular.is_finite())
+            || next
+                .joint_q
+                .host()?
+                .iter()
+                .chain(next.joint_qd.host()?)
+                .any(|v| !v.is_finite())
+        {
+            return Err(Error::Build("body edit produced non-finite state".into()));
+        }
+        self.snapshot.state = next;
+        self.snapshot.stamp = SceneStamp(Arc::new(()));
+        self.revision += 1;
+        Ok(())
+    }
+
+    pub fn body_world_com(&self, id: BodyHandle) -> Result<Vec3> {
+        let pose = self.body_pose(id)?;
+        Ok(pose.position + pose.rotation * self.body_mass_properties(id)?.local_com)
+    }
+
+    pub fn body_velocity_at_point(&self, id: BodyHandle, point: Vec3) -> Result<Vec3> {
+        let velocity = self.body_velocity(id)?;
+        Ok(velocity.linear + velocity.angular.cross(point - self.body_world_com(id)?))
+    }
+
+    pub fn body_colliders(&self, id: BodyHandle) -> impl Iterator<Item = ColliderHandle> + '_ {
+        self.colliders()
+            .filter(move |(_, c)| c.parent == Some(id))
+            .map(|(id, _)| id)
+    }
+
+    pub fn set_body_damping(&mut self, id: BodyHandle, linear: Real, angular: Real) -> Result<()> {
+        if !linear.is_finite() || linear < 0.0 || !angular.is_finite() || angular < 0.0 {
+            return Err(Error::Build("invalid body damping".into()));
+        }
+        let body = self
+            .description
+            .bodies
+            .get_mut(&id)
+            .ok_or_else(|| missing("body"))?;
+        body.linear_damping = linear;
+        body.angular_damping = angular;
+        Ok(())
+    }
+
+    /// Add a world-space force and torque about the current COM.
+    pub fn add_body_wrench(&mut self, id: BodyHandle, wrench: SpatialVector) -> Result<()> {
+        if !wrench.linear.is_finite() || !wrench.angular.is_finite() {
+            return Err(Error::Build("non-finite body wrench".into()));
+        }
+        let body = self.body(id).ok_or_else(|| missing("body"))?;
+        if body.kind != BodyKind::Dynamic {
+            return Ok(());
+        }
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        let current = self.state().body_f.host()?[i];
+        let next = SpatialVector::new(
+            current.linear + wrench.linear,
+            current.angular + wrench.angular,
+        );
+        if !next.linear.is_finite() || !next.angular.is_finite() {
+            return Err(Error::Build("body wrench overflow".into()));
+        }
+        self.state_mut().body_f.host_mut()?[i] = next;
+        Ok(())
+    }
+
+    pub fn add_body_force_at_point(
+        &mut self,
+        id: BodyHandle,
+        force: Vec3,
+        point: Vec3,
+    ) -> Result<()> {
+        self.add_body_wrench(
+            id,
+            SpatialVector::new(force, (point - self.body_world_com(id)?).cross(force)),
+        )
+    }
+
+    pub fn reset_body_forces(&mut self, id: BodyHandle) -> Result<()> {
+        let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        self.state_mut().body_f.host_mut()?[i] = SpatialVector::ZERO;
+        Ok(())
+    }
+
     /// The sole dense shape index; multi-piece colliders have no single index.
     pub fn collider_index(&self, id: ColliderHandle) -> Option<ShapeId> {
         self.collider_indices(id)
@@ -378,7 +558,13 @@ impl RigidScene {
         self.description.joints.iter().map(|(&id, desc)| (id, desc))
     }
 
-    pub fn insert_body(&mut self, desc: BodyDesc) -> Result<BodyHandle> {
+    pub fn insert_body(&mut self, mut desc: BodyDesc) -> Result<BodyHandle> {
+        if let Some(mass) = desc.additional_mass {
+            mass.validate()?;
+            desc.params.mass = mass.mass;
+            desc.params.com = mass.local_com;
+            desc.params.inertia = mass.inertia;
+        }
         self.edit(|d| {
             let id = BodyHandle(d.allocate()?);
             d.bodies.insert(id, desc);
@@ -423,6 +609,25 @@ impl RigidScene {
             params.mass = mass.mass;
             params.com = mass.local_com;
             params.inertia = mass.inertia;
+            Ok(())
+        })
+    }
+
+    /// Commit a recomputed total and its independently replaceable additional component.
+    pub fn set_body_mass_components(
+        &mut self,
+        id: BodyHandle,
+        total: MassProperties,
+        additional: MassProperties,
+    ) -> Result<()> {
+        total.validate()?;
+        additional.validate()?;
+        self.edit(|d| {
+            let body = d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?;
+            body.params.mass = total.mass;
+            body.params.com = total.local_com;
+            body.params.inertia = total.inertia;
+            body.additional_mass = Some(additional);
             Ok(())
         })
     }
@@ -719,6 +924,16 @@ fn validate_body(desc: &BodyDesc) -> Result<()> {
         inertia: desc.params.inertia,
     }
     .validate()?;
+    if let Some(additional) = desc.additional_mass {
+        additional.validate()?;
+    }
+    if !desc.linear_damping.is_finite()
+        || desc.linear_damping < 0.0
+        || !desc.angular_damping.is_finite()
+        || desc.angular_damping < 0.0
+    {
+        return Err(Error::Build("invalid body damping".into()));
+    }
     if desc.params.world != WorldId(0)
         || !desc.params.mass.is_finite()
         || desc.params.mass < 0.0

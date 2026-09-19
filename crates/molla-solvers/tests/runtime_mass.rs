@@ -14,7 +14,7 @@ fn recomputed_mass_controls_featherstone_force_response() {
     let collider = world.scene.insert_collider(sphere).unwrap();
     assert_eq!(world.collider_mass_properties(collider).unwrap().mass, 2.0);
     world
-        .recompute_body_mass(
+        .set_body_additional_mass(
             body,
             MassProperties {
                 mass: 4.0,
@@ -35,7 +35,7 @@ fn recomputed_mass_controls_featherstone_force_response() {
         .unwrap();
     assert_eq!(world.scene.collider_stamp(collider).unwrap(), stamp);
     world
-        .recompute_body_mass(body, MassProperties::ZERO)
+        .set_body_additional_mass(body, MassProperties::ZERO)
         .unwrap();
     world.step(0.01).unwrap();
     let velocity = world.scene.state().body_qd.host().unwrap()[0];

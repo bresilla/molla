@@ -20,7 +20,7 @@
 use crate::core::{Error, Result};
 use crate::featherstone::{MAX_JOINT_DOFS, build_motion_subspace};
 use crate::math::{Real, SpatialVector, Vec3};
-use crate::sim::{JointType, Model, State};
+use crate::sim::{BodyFlags, JointType, Model, State};
 
 /// `6 × N` Jacobian for a body point. Returns a flat row-major
 /// `6 · N` Vec where row `r ∈ [0,5]` and column `k ∈ [0,N)` give
@@ -97,20 +97,28 @@ pub fn jacobian(
             continue;
         }
         let j = j_begin + k;
+        if model.joint_enabled.host()?[j] == 0
+            || model.body_flags.host()?[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0
+        {
+            continue;
+        }
         let parent_body = joint_parent[j];
         let parent_world = if parent_body < 0 {
             crate::math::Transform::IDENTITY
         } else {
             body_q[parent_body as usize]
         };
-        let xpw = parent_world.compose(&joint_x_p[j]);
+        let mut xpw = parent_world.compose(&joint_x_p[j]);
         let jt = decode_joint_type(joint_type[j])?;
+        if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+            let c = model.joint_coord_offset.host()?[j] as usize;
+            let q = state.joint_q.host()?;
+            xpw.position += xpw.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
+        }
+        xpw.position -= target_world;
         let dof_local = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
 
-        // Per-DOF motion subspace at the WORLD ORIGIN (shared with
-        // Featherstone / CRBA / RNEA), then reference-shifted to the
-        // target point: v(target) = v(origin) + ω × target. Locked D6
-        // columns are ZERO vectors and write zero columns.
+        // Motion subspace about the target point; locked columns remain zero.
         let mut s_cols = [SpatialVector::ZERO; MAX_JOINT_DOFS];
         let mut dof_active = [false; MAX_JOINT_DOFS];
         let width = build_motion_subspace(
@@ -125,7 +133,7 @@ pub fn jacobian(
         );
         for a in 0..width {
             let s = s_cols[a];
-            let lin = s.linear + s.angular.cross(target_world);
+            let lin = s.linear;
             let col_idx = dof_local + a;
             j_cols[0 * dof_total + col_idx] = lin.x;
             j_cols[1 * dof_total + col_idx] = lin.y;

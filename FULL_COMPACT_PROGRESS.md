@@ -65,17 +65,44 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Runtime dynamic inverse tensors remain finite for singular principal axes;
   fixed/kinematic inverse tensors remain zero. This does not yet establish
   Featherstone/Rapier torque-response parity for singular-inertia bodies.
-- `RigidWorld::recompute_body_mass(body, additional)` replaces the total with
-  enabled collider contributions plus the supplied additional component.
-  Repeated calls do not accumulate previous totals. Recompute is explicit:
-  shape/density/pose edits alone do not change body mass, and the caller still
-  owns/persists the additional component. Complete BodyMut/adapter lifecycle
-  semantics remain pending. Existing explicitly authored body totals retain
-  their behavior until recomputation is requested.
+- Body descriptors now persist optional additional mass. Creation with an
+  additional component uses it as the initial total before colliders exist;
+  legacy descriptors without it retain their explicitly authored totals.
+  `RigidWorld::set_body_additional_mass` replaces the stored component and
+  recomputes atomically. `recompute_body_mass(body)` reuses the stored component,
+  adding enabled collider contributions without accumulating previous totals.
+  Recompute remains explicit after shape/density/pose edits; the Gearbox adapter
+  must invoke it at the appropriate mutation boundaries.
 - Runtime total-mass edits rebase COM velocity and both applied-wrench buffers
   to preserve the body-origin velocity field and world force application
   points. Joint coordinates/rates/controls remain unchanged. Invalid mass,
   inertia or rebasing overflow rejects the entire edit transactionally.
+- Runtime body reads expose pose, COM velocity, world COM, velocity at a point,
+  descriptor/tag and collider handles. Pose edits teleport a body's subtree;
+  pose/velocity edits are projected onto any incoming joint's freedoms and
+  reconstruct descendant kinematics immediately. Free roots and prescribed
+  fixed/kinematic roots retain their requested poses, including across rebuilds.
+  Collider queries see teleports without stepping and retain prepared geometry.
+- World COM wrenches, forces at points and force reset are runtime operations.
+  Articulated impulses use CRBA and point Jacobians to update generalized rates,
+  then reconstruct all affected COM velocities. They use the whole articulation,
+  not independent-body inverse masses, and do not integrate poses or persist as
+  forces. Point impulses use the current world COM. Fixed/kinematic bodies ignore
+  impulses. State changes reject non-finite input/output atomically.
+- CRBA and body Jacobians now use the translated angular pivot for free/D6/
+  distance joints and omit disabled/immovable motion columns. CRBA references
+  positions to the articulation root; Jacobians reference the target point.
+  This avoids subtracting large origin-based inertia terms for translated rigs.
+  Singular impulse systems explicitly constrain zero-inertia angular directions;
+  a generalized-coordinate pseudoinverse alone was incorrect with an offset COM.
+  Continuous-force Featherstone singular-inertia parity still needs verification.
+- `step_with_forces` / `step_with_collision_and_forces` evaluate transient body
+  force elements on every fresh substep state. The scene argument supplies stable
+  handles/descriptors; the separate state argument supplies current kinematics.
+  Transient wrenches are restored to the persistent input after each substep,
+  preventing accumulation. Callback failure leaves `RigidWorld` state unchanged.
+  Per-body linear/angular damping uses this force path with bounded substep
+  coefficients. Tyre/soil adapters still need to be connected to the hook.
 - `molla_geometry::collider_query` supplies primitive/convex/other shape views.
   Convex views have compact hull vertices and sorted true edges, excluding
   coplanar triangulation diagonals. `RigidWorld` exposes the shape-view and
@@ -172,11 +199,11 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.2: live mutation | Foundation implemented and tested; re-rooting and complete mutable descriptors remain. |
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
-| 2: bodies | Runtime total-mass edits and explicit collider-plus-additional recomputation implemented with full tensors, COM velocity/wrench rebasing and atomic rejection. Complete body read/write API, enabled/quarantine, damping, sleep/wake, persistent additional-mass lifecycle, force/impulse helpers, CCD option and no-step synchronization remain. Singular-inertia solver parity needs verification. |
+| 2: bodies | Body reads, subtree teleports, reduced-coordinate velocity edits, no-step collider queries, per-body damping, persistent additional mass, explicit recomputation, force/reset and articulated impulse APIs implemented. Enabled/quarantine, sleep/wake, CCD option, non-root fixed transitions and Gearbox accessor wiring remain. Continuous-force singular-inertia parity needs verification. |
 | 3: colliders | All requested shape kinds have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Views, pose access, AABBs, materials, friction rules, two-way masks, enabled/sensor flags and density/total-mass editing implemented. Explicit body mass recomputation implemented. Gearbox consumption still requires integration tests. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
 | 5: world | Gravity access, CPU world step with configurable substeps, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
-| 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
+| 6.1-6.3: tyres | Per-substep transient force-element hook implemented. Wheel force elements, ground masking, scene terrain adapter with per-cell friction and wheel output readback remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
 | 8.5: Gearbox implementation | Pending `MollaBackend`, backend selection arm and `GEARBOX_PHYSICS=molla`. |
@@ -330,12 +357,35 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `crates/molla-geometry/src/mass_properties.rs`, sim/solvers
   `tests/runtime_mass.rs`, and geometry `tests/collider_mass.rs`.
 
+### Body mutation / impulse / force-element verification
+
+- Twelve `body_mutation` tests cover full rotated tensors and translated roots,
+  offset-COM impulses/forces, fixed-link total mass, anchored revolute impulses,
+  rotated singular inertia with offset COM, persistent additional-mass replacement,
+  fresh per-substep force callbacks, nonaccumulation, damping, callback failure,
+  invalid-edit atomicity, subtree teleport/ray queries, generalized-rate velocity
+  edits, and prescribed fixed/kinematic motion.
+- The singular-inertia oracle initially failed when COM was offset: a bare mass
+  pseudoinverse mixed the zero-inertia direction into permitted angular response.
+  Projecting into the permitted angular subspace before solving fixes the oracle,
+  including a later linear impulse with no unintended angular velocity.
+- Regression lanes passed: sim 30 tests/doctests, geometry 151 tests, and solvers
+  102 tests (283 total). The solver selection now includes CRBA, RNEA, multi-DOF
+  oracle and Franka IK/Jacobian regressions. Workspace `make check-all`, strict
+  scoped Clippy with all features and no default features, and diff checks pass.
+- New files: `crates/molla-solvers/src/rigid_impulse.rs` and
+  `crates/molla-solvers/tests/body_mutation.rs`. Runtime body descriptors, geometry
+  mass helpers, CRBA/Jacobian helpers and the Featherstone/world force hooks were
+  updated. No Gearbox, dependency, Makefile, environment or specification edits.
+- The original objective remains incomplete. No tractor-scale performance,
+  driving, hitch, Kubota-controller, slope, or full Gearbox acceptance is claimed.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Complete body editing, persistent additional-mass lifecycle and force/impulse
-   APIs; verify singular-inertia dynamics and benchmark queries with tyres.
+2. Implement body enabled/quarantine, sleep/wake and CCD surface; verify
+   continuous-force singular-inertia dynamics and benchmark queries with tyres.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.

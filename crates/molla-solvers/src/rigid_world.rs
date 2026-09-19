@@ -9,7 +9,7 @@ use molla_geometry::{
     Aabb, CollisionPipeline,
     collider_query::{self, ColliderShapeView},
 };
-use molla_math::{Real, Transform, Vec3};
+use molla_math::{Mat3, Real, SpatialVector, Transform, Vec3};
 use molla_sim::Contacts;
 use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
 
@@ -108,25 +108,71 @@ impl RigidWorld {
         molla_geometry::mass_properties::collider_mass_properties(collider)
     }
 
-    /// Replace the total with collider contributions plus the supplied additional component.
-    pub fn recompute_body_mass(
+    pub fn set_body_additional_mass(
         &mut self,
         id: BodyHandle,
         additional: molla_sim::MassProperties,
     ) -> Result<()> {
-        molla_geometry::mass_properties::recompute_body_mass(&mut self.scene, id, additional)
+        molla_geometry::mass_properties::set_body_additional_mass(&mut self.scene, id, additional)
+    }
+
+    pub fn recompute_body_mass(&mut self, id: BodyHandle) -> Result<()> {
+        molla_geometry::mass_properties::recompute_body_mass(&mut self.scene, id)
+    }
+
+    pub fn apply_body_impulse(&mut self, id: BodyHandle, impulse: SpatialVector) -> Result<()> {
+        let desc = self
+            .scene
+            .body(id)
+            .ok_or_else(|| Error::Build("unknown runtime body handle".into()))?;
+        if !impulse.linear.is_finite() || !impulse.angular.is_finite() {
+            return Err(Error::Build("non-finite body impulse".into()));
+        }
+        if desc.kind != molla_sim::runtime::BodyKind::Dynamic {
+            return Ok(());
+        }
+        let i = self
+            .scene
+            .body_index(id)
+            .ok_or_else(|| Error::Build("unknown runtime body handle".into()))?
+            .index();
+        let mut next = self.scene.state().clone_host()?;
+        crate::rigid_impulse::apply_impulse(self.scene.model(), &mut next, i, impulse)?;
+        *self.scene.state_mut() = next;
+        Ok(())
+    }
+
+    pub fn apply_body_impulse_at_point(
+        &mut self,
+        id: BodyHandle,
+        impulse: Vec3,
+        point: Vec3,
+    ) -> Result<()> {
+        let torque = (point - self.scene.body_world_com(id)?).cross(impulse);
+        self.apply_body_impulse(id, SpatialVector::new(impulse, torque))
     }
 
     /// Advance the scene atomically; `true` excludes all contacts for that body pair.
     pub fn step_filtered(
         &mut self,
         dt: Real,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+    ) -> Result<()> {
+        self.step_with_forces(dt, excluded, |_, _, _, _| Ok(()))
+    }
+
+    /// Evaluate additional transient force elements before each Featherstone substep.
+    /// The scene supplies handles/descriptors; the state argument supplies substep kinematics.
+    pub fn step_with_forces(
+        &mut self,
+        dt: Real,
         mut excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+        mut forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
         self.contact_revision = None;
         let scene = &self.scene;
         let mut next = scene.model().state()?;
-        self.solver.step_with_collision(
+        self.solver.step_with_collision_and_forces(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -139,6 +185,36 @@ impl RigidWorld {
                     a.and_then(|i| scene.body_handle(i)),
                     b.and_then(|i| scene.body_handle(i)),
                 )
+            },
+            |model, state, sub_dt, wrenches| {
+                let poses = state.body_q.host()?;
+                let velocities = state.body_qd.host()?;
+                let masses = model.body_mass.host()?;
+                let inertias = model.body_inertia.host()?;
+                for (id, desc) in scene.bodies() {
+                    if desc.kind != molla_sim::runtime::BodyKind::Dynamic {
+                        continue;
+                    }
+                    let i = scene
+                        .body_index(id)
+                        .ok_or_else(|| Error::Solver("missing damping body".into()))?
+                        .index();
+                    let coefficient = |d: Real| {
+                        if d > 0.0 {
+                            1.0 / (1.0 / d + sub_dt)
+                        } else {
+                            0.0
+                        }
+                    };
+                    let linear = coefficient(desc.linear_damping);
+                    let angular = coefficient(desc.angular_damping);
+                    let rotation = Mat3::from_quat(poses[i].rotation);
+                    wrenches[i].linear -= velocities[i].linear * (masses[i] * linear);
+                    wrenches[i].angular -= (rotation * inertias[i] * rotation.transpose())
+                        * velocities[i].angular
+                        * angular;
+                }
+                forces(scene, state, sub_dt, wrenches)
             },
         )?;
         if next

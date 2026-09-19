@@ -49,14 +49,23 @@ pub fn body_mass_properties(
     total.combined(additional)
 }
 
-/// Recompute explicitly; the caller owns the replaceable additional component.
-pub fn recompute_body_mass(
+/// Replace the persisted additional component and recompute the total atomically.
+pub fn set_body_additional_mass(
     scene: &mut RigidScene,
     body: BodyHandle,
     additional: MassProperties,
 ) -> Result<()> {
     let total = body_mass_properties(scene, body, additional)?;
-    scene.set_body_mass_properties(body, total)
+    scene.set_body_mass_components(body, total, additional)
+}
+
+pub fn recompute_body_mass(scene: &mut RigidScene, body: BodyHandle) -> Result<()> {
+    let additional = scene
+        .body(body)
+        .ok_or_else(|| Error::Build("unknown runtime body handle".into()))?
+        .additional_mass
+        .unwrap_or(MassProperties::ZERO);
+    set_body_additional_mass(scene, body, additional)
 }
 
 fn unit_properties(geometry: &ColliderGeometry) -> Result<MassProperties> {

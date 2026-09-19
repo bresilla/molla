@@ -1,5 +1,5 @@
 use molla_geometry::mass_properties::{
-    body_mass_properties, collider_mass_properties, recompute_body_mass,
+    body_mass_properties, collider_mass_properties, recompute_body_mass, set_body_additional_mass,
 };
 use molla_math::{Mat3, Quat, Transform, Vec3};
 use molla_sim::runtime::{BodyDesc, ColliderDesc, ColliderGeometry, RigidScene};
@@ -179,13 +179,14 @@ fn recompute_filters_disabled_includes_sensors_and_replaces_additional() {
     };
     let expected = sensor_props.combined(additional).unwrap();
     for _ in 0..2 {
-        recompute_body_mass(&mut scene, body, additional).unwrap();
+        set_body_additional_mass(&mut scene, body, additional).unwrap();
+        recompute_body_mass(&mut scene, body).unwrap();
         let p = scene.body_mass_properties(body).unwrap();
         near(p.mass, 5.0);
         matrix_near(p.inertia, expected.inertia);
         near((p.local_com - expected.local_com).length(), 0.0);
     }
-    recompute_body_mass(&mut scene, body, MassProperties::ZERO).unwrap();
+    set_body_additional_mass(&mut scene, body, MassProperties::ZERO).unwrap();
     near(scene.body_mass_properties(body).unwrap().mass, 2.0);
     let mut enabled = scene.collider(disabled_id).unwrap().clone();
     enabled.enabled = true;
@@ -228,7 +229,7 @@ fn invalid_properties_are_atomic_and_heightfields_have_no_volume() {
         mass: -1.0,
         ..MassProperties::ZERO
     };
-    assert!(recompute_body_mass(&mut scene, body, invalid).is_err());
+    assert!(set_body_additional_mass(&mut scene, body, invalid).is_err());
     assert_eq!(scene.stamp(), stamp);
     assert_eq!(scene.body_mass_properties(body).unwrap(), before);
 }

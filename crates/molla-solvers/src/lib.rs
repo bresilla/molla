@@ -28,6 +28,7 @@ pub mod jacobian;
 pub mod mpm;
 pub mod mpm_oracle;
 pub mod penalty_contact;
+pub mod rigid_impulse;
 pub mod rigid_world;
 pub mod rnea;
 pub mod semi_implicit;
