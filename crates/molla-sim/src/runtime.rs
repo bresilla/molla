@@ -6,7 +6,8 @@ use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Real, SpatialVector, Transform, Vec3};
 
 use crate::{
-    BodyFlags, BodyParams, Control, Heightfield, JointType, Model, ModelBuilder, State, TriMesh,
+    BodyFlags, BodyParams, CoefficientCombineRule, ContactMaterial, Control, Heightfield,
+    JointType, Model, ModelBuilder, ShapeFlags, State, TriMesh,
 };
 
 macro_rules! handle {
@@ -70,7 +71,33 @@ pub struct ColliderDesc {
     pub pose: Transform,
     pub friction: Real,
     pub restitution: Real,
+    pub contact_material: ContactMaterial,
+    pub memberships: u32,
+    pub filter: u32,
+    pub enabled: bool,
+    pub sensor: bool,
     pub user_tag: u64,
+}
+
+impl ColliderDesc {
+    pub fn new(geometry: ColliderGeometry) -> Self {
+        Self {
+            parent: None,
+            geometry,
+            pose: Transform::IDENTITY,
+            friction: 0.5,
+            restitution: 0.0,
+            contact_material: ContactMaterial {
+                friction_combine: CoefficientCombineRule::Average,
+                ..ContactMaterial::default()
+            },
+            memberships: u32::MAX,
+            filter: u32::MAX,
+            enabled: true,
+            sensor: false,
+            user_tag: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +187,20 @@ impl RigidScene {
 
     pub fn collider_index(&self, id: ColliderHandle) -> Option<ShapeId> {
         self.snapshot.colliders.get(&id).copied()
+    }
+
+    pub fn body_handle(&self, index: BodyId) -> Option<BodyHandle> {
+        self.snapshot
+            .bodies
+            .iter()
+            .find_map(|(&id, &i)| (i == index).then_some(id))
+    }
+
+    pub fn collider_handle(&self, index: ShapeId) -> Option<ColliderHandle> {
+        self.snapshot
+            .colliders
+            .iter()
+            .find_map(|(&id, &i)| (i == index).then_some(id))
     }
 
     pub fn joint_index(&self, id: JointHandle) -> Option<JointId> {
@@ -293,6 +334,19 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         let parent = dense_body(&bodies, desc.parent)?;
         let shape = add_shape(&mut builder, parent, desc)?;
         builder.set_shape_material(shape, desc.friction, desc.restitution)?;
+        if desc.friction < 0.0 || !(0.0..=1.0).contains(&desc.restitution) {
+            return Err(Error::Build(
+                "invalid runtime friction or restitution".into(),
+            ));
+        }
+        builder.set_shape_contact_material(shape, desc.contact_material)?;
+        builder.set_shape_collision_groups(shape, desc.memberships, desc.filter)?;
+        let flags = if desc.enabled {
+            ShapeFlags::COLLIDES
+        } else {
+            0
+        } | if desc.sensor { ShapeFlags::SENSOR } else { 0 };
+        builder.set_shape_flags(shape, flags)?;
         colliders.insert(id, shape);
     }
     let mut incoming = BTreeMap::new();

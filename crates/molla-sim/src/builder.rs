@@ -420,6 +420,7 @@ pub struct ModelBuilder {
     shape_geometry: Vec<ShapeGeometry>,
     shape_flags: Vec<u32>,
     shape_friction: Vec<Real>,
+    shape_contact_material: Vec<super::ContactMaterial>,
     shape_rolling_friction: Vec<Real>,
     shape_torsional_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
@@ -428,6 +429,7 @@ pub struct ModelBuilder {
     heightfields: Vec<super::Heightfield>,
     sdfs: Vec<super::SdfShape>,
     shape_collision_group: Vec<u32>,
+    shape_collision_mask: Vec<u32>,
     shape_collision_filter_pairs: Vec<(u32, u32)>,
     shape_color: Vec<Vec3>,
     shape_metallic: Vec<Real>,
@@ -1610,10 +1612,13 @@ impl ModelBuilder {
         self.shape_geometry.push(geom);
         self.shape_flags.push(super::flags::ShapeFlags::COLLIDES);
         self.shape_friction.push(Real::NAN);
+        self.shape_contact_material
+            .push(super::ContactMaterial::default());
         self.shape_rolling_friction.push(Real::NAN);
         self.shape_torsional_friction.push(Real::NAN);
         self.shape_restitution.push(Real::NAN);
         self.shape_collision_group.push(0xffff_ffff);
+        self.shape_collision_mask.push(0xffff_ffff);
         // Visual material defaults: white Lambertian.
         self.shape_color.push(Vec3::new(1.0, 1.0, 1.0));
         self.shape_metallic.push(0.0);
@@ -1655,6 +1660,43 @@ impl ModelBuilder {
             )));
         }
         self.shape_collision_group[i] = group;
+        self.shape_collision_mask[i] = group;
+        Ok(())
+    }
+
+    pub fn set_shape_collision_groups(
+        &mut self,
+        shape: ShapeId,
+        memberships: u32,
+        filter: u32,
+    ) -> Result<()> {
+        self.validate_shape_id(shape)?;
+        self.shape_collision_group[shape.index()] = memberships;
+        self.shape_collision_mask[shape.index()] = filter;
+        Ok(())
+    }
+
+    pub fn set_shape_contact_material(
+        &mut self,
+        shape: ShapeId,
+        material: super::ContactMaterial,
+    ) -> Result<()> {
+        self.validate_shape_id(shape)?;
+        material.validate()?;
+        self.shape_contact_material[shape.index()] = material;
+        Ok(())
+    }
+
+    pub fn set_shape_flags(&mut self, shape: ShapeId, flags: u32) -> Result<()> {
+        self.validate_shape_id(shape)?;
+        self.shape_flags[shape.index()] = flags;
+        Ok(())
+    }
+
+    fn validate_shape_id(&self, shape: ShapeId) -> Result<()> {
+        if shape.index() >= self.shape_geometry.len() {
+            return Err(Error::Build("shape handle out of range".into()));
+        }
         Ok(())
     }
 
@@ -2946,6 +2988,7 @@ impl ModelBuilder {
             shape_geometry: self.shape_geometry,
             shape_flags: Buffer::from_vec(self.shape_flags, s),
             shape_friction: Buffer::from_vec(self.shape_friction, s),
+            shape_contact_material: self.shape_contact_material,
             shape_rolling_friction: Buffer::from_vec(self.shape_rolling_friction, s),
             shape_torsional_friction: Buffer::from_vec(self.shape_torsional_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),
@@ -2954,6 +2997,7 @@ impl ModelBuilder {
             heightfields: self.heightfields,
             sdfs: self.sdfs,
             shape_collision_group: Buffer::from_vec(self.shape_collision_group, s),
+            shape_collision_mask: Buffer::from_vec(self.shape_collision_mask, s),
             shape_collision_filter_pairs: {
                 let mut p = self.shape_collision_filter_pairs;
                 p.sort_unstable();

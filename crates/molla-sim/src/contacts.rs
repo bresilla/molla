@@ -23,10 +23,14 @@ pub struct Contacts {
     pub count: u32,
     /// Allocated capacity. `count <= capacity`.
     pub capacity: usize,
-    /// First body/shape index of each pair.
+    /// First body index, or `u32::MAX` for the static world.
     pub a_index: Buffer<u32>,
-    /// Second body/shape index of each pair.
+    /// Second body index, or `u32::MAX` for the static world.
     pub b_index: Buffer<u32>,
+    /// First collider index, or `u32::MAX` for manually authored body-only contacts.
+    pub a_shape: Buffer<u32>,
+    /// Second collider index, or `u32::MAX` for manually authored body-only contacts.
+    pub b_shape: Buffer<u32>,
     /// World-space contact point.
     pub point: Buffer<Vec3>,
     /// Contact normal pointing from `a` to `b`.
@@ -78,6 +82,8 @@ impl Contacts {
             capacity,
             a_index: Buffer::from_vec(vec![0; capacity], StorageReadWrite),
             b_index: Buffer::from_vec(vec![0; capacity], StorageReadWrite),
+            a_shape: Buffer::from_vec(vec![u32::MAX; capacity], StorageReadWrite),
+            b_shape: Buffer::from_vec(vec![u32::MAX; capacity], StorageReadWrite),
             point: Buffer::from_vec(vec![Vec3::ZERO; capacity], StorageReadWrite),
             normal: Buffer::from_vec(vec![Vec3::ZERO; capacity], StorageReadWrite),
             depth: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),

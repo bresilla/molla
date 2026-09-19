@@ -14,6 +14,7 @@
 
 mod articulation;
 mod builder;
+mod contact_material;
 mod contacts;
 mod control;
 pub mod flags;
@@ -26,6 +27,7 @@ mod state;
 
 pub use articulation::{eval_body_velocities, eval_fk};
 pub use builder::{BodyParams, MaterialNeoHookean, ModelBuilder, ShapeGeometry, TetMeshId};
+pub use contact_material::{CoefficientCombineRule, ContactMaterial};
 pub use contacts::Contacts;
 pub use control::Control;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};

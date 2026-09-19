@@ -36,20 +36,45 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   and the GPU semi-implicit/XPBD shaders. The GPU Featherstone implementation
   has not yet received the CPU dynamics/readback fixes; this remains explicit
   follow-up work, not verified parity.
+- CPU Featherstone consumes penalty contact wrenches before ABA, with per-shape
+  normal stiffness, compression damping, tangential gain and velocity smoothing.
+  The spring/damper and Coulomb structure follows Newton's local
+  `eval_body_contact` reference. Tangent normalization uses a Huber-regularized
+  speed (not Warp's dimensionful Huber loss), preserving a strict Coulomb bound.
+- `molla_solvers::rigid_world::RigidWorld` integrates the live scene with fresh
+  collision detection and body-pair filtering every substep (eight by default).
+  Failed/non-finite steps do not commit output state. The low-level solver's
+  ordinary `step` still consumes its supplied contact set; callers needing
+  refreshed contacts must use `step_with_collision` or `RigidWorld`.
+- Contact buffers retain both collider and body indices. Force readout retains
+  every substep sample, including impacts which end before the final substep,
+  with normal force, integrated normal impulse, sample duration, friction,
+  world point/normal, penetration and acted flag. `RigidWorld::contact_pairs`
+  groups samples by stable collider handles. Sum impulses over the outer step;
+  do not sum instantaneous forces from successive substeps.
+- Average/Min/Multiply/Max friction rules, 32-bit two-way memberships/filters,
+  collider enabled flags and sensor flags are runtime-editable. Legacy builders
+  retain Max as the default; new runtime collider descriptors use Average so
+  a tyre's explicit Min rule can take priority. Sensors enter world readout
+  without force; other collision pipelines exclude sensor overlaps unless
+  explicitly configured to include them.
+- Voxel contact reduction preserves distinct collider pairs and remaps its
+  body-contact CSR after pruning. This keeps material identity and force
+  attribution intact when multiple colliders share the same bodies.
 
 ## Requirement ledger
 
 | Plan section | Status / remaining evidence |
 | --- | --- |
-| 0: solver and force architecture | Retained Featherstone for rigid runtime scenes; no XPBD replacement. Contacts/tyres must still feed `state.body_f`. |
-| 1.1: penalty contacts | Pending Newton contact port, material stiffness/damping, refreshed detection per substep. |
+| 0: solver and force architecture | Retained Featherstone for rigid runtime scenes; no XPBD replacement. Penalty contacts enter the working copy of `state.body_f` before ABA without accumulating in persistent applied forces. Tyre/soil force elements remain. |
+| 1.1: penalty contacts | CPU spring/compression-damper and bounded smoothed friction implemented; world collision is refreshed every substep. Tractor-scale stability remains unverified. |
 | 1.2: live mutation | Foundation implemented and tested; re-rooting and complete mutable descriptors remain. |
-| 1.3: contact force readout | Pending per-point force/impulse, friction, point, penetration, acted flag and pair normal. |
+| 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
 | 2: bodies | Pose/mass/COM/inertia/initial velocity/tag available in model/state/descriptors. Full read/write API, enabled/quarantine, damping, sleep/wake, additional-mass replacement, force/impulse helpers, CCD option, collider mass recomputation and no-step synchronization remain. |
-| 3: colliders | Existing-shape mutation foundation implemented. Endpoint capsule, round cylinder, convex decomposition, rectangular scaled heightfields, density/mass, combine rules, two-way membership/filter masks, enabled/sensor flags, full mutable/read/query API and AABBs remain. |
+| 3: colliders | Existing-shape/material mutation, friction combine rules, two-way memberships/filter masks and enabled/sensor flags implemented. Endpoint capsule, round cylinder, convex decomposition, rectangular scaled heightfields, density/mass, remaining read/query API and AABBs remain. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
-| 5: world | Gravity access and low-level step usable. World orchestration, iteration/substep settings, per-step pair callback and handle-aware raycast remain. |
+| 5: world | Gravity access, CPU world step with configurable substeps, and per-step body-pair callback implemented. Solver-setting mapping for Gearbox and handle-aware raycast remain. |
 | 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
@@ -66,9 +91,11 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   left unmodified and untracked.
 - Actual backend trait is in
   `/home/bresilla/data/code/robolibs/gearbox-physics/bin/gearbox/src/physics/backend.rs`
-  on `feat/physics-backend`, initially clean at `8358c2a`. The sibling
-  `gearbox` worktree is on `develop` with user changes in `terrain.rs` and
-  `crates/gearbox-fields/src/heights.rs`; do not switch or overwrite that tree.
+  on `feat/physics-backend`, still clean at `8358c2a` at this checkpoint. The
+  sibling `gearbox` worktree is changing externally: it is now at `f637c64`
+  with dirty `controller.rs`, `globe.rs`, and `physics/writeback.rs` under
+  `bin/gearbox/src`. Earlier terrain edits are not its current baseline.
+  Do not switch or overwrite that tree; re-inspect before integration work.
 - The Makefile refers to a missing `PROJECT`. Commands use
   `PROJECT_NAME=molla PROJECT_VERSION=0` overrides; no environment or Makefile
   files were changed. The Makefile still prints its missing-file sed warnings.
@@ -88,10 +115,37 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `cargo clippy -p molla-sim -p molla-solvers --all-targets
   --no-default-features -- -D warnings`: passed. `git diff --check` also passed.
 
+### Contact integration verification
+
+- `make test ... APP_TARGET='-p molla-geometry --lib --test contact_materials'`:
+  113 unit tests and 5 new integration tests passed (all coefficient priorities,
+  masks using bit 31, callback-before-narrow-phase filtering, sensor opt-in and
+  collider identity/CSR preservation during reduction).
+- `make test ... APP_TARGET='-p molla-solvers --test featherstone_contacts
+  --test runtime_scene'`: 10 contact tests and 5 runtime tests passed. Covers
+  analytic normal force/COM torque, equal/opposite reactions, friction bounds,
+  finite zero-slip behavior, disabled-joint velocity, transient impacts,
+  no force accumulation, material/sensor/mask edits, replay determinism and
+  rejected timesteps. A 1 kg sphere settles with 9.81 N support at 120 Hz;
+  this is not evidence of the tractor's mass-ratio or slope acceptance.
+- Existing solver unit (36), articulation (4), polish (4), origin-invariance
+  (1), and sim unit/integration/doctest (23) lanes also passed after contact
+  integration. The final solver rerun passed all 60 selected tests after the
+  input-validation and disabled-joint velocity changes.
+- `make test-gpu ... P=molla-geometry T=contact_materials A=--nocapture`:
+  one live GPU GJK/EPA test passed, retaining Min friction and callback filtering
+  with zero CPU narrow-phase fallbacks. The GPU fixture uses offset cuboids;
+  a sphere-pair fixture exercised the existing EPA-to-CPU fallback instead.
+- Strict Clippy for sim, geometry and solvers with all targets and no default
+  features passed. An existing unconditional GPU-only test import in
+  `narrow_phase_backend.rs` needed its missing feature guard. Scoped Clippy with
+  all targets and all features also passed. No workspace-wide or Gearbox
+  acceptance claim follows from these scoped gates.
+
 ## Next implementation steps
 
-1. Finish fixed-body/re-rooting and runtime descriptor semantics while adding
-   penalty contacts/readout, friction combine rules and pair filtering.
+1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
+   now-tested contact/readout/filtering path while extending the live world.
 2. Complete shapes, collider/body editing and mass/impulse APIs.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.

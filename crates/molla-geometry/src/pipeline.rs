@@ -74,6 +74,7 @@ pub enum NarrowPhaseBackend {
 /// choice (both run on the GPU, but only one at a time).
 #[derive(Default)]
 pub struct CollisionPipeline {
+    include_sensor_overlaps: bool,
     broad: BroadPhase,
     pair_buf: Vec<ShapePair>,
     manifolds: Vec<ContactManifold>,
@@ -161,6 +162,12 @@ impl CollisionPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Include sensor geometry for overlap queries or solvers that suppress sensor forces.
+    pub fn with_sensor_overlaps(mut self, include: bool) -> Self {
+        self.include_sensor_overlaps = include;
+        self
     }
 
     /// Select the narrow-phase backend. Pairs the backend can't
@@ -395,6 +402,17 @@ impl CollisionPipeline {
         state: &State,
         contacts: &mut Contacts,
     ) -> Result<usize> {
+        self.collide_filtered(model, state, contacts, |_, _| false)
+    }
+
+    /// Drop all shape pairs whose body pair is excluded; `None` denotes the world.
+    pub fn collide_filtered(
+        &mut self,
+        model: &Model,
+        state: &State,
+        contacts: &mut Contacts,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+    ) -> Result<usize> {
         contacts.clear();
         self.last_cpu_np_calls = 0;
         self.last_broad_phase_pairs = 0;
@@ -417,6 +435,17 @@ impl CollisionPipeline {
             self.broad
                 .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
         }
+        let bodies = model.shape_body.host()?;
+        let body_id = |s: u32| {
+            let b = bodies[s as usize];
+            (b >= 0).then_some(molla_core::BodyId(b as u32))
+        };
+        let flags = model.shape_flags.host()?;
+        self.pair_buf.retain(|p| {
+            (self.include_sensor_overlaps
+                || (flags[p.a as usize] | flags[p.b as usize]) & molla_sim::ShapeFlags::SENSOR == 0)
+                && !excluded(body_id(p.a), body_id(p.b))
+        });
         self.last_broad_phase_pairs = self.pair_buf.len();
 
         // Full GPU narrow phase takes precedence over the prefilter.
@@ -671,12 +700,7 @@ impl CollisionPipeline {
 
             let normal = res.normal.normalize();
             let point = (res.point_a + res.point_b) * 0.5;
-            let pair_friction = pair_material(
-                model.shape_friction.host()?,
-                pair.a as usize,
-                pair.b as usize,
-                model.default_friction,
-            );
+            let pair_friction = model.combined_shape_friction(pair.a as usize, pair.b as usize)?;
             let pair_restitution = pair_material(
                 model.shape_restitution.host()?,
                 pair.a as usize,
@@ -857,12 +881,7 @@ impl CollisionPipeline {
             // Build a `ContactManifold` from the GPU EPA result. The
             // contact-point convention matches CPU EPA: midpoint
             // between point_a and point_b.
-            let pair_friction = pair_material(
-                model.shape_friction.host()?,
-                pair.a as usize,
-                pair.b as usize,
-                model.default_friction,
-            );
+            let pair_friction = model.combined_shape_friction(pair.a as usize, pair.b as usize)?;
             let pair_restitution = pair_material(
                 model.shape_restitution.host()?,
                 pair.a as usize,
@@ -1038,6 +1057,10 @@ pub fn collide(
 
     // Generate AABB-overlap pairs.
     brute_force_pairs(model, state, model.contact_margin, pair_buf);
+    let flags = model.shape_flags.host()?;
+    pair_buf.retain(|p| {
+        (flags[p.a as usize] | flags[p.b as usize]) & molla_sim::ShapeFlags::SENSOR == 0
+    });
 
     // Narrow phase + push into Contacts. Each pair can yield 0..N
     // manifolds (boxes can give up to 4).
@@ -1072,6 +1095,10 @@ fn push_contacts_into(
             molla_storage::Buffer::from_vec(vec![0u32; cap], BufferUsage::StorageReadWrite);
         contacts.b_index =
             molla_storage::Buffer::from_vec(vec![0u32; cap], BufferUsage::StorageReadWrite);
+        contacts.a_shape =
+            molla_storage::Buffer::from_vec(vec![u32::MAX; cap], BufferUsage::StorageReadWrite);
+        contacts.b_shape =
+            molla_storage::Buffer::from_vec(vec![u32::MAX; cap], BufferUsage::StorageReadWrite);
         contacts.point = molla_storage::Buffer::from_vec(
             vec![molla_math::Vec3::ZERO; cap],
             BufferUsage::StorageReadWrite,
@@ -1096,11 +1123,15 @@ fn push_contacts_into(
 
     let a_index = contacts.a_index.host_mut()?;
     let b_index = contacts.b_index.host_mut()?;
+    let a_shape = contacts.a_shape.host_mut()?;
+    let b_shape = contacts.b_shape.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {
         // Translate shape→body so solvers can apply impulses to the
         // owning body. -1 (static) stays as a sentinel.
         a_index[i] = body_or_static(shape_body[m.a_shape as usize]);
         b_index[i] = body_or_static(shape_body[m.b_shape as usize]);
+        a_shape[i] = m.a_shape;
+        b_shape[i] = m.b_shape;
     }
 
     let point = contacts.point.host_mut()?;
@@ -1117,7 +1148,7 @@ fn push_contacts_into(
     }
     let fric = contacts.friction.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {
-        fric[i] = m.friction;
+        fric[i] = model.combined_shape_friction(m.a_shape as usize, m.b_shape as usize)?;
     }
     let roll = contacts.rolling_friction.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {
@@ -1301,12 +1332,9 @@ fn cpu_mpr_manifold(
     }
     let normal = m.normal / normal_len_sq.sqrt();
     let point = (m.point_a + m.point_b) * 0.5;
-    let pair_friction = pair_material(
-        model.shape_friction.host().expect("shape_friction"),
-        pair.a as usize,
-        pair.b as usize,
-        model.default_friction,
-    );
+    let pair_friction = model
+        .combined_shape_friction(pair.a as usize, pair.b as usize)
+        .expect("shape friction material");
     let pair_restitution = pair_material(
         model.shape_restitution.host().expect("shape_restitution"),
         pair.a as usize,

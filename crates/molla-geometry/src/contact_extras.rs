@@ -73,9 +73,13 @@ pub fn match_contacts(
     let mut out = vec![None; n];
     let a_idx = current.a_index.host()?;
     let b_idx = current.b_index.host()?;
+    let a_shape = current.a_shape.host()?;
+    let b_shape = current.b_shape.host()?;
     let point = current.point.host()?;
     for i in 0..n {
-        let id = contact_id(a_idx[i], b_idx[i], point[i], voxel_size);
+        let id = collider_contact_id(
+            a_shape[i], b_shape[i], a_idx[i], b_idx[i], point[i], voxel_size,
+        );
         // Binary search in the sorted previous list.
         match previous.binary_search_by_key(&id, |&(k, _)| k) {
             Ok(j) => out[i] = Some(previous[j].1),
@@ -92,12 +96,36 @@ pub fn build_contact_id_table(contacts: &Contacts, voxel_size: Real) -> Result<V
     let n = contacts.count as usize;
     let a_idx = contacts.a_index.host()?;
     let b_idx = contacts.b_index.host()?;
+    let a_shape = contacts.a_shape.host()?;
+    let b_shape = contacts.b_shape.host()?;
     let point = contacts.point.host()?;
     let mut out: Vec<(u64, usize)> = (0..n)
-        .map(|i| (contact_id(a_idx[i], b_idx[i], point[i], voxel_size), i))
+        .map(|i| {
+            (
+                collider_contact_id(
+                    a_shape[i], b_shape[i], a_idx[i], b_idx[i], point[i], voxel_size,
+                ),
+                i,
+            )
+        })
         .collect();
     out.sort_unstable_by_key(|&(k, _)| k);
     Ok(out)
+}
+
+fn collider_contact_id(
+    a_shape: u32,
+    b_shape: u32,
+    a_body: u32,
+    b_body: u32,
+    point: Vec3,
+    voxel: Real,
+) -> u64 {
+    if a_shape == u32::MAX && b_shape == u32::MAX {
+        contact_id(a_body, b_body, point, voxel)
+    } else {
+        contact_id(a_shape, b_shape, point, voxel)
+    }
 }
 
 /// Voxel-AABB pruning: bin all contacts into a uniform grid keyed
@@ -117,6 +145,8 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
     // Collect (id, depth, original_index) and pick the deepest per id.
     let a_idx_src = contacts.a_index.host()?.to_vec();
     let b_idx_src = contacts.b_index.host()?.to_vec();
+    let a_shape_src = contacts.a_shape.host()?.to_vec();
+    let b_shape_src = contacts.b_shape.host()?.to_vec();
     let point_src = contacts.point.host()?.to_vec();
     let normal_src = contacts.normal.host()?.to_vec();
     let depth_src = contacts.depth.host()?.to_vec();
@@ -129,7 +159,14 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
     use std::collections::HashMap;
     let mut keep: HashMap<u64, (Real, usize)> = HashMap::with_capacity(n);
     for i in 0..n {
-        let id = contact_id(a_idx_src[i], b_idx_src[i], point_src[i], voxel_size);
+        let id = collider_contact_id(
+            a_shape_src[i],
+            b_shape_src[i],
+            a_idx_src[i],
+            b_idx_src[i],
+            point_src[i],
+            voxel_size,
+        );
         let d = depth_src[i];
         keep.entry(id)
             .and_modify(|(best_d, best_i)| {
@@ -148,9 +185,13 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
 
     let a_idx = contacts.a_index.host_mut()?;
     let b_idx = contacts.b_index.host_mut()?;
+    let a_shape = contacts.a_shape.host_mut()?;
+    let b_shape = contacts.b_shape.host_mut()?;
     for (slot, &src) in kept_indices.iter().enumerate() {
         a_idx[slot] = a_idx_src[src];
         b_idx[slot] = b_idx_src[src];
+        a_shape[slot] = a_shape_src[src];
+        b_shape[slot] = b_shape_src[src];
     }
     let point = contacts.point.host_mut()?;
     for (slot, &src) in kept_indices.iter().enumerate() {
@@ -181,6 +222,30 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
         rest[slot] = rest_src[src];
     }
     contacts.count = n_keep as u32;
+    if !contacts.body_contact_offsets.is_empty() {
+        let old_offsets = contacts.body_contact_offsets.host()?.to_vec();
+        let old_indices = contacts.body_contact_indices.host()?.to_vec();
+        let mut mapping = vec![u32::MAX; n];
+        for (slot, &src) in kept_indices.iter().enumerate() {
+            mapping[src] = slot as u32;
+        }
+        let offsets = contacts.body_contact_offsets.host_mut()?;
+        let indices = contacts.body_contact_indices.host_mut()?;
+        let mut cursor = 0;
+        for body in 0..old_offsets.len() - 1 {
+            offsets[body] = cursor as u32;
+            for &packed in &old_indices[old_offsets[body] as usize..old_offsets[body + 1] as usize]
+            {
+                let (index, b_side) = Contacts::decode_index(packed);
+                let target = mapping[index as usize];
+                if target != u32::MAX {
+                    indices[cursor] = target | if b_side { Contacts::B_SIDE_BIT } else { 0 };
+                    cursor += 1;
+                }
+            }
+        }
+        *offsets.last_mut().unwrap() = cursor as u32;
+    }
     Ok(n_keep)
 }
 

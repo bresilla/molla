@@ -20,6 +20,7 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
     let frames = model.joint_x_p.host()?;
     let axes = model.joint_axis.host()?;
     let kinds = model.joint_type.host()?;
+    let enabled = model.joint_enabled.host()?;
     let coord_offsets = model.joint_coord_offset.host()?;
     let dof_offsets = model.joint_dof_offset.host()?;
     let q = state.joint_q.host()?;
@@ -54,7 +55,12 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
         let mut origin = frame.position;
         let mut linear = Vec3::ZERO;
         let mut angular = Vec3::ZERO;
-        match joint_type_from_u32(kinds[j]) {
+        let kind = if enabled[j] != 0 {
+            joint_type_from_u32(kinds[j])
+        } else {
+            JointType::Fixed
+        };
+        match kind {
             JointType::Revolute => angular = axes[j] * qd[v],
             JointType::Prismatic => linear = axes[j] * qd[v],
             JointType::Ball => angular = Vec3::new(qd[v], qd[v + 1], qd[v + 2]),

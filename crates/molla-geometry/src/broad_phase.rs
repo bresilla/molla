@@ -26,6 +26,12 @@ pub fn pair_passes_filters(
 ) -> bool {
     let bi = shape_body[i];
     let bj = shape_body[j];
+    if let Ok(flags) = model.shape_flags.host()
+        && (flags[i] & molla_sim::ShapeFlags::COLLIDES == 0
+            || flags[j] & molla_sim::ShapeFlags::COLLIDES == 0)
+    {
+        return false;
+    }
     if bi < 0 && bj < 0 {
         return false;
     }
@@ -41,7 +47,11 @@ pub fn pair_passes_filters(
     if let Ok(groups) = model.shape_collision_group.host() {
         let gi = groups.get(i).copied().unwrap_or(0xffff_ffff);
         let gj = groups.get(j).copied().unwrap_or(0xffff_ffff);
-        if gi & gj == 0 {
+        let masks = model
+            .shape_collision_mask
+            .host()
+            .expect("shape_collision_mask");
+        if gi & masks[j] == 0 || gj & masks[i] == 0 {
             return false;
         }
     }

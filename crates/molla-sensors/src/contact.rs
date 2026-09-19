@@ -19,11 +19,9 @@
 //!   *this* body.
 //! - `centroid` — mean contact point in world frame.
 //!
-//! What it does **not** measure: actual contact forces / impulses.
-//! Surfacing per-contact lambdas from the XPBD velocity-projection
-//! pass is its own piece of solver work — for the first cut we
-//! report geometric / kinematic summaries only, which is enough for
-//! "is body in contact?" and "where is it being pushed?" use cases.
+//! This GPU sensor reports geometry, not forces. CPU Featherstone exposes
+//! penalty forces through `FeatherstoneSolver::contact_forces`; `RigidWorld`
+//! groups those readings by stable collider pair.
 
 use molla_compute::Engine;
 use molla_core::{Error, Result};

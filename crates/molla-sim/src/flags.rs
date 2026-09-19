@@ -25,4 +25,6 @@ pub mod ParticleFlags {
 pub mod ShapeFlags {
     /// Shape participates in collision detection.
     pub const COLLIDES: u32 = 1 << 0;
+    /// Shape generates overlap readings without contact forces.
+    pub const SENSOR: u32 = 1 << 1;
 }

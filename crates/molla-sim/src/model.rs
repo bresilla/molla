@@ -506,10 +506,10 @@ pub struct Model {
     pub shape_geometry: Vec<super::ShapeGeometry>,
     /// Per-shape bitflags.
     pub shape_flags: Buffer<u32>,
-    /// Per-shape Coulomb friction coefficient. `NaN` = use the
-    /// `default_friction` model knob; otherwise the pair-rule is
-    /// `max(μ_a, μ_b)` (matches Newton).
+    /// Per-shape Coulomb friction coefficient, combined using `shape_contact_material` rules.
     pub shape_friction: Buffer<Real>,
+    /// CPU penalty-contact parameters and friction combination rules.
+    pub shape_contact_material: Vec<super::ContactMaterial>,
     /// Per-shape **rolling** friction (m·μ) — opposes the angular
     /// velocity component perpendicular to the contact normal.
     /// Without this, balls/cylinders roll forever on a flat plane.
@@ -536,10 +536,10 @@ pub struct Model {
     /// SDF shape storage. `ShapeGeometry::Sdf { sdf_id }` references
     /// entries here.
     pub sdfs: Vec<SdfShape>,
-    /// Per-shape collision group bitmask. Two shapes can collide
-    /// only if `group_a & group_b != 0`. Default `0xffff_ffff` =
-    /// "collides with every group". Length = `shape_count`.
+    /// Per-shape membership mask, checked against the other shape's filter in both directions.
     pub shape_collision_group: Buffer<u32>,
+    /// Per-shape filter mask, checked against the other shape's membership mask.
+    pub shape_collision_mask: Buffer<u32>,
     /// Explicit shape-pair exclusions (always filtered out, even
     /// when group bitmasks would allow). Stored as `(min, max)`
     /// shape-index pairs; broad phase tests pair membership against
@@ -790,6 +790,25 @@ pub struct Model {
 }
 
 impl Model {
+    pub fn combined_shape_friction(&self, a: usize, b: usize) -> Result<Real> {
+        let coefficients = self.shape_friction.host()?;
+        let ma = self
+            .shape_contact_material
+            .get(a)
+            .ok_or_else(|| molla_core::Error::Build("missing shape contact material".into()))?;
+        let mb = self
+            .shape_contact_material
+            .get(b)
+            .ok_or_else(|| molla_core::Error::Build("missing shape contact material".into()))?;
+        let fa = coefficients
+            .get(a)
+            .ok_or_else(|| molla_core::Error::Build("missing shape friction".into()))?;
+        let fb = coefficients
+            .get(b)
+            .ok_or_else(|| molla_core::Error::Build("missing shape friction".into()))?;
+        Ok(ma.friction_combine.combine(mb.friction_combine, *fa, *fb))
+    }
+
     /// An empty model: zero particles, zero bodies, zero shapes, one
     /// world with standard gravity.
     #[must_use]
@@ -882,6 +901,7 @@ impl Model {
             shape_geometry: Vec::new(),
             shape_flags: Buffer::from_vec(Vec::new(), s),
             shape_friction: Buffer::from_vec(Vec::new(), s),
+            shape_contact_material: Vec::new(),
             shape_rolling_friction: Buffer::from_vec(Vec::new(), s),
             shape_torsional_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),
@@ -890,6 +910,7 @@ impl Model {
             heightfields: Vec::new(),
             sdfs: Vec::new(),
             shape_collision_group: Buffer::from_vec(Vec::new(), s),
+            shape_collision_mask: Buffer::from_vec(Vec::new(), s),
             shape_collision_filter_pairs: Vec::new(),
             shape_color: Buffer::from_vec(Vec::new(), s),
             shape_metallic: Buffer::from_vec(Vec::new(), s),

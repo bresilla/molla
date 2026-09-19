@@ -71,6 +71,7 @@ pub struct GpuBackend {
 
 /// Forward-dynamics solver for articulated rigid bodies.
 pub struct FeatherstoneSolver {
+    contact_forces: Vec<crate::penalty_contact::ContactForce>,
     /// Joint-space damping coefficient (1/s) applied to `joint_qd`
     /// each step. Helps keep long-running pendulums numerically calm.
     pub joint_damping: Real,
@@ -111,6 +112,7 @@ impl FeatherstoneSolver {
             rigorous_d_solve: false,
             rigorous_distance: true,
             backend: FeatherstoneBackend::Cpu,
+            contact_forces: Vec::new(),
         }
     }
 
@@ -149,6 +151,7 @@ impl FeatherstoneSolver {
                 kernel,
                 muscle_kernel,
             }),
+            contact_forces: Vec::new(),
         })
     }
 
@@ -303,6 +306,12 @@ impl Solver for FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        self.contact_forces.clear();
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(crate::core::Error::Solver(
+                "step dt must be positive and finite".into(),
+            ));
+        }
         let n_sub = self.substeps.max(1);
         let dt_sub = dt / n_sub as Real;
 
@@ -312,6 +321,8 @@ impl Solver for FeatherstoneSolver {
 
         let mut scratch = state_in.clone_host()?;
         self.step_inner(model, state_in, control, contacts, dt_sub, state_out)?;
+        let mut samples = Vec::new();
+        samples.append(&mut self.contact_forces);
         let mut output_in_scratch = false;
         for _ in 1..n_sub {
             if output_in_scratch {
@@ -320,15 +331,63 @@ impl Solver for FeatherstoneSolver {
                 self.step_inner(model, state_out, control, contacts, dt_sub, &mut scratch)?;
             }
             output_in_scratch = !output_in_scratch;
+            samples.append(&mut self.contact_forces);
         }
         if output_in_scratch {
             state_out.copy_host_from(&scratch)?;
         }
+        self.contact_forces = samples;
         Ok(())
     }
 }
 
 impl FeatherstoneSolver {
+    /// CPU contact samples from every substep of the latest step; impulses sum over time.
+    pub fn contact_forces(&self) -> &[crate::penalty_contact::ContactForce] {
+        &self.contact_forces
+    }
+
+    /// CPU stepping with fresh collision detection and pair filtering on every substep.
+    pub fn step_with_collision(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        pipeline: &mut crate::geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        state_out: &mut State,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+    ) -> Result<()> {
+        self.contact_forces.clear();
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(crate::core::Error::Solver(
+                "step dt must be positive and finite".into(),
+            ));
+        }
+        if !matches!(self.backend, FeatherstoneBackend::Cpu) {
+            return Err(crate::core::Error::Solver(
+                "contact-refreshed Featherstone stepping requires the CPU backend".into(),
+            ));
+        }
+        let n = self.substeps.max(1);
+        let sub_dt = dt / n as Real;
+        let mut scratch = state_in.clone_host()?;
+        eval_fk(model, &mut scratch)?;
+        eval_body_velocities(model, &mut scratch)?;
+        let mut samples = Vec::new();
+        for substep in 0..n {
+            pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)?;
+            self.step_inner(model, &scratch, control, contacts, sub_dt, state_out)?;
+            samples.append(&mut self.contact_forces);
+            if substep + 1 < n {
+                std::mem::swap(&mut scratch, state_out);
+            }
+        }
+        self.contact_forces = samples;
+        Ok(())
+    }
+
     fn step_inner(
         &mut self,
         model: &Model,
@@ -338,18 +397,27 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        self.contact_forces.clear();
         match &mut self.backend {
-            FeatherstoneBackend::Cpu => cpu_step(
-                model,
-                state_in,
-                control,
-                contacts,
-                dt,
-                state_out,
-                self.joint_damping,
-                self.rigorous_d_solve,
-                self.rigorous_distance,
-            ),
+            FeatherstoneBackend::Cpu => {
+                cpu_step(
+                    model,
+                    state_in,
+                    control,
+                    contacts,
+                    dt,
+                    state_out,
+                    self.joint_damping,
+                    self.rigorous_d_solve,
+                    self.rigorous_distance,
+                    &mut self.contact_forces,
+                )?;
+                for reading in &mut self.contact_forces {
+                    reading.sample_dt = dt;
+                    reading.normal_impulse = reading.normal_force * dt;
+                }
+                Ok(())
+            }
             #[cfg(feature = "gpu")]
             FeatherstoneBackend::Gpu(gpu) => {
                 let GpuBackend {
@@ -521,12 +589,13 @@ fn cpu_step(
     model: &Model,
     state_in: &State,
     control: &Control,
-    _contacts: &Contacts,
+    contacts: &Contacts,
     dt: Real,
     state_out: &mut State,
     joint_damping: Real,
     rigorous_d_solve: bool,
     rigorous_distance: bool,
+    contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
 ) -> Result<()> {
     if model.joint_count == 0 {
         state_out.copy_host_from(state_in)?;
@@ -580,6 +649,7 @@ fn cpu_step(
         .host_mut()?
         .copy_from_slice(state_in.body_qd.host()?);
     eval_fk(model, state_out)?;
+    eval_body_velocities(model, state_out)?;
 
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
@@ -594,7 +664,9 @@ fn cpu_step(
     let art_count = model.articulation_count.max(1);
 
     let body_q = state_out.body_q.host()?.to_vec();
-    let body_f_in = state_in.body_f.host()?.to_vec();
+    let mut body_f_in = state_in.body_f.host()?.to_vec();
+    *contact_forces =
+        crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?;
     let body_mass = model.body_mass.host()?;
     let body_flags = model.body_flags.host()?;
     let body_inertia = model.body_inertia.host()?;
@@ -1531,7 +1603,10 @@ fn cpu_step(
     // Propagate input body_f to output so substepping (which swaps
     // state_a / state_b each iteration) sees the same external wrench
     // each substep until the caller overwrites it.
-    state_out.body_f.host_mut()?.copy_from_slice(&body_f_in);
+    state_out
+        .body_f
+        .host_mut()?
+        .copy_from_slice(state_in.body_f.host()?);
     Ok(())
 }
 

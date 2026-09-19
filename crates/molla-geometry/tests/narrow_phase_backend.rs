@@ -22,6 +22,7 @@
 //! `#[ignore]` because the GPU adapter is only available behind
 //! `make test-gpu` / explicit `cargo test --features gpu -- --ignored`.
 
+#[cfg(feature = "gpu")]
 use molla_compute::Engine;
 use molla_geometry::{CollisionPipeline, NarrowPhaseBackend};
 use molla_math::{Mat3, Real, SpatialInertia, Transform, Vec3};

@@ -12,6 +12,7 @@ fn collider(parent: molla_sim::runtime::BodyHandle) -> ColliderDesc {
         friction: 0.7,
         restitution: 0.1,
         user_tag: 91,
+        ..ColliderDesc::new(ColliderGeometry::Ball { radius: 0.5 })
     }
 }
 

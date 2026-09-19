@@ -50,7 +50,7 @@ pub fn pair_contact(
     model: &Model,
     state: &State,
     pair: ShapePair,
-    default_friction: Real,
+    _default_friction: Real,
     default_restitution: Real,
     out: &mut Vec<ContactManifold>,
 ) {
@@ -59,14 +59,9 @@ pub fn pair_contact(
     let xf_a = shape_world_transform(model, state, pair.a as usize);
     let xf_b = shape_world_transform(model, state, pair.b as usize);
 
-    // Pair-rule: per-shape material wins over the model default.
-    // `NaN` sentinel = "use default". `max` matches Newton's pair rule.
-    let pair_friction = pair_material(
-        model.shape_friction.host().expect("shape_friction"),
-        pair.a as usize,
-        pair.b as usize,
-        default_friction,
-    );
+    let pair_friction = model
+        .combined_shape_friction(pair.a as usize, pair.b as usize)
+        .expect("shape friction material");
     let pair_restitution = pair_material(
         model.shape_restitution.host().expect("shape_restitution"),
         pair.a as usize,
