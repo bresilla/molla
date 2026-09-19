@@ -1,12 +1,12 @@
 //! `Model` — static, immutable simulation description.
 
-use molla_core::Result;
+use molla_core::{Error, Result};
 use molla_math::{Mat3, Real, Transform, Vec3};
 use molla_storage::{Buffer, BufferUsage};
 
 /// Regular grid of height samples (heightmap) — terrain primitive.
 /// Surface is sampled at `(origin.x + i·cell_size, origin.y + height[i,j],
-/// origin.z + j·cell_size)` for `i ∈ [0, nx)`, `j ∈ [0, nz)`.
+/// origin.z + j·cell_size_z)` for `i ∈ [0, nx)`, `j ∈ [0, nz)`.
 /// Collision routing converts only the cells overlapping the
 /// query AABB into triangles, so heightmaps stay cheap even when
 /// the grid is large.
@@ -16,8 +16,10 @@ pub struct Heightfield {
     pub nx: u32,
     /// Number of samples along the Z axis.
     pub nz: u32,
-    /// Distance between adjacent samples (m).
+    /// Distance between adjacent X samples (m).
     pub cell_size: Real,
+    /// Distance between adjacent Z samples (m).
+    pub cell_size_z: Real,
     /// Origin in shape-local frame: the `(0, 0)` sample sits at this point.
     pub origin: Vec3,
     /// Flat `nx · nz` array — row-major, `height[j*nx + i]`.
@@ -25,12 +27,121 @@ pub struct Heightfield {
 }
 
 impl Heightfield {
+    /// Centered row-major grid: rows follow Z, columns follow X, heights scale by Y.
+    pub fn from_scaled(rows: usize, cols: usize, heights: Vec<Real>, scale: Vec3) -> Result<Self> {
+        if rows < 2
+            || cols < 2
+            || rows > u32::MAX as usize
+            || cols > u32::MAX as usize
+            || rows.checked_mul(cols) != Some(heights.len())
+            || !scale.is_finite()
+            || scale.x <= 0.0
+            || scale.z <= 0.0
+        {
+            return Err(Error::Build("invalid scaled heightfield dimensions".into()));
+        }
+        let field = Self {
+            nx: cols as u32,
+            nz: rows as u32,
+            cell_size: scale.x / (cols - 1) as Real,
+            cell_size_z: scale.z / (rows - 1) as Real,
+            origin: Vec3::new(-scale.x * 0.5, 0.0, -scale.z * 0.5),
+            heights: heights.into_iter().map(|h| h * scale.y).collect(),
+        };
+        field.validate()?;
+        Ok(field)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.nx < 2
+            || self.nz < 2
+            || self.nx as u64 * self.nz as u64 != self.heights.len() as u64
+            || !self.origin.is_finite()
+            || !self.cell_size.is_finite()
+            || self.cell_size <= 0.0
+            || !self.cell_size_z.is_finite()
+            || self.cell_size_z <= 0.0
+            || self
+                .heights
+                .iter()
+                .any(|h| !h.is_finite() || !(self.origin.y + h).is_finite())
+            || !(self.origin.x + (self.nx - 1) as Real * self.cell_size).is_finite()
+            || !(self.origin.z + (self.nz - 1) as Real * self.cell_size_z).is_finite()
+        {
+            return Err(Error::Build("invalid heightfield".into()));
+        }
+        Ok(())
+    }
+
     /// Sample height at integer cell coords. Out-of-range returns 0.
     pub fn sample(&self, i: u32, j: u32) -> Real {
         if i >= self.nx || j >= self.nz {
             return 0.0;
         }
-        self.heights[(j * self.nx + i) as usize]
+        self.heights[j as usize * self.nx as usize + i as usize]
+    }
+
+    pub fn vertex(&self, i: u32, j: u32) -> Vec3 {
+        Vec3::new(
+            self.origin.x + i as Real * self.cell_size,
+            self.origin.y + self.sample(i, j),
+            self.origin.z + j as Real * self.cell_size_z,
+        )
+    }
+
+    /// Upward-wound triangles split across the cell's X-max/Z-min to X-min/Z-max diagonal.
+    pub fn cell_triangles(&self, i: u32, j: u32) -> Option<[[Vec3; 3]; 2]> {
+        if i >= self.nx.saturating_sub(1) || j >= self.nz.saturating_sub(1) {
+            return None;
+        }
+        let p00 = self.vertex(i, j);
+        let p10 = self.vertex(i + 1, j);
+        let p01 = self.vertex(i, j + 1);
+        let p11 = self.vertex(i + 1, j + 1);
+        Some([[p00, p01, p10], [p01, p11, p10]])
+    }
+
+    /// Piecewise-planar local height and unit normal on the collision triangles.
+    pub fn height_and_normal(&self, x: Real, z: Real) -> Option<(Real, Vec3)> {
+        if self.nx < 2 || self.nz < 2 {
+            return None;
+        }
+        let gx = (x - self.origin.x) / self.cell_size;
+        let gz = (z - self.origin.z) / self.cell_size_z;
+        if !gx.is_finite()
+            || !gz.is_finite()
+            || gx < 0.0
+            || gz < 0.0
+            || gx > (self.nx - 1) as Real
+            || gz > (self.nz - 1) as Real
+        {
+            return None;
+        }
+        let i = (gx.floor() as u32).min(self.nx - 2);
+        let j = (gz.floor() as u32).min(self.nz - 2);
+        let tx = gx - i as Real;
+        let tz = gz - j as Real;
+        let h00 = self.sample(i, j);
+        let h10 = self.sample(i + 1, j);
+        let h01 = self.sample(i, j + 1);
+        let h11 = self.sample(i + 1, j + 1);
+        let (height, dx, dz) = if tx + tz <= 1.0 {
+            (
+                h00 + (h10 - h00) * tx + (h01 - h00) * tz,
+                h10 - h00,
+                h01 - h00,
+            )
+        } else {
+            (
+                h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz),
+                h11 - h01,
+                h11 - h10,
+            )
+        };
+        Some((
+            self.origin.y + height,
+            Vec3::new(-dx / self.cell_size, 1.0, -dz / self.cell_size_z).normalize(),
+        ))
     }
 
     /// Heightfield's local-frame AABB (min, max) — the range over
@@ -42,7 +153,7 @@ impl Heightfield {
     /// upstream loader bug and is caught by `debug_assert!`.
     pub fn local_aabb(&self) -> (Vec3, Vec3) {
         let max_x = self.origin.x + (self.nx.saturating_sub(1) as Real) * self.cell_size;
-        let max_z = self.origin.z + (self.nz.saturating_sub(1) as Real) * self.cell_size;
+        let max_z = self.origin.z + (self.nz.saturating_sub(1) as Real) * self.cell_size_z;
         let mut min_h = Real::INFINITY;
         let mut max_h = -Real::INFINITY;
         for &h in &self.heights {

@@ -29,6 +29,7 @@ pub mod mpr;
 mod mpr_gpu;
 pub mod narrow_phase;
 pub mod pipeline;
+pub mod raycast_cpu;
 pub mod sdf_bake;
 #[cfg(feature = "gpu")]
 mod sdf_bake_gpu;

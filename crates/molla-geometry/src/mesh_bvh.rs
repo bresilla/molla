@@ -162,8 +162,9 @@ impl MeshBvh {
                     let v1 = vertices[tri[1] as usize];
                     let v2 = vertices[tri[2] as usize];
                     if let Some((t, n)) = ray_triangle(origin, dir, v0, v1, v2)
-                        && t > 0.0
-                        && t < best_t
+                        && t >= 0.0
+                        && t <= best_t
+                        && (best.is_none() || t < best_t)
                     {
                         best_t = t;
                         best = Some((tri_idx, t, n));
@@ -309,37 +310,51 @@ fn aabb_overlap(a_min: Vec3, a_max: Vec3, b_min: Vec3, b_max: Vec3) -> bool {
 }
 
 fn ray_aabb(origin: Vec3, inv_dir: Vec3, min: Vec3, max: Vec3, max_t: Real) -> bool {
-    let tx1 = (min.x - origin.x) * inv_dir.x;
-    let tx2 = (max.x - origin.x) * inv_dir.x;
-    let ty1 = (min.y - origin.y) * inv_dir.y;
-    let ty2 = (max.y - origin.y) * inv_dir.y;
-    let tz1 = (min.z - origin.z) * inv_dir.z;
-    let tz2 = (max.z - origin.z) * inv_dir.z;
-    let tmin = tx1.min(tx2).max(ty1.min(ty2)).max(tz1.min(tz2));
-    let tmax = tx1.max(tx2).min(ty1.max(ty2)).min(tz1.max(tz2));
-    tmax >= tmin.max(0.0) && tmin <= max_t
+    let (mut lo, mut hi) = (0.0_f64, max_t);
+    for i in 0..3 {
+        if inv_dir[i].is_infinite() {
+            if origin[i] < min[i] || origin[i] > max[i] {
+                return false;
+            }
+        } else {
+            let a = (min[i] - origin[i]) * inv_dir[i];
+            let b = (max[i] - origin[i]) * inv_dir[i];
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+            if lo > hi {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Möller-Trumbore ray-triangle intersection. Returns `(t, normal)`
 /// on hit; `t` along ray. Normal is unnormalised cross product
 /// `(v1 − v0) × (v2 − v0)` — caller normalises if needed.
-fn ray_triangle(origin: Vec3, dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<(Real, Vec3)> {
+pub(crate) fn ray_triangle(
+    origin: Vec3,
+    dir: Vec3,
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+) -> Option<(Real, Vec3)> {
     let edge1 = v1 - v0;
     let edge2 = v2 - v0;
     let h = dir.cross(edge2);
     let a = edge1.dot(h);
-    if a.abs() < 1e-12 {
+    if a.abs() <= 1e-14 * edge1.length() * edge2.length() * dir.length() {
         return None;
     }
     let f = 1.0 / a;
     let s = origin - v0;
     let u = f * s.dot(h);
-    if !(0.0..=1.0).contains(&u) {
+    if !(-1e-12..=1.0 + 1e-12).contains(&u) {
         return None;
     }
     let q = s.cross(edge1);
     let v = f * dir.dot(q);
-    if v < 0.0 || u + v > 1.0 {
+    if v < -1e-12 || u + v > 1.0 + 1e-12 {
         return None;
     }
     let t = f * edge2.dot(q);

@@ -95,7 +95,7 @@ pub enum ShapeGeometry {
     /// Heightfield (regular grid of height samples) — references
     /// entry `field_id` in [`super::Model::heightfields`]. Surface
     /// is defined by `height[i, j]` at grid coordinates
-    /// `(origin + i·cell_size·X, height, origin + j·cell_size·Z)`.
+    /// `(origin.x + i·cell_size, origin.y + height, origin.z + j·cell_size_z)`.
     /// Each quad cell decomposes into 2 triangles on the fly during
     /// narrow phase; collision queries route through the same
     /// triangle-based GJK/EPA path as `TriMesh`.
@@ -1519,7 +1519,7 @@ impl ModelBuilder {
 
     /// Register a heightfield (regular grid of height samples) and
     /// return its `field_id`. The grid sits at `origin` in shape-local
-    /// frame with `nx · nz` samples spaced `cell_size` apart.
+    /// frame with independent X/Z sample spacing.
     pub fn add_heightfield(&mut self, hf: super::Heightfield) -> u32 {
         let id = self.heightfields.len() as u32;
         self.heightfields.push(hf);
@@ -1539,6 +1539,7 @@ impl ModelBuilder {
                 "add_shape_heightfield: field_id {field_id} not registered"
             )));
         }
+        self.heightfields[field_id as usize].validate()?;
         Ok(self.push_shape(body, local_pose, ShapeGeometry::Heightfield { field_id }))
     }
 

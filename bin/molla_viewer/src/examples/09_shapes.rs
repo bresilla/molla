@@ -34,6 +34,7 @@ fn build_shapes_model() -> (mp::Model, Vec<BodyVisual>) {
         nx: n,
         nz: n,
         cell_size: cell,
+        cell_size_z: cell,
         origin: MVec3::new(-half, 0.0, -half),
         heights,
     };

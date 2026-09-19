@@ -40,6 +40,7 @@ fn heightfield_local_aabb_matches_extents() {
         nx: 4,
         nz: 4,
         cell_size: 1.0,
+        cell_size_z: 1.0,
         origin: V3::new(-1.5, 0.0, -1.5),
         heights: vec![0.0; 16],
     };
@@ -68,6 +69,7 @@ fn sphere_settles_on_flat_heightfield() {
         nx: 5,
         nz: 5,
         cell_size: 1.0,
+        cell_size_z: 1.0,
         origin: V3::new(-2.0, 0.0, -2.0),
         heights: vec![0.0; 25],
     };
@@ -120,6 +122,7 @@ fn box_settles_on_flat_heightfield_without_tunneling() {
         nx: 5,
         nz: 5,
         cell_size: 1.0,
+        cell_size_z: 1.0,
         origin: V3::new(-2.0, 0.0, -2.0),
         heights: vec![0.0; 25],
     };
@@ -202,6 +205,7 @@ fn convex_hull_settles_on_flat_heightfield_without_tunneling() {
         nx: 5,
         nz: 5,
         cell_size: 1.0,
+        cell_size_z: 1.0,
         origin: V3::new(-2.0, 0.0, -2.0),
         heights: vec![0.0; 25],
     };
@@ -288,6 +292,7 @@ fn sphere_heightfield_ramp_contact_has_expected_normal_and_depth() {
         nx: 3,
         nz: 3,
         cell_size: 1.0,
+        cell_size_z: 1.0,
         origin: V3::new(-1.0, 0.0, -1.0),
         heights,
     };

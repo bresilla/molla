@@ -628,16 +628,7 @@ fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> R
             builder.add_shape_trimesh(body, mesh, pose)
         }
         ColliderGeometry::Heightfield(field) => {
-            if field.nx < 2
-                || field.nz < 2
-                || field.nx as u64 * field.nz as u64 != field.heights.len() as u64
-                || !field.origin.is_finite()
-                || !field.cell_size.is_finite()
-                || field.cell_size <= 0.0
-                || field.heights.iter().any(|h| !h.is_finite())
-            {
-                return Err(Error::Build("invalid runtime heightfield".into()));
-            }
+            field.validate()?;
             let field = builder.add_heightfield(field.clone());
             builder.add_shape_heightfield(body, field, pose)
         }

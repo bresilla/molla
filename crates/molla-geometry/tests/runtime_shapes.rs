@@ -196,6 +196,7 @@ fn heightfield_bounds_include_vertical_origin_and_mesh_bounds_use_vertices() {
         nx: 3,
         nz: 2,
         cell_size: 2.0,
+        cell_size_z: 2.0,
         origin: Vec3::new(-2.0, 7.0, -1.0),
         heights: vec![1.0, -2.0, 0.0, 2.0, 1.0, 0.0],
     };

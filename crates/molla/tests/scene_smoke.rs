@@ -666,6 +666,7 @@ fn build_shapes_smoke() -> Model {
         nx: n,
         nz: n,
         cell_size: cell,
+        cell_size_z: cell,
         origin: Vec3::new(-half, 0.0, -half),
         heights,
     };
@@ -1816,6 +1817,7 @@ fn build_heightfield_smoke() -> Model {
         nx: n,
         nz: n,
         cell_size: cell,
+        cell_size_z: cell,
         origin: Vec3::new(-half, 0.0, -half),
         heights,
     };

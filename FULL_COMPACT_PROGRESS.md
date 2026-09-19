@@ -23,10 +23,9 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   the current pose; fixing zeroes velocity. Changing a non-root to fixed is
   currently rejected and still needs a re-rooting implementation.
 - Runtime collider replacement supports ball, cuboid, Y capsule, endpoint
-  capsule, Y cylinder, round cylinder, convex hull, triangle mesh and the
-  existing square-spacing heightfield, with local pose, friction, restitution
-  and tags. Indexed-mesh convex decomposition and independently scaled
-  row-major heightfields remain.
+  capsule, Y cylinder, round cylinder, convex hull, triangle mesh and native
+  rectangular heightfield, with local pose, friction, restitution and tags.
+  Indexed-mesh convex decomposition remains.
 - Endpoint capsules retain the authored collider frame and lower to a posed
   Y capsule; coincident endpoints lower to a sphere. Collider descriptor,
   local/world pose reads and local/world pose writes are available without
@@ -46,6 +45,35 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Direct GPU primitive kernels still do not implement round cylinders.
 - Heightfield bounds now include `origin.y`, matching the existing triangle
   and hull-contact paths; the omission could cull elevated terrain contacts.
+- `Heightfield::from_scaled(rows, cols, heights, scale)` constructs a centered
+  row-major grid with independent X/Z spacing and baked Y-scaled heights.
+  The low-level struct now requires `cell_size_z` alongside X's `cell_size`;
+  all workspace literals were migrated. Dimensions, scales, samples and
+  resulting coordinates are validated before attachment. Zero/negative Y
+  scale is supported; horizontal scale must remain positive.
+- Heightfield cell triangles, height/normal sampling, hull contacts and CPU
+  ray queries share the anti-diagonal used by Parry's default heightfield
+  (verified in local `parry3d-f64-0.26.1/src/shape/heightfield3.rs`). The old
+  opposite-diagonal triangle path and bilinear hull path disagreed on curved
+  cells. Rotated terrain contact culling now transforms all eight query-box
+  corners; hull penetration and midpoint use the facet-normal projection.
+- `molla_geometry::raycast_cpu` and `RigidWorld::cast_ray[_filtered]` return
+  stable collider/body handles, metric distance, point and normal without a
+  GPU or stepping. Directions are normalized, matching Gearbox's Rapier
+  implementation. Enabled sensors participate; disabled colliders do not.
+  Solid primitives/hulls return zero from inside, limits are inclusive, and
+  filtered queries select colliders before geometry work. Body pose changes
+  are read directly, including local shape offsets and nonzero COM.
+- Terrain rays traverse only crossed X/Z cells with a bounded DDA; vertical
+  rays avoid scanning the height array or constructing mesh acceleration.
+  Other primitives use bounded signed-distance minimization/root refinement
+  (spheres have a direct analytic path), hulls use facet clipping, and meshes
+  use the CPU BVH. Mesh BVHs and hull facets are currently constructed per
+  intersected collider/query; persistent preparation remains a performance
+  follow-up before high-volume mesh/tyre query acceptance.
+- CPU mesh BVH rays now include origin/maximum-distance hits and handle
+  parallel slab-boundary rays without `0 * infinity` NaNs. The triangle
+  intersection is shared with the terrain traversal.
 - CPU Featherstone now publishes world COM/angular velocities. Its moving
   free/D6/distance angular subspace includes the translated joint origin and
   the associated velocity bias. The acceleration solve includes the bias in
@@ -92,9 +120,9 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
 | 2: bodies | Pose/mass/COM/inertia/initial velocity/tag available in model/state/descriptors. Full read/write API, enabled/quarantine, damping, sleep/wake, additional-mass replacement, force/impulse helpers, CCD option, collider mass recomputation and no-step synchronization remain. |
-| 3: colliders | Endpoint capsules, round cylinders, primitive/convex/other views, descriptor/pose reads, local/world pose writes and local/world/arbitrary-pose AABBs added. Material mutation, friction rules, two-way masks and enabled/sensor flags remain tested. Convex decomposition, rectangular scaled heightfields and density/mass remain. |
+| 3: colliders | Endpoint capsules, round cylinders, independently scaled native heightfields, primitive/convex/other views, descriptor/pose reads, pose writes and local/world/arbitrary-pose AABBs added. Material mutation, friction rules, two-way masks and enabled/sensor flags remain tested. Convex decomposition and density/mass remain. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
-| 5: world | Gravity access, CPU world step with configurable substeps, and per-step body-pair callback implemented. Solver-setting mapping for Gearbox and handle-aware CPU raycast remain. Existing `molla-sensors::Raycaster` is GPU-only; it cannot directly fill the CPU-backend requirement. |
+| 5: world | Gravity access, CPU world step with configurable substeps, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
 | 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
@@ -185,12 +213,32 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Workspace `make check-all` and strict scoped Clippy passed. No external
   dependencies, Makefile/environment changes or Gearbox edits were needed.
 
+### Scaled terrain / CPU ray verification
+
+- Twelve `cpu_scene_queries` tests cover rectangular row-major grids and Y
+  scaling, validation/atomic rejection, nonplanar cell diagonals, hull-normal
+  penetration, rotated terrain contact culling, metric and transformed rays,
+  inside/zero/max-distance hits, tangencies and tangent intervals, enabled
+  sensor/filter behavior, removals, pose edits without stepping, convex hulls
+  and mesh slab boundaries. Two hundred oblique terrain rays match an
+  independently traversed equivalent triangle-mesh BVH.
+- A large-grid test fires 512 vertical rays against 131,841 height samples;
+  one debug run took 467.432 microseconds for the ray loop. This is a bounded
+  query-path observation, not a release benchmark or tractor-step acceptance.
+- Regression lanes passed: sim 23 tests/doctests; geometry 113 unit, 5 material,
+  8 previous shape and 12 new terrain/query tests; solvers 71 selected tests.
+  Total: 232 CPU tests/doctests. The rounded-cylinder GPU-fallback regression,
+  workspace `make check-all` and strict scoped Clippy also passed.
+- No new dependencies or Gearbox checkout edits. Remaining query optimization:
+  reuse prepared mesh BVHs/hull facets across repeated queries, with safe
+  invalidation on scene mutations.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Complete convex decomposition, independently scaled heightfields and CPU
-   raycast, then collider/body editing and mass/impulse APIs.
+2. Complete indexed-mesh convex decomposition, then collider/body editing and
+   mass/impulse APIs; prepare mesh/hull query data for high-volume terrain use.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.

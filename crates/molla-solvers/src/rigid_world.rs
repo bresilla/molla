@@ -52,6 +52,31 @@ impl RigidWorld {
         self.step_filtered(dt, |_, _| false)
     }
 
+    pub fn cast_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: Real,
+    ) -> Result<Option<molla_geometry::raycast_cpu::RayHit>> {
+        molla_geometry::raycast_cpu::cast_ray(&self.scene, origin, direction, max_distance)
+    }
+
+    pub fn cast_ray_filtered(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: Real,
+        include: impl FnMut(ColliderHandle) -> bool,
+    ) -> Result<Option<molla_geometry::raycast_cpu::RayHit>> {
+        molla_geometry::raycast_cpu::cast_ray_filtered(
+            &self.scene,
+            origin,
+            direction,
+            max_distance,
+            include,
+        )
+    }
+
     pub fn collider_local_aabb(&self, id: ColliderHandle) -> Result<Aabb> {
         collider_query::collider_local_aabb(&self.scene, id)
     }
