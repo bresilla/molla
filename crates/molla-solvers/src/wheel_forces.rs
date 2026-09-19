@@ -68,6 +68,7 @@ impl FrictionGrid {
 pub struct WheelSample {
     pub wheel: BodyHandle,
     pub ground: ColliderHandle,
+    pub ground_point: Vec3,
     pub dt: Real,
     pub normal: Vec3,
     pub friction: Real,
@@ -483,6 +484,7 @@ impl WheelForces {
             samples.push(WheelSample {
                 wheel: w.body,
                 ground: hit.collider,
+                ground_point: hit.point,
                 dt,
                 normal,
                 friction,

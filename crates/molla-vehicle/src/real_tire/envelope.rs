@@ -39,10 +39,14 @@ impl LoadedTireEnvelope {
         let sidewall =
             ((radial - self.bead_radius) / (self.radius - self.bead_radius)).clamp(0.0, 1.0);
         let shoulder = (std::f64::consts::PI * sidewall).sin();
-        let lower_sector = (-y / radial).clamp(0.0, 1.0).powi(4);
+        let downward = (-y / radial).clamp(0.0, 1.0);
+        let lower_sector = downward.powi(4);
         let lateral = (z / (0.25 * self.width)).clamp(-1.0, 1.0);
         let bulge = 0.65 * compression * shoulder * lower_sector * lateral;
-        [x, y.max(-loaded), z + bulge]
+        let radial_weight = sidewall * sidewall * (3.0 - 2.0 * sidewall);
+        let tread_lift = (self.radius * downward - loaded).max(0.0);
+        let compressed_y = y + radial_weight * tread_lift;
+        [x, compressed_y.max(-loaded), z + bulge]
     }
 }
 
@@ -92,5 +96,23 @@ mod tests {
             .deform(point),
             point
         );
+    }
+
+    #[test]
+    fn lower_sidewall_compresses_before_it_reaches_the_ground() {
+        let point = [0.0, -0.75, 0.2];
+        let low = envelope(0.8).deform(point);
+        let high = envelope(0.95).deform(point);
+        assert!((low[1] + 0.65).abs() < 1e-12);
+        assert!(low[1] > high[1] && high[1] > point[1]);
+        for loaded in [0.55, 0.8, 0.95] {
+            for radial in [0.5, 0.55, 0.75, 1.0, 1.05] {
+                for angle in 0..=180 {
+                    let theta = (angle as f64).to_radians();
+                    let p = [radial * theta.cos(), -radial * theta.sin(), 0.2];
+                    assert!(envelope(loaded).deform(p)[1] >= -loaded - 1e-12);
+                }
+            }
+        }
     }
 }

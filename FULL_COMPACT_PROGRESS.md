@@ -1291,6 +1291,234 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   keep the full objective active. Engram tools remain unavailable, so this
   tracked handoff records the session outcome.
 
+### Rubber/ground mismatch investigation (2026-09-19)
+
+#### Goal and instructions
+
+- User still saw unchanged rubber, then suggested inflation grows through
+  the ground rather than lifting the tractor. Investigate rendered vertices
+  and ground support directly, without touching original Gearbox/assets.
+
+#### Discoveries
+
+- Opt-in vertex tracing proved real rubber meshes are being modified, but
+  the old envelope mostly clamped bottom vertices and bulged sideways. Lower
+  sidewall vertices above the support plane had no vertical compression.
+- Renderer used positive support force as the condition for deformation.
+  Damping can make support force zero while the tyre still intersects terrain;
+  restoring the undeformed mesh then loses the ground constraint. Imported
+  tread lugs can also extend beyond the nominal collider radius. Before the
+  first support sample, traced front tread vertices reached about -0.042 m
+  against the flat y=0 ground. Settled positive-force samples were near y=0.
+- Loaded-radius readout used the last pre-integration sample with a final
+  integrated hub pose. Those two frames need a consistent ground reference.
+
+#### Accomplished
+
+- Molla `WheelSample` now retains the actual terrain ray-hit point separately
+  from tyre force application position; backend pressure output keeps that
+  ground plane even with zero normal force. Loaded radius is evaluated from
+  the final hub pose and terrain plane.
+- Render deformation uses this geometry rather than the support-force flag,
+  constrains rubber/tread vertices above its plane, and includes ground
+  distance in the update cache. Collider helper meshes are excluded.
+- Reusable contact envelope now distributes vertical tread displacement
+  smoothly through the lower sidewall, keeping bead and upper rubber fixed.
+- Regression tests: inflation raises a vertically supported chassis without
+  teleporting, deflation returns it, final support plane stays grounded;
+  zero-force rubber/lugs remain above flat and tilted planes; lower-sidewall
+  compression is continuous and ground-safe. Binary suite passes 73, Molla
+  wheel integration 16, envelope tests 4; native build passes.
+
+#### Next steps and relevant files
+
+- Live updated Kubota validation is in progress in `molla-rubber`. Do not
+  claim user-visible acceptance before checking the updated output/feedback.
+- Molla `real_tire/envelope.rs`, solver `wheel_forces.rs`; isolated Gearbox
+  `physics/backend.rs`, `physics/molla/{wheel,tests}.rs`, `viewer/tyre_mesh.rs`.
+- Opt-in `GEARBOX_TYRE_MESH_TRACE=1` reports actual mesh vertex displacement,
+  world-space bottom and sampled terrain height. Logs `/tmp/molla-rubber-*`.
+- Engram save/session-summary tools remain unavailable; this tracked entry
+  preserves the diagnosis, changes and remaining acceptance work.
+
+### Live pressure response confirmed (2026-09-19)
+
+#### Goal
+
+- Check whether sidebar pressure edits reach the rubber, then distinguish
+  slow inflation from a frozen shape.
+
+#### Instructions
+
+- User now confirms the visible pressure change works after waiting. Their
+  next concern is whether the fully inflated tyre should appear rounder.
+- Original Gearbox and source assets remain untouched.
+
+#### Discoveries
+
+- The default pressure rate is 0.2 bar per simulated second. A real sidebar
+  click changed the target from 0.5265 to 3.9735 bar; applied pressure reached
+  it in about 25 wall seconds in this debug run. Front deflection decreased
+  from 82.5 to 35.3 mm, with loaded radius increasing from 0.5614 to 0.6086 m.
+- Imported tread extends beyond nominal tyre geometry. Its additional ground
+  clipping may contribute to the still-flattened high-pressure appearance;
+  this is a hypothesis to investigate, not a calibrated-shape diagnosis.
+
+#### Accomplished
+
+- Verified actual UI edits and time-series pressure/deflection readback;
+  inspected the low-pressure rendered image. User accepted live response.
+- Molla vehicle library: 232 tests pass; workspace check-all passes.
+- Isolated Gearbox binary suites: 73 tests pass with each backend selection.
+
+#### Next Steps
+
+- Investigate high-pressure roundness against mesh radius, load and carcass
+  properties. Do not remove all load-dependent flattening or exaggerate mesh
+  changes independently of physics. Inflation rate has not been changed.
+- Ground/envelope changes remain uncommitted; full compatibility goal remains
+  incomplete. Engram tools remain unavailable.
+
+#### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/envelope.rs` — rubber envelope.
+- `crates/molla-solvers/src/wheel_forces.rs` — terrain support sample.
+- Isolated Gearbox `bin/gearbox/src/viewer/tyre_mesh.rs` — mesh deformation.
+- `/tmp/response-{low,high}.png`, `/tmp/molla-pressure-response.log` — live
+  evidence; high-pressure screenshot saved but not inspected in this check.
+
+### Reverted roundness experiment (2026-09-19)
+
+#### Goal
+
+- User requested rounder fully inflated rubber, then rejected the resulting
+  version: "you fucked up completely". Exact visible failure is not yet known.
+
+#### Instructions
+
+- Undo only the latest roundness experiment; preserve the pressure response
+  the user previously confirmed and the earlier ground-contact fixes.
+- Do not touch original Gearbox. Ask what went wrong before another attempt.
+
+#### Discoveries
+
+- Inferring the physical support radius from undeformed rubber raised the
+  Kubota front radius from about 0.644 to 0.691 m and rear to 0.888 m. This
+  changed physical support geometry, not merely rubber appearance.
+- Tests passed (74 per backend selection), but that did not establish visual
+  acceptance. The user rejected the live experiment before visual validation
+  was complete. Do not treat its radius inference as an accepted solution.
+
+#### Accomplished
+
+- Reversed only the experiment in isolated Gearbox controller/wheel_forces.rs
+  and restored renderer-local mesh naming helpers. Earlier envelope and
+  ground-plane changes remain intact. Original Gearbox is untouched.
+- Saved the reversed patch at `/tmp/molla-roundness-rollback.patch` for audit.
+- Native rollback build passed; no replacement window was launched.
+
+#### Next Steps
+
+- Wait for the user's description of the failure.
+- High-pressure roundness remains unresolved. No new tuning or relaunch until
+  the failure is understood. Engram tools remain unavailable.
+
+#### Relevant Files
+
+- Isolated Gearbox `bin/gearbox/src/controller/wheel_forces.rs` — back to its
+  pre-experiment state; collider-derived physical radius restored.
+- Isolated Gearbox `bin/gearbox/src/viewer/tyre_mesh.rs` — previous working
+  deformation retained, shared experiment helpers removed.
+- `/tmp/gearbox-round-rollback-build.log` — rollback build result.
+
+### Restored-version motion check (2026-09-19)
+
+#### Goal
+
+- Investigate the user's report that it no longer moves. Asked whether this
+  means tractor driving or rubber inflation; clarification remains pending.
+
+#### Instructions
+
+- Leave roundness tuning reverted. Test only the isolated restored build.
+
+#### Discoveries
+
+- Fresh restored Kubota responds to a remote straight-drive command. A 1 m/s
+  target ramped through 0.10, 0.33, 0.59 and 0.87 m/s. Before/after state moved
+  from x=0.0126 to x=0.7936 m. This does not verify keyboard/gamepad ownership
+  or prove the cause of the user's reported failure.
+- The debug window ran near 2.2 FPS during this check; simulation advancement
+  is slower than wall time. Local keyboard ownership can override bus input
+  even with no movement key held; do not conflate that with solver failure.
+
+#### Accomplished
+
+- Relaunched restored `molla-rubber`, spawned the Kubota, tested remote drive,
+  sent a stop, and inspected its rendered screenshot. No new source edits.
+- Original Gearbox instance remains untouched.
+
+#### Next Steps
+
+- Obtain precise user clarification, then reproduce the relevant control
+  path. Keyboard/gamepad and pressure deformation still need this retest.
+- Do not resume high-pressure roundness changes yet. Engram unavailable.
+
+#### Relevant Files
+
+- `/tmp/molla-restored-drive.log`, `/tmp/molla-restored-drive.png` — live run.
+- `/tmp/restored-{before,after}-drive.json` — movement readback.
+- Isolated Gearbox `viewer/drive/keyboard.rs`, `controller.rs` — read-only
+  inspection of local control ownership; no changes made.
+
+### Rubber-only clarification and response retest (2026-09-20)
+
+#### Goal and instructions
+
+- User clarified that "does not move" means rubber does not visibly change
+  with pressure, not that the tractor cannot drive. Stop drive debugging.
+- Keep physical support-radius experiment reverted; no roundness changes.
+
+#### Discoveries and decision
+
+- Restored code accepts pressure targets and moves actual rubber vertices.
+  In the instrumented run, front hub fell from 0.5902 to 0.5864 m over about
+  7 wall seconds; maximum rubber displacement increased from 58.5 to 62.3 mm.
+- Window ran around 2.1 FPS. With twelve 120 Hz steps per frame, pressure
+  advancement at the old 0.2 bar/s becomes about 0.04 bar per wall second.
+  Full-range inflation can therefore take over a minute. This is observed
+  behavior in the retest, not proof of the user's exact previous state.
+- Mesh update timing: about 90 ms total, 80 ms deformation, 5 ms normals,
+  effectively no tangent cost. Do not replace tangent generation speculatively.
+- Increase isolated backend's uncalibrated default inflation rate to 1 bar
+  per simulated second, retaining authored rate overrides and successful-step
+  advancement. Do not alter radii, shape mapping, pressure limits or loads.
+
+#### Accomplished
+
+- Added full backend-to-private-mesh inflation/deflation regression, checking
+  both directions, unchanged source asset, cache refresh and ground contact.
+- Added opt-in mesh timing alongside existing vertex diagnostics.
+
+#### Next Steps
+
+- Finish tests/build and check low/high rendered states of the faster-rate
+  version; user-visible acceptance is still pending. Engram unavailable.
+
+#### User acceptance update
+
+- User confirmed the faster-rate version works ("nice it works") and again
+  requested a rounder high-pressure tyre with a smaller ground contact patch.
+- Both backend-selected binary suites passed 74 tests, including the new
+  pressure-to-private-mesh regression; native build passed. Preserve this
+  pressure response while addressing high-pressure shape.
+
+#### Relevant Files
+
+- Isolated Gearbox `physics/backend.rs`, `physics/molla/tests.rs`,
+  `viewer/tyre_mesh.rs`, `specs/TYRE_PRESSURE.md`.
+- `/tmp/molla-rubber-timing.log`, `/tmp/rubber-retest-{low,high}.png`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
