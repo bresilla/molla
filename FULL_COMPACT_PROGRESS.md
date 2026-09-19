@@ -235,11 +235,11 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 3: colliders | Requested shape kinds, queries, materials, masks and runtime edits implemented. Gearbox accessor/query/mass tests pass; compound edit failure atomicity and live scene coverage remain. |
 | 4: joints | Stable insert/remove, arbitrary-tree merge/split/re-rooting, frames, enabled state, collision flags, locks, limits, motors/caps, acceleration gains, pair queries and CPU softness implemented. Gearbox hitch-capture loop tested. Soft angular coordinates use the D6 chart; multi-turn soft revolute position and GPU parity remain. |
 | 5: world | Gravity, configurable CPU substeps, quarantine, pair filtering and CPU raycasts wired through Gearbox. Internal iterations map to substeps; direct ABA has no outer iterative-solver equivalent. CPU queries remain in geometry. |
-| 6.1-6.3: tyres | Articulated CPU wheel forces, shape-level ground masking, static scene heightfield/trimesh sampling, per-cell friction and substep TireOutput readout implemented and tested. Gearbox wheel/terrain registration and traction/stamping consumers remain. |
+| 6.1-6.3: tyres | Articulated CPU wheel forces, ground masking, static terrain sampling and per-cell friction API implemented. Gearbox scene registration, signed motors, traction and stamping consume tyre readout. Real field-profile friction authoring and live vehicle acceptance remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
-| 8.5: Gearbox implementation | Experimental `MollaBackend`, selection arm and compliant hitch capture implemented in `gearbox-physics`. Sleeping, tyre integration, failure-path hardening and live acceptance remain. |
-| 9: 43 binary tests on both backends | Original 43 plus ten new checks pass (53 tests) with each explicit backend environment. Reduced-joint expectation is backend-specific; all original motor target/cap assertions remain. |
+| 8.5: Gearbox implementation | Experimental `MollaBackend`, compliant hitches and articulated tyres wired in `gearbox-physics`; runnable native build passes. Sleeping, failure-path hardening and live acceptance remain. |
+| 9: 43 binary tests on both backends | Original 43 plus fourteen new checks pass (57 tests) with each explicit backend environment. Reduced-joint expectation is backend-specific; all original motor target/cap assertions remain. |
 | 9: tractor driving | Pending spawn, forward 2/turn 0.4, heading comparison and visible tracks. |
 | 9: hitch/tow/detach | Pending rear_drawbar teleport attach, turn, detach, finite state and no quarantine. |
 | 9: Kubota | Pending all five controllers, including hitch lift and PTO motion. |
@@ -677,6 +677,54 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   contact. No USD/import logic, viewer code, environment, recipes, vendor or
   specification files changed. Engram tools remain unavailable.
 
+### Gearbox articulated tyre consumers and scene registration
+
+- Gearbox source checkpoint: unsigned commit `a0ac5d1`
+  (`feat(physics): connect articulated tyre forces`).
+- Added backend-neutral wheel descriptors, friction grids and last-step tyre
+  outputs. Molla registers `WheelForces`; Rapier retains its existing rigid
+  contact path. Readout integrates substep normal/friction impulses over the
+  actual completed step duration, with impulse-weighted point, normal and slip.
+  Changing future solver dt does not rescale an already completed readout.
+- Gearbox's controller preparation now resolves wheel bodies, revolute spin
+  joints, collider hub/radius and supported mass. Registration retries until
+  the scene is ready and refreshes when geometry, joint or mass inputs change.
+  Rolling direction follows the bearing/knuckle, not the spinning wheel.
+  Authored axle direction determines both the tyre spin sign and controller
+  motor-target sign. Removal clears the adapter's wheel metadata.
+- Meadow heightfields, loaded USD terrain meshes and the flat slab register
+  as tyre ground. Core registration now accepts explicitly selected static
+  cuboids as well as heightfields/trimeshes, using the same top-surface query.
+  Safety floors and obstacles are not automatically promoted to tyre terrain.
+- Traction budgets use mean tyre normal/friction loads. Registered wheel
+  stamps use tyre contact state/point rather than approximate terrain height;
+  link values expose tyre slip ratio, slip angle and normal force. Unregistered
+  wheels and Rapier retain the old contact/stamping path.
+- Initial tyre tuning uses nominal per-wheel supported mass, 4% radial
+  deflection at nominal load, damping ratio 0.7 and load-scaled smooth slip
+  gains. This is not calibrated tractor acceptance. The current Gearbox
+  field-profile source exposes visual ground materials, not a physics friction
+  grid; scene builders currently retain scalar material friction. The new
+  backend grid API is tested, but actual per-field/cell authoring remains.
+- Four new Gearbox checks cover load/grid readout without penalty manifolds,
+  opposite axle signs and forward motion, failed registration/removal, and a
+  headless ECS scene executing registration, traction and elevated tyre-point
+  stamping. Disabling terrain clears its stamp. With Molla selected, the ECS
+  test proves the tyre consumer path; Rapier checks its unchanged fallback.
+- Gearbox passes 57/57 binary tests with each explicit backend. Native
+  `nix develop --impure -c oslo make build` now also passes, producing the
+  runnable `target/debug/gearbox`; no GUI/live scene was launched this turn.
+  Its scoped strict Clippy still reports the same seven pre-existing errors
+  outside the new wheel code. Existing all-target test limitations remain.
+- Molla's eight articulated-wheel tests, workspace `make check-all`, scoped
+  all-feature/no-default solver Clippy and diff checks pass. Direct local
+  `molla-vehicle` wiring changes no external dependency versions. No environment,
+  recipes, vendors or specification changes. Engram tools remain unavailable.
+- Next acceptance work should run the real binary and named tractor/hitch
+  scenes, not infer drive/steer/tracks or <1 ms performance from headless tests.
+  Sleeping, deformation/MPM, soft angular phase, GPU parity and failure-path
+  hardening also remain within the unchanged full objective.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
@@ -686,7 +734,7 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 3. Finish soft angular phase semantics and GPU joint-control parity; validate
    compliant hitches at real tractor/trailer scale.
 4. Complete and validate the Gearbox backend in its existing physics worktree.
-5. Register Gearbox wheels and terrain with `RigidWorld::wheels`, connect
-   tyre samples to traction/stamping, then sleeping/deformation/MPM as specified.
+5. Validate real Gearbox tyre/terrain behavior and field-friction authoring,
+   then sleeping/deformation/MPM as specified.
 6. Run and record every original acceptance scene, performance and deterministic
    replay gate. Do not mark the objective complete from library tests alone.

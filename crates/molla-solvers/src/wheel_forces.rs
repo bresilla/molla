@@ -95,14 +95,16 @@ fn validate_ground(scene: &RigidScene, id: ColliderHandle) -> Result<()> {
         .ok_or_else(|| invalid("unknown wheel terrain collider"))?;
     if !matches!(
         collider.geometry,
-        ColliderGeometry::Heightfield(_) | ColliderGeometry::TriMesh(_)
+        ColliderGeometry::Heightfield(_)
+            | ColliderGeometry::TriMesh(_)
+            | ColliderGeometry::Cuboid { .. }
     ) || collider.sensor
         || collider
             .parent
             .is_some_and(|b| scene.body(b).is_none_or(|b| b.kind != BodyKind::Fixed))
     {
         return Err(invalid(
-            "wheel terrain requires a static, nonsensor heightfield or triangle mesh",
+            "wheel terrain requires a static, nonsensor heightfield, triangle mesh or cuboid",
         ));
     }
     Ok(())
