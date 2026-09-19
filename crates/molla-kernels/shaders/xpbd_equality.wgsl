@@ -28,7 +28,7 @@
 // drift on bouncing-stack scenes is bounded and characterised by
 // `tests/xpbd_equality_gpu.rs::gpu_friction_velocity_survives_equality_recovery`.
 
-const FLAG_KINEMATIC: u32 = 1u;
+const FLAG_IMMOVABLE: u32 = 3u;
 const EQ_TYPE_CONNECT: u32     = 0u;
 const EQ_TYPE_WELD: u32        = 1u;
 const EQ_TYPE_JOINT_MIMIC: u32 = 2u;
@@ -162,8 +162,8 @@ fn project_equality() {
 
             let a_idx = u32(a);
             let b_idx = u32(b);
-            let kin_a = (a < 0) || ((body_flags[a_idx] & FLAG_KINEMATIC) != 0u);
-            let kin_b = (b < 0) || ((body_flags[b_idx] & FLAG_KINEMATIC) != 0u);
+            let kin_a = (a < 0) || ((body_flags[a_idx] & FLAG_IMMOVABLE) != 0u);
+            let kin_b = (b < 0) || ((body_flags[b_idx] & FLAG_IMMOVABLE) != 0u);
 
             var inv_m_a: f32 = 0.0;
             var inv_m_b: f32 = 0.0;
@@ -306,7 +306,7 @@ fn project_equality() {
 fn recover_velocity_after_equality(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= u.body_count) { return; }
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) { return; }
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) { return; }
 
     let q_now = body_q[tid];
     let q_pre = body_q_pre_eq[tid];
@@ -375,4 +375,3 @@ fn project_joint_mimic() {
         }
     }
 }
-

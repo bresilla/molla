@@ -183,9 +183,13 @@ fn cpu_step(
     let mut qd_out = vec![SpatialVector::ZERO; model.body_count];
 
     for tid in 0..model.body_count {
-        if (flags[tid] & BodyFlags::KINEMATIC) != 0 {
+        if (flags[tid] & BodyFlags::IMMOVABLE) != 0 {
             q_out[tid] = q_in[tid];
-            qd_out[tid] = qd_in[tid];
+            qd_out[tid] = if flags[tid] & BodyFlags::FIXED != 0 {
+                SpatialVector::ZERO
+            } else {
+                qd_in[tid]
+            };
             continue;
         }
 

@@ -7,6 +7,10 @@ pub mod BodyFlags {
     pub const DYNAMIC: u32 = 0;
     /// Body's pose is user-prescribed; integrators pass it through unchanged.
     pub const KINEMATIC: u32 = 1 << 0;
+    /// Body remains at its world pose with zero velocity.
+    pub const FIXED: u32 = 1 << 1;
+    /// Bodies whose motion cannot be changed by forces or constraints.
+    pub const IMMOVABLE: u32 = KINEMATIC | FIXED;
 }
 
 /// Per-particle flags. Populated in stage 4.

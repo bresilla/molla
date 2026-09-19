@@ -51,7 +51,8 @@ struct Uniforms {
     _pad2:              f32,
 };
 
-const FLAG_KINEMATIC: u32 = 1u;
+const FLAG_IMMOVABLE: u32 = 3u;
+const FLAG_FIXED: u32 = 2u;
 const STATIC_BODY:    u32 = 0xffffffffu;
 const B_SIDE_BIT:     u32 = 0x80000000u;
 
@@ -158,7 +159,7 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= uniforms.body_count) { return; }
 
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) {
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) {
         body_q_pred[tid] = body_q_in[tid];
         body_v_pred[tid] = vec4<f32>(0.0);
         body_w_pred[tid] = vec4<f32>(0.0);
@@ -208,7 +209,7 @@ fn project_position(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= uniforms.body_count) { return; }
 
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) {
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) {
         body_q_alt[tid] = body_q_out[tid];
         return;
     }
@@ -242,7 +243,7 @@ fn project_position(@builtin(global_invocation_id) gid: vec3<u32>) {
         let b = contact_b[c];
         let other = select(b, a, is_b);
         let other_kin = (other == STATIC_BODY) ||
-            ((body_flags[other] & FLAG_KINEMATIC) != 0u);
+            ((body_flags[other] & FLAG_IMMOVABLE) != 0u);
 
         // Fetch other-body data with proper static-body fallbacks.
         var inv_m_other = 0.0;
@@ -339,7 +340,7 @@ fn project_position(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn recover_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= uniforms.body_count) { return; }
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) {
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) {
         body_v_post[tid] = vec4<f32>(0.0);
         body_w_post[tid] = vec4<f32>(0.0);
         return;
@@ -356,7 +357,7 @@ fn recover_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= uniforms.body_count) { return; }
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) {
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) {
         return;
     }
     let inv_m_self = body_inv_mass[tid];
@@ -391,7 +392,7 @@ fn project_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let b = contact_b[c];
         let other = select(b, a, is_b);
         let other_kin = (other == STATIC_BODY) ||
-            ((body_flags[other] & FLAG_KINEMATIC) != 0u);
+            ((body_flags[other] & FLAG_IMMOVABLE) != 0u);
 
         var inv_m_other = 0.0;
         var q_other_pos = p_w;
@@ -613,9 +614,13 @@ fn write_final(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tid = gid.x;
     if (tid >= uniforms.body_count) { return; }
 
-    if ((body_flags[tid] & FLAG_KINEMATIC) != 0u) {
+    if ((body_flags[tid] & FLAG_IMMOVABLE) != 0u) {
         body_q_out[tid]  = body_q_in[tid];
         body_qd_out[tid] = body_qd_in[tid];
+        if ((body_flags[tid] & FLAG_FIXED) != 0u) {
+            body_qd_out[tid].linear = vec4<f32>(0.0);
+            body_qd_out[tid].angular = vec4<f32>(0.0);
+        }
         return;
     }
 

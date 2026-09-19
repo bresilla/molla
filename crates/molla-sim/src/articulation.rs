@@ -7,9 +7,76 @@
 //! pose-only "kinematics" subset suitable for IK targets and tests.
 
 use molla_core::Result;
-use molla_math::{Quat, Real, Transform, Vec3};
+use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
-use super::{JointType, Model, State};
+use super::{BodyFlags, JointType, Model, State};
+
+/// Reconstruct world COM velocities from generalized velocities in topological order.
+pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
+    let poses = state.body_q.host()?;
+    let com = model.body_com.host()?;
+    let parents = model.joint_parent.host()?;
+    let children = model.joint_child.host()?;
+    let frames = model.joint_x_p.host()?;
+    let axes = model.joint_axis.host()?;
+    let kinds = model.joint_type.host()?;
+    let coord_offsets = model.joint_coord_offset.host()?;
+    let dof_offsets = model.joint_dof_offset.host()?;
+    let q = state.joint_q.host()?;
+    let qd = state.joint_qd.host()?;
+    let flags = model.body_flags.host()?;
+    let velocities = state.body_qd.host_mut()?;
+    for j in 0..model.joint_count {
+        let child = children[j] as usize;
+        if flags[child] & BodyFlags::FIXED != 0 {
+            velocities[child] = SpatialVector::ZERO;
+            continue;
+        }
+        if flags[child] & BodyFlags::KINEMATIC != 0 {
+            continue;
+        }
+        let parent = parents[j];
+        let frame = if parent < 0 {
+            frames[j]
+        } else {
+            poses[parent as usize].compose(&frames[j])
+        };
+        let child_com = poses[child].position + poses[child].rotation * com[child];
+        let mut velocity = SpatialVector::ZERO;
+        if parent >= 0 {
+            let p = parent as usize;
+            let parent_com = poses[p].position + poses[p].rotation * com[p];
+            velocity = velocities[p];
+            velocity.linear += velocity.angular.cross(child_com - parent_com);
+        }
+        let c = coord_offsets[j] as usize;
+        let v = dof_offsets[j] as usize;
+        let mut origin = frame.position;
+        let mut linear = Vec3::ZERO;
+        let mut angular = Vec3::ZERO;
+        match joint_type_from_u32(kinds[j]) {
+            JointType::Revolute => angular = axes[j] * qd[v],
+            JointType::Prismatic => linear = axes[j] * qd[v],
+            JointType::Ball => angular = Vec3::new(qd[v], qd[v + 1], qd[v + 2]),
+            JointType::Free | JointType::D6 | JointType::Distance => {
+                origin += frame.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
+                linear = Vec3::new(qd[v], qd[v + 1], qd[v + 2]);
+                angular = Vec3::new(qd[v + 3], qd[v + 4], qd[v + 5]);
+            }
+            JointType::Cable => {
+                origin += frame.rotation * Vec3::Z * q[c];
+                linear = Vec3::Z * qd[v];
+                angular = Vec3::X * qd[v + 1];
+            }
+            JointType::Fixed => {}
+        }
+        let angular = frame.rotation * angular;
+        velocity.linear += frame.rotation * linear + angular.cross(child_com - origin);
+        velocity.angular += angular;
+        velocities[child] = velocity;
+    }
+    Ok(())
+}
 
 /// Compute world poses for every body from `state.joint_q`.
 ///
@@ -41,11 +108,15 @@ pub fn eval_fk(model: &Model, state: &mut State) -> Result<()> {
     let joint_axis = model.joint_axis.host()?;
     let coord_offset = model.joint_coord_offset.host()?;
     let q = state.joint_q.host()?.to_vec();
+    let flags = model.body_flags.host()?;
 
     let body_q = state.body_q.host_mut()?;
     for j in 0..model.joint_count {
         let parent = joint_parent[j];
         let child = joint_child[j] as usize;
+        if flags[child] & BodyFlags::IMMOVABLE != 0 {
+            continue;
+        }
         let parent_world = if parent < 0 {
             Transform::IDENTITY
         } else {

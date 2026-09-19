@@ -614,7 +614,11 @@ fn cpu_step(
     let mut w_pred: Vec<Vec3> = (0..n).map(|i| qd_in[i].angular).collect();
 
     for i in 0..n {
-        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
+        if (flags[i] & BodyFlags::IMMOVABLE) != 0 {
+            if flags[i] & BodyFlags::FIXED != 0 {
+                v_pred[i] = Vec3::ZERO;
+                w_pred[i] = Vec3::ZERO;
+            }
             continue;
         }
         let mut applied_lin = f_in[i].linear;
@@ -800,7 +804,7 @@ fn cpu_step(
 
             // Apply averaged per-body deltas.
             for i in 0..n {
-                if weight[i] <= 0.0 || (flags[i] & BodyFlags::KINEMATIC) != 0 {
+                if weight[i] <= 0.0 || (flags[i] & BodyFlags::IMMOVABLE) != 0 {
                     continue;
                 }
                 let inv_w = 1.0 / weight[i];
@@ -1083,7 +1087,7 @@ fn cpu_step(
         }
 
         for i in 0..n {
-            if v_weight[i] <= 0.0 || (flags[i] & BodyFlags::KINEMATIC) != 0 {
+            if v_weight[i] <= 0.0 || (flags[i] & BodyFlags::IMMOVABLE) != 0 {
                 continue;
             }
             let inv_w = 1.0 / v_weight[i];
@@ -1097,9 +1101,13 @@ fn cpu_step(
     let q_out = state_out.body_q.host_mut()?;
     let qd_out = state_out.body_qd.host_mut()?;
     for i in 0..n {
-        if (flags[i] & BodyFlags::KINEMATIC) != 0 {
+        if (flags[i] & BodyFlags::IMMOVABLE) != 0 {
             q_out[i] = q_in[i];
-            qd_out[i] = qd_in[i];
+            qd_out[i] = if flags[i] & BodyFlags::FIXED != 0 {
+                SpatialVector::ZERO
+            } else {
+                qd_in[i]
+            };
             continue;
         }
         q_out[i] = q_pred[i];
@@ -1166,7 +1174,7 @@ fn is_static_or_kinematic(flags: &[u32], idx: usize) -> bool {
     flags
         .get(idx)
         .copied()
-        .is_none_or(|f| f & BodyFlags::KINEMATIC != 0)
+        .is_none_or(|f| f & BodyFlags::IMMOVABLE != 0)
 }
 
 #[inline]
@@ -1239,9 +1247,9 @@ pub(crate) fn equality_projection_pass(
             let anchor_b_local = eq_anchor_b[c];
 
             let kin_a = a < 0
-                || ((flags.get(a as usize).copied().unwrap_or(0)) & BodyFlags::KINEMATIC != 0);
+                || ((flags.get(a as usize).copied().unwrap_or(0)) & BodyFlags::IMMOVABLE != 0);
             let kin_b = b < 0
-                || ((flags.get(b as usize).copied().unwrap_or(0)) & BodyFlags::KINEMATIC != 0);
+                || ((flags.get(b as usize).copied().unwrap_or(0)) & BodyFlags::IMMOVABLE != 0);
             let inv_m_a = if kin_a {
                 0.0
             } else {

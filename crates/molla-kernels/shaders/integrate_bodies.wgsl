@@ -29,7 +29,8 @@ struct Uniforms {
     has_external_force: u32, // 1 if Control::body_external_f populated, else 0
 };
 
-const FLAG_KINEMATIC: u32 = 1u;
+const FLAG_IMMOVABLE: u32 = 3u;
+const FLAG_FIXED: u32 = 2u;
 
 // ── Group 0 — Model (read-only) ──────────────────────────────────────
 @group(0) @binding(0) var<storage, read> body_inv_mass: array<f32>;
@@ -88,9 +89,13 @@ fn integrate_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let flags = body_flags[tid];
-    if ((flags & FLAG_KINEMATIC) != 0u) {
+    if ((flags & FLAG_IMMOVABLE) != 0u) {
         body_q_out[tid] = body_q_in[tid];
         body_qd_out[tid] = body_qd_in[tid];
+        if ((flags & FLAG_FIXED) != 0u) {
+            body_qd_out[tid].linear = vec4<f32>(0.0);
+            body_qd_out[tid].angular = vec4<f32>(0.0);
+        }
         return;
     }
 

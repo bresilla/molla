@@ -1257,13 +1257,7 @@ impl ModelBuilder {
                 .push(Vec3::new(0.0, -molla_math::GRAVITY, 0.0));
         }
 
-        // A KINEMATIC body is immovable by forces/constraints — its
-        // motion is prescribed by the host. Zero its inverse mass and
-        // inverse inertia regardless of the `mass` field so every
-        // consumer (including any GPU kernel that gathers
-        // `body_inv_mass` without re-checking the flag) treats it as
-        // infinitely massive. Matches Newton's finalize step.
-        let is_kinematic = (params.flags & BodyFlags::KINEMATIC) != 0;
+        let is_kinematic = (params.flags & BodyFlags::IMMOVABLE) != 0;
         let inv_mass = if params.mass > 0.0 && !is_kinematic {
             1.0 / params.mass
         } else {

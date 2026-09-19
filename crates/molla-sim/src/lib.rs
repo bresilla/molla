@@ -1,7 +1,7 @@
 //! Core simulation types: [`Model`], [`State`], [`Control`], [`Contacts`].
 //!
 //! These four types form the contract every solver consumes:
-//! [`Model`] is built once via [`ModelBuilder`] and then immutable;
+//! [`Model`] is an immutable solver snapshot built via [`ModelBuilder`];
 //! [`State`] holds the time-varying body / joint / particle data
 //! that solvers ping-pong between substeps; [`Control`] carries
 //! user-supplied joint targets and external wrenches; [`Contacts`]
@@ -10,6 +10,7 @@
 //! Forward kinematics on a [`Model`] + [`State`] is exposed as
 //! [`eval_fk`]. Joint topology and per-DOF flags live in [`flags`]
 //! and [`JointType`] / [`JointTargetMode`].
+//! [`runtime::RigidScene`] rebuilds rigid snapshots while preserving runtime handles and state.
 
 mod articulation;
 mod builder;
@@ -19,10 +20,11 @@ pub mod flags;
 mod joint;
 mod model;
 mod muscle;
+pub mod runtime;
 mod soft_surface;
 mod state;
 
-pub use articulation::eval_fk;
+pub use articulation::{eval_body_velocities, eval_fk};
 pub use builder::{BodyParams, MaterialNeoHookean, ModelBuilder, ShapeGeometry, TetMeshId};
 pub use contacts::Contacts;
 pub use control::Control;

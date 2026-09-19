@@ -37,7 +37,10 @@ use crate::math::{
     Mat3, Quat, Real, SpatialMatrix6, SpatialVector, Transform, Vec3, spatial_cross,
     spatial_cross_dual,
 };
-use crate::sim::{Contacts, Control, JointTargetMode, JointType, Model, State, eval_fk};
+use crate::sim::{
+    BodyFlags, Contacts, Control, JointTargetMode, JointType, Model, State, eval_body_velocities,
+    eval_fk,
+};
 
 use super::Solver;
 
@@ -526,15 +529,12 @@ fn cpu_step(
     rigorous_distance: bool,
 ) -> Result<()> {
     if model.joint_count == 0 {
-        // Nothing to integrate. Pass body state through.
-        state_out
-            .body_q
-            .host_mut()?
-            .copy_from_slice(state_in.body_q.host()?);
-        state_out
-            .body_qd
-            .host_mut()?
-            .copy_from_slice(state_in.body_qd.host()?);
+        state_out.copy_host_from(state_in)?;
+        for (i, &flags) in model.body_flags.host()?.iter().enumerate() {
+            if flags & BodyFlags::FIXED != 0 {
+                state_out.body_qd.host_mut()?[i] = SpatialVector::ZERO;
+            }
+        }
         return Ok(());
     }
 
@@ -575,6 +575,10 @@ fn cpu_step(
         .body_q
         .host_mut()?
         .copy_from_slice(state_in.body_q.host()?);
+    state_out
+        .body_qd
+        .host_mut()?
+        .copy_from_slice(state_in.body_qd.host()?);
     eval_fk(model, state_out)?;
 
     let n = model.joint_count;
@@ -592,6 +596,7 @@ fn cpu_step(
     let body_q = state_out.body_q.host()?.to_vec();
     let body_f_in = state_in.body_f.host()?.to_vec();
     let body_mass = model.body_mass.host()?;
+    let body_flags = model.body_flags.host()?;
     let body_inertia = model.body_inertia.host()?;
     let body_com = model.body_com.host()?;
     let body_world = model.body_world.host()?;
@@ -669,12 +674,18 @@ fn cpu_step(
                 body_q[parent as usize]
             };
             let joint_world = parent_world.compose(&joint_x_p[j]);
+            let mut motion_frame = joint_world;
+            if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+                let c = joint_coord_offset[j] as usize;
+                motion_frame.position +=
+                    joint_world.rotation * Vec3::new(q_in[c], q_in[c + 1], q_in[c + 2]);
+            }
 
             // Build motion subspace (per-DOF).
             let dof_idx = joint_dof_offset[j] as usize;
-            let n_dof = build_motion_subspace(
+            let mut n_dof = build_motion_subspace(
                 jt,
-                joint_world,
+                motion_frame,
                 joint_axis[j],
                 dof_idx,
                 limit_lower,
@@ -682,6 +693,11 @@ fn cpu_step(
                 &mut s_cols[j],
                 &mut dof_active[j],
             );
+            if body_flags[child] & BodyFlags::IMMOVABLE != 0 || joint_enabled[j] == 0 {
+                n_dof = 0;
+                s_cols[j].fill(SpatialVector::ZERO);
+                dof_active[j].fill(false);
+            }
             dof_count[j] = n_dof;
 
             // Joint velocity = sum of S_k · qd_k.
@@ -708,9 +724,25 @@ fn cpu_step(
                 v
             };
 
-            let v_i = v_p + v_j;
+            let v_i = if body_flags[child] & BodyFlags::FIXED != 0 {
+                SpatialVector::ZERO
+            } else if body_flags[child] & BodyFlags::KINEMATIC != 0 {
+                let velocity = state_in.body_qd.host()?[child];
+                let com = body_q[child].position + body_q[child].rotation * body_com[child];
+                SpatialVector::new(
+                    velocity.linear - velocity.angular.cross(com),
+                    velocity.angular,
+                )
+            } else {
+                v_p + v_j
+            };
             v_body[j] = v_i;
             c_term[j] = spatial_cross(v_i, v_j);
+            if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+                let translation = joint_world.rotation
+                    * Vec3::new(qd_in[dof_idx], qd_in[dof_idx + 1], qd_in[dof_idx + 2]);
+                c_term[j].linear -= v_j.angular.cross(translation);
+            }
 
             // Body spatial inertia in WORLD frame, expressed at world origin.
             let cw = body_q[child];
@@ -1032,6 +1064,12 @@ fn cpu_step(
                         j_begin,
                     );
                 }
+            } else if parent >= 0
+                && body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE == 0
+                && let Some(pj) = (j_begin..j).find(|&k| joint_child[k] == parent)
+            {
+                i_a[pj] = i_a[pj].add(&i_a[j]);
+                p_a[pj] = p_a[pj] + p_a[j] + i_a[j].mul_sv(c_term[j]);
             }
         }
 
@@ -1046,6 +1084,10 @@ fn cpu_step(
             let n_dof = dof_count[j];
             let supported = enabled && !matches!(jt, JointType::Fixed);
 
+            if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0 {
+                continue;
+            }
+
             let a_p = if parent < 0 {
                 SpatialVector::ZERO
             } else {
@@ -1059,6 +1101,7 @@ fn cpu_step(
                 a
             };
 
+            let a_bias = a_p + c_term[j];
             if supported && n_dof > 0 {
                 let dof_idx = joint_dof_offset[j] as usize;
                 let mut s_qdd = SpatialVector::ZERO;
@@ -1077,7 +1120,7 @@ fn cpu_step(
                         let mut rhs = vec![0.0_f64; n_act];
                         for ai in 0..n_act {
                             let ki = active_idx[ai];
-                            rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_p);
+                            rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_bias);
                         }
                         // Re-pack the cached Cholesky factor into a flat n_act×n_act.
                         let mut l_packed = vec![0.0_f64; n_act * n_act];
@@ -1097,7 +1140,8 @@ fn cpu_step(
                                 if !dof_active[j][k] {
                                     continue;
                                 }
-                                let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_p))
+                                let q_dd_k = (u_tau_per_dof[j][k]
+                                    - sv_dot(u_per_dof[j][k], a_bias))
                                     * d_inv_per_dof[j][k];
                                 q_dd[dof_idx + k] = q_dd_k;
                                 q_dd_local[j][k] = q_dd_k;
@@ -1120,16 +1164,16 @@ fn cpu_step(
                         if !dof_active[j][k] {
                             continue;
                         }
-                        let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_p))
+                        let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_bias))
                             * d_inv_per_dof[j][k];
                         q_dd[dof_idx + k] = q_dd_k;
                         q_dd_local[j][k] = q_dd_k;
                         s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                     }
                 }
-                a_body[j] = a_p + s_qdd + c_term[j];
+                a_body[j] = a_bias + s_qdd;
             } else {
-                a_body[j] = a_p + c_term[j];
+                a_body[j] = a_bias;
             }
         }
 
@@ -1138,6 +1182,13 @@ fn cpu_step(
             let jt = joint_type_from_u32(joint_type[j]);
             let coord_idx = joint_coord_offset[j] as usize;
             let dof_idx = joint_dof_offset[j] as usize;
+            if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0
+                || joint_enabled[j] == 0
+            {
+                let end = joint_dof_offset[j + 1] as usize;
+                qd_new[dof_idx..end].fill(0.0);
+                continue;
+            }
             match jt {
                 JointType::Revolute | JointType::Prismatic => {
                     let qd_old = qd_in[dof_idx];
@@ -1475,6 +1526,7 @@ fn cpu_step(
     state_out.joint_q.host_mut()?.copy_from_slice(&q_new);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
     eval_fk(model, state_out)?;
+    eval_body_velocities(model, state_out)?;
 
     // Propagate input body_f to output so substepping (which swaps
     // state_a / state_b each iteration) sees the same external wrench
