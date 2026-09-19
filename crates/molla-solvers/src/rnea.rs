@@ -66,11 +66,9 @@ pub fn inverse_dynamics(
     let body_q = state.body_q.host()?;
     let joint_q = state.joint_q.host()?;
     let joint_qd = state.joint_qd.host()?;
-    let _ = joint_q;
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
-    let joint_x_p = model.joint_x_p.host()?;
     let joint_axis = model.joint_axis.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
     let body_mass = model.body_mass.host()?;
@@ -124,13 +122,7 @@ pub fn inverse_dynamics(
         local_dof_offset[k] = local_dof_total;
         let jt = decode_joint_type(joint_type[j])?;
 
-        let parent_body = joint_parent[j];
-        let parent_world = if parent_body < 0 {
-            crate::math::Transform::IDENTITY
-        } else {
-            body_q[parent_body as usize]
-        };
-        let xpw = parent_world.compose(&joint_x_p[j]);
+        let (xpw, direction) = model.joint_motion_frame(body_q, joint_q, j)?;
 
         let mut dof_active = [false; MAX_JOINT_DOFS];
         let width = build_motion_subspace(
@@ -143,6 +135,9 @@ pub fn inverse_dynamics(
             &mut s_cols_per_joint[k],
             &mut dof_active,
         );
+        for column in &mut s_cols_per_joint[k] {
+            *column = column.scale(direction);
+        }
         dof_width[k] = width;
         local_dof_total += width;
 
@@ -170,7 +165,12 @@ pub fn inverse_dynamics(
             a_j = a_j + s_cols_per_joint[k][a].scale(qdd[lbase + a]);
         }
         let v_i = v_p + v_j;
-        let a_i = a_p + a_j + spatial_cross(v_i, v_j);
+        let mut a_i = a_p + a_j + spatial_cross(v_i, v_j);
+        if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+            let translation =
+                xpw.rotation * Vec3::new(joint_qd[gbase], joint_qd[gbase + 1], joint_qd[gbase + 2]);
+            a_i.linear -= v_j.angular.cross(translation);
+        }
         v_body[k] = v_i;
         a_body[k] = a_i;
 

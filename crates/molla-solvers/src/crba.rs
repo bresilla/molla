@@ -56,7 +56,6 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
-    let joint_x_p = model.joint_x_p.host()?;
     let joint_axis = model.joint_axis.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
     let body_mass = model.body_mass.host()?;
@@ -109,19 +108,7 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
         let jt = decode_joint_type(joint_type[j])?;
         local_dof_offset[k] = local_dof_total;
 
-        // Joint origin in world — parent's body frame composed with x_p.
-        let parent_body = joint_parent[j];
-        let parent_world = if parent_body < 0 {
-            crate::math::Transform::IDENTITY
-        } else {
-            body_q[parent_body as usize]
-        };
-        let mut xpw = parent_world.compose(&joint_x_p[j]);
-        if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
-            let c = model.joint_coord_offset.host()?[j] as usize;
-            let q = state.joint_q.host()?;
-            xpw.position += xpw.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
-        }
+        let (mut xpw, direction) = model.joint_motion_frame(body_q, state.joint_q.host()?, j)?;
         xpw.position -= origin;
 
         let mut dof_active = [false; MAX_JOINT_DOFS];
@@ -135,6 +122,9 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
             &mut s_cols_per_joint[k],
             &mut dof_active,
         );
+        for column in &mut s_cols_per_joint[k] {
+            *column = column.scale(direction);
+        }
         dof_width[k] = width;
         if model.joint_enabled.host()?[j] == 0
             || model.body_flags.host()?[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0

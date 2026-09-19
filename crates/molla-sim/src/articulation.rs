@@ -11,13 +11,41 @@ use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
 use super::{BodyFlags, JointType, Model, State};
 
+impl Model {
+    /// Authored motion basis and angular pivot, with signed tree-traversal direction.
+    pub fn joint_motion_frame(
+        &self,
+        poses: &[Transform],
+        q: &[Real],
+        joint: usize,
+    ) -> Result<(Transform, Real)> {
+        let reversed = self.joint_reversed.host()?[joint] != 0;
+        let mut frame = if reversed {
+            poses[self.joint_child.host()?[joint] as usize].compose(&self.joint_x_c.host()?[joint])
+        } else {
+            let parent = self.joint_parent.host()?[joint];
+            let pose = if parent < 0 {
+                Transform::IDENTITY
+            } else {
+                poses[parent as usize]
+            };
+            pose.compose(&self.joint_x_p.host()?[joint])
+        };
+        let kind = joint_type_from_u32(self.joint_type.host()?[joint]);
+        if matches!(kind, JointType::Free | JointType::D6 | JointType::Distance) {
+            let c = self.joint_coord_offset.host()?[joint] as usize;
+            frame.position += frame.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
+        }
+        Ok((frame, if reversed { -1.0 } else { 1.0 }))
+    }
+}
+
 /// Reconstruct world COM velocities from generalized velocities in topological order.
 pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
     let poses = state.body_q.host()?;
     let com = model.body_com.host()?;
     let parents = model.joint_parent.host()?;
     let children = model.joint_child.host()?;
-    let frames = model.joint_x_p.host()?;
     let axes = model.joint_axis.host()?;
     let kinds = model.joint_type.host()?;
     let enabled = model.joint_enabled.host()?;
@@ -39,11 +67,7 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
             continue;
         }
         let parent = parents[j];
-        let frame = if parent < 0 {
-            frames[j]
-        } else {
-            poses[parent as usize].compose(&frames[j])
-        };
+        let (frame, direction) = model.joint_motion_frame(poses, q, j)?;
         let child_com = poses[child].position + poses[child].rotation * com[child];
         let mut velocity = SpatialVector::ZERO;
         if parent >= 0 {
@@ -67,7 +91,6 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
             JointType::Prismatic => linear = axes[j] * qd[v],
             JointType::Ball => angular = Vec3::new(qd[v], qd[v + 1], qd[v + 2]),
             JointType::Free | JointType::D6 | JointType::Distance => {
-                origin += frame.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
                 linear = Vec3::new(qd[v], qd[v + 1], qd[v + 2]);
                 angular = Vec3::new(qd[v + 3], qd[v + 4], qd[v + 5]);
             }
@@ -105,8 +128,8 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
             }
             _ => {}
         }
-        let angular = frame.rotation * angular;
-        velocity.linear += frame.rotation * linear + angular.cross(child_com - origin);
+        let angular = frame.rotation * angular * direction;
+        velocity.linear += frame.rotation * linear * direction + angular.cross(child_com - origin);
         velocity.angular += angular;
         velocities[child] = velocity;
     }
@@ -163,7 +186,10 @@ pub fn eval_fk(model: &Model, state: &mut State) -> Result<()> {
         let qj = &q[coord_start..coord_end];
 
         let jt = joint_type_from_u32(joint_type[j]);
-        let local = joint_local_transform(jt, qj, joint_axis[j]);
+        let mut local = joint_local_transform(jt, qj, joint_axis[j]);
+        if model.joint_reversed.host()?[j] != 0 {
+            local = local.inverse();
+        }
 
         let x_p = joint_x_p[j];
         let x_c_inv = joint_x_c[j].inverse();

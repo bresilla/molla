@@ -786,6 +786,8 @@ pub struct Model {
     /// joints don't contribute torque or constrain motion. Length =
     /// `joint_count`.
     pub joint_enabled: Buffer<u32>,
+    /// Invert the authored joint map while retaining its coordinate and effort signs.
+    pub joint_reversed: Buffer<u32>,
     /// Per-joint ancestor — index of the parent joint in the
     /// articulation tree, or -1 for a root. Length = `joint_count`.
     /// Currently informational; future tree traversals consume it.
@@ -1068,6 +1070,7 @@ impl Model {
             articulation_world: Buffer::from_vec(Vec::new(), s),
             joint_world: Buffer::from_vec(Vec::new(), s),
             joint_enabled: Buffer::from_vec(Vec::new(), s),
+            joint_reversed: Buffer::from_vec(Vec::new(), s),
             joint_ancestor: Buffer::from_vec(Vec::new(), s),
             joint_target_ke: Buffer::from_vec(Vec::new(), s),
             joint_cable_stiffness_linear: Buffer::from_vec(Vec::new(), s),
@@ -1213,6 +1216,7 @@ impl Model {
         up!(articulation_world);
         up!(joint_world);
         up!(joint_enabled);
+        up!(joint_reversed);
         up!(joint_ancestor);
         up!(joint_target_ke);
         up!(shape_collision_group);

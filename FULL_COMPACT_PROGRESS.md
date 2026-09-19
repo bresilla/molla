@@ -13,15 +13,17 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   surviving body poses, velocities, forces and controls, plus joint coordinates,
   velocities and motor controls. Removing a body cascades to its colliders and
   incident joints, not its surviving child bodies. Handles are not recycled.
-- Directed joint forests are compiled in deterministic parent-first order.
-  Attaching a root to another articulation merges them; detaching creates a new
-  free root from the body's current pose and COM velocity. Cycles and multiple
-  parents are rejected. Reverse-edge re-rooting is not implemented yet.
+- Undirected joint forests are compiled in deterministic parent-first order,
+  choosing an immovable/world-anchored root when present. Attaching at either
+  endpoint can merge articulations and reverse the required branch; detaching
+  seeds newly free roots from current pose and COM velocity. Authored endpoint,
+  frame, coordinate, rate, limit and motor signs remain unchanged. Closed loops,
+  including multiple independent anchors in one component, remain unsupported.
 - Fixed and kinematic root kinds retain physical mass/inertia while exposing
   zero inverse mass/inertia. Dynamic roots get free joints automatically;
-  immovable roots get fixed world anchors. Dynamic/fixed root transitions keep
-  the current pose; fixing zeroes velocity. Changing a non-root to fixed is
-  currently rejected and still needs a re-rooting implementation.
+  immovable roots get fixed world anchors. Dynamic/fixed transitions keep the
+  current pose; fixing zeroes velocity. Pinning a former non-root re-roots the
+  articulation instead of freezing or discarding its neighboring bodies.
 - Body enable/disable is now separate from body kind. Disabled bodies lower
   to immovable, noncolliding placeholders while retaining physical mass, pose,
   pending velocity and authored collider flags. Incident joints are suspended,
@@ -49,8 +51,9 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   joint/free-root motor controls survive body toggles, joint toggles and unrelated
   rebuilds; non-finite control values are sanitized during quarantine. Logical
   joint handles remain readable while `joint_index` returns `None` for suspended
-  joints. Authored cycles, multiple parents and invalid axes/frames remain
-  rejected even when the affected bodies/joints are disabled.
+  joints. Authored cycles and invalid axes/frames remain rejected even when the
+  affected bodies/joints are disabled. Multiple authored incoming edges are
+  accepted when their undirected graph is a tree.
 - Runtime collider replacement supports ball, cuboid, Y capsule, endpoint
   capsule, Y cylinder, round cylinder, convex hull, triangle mesh and native
   rectangular heightfield, with local pose, friction, restitution and tags.
@@ -463,10 +466,44 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   dependency, environment, Makefile or Gearbox edits. Engram tools remain
   unavailable; this checkpoint records the work. The full goal is still active.
 
+### Tree re-rooting / fixed transitions verification
+
+- Extracted runtime forest compilation into `runtime/tree.rs`. Components now
+  choose a deterministic root, prioritizing prescribed immovable/world-anchored
+  bodies. Joining two existing children merges trees without a second rigid
+  solver or a fake detached constraint. Closed loops and multiple independent
+  anchors still fail atomically; those require a loop solver outside this spec.
+- Added a joint traversal-direction flag. Reversed traversal swaps compiled
+  endpoints/frames, inverts FK and negates the motion subspace, but does not
+  negate or rewrite authored joint coordinates, rates, limits, drives or queries.
+  This handles Ball/D6 maps as well as scalar joints; simply swapping frames
+  and negating a scalar axis would not preserve multi-axis motor semantics.
+- `Model::joint_motion_frame` supplies the shared authored basis/moving pivot
+  to velocity reconstruction, Featherstone, CRBA, Jacobians and RNEA. RNEA now
+  includes the translated Free/D6 pivot and its velocity-bias term. Teleports
+  follow compiled solver descendants, including reversed branches.
+- Ten new `runtime_tree` tests cover child-to-fixed/dynamic transitions,
+  non-root world pins, branch merges/detaches, signed prismatic limits/impulses,
+  reversed Ball acceleration motors, freely moving reversed D6 bodies,
+  kinematic-root teleports, frame edits, enable cycles and atomic loop rejection.
+  The multi-axis oracle checks all Jacobian columns against pose finite
+  differences, full mass matrices against kinetic energy, inverse-dynamics bias
+  against differentiated physical COM/angular velocities with rotated full
+  inertia/offset COM, and resulting Featherstone generalized-rate response.
+- Selected regression gates pass: sim 30, geometry 151, solvers 137 tests
+  (318 total), workspace `make check-all`, strict scoped Clippy with all
+  features and no default features, and diff checks. These are CPU/library
+  gates, not the original full Gearbox/tractor acceptance requirements.
+- GPU Featherstone explicitly rejects reversed joints until its parity work
+  is implemented. No new GPU, Gearbox, tractor/performance, or live acceptance
+  claim is made. No dependencies, environment, Makefile, specification or
+  Gearbox files changed. Engram tools remain unavailable; this ledger records
+  the design and verification checkpoint.
+
 ## Next implementation steps
 
-1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
-   now-tested contact/readout/filtering path while extending the live world.
+1. Finish runtime descriptor/integration semantics; retain the tested
+   re-rooting, mutation, contact/readout/filtering paths while extending the world.
 2. Implement sleep/wake/islands; verify continuous-force singular-inertia
    dynamics and benchmark queries with tyres.
 3. Finish joint softness/capture semantics and GPU joint-control parity.

@@ -438,6 +438,11 @@ impl FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
+        if self.is_gpu() && model.joint_reversed.host()?.iter().any(|&r| r != 0) {
+            return Err(crate::core::Error::Solver(
+                "reversed joints require CPU Featherstone".into(),
+            ));
+        }
         if self.is_gpu()
             && (control.joint_motor_model.host()?.iter().any(|&m| m != 0)
                 || control
@@ -724,7 +729,6 @@ fn cpu_step(
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
-    let joint_x_p = model.joint_x_p.host()?;
     let joint_axis = model.joint_axis.host()?;
     let joint_coord_offset = model.joint_coord_offset.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
@@ -809,19 +813,7 @@ fn cpu_step(
             let parent = joint_parent[j];
             let child = joint_child[j] as usize;
 
-            // Joint world transform = parent body world * X_p.
-            let parent_world = if parent < 0 {
-                Transform::IDENTITY
-            } else {
-                body_q[parent as usize]
-            };
-            let joint_world = parent_world.compose(&joint_x_p[j]);
-            let mut motion_frame = joint_world;
-            if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
-                let c = joint_coord_offset[j] as usize;
-                motion_frame.position +=
-                    joint_world.rotation * Vec3::new(q_in[c], q_in[c + 1], q_in[c + 2]);
-            }
+            let (motion_frame, direction) = model.joint_motion_frame(&body_q, &q_in, j)?;
 
             // Build motion subspace (per-DOF).
             let dof_idx = joint_dof_offset[j] as usize;
@@ -835,6 +827,9 @@ fn cpu_step(
                 &mut s_cols[j],
                 &mut dof_active[j],
             );
+            for column in &mut s_cols[j] {
+                *column = column.scale(direction);
+            }
             if body_flags[child] & BodyFlags::IMMOVABLE != 0 || joint_enabled[j] == 0 {
                 n_dof = 0;
                 s_cols[j].fill(SpatialVector::ZERO);
@@ -881,7 +876,7 @@ fn cpu_step(
             v_body[j] = v_i;
             c_term[j] = spatial_cross(v_i, v_j);
             if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
-                let translation = joint_world.rotation
+                let translation = motion_frame.rotation
                     * Vec3::new(qd_in[dof_idx], qd_in[dof_idx + 1], qd_in[dof_idx + 2]);
                 c_term[j].linear -= v_j.angular.cross(translation);
             }

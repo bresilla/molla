@@ -500,6 +500,7 @@ pub struct ModelBuilder {
     articulation_world: Vec<i32>,
     /// Per-joint enable flag (1 = active by default).
     joint_enabled: Vec<u32>,
+    joint_reversed: Vec<u32>,
     /// Per-joint ancestor index in the articulation tree.
     joint_ancestor: Vec<i32>,
     /// Per-DOF static joint stiffness (default 0).
@@ -2163,6 +2164,7 @@ impl ModelBuilder {
         let child_world = self.body_world.get(child.0 as usize).copied().unwrap_or(0);
         self.joint_world.push(child_world);
         self.joint_enabled.push(1);
+        self.joint_reversed.push(0);
         // Ancestor: scan the current articulation's joints for one
         // whose child body matches this joint's parent body.
         let parent_body_idx = parent_idx;
@@ -2281,8 +2283,17 @@ impl ModelBuilder {
         Ok(())
     }
 
-    /// Enable or disable a joint. Disabled joints don't contribute
-    /// to the dynamics solve.
+    /// Invert the joint transform and motion subspace without changing authored coordinates.
+    pub fn set_joint_reversed(&mut self, joint: JointId, reversed: bool) -> Result<()> {
+        let value = self
+            .joint_reversed
+            .get_mut(joint.index())
+            .ok_or_else(|| Error::Build("joint reversal index out of range".into()))?;
+        *value = u32::from(reversed);
+        Ok(())
+    }
+
+    /// Enable or disable a joint's dynamics contribution.
     pub fn set_joint_enabled(&mut self, joint: JointId, enabled: bool) -> Result<()> {
         let i = joint.index();
         if i >= self.joint_enabled.len() {
@@ -3100,6 +3111,7 @@ impl ModelBuilder {
             articulation_world: Buffer::from_vec(self.articulation_world, s),
             joint_world: Buffer::from_vec(self.joint_world, s),
             joint_enabled: Buffer::from_vec(self.joint_enabled, s),
+            joint_reversed: Buffer::from_vec(self.joint_reversed, s),
             joint_ancestor: Buffer::from_vec(self.joint_ancestor, s),
             joint_target_ke: Buffer::from_vec(self.joint_target_ke, s),
             joint_cable_stiffness_linear: Buffer::from_vec(self.joint_cable_stiffness_linear, s),

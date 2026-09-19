@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod tree;
+
 use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor};
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
@@ -521,24 +523,16 @@ impl RigidScene {
         validate_pose(pose)?;
         let kind = self.body(id).ok_or_else(|| missing("body"))?.kind;
         let delta = pose.compose(&self.body_pose(id)?.inverse());
-        let mut moved = BTreeSet::from([id]);
-        let mut pending = vec![id];
-        while let Some(parent) = pending.pop() {
-            for (_, joint) in self
-                .joints()
-                .filter(|(id, j)| j.parent == Some(parent) && self.snapshot.joints.contains_key(id))
-            {
-                if moved.insert(joint.child) {
-                    pending.push(joint.child);
-                }
+        let root = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+        let mut moved = BTreeSet::from([root]);
+        let parents = self.model().joint_parent.host()?;
+        for (j, &child) in self.model().joint_child.host()?.iter().enumerate() {
+            if parents[j] >= 0 && moved.contains(&(parents[j] as usize)) {
+                moved.insert(child as usize);
             }
         }
         let mut next = self.state().clone_host()?;
-        for body in moved {
-            let i = self
-                .body_index(body)
-                .ok_or_else(|| missing("body"))?
-                .index();
+        for i in moved {
             next.body_q.host_mut()?[i] = delta.compose(&next.body_q.host()?[i]);
         }
         if kind == BodyKind::Dynamic {
@@ -1103,123 +1097,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         }
         colliders.insert(id, shapes);
     }
-    let mut authored_incoming = BTreeMap::new();
-    for (&id, joint) in &d.joints {
-        dense_body(&bodies, joint.parent)?;
-        dense_body(&bodies, Some(joint.child))?;
-        validate_pose(joint.frame_parent)?;
-        validate_pose(joint.frame_child)?;
-        if matches!(joint.kind, JointType::Distance | JointType::Cable) {
-            return Err(Error::Build("runtime joint kind is not supported".into()));
-        }
-        if matches!(joint.kind, JointType::Revolute | JointType::Prismatic)
-            && (!joint.axis.length().is_finite() || joint.axis.length() < 1e-9)
-        {
-            return Err(Error::Build(
-                "runtime joint axis must be finite and nonzero".into(),
-            ));
-        }
-        if joint.parent == Some(joint.child) || authored_incoming.insert(joint.child, id).is_some()
-        {
-            return Err(Error::Build(
-                "runtime joints require a forest with one parent per body".into(),
-            ));
-        }
-    }
-    for &body in d.bodies.keys() {
-        let mut visited = BTreeSet::new();
-        let mut cursor = Some(body);
-        while let Some(body) = cursor {
-            if !visited.insert(body) {
-                return Err(Error::Build("runtime joint cycle".into()));
-            }
-            cursor = authored_incoming
-                .get(&body)
-                .and_then(|id| d.joints[id].parent);
-        }
-    }
-    let mut incoming = BTreeMap::new();
-    let mut children: BTreeMap<BodyHandle, Vec<JointHandle>> = BTreeMap::new();
-    for (&id, joint) in &d.joints {
-        if !d.joint_settings[&id].enabled
-            || !d.bodies[&joint.child].enabled
-            || joint.parent.is_some_and(|p| !d.bodies[&p].enabled)
-        {
-            continue;
-        }
-        incoming.insert(joint.child, id);
-        if d.bodies[&joint.child].kind != BodyKind::Dynamic {
-            return Err(Error::Build(
-                "an immovable body must be an articulation root".into(),
-            ));
-        }
-        if let Some(parent) = joint.parent {
-            children.entry(parent).or_default().push(id);
-        }
-    }
-    let mut joints = BTreeMap::new();
-    let mut roots = BTreeMap::new();
-    let mut visited = BTreeSet::new();
-    for (&body, desc) in &d.bodies {
-        if incoming
-            .get(&body)
-            .is_some_and(|j| d.joints[j].parent.is_some())
-        {
-            continue;
-        }
-        builder.begin_articulation();
-        let mut stack = vec![body];
-        while let Some(body) = stack.pop() {
-            if !visited.insert(body) {
-                return Err(Error::Build("runtime joint cycle".into()));
-            }
-            if let Some(&joint) = incoming.get(&body) {
-                let j = add_joint(&mut builder, &bodies, &d.joints[&joint])?;
-                let mut lower = vec![Real::NEG_INFINITY; d.joints[&joint].kind.dof_count()];
-                let mut upper = vec![Real::INFINITY; lower.len()];
-                for axis in JointAxis::ALL {
-                    if let Ok(dof) = axis.dof(d.joints[&joint].kind) {
-                        let setting = d.joint_axes[&joint][axis as usize];
-                        let bounds = if setting.locked {
-                            Some([0.0, 0.0])
-                        } else {
-                            setting.limits
-                        };
-                        if let Some([lo, hi]) = bounds {
-                            lower[dof] = lo;
-                            upper[dof] = hi;
-                        }
-                    }
-                }
-                builder.set_joint_limits(j, &lower, &upper)?;
-                joints.insert(joint, j);
-            } else {
-                let pose = poses[&body];
-                let j = if desc.enabled && desc.kind == BodyKind::Dynamic {
-                    builder.add_joint_free(
-                        BodyId::NONE,
-                        bodies[&body],
-                        Transform::IDENTITY,
-                        Transform::IDENTITY,
-                    )?
-                } else {
-                    builder.add_joint_fixed(
-                        BodyId::NONE,
-                        bodies[&body],
-                        pose,
-                        Transform::IDENTITY,
-                    )?
-                };
-                roots.insert(body, j);
-            }
-            if let Some(next) = children.get(&body) {
-                stack.extend(next.iter().rev().map(|j| d.joints[j].child));
-            }
-        }
-    }
-    if visited.len() != d.bodies.len() {
-        return Err(Error::Build("runtime joint cycle".into()));
-    }
+    let (joints, roots) = tree::compile_joints(d, &bodies, &poses, &mut builder)?;
     for (&id, joint) in &d.joints {
         if !d.joint_settings[&id].contacts_enabled
             && let Some(parent) = joint.parent
@@ -1509,15 +1387,23 @@ fn add_joint(
 
 fn seed_joint(model: &Model, state: &mut State, joint: JointId) -> Result<()> {
     let j = joint.index();
-    let parent = model.joint_parent.host()?[j];
-    let child = model.joint_child.host()?[j] as usize;
+    let mut parent = model.joint_parent.host()?[j];
+    let mut child = model.joint_child.host()?[j] as usize;
+    let mut xp = model.joint_x_p.host()?[j];
+    let mut xc = model.joint_x_c.host()?[j];
+    if model.joint_reversed.host()?[j] != 0 {
+        let previous = child;
+        child = parent as usize;
+        parent = previous as i32;
+        std::mem::swap(&mut xp, &mut xc);
+    }
     let poses = state.body_q.host()?;
     let velocities = state.body_qd.host()?;
-    let child_frame = poses[child].compose(&model.joint_x_c.host()?[j]);
+    let child_frame = poses[child].compose(&xc);
     let parent_frame = if parent < 0 {
-        model.joint_x_p.host()?[j]
+        xp
     } else {
-        poses[parent as usize].compose(&model.joint_x_p.host()?[j])
+        poses[parent as usize].compose(&xp)
     };
     let relative = parent_frame.inverse().compose(&child_frame);
     let body_com = model.body_com.host()?;

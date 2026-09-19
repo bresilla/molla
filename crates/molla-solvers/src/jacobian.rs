@@ -50,7 +50,6 @@ pub fn jacobian(
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
-    let joint_x_p = model.joint_x_p.host()?;
     let joint_axis = model.joint_axis.host()?;
     let joint_dof_offset = model.joint_dof_offset.host()?;
     let limit_lower = model.joint_limit_lower.host()?;
@@ -102,19 +101,8 @@ pub fn jacobian(
         {
             continue;
         }
-        let parent_body = joint_parent[j];
-        let parent_world = if parent_body < 0 {
-            crate::math::Transform::IDENTITY
-        } else {
-            body_q[parent_body as usize]
-        };
-        let mut xpw = parent_world.compose(&joint_x_p[j]);
+        let (mut xpw, direction) = model.joint_motion_frame(body_q, state.joint_q.host()?, j)?;
         let jt = decode_joint_type(joint_type[j])?;
-        if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
-            let c = model.joint_coord_offset.host()?[j] as usize;
-            let q = state.joint_q.host()?;
-            xpw.position += xpw.rotation * Vec3::new(q[c], q[c + 1], q[c + 2]);
-        }
         xpw.position -= target_world;
         let dof_local = (joint_dof_offset[j] - joint_dof_offset[j_begin]) as usize;
 
@@ -132,7 +120,7 @@ pub fn jacobian(
             &mut dof_active,
         );
         for a in 0..width {
-            let s = s_cols[a];
+            let s = s_cols[a].scale(direction);
             let lin = s.linear;
             let col_idx = dof_local + a;
             j_cols[0 * dof_total + col_idx] = lin.x;
