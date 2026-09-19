@@ -1,7 +1,7 @@
 //! Coupled compliant loop-closure wrenches for reduced-coordinate trees.
 
 use molla_core::{Error, Result};
-use molla_math::dense_solve::{back_sub, dense_chol, forward_sub};
+use molla_math::dense_solve::{dense_chol, forward_sub};
 use molla_math::{Quat, Real, SpatialVector, Vec3};
 use molla_sim::joint_control::{JointAxis, JointMotor, JointSoftness, MotorModel};
 use molla_sim::runtime::RigidScene;
@@ -180,7 +180,8 @@ pub(crate) fn apply(
         {
             continue;
         }
-        let _response_span = tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
+        let _response_span =
+            tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
         let mut jacobians = std::collections::BTreeMap::new();
         let mut projected = vec![vec![0.0; n]; count];
         for (r, row) in rows.iter().enumerate() {
@@ -209,30 +210,7 @@ pub(crate) fn apply(
             }
         }
         let mass = crate::mass_matrix(model, state, art)?;
-        let mut factor = mass.clone();
-        let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);
-        let factored = dense_chol(&mut factor, n).is_ok()
-            && (0..n).all(|i| factor[i * n + i].powi(2) > scale * 1e-12);
-        let _solve_span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
-        let singular = if factored {
-            None
-        } else {
-            Some(crate::rigid_impulse::MassFactor::new(&mass, n)?)
-        };
-        for col in 0..count {
-            let solved = if factored {
-                back_sub(&factor, &forward_sub(&factor, &projected[col], n)?, n)?
-            } else {
-                singular.as_ref().unwrap().solve(&projected[col])?
-            };
-            for row in 0..count {
-                response[row * count + col] += projected[row]
-                    .iter()
-                    .zip(&solved)
-                    .map(|(a, b)| a * b)
-                    .sum::<Real>();
-            }
-        }
+        add_mass_response(&mass, n, &projected, &mut response)?;
     }
     let mut rhs = vec![0.0; count];
     let mut bounds = vec![[0.0; 2]; count];
@@ -290,6 +268,56 @@ pub(crate) fn apply(
         .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
     {
         return Err(Error::Solver("non-finite loop joint wrench".into()));
+    }
+    Ok(())
+}
+
+fn add_mass_response(
+    mass: &[Real],
+    n: usize,
+    projected: &[Vec<Real>],
+    response: &mut [Real],
+) -> Result<()> {
+    let count = projected.len();
+    let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);
+    let mut factor: Vec<_> = mass.iter().map(|v| v / scale).collect();
+    let factored = scale > 0.0
+        && scale.is_finite()
+        && dense_chol(&mut factor, n).is_ok()
+        && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12);
+    let _span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
+    if factored {
+        // J M⁻¹ Jᵀ = (L⁻¹ Jᵀ)ᵀ (L⁻¹ Jᵀ) / scale.
+        let whitened: Vec<_> = projected
+            .iter()
+            .map(|row| forward_sub(&factor, row, n))
+            .collect::<Result<_>>()?;
+        for row in 0..count {
+            for col in 0..=row {
+                let value = whitened[row]
+                    .iter()
+                    .zip(&whitened[col])
+                    .map(|(a, b)| a * b)
+                    .sum::<Real>()
+                    / scale;
+                response[row * count + col] += value;
+                if row != col {
+                    response[col * count + row] += value;
+                }
+            }
+        }
+        return Ok(());
+    }
+    let singular = crate::rigid_impulse::MassFactor::new(mass, n)?;
+    for col in 0..count {
+        let solved = singular.solve(&projected[col])?;
+        for row in 0..count {
+            response[row * count + col] += projected[row]
+                .iter()
+                .zip(&solved)
+                .map(|(a, b)| a * b)
+                .sum::<Real>();
+        }
     }
     Ok(())
 }
@@ -365,6 +393,115 @@ mod tests {
     use molla_math::{Mat3, Transform};
     use molla_sim::runtime::{BodyDesc, JointDesc};
     use molla_sim::{BodyParams, MassProperties};
+
+    fn response_fixture(n: usize, rows: usize) -> (Vec<Real>, Vec<Vec<Real>>) {
+        let mut lower = vec![0.0; n * n];
+        for i in 0..n {
+            lower[i * n + i] = 0.2 + i as Real;
+            for j in 0..i {
+                lower[i * n + j] = ((i + 3 * j) % 7) as Real * 0.03;
+            }
+        }
+        let mut mass = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                mass[i * n + j] = (0..n).map(|k| lower[i * n + k] * lower[j * n + k]).sum();
+            }
+        }
+        let projected = (0..rows)
+            .map(|row| {
+                (0..n)
+                    .map(|col| ((row * 13 + col * 7) % 17) as Real - 8.0)
+                    .collect()
+            })
+            .collect();
+        (mass, projected)
+    }
+
+    #[test]
+    fn mass_response_matches_inverse_products_and_accumulates() {
+        for singular in [false, true] {
+            for scale in [1e-60, 1.0, 1e60] {
+                let n = 9;
+                let count = 7;
+                let (mut mass, mut projected) = response_fixture(n, count);
+                for i in 0..n {
+                    for j in 0..n {
+                        mass[i * n + j] *= scale;
+                        if singular && (i == n - 1 || j == n - 1) {
+                            mass[i * n + j] = 0.0;
+                        }
+                    }
+                }
+                projected[0].fill(0.0);
+                let mut response = vec![0.0; count * count];
+                add_mass_response(&mass, n, &projected, &mut response).unwrap();
+                add_mass_response(&mass, n, &projected, &mut response).unwrap();
+                for col in 0..count {
+                    let solved =
+                        crate::rigid_impulse::solve_mass(&mass, &projected[col], n).unwrap();
+                    for row in 0..count {
+                        let expected: Real = projected[row]
+                            .iter()
+                            .zip(&solved)
+                            .map(|(a, b)| 2.0 * a * b)
+                            .sum();
+                        let actual = response[row * count + col];
+                        assert!(
+                            (actual - expected).abs() <= 1e-10 * expected.abs().max(1.0 / scale),
+                            "singular={singular} scale={scale} row={row} col={col}: {actual} != {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "wall-clock CPU benchmark; run in release without concurrent builds"]
+    fn full_rank_loop_response_timings() {
+        let (mass, projected) = response_fixture(39, 22);
+        let mut response = vec![0.0; 22 * 22];
+        for batch in 0..5 {
+            for gram in if batch % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = std::time::Instant::now();
+                for _ in 0..2000 {
+                    response.fill(0.0);
+                    let mass = std::hint::black_box(&mass);
+                    if gram {
+                        add_mass_response(mass, 39, &projected, &mut response).unwrap();
+                    } else {
+                        let mut factor = mass.clone();
+                        dense_chol(&mut factor, 39).unwrap();
+                        for col in 0..22 {
+                            let solved = molla_math::dense_solve::back_sub(
+                                &factor,
+                                &forward_sub(&factor, &projected[col], 39).unwrap(),
+                                39,
+                            )
+                            .unwrap();
+                            for row in 0..22 {
+                                response[row * 22 + col] += projected[row]
+                                    .iter()
+                                    .zip(&solved)
+                                    .map(|(a, b)| a * b)
+                                    .sum::<Real>();
+                            }
+                        }
+                    }
+                    std::hint::black_box(&response);
+                }
+                eprintln!(
+                    "39-DOF/22-row response gram={gram} batch {batch}: {:.3} us/call",
+                    start.elapsed().as_secs_f64() * 1e6 / 2000.0
+                );
+            }
+        }
+    }
 
     #[test]
     fn closure_rows_match_pose_derivatives_and_conserve_momentum() {

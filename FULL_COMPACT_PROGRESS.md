@@ -1886,9 +1886,68 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   and measured outcomes, including the lack of proven live-machine improvement.
 - `/tmp/molla-loop-perf-{before,after}.log`,
   `/tmp/molla-loop-cache-{full,final}-tests.log`,
-  `/tmp/molla-{physics,loop}-stages{,-summary}.json`,
-  `/tmp/molla-loop-stages-summary.txt`, `/tmp/molla-loop-live.log`,
+  `/tmp/molla-{physics,loop}-stages.json`,
+  `/tmp/molla-{physics,loop}-stages-summary.txt`, `/tmp/molla-loop-live.log`,
   `/tmp/molla-loop-state.json` — temporary evidence (not tracked).
+
+### Full-rank loop response checkpoint (2026-09-20)
+
+#### Goal
+
+- Optimize the actual Kubota loop workload identified by the stage trace.
+
+#### Discoveries
+
+- The 39-DOF, 22-row loop response used both triangular solves per RHS,
+  followed by all pair products. For Cholesky `M = scale * L * L^T`, the
+  equivalent response is the Gram matrix of `L^-1 * J^T`, divided by scale.
+- New extreme-scale reference tests exposed an existing small-inertia failure:
+  unnormalized Cholesky could succeed but forward substitution rejected its
+  tiny diagonal. Normalized factorization handles the tested 1e-60 scale.
+- Background release builds and the user's independently changing original
+  viewer make these live samples unsuitable for claiming controlled parity.
+
+#### Accomplished
+
+- Full-rank response uses one forward solve per row and one triangular Gram
+  product, mirrored symmetrically. Singular matrices retain the cached
+  generalized-inverse path. Solver settings and physical models are unchanged.
+- Tests compare accumulated response with independent inverse products for
+  full/singular rank, zero projected rows and scales 1e-60, 1 and 1e60.
+- Added an ignored paired 39-DOF/22-row benchmark alternating old/new order.
+  Gram batches: 15.292–21.525 us; direct inverse-product batches:
+  25.535–43.504 us. Every paired Gram batch was faster (38–59% less time).
+  This is response-assembly cost, not a whole-step speedup claim.
+- Native release solver suite: 372 passed, 0 failed, 4 ignored, 87 binaries.
+  Isolated Molla binary tests: 78 passed, 1 ignored. Profile build passes.
+- Live untraced windows remained above 1 ms. The final driving command reached
+  2 m/s, then slowed to zero around x=8.82 m; a viewer selection event occurred
+  during the run, and the instance closed before final telemetry collection.
+  Do not classify this as accepted continuous driving or assume its cause.
+  Asked the user asynchronously whether they interacted with/closed that window.
+- A render slab-allocator use-after-free diagnostic appears before machine load
+  in both pre-Gram and post-Gram logs. No shared renderer files were changed.
+
+#### Next Steps
+
+- Resolve the final live stop/closure: inspect command ownership/UI override
+  and reproduce without interactive inputs, preferably in an imported-machine
+  headless benchmark. `machine move` keeps publishing commands throughout the
+  requested duration; its final "drove" acknowledgement does not prove motion.
+- Record controlled real-machine timing; concurrent user builds affected all
+  sampled stages. Do not claim the real machine meets 1 ms or Rapier parity.
+- Continue measured full-machine/fleet work and remaining full-plan acceptance.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/loop_forces.rs` — normalized Gram response,
+  scale/reference tests and paired benchmark.
+- `/tmp/molla-gram-before.log` — old timing and reproduced tiny-scale failure.
+- `/tmp/molla-gram-after.log`, `/tmp/molla-gram-paired.log` — correctness/timing.
+- `/tmp/molla-gram-full-tests.log`, `/tmp/gearbox-gram-molla-tests.log`,
+  `/tmp/gearbox-gram-build.log` — regression/build evidence.
+- `/tmp/molla-gram-stages.json`, `/tmp/molla-gram-stages-summary.txt`,
+  `/tmp/molla-gram-live.log`, `/tmp/molla-gram-drive.log` — live evidence.
 
 ## Next implementation steps
 
