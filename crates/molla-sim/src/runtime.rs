@@ -245,6 +245,7 @@ struct Description {
     joint_settings: BTreeMap<JointHandle, JointSettings>,
     joint_axes: BTreeMap<JointHandle, [JointAxisSettings; 6]>,
     joint_softness: BTreeMap<JointHandle, JointSoftness>,
+    loop_joints: BTreeSet<JointHandle>,
 }
 
 impl Description {
@@ -759,13 +760,21 @@ impl RigidScene {
         self.snapshot.shape_colliders.get(index.index()).copied()
     }
 
-    /// Dense index of an active joint; suspended authored joints return `None`.
+    /// Dense index of an active tree joint; suspended and force joints return `None`.
     pub fn joint_index(&self, id: JointHandle) -> Option<JointId> {
         self.snapshot.joints.get(&id).copied()
     }
 
     pub fn joint(&self, id: JointHandle) -> Option<&JointDesc> {
         self.description.joints.get(&id)
+    }
+
+    /// Force-element joints omitted from the reduced-coordinate tree.
+    pub fn loop_joints(&self) -> impl Iterator<Item = (JointHandle, &JointDesc)> {
+        self.description
+            .loop_joints
+            .iter()
+            .map(|id| (*id, &self.description.joints[id]))
     }
 
     pub fn joint_settings(&self, id: JointHandle) -> Option<JointSettings> {
@@ -793,6 +802,9 @@ impl RigidScene {
         softness: Option<JointSoftness>,
     ) -> Result<()> {
         let previous = self.joint_softness(id)?;
+        if softness.is_none() && self.description.loop_joints.contains(&id) {
+            return Err(Error::Build("loop joints require compliance".into()));
+        }
         if let Some(value) = softness {
             value.validate()?;
         }
@@ -964,6 +976,7 @@ impl RigidScene {
             d.joint_settings.retain(|id, _| d.joints.contains_key(id));
             d.joint_axes.retain(|id, _| d.joints.contains_key(id));
             d.joint_softness.retain(|id, _| d.joints.contains_key(id));
+            d.loop_joints.retain(|id| d.joints.contains_key(id));
             Ok(())
         })
     }
@@ -1063,12 +1076,31 @@ impl RigidScene {
         })
     }
 
+    /// Insert a compliant force joint without merging or projecting either tree.
+    pub fn insert_loop_joint(
+        &mut self,
+        desc: JointDesc,
+        softness: JointSoftness,
+    ) -> Result<JointHandle> {
+        softness.validate()?;
+        self.edit(|d| {
+            let id = JointHandle(d.allocate()?);
+            d.joints.insert(id, desc);
+            d.joint_settings.insert(id, JointSettings::default());
+            d.joint_axes.insert(id, [JointAxisSettings::default(); 6]);
+            d.joint_softness.insert(id, softness);
+            d.loop_joints.insert(id);
+            Ok(id)
+        })
+    }
+
     pub fn remove_joint(&mut self, id: JointHandle) -> Result<()> {
         self.edit(|d| {
             d.joints.remove(&id).ok_or_else(|| missing("joint"))?;
             d.joint_settings.remove(&id);
             d.joint_axes.remove(&id);
             d.joint_softness.remove(&id);
+            d.loop_joints.remove(&id);
             Ok(())
         })
     }

@@ -25,6 +25,7 @@ pub mod ik;
 pub mod implicit_mpm;
 pub mod jacobian;
 mod joint_compliance;
+mod loop_forces;
 #[cfg(feature = "gpu")]
 pub mod mpm;
 pub mod mpm_oracle;

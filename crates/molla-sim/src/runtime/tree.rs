@@ -45,6 +45,12 @@ pub(super) fn compile_joints(
                 "runtime joint axis must be finite and nonzero".into(),
             ));
         }
+        if joint.parent == Some(joint.child) {
+            return Err(Error::Build("joint endpoints must differ".into()));
+        }
+        if description.loop_joints.contains(&id) {
+            continue;
+        }
         if let Some(parent) = joint.parent {
             if component(&authored, parent).contains(&joint.child) {
                 return Err(Error::Build("runtime joint cycle".into()));

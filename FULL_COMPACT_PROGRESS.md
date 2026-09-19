@@ -725,6 +725,66 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Sleeping, deformation/MPM, soft angular phase, GPU parity and failure-path
   hardening also remain within the unchanged full objective.
 
+### Live Kubota discovery and compliant loop closures
+
+- Native Gearbox launch works through `nix develop --impure -c oslo make run
+  '--args=--name molla-loop-test --ephemeral'`. Oslo requires the equals form
+  for this string parameter. Direct unwrapped launch failed GPU surface
+  creation; no environment files were changed. `gearbox launch --help` starts
+  the simulator with a scene path rather than displaying CLI help.
+- The first actual Kubota load panicked in the adapter: its rear lift rods,
+  stabilizers and front/rear cylinders close articulation loops. The asset
+  marks those edges with `physics:excludeFromArticulation`; rejecting every
+  cycle was insufficient for the named acceptance asset.
+- `RigidScene::insert_loop_joint` now stores a validated compliant joint with
+  stable handles, frames, limits, motors and collision exclusions, but omits
+  it from the reduced tree. Insertion does not project or teleport either
+  endpoint. Disable/remove/cascade and authoring survive tree rebuilds.
+  Ordinary unmarked tree cycles remain rejected; loop softness is mandatory.
+- CPU `RigidWorld` evaluates these force elements each fresh substep. Anchor
+  translation and principal rotation-log rows have equal/opposite COM
+  wrenches; rotating-frame translation and SO(3) derivative terms preserve
+  virtual work and net world momentum. The coupled `J M^-1 J^T` response uses
+  the existing articulated CRBA/Jacobian path, including across separate trees.
+  A backward-Euler spring/damper solve produces impulses converted to body
+  forces; a bounded active-set solve handles unilateral limits and motor caps.
+  Featherstone remains the sole rigid integrator. Cholesky is reused across
+  row right-hand sides; singular mass matrices use the existing pseudoinverse.
+- Gearbox propagates the authored closure flag separately from `reduced` and
+  inserts force joints with initial 30 Hz / critical damping when unspecified.
+  Rapier's existing constraint path is unchanged. Five core regressions cover
+  driven four-bar closure, a 1000:1 pair, motor caps/world anchors, analytic
+  row derivatives/momentum and coupled bound complementarity. An adapter
+  regression covers closure joint access, driving and independent removal.
+- Live Kubota now loads: 26 bodies, 4917 kg, four tyres and all five controllers.
+  The actual `--forward 2 --turn 0.4 --for 4s` command drives and steers;
+  captured heading changed from about 0 to +0.365 rad, not the specified
+  Rapier reference +0.60 rad. Wheel stamping logs and rendered tractor
+  screenshots exist in `/tmp/molla-kubota-*.png`; this is not full parity.
+  Current debug-build timing is about 5 ms/physics step, not the <1 ms target.
+  Paused telemetry showed zero tyre loads, requiring further lifecycle/order
+  investigation. Wire machine coordinates are Z-up (x=sim_z, y=sim_x,
+  z=sim_y), so wire y changes are not vertical sinking.
+- Live controller commands and TF sampling also show both PTO bodies rotating
+  at commanded engagement, and both hitch bodies changing pose. Raising then
+  lowering changed rear rockshaft orientation by approximately 0.966 rad and
+  front lower-hitch orientation by 0.395 rad; chassis heading stayed near
+  0.368 rad. These are actual TF poses, not just echoed command properties.
+  No step rejection, panic or quarantine appears in the captured drive log.
+  Exact PTO speed/load and hitch-load acceptance still require measurement.
+- Gates pass: all 30 sim tests, all 354 solver tests (one explicit long MPM
+  stress test ignored), workspace `make check-all`, strict sim/solver Clippy
+  with all features and without default features, and Gearbox's 58 binary
+  tests under each selected backend. Logs: `/tmp/molla-loop-*.log` and
+  `/tmp/gearbox-loop-{tests,rapier,drive}.log`. Existing Gearbox all-target
+  and broader Clippy limitations remain unchanged.
+- Remaining limitations include principal-log angular branch/multi-turn
+  semantics, finite loop compliance, omitted free-acceleration/bias prediction
+  in the implicit force solve, GPU loop parity, actual hitch/PTO/towing/slope
+  acceptance and performance. No external dependencies, asset, environment,
+  recipes, vendors or original specification were changed. Engram tools are
+  still unavailable; the full objective remains active.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

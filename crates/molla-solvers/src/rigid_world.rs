@@ -241,6 +241,7 @@ impl RigidWorld {
                     &mut wheel_samples,
                     |a, b| excluded.borrow_mut()(a, b),
                 )?;
+                crate::loop_forces::apply(scene, state, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)
             },
         )?;
