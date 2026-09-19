@@ -1,8 +1,10 @@
 //! CPU nearest-hit queries over live rigid-scene colliders.
 
+use std::collections::{BTreeMap, btree_map::Entry};
+
 use molla_core::{Error, Result};
 use molla_math::{Real, Vec3};
-use molla_sim::runtime::{BodyHandle, ColliderGeometry, ColliderHandle, RigidScene};
+use molla_sim::runtime::{BodyHandle, ColliderGeometry, ColliderHandle, RigidScene, SceneStamp};
 use molla_sim::{Heightfield, TriMesh};
 
 use crate::{Aabb, MeshBvh, collider_query::collider_local_aabb, convex_hull};
@@ -17,6 +19,60 @@ pub struct RayHit {
     pub normal: Vec3,
 }
 
+enum PreparedGeometry {
+    Primitive,
+    Hull(Vec<(Vec3, Vec3)>),
+    Compound(Vec<Vec<(Vec3, Vec3)>>),
+    Mesh(MeshBvh),
+    Heightfield,
+}
+
+struct PreparedCollider {
+    stamp: SceneStamp,
+    bounds: Aabb,
+    geometry: Option<PreparedGeometry>,
+}
+
+#[derive(Default)]
+pub struct CpuRaycaster {
+    stamp: Option<SceneStamp>,
+    colliders: BTreeMap<ColliderHandle, PreparedCollider>,
+    preparations: usize,
+}
+
+impl CpuRaycaster {
+    pub fn preparation_count(&self) -> usize {
+        self.preparations
+    }
+
+    pub fn cast_ray(
+        &mut self,
+        scene: &RigidScene,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: Real,
+    ) -> Result<Option<RayHit>> {
+        self.cast_ray_filtered(scene, origin, direction, max_distance, |_| true)
+    }
+
+    pub fn cast_ray_filtered(
+        &mut self,
+        scene: &RigidScene,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: Real,
+        include: impl FnMut(ColliderHandle) -> bool,
+    ) -> Result<Option<RayHit>> {
+        let stamp = scene.stamp();
+        if self.stamp.as_ref() != Some(&stamp) {
+            self.colliders
+                .retain(|id, cached| scene.collider_stamp(*id).as_ref() == Some(&cached.stamp));
+            self.stamp = Some(stamp);
+        }
+        cast_prepared(self, scene, origin, direction, max_distance, include)
+    }
+}
+
 /// Enabled sensors participate; origins inside solid shapes return distance zero.
 pub fn cast_ray(
     scene: &RigidScene,
@@ -29,6 +85,17 @@ pub fn cast_ray(
 
 /// `include` selects eligible colliders before geometry work.
 pub fn cast_ray_filtered(
+    scene: &RigidScene,
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: Real,
+    include: impl FnMut(ColliderHandle) -> bool,
+) -> Result<Option<RayHit>> {
+    CpuRaycaster::default().cast_ray_filtered(scene, origin, direction, max_distance, include)
+}
+
+fn cast_prepared(
+    cache: &mut CpuRaycaster,
     scene: &RigidScene,
     origin: Vec3,
     direction: Vec3,
@@ -54,25 +121,58 @@ pub fn cast_ray_filtered(
         let pose = scene.collider_world_pose(id)?;
         let o = pose.inverse_transform_point(origin);
         let d = pose.rotation.conjugate() * direction;
-        let bounds = match &desc.geometry {
-            ColliderGeometry::Heightfield(field) => Aabb {
-                min: Vec3::new(field.origin.x, Real::NEG_INFINITY, field.origin.z),
-                max: Vec3::new(
-                    field.origin.x + (field.nx - 1) as Real * field.cell_size,
-                    Real::INFINITY,
-                    field.origin.z + (field.nz - 1) as Real * field.cell_size_z,
-                ),
-            },
-            _ => collider_local_aabb(scene, id)?,
+        let prepared = match cache.colliders.entry(id) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let bounds = match &desc.geometry {
+                    ColliderGeometry::Heightfield(field) => Aabb {
+                        min: Vec3::new(field.origin.x, Real::NEG_INFINITY, field.origin.z),
+                        max: Vec3::new(
+                            field.origin.x + (field.nx - 1) as Real * field.cell_size,
+                            Real::INFINITY,
+                            field.origin.z + (field.nz - 1) as Real * field.cell_size_z,
+                        ),
+                    },
+                    _ => collider_local_aabb(scene, id)?,
+                };
+                e.insert(PreparedCollider {
+                    stamp: scene
+                        .collider_stamp(id)
+                        .ok_or_else(|| Error::Build("missing collider stamp".into()))?,
+                    bounds,
+                    geometry: None,
+                })
+            }
         };
-        let Some((entry, exit)) = ray_bounds(o, d, bounds, limit) else {
+        let Some((entry, exit)) = ray_bounds(o, d, prepared.bounds, limit) else {
             continue;
         };
-        let hit = match &desc.geometry {
-            ColliderGeometry::TriMesh(mesh) => ray_mesh(mesh, o, d, limit),
-            ColliderGeometry::Heightfield(field) => ray_heightfield(field, o, d, entry, exit),
-            ColliderGeometry::ConvexHull(points) => ray_hull(points, o, d, limit),
-            geometry => ray_primitive(geometry, o, d, entry, exit),
+        let geometry = prepared.geometry.get_or_insert_with(|| {
+            cache.preparations += 1;
+            match &desc.geometry {
+                ColliderGeometry::TriMesh(mesh) => {
+                    PreparedGeometry::Mesh(MeshBvh::build(&mesh.vertices, &mesh.indices, 4))
+                }
+                ColliderGeometry::ConvexHull(points) => PreparedGeometry::Hull(hull_planes(points)),
+                ColliderGeometry::ConvexParts(parts) => PreparedGeometry::Compound(
+                    parts.iter().map(|points| hull_planes(points)).collect(),
+                ),
+                ColliderGeometry::Heightfield(_) => PreparedGeometry::Heightfield,
+                _ => PreparedGeometry::Primitive,
+            }
+        });
+        let hit = match (&desc.geometry, geometry) {
+            (ColliderGeometry::TriMesh(mesh), PreparedGeometry::Mesh(bvh)) => {
+                ray_mesh(bvh, mesh, o, d, limit)
+            }
+            (ColliderGeometry::Heightfield(field), _) => ray_heightfield(field, o, d, entry, exit),
+            (_, PreparedGeometry::Hull(planes)) => ray_hull(planes, o, d, limit),
+            (_, PreparedGeometry::Compound(parts)) => parts
+                .iter()
+                .filter_map(|p| ray_hull(p, o, d, limit))
+                .min_by(|a, b| a.0.total_cmp(&b.0)),
+            (geometry, PreparedGeometry::Primitive) => ray_primitive(geometry, o, d, entry, exit),
+            _ => unreachable!("prepared geometry matches scene stamp"),
         };
         if let Some((distance, normal)) = hit
             && (best.is_none() || distance < limit)
@@ -250,18 +350,27 @@ fn ray_primitive(
     Some((hi, sample(hi).1))
 }
 
-fn ray_hull(points: &[Vec3], o: Vec3, d: Vec3, max: Real) -> Option<(Real, Vec3)> {
+fn hull_planes(points: &[Vec3]) -> Vec<(Vec3, Vec3)> {
     let hull = convex_hull(points);
-    if hull.faces.is_empty() {
+    hull.faces
+        .iter()
+        .map(|&[a, b, c]| {
+            let p = hull.vertices[a as usize];
+            let n = (hull.vertices[b as usize] - p)
+                .cross(hull.vertices[c as usize] - p)
+                .normalize_or_zero();
+            (p, n)
+        })
+        .collect()
+}
+
+fn ray_hull(planes: &[(Vec3, Vec3)], o: Vec3, d: Vec3, max: Real) -> Option<(Real, Vec3)> {
+    if planes.is_empty() {
         return None;
     }
     let (mut enter, mut exit) = (0.0_f64, max);
     let mut normal = -d;
-    for [a, b, c] in hull.faces {
-        let p = hull.vertices[a as usize];
-        let n = (hull.vertices[b as usize] - p)
-            .cross(hull.vertices[c as usize] - p)
-            .normalize_or_zero();
+    for &(p, n) in planes {
         let offset = n.dot(p - o);
         let speed = n.dot(d);
         if speed == 0.0 {
@@ -284,8 +393,7 @@ fn ray_hull(points: &[Vec3], o: Vec3, d: Vec3, max: Real) -> Option<(Real, Vec3)
     Some((enter, normal))
 }
 
-fn ray_mesh(mesh: &TriMesh, o: Vec3, d: Vec3, max: Real) -> Option<(Real, Vec3)> {
-    let bvh = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
+fn ray_mesh(bvh: &MeshBvh, mesh: &TriMesh, o: Vec3, d: Vec3, max: Real) -> Option<(Real, Vec3)> {
     bvh.ray_cast(&mesh.vertices, &mesh.indices, o, d, max)
         .map(|(_, t, n)| {
             let n = n.normalize_or_zero();

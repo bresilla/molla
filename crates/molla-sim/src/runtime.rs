@@ -1,6 +1,7 @@
 //! Transactional rigid-scene mutation with persistent handles and dense solver snapshots.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
@@ -26,6 +27,17 @@ macro_rules! handle {
 handle!(BodyHandle);
 handle!(ColliderHandle);
 handle!(JointHandle);
+
+/// Identity of an immutable scene description; body state changes retain it.
+#[derive(Clone, Debug)]
+pub struct SceneStamp(Arc<()>);
+
+impl PartialEq for SceneStamp {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for SceneStamp {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BodyKind {
@@ -80,6 +92,8 @@ pub enum ColliderGeometry {
         border_radius: Real,
     },
     ConvexHull(Vec<Vec3>),
+    /// Convex pieces in one shared collider frame, prepared by a mesh decomposer.
+    ConvexParts(Vec<Vec<Vec3>>),
     TriMesh(TriMesh),
     Heightfield(Heightfield),
 }
@@ -102,6 +116,46 @@ impl ColliderGeometry {
         };
         Ok(Transform::new(*a * 0.5 + *b * 0.5, rotation))
     }
+}
+
+/// Validate a finite three-dimensional support-point cloud.
+/// Coplanarity tolerance is `1e-12` of the largest point-cloud extent.
+pub fn validate_convex_points(points: &[Vec3]) -> Result<()> {
+    let invalid = || Error::Build("convex collider requires a finite solid point cloud".into());
+    if points.len() < 4 || points.iter().any(|p| !p.is_finite()) {
+        return Err(invalid());
+    }
+    let lo = points
+        .iter()
+        .copied()
+        .fold(Vec3::splat(Real::INFINITY), Vec3::min);
+    let hi = points
+        .iter()
+        .copied()
+        .fold(Vec3::splat(Real::NEG_INFINITY), Vec3::max);
+    let scale = (hi - lo).max_element();
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(invalid());
+    }
+    let offset = |p: &Vec3| (*p - points[0]) / scale;
+    let edge = points
+        .iter()
+        .map(offset)
+        .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+        .ok_or_else(invalid)?;
+    let normal = points
+        .iter()
+        .map(|p| edge.cross(offset(p)))
+        .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+        .ok_or_else(invalid)?;
+    if normal.length_squared() == 0.0
+        || !points
+            .iter()
+            .any(|p| normal.dot(offset(p)).abs() > normal.length() * 1e-12)
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -155,6 +209,7 @@ struct Description {
     next_id: u64,
     bodies: BTreeMap<BodyHandle, BodyDesc>,
     colliders: BTreeMap<ColliderHandle, ColliderDesc>,
+    collider_stamps: BTreeMap<ColliderHandle, SceneStamp>,
     joints: BTreeMap<JointHandle, JointDesc>,
 }
 
@@ -169,11 +224,13 @@ impl Description {
 }
 
 struct Snapshot {
+    stamp: SceneStamp,
     model: Model,
     state: State,
     control: Control,
     bodies: BTreeMap<BodyHandle, BodyId>,
-    colliders: BTreeMap<ColliderHandle, ShapeId>,
+    colliders: BTreeMap<ColliderHandle, Vec<ShapeId>>,
+    shape_colliders: Vec<ColliderHandle>,
     joints: BTreeMap<JointHandle, JointId>,
     roots: BTreeMap<BodyHandle, JointId>,
 }
@@ -217,6 +274,9 @@ impl RigidScene {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    pub fn stamp(&self) -> SceneStamp {
+        self.snapshot.stamp.clone()
+    }
     pub fn gravity(&self) -> Vec3 {
         self.gravity
     }
@@ -225,12 +285,24 @@ impl RigidScene {
         self.snapshot.bodies.get(&id).copied()
     }
 
+    /// The sole dense shape index; multi-piece colliders have no single index.
     pub fn collider_index(&self, id: ColliderHandle) -> Option<ShapeId> {
-        self.snapshot.colliders.get(&id).copied()
+        self.collider_indices(id)
+            .filter(|indices| indices.len() == 1)
+            .map(|indices| indices[0])
+    }
+
+    pub fn collider_indices(&self, id: ColliderHandle) -> Option<&[ShapeId]> {
+        self.snapshot.colliders.get(&id).map(Vec::as_slice)
     }
 
     pub fn collider(&self, id: ColliderHandle) -> Option<&ColliderDesc> {
         self.description.colliders.get(&id)
+    }
+
+    /// Identity of collider geometry/material authoring, preserved by pose-only edits.
+    pub fn collider_stamp(&self, id: ColliderHandle) -> Option<SceneStamp> {
+        self.description.collider_stamps.get(&id).cloned()
     }
 
     pub fn collider_world_pose(&self, id: ColliderHandle) -> Result<Transform> {
@@ -281,10 +353,7 @@ impl RigidScene {
     }
 
     pub fn collider_handle(&self, index: ShapeId) -> Option<ColliderHandle> {
-        self.snapshot
-            .colliders
-            .iter()
-            .find_map(|(&id, &i)| (i == index).then_some(id))
+        self.snapshot.shape_colliders.get(index.index()).copied()
     }
 
     pub fn joint_index(&self, id: JointHandle) -> Option<JointId> {
@@ -319,6 +388,8 @@ impl RigidScene {
         self.edit(|d| {
             d.bodies.remove(&id).ok_or_else(|| missing("body"))?;
             d.colliders.retain(|_, c| c.parent != Some(id));
+            d.collider_stamps
+                .retain(|id, _| d.colliders.contains_key(id));
             d.joints
                 .retain(|_, j| j.parent != Some(id) && j.child != id);
             Ok(())
@@ -336,6 +407,7 @@ impl RigidScene {
         self.edit(|d| {
             let id = ColliderHandle(d.allocate()?);
             d.colliders.insert(id, desc);
+            d.collider_stamps.insert(id, SceneStamp(Arc::new(())));
             Ok(id)
         })
     }
@@ -345,6 +417,7 @@ impl RigidScene {
             *d.colliders
                 .get_mut(&id)
                 .ok_or_else(|| missing("collider"))? = desc;
+            d.collider_stamps.insert(id, SceneStamp(Arc::new(())));
             Ok(())
         })
     }
@@ -352,6 +425,7 @@ impl RigidScene {
     pub fn remove_collider(&mut self, id: ColliderHandle) -> Result<()> {
         self.edit(|d| {
             d.colliders.remove(&id).ok_or_else(|| missing("collider"))?;
+            d.collider_stamps.remove(&id);
             Ok(())
         })
     }
@@ -413,25 +487,29 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         bodies.insert(id, builder.add_body(params));
     }
     let mut colliders = BTreeMap::new();
+    let mut shape_colliders = Vec::new();
     for (&id, desc) in &d.colliders {
         validate_pose(desc.pose)?;
         let parent = dense_body(&bodies, desc.parent)?;
-        let shape = add_shape(&mut builder, parent, desc)?;
-        builder.set_shape_material(shape, desc.friction, desc.restitution)?;
+        let shapes = add_shapes(&mut builder, parent, desc)?;
         if desc.friction < 0.0 || !(0.0..=1.0).contains(&desc.restitution) {
             return Err(Error::Build(
                 "invalid runtime friction or restitution".into(),
             ));
         }
-        builder.set_shape_contact_material(shape, desc.contact_material)?;
-        builder.set_shape_collision_groups(shape, desc.memberships, desc.filter)?;
         let flags = if desc.enabled {
             ShapeFlags::COLLIDES
         } else {
             0
         } | if desc.sensor { ShapeFlags::SENSOR } else { 0 };
-        builder.set_shape_flags(shape, flags)?;
-        colliders.insert(id, shape);
+        for &shape in &shapes {
+            builder.set_shape_material(shape, desc.friction, desc.restitution)?;
+            builder.set_shape_contact_material(shape, desc.contact_material)?;
+            builder.set_shape_collision_groups(shape, desc.memberships, desc.filter)?;
+            builder.set_shape_flags(shape, flags)?;
+            shape_colliders.push(id);
+        }
+        colliders.insert(id, shapes);
     }
     let mut incoming = BTreeMap::new();
     let mut children: BTreeMap<BodyHandle, Vec<JointHandle>> = BTreeMap::new();
@@ -539,11 +617,13 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         }
     }
     Ok(Snapshot {
+        stamp: SceneStamp(Arc::new(())),
         model,
         state,
         control,
         bodies,
         colliders,
+        shape_colliders,
         joints,
         roots,
     })
@@ -583,10 +663,28 @@ fn validate_body(desc: &BodyDesc) -> Result<()> {
     Ok(())
 }
 
-fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> Result<ShapeId> {
+fn add_shapes(
+    builder: &mut ModelBuilder,
+    body: BodyId,
+    desc: &ColliderDesc,
+) -> Result<Vec<ShapeId>> {
     let pose = desc.pose.compose(&desc.geometry.geometry_transform()?);
     validate_pose(pose)?;
-    match &desc.geometry {
+    if let ColliderGeometry::ConvexParts(parts) = &desc.geometry {
+        if parts.is_empty() {
+            return Err(Error::Build("invalid convex decomposition pieces".into()));
+        }
+        return parts
+            .iter()
+            .map(|points| {
+                validate_convex_points(points)?;
+                let hull = builder.add_hull(points.clone());
+                builder.add_shape_convex_hull(body, hull, pose)
+            })
+            .collect();
+    }
+    let shape = match &desc.geometry {
+        ColliderGeometry::ConvexParts(_) => unreachable!(),
         ColliderGeometry::Ball { radius } => builder.add_shape_sphere(body, *radius, pose),
         ColliderGeometry::Cuboid { half_extents } => {
             builder.add_shape_box(body, *half_extents, pose)
@@ -608,9 +706,7 @@ fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> R
             border_radius,
         } => builder.add_shape_round_cylinder(body, *half_height, *radius, *border_radius, pose),
         ColliderGeometry::ConvexHull(points) => {
-            if points.iter().any(|p| !p.is_finite()) {
-                return Err(Error::Build("non-finite hull".into()));
-            }
+            validate_convex_points(points)?;
             let hull = builder.add_hull(points.clone());
             builder.add_shape_convex_hull(body, hull, pose)
         }
@@ -632,7 +728,8 @@ fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> R
             let field = builder.add_heightfield(field.clone());
             builder.add_shape_heightfield(body, field, pose)
         }
-    }
+    }?;
+    Ok(vec![shape])
 }
 
 fn add_joint(

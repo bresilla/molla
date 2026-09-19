@@ -25,7 +25,26 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Runtime collider replacement supports ball, cuboid, Y capsule, endpoint
   capsule, Y cylinder, round cylinder, convex hull, triangle mesh and native
   rectangular heightfield, with local pose, friction, restitution and tags.
-  Indexed-mesh convex decomposition remains.
+  Indexed-mesh convex decomposition now lowers to multiple convex pieces
+  owned by a single stable collider handle.
+- `molla_geometry::decomposition::convex_decomposition` runs VHACD offline
+  during authoring and reconstructs hulls from the indexed surface. It uses
+  pinned `parry3d-f64 = 0.26.1` with deterministic, non-parallel features for
+  this geometry operation only; it does not introduce Rapier or replace
+  Molla collision/Featherstone stepping. The same Parry version is already in
+  the clean Gearbox physics worktree's lockfile. New dependencies were resolved
+  from the local Cargo cache; existing dependency versions were not refreshed.
+- Decomposition removes unused input vertices, normalizes its working frame,
+  validates authoring limits/indices/solid geometry, reconstructs original
+  units and sorts output pieces/points. Runtime convex hulls/pieces reject
+  non-finite, empty and coplanar clouds. Algorithm failure returns an error,
+  not a fallback hull which silently fills concavities.
+- `RigidScene::collider_indices` exposes every dense piece and the inverse
+  map resolves every piece to its stable owner. `collider_index` remains for
+  single-piece colliders only. Materials, groups, flags, pose edits, removal
+  and replacement apply to all pieces. AABBs union piece bounds; ray queries
+  choose the nearest piece; contact readout aggregates pieces under the one
+  logical collider pair. Compound shape views report `Other`.
 - Endpoint capsules retain the authored collider frame and lower to a posed
   Y capsule; coincident endpoints lower to a sphere. Collider descriptor,
   local/world pose reads and local/world pose writes are available without
@@ -68,9 +87,17 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   rays avoid scanning the height array or constructing mesh acceleration.
   Other primitives use bounded signed-distance minimization/root refinement
   (spheres have a direct analytic path), hulls use facet clipping, and meshes
-  use the CPU BVH. Mesh BVHs and hull facets are currently constructed per
-  intersected collider/query; persistent preparation remains a performance
-  follow-up before high-volume mesh/tyre query acceptance.
+  use the CPU BVH. `CpuRaycaster` now lazily retains local bounds, mesh BVHs
+  and hull facet planes; `RigidWorld` owns a mutex-protected persistent cache.
+  Geometry preparation happens only after filtering and bounds intersection.
+  The free ray functions remain one-shot conveniences.
+- Opaque reference-counted scene/collider stamps distinguish fresh worlds
+  even when their numeric revisions and handles coincide. Collider replacement
+  and deletion invalidate the corresponding prepared data; pose, body and joint
+  edits preserve unrelated geometry preparation. Contact readout also uses a
+  scene stamp, preventing stale pairs after replacing `RigidWorld::scene` with
+  a different scene at the same numeric revision. Shared query reads retain
+  the `Send + Sync` contract required by Gearbox.
 - CPU mesh BVH rays now include origin/maximum-distance hits and handle
   parallel slab-boundary rays without `0 * infinity` NaNs. The triangle
   intersection is shared with the terrain traversal.
@@ -120,7 +147,7 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
 | 2: bodies | Pose/mass/COM/inertia/initial velocity/tag available in model/state/descriptors. Full read/write API, enabled/quarantine, damping, sleep/wake, additional-mass replacement, force/impulse helpers, CCD option, collider mass recomputation and no-step synchronization remain. |
-| 3: colliders | Endpoint capsules, round cylinders, independently scaled native heightfields, primitive/convex/other views, descriptor/pose reads, pose writes and local/world/arbitrary-pose AABBs added. Material mutation, friction rules, two-way masks and enabled/sensor flags remain tested. Convex decomposition and density/mass remain. |
+| 3: colliders | All requested shape kinds now have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Primitive/convex/other views, pose access, AABBs, material mutation, friction rules, two-way masks and enabled/sensor flags implemented. Collider density/mass and body mass recomputation remain. Gearbox consumption still requires integration tests. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
 | 5: world | Gravity access, CPU world step with configurable substeps, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
 | 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
@@ -229,16 +256,35 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   8 previous shape and 12 new terrain/query tests; solvers 71 selected tests.
   Total: 232 CPU tests/doctests. The rounded-cylinder GPU-fallback regression,
   workspace `make check-all` and strict scoped Clippy also passed.
-- No new dependencies or Gearbox checkout edits. Remaining query optimization:
-  reuse prepared mesh BVHs/hull facets across repeated queries, with safe
-  invalidation on scene mutations.
+- That terrain/ray slice added no dependencies or Gearbox checkout edits.
+  Persistent mesh/hull query preparation was subsequently implemented below.
+
+### Convex decomposition / persistent query verification
+
+- Six `convex_decomposition` tests cover the concavity of a closed indexed
+  L-shaped mesh (including a cavity contact miss, ray miss/hit and correct
+  bounds), deterministic replay, unused input vertices, translated small
+  meshes, authoring rejection, multiple dense shapes under one handle, atomic
+  mutation and per-piece material/filter propagation.
+- Cache preparation counts verify reuse over repeated rays, body motion,
+  collider pose edits and body/joint topology edits. Replacements, removals
+  and different scenes with equal numeric revisions cannot reuse stale data;
+  filtered/bounds-missed geometry is not prepared.
+- Four `compound_world` tests verify actual Featherstone force readout groups
+  both convex pieces into one collider pair, sensor/disabled changes cover
+  every piece, replacing a same-revision world clears contact readout, and
+  concurrent shared-world rays preserve `Send + Sync` and correct hits.
+  A panicking user query predicate does not permanently poison later queries.
+- Regression lanes include sim 23 tests/doctests, geometry 144 tests and
+  solvers 75 selected tests (242 CPU tests/doctests total). Tractor-scale,
+  mass-ratio and full Gearbox acceptance are still unproven.
 
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Complete indexed-mesh convex decomposition, then collider/body editing and
-   mass/impulse APIs; prepare mesh/hull query data for high-volume terrain use.
+2. Complete collider density/mass, body editing, mass recomputation and
+   force/impulse APIs; benchmark the prepared query path with the tyre adapter.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.

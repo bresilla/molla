@@ -7,6 +7,7 @@ pub mod collider_query;
 pub mod contact_extras;
 pub mod contact_reduction;
 pub mod decimate;
+pub mod decomposition;
 pub mod epa;
 #[cfg(feature = "gpu")]
 mod epa_gpu;

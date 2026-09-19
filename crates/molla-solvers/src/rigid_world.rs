@@ -1,15 +1,17 @@
 //! CPU rigid-world stepping and stable-handle contact readout.
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use molla_core::{Error, Result};
+use molla_geometry::raycast_cpu::CpuRaycaster;
 use molla_geometry::{
     Aabb, CollisionPipeline,
     collider_query::{self, ColliderShapeView},
 };
 use molla_math::{Real, Transform, Vec3};
 use molla_sim::Contacts;
-use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene};
+use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
 
 use crate::FeatherstoneSolver;
 use crate::penalty_contact::ContactForce;
@@ -28,7 +30,8 @@ pub struct RigidWorld {
     pub solver: FeatherstoneSolver,
     pipeline: CollisionPipeline,
     contacts: Contacts,
-    contact_revision: Option<u64>,
+    contact_revision: Option<SceneStamp>,
+    queries: Mutex<CpuRaycaster>,
 }
 
 impl RigidWorld {
@@ -45,6 +48,7 @@ impl RigidWorld {
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
             contacts: Contacts::with_capacity(64),
             contact_revision: None,
+            queries: Mutex::new(CpuRaycaster::default()),
         })
     }
 
@@ -58,7 +62,7 @@ impl RigidWorld {
         direction: Vec3,
         max_distance: Real,
     ) -> Result<Option<molla_geometry::raycast_cpu::RayHit>> {
-        molla_geometry::raycast_cpu::cast_ray(&self.scene, origin, direction, max_distance)
+        self.cast_ray_filtered(origin, direction, max_distance, |_| true)
     }
 
     pub fn cast_ray_filtered(
@@ -68,13 +72,13 @@ impl RigidWorld {
         max_distance: Real,
         include: impl FnMut(ColliderHandle) -> bool,
     ) -> Result<Option<molla_geometry::raycast_cpu::RayHit>> {
-        molla_geometry::raycast_cpu::cast_ray_filtered(
-            &self.scene,
-            origin,
-            direction,
-            max_distance,
-            include,
-        )
+        let mut queries = self.queries.lock().unwrap_or_else(|poison| {
+            let mut queries = poison.into_inner();
+            *queries = CpuRaycaster::default();
+            self.queries.clear_poison();
+            queries
+        });
+        queries.cast_ray_filtered(&self.scene, origin, direction, max_distance, include)
     }
 
     pub fn collider_local_aabb(&self, id: ColliderHandle) -> Result<Aabb> {
@@ -137,13 +141,13 @@ impl RigidWorld {
             return Err(Error::Solver("rigid step produced non-finite state".into()));
         }
         *self.scene.state_mut() = next;
-        self.contact_revision = Some(self.scene.revision());
+        self.contact_revision = Some(self.scene.stamp());
         Ok(())
     }
 
     /// All substep samples grouped by stable collider pair; sum impulses, not instantaneous forces.
     pub fn contact_pairs(&self) -> Vec<ContactPair> {
-        if self.contact_revision != Some(self.scene.revision()) {
+        if self.contact_revision != Some(self.scene.stamp()) {
             return Vec::new();
         }
         let mut pairs = BTreeMap::new();

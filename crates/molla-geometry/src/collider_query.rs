@@ -61,15 +61,20 @@ pub fn collider_aabb_at_pose(
     let desc = scene
         .collider(id)
         .ok_or_else(|| Error::Build("unknown collider".into()))?;
-    let index = scene
-        .collider_index(id)
+    let indices = scene
+        .collider_indices(id)
         .ok_or_else(|| Error::Build("unknown collider".into()))?;
-    Ok(shape_aabb_at_pose(
-        scene.model(),
-        index.index(),
-        pose.compose(&desc.geometry.geometry_transform()?),
-        0.0,
-    ))
+    let pose = pose.compose(&desc.geometry.geometry_transform()?);
+    let mut bounds = Aabb {
+        min: Vec3::splat(Real::INFINITY),
+        max: Vec3::splat(Real::NEG_INFINITY),
+    };
+    for index in indices {
+        let part = shape_aabb_at_pose(scene.model(), index.index(), pose, 0.0);
+        bounds.min = bounds.min.min(part.min);
+        bounds.max = bounds.max.max(part.max);
+    }
+    Ok(bounds)
 }
 
 pub fn collider_shape_view(scene: &RigidScene, id: ColliderHandle) -> Result<ColliderShapeView> {
@@ -132,6 +137,8 @@ pub fn collider_shape_view(scene: &RigidScene, id: ColliderHandle) -> Result<Col
                 edges,
             }
         }
-        ColliderGeometry::TriMesh(_) | ColliderGeometry::Heightfield(_) => ColliderShapeView::Other,
+        ColliderGeometry::TriMesh(_)
+        | ColliderGeometry::Heightfield(_)
+        | ColliderGeometry::ConvexParts(_) => ColliderShapeView::Other,
     })
 }

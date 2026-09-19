@@ -32,6 +32,7 @@ molla-sim = { path = "../molla-sim", default-features = false }
 molla-storage = { path = "../molla-storage", default-features = false }
 bytemuck = { version = "1.18", features = ["derive"] }
 rayon = "1.10"
+parry3d-f64 = { version = "=0.26.1", default-features = false, features = ["required-features", "std", "alloc", "enhanced-determinism"] }
 wgpu = { version = "27", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
