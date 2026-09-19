@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 default = []
-gpu = ["dep:wgpu"]
+gpu = ["dep:wgpu", "molla-core/gpu"]
 
 [dependencies]
 molla-core = { path = "../molla-core", default-features = false }
