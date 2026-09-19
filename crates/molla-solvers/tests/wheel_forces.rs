@@ -500,6 +500,32 @@ fn pressure_normal_support_replaces_the_legacy_spring() {
 }
 
 #[test]
+fn pressure_target_edit_preserves_actual_contact_until_stepping() {
+    let (mut w, _, wheel, _, _) = fixture(true);
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    w.step(0.01).unwrap();
+    let before = w.wheels.samples(&w.scene).last().unwrap().clone();
+    w.wheels
+        .set_pressures(&w.scene, &[(wheel, 220_000.0)])
+        .unwrap();
+    let sample = w.wheels.samples(&w.scene).last().unwrap();
+    assert_eq!(sample.output.fz, before.output.fz);
+    assert_eq!(
+        sample.pressure.as_ref().unwrap().deflection,
+        before.pressure.unwrap().deflection
+    );
+    assert_eq!(
+        sample.pressure.as_ref().unwrap().target_pressure_pa,
+        180_000.0
+    );
+    let state = w.wheels.pressure_tire(&w.scene, wheel).unwrap();
+    assert_eq!(state.pressure_pa, 180_000.0);
+    assert_eq!(state.target_pressure_pa, 220_000.0);
+}
+
+#[test]
 fn pressure_targets_are_atomic_rate_limited_and_survive_rebuilds() {
     let (mut w, chassis, wheel, spin, _) = fixture(true);
     w.wheels

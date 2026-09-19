@@ -231,7 +231,6 @@ impl WheelForces {
                 .unwrap()
                 .target_pressure_pa = target;
         }
-        self.invalidate();
         Ok(())
     }
 

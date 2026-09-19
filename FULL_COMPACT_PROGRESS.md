@@ -902,6 +902,18 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   the compact brush is not a full FEM carcass. Do not call either calibrated
   production tyre realism from these internal-consistency tests.
 
+### Paused pressure edits preserve contact telemetry
+
+- Target-only pressure edits no longer invalidate the previous successful
+  wheel samples. While paused, actual pressure, normal support and deflection
+  remain unchanged; `pressure_tire()` immediately exposes the accepted new
+  target. Historical samples retain the target used by their own substep.
+- Verification: all 16 wheel integration tests pass, including the new paused
+  telemetry regression; workspace all-target check and strict solver Clippy
+  with all features and without defaults pass. Logs:
+  `/tmp/molla-pressure-paused-final.log`, `/tmp/molla-pressure-check-final.log`,
+  `/tmp/molla-pressure-lint-final.log`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
