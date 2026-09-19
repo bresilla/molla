@@ -963,6 +963,25 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `host/panes/{machine,mod}.rs`, `gearbox-fields/src/{contacts,render}.rs` and
   `docs/MOLLA_BACKEND.md`. The full objective remains active.
 
+### Atomic articulated teleports and paused publication
+
+- `RigidScene::set_body_poses` validates complete batches before committing.
+  Explicit world-pose targets are applied together; unlisted descendants
+  follow their parent's transform. Joint freedoms still project targets.
+  Generalized rates and revolute winding persist unless velocity reset is
+  requested, which clears only affected subtrees. Duplicate/missing handles
+  and invalid poses leave state, revision and scene stamp unchanged.
+- New `runtime_pose_batch.rs` tests cover both input orders, descendant motion,
+  fixed roots, winding/rates, unrelated moving bodies and atomic rejection.
+  The runtime, mass and batch suites pass 17 tests total. Seven solver suites
+  pass 66 tests, including pressure wheels, runtime trees, softness, joint
+  control/compliance and loops. Workspace all-target check passes.
+- Independent `molla-sim --all-features` linting exposed a pre-existing GPU
+  feature dependency omission: `molla-storage/gpu` used `Error::Gpu` without
+  enabling `molla-core/gpu`. The storage feature now propagates that dependency.
+  Strict simulation Clippy passes both all-feature and no-default lanes.
+- Evidence: `/tmp/molla-pose-batch-{regression,solvers,check,lint}.log`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

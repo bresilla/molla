@@ -566,6 +566,74 @@ impl RigidScene {
         self.commit_body_state(next)
     }
 
+    /// Atomically set world poses; unlisted descendants follow their parent.
+    /// Joint freedoms project requested poses. Rates persist unless reset.
+    pub fn set_body_poses(
+        &mut self,
+        poses: &[(BodyHandle, Transform)],
+        reset_velocity: bool,
+    ) -> Result<()> {
+        let mut requested = BTreeMap::new();
+        for &(id, pose) in poses {
+            validate_pose(pose)?;
+            let index = self.body_index(id).ok_or_else(|| missing("body"))?.index();
+            if requested.insert(index, pose).is_some() {
+                return Err(Error::Build("duplicate body in pose batch".into()));
+            }
+        }
+        if requested.is_empty() {
+            return Ok(());
+        }
+        let model = self.model();
+        let original = self.state().body_q.host()?;
+        let mut next = self.state().clone_host()?;
+        let mut moved = BTreeSet::new();
+        for (&index, &pose) in &requested {
+            next.body_q.host_mut()?[index] = pose;
+            moved.insert(index);
+        }
+        let parents = model.joint_parent.host()?;
+        let children = model.joint_child.host()?;
+        for (j, &child) in children.iter().enumerate() {
+            let child = child as usize;
+            let parent = parents[j];
+            if parent >= 0 && moved.contains(&(parent as usize)) && !requested.contains_key(&child)
+            {
+                let parent = parent as usize;
+                let delta = next.body_q.host()?[parent].compose(&original[parent].inverse());
+                next.body_q.host_mut()?[child] = delta.compose(&original[child]);
+                moved.insert(child);
+            }
+        }
+        let rates = next.joint_qd.host()?.to_vec();
+        for (j, &child) in children.iter().enumerate() {
+            if requested.contains_key(&(child as usize)) {
+                seed_joint(model, &mut next, JointId::from_index(j))?;
+                if model.joint_type.host()?[j] == JointType::Revolute as u32 {
+                    let c = model.joint_coord_offset.host()?[j] as usize;
+                    let old = self.state().joint_q.host()?[c];
+                    let q = &mut next.joint_q.host_mut()?[c];
+                    *q += ((old - *q) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+                }
+            }
+        }
+        next.joint_qd.host_mut()?.copy_from_slice(&rates);
+        if reset_velocity {
+            for (j, &child) in children.iter().enumerate() {
+                if moved.contains(&(child as usize)) {
+                    let v = model.joint_dof_offset.host()?;
+                    next.joint_qd.host_mut()?[v[j] as usize..v[j + 1] as usize].fill(0.0);
+                }
+            }
+            for i in moved {
+                next.body_qd.host_mut()?[i] = SpatialVector::ZERO;
+            }
+        }
+        crate::eval_fk(model, &mut next)?;
+        crate::eval_body_velocities(model, &mut next)?;
+        self.commit_body_state(next)
+    }
+
     fn commit_body_state(&mut self, next: State) -> Result<()> {
         self.commit_step(next)?;
         self.snapshot.stamp = SceneStamp(Arc::new(()));
