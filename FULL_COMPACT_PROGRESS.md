@@ -1567,6 +1567,57 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Isolated Gearbox `controller/wheel_forces.rs`, `viewer/tyre_mesh.rs`,
   `specs/TYRE_PRESSURE.md`; `/tmp/gearbox-round-responsive-*` validation logs.
 
+### Machine-wide tyre compatibility contract (2026-09-20)
+
+#### Goal
+
+- Check whether the machine spec requires tyre support for every compatible
+  machine rather than relying on recognised model/mesh names.
+
+#### Instructions
+
+- User requires tyre support to be part of machine compatibility. Apply
+  pneumatic requirements to all pneumatic wheels, including passive trailer
+  and implement wheels; explicitly classify solid/track/no-wheel cases.
+- Keep original Gearbox untouched; documentation changes stay isolated.
+
+#### Discoveries
+
+- `FULL_COMPACT.md` §6.1 already requires pressure-dependent mechanics and
+  matching visuals, but allows documented defaults for missing metadata.
+- Existing controller spec had wheel joints/colliders, while the tyre spec
+  documented Molla controls and name-based recognition. Neither established
+  explicit per-asset rubber bindings as a full-compatibility requirement.
+- Current loader does not enforce explicit contact type, rubber/rigid mesh
+  bindings or authored reference geometry; their schema still needs design
+  and implementation. Runtime success is not universal compatibility proof.
+
+#### Accomplished
+
+- Added controller-spec §5.1 and a linked tyre asset contract covering wheel
+  identity/joints, explicit contact classification and mesh bindings, geometry,
+  pressures, material response, axle membership and validation/acceptance.
+- Listed currently consumed numeric attributes separately from missing schema.
+  Marked the requirement as REQUIRED CONTRACT with enforcement incomplete;
+  retained MUST's existing meaning of currently enforced runtime checks.
+- Documented legacy fallback/degraded reporting, backend capability reporting,
+  and rename-independent discovery as required acceptance gates.
+- Documentation-only change, checked with `git diff --check`; no runtime or
+  asset edits and no builds/tests needed. Engram tools unavailable.
+
+#### Next Steps
+
+- Define/implement explicit schema bindings and validator; migrate assets,
+  then verify each machine's pressure/mesh/ground-contact lifecycle. The spec
+  update does not make existing assets or backends compliant automatically.
+
+#### Relevant Files
+
+- Isolated Gearbox `specs/CONTROLLER_SPEC.md` — §5.1 and requirement status.
+- Isolated Gearbox `specs/TYRE_PRESSURE.md` — required asset contract, current
+  fields, enforcement gaps and acceptance gates.
+- Molla `FULL_COMPACT.md` — consulted only, remains untracked and unchanged.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
