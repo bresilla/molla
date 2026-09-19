@@ -785,6 +785,33 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   recipes, vendors or original specification were changed. Engram tools are
   still unavailable; the full objective remains active.
 
+### Idempotent material sync and live tyre readout
+
+- Traced the zero-load telemetry to Gearbox's `apply_physics_materials`, which
+  reapplies friction/restitution every Update. Molla replaced the whole
+  collider even for identical values, invalidating the scene stamp before
+  traction and wheel stamping consumed the previous step's samples.
+- Molla adapter setters now skip unchanged friction, restitution and friction
+  combine rules. A regression proves repeated material sync retains scene
+  identity and tyre load, while a real material change invalidates samples and
+  the next step restores them. No weakening of stale-readout checks was needed.
+- A rebuilt native viewer confirms nonzero Kubota wheel telemetry: approximately
+  15.3, 11.1, 13.4 and 8.6 kN after a turn, totaling 48.3 kN versus 48.2 kN
+  static weight. The 4 s forward-2/turn-0.4 command reaches roughly 1.6 m/s and
+  +0.64 rad in its final streamed sample. Later paused readout is +0.86 rad;
+  CLI/network delay means these samples are not an exact fixed-step heading
+  parity measurement. Logs and JSON: `/tmp/gearbox-material-live.log`,
+  `/tmp/molla-material-{before,after}.json`.
+- Gearbox binary tests pass 59/59 with both explicit backends. A real Krampe
+  trailer load reports 15 bodies, 6729 kg and five tyres. The exact paused
+  rear_drawbar teleport attach succeeds, but play then launches the rig and
+  stepping rejects a non-finite mass system. This is failed towing acceptance,
+  not a completed tow. Relevant paths: `attach.rs` teleports bodies one-by-one,
+  including already-transformed descendants under Molla; resume synchronization
+  writes stale ECS transforms back after a paused backend teleport. Both need
+  regression-driven investigation. The failed scene is paused, with the
+  original successful Kubota viewer in its separate instance unchanged.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
