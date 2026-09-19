@@ -1033,6 +1033,64 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   hubs and rims, allowing targeted rubber geometry updates. Assets remain
   unchanged; implement in Molla's reusable tyre layer and isolated viewer.
 
+### Visible pressure tyre integration (2026-09-19)
+
+#### Goal and instructions
+
+- Address the user's report that the tyres remain visually rigid when pressure
+  changes. Original `robolibs/gearbox`, asset files and Mara remain untouched;
+  viewer changes are confined to `gearbox-physics`.
+
+#### Discoveries
+
+- Imported rubber is separable from rigid hubs/rims. Material-subset parents
+  can contain empty, main-world-only meshes: uploading those as render meshes
+  causes repeated Bevy slab allocation errors. The deformation path now skips
+  empty/non-renderable geometry and retains its subset children.
+- Authored `Mesh::final_aabb` overrides calculated bounds; private deforming
+  meshes clear it and update their bounds before visibility checks.
+- This is a CPU compact contact-envelope approximation, not solved FEM carcass
+  displacement or a calibrated sidewall model. Lower-sidewall bulge derives
+  from actual loaded-radius compression, not an independent pressure animation.
+
+#### Accomplished
+
+- `molla-vehicle::real_tire::LoadedTireEnvelope` maps rubber onto the loaded
+  plane and bulges the lower sidewall while preserving the bead and upper tyre.
+  Molla wheel descriptors now expose read-only geometry; the isolated backend
+  publishes current hub, heading, unloaded radius and tread width.
+- The isolated viewer clones each rubber mesh, always deforms reference
+  positions, preserves rigid rims/hubs and shared source assets, recalculates
+  normals/tangents and bounds, restores unloaded geometry, and releases its
+  records when bodies/meshes disappear. Paused external body transforms carry
+  the contact frame with them instead of deforming against stale world poses.
+- Molla envelope-filtered tests: 10 pass; wheel-force regressions: 16 pass;
+  strict library Clippy passes. Isolated binary suites: 67 pass per backend;
+  native build passes. Logs: `/tmp/molla-tyre-envelope-{tests,wheel-tests,lint}.log`
+  and `/tmp/gearbox-tyre-mesh-{tests,rapier-tests,build}.log`.
+- Live Kubota low/high pressure screenshots inspected at the same close camera:
+  `/tmp/molla-tyre-checked-low-settled.png` and
+  `/tmp/molla-tyre-checked-high.png`. Matching JSON shows 0.5 versus 4 bar applied;
+  front compression changes from 83.7 to 35.2 mm, rear 79.0 to 36.5 mm.
+  The sidebar's applied values/targets reflect CLI edits at both endpoints.
+- The corrected live run no longer repeatedly reports slab allocation errors;
+  one startup allocation warning remains. Debug frame rate is about 6 FPS,
+  physics about 5.5 ms/step, so performance acceptance remains open. The owned
+  live instance later disappeared; the separate `probe` instance was not touched.
+
+#### Next steps and relevant files
+
+- General authored rubber tagging, calibrated carcass deformation, nonplanar/
+  camber agreement, GPU deformation and CPU/GPU pressure parity remain open.
+  Name-based selection covers the tested Kubota rubber and Krampe BKT naming;
+  it is not universal imported-asset support. Krampe deformation needs live proof.
+- `crates/molla-vehicle/src/real_tire/envelope.rs`: reusable geometric envelope.
+- `crates/molla-solvers/src/wheel_forces.rs`: read-only wheel descriptor.
+- Isolated `bin/gearbox/src/viewer/tyre_mesh.rs`: deformation/lifecycle tests.
+- Isolated `bin/gearbox/src/physics/{backend.rs,molla/wheel.rs}`: geometry readout.
+- Engram session-summary/save tools are unavailable in this tool set; this
+  progress entry records the session findings and handoff instead.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
