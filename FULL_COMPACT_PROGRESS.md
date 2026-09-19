@@ -1091,6 +1091,64 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Engram session-summary/save tools are unavailable in this tool set; this
   progress entry records the session findings and handoff instead.
 
+### Axle-level pressure controls (2026-09-19)
+
+#### Goal and instructions
+
+- Continue §6.1 axle-level pressure adjustment through the sidebar and CLI.
+  Only the isolated `gearbox-physics` worktree changed; the original Gearbox,
+  assets and environment files were not edited.
+
+#### Discoveries
+
+- The supported scene reset currently replays CLI spawn manifests. There is
+  no live machine/scene snapshot export carrying tyre state; editor menu
+  persistence is unrelated. Save/reload pressure acceptance remains open.
+- Live remote driving returned approximately zero speed during this check.
+  The later screenshot shows `tractor · viewer` ownership; target values also
+  changed outside the scripted values during the running check. Do not count
+  this run as controlled pressure adjustment while driving. Next audit should
+  check local `UiDrive`/MachinePanel ownership before diagnosing solver motion.
+
+#### Accomplished
+
+- Added optional authored numeric `gearbox:value:tyre_axle` ids (1–65535).
+  Fallback discovery clusters wheel-body longitudinal positions within 0.25 m,
+  front to rear. Cached membership prevents renumbering under steering/motion;
+  metadata changes refresh grouping. Invalid/ambiguous metadata is rejected.
+- Machine sidebar now includes axle sliders between all-wheel and individual
+  controls. Mixed targets are read-only until edited; each group uses the
+  intersection of supported member ranges and rejects an invalid edit whole.
+- `machine tyre-pressure BAR --axle N|--wheel LINK --machine ID` sends one
+  grouped request; omitting selectors targets all tyres. Shared API helpers
+  validate telemetry, scope and every range. The CLI waits for accepted target
+  telemetry and distinguishes queued requests from confirmed edits.
+- Live Kubota: inferred front wheels are axle 1, rears axle 2. CLI accepted
+  front 1.0 / rear 2.4 bar targets while all applied pressures remained 1.8
+  paused. An all-wheel 4.1 bar request exited 2 and left all targets unchanged.
+  A sidebar axle-1 click accepted 1.494318 bar on both fronts, leaving rears
+  at 2.4. Screenshots inspected: `/tmp/molla-axle-{paused,ui-paused}.png`.
+  Matching JSON, invalid-edit and running-attempt logs use `/tmp/molla-axle-*`.
+  The owned `molla-axles` instance was stopped after testing; `gearbox` was left alone.
+- Binary suites pass 68 tests per backend; shared API selector tests pass 2;
+  full CLI fake-host suite passes 12. Native build passes. Logs:
+  `/tmp/gearbox-axle-{tests,rapier-tests,api-tests,cli-full,build}.log`.
+
+#### Next steps and relevant files
+
+- Implement actual supported snapshot save/reload, including applied pressure
+  and a distinct target during transitions, without editing source assets.
+- Repeat pressure controls under unambiguous remote/local drive ownership and
+  verify unrelated mutation, attach/detach and save/reload lifecycle gates.
+- Isolated `controller/wheel_forces.rs`: axle discovery/cache and grouped edits.
+- Isolated `host/panes/machine.rs`: axle sliders and atomic UI range checks.
+- Isolated `crates/gearbox-api/src/tyres.rs`: shared scope/range/telemetry validation.
+- Isolated `crates/gearbox-cli/src/cli/machine.rs`: confirmed grouped CLI edits.
+- Isolated `specs/TYRE_PRESSURE.md`: controls, inferred/authored axle contract,
+  simulation defaults and explicit persistence/model limitations.
+- Engram save/session-summary tools are still unavailable; this entry retains
+  the findings and session handoff. The full objective remains incomplete.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
