@@ -37,6 +37,7 @@ use crate::sim::{BodyFlags, JointType, Model, State};
 /// back to the implicit "all joints in declaration order" articulation
 /// — matches the convention used by `FeatherstoneSolver`.
 pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<Vec<Real>> {
+    let _span = tracing::debug_span!("mass_matrix").entered();
     if model.joint_count == 0 {
         return Ok(Vec::new());
     }

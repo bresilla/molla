@@ -353,6 +353,7 @@ impl WheelForces {
             samples,
             pressure_states,
         } = step;
+        let _span = tracing::debug_span!("wheel_forces").entered();
         for state in pressure_states.values_mut() {
             state.advance(dt);
         }

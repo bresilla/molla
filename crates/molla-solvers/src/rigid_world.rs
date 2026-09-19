@@ -179,6 +179,7 @@ impl RigidWorld {
         mut excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
         mut forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
+        let _span = tracing::debug_span!("rigid_step").entered();
         self.contact_revision = None;
         self.wheels.invalidate();
         if !dt.is_finite() || dt <= 0.0 {

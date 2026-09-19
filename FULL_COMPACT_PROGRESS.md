@@ -1832,6 +1832,64 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - `crates/molla-geometry/tests/collision_mesh_cache.rs` — lifecycle/parity tests.
 - `crates/molla-solvers/tests/mesh_bvh_perf.rs` — existing timing gate/build count.
 
+### Loop/motor factor and profiling checkpoint (2026-09-20)
+
+#### Goal
+
+- Continue the full plan with measured real-machine physics optimization.
+
+#### Instructions
+
+- Original Gearbox remains untouched. Do not confuse synthetic speedups or
+  traced timings with real-machine Rapier performance parity.
+
+#### Discoveries
+
+- Rebuilt isolated Kubota still measures about 1.5 ms/step after prior cache
+  work. Straight driving reaches 2 m/s with all tyres at 1.8 bar, roughly
+  53.5–54.3 mm deflection. No new live-machine gain was demonstrated.
+- Warmed stage trace: collision 19 us/substep, external forces 148 us
+  (including wheels 66 us), Featherstone 67 us (drive inertias 36 us).
+  Timings are inclusive; eight substeps. Tracing raises full-step cost to
+  about 2 ms, so compare against untraced measurements separately.
+- Detailed Kubota loop trace shows 39 DOFs, 22 rows, successful Cholesky:
+  response assembly about 62 us, including 29 us for mass RHS solves/products.
+  The singular fallback cache does not accelerate this full-rank workload.
+
+#### Accomplished
+
+- Reused singular decompositions across loop-closure RHS vectors and motor
+  inertia queries within one articulation/substep; no cross-state cache.
+- Added a 26-body pressure-tyre fixture with a compliant closure and active
+  D6 motor, checking support, motion, closure convergence and exact replay.
+  Release timing median improved 0.855414 to 0.527412 ms/step (38%).
+- Solver release suite: 371 passed, 0 failed, 3 ignored across 87 binaries.
+  Final loop/pressure tests after stronger replay assertions: 5 passed,
+  2 ignored. Isolated Molla binary tests: 78 passed, 1 ignored.
+- Added disabled-by-default debug stage spans and isolated Gearbox's
+  `GEARBOX_TRACE_FILTER` override. Native profile build passed; focused
+  traces avoid recording unrelated render events.
+
+#### Next Steps
+
+- Optimize the measured full-rank loop response, not only the singular
+  synthetic fixture. Keep reference algebra and live/CPU acceptance evidence.
+- Continue fleet/sleeping, lifecycle, terrain, slope, towing and the rest
+  of the original plan. Neither this checkpoint nor library tests complete it.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/{loop_forces,featherstone,crba,rigid_world,wheel_forces}.rs`
+  — factor reuse and stage spans.
+- `crates/molla-solvers/tests/rigid_performance.rs` — loop/motor workload.
+- Isolated `bin/gearbox/src/main.rs`, `specs/TYRE_PERFORMANCE.md` — trace filter
+  and measured outcomes, including the lack of proven live-machine improvement.
+- `/tmp/molla-loop-perf-{before,after}.log`,
+  `/tmp/molla-loop-cache-{full,final}-tests.log`,
+  `/tmp/molla-{physics,loop}-stages{,-summary}.json`,
+  `/tmp/molla-loop-stages-summary.txt`, `/tmp/molla-loop-live.log`,
+  `/tmp/molla-loop-state.json` — temporary evidence (not tracked).
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

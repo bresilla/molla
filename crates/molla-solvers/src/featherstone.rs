@@ -432,9 +432,12 @@ impl FeatherstoneSolver {
         let persistent = state_in.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
         for substep in 0..n {
-            pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)?;
+            tracing::debug_span!("collision").in_scope(|| {
+                pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)
+            })?;
             applied.copy_from_slice(&persistent);
-            forces(model, &scratch, sub_dt, &mut applied)?;
+            tracing::debug_span!("external_forces")
+                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied))?;
             if applied
                 .iter()
                 .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
@@ -444,7 +447,9 @@ impl FeatherstoneSolver {
                 ));
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
-            self.step_inner(model, &scratch, control, contacts, sub_dt, state_out)?;
+            tracing::debug_span!("featherstone_substep").in_scope(|| {
+                self.step_inner(model, &scratch, control, contacts, sub_dt, state_out)
+            })?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
             if substep + 1 < n {
@@ -1750,6 +1755,7 @@ fn effective_drive_inertias(
     control: &Control,
     stable_feedback: bool,
 ) -> Result<Vec<Real>> {
+    let _span = tracing::debug_span!("drive_inertias").entered();
     let mut result = vec![1.0; model.joint_dof_total];
     let models = control.joint_motor_model.host()?;
     let modes = control.joint_target_mode.host()?;
@@ -1799,6 +1805,7 @@ fn effective_drive_inertias(
         }
         let mut factor = matrix.clone();
         let factored = dense_chol(&mut factor, n).is_ok();
+        let mut singular = None;
         for dof in 0..count {
             if !requested(first + dof) {
                 continue;
@@ -1812,7 +1819,10 @@ fn effective_drive_inertias(
             let solved = if factored {
                 back_sub_packed(&factor, &forward_sub_packed(&factor, &unit, n), n)
             } else {
-                crate::rigid_impulse::solve_mass(&matrix, &unit, n)?
+                if singular.is_none() {
+                    singular = Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
+                }
+                singular.as_ref().unwrap().solve(&unit)?
             };
             if solved[index] > 0.0 {
                 result[first + dof] = scale / solved[index];

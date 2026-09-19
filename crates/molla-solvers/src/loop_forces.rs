@@ -156,7 +156,8 @@ pub(crate) fn apply(
     dt: Real,
     forces: &mut [SpatialVector],
 ) -> Result<()> {
-    let rows = rows(scene, state)?;
+    let _span = tracing::debug_span!("loop_forces").entered();
+    let rows = tracing::debug_span!("loop_rows").in_scope(|| rows(scene, state))?;
     let count = rows.len();
     if count == 0 {
         return Ok(());
@@ -179,6 +180,7 @@ pub(crate) fn apply(
         {
             continue;
         }
+        let _response_span = tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
         let mut jacobians = std::collections::BTreeMap::new();
         let mut projected = vec![vec![0.0; n]; count];
         for (r, row) in rows.iter().enumerate() {
@@ -211,11 +213,17 @@ pub(crate) fn apply(
         let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);
         let factored = dense_chol(&mut factor, n).is_ok()
             && (0..n).all(|i| factor[i * n + i].powi(2) > scale * 1e-12);
+        let _solve_span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
+        let singular = if factored {
+            None
+        } else {
+            Some(crate::rigid_impulse::MassFactor::new(&mass, n)?)
+        };
         for col in 0..count {
             let solved = if factored {
                 back_sub(&factor, &forward_sub(&factor, &projected[col], n)?, n)?
             } else {
-                crate::rigid_impulse::solve_mass(&mass, &projected[col], n)?
+                singular.as_ref().unwrap().solve(&projected[col])?
             };
             for row in 0..count {
                 response[row * count + col] += projected[row]
@@ -288,6 +296,7 @@ pub(crate) fn apply(
 
 fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<Vec<Real>> {
     let n = rhs.len();
+    let _span = tracing::debug_span!("loop_bounded_solve", rows = n).entered();
     let mut x = vec![0.0; n];
     let mut fixed: Vec<bool> = bounds.iter().map(|b| b[0] == b[1]).collect();
     for _ in 0..(4 * n + 32) {
