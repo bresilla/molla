@@ -28,6 +28,7 @@ pub struct ContactPair {
 pub struct RigidWorld {
     pub scene: RigidScene,
     pub solver: FeatherstoneSolver,
+    pub wheels: crate::wheel_forces::WheelForces,
     pipeline: CollisionPipeline,
     contacts: Contacts,
     contact_revision: Option<SceneStamp>,
@@ -46,6 +47,7 @@ impl RigidWorld {
             solver: FeatherstoneSolver::new_cpu()
                 .with_rigorous_d_solve(true)
                 .with_substeps(8),
+            wheels: crate::wheel_forces::WheelForces::default(),
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
             contacts: Contacts::with_capacity(64),
             contact_revision: None,
@@ -177,11 +179,17 @@ impl RigidWorld {
         mut forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
         self.contact_revision = None;
+        self.wheels.invalidate();
         if !dt.is_finite() || dt <= 0.0 {
             return Err(Error::Solver("step dt must be positive and finite".into()));
         }
         self.quarantined = self.scene.quarantine_non_finite()?;
         let scene = &self.scene;
+        self.pipeline
+            .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
+        let mut wheel_samples = Vec::new();
+        let excluded = std::cell::RefCell::new(&mut excluded);
+        let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
         self.solver.step_with_collision_and_forces(
             scene.model(),
@@ -192,7 +200,7 @@ impl RigidWorld {
             dt,
             &mut next,
             |a, b| {
-                excluded(
+                excluded.borrow_mut()(
                     a.and_then(|i| scene.body_handle(i)),
                     b.and_then(|i| scene.body_handle(i)),
                 )
@@ -225,10 +233,19 @@ impl RigidWorld {
                         * velocities[i].angular
                         * angular;
                 }
+                wheels.apply(
+                    scene,
+                    state,
+                    sub_dt,
+                    wrenches,
+                    &mut wheel_samples,
+                    |a, b| excluded.borrow_mut()(a, b),
+                )?;
                 forces(scene, state, sub_dt, wrenches)
             },
         )?;
         self.scene.commit_step(next)?;
+        self.wheels.publish(&self.scene, wheel_samples);
         self.contact_revision = Some(self.scene.stamp());
         Ok(())
     }

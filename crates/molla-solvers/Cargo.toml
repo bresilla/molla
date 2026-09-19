@@ -35,6 +35,7 @@ molla-compute = { path = "../molla-compute", default-features = false, optional 
 molla-geometry = { path = "../molla-geometry", default-features = false }
 molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
 molla-storage = { path = "../molla-storage", default-features = false }
+molla-vehicle = { path = "../molla-vehicle" }
 tracing = "0.1"
 wgpu = { version = "27", optional = true, default-features = false, features = [
     "wgsl",

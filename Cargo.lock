@@ -3410,6 +3410,7 @@ dependencies = [
  "molla-optim",
  "molla-sim",
  "molla-storage",
+ "molla-vehicle",
  "tracing",
  "wgpu",
 ]

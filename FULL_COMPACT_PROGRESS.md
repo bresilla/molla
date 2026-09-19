@@ -235,7 +235,7 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 3: colliders | Requested shape kinds, queries, materials, masks and runtime edits implemented. Gearbox accessor/query/mass tests pass; compound edit failure atomicity and live scene coverage remain. |
 | 4: joints | Stable insert/remove, arbitrary-tree merge/split/re-rooting, frames, enabled state, collision flags, locks, limits, motors/caps, acceleration gains, pair queries and CPU softness implemented. Gearbox hitch-capture loop tested. Soft angular coordinates use the D6 chart; multi-turn soft revolute position and GPU parity remain. |
 | 5: world | Gravity, configurable CPU substeps, quarantine, pair filtering and CPU raycasts wired through Gearbox. Internal iterations map to substeps; direct ABA has no outer iterative-solver equivalent. CPU queries remain in geometry. |
-| 6.1-6.3: tyres | Per-substep transient force-element hook implemented. Wheel force elements, ground masking, scene terrain adapter with per-cell friction and wheel output readback remain. |
+| 6.1-6.3: tyres | Articulated CPU wheel forces, shape-level ground masking, static scene heightfield/trimesh sampling, per-cell friction and substep TireOutput readout implemented and tested. Gearbox wheel/terrain registration and traction/stamping consumers remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
 | 8.5: Gearbox implementation | Experimental `MollaBackend`, selection arm and compliant hitch capture implemented in `gearbox-physics`. Sleeping, tyre integration, failure-path hardening and live acceptance remain. |
@@ -627,6 +627,56 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   or specification edits. Engram tools remain unavailable; this checkpoint
   records the design, verification and remaining scope.
 
+### Articulated tyre-force and scene-terrain integration
+
+- Added `molla_solvers::wheel_forces::WheelForces`, owned by `RigidWorld`.
+  Wheel descriptors reference stable wheel, knuckle/heading and spin-joint
+  handles, local hub/heading, radius, stiffness/damping, authored spin sign
+  and an `Arc<dyn TireModel>`. Every CPU substep builds `WheelContact` from
+  the current solver state and calls `wheel_ground_wrench`. Ground force,
+  contact-point moment and aligning moment enter the wheel's COM wrench.
+  Drive torque remains the revolute motor; Featherstone integrates both
+  chassis and wheel spin. The separate `Vehicle::step` is not used here.
+- Registered static, nonsensor heightfields/trimeshes supply top-surface
+  terrain samples through the existing cached CPU raycaster. Collider-local
+  rectangular `FrictionGrid` cells can override the collider coefficient.
+  Missing/out-of-footprint or disabled ground supplies no tyre force. Dynamic
+  terrain registration is rejected explicitly; deformable/MPM coupling remains.
+  Ground bounds and dense wheel-ground exclusions are cached by scene stamp
+  and rebuilt after configuration/topology changes, not rescanned per substep.
+- Supplemental shape-level pipeline exclusions suppress only registered
+  wheel shapes against registered ground. Obstacle contacts, including other
+  parentless colliders, remain active. Removing a wheel registration restores
+  ordinary ground contact. The per-step body-pair callback also filters tyre
+  terrain queries. No authored collision groups or scene descriptions are
+  rewritten to reserve a global collision bit.
+- `WheelSample` publishes per-wheel/ground `TireOutput`, normal, friction and
+  substep duration after a successful whole step. Forces integrate as
+  `force*dt`; failed steps publish no partial readout. Body removal prunes
+  stale registrations, scene edits invalidate readout, and invalid wheel/grid
+  authoring or non-finite tyre output cannot commit a partial physics step.
+- Corrected `wheel_ground_wrench`: it now uses the Terrain signed-distance
+  contract for slope penetration, `friction_at` for local coefficients and
+  surface-relative hub velocity. Previously it ignored those existing APIs,
+  so terrain friction maps and moving surfaces could not affect this path.
+- Eight runtime tests prove whole-articulation normal response, actual motor
+  traction, analytic reaction torque reducing wheel spin, per-cell friction,
+  pair filtering, obstacle-preserving ground masks, mesh terrain, cache/mask
+  rebuilding after dense shape reorder, lifecycle/readout and atomic failure.
+  Two helper regressions cover slope distance and moving/friction-map terrain.
+- Gates: 345 selected sim/geometry/solver CPU tests pass, plus 190 tyre/real-tyre
+  and two vehicle unit tests (537 selected tests total). Workspace
+  `make check-all`, scoped all-feature/no-default Clippy and diff checks pass.
+  Gearbox still passes 53 binary tests with each explicit backend; commit
+  `e544b3d` records only the new local `molla-vehicle` lockfile dependency.
+  No external dependency versions changed.
+- This does not yet register Gearbox's scene wheels/terrain or replace its
+  traction and stamping consumers. No tractor drive/tracks, slope, real towing,
+  GPU tyre-force, determinism or <1 ms acceptance claim is made. The public
+  Terrain query remains a top-surface/2.5D model, not arbitrary under-bridge
+  contact. No USD/import logic, viewer code, environment, recipes, vendor or
+  specification files changed. Engram tools remain unavailable.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
@@ -636,6 +686,7 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 3. Finish soft angular phase semantics and GPU joint-control parity; validate
    compliant hitches at real tractor/trailer scale.
 4. Complete and validate the Gearbox backend in its existing physics worktree.
-5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
+5. Register Gearbox wheels and terrain with `RigidWorld::wheels`, connect
+   tyre samples to traction/stamping, then sleeping/deformation/MPM as specified.
 6. Run and record every original acceptance scene, performance and deterministic
    replay gate. Do not mark the objective complete from library tests alone.

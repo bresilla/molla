@@ -74,6 +74,7 @@ pub enum NarrowPhaseBackend {
 /// choice (both run on the GPU, but only one at a time).
 #[derive(Default)]
 pub struct CollisionPipeline {
+    extra_shape_exclusions: std::collections::BTreeSet<(u32, u32)>,
     include_sensor_overlaps: bool,
     broad: BroadPhase,
     pair_buf: Vec<ShapePair>,
@@ -405,6 +406,17 @@ impl CollisionPipeline {
         self.collide_filtered(model, state, contacts, |_, _| false)
     }
 
+    /// Replace supplemental dense shape exclusions; rebuild these after topology edits.
+    pub fn set_extra_shape_exclusions(
+        &mut self,
+        pairs: impl IntoIterator<Item = (molla_core::ShapeId, molla_core::ShapeId)>,
+    ) {
+        self.extra_shape_exclusions = pairs
+            .into_iter()
+            .map(|(a, b)| (a.0.min(b.0), a.0.max(b.0)))
+            .collect();
+    }
+
     /// Drop all shape pairs whose body pair is excluded; `None` denotes the world.
     pub fn collide_filtered(
         &mut self,
@@ -445,6 +457,9 @@ impl CollisionPipeline {
             (self.include_sensor_overlaps
                 || (flags[p.a as usize] | flags[p.b as usize]) & molla_sim::ShapeFlags::SENSOR == 0)
                 && !excluded(body_id(p.a), body_id(p.b))
+                && !self
+                    .extra_shape_exclusions
+                    .contains(&(p.a.min(p.b), p.a.max(p.b)))
         });
         self.last_broad_phase_pairs = self.pair_buf.len();
 

@@ -249,28 +249,37 @@ pub fn wheel_ground_wrench(
     terrain: &dyn Terrain,
     tire: &dyn TireModel,
 ) -> TireOutput {
-    let gh = terrain.height(w.hub_pos[0], w.hub_pos[2]);
-    let n = terrain.normal(w.hub_pos[0], w.hub_pos[2]);
-    let penetration = w.radius - (w.hub_pos[1] - gh);
+    let (distance, normal) = terrain.signed_distance_and_normal(w.hub_pos);
+    let n = normalize(normal);
+    let penetration = w.radius - distance;
     if penetration <= 0.0 {
         return TireOutput::none();
     }
     // Normal load — penalty spring + damping on the closing speed.
-    let approach = -dot(w.hub_vel, n);
+    let velocity = sub(
+        w.hub_vel,
+        terrain.surface_velocity(w.hub_pos[0], w.hub_pos[2]),
+    );
+    let approach = -dot(velocity, n);
     let fz = (w.normal_stiffness * penetration + w.normal_damping * approach).max(0.0);
 
     // Contact frame: longitudinal = heading projected onto the ground
     // plane; lateral completes a right-handed frame with the normal.
     let long = normalize(sub(w.heading, scale(n, dot(w.heading, n))));
     let lat = cross(n, long);
-    let v_long = dot(w.hub_vel, long);
-    let v_lat = dot(w.hub_vel, lat);
+    let v_long = dot(velocity, long);
+    let v_lat = dot(velocity, lat);
     let v_eps = 0.3; // standstill regularisation (m/s)
     let denom = v_long.abs().max(v_eps);
     let slip_ratio = (w.spin * w.radius - v_long) / denom;
     let slip_angle = (v_lat / denom).atan();
 
-    let (fx, fy, mz) = tire.evaluate(slip_ratio, slip_angle, fz, terrain.friction());
+    let (fx, fy, mz) = tire.evaluate(
+        slip_ratio,
+        slip_angle,
+        fz,
+        terrain.friction_at(w.hub_pos[0], w.hub_pos[2]),
+    );
     let force = [
         fx * long[0] + fy * lat[0] + fz * n[0],
         fx * long[1] + fy * lat[1] + fz * n[1],
@@ -316,6 +325,72 @@ fn normalize(a: [f64; 3]) -> [f64; 3] {
 mod tests {
     use super::*;
     use crate::terrain::FlatTerrain;
+
+    #[test]
+    fn wheel_wrench_uses_local_friction_and_ground_relative_velocity() {
+        struct MovingPatch;
+        impl Terrain for MovingPatch {
+            fn height(&self, _: f64, _: f64) -> f64 {
+                0.0
+            }
+            fn normal(&self, _: f64, _: f64) -> [f64; 3] {
+                [0.0, 1.0, 0.0]
+            }
+            fn friction(&self) -> f64 {
+                1.0
+            }
+            fn friction_at(&self, _: f64, _: f64) -> f64 {
+                0.2
+            }
+            fn surface_velocity(&self, _: f64, _: f64) -> [f64; 3] {
+                [2.0, 0.0, 0.0]
+            }
+        }
+        let mut wheel = WheelContact {
+            hub_pos: [0.0, 0.49, 0.0],
+            hub_vel: [2.0, 0.0, 0.0],
+            heading: [1.0, 0.0, 0.0],
+            spin: 0.0,
+            radius: 0.5,
+            normal_stiffness: 1e5,
+            normal_damping: 100.0,
+        };
+        let output = wheel_ground_wrench(&wheel, &MovingPatch, &RigidTire::default());
+        assert_eq!(output.slip_ratio, 0.0);
+        assert_eq!(output.force[0], 0.0);
+        wheel.spin = 100.0;
+        let output = wheel_ground_wrench(&wheel, &MovingPatch, &RigidTire::default());
+        assert!((output.force[0] - 0.2 * output.fz).abs() < 1e-8);
+    }
+
+    #[test]
+    fn wheel_penetration_is_normal_distance_on_a_slope() {
+        struct Slope;
+        impl Terrain for Slope {
+            fn height(&self, x: f64, _: f64) -> f64 {
+                -0.75 * x
+            }
+            fn normal(&self, _: f64, _: f64) -> [f64; 3] {
+                [0.6, 0.8, 0.0]
+            }
+            fn friction(&self) -> f64 {
+                0.0
+            }
+        }
+        let wheel = WheelContact {
+            hub_pos: [0.0, 0.49 / 0.8, 0.0],
+            hub_vel: [0.0; 3],
+            heading: [0.0, 0.0, 1.0],
+            spin: 0.0,
+            radius: 0.5,
+            normal_stiffness: 1e5,
+            normal_damping: 0.0,
+        };
+        let output = wheel_ground_wrench(&wheel, &Slope, &RigidTire::default());
+        assert!((output.fz - 1000.0).abs() < 1e-8);
+        assert!((output.force[0] - 600.0).abs() < 1e-8);
+        assert!((output.force[1] - 800.0).abs() < 1e-8);
+    }
 
     #[test]
     fn force_signs_are_physical() {
