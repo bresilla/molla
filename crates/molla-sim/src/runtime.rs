@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 mod tree;
 
-use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor};
+use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor, JointSoftness};
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
@@ -244,6 +244,7 @@ struct Description {
     joints: BTreeMap<JointHandle, JointDesc>,
     joint_settings: BTreeMap<JointHandle, JointSettings>,
     joint_axes: BTreeMap<JointHandle, [JointAxisSettings; 6]>,
+    joint_softness: BTreeMap<JointHandle, JointSoftness>,
 }
 
 impl Description {
@@ -265,6 +266,8 @@ struct Snapshot {
     colliders: BTreeMap<ColliderHandle, Vec<ShapeId>>,
     shape_colliders: Vec<ColliderHandle>,
     joints: BTreeMap<JointHandle, JointId>,
+    joint_layouts: BTreeMap<JointHandle, [Option<usize>; 6]>,
+    soft_joints: BTreeSet<JointHandle>,
     roots: BTreeMap<BodyHandle, JointId>,
     drives: BTreeMap<DriveOwner, DriveState>,
     valid_poses: BTreeMap<BodyHandle, Transform>,
@@ -278,6 +281,7 @@ enum DriveOwner {
 
 #[derive(Clone)]
 struct DriveState {
+    layout: [Option<usize>; 6],
     mode: Vec<u32>,
     position: Vec<Real>,
     velocity: Vec<Real>,
@@ -289,7 +293,7 @@ struct DriveState {
 }
 
 impl DriveState {
-    fn capture(snapshot: &Snapshot, joint: JointId) -> Result<Self> {
+    fn capture(snapshot: &Snapshot, joint: JointId, layout: [Option<usize>; 6]) -> Result<Self> {
         let offsets = snapshot.model.joint_dof_offset.host()?;
         let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
         let clean = |values: &[Real]| {
@@ -299,6 +303,7 @@ impl DriveState {
                 .collect()
         };
         Ok(Self {
+            layout,
             mode: snapshot.control.joint_target_mode.host()?[range.clone()].to_vec(),
             position: clean(snapshot.control.joint_target_pos.host()?),
             velocity: clean(snapshot.control.joint_target_vel.host()?),
@@ -316,23 +321,32 @@ impl DriveState {
         })
     }
 
-    fn restore(&self, model: &Model, control: &mut Control, joint: JointId) -> Result<()> {
+    fn restore(
+        &self,
+        model: &Model,
+        control: &mut Control,
+        joint: JointId,
+        layout: [Option<usize>; 6],
+    ) -> Result<()> {
         let offsets = model.joint_dof_offset.host()?;
         let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
-        if range.len() != self.mode.len() {
-            return Ok(());
-        }
-        control.joint_target_mode.host_mut()?[range.clone()].copy_from_slice(&self.mode);
-        control.joint_motor_model.host_mut()?[range.clone()].copy_from_slice(&self.motor_model);
-        for (destination, source) in [
-            (&mut control.joint_target_pos, &self.position),
-            (&mut control.joint_target_vel, &self.velocity),
-            (&mut control.joint_target_kp, &self.kp),
-            (&mut control.joint_target_kd, &self.kd),
-            (&mut control.joint_force, &self.force),
-            (&mut control.joint_motor_max_force, &self.max_force),
-        ] {
-            destination.host_mut()?[range.clone()].copy_from_slice(source);
+        for (source, destination) in self.layout.iter().zip(layout) {
+            let (Some(source), Some(destination)) = (*source, destination) else {
+                continue;
+            };
+            let destination = range.start + destination;
+            control.joint_target_mode.host_mut()?[destination] = self.mode[source];
+            control.joint_motor_model.host_mut()?[destination] = self.motor_model[source];
+            for (buffer, values) in [
+                (&mut control.joint_target_pos, &self.position),
+                (&mut control.joint_target_vel, &self.velocity),
+                (&mut control.joint_target_kp, &self.kp),
+                (&mut control.joint_target_kd, &self.kd),
+                (&mut control.joint_force, &self.force),
+                (&mut control.joint_motor_max_force, &self.max_force),
+            ] {
+                buffer.host_mut()?[destination] = values[source];
+            }
         }
         Ok(())
     }
@@ -767,6 +781,46 @@ impl RigidScene {
         })
     }
 
+    pub fn joint_softness(&self, id: JointHandle) -> Result<Option<JointSoftness>> {
+        self.joint(id).ok_or_else(|| missing("joint"))?;
+        Ok(self.description.joint_softness.get(&id).copied())
+    }
+
+    /// Softness gain edits retain the compiled layout; toggles rebuild it.
+    pub fn set_joint_softness(
+        &mut self,
+        id: JointHandle,
+        softness: Option<JointSoftness>,
+    ) -> Result<()> {
+        let previous = self.joint_softness(id)?;
+        if let Some(value) = softness {
+            value.validate()?;
+        }
+        if previous == softness {
+            return Ok(());
+        }
+        if let (Some(_), Some(value)) = (previous, softness) {
+            if let Some(joint) = self.joint_index(id) {
+                let offsets = self.model().joint_dof_offset.host()?;
+                let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
+                for record in &mut self.snapshot.model.joint_compliance.host_mut()?[range] {
+                    record.natural_frequency = value.natural_frequency;
+                    record.damping_ratio = value.damping_ratio;
+                }
+            }
+            self.description.joint_softness.insert(id, value);
+            return Ok(());
+        }
+        self.edit(|d| {
+            if let Some(value) = softness {
+                d.joint_softness.insert(id, value);
+            } else {
+                d.joint_softness.remove(&id);
+            }
+            Ok(())
+        })
+    }
+
     pub fn joint_axis_settings(
         &self,
         id: JointHandle,
@@ -829,7 +883,8 @@ impl RigidScene {
         motor: JointMotor,
     ) -> Result<()> {
         motor.validate()?;
-        let dof = axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        let dof = self.snapshot.joint_layouts[&id][axis as usize].expect("validated joint axis");
         if let Some(joint) = self.joint_index(id) {
             let offset = self.model().joint_dof_offset.host()?[joint.index()] as usize;
             motor.apply(&mut self.snapshot.control, offset + dof)?;
@@ -908,6 +963,7 @@ impl RigidScene {
                 .retain(|_, j| j.parent != Some(id) && j.child != id);
             d.joint_settings.retain(|id, _| d.joints.contains_key(id));
             d.joint_axes.retain(|id, _| d.joints.contains_key(id));
+            d.joint_softness.retain(|id, _| d.joints.contains_key(id));
             Ok(())
         })
     }
@@ -1012,6 +1068,7 @@ impl RigidScene {
             d.joints.remove(&id).ok_or_else(|| missing("joint"))?;
             d.joint_settings.remove(&id);
             d.joint_axes.remove(&id);
+            d.joint_softness.remove(&id);
             Ok(())
         })
     }
@@ -1042,6 +1099,32 @@ fn missing(kind: &str) -> Error {
 
 fn finite_spatial(value: SpatialVector) -> bool {
     value.linear.is_finite() && value.angular.is_finite()
+}
+
+fn joint_layout(kind: JointType, soft: bool) -> [Option<usize>; 6] {
+    JointAxis::ALL.map(|axis| {
+        axis.dof(kind)
+            .ok()
+            .map(|dof| if soft { axis as usize } else { dof })
+    })
+}
+
+fn drive_layout(
+    owner: DriveOwner,
+    layouts: &BTreeMap<JointHandle, [Option<usize>; 6]>,
+    model: &Model,
+    joint: JointId,
+) -> Result<[Option<usize>; 6]> {
+    Ok(match owner {
+        DriveOwner::Joint(id) => layouts[&id],
+        DriveOwner::Body(_) => {
+            if model.joint_type.host()?[joint.index()] == JointType::Free as u32 {
+                joint_layout(JointType::Free, false)
+            } else {
+                [None; 6]
+            }
+        }
+    })
 }
 
 fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Snapshot> {
@@ -1098,6 +1181,16 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         colliders.insert(id, shapes);
     }
     let (joints, roots) = tree::compile_joints(d, &bodies, &poses, &mut builder)?;
+    let joint_layouts = d
+        .joints
+        .iter()
+        .map(|(&id, joint)| {
+            (
+                id,
+                joint_layout(joint.kind, d.joint_softness.contains_key(&id)),
+            )
+        })
+        .collect();
     for (&id, joint) in &d.joints {
         if !d.joint_settings[&id].contacts_enabled
             && let Some(parent) = joint.parent
@@ -1183,7 +1276,10 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         }
     }
     for (&id, &joint) in &joints {
-        if let Some((s, &previous)) = old.and_then(|s| s.joints.get(&id).map(|j| (s, j))) {
+        if let Some((s, &previous)) = old.and_then(|s| s.joints.get(&id).map(|j| (s, j)))
+            && !d.joint_softness.contains_key(&id)
+            && !s.soft_joints.contains(&id)
+        {
             copy_joint(s, previous, &model, &mut state, &mut control, joint)?;
         } else {
             seed_joint(&model, &mut state, joint)?;
@@ -1201,7 +1297,11 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
                     .map(|(&id, &j)| (DriveOwner::Joint(id), j)),
             )
         {
-            let drive = DriveState::capture(old, joint)?;
+            let drive = DriveState::capture(
+                old,
+                joint,
+                drive_layout(owner, &old.joint_layouts, &old.model, joint)?,
+            )?;
             if !drive.mode.is_empty() {
                 drives.insert(owner, drive);
             }
@@ -1217,13 +1317,18 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         .chain(joints.iter().map(|(&id, &j)| (DriveOwner::Joint(id), j)))
     {
         if let Some(drive) = drives.get(&owner) {
-            drive.restore(&model, &mut control, joint)?;
+            drive.restore(
+                &model,
+                &mut control,
+                joint,
+                drive_layout(owner, &joint_layouts, &model, joint)?,
+            )?;
         }
     }
     for (&id, joint) in &joints {
         let offset = model.joint_dof_offset.host()?[joint.index()] as usize;
         for axis in JointAxis::ALL {
-            if let Ok(dof) = axis.dof(d.joints[&id].kind)
+            if let Some(dof) = joint_layouts[&id][axis as usize]
                 && let Some(motor) = d.joint_axes[&id][axis as usize].motor
             {
                 motor.apply(&mut control, offset + dof)?;
@@ -1239,6 +1344,8 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         colliders,
         shape_colliders,
         joints,
+        joint_layouts,
+        soft_joints: d.joint_softness.keys().copied().collect(),
         roots,
         drives,
         valid_poses: poses,

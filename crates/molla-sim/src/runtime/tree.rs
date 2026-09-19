@@ -122,7 +122,7 @@ pub(super) fn compile_joints(
         }
         builder.begin_articulation();
         if let Some(&id) = anchors.get(&root) {
-            let j = add_joint(builder, bodies, &description.joints[&id])?;
+            let j = add_joint(builder, bodies, &lower_joint(description, id))?;
             set_limits(description, id, j, builder)?;
             joints.insert(id, j);
         } else {
@@ -148,7 +148,7 @@ pub(super) fn compile_joints(
         let mut pending = vec![(root, None)];
         while let Some((body, incoming)) = pending.pop() {
             if let Some((id, parent)) = incoming {
-                let mut joint = description.joints[&id].clone();
+                let mut joint = lower_joint(description, id);
                 let reversed = joint.child != body;
                 if reversed {
                     joint.parent = Some(parent);
@@ -177,6 +177,23 @@ fn set_limits(
     builder: &mut ModelBuilder,
 ) -> Result<()> {
     let kind = description.joints[&id].kind;
+    if let Some(&softness) = description.joint_softness.get(&id) {
+        let mut lower = [Real::NEG_INFINITY; 6];
+        let mut upper = [Real::INFINITY; 6];
+        for axis in JointAxis::ALL {
+            let setting = description.joint_axes[&id][axis as usize];
+            let bounds = if axis.dof(kind).is_err() || setting.locked {
+                Some([0.0, 0.0])
+            } else {
+                setting.limits
+            };
+            if let Some([lo, hi]) = bounds {
+                lower[axis as usize] = lo;
+                upper[axis as usize] = hi;
+            }
+        }
+        return builder.set_joint_compliance(joint, softness, &lower, &upper);
+    }
     let mut lower = vec![Real::NEG_INFINITY; kind.dof_count()];
     let mut upper = vec![Real::INFINITY; lower.len()];
     for axis in JointAxis::ALL {
@@ -193,4 +210,17 @@ fn set_limits(
         }
     }
     builder.set_joint_limits(joint, &lower, &upper)
+}
+
+fn lower_joint(description: &Description, id: JointHandle) -> JointDesc {
+    let mut joint = description.joints[&id].clone();
+    if description.joint_softness.contains_key(&id) {
+        if matches!(joint.kind, JointType::Revolute | JointType::Prismatic) {
+            let rotation = Quat::from_rotation_arc(Vec3::X, joint.axis.normalize());
+            joint.frame_parent.rotation = (joint.frame_parent.rotation * rotation).normalize();
+            joint.frame_child.rotation = (joint.frame_child.rotation * rotation).normalize();
+        }
+        joint.kind = JointType::D6;
+    }
+    joint
 }

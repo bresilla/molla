@@ -233,13 +233,13 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.4: fixed bodies | Root and non-root fixed transitions/re-rooting tested, including Gearbox accessors. Complete GPU Featherstone support remains. |
 | 2: bodies | Reads, teleports, velocity edits, damping, mass, force/reset, impulses, enable/quarantine, CCD storage and Gearbox accessors implemented. Sleep/wake still no-op. Continuous-force singular-inertia parity needs verification. |
 | 3: colliders | Requested shape kinds, queries, materials, masks and runtime edits implemented. Gearbox accessor/query/mass tests pass; compound edit failure atomicity and live scene coverage remain. |
-| 4: joints | Stable insert/remove, arbitrary-tree merge/split/re-rooting, frames, enabled state, collision flags, locks, limits, motors/caps, acceleration gains and pair queries implemented. Softness remains unsupported and explicitly warns in Gearbox; GPU parity remains. |
+| 4: joints | Stable insert/remove, arbitrary-tree merge/split/re-rooting, frames, enabled state, collision flags, locks, limits, motors/caps, acceleration gains, pair queries and CPU softness implemented. Gearbox hitch-capture loop tested. Soft angular coordinates use the D6 chart; multi-turn soft revolute position and GPU parity remain. |
 | 5: world | Gravity, configurable CPU substeps, quarantine, pair filtering and CPU raycasts wired through Gearbox. Internal iterations map to substeps; direct ABA has no outer iterative-solver equivalent. CPU queries remain in geometry. |
 | 6.1-6.3: tyres | Per-substep transient force-element hook implemented. Wheel force elements, ground masking, scene terrain adapter with per-cell friction and wheel output readback remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
-| 8.5: Gearbox implementation | Experimental `MollaBackend` and selection arm implemented in `gearbox-physics`. Missing softness, sleeping and tyre integration prevent full acceptance. |
-| 9: 43 binary tests on both backends | Original 43 plus eight new checks pass (51 tests) with each explicit backend environment. Reduced-joint expectation is backend-specific; all original motor target/cap assertions remain. |
+| 8.5: Gearbox implementation | Experimental `MollaBackend`, selection arm and compliant hitch capture implemented in `gearbox-physics`. Sleeping, tyre integration, failure-path hardening and live acceptance remain. |
+| 9: 43 binary tests on both backends | Original 43 plus ten new checks pass (53 tests) with each explicit backend environment. Reduced-joint expectation is backend-specific; all original motor target/cap assertions remain. |
 | 9: tractor driving | Pending spawn, forward 2/turn 0.4, heading comparison and visible tracks. |
 | 9: hitch/tow/detach | Pending rear_drawbar teleport attach, turn, detach, finite state and no quarantine. |
 | 9: Kubota | Pending all five controllers, including hitch lift and PTO motion. |
@@ -588,13 +588,53 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Capture-frame edits must change the spring rest frame without teleporting
   bodies. Only then wire Gearbox's 8-to-30 Hz hitch capture and test its motion.
 
+### Runtime softness and Gearbox capture integration
+
+- `RigidScene::joint_softness` / `set_joint_softness` now author validated
+  optional compliance. Enabling or removing softness rebuilds the layout;
+  frequency/damping changes on an already-soft joint update its live records
+  without changing scene identity. Suspended joints retain their settings.
+- Soft Fixed/Ball/Revolute/Prismatic/D6 joints lower to full D6 freedoms.
+  Implicit and explicit locks become spring equality intervals, while authored
+  limits become unilateral spring intervals. Scalar joints align both compiled
+  local frames to their authored axis before any tree-traversal reversal.
+  Logical descriptions, endpoints, frames, axes and handles remain unchanged.
+- Soft coordinates/rates are reseeded from current body poses and COM
+  velocities on every structural edit. Changing a capture frame changes the
+  spring rest frame without teleporting bodies. Switching back to hard joints
+  reseeds their natural coordinates; normal hard enforcement resumes on step.
+- Drive snapshots now carry semantic-axis layouts. Authored motors and raw
+  controls migrate between scalar/Ball and D6 slots through softness toggles,
+  suspension and re-rooting; raw root-body drives retain their prior behavior.
+- Ten runtime tests cover all logical kinds, arbitrary and reversed scalar
+  axes, pose/velocity preservation, capture motion, live gain changes, dormant
+  controls, authored motor migration, spring limits/locks, invalid edit
+  atomicity, suspension and cascading body removal.
+- Gearbox commit `1120a23` (`feat(physics): enable molla hitch compliance`)
+  connects `JointMut::set_softness` to the runtime and removes the metadata-only
+  warning/no-op. Two new binary tests prove compliant motion after frame edits
+  and exercise the real `PhysicsWorld::capture_hitch` fixed-step capture loop,
+  including its 8-to-30 Hz gain ramp and finite, enabled body state.
+- Gates pass: sim 30, geometry 151, solvers 156 selected CPU tests (337 total),
+  workspace `make check-all`, strict scoped all-feature/no-default Clippy,
+  diff checks, and Gearbox's 53 binary tests with each explicit backend.
+  Existing Gearbox all-target/lint limitations are unchanged. These synthetic
+  capture tests do not prove the requested live rear_drawbar tow/turn/detach,
+  tractor drive/tracks, Kubota, slope, determinism or performance acceptance.
+- Compliance retains the documented scalar-regularization timestep dependence
+  and D6 XYZ angular chart. Multi-turn soft revolute position targets and GPU
+  support remain unfinished. No dependencies, environment, recipes, vendors
+  or specification edits. Engram tools remain unavailable; this checkpoint
+  records the design, verification and remaining scope.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
    re-rooting, mutation, contact/readout/filtering paths while extending the world.
 2. Implement sleep/wake/islands; verify continuous-force singular-inertia
    dynamics and benchmark queries with tyres.
-3. Finish joint softness/capture semantics and GPU joint-control parity.
+3. Finish soft angular phase semantics and GPU joint-control parity; validate
+   compliant hitches at real tractor/trailer scale.
 4. Complete and validate the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
 6. Run and record every original acceptance scene, performance and deterministic
