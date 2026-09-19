@@ -1217,6 +1217,80 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - Isolated `specs/TYRE_PRESSURE.md`: explicit isolated launch and clock semantics.
 - Engram save/summary tools are unavailable; this entry preserves the handoff.
 
+### Pressure configuration round-trip and rejection cleanup (2026-09-19)
+
+#### Goal and instructions
+
+- Continue §6.1 machine pressure persistence in isolated Gearbox. The previous
+  visibility turn was progress. Original Gearbox and source assets are off limits.
+- The user repeated that the tractor I spawned still shows no visible tyre
+  change. Persistence work was set aside again for a bare-ground close-up.
+
+#### Discoveries
+
+- A pressure configuration can restore exact applied and target pressures
+  while keeping the scene paused. Reusing an ephemeral machine id can wait
+  for an old topic ownership lease; `spawn from` now has a separate 90-second
+  default `--wait-timeout` instead of relying on the short RPC timeout.
+- Rejecting an already projected invalid snapshot in Update raced queued
+  physics marker insertion and caused an entity-despawn command panic. Root
+  deletion now runs in Last, after earlier projection commands, and explicitly
+  removes bodies/colliders. A regression test covers command ordering/cleanup.
+- When the user repeated the visibility problem, both isolated instances
+  were gone and only original Gearbox was running. No cause was established;
+  do not infer that the user deliberately closed them. Test windows previously
+  had the same generic title and no always-visible instance/backend badge.
+
+#### Accomplished
+
+- Added versioned TOML machine configuration save, no-clobber publication,
+  source/variant/root placement references, distinct applied/target pressures,
+  all-member source-bound validation, paused restoration, readback confirmation
+  and rejection events. Delete/reset clear obsolete cached pressure values.
+- Live disposable fixture `/tmp/gearbox-pressure-roundtrip.LGK4rq`: exported
+  Kubota applied 1.8 with front target 1.0 / rear target 2.4, refused overwrite,
+  unloaded/reloaded the same id, and compared all eight pressure fields exactly.
+  Restored scene stayed paused. After the cleanup fix, invalid 4.1-bar restore
+  rejected cleanly and the existing tractor's pressure fields were unchanged.
+- Resumed and paused during transition, exporting front applied 1.46 and rear
+  applied 2.14 bar with distinct targets. This second snapshot has NOT yet been
+  round-tripped: the instance disappeared before the next command. Unrelated
+  spawn/despawn and resumed-transition acceptance remain unverified this turn.
+- Final snapshot suites: 71 Molla binary tests, 71 Rapier binary tests, 2 CLI
+  serialization/publication tests, 14 full CLI fake-host tests; native build
+  passes. Logs `/tmp/gearbox-snapshot-*.log`.
+
+#### Next steps and relevant files
+
+- Finish exact mid-transition reload/resume and unrelated topology checks;
+  this is machine configuration persistence, not a full solver checkpoint.
+- Isolated `load.rs`: atomic restore validation, Last-stage failed-load cleanup.
+- Isolated API `tyres.rs`, CLI `spawn.rs`/`machine.rs`, CLI integration tests,
+  and `specs/TYRE_PRESSURE.md`: pressure configuration format and command path.
+- Isolated `host/mod.rs`: current visible-feedback work adds an always-visible
+  instance/backend/clock badge and distinct window title. Bare-ground instance
+  `molla-tyres` is being checked with 0.5-to-4 bar transitions.
+- Engram save/session-summary tools remain unavailable; this records findings
+  and the handoff without editing the persistent-memory folder.
+
+### User-requested visual retest (2026-09-19)
+
+- User explicitly confirmed that rubber still looks unchanged in the labelled
+  Molla window. Treat visual acceptance as unresolved, despite pressure
+  telemetry and earlier screenshot interpretations. Do not claim it fixed.
+- User requested another launch and will judge the rubber change themselves.
+  Reopening only `molla-tyres` on bare ground with the real Kubota and sidebar;
+  no scripted pressure sweep this time. Original Gearbox stays untouched.
+- Completed isolated commits: `9e0fe7c` pressure configuration persistence and
+  `a14f41d` visible instance/backend/clock identity. Final binary tests pass 71.
+- Earlier bare-ground captures `/tmp/molla-flat-{low,high}-settled.png` show
+  about 0.55 vs 4 bar. The low target was changed during the check; do not
+  label that image as exactly 0.5 bar. User visual feedback overrides any
+  assumption that the effect is clear enough.
+- Next: obtain the user's retest feedback before further visual changes;
+  keep the full objective active. Engram tools remain unavailable, so this
+  tracked handoff records the session outcome.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
