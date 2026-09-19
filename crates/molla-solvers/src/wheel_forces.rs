@@ -119,6 +119,10 @@ fn validate_ground(scene: &RigidScene, id: ColliderHandle) -> Result<()> {
 }
 
 impl WheelForces {
+    pub fn descriptor(&self, body: BodyHandle) -> Option<&WheelDesc> {
+        self.wheels.get(&body)
+    }
+
     pub fn insert(&mut self, scene: &RigidScene, desc: WheelDesc) -> Result<()> {
         let joint = scene
             .joint(desc.spin_joint)

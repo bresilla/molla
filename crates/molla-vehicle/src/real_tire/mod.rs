@@ -39,6 +39,8 @@ pub use realism::{
 };
 mod params;
 pub use params::RealTireParams;
+mod envelope;
+pub use envelope::LoadedTireEnvelope;
 mod wheel;
 pub use wheel::{RealWheelOrientation, RealWheelState};
 
