@@ -228,18 +228,18 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | --- | --- |
 | 0: solver and force architecture | Retained Featherstone for rigid runtime scenes; no XPBD replacement. Penalty contacts enter the working copy of `state.body_f` before ABA without accumulating in persistent applied forces. Tyre/soil force elements remain. |
 | 1.1: penalty contacts | CPU spring/compression-damper and bounded smoothed friction implemented; world collision is refreshed every substep. Tractor-scale stability remains unverified. |
-| 1.2: live mutation | Foundation implemented and tested; re-rooting and complete mutable descriptors remain. |
-| 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
-| 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
-| 2: bodies | Body reads, subtree teleports, reduced-coordinate velocity edits, no-step collider queries, per-body damping, persistent additional mass, explicit recomputation, force/reset, articulated impulses, enabled/quarantine and stored CCD option implemented. Sleep/wake, non-root fixed transitions and Gearbox accessor wiring remain. Continuous-force singular-inertia parity needs verification. |
-| 3: colliders | All requested shape kinds have CPU authoring/query paths, including indexed-mesh convex decomposition with one stable owner for multiple pieces. Views, pose access, AABBs, materials, friction rules, two-way masks, enabled/sensor flags and density/total-mass editing implemented. Explicit body mass recomputation implemented. Gearbox consumption still requires integration tests. |
-| 4: joints | Stable-ID insert/remove, directed-tree merge/split, readable/writable frames, enabled/suspended state and connected-body collision flags implemented. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, softness, re-rooting and full body-pair queries remain. |
-| 5: world | Gravity access, CPU step with configurable substeps, pre-collision invalid-input quarantine/readout, per-step body-pair callback and handle-aware CPU raycasts implemented. Solver-setting mapping and Gearbox wiring remain. Existing `molla-sensors::Raycaster` stays GPU-only; CPU queries live in geometry. |
+| 1.2: live mutation | Stable mutation, branch merge/split and re-rooting implemented and tested. Combined collider-plus-mass transactions need hardening at the adapter boundary. |
+| 1.3: contact force readout | CPU Featherstone samples and stable pair grouping feed Gearbox contact manifolds; adapter impulse/material/filter tests pass. Tractor traction/stamping acceptance remains. |
+| 1.4: fixed bodies | Root and non-root fixed transitions/re-rooting tested, including Gearbox accessors. Complete GPU Featherstone support remains. |
+| 2: bodies | Reads, teleports, velocity edits, damping, mass, force/reset, impulses, enable/quarantine, CCD storage and Gearbox accessors implemented. Sleep/wake still no-op. Continuous-force singular-inertia parity needs verification. |
+| 3: colliders | Requested shape kinds, queries, materials, masks and runtime edits implemented. Gearbox accessor/query/mass tests pass; compound edit failure atomicity and live scene coverage remain. |
+| 4: joints | Stable insert/remove, arbitrary-tree merge/split/re-rooting, frames, enabled state, collision flags, locks, limits, motors/caps, acceleration gains and pair queries implemented. Softness remains unsupported and explicitly warns in Gearbox; GPU parity remains. |
+| 5: world | Gravity, configurable CPU substeps, quarantine, pair filtering and CPU raycasts wired through Gearbox. Internal iterations map to substeps; direct ABA has no outer iterative-solver equivalent. CPU queries remain in geometry. |
 | 6.1-6.3: tyres | Per-substep transient force-element hook implemented. Wheel force elements, ground masking, scene terrain adapter with per-cell friction and wheel output readback remain. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
-| 8.5: Gearbox implementation | Pending `MollaBackend`, backend selection arm and `GEARBOX_PHYSICS=molla`. |
-| 9: 43 binary tests on both backends | Pending; includes joint motors (constraint/reduced), heightfield ray and steering limits. |
+| 8.5: Gearbox implementation | Experimental `MollaBackend` and selection arm implemented in `gearbox-physics`. Missing softness, sleeping and tyre integration prevent full acceptance. |
+| 9: 43 binary tests on both backends | Original 43 plus eight new checks pass (51 tests) with each explicit backend environment. Reduced-joint expectation is backend-specific; all original motor target/cap assertions remain. |
 | 9: tractor driving | Pending spawn, forward 2/turn 0.4, heading comparison and visible tracks. |
 | 9: hitch/tow/detach | Pending rear_drawbar teleport attach, turn, detach, finite state and no quarantine. |
 | 9: Kubota | Pending all five controllers, including hitch lift and PTO motion. |
@@ -251,11 +251,11 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   left unmodified and untracked.
 - Actual backend trait is in
   `/home/bresilla/data/code/robolibs/gearbox-physics/bin/gearbox/src/physics/backend.rs`
-  on `feat/physics-backend`, still clean at `8358c2a` at this checkpoint. The
-  sibling `gearbox` worktree is changing externally: it is now at `f637c64`
+  on `feat/physics-backend`; integration began from clean `8358c2a`. The
+  sibling `gearbox` worktree changes externally: an earlier snapshot was `f637c64`
   with dirty `controller.rs`, `globe.rs`, and `physics/writeback.rs` under
   `bin/gearbox/src`. Earlier terrain edits are not its current baseline.
-  Do not switch or overwrite that tree; re-inspect before integration work.
+  Do not switch or overwrite that tree; re-inspect before touching it.
 - The Makefile refers to a missing `PROJECT`. Commands use
   `PROJECT_NAME=molla PROJECT_VERSION=0` overrides; no environment or Makefile
   files were changed. The Makefile still prints its missing-file sed warnings.
@@ -500,6 +500,52 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Gearbox files changed. Engram tools remain unavailable; this ledger records
   the design and verification checkpoint.
 
+### Gearbox backend integration checkpoint
+
+- Gearbox source checkpoint: unsigned commit `6fd40ee`
+  (`feat(physics): add molla backend adapter`) on `feat/physics-backend`.
+- Working in the existing clean `feat/physics-backend` worktree at
+  `/home/bresilla/data/code/robolibs/gearbox-physics`, not the independently
+  changing `/home/bresilla/data/code/robolibs/gearbox` checkout. Added
+  `physics/molla/{mod,body,collider,joint,convert,tests}.rs`, trait accessors,
+  backend-name selection and local CPU-only Molla dependencies.
+- Adapter accessors share an `Arc<Mutex<RigidWorld>>`; they do not copy live
+  physics state into stale trait views. Stable handles map directly to Gearbox
+  IDs, mass-affecting collider operations recompute parent totals, and queries,
+  impulses, motors, contacts and per-step pair exclusions call Molla's runtime.
+  All joints truthfully report reduced coordinates, regardless of Rapier's
+  preferred constraint/reduced insertion hint. The existing constraint-motor
+  test now checks this backend-specific truth while keeping its motor assertions.
+- Integration discovered a Cargo feature-unification incompatibility: Molla's
+  deterministic Parry collections require Rapier's `enhanced-determinism`
+  feature too, or Rapier compiles the wrong HashSet `drain` calls. Enabled the
+  matching Rapier feature; no dependency versions were updated. Host Rust
+  1.94 is too old for this Gearbox checkout; use its Nix Rust 1.96 environment.
+- `nix develop --impure -c oslo make check` compiles the binary but the all-target
+  gate fails in unchanged `bin/gearbox/tests/oxbo_transforms.rs`, which names
+  removed `openusd::Stage`/`usd_schema` APIs. Scoped binary tests passed with
+  explicit `GEARBOX_PHYSICS=rapier` and `GEARBOX_PHYSICS=molla`: 51/51 each,
+  including the original 43 plus seven adapter checks and one selection check.
+  No live-scene acceptance is claimed. Strict Clippy including workspace
+  dependencies is blocked by pre-existing warnings in `gearbox-api`,
+  `gearbox-fields` and vendored clouds; those files were not changed.
+  The `--no-deps` binary Clippy lane also fails on seven existing issues outside
+  the Molla adapter. No lint suppressions were added and no green Clippy claim
+  is made for Gearbox.
+- Internal generalized-state quarantine now reaches Gearbox's entity report:
+  a default backend readout exposes internally isolated body IDs, Molla maps
+  its stable handles to those IDs, and `PhysicsWorld` collects their entities
+  after the backend step. An actual-corruption test proves this path rather
+  than leaving the UI/reporting layer falsely unaware of disabled bodies.
+- This remains explicitly experimental. Softness requests warn and retain rigid
+  constraints; sleep/wake are no-ops with never-sleeping readout; tyre/terrain
+  integration is still absent. Collider replacement plus recomputation needs a
+  combined transaction before final failure-path acceptance. Gearbox's
+  `docs/MOLLA_BACKEND.md` records these gaps rather than hiding them.
+- No environment, Makefile, Oslo recipes, vendor or specification edits. Engram
+  tools remain unavailable. Original full-goal and live acceptance scope remain
+  unchanged.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
@@ -507,7 +553,7 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 2. Implement sleep/wake/islands; verify continuous-force singular-inertia
    dynamics and benchmark queries with tyres.
 3. Finish joint softness/capture semantics and GPU joint-control parity.
-4. Implement the Gearbox backend in its existing physics worktree.
+4. Complete and validate the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
 6. Run and record every original acceptance scene, performance and deterministic
    replay gate. Do not mark the objective complete from library tests alone.
