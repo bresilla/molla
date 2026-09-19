@@ -1519,6 +1519,54 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `viewer/tyre_mesh.rs`, `specs/TYRE_PRESSURE.md`.
 - `/tmp/molla-rubber-timing.log`, `/tmp/rubber-retest-{low,high}.png`.
 
+### Roundness with accepted pressure response (2026-09-20)
+
+#### Goal and instructions
+
+- Preserve the now user-accepted inflation response and make maximum-pressure
+  tyres rounder with less rubber flattened on the ground.
+- Accepted baseline committed locally: Molla `9051d20`, isolated Gearbox
+  `356760d`. Original Gearbox remains untouched.
+
+#### Decision and discoveries
+
+- Revisit reference-radius alignment while retaining the accepted 1 bar/s
+  pressure rate. The earlier rejected experiment preceded the user's
+  clarification that slow rubber response, not driving, was the failure.
+- Collider-only front radius is about 0.644 m; imported tread reaches about
+  0.691 m. At high pressure the hub is around 0.609 m, so rendering must flatten
+  about 82 mm of outer tread despite solver deflection being only 35 mm.
+- Use undeformed rubber's axle-plane radial extent at first registration.
+  Keep it cached through live deformation; exclude rigid/rim/helper meshes.
+  No pressure-dependent mesh scaling or radius changes. Missing render meshes
+  retain the collider fallback; universal/headless metadata remains a limit.
+
+#### Accomplished and next steps
+
+- Restored and documented the bounded geometry correction; retained faster
+  inflation and the new backend-to-rendered-mesh bidirectional regression.
+- Build/tests and low/high visual comparison are pending. Do not claim this
+  shape accepted until visual inspection and user feedback. Engram unavailable.
+
+#### Validation update
+
+- Native build passed; both backend-selected binary suites passed 75 tests.
+- Real sidebar transition from 0.5 to 3.9735 bar completed in about 21 wall
+  seconds in the 2 FPS debug window. Front hub rose from 0.6087 to 0.6554 m;
+  deflection fell from 82.6 to 35.8 mm. Faster rate remains 1 bar/s simulated.
+- Inspected `/tmp/round-responsive-low.png` and `-high.png`: high-pressure
+  outer tread is rounder, with less flattened lower tread than the previous
+  collider-radius-only rendering. Compared with its prior 0.6086 m high-
+  pressure hub, corrected support removes about 47 mm of excess tread crush.
+- This is geometry consistency, not measured real-tyre calibration. Rubber
+  still flattens under load. User acceptance of the revised roundness remains
+  pending. Leave the isolated viewer open at maximum pressure for inspection.
+
+#### Relevant Files
+
+- Isolated Gearbox `controller/wheel_forces.rs`, `viewer/tyre_mesh.rs`,
+  `specs/TYRE_PRESSURE.md`; `/tmp/gearbox-round-responsive-*` validation logs.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
