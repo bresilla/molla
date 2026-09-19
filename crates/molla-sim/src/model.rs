@@ -4,11 +4,8 @@ use molla_core::Result;
 use molla_math::{Mat3, Real, Transform, Vec3};
 use molla_storage::{Buffer, BufferUsage};
 
-/// A triangle mesh stored on the host. Vertices are in the mesh's
-/// local frame; world positioning comes from the shape's transform.
-/// Triangle indexing convention: `indices[t]` gives the three
 /// Regular grid of height samples (heightmap) — terrain primitive.
-/// Surface is sampled at `(origin.x + i·cell_size, height[i,j],
+/// Surface is sampled at `(origin.x + i·cell_size, origin.y + height[i,j],
 /// origin.z + j·cell_size)` for `i ∈ [0, nx)`, `j ∈ [0, nz)`.
 /// Collision routing converts only the cells overlapping the
 /// query AABB into triangles, so heightmaps stay cheap even when
@@ -65,8 +62,8 @@ impl Heightfield {
             max_h = 0.0;
         }
         (
-            Vec3::new(self.origin.x, min_h, self.origin.z),
-            Vec3::new(max_x, max_h, max_z),
+            Vec3::new(self.origin.x, self.origin.y + min_h, self.origin.z),
+            Vec3::new(max_x, self.origin.y + max_h, max_z),
         )
     }
 }

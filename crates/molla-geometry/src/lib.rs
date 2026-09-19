@@ -3,6 +3,7 @@
 pub mod aabb;
 pub mod broad_phase;
 pub mod bvh;
+pub mod collider_query;
 pub mod contact_extras;
 pub mod contact_reduction;
 pub mod decimate;

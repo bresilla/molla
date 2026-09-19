@@ -3,8 +3,11 @@
 use std::collections::BTreeMap;
 
 use molla_core::{Error, Result};
-use molla_geometry::CollisionPipeline;
-use molla_math::{Real, Vec3};
+use molla_geometry::{
+    Aabb, CollisionPipeline,
+    collider_query::{self, ColliderShapeView},
+};
+use molla_math::{Real, Transform, Vec3};
 use molla_sim::Contacts;
 use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene};
 
@@ -47,6 +50,22 @@ impl RigidWorld {
 
     pub fn step(&mut self, dt: Real) -> Result<()> {
         self.step_filtered(dt, |_, _| false)
+    }
+
+    pub fn collider_local_aabb(&self, id: ColliderHandle) -> Result<Aabb> {
+        collider_query::collider_local_aabb(&self.scene, id)
+    }
+
+    pub fn collider_world_aabb(&self, id: ColliderHandle) -> Result<Aabb> {
+        collider_query::collider_world_aabb(&self.scene, id)
+    }
+
+    pub fn collider_aabb_at_pose(&self, id: ColliderHandle, pose: Transform) -> Result<Aabb> {
+        collider_query::collider_aabb_at_pose(&self.scene, id, pose)
+    }
+
+    pub fn collider_shape_view(&self, id: ColliderHandle) -> Result<ColliderShapeView> {
+        collider_query::collider_shape_view(&self.scene, id)
     }
 
     /// Advance the scene atomically; `true` excludes all contacts for that body pair.

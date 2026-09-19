@@ -44,6 +44,14 @@ pub fn support_with_hulls(
             half_height,
             radius,
         } => support_cylinder(half_height, radius, dir_local),
+        ShapeGeometry::RoundCylinder {
+            half_height,
+            radius,
+            border_radius,
+        } => {
+            support_cylinder(half_height, radius, dir_local)
+                + support_sphere(border_radius, dir_local)
+        }
         ShapeGeometry::Cone {
             half_height,
             radius,

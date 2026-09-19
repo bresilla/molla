@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
-use molla_math::{Real, SpatialVector, Transform, Vec3};
+use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
 use crate::{
     BodyFlags, BodyParams, CoefficientCombineRule, ContactMaterial, Control, Heightfield,
@@ -55,13 +55,53 @@ impl Default for BodyDesc {
 
 #[derive(Clone, Debug)]
 pub enum ColliderGeometry {
-    Ball { radius: Real },
-    Cuboid { half_extents: Vec3 },
-    Capsule { half_height: Real, radius: Real },
-    Cylinder { half_height: Real, radius: Real },
+    Ball {
+        radius: Real,
+    },
+    Cuboid {
+        half_extents: Vec3,
+    },
+    Capsule {
+        half_height: Real,
+        radius: Real,
+    },
+    CapsuleEndpoints {
+        a: Vec3,
+        b: Vec3,
+        radius: Real,
+    },
+    Cylinder {
+        half_height: Real,
+        radius: Real,
+    },
+    RoundCylinder {
+        half_height: Real,
+        radius: Real,
+        border_radius: Real,
+    },
     ConvexHull(Vec<Vec3>),
     TriMesh(TriMesh),
     Heightfield(Heightfield),
+}
+
+impl ColliderGeometry {
+    /// Transform from the canonical primitive frame into the collider frame.
+    pub fn geometry_transform(&self) -> Result<Transform> {
+        let Self::CapsuleEndpoints { a, b, .. } = self else {
+            return Ok(Transform::IDENTITY);
+        };
+        let delta = *b - *a;
+        let length = delta.length();
+        if !a.is_finite() || !b.is_finite() || !length.is_finite() {
+            return Err(Error::Build("invalid capsule endpoints".into()));
+        }
+        let rotation = if length > 0.0 {
+            Quat::from_rotation_arc(Vec3::Y, delta / length)
+        } else {
+            Quat::IDENTITY
+        };
+        Ok(Transform::new(*a * 0.5 + *b * 0.5, rotation))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +227,50 @@ impl RigidScene {
 
     pub fn collider_index(&self, id: ColliderHandle) -> Option<ShapeId> {
         self.snapshot.colliders.get(&id).copied()
+    }
+
+    pub fn collider(&self, id: ColliderHandle) -> Option<&ColliderDesc> {
+        self.description.colliders.get(&id)
+    }
+
+    pub fn collider_world_pose(&self, id: ColliderHandle) -> Result<Transform> {
+        let desc = self.collider(id).ok_or_else(|| missing("collider"))?;
+        match desc.parent {
+            Some(parent) => {
+                let i = self
+                    .body_index(parent)
+                    .ok_or_else(|| missing("body"))?
+                    .index();
+                Ok(self.state().body_q.host()?[i].compose(&desc.pose))
+            }
+            None => Ok(desc.pose),
+        }
+    }
+
+    pub fn set_collider_pose(&mut self, id: ColliderHandle, pose: Transform) -> Result<()> {
+        self.edit(|d| {
+            d.colliders
+                .get_mut(&id)
+                .ok_or_else(|| missing("collider"))?
+                .pose = pose;
+            Ok(())
+        })
+    }
+
+    pub fn set_collider_world_pose(&mut self, id: ColliderHandle, pose: Transform) -> Result<()> {
+        validate_pose(pose)?;
+        let desc = self.collider(id).ok_or_else(|| missing("collider"))?;
+        let local = match desc.parent {
+            Some(parent) => {
+                let i = self
+                    .body_index(parent)
+                    .ok_or_else(|| missing("body"))?
+                    .index();
+                self.state().body_q.host()?[i].inverse().compose(&pose)
+            }
+            None => pose,
+        };
+        self.set_collider_pose(id, local)
     }
 
     pub fn body_handle(&self, index: BodyId) -> Option<BodyHandle> {
@@ -500,7 +584,8 @@ fn validate_body(desc: &BodyDesc) -> Result<()> {
 }
 
 fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> Result<ShapeId> {
-    let pose = desc.pose;
+    let pose = desc.pose.compose(&desc.geometry.geometry_transform()?);
+    validate_pose(pose)?;
     match &desc.geometry {
         ColliderGeometry::Ball { radius } => builder.add_shape_sphere(body, *radius, pose),
         ColliderGeometry::Cuboid { half_extents } => {
@@ -510,10 +595,18 @@ fn add_shape(builder: &mut ModelBuilder, body: BodyId, desc: &ColliderDesc) -> R
             half_height,
             radius,
         } => builder.add_shape_capsule(body, *half_height, *radius, pose),
+        ColliderGeometry::CapsuleEndpoints { a, b, radius } => {
+            builder.add_shape_capsule(body, (*b - *a).length() * 0.5, *radius, pose)
+        }
         ColliderGeometry::Cylinder {
             half_height,
             radius,
         } => builder.add_shape_cylinder(body, *half_height, *radius, pose),
+        ColliderGeometry::RoundCylinder {
+            half_height,
+            radius,
+            border_radius,
+        } => builder.add_shape_round_cylinder(body, *half_height, *radius, *border_radius, pose),
         ColliderGeometry::ConvexHull(points) => {
             if points.iter().any(|p| !p.is_finite()) {
                 return Err(Error::Build("non-finite hull".into()));

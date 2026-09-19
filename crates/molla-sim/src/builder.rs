@@ -53,6 +53,12 @@ pub enum ShapeGeometry {
         /// Radius.
         radius: Real,
     },
+    /// Y-axis cylinder dilated by a sphere of `border_radius`.
+    RoundCylinder {
+        half_height: Real,
+        radius: Real,
+        border_radius: Real,
+    },
     /// Triangle in the shape's local frame. Three vertex positions.
     /// Used as a primitive for narrow-phase queries against
     /// individual mesh triangles; the user typically builds meshes
@@ -1328,7 +1334,7 @@ impl ModelBuilder {
     /// shape-local +Y direction. `half_height` is
     /// the half-length of the cylindrical section (cap centres are
     /// at `±half_height·Y` in shape-local frame); `radius` is the
-    /// cap + cylinder radius. Both must be strictly positive.
+    /// cap + cylinder radius. Zero half-height gives a sphere.
     pub fn add_shape_capsule(
         &mut self,
         body: BodyId,
@@ -1337,15 +1343,18 @@ impl ModelBuilder {
         local_pose: Transform,
     ) -> Result<ShapeId> {
         self.validate_body_for_shape(body, "add_shape_capsule")?;
-        if !half_height.is_finite() || half_height <= 0.0 {
+        if !half_height.is_finite() || half_height < 0.0 {
             return Err(Error::Build(format!(
-                "add_shape_capsule: half_height must be positive finite, got {half_height}"
+                "add_shape_capsule: half_height must be nonnegative finite, got {half_height}"
             )));
         }
         if !radius.is_finite() || radius <= 0.0 {
             return Err(Error::Build(format!(
                 "add_shape_capsule: radius must be positive finite, got {radius}"
             )));
+        }
+        if half_height == 0.0 {
+            return self.add_shape_sphere(body, radius, local_pose);
         }
         Ok(self.push_shape(
             body,
@@ -1384,6 +1393,38 @@ impl ModelBuilder {
             ShapeGeometry::Cylinder {
                 half_height,
                 radius,
+            },
+        ))
+    }
+
+    /// Attach a cylinder dilated outward by `border_radius` (CPU collision).
+    pub fn add_shape_round_cylinder(
+        &mut self,
+        body: BodyId,
+        half_height: Real,
+        radius: Real,
+        border_radius: Real,
+        local_pose: Transform,
+    ) -> Result<ShapeId> {
+        self.validate_body_for_shape(body, "add_shape_round_cylinder")?;
+        if !half_height.is_finite()
+            || half_height <= 0.0
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !border_radius.is_finite()
+            || border_radius < 0.0
+            || !(half_height + border_radius).is_finite()
+            || !(radius + border_radius).is_finite()
+        {
+            return Err(Error::Build("invalid rounded cylinder dimensions".into()));
+        }
+        Ok(self.push_shape(
+            body,
+            local_pose,
+            ShapeGeometry::RoundCylinder {
+                half_height,
+                radius,
+                border_radius,
             },
         ))
     }
@@ -2933,6 +2974,7 @@ impl ModelBuilder {
                         ShapeGeometry::Box { .. } => 2,
                         ShapeGeometry::Capsule { .. } => 3,
                         ShapeGeometry::Cylinder { .. } => 4,
+                        ShapeGeometry::RoundCylinder { .. } => 0xff,
                         // Cone (5) gets a real kind for GPU GJK;
                         // ConvexHull/Heightfield/Sdf stay CPU-only —
                         // sentinel 0xff so the GPU kernels skip them.
@@ -2971,6 +3013,11 @@ impl ModelBuilder {
                             radius,
                         } => Vec3::new(half_height, radius, 0.0),
                         ShapeGeometry::Triangle { .. } => Vec3::ZERO,
+                        ShapeGeometry::RoundCylinder {
+                            half_height,
+                            radius,
+                            border_radius,
+                        } => Vec3::new(half_height, radius, border_radius),
                         ShapeGeometry::TriMesh { .. } => Vec3::ZERO,
                         ShapeGeometry::Cone {
                             half_height,

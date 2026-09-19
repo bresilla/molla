@@ -289,7 +289,9 @@ pub fn pair_contact(
         // (unbounded support). Pair-vs-plane uses a ray-test fast
         // path (only the 'lowest' support point matters).
         (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Plane { .. })
-        | (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. }) => {
+        | (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. })
+        | (ShapeGeometry::RoundCylinder { .. }, ShapeGeometry::Plane { .. })
+        | (ShapeGeometry::Plane { .. }, ShapeGeometry::RoundCylinder { .. }) => {
             cylinder_plane_fallback(geom_a, &xf_a, geom_b, &xf_b, pair, out);
         }
         (ShapeGeometry::Cone { .. }, ShapeGeometry::Plane { .. })
@@ -345,7 +347,9 @@ pub fn pair_contact(
         | (ShapeGeometry::ConvexHull { .. }, _)
         | (_, ShapeGeometry::ConvexHull { .. })
         | (ShapeGeometry::Ellipsoid { .. }, _)
-        | (_, ShapeGeometry::Ellipsoid { .. }) => {
+        | (_, ShapeGeometry::Ellipsoid { .. })
+        | (ShapeGeometry::RoundCylinder { .. }, _)
+        | (_, ShapeGeometry::RoundCylinder { .. }) => {
             if matches!(geom_a, ShapeGeometry::Plane { .. })
                 || matches!(geom_b, ShapeGeometry::Plane { .. })
             {
@@ -1565,6 +1569,11 @@ fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
         ShapeGeometry::Cylinder {
             half_height,
             radius,
+        }
+        | ShapeGeometry::RoundCylinder {
+            half_height,
+            radius,
+            ..
         } => {
             let axis = xf.rotation * Vec3::Y;
             let absax = Vec3::new(axis.x.abs(), axis.y.abs(), axis.z.abs());
@@ -1575,7 +1584,11 @@ fn shape_world_aabb_quick(geom: ShapeGeometry, xf: &Transform) -> (Vec3, Vec3) {
                 perp_scale.y.sqrt(),
                 perp_scale.z.sqrt(),
             );
-            let h = absax * half_height + perp * radius;
+            let border = match geom {
+                ShapeGeometry::RoundCylinder { border_radius, .. } => border_radius,
+                _ => 0.0,
+            };
+            let h = absax * half_height + perp * radius + Vec3::splat(border);
             (xf.position - h, xf.position + h)
         }
         ShapeGeometry::Triangle { v0, v1, v2 } => {
@@ -1671,12 +1684,14 @@ fn cylinder_plane_fallback(
     out: &mut Vec<ContactManifold>,
 ) {
     let (cyl_xf, plane_xf, cyl_geom, cyl_shape, plane_shape, flip) = match (geom_a, geom_b) {
-        (ShapeGeometry::Cylinder { .. }, ShapeGeometry::Plane { .. }) => {
-            (xf_a, xf_b, geom_a, pair.a, pair.b, false)
-        }
-        (ShapeGeometry::Plane { .. }, ShapeGeometry::Cylinder { .. }) => {
-            (xf_b, xf_a, geom_b, pair.b, pair.a, true)
-        }
+        (
+            ShapeGeometry::Cylinder { .. } | ShapeGeometry::RoundCylinder { .. },
+            ShapeGeometry::Plane { .. },
+        ) => (xf_a, xf_b, geom_a, pair.a, pair.b, false),
+        (
+            ShapeGeometry::Plane { .. },
+            ShapeGeometry::Cylinder { .. } | ShapeGeometry::RoundCylinder { .. },
+        ) => (xf_b, xf_a, geom_b, pair.b, pair.a, true),
         _ => return,
     };
     let plane_normal_world = match (geom_a, geom_b) {
@@ -1686,11 +1701,16 @@ fn cylinder_plane_fallback(
     };
     let plane_p = plane_xf.position;
 
-    let (half_height, radius) = match cyl_geom {
+    let (half_height, radius, border) = match cyl_geom {
         ShapeGeometry::Cylinder {
             half_height,
             radius,
-        } => (half_height, radius),
+        } => (half_height, radius, 0.0),
+        ShapeGeometry::RoundCylinder {
+            half_height,
+            radius,
+            border_radius,
+        } => (half_height, radius, border_radius),
         _ => return,
     };
 
@@ -1725,6 +1745,18 @@ fn cylinder_plane_fallback(
         candidates.push(disk - v * radius);
     }
 
+    if matches!(cyl_geom, ShapeGeometry::RoundCylinder { .. }) {
+        for point in &mut candidates {
+            *point -= plane_normal_world * border;
+        }
+        let lowest = crate::support::support(cyl_geom, cyl_xf, -plane_normal_world);
+        if !candidates
+            .iter()
+            .any(|p| p.distance_squared(lowest) < 1e-24)
+        {
+            candidates.push(lowest);
+        }
+    }
     let mut emitted = 0usize;
     for c in candidates {
         let signed = (c - plane_p).dot(plane_normal_world);
@@ -2129,6 +2161,11 @@ fn sdf_pair(
             half_height,
             radius,
         } => half_height.max(radius),
+        ShapeGeometry::RoundCylinder {
+            half_height,
+            radius,
+            border_radius,
+        } => half_height.hypot(radius) + border_radius,
         ShapeGeometry::Cone {
             half_height,
             radius,

@@ -22,10 +22,30 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   immovable roots get fixed world anchors. Dynamic/fixed root transitions keep
   the current pose; fixing zeroes velocity. Changing a non-root to fixed is
   currently rejected and still needs a re-rooting implementation.
-- Runtime collider replacement supports the existing ball, cuboid, Y capsule,
-  Y cylinder, convex hull, triangle mesh and heightfield builder paths, with
-  local pose, friction, restitution and tags. This is not the complete collider
-  contract in section 3.
+- Runtime collider replacement supports ball, cuboid, Y capsule, endpoint
+  capsule, Y cylinder, round cylinder, convex hull, triangle mesh and the
+  existing square-spacing heightfield, with local pose, friction, restitution
+  and tags. Indexed-mesh convex decomposition and independently scaled
+  row-major heightfields remain.
+- Endpoint capsules retain the authored collider frame and lower to a posed
+  Y capsule; coincident endpoints lower to a sphere. Collider descriptor,
+  local/world pose reads and local/world pose writes are available without
+  stepping. Geometry-frame, world and arbitrary-pose AABBs use the same shape
+  bounds as broad phase, including the capsule's canonical-frame offset.
+- `molla_geometry::collider_query` supplies primitive/convex/other shape views.
+  Convex views have compact hull vertices and sorted true edges, excluding
+  coplanar triangulation diagonals. `RigidWorld` exposes the shape-view and
+  AABB queries by stable collider handle.
+- Round cylinders are exact cylinder-plus-sphere support maps on CPU GJK/EPA,
+  with expanded analytic bounds and multi-point plane contacts. The stored
+  height/radius describe the inner cylinder, matching Gearbox's actual Rapier
+  constructor (not its contradictory "shrunk" trait comment). Parry documents
+  this as sphere dilation:
+  https://docs.rs/parry3d-f64/latest/parry3d_f64/shape/struct.SharedShape.html#method.round_cylinder
+  GPU pipelines retain the CPU fallback rather than dropping these shapes.
+  Direct GPU primitive kernels still do not implement round cylinders.
+- Heightfield bounds now include `origin.y`, matching the existing triangle
+  and hull-contact paths; the omission could cull elevated terrain contacts.
 - CPU Featherstone now publishes world COM/angular velocities. Its moving
   free/D6/distance angular subspace includes the translated joint origin and
   the associated velocity bias. The acceleration solve includes the bias in
@@ -72,9 +92,9 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 | 1.3: contact force readout | Implemented for CPU Featherstone, including all substep samples and stable pair grouping. Gearbox consumption remains pending. |
 | 1.4: fixed bodies | Root transitions tested; non-root freezing/re-rooting and complete GPU Featherstone support remain. |
 | 2: bodies | Pose/mass/COM/inertia/initial velocity/tag available in model/state/descriptors. Full read/write API, enabled/quarantine, damping, sleep/wake, additional-mass replacement, force/impulse helpers, CCD option, collider mass recomputation and no-step synchronization remain. |
-| 3: colliders | Existing-shape/material mutation, friction combine rules, two-way memberships/filter masks and enabled/sensor flags implemented. Endpoint capsule, round cylinder, convex decomposition, rectangular scaled heightfields, density/mass, remaining read/query API and AABBs remain. |
+| 3: colliders | Endpoint capsules, round cylinders, primitive/convex/other views, descriptor/pose reads, local/world pose writes and local/world/arbitrary-pose AABBs added. Material mutation, friction rules, two-way masks and enabled/sensor flags remain tested. Convex decomposition, rectangular scaled heightfields and density/mass remain. |
 | 4: joints | Stable-ID insert/remove and directed-tree merge/split implemented for revolute/prismatic/fixed/ball/free/D6. Explicit locked-axis API, limits/motors/force caps, acceleration-based gains, mutable frames, softness, collision enable, enabled flag and full body-pair queries remain. |
-| 5: world | Gravity access, CPU world step with configurable substeps, and per-step body-pair callback implemented. Solver-setting mapping for Gearbox and handle-aware raycast remain. |
+| 5: world | Gravity access, CPU world step with configurable substeps, and per-step body-pair callback implemented. Solver-setting mapping for Gearbox and handle-aware CPU raycast remain. Existing `molla-sensors::Raycaster` is GPU-only; it cannot directly fill the CPU-backend requirement. |
 | 6.1-6.3: tyres | Pending Featherstone wheel force elements, ground masking, scene terrain adapter with per-cell friction, wheel output readback. |
 | 6.4 / build order 7 | Sleeping/islands, deformable terrain and two-way MPM coupling remain; existing separate modules are not evidence of runtime integration. |
 | 7: stability/performance | No tractor-scale acceptance evidence yet. Must measure 26-body/high-mass-ratio tractor and 2-10 t trailers at 120 Hz, re-detect contacts per substep, deterministic replay, <1 ms CPU step. |
@@ -142,11 +162,35 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   all targets and all features also passed. No workspace-wide or Gearbox
   acceptance claim follows from these scoped gates.
 
+### Shape/query integration verification
+
+- Eight CPU tests in `molla-geometry/tests/runtime_shapes.rs` cover endpoint
+  and collapsed capsules, body/local/canonical frame composition, COM offsets,
+  local/world/arbitrary-pose bounds, invalid edits/queries, convex true edges,
+  rounded-cylinder support, symmetric plane contacts and rounded-corner depth.
+  Terrain bounds now have an explicit nonzero vertical-origin regression.
+- The existing CPU MPR algorithm returned 1.30 m rather than the analytic
+  0.05858 m depth for the rounded-corner fixture when experimentally enabled.
+  Round cylinders therefore remain ineligible for MPR, using CPU GJK/EPA for
+  every pipeline selection. The regression verifies both default and MPR
+  selection produce the correct fallback result. General MPR repair is not
+  claimed by this slice.
+- The live `make test-gpu ... P=molla-geometry T=runtime_shapes` regression
+  passed: a rounded-cylinder contact retains both collider IDs and records
+  exactly one CPU fallback in a full GPU narrow-phase pipeline.
+- CPU regression lanes passed: sim 23 tests/doctests; geometry 113 unit,
+  5 material and 8 shape tests; solvers 36 unit, 24 selected Featherstone/runtime
+  and 11 heightfield/SDF tests. Total: 220 CPU tests/doctests, plus the live GPU
+  fallback test. This does not establish tractor/terrain acceptance.
+- Workspace `make check-all` and strict scoped Clippy passed. No external
+  dependencies, Makefile/environment changes or Gearbox edits were needed.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
-2. Complete shapes, collider/body editing and mass/impulse APIs.
+2. Complete convex decomposition, independently scaled heightfields and CPU
+   raycast, then collider/body editing and mass/impulse APIs.
 3. Finish joint editing, locking, motors and softness, including capture frames.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
