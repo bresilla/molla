@@ -7,7 +7,7 @@ use molla_sim::{Model, State};
 
 struct MassSolve {
     size: usize,
-    matrix: Vec<Real>,
+    singular: Option<crate::rigid_impulse::MassFactor>,
     factor: Option<Vec<Real>>,
 }
 
@@ -62,7 +62,11 @@ impl ArticulatedResponse {
                 && (0..n).all(|i| factor[i * n + i].powi(2) > scale * 1e-12);
             entry.insert(MassSolve {
                 size: n,
-                matrix,
+                singular: if factored {
+                    None
+                } else {
+                    Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?)
+                },
                 factor: factored.then_some(factor),
             });
         }
@@ -85,7 +89,7 @@ impl ArticulatedResponse {
                 mass.size,
             )?
         } else {
-            crate::rigid_impulse::solve_mass(&mass.matrix, &projected, mass.size)?
+            mass.singular.as_ref().unwrap().solve(&projected)?
         };
         let response = projected
             .iter()

@@ -3,7 +3,7 @@
 use molla_core::{Error, Result};
 use molla_math::{
     Real, SpatialVector,
-    dense_solve::{dense_chol_solve, dense_eig_sym},
+    dense_solve::{back_sub, dense_chol, dense_eig_sym, forward_sub},
 };
 use molla_sim::{MassProperties, Model, State, eval_body_velocities};
 
@@ -196,38 +196,160 @@ fn solve_constrained_mass(
 }
 
 pub(crate) fn solve_mass(matrix: &[Real], rhs: &[Real], n: usize) -> Result<Vec<Real>> {
-    if matrix.iter().chain(rhs).any(|v| !v.is_finite()) {
-        return Err(Error::Solver("non-finite impulse mass system".into()));
-    }
-    let scale = matrix.iter().copied().map(Real::abs).fold(0.0, Real::max);
-    if scale == 0.0 {
-        return Ok(vec![0.0; n]);
-    }
-    let normalized: Vec<Real> = matrix.iter().map(|v| v / scale).collect();
-    let rhs: Vec<Real> = rhs.iter().map(|v| v / scale).collect();
-    let mut factor = normalized.clone();
-    if let Ok(solution) = dense_chol_solve(&mut factor, &rhs, n)
-        && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12)
-    {
-        return Ok(solution);
-    }
-    let (values, vectors) = dense_eig_sym(&normalized, n)?;
-    let floor = values.iter().copied().fold(0.0, Real::max) * 1e-12;
-    let mut result = vec![0.0; n];
-    for (col, value) in values.into_iter().enumerate() {
-        if value < -floor {
-            return Err(Error::Solver("indefinite impulse mass matrix".into()));
+    MassFactor::new(matrix, n)?.solve(rhs)
+}
+
+/// Reusable normalized Cholesky or spectral pseudoinverse of one mass matrix.
+pub(crate) struct MassFactor {
+    n: usize,
+    scale: Real,
+    decomposition: MassDecomposition,
+}
+
+enum MassDecomposition {
+    Zero,
+    Cholesky(Vec<Real>),
+    Spectral {
+        values: Vec<Real>,
+        vectors: Vec<Real>,
+        floor: Real,
+    },
+}
+
+impl MassFactor {
+    pub(crate) fn new(matrix: &[Real], n: usize) -> Result<Self> {
+        if n.checked_mul(n) != Some(matrix.len()) || matrix.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Solver("invalid impulse mass matrix".into()));
         }
-        if value <= floor {
-            continue;
+        let scale = matrix.iter().copied().map(Real::abs).fold(0.0, Real::max);
+        let decomposition = if scale == 0.0 {
+            MassDecomposition::Zero
+        } else {
+            let normalized: Vec<Real> = matrix.iter().map(|v| v / scale).collect();
+            let mut factor = normalized.clone();
+            if dense_chol(&mut factor, n).is_ok()
+                && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12)
+            {
+                MassDecomposition::Cholesky(factor)
+            } else {
+                let (values, vectors) = dense_eig_sym(&normalized, n)?;
+                let floor = values.iter().copied().fold(0.0, Real::max) * 1e-12;
+                if values.iter().any(|&value| value < -floor) {
+                    return Err(Error::Solver("indefinite impulse mass matrix".into()));
+                }
+                MassDecomposition::Spectral {
+                    values,
+                    vectors,
+                    floor,
+                }
+            }
+        };
+        Ok(Self {
+            n,
+            scale,
+            decomposition,
+        })
+    }
+
+    pub(crate) fn solve(&self, rhs: &[Real]) -> Result<Vec<Real>> {
+        if rhs.len() != self.n || rhs.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Solver("invalid impulse mass right-hand side".into()));
         }
-        let weight = (0..n)
-            .map(|row| vectors[row * n + col] * rhs[row])
-            .sum::<Real>()
-            / value;
-        for row in 0..n {
-            result[row] += vectors[row * n + col] * weight;
+        let n = self.n;
+        if matches!(self.decomposition, MassDecomposition::Zero) {
+            return Ok(vec![0.0; n]);
+        }
+        let rhs: Vec<Real> = rhs.iter().map(|v| v / self.scale).collect();
+        match &self.decomposition {
+            MassDecomposition::Zero => unreachable!(),
+            MassDecomposition::Cholesky(factor) => {
+                back_sub(factor, &forward_sub(factor, &rhs, n)?, n)
+            }
+            MassDecomposition::Spectral {
+                values,
+                vectors,
+                floor,
+            } => {
+                let mut result = vec![0.0; n];
+                for (col, &value) in values.iter().enumerate() {
+                    if value <= *floor {
+                        continue;
+                    }
+                    let weight = (0..n)
+                        .map(|row| vectors[row * n + col] * rhs[row])
+                        .sum::<Real>()
+                        / value;
+                    for row in 0..n {
+                        result[row] += vectors[row * n + col] * weight;
+                    }
+                }
+                Ok(result)
+            }
         }
     }
-    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reusable_factors_match_analytic_full_and_reduced_rank_solutions() {
+        for scale in [1e-100, 1.0, 1e100] {
+            for singular in [false, true] {
+                let matrix = if singular {
+                    [2.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 3.0]
+                } else {
+                    [4.0, 1.0, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0, 2.0]
+                }
+                .map(|v| v * scale);
+                let factor = MassFactor::new(&matrix, 3).unwrap();
+                assert_eq!(
+                    matches!(factor.decomposition, MassDecomposition::Spectral { .. }),
+                    singular
+                );
+                for rhs in [[1.0, 0.0, 0.0], [0.0, -3.0, 5.0], [9.0, -7.0, 2.0]] {
+                    let expected = if singular {
+                        [
+                            (rhs[0] + rhs[1]) / 8.0,
+                            (rhs[0] + rhs[1]) / 8.0,
+                            rhs[2] / 3.0,
+                        ]
+                    } else {
+                        [
+                            (3.0 * rhs[0] - rhs[1]) / 11.0,
+                            (4.0 * rhs[1] - rhs[0]) / 11.0,
+                            rhs[2] / 2.0,
+                        ]
+                    };
+                    let actual = factor.solve(&rhs).unwrap();
+                    for (actual, expected) in actual.iter().zip(expected) {
+                        assert!((actual * scale - expected).abs() < 1e-12);
+                    }
+                    assert_eq!(actual, solve_mass(&matrix, &rhs, 3).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn factors_preserve_nullspace_cutoff_and_reject_invalid_systems() {
+        let factor = MassFactor::new(&[1.0, 0.0, 0.0, 1e-14], 2).unwrap();
+        assert_eq!(factor.solve(&[3.0, 4.0]).unwrap(), vec![3.0, 0.0]);
+        let zero = MassFactor::new(&[0.0; 4], 2).unwrap();
+        assert_eq!(zero.solve(&[3.0, 4.0]).unwrap(), vec![0.0; 2]);
+        assert!(zero.solve(&[f64::NAN, 0.0]).is_err());
+        assert!(zero.solve(&[0.0]).is_err());
+        assert!(MassFactor::new(&[1.0, 2.0, 2.0, 1.0], 2).is_err());
+        assert!(MassFactor::new(&[f64::INFINITY], 1).is_err());
+        assert!(MassFactor::new(&[1.0], 2).is_err());
+        assert!(MassFactor::new(&[], usize::MAX).is_err());
+        assert!(
+            MassFactor::new(&[], 0)
+                .unwrap()
+                .solve(&[])
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

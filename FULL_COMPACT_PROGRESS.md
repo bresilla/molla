@@ -1697,6 +1697,87 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   `/tmp/tyre-final-molla-tests.log`, `/tmp/tyre-final-rapier-tests.log`,
   `/tmp/tyre-final-gpu-parity.log`, `/tmp/tyre-final-native-build.log`.
 
+### Singular articulation response performance (2026-09-20)
+
+#### Goal
+
+- Continue the full `FULL_COMPACT.md` objective, specifically CPU tyre/rigid
+  performance. The preceding goal turn made concrete progress with GPU rubber
+  rendering; general performance and all acceptance scenes remain incomplete.
+
+#### Instructions
+
+- Preserve the original Gearbox checkout and active instance. No original
+  Gearbox edits, launches, stops or merges were made during this continuation.
+- Keep solver accuracy, eight substeps and 120 Hz unchanged. The synthetic
+  benchmark below is not proof of the imported Kubota performance gate.
+
+#### Discoveries
+
+- `ArticulatedResponse` already cached full-rank Cholesky factors per substep,
+  but its singular/ill-conditioned fallback reran normalization and spectral
+  decomposition for each wheel's wrench. Locked D6 coordinates exercise this
+  path. All wheel responses in one `apply` share the same kinematic state.
+- The checked-in Makefile expects an absent `PROJECT` file. Native test recipes
+  run with command-line `PROJECT_NAME=molla PROJECT_VERSION=0.0.1` overrides;
+  no environment, recipe or project metadata file was edited. A harmless
+  missing-PROJECT `sed` diagnostic still appears during shell setup.
+- Engram tools remain unavailable; this tracked checkpoint is the handoff.
+
+#### Accomplished
+
+- Extracted a reusable normalized `MassFactor` for Cholesky/spectral solves.
+  Singular tyre response now factors once per articulation per substep and
+  reuses the result across wheel wrenches. The existing full-rank fast path,
+  eigenvalue cutoff, nullspace behavior and indefinite-mass rejection remain.
+  The cache is still scoped to one `WheelForces::apply`, not persisted across
+  pose/topology changes.
+- Added analytic full/rank-deficient factor tests over scales 1e-100 through
+  1e100, repeated RHS solves, nullspace threshold, malformed/nonfinite inputs,
+  indefinite systems and zero-dimensional systems.
+- Added a 4,910 kg synthetic 26-body fixture with four pressure tyres, a
+  partially locked D6 accessory and eight substeps. It checks force support,
+  no quarantines, no accumulated transient forces, actual driving velocity
+  and exact two-run replay. An ignored release timing test runs idle/driving
+  workloads after settling. It does not use real imported mesh colliders.
+- Before: median idle 0.36505 ms/step; driving 0.43387 ms/step. Final repeat:
+  idle 0.30681 ms/step; driving 0.35890 ms/step (approximately 16% and 17%
+  reductions). Pressure geometry, force models and solver settings were not
+  simplified. Five 240-step batches were measured in each phase.
+- Full CPU solver lib/integration run with `--no-fail-fast --test-threads=1`:
+  369 passed, 1 failed, 2 ignored across 87 test binaries. The failure is
+  `mesh_bvh_perf::bvh_accelerates_sphere_on_grid_mesh`: 256.5 microseconds versus
+  its 200 microsecond release budget; an earlier run measured 238.6. This test
+  directly calls collision generation, not the changed mass solve. The full
+  suite must not be reported green, and the threshold was not relaxed.
+- Isolated Gearbox binary regression tests pass for both Molla and Rapier
+  selection (78 each, one GPU test ignored per run). Its running viewer was
+  not rebuilt/restarted to claim a new live-frame or real-Kubota timing.
+
+#### Next Steps
+
+- Investigate the repeatedly failing mesh BVH collision performance gate;
+  inspect geometry preparation and candidate traversal before changing code.
+- Benchmark the real imported machine and fleet/terrain scenes after rebuilding
+  the isolated Gearbox binary. Synthetic under-1-ms timings do not satisfy
+  the real-machine acceptance requirement.
+- Continue the remaining full-goal lifecycle, sleeping, pressure, terrain,
+  hitch/towing, slope and deterministic replay acceptance work.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/rigid_impulse.rs` — reusable factorization and tests.
+- `crates/molla-solvers/src/articulated_response.rs` — per-substep factor reuse.
+- `crates/molla-solvers/tests/rigid_performance.rs` — synthetic CPU workload.
+- `/tmp/molla-rigid-perf-before.log`, `/tmp/molla-rigid-perf-after.log`,
+  `/tmp/molla-rigid-perf-final.log`, `/tmp/molla-mass-factor-full-tests.log`,
+  `/tmp/gearbox-mass-factor-molla-tests.log`,
+  `/tmp/gearbox-mass-factor-rapier-tests.log` — validation evidence.
+- Reproduce the timing test through the native recipe:
+  `nix develop --impure -c make test PROJECT_NAME=molla PROJECT_VERSION=0.0.1
+  APP_TARGET='-p molla-solvers --release --test rigid_performance --
+  --include-ignored --nocapture --test-threads=1'` (join onto one command line).
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
