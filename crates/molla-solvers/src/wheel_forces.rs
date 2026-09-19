@@ -249,6 +249,7 @@ impl WheelForces {
         let poses = state.body_q.host()?;
         let velocities = state.body_qd.host()?;
         let model = scene.model();
+        let mut response = crate::articulated_response::ArticulatedResponse::default();
         for w in self.wheels.values().filter(|w| active(scene, w)) {
             let body = scene
                 .body_index(w.body)
@@ -317,7 +318,23 @@ impl WheelForces {
                 normal_stiffness: w.normal_stiffness,
                 normal_damping: w.normal_damping,
             };
-            let output = wheel_ground_wrench(&contact, &terrain, w.tire.as_ref());
+            let mut output = wheel_ground_wrench(&contact, &terrain, w.tire.as_ref());
+            if output.in_contact {
+                let tangent = Vec3::from_array(output.force) - normal * output.fz;
+                let point = Vec3::from_array(output.contact_point);
+                let wrench = SpatialVector::new(
+                    tangent,
+                    (point - center).cross(tangent) + normal * output.aligning_moment,
+                );
+                let power = wrench.linear.dot(velocities[body].linear)
+                    + wrench.angular.dot(velocities[body].angular);
+                let mobility = response.quadratic(model, state, body, wrench)?;
+                if mobility > 0.0 {
+                    let scale = (-power / (dt * mobility)).clamp(0.0, 1.0);
+                    output.force = (normal * output.fz + tangent * scale).to_array();
+                    output.aligning_moment *= scale;
+                }
+            }
             let force = Vec3::from_array(output.force);
             let point = Vec3::from_array(output.contact_point);
             let torque = (point - center).cross(force) + normal * output.aligning_moment;

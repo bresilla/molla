@@ -46,6 +46,7 @@ impl RigidWorld {
             scene,
             solver: FeatherstoneSolver::new_cpu()
                 .with_rigorous_d_solve(true)
+                .with_stable_motor_feedback(true)
                 .with_substeps(8),
             wheels: crate::wheel_forces::WheelForces::default(),
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),

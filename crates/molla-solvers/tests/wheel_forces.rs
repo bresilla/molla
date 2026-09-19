@@ -139,6 +139,32 @@ fn contact_force_reacts_against_wheel_spin_without_a_second_spin_integrator() {
 }
 
 #[test]
+fn tyre_friction_stops_slip_without_reversing_it() {
+    for dt in [0.005, 0.01, 0.1] {
+        for direction in [-1.0, 1.0] {
+            let (mut w, chassis, _, spin, _) = fixture(true);
+            let joint = w.scene.joint_index(spin).unwrap().index();
+            let offset = w.scene.model().joint_dof_offset.host().unwrap()[joint] as usize;
+            let initial_spin = 0.01 * direction;
+            w.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = initial_spin;
+            w.solver.substeps = 1;
+            w.step(dt).unwrap();
+            let sample = &w.wheels.samples(&w.scene)[0];
+            let impulse = sample.output.force[0] * dt;
+            let expected = initial_spin * 0.5 / (1.0 / 110.0 + 0.25);
+            assert!((impulse - expected).abs() < 1e-10);
+            assert!((sample.output.fz - 1000.0).abs() < 1e-8);
+            let speed = w.scene.body_velocity(chassis).unwrap().linear.x;
+            let spin = w.scene.state().joint_qd.host().unwrap()[offset];
+            assert!((speed - impulse / 110.0).abs() < 1e-10);
+            assert!((spin - initial_spin + 0.5 * impulse).abs() < 1e-10);
+            assert!((spin * 0.5 - speed).abs() < 1e-10);
+            assert!(110.0 * speed * speed + spin * spin < initial_spin * initial_spin);
+        }
+    }
+}
+
+#[test]
 fn joint_drive_torque_spins_the_wheel_and_drives_the_carrier() {
     let (mut w, chassis, wheel, spin, _) = fixture(true);
     w.scene
@@ -167,6 +193,137 @@ fn joint_drive_torque_spins_the_wheel_and_drives_the_carrier() {
             .all(|s| s.output.in_contact && s.output.slip_ratio > 0.0)
     );
     assert!(w.quarantined_bodies().is_empty());
+}
+
+#[test]
+fn straight_velocity_drive_with_traction_control_accelerates() {
+    let (mut w, chassis, wheel, spin, _) = fixture(true);
+    let mut desc = descriptor(chassis, wheel, spin);
+    desc.tire = Arc::new(molla_vehicle::TmSimpleTire {
+        c_kappa: 10_000.0,
+        c_alpha: 8_000.0,
+        pneumatic_trail: 0.015,
+    });
+    w.wheels.insert(&w.scene, desc).unwrap();
+    for _ in 0..120 {
+        let speed = w.scene.body_velocity(chassis).unwrap().linear.x;
+        let surface_speed = 2.0_f64.min(speed + 0.08 * speed.abs() + 0.15).max(0.0);
+        w.scene
+            .set_joint_motor(
+                spin,
+                JointAxis::AngX,
+                JointMotor {
+                    mode: JointTargetMode::Velocity,
+                    target_velocity: surface_speed / 0.5,
+                    damping: 2250.0,
+                    max_force: 225.0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        w.step(1.0 / 120.0).unwrap();
+    }
+    let speed = w.scene.body_velocity(chassis).unwrap().linear.x;
+    assert!(speed > 1.0, "straight speed {speed}");
+}
+
+#[test]
+fn tractor_mass_mixed_wheels_accelerate_straight() {
+    for substeps in [4, 8, 16] {
+        for direction in [-1.0, 1.0] {
+            let speed = tractor_straight_speed(substeps, direction);
+            assert!(
+                (1.8..2.2).contains(&speed),
+                "tractor straight speed {speed}, substeps {substeps}, direction {direction}"
+            );
+        }
+    }
+}
+
+fn tractor_straight_speed(substeps: usize, direction: f64) -> f64 {
+    let mut w = RigidWorld::new().unwrap();
+    w.solver.substeps = substeps;
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    let chassis = body(&mut w, 4397.0);
+    w.scene
+        .insert_joint(JointDesc {
+            parent: None,
+            child: chassis,
+            kind: JointType::Prismatic,
+            axis: Vec3::X,
+            frame_parent: Transform::IDENTITY,
+            frame_child: Transform::IDENTITY,
+        })
+        .unwrap();
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(100.0, 0.01, 10.0),
+    });
+    ground_desc.friction = 1.4;
+    let ground = w.scene.insert_collider(ground_desc).unwrap();
+    w.wheels.register_ground(&w.scene, ground, None).unwrap();
+    let mut wheels = Vec::new();
+    let load = 4917.0 * 9.81 / 4.0;
+    for (i, radius) in [0.6, 0.6, 0.85, 0.85].into_iter().enumerate() {
+        let wheel = body(&mut w, 130.0);
+        w.scene
+            .set_body_mass_properties(
+                wheel,
+                MassProperties {
+                    mass: 130.0,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::IDENTITY * 15.6,
+                },
+            )
+            .unwrap();
+        let spin = w
+            .scene
+            .insert_joint(JointDesc {
+                parent: Some(chassis),
+                child: wheel,
+                kind: JointType::Revolute,
+                axis: -Vec3::Z,
+                frame_parent: Transform::from_translation(Vec3::new(
+                    if i < 2 { 1.4 } else { -1.4 },
+                    radius * 0.96 + 0.01,
+                    if i % 2 == 0 { 1.0 } else { -1.0 },
+                )),
+                frame_child: Transform::IDENTITY,
+            })
+            .unwrap();
+        let mut desc = descriptor(chassis, wheel, spin);
+        desc.radius = radius;
+        desc.normal_stiffness = load / (0.04 * radius);
+        desc.tire = Arc::new(molla_vehicle::TmSimpleTire {
+            c_kappa: 10.0 * load,
+            c_alpha: 8.0 * load,
+            pneumatic_trail: 0.03 * radius,
+        });
+        w.wheels.insert(&w.scene, desc).unwrap();
+        wheels.push((wheel, spin, radius));
+    }
+    for _ in 0..600 {
+        let speed = direction * w.scene.body_velocity(chassis).unwrap().linear.x;
+        for &(_, spin, radius) in &wheels {
+            let torque = (0.9 * 1.4 * load * radius).min(6000.0);
+            w.scene
+                .set_joint_motor(
+                    spin,
+                    JointAxis::AngX,
+                    JointMotor {
+                        mode: JointTargetMode::Velocity,
+                        target_velocity: direction
+                            * 2.0_f64.min(speed + 0.08 * speed.abs() + 0.15).max(0.0)
+                            / radius,
+                        damping: torque / 0.1,
+                        max_force: torque,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        w.step(1.0 / 120.0).unwrap();
+    }
+    direction * w.scene.body_velocity(chassis).unwrap().linear.x
 }
 
 #[test]

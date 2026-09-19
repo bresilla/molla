@@ -152,7 +152,7 @@ fn acceleration_gains_are_mass_and_inertia_independent() {
         near(velocities[0], velocities[1]);
         near(
             velocities[0],
-            2.0 * (1.0 - (1.0_f64 - 3.0 * 0.1 / 8.0).powi(8)),
+            2.0 * (1.0 - (1.0_f64 + 3.0 * 0.1 / 8.0).powi(-8)),
         );
     }
 }
@@ -179,11 +179,79 @@ fn acceleration_motor_uses_floating_parent_effective_mass() {
         .unwrap();
     world.step(0.1).unwrap();
     let relative = world.scene.state().joint_qd.host().unwrap()[offset(&world, j)];
-    near(relative, 2.0 * (1.0 - (1.0_f64 - 3.0 * 0.1 / 8.0).powi(8)));
+    near(relative, 2.0 * (1.0 - (1.0_f64 + 3.0 * 0.1 / 8.0).powi(-8)));
     let pv = world.scene.body_velocity(parent).unwrap().linear.y;
     let cv = world.scene.body_velocity(child).unwrap().linear.y;
     near(cv - pv, relative);
     near(3.0 * pv + 12.0 * cv, 0.0);
+}
+
+#[test]
+fn explicit_motor_feedback_remains_available() {
+    assert!(!molla_solvers::FeatherstoneSolver::new_cpu().stable_motor_feedback);
+    let mut w = world();
+    w.solver.stable_motor_feedback = false;
+    let b = body(&mut w, 2.0);
+    let j = joint(&mut w, None, b, JointType::Prismatic);
+    w.scene
+        .set_joint_motor(
+            j,
+            JointAxis::LinX,
+            JointMotor {
+                mode: JointTargetMode::Velocity,
+                target_velocity: 2.0,
+                damping: 3.0,
+                model: MotorModel::Acceleration,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    w.step(0.1).unwrap();
+    near(
+        w.scene.body_velocity(b).unwrap().linear.y,
+        2.0 * (1.0 - (1.0_f64 - 3.0 * 0.1 / 8.0).powi(8)),
+    );
+}
+
+#[test]
+fn stiff_velocity_motor_converges_without_overshoot() {
+    for model in [MotorModel::Force, MotorModel::Acceleration] {
+        for direction in [-1.0, 1.0] {
+            let mut w = world();
+            w.solver.substeps = 1;
+            let parent = body(&mut w, 3.0);
+            let child = body(&mut w, 12.0);
+            let j = joint(&mut w, Some(parent), child, JointType::Prismatic);
+            w.scene
+                .set_joint_motor(
+                    j,
+                    JointAxis::LinX,
+                    JointMotor {
+                        mode: JointTargetMode::Velocity,
+                        target_velocity: 2.0 * direction,
+                        damping: 60_000.0,
+                        max_force: 6000.0,
+                        model,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let mut previous = 0.0;
+            for _ in 0..20 {
+                w.step(1.0 / 120.0).unwrap();
+                let speed = direction * w.scene.state().joint_qd.host().unwrap()[offset(&w, j)];
+                assert!(
+                    speed >= previous - 1e-12 && speed <= 2.0 + 1e-12,
+                    "{model:?}: {previous} -> {speed}"
+                );
+                let pv = w.scene.body_velocity(parent).unwrap().linear.y;
+                let cv = w.scene.body_velocity(child).unwrap().linear.y;
+                near(3.0 * pv + 12.0 * cv, 0.0);
+                previous = speed;
+            }
+            assert!(previous > 1.99);
+        }
+    }
 }
 
 #[test]

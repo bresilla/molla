@@ -812,6 +812,47 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   regression-driven investigation. The failed scene is paused, with the
   original successful Kubota viewer in its separate instance unchanged.
 
+### Straight-line tractor drive stability
+
+- Scope: fix the reported straight-drive failure in Molla and validate through
+  the isolated `gearbox-physics` worktree. No original Gearbox checkout edits,
+  merges, branch changes or pushes. The broader FULL_COMPACT goal stays paused.
+- Reproduced with the real Kubota at forward 2, turn 0: only about 0.35 m/s
+  after five wall-clock seconds, with front/rear slip opposing each other.
+  A 4917 kg/four-wheel fixture with 130 kg wheels, 15.6 kg m2 spin inertia,
+  mixed radii and Meadow friction 1.4 reproduced the cancellation. Friction
+  0.5 did not reproduce it. Tyre limiting alone and motor stabilization alone
+  both failed the high-grip regression; the combined change passes.
+- `FeatherstoneSolver::with_stable_motor_feedback` applies per-DOF
+  effective-inertia backward-Euler feedback, followed by the authored motor
+  effort cap. `RigidWorld` enables it. Low-level solvers retain their explicit
+  default; GPU use of the new option returns an error instead of silently
+  changing semantics. This is a diagonal motor approximation, not a coupled
+  implicit motor/contact solve including external-acceleration prediction.
+- `wheel_forces.rs` bounds each tangential tyre wrench by its current-state
+  maximum-dissipation impulse using `w^T J M^-1 J^T w`. Mass factorizations are
+  cached only within a substep. Normal support is unchanged and Featherstone
+  remains the only rigid/spin integrator. This is a per-wheel bound, not a
+  global passivity proof for simultaneous wheels, motors and terrain forces.
+- Rebuilt live Kubota reaches approximately 2.01 m/s with zero steering and
+  negligible heading change. Reverse reaches about 2.02 m/s backwards; a zero
+  command stops it. Turning still reaches about 0.4 rad/s during the turn.
+  Viewer was relaunched as `molla-straight-fixed`; inspected screenshot:
+  `/tmp/molla-straight-fixed-final.png`. CLI timing and user interaction are
+  not deterministic fixed-step acceptance evidence.
+- CPU regressions include straight drive in both directions at 4/8/16
+  substeps, analytic slip stopping without reversal or energy gain, stiff
+  force/acceleration motors, preserved momentum, and explicit-mode retention.
+  Broad solver run: 358 passed, one existing ignored MPM stress gate. After
+  final option/guard changes, solver unit/control/compliance/loop/wheel lanes
+  pass (39/14/8/3/11 tests). Workspace check and strict all-feature/no-default
+  solver Clippy pass. Isolated Gearbox binary tests pass 59/59 with either
+  backend selection. Logs: `/tmp/molla-straight-*.log` and
+  `/tmp/gearbox-straight-*.log`; live JSON `/tmp/molla-straight-fixed-*.json`.
+- GPU stabilization parity, global coupled contact stability, towing and
+  performance remain unverified/incomplete; this fixes the reported drive
+  regression, not the whole integration plan.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

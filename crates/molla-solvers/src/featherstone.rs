@@ -78,6 +78,8 @@ pub struct FeatherstoneSolver {
     /// Number of substeps per outer `step` call. Each substep advances
     /// `dt/substeps`. Default 1.
     pub substeps: usize,
+    /// CPU feedback gains use a per-DOF effective-inertia backward-Euler denominator.
+    pub stable_motor_feedback: bool,
     /// Stage 17.1 polish: when `true`, the backward ABA pass builds the
     /// full per-joint `D = S^T · I^A · S` matrix and solves
     /// `D · q̈ = u_tau` via dense Cholesky instead of the v1 sequential
@@ -109,6 +111,7 @@ impl FeatherstoneSolver {
         Self {
             joint_damping: 0.0,
             substeps: 1,
+            stable_motor_feedback: false,
             rigorous_d_solve: false,
             rigorous_distance: true,
             backend: FeatherstoneBackend::Cpu,
@@ -143,6 +146,7 @@ impl FeatherstoneSolver {
         Ok(Self {
             joint_damping: 0.0,
             substeps: 1,
+            stable_motor_feedback: false,
             rigorous_d_solve: false,
             rigorous_distance: true,
             backend: FeatherstoneBackend::Gpu(GpuBackend {
@@ -160,6 +164,13 @@ impl FeatherstoneSolver {
     #[must_use]
     pub fn with_damping(mut self, d: Real) -> Self {
         self.joint_damping = d;
+        self
+    }
+
+    /// Enable CPU effective-inertia stabilization of feedback motors.
+    #[must_use]
+    pub fn with_stable_motor_feedback(mut self, enabled: bool) -> Self {
+        self.stable_motor_feedback = enabled;
         self
     }
 
@@ -307,6 +318,11 @@ impl Solver for FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
+        if self.is_gpu() && self.stable_motor_feedback {
+            return Err(crate::core::Error::Solver(
+                "stable motor feedback requires CPU Featherstone".into(),
+            ));
+        }
         if self.is_gpu()
             && model
                 .joint_compliance
@@ -476,6 +492,7 @@ impl FeatherstoneSolver {
                     dt,
                     state_out,
                     self.joint_damping,
+                    self.stable_motor_feedback,
                     self.rigorous_d_solve,
                     self.rigorous_distance,
                     &mut self.contact_forces,
@@ -676,6 +693,7 @@ fn cpu_step(
     dt: Real,
     state_out: &mut State,
     joint_damping: Real,
+    stable_motor_feedback: bool,
     rigorous_d_solve: bool,
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
@@ -734,7 +752,8 @@ fn cpu_step(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
-    let motor_inertias = effective_drive_inertias(model, state_out, control)?;
+    let motor_inertias =
+        effective_drive_inertias(model, state_out, control, stable_motor_feedback)?;
 
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
@@ -788,6 +807,7 @@ fn cpu_step(
     let target_kp = control.joint_target_kp.host()?;
     let target_kd = control.joint_target_kd.host()?;
     let motor_max_force = control.joint_motor_max_force.host()?;
+    let motor_models = control.joint_motor_model.host()?;
 
     // ── Per-joint scratch — indexed by joint id ──────────────────────
     let mut v_body = vec![SpatialVector::ZERO; n]; // body spatial velocity
@@ -960,13 +980,28 @@ fn cpu_step(
                         }
                         JointTargetMode::Effort => pos_t,
                     };
-                    let scale = if mode == JointTargetMode::Effort {
-                        1.0
+                    let scale =
+                        if mode != JointTargetMode::Effort && motor_models.get(dof_g) == Some(&1) {
+                            motor_inertias[dof_g]
+                        } else {
+                            1.0
+                        };
+                    let implicit_drive = if stable_motor_feedback
+                        && (1..=3).contains(&(mode as u32))
+                        && motor_inertias[dof_g] > 0.0
+                    {
+                        let stiffness = if mode == JointTargetMode::Velocity {
+                            0.0
+                        } else {
+                            kp
+                        };
+                        (drive - stiffness * dt * qd_now) * scale
+                            / (1.0 + (kd + stiffness * dt) * scale * dt / motor_inertias[dof_g])
                     } else {
-                        motor_inertias[dof_g]
+                        drive * scale
                     };
                     let drive_torque = clamp_or_passthrough(
-                        drive * scale,
+                        implicit_drive,
                         motor_max_force
                             .get(dof_g)
                             .copied()
@@ -1708,14 +1743,20 @@ fn project_angular_limits(
     (rotation, velocity)
 }
 
-/// Compute 1 / (M^-1)[i,i] for active acceleration motors and joint springs.
-fn effective_drive_inertias(model: &Model, state: &State, control: &Control) -> Result<Vec<Real>> {
+/// Compute 1 / (M^-1)[i,i] for active feedback motors and joint springs.
+fn effective_drive_inertias(
+    model: &Model,
+    state: &State,
+    control: &Control,
+    stable_feedback: bool,
+) -> Result<Vec<Real>> {
     let mut result = vec![1.0; model.joint_dof_total];
     let models = control.joint_motor_model.host()?;
     let modes = control.joint_target_mode.host()?;
     let compliance = model.joint_compliance.host()?;
     let requested = |dof: usize| {
-        (models.get(dof) == Some(&1) && modes.get(dof).is_some_and(|m| (1..=3).contains(m)))
+        ((stable_feedback || models.get(dof) == Some(&1))
+            && modes.get(dof).is_some_and(|m| (1..=3).contains(m)))
             || compliance
                 .get(dof)
                 .is_some_and(|c| c.enabled != 0 && c.natural_frequency > 0.0)
