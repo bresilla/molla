@@ -484,6 +484,7 @@ pub struct ModelBuilder {
     joint_friction: Vec<Real>,
     joint_effort_limit: Vec<Real>,
     joint_velocity_limit: Vec<Real>,
+    joint_compliance: Vec<crate::joint_control::JointCompliance>,
 
     // Articulation CSR — joint `i` is in articulation `a` iff
     // `articulation_start[a] <= i < articulation_start[a+1]`.
@@ -2159,6 +2160,8 @@ impl ModelBuilder {
             self.joint_friction.push(0.0);
             self.joint_effort_limit.push(Real::NAN);
             self.joint_velocity_limit.push(Real::NAN);
+            self.joint_compliance
+                .push(crate::joint_control::JointCompliance::DISABLED);
         }
         // Joint world inherits from the child body's world.
         let child_world = self.body_world.get(child.0 as usize).copied().unwrap_or(0);
@@ -2204,6 +2207,7 @@ impl ModelBuilder {
     /// back-compat alias — substituted at finalize) to leave a bound
     /// unset. For multi-DOF joints (e.g. `Free`, future ball/D6),
     /// `lower` and `upper` must have length = `joint.dof_count()`.
+    /// Replaces any compliant bounds on this joint.
     pub fn set_joint_limits(
         &mut self,
         joint: JointId,
@@ -2243,6 +2247,46 @@ impl ModelBuilder {
         }
         self.joint_limit_lower[start..end].copy_from_slice(lower);
         self.joint_limit_upper[start..end].copy_from_slice(upper);
+        self.joint_compliance[start..end].fill(crate::joint_control::JointCompliance::DISABLED);
+        Ok(())
+    }
+
+    /// Replace D6 hard bounds with mass-scaled spring intervals (Hz, damping ratio).
+    pub fn set_joint_compliance(
+        &mut self,
+        joint: JointId,
+        softness: crate::joint_control::JointSoftness,
+        lower: &[Real; 6],
+        upper: &[Real; 6],
+    ) -> Result<()> {
+        softness.validate()?;
+        let (start, end) = self.joint_dof_range(joint, "set_joint_compliance")?;
+        if self.joint_type[joint.index()] != crate::JointType::D6 as u32 {
+            return Err(Error::Build("joint compliance requires a D6 joint".into()));
+        }
+        let mut records = [crate::joint_control::JointCompliance::DISABLED; 6];
+        for (i, record) in records.iter_mut().enumerate() {
+            let (lo, hi) = (lower[i], upper[i]);
+            if lo.is_nan()
+                || hi.is_nan()
+                || lo == Real::INFINITY
+                || hi == Real::NEG_INFINITY
+                || lo > hi
+            {
+                return Err(Error::Build("invalid compliant joint interval".into()));
+            }
+            *record = crate::joint_control::JointCompliance {
+                enabled: u32::from(lo.is_finite() || hi.is_finite()),
+                padding: 0,
+                lower: lo,
+                upper: hi,
+                natural_frequency: softness.natural_frequency,
+                damping_ratio: softness.damping_ratio,
+            };
+        }
+        self.joint_compliance[start..end].copy_from_slice(&records);
+        self.joint_limit_lower[start..end].fill(Real::NEG_INFINITY);
+        self.joint_limit_upper[start..end].fill(Real::INFINITY);
         Ok(())
     }
 
@@ -3105,6 +3149,7 @@ impl ModelBuilder {
             joint_friction: Buffer::from_vec(self.joint_friction, s),
             joint_effort_limit: Buffer::from_vec(self.joint_effort_limit, s),
             joint_velocity_limit: Buffer::from_vec(self.joint_velocity_limit, s),
+            joint_compliance: Buffer::from_vec(self.joint_compliance, s),
 
             articulation_count,
             articulation_start: Buffer::from_vec(self.articulation_start, s),

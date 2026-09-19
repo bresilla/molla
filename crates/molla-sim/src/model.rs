@@ -767,6 +767,7 @@ pub struct Model {
     /// Per-DOF velocity cap (rad/s or m/s). `NaN` = unlimited.
     /// Post-step `qd` is clamped to `[−velocity_limit, +velocity_limit]`.
     pub joint_velocity_limit: Buffer<Real>,
+    pub joint_compliance: Buffer<crate::joint_control::JointCompliance>,
 
     // ── Articulations ───────────────────────────────────────────────
     /// Number of independent articulations (kinematic chains). The
@@ -1064,6 +1065,7 @@ impl Model {
             joint_friction: Buffer::from_vec(Vec::new(), s),
             joint_effort_limit: Buffer::from_vec(Vec::new(), s),
             joint_velocity_limit: Buffer::from_vec(Vec::new(), s),
+            joint_compliance: Buffer::from_vec(Vec::new(), s),
 
             articulation_count: 0,
             articulation_start: Buffer::from_vec(vec![0u32], s),
@@ -1212,6 +1214,7 @@ impl Model {
         up!(joint_friction);
         up!(joint_effort_limit);
         up!(joint_velocity_limit);
+        up!(joint_compliance);
         up!(articulation_start);
         up!(articulation_world);
         up!(joint_world);

@@ -546,6 +546,48 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   tools remain unavailable. Original full-goal and live acceptance scope remain
   unchanged.
 
+### CPU joint-compliance force foundation
+
+- Added validated `JointSoftness` (natural frequency in Hz, damping ratio),
+  per-DOF `JointCompliance` storage and an f32 device mirror. Every authored
+  DOF gets a disabled record. `ModelBuilder::set_joint_compliance` replaces
+  D6 hard limits with spring intervals; setting hard limits removes those
+  springs. Invalid authoring is rejected before any bounds are changed.
+- CPU Featherstone evaluates spring forces into transient body wrenches before
+  ABA, sharing the acceleration-motor CRBA effective-inertia calculation:
+  `1 / (M^-1)[i,i]`. Equal/opposite forces and torques use the shared moving
+  joint pivot, including offset COMs, rotated frames and reversed traversal.
+  Persistent caller wrenches do not accumulate the spring contribution.
+- Equality intervals act as springs, bounded intervals act only outside their
+  bounds and cannot pull toward an escaped side, and unbounded axes stay free.
+  Zero natural frequency releases the constraint without damping. The force
+  uses scalar backward-Euler regularization, not a second rigid-body solver.
+  This regularization has timestep-dependent static compliance: for an isolated
+  critically damped axis, the stiffness is divided by `(1 + omega*dt)^2`.
+  It is not a fully coupled implicit spring solve. Angular displacement uses
+  the existing D6 XYZ chart; multi-turn revolute phase remains a runtime concern.
+- Eight integration tests and one wrench-level oracle cover analytic one-step
+  response, 8/30 Hz capture settings, isolated 1000 Hz stability, static load,
+  zero frequency, unilateral bounds, invalid edits, input preservation and
+  1000:1 floating pairs in both traversal directions. The offset/rotated-frame
+  oracle verifies net world force/torque and generalized virtual work.
+- Selected CPU regressions pass: sim 30, geometry 151, solvers 146 (327 total).
+  New integration tests also pass without default features. Workspace
+  `make check-all`, strict scoped Clippy with all/no-default features and diff
+  checks pass. Gearbox binary tests were rerun in its Nix environment with
+  explicit Molla and Rapier selection: 51/51 each. Its existing all-target
+  and lint limitations above remain unchanged; no live acceptance was run.
+- This is the low-level force foundation only. `RigidScene` does not yet
+  author compliance, and Gearbox's softness setter still warns and retains
+  rigid behavior. GPU Featherstone rejects enabled compliance explicitly.
+  No Gearbox, dependency, environment, Makefile or specification files changed.
+  Engram tools remain unavailable; this checkpoint preserves the work.
+- Next: lower soft runtime joints to D6 while retaining logical kind/handles;
+  align scalar axes with both local frames, migrate semantic motor slots across
+  hard/soft layouts, and reseed soft coordinates from live body kinematics.
+  Capture-frame edits must change the spring rest frame without teleporting
+  bodies. Only then wire Gearbox's 8-to-30 Hz hitch capture and test its motion.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

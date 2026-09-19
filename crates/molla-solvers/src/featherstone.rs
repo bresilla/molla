@@ -307,6 +307,17 @@ impl Solver for FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
+        if self.is_gpu()
+            && model
+                .joint_compliance
+                .host()?
+                .iter()
+                .any(|c| c.enabled != 0)
+        {
+            return Err(crate::core::Error::Solver(
+                "joint compliance requires CPU Featherstone".into(),
+            ));
+        }
         if !dt.is_finite() || dt <= 0.0 {
             return Err(crate::core::Error::Solver(
                 "step dt must be positive and finite".into(),
@@ -723,7 +734,7 @@ fn cpu_step(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
-    let motor_inertias = effective_motor_inertias(model, state_out, control)?;
+    let motor_inertias = effective_drive_inertias(model, state_out, control)?;
 
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
@@ -738,6 +749,7 @@ fn cpu_step(
 
     let body_q = state_out.body_q.host()?.to_vec();
     let mut body_f_in = state_in.body_f.host()?.to_vec();
+    crate::joint_compliance::apply(model, state_out, &motor_inertias, dt, &mut body_f_in)?;
     *contact_forces =
         crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?;
     let body_mass = model.body_mass.host()?;
@@ -1696,13 +1708,17 @@ fn project_angular_limits(
     (rotation, velocity)
 }
 
-/// Compute 1 / (M^-1)[i,i] for each active acceleration motor.
-fn effective_motor_inertias(model: &Model, state: &State, control: &Control) -> Result<Vec<Real>> {
+/// Compute 1 / (M^-1)[i,i] for active acceleration motors and joint springs.
+fn effective_drive_inertias(model: &Model, state: &State, control: &Control) -> Result<Vec<Real>> {
     let mut result = vec![1.0; model.joint_dof_total];
     let models = control.joint_motor_model.host()?;
     let modes = control.joint_target_mode.host()?;
+    let compliance = model.joint_compliance.host()?;
     let requested = |dof: usize| {
-        models.get(dof) == Some(&1) && modes.get(dof).is_some_and(|m| (1..=3).contains(m))
+        (models.get(dof) == Some(&1) && modes.get(dof).is_some_and(|m| (1..=3).contains(m)))
+            || compliance
+                .get(dof)
+                .is_some_and(|c| c.enabled != 0 && c.natural_frequency > 0.0)
     };
     if !(0..model.joint_dof_total).any(requested) {
         return Ok(result);
@@ -1726,7 +1742,7 @@ fn effective_motor_inertias(model: &Model, state: &State, control: &Control) -> 
         let mass = crate::mass_matrix(model, state, articulation)?;
         if mass.iter().any(|v| !v.is_finite()) {
             return Err(crate::core::Error::Solver(
-                "non-finite motor inertia".into(),
+                "non-finite drive inertia".into(),
             ));
         }
         let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);

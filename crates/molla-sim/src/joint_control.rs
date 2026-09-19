@@ -4,6 +4,105 @@ use crate::{Control, JointTargetMode, JointType};
 use molla_core::{Error, Result};
 use molla_math::Real;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JointSoftness {
+    pub natural_frequency: Real,
+    pub damping_ratio: Real,
+}
+
+impl JointSoftness {
+    pub fn validate(self) -> Result<()> {
+        let omega = std::f64::consts::TAU * self.natural_frequency;
+        if !self.natural_frequency.is_finite()
+            || self.natural_frequency < 0.0
+            || !self.damping_ratio.is_finite()
+            || self.damping_ratio < 0.0
+            || !(omega * omega).is_finite()
+            || !(2.0 * self.damping_ratio * omega).is_finite()
+        {
+            return Err(Error::Build("invalid joint softness".into()));
+        }
+        Ok(())
+    }
+}
+
+/// Per-DOF spring interval; inactive records apply no constraint force.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct JointCompliance {
+    pub enabled: u32,
+    pub padding: u32,
+    pub lower: Real,
+    pub upper: Real,
+    pub natural_frequency: Real,
+    pub damping_ratio: Real,
+}
+
+impl JointCompliance {
+    pub fn validate(self) -> Result<()> {
+        if self.enabled > 1
+            || self.lower.is_nan()
+            || self.upper.is_nan()
+            || self.lower == Real::INFINITY
+            || self.upper == Real::NEG_INFINITY
+            || self.lower > self.upper
+        {
+            return Err(Error::Build("invalid compliant joint interval".into()));
+        }
+        JointSoftness {
+            natural_frequency: self.natural_frequency,
+            damping_ratio: self.damping_ratio,
+        }
+        .validate()
+    }
+
+    pub const DISABLED: Self = Self {
+        enabled: 0,
+        padding: 0,
+        lower: Real::NEG_INFINITY,
+        upper: Real::INFINITY,
+        natural_frequency: 0.0,
+        damping_ratio: 0.0,
+    };
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuJointCompliance {
+    pub enabled: u32,
+    pub padding: u32,
+    pub lower: f32,
+    pub upper: f32,
+    pub natural_frequency: f32,
+    pub damping_ratio: f32,
+}
+
+impl molla_storage::BufferElement for JointCompliance {
+    type Gpu = GpuJointCompliance;
+
+    fn to_gpu(&self) -> Self::Gpu {
+        GpuJointCompliance {
+            enabled: self.enabled,
+            padding: 0,
+            lower: self.lower as f32,
+            upper: self.upper as f32,
+            natural_frequency: self.natural_frequency as f32,
+            damping_ratio: self.damping_ratio as f32,
+        }
+    }
+
+    fn from_gpu(gpu: &Self::Gpu) -> Self {
+        Self {
+            enabled: gpu.enabled,
+            padding: 0,
+            lower: gpu.lower as Real,
+            upper: gpu.upper as Real,
+            natural_frequency: gpu.natural_frequency as Real,
+            damping_ratio: gpu.damping_ratio as Real,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum JointAxis {
