@@ -31,6 +31,7 @@ mod loop_forces;
 pub mod mpm;
 pub mod mpm_oracle;
 pub mod penalty_contact;
+pub mod pressure_tire;
 pub mod rigid_impulse;
 pub mod rigid_world;
 pub mod rnea;

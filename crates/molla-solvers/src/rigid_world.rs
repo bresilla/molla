@@ -188,7 +188,7 @@ impl RigidWorld {
         let scene = &self.scene;
         self.pipeline
             .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
-        let mut wheel_samples = Vec::new();
+        let mut wheel_step = self.wheels.begin_step();
         let excluded = std::cell::RefCell::new(&mut excluded);
         let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
@@ -234,20 +234,15 @@ impl RigidWorld {
                         * velocities[i].angular
                         * angular;
                 }
-                wheels.apply(
-                    scene,
-                    state,
-                    sub_dt,
-                    wrenches,
-                    &mut wheel_samples,
-                    |a, b| excluded.borrow_mut()(a, b),
-                )?;
+                wheels.apply(scene, state, sub_dt, wrenches, &mut wheel_step, |a, b| {
+                    excluded.borrow_mut()(a, b)
+                })?;
                 crate::loop_forces::apply(scene, state, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)
             },
         )?;
         self.scene.commit_step(next)?;
-        self.wheels.publish(&self.scene, wheel_samples);
+        self.wheels.publish(&self.scene, wheel_step);
         self.contact_revision = Some(self.scene.stamp());
         Ok(())
     }

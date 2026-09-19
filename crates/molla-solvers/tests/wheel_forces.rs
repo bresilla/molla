@@ -459,3 +459,208 @@ fn stable_wheels_survive_rebuilds_and_prune_removed_bodies() {
     w.step(0.001).unwrap();
     assert!(w.wheels.samples(&w.scene).is_empty());
 }
+
+fn pressure_config() -> molla_solvers::pressure_tire::PressureTireConfig {
+    molla_solvers::pressure_tire::PressureTireConfig {
+        tire: molla_vehicle::real_tire::RealTireParams {
+            radius: 0.5,
+            width: 0.3,
+            pressure_pa: 180_000.0,
+            ..Default::default()
+        },
+        min_pressure_pa: 50_000.0,
+        max_pressure_pa: 400_000.0,
+        pressure_rate_pa_s: 10_000.0,
+        supported_mass: 110.0,
+        damping_ratio: 0.7,
+        hysteresis_fraction: 0.1,
+    }
+}
+
+#[test]
+fn pressure_normal_support_replaces_the_legacy_spring() {
+    let (mut w, chassis, wheel, _, _) = fixture(false);
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    w.solver.substeps = 1;
+    w.step(0.0001).unwrap();
+    let sample = &w.wheels.samples(&w.scene)[0];
+    let pressure = sample.pressure.as_ref().unwrap();
+    let normal = pressure.cells.iter().map(|c| c.normal_load).sum::<f64>();
+    assert!((sample.output.fz - normal).abs() < 1e-9);
+    assert!((normal - 1000.0).abs() > 1.0);
+    assert!((pressure.loaded_radius - 0.49).abs() < 1e-10);
+    for body in [chassis, wheel] {
+        assert!(
+            (w.scene.body_velocity(body).unwrap().linear.y - normal / 110.0 * 0.0001).abs() < 1e-10
+        );
+    }
+    assert!(w.contact_pairs().is_empty());
+}
+
+#[test]
+fn pressure_targets_are_atomic_rate_limited_and_survive_rebuilds() {
+    let (mut w, chassis, wheel, spin, _) = fixture(true);
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    for target in [f64::NAN, -1.0, 500_000.0] {
+        assert!(
+            w.wheels
+                .set_pressures(&w.scene, &[(wheel, target)])
+                .is_err()
+        );
+    }
+    assert!(
+        w.wheels
+            .set_pressures(&w.scene, &[(wheel, 200_000.0), (chassis, 200_000.0)])
+            .is_err()
+    );
+    assert!(
+        w.wheels
+            .set_pressures(&w.scene, &[(wheel, 200_000.0), (wheel, 250_000.0)])
+            .is_err()
+    );
+    assert_eq!(
+        w.wheels
+            .pressure_tire(&w.scene, wheel)
+            .unwrap()
+            .target_pressure_pa,
+        180_000.0
+    );
+    let mut invalid = pressure_config();
+    invalid.tire.pressure_pa = f64::NAN;
+    assert!(w.wheels.configure_pressure_tire(wheel, invalid).is_err());
+    let mut invalid = pressure_config();
+    invalid.min_pressure_pa = 190_000.0;
+    invalid.tire.pressure_pa = 200_000.0;
+    assert!(w.wheels.configure_pressure_tire(wheel, invalid).is_err());
+    let mut invalid = pressure_config();
+    invalid.tire.radius = 0.6;
+    assert!(w.wheels.configure_pressure_tire(wheel, invalid).is_err());
+    assert_eq!(
+        w.wheels
+            .pressure_tire(&w.scene, wheel)
+            .unwrap()
+            .config
+            .tire
+            .radius,
+        0.5
+    );
+    w.wheels
+        .set_pressures(&w.scene, &[(wheel, 200_000.0)])
+        .unwrap();
+    assert_eq!(
+        w.wheels.pressure_tire(&w.scene, wheel).unwrap().pressure_pa,
+        180_000.0
+    );
+    w.step(0.01).unwrap();
+    assert!(
+        (w.wheels.pressure_tire(&w.scene, wheel).unwrap().pressure_pa - 180_100.0).abs() < 1e-8
+    );
+    let samples = w.wheels.samples(&w.scene);
+    assert_eq!(samples.len(), 8);
+    assert!(samples.iter().all(|s| s.pressure.is_some()));
+    assert!(w.contact_pairs().is_empty());
+    let extra = body(&mut w, 1.0);
+    w.scene.remove_body(extra).unwrap();
+    w.wheels
+        .insert(&w.scene, descriptor(chassis, wheel, spin))
+        .unwrap();
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    assert!(
+        (w.wheels.pressure_tire(&w.scene, wheel).unwrap().pressure_pa - 180_100.0).abs() < 1e-8
+    );
+    assert_eq!(
+        w.wheels
+            .pressure_tire(&w.scene, wheel)
+            .unwrap()
+            .target_pressure_pa,
+        200_000.0
+    );
+    w.scene.remove_body(wheel).unwrap();
+    assert!(w.wheels.pressure_tire(&w.scene, wheel).is_none());
+    assert!(
+        w.wheels
+            .set_pressures(&w.scene, &[(wheel, 200_000.0)])
+            .is_err()
+    );
+    w.step(0.01).unwrap();
+    assert!(w.wheels.remove_pressure_tire(wheel).is_none());
+}
+
+#[test]
+fn failed_step_rolls_back_pressure_and_rigid_state() {
+    let (mut w, _, wheel, _, _) = fixture(true);
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    w.wheels
+        .set_pressures(&w.scene, &[(wheel, 200_000.0)])
+        .unwrap();
+    let pose = w.scene.body_pose(wheel).unwrap();
+    let velocity = w.scene.body_velocity(wheel).unwrap();
+    let mut substeps = 0;
+    assert!(
+        w.step_with_forces(
+            0.01,
+            |_, _| false,
+            |_, _, _, _| {
+                substeps += 1;
+                if substeps == 4 {
+                    Err(molla_core::Error::Solver("injected failure".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(substeps, 4);
+    assert_eq!(
+        w.wheels.pressure_tire(&w.scene, wheel).unwrap().pressure_pa,
+        180_000.0
+    );
+    assert_eq!(w.scene.body_pose(wheel).unwrap(), pose);
+    assert_eq!(w.scene.body_velocity(wheel).unwrap(), velocity);
+    assert!(w.wheels.samples(&w.scene).is_empty());
+}
+
+#[test]
+fn pressure_tyres_drive_in_both_directions_during_inflation() {
+    for direction in [-1.0, 1.0] {
+        let (mut w, chassis, wheel, spin, _) = fixture(true);
+        w.wheels
+            .configure_pressure_tire(wheel, pressure_config())
+            .unwrap();
+        w.wheels
+            .set_pressures(&w.scene, &[(wheel, 220_000.0)])
+            .unwrap();
+        w.scene
+            .set_joint_motor(
+                spin,
+                JointAxis::AngX,
+                JointMotor {
+                    mode: JointTargetMode::Velocity,
+                    target_velocity: direction * 2.0,
+                    damping: 1000.0,
+                    max_force: 100.0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for _ in 0..240 {
+            w.step(1.0 / 120.0).unwrap();
+        }
+        let speed = direction * w.scene.body_velocity(chassis).unwrap().linear.x;
+        assert!((0.7..1.1).contains(&speed), "pressure tyre speed {speed}");
+        assert!(
+            (w.wheels.pressure_tire(&w.scene, wheel).unwrap().pressure_pa - 200_000.0).abs() < 1e-6
+        );
+        assert!(w.quarantined_bodies().is_empty());
+        assert!(w.contact_pairs().is_empty());
+    }
+}

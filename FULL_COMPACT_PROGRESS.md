@@ -853,6 +853,55 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   performance remain unverified/incomplete; this fixes the reported drive
   regression, not the whole integration plan.
 
+### Pressure-dependent articulated tyre foundation
+
+- The user expanded `FULL_COMPACT.md` with required pressure-dependent tyre
+  integration, controls, physical/visual deformation, traction, resistance,
+  persistence and acceptance. The full goal is active again. The specification
+  remains an untracked user file; it has not been staged with implementation.
+- `pressure_tire.rs` connects the existing `real_tire::evaluate_brush_tire`
+  contact-cell model to the actual Featherstone wheel force path. Pressure is
+  explicit gauge Pa. Geometry and current load determine deflection, loaded
+  radius, cell support and tread area; longitudinal/lateral response and
+  available grip come from the existing pressure/load-sensitive brush model.
+  The old normal spring is replaced, not added to the pressure contact force.
+- Contact evaluation uses a local planar frame, including on slopes. Slip
+  uses loaded radius; damping scales the supported contact load and its
+  friction budget. Rolling losses are a separate resisting axle moment with
+  surface and configured carcass-hysteresis contributions, not a tangential
+  ground force which could incorrectly spin the wheel. The existing
+  articulated tangential impulse bound also applies to that moment.
+- `WheelForces::configure_pressure_tire` enables the path per wheel;
+  `set_pressures` atomically validates grouped targets. Applied pressure ramps
+  by an authored Pa/s rate during simulation; setting a target while paused
+  does not advance the pressure clock. `pressure_tire` reads both values.
+  `WheelStep` stages pressure and telemetry alongside the candidate rigid
+  state; failed substeps commit neither. Re-registering an unchanged wheel
+  or making unrelated scene edits preserves pressure/targets. Removed wheel
+  bodies/joints prune state; incompatible geometry/bounds edits are rejected.
+- `WheelSample::pressure` exposes pressure, deflection, loaded radius, tread
+  area, patch extents, normal stiffness, grip budget, cell loads/forces and
+  the applied rolling moment. Tangential cell forces and the rolling moment
+  are adjusted together with the applied wrench's numerical impulse bound.
+- Verification: 42 solver unit, 15 wheel, 14 joint-control, eight compliance
+  and three loop tests pass. New cases cover matched-load pressure sweeps,
+  slope-frame covariance, loaded-radius zero slip, resisting-moment sign,
+  exact single normal support, atomic invalid edits, bounded pressure ramps,
+  unrelated rebuilds/removal, injected fourth-substep rollback, and driving
+  both directions while inflating. Workspace check and strict solver Clippy
+  pass with all features and without defaults. Isolated Gearbox's existing
+  binary suite remains 59/59. Logs: `/tmp/molla-pressure-*.log` and
+  `/tmp/gearbox-pressure-core-tests.log`.
+- This is opt-in core integration, NOT completed live Gearbox tyre acceptance.
+  No Gearbox source has changed for this checkpoint. Remaining: authored
+  width/pressure/presets, backend controls/readout, UI/CLI and saved state,
+  visible deformation and stamping, per-cell scene terrain/material queries,
+  camber and nonplanar footprint integration, real-machine calibration,
+  pressure-extreme slope/towing tests, timing and GPU parity. Current tread
+  area is the sum of sampled curved-cell areas, not projected footprint area;
+  the compact brush is not a full FEM carcass. Do not call either calibrated
+  production tyre realism from these internal-consistency tests.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
