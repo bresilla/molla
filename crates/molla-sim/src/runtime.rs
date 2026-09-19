@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor};
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
 
@@ -28,7 +29,7 @@ handle!(BodyHandle);
 handle!(ColliderHandle);
 handle!(JointHandle);
 
-/// Identity of an immutable scene description; body state changes retain it.
+/// Compiled scene identity; simulation steps and motor updates retain it.
 #[derive(Clone, Debug)]
 pub struct SceneStamp(Arc<()>);
 
@@ -240,6 +241,7 @@ struct Description {
     collider_stamps: BTreeMap<ColliderHandle, SceneStamp>,
     joints: BTreeMap<JointHandle, JointDesc>,
     joint_settings: BTreeMap<JointHandle, JointSettings>,
+    joint_axes: BTreeMap<JointHandle, [JointAxisSettings; 6]>,
 }
 
 impl Description {
@@ -280,6 +282,8 @@ struct DriveState {
     kp: Vec<Real>,
     kd: Vec<Real>,
     force: Vec<Real>,
+    motor_model: Vec<u32>,
+    max_force: Vec<Real>,
 }
 
 impl DriveState {
@@ -299,6 +303,14 @@ impl DriveState {
             kp: clean(snapshot.control.joint_target_kp.host()?),
             kd: clean(snapshot.control.joint_target_kd.host()?),
             force: clean(snapshot.control.joint_force.host()?),
+            motor_model: snapshot.control.joint_motor_model.host()?[range.clone()]
+                .iter()
+                .map(|&m| m.min(1))
+                .collect(),
+            max_force: snapshot.control.joint_motor_max_force.host()?[range]
+                .iter()
+                .map(|&v| if v.is_nan() || v < 0.0 { 0.0 } else { v })
+                .collect(),
         })
     }
 
@@ -309,12 +321,14 @@ impl DriveState {
             return Ok(());
         }
         control.joint_target_mode.host_mut()?[range.clone()].copy_from_slice(&self.mode);
+        control.joint_motor_model.host_mut()?[range.clone()].copy_from_slice(&self.motor_model);
         for (destination, source) in [
             (&mut control.joint_target_pos, &self.position),
             (&mut control.joint_target_vel, &self.velocity),
             (&mut control.joint_target_kp, &self.kp),
             (&mut control.joint_target_kd, &self.kd),
             (&mut control.joint_force, &self.force),
+            (&mut control.joint_motor_max_force, &self.max_force),
         ] {
             destination.host_mut()?[range.clone()].copy_from_slice(source);
         }
@@ -439,7 +453,13 @@ impl RigidScene {
             ]
             .iter()
             .any(|values| values[v.clone()].iter().any(|v| !v.is_finite()));
-            if bad_coordinates || bad_rates {
+            let bad_motor = self.control().joint_motor_model.host()?[v.clone()]
+                .iter()
+                .any(|&m| m > 1)
+                || self.control().joint_motor_max_force.host()?[v]
+                    .iter()
+                    .any(|v| v.is_nan() || *v < 0.0);
+            if bad_coordinates || bad_rates || bad_motor {
                 let body = BodyId::from_index(model.joint_child.host()?[joint] as usize);
                 if let Some(id) = self.body_handle(body) {
                     invalid.insert(id);
@@ -753,6 +773,93 @@ impl RigidScene {
         })
     }
 
+    pub fn joint_axis_settings(
+        &self,
+        id: JointHandle,
+        axis: JointAxis,
+    ) -> Result<JointAxisSettings> {
+        axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        Ok(self.description.joint_axes[&id][axis as usize])
+    }
+
+    pub fn joint_locked_axes(&self, id: JointHandle) -> Result<JointAxes> {
+        let kind = self.joint(id).ok_or_else(|| missing("joint"))?.kind;
+        let mut axes = JointAxes::NONE;
+        for axis in JointAxis::ALL {
+            if axis.dof(kind).is_err() || self.description.joint_axes[&id][axis as usize].locked {
+                axes = axes.with(axis);
+            }
+        }
+        Ok(axes)
+    }
+
+    pub fn set_joint_locked_axes(&mut self, id: JointHandle, locked: JointAxes) -> Result<()> {
+        if self.joint(id).ok_or_else(|| missing("joint"))?.kind != JointType::D6
+            || locked.0 & !63 != 0
+        {
+            return Err(Error::Build(
+                "explicit axis locking requires a D6 joint and six-bit mask".into(),
+            ));
+        }
+        self.edit(|d| {
+            for axis in JointAxis::ALL {
+                d.joint_axes.get_mut(&id).ok_or_else(|| missing("joint"))?[axis as usize].locked =
+                    locked.contains(axis);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn set_joint_limits(
+        &mut self,
+        id: JointHandle,
+        axis: JointAxis,
+        limits: Option<[Real; 2]>,
+    ) -> Result<()> {
+        axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        if limits.is_some_and(|[lo, hi]| !lo.is_finite() || !hi.is_finite() || lo > hi) {
+            return Err(Error::Build("invalid joint axis limits".into()));
+        }
+        self.edit(|d| {
+            d.joint_axes.get_mut(&id).ok_or_else(|| missing("joint"))?[axis as usize].limits =
+                limits;
+            Ok(())
+        })
+    }
+
+    /// Update motor authoring and active controls without rebuilding the solver snapshot.
+    pub fn set_joint_motor(
+        &mut self,
+        id: JointHandle,
+        axis: JointAxis,
+        motor: JointMotor,
+    ) -> Result<()> {
+        motor.validate()?;
+        let dof = axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        if let Some(joint) = self.joint_index(id) {
+            let offset = self.model().joint_dof_offset.host()?[joint.index()] as usize;
+            motor.apply(&mut self.snapshot.control, offset + dof)?;
+        }
+        self.description
+            .joint_axes
+            .get_mut(&id)
+            .ok_or_else(|| missing("joint"))?[axis as usize]
+            .motor = Some(motor);
+        Ok(())
+    }
+
+    pub fn joints_between(
+        &self,
+        a: BodyHandle,
+        b: BodyHandle,
+    ) -> impl Iterator<Item = JointHandle> + '_ {
+        self.joints()
+            .filter(move |(_, j)| {
+                (j.parent == Some(a) && j.child == b) || (j.parent == Some(b) && j.child == a)
+            })
+            .map(|(id, _)| id)
+    }
+
     pub fn set_joint_frames(
         &mut self,
         id: JointHandle,
@@ -806,6 +913,7 @@ impl RigidScene {
             d.joints
                 .retain(|_, j| j.parent != Some(id) && j.child != id);
             d.joint_settings.retain(|id, _| d.joints.contains_key(id));
+            d.joint_axes.retain(|id, _| d.joints.contains_key(id));
             Ok(())
         })
     }
@@ -900,6 +1008,7 @@ impl RigidScene {
             let id = JointHandle(d.allocate()?);
             d.joints.insert(id, desc);
             d.joint_settings.insert(id, JointSettings::default());
+            d.joint_axes.insert(id, [JointAxisSettings::default(); 6]);
             Ok(id)
         })
     }
@@ -908,6 +1017,7 @@ impl RigidScene {
         self.edit(|d| {
             d.joints.remove(&id).ok_or_else(|| missing("joint"))?;
             d.joint_settings.remove(&id);
+            d.joint_axes.remove(&id);
             Ok(())
         })
     }
@@ -1065,6 +1175,23 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             }
             if let Some(&joint) = incoming.get(&body) {
                 let j = add_joint(&mut builder, &bodies, &d.joints[&joint])?;
+                let mut lower = vec![Real::NEG_INFINITY; d.joints[&joint].kind.dof_count()];
+                let mut upper = vec![Real::INFINITY; lower.len()];
+                for axis in JointAxis::ALL {
+                    if let Ok(dof) = axis.dof(d.joints[&joint].kind) {
+                        let setting = d.joint_axes[&joint][axis as usize];
+                        let bounds = if setting.locked {
+                            Some([0.0, 0.0])
+                        } else {
+                            setting.limits
+                        };
+                        if let Some([lo, hi]) = bounds {
+                            lower[dof] = lo;
+                            upper[dof] = hi;
+                        }
+                    }
+                }
+                builder.set_joint_limits(j, &lower, &upper)?;
                 joints.insert(joint, j);
             } else {
                 let pose = poses[&body];
@@ -1213,6 +1340,16 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     {
         if let Some(drive) = drives.get(&owner) {
             drive.restore(&model, &mut control, joint)?;
+        }
+    }
+    for (&id, joint) in &joints {
+        let offset = model.joint_dof_offset.host()?[joint.index()] as usize;
+        for axis in JointAxis::ALL {
+            if let Ok(dof) = axis.dof(d.joints[&id].kind)
+                && let Some(motor) = d.joint_axes[&id][axis as usize].motor
+            {
+                motor.apply(&mut control, offset + dof)?;
+            }
         }
     }
     Ok(Snapshot {
@@ -1464,6 +1601,8 @@ fn copy_joint(
         joint_target_vel,
         joint_target_kp,
         joint_target_kd,
+        joint_motor_model,
+        joint_motor_max_force,
         joint_force
     );
     Ok(())

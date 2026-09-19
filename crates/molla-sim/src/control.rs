@@ -24,10 +24,14 @@ pub struct Control {
     /// Per-DOF velocity target (rad/s or m/s). Used when mode is
     /// `Velocity` or `PositionVelocity`.
     pub joint_target_vel: Buffer<Real>,
-    /// Per-DOF position gain (N·m/rad or N/m).
+    /// Per-DOF position gain; acceleration motors use inverse seconds squared.
     pub joint_target_kp: Buffer<Real>,
-    /// Per-DOF velocity gain (N·m·s/rad or N·s/m).
+    /// Per-DOF velocity gain; acceleration motors use inverse seconds.
     pub joint_target_kd: Buffer<Real>,
+    /// Per-DOF force/acceleration motor model (`joint_control::MotorModel`).
+    pub joint_motor_model: Buffer<u32>,
+    /// Per-DOF motor-only effort cap; infinity leaves the motor uncapped.
+    pub joint_motor_max_force: Buffer<Real>,
     /// Direct joint torque/force feed-forward (N·m or N), added to
     /// any drive output. Length = `joint_dof_total`.
     pub joint_force: Buffer<Real>,
@@ -46,6 +50,8 @@ impl Control {
             joint_target_vel: Buffer::from_vec(Vec::new(), Storage),
             joint_target_kp: Buffer::from_vec(Vec::new(), Storage),
             joint_target_kd: Buffer::from_vec(Vec::new(), Storage),
+            joint_motor_model: Buffer::from_vec(Vec::new(), Storage),
+            joint_motor_max_force: Buffer::from_vec(Vec::new(), Storage),
             joint_force: Buffer::from_vec(Vec::new(), Storage),
             body_external_f: Buffer::from_vec(Vec::new(), Storage),
         }
@@ -64,6 +70,8 @@ impl Control {
             joint_target_vel: Buffer::from_vec(vec![0.0; n_dof], Storage),
             joint_target_kp: Buffer::from_vec(vec![0.0; n_dof], Storage),
             joint_target_kd: Buffer::from_vec(vec![0.0; n_dof], Storage),
+            joint_motor_model: Buffer::from_vec(vec![0; n_dof], Storage),
+            joint_motor_max_force: Buffer::from_vec(vec![Real::INFINITY; n_dof], Storage),
             joint_force: Buffer::from_vec(vec![0.0; n_dof], Storage),
             body_external_f: Buffer::from_vec(vec![SpatialVector::ZERO; model.body_count], Storage),
         }
@@ -87,6 +95,8 @@ impl Control {
         up!(joint_target_vel);
         up!(joint_target_kp);
         up!(joint_target_kd);
+        up!(joint_motor_model);
+        up!(joint_motor_max_force);
         up!(joint_force);
         up!(body_external_f);
         Ok(())

@@ -19,6 +19,7 @@ mod contacts;
 mod control;
 pub mod flags;
 mod joint;
+pub mod joint_control;
 mod mass;
 mod model;
 mod muscle;

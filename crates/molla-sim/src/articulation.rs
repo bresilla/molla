@@ -26,6 +26,8 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
     let q = state.joint_q.host()?;
     let qd = state.joint_qd.host()?;
     let flags = model.body_flags.host()?;
+    let lower = model.joint_limit_lower.host()?;
+    let upper = model.joint_limit_upper.host()?;
     let velocities = state.body_qd.host_mut()?;
     for j in 0..model.joint_count {
         let child = children[j] as usize;
@@ -75,6 +77,33 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
                 angular = Vec3::X * qd[v + 1];
             }
             JointType::Fixed => {}
+        }
+        let locked = |k: usize| {
+            lower[v + k].is_finite()
+                && upper[v + k].is_finite()
+                && (upper[v + k] - lower[v + k]).abs() < 1e-12
+        };
+        match kind {
+            JointType::Revolute if locked(0) => angular = Vec3::ZERO,
+            JointType::Prismatic if locked(0) => linear = Vec3::ZERO,
+            JointType::Ball => {
+                for k in 0..3 {
+                    if locked(k) {
+                        angular[k] = 0.0;
+                    }
+                }
+            }
+            JointType::D6 => {
+                for k in 0..3 {
+                    if locked(k) {
+                        linear[k] = 0.0;
+                    }
+                    if locked(k + 3) {
+                        angular[k] = 0.0;
+                    }
+                }
+            }
+            _ => {}
         }
         let angular = frame.rotation * angular;
         velocity.linear += frame.rotation * linear + angular.cross(child_com - origin);

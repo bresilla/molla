@@ -195,7 +195,7 @@ fn solve_constrained_mass(
         .collect())
 }
 
-fn solve_mass(matrix: &[Real], rhs: &[Real], n: usize) -> Result<Vec<Real>> {
+pub(crate) fn solve_mass(matrix: &[Real], rhs: &[Real], n: usize) -> Result<Vec<Real>> {
     if matrix.iter().chain(rhs).any(|v| !v.is_finite()) {
         return Err(Error::Solver("non-finite impulse mass system".into()));
     }

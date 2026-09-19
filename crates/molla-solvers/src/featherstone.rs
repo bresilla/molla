@@ -438,6 +438,18 @@ impl FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
+        if self.is_gpu()
+            && (control.joint_motor_model.host()?.iter().any(|&m| m != 0)
+                || control
+                    .joint_motor_max_force
+                    .host()?
+                    .iter()
+                    .any(|cap| cap.is_finite()))
+        {
+            return Err(crate::core::Error::Solver(
+                "acceleration motors and motor-only caps require CPU Featherstone".into(),
+            ));
+        }
         match &mut self.backend {
             FeatherstoneBackend::Cpu => {
                 cpu_step(
@@ -548,26 +560,41 @@ pub(crate) fn build_motion_subspace(
     // CRBA/RNEA `spatial_jacobian_column`.
     let p = joint_world.position;
     let twist = |axis: Vec3| SpatialVector::new(axis.cross(-p), axis);
+    let locked = |k| {
+        let lo = limit_lower
+            .get(dof_idx + k)
+            .copied()
+            .unwrap_or(Real::NEG_INFINITY);
+        let hi = limit_upper
+            .get(dof_idx + k)
+            .copied()
+            .unwrap_or(Real::INFINITY);
+        lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12
+    };
     match jt {
         JointType::Revolute => {
             let axis_world = (r * axis_local).normalize_or_zero();
-            s_cols[0] = twist(axis_world);
-            dof_active[0] = true;
+            if !locked(0) {
+                s_cols[0] = twist(axis_world);
+                dof_active[0] = true;
+            }
             1
         }
         JointType::Prismatic => {
             let axis_world = (r * axis_local).normalize_or_zero();
-            s_cols[0] = SpatialVector::new(axis_world, Vec3::ZERO);
-            dof_active[0] = true;
+            if !locked(0) {
+                s_cols[0] = SpatialVector::new(axis_world, Vec3::ZERO);
+                dof_active[0] = true;
+            }
             1
         }
         JointType::Ball => {
-            s_cols[0] = twist(ex);
-            s_cols[1] = twist(ey);
-            s_cols[2] = twist(ez);
-            dof_active[0] = true;
-            dof_active[1] = true;
-            dof_active[2] = true;
+            for (k, axis) in [ex, ey, ez].into_iter().enumerate() {
+                if !locked(k) {
+                    s_cols[k] = twist(axis);
+                    dof_active[k] = true;
+                }
+            }
             3
         }
         JointType::Free | JointType::Distance => {
@@ -691,6 +718,8 @@ fn cpu_step(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
+    let motor_inertias = effective_motor_inertias(model, state_out, control)?;
+
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
@@ -742,6 +771,7 @@ fn cpu_step(
     let target_vel = control.joint_target_vel.host()?;
     let target_kp = control.joint_target_kp.host()?;
     let target_kd = control.joint_target_kd.host()?;
+    let motor_max_force = control.joint_motor_max_force.host()?;
 
     // ── Per-joint scratch — indexed by joint id ──────────────────────
     let mut v_body = vec![SpatialVector::ZERO; n]; // body spatial velocity
@@ -907,21 +937,14 @@ fn cpu_step(
                     let s_k = s_cols[j][k];
                     let dof_g = dof_idx + k;
                     let qd_now = qd_in.get(dof_g).copied().unwrap_or(0.0);
-                    let q_now = match jt {
-                        JointType::Revolute | JointType::Prismatic => {
-                            q_in.get(coord_idx + k).copied().unwrap_or(0.0)
-                        }
-                        // Cable: 2 scalar coords (k=0 → linear stretch, k=1 → bend).
-                        JointType::Cable => q_in.get(coord_idx + k).copied().unwrap_or(0.0),
-                        _ => 0.0,
-                    };
+                    let q_now = motor_coordinate(jt, &q_in[coord_idx..], k);
                     let mode =
                         JointTargetMode::from_u32(target_mode.get(dof_g).copied().unwrap_or(0));
                     let kp = target_kp.get(dof_g).copied().unwrap_or(0.0);
                     let kd = target_kd.get(dof_g).copied().unwrap_or(0.0);
                     let pos_t = target_pos.get(dof_g).copied().unwrap_or(0.0);
                     let vel_t = target_vel.get(dof_g).copied().unwrap_or(0.0);
-                    let drive_torque = match mode {
+                    let drive = match mode {
                         JointTargetMode::None => 0.0,
                         JointTargetMode::Position => kp * (pos_t - q_now) - kd * qd_now,
                         JointTargetMode::Velocity => kd * (vel_t - qd_now),
@@ -930,6 +953,18 @@ fn cpu_step(
                         }
                         JointTargetMode::Effort => pos_t,
                     };
+                    let scale = if mode == JointTargetMode::Effort {
+                        1.0
+                    } else {
+                        motor_inertias[dof_g]
+                    };
+                    let drive_torque = clamp_or_passthrough(
+                        drive * scale,
+                        motor_max_force
+                            .get(dof_g)
+                            .copied()
+                            .unwrap_or(Real::INFINITY),
+                    );
                     let mu = joint_friction.get(dof_g).copied().unwrap_or(0.0);
                     let friction_torque = -mu * qd_now;
                     // Stage 39E — CABLE per-DoF spring + damper. Only applied
@@ -1333,6 +1368,9 @@ fn cpu_step(
                     omega += alpha * dt;
                     let damp = (1.0 - joint_damping * dt).max(0.0);
                     omega *= damp;
+                    for k in 0..3 {
+                        omega[k] = clamp_or_passthrough(omega[k], velocity_limit[dof_idx + k]);
+                    }
                     let q_old = Quat::from_xyzw(
                         q_in[coord_idx],
                         q_in[coord_idx + 1],
@@ -1348,6 +1386,9 @@ fn cpu_step(
                         q_old.w + q_dot.w * dt,
                     )
                     .normalize();
+                    let (q_pred, bounded_omega) =
+                        project_angular_limits(q_pred, omega, dof_idx, limit_lower, limit_upper);
+                    omega = bounded_omega;
                     q_new[coord_idx] = q_pred.x;
                     q_new[coord_idx + 1] = q_pred.y;
                     q_new[coord_idx + 2] = q_pred.z;
@@ -1384,6 +1425,10 @@ fn cpu_step(
                     let damp = (1.0 - joint_damping * dt).max(0.0);
                     v *= damp;
                     omega *= damp;
+                    for k in 0..3 {
+                        v[k] = clamp_or_passthrough(v[k], velocity_limit[dof_idx + k]);
+                        omega[k] = clamp_or_passthrough(omega[k], velocity_limit[dof_idx + 3 + k]);
+                    }
 
                     let p_old =
                         Vec3::new(q_in[coord_idx], q_in[coord_idx + 1], q_in[coord_idx + 2]);
@@ -1523,16 +1568,7 @@ fn cpu_step(
                         }
                     }
 
-                    // D6 per-axis limits.
-                    //
-                    // Stage 17.1 polish:
-                    //   - Linear axes 0..3 still clamp the per-axis position
-                    //     directly (same as v1).
-                    //   - Angular axes 3..6 now decompose the integrated
-                    //     quaternion into XYZ Euler angles, clamp each
-                    //     unlocked axis to its `[lo, hi]` window, then
-                    //     recompose the quaternion. Angular qd is zeroed
-                    //     when an axis hits a limit.
+                    // Project D6 translation and XYZ angular limits.
                     if matches!(jt, JointType::D6) {
                         for k in 0..3 {
                             let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
@@ -1544,63 +1580,31 @@ fn cpu_step(
                             qd_new[dof_idx + k] = qd_c;
                         }
 
-                        // Angular axes (DOF 3..6 ↔ ωx, ωy, ωz). Use the post-
-                        // integration quaternion `r_new` for the Euler decomp.
                         let r_now = Quat::from_xyzw(
                             q_new[coord_idx + 3],
                             q_new[coord_idx + 4],
                             q_new[coord_idx + 5],
                             q_new[coord_idx + 6],
                         );
-                        let (ex, ey, ez) = r_now.to_euler(glam::EulerRot::XYZ);
-                        let mut ang = [ex, ey, ez];
-                        let mut omega_arr = [
+                        let omega = Vec3::new(
                             qd_new[dof_idx + 3],
                             qd_new[dof_idx + 4],
                             qd_new[dof_idx + 5],
-                        ];
-                        let mut clamped = false;
-                        for k in 0..3 {
-                            let lo = limit_lower
-                                .get(dof_idx + 3 + k)
-                                .copied()
-                                .unwrap_or(Real::NAN);
-                            let hi = limit_upper
-                                .get(dof_idx + 3 + k)
-                                .copied()
-                                .unwrap_or(Real::NAN);
-                            // Skip the locked-axis sentinel `lo == hi == 0` —
-                            // those DOFs were already removed from the
-                            // motion subspace, but the Euler value is still
-                            // correctly zero there since the joint never
-                            // accumulated motion on them.
-                            if !lo.is_nan() && ang[k] < lo {
-                                ang[k] = lo;
-                                if omega_arr[k] < 0.0 {
-                                    omega_arr[k] = 0.0;
-                                }
-                                clamped = true;
-                            }
-                            if !hi.is_nan() && ang[k] > hi {
-                                ang[k] = hi;
-                                if omega_arr[k] > 0.0 {
-                                    omega_arr[k] = 0.0;
-                                }
-                                clamped = true;
-                            }
-                        }
-                        if clamped {
-                            let r_proj =
-                                Quat::from_euler(glam::EulerRot::XYZ, ang[0], ang[1], ang[2])
-                                    .normalize();
-                            q_new[coord_idx + 3] = r_proj.x;
-                            q_new[coord_idx + 4] = r_proj.y;
-                            q_new[coord_idx + 5] = r_proj.z;
-                            q_new[coord_idx + 6] = r_proj.w;
-                            qd_new[dof_idx + 3] = omega_arr[0];
-                            qd_new[dof_idx + 4] = omega_arr[1];
-                            qd_new[dof_idx + 5] = omega_arr[2];
-                        }
+                        );
+                        let (r_proj, omega) = project_angular_limits(
+                            r_now,
+                            omega,
+                            dof_idx + 3,
+                            limit_lower,
+                            limit_upper,
+                        );
+                        q_new[coord_idx + 3] = r_proj.x;
+                        q_new[coord_idx + 4] = r_proj.y;
+                        q_new[coord_idx + 5] = r_proj.z;
+                        q_new[coord_idx + 6] = r_proj.w;
+                        qd_new[dof_idx + 3] = omega.x;
+                        qd_new[dof_idx + 4] = omega.y;
+                        qd_new[dof_idx + 5] = omega.z;
                     }
                 }
                 JointType::Cable => {
@@ -1657,6 +1661,115 @@ fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
 /// Index a spatial vector by its 6-dim component index `[lin.x, lin.y,
 /// lin.z, ang.x, ang.y, ang.z]`.
 #[inline]
+fn motor_coordinate(kind: JointType, q: &[Real], axis: usize) -> Real {
+    let angular = |offset: usize, axis: usize| {
+        let r = Quat::from_xyzw(q[offset], q[offset + 1], q[offset + 2], q[offset + 3]);
+        let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+        [x, y, z][axis]
+    };
+    match kind {
+        JointType::Revolute | JointType::Prismatic | JointType::Cable => q[axis],
+        JointType::Ball => angular(0, axis),
+        JointType::Free | JointType::D6 | JointType::Distance if axis < 3 => q[axis],
+        JointType::Free | JointType::D6 | JointType::Distance => angular(3, axis - 3),
+        JointType::Fixed => 0.0,
+    }
+}
+
+fn project_angular_limits(
+    rotation: Quat,
+    mut velocity: Vec3,
+    offset: usize,
+    lower: &[Real],
+    upper: &[Real],
+) -> (Quat, Vec3) {
+    let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
+    let mut angles = [x, y, z];
+    let mut changed = false;
+    for k in 0..3 {
+        let (angle, rate) =
+            clamp_joint_pos(angles[k], velocity[k], lower[offset + k], upper[offset + k]);
+        changed |= angle != angles[k];
+        angles[k] = angle;
+        velocity[k] = rate;
+    }
+    let rotation = if changed {
+        Quat::from_euler(glam::EulerRot::XYZ, angles[0], angles[1], angles[2]).normalize()
+    } else {
+        rotation
+    };
+    (rotation, velocity)
+}
+
+/// Compute 1 / (M^-1)[i,i] for each active acceleration motor.
+fn effective_motor_inertias(model: &Model, state: &State, control: &Control) -> Result<Vec<Real>> {
+    let mut result = vec![1.0; model.joint_dof_total];
+    let models = control.joint_motor_model.host()?;
+    let modes = control.joint_target_mode.host()?;
+    let requested = |dof: usize| {
+        models.get(dof) == Some(&1) && modes.get(dof).is_some_and(|m| (1..=3).contains(m))
+    };
+    if !(0..model.joint_dof_total).any(requested) {
+        return Ok(result);
+    }
+    let starts = model.articulation_start.host()?;
+    let offsets = model.joint_dof_offset.host()?;
+    for articulation in 0..model.articulation_count.max(1) {
+        let (begin, end) = if model.articulation_count == 0 {
+            (0, model.joint_count)
+        } else {
+            (
+                starts[articulation] as usize,
+                starts[articulation + 1] as usize,
+            )
+        };
+        let first = offsets[begin] as usize;
+        let count = (offsets[end] - offsets[begin]) as usize;
+        if !(first..first + count).any(requested) {
+            continue;
+        }
+        let mass = crate::mass_matrix(model, state, articulation)?;
+        if mass.iter().any(|v| !v.is_finite()) {
+            return Err(crate::core::Error::Solver(
+                "non-finite motor inertia".into(),
+            ));
+        }
+        let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);
+        let active: Vec<usize> = (0..count)
+            .filter(|&i| mass[i * count + i] > scale * 1e-14)
+            .collect();
+        let n = active.len();
+        let mut matrix = vec![0.0; n * n];
+        for (i, &a) in active.iter().enumerate() {
+            for (j, &b) in active.iter().enumerate() {
+                matrix[i * n + j] = mass[a * count + b] / scale;
+            }
+        }
+        let mut factor = matrix.clone();
+        let factored = dense_chol(&mut factor, n).is_ok();
+        for dof in 0..count {
+            if !requested(first + dof) {
+                continue;
+            }
+            result[first + dof] = 0.0;
+            let Some(index) = active.iter().position(|&i| i == dof) else {
+                continue;
+            };
+            let mut unit = vec![0.0; n];
+            unit[index] = 1.0;
+            let solved = if factored {
+                back_sub_packed(&factor, &forward_sub_packed(&factor, &unit, n), n)
+            } else {
+                crate::rigid_impulse::solve_mass(&matrix, &unit, n)?
+            };
+            if solved[index] > 0.0 {
+                result[first + dof] = scale / solved[index];
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn sv_component(s: SpatialVector, c: usize) -> Real {
     match c {
         0 => s.linear.x,

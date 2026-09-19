@@ -431,13 +431,45 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   tools remain unavailable; progress is recorded here. Full objective remains
   active, including all original named integration and acceptance gates.
 
+### Axis limits / locks / motor verification
+
+- Added canonical `joint_control` types and runtime axis-addressed edits.
+  Revolute/prismatic freedoms are addressed as AngX/LinX irrespective of the
+  authored axis. D6 lock masks, per-axis limits, authored motors and logical
+  between-body queries survive suspensions and transactional rebuilds. Motor
+  updates write live controls without rebuilding or invalidating scene stamps.
+- CPU Featherstone caps motor effort separately from feed-forward joint force
+  and external body wrenches. Acceleration gains use the reciprocal diagonal
+  of the inverse articulation mass matrix, including floating-parent mobility.
+  This currently performs a CRBA/factorization for each driven articulation
+  each substep; tractor-scale performance has not been measured.
+- Ball/D6 position drives now read their actual angular/linear coordinates.
+  Ball limits and per-axis speed caps are enforced; D6 and Ball share XYZ
+  angular projection. Equality-locked scalar/Ball/D6 freedoms contribute no
+  motion-subspace column or published body twist. Multi-axis angular behavior
+  retains the existing XYZ-coordinate convention, not a new swing/twist model.
+- Twelve new `joint_control` tests exercise real CPU motion: semantic axes,
+  separate force caps, 1000:1 inertia scaling, floating-parent reduced mass,
+  invalid-edit atomicity, dormant authoring/raw controls, live locks/releases,
+  scalar equality limits, and nonzero Ball/D6 position targets and saturation.
+  Selected gates pass: sim 30, geometry 151, solvers 127 tests (308 total).
+  Workspace check-all and scoped strict Clippy in both feature configurations
+  pass. No GPU execution or Gearbox acceptance is claimed: acceleration models
+  and motor-only caps explicitly reject GPU Featherstone rather than silently
+  running unsupported semantics.
+- New files: `crates/molla-sim/src/joint_control.rs` and
+  `crates/molla-solvers/tests/joint_control.rs`. Runtime descriptions, controls,
+  velocity evaluation and CPU Featherstone were extended. No specification,
+  dependency, environment, Makefile or Gearbox edits. Engram tools remain
+  unavailable; this checkpoint records the work. The full goal is still active.
+
 ## Next implementation steps
 
 1. Finish fixed-body/re-rooting and runtime descriptor semantics; retain the
    now-tested contact/readout/filtering path while extending the live world.
 2. Implement sleep/wake/islands; verify continuous-force singular-inertia
    dynamics and benchmark queries with tyres.
-3. Finish joint editing, locking, motors and softness, including capture frames.
+3. Finish joint softness/capture semantics and GPU joint-control parity.
 4. Implement the Gearbox backend in its existing physics worktree.
 5. Connect tyre/terrain outputs, then sleeping/deformation/MPM as specified.
 6. Run and record every original acceptance scene, performance and deterministic
