@@ -3453,6 +3453,94 @@ settings, targeting effective drive-inertia calculations.
 - `/tmp/molla-drive-suffix-imported.log` — final real-machine regression.
 - `/tmp/molla-drive-suffix-{molla,rapier}-binary.log` — ordinary backend lanes.
 
+## Articulation acceleration scratch checkpoint (2026-09-20)
+
+### Goal
+
+Remove the identified many-articulation allocation cost without changing the
+full replacement plan, solver equations or numerical acceptance thresholds.
+
+### Instructions
+
+- Keep original Gearbox and unrelated viewers untouched.
+- Distinguish solver-only scaling measurements from real imported-machine,
+  rendered fleet, sleeping/islands and Rapier-parity acceptance.
+
+### Discoveries
+
+- `cpu_step` allocated `joint_dof_total` acceleration scalars and `joint_count`
+  spatial accelerations for every articulation. Both consumers use disjoint
+  joint/DOF ranges; parent acceleration lookup stays inside the current tree,
+  and scalar-stop reactions only update that articulation's DOF slice.
+- Hoisting these buffers into the substep scope reduces their allocation count
+  from two per articulation to two per substep. It removes this particular
+  articulation-count-times-world-size initialization cost, not every possible
+  non-linear cost in the solver or runtime scene.
+- Follow-up source audit: CRBA already sizes its scratch to the selected
+  articulation. However, loop closure projection allocates one row for every
+  world-wide closure row inside each articulation, even when most projections
+  are zero. `MassFactor::add_gram` whitens and multiplies every such row, then
+  `bounded_solve` factors the full global row system. Independent machines can
+  therefore incur avoidable superlinear closure work. Partitioning must preserve
+  rows that couple multiple articulations, bounded-solve behavior and rank policy;
+  no partitioning change is implemented or validated at this checkpoint.
+
+### Accomplished
+
+- Moved the two acceleration scratch allocations outside the articulation loop.
+  No mathematical operations, parameters, substeps or thresholds changed.
+- Added eight-articulation versus eight separate-simulation comparison over
+  120 steps and both rigorous/sequential multi-DOF paths. Joint coordinates,
+  joint velocities, body poses and body velocities match exactly every step.
+  Includes fixed roots, disabled and locked hinges, distinct external wrenches,
+  feedback motors and both limit directions; explicit assertions verify stops
+  were reached and unlocked dynamic bodies moved.
+- Added an ignored CPU scaling fixture with 1/32/128/512 two-body trees. It
+  times one solver substep from a fixed input state, with 20 warmups and 80
+  samples, no contacts/rendering. This is not an imported tractor fleet.
+- Four A/B/B/A cycles (eight runs of each retained binary) give these mean
+  medians in ms: 32 articulations **0.099050 -> 0.086140375** (13.03% lower),
+  128 **0.39276575 -> 0.35325925** (10.06%), 512 **2.222096625 -> 1.446364875**
+  (34.91%). One articulation is effectively unchanged at **0.002414375 ->
+  0.002426125** ms. The same independent-island correctness test passes before
+  and after the production change. No owned build/test overlapped these timings;
+  an unrelated original Gearbox viewer remained running.
+- CPU solver lane: **388 passed, six ignored**, across 89 test binaries.
+- Real Kubota A/B/B/A: mean Molla medians **0.931703375 -> 0.918061375 ms**,
+  while Rapier controls also improve **0.23251375 -> 0.229295125 ms**. Relative
+  to Rapier, the single-machine result is effectively unchanged at about **4x**
+  its step time; do not attribute the common timing shift to this allocation fix.
+  All four paired tests pass and their logged mechanical states match exactly.
+- Final imported-machine suite: **seven passed** at unchanged thresholds.
+  Explicit Molla and Rapier ordinary binary lanes each pass **87 tests, eight
+  ignored**. All owned build/test handles are terminal; no viewers were launched
+  or stopped. The original full-plan completion criteria remain unmet.
+
+### Next Steps
+
+1. Add multi-articulation loop-closure correctness/scaling fixtures, then reduce
+   work on unrelated zero rows and investigate connected closure components.
+   Preserve actual cross-articulation couplings; do not claim full islands or
+   sleeping from this narrower constraint optimization. Continue profiling
+   remaining single-machine ABA/drive/tyre costs.
+2. Continue full-plan sleep/wake/islands, imported fleet, lifecycle/calibration,
+   generic/GPU joint, terrain/soil and rendered acceptance. No full-plan or
+   Rapier-comparable performance claim follows from the synthetic scaling result.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/featherstone.rs` — substep-scoped acceleration buffers.
+- `crates/molla-solvers/tests/featherstone_islands.rs` — exact independent-tree
+  comparisons and ignored scaling fixture.
+- `/tmp/molla-islands-{before,after}` — retained solver-test binaries.
+- `/tmp/molla-islands-abba-{1..16}.log` — repeated scaling measurements.
+- `/tmp/molla-islands-full.log` — CPU solver regression output.
+- `/tmp/gearbox-after-drive-suffix`, `/tmp/gearbox-after-island-scratch` —
+  retained real-machine timing binaries.
+- `/tmp/molla-islands-machine-abba-{1,2,3,4}.log` — real Kubota paired timing.
+- `/tmp/molla-islands-imported.log` — final imported-machine checks.
+- `/tmp/molla-islands-{molla,rapier}-binary.log` — ordinary backend checks.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
