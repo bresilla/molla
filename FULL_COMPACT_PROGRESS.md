@@ -5733,6 +5733,133 @@ observed while diagnosing the Oxbo, then verify the real pressure-enabled machin
 - Engram APIs remain absent from tool metadata; this tracked checkpoint records
   the session. FULL_COMPACT.md remains unmodified and untracked.
 
+## Session checkpoint: width-resolved brush and geometry cache
+
+### Goal
+
+- Continue FULL_COMPACT.md's footprint/material response without replacing its
+  full scope. Previous goal turn was progress (footprint friction integration).
+  This turn adds real lateral brush strips and measures/mitigates their CPU
+  cost. FULL_COMPACT remains active and incomplete.
+
+### Instructions
+
+- Original Gearbox, shared assets and FULL_COMPACT.md remain untouched.
+  Isolated Gearbox source remains clean at `559d055`; only binaries/tests were
+  rebuilt there. No test window was launched, manipulated or closed.
+- Do not count incomplete/narrow GPU or performance checks as full acceptance.
+
+### Discoveries
+
+- Brush contact had one full-width cell per circumferential sample. Its yaw
+  moment only included lateral traction along the rolling coordinate; split
+  left/right friction could not generate longitudinal-traction yaw leverage.
+- Naively repeating the geometry per strip raised full-meadow driving median
+  cost by 10.61%. Caching all reference cell coordinates (including lateral
+  positions, not just trigonometry) reduced the remaining increase to 3.41%.
+- Geometry depends on unloaded radius, width and both sample counts, not on
+  inflation/load. Cache immutable reference coordinates; retain independent
+  bristles and recompute penetration, loads and forces at each step.
+- Existing GPU brush inputs still have no width-resolution field. Their seven
+  existing tests pass, but they do not prove width-varying-material/yaw parity.
+  Do not silently claim the new CPU feature is implemented by that shader.
+
+### Accomplished
+
+- Molla `f718780 feat(tyres): resolve brush contact across width` adds public
+  `RealTireParams::width_segments`, default 3. Standalone brush sanitizes to
+  1..=16; solver configuration rejects outside that range atomically.
+  Circumferential and width samples form equal-area cells at strip midpoints.
+  The true midpoint of odd-width grids is exactly zero in local coordinates.
+- Persistent shear has one state per cell; geometry identity includes width
+  resolution. Material, film and slip queries use both rolling and lateral
+  positions. Aligning torque includes `z * longitudinal_force - x * lateral_force`
+  (and the longitudinal rolling term where the reusable brush applies it).
+  The existing Featherstone force path applies that torque; no extra body or
+  wheel-spin integration was added.
+- Airborne cells skip force/material calculations. Parameter copies/presets,
+  cell telemetry docs and GPU-test parameter literals were updated. Obsolete
+  one-strip telemetry assertions now verify four requested lateral bins,
+  nonzero width and conserved lateral load, rather than requiring width=0.
+- Molla `f6abd31 perf(tyres): cache brush cell geometry` stores immutable
+  reference coordinates in an Arc shared across step-history clones. Geometry
+  changes rebuild/reset it; pressure-only changes retain it. Invalid steps
+  preserve state/cache identity; explicit reset clears both.
+- A failing-before test demonstrated all brush cells were at local_z=0.
+  Four vehicle regressions now cover both shoulders, independent split-surface
+  shear/yaw, uniform-surface load/area/force conservation at 1/2/3/8/16 strips,
+  and resolution/cache/rollback semantics. One world integration regression
+  verifies asymmetric friction causes actual chassis yaw without duplicate
+  ground contacts, and rejects invalid resolution without partial mutation.
+- Final selected CPU lane (including vehicle): **984 passed, 10 ignored,
+  0 failed**, 126 binaries. GPU-feature check passes. The seven explicit
+  existing GPU brush tests pass through nixVulkan, with no adapter-skip messages.
+  These remain narrower than complete new width-resolved GPU parity.
+- Final isolated backend lanes: **104 passed, 17 ignored** each. All three
+  Oxbo gates pass (21.90 s); all ten Kubota/Krampe gates pass (121.59 s).
+  GUI Oslo build passes (29.22 s). No rendered acceptance was performed.
+
+### Controlled CPU comparison
+
+- Two separate A/B/B/A comparisons used retained binaries, the same 801×801
+  meadow, full imported Kubota, solver settings unchanged, 600 warmup and 1200
+  samples per parked/driving lane. All owned builds/tests were terminal before
+  each comparison; no competing owned validation ran during timing. Each suite
+  also runs Rapier/Molla/Molla/Rapier internally. All eight suites passed.
+- Initial width feature: mean Molla driving medians **0.963860 → 1.066130 ms**,
+  +10.61%; Rapier **0.2859775 → 0.2867435 ms**. This regression prompted caching.
+- Final cached feature vs one-strip baseline (means of four medians each):
+
+| Lane | Baseline ms | Cached three-strip ms |
+|---|---:|---:|
+| Molla parked | 0.959766500 | 0.991887750 |
+| Molla driving | 0.967456750 | 1.000471250 |
+| Rapier parked | 0.278610000 | 0.280224500 |
+| Rapier driving | 0.287113750 | 0.288903000 |
+
+- Final Molla driving cost is +3.41%, **3.463× Rapier**. Mean driving p95 is
+  1.285393 ms (baseline 1.300234 ms); tail variability does not establish a
+  speedup. Highest driving median is 1.004739 ms. Consistent sub-1-ms stepping,
+  tails, Rapier parity and full-viewer frame performance are NOT achieved.
+
+### Next Steps
+
+- Implement/test GPU width sampling and asymmetric-material yaw explicitly;
+  the old shader/input lacks the new sample dimension despite legacy tests passing.
+- Wire authored field material grids into the live isolated ground registration
+  (currently None), then complete calibrated pressure/material response, full
+  footprint/terrain geometry and normal-load distribution as required.
+- Continue explicit machine compatibility metadata, controlled lifecycle/UI/CLI
+  and rendered pressure acceptance, CPU/frame performance, joint/GPU/sleep parity,
+  towing/replay/PTO and Bekker/MPM coupling. Do not shrink the original objective.
+
+### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/{params,brush,bristle,contact}.rs` — width
+  resolution, bounded sampling and persistent/cache state.
+- `real_tire/rig/runners.rs`, `rig/sweeps.rs`, `reports/vehicle.rs` — brush solve
+  and parameter propagation; `width_tests.rs`, `tests.rs` — regression coverage.
+- `crates/molla-solvers/src/pressure_tire.rs` — resolution validation;
+  `tests/wheel_forces/footprint_material.rs` — actual rigid-body yaw test.
+- `crates/molla-kernels/tests/tire_brush_gpu.rs` — updated parameter literals;
+  kernel/shader width implementation remains outstanding.
+- Molla `target/perf/brush-width-{repro,focused,integration,full-initial,full,gpu-*}.log`
+  and `brush-width-cache-{focused,full,gpu-*}.log` — validation history.
+- Isolated `target/perf/brush-width-{cache-,}{molla,rapier,oxbo,imported,viewer-build}.log`
+  plus `brush-width-meadow-*.log` and `brush-width-cached-meadow-*.log` — tests/timings.
+- Retained isolated test binaries `gearbox-brush-width-before` SHA256
+  `3b24ee0542576c61e4807b2f1b8a9f172fba3c5953689e9837b3c26d99db755d`,
+  `gearbox-brush-width-after` SHA256
+  `827a7103b2d4d52ffd8afa721bea1e207305527e9b646b4e77ff995eba200a9d`,
+  and final `gearbox-brush-width-cached` SHA256
+  `8bc7226c22384843c6c4832da58513c2c730c010efdc2d06b317bb3a54e3edfa`.
+- Current isolated GUI SHA256
+  `b6f65e23496c0533e7f1f0aba12ff514fd9783a36d081b89dea0dee046d3b6e0`.
+- All owned handles are terminal. Final core/GPU handle 46040, final imported/
+  viewer-build 91048, timing handles 40295 and 50865; earlier focused/build/test
+  handles also returned terminal results. Engram APIs remain unavailable; this
+  tracked checkpoint records session context.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
