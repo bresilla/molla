@@ -190,14 +190,7 @@ pub(crate) fn apply(
                     continue;
                 }
                 let j = cache.jacobian(art, body)?;
-                for col in 0..n {
-                    projected[r][col] += wrench.linear.x * j[col]
-                        + wrench.linear.y * j[n + col]
-                        + wrench.linear.z * j[2 * n + col]
-                        + wrench.angular.x * j[3 * n + col]
-                        + wrench.angular.y * j[4 * n + col]
-                        + wrench.angular.z * j[5 * n + col];
-                }
+                project_wrench(j, wrench, &mut projected[r]);
             }
         }
         drop(project_span);
@@ -261,6 +254,25 @@ pub(crate) fn apply(
         return Err(Error::Solver("non-finite loop joint wrench".into()));
     }
     Ok(())
+}
+
+fn project_wrench(jacobian: &[Real], wrench: SpatialVector, projected: &mut [Real]) {
+    let n = projected.len();
+    debug_assert_eq!(jacobian.len(), 6 * n);
+    let (lx, rest) = jacobian.split_at(n);
+    let (ly, rest) = rest.split_at(n);
+    let (lz, rest) = rest.split_at(n);
+    let (ax, rest) = rest.split_at(n);
+    let (ay, rest) = rest.split_at(n);
+    let (az, _) = rest.split_at(n);
+    for (col, value) in projected.iter_mut().enumerate() {
+        *value += wrench.linear.x * lx[col]
+            + wrench.linear.y * ly[col]
+            + wrench.linear.z * lz[col]
+            + wrench.angular.x * ax[col]
+            + wrench.angular.y * ay[col]
+            + wrench.angular.z * az[col];
+    }
 }
 
 #[cfg(test)]
@@ -345,6 +357,33 @@ mod tests {
     use molla_math::{Mat3, Transform};
     use molla_sim::runtime::{BodyDesc, JointDesc};
     use molla_sim::{BodyParams, MassProperties};
+
+    #[test]
+    fn contiguous_wrench_projection_matches_indexed_arithmetic() {
+        let wrenches = [
+            SpatialVector::ZERO,
+            SpatialVector::new(Vec3::X, Vec3::ZERO),
+            SpatialVector::new(Vec3::ZERO, Vec3::Z),
+            SpatialVector::new(Vec3::new(0.31, -0.72, 1.8), Vec3::new(-1.3, 0.28, -2.1)),
+        ];
+        for n in [0, 1, 6, 39, 78] {
+            let j: Vec<_> = (0..6 * n).map(|k| (k as Real * 0.31).sin()).collect();
+            let mut actual: Vec<_> = (0..n).map(|k| k as Real * 0.09).collect();
+            let mut expected = actual.clone();
+            for wrench in wrenches {
+                for col in 0..n {
+                    expected[col] += wrench.linear.x * j[col]
+                        + wrench.linear.y * j[n + col]
+                        + wrench.linear.z * j[2 * n + col]
+                        + wrench.angular.x * j[3 * n + col]
+                        + wrench.angular.y * j[4 * n + col]
+                        + wrench.angular.z * j[5 * n + col];
+                }
+                project_wrench(&j, wrench, &mut actual);
+                assert_eq!(actual, expected, "n={n}, wrench={wrench:?}");
+            }
+        }
+    }
 
     fn response_fixture(n: usize, rows: usize) -> (Vec<Real>, Vec<Vec<Real>>) {
         let mut lower = vec![0.0; n * n];
