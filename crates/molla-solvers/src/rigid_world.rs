@@ -19,6 +19,10 @@ use crate::penalty_contact::ContactForce;
 #[path = "rigid_sleep.rs"]
 mod sleep;
 
+#[path = "rigid_settling.rs"]
+mod settling;
+pub use settling::SleepSettings;
+
 #[derive(Clone, Debug)]
 pub struct ContactPair {
     pub colliders: [ColliderHandle; 2],
@@ -38,6 +42,7 @@ pub struct RigidWorld {
     queries: Mutex<CpuRaycaster>,
     quarantined: Vec<BodyHandle>,
     sleeping: sleep::SleepingGroups,
+    settling: settling::Settling,
 }
 
 impl RigidWorld {
@@ -59,6 +64,7 @@ impl RigidWorld {
             queries: Mutex::new(CpuRaycaster::default()),
             quarantined: Vec::new(),
             sleeping: sleep::SleepingGroups::default(),
+            settling: settling::Settling::default(),
         })
     }
 
@@ -173,10 +179,14 @@ impl RigidWorld {
         dt: Real,
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
     ) -> Result<()> {
+        let changed = self.settling.changed_inputs(&self.scene, &self.wheels);
         if self.sleeping.any_valid(&self.scene, &self.wheels) {
-            return self.step_sleeping(dt, excluded);
+            self.step_sleeping(dt, excluded)?;
+        } else {
+            self.step_with_forces_inner(dt, excluded, |_, _, _, _| Ok(()), false)?;
         }
-        self.step_with_forces(dt, excluded, |_, _, _, _| Ok(()))
+        self.finish_settling(dt, &changed);
+        Ok(())
     }
 
     /// Evaluate additional transient force elements before each Featherstone substep.
@@ -184,8 +194,18 @@ impl RigidWorld {
     pub fn step_with_forces(
         &mut self,
         dt: Real,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+        forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
+    ) -> Result<()> {
+        self.step_with_forces_inner(dt, excluded, forces, true)
+    }
+
+    fn step_with_forces_inner(
+        &mut self,
+        dt: Real,
         mut excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
         mut forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
+        custom_forces: bool,
     ) -> Result<()> {
         let _span = tracing::debug_span!("rigid_step").entered();
         self.contact_revision = None;
@@ -254,6 +274,9 @@ impl RigidWorld {
         )?;
         self.scene.commit_step(next)?;
         self.sleeping.clear();
+        if custom_forces {
+            self.settling.clear_windows();
+        }
         self.wheels.publish(&self.scene, wheel_step);
         self.contact_revision = Some(self.scene.stamp());
         Ok(())

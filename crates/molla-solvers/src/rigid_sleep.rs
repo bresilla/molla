@@ -89,93 +89,110 @@ impl RigidWorld {
     /// Zero generalized velocities and sleep the body's complete dynamic dependency group.
     /// Moving kinematic boundaries and transitioning tyre pressures keep the group awake.
     pub fn sleep_body(&mut self, body: BodyHandle) -> Result<()> {
-        let desc = self
-            .scene
-            .body(body)
-            .ok_or_else(|| invalid("unknown sleep body"))?;
-        if !desc.enabled || desc.kind != BodyKind::Dynamic {
-            return Ok(());
+        self.sleep_bodies(&[body])
+    }
+
+    /// Atomically sleep the complete groups containing the requested dynamic bodies.
+    pub fn sleep_bodies(&mut self, bodies: &[BodyHandle]) -> Result<()> {
+        if bodies.iter().any(|body| self.scene.body(*body).is_none()) {
+            return Err(invalid("unknown sleep body"));
         }
         let islands = self.islands()?;
-        let group = islands
-            .body_island(body)
-            .ok_or_else(|| invalid("missing sleep island"))?;
-        if group
-            .bodies
-            .iter()
-            .any(|&body| self.wheels.transitioning(body))
-            || group.boundaries.iter().any(|&body| {
-                self.scene
-                    .body_velocity(body)
-                    .is_ok_and(|velocity| velocity != SpatialVector::ZERO)
-            })
-        {
-            return self.wake_body(body);
-        }
         let mut sleeping = self.sleeping.clone();
         sleeping.refresh(&self.scene, &self.wheels);
-        for &body in &group.bodies {
-            sleeping.wake(body);
+        let mut groups = BTreeMap::new();
+        for &body in bodies {
+            let desc = self.scene.body(body).unwrap();
+            if !desc.enabled || desc.kind != BodyKind::Dynamic {
+                continue;
+            }
+            let group = islands
+                .body_island(body)
+                .ok_or_else(|| invalid("missing sleep island"))?;
+            for &body in &group.bodies {
+                sleeping.wake(body);
+            }
+            if group
+                .bodies
+                .iter()
+                .any(|&body| self.wheels.transitioning(body))
+                || group.boundaries.iter().any(|&body| {
+                    self.scene
+                        .body_velocity(body)
+                        .is_ok_and(|velocity| velocity != SpatialVector::ZERO)
+                })
+            {
+                continue;
+            }
+            groups.insert(group.bodies[0], group);
+        }
+        if groups.is_empty() {
+            self.sleeping = sleeping;
+            return Ok(());
         }
         let mut next = self.scene.state().clone_host()?;
         let model = self.scene.model();
         let starts = model.articulation_start.host()?;
         let dofs = model.joint_dof_offset.host()?;
-        for &art in &group.articulations {
-            let begin = dofs[starts[art] as usize] as usize;
-            let end = dofs[starts[art + 1] as usize] as usize;
-            next.joint_qd.host_mut()?[begin..end].fill(0.0);
-        }
-        for &body in &group.bodies {
-            next.body_qd.host_mut()?[self.scene.body_index(body).unwrap().index()] =
-                SpatialVector::ZERO;
+        for group in groups.values() {
+            for &art in &group.articulations {
+                let begin = dofs[starts[art] as usize] as usize;
+                let end = dofs[starts[art + 1] as usize] as usize;
+                next.joint_qd.host_mut()?[begin..end].fill(0.0);
+            }
+            for &body in &group.bodies {
+                next.body_qd.host_mut()?[self.scene.body_index(body).unwrap().index()] =
+                    SpatialVector::ZERO;
+            }
         }
         molla_sim::eval_body_velocities(model, &mut next)?;
         self.scene.commit_step(next)?;
         sleeping.acknowledge(&self.scene);
-        let owner = group.bodies[0];
-        let watched = group
-            .bodies
-            .iter()
-            .chain(&group.boundaries)
-            .map(|&body| (body, self.scene.activation_stamp(body).unwrap()))
-            .collect();
-        let wheel_samples = self
-            .wheels
-            .samples(&self.scene)
-            .iter()
-            .filter(|sample| group.bodies.contains(&sample.wheel))
-            .cloned()
-            .collect();
-        let contacts = self
-            .contact_pairs()
-            .into_iter()
-            .filter(|pair| {
-                pair.bodies
-                    .iter()
-                    .flatten()
-                    .any(|body| group.bodies.contains(body))
-                    && pair.colliders.iter().all(|&collider| {
-                        self.scene
-                            .collider(collider)
-                            .is_some_and(|c| c.enabled && !c.sensor)
-                    })
-                    && pair.points.iter().any(|point| point.penetration >= 0.0)
-            })
-            .map(|pair| canonical_pair(pair.colliders))
-            .collect();
-        sleeping.groups.insert(
-            owner,
-            SleepingGroup {
-                bodies: group.bodies.clone(),
-                watched,
-                wheels: self.wheels.activation_stamp(),
-                wheel_samples,
-                contacts,
-            },
-        );
-        for &body in &group.bodies {
-            sleeping.owners.insert(body, owner);
+        let pairs = self.contact_pairs();
+        for group in groups.values() {
+            let owner = group.bodies[0];
+            let watched = group
+                .bodies
+                .iter()
+                .chain(&group.boundaries)
+                .map(|&body| (body, self.scene.activation_stamp(body).unwrap()))
+                .collect();
+            let wheel_samples = self
+                .wheels
+                .samples(&self.scene)
+                .iter()
+                .filter(|sample| group.bodies.contains(&sample.wheel))
+                .cloned()
+                .collect();
+            let contacts = pairs
+                .iter()
+                .filter(|pair| {
+                    pair.bodies
+                        .iter()
+                        .flatten()
+                        .any(|body| group.bodies.contains(body))
+                        && pair.colliders.iter().all(|&collider| {
+                            self.scene
+                                .collider(collider)
+                                .is_some_and(|c| c.enabled && !c.sensor)
+                        })
+                        && pair.points.iter().any(|point| point.penetration >= 0.0)
+                })
+                .map(|pair| canonical_pair(pair.colliders))
+                .collect();
+            sleeping.groups.insert(
+                owner,
+                SleepingGroup {
+                    bodies: group.bodies.clone(),
+                    watched,
+                    wheels: self.wheels.activation_stamp(),
+                    wheel_samples,
+                    contacts,
+                },
+            );
+            for &body in &group.bodies {
+                sleeping.owners.insert(body, owner);
+            }
         }
         self.sleeping = sleeping;
         Ok(())
@@ -185,6 +202,8 @@ impl RigidWorld {
     pub fn wake_body(&mut self, body: BodyHandle) -> Result<()> {
         let graph = self.islands()?;
         let affected = graph.affected_bodies(&[body])?;
+        self.settling.reset_bodies(&affected);
+        self.settling.reset_bodies(&[body]);
         let watched: Vec<_> = self
             .sleeping
             .groups
@@ -305,8 +324,10 @@ impl RigidWorld {
                         break;
                     }
                 }
+                let mut any_awake = false;
                 for group in graph.groups() {
                     let awake = group.bodies.iter().any(|body| !sleeping.contains(*body));
+                    any_awake |= awake;
                     for &body in &group.bodies {
                         selected[scene.body_index(body).unwrap().index()] = awake;
                     }
@@ -326,7 +347,9 @@ impl RigidWorld {
                     |a, b| excluded.borrow_mut()(a, b),
                     Some(&selected),
                 )?;
-                crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                if any_awake {
+                    crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                }
                 Ok(articulations)
             },
         )?;

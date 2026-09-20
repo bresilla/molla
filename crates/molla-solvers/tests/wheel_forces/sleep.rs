@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn automatic_sleep_waits_for_pressure_and_resumes_on_target_change() {
+    let (mut world, chassis, wheel, _, _) = fixture(true);
+    world
+        .wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    world
+        .set_sleep_settings(Some(molla_solvers::rigid_world::SleepSettings {
+            quiet_time: 0.025,
+            ..Default::default()
+        }))
+        .unwrap();
+    for _ in 0..3 {
+        world.step(0.01).unwrap();
+    }
+    assert!(world.is_sleeping(chassis));
+    world
+        .wheels
+        .set_pressures(&world.scene, &[(wheel, 184_000.0)])
+        .unwrap();
+    assert!(!world.is_sleeping(chassis));
+    for _ in 0..39 {
+        world.step(0.01).unwrap();
+        assert!(!world.is_sleeping(chassis));
+        assert!(
+            world
+                .wheels
+                .pressure_tire(&world.scene, wheel)
+                .unwrap()
+                .pressure_pa
+                < 184_000.0
+        );
+    }
+    for _ in 0..5 {
+        world.step(0.01).unwrap();
+    }
+    assert_eq!(
+        world
+            .wheels
+            .pressure_tire(&world.scene, wheel)
+            .unwrap()
+            .pressure_pa,
+        184_000.0
+    );
+    assert!(world.is_sleeping(chassis));
+}
+
+#[test]
 fn replacing_wheel_force_storage_invalidates_sleep_even_with_matching_revisions() {
     let (mut world, chassis, _, _, _) = fixture(true);
     let (replacement, _, _, _, _) = fixture(true);

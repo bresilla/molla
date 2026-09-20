@@ -1017,6 +1017,17 @@ impl RigidScene {
         axis: JointAxis,
         motor: JointMotor,
     ) -> Result<()> {
+        self.set_joint_motor_with_wake(id, axis, motor, true)
+    }
+
+    /// Update motor controls, optionally activating endpoints when their input changes.
+    pub fn set_joint_motor_with_wake(
+        &mut self,
+        id: JointHandle,
+        axis: JointAxis,
+        motor: JointMotor,
+        wake: bool,
+    ) -> Result<()> {
         motor.validate()?;
         axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
         let dof = self.snapshot.joint_layouts[&id][axis as usize].expect("validated joint axis");
@@ -1048,7 +1059,7 @@ impl RigidScene {
             .get_mut(&id)
             .ok_or_else(|| missing("joint"))?[axis as usize]
             .motor = Some(motor);
-        if changed {
+        if changed && wake {
             for body in ends.into_iter().flatten() {
                 self.activate_body(body);
             }
