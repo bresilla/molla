@@ -6273,6 +6273,118 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Isolated `target/perf/joint-block-stack-{trace.json,trace.log,profile.tsv}` —
   candidate diagnostics, alongside molla-meadow-current-* baseline artifacts.
 
+### Root-propagation candidate checkpoint
+
+- Uncommitted candidate skips successful rigorous root-block inertia/bias
+  propagation only after U and Cholesky caches required by the forward pass
+  are populated. A private const-generic reference mode retains the old work.
+  No joint quality, stiffness, timestep or substep settings changed.
+- Added full state oracle for 120 substeps, single/global and three/local
+  articulations, free/ball/D6 roots, internal multi-DOF links, partial locks,
+  gravity and applied wrenches. Valid positive-inertia chains and centred
+  zero-inertia point masses match the old path exactly; focused cases pass.
+- Important separate finding: the initial zero-inertia fixture with offset
+  frames becomes non-finite in BOTH optimized and original propagation paths.
+  Reducing to one offset point mass still fails by step 10. This is NOT fixed
+  by eliding root propagation. The accepted singular oracle uses coincident
+  root/COM frames instead; do not claim general offset-singular stability.
+  Reproducer: featherstone_root_tests.rs singular=true with frame restored to
+  Transform::new(Vec3::new(root*2,0.4,-0.2),Quat::from_rotation_x(0.2)) and
+  child_frame translate(0.03,0.1,-0.02), zero inertia and nonzero applied torque.
+  Evidence: target/perf/root-propagation-offset-singular-failure.log. Investigate
+  this separately against rigid-world singular-response semantics before full
+  plan acceptance; do not weaken finite-state requirements to hide it.
+- Solver suite handle 74653 and isolated validation/build handle 72178 are live
+  at this checkpoint. Earlier focused handles 96596/50015 terminal (both failed
+  on the offset-singular fixture). Candidate is not committed or timed yet.
+  Engram APIs unavailable; this file preserves the discovery and next work.
+
+### Session summary: root-propagation candidate rejected
+
+#### Goal
+
+- Continue FULL_COMPACT.md with measured Molla performance work, preserving
+  physics fidelity and the original Gearbox/assets boundary.
+
+#### Discoveries
+
+- The rigorous solver can omit unused root-to-parent propagation without
+  changing finite motion in the tested cases, but its full-machine timing
+  effect is too small/noisy to justify the additional production branch and
+  reference specialization. Do not repeat this candidate as a proven speedup.
+- Offset zero-inertia point-mass instability occurs in both old and candidate
+  raw Featherstone paths. See the preceding checkpoint and retained failure log.
+  Centred singular fixtures passing is not proof of the offset case. This is
+  a newly recorded unresolved correctness issue, not caused/fixed by this work.
+
+#### Accomplished
+
+- Candidate verification: solver **497 passed, 9 ignored**, 91 binaries;
+  isolated Molla **111 passed**, Oxbo **3 passed**, Kubota/Krampe **10 passed**.
+  GPU-feature all-targets compilation and native viewer build passed.
+- Eight matched before/after timing runs passed, scalar and uniform-map full
+  801x801 terrain, 120 Hz and all settings unchanged, A/B/B/A with internal
+  R/M/M/R controls. Candidate and reference logged states match exactly.
+
+  | Mean of four medians, ms/step | Stack-block baseline | Root candidate |
+  | --- | ---: | ---: |
+  | Scalar Molla parked | 0.975387250 | 0.971429500 |
+  | Scalar Molla driving | 0.982362000 | 0.985930500 |
+  | Scalar Rapier driving control | 0.294857500 | 0.295612000 |
+  | Grid Molla parked | 0.996839000 | 0.996225000 |
+  | Grid Molla driving | 1.005938750 | 1.003258250 |
+  | Grid Rapier driving control | 0.291685000 | 0.291841500 |
+
+- Scalar driving regressed 0.36%; grid improved 0.27%. These are not a reliable
+  benefit. User-owned original GUI launches overlapped the host environment,
+  while no owned builds/tests overlapped timings. User processes untouched.
+- Reverted ONLY this turn's candidate source and new oracle module via
+  apply_patch. `git diff --exit-code -- crates/molla-solvers/src/featherstone.rs`
+  confirms exact return to committed stack-block implementation 757896f.
+  Candidate patch and oracle retained as ignored diagnostics, not production.
+- All candidate handles terminal: 96596/50015 failed focused offset-singular
+  oracles; 74653 corrected/full solver, 72178 integration/viewer, 76912 GPU check,
+  17511 timing. Restored-source native viewer rebuild handle 41493 still live
+  at this checkpoint. No owned GUI. Engram APIs unavailable.
+
+#### Next Steps
+
+- Finish/poll restored viewer build and refresh ordinary Molla test binary so
+  target/release outputs do not remain the rejected candidate.
+- Investigate offset singular-inertia behavior with a minimal reproducible case
+  in raw Featherstone and RigidWorld, including compatibility of applied torque
+  with locked/singular angular modes. Do not assume the public adapter shares
+  the raw-path failure without reproducing it.
+- Continue larger measured solver/collision optimizations and the full remaining
+  pressure/material/GPU/lifecycle/rendering/towing/replay/soil requirements.
+  Goal remains active and incomplete; no performance-parity claim.
+
+#### Relevant Files
+
+- Core `target/perf/root-propagation-candidate.patch`,
+  `root-propagation-oracle.rs`, `root-propagation-offset-singular-failure.log` —
+  rejected candidate and unresolved edge-case evidence.
+- Core `target/perf/root-propagation-{solvers,gpu-check}.log` — validation.
+- Isolated `target/perf/root-propagation-{molla,oxbo,imported,viewer}.log`.
+- Isolated `target/perf/root-propagation-{scalar,grid}-{before-a,after-a,after-b,before-b}.log`,
+  `root-propagation-timing-summary.txt`, `root-propagation-load-{before,after}.txt`.
+- Isolated `target/perf/gearbox-root-propagation-after` SHA256
+  64de5bd3693fb9b582fd93e88735063606267d4d370d86e088af2ecbffdd7f1b;
+  this is a rejected experimental binary, not the current implementation.
+- Isolated `target/perf/root-propagation-restored-viewer.log` — restoration build.
+
+### Status clarification after candidate restoration
+
+- Restored-source native viewer rebuild handle 41493 is terminal: passed in
+  35.50 s. No owned jobs remain. Ordinary non-profile test executable still
+  needs refreshing before it is reused; retained accepted stack-block binary
+  remains the correct performance baseline, not the root candidate.
+- User requested overall progress: working integration, not replacement-ready.
+  Latest accepted optimization is stack-backed joint solves, not the rejected
+  root candidate. Typical one-machine physics remains roughly 1 ms versus
+  0.29 ms baseline; tails/full-viewer performance and full-plan acceptance are
+  incomplete. Do not provide an invented completion percentage.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
