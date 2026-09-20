@@ -63,7 +63,7 @@ struct WheelOutput {
     // x=adhesion_fraction, y=sliding_fraction,
     // z=available_friction_budget, w=consumed_friction_budget
     diag4: vec4<f32>,
-    // x=effective_longitudinal_stiffness, y=effective_cornering_stiffness
+    // x=longitudinal stiffness, y=cornering stiffness, z=contact area (m²)
     diag5: vec4<f32>,
     // xyz=world force accumulated from per-contact terrain normals
     world_force: vec4<f32>,
@@ -162,6 +162,7 @@ var<workgroup> seg_world_x: array<f32, WG>;
 var<workgroup> seg_world_y: array<f32, WG>;
 var<workgroup> seg_world_z: array<f32, WG>;
 var<workgroup> seg_rolling: array<f32, WG>;
+var<workgroup> seg_area: array<f32, WG>;
 // Patch extent shared across the workgroup for the linear leading-edge
 // bristle profile (reduced from the geometry pre-pass before forces).
 var<workgroup> wg_patch_min_x: f32;
@@ -185,6 +186,77 @@ fn brush_load_stiffness_factor(normal_pressure: f32) -> f32 {
 fn brush_pressure_stiffness_factor(pressure: f32) -> f32 {
     let pressure_ratio = clamp(max(pressure, 1.0) / 180000.0, 0.25, 2.50);
     return clamp(pow(pressure_ratio, 0.14), 0.78, 1.14);
+}
+
+struct CoverageIntegral {
+    length: f32,
+    load: f32,
+    moment: f32,
+    lo: f32,
+    hi: f32,
+};
+
+fn positive_segment(a: vec2<f32>, b: vec2<f32>) -> CoverageIntegral {
+    var x0 = a.x;
+    var p0 = a.y;
+    var x1 = b.x;
+    var p1 = b.y;
+    if (p0 <= 0.0 && p1 <= 0.0) {
+        return CoverageIntegral(0.0, 0.0, 0.0, 1.0e9, -1.0e9);
+    }
+    if (p0 < 0.0) {
+        x0 = x0 + (x1 - x0) * (-p0 / (p1 - p0));
+        p0 = 0.0;
+    } else if (p1 < 0.0) {
+        x1 = x0 + (x1 - x0) * (p0 / (p0 - p1));
+        p1 = 0.0;
+    }
+    let length = abs(x1 - x0);
+    let load = length * (p0 + p1) * 0.5;
+    let moment = length * (x0 * (2.0 * p0 + p1) + x1 * (p0 + 2.0 * p1)) / 6.0;
+    return CoverageIntegral(length, load, moment, min(x0, x1), max(x0, x1));
+}
+
+fn profile_depth(in_: WheelInput, segment: u32, segments: u32, z: f32,
+                 heading: vec3<f32>, side: vec3<f32>) -> vec2<f32> {
+    var signed_index = f32(segment);
+    if (segment > segments / 2u) { signed_index = signed_index - f32(segments); }
+    let theta = signed_index * (6.2831853 / f32(segments));
+    let x = in_.spin.y * sin(theta);
+    let y = -in_.spin.y * cos(theta);
+    var height = 0.0;
+    if (in_.extra.y > 0.5) {
+        height = sample_terrain(in_.hub_pos.x + heading.x * x + side.x * z,
+                                in_.hub_pos.z + heading.z * x + side.z * z);
+    }
+    return vec2<f32>(x, height - (in_.hub_pos.y + y));
+}
+
+struct CellCoverage {
+    x: f32,
+    z: f32,
+    penetration: f32,
+    length: f32,
+    lo: f32,
+    hi: f32,
+};
+
+fn cell_coverage(in_: WheelInput, index: u32, segments: u32, strips: u32,
+                 heading: vec3<f32>, side: vec3<f32>) -> CellCoverage {
+    let segment = index / strips;
+    let z = ((f32(index % strips) + 0.5) / f32(strips) - 0.5) * in_.spin.z;
+    let center = profile_depth(in_, segment, segments, z, heading, side);
+    let prev = profile_depth(in_, (segment + segments - 1u) % segments, segments, z, heading, side);
+    let next = profile_depth(in_, (segment + 1u) % segments, segments, z, heading, side);
+    let a = positive_segment((prev + center) * 0.5, center);
+    let b = positive_segment(center, (center + next) * 0.5);
+    let length = a.length + b.length;
+    let load = a.load + b.load;
+    if (length <= 0.0 || load <= 0.0) {
+        return CellCoverage(0.0, z, 0.0, 0.0, 1.0e9, -1.0e9);
+    }
+    return CellCoverage((a.moment + b.moment) / load, z, load / length, length,
+                        min(a.lo, b.lo), max(a.hi, b.hi));
 }
 
 @compute @workgroup_size(WG)
@@ -228,7 +300,6 @@ fn brush_step(
     let slip_angle = atan2(v_lat, max(abs(v_long), relax));
     let dtheta = 6.2831853 / f32(segments);
     let arc_len = radius * dtheta;
-    let cell_area = width / f32(width_segments) * arc_len;
     let normal_per_area_per_m = carcass_k + 3.0 * pressure / max(radius, 1.0e-6);
 
     // Initialise scratch for this segment slot.
@@ -250,6 +321,7 @@ fn brush_step(
         seg_world_y[i] = 0.0;
         seg_world_z[i] = 0.0;
         seg_rolling[i] = 0.0;
+        seg_area[i] = 0.0;
     }
     workgroupBarrier();
 
@@ -259,19 +331,10 @@ fn brush_step(
     var pre = i;
     loop {
         if (pre >= cells) { break; }
-        let theta_p = f32(pre / width_segments) * dtheta;
-        let local_x_p = radius * sin(theta_p);
-        let local_y_p = -radius * cos(theta_p);
-        let local_z_p = ((f32(pre % width_segments) + 0.5) / f32(width_segments) - 0.5) * width;
-        let world_x_p = in_.hub_pos.x + heading.x * local_x_p + side.x * local_z_p;
-        let world_z_p = in_.hub_pos.z + heading.z * local_x_p + side.z * local_z_p;
-        var ground_y_p: f32 = 0.0;
-        if (terrain_mode > 0.5) {
-            ground_y_p = sample_terrain(world_x_p, world_z_p);
-        }
-        if (ground_y_p - (in_.hub_pos.y + local_y_p) > 0.0) {
-            seg_min_x[i] = min(seg_min_x[i], local_x_p);
-            seg_max_x[i] = max(seg_max_x[i], local_x_p);
+        let cell = cell_coverage(in_, pre, segments, width_segments, heading, side);
+        if (cell.length > 0.0) {
+            seg_min_x[i] = min(seg_min_x[i], cell.lo);
+            seg_max_x[i] = max(seg_max_x[i], cell.hi);
         }
         pre = pre + WG;
     }
@@ -305,20 +368,13 @@ fn brush_step(
     var idx = i;
     loop {
         if (idx >= cells) { break; }
-        let theta = f32(idx / width_segments) * dtheta;
-        let local_x = radius * sin(theta);
-        let local_y = -radius * cos(theta);
-        let local_z = ((f32(idx % width_segments) + 0.5) / f32(width_segments) - 0.5) * width;
+        let cell = cell_coverage(in_, idx, segments, width_segments, heading, side);
+        let local_x = cell.x;
+        let local_z = cell.z;
+        let cell_area = width / f32(width_segments) * cell.length;
         let world_x = in_.hub_pos.x + heading.x * local_x + side.x * local_z;
         let world_z = in_.hub_pos.z + heading.z * local_x + side.z * local_z;
-        let point_y = in_.hub_pos.y + local_y;
-        // Terrain mode 0 = flat floor at y = 0; mode 1 = bilinear
-        // heightfield lookup.
-        var ground_y: f32 = 0.0;
-        if (terrain_mode > 0.5) {
-            ground_y = sample_terrain(world_x, world_z);
-        }
-        let pen = ground_y - point_y;
+        let pen = cell.penetration;
         if (pen > 0.0) {
             let cell_normal = sample_terrain_normal(world_x, world_z);
             let cell_heading = safe_normalize(
@@ -404,8 +460,9 @@ fn brush_step(
             seg_consumed[i] = seg_consumed[i] + consumed_i;
             seg_mz[i] = seg_mz[i] + local_z * (ft_long - rolling_i) - local_x * ft_lat;
             seg_fn[i] = seg_fn[i] + fn_i;
-            seg_min_x[i] = min(seg_min_x[i], local_x);
-            seg_max_x[i] = max(seg_max_x[i], local_x);
+            seg_area[i] = seg_area[i] + cell_area;
+            seg_min_x[i] = min(seg_min_x[i], cell.lo);
+            seg_max_x[i] = max(seg_max_x[i], cell.hi);
             seg_fn_x[i] = seg_fn_x[i] + local_x * fn_i;
             seg_lat_x[i] = seg_lat_x[i] + local_x * abs(ft_lat);
             seg_count[i] = seg_count[i] + 1u;
@@ -426,6 +483,7 @@ fn brush_step(
         var total_fy: f32 = 0.0;
         var total_mz: f32 = 0.0;
         var total_fn: f32 = 0.0;
+        var total_area: f32 = 0.0;
         var min_x: f32 = 1.0e9;
         var max_x: f32 = -1.0e9;
         var total_count: u32 = 0u;
@@ -444,6 +502,7 @@ fn brush_step(
             total_fy = total_fy + seg_fy[k];
             total_mz = total_mz + seg_mz[k];
             total_fn = total_fn + seg_fn[k];
+            total_area = total_area + seg_area[k];
             total_power = total_power + seg_power[k];
             total_fn_x = total_fn_x + seg_fn_x[k];
             total_lat_x = total_lat_x + seg_lat_x[k];
@@ -489,7 +548,7 @@ fn brush_step(
         outputs[wi].diag2 = vec4<f32>(f32(total_slide), total_mz, lateral_slip_speed, slip_angle);
         outputs[wi].diag3 = vec4<f32>(total_power, camber_angle, contact_center_x, pneumatic_trail);
         outputs[wi].diag4 = vec4<f32>(adhesion_fraction, sliding_fraction, total_available, total_consumed);
-        outputs[wi].diag5 = vec4<f32>(k_long, k_corner, 0.0, 0.0);
+        outputs[wi].diag5 = vec4<f32>(k_long, k_corner, total_area, 0.0);
         outputs[wi].world_force = vec4<f32>(total_world, 0.0);
     }
 }

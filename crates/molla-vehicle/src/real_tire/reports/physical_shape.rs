@@ -397,7 +397,9 @@ pub struct TireAdhesionSlidingContinuityReport {
     pub max_moment_jump_over_load_radius: f64,
     pub max_budget_ratio: f64,
     pub force_sign_stable: bool,
+    /// Restoring sign in the equal-static/kinetic-friction control sweep.
     pub moment_sign_stable: bool,
+    pub max_mirrored_moment_error_over_load_radius: f64,
 }
 
 impl TireAdhesionSlidingContinuityReport {
@@ -407,6 +409,7 @@ impl TireAdhesionSlidingContinuityReport {
             && self.max_force_jump_over_load.is_finite()
             && self.max_moment_jump_over_load_radius.is_finite()
             && self.max_budget_ratio.is_finite()
+            && self.max_mirrored_moment_error_over_load_radius.is_finite()
     }
 
     pub fn passed(self) -> bool {
@@ -420,6 +423,7 @@ impl TireAdhesionSlidingContinuityReport {
             && self.max_budget_ratio <= 1.05
             && self.force_sign_stable
             && self.moment_sign_stable
+            && self.max_mirrored_moment_error_over_load_radius <= 1e-10
     }
 
     pub fn acceptance_checks(self) -> Vec<TireRigAcceptanceCheck> {
@@ -482,10 +486,17 @@ impl TireAdhesionSlidingContinuityReport {
             ),
             TireRigAcceptanceCheck::at_least(
                 "adhesion_sliding_moment_sign_stable",
-                "aligning moment sign should not flip while lateral slip direction stays fixed",
+                "equal-static/kinetic-friction control must retain a restoring aligning moment",
                 "moment_sign_stable",
                 bool_metric(self.moment_sign_stable),
                 1.0,
+            ),
+            TireRigAcceptanceCheck::at_most(
+                "adhesion_sliding_moment_mirrored",
+                "mirrored lateral slip must reverse the variable-friction aligning moment",
+                "max_mirrored_moment_error_over_load_radius",
+                self.max_mirrored_moment_error_over_load_radius,
+                1e-10,
             ),
         ]
     }
@@ -1995,10 +2006,10 @@ pub fn tire_adhesion_sliding_continuity_report() -> TireAdhesionSlidingContinuit
     let mut max_moment_jump_over_load_radius = 0.0_f64;
     let mut max_budget_ratio = 0.0_f64;
     let mut force_sign: Option<(f64, f64)> = None;
-    let mut moment_sign: Option<f64> = None;
     let mut force_sign_stable = true;
     let mut moment_sign_stable = true;
-    let mut sweep_moments: Vec<f64> = Vec::new();
+    let mut max_mirrored_moment_error_over_load_radius = 0.0_f64;
+    let constant_friction = SurfaceMaterial { mu_dynamic: material.mu_static, ..material };
 
     for slip_ratio in [
         0.000, 0.015, 0.030, 0.045, 0.060, 0.080, 0.105, 0.135, 0.170, 0.215, 0.270,
@@ -2072,32 +2083,27 @@ pub fn tire_adhesion_sliding_continuity_report() -> TireAdhesionSlidingContinuit
             && sample.consumed_friction_budget_n.is_finite();
         max_budget_ratio = max_budget_ratio
             .max(sample.consumed_friction_budget_n / sample.available_friction_budget_n.max(1.0));
-        sweep_moments.push(sample.aligning_moment_nm);
+        let mirrored = tire_rig_point(
+            &params, &terrain, &material, load_n, speed_m_per_s,
+            0.080, -slip_angle_rad, 0.0,
+        );
+        let control = tire_rig_point(
+            &params, &terrain, &constant_friction, load_n, speed_m_per_s,
+            0.080, slip_angle_rad, 0.0,
+        );
+        finite_outputs &= mirrored.is_finite() && control.is_finite();
+        max_mirrored_moment_error_over_load_radius = max_mirrored_moment_error_over_load_radius.max(
+            (sample.aligning_moment_nm + mirrored.telemetry.aligning_moment_nm).abs()
+                / (load_n * params.radius),
+        );
+        moment_sign_stable &= control.telemetry.aligning_moment_nm < 0.0;
         if let Some(prev) = previous_moment {
             max_moment_jump_over_load_radius = max_moment_jump_over_load_radius.max(
                 (sample.aligning_moment_nm - prev).abs() / (load_n * params.radius.max(1.0e-9)),
             );
         }
-        sample_count += 1;
+        sample_count += 3;
         previous_moment = Some(sample.aligning_moment_nm);
-    }
-
-    // The aligning moment physically decays toward zero (and may cross it)
-    // as the patch saturates at high slip angles, so sign stability is only
-    // required while the moment is a meaningful fraction of the sweep peak.
-    let peak_moment = sweep_moments
-        .iter()
-        .fold(0.0_f64, |acc, m| acc.max(m.abs()));
-    let moment_floor = (0.10 * peak_moment).max(0.05);
-    for moment in &sweep_moments {
-        if moment.abs() > moment_floor {
-            let sign = moment.signum();
-            if let Some(first) = moment_sign {
-                moment_sign_stable &= sign == first;
-            } else {
-                moment_sign = Some(sign);
-            }
-        }
     }
 
     TireAdhesionSlidingContinuityReport {
@@ -2110,5 +2116,6 @@ pub fn tire_adhesion_sliding_continuity_report() -> TireAdhesionSlidingContinuit
         max_budget_ratio,
         force_sign_stable,
         moment_sign_stable,
+        max_mirrored_moment_error_over_load_radius,
     }
 }

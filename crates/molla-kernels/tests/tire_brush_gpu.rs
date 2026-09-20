@@ -12,6 +12,9 @@ use molla_vehicle::{
 #[path = "tire_brush_gpu/width.rs"]
 mod width;
 
+#[path = "tire_brush_gpu/coverage.rs"]
+mod coverage;
+
 fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
 }

@@ -6,6 +6,7 @@ use super::super::{TireBrushState, TreadBristle, TreadBristleParams};
 use crate::terrain::Terrain;
 
 mod brush_factors;
+mod coverage;
 use brush_factors::BrushFactors;
 
 #[cfg(test)]
@@ -293,7 +294,8 @@ fn evaluate_persistent_inner<T: Terrain + ?Sized, const CACHED: bool>(
 
 fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize) -> std::sync::Arc<[[f64; 3]]> {
     (0..segments).flat_map(|i| {
-        let theta = i as f64 * (std::f64::consts::TAU / segments as f64);
+        let signed = if i > segments / 2 { i as f64 - segments as f64 } else { i as f64 };
+        let theta = signed * (std::f64::consts::TAU / segments as f64);
         let (x, y) = (radius * theta.sin(), -radius * theta.cos());
         (0..width_segments).map(move |strip| {
             [x, y, ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width]
@@ -352,23 +354,28 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
     let dtheta = std::f64::consts::TAU / segments as f64;
     let arc_len = params.radius * dtheta;
     let strip_width = params.width / width_segments as f64;
-    let cell_area = strip_width * arc_len;
     let normal_per_area_per_m =
         params.carcass_normal_stiffness + 3.0 * params.pressure_pa / params.radius.max(1.0e-6);
     let terrain_mu_ref =
         finite_positive_or(terrain.friction(), material.mu_static.max(1.0e-3), 1.0e-6);
 
-    // The linear leading-edge bristle profile needs the patch extent and
-    // travel direction before forces are evaluated, so run a cheap
-    // geometry-only pre-pass over the penetrating segments first.
+    let depths: Vec<_> = profile.iter().map(|&[x, y, z]| {
+        terrain.height(state.hub_pos[0] + heading[0] * x + side[0] * z,
+            state.hub_pos[2] + heading[2] * x + side[2] * z) - (state.hub_pos[1] + y)
+    }).collect();
+    if depths.iter().any(|p| !p.is_finite()) {
+        return Err("non-finite brush terrain height");
+    }
+    let mut coverage = Vec::new();
     let mut patch_min_x = f64::INFINITY;
     let mut patch_max_x = f64::NEG_INFINITY;
-    for &[local_x, local_y, local_z] in profile.iter() {
-        let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
-        let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
-        if terrain.height(world_x, world_z) - (state.hub_pos[1] + local_y) > 0.0 {
-            patch_min_x = patch_min_x.min(local_x);
-            patch_max_x = patch_max_x.max(local_x);
+    for i in 0..profile.len() {
+        if let Some(cell) = coverage::cell(&profile, &depths, width_segments, i) {
+            patch_min_x = patch_min_x.min(cell.min);
+            patch_max_x = patch_max_x.max(cell.max);
+            coverage.push(cell);
+        } else if let Some((history, _)) = &mut persistent {
+            history.cells[i].reset();
         }
     }
     let patch_extent = (patch_max_x - patch_min_x).max(0.0);
@@ -392,24 +399,17 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
     let mut normal_moment_x = 0.0;
     let mut lateral_moment_x = 0.0;
     let mut sliding_count = 0usize;
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
     let mut available_friction_budget = 0.0;
     let mut consumed_friction_budget = 0.0;
     let mut force_vec = [0.0; 3];
     let mut rolling_resistance_force = 0.0;
 
-    for (cell_index, &[local_x, local_y, local_z]) in profile.iter().enumerate() {
+    for cell in coverage {
+        let (cell_index, local_x, local_z) = (cell.index, cell.x, cell.z);
+        let penetration = cell.penetration;
+        let cell_area = strip_width * cell.length;
         let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
         let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
-        let point_y = state.hub_pos[1] + local_y;
-        let penetration = terrain.height(world_x, world_z) - point_y;
-        if penetration <= 0.0 {
-            if let Some((history, _)) = &mut persistent {
-                history.cells[cell_index].reset();
-            }
-            continue;
-        }
         let cell_normal = normalize(terrain.normal(world_x, world_z));
         let cell_heading = normalize(project_to_ground(state.heading, cell_normal));
         let cell_side = normalize(cross(cell_heading, cell_normal));
@@ -527,8 +527,6 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
         if sliding {
             sliding_count += 1;
         }
-        min_x = min_x.min(local_x);
-        max_x = max_x.max(local_x);
         cells.push(TireContactCell {
             node_index: None,
             local_x,
@@ -602,7 +600,7 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
         slip_speed,
         lateral_slip_speed,
         slip_angle_rad,
-        patch_length: (max_x - min_x).max(0.0),
+        patch_length: patch_extent,
         contact_count: cells.len(),
         sliding_count,
         adhesion_fraction,

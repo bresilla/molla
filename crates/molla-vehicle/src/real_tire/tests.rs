@@ -4151,6 +4151,7 @@ fn ice_large_patch_report_keeps_low_mu_force_capped() {
 #[test]
 fn adhesion_sliding_continuity_report_keeps_force_and_moment_smooth() {
     let report = tire_adhesion_sliding_continuity_report();
+    assert_eq!(report.sample_count, 35);
     assert!(report.is_finite(), "report should be finite: {report:?}");
     assert!(
         report.passed(),
@@ -4174,9 +4175,29 @@ fn adhesion_sliding_continuity_report_keeps_force_and_moment_smooth() {
                 .any(|check| check.check_id == "adhesion_sliding_moment_continuous")
             && checks
                 .iter()
-                .any(|check| check.check_id == "adhesion_sliding_budget_bounded"),
+                .any(|check| check.check_id == "adhesion_sliding_budget_bounded")
+            && checks
+                .iter()
+                .any(|check| check.check_id == "adhesion_sliding_moment_mirrored"),
         "adhesion/sliding checks should expose force, moment, and budget continuity gates: {checks:?}"
     );
+}
+
+#[test]
+fn adhesion_sliding_controls_reject_bad_sign_symmetry_and_nonfinite_metrics() {
+    let report = tire_adhesion_sliding_continuity_report();
+    let mut wrong_sign = report;
+    wrong_sign.moment_sign_stable = false;
+    assert!(!wrong_sign.passed());
+    assert!(wrong_sign.acceptance_checks().iter().any(|check|
+        check.check_id == "adhesion_sliding_moment_sign_stable" && !check.passed));
+    for error in [1e-8, f64::INFINITY, f64::NAN] {
+        let mut asymmetric = report;
+        asymmetric.max_mirrored_moment_error_over_load_radius = error;
+        assert!(!asymmetric.passed());
+        assert!(asymmetric.acceptance_checks().iter().any(|check|
+            check.check_id == "adhesion_sliding_moment_mirrored" && !check.passed));
+    }
 }
 
 #[test]
@@ -8837,7 +8858,7 @@ fn brush_load_deflection_sweep() {
                 &SurfaceMaterial::dry_asphalt(),
             );
             assert!(
-                out.patch_length > prev_patch_per_pressure[i] - 1.0e-6,
+                out.patch_length > prev_patch_per_pressure[i],
                 "patch length not monotone with load at p={p} Pa: \
                  prev={} now={} at Fz={fz}",
                 prev_patch_per_pressure[i],
@@ -8873,12 +8894,13 @@ fn brush_load_deflection_sweep() {
         p_low > p_high,
         "low-pressure patch should be longer at Fz=5 kN: low={p_low} high={p_high}"
     );
-    // Magnitudes: passenger-tire patches at 5 kN are typically
-    // 0.08–0.20 m. Allow a generous band.
-    assert!(
-        p_low > 0.04 && p_low < 0.35,
-        "low-pressure patch length out of plausible band: {p_low} m"
-    );
+    let params = RealTireParams { pressure_pa: 120_000.0, ..Default::default() };
+    let height = solve_loaded_tire_hub_height(&params, &terrain, 0.0, 0.0, 5_000.0);
+    let inner = params.radius * (std::f64::consts::PI / params.segments as f64).cos();
+    let lower = 2.0 * (inner * inner - height * height).max(0.0).sqrt();
+    let upper = 2.0 * (params.radius * params.radius - height * height).max(0.0).sqrt();
+    assert!((lower - 1e-12..=upper + 1e-12).contains(&p_low),
+        "patch {p_low} outside inscribed-polygon/circle bounds [{lower}, {upper}]");
 }
 
 /// Hardening sweep for the reduced brush tire: over a small grid

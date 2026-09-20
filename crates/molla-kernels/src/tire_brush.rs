@@ -45,7 +45,7 @@ pub struct BrushWheelOutput {
     pub diag3: [f32; 4],
     /// `(adhesion_fraction, sliding_fraction, available_friction_budget, consumed_friction_budget)`
     pub diag4: [f32; 4],
-    /// `(effective_longitudinal_stiffness, effective_cornering_stiffness, 0, 0)`
+    /// `(effective_longitudinal_stiffness, effective_cornering_stiffness, contact_area_m2, 0)`
     pub diag5: [f32; 4],
     /// `(Fx, Fy, Fz, 0)` world-force vector accumulated from per-contact
     /// terrain normals. This is the GPU counterpart of
