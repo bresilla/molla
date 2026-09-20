@@ -5644,6 +5644,95 @@ observed while diagnosing the Oxbo, then verify the real pressure-enabled machin
 - Engram tools remain unavailable in metadata; this tracked checkpoint records
   the session. FULL_COMPACT.md remains untracked and unchanged.
 
+## Session checkpoint: footprint-cell friction sampling
+
+### Goal
+
+- Continue the entire FULL_COMPACT.md objective, specifically §6.1 terrain
+  coupling. The preceding user-requested divergence audit was read-only; this
+  continuation implements the identified centre-only friction sampling gap.
+  The full objective remains active and incomplete.
+
+### Instructions
+
+- No Gearbox source files changed this turn: isolated HEAD remains `559d055`,
+  clean. Original Gearbox and shared assets remain untouched. Isolated builds
+  and tests were run; no GUI was launched or manipulated.
+- User asked how far the isolated worktree diverged. Git HEAD reflog confirms
+  its origin at `6f2db09`. At audit time, isolated `559d055` had 51 commits and
+  70 touched/net-changed paths: 37 modified, 30 added, 3 deleted; +12,222/-1,897
+  lines, including tests, refactoring and docs. Original develop `d45154b`
+  independently had 154 commits since that split. Do not characterize this as
+  a small adapter-only patch or claim it was merged into the original checkout.
+
+### Discoveries
+
+- Vehicle brush evaluation already queries `Terrain::friction_at` per tread
+  cell. The solver adapter flattened the selected ground material to one
+  centre-probe scalar and the persistent entrypoint required FlatTerrain.
+- A material reference based on the registered grid maximum plus collider
+  fallback avoids zero-centre/high-friction-neighbour loss and ratio clipping.
+  Cache the grid maximum on registration, not by scanning a whole field per
+  wheel/substep. No per-cell raycasts are needed for this planar patch model.
+- The current ideal brush has one centre strip: each rolling sample represents
+  the whole width and has local_z=0. Width-resolved surface mixtures remain
+  missing. Likewise live isolated terrain/world registration currently passes
+  `None` for grids; this does not complete field authoring integration.
+
+### Accomplished
+
+- Molla `03fd9a8 feat(tyres): sample footprint surface friction` broadens the
+  persistent planar brush to the existing Terrain trait. Pressure contact maps
+  each brush cell from the local tangent plane through world space into the
+  selected ground collider's local friction grid. Outside-grid lookup retains
+  the collider's authored scalar friction. Simple non-pressure tyres keep their
+  existing centre-probe model.
+- Active and sleeping geometry-refresh paths use the same material lookup.
+  Forces, aligning moment and available grip still come from the existing
+  brush solve; no duplicate force path or tyre/chassis integrator was added.
+- A failing-before mixed zero/high-friction regression reported 152.72 N on a
+  zero-friction cell. It now passes with zero force there and the expected
+  sum of load-sensitive budgets on the other cells.
+- Three new tests cover that boundary, a rotated/translated/tilted collider,
+  a zero-friction centre with nonzero outside-grid fallback, high-friction
+  contrast, sleeping pose refresh, uniform-grid/scalar equivalence at mu=0,
+  0.2 and 1.2, and invalid grid replacement without losing live output/state.
+- Full selected CPU lane including molla-vehicle: **979 passed, 10 ignored,
+  0 failed**, across 126 test binaries (242 vehicle tests included). GPU-feature
+  compilation passes; this is not a GPU runtime-parity result.
+- Both ordinary Gearbox backend lanes: **104 passed, 17 ignored** each.
+  All three imported Oxbo gates pass (21.34 s); all ten Kubota/Krampe gates pass
+  (121.67 s). Isolated GUI builds through Oslo (30.41 s). Incidental timings
+  overlap correctness work and are not performance acceptance.
+- All owned handles are terminal: repro 56326, focused 35306, 88031/79378
+  (test strip initially missed all non-centre samples), 8791 (test API typo),
+  final focused 85569, core/GPU 96706, backend lanes 29919, imported/build 30613.
+
+### Next Steps
+
+- Finish width-resolved footprint material response and live field/material
+  authoring-to-grid integration; handle full surface parameters and calibrated
+  pressure/load trends rather than pretending scalar friction is that model.
+- Continue explicit machine metadata validation, controlled pressure sweeps,
+  lifecycle/rendered UI/CLI acceptance, sub-1-ms/Rapier/end-to-end performance,
+  GPU parity, towing/replay/PTO gates and Bekker/MPM coupling. None are complete
+  merely because the planar friction-cell tests pass.
+
+### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/rig/runners.rs` — persistent brush terrain
+  parameter; `real_tire` is now a module directory, not a single source file.
+- `crates/molla-solvers/src/pressure_tire.rs` — tangent-plane material adapter.
+- `crates/molla-solvers/src/wheel_forces.rs`, `wheel_forces/sleeping.rs` —
+  registered grid reference cache and shared active/sleeping surface lookup.
+- `crates/molla-solvers/tests/wheel_forces/footprint_material.rs` — regressions.
+- Molla `target/perf/footprint-friction-{repro,focused,full,gpu-check}.log`;
+  isolated `target/perf/footprint-friction-{molla,rapier,oxbo,imported,viewer-build}.log`.
+- Current isolated GUI SHA256:
+  `89950472a9035fa75eb4d3e189d00689e4454519db21717fab74b92fc394c515`.
+- Engram APIs remain absent from tool metadata; this tracked checkpoint records
+  the session. FULL_COMPACT.md remains unmodified and untracked.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
