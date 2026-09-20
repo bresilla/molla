@@ -16,6 +16,7 @@ const SEGMENTS_MAX: u32 = 256;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, Default)]
 pub struct BrushWheelInput {
+    /// `(hub.xyz, width_segments)`: integer 1..=16; zero selects three strips.
     pub hub_pos: [f32; 4],
     pub hub_vel: [f32; 4],
     /// `(heading.xyz, structural_lateral_bias_per_normal)`.
@@ -698,12 +699,22 @@ impl TireBrushGpuKernel {
 
 fn validate_wheels(wheels: &[BrushWheelInput]) -> Result<()> {
     for w in wheels {
+        validate_width_segments(w.hub_pos[3])?;
         if w.tire[0] as u32 > SEGMENTS_MAX {
             return Err(Error::Solver(format!(
                 "tire_brush: segments {} exceeds GPU max {SEGMENTS_MAX}",
                 w.tire[0] as u32
             )));
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_width_segments(value: f32) -> Result<()> {
+    if !value.is_finite() || !(0.0..=16.0).contains(&value) || value.fract() != 0.0 {
+        return Err(Error::Solver(
+            "tire_brush: width segments must be an integer 1..=16, or zero for three strips".into(),
+        ));
     }
     Ok(())
 }
@@ -805,6 +816,17 @@ const _WG_DOC: u32 = WORKGROUP_SIZE;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn width_resolution_validates_without_changing_the_row_layout() {
+        assert_eq!(std::mem::size_of::<super::BrushWheelInput>(), 7 * 16);
+        for width in [0.0, 1.0, 3.0, 16.0] {
+            assert!(super::validate_width_segments(width).is_ok());
+        }
+        for width in [-1.0, 0.5, 1.5, 17.0, f32::NAN, f32::INFINITY] {
+            assert!(super::validate_width_segments(width).is_err());
+        }
+    }
+
     #[test]
     fn tire_brush_shader_carries_structural_lateral_bias_from_heading_w() {
         let shader = include_str!("../shaders/tire_brush.wgsl");

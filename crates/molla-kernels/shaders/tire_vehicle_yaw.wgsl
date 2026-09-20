@@ -820,19 +820,16 @@ fn build_brush_rows(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Reuse binding names for this entry:
     // wheel_offsets[i]: x=attach_x_m, y=attach_y_m,
     //                   z=attach_z_m, w=wheel_radius_m.
-    // tire_wrenches[i*5 + 0]: wheel state (spin, steer, width, pressure)
-    // tire_wrenches[i*5 + 1]: tire row
-    // tire_wrenches[i*5 + 2]: material row
-    // tire_wrenches[i*5 + 3]: extra row
-    // tire_wrenches[i*5 + 4]: suspension/contact row
+    // tire_wrenches[i*6 + 0..5]: state, tire, material, extra, suspension, width resolution.
     // yaw_out[i*7..i*7+7] is BrushWheelInput as seven vec4 rows.
     let mount = wheel_offsets[i];
-    let base_in = i * 5u;
+    let base_in = i * 6u;
     let wheel = tire_wrenches[base_in + 0u];
     let tire = tire_wrenches[base_in + 1u];
     let material = tire_wrenches[base_in + 2u];
     let extra = tire_wrenches[base_in + 3u];
     let suspension = tire_wrenches[base_in + 4u];
+    let width_segments = tire_wrenches[base_in + 5u].x;
     let yaw = u.pose.w;
     let cy = cos(yaw);
     let sy = sin(yaw);
@@ -848,7 +845,7 @@ fn build_brush_rows(@builtin(global_invocation_id) gid: vec3<u32>) {
     let hub_vx = u.velocity.x - u.velocity.w * off_z;
     let hub_vz = u.velocity.z + u.velocity.w * off_x;
     let base_out = i * 7u;
-    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, 0.0);
+    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, width_segments);
     yaw_out[base_out + 1u] = vec4<f32>(hub_vx, u.velocity.y, hub_vz, 0.0);
     yaw_out[base_out + 2u] = vec4<f32>(long_x, 0.0, long_z, 0.0);
     yaw_out[base_out + 3u] = vec4<f32>(wheel.x, radius, wheel.z, wheel.w);
@@ -868,7 +865,7 @@ fn build_brush_rows_from_spin_state(@builtin(global_invocation_id) gid: vec3<u32
     // wheel_offsets[i]: resident wheel-spin state
     //   x=spin_rad_s, y=wheel_radius_m, z=spin_inertia_kg_m2, w=finite.
     // tire_wrenches[i*6 + 0]: wheel mount (attach_x, attach_y, attach_z, radius fallback)
-    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, reserved)
+    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, width_segments)
     // tire_wrenches[i*6 + 2]: tire row
     // tire_wrenches[i*6 + 3]: material row
     // tire_wrenches[i*6 + 4]: extra row
@@ -897,7 +894,7 @@ fn build_brush_rows_from_spin_state(@builtin(global_invocation_id) gid: vec3<u32
     let hub_vx = u.velocity.x - u.velocity.w * off_z;
     let hub_vz = u.velocity.z + u.velocity.w * off_x;
     let base_out = i * 7u;
-    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, 0.0);
+    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, controls.w);
     yaw_out[base_out + 1u] = vec4<f32>(hub_vx, u.velocity.y, hub_vz, 0.0);
     yaw_out[base_out + 2u] = vec4<f32>(long_x, 0.0, long_z, 0.0);
     yaw_out[base_out + 3u] = vec4<f32>(spin_state.x, radius, controls.y, controls.z);
@@ -917,7 +914,7 @@ fn build_brush_rows_from_spin_and_suspension_state(@builtin(global_invocation_id
     // wheel_offsets[i]: resident wheel-spin state
     //   x=spin_rad_s, y=wheel_radius_m, z=spin_inertia_kg_m2, w=finite.
     // tire_wrenches[i*6 + 0]: wheel mount (attach_x, attach_y, attach_z, radius fallback)
-    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, reserved)
+    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, width_segments)
     // tire_wrenches[i*6 + 2]: tire row
     // tire_wrenches[i*6 + 3]: material row
     // tire_wrenches[i*6 + 4]: extra row
@@ -949,7 +946,7 @@ fn build_brush_rows_from_spin_and_suspension_state(@builtin(global_invocation_id
     let hub_vx = u.velocity.x - u.velocity.w * off_z;
     let hub_vz = u.velocity.z + u.velocity.w * off_x;
     let base_out = i * 7u;
-    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, 0.0);
+    yaw_out[base_out + 0u] = vec4<f32>(u.pose.x + off_x, hub_y, u.pose.z + off_z, controls.w);
     yaw_out[base_out + 1u] = vec4<f32>(hub_vx, u.velocity.y, hub_vz, 0.0);
     yaw_out[base_out + 2u] = vec4<f32>(long_x, 0.0, long_z, 0.0);
     yaw_out[base_out + 3u] = vec4<f32>(spin_state.x, radius, controls.y, controls.z);
@@ -969,7 +966,7 @@ fn build_brush_rows_from_spin_suspension_planar_state(@builtin(global_invocation
     // wheel_offsets[i]: resident wheel-spin state
     //   x=spin_rad_s, y=wheel_radius_m, z=spin_inertia_kg_m2, w=finite.
     // tire_wrenches[i*6 + 0]: wheel mount (attach_x, attach_y, attach_z, radius fallback)
-    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, reserved)
+    // tire_wrenches[i*6 + 1]: wheel controls (steer, width, pressure, width_segments)
     // tire_wrenches[i*6 + 2]: tire row
     // tire_wrenches[i*6 + 3]: material row
     // tire_wrenches[i*6 + 4]: extra row
@@ -1007,7 +1004,7 @@ fn build_brush_rows_from_spin_suspension_planar_state(@builtin(global_invocation
     let hub_vx = planar.z - yaw_state.y * off_z;
     let hub_vz = planar.w + yaw_state.y * off_x;
     let base_out = i * 7u;
-    yaw_out[base_out + 0u] = vec4<f32>(planar.x + off_x, hub_y, planar.y + off_z, 0.0);
+    yaw_out[base_out + 0u] = vec4<f32>(planar.x + off_x, hub_y, planar.y + off_z, controls.w);
     yaw_out[base_out + 1u] = vec4<f32>(hub_vx, u.velocity.y, hub_vz, 0.0);
     yaw_out[base_out + 2u] = vec4<f32>(long_x, 0.0, long_z, 0.0);
     yaw_out[base_out + 3u] = vec4<f32>(spin_state.x, radius, controls.y, controls.z);
@@ -1055,7 +1052,7 @@ fn build_brush_rows_from_spin_suspension_chassis_state(@builtin(global_invocatio
     let hub_vx = planar.z - yaw_state.y * off_z;
     let hub_vz = planar.w + yaw_state.y * off_x;
     let base_out = i * 7u;
-    yaw_out[base_out + 0u] = vec4<f32>(planar.x + off_x, hub_y, planar.y + off_z, 0.0);
+    yaw_out[base_out + 0u] = vec4<f32>(planar.x + off_x, hub_y, planar.y + off_z, controls.w);
     yaw_out[base_out + 1u] = vec4<f32>(hub_vx, vertical.y, hub_vz, 0.0);
     yaw_out[base_out + 2u] = vec4<f32>(long_x, 0.0, long_z, 0.0);
     yaw_out[base_out + 3u] = vec4<f32>(spin_state.x, radius, controls.y, controls.z);

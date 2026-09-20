@@ -933,7 +933,7 @@ fn pack_brush_gpu_input(
             wheel.hub_pos[0] as f32,
             wheel.hub_pos[1] as f32,
             wheel.hub_pos[2] as f32,
-            0.0,
+            params.width_segments as f32,
         ],
         hub_vel: [
             wheel.hub_vel[0] as f32,
@@ -1092,6 +1092,7 @@ fn vehicle_brush_rows_input(
             ],
         ],
         tire_rows: vec![tire_row; 2],
+        width_segments: vec![params.width_segments as u32; 2],
         material_rows: vec![material_row; 2],
         extra_rows: vec![[material.cohesion as f32, 0.0, 1.0, camber_rad]; 2],
         suspension_rows: vec![[travel, 0.0, 0.0, 1.0]; 2],

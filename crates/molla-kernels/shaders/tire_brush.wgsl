@@ -1,7 +1,7 @@
 // Stage (i) — GPU brush-tire contact kernel.
 //
 // Mirrors `molla_vehicle::real_tire::evaluate_brush_tire`. One
-// workgroup per wheel; threads cover the circumferential segments.
+// workgroup per wheel; threads cover circumferential segments and width strips.
 // Each segment thread computes its own (penetration, normal load,
 // brush traction, sliding flag) and the workgroup reduces them into
 // a single per-wheel output row.
@@ -22,7 +22,7 @@ const SEGMENTS_MAX: u32 = 256u;
 const WG: u32 = 64u;
 
 struct WheelInput {
-    // (hub_x, hub_y, hub_z, _)
+    // (hub_x, hub_y, hub_z, width_segments; zero selects three strips)
     hub_pos: vec4<f32>,
     // (vx, vy, vz, _)
     hub_vel: vec4<f32>,
@@ -145,22 +145,23 @@ fn sample_terrain_friction(world_x: f32, world_z: f32) -> f32 {
     return max(f0 * (1.0 - tz) + f1 * tz, 0.0);
 }
 
-var<workgroup> seg_fx:    array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_fy:    array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_mz:    array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_fn:    array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_min_x: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_max_x: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_count: array<u32, SEGMENTS_MAX>;
-var<workgroup> seg_slide: array<u32, SEGMENTS_MAX>;
-var<workgroup> seg_power: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_fn_x: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_lat_x: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_available: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_consumed: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_world_x: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_world_y: array<f32, SEGMENTS_MAX>;
-var<workgroup> seg_world_z: array<f32, SEGMENTS_MAX>;
+var<workgroup> seg_fx:    array<f32, WG>;
+var<workgroup> seg_fy:    array<f32, WG>;
+var<workgroup> seg_mz:    array<f32, WG>;
+var<workgroup> seg_fn:    array<f32, WG>;
+var<workgroup> seg_min_x: array<f32, WG>;
+var<workgroup> seg_max_x: array<f32, WG>;
+var<workgroup> seg_count: array<u32, WG>;
+var<workgroup> seg_slide: array<u32, WG>;
+var<workgroup> seg_power: array<f32, WG>;
+var<workgroup> seg_fn_x: array<f32, WG>;
+var<workgroup> seg_lat_x: array<f32, WG>;
+var<workgroup> seg_available: array<f32, WG>;
+var<workgroup> seg_consumed: array<f32, WG>;
+var<workgroup> seg_world_x: array<f32, WG>;
+var<workgroup> seg_world_y: array<f32, WG>;
+var<workgroup> seg_world_z: array<f32, WG>;
+var<workgroup> seg_rolling: array<f32, WG>;
 // Patch extent shared across the workgroup for the linear leading-edge
 // bristle profile (reduced from the geometry pre-pass before forces).
 var<workgroup> wg_patch_min_x: f32;
@@ -194,7 +195,9 @@ fn brush_step(
     let wi = wid.x;
     let i = lid.x;
     let in_ = wheels[wi];
-    let segments = max(u32(in_.tire.x), 8u);
+    let segments = u32(clamp(in_.tire.x, 8.0, f32(SEGMENTS_MAX)));
+    let width_segments = u32(clamp(select(3.0, in_.hub_pos.w, in_.hub_pos.w > 0.0), 1.0, 16.0));
+    let cells = segments * width_segments;
     let radius = in_.spin.y;
     let width = in_.spin.z;
     let pressure = max(in_.spin.w, 0.0);
@@ -225,11 +228,11 @@ fn brush_step(
     let slip_angle = atan2(v_lat, max(abs(v_long), relax));
     let dtheta = 6.2831853 / f32(segments);
     let arc_len = radius * dtheta;
-    let cell_area = width * arc_len;
+    let cell_area = width / f32(width_segments) * arc_len;
     let normal_per_area_per_m = carcass_k + 3.0 * pressure / max(radius, 1.0e-6);
 
     // Initialise scratch for this segment slot.
-    if (i < SEGMENTS_MAX) {
+    if (i < WG) {
         seg_fx[i] = 0.0;
         seg_fy[i] = 0.0;
         seg_mz[i] = 0.0;
@@ -246,6 +249,7 @@ fn brush_step(
         seg_world_x[i] = 0.0;
         seg_world_y[i] = 0.0;
         seg_world_z[i] = 0.0;
+        seg_rolling[i] = 0.0;
     }
     workgroupBarrier();
 
@@ -254,12 +258,13 @@ fn brush_step(
     // Mirrors the CPU pre-pass in `evaluate_brush_tire_oriented`.
     var pre = i;
     loop {
-        if (pre >= segments) { break; }
-        let theta_p = f32(pre) * dtheta;
+        if (pre >= cells) { break; }
+        let theta_p = f32(pre / width_segments) * dtheta;
         let local_x_p = radius * sin(theta_p);
         let local_y_p = -radius * cos(theta_p);
-        let world_x_p = in_.hub_pos.x + heading.x * local_x_p;
-        let world_z_p = in_.hub_pos.z + heading.z * local_x_p;
+        let local_z_p = ((f32(pre % width_segments) + 0.5) / f32(width_segments) - 0.5) * width;
+        let world_x_p = in_.hub_pos.x + heading.x * local_x_p + side.x * local_z_p;
+        let world_z_p = in_.hub_pos.z + heading.z * local_x_p + side.z * local_z_p;
         var ground_y_p: f32 = 0.0;
         if (terrain_mode > 0.5) {
             ground_y_p = sample_terrain(world_x_p, world_z_p);
@@ -299,12 +304,13 @@ fn brush_step(
     // support segments > WG with a single workgroup.
     var idx = i;
     loop {
-        if (idx >= segments) { break; }
-        let theta = f32(idx) * dtheta;
+        if (idx >= cells) { break; }
+        let theta = f32(idx / width_segments) * dtheta;
         let local_x = radius * sin(theta);
         let local_y = -radius * cos(theta);
-        let world_x = in_.hub_pos.x + heading.x * local_x;
-        let world_z = in_.hub_pos.z + heading.z * local_x;
+        let local_z = ((f32(idx % width_segments) + 0.5) / f32(width_segments) - 0.5) * width;
+        let world_x = in_.hub_pos.x + heading.x * local_x + side.x * local_z;
+        let world_z = in_.hub_pos.z + heading.z * local_x + side.z * local_z;
         let point_y = in_.hub_pos.y + local_y;
         // Terrain mode 0 = flat floor at y = 0; mode 1 = bilinear
         // heightfield lookup.
@@ -388,13 +394,15 @@ fn brush_step(
             }
             seg_fx[i] = seg_fx[i] + ft_long;
             seg_fy[i] = seg_fy[i] + ft_lat;
-            let world_force = cell_heading * ft_long + cell_side * ft_lat + cell_normal * fn_i;
+            let rolling_i = rolling * fn_i * sign(v_long_cell);
+            seg_rolling[i] = seg_rolling[i] + rolling_i;
+            let world_force = cell_heading * (ft_long - rolling_i) + cell_side * ft_lat + cell_normal * fn_i;
             seg_world_x[i] = seg_world_x[i] + world_force.x;
             seg_world_y[i] = seg_world_y[i] + world_force.y;
             seg_world_z[i] = seg_world_z[i] + world_force.z;
             seg_available[i] = seg_available[i] + static_cap;
             seg_consumed[i] = seg_consumed[i] + consumed_i;
-            seg_mz[i] = seg_mz[i] - local_x * ft_lat;
+            seg_mz[i] = seg_mz[i] + local_z * (ft_long - rolling_i) - local_x * ft_lat;
             seg_fn[i] = seg_fn[i] + fn_i;
             seg_min_x[i] = min(seg_min_x[i], local_x);
             seg_max_x[i] = max(seg_max_x[i], local_x);
@@ -428,6 +436,7 @@ fn brush_step(
         var total_available: f32 = 0.0;
         var total_consumed: f32 = 0.0;
         var total_world: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+        var rolling_force: f32 = 0.0;
         var k: u32 = 0u;
         loop {
             if (k >= WG) { break; }
@@ -440,6 +449,7 @@ fn brush_step(
             total_lat_x = total_lat_x + seg_lat_x[k];
             total_available = total_available + seg_available[k];
             total_consumed = total_consumed + seg_consumed[k];
+            rolling_force = rolling_force + seg_rolling[k];
             total_world = total_world + vec3<f32>(seg_world_x[k], seg_world_y[k], seg_world_z[k]);
             if (seg_count[k] > 0u) {
                 min_x = min(min_x, seg_min_x[k]);
@@ -449,11 +459,6 @@ fn brush_step(
             }
             k = k + 1u;
         }
-        var rolling_force: f32 = 0.0;
-        if (total_fn > 0.0) {
-            rolling_force = rolling * total_fn * sign(v_long);
-        }
-        total_world = total_world - heading * rolling_force;
         let longitudinal_force = total_fx - rolling_force;
         let patch_length = max(max_x - min_x, 0.0);
         var contact_center_x: f32 = 0.0;

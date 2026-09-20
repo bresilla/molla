@@ -296,6 +296,8 @@ pub struct TireVehicleBrushRowsGpuInput {
     /// Per-wheel state rows: x=spin_rad_s, y=steer_rad, z=width_m,
     /// w=pressure_pa.
     pub wheel_state: Vec<[f32; 4]>,
+    /// Per-wheel width strip counts, 1..=16; zero selects three strips.
+    pub width_segments: Vec<u32>,
     pub tire_rows: Vec<[f32; 4]>,
     pub material_rows: Vec<[f32; 4]>,
     pub extra_rows: Vec<[f32; 4]>,
@@ -316,7 +318,8 @@ pub struct TireVehicleBrushRowsFromSpinGpuInput {
     /// Per-wheel mount rows in chassis frame: x=attach_x_m, y=attach_y_m,
     /// z=attach_z_m, w=wheel_radius_fallback_m.
     pub wheel_mounts: Vec<[f32; 4]>,
-    /// Per-wheel controls: x=steer_rad, y=width_m, z=pressure_pa, w=reserved.
+    /// Per-wheel controls: x=steer_rad, y=width_m, z=pressure_pa,
+    /// w=width_segments (1..=16; zero selects three strips).
     pub wheel_controls: Vec<[f32; 4]>,
     pub tire_rows: Vec<[f32; 4]>,
     pub material_rows: Vec<[f32; 4]>,
@@ -612,6 +615,7 @@ impl TireVehicleBrushRowsGpuInput {
             ));
         }
         if self.wheel_state.len() != n
+            || self.width_segments.len() != n
             || self.tire_rows.len() != n
             || self.material_rows.len() != n
             || self.extra_rows.len() != n
@@ -620,6 +624,9 @@ impl TireVehicleBrushRowsGpuInput {
             return Err(Error::Solver(
                 "tire_vehicle_brush_rows: per-wheel row length mismatch".into(),
             ));
+        }
+        for &width in &self.width_segments {
+            crate::tire_brush::validate_width_segments(width as f32)?;
         }
         if n > WORKGROUP_SIZE as usize {
             return Err(Error::Solver(format!(
@@ -631,13 +638,14 @@ impl TireVehicleBrushRowsGpuInput {
 
     fn packed_rows(&self) -> Vec<[f32; 4]> {
         let n = self.wheel_mounts.len();
-        let mut rows = Vec::with_capacity(n * 5);
+        let mut rows = Vec::with_capacity(n * 6);
         for i in 0..n {
             rows.push(self.wheel_state[i]);
             rows.push(self.tire_rows[i]);
             rows.push(self.material_rows[i]);
             rows.push(self.extra_rows[i]);
             rows.push(self.suspension_rows[i]);
+            rows.push([self.width_segments[i] as f32, 0.0, 0.0, 0.0]);
         }
         rows
     }
@@ -646,6 +654,9 @@ impl TireVehicleBrushRowsGpuInput {
 impl TireVehicleBrushRowsFromSpinGpuInput {
     fn validate(&self) -> Result<usize> {
         let n = self.spin_state_rows.len();
+        for controls in &self.wheel_controls {
+            crate::tire_brush::validate_width_segments(controls[3])?;
+        }
         if n == 0 {
             return Err(Error::Solver(
                 "tire_vehicle_brush_rows_from_spin: at least one wheel is required".into(),
@@ -1170,7 +1181,7 @@ pub fn tire_vehicle_brush_rows_reference(
                 chassis_x + off_x,
                 ground_height + radius - travel,
                 chassis_z + off_z,
-                0.0,
+                input.width_segments[i] as f32,
             ],
             hub_vel: [vx - yaw_rate * off_z, vy, vz + yaw_rate * off_x, 0.0],
             heading: [ch, 0.0, sh, 0.0],
@@ -1238,7 +1249,7 @@ pub fn tire_vehicle_brush_rows_from_spin_reference(
                 chassis_x + off_x,
                 ground_height + radius - travel,
                 chassis_z + off_z,
-                0.0,
+                controls[3],
             ],
             hub_vel: [vx - yaw_rate * off_z, vy, vz + yaw_rate * off_x, 0.0],
             heading: [ch, 0.0, sh, 0.0],

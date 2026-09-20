@@ -189,6 +189,7 @@ fn sample_brush_rows_input() -> TireVehicleBrushRowsGpuInput {
             [28.0, 0.0, 0.24, 170_000.0],
         ],
         tire_rows: vec![[48.0, 280_000.0, 25_000.0, 0.5]; 4],
+        width_segments: vec![1, 3, 4, 16],
         material_rows: vec![[0.9, 0.75, 1_200.0, 18.0]; 4],
         extra_rows: vec![[0.0, 0.0, 1.0, 0.02]; 4],
         suspension_rows: vec![
@@ -212,7 +213,8 @@ fn sample_brush_rows_from_spin_input(
         wheel_controls: base
             .wheel_state
             .iter()
-            .map(|row| [row[1], row[2], row[3], 0.0])
+            .enumerate()
+            .map(|(i, row)| [row[1], row[2], row[3], [1.0, 3.0, 4.0, 16.0][i]])
             .collect(),
         tire_rows: base.tire_rows,
         material_rows: base.material_rows,
@@ -621,6 +623,9 @@ fn tire_vehicle_vertical_reference_integrates_suspension_load_against_gravity() 
 fn tire_vehicle_brush_rows_reference_builds_gpu_brush_inputs() {
     let input = sample_brush_rows_input();
     let out = tire_vehicle_brush_rows_reference(&input).expect("brush rows reference");
+    for (wheel, &width) in out.wheels.iter().zip(&input.width_segments) {
+        assert_eq!(wheel.hub_pos[3], width as f32);
+    }
     assert_eq!(out.wheels.len(), input.wheel_mounts.len());
     assert!(out.finite);
 
@@ -664,9 +669,10 @@ fn tire_vehicle_brush_rows_from_spin_reference_uses_resident_spin_state() {
         tire_vehicle_brush_rows_from_spin_reference(&input).expect("brush rows from spin ref");
     assert_eq!(out.wheels.len(), input.wheel_mounts.len());
     assert!(out.finite);
-    for (wheel, spin) in out.wheels.iter().zip(spin_rows.iter()) {
+    for ((wheel, spin), controls) in out.wheels.iter().zip(spin_rows.iter()).zip(&input.wheel_controls) {
         assert!((wheel.spin[0] - spin[0]).abs() < 1.0e-6);
         assert!((wheel.spin[1] - spin[1]).abs() < 1.0e-6);
+        assert_eq!(wheel.hub_pos[3], controls[3]);
     }
     assert!(
         (out.wheels[0].spin[0] - sample_brush_rows_input().wheel_state[0][0]).abs() > 1.0e-3,
@@ -679,6 +685,23 @@ fn tire_vehicle_brush_rows_from_spin_reference_uses_resident_spin_state() {
     let source = include_str!("../src/tire_vehicle.rs");
     assert!(source.contains("dispatch_brush_rows_from_spin_resident"));
     assert!(source.contains("spin_batch.current_state_buffer()"));
+}
+
+#[test]
+fn tire_vehicle_brush_rows_reject_invalid_widths() {
+    let mut input = sample_brush_rows_input();
+    for invalid in [17, u32::MAX] {
+        input.width_segments[1] = invalid;
+        assert!(tire_vehicle_brush_rows_reference(&input).is_err());
+    }
+    input.width_segments.pop();
+    assert!(tire_vehicle_brush_rows_reference(&input).is_err());
+    let spin = tire_vehicle_wheel_spin_state_reference(&sample_wheel_spin_input()).unwrap().rows;
+    let mut input = sample_brush_rows_from_spin_input(spin);
+    for invalid in [-1.0, 0.25, 17.0, f32::NAN, f32::INFINITY] {
+        input.wheel_controls[1][3] = invalid;
+        assert!(tire_vehicle_brush_rows_from_spin_reference(&input).is_err());
+    }
 }
 
 #[test]

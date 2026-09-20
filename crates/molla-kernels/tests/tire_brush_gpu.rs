@@ -9,6 +9,9 @@ use molla_vehicle::{
     evaluate_brush_tire_oriented, terrain::FlatTerrain,
 };
 
+#[path = "tire_brush_gpu/width.rs"]
+mod width;
+
 fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
 }
@@ -40,7 +43,7 @@ fn pack_input_with_camber(
             state.hub_pos[0] as f32,
             state.hub_pos[1] as f32,
             state.hub_pos[2] as f32,
-            0.0,
+            params.width_segments as f32,
         ],
         hub_vel: [
             state.hub_vel[0] as f32,
