@@ -18,6 +18,8 @@ pub struct RealTireParams {
     pub pressure_pa: f64,
     /// Number of circumferential samples used for the contact patch.
     pub segments: usize,
+    /// Number of equal-width brush strips across the tread.
+    pub width_segments: usize,
     /// Carcass normal stiffness per contact area (Pa/m). This is the part
     /// that still supports load at zero pressure.
     pub carcass_normal_stiffness: f64,
@@ -52,6 +54,7 @@ impl RealTireParams {
             width: 0.185,
             pressure_pa: 180_000.0,
             segments: 48,
+            width_segments: 3,
             carcass_normal_stiffness: 4.0e5,
             tread_shear_stiffness: 2.6e6,
             structural_lateral_bias_per_normal: 0.0,
@@ -66,6 +69,7 @@ impl RealTireParams {
             width: 0.24,
             pressure_pa: 95_000.0,
             segments: 64,
+            width_segments: 3,
             carcass_normal_stiffness: 3.2e5,
             tread_shear_stiffness: 2.1e6,
             structural_lateral_bias_per_normal: 0.0,
@@ -80,6 +84,7 @@ impl RealTireParams {
             width: 0.185,
             pressure_pa: 320_000.0,
             segments: 64,
+            width_segments: 3,
             carcass_normal_stiffness: 5.2e5,
             tread_shear_stiffness: 3.1e6,
             structural_lateral_bias_per_normal: 0.0,

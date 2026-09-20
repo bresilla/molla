@@ -43,6 +43,7 @@ impl PressureTireConfig {
         if positive.iter().any(|v| !v.is_finite() || *v <= 0.0)
             || nonnegative.iter().any(|v| !v.is_finite() || *v < 0.0)
             || !(8..=512).contains(&t.segments)
+            || !(1..=16).contains(&t.width_segments)
             || t.radius < 1e-4
             || t.width < 1e-4
             || t.relaxation_speed < 1e-4

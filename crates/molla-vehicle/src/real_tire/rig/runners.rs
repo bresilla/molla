@@ -251,12 +251,12 @@ pub fn evaluate_planar_brush_tire_persistent(
     }
     let mut next = history.clone();
     let sanitized = sanitize_brush_params(params);
-    let geometry = (sanitized.radius, sanitized.width, sanitized.segments);
+    let geometry = (sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
     if next.geometry != Some(geometry) {
         next.reset();
         next.geometry = Some(geometry);
         next.cells
-            .resize(sanitized.segments, TreadBristle::default());
+            .resize(sanitized.segments * sanitized.width_segments, TreadBristle::default());
     }
     let output = evaluate_brush_impl(
         params,
@@ -291,6 +291,8 @@ fn evaluate_brush_impl(
     let params = sanitize_brush_params(params);
     let material = sanitized_surface_material(material);
     let segments = params.segments;
+    let width_segments = params.width_segments;
+    let cell_count = segments * width_segments;
     let normal = terrain.normal(state.hub_pos[0], state.hub_pos[2]);
     let heading = normalize(project_to_ground(state.heading, normal));
     let side = normalize(cross(heading, normal));
@@ -307,7 +309,8 @@ fn evaluate_brush_impl(
     let slip_angle_rad = v_lat.atan2(v_long.abs().max(params.relaxation_speed));
     let dtheta = std::f64::consts::TAU / segments as f64;
     let arc_len = params.radius * dtheta;
-    let cell_area = params.width * arc_len;
+    let strip_width = params.width / width_segments as f64;
+    let cell_area = strip_width * arc_len;
     let normal_per_area_per_m =
         params.carcass_normal_stiffness + 3.0 * params.pressure_pa / params.radius.max(1.0e-6);
     let terrain_mu_ref =
@@ -318,12 +321,14 @@ fn evaluate_brush_impl(
     // geometry-only pre-pass over the penetrating segments first.
     let mut patch_min_x = f64::INFINITY;
     let mut patch_max_x = f64::NEG_INFINITY;
-    for i in 0..segments {
+    for cell_index in 0..cell_count {
+        let i = cell_index / width_segments;
+        let local_z = (((cell_index % width_segments) as f64 + 0.5) / width_segments as f64 - 0.5) * params.width;
         let theta = (i as f64) * dtheta;
         let local_x = params.radius * theta.sin();
         let local_y = -params.radius * theta.cos();
-        let world_x = state.hub_pos[0] + heading[0] * local_x;
-        let world_z = state.hub_pos[2] + heading[2] * local_x;
+        let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
+        let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
         if terrain.height(world_x, world_z) - (state.hub_pos[1] + local_y) > 0.0 {
             patch_min_x = patch_min_x.min(local_x);
             patch_max_x = patch_max_x.max(local_x);
@@ -356,18 +361,27 @@ fn evaluate_brush_impl(
     let mut force_vec = [0.0; 3];
     let mut rolling_resistance_force = 0.0;
 
-    for i in 0..segments {
+    for cell_index in 0..cell_count {
+        let i = cell_index / width_segments;
+        let local_z = (((cell_index % width_segments) as f64 + 0.5) / width_segments as f64 - 0.5) * params.width;
         // theta = 0 is the bottom of the wheel. local_x spans the rolling
         // direction through the patch.
         let theta = (i as f64) * dtheta;
         let local_x = params.radius * theta.sin();
         let local_y = -params.radius * theta.cos();
-        let world_x = state.hub_pos[0] + heading[0] * local_x;
-        let world_z = state.hub_pos[2] + heading[2] * local_x;
+        let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
+        let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
+        let point_y = state.hub_pos[1] + local_y;
+        let penetration = terrain.height(world_x, world_z) - point_y;
+        if penetration <= 0.0 {
+            if let Some((history, _)) = &mut persistent {
+                history.cells[cell_index].reset();
+            }
+            continue;
+        }
         let cell_normal = normalize(terrain.normal(world_x, world_z));
         let cell_heading = normalize(project_to_ground(state.heading, cell_normal));
         let cell_side = normalize(cross(cell_heading, cell_normal));
-        let ground_y = terrain.height(world_x, world_z);
         let ground_v = terrain.surface_velocity(world_x, world_z);
         let rel_ground_v = sub(state.hub_vel, ground_v);
         let v_long_cell = dot(rel_ground_v, cell_heading);
@@ -388,14 +402,6 @@ fn evaluate_brush_impl(
         let friction_scale = (terrain_mu / terrain_mu_ref).clamp(0.0, 3.0);
         let mu_static_cell = cell_material.mu_static * friction_scale;
         let mu_dynamic_cell = cell_material.mu_dynamic * friction_scale;
-        let point_y = state.hub_pos[1] + local_y;
-        let penetration = ground_y - point_y;
-        if penetration <= 0.0 {
-            if let Some((history, _)) = &mut persistent {
-                history.cells[i].reset();
-            }
-            continue;
-        }
 
         let camber_pressure_bias = (1.0
             + 0.35 * camber_angle_rad * (local_x / params.radius).clamp(-1.0, 1.0))
@@ -429,11 +435,11 @@ fn evaluate_brush_impl(
                     renewal_rate: wheel_speed.abs() / (params.radius * profile).max(arc_len * 0.5),
                 };
                 let velocity = [-slip_speed_cell, -lateral_slip_speed_cell];
-                let previous = history.cells[i];
-                let mut result = history.cells[i].advance(velocity, *dt, config)?;
+                let previous = history.cells[cell_index];
+                let mut result = history.cells[cell_index].advance(velocity, *dt, config)?;
                 if result.sliding {
-                    history.cells[i] = previous;
-                    result = history.cells[i].advance(
+                    history.cells[cell_index] = previous;
+                    result = history.cells[cell_index].advance(
                         velocity,
                         *dt,
                         TreadBristleParams {
@@ -483,7 +489,7 @@ fn evaluate_brush_impl(
         );
         available_friction_budget += available_i;
         consumed_friction_budget += consumed_i;
-        mz -= local_x * ft_lat;
+        mz += local_z * (ft_long - rolling_i) - local_x * ft_lat;
         normal_moment_x += local_x * fn_i;
         lateral_moment_x += local_x * ft_lat.abs();
         if sliding {
@@ -494,7 +500,7 @@ fn evaluate_brush_impl(
         cells.push(TireContactCell {
             node_index: None,
             local_x,
-            local_z: 0.0,
+            local_z,
             penetration,
             area: cell_area,
             normal_load: fn_i,

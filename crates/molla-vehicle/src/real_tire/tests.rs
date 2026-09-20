@@ -132,8 +132,13 @@ fn pressure_distribution_diagnostics_track_patch_pressure_and_width() {
     let high_dist = high.pressure_distribution(8, 4);
     let low_dist = low.pressure_distribution(8, 4);
     assert!(high_dist.is_finite() && low_dist.is_finite());
-    assert_eq!(high_dist.lateral_bins.len(), 1);
-    assert_eq!(low_dist.lateral_bins.len(), 1);
+    assert_eq!(high_dist.lateral_bins.len(), 4);
+    assert_eq!(low_dist.lateral_bins.len(), 4);
+    assert!(high_dist.lateral_span_m > 0.1 && low_dist.lateral_span_m > 0.1);
+    for (contact, distribution) in [(&high, &high_dist), (&low, &low_dist)] {
+        let load: f64 = distribution.lateral_bins.iter().map(|bin| bin.normal_load_n).sum();
+        assert!((load - contact.normal_load).abs() < contact.normal_load * 1e-9);
+    }
     assert!(
         low_dist.longitudinal_span_m > high_dist.longitudinal_span_m,
         "lower pressure should spread contact over more circumference: low={low_dist:?} high={high_dist:?}"
@@ -8942,8 +8947,8 @@ fn brush_contact_sanity_matrix_is_finite_and_capped() {
                         out.patch_length
                     );
                     assert!(
-                        out.contact_count <= params.segments,
-                        "contact cells cannot exceed segments"
+                        out.contact_count <= params.segments * params.width_segments,
+                        "contact cells cannot exceed the brush grid"
                     );
                     assert!(
                         out.sliding_count <= out.contact_count,
@@ -8976,6 +8981,7 @@ fn brush_contact_hardens_invalid_inputs() {
         width: f64::NAN,
         pressure_pa: -1.0e9,
         segments: 1_000_000,
+        width_segments: usize::MAX,
         carcass_normal_stiffness: f64::NAN,
         tread_shear_stiffness: -10.0,
         structural_lateral_bias_per_normal: f64::NAN,
@@ -9008,7 +9014,7 @@ fn brush_contact_hardens_invalid_inputs() {
         "sanitized bad tire input should stay finite: {out:?}"
     );
     assert!(out.normal_load >= 0.0);
-    assert!(out.contact_count <= 512, "segment hard cap should hold");
+    assert!(out.contact_count <= 512 * bad_params.width_segments.clamp(1, 16), "brush grid hard cap should hold");
 
     let empty = evaluate_brush_tire(
         &RealTireParams::default(),

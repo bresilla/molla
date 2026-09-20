@@ -226,3 +226,6 @@ use internal::normalize;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod width_tests;

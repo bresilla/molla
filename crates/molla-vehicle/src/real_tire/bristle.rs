@@ -95,7 +95,7 @@ impl TreadBristle {
 #[derive(Clone, Debug, Default)]
 pub struct TireBrushState {
     pub(crate) cells: Vec<TreadBristle>,
-    pub(crate) geometry: Option<(f64, f64, usize)>,
+    pub(crate) geometry: Option<(f64, f64, usize, usize)>,
 }
 
 impl TireBrushState {

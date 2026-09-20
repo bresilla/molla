@@ -2,6 +2,40 @@ use super::*;
 use molla_math::Quat;
 
 #[test]
+fn shoulder_friction_difference_produces_a_real_articulated_yaw_moment() {
+    let (mut world, chassis, wheel, spin, ground) = fixture(false);
+    let mut config = pressure_config();
+    config.tire.width_segments = 4;
+    world.wheels.configure_pressure_tire(wheel, config).unwrap();
+    world.wheels.register_ground(&world.scene, ground, Some(FrictionGrid {
+        origin: [-10.0, -5.0], cell_size: [20.0, 5.0],
+        cols: 1, rows: 2, values: vec![0.0, 1.0],
+    })).unwrap();
+    let offset = world.scene.model().joint_dof_offset.host().unwrap()
+        [world.scene.joint_index(spin).unwrap().index()] as usize;
+    world.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 10.0;
+    world.solver.substeps = 1;
+    world.step(0.0001).unwrap();
+    let sample = &world.wheels.samples(&world.scene)[0];
+    let pressure = sample.pressure.as_ref().unwrap();
+    let mut torque = 0.0;
+    for cell in &pressure.cells {
+        if cell.local_z < 0.0 { assert_eq!(cell.tangential_force, 0.0); }
+        else { assert!(cell.tangential_force > 0.0); }
+        torque += cell.local_z * cell.tangential_force - cell.local_x * cell.lateral_force;
+    }
+    assert!(torque > 0.0);
+    assert!((sample.output.aligning_moment - torque).abs() < 1e-10);
+    assert!(world.scene.body_velocity(chassis).unwrap().angular.y > 0.0);
+    assert!(world.contact_pairs().is_empty());
+    for width_segments in [0, 17, usize::MAX] {
+        config.tire.width_segments = width_segments;
+        assert!(world.wheels.configure_pressure_tire(wheel, config).is_err());
+        assert_eq!(world.wheels.pressure_tire(&world.scene, wheel).unwrap().config.tire.width_segments, 4);
+    }
+}
+
+#[test]
 fn pressure_patch_samples_friction_on_both_sides_of_a_material_boundary() {
     let (mut world, _, wheel, spin, ground) = fixture(true);
     world.wheels.configure_pressure_tire(wheel, pressure_config()).unwrap();

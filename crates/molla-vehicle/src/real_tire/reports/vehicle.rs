@@ -702,6 +702,7 @@ fn simulate_torque_slip_outcome(
         width: brush_params.width,
         pressure_pa: brush_params.pressure_pa,
         segments: brush_params.segments,
+        width_segments: brush_params.width_segments,
         carcass_normal_stiffness: brush_params.carcass_normal_stiffness,
         tread_shear_stiffness: brush_params.tread_shear_stiffness,
         structural_lateral_bias_per_normal: brush_params.structural_lateral_bias_per_normal,

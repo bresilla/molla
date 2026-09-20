@@ -14,9 +14,8 @@ pub struct TireContactCell {
     /// Local rolling coordinate in metres. Positive is forward of the wheel
     /// centre.
     pub local_x: f64,
-    /// Local lateral/width coordinate in metres. Ideal sampled brush contacts
-    /// currently use `0`; FEM-derived tread-node contacts carry the actual
-    /// deformed tread-node width position.
+    /// Local lateral/width coordinate in metres, at the brush-strip midpoint
+    /// or the deformed FEM tread-node position.
     pub local_z: f64,
     pub penetration: f64,
     pub area: f64,

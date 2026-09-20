@@ -99,6 +99,7 @@ pub(crate) struct BrushParams {
     pub(crate) width: f64,
     pub(crate) pressure_pa: f64,
     pub(crate) segments: usize,
+    pub(crate) width_segments: usize,
     pub(crate) carcass_normal_stiffness: f64,
     pub(crate) tread_shear_stiffness: f64,
     pub(crate) structural_lateral_bias_per_normal: f64,
@@ -114,6 +115,7 @@ pub(crate) fn sanitize_brush_params(params: &RealTireParams) -> BrushParams {
         // Hard cap protects the CPU contact path from accidental million-
         // segment inputs; the GPU kernel has its own tighter cap.
         segments: params.segments.clamp(8, 512),
+        width_segments: params.width_segments.clamp(1, 16),
         carcass_normal_stiffness: finite_positive_or(
             params.carcass_normal_stiffness,
             d.carcass_normal_stiffness,
