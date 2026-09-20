@@ -838,6 +838,8 @@ fn cpu_step(
     // ── Per-articulation outer loop ─────────────────────────────────
     let mut q_new: Vec<Real> = q_in.clone();
     let mut qd_new: Vec<Real> = qd_in.clone();
+    let mut q_dd = vec![0.0_f64; model.joint_dof_total];
+    let mut a_body = vec![SpatialVector::ZERO; n];
     for art in 0..art_count {
         let j_begin = art_start[art] as usize;
         let j_end = art_start[art + 1] as usize;
@@ -1269,9 +1271,6 @@ fn cpu_step(
         }
 
         // ── Pass 3: forward — solve for joint accelerations ──────────────
-        let mut q_dd = vec![0.0_f64; model.joint_dof_total];
-        let mut a_body = vec![SpatialVector::ZERO; n]; // body spatial accel
-
         for j in j_begin..j_end {
             let parent = joint_parent[j];
             let jt = joint_type_from_u32(joint_type[j]);
