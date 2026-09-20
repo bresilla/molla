@@ -1,7 +1,6 @@
 //! Coupled compliant loop-closure wrenches for reduced-coordinate trees.
 
 use molla_core::{Error, Result};
-use molla_math::dense_solve::{dense_chol, forward_sub};
 use molla_math::{Quat, Real, SpatialVector, Vec3};
 use molla_sim::joint_control::{JointAxis, JointMotor, JointSoftness, MotorModel};
 use molla_sim::runtime::RigidScene;
@@ -152,10 +151,11 @@ fn rows(scene: &RigidScene, state: &State) -> Result<Vec<Row>> {
 
 pub(crate) fn apply(
     scene: &RigidScene,
-    state: &State,
+    cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
     dt: Real,
     forces: &mut [SpatialVector],
 ) -> Result<()> {
+    let state = cache.state();
     let _span = tracing::debug_span!("loop_forces").entered();
     let rows = tracing::debug_span!("loop_rows").in_scope(|| rows(scene, state))?;
     let count = rows.len();
@@ -182,23 +182,13 @@ pub(crate) fn apply(
         }
         let _response_span =
             tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
-        let mut jacobians = std::collections::BTreeMap::new();
         let mut projected = vec![vec![0.0; n]; count];
         for (r, row) in rows.iter().enumerate() {
             for &(body, wrench) in &row.ends {
                 if !children[begin..end].contains(&(body as i32)) {
                     continue;
                 }
-                if let std::collections::btree_map::Entry::Vacant(entry) = jacobians.entry(body) {
-                    entry.insert(crate::jacobian(
-                        model,
-                        state,
-                        art,
-                        body,
-                        model.body_com.host()?[body],
-                    )?);
-                }
-                let j = &jacobians[&body];
+                let j = cache.jacobian(art, body)?;
                 for col in 0..n {
                     projected[r][col] += wrench.linear.x * j[col]
                         + wrench.linear.y * j[n + col]
@@ -209,8 +199,7 @@ pub(crate) fn apply(
                 }
             }
         }
-        let mass = crate::mass_matrix(model, state, art)?;
-        add_mass_response(&mass, n, &projected, &mut response)?;
+        cache.add_gram(art, n, &projected, &mut response)?;
     }
     let mut rhs = vec![0.0; count];
     let mut bounds = vec![[0.0; 2]; count];
@@ -272,54 +261,14 @@ pub(crate) fn apply(
     Ok(())
 }
 
+#[cfg(test)]
 fn add_mass_response(
     mass: &[Real],
     n: usize,
     projected: &[Vec<Real>],
     response: &mut [Real],
 ) -> Result<()> {
-    let count = projected.len();
-    let scale = mass.iter().copied().map(Real::abs).fold(0.0, Real::max);
-    let mut factor: Vec<_> = mass.iter().map(|v| v / scale).collect();
-    let factored = scale > 0.0
-        && scale.is_finite()
-        && dense_chol(&mut factor, n).is_ok()
-        && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12);
-    let _span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
-    if factored {
-        // J M⁻¹ Jᵀ = (L⁻¹ Jᵀ)ᵀ (L⁻¹ Jᵀ) / scale.
-        let whitened: Vec<_> = projected
-            .iter()
-            .map(|row| forward_sub(&factor, row, n))
-            .collect::<Result<_>>()?;
-        for row in 0..count {
-            for col in 0..=row {
-                let value = whitened[row]
-                    .iter()
-                    .zip(&whitened[col])
-                    .map(|(a, b)| a * b)
-                    .sum::<Real>()
-                    / scale;
-                response[row * count + col] += value;
-                if row != col {
-                    response[col * count + row] += value;
-                }
-            }
-        }
-        return Ok(());
-    }
-    let singular = crate::rigid_impulse::MassFactor::new(mass, n)?;
-    for col in 0..count {
-        let solved = singular.solve(&projected[col])?;
-        for row in 0..count {
-            response[row * count + col] += projected[row]
-                .iter()
-                .zip(&solved)
-                .map(|(a, b)| a * b)
-                .sum::<Real>();
-        }
-    }
-    Ok(())
+    crate::rigid_impulse::MassFactor::new(mass, n)?.add_gram(projected, response)
 }
 
 fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<Vec<Real>> {
@@ -390,6 +339,7 @@ fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use molla_math::dense_solve::{dense_chol, forward_sub};
     use molla_math::{Mat3, Transform};
     use molla_sim::runtime::{BodyDesc, JointDesc};
     use molla_sim::{BodyParams, MassProperties};

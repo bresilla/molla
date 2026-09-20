@@ -17,8 +17,10 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   choosing an immovable/world-anchored root when present. Attaching at either
   endpoint can merge articulations and reverse the required branch; detaching
   seeds newly free roots from current pose and COM velocity. Authored endpoint,
-  frame, coordinate, rate, limit and motor signs remain unchanged. Closed loops,
-  including multiple independent anchors in one component, remain unsupported.
+  frame, coordinate, rate, limit and motor signs remain unchanged. Ordinary tree
+  joint insertion rejects cycles; explicit `insert_loop_joint` descriptors are
+  now supported separately as CPU compliant force elements, without merging
+  or projecting their endpoint trees. This is not reduced-coordinate loop closure.
 - Fixed and kinematic root kinds retain physical mass/inertia while exposing
   zero inverse mass/inertia. Dynamic roots get free joints automatically;
   immovable roots get fixed world anchors. Dynamic/fixed transitions keep the
@@ -222,7 +224,13 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   body-contact CSR after pruning. This keeps material identity and force
   attribution intact when multiple colliders share the same bodies.
 
-## Requirement ledger
+## Initial integration requirement ledger
+
+This table records the initial adapter checkpoint, not current test counts or
+acceptance results. Later checkpoints below supersede its pending flags where
+they provide explicit evidence. In particular, real imported Kubota driving,
+pressure sweeps and CPU replay now have coverage; the full slope, towing,
+lifecycle, fleet and under-1-ms acceptance set is still incomplete.
 
 | Plan section | Status / remaining evidence |
 | --- | --- |
@@ -2175,11 +2183,10 @@ solver microbenchmarks.
 
 ### Next Steps
 
-- A release imported benchmark/replay build is running with four Cargo jobs;
-  poll exec session `9005`, log `/tmp/gearbox-imported-release.log`. Do not restart
-  merely because output is quiet, and do not change its source before collecting
-  the baseline. The command runs both `controller::benchmark::imported_kubota_pressure*`
-  tests with the real asset after compilation.
+- The first release imported benchmark/replay build completed after 7m20s;
+  session `9005` is terminal. `/tmp/gearbox-imported-release.log` records both
+  pressure tests passing, with medians 0.835–0.853 ms but p95 up to 1.199 ms.
+  The later shared-response checkpoint below records paired follow-up results.
 - Consider substep-scoped mass/factor reuse across wheel, loop and motor response
   only where state/control semantics permit it; preserve reference correctness,
   singular matrices, replay and convergence. Measure on the imported harness.
@@ -2198,6 +2205,79 @@ solver microbenchmarks.
 - `/tmp/molla-imported-solver.json`, `/tmp/molla-imported-solver-summary.txt`,
   `/tmp/molla-imported-trace-summary.mjs` — trace and streaming summarizer.
 - Asset SHA-256: `8aa28ea5bb56c0af11ac233d884661d1d775a2a7ab2d6c860dd2af3effb77718`.
+
+## Checkpoint: share external-force articulation responses
+
+### Goal
+
+Improve full imported-machine physics performance without reducing substeps,
+tyre fidelity, loop constraints or acceptance scope.
+
+### Instructions
+
+- Preserve the original Gearbox checkout, external assets, shared dependencies
+  and existing build/environment recipes. No user processes were stopped.
+- Engram tools remain unavailable; this checkpoint is the persistent handoff.
+
+### Discoveries
+
+- Wheel and loop forces query the same immutable model/state during one external
+  force callback. Their mass factors and COM Jacobians can be shared safely
+  within that callback; the next substep must get a fresh cache.
+- Motor inertia is evaluated after Featherstone's mimic pre-pass and FK. It
+  cannot blindly reuse the earlier state's factor. This change leaves its
+  mass evaluation separate rather than introducing a stale-state shortcut.
+- Concurrent user Magi builds affected the first post-change timing run. Only
+  the subsequent alternating baseline/new runs below are used for speedup.
+
+### Accomplished
+
+- `ArticulatedResponse` now borrows one model/state and owns per-articulation
+  factors plus per-body COM Jacobians. `RigidWorld` creates it inside each
+  substep's external-force callback and shares it between wheels and loops.
+  No cache survives state integration or a scene edit.
+- Moved the existing full-rank Gram and singular fallback computation into
+  `MassFactor::add_gram`; scaling, rank threshold and accumulation order remain.
+  Tests cover shared wheel/loop factor reuse across two articulations, Jacobian
+  reuse, fresh rotated-state response, zero matrices and invalid Gram dimensions.
+  Existing scaled full/singular inverse-product comparisons remain green.
+- Release CPU solver suite passes 376 tests, zero failures, five ignored across
+  87 binaries. Imported release benchmark and exact replay both pass. Logged
+  before/after pressure/drive checkpoints are text-identical (including reported
+  poses, speed, load and deflection); this is sampled comparison, not every-step
+  baseline/new trajectory equality.
+- Preserved old/new release test executables and ran before/after/after/before
+  sequentially on CPU 2 with no overlapping assistant build/test workloads.
+  Across all pressures, old medians were 0.8335–0.8523 ms, new medians
+  0.7586–0.7814 ms; averaging the two medians per condition gives about 8–9%
+  reduction. New p95 values were 0.7786–0.8668 ms. Occasional maxima still reached
+  1.201 ms on this shared host; no hard real-time or Rapier-parity claim follows.
+- The post-change short trace passed and confirms 1,920 mass-matrix evaluations
+  over 120 steps, versus 2,880 before: wheel and motor builds remain, loop builds
+  are eliminated. Other user builds disturbed stage timings, so use the trace
+  for attribution/counts, not a before/after timing ratio.
+- Isolated binary tests pass 84 tests, three ignored. Native build passes.
+  Final native rebuild after removing an unused import also passes; session
+  `54906` is terminal. Log: `/tmp/gearbox-shared-response-build-final.log`.
+
+### Next Steps
+
+- No build/test process remains running for this checkpoint. Preserve the paired
+  binaries/logs for further comparisons; rebuild normally for any new source.
+- Continue whole-machine and fleet profiling, sleep/islands, lifecycle,
+  slope/towing/PTO acceptance and the remaining tyre/terrain/GPU requirements.
+  Headless release median/p95 samples do not replace the entire full-plan audit.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/articulated_response.rs` — state-bound factor/Jacobian cache.
+- `crates/molla-solvers/src/{wheel_forces,loop_forces,rigid_world}.rs` — callback-scoped reuse.
+- `crates/molla-solvers/src/rigid_impulse.rs` — reusable Gram response and validation.
+- `/tmp/molla-shared-response-{tests,unit,full-final}.log` — solver validation.
+- `/tmp/gearbox-shared-response-{release,paired,trace,unit,build}.log` — imported and adapter evidence.
+- `/tmp/gearbox-imported-{before,after}-cache` — immutable baseline/new release test executables.
+- `/tmp/molla-shared-response-solver.json` — post-change short trace when complete.
+- `/tmp/molla-shared-response-solver-summary.txt` — streamed post-change stage counts.
 
 ## Next implementation steps
 

@@ -10,7 +10,7 @@ use molla_math::{Real, SpatialVector, Vec3};
 use molla_sim::runtime::{
     BodyHandle, BodyKind, ColliderGeometry, ColliderHandle, JointHandle, RigidScene, SceneStamp,
 };
-use molla_sim::{JointType, State};
+use molla_sim::JointType;
 use molla_vehicle::{Terrain, TireModel, TireOutput, WheelContact, wheel_ground_wrench};
 
 #[derive(Clone)]
@@ -343,7 +343,7 @@ impl WheelForces {
     pub(crate) fn apply(
         &mut self,
         scene: &RigidScene,
-        state: &State,
+        response: &mut crate::articulated_response::ArticulatedResponse<'_>,
         dt: Real,
         forces: &mut [SpatialVector],
         step: &mut WheelStep,
@@ -353,6 +353,7 @@ impl WheelForces {
             samples,
             pressure_states,
         } = step;
+        let state = response.state();
         let _span = tracing::debug_span!("wheel_forces").entered();
         for state in pressure_states.values_mut() {
             state.advance(dt);
@@ -366,7 +367,6 @@ impl WheelForces {
         let poses = state.body_q.host()?;
         let velocities = state.body_qd.host()?;
         let model = scene.model();
-        let mut response = crate::articulated_response::ArticulatedResponse::default();
         for w in self.wheels.values().filter(|w| active(scene, w)) {
             let body = scene
                 .body_index(w.body)
@@ -457,7 +457,7 @@ impl WheelForces {
                 );
                 let power = wrench.linear.dot(velocities[body].linear)
                     + wrench.angular.dot(velocities[body].angular);
-                let mobility = response.quadratic(model, state, body, wrench)?;
+                let mobility = response.quadratic(body, wrench)?;
                 if mobility > 0.0 {
                     let scale = (-power / (dt * mobility)).clamp(0.0, 1.0);
                     output.force = (normal * output.fz + tangent * scale).to_array();

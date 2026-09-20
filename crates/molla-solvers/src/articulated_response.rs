@@ -4,17 +4,57 @@ use molla_core::{Error, Result};
 use molla_math::{Real, SpatialVector};
 use molla_sim::{Model, State};
 
-#[derive(Default)]
-pub(crate) struct ArticulatedResponse {
+pub(crate) struct ArticulatedResponse<'a> {
+    model: &'a Model,
+    state: &'a State,
     masses: BTreeMap<usize, crate::rigid_impulse::MassFactor>,
+    jacobians: BTreeMap<(usize, usize), Vec<Real>>,
 }
 
-impl ArticulatedResponse {
+impl<'a> ArticulatedResponse<'a> {
+    pub(crate) fn new(model: &'a Model, state: &'a State) -> Self {
+        Self {
+            model,
+            state,
+            masses: BTreeMap::new(),
+            jacobians: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn state(&self) -> &'a State {
+        self.state
+    }
+
+    fn factor(&mut self, art: usize, n: usize) -> Result<&crate::rigid_impulse::MassFactor> {
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
+            let matrix = crate::mass_matrix(self.model, self.state, art)?;
+            entry.insert(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
+        }
+        Ok(&self.masses[&art])
+    }
+
+    pub(crate) fn jacobian(&mut self, art: usize, body: usize) -> Result<&[Real]> {
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.jacobians.entry((art, body)) {
+            let point = *self.model.body_com.host()?.get(body)
+                .ok_or_else(|| Error::Solver("missing response body".into()))?;
+            entry.insert(crate::jacobian(self.model, self.state, art, body, point)?);
+        }
+        Ok(&self.jacobians[&(art, body)])
+    }
+
+    pub(crate) fn add_gram(
+        &mut self,
+        art: usize,
+        n: usize,
+        projected: &[Vec<Real>],
+        response: &mut [Real],
+    ) -> Result<()> {
+        self.factor(art, n)?.add_gram(projected, response)
+    }
+
     /// COM wrench quadratic response `wᵀ J M⁻¹ Jᵀ w` at the current substep state.
     pub(crate) fn quadratic(
         &mut self,
-        model: &Model,
-        state: &State,
         body: usize,
         wrench: SpatialVector,
     ) -> Result<Real> {
@@ -24,6 +64,7 @@ impl ArticulatedResponse {
         if wrench == SpatialVector::ZERO {
             return Ok(0.0);
         }
+        let model = self.model;
         let children = model.joint_child.host()?;
         let starts = model.articulation_start.host()?;
         let Some(joint) = children.iter().position(|&child| child == body as i32) else {
@@ -44,11 +85,7 @@ impl ArticulatedResponse {
         if n == 0 {
             return Ok(0.0);
         }
-        if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
-            let matrix = crate::mass_matrix(model, state, art)?;
-            entry.insert(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
-        }
-        let j = crate::jacobian(model, state, art, body, model.body_com.host()?[body])?;
+        let j = self.jacobian(art, body)?;
         let projected: Vec<_> = (0..n)
             .map(|i| {
                 wrench.linear.x * j[i]
@@ -59,6 +96,66 @@ impl ArticulatedResponse {
                     + wrench.angular.z * j[5 * n + i]
             })
             .collect();
-        self.masses[&art].quadratic(&projected)
+        self.factor(art, n)?.quadratic(&projected)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use molla_math::{Mat3, Quat, Transform, Vec3};
+    use molla_sim::runtime::{BodyDesc, RigidScene};
+    use molla_sim::{BodyParams, MassProperties};
+
+    #[test]
+    fn shared_responses_reuse_each_articulation_and_refresh_with_state() {
+        let mut scene = RigidScene::new().unwrap();
+        let mut bodies = Vec::new();
+        for mass in [2.0, 5.0] {
+            bodies.push(scene.insert_body(BodyDesc {
+                params: BodyParams::new(),
+                additional_mass: Some(MassProperties {
+                    mass,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::from_diagonal(Vec3::new(1.0, 2.0, 3.0)),
+                }),
+                ..Default::default()
+            }).unwrap());
+        }
+        {
+            let mut response = ArticulatedResponse::new(scene.model(), scene.state());
+            for (art, (&body, mass)) in bodies.iter().zip([2.0, 5.0]).enumerate() {
+                let body = scene.body_index(body).unwrap().index();
+                let wrench = SpatialVector::new(Vec3::X, Vec3::ZERO);
+                let quadratic = response.quadratic(body, wrench).unwrap();
+                assert!((quadratic - 1.0 / mass).abs() < 1e-14);
+                let jacobian = response.jacobian(art, body).unwrap();
+                let pointer = jacobian.as_ptr();
+                let n = jacobian.len() / 6;
+                let projected = vec![jacobian[..n].to_vec(), jacobian[n..2 * n].to_vec()];
+                let mut gram = vec![0.0; 4];
+                response.add_gram(art, n, &projected, &mut gram).unwrap();
+                assert!((gram[0] - quadratic).abs() < 1e-14);
+                assert!((gram[3] - quadratic).abs() < 1e-14);
+                assert_eq!(gram[1], 0.0);
+                assert_eq!(gram[2], 0.0);
+                assert_eq!(response.jacobian(art, body).unwrap().as_ptr(), pointer);
+                assert_eq!(response.masses.len(), art + 1);
+                assert_eq!(response.jacobians.len(), art + 1);
+            }
+            let body = scene.body_index(bodies[0]).unwrap().index();
+            let angular = response.quadratic(body, SpatialVector::new(Vec3::ZERO, Vec3::X)).unwrap();
+            assert!((angular - 1.0).abs() < 1e-14);
+        }
+        scene.set_body_pose(bodies[0], Transform {
+            position: Vec3::new(30.0, -4.0, 6.0),
+            rotation: Quat::from_rotation_y(std::f64::consts::FRAC_PI_2),
+        }).unwrap();
+        let mut response = ArticulatedResponse::new(scene.model(), scene.state());
+        assert!(response.masses.is_empty() && response.jacobians.is_empty());
+        let body = scene.body_index(bodies[0]).unwrap().index();
+        let angular = response.quadratic(body, SpatialVector::new(Vec3::ZERO, Vec3::X)).unwrap();
+        assert!((angular - 1.0 / 3.0).abs() < 1e-14);
+        assert_eq!(response.masses.len(), 1);
     }
 }

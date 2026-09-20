@@ -235,10 +235,12 @@ impl RigidWorld {
                         * velocities[i].angular
                         * angular;
                 }
-                wheels.apply(scene, state, sub_dt, wrenches, &mut wheel_step, |a, b| {
+                let mut response =
+                    crate::articulated_response::ArticulatedResponse::new(scene.model(), state);
+                wheels.apply(scene, &mut response, sub_dt, wrenches, &mut wheel_step, |a, b| {
                     excluded.borrow_mut()(a, b)
                 })?;
-                crate::loop_forces::apply(scene, state, sub_dt, wrenches)?;
+                crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)
             },
         )?;

@@ -289,6 +289,51 @@ impl MassFactor {
         Ok(response)
     }
 
+    /// Accumulate `J M⁺ Jᵀ` into a row-major response matrix.
+    pub(crate) fn add_gram(&self, projected: &[Vec<Real>], response: &mut [Real]) -> Result<()> {
+        let count = projected.len();
+        if count.checked_mul(count) != Some(response.len())
+            || projected
+                .iter()
+                .any(|row| row.len() != self.n || row.iter().any(|v| !v.is_finite()))
+        {
+            return Err(Error::Solver("invalid projected mass response".into()));
+        }
+        let factored = matches!(self.decomposition, MassDecomposition::Cholesky(_));
+        let _span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
+        if let MassDecomposition::Cholesky(factor) = &self.decomposition {
+            let whitened: Vec<_> = projected
+                .iter()
+                .map(|row| forward_sub(factor, row, self.n))
+                .collect::<Result<_>>()?;
+            for row in 0..count {
+                for col in 0..=row {
+                    let value = whitened[row]
+                        .iter()
+                        .zip(&whitened[col])
+                        .map(|(a, b)| a * b)
+                        .sum::<Real>() / self.scale;
+                    response[row * count + col] += value;
+                    if row != col {
+                        response[col * count + row] += value;
+                    }
+                }
+            }
+        } else {
+            for col in 0..count {
+                let solved = self.solve(&projected[col])?;
+                for row in 0..count {
+                    response[row * count + col] += projected[row]
+                        .iter()
+                        .zip(&solved)
+                        .map(|(a, b)| a * b)
+                        .sum::<Real>();
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn solve(&self, rhs: &[Real]) -> Result<Vec<Real>> {
         if rhs.len() != self.n || rhs.iter().any(|v| !v.is_finite()) {
             return Err(Error::Solver("invalid impulse mass right-hand side".into()));
@@ -409,6 +454,20 @@ mod tests {
         }
         let factor = MassFactor::new(&[1.0], 1).unwrap();
         assert!(factor.quadratic(&[Real::MAX]).is_err());
+    }
+
+    #[test]
+    fn gram_response_checks_dimensions_and_zero_mass() {
+        for matrix in [[0.0; 4], [2.0, 0.0, 0.0, 3.0]] {
+            let factor = MassFactor::new(&matrix, 2).unwrap();
+            assert!(factor.add_gram(&[vec![1.0]], &mut [0.0]).is_err());
+            assert!(factor.add_gram(&[vec![1.0, f64::NAN]], &mut [0.0]).is_err());
+            assert!(factor.add_gram(&[vec![1.0, 2.0]], &mut []).is_err());
+            factor.add_gram(&[], &mut []).unwrap();
+            let mut response = [7.0; 4];
+            factor.add_gram(&[vec![0.0; 2], vec![0.0; 2]], &mut response).unwrap();
+            assert_eq!(response, [7.0; 4]);
+        }
     }
 
     #[test]
