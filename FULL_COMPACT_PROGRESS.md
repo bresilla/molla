@@ -5564,6 +5564,86 @@ observed while diagnosing the Oxbo, then verify the real pressure-enabled machin
   handoff records the session instead. FULL_COMPACT.md remains unmodified
   and untracked.
 
+## Session checkpoint: body-kind wake policy
+
+### Goal
+
+- Continue FULL_COMPACT.md body mutation and sleeping semantics. The previous
+  goal turn was progress (committed and validated tyre telemetry). This turn
+  closes the previously recorded ignored body-kind wake argument; the whole
+  objective remains active and incomplete.
+
+### Instructions
+
+- Only Molla and isolated Gearbox were edited/built. Original Gearbox, shared
+  machine assets and FULL_COMPACT.md were not modified. No GUI interaction or
+  new preview launch occurred. Commits are unsigned, title-only Conventional.
+
+### Discoveries
+
+- `set_body_kind` rebuilt even on same-kind input and used global activation.
+  Both defects were reproduced by failing core tests before the fix.
+- Local Rapier 0.32 source makes same-kind input a no-op and only applies the
+  explicit wake request when the new type is dynamic or kinematic. Fixing a
+  body zeroes velocity without that explicit activation.
+- A non-waking change does not promise indefinite sleep: a newly dynamic,
+  awake boundary joins its dependents on the next step; a moving kinematic
+  boundary also wakes dependent bodies. Unrelated sleepers stay asleep.
+
+### Accomplished
+
+- Molla `27a14b2 fix(sim): honor body kind wake policy` adds
+  `RigidScene::set_body_kind_with_wake`. Same-kind calls preserve revision,
+  snapshot and activation identity. Real edits rebuild atomically and activate
+  only the edited non-fixed body when requested. The existing method delegates
+  with wake=true. Fixed velocity clearing and physical mass/pose preservation
+  remain intact.
+- Isolated `559d055 fix(physics): pass body kind wake policy` connects the
+  trait argument instead of ignoring it. Backend regression compares automatic
+  sleepers through fixed/kinematic/dynamic round-trips against Rapier, including
+  same-kind calls, subsequent stepping, impulses and unrelated sleepers.
+- Core tests cover all kind pairs and wake flags, unknown-handle rejection,
+  fixed zero velocity, retained pose/mass, re-rooted trees, compliant loops,
+  retained sleep, awake/moving boundary propagation, prior wake preservation
+  and unrelated automatic quiet windows.
+- Full selected core lane: **734 passed, 0 failed, 10 ignored**, across 125
+  test binaries. GPU-feature compilation succeeds; no GPU runtime-parity claim.
+  Both ordinary Gearbox backend lanes: **104 passed, 17 ignored** each.
+- All three explicit real-Oxbo gates pass (21.08 s). All ten Kubota/Krampe
+  imported gates pass (123.07 s). GUI Oslo build succeeds (30.67 s). These
+  correctness runs overlap core validation; incidental timing values are not
+  controlled performance acceptance or a Rapier-parity claim.
+- All owned handles are terminal: search 2611, failing repro 47925, core
+  focused 22640, adapter focused 53879, core/GPU 95786, backend lanes 76247,
+  imported/build 5099. A late attempt to stop the owned broad dependency search
+  found it already absent; no user processes were stopped.
+
+### Next Steps
+
+- Continue the remaining full tyre contract: explicit metadata validation,
+  controlled/calibrated pressure sweeps, combined slip/braking/coast-down,
+  lifecycle and rendered UI/CLI acceptance on supported machine/surface sets.
+- Complete end-to-end performance acceptance and consistent sub-1-ms/Rapier
+  targets, GPU joint/tyre/sleep parity, deterministic towing/service/PTO gates,
+  per-cell terrain coupling, Bekker and MPM. This body API fix is not completion
+  of those requirements.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — kind mutation API and activation policy.
+- `crates/molla-sim/tests/runtime_kind_wake.rs` — mutation/no-op/atomic tests.
+- `crates/molla-solvers/tests/rigid_settling/kind.rs`, `rigid_sleep.rs` —
+  dependency/sleep/wake tests.
+- Isolated `physics/molla/body.rs`, `kind_wake_tests.rs`, `tests.rs` — adapter
+  forwarding and Rapier comparison.
+- Molla `target/perf/kind-wake-{repro,focused,full,gpu-check}.log` and isolated
+  `target/perf/kind-wake-{focused,molla,rapier,oxbo,imported,viewer-build}.log`
+  — validation evidence.
+- Current isolated GUI `target/release/gearbox` SHA256
+  `4b71e09086e1ad9df6a40ea53f7dfd1ef24c4e9690adca6f2b8b78553bd383fb`.
+- Engram tools remain unavailable in metadata; this tracked checkpoint records
+  the session. FULL_COMPACT.md remains untracked and unchanged.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
