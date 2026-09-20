@@ -8009,6 +8009,120 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   `crates/molla-solvers/src/pressure_tire.rs`. Production source unchanged this turn.
 - Engram APIs unavailable; this checkpoint is the session handoff.
 
+### Partial-cell footprint candidate checkpoint
+
+#### Goal
+- Remove contact-area plateaus in the shared brush mechanics, including its GPU
+  implementation, without changing only displayed area or weakening the new
+  imported Kubota load-growth assertion.
+
+#### Instructions
+- Headless only; original Gearbox/assets untouched. No preview launch/close.
+- **Candidate is uncommitted and not accepted yet.** Do not call all validation
+  green or replace the accepted native preview binary while the failures below
+  remain unresolved. No native build or new performance comparison this turn.
+
+#### Discoveries
+- Whole-cell activation was the source of the plateaus. Replacing it with clipped
+  partial coverage makes area grow continuously in the actual force integration.
+- The candidate changes the old coarse footprint-size diagnostic, not just force:
+  the old `max(sample_x)-min(sample_x)` underreported patch edges. A prior hand-tuned
+  passenger preset now reports a 0.3916427154 m low-pressure patch at 5 kN, outside
+  a legacy test's uncalibrated `<0.35 m` bound. Do not simply increase that bound;
+  reconcile the preset/acceptance with physical geometry and calibration evidence.
+- A separate existing aligning-moment acceptance fails: under fixed longitudinal
+  slip .08 and lateral slip .01–.16, the candidate's moment changes sign while
+  the report requires sign stability above 10% of the sweep peak. All sampled
+  contact cells are classified sliding; force jumps and moment jumps remain bounded.
+  It is not yet established whether to change model integration or this criterion.
+- Temporary diagnostic output (removed again from source) measured moments:
+  angle .02 → -0.49730 Nm; .035 → +0.62319; .05 → +2.68457;
+  .07 → +4.16952; .095 → +2.05708; .125 → -.06767; .16 → -.01586.
+  `smooth_combined_brush_force` blends static/dynamic caps with utilization; its
+  velocity-weakening transition is a possible contributor, not a proven diagnosis.
+- Added an independent mixed-slip reversal/refinement test rather than loosening
+  the failing sign criterion. At 64/128/256/512 segments the moment reversal persists;
+  e.g. .02 rad gives **-.22855/-.49730/-.58499/-.63544 Nm**, while .07 rad gives
+  **3.78847/4.16952/4.27511/4.33132 Nm**. Mirroring lateral slip reverses lateral
+  force/moment within 1e-8, preserves longitudinal force, supports 4200 N within
+  1e-6 and respects the friction budget. This constrains diagnosis but is not
+  physical calibration or proof that the legacy criterion should be removed.
+
+#### Accomplished
+- New CPU `rig/runners/coverage.rs` integrates positive piecewise-linear penetration
+  over each circumferential sample's dual cell (half the neighbour intervals).
+  Clip at zero penetration; use projected covered length for area, integrated mean
+  penetration for normal load, and pressure-centroid coordinates for force sampling.
+  Both full and partially covered cells use the same area for stiffness, traction,
+  cohesion, bristle parameters and telemetry. Retain persistent cell indices; reset
+  history only when its coverage vanishes. Patch edges use clipped boundaries.
+- Signed-angle profile generation gives exact mirrored lower-half samples. This
+  fixed an initial roundoff issue where a near-zero negative centroid was classified
+  left of a material boundary while world/grid rounding selected the right cell.
+  All four existing footprint-material tests now pass without assertion changes.
+- Retained the existing `brush_bristle_profile` force law. An initial alternative
+  using unregularized edge distance did not resolve the moment criterion and was
+  removed; current candidate uses the existing helper with the clipped patch extent.
+- Added four coverage math tests: analytic clipped linear integral, strict monotonic
+  area/load through 401 subsegment compressions, width invariance and convergence
+  toward analytic circle-plane area/load, and continuity at sample-entry boundaries.
+  All four passed. Typed/erased and cached/uncached dispatch tests also remain in
+  the full suite; no cached-factor simplification was introduced.
+- Mirrored clipping in `tire_brush.wgsl`; added contact area to previously unused
+  `BrushWheelOutput.diag5.z` without changing buffer layout. New real-GPU test sweeps
+  81 compressions at three pressures plus no-contact cases and compares area,
+  length, normal/longitudinal/lateral force and moment with CPU.
+- GPU session **83609** initially failed shader parsing (`signed` is reserved in
+  WGSL). Renamed it `signed_index`; corrected session **18745** passed **all 13
+  GPU brush tests** through native `make test-gpu`/nixVulkan, including real adapter
+  required new coverage test, mixed shoulder friction, heightfields and camber.
+  This proves that brush lane, not general GPU pressure/history/integration parity.
+- Imported candidate results: rear area **.35331 → .37042 → .35331 m²**;
+  front area **.25904 → .29212 → .25904 m²** under 0 → 1500 → 0 kg payload.
+  Whole support remains ~**48226 → 62941 → 48226 N**; forward axle takes ~75.17%.
+  The previously failing area-growth assertion passes unchanged.
+- Isolated session **15955** passed **113 ordinary tests**, imported payload **1**,
+  paired prop-lifecycle **1**, and all **4 Oxbo tests**, including six independent
+  pressures. Initial payload session **3603** also passed. No asset edits.
+- Initial full CPU session **14623** failed on one mixed-material boundary test
+  (subsequently fixed as above) and three vehicle tests. Focused session **14647**
+  passed four coverage and four material tests but failed the moment report; its
+  shell status 0 only reflects the final successful command, not all subcommands.
+  Diagnostic session **22707** exited 2 on the moment report; **61684** was only
+  a direct existing-binary diagnostic.
+- Final CPU session **67139** completed: **761 passed, 3 failed, 9 ignored across
+  93 test binaries**. All solver tests pass, including the corrected material-boundary
+  test. The three named vehicle failures below persist. Additional focused mixed-slip
+  reversal/refinement test **22412** passed after that run (one additional test).
+- All owned sessions are terminal. Focused new-file rustfmt and both worktree diff
+  checks pass. No runtime/tests committed or native binary rebuilt for this candidate;
+  only this progress handoff is being committed.
+
+#### Next Steps
+- Resolve the final CPU failures in `target/perf/tyre-coverage-final-core.log`:
+  `brush_load_deflection_sweep`, `adhesion_sliding_continuity_report_keeps_force_and_moment_smooth`,
+  and `tire_rig_default_runner_emits_non_calibration_snapshots_and_envelopes`.
+  The default runner fails the same moment sign check, not a third root issue.
+- Resolve those two underlying acceptance/model questions with stronger evidence;
+  do not suppress, skip or loosen tests just to accept this candidate. A diagnostic
+  report emitted a ~300 KB snapshot line: extract failed `TireRigAcceptanceCheck`
+  entries instead of printing that whole line.
+- After resolution: full core vehicle/solver, GPU, isolated ordinary/imported,
+  remaining lifecycle/terrain gates, native build and clean performance measurement.
+  Commit core and isolated regression only once validated; retain FULL_COMPACT scope.
+
+#### Relevant Files
+- Pending core `crates/molla-vehicle/src/real_tire/rig/runners.rs`, new
+  `rig/runners/coverage.rs`; pending shader `crates/molla-kernels/shaders/tire_brush.wgsl`,
+  output docs `src/tire_brush.rs`, GPU test registration and new
+  `tests/tire_brush_gpu/coverage.rs`.
+- Pending isolated `controller/benchmark.rs` + `benchmark/tyre_load.rs` from prior
+  turn; now passes on this candidate but depends on unaccepted core changes.
+- Core logs `target/perf/tyre-coverage-{initial-core,focused,failure-details,moment-details,
+  moment-refinement,gpu-initial,gpu-corrected,final-core}.log`; isolated `kubota-tyre-payload-coverage.log`
+  and `tyre-coverage-integration.log`. `physical_shape.rs` temporary logging removed.
+- Engram APIs unavailable; this project checkpoint is the session handoff.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
