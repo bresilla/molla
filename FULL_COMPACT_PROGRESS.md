@@ -3717,6 +3717,106 @@ plan, preserving substeps, physics equations and numerical rank policies.
 - `/tmp/molla-dense-chol-after-{trace.json,profile.tsv,profile.log}` — candidate
   profiling and warm-state verification.
 
+## Batched closure whitening checkpoint (2026-09-20)
+
+### Goal
+
+Continue full-plan performance work by reducing repeated triangular solves in
+closure responses, without changing physics equations or numerical thresholds.
+
+### Instructions
+
+- Original Gearbox, assets and user processes stay untouched; only isolated
+  physics-worktree tests exercise the integration. No owned viewers are launched.
+- Engram tools remain unavailable; this checkpoint preserves the session handoff.
+
+### Discoveries
+
+- The previous turn was progress: contiguous Cholesky access shipped with
+  bitwise-reference coverage and repeated real-machine timing evidence.
+- The closure response whitens many projected wrenches against the same factor.
+  Four independent RHS lanes can share each coefficient load while keeping each
+  lane's subtraction/division order identical to the existing scalar solve.
+- Initial batching improves representative 39-DOF/22-row Gram assembly, but
+  six-DOF/64-row measurements regress. The revised candidate retains the old
+  scalar path for at most six DOFs or fewer than four RHS rows. This is a work
+  scheduling cutoff, not a numerical rank or physics threshold.
+
+### Accomplished
+
+- Added four-RHS lower-triangular tiles with scalar handling of incomplete tails.
+  Cholesky construction, spectral fallback, Gram accumulation and the global
+  bounded constraint solve remain unchanged. Workspace is scoped to one call;
+  no state is cached across substeps or topology mutations.
+- Added bitwise comparisons against the old scalar Gram implementation across
+  independent row counts, complete/partial batches, full-rank/singular/zero mass,
+  three mass scales and repeated accumulation into nonzero response matrices.
+  Invalid row lengths/non-finite inputs must leave the output unchanged.
+- Initial candidate CPU lane: **390 passed, seven ignored**, 89 binaries;
+  ordinary Molla binary lane: **87 passed, eight ignored**.
+- Three additional factor-response A/B/B/A cycles give 39 DOFs/22 rows
+  **13.863833 -> 8.077 us** (41.74% lower); six DOFs/64 rows increase
+  **9.560333 -> 10.441833 us** (9.22%). These are response-only synthetic
+  timings, not whole-machine performance, and motivate the scalar cutoff.
+- Initial real-machine three-cycle A/B/B/A: Molla mean medians
+  **0.888016250 -> 0.853618333 ms** (3.874% lower), Rapier controls
+  **0.227858 -> 0.227716458 ms** (0.062% lower). Logged mechanical states
+  match exactly across all 12 runs.
+- Final scalar-cutoff candidate CPU lane: **390 passed, seven ignored**;
+  ordinary Molla/Rapier binary lanes: **87 passed, eight ignored each**.
+  Exact-reference cases additionally cover seven/eight DOFs at the cutoff;
+  invalid-input atomicity exercises the eight-DOF/eight-row batch path.
+- Final real-machine two-cycle A/B/B/A: Molla mean medians
+  **0.892427813 -> 0.852627687 ms** (4.460% lower); individual cycle reductions
+  are 4.253% and 4.665%. Rapier controls also shift
+  **0.230770750 -> 0.226835062 ms** (1.705% lower), so preserve that host-noise
+  caveat. The Molla/Rapier ratio remains about **3.76x**, not parity. All eight
+  paired tests pass, with exact matching logged pressure/load/deflection/pose.
+- Final unrestricted microbenchmarks remain noisy, including smaller cases.
+  A separate three-cycle microbenchmark with only the test process pinned to
+  allowed CPU 2 gives 39 DOFs/22 rows **11.658333 -> 5.663167 us**, and six
+  DOFs/64 rows **7.701 -> 7.187833 us**, not reproducing the larger small-matrix
+  regression. Six-DOF one/four-row calls remain 2.5/9.5 ns slower in that sample.
+  This is not a universal speedup claim. Real-machine timings were NOT pinned.
+- No owned builds or other tests overlapped paired/pinned timing runs. User
+  processes remained untouched. Final imported-machine checks pass **all seven
+  tests** at unchanged thresholds, including pressure extremes/replay, parked
+  slopes, straight driving/turning, trailer support and hitch/PTO controllers.
+- Final profiling passes. Whitening measures **0.035627992 ms/frame**, versus
+  **0.073313317 ms/frame** in the prior post-Cholesky trace. Other phases also
+  shift; traces are diagnostic, not latency acceptance. Paired uninstrumented
+  results above remain the performance evidence. All owned handles are terminal.
+- This checkpoint does not complete `FULL_COMPACT.md`: sleep/wake islands,
+  fleet scaling, lifecycle/calibration, generic/GPU joint and rendered/soil
+  acceptance remain incomplete or unverified.
+
+### Next Steps
+
+1. Start proper runtime sleep/wake state and connected islands. Existing adapter
+   sleep/wake methods are no-ops; parked/fleet performance needs real integration
+   and wake tests.
+2. Continue full-plan sleep/wake islands and remaining runtime/joint/tyre/terrain
+   acceptance. No fleet, GPU, rendered or full-plan completion claim follows from
+   these CPU response tests.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/rigid_impulse.rs` — batched whitening candidate.
+- `crates/molla-solvers/src/gram_batch_tests.rs` — bitwise reference, invalid
+  input atomicity and ignored response benchmark.
+- `/tmp/molla-gram-batch-scaling-{1..16}.log` — initial response timings.
+- `/tmp/molla-gram-batch-machine-abba-{1..12}.log` — initial paired Kubota timing.
+- `/tmp/molla-gram-batch-full.log` — initial CPU regression lane.
+- `/tmp/gearbox-after-dense-chol`, `/tmp/gearbox-after-gram-batch` — retained
+  baseline and initial candidate real-machine test executables.
+- `/tmp/gearbox-after-gram-batch-guard` — final candidate real-machine binary.
+- `/tmp/molla-gram-batch-guard-*` — final CPU/backend checks and paired/micro
+  timings, including `abba-{1..8}.log` and `scaling-{1..12}.log`.
+- `/tmp/molla-gram-batch-pinned-scaling-{1..12}.log` — CPU-2 microbenchmarks.
+- `/tmp/molla-gram-batch-imported.log` — final imported-machine regressions.
+- `/tmp/molla-gram-batch-{trace.json,profile.tsv,profile.log}` — candidate
+  profiling and warm-state verification.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
