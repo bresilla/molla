@@ -7930,6 +7930,85 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   `tyre-readout-structure-{integration,final-integration,native}.log`.
   Engram APIs are unavailable; this checkpoint provides the session handoff.
 
+### Fixed-pressure load/shape validation checkpoint
+
+#### Goal
+- Validate the user's pressure-versus-weight question through the actual backend
+  and rubber update paths, and extend the plan's load/footprint acceptance.
+
+#### Instructions
+- Continue headlessly. No automatic preview launch/closure; original Gearbox and
+  shared assets remain read-only. No speculative performance tuning.
+
+#### Discoveries
+- Weight really changes physical deflection and the visible-shape inputs per wheel.
+  It is not a uniform machine-mass share or a pressure-only mesh scale.
+- **New unresolved footprint quantization issue:** the real Kubota changes loads
+  and deflections under a 1500 kg payload at fixed 1.8 bar, but its reported contact
+  area remains exactly unchanged across that range. The imported test fails on
+  this requirement; it is not a passing footprint acceptance gate.
+- Source: `real_tire/rig/runners.rs` uses constant cell area
+  `width / width_segments * radius * TAU / segments`; an entire cell contributes
+  whenever its sample penetration is positive. Patch length is the difference of
+  the most distant active sample centres. Both stay constant while the active
+  cell set stays unchanged. `pressure_tire.rs` sums those actual cell areas and
+  uses them for normal stiffness/damping as well as readout. This is upstream
+  quadrature/geometry, not the newly fixed scene-stamp invalidation.
+
+#### Accomplished
+- Extended the existing CPU-private-rubber and GPU-uniform tests with a fixed
+  1.8 bar, 101 → 401 → 101 kg cycle. Configuration's nominal supported mass stays
+  unchanged. Settled support matches actual weight within 1%; compression grows,
+  loaded radius shrinks, mesh vertices/uniforms follow, ground contact stays aligned,
+  shared source meshes stay unchanged, and removing load restores the shape.
+- Measured deflection **14.2169 → 35.5998 → 14.2169 mm**, loaded radius
+  **.485783 → .464400 → .485783 m**, identical CPU/GPU-uniform values. These are
+  headless mesh/uniform checks, not screenshots or new GPU physics parity proof.
+- Session **19068** passed all eight tyre-mesh tests. Final session **97491**
+  passed **113 ordinary tests** (21 ignored), then both new load visual tests.
+  Test-only change committed in isolated Gearbox as **5cdc705**
+  (`test(tyres): verify load-driven rubber shape`). Native runtime unchanged.
+- Added an uncommitted real-Kubota payload regression in `benchmark/tyre_load.rs`:
+  960 settling ticks + 120 averaging ticks at baseline, payload, and restored load.
+  A colliderless 1500 kg rigid payload is fixed-jointed above the chassis, at 75%
+  of the wheelbase toward the forward axle; no USD edits or fake external load.
+- Imported results:
+  - Total support **48226.05 → 62941.06 → 48226.06 N**, matching actual weight.
+  - Rear deflection approximately **53.45 → 58.83 → 53.45 mm**.
+  - Front deflection approximately **54.35 → 69.74 → 54.35 mm**.
+  - Extra load per rear wheel ~**1828.7 N**, per front wheel ~**5528.8 N**;
+    forward axle takes **75.1447%**, proving nonuniform physical load distribution.
+  - Shape/load restoration assertions pass. Rear area stays **.3371707324 m²**,
+    front area stays **.3040317383 m²** despite the load change.
+- Initial imported run **14482** failed on area growth. Moved that same assertion
+  after the complete unload/restore cycle, without relaxing it, to collect the
+  remaining evidence. Final **97491** again exits **101** on exactly area growth.
+  All owned processes are terminal. This turn made progress via a committed
+  passing visual-load regression and a reproducible new physical-model limitation.
+
+#### Next Steps
+- Implement continuous partial-cell contact coverage/footprint geometry in the
+  shared brush model; keep cell area, pressure, normal/tangential force, stiffness,
+  bristle state and telemetry consistent. Do not only fabricate a smoother area
+  number in Gearbox/readout, increase segment count to hide the plateau, or weaken
+  the failing area-growth assertion. No production fix/design has landed yet.
+- Re-run the pending Kubota payload cycle plus core vehicle/solver, ordinary,
+  existing imported lifecycle/Oxbo and relevant parity/stability gates after changes.
+  Review planar versus general terrain and CPU/GPU semantics explicitly.
+- Wider multi-machine lifecycle, save/reload, calibrated tyre/soil, joint/GPU and
+  full acceptance/performance gates remain open. The full goal stays active.
+
+#### Relevant Files
+- Committed isolated `bin/gearbox/src/viewer/tyre_mesh.rs` tests.
+- Pending isolated `bin/gearbox/src/controller/benchmark.rs` module registration
+  and new `benchmark/tyre_load.rs`; do not call/commit it as a passing regression.
+- Isolated logs `target/perf/tyre-load-visual.log`, `kubota-tyre-payload.log`,
+  `tyre-load-final-and-payload-cycle.log` (includes successful gates and final failure).
+- Core `crates/molla-vehicle/src/real_tire/rig/runners.rs`,
+  `real_tire/{contact.rs,brush.rs,bristle.rs,width_tests.rs,dispatch_tests.rs}`,
+  `crates/molla-solvers/src/pressure_tire.rs`. Production source unchanged this turn.
+- Engram APIs unavailable; this checkpoint is the session handoff.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
