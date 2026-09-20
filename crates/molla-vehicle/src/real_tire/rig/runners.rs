@@ -473,7 +473,8 @@ fn evaluate_brush_impl(
             } else {
                 smooth_combined_brush_force(trial_long, trial_lat, static_cap, dynamic_cap)
             };
-        let rolling_i = cell_material.rolling_resistance * fn_i * v_long_cell.signum();
+        let rolling_direction = if v_long_cell == 0.0 { 0.0 } else { v_long_cell.signum() };
+        let rolling_i = cell_material.rolling_resistance * fn_i * rolling_direction;
         rolling_resistance_force += rolling_i;
 
         normal_load += fn_i;

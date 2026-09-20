@@ -13,6 +13,29 @@ fn brush_cells_resolve_both_shoulders_not_only_the_centerline() {
     assert!(contact.cells.iter().any(|cell| cell.local_z > 0.0));
 }
 
+#[test]
+fn stopped_brush_has_no_directional_rolling_resistance() {
+    let params = RealTireParams::default();
+    let terrain = FlatTerrain::new(0.0, 1.0);
+    let material = SurfaceMaterial::dry_asphalt();
+    for zero in [0.0, -0.0] {
+        let state = RealWheelState {
+            hub_pos: [0.0, params.radius * 0.9, 0.0],
+            hub_vel: [zero, zero, zero], heading: [1.0, 0.0, 0.0], omega: zero,
+        };
+        let stateless = evaluate_brush_tire(&params, &state, &terrain, &material);
+        let persistent = evaluate_planar_brush_tire_persistent(
+            &params, &state, &terrain, &material, &mut TireBrushState::default(), 0.001,
+        ).unwrap();
+        for contact in [stateless, persistent] {
+            assert!(contact.normal_load > 0.0);
+            assert_eq!(contact.longitudinal_force, 0.0);
+            assert_eq!(contact.force[0], 0.0);
+            assert_eq!(contact.aligning_moment_z, 0.0);
+        }
+    }
+}
+
 struct SplitWidth;
 impl Terrain for SplitWidth {
     fn height(&self, _: f64, _: f64) -> f64 { 0.0 }
