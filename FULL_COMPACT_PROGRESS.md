@@ -7635,6 +7635,160 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   timing scripts, summaries, activity mappings and binary hashes.
 - Original Gearbox/assets untouched. Engram APIs remain unavailable.
 
+### User-directed Oxbo preview — leave open
+
+#### Goal
+- User now accepts that Molla does more work than Rapier and says beating Rapier
+  is not necessary. Immediate task is the Oxbo preview and independent wheel
+  pressure inspection, not more performance tuning.
+
+#### Instructions
+- Explicit: launch and DO NOT close the simulator until the user says to.
+- Preserve separate per-wheel pressures. Whole-machine/axle controls may exist
+  as conveniences, not replace individual wheel state or controls.
+
+#### Discoveries
+- Sidebar source has whole-machine, axle and individual wheel sliders; individual
+  TyreBlock contains exactly one link. Pressure target writes occur only when a
+  slider changed, and each link stores its own applied and target pressure.
+- `gearbox launch --help` starts the GUI rather than showing help; the accidental
+  unwrapped launch failed to create its GPU surface. Use the Nix nixVulkan path.
+
+#### Accomplished
+- Archived untested prepared-Jacobian work in ignored
+  `target/perf/prepared-jacobian-unvalidated.patch` and restored runtime source.
+  It has no tests, is NOT accepted and was never built into the preview.
+- First named detached Oxbo preview PID 804883 loaded 40 bodies and six tyres,
+  Molla backend, then disappeared without a logged panic. No assistant stop or
+  termination command was issued. Cause is not established.
+- Relaunched foreground via tool session **13172**, instance `molla-oxbo-tyres`,
+  with `--load .../machines/usd/oxbo_harvester.usdz`, Molla, Wayland and nixVulkan.
+  Leave this owned GUI session running; do not stop it for cleanup or benchmarks.
+
+#### Next Steps
+- Let the user inspect Oxbo. Do not change pressures or restart/close the window
+  without a user request. Full physical/visual replacement gates remain open.
+
+#### Relevant Files
+- Isolated `target/perf/oxbo-tyres-live-{launch,foreground}.log` and
+  `~/.local/state/gearbox/logs/molla-oxbo-tyres.log`.
+- Isolated `bin/gearbox/src/host/panes/machine.rs` individual sliders and
+  `bin/gearbox/src/controller/wheel_forces.rs` per-link pressure targets.
+- Original Gearbox/assets unchanged; Engram APIs unavailable.
+
+### Oxbo relaunch checkpoint
+
+#### Goal
+- Relaunch the same Oxbo preview at the user's explicit request.
+
+#### Instructions
+- Leave the preview open until the user requests closure. Do not stop other apps.
+
+#### Discoveries
+- Previous Oxbo PID 811920 is gone. Another instance named `gearbox`, PID 818587,
+  is live and was not touched.
+
+#### Accomplished
+- Started the isolated Molla/Oxbo instance again using the same native
+  nixVulkan/Wayland command, foreground tool session **40100**.
+
+#### Next Steps
+- Leave session 40100 running for user inspection; do not clean it up.
+
+#### Relevant Files
+- Isolated `target/perf/oxbo-tyres-live-relaunch.log` records this launch.
+- Engram tools remain unavailable.
+
+### Oxbo relaunch checkpoint 2
+
+#### Goal
+- Launch Oxbo again at the user's request, leaving it open.
+
+#### Discoveries
+- The instance registry reported no running instances before this launch.
+
+#### Accomplished
+- Repeated the isolated Molla/nixVulkan/Wayland launch with the Oxbo asset.
+  Foreground GUI tool session **51992**; no close or stop commands issued.
+
+#### Next Steps
+- Leave this preview running until the user explicitly requests closure.
+
+#### Relevant Files
+- Isolated `target/perf/oxbo-tyres-live-relaunch-2.log`.
+- Engram APIs unavailable; this is the session handoff.
+
+### Oxbo preview closure confirmed by user
+
+#### Goal
+- Clarify the preview exit while checking per-wheel pressure independence.
+
+#### Instructions
+- User confirmed they closed the latest preview. Relaunch only when requested;
+  never close a running preview on their behalf without an explicit request.
+
+#### Discoveries
+- Session 51992 ended with code 0; user confirmation establishes intentional
+  closure for this run, not a simulator crash. Earlier exits remain unclassified.
+- Read-only machine telemetry was unavailable after closure. No live pressure
+  setting was changed. No headless per-wheel test has been added yet.
+
+#### Accomplished
+- Verified separate individual wheel UI controls and per-link targets in source.
+  Whole-machine and axle controls are additional explicit group operations.
+
+#### Next Steps
+- Continue the per-wheel Oxbo regression independently of the closed GUI.
+
+#### Relevant Files
+- Isolated `bin/gearbox/src/controller/benchmark/oxbo.rs`,
+  `controller/wheel_forces.rs`, `host/panes/machine.rs`,
+  `crates/gearbox-api/src/tyres.rs`.
+- Engram APIs unavailable; project handoff records the confirmation.
+
+### Oxbo independent-pressure regression checkpoint
+
+#### Goal
+- Verify required per-wheel pressure independence on the actual six-wheel asset,
+  without changing a user's live GUI settings or resuming performance tuning.
+
+#### Discoveries
+- Existing Oxbo imported tests cover settling/spawn/teleport, but not six distinct
+  wheel pressure targets. The shared fixture's pressure helper selects all tyres.
+  Production controls additionally support `wheel:LINK` and `axle:N` selectors.
+
+#### Accomplished
+- Added a headless real-Oxbo regression in the isolated Gearbox worktree: assign
+  0.8/1.2/1.6/2.0/2.4/2.8 gauge bar to six distinct wheel links while paused;
+  compare both telemetry and physical wheel outputs, reject invalid edits
+  atomically, resume and settle, then edit one wheel to 3.2 bar while driving and
+  ensure all five unselected pressures stay unchanged.
+- Initial focused build **26624** failed because the path-attributed Oxbo module
+  resolves child modules under `benchmark/`; added explicit `oxbo/pressure.rs`
+  path. Corrected focused build/test **19253** passed: all six applied physical
+  pressures matched the independent targets, with distinct deflections/radii.
+  Front L/R were 0.8/1.2 bar, middle L/R 1.6/2.0, rear L/R 2.4/2.8. Single-wheel
+  edit while driving left all other applied pressures unchanged. Added a chassis
+  runaway guard for final validation. Combined final lane **46078** completed
+  exit 0: 111 ordinary tests passed (19 ignored), all four imported Oxbo tests
+  passed, new-file rustfmt and diff checks passed. No GUI
+  launched or closed, no asset or original Gearbox edits. Previous user turn
+  added authoritative confirmation of intentional preview closure.
+
+#### Next Steps
+- Per-wheel independence is verified headlessly on real Oxbo. Continue remaining
+  FULL_COMPACT.md physical/visual/lifecycle acceptance; this does not establish
+  rendered UI acceptance, surface calibration or full replacement completion.
+- Do not relaunch or close previews automatically. The user explicitly confirmed
+  closing the last preview. Runtime/native viewer code has not changed.
+
+#### Relevant Files
+- Isolated `bin/gearbox/src/controller/benchmark/oxbo.rs`, new
+  `benchmark/oxbo/pressure.rs`, `target/perf/oxbo-independent-pressure.log`,
+  `oxbo-independent-{molla,all,format}.log`. Test-only changes committed separately
+  in the isolated Gearbox worktree; original Gearbox/shared assets unchanged.
+- Engram APIs remain unavailable.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
