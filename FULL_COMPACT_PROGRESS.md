@@ -6642,6 +6642,116 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Retained baseline `target/perf/gearbox-singular-force-after`, SHA256
   f1cd2555411944323c4c6d26935bbd0c6a1aad587552e361c95d4a81ba1f98f6.
 
+### Sparse wrench-projection candidate checkpoint
+
+- Previous goal turn made verified progress: accepted terrain optimization in
+  `16dfe4c`, isolated trace update in `e8292b1`, timing handoff in `43503e4`.
+- Next profile target is loop-response wrench projection. A body's COM Jacobian
+  has all-zero columns for non-ancestor or locked joints, but each closure row
+  currently scans all six full dense rows. Candidate caches packed nonzero
+  columns alongside the existing per-state dense Jacobian. It retains exact
+  six-term product order and dense fallback for non-finite wrenches. No columns
+  are dropped by tolerance, and coefficients containing NaN/Inf remain present.
+- Loop-force projection and wheel quadratic response share this representation
+  through ArticulatedResponse, whose lifetime is one immutable state. Public
+  Jacobian API, mass response, constraint equations and integration are unchanged.
+- Focused cache/projection tests passed (56593 terminal), including sizes
+  0/1/6/39/120, dense/sparse patterns, negative zero, subnormal values and
+  non-finite wrench propagation compared to the original dense projection.
+- Core solver full tests passed 499 tests (nine ignored, 92 binaries), followed
+  by 111 isolated ordinary tests (18 ignored); handle 14546 is terminal.
+  These runs preceded the final additional non-finite-coefficient test, which
+  was archived without execution when the candidate was rejected below.
+- Source: `crates/molla-solvers/src/articulated_response.rs`,
+  `articulated_response/projection.rs`, `loop_forces.rs`. Logs:
+  core `target/perf/sparse-projection-{focused,solvers}.log`, isolated
+  `target/perf/sparse-projection-molla.log`. Accepted retained baseline remains
+  isolated `target/perf/gearbox-heightfield-tile-after` (40ae96b5...).
+
+### Session summary: sparse projection rejected after machine timing
+
+#### Goal
+
+- Continue FULL_COMPACT.md and reduce enabled full-machine physics cost without
+  changing physical equations, accuracy settings, tyre features or terrain detail.
+
+#### Instructions
+
+- Work remains limited to Molla and isolated Gearbox. Original Gearbox and
+  shared assets remain untouched. No Rapier development, merges or pushes.
+- Engram save/context/session APIs are unavailable; this file is the handoff.
+
+#### Discoveries
+
+- Sparse packed wrench projection is not a win in this machine workload.
+  Saving zero-column multiply/add operations did not offset cache preparation
+  and indirect access costs sufficiently; that cost explanation is an inference,
+  while the measured regression is direct evidence. Do not re-add this candidate
+  merely because the local operation appears cheaper.
+- The last accepted trace computes mass_matrix 1920 times over 120 frames at
+  eight substeps (two per substep). Source shows separate caches for external
+  tyre/loop response (`ArticulatedResponse`) and post-FK motor/constraint response
+  (`JointMass`). This is a better next investigation, not a proven speedup yet.
+- Mass-cache reuse across those phases needs exact state validity: Featherstone
+  applies mimic constraints and recomputes FK before motor effective inertias.
+  Blindly reusing pre-force response matrices would be wrong when that changes
+  joint coordinates/body poses. Preserve distinct factorization/fallback semantics
+  for singular matrices and the existing motor inertia thresholds.
+
+#### Accomplished
+
+- Completed scalar + grid A/B/B/A, each internally R/M/M/R, unchanged 801x801
+  terrain/120 Hz/pressure model/warmup/sample counts; handle 52764 terminal.
+  No owned validation/build ran concurrently. Per-run host snapshots retained;
+  original user viewer remained active. All before/after logged state lines
+  matched exactly within both modes.
+- Mean of four medians, milliseconds per physics step:
+
+  | mode / backend | before parked | candidate parked | before driving | candidate driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | scalar Molla | 0.805666500 | 0.819102750 | 0.816810750 | 0.822317500 |
+  | scalar control | 0.281246000 | 0.280673750 | 0.289212000 | 0.286829500 |
+  | field-grid Molla | 0.823996750 | 0.847306750 | 0.834846750 | 0.865910500 |
+  | field-grid control | 0.280562000 | 0.284119250 | 0.295803250 | 0.293933500 |
+
+- Candidate driving medians are 0.67% / 3.72% slower; parked medians also worsen.
+  **Rejected the candidate.** Restored both tracked source files byte-for-byte
+  to HEAD through apply_patch and removed the new module. Only this progress
+  document remains modified. No candidate GPU/imported/Oxbo/viewer acceptance
+  is claimed or needed for an optimization that is not being retained.
+- Retained experiment artifacts under ignored target/perf, never as release
+  code. The additional non-finite-coefficient test is only in that archive and
+  was not compiled/executed; do not count it as a passing regression.
+- Restored isolated ordinary tests passed 111 (18 ignored) and native profile
+  viewer build passed in 29.28 seconds (95576 terminal). All owned handles are
+  terminal; no owned GUI launched. Do not use `gearbox-sparse-projection-after`
+  as the next performance reference or launch it as accepted code.
+
+#### Next Steps
+
+- Investigate sharing the unchanged mass matrix between external force response
+  and post-FK motor calculations within a single immutable-model substep. Use
+  explicit coordinate/pose validity checks or a provably shared post-FK state;
+  fall back after mimic/state changes. Do not cache across model edits by pointer
+  alone, or reuse numerically different factorization semantics unconditionally.
+- Keep accepted terrain-culling baseline. Full physics/tyre/lifecycle/visual/
+  calibrated-surface/GPU/replay/soil and performance acceptance remains open.
+  Goal active, not complete, paused or blocked.
+
+#### Relevant Files
+
+- Core ignored `target/perf/sparse-projection-{candidate.patch,candidate.rs,
+  focused.log,solvers.log}` — rejected source and successful exercised tests.
+- Isolated `target/perf/sparse-projection-{molla,restored,restored-viewer}.log`,
+  `sparse-projection-{scalar,grid}-{before-a,after-a,after-b,before-b}{.log,-load.txt}`,
+  `sparse-projection-summary.txt`, `sparse-projection-binaries.sha256`.
+- Rejected retained binary `target/perf/gearbox-sparse-projection-after`, SHA256
+  efb262c66faca19eba13210327172c10726fa655936e06f65f96983cf4ac7f75.
+- Accepted baseline remains `target/perf/gearbox-heightfield-tile-after`, SHA256
+  40ae96b5a4b3925e1ece27c3f77eb4e9627bb9d92364c8c9eb316c7c61c6a924.
+- Next source investigation: `articulated_response.rs`, `joint_mass.rs`,
+  `featherstone.rs` force callback/step and post-FK effective-drive inertia path.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
