@@ -3321,6 +3321,62 @@ eight-substep fidelity or changing the original Gearbox checkout.
 - `/tmp/molla-response-detail-profile.tsv` — per-frame span totals.
 - `/tmp/molla-response-detail-profile.log` — passing profile fixture output.
 
+## Contiguous wrench projection checkpoint (2026-09-20)
+
+### Goal
+
+Reduce the measured loop-response projection cost while preserving the full
+`FULL_COMPACT.md` objective and the validated integration settings.
+
+### Discoveries
+
+- Splitting a row-major Jacobian into six contiguous row slices before the
+  wrench dot products gives a small consistent full-machine timing reduction.
+  This does not require another kinematics cache, change multiplication/addition
+  order, or change tyre/contact/drive parameters.
+- Both A/B/B/A candidate runs have lower mean medians than both baselines.
+  The Rapier control mean is effectively unchanged: 0.22512525 ms before versus
+  0.225219375 ms after. The result is still about **4.12 times Rapier**, not
+  performance parity. Some p95 samples and tails remain above 1 ms.
+
+### Accomplished
+
+- Replaced repeated flattened-row indexing in loop wrench projection with
+  six row slices and an output-slice loop. Added an exact-arithmetic comparison
+  covering 0/1/6/39/78 DOFs, zero/linear/angular/mixed wrenches, and accumulation
+  into nonzero prior values.
+- CPU solver regression lane: **385 passed, five ignored**, 88 test binaries.
+- Uninstrumented A/B/B/A at unchanged settings: baseline mean of eight Molla
+  medians **0.940904625 ms**, candidate **0.928933125 ms**, a **1.2723%** reduction.
+  Both states (parked/driving) are sampled twice in each executable run, with
+  Rapier/Molla/Molla/Rapier fixture order. No owned build/test ran concurrently
+  with these timings. All four paired timing tests passed; the logged pressure,
+  load, deflection and position readouts match exactly before and after.
+- Final imported suite: **seven passed**, covering pressure sweeps, exact replay,
+  Krampe parking, Kubota controllers, slopes, straight/turning/tracks and paired
+  timing. Explicit Molla and Rapier ordinary binary lanes each pass **87 tests,
+  eight ignored**. No regression thresholds were changed.
+- Committed the projection change as `ce107f4`. All owned build/test handles are terminal;
+  no viewers were launched. This checkpoint does not establish live UI,
+  rendered tyre/track, GPU, fleet, soil or full-plan performance acceptance.
+
+### Next Steps
+
+1. Profile the larger ABA, drive-inertia and wheel-force costs. Keep unchanged
+   thresholds and eight substeps until an alternative passes all stability gates.
+2. Continue all remaining full-plan lifecycle/calibration, sleeping/islands/fleet,
+   generic/GPU joint, rendered footprint and terrain/soil acceptance work.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/loop_forces.rs` — contiguous projection and regression.
+- `/tmp/molla-projection-full.log` — CPU solver validation.
+- `/tmp/gearbox-before-projection`, `/tmp/gearbox-after-projection` — retained
+  uninstrumented before/after binaries.
+- `/tmp/molla-projection-abba-{1,2,3,4}.log` — same-host timing evidence.
+- `/tmp/molla-projection-imported.log` — final imported-machine regression.
+- `/tmp/molla-projection-{molla,rapier}-binary.log` — ordinary backend regressions.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
