@@ -3628,6 +3628,95 @@ changing the global bounded constraint solve or numerical rank thresholds.
 - `/tmp/molla-closures-densepath-*` — revised dense-participation validation.
 - `/tmp/molla-closures-restored-*` — restored-source validation.
 
+## Contiguous Cholesky rows checkpoint (2026-09-20)
+
+### Goal
+
+Reduce measured real-machine CPU costs while continuing the full replacement
+plan, preserving substeps, physics equations and numerical rank policies.
+
+### Instructions
+
+- Keep original Gearbox and user processes untouched; integration validation
+  runs only in the isolated physics worktree. No owned viewers were launched.
+- Engram tools remain unavailable; this checkpoint is the session handoff.
+
+### Discoveries
+
+- The previous turn was progress: rejected compact closure variants supplied
+  real-machine evidence against shipping their synthetic scaling improvements.
+- A fresh Kubota trace confirms a 39-DOF response factorization eight times per
+  outer step, alongside the drive-inertia factorization. The shared Cholesky
+  inner loop repeatedly indexes flat storage. Disjoint row slices expose bounds
+  and aliasing to the compiler without changing scalar arithmetic order.
+- The new tests compare every output bit against the original scalar algorithm,
+  including untouched upper triangles and partially updated matrices on failure.
+  Existing non-finite behavior is preserved, not silently redefined.
+
+### Accomplished
+
+- Replaced flat inner-loop indexing in `dense_chol` with disjoint pivot/trailing
+  row slices. Pivot validation, update order, square roots, divisions and error
+  behavior remain unchanged. No unsafe code, SIMD reduction/reassociation, solver
+  settings, tolerances or fallback/rank thresholds were introduced or changed.
+- Added deterministic SPD fixtures at dimensions 0/1/2/3/6/26/39/78/128, eight
+  seeds and scales 1e-18/1/1e18. Failure tests cover each pivot, zero/rank-one
+  matrices, invalid length, signed zero, tiny values and non-finite diagonals.
+- Initial factor-only A/B/B/A mean medians: 26 DOFs **2.6685 -> 1.485 us**,
+  39 **8.5045 -> 4.3385 us**, 78 **65.512 -> 34.1615 us**, and 156
+  **267.516 -> 145.266 us**. These are microbenchmarks, not whole-machine claims;
+  the 78-DOF baseline varied noticeably between runs.
+- Combined math/geometry/solver CPU lane: **681 passed, seven ignored** across
+  118 test binaries. Ordinary Molla binary lane: **87 passed, eight ignored**.
+- Three real-Kubota A/B/B/A cycles (12 runs, six per retained binary) give mean
+  Molla medians **0.912905708 -> 0.886234125 ms**, a **2.922%** reduction.
+  Individual cycle reductions are 3.097%, 2.969%, and 2.701%. Rapier controls
+  shift **0.229482667 -> 0.227412667 ms** (0.902%); their cycle shifts vary
+  from 3.785% faster to 2.092% slower. Keep that host noise visible: this is a
+  modest measured gain, not a quiet-host latency guarantee or parity claim.
+  The new Molla/Rapier ratio is still approximately **3.9x**.
+- All 12 paired tests pass; every logged pressure/load/deflection/pose state
+  matches the baseline exactly. No owned build/test overlapped these paired
+  timings. User processes, including an unrelated Gearbox viewer, remained alone.
+- Final imported-machine suite: **all seven tests pass** at unchanged
+  thresholds, including pressure extremes/replay, straight driving/turning,
+  slope parking, trailer support and hitch/PTO controllers. Ordinary Rapier
+  binary lane: **87 passed, eight ignored**. Formatting checks pass.
+- Candidate profiling passes. The response-factor span decreases from
+  **0.057751692 to 0.044637458 ms/frame**, and exclusive drive-inertia time
+  from **0.092871325 to 0.08104555 ms/frame**. Unchanged phases are slower in
+  the second trace and total instrumented time increases; these separate traces
+  localize work, not prove latency improvement. The uninstrumented repeated
+  A/B/B/A measurements above are the performance evidence.
+- Final focused bitwise-reference rerun passes **two tests, one ignored**.
+  All owned build/test handles are terminal. Full-plan completion and
+  Rapier-comparable performance remain unproven.
+
+### Next Steps
+
+1. Continue examining triangular solves and ABA allocation/lookup costs using
+   the same exact-reference and real-machine timing gates. Implement proper
+   sleep/wake islands; the Molla adapter still has no-op sleep/wake methods.
+2. Continue full-plan performance/islands/sleeping, generic/GPU joint semantics,
+   runtime/lifecycle, calibrated tyre/terrain and rendered acceptance gates.
+
+### Relevant Files
+
+- `crates/molla-math/src/dense_solve.rs` — contiguous Cholesky row access.
+- `crates/molla-math/tests/dense_chol.rs` — bitwise reference and scaling tests.
+- `/tmp/molla-dense-chol-before-{trace.json,profile.tsv,profile.log}` — fresh
+  real-machine baseline profiling; trace instrumentation adds overhead.
+- `/tmp/molla-dense-chol-{before,after}` — retained math benchmark executables.
+- `/tmp/molla-dense-chol-scaling-{1..4}.log` — factor-only A/B/B/A measurements.
+- `/tmp/gearbox-after-island-scratch`, `/tmp/gearbox-after-dense-chol` — retained
+  real-machine baseline and candidate test executables.
+- `/tmp/molla-dense-chol-machine-abba-{1..12}.log` — paired Kubota timings.
+- `/tmp/molla-dense-chol-full.log` — combined CPU regression lane.
+- `/tmp/molla-dense-chol-{molla-binary,rapier-binary,imported}.log` — final
+  ordinary backend and imported-machine regression checks.
+- `/tmp/molla-dense-chol-after-{trace.json,profile.tsv,profile.log}` — candidate
+  profiling and warm-state verification.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
