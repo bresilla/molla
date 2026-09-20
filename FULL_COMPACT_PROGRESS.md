@@ -5487,6 +5487,83 @@ observed while diagnosing the Oxbo, then verify the real pressure-enabled machin
   `a1ea51fdb9174da170f30bddc6d385b044dfe68cf51448315c3597e7c77faacd`.
 - Engram APIs remain unavailable; this tracked handoff preserves session context.
 
+## Session checkpoint: tyre wrench telemetry
+
+### Goal
+
+- Continue the whole FULL_COMPACT.md objective, especially §6.1 physical
+  readout. The previous acknowledgement-only turn made no implementation
+  progress; this turn revalidated the worktrees and implemented a missing
+  requirement. The full goal remains active and incomplete.
+
+### Instructions
+
+- Original Gearbox and shared machine assets remain untouched. Integration
+  changes are only in isolated `gearbox-physics` on `feat/physics-backend`.
+- The user closes Oxbo test windows manually; closures are not crash evidence.
+  Prior preview PID 2328595 was absent when checked. No GUI was launched,
+  closed, or manipulated in this turn.
+
+### Discoveries
+
+- Core wheel samples already contain the post-limiter resultant force and
+  aligning moment actually used by Featherstone. The adapter previously
+  dropped these, and exposed rolling resistance from only the final substep.
+- Active telemetry needs duration-weighted forces/moments, whereas slip and
+  contact point use normal-impulse weights. Sleeping zero-duration samples
+  retain reactions without applying a fresh wrench; these must be labelled.
+- The first test fixture produced zero longitudinal force in the simple-tyre
+  limiter's positive-power case. The final fixture uses braking and an oblique
+  guide to exercise nonzero longitudinal/lateral force and aligning moment.
+
+### Accomplished
+
+- Isolated commit `266ac18 feat(tyres): expose solver wrench telemetry` adds
+  world-space force and aligning moment to `WheelForceOutput`, with explicit
+  `held_support`. Rolling moment now has the same completed-step averaging as
+  force. Retained sleeping reactions are reported once, not reintegrated.
+- Controller LinkValues / machine-state telemetry now includes signed XYZ
+  force, aligning and rolling moments, normal load, grip budget, slip ratio,
+  slip angle, contact and held-support flags. Existing pressure telemetry and
+  track properties remain available. Documented units, Y-up world frame,
+  averaging, pressure/geometry timing, and sleep semantics in TYRE_PRESSURE.md.
+- Three new regressions cover actual substep integration for simple/pressure
+  tyres, changing timesteps, stale/contact-off clearing, sleeping/waking,
+  signed LinkValues and units. Existing controller integration also checks
+  paused telemetry against physical readout while a target edit is pending.
+- Both ordinary backend lanes pass **103 tests, 17 ignored**. All three
+  imported Oxbo gates pass (21.70 s), and all ten Kubota/Krampe imported gates
+  pass (125.01 s). GUI build through Oslo succeeds (33.69 s). This is not
+  new rendered acceptance, a calibrated pressure sweep, or performance parity.
+- No core dynamics changes; no new Molla core/GPU test or parity claim.
+  All owned process handles are terminal: focused 73359 (initial fixture
+  assertion failure), focused 42422, full lanes 27760, imported/build 26850.
+
+### Next Steps
+
+- Finish controlled/calibrated pressure sweeps and lifecycle/UI/CLI/visual
+  acceptance, now recording the actual force/moment outputs. Complete explicit
+  machine metadata validation, not just heuristic legacy import defaults.
+- Body-kind optional wake remains missing: core `runtime.rs::set_body_kind`
+  calls global-activating `edit` even on same-kind input; isolated body.rs
+  still ignores `_wake`. Preserve structural/dependency safety when fixing it.
+- End-to-end performance, GPU parity, towing/replay/PTO and Bekker/MPM scope
+  remain unfinished. No objective reduction or completion claim.
+
+### Relevant Files
+
+- Isolated `physics/backend.rs`, `physics/molla/wheel.rs` — wrench readout.
+- Isolated `physics/molla/wheel_readout_tests.rs` — substep/sleep regressions.
+- Isolated `controller/wheel_forces.rs` — physical telemetry and mapping tests.
+- Isolated `specs/TYRE_PRESSURE.md` — telemetry contract and remaining gaps.
+- Isolated `target/perf/tyre-wrench-{focused,molla,rapier,oxbo,imported}.log`
+  and `tyre-wrench-viewer-build.log` — validation evidence.
+- Current GUI `target/release/gearbox` SHA256
+  `533afd2979c80b067244d1cd1b066b80922657b5b95072bb414b8bfdf5c30712`.
+- Engram APIs are still absent from available tool metadata; this tracked
+  handoff records the session instead. FULL_COMPACT.md remains unmodified
+  and untracked.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
