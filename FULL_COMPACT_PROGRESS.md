@@ -5860,6 +5860,95 @@ observed while diagnosing the Oxbo, then verify the real pressure-enabled machin
   handles also returned terminal results. Engram APIs remain unavailable; this
   tracked checkpoint records session context.
 
+## 2026-09-20 — GPU width sampling and stopped-wheel resistance
+
+### Goal
+
+Continue FULL_COMPACT.md without reducing its scope. This turn addressed the
+GPU brush width gap identified by the preceding CPU width implementation.
+The full objective remains active, not complete.
+
+### Instructions
+
+- Original Gearbox remains read-only; no source changes in either Gearbox
+  worktree this turn. Isolated Gearbox was rebuilt/tested against changed Molla.
+- Preserve make-based Molla validation, unsigned title-only commits, and
+  apply_patch edits. FULL_COMPACT.md remains unchanged/untracked.
+
+### Discoveries
+
+- New regressions failed on the old GPU shader: shoulder-specific grip gave
+  zero yaw moment, and contact counts omitted width strips. The seven older
+  passing brush tests did not prove width parity.
+- CPU `f64::signum()` at zero produced a directional rolling-resistance force.
+  Initially mirroring it on GPU broke a resident FEM/vehicle substep test.
+  Both paths now return zero rolling resistance at zero longitudinal speed;
+  positive and negative zero are tested, including persistent CPU state.
+- Rapier is not an exclusively impulse-joint engine. Original Gearbox at the
+  fork point and its current checkout both contain MultibodyJointSet insertion
+  with impulse fallback; isolated Rapier retains it. Molla's RigidWorld uses
+  FeatherstoneSolver::new_cpu() with eight substeps. Solver family alone does
+  not establish superiority. Official reference:
+  https://rapier.rs/docs/user_guides/rust/joint_constraints/
+
+### Accomplished
+
+- `85faa98 fix(tyres): stop rolling force at zero speed`.
+- `4dae6c5 feat(gpu): sample tyre contact across width`.
+- GPU width strips sample geometry/material independently, conserve cell area,
+  and accumulate `z*(longitudinal-rolling)-x*lateral` yaw moment. Rolling
+  resistance uses each cell's tangent instead of a single global subtraction.
+- Kept BrushWheelInput at seven vec4 rows: hub_pos.w carries width resolution,
+  integers 1..16, zero selecting three strips. Host inputs reject invalid
+  values; the shader bounds GPU-resident counts. Scratch is per workgroup lane,
+  not per circumferential sample. Existing circumferential GPU maximum is 256.
+- Direct vehicle row builders expose per-wheel width_segments; all four
+  resident spin/suspension/chassis builders forward wheel_controls.w. Updated
+  Molla viewer packing. No alternative Gearbox chassis integrator was added.
+- Final validation: core **985 passed, 10 ignored**, 126 binaries; kernel
+  library **8 passed**; vehicle host/reference **15 passed, 21 GPU ignored**;
+  explicit GPU brush **12 passed**; GPU vehicle **21 passed**; selected FEM
+  brush consumers **3 passed** and resident FEM owner **1 passed**. No GPU
+  adapter skips. Viewer/kernels all-targets check passed.
+- GPU tests cover 1/2/3/4/8/16 strips, 8/48/96/256 circumferential samples,
+  airborne wheels, asymmetric grip with reversed travel/heading/material sides,
+  80/300 kPa, shoulder heights and rolling moment, zero speed, invalid counts,
+  and GPU-resident row generation through brush output/readback.
+- Isolated ordinary backends: **104 passed, 17 ignored each**. Imported Oxbo:
+  **3 passed**, 21.35 s. Kubota/Krampe: **10 passed**, 126.66 s.
+- All owned handles terminal (73005 core/GPU/FEM, 2061 final kernel checks,
+  24461 isolated backends/imports; earlier handles also terminal). No GUI launch
+  or rebuild this turn, no rendered acceptance and no new performance timing.
+  Engram APIs remain unavailable; this checkpoint persists the session.
+
+### Next Steps
+
+- Full GPU parity remains unproven: persistent shear, general terrain tangent
+  frames/camber, the CPU 512-vs-GPU 256 circumferential limit and full rigid
+  GPU integration still need coverage/work. Width tests are not blanket parity.
+- Publish authored field friction grids into live isolated ground registration,
+  finish calibrated pressure/material response and full footprint geometry.
+- Continue compatibility metadata, lifecycle/UI/CLI and rendered acceptance,
+  joints/towing/replay/PTO, sleep/GPU integration, Bekker/MPM and performance.
+- Last controlled CPU timing remains the preceding cached-width comparison:
+  Molla driving 1.000471 ms vs Rapier 0.288903 ms, 3.463x. It predates this
+  zero-speed fix; no newer timing or claim of Rapier parity is established.
+
+### Relevant Files
+
+- `crates/molla-kernels/{src/tire_brush.rs,shaders/tire_brush.wgsl}` — width
+  contract, geometry/force sampling and per-cell rolling/moment reduction.
+- `crates/molla-kernels/{src/tire_vehicle.rs,shaders/tire_vehicle_yaw.wgsl}` —
+  CPU and GPU-resident width propagation.
+- `crates/molla-kernels/tests/tire_brush_gpu/width.rs`, `tire_brush_gpu.rs`,
+  `tire_vehicle_gpu.rs` — width/material/geometry/motion/validation regressions.
+- `crates/molla-vehicle/src/real_tire/{rig/runners.rs,width_tests.rs}` — stopped
+  rolling-force correction and stateless/persistent regression.
+- `bin/molla_viewer/src/examples/121_tire_traction.rs` — width packing.
+- Molla `target/perf/gpu-brush-width{,-repro,-unit,-vehicle,-check,-core,-fem,
+  -fem-fixed}.log`; isolated `target/perf/gpu-brush-width-{molla,rapier,oxbo,
+  imported}.log` — final and deliberately retained failing evidence.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
