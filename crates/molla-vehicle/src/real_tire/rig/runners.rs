@@ -152,9 +152,9 @@ pub fn tire_rig_camber_sweep(
         .collect()
 }
 
-pub(crate) fn surface_material_with_terrain_film(
+pub(crate) fn surface_material_with_terrain_film<T: Terrain + ?Sized>(
     material: &SurfaceMaterial,
-    terrain: &dyn Terrain,
+    terrain: &T,
     x: f64,
     z: f64,
     speed_mps: f64,
@@ -238,10 +238,10 @@ pub fn evaluate_brush_tire_oriented(
 /// Evaluate a planar patch with persistent cell shear; errors retain the previous state.
 /// Terrain friction and film properties may vary across the planar contact patch.
 /// The caller projects history when the tangent frame changes.
-pub fn evaluate_planar_brush_tire_persistent(
+pub fn evaluate_planar_brush_tire_persistent<T: Terrain + ?Sized>(
     params: &RealTireParams,
     state: &RealWheelState,
-    terrain: &dyn Terrain,
+    terrain: &T,
     material: &SurfaceMaterial,
     history: &mut TireBrushState,
     dt: f64,
@@ -284,10 +284,10 @@ fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize
     }).collect()
 }
 
-fn evaluate_brush_impl(
+fn evaluate_brush_impl<T: Terrain + ?Sized>(
     params: &RealTireParams,
     state: &RealWheelState,
-    terrain: &dyn Terrain,
+    terrain: &T,
     material: &SurfaceMaterial,
     orientation: &RealWheelOrientation,
     mut persistent: Option<(&mut TireBrushState, f64)>,

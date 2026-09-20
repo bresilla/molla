@@ -147,6 +147,7 @@ pub(crate) fn evaluate_with_surface(
     shear: Option<(&mut PressureShear, Real)>,
     friction_at: Option<&dyn Fn(Vec3) -> Real>,
 ) -> Result<(TireOutput, PressureTireSample)> {
+    let _span = tracing::debug_span!("pressure_tire").entered();
     let mut params = state.config.tire;
     params.pressure_pa = state.pressure_pa;
     let heading = Vec3::from_array(wheel.heading);
@@ -178,6 +179,7 @@ pub(crate) fn evaluate_with_surface(
     let mut material = SurfaceMaterial::from_terrain_friction(friction);
     let rolling_coefficient = material.rolling_resistance;
     material.rolling_resistance = 0.0;
+    let brush_span = tracing::debug_span!("pressure_brush").entered();
     let mut contact = if let Some((shear, dt)) = shear {
         if let Some((old_forward, old_side)) = shear.frame {
             shear
@@ -201,6 +203,7 @@ pub(crate) fn evaluate_with_surface(
     } else {
         evaluate_brush_tire(&params, &local, &terrain, &material)
     };
+    drop(brush_span);
     if !contact.is_finite() {
         return Err(Error::Solver("non-finite pressure tyre contact".into()));
     }

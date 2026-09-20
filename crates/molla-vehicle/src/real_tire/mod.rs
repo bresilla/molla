@@ -229,3 +229,6 @@ mod tests;
 
 #[cfg(test)]
 mod width_tests;
+
+#[cfg(test)]
+mod dispatch_tests;

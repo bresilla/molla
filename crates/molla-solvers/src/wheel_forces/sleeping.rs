@@ -37,6 +37,7 @@ pub(super) fn query_ground<'a>(
     hub: Vec3,
     mut include: impl FnMut(ColliderHandle) -> bool,
 ) -> Result<Option<GroundHit<'a>>> {
+    let _span = tracing::debug_span!("wheel_ground_query").entered();
     let Some(hit) = queries.cast_ray_filtered(
         scene,
         Vec3::new(hub.x, top + 1.0, hub.z),
