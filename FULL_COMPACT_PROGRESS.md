@@ -7050,6 +7050,116 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Accepted binary `target/perf/gearbox-shared-factor-after`, SHA256
   b364462764fba8da9f50de952cfdd35374ca094a3cf0e867764eb6053e08d622.
 
+### 2026-09-20 — Batched scalar joint-stop responses
+
+#### Goal
+
+- Continue FULL_COMPACT.md with the user's Molla performance priority. Keep
+  tyres, terrain, fixed-step settings and machine behavior unchanged; retain
+  Rapier only as the benchmark reference until the replacement gates pass.
+
+#### Instructions
+
+- Original Gearbox and shared machine assets remain untouched. Integration
+  builds/tests run only in `robolibs/gearbox-physics`; no preview was launched.
+- Use the Molla Makefile through Nix, native Oslo viewer build in the isolated
+  worktree, patch edits and unsigned title-only Conventional Commits.
+
+#### Discoveries
+
+- Added debug spans for ABA setup, kinematics, backward/acceleration passes,
+  constraints, integration and finalization. Added scalar-stop response/Gram/
+  impulse spans. These distinguish joint-limit work from Featherstone's passes.
+- Before the change, the Molla-only 120-frame full-meadow trace had 26 scalar
+  stops on every one of 960 substeps. Response solves took 0.195608 ms/frame,
+  versus 0.027641 ms/frame for the earlier trace's ABA backward pass. This
+  directed optimization toward independent response solves, not ABA mechanics.
+- Four-lane triangular solves preserve each RHS's division, subtraction and
+  traversal order. Sharing arithmetic across opposite-sign bounds was not used;
+  no signed-zero reflection assumption or omitted coupled stop was introduced.
+- Profile-only after diagnostics: response solves 0.087476 ms/frame; scalar
+  stops total 0.131440 versus 0.242054 ms/frame before. These instrumented
+  measurements explain the target; the non-profile machine runs below determine
+  acceptance. Remaining large trace regions include external/loop forces,
+  projected wrenches/Jacobians, collision and wheel forces.
+
+#### Accomplished
+
+- Source commit `6a95c3f` (`perf(solver): batch joint stop responses`).
+- `MassFactor::solve_batch` batches full four-RHS groups for Cholesky factors,
+  reusing a transposed scratch buffer through forward/back substitution. Scalar
+  tails and spectral/zero factors retain the existing solve path. Every RHS is
+  dimension/finite checked. Scalar-stop construction, Gram matrix, unilateral
+  active-set solution and reaction application remain unchanged.
+- New exact-bit reference tests cover dimensions 0/1/2/6/7/39/78, batch sizes
+  0/1/2/3/4/5/7/8/26/33, scales 1e-60/1/1e60, full-rank/weak/singular matrices,
+  general RHSs and signed unit pairs. Additional tests cover zero factors,
+  signed zero/subnormal RHSs and invalid inputs in every full-group/tail lane.
+- Solver lane: **504 passed, 9 ignored across 92 binaries**. Isolated ordinary
+  integration: **111 passed, 18 ignored**. Oxbo: **3 passed**. Imported tractor/
+  trailer: **10 passed**, including pressure replay/extremes, slope parking,
+  sleep, hitch/PTO and straight/turning/track checks. Profile trace test, native
+  profile viewer build, GPU-feature all-targets compile, owned-module formatting
+  and diff checks passed. No GPU runtime or rendered acceptance claim.
+- All test/build handles reached exit 0: 58724, 5682, 8692, 35308 and 19147.
+  Timing handles 1452 and 41500 also reached exit 0. No owned build/test ran
+  concurrently with the accepted timing batches.
+- Two A/B/B/A batches, each internally R/M/M/R, use the full 801x801 meadow,
+  enabled pressure-dependent tyres, 120 Hz and unchanged solver settings.
+  Mean of four medians per cell, milliseconds per physics step:
+
+  | batch / mode | Molla before driving | Molla after driving | control before driving | control after driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | repeat scalar | 0.754580000 | 0.673450750 | 0.291359000 | 0.293285500 |
+  | repeat grid | 0.771751000 | 0.676393500 | 0.292895250 | 0.296697250 |
+  | confirm scalar | 0.765072500 | 0.660467000 | 0.297021750 | 0.298653000 |
+  | confirm grid | 0.772422000 | 0.674475500 | 0.297909500 | 0.292949750 |
+
+- Driving reduction is 10.75%/12.36% in repeat and 13.67%/12.68% in confirm
+  scalar/grid. Retain the repeatable gain. Confirm Molla/reference ratio remains
+  **2.21x/2.30x**, with mean driving p95 **1.3260625/1.1191995 ms**. Repeat
+  scalar p95 did not improve (1.42478475 before, 1.4665365 after). Thus no
+  parity, tail-target or complete-plan claim.
+- All four logged state lines in each of 16 before/after timing runs match
+  exactly within/across batches. The two new trace state lines match both the
+  previous shared-factor trace and the pre-batch scalar-stop trace exactly.
+- Before/after load snapshots show no competing cargo/rustc activity; the
+  user's original viewer stayed running. These are loaded-workstation physics
+  timings, not full viewer-frame timings. No outside processes were stopped.
+- Retained accepted baseline `target/perf/gearbox-stop-batch-after`, SHA256
+  `8fbebbc7ac3cbcc49edc746946dbfe3aae8c9757ed5550801cda68199525fbc8`, supersedes
+  `gearbox-shared-factor-after` for future comparisons. Isolated Gearbox stays
+  clean at `e8292b1`; no integration source edits were needed for this change.
+
+#### Next Steps
+
+- Continue profiling/optimizing remaining loop-force/response and collision
+  work against this accepted binary, retaining exact-state checks and full
+  machine A/B/B/A gates. Local speedups alone still do not justify acceptance.
+- Keep FULL_COMPACT.md active: performance parity/tails, full-frame/rendered
+  evidence, calibration/pressure lifecycle/reference acceptance, general
+  joint/singular/GPU issues and soil coupling remain open. Do not remove Rapier
+  or modify the original checkout before the user's replacement condition.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/featherstone.rs` — ABA stage profiling.
+- `crates/molla-solvers/src/joint_limits.rs` — batched stop responses/profiling.
+- `crates/molla-solvers/src/rigid_impulse.rs` — response-batch module wiring.
+- `crates/molla-solvers/src/rigid_impulse/response_batch{.rs,/tests.rs}` — batched
+  triangular solves and bitwise/fallback/input validation coverage.
+- Core `target/perf/stop-batch-{focused,solvers,gpu-check,format}.log`.
+- Isolated `target/perf/{aba-stages,scalar-stops}-trace.{json,log}` and
+  corresponding `*-profile.tsv` — pre-optimization diagnostics.
+- Isolated `target/perf/stop-batch-{molla,oxbo,imported,trace,viewer}.log`,
+  `stop-batch-trace.json`, `stop-batch-profile.tsv`, `stop-batch-binaries.sha256`,
+  `stop-batch-{repeat,confirm}-summary.txt`, `run-stop-batch-timing.sh` and
+  `stop-batch-{repeat,confirm}-{scalar,grid}-{before-a,after-a,after-b,before-b}`
+  `.log`/`-load.txt` — validation and reproducible timing evidence.
+- Engram tools remain unavailable in the configured tool registry; this
+  project handoff records the session findings instead of claiming a memory
+  save or session-summary tool call succeeded.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
