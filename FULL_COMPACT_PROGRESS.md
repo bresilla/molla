@@ -5886,7 +5886,9 @@ The full objective remains active, not complete.
   positive and negative zero are tested, including persistent CPU state.
 - Rapier is not an exclusively impulse-joint engine. Original Gearbox at the
   fork point and its current checkout both contain MultibodyJointSet insertion
-  with impulse fallback; isolated Rapier retains it. Molla's RigidWorld uses
+  with impulse fallback; original activation is opt-in via
+  `GEARBOX_MULTIBODY=1`, otherwise joints use the impulse path. Isolated Rapier
+  retains multibody support. Molla's RigidWorld uses
   FeatherstoneSolver::new_cpu() with eight substeps. Solver family alone does
   not establish superiority. Official reference:
   https://rapier.rs/docs/user_guides/rust/joint_constraints/
