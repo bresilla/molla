@@ -1,19 +1,12 @@
 use std::collections::BTreeMap;
 
 use molla_core::{Error, Result};
-use molla_math::dense_solve::{back_sub, dense_chol, forward_sub};
 use molla_math::{Real, SpatialVector};
 use molla_sim::{Model, State};
 
-struct MassSolve {
-    size: usize,
-    singular: Option<crate::rigid_impulse::MassFactor>,
-    factor: Option<Vec<Real>>,
-}
-
 #[derive(Default)]
 pub(crate) struct ArticulatedResponse {
-    masses: BTreeMap<usize, MassSolve>,
+    masses: BTreeMap<usize, crate::rigid_impulse::MassFactor>,
 }
 
 impl ArticulatedResponse {
@@ -53,22 +46,7 @@ impl ArticulatedResponse {
         }
         if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
             let matrix = crate::mass_matrix(model, state, art)?;
-            if matrix.iter().any(|v| !v.is_finite()) {
-                return Err(Error::Solver("non-finite articulated mass".into()));
-            }
-            let scale = matrix.iter().copied().map(Real::abs).fold(0.0, Real::max);
-            let mut factor = matrix.clone();
-            let factored = dense_chol(&mut factor, n).is_ok()
-                && (0..n).all(|i| factor[i * n + i].powi(2) > scale * 1e-12);
-            entry.insert(MassSolve {
-                size: n,
-                singular: if factored {
-                    None
-                } else {
-                    Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?)
-                },
-                factor: factored.then_some(factor),
-            });
+            entry.insert(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
         }
         let j = crate::jacobian(model, state, art, body, model.body_com.host()?[body])?;
         let projected: Vec<_> = (0..n)
@@ -81,24 +59,6 @@ impl ArticulatedResponse {
                     + wrench.angular.z * j[5 * n + i]
             })
             .collect();
-        let mass = &self.masses[&art];
-        let solved = if let Some(factor) = &mass.factor {
-            back_sub(
-                factor,
-                &forward_sub(factor, &projected, mass.size)?,
-                mass.size,
-            )?
-        } else {
-            mass.singular.as_ref().unwrap().solve(&projected)?
-        };
-        let response = projected
-            .iter()
-            .zip(solved)
-            .map(|(a, b)| a * b)
-            .sum::<Real>();
-        if !response.is_finite() {
-            return Err(Error::Solver("non-finite articulated response".into()));
-        }
-        Ok(response.max(0.0))
+        self.masses[&art].quadratic(&projected)
     }
 }

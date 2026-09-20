@@ -2017,6 +2017,89 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
   Files named `/tmp/molla-control-high-state.json` and `-high.png` were captured
   after the refused high-pressure request and do not prove 4-bar operation.
 
+## Checkpoint: concurrent driving pressure edits
+
+### Goal
+
+Continue the entire `FULL_COMPACT.md`; verify its CLI mid-drive pressure gate
+without interrupting driving or touching the original Gearbox checkout.
+
+### Instructions
+
+- Changes remain in Molla and the isolated `gearbox-physics` worktree only.
+- Use native make recipes, patch tools and unsigned title-only commits.
+
+### Discoveries
+
+- The explicit pressure command can borrow a same-identity active drive lease;
+  it must not claim/release that lease on success, refusal or transport error.
+  Holder comparison is CLI-side validation, not new server authentication.
+- A completed CLI drive-duration message alone is insufficient evidence;
+  fresh telemetry throughout the edit sequence confirms continuing motion.
+- The user confirmed interacting with the older `molla-gram-perf` window.
+  Its stop/closure is not evidence of an unattended crash. This confirmation
+  does not identify the cause of closure; the keyboard override was separately
+  reproduced by regression tests and corrected before the latest live run.
+
+### Accomplished
+
+- Isolated commit `dbc255c` adds `machine tyre-pressure --reuse-session`,
+  rejects inactive/zero/different-holder sessions and conflicts with `--take`.
+  Owned pressure sessions still release on command failure. Four new unit tests
+  cover this lifecycle; six CLI unit and fourteen integration tests pass.
+  Native `oslo make build` passes.
+- Selected real Kubota completed a 90-second drive at forward 2 m/s and yaw
+  0.12 rad/s. A mid-drive 0.5-to-4-bar edit reached all four applied pressures
+  while fresh speed readback remained 2.004 m/s. Session id/holder remained
+  unchanged. A front-axle edit changed only its two targets; a subsequent
+  rear-left edit changed only that wheel. All final applied pressures reached
+  their targets while driving on the same session.
+- Invalid 99-bar input returned exit 2 without changing targets/session.
+  After driving released normally, `--reuse-session` refused the idle session
+  with exit 6. Stopped only the named `molla-pressure-reuse` instance.
+- Inspected screenshot confirms the selected Molla/PLAYING machine, not a
+  close-up tyre-shape comparison. Step samples 1.61–1.92 ms under concurrent
+  user workloads are not a controlled performance comparison. Existing
+  pre-load renderer/Vulkan diagnostics remain; no physics quarantine observed.
+
+### Next Steps
+
+- Redundant backward solves have now been removed from tyre quadratic responses
+  and motor inverse diagonals. The release CPU solver suite passes 374 tests,
+  zero failures, five ignored across 87 binaries. Isolated viewer rebuild and
+  post-optimization live verification are still in progress.
+- Continue whole imported-machine profiling and all remaining performance,
+  lifecycle, calibration, slope, fleet and deterministic replay gates.
+
+### Relevant Files
+
+- Isolated `crates/gearbox-cli/src/cli/machine.rs` — pressure session lifecycle.
+- Isolated `specs/TYRE_PRESSURE.md`, `specs/TYRE_PERFORMANCE.md` — command and evidence.
+- `/tmp/gearbox-pressure-session-{tests,build}.log` — build/test results.
+- `/tmp/molla-reuse-{before,after,high,axle,invalid-state,wheel,final-state}.json`
+  and `/tmp/molla-reuse-drive.log` — live telemetry and completed drive.
+- `/tmp/molla-pressure-reuse.log`, `/tmp/molla-reuse-scoped.png` — viewer evidence.
+
+## Checkpoint: quadratic mass responses
+
+- `MassFactor::quadratic` computes `rhsᵀ M⁺ rhs` without reconstructing the full
+  inverse response: one forward solve and squared norm for Cholesky, or squared
+  retained eigenbasis projections for singular mass matrices. Scaling the RHS
+  by the square root of the mass scale before squaring avoids intermediate
+  overflow/underflow. Wheel response caches now use this shared factor directly.
+- Motor effective inertia uses the same Cholesky norm identity for requested
+  inverse diagonal entries; singular fallback semantics remain unchanged.
+- Analytic full/singular-rank tests, nullspace cutoff, invalid inputs, zero RHS,
+  mass/RHS scales from 1e-300 to 1e300, and a multi-joint motor-inertia comparison
+  against full inverse columns pass. The motor comparison includes a massless
+  tip and scales 1e-60/1/1e60. Existing physics/replay tests remain green.
+- Alternating paired 39-DOF cached quadratic microbenchmarks measured full-rank
+  0.326–0.358 us versus 0.791–1.053 us for full solve plus dot product; singular
+  0.400–0.402 us versus 0.992–1.201 us. These isolate response evaluation and do
+  not measure factorization, whole physics steps or imported-machine parity.
+- Evidence: `/tmp/molla-quadratic-{unit-tests,full-tests,timings}.log`.
+- Files: `crates/molla-solvers/src/{rigid_impulse,articulated_response,featherstone}.rs`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

@@ -1816,16 +1816,19 @@ fn effective_drive_inertias(
             };
             let mut unit = vec![0.0; n];
             unit[index] = 1.0;
-            let solved = if factored {
-                back_sub_packed(&factor, &forward_sub_packed(&factor, &unit, n), n)
+            let inverse_diagonal = if factored {
+                forward_sub_packed(&factor, &unit, n)
+                    .iter()
+                    .map(|v| v * v)
+                    .sum()
             } else {
                 if singular.is_none() {
                     singular = Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
                 }
-                singular.as_ref().unwrap().solve(&unit)?
+                singular.as_ref().unwrap().solve(&unit)?[index]
             };
-            if solved[index] > 0.0 {
-                result[first + dof] = scale / solved[index];
+            if inverse_diagonal > 0.0 {
+                result[first + dof] = scale / inverse_diagonal;
             }
         }
     }
@@ -2016,6 +2019,64 @@ mod tests {
     use crate::core::BodyId;
     use crate::math::{SpatialInertia, Transform, Vec3 as V3};
     use crate::sim::{BodyParams, ModelBuilder};
+
+    #[test]
+    fn drive_inertias_match_full_inverse_diagonals() {
+        for scale in [1e-60, 1.0, 1e60] {
+            for massless_tip in [false, true] {
+                let mut builder = ModelBuilder::new();
+                let mut parent = BodyId::NONE;
+                for i in 0..5 {
+                    let weight = if massless_tip && i == 4 { 0.0 } else { scale };
+                    let body = builder.add_body(
+                        BodyParams::new().with_spatial_inertia(SpatialInertia {
+                            mass: weight * (1.0 + i as Real),
+                            com: V3::new(0.1, 0.2, -0.1),
+                            inertia: Mat3::IDENTITY * weight,
+                        }),
+                    );
+                    builder
+                        .add_joint_revolute(
+                            parent,
+                            body,
+                            Transform::from_translation(V3::new(0.3, 0.5, 0.2)),
+                            Transform::IDENTITY,
+                            if i % 2 == 0 { V3::Z } else { V3::X },
+                        )
+                        .unwrap();
+                    parent = body;
+                }
+                let model = builder.build().unwrap();
+                let mut state = model.state().unwrap();
+                for (i, q) in state.joint_q.host_mut().unwrap().iter_mut().enumerate() {
+                    *q = i as Real * 0.2;
+                }
+                eval_fk(&model, &mut state).unwrap();
+                let mut control = model.control();
+                control
+                    .joint_target_mode
+                    .host_mut()
+                    .unwrap()
+                    .fill(JointTargetMode::Velocity as u32);
+                let result = effective_drive_inertias(&model, &state, &control, true).unwrap();
+                let mass = crate::mass_matrix(&model, &state, 0).unwrap();
+                for (i, actual) in result.iter().enumerate() {
+                    let mut unit = vec![0.0; 5];
+                    unit[i] = 1.0;
+                    let inverse = crate::rigid_impulse::solve_mass(&mass, &unit, 5).unwrap()[i];
+                    let expected = if inverse > 0.0 { inverse.recip() } else { 0.0 };
+                    assert!(
+                        (actual - expected).abs() <= 1e-10 * scale,
+                        "scale={scale} massless={massless_tip} dof={i}: {actual} != {expected}"
+                    );
+                }
+                assert_eq!(
+                    effective_drive_inertias(&model, &state, &control, false).unwrap(),
+                    vec![1.0; 5]
+                );
+            }
+        }
+    }
 
     /// Pendulum at small initial angle should oscillate with the
     /// linearised period `T = 2π·√(I_eff / (m·g·L))`. Check the

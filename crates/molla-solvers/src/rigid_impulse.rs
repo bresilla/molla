@@ -251,6 +251,44 @@ impl MassFactor {
         })
     }
 
+    /// Quadratic response `rhsᵀ M⁺ rhs` using the cached mass decomposition.
+    pub(crate) fn quadratic(&self, rhs: &[Real]) -> Result<Real> {
+        if rhs.len() != self.n || rhs.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Solver("invalid impulse mass right-hand side".into()));
+        }
+        if matches!(self.decomposition, MassDecomposition::Zero) {
+            return Ok(0.0);
+        }
+        let root_scale = self.scale.sqrt();
+        let scaled: Vec<Real> = rhs.iter().map(|v| v / root_scale).collect();
+        let response: Real = match &self.decomposition {
+            MassDecomposition::Zero => unreachable!(),
+            MassDecomposition::Cholesky(factor) => forward_sub(factor, &scaled, self.n)?
+                .iter()
+                .map(|v| v * v)
+                .sum(),
+            MassDecomposition::Spectral {
+                values,
+                vectors,
+                floor,
+            } => values
+                .iter()
+                .enumerate()
+                .filter(|(_, value)| **value > *floor)
+                .map(|(col, value)| {
+                    let weight: Real = (0..self.n)
+                        .map(|row| vectors[row * self.n + col] * scaled[row])
+                        .sum();
+                    (weight / value.sqrt()).powi(2)
+                })
+                .sum(),
+        };
+        if !response.is_finite() {
+            return Err(Error::Solver("non-finite articulated response".into()));
+        }
+        Ok(response)
+    }
+
     pub(crate) fn solve(&self, rhs: &[Real]) -> Result<Vec<Real>> {
         if rhs.len() != self.n || rhs.iter().any(|v| !v.is_finite()) {
             return Err(Error::Solver("invalid impulse mass right-hand side".into()));
@@ -323,6 +361,10 @@ mod tests {
                         ]
                     };
                     let actual = factor.solve(&rhs).unwrap();
+                    let expected_quadratic: Real =
+                        rhs.iter().zip(expected).map(|(a, b)| a * b).sum();
+                    let quadratic = factor.quadratic(&rhs).unwrap();
+                    assert!((quadratic * scale - expected_quadratic).abs() < 1e-11);
                     for (actual, expected) in actual.iter().zip(expected) {
                         assert!((actual * scale - expected).abs() < 1e-12);
                     }
@@ -336,8 +378,12 @@ mod tests {
     fn factors_preserve_nullspace_cutoff_and_reject_invalid_systems() {
         let factor = MassFactor::new(&[1.0, 0.0, 0.0, 1e-14], 2).unwrap();
         assert_eq!(factor.solve(&[3.0, 4.0]).unwrap(), vec![3.0, 0.0]);
+        assert_eq!(factor.quadratic(&[3.0, 4.0]).unwrap(), 9.0);
         let zero = MassFactor::new(&[0.0; 4], 2).unwrap();
         assert_eq!(zero.solve(&[3.0, 4.0]).unwrap(), vec![0.0; 2]);
+        assert_eq!(zero.quadratic(&[3.0, 4.0]).unwrap(), 0.0);
+        assert!(zero.quadratic(&[f64::NAN, 0.0]).is_err());
+        assert!(zero.quadratic(&[0.0]).is_err());
         assert!(zero.solve(&[f64::NAN, 0.0]).is_err());
         assert!(zero.solve(&[0.0]).is_err());
         assert!(MassFactor::new(&[1.0, 2.0, 2.0, 1.0], 2).is_err());
@@ -351,5 +397,64 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn quadratic_response_scales_before_squaring() {
+        for scale in [1e-300, 1e-200, 1.0, 1e200, 1e300] {
+            let factor = MassFactor::new(&[scale], 1).unwrap();
+            let actual = factor.quadratic(&[scale]).unwrap();
+            assert!((actual / scale - 1.0).abs() < 1e-14);
+            assert_eq!(factor.quadratic(&[0.0]).unwrap(), 0.0);
+        }
+        let factor = MassFactor::new(&[1.0], 1).unwrap();
+        assert!(factor.quadratic(&[Real::MAX]).is_err());
+    }
+
+    #[test]
+    #[ignore = "wall-clock CPU benchmark; run in release without concurrent builds"]
+    fn quadratic_response_timings() {
+        let n = 39;
+        let rhs: Vec<Real> = (0..n).map(|i| (i % 7) as Real - 3.0).collect();
+        for singular in [false, true] {
+            let mut mass = vec![0.0; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    mass[i * n + j] = if i == j { 2.0 + i as Real } else { 0.1 };
+                    if singular && (i == n - 1 || j == n - 1) {
+                        mass[i * n + j] = 0.0;
+                    }
+                }
+            }
+            let factor = MassFactor::new(&mass, n).unwrap();
+            for batch in 0..5 {
+                for gram in if batch % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let start = std::time::Instant::now();
+                    for _ in 0..20_000 {
+                        let rhs = std::hint::black_box(&rhs);
+                        let value = if gram {
+                            factor.quadratic(rhs).unwrap()
+                        } else {
+                            factor
+                                .solve(rhs)
+                                .unwrap()
+                                .iter()
+                                .zip(rhs)
+                                .map(|(a, b)| a * b)
+                                .sum()
+                        };
+                        std::hint::black_box(value);
+                    }
+                    eprintln!(
+                        "39-DOF quadratic singular={singular} gram={gram} batch {batch}: {:.3} us/call",
+                        start.elapsed().as_secs_f64() * 1e6 / 20_000.0
+                    );
+                }
+            }
+        }
     }
 }
