@@ -2884,6 +2884,95 @@ uncovered a failing stability requirement; the full objective stays active.
 - `/tmp/{molla-tow-low,molla-tow-high,rapier-tow}-{driven,detached}.png` —
   inspected visual evidence; corresponding JSON captures are in `/tmp`.
 
+## 2026-09-20 — scalar joint-stop reaction fix
+
+### Goal
+
+Continue the full plan by fixing the reproduced Krampe support failure. The
+preceding turn was progress (a failing imported regression and live evidence).
+The complete goal remains active; trailer parking acceptance is still failing.
+
+### Instructions
+
+- Preserve original Gearbox and shared assets/network libraries. All production
+  changes here are reusable Molla physics; isolated Gearbox only gets test/docs.
+- Engram tools are still unavailable. This checkpoint records the completed
+  bug fix and session handoff without claiming a successful memory-tool call.
+
+### Discoveries
+
+- Scalar joint limits only clamped coordinates/velocities after Featherstone
+  integration; they did not transmit stop reaction to the other bodies.
+  Two 2 kg free bodies on a lower-stopped slider receiving -8 N for 0.1 s
+  incorrectly kept total momentum zero instead of -0.8 kg m/s. This is a
+  dynamics bug independent of tyre tuning, hitching, rendering or networking.
+- Molla with ordinary collider support also had incorrect Krampe motion;
+  disabling pressure tyres was not a repair. Temporary diagnostic switches
+  were removed after use, leaving the production fixture path unchanged.
+- An initial projected Gauss-Seidel reaction correction passed equal-mass
+  tests but failed a 1000:1:1000 chain. It was replaced, not retained, by a
+  coupled nonnegative active-set solve with complementarity validation.
+
+### Accomplished
+
+- Molla commit `1a1cf89 fix(solver): transmit scalar joint stop reactions`
+  computes unilateral lower/upper-stop reactions through the articulation's
+  mass matrix, distributes them over all generalized accelerations, and then
+  uses the existing Featherstone integration. No second rigid integrator,
+  trailer freeze, asset/mass edits or disabled ground contacts were introduced.
+- Inactive stops return without mass factorization. Active-set solves handle
+  coupled stops and release; non-finite/nonconvergent/complementarity failures
+  return solver errors rather than accepting invalid impulse vectors.
+- Tests cover lower/upper prismatic and revolute stops, exact load/momentum
+  transfer, stop release, multi-stop impact energy dissipation, translated
+  origins and 1000:1:1000 masses, plus active-set removal of a redundant active
+  stop. All 382 CPU solver tests pass, five ignored, across 88 test binaries.
+- All five imported Kubota gates pass with the final active-set solver:
+  hitch/PTO, pressure benchmark, exact replay, 60 s slope hold and dual-backend
+  straight/turn/tracks. Krampe's gross nose-up tipping is gone at all pressures:
+  final headless pitch +0.13173/+0.13663/+0.13286 rad at 0.5/1.8/4 bar.
+- The unchanged Krampe gate STILL FAILS at 0.5 bar: speed 0.07754 m/s vs
+  required <0.05, mainly vertical motion (+0.07430 m/s) with angular X
+  -0.03485 rad/s. Reference/high speeds are 0.04966/0.00296 m/s. Do not loosen
+  this bound or call the whole trailer bug/acceptance finished.
+- Native isolated `oslo make build` passes. A fresh owned standalone Krampe
+  viewer accepted 0.5 bar and streamed live state for 20 s. Final pitch was
+  +0.11513 rad, pressure 0.5 on the front-left readout; rear-view screenshot
+  inspected. This is not matched side-view deformation or tow/detach proof.
+  No rejected-step/quarantine/non-finite diagnostics appeared. The viewer
+  `molla-limit-fixed` (34159) was explicitly stopped and polled terminal.
+- Imported timing medians in this mixed functional run were 1.018–1.056 ms,
+  above target. Build/test/viewer work overlapped portions of the run, so this
+  is not a controlled speed comparison. The added mass/stop solve needs a
+  dedicated profile and reuse with the existing effective-drive factorization.
+
+### Next Steps
+
+1. Resolve residual low-pressure Krampe vertical rocking without hiding it by
+   relaxing the acceptance limit. Inspect stop/contact/suspension dynamics and
+   damping using the exact existing 15 s regression.
+2. Profile/cache the added response solve, then repeat full-machine under-1-ms
+   timing without overlapping work and run live tow/turn/detach again.
+3. Extend coupled reaction semantics to Ball/D6 angular/linear limits and GPU
+   paths; this fix covers CPU scalar revolute/prismatic stops only. Existing
+   post-projection velocity-cap and general mutation semantics need further audit.
+4. Continue every remaining full-plan lifecycle, terrain/soil, calibration,
+   sleep/islands/fleet and acceptance requirement. Full completion is unproven.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/joint_limits.rs` — scalar reaction active-set solver.
+- `crates/molla-solvers/src/featherstone.rs` — pre-integration reaction phase.
+- `crates/molla-solvers/tests/runtime_limit_reactions.rs` — momentum/release,
+  coupled impact and high-mass-ratio regressions.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — velocity-vector diagnostics.
+- `/tmp/molla-limit-reaction-before.log` — failing minimal momentum reproduction.
+- `/tmp/molla-limit-ratio.log` — rejected first PGS implementation's failure.
+- `/tmp/molla-limit-active-full.log` — final 382 CPU tests passing.
+- `/tmp/gearbox-limit-active-imported.log` — five Kubota pass, Krampe speed fails.
+- `/tmp/gearbox-limit-active-build.log` — native debug build passed.
+- `/tmp/molla-limit-fixed{.log,.png,-state.jsonl}` — live standalone validation.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
