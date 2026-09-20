@@ -4267,6 +4267,107 @@ settling checkpoint. The previous goal turn made progress (`346c2ed`, `f672656`,
 - `/tmp/molla-inactive-normal-{1..4}.log` — ordinary-path regression comparison.
 - `/tmp/molla-inactive-imported-final.log` — ten imported tests and paired parking.
 
+## Articulation-local ABA storage (2026-09-20)
+
+### Goal
+
+Continue mixed-scene performance work in `FULL_COMPACT.md`. The previous turn
+made verified progress (`61f53ff`, `7c35eb6`, `75a6353`); current code, journal,
+plan and isolated checkout were re-read before changing storage.
+
+### Instructions
+
+- Do not touch original Gearbox or weaken active dynamics/contact substeps.
+- Keep shared solver work in Molla and machine integration in the isolated tree.
+
+### Discoveries
+
+- ABA's per-joint temporary arrays are only read within the current articulation;
+  parent searches in the backward/forward passes stay within its joint range.
+- `q_dd_local` duplicated acceleration writes but had no readers; generalized
+  acceleration still lives in the separate world-wide `q_dd` array.
+- Cargo produces different test executable hashes for the focused solver lane
+  and the combined sim/solver lane. An initial scaling comparison accidentally
+  reused the old combined-lane executable for both arms; matching checksums
+  exposed it. Those logs are renamed `molla-local-scratch-stale-alias-*` and are
+  not performance evidence. Final comparisons must use the exact executable
+  named by the completed matching-lane build and verify distinct checksums.
+- Engram tools remain unavailable; this journal stores the handoff.
+
+### Accomplished
+
+- Added bounded global-index views over reusable articulation-local arrays.
+  Capacity is the largest active articulation, not total world joint count;
+  every visited articulation resets its own range before the three ABA passes.
+- Removed the write-only acceleration duplicate. Generalized state, motor
+  inertia, reaction forces and joint integration math are unchanged.
+- Added storage reuse/bounds tests and an exact separate-world trajectory oracle
+  with heterogeneous 1/7/3/11/2-body articulations, fixed roots, changing active
+  masks, scalar stops, both solve modes, and one/eight substeps.
+- Initial full gates pass **478 simulation/solver tests, nine ignored**, in 95 binaries.
+  Both backend environments pass **91 ordinary binary tests, eleven ignored**;
+  GPU-feature compilation passes. These are CPU storage tests, not GPU execution
+  or automatic-sleep parity evidence.
+- Correctly paired combined-lane A/B/B/A measurements on the collider-free,
+  two-body-articulation fixture show 512 articulations / one selected active
+  articulation at **0.4973840 → 0.2533255 ms** average median (about 49% less).
+  Ordinary all-active stepping is **1.4323935 → 1.2444850 ms** (about 13% less);
+  selected all-active is **1.4761440 → 1.2937080 ms**. These are synthetic scaling
+  results, not real multi-machine fleet acceptance.
+- The first implementation passes all ten imported-machine tests and matches all
+  logged dynamics, but two ordinary-path A/B/B/A cycles show a small consistent
+  single-machine cost: Molla **0.836715813 → 0.843777687 ms** (+0.844%), Rapier
+  control **0.227594688 → 0.226832438 ms**. It is not accepted as the final version.
+- Added compile-time flat/local storage specializations: single-articulation
+  worlds keep direct global indexing and one initialization; multi-articulation
+  worlds use bounded reset views. A sole articulation cannot benefit from the
+  smaller capacity, so remapping overhead is unnecessary there. The solver's
+  calculations remain shared, without separate equations or tolerances.
+- Final flat/local candidate passes **479 simulation/solver tests, nine ignored**
+  in 95 binaries, both backend binary lanes (**91 passed, eleven ignored** each),
+  all **ten imported-machine tests**, GPU-feature compilation and new-file
+  formatting checks. The heterogeneous oracle now compares local-storage worlds
+  against separate flat-storage worlds, exactly, through changing wake masks.
+- Final matching-lane retained-binary A/B/B/A on 512 synthetic articulations:
+  one selected active articulation **0.5022765 → 0.2628465 ms** (-47.669%);
+  ordinary all-active **1.4382990 → 1.2412385 ms** (-13.701%); selected all-active
+  **1.4852050 → 1.3036625 ms**. This does not establish real fleet performance.
+- Two final real-machine A/B/B/A cycles measure Molla **0.857194188 →
+  0.857813625 ms** (+0.072%), Rapier control **0.232007250 → 0.232260250 ms**
+  (+0.109%). The single-machine path is effectively unchanged, and Molla remains
+  **3.69×** Rapier. All logged poses, deflections, loads and speeds match across
+  all eight binaries/runs. No owned builds/tests ran concurrently with timings.
+- Implementation committed as `142bb47`; isolated integration source is unchanged
+  this turn. All owned command handles are terminal. Original Gearbox is untouched
+  and no viewer was launched. Final evidence is in the `*-final-*` logs; earlier
+  unspecialized and stale-alias results above are diagnostic history only.
+
+### Next Steps
+
+1. Benchmark actual same-world parked/mixed-active machine fleets. Remaining
+   world-wide FK, collision and state-buffer work is not removed by local ABA
+   storage; preserve contact/filter callbacks and kinematic wake dependencies.
+2. Continue
+   body wake semantics, active-path optimization and remaining compatibility work.
+3. Complete every original GPU, tyre calibration/visual, lifecycle, service,
+   terrain and soil requirement; storage changes are not full-plan acceptance.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/featherstone_scratch.rs` — bounded reusable storage.
+- `crates/molla-solvers/src/featherstone.rs` — per-articulation storage routing.
+- `crates/molla-solvers/tests/featherstone_islands/scratch.rs` — mixed-size oracle.
+- `target/perf/featherstone-before-local-scratch` — matching combined-lane baseline.
+- `target/perf/sleep-before-local-scratch` — prior rigid sleep test binary.
+- Isolated `target/perf/gearbox-after-inactive-validated` — real-machine baseline.
+- `/tmp/molla-local-scratch-*` — build/check/test evidence and diagnostics.
+- `target/perf/featherstone-after-local-scratch-validated` — final combined-lane
+  solver test binary; distinct checksum and matching build invocation verified.
+- Isolated `target/perf/gearbox-after-local-scratch-validated` — final tested
+  machine binary, verified byte-identical to the build output before timing.
+- `/tmp/molla-local-scratch-final-{full,backend,rapier,gpu,imported,format}.log` —
+  final gates; `final-scale-{1..4}` and `final-normal-{1..8}` logs — final timings.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
