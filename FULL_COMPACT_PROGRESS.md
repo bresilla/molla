@@ -3148,6 +3148,92 @@ verified performance progress; this turn makes collision/stability progress.
 - `/tmp/molla-gjk-abba-{1-before,2-after,3-after,4-before}.log` — sequential
   timing comparison against the previous shared-mass-cache implementation.
 
+## Mid-plane contact and paired-performance checkpoint (2026-09-20)
+
+### Goal
+
+Continue the full plan: finish the contact-witness regression identified in
+the previous turn and measure the actual Rapier performance gap. The previous
+goal turn made verified collision and live-acceptance progress.
+
+### Instructions
+
+- Original Gearbox remains untouched; only Molla and isolated test/docs code
+  changed. No viewer was launched this turn. No production solver setting was
+  changed. Engram tools remain unavailable; this checkpoint persists the work.
+
+### Discoveries
+
+- Box face clipping projected penetrating incident points in the wrong
+  direction when computing their mid-plane contact. For faces at 0.9 and
+  1.0 m, it returned 0.85 rather than 0.95 m. Both the normal path and fallback
+  had the sign error. Commit `9d91efd` corrects both without changing depths.
+- The real paired CPU comparison is about **4.1x**, not parity: default
+  Molla medians 0.941989–0.948653 ms versus Rapier 0.225601–0.232383 ms.
+  All 26 bodies were awake in both backends, including parked samples.
+- Existing `imported_kubota_solver_trace` already supports headless profiling;
+  use the isolated binary test with `--features gearbox-sim/profile`,
+  `GEARBOX_BENCH_ASSET=.../kubota_tractor.usdz` and `GEARBOX_TRACE=...json`.
+  Host `perf_event_paranoid=4`; no kernel configuration was changed.
+- Profile of 120 driving steps: 960 substeps, 39 reduced DOFs and 22 loop rows;
+  960/960 loop response samples use Cholesky, not the spectral fallback.
+  Instrumented inclusive cost per frame: Featherstone 0.524 ms, loop forces
+  0.360 ms, tyre forces 0.157 ms, collision 0.076 ms. Whole rigid step 1.168 ms.
+  These include tracing overhead and are not uninstrumented latency evidence.
+- Simply reducing substeps does not preserve current behavior. Two substeps
+  cost about 0.25 ms but fail trailer support, hitch tracking, slope parking
+  and turning (3 imported tests pass, 4 fail). Low/reference-pressure trailer
+  speed reaches 0.245/0.275 m/s; slope drift reaches 0.543 m in 60 s.
+- Four substeps cost about 0.48 ms but still fail slope parking and turning
+  (5 pass, 2 fail): downhill low-pressure speed peaks at 0.002712 m/s against
+  the unchanged 0.001 limit. Both configurations are rejected for production.
+  Default eight-substep behavior remains in place. Lower-step tests expose
+  integration/gain sensitivity, not a validated shortcut to Rapier parity.
+
+### Accomplished
+
+- Contact witness regression covers all axes, both signs, reversed pairs,
+  global rotations/translations and tilted box/slab reference faces. It first
+  failed at the measured 0.85 m midpoint, then passed with the sign correction.
+- Combined CPU geometry/solver lane: **576 passed, 5 ignored**, across 112
+  test binaries (192 geometry, 384 solver tests).
+- Added ignored `imported_kubota_backend_timing`: fresh fixtures in R/M/M/R
+  order, identical 120 Hz settings, parked and driving, 600 warmup steps and
+  1,200 timed steps per case. Reports median/p95/p99/max, sleeping count,
+  realized speed and complete solver settings. This measures performance;
+  passing the test's mechanical checks does not certify timing acceptance.
+- Added test-only `GEARBOX_BENCH_MOLLA_INTERNAL_ITERATIONS` override (1–64)
+  for reproducible substep experiments. It affects only Molla fixtures and
+  logs the effective settings; production defaults and Rapier are unchanged.
+- Final default-settings rerun: **all seven imported tests pass**. Explicit
+  Molla and Rapier ordinary binary lanes each pass **87 tests, eight ignored**.
+  All launched build/test handles are terminal. Full-plan performance and
+  other outstanding acceptance requirements remain unproven.
+
+### Next Steps
+
+1. Optimize measured articulated/loop/tyre work at validated settings, using
+   the paired benchmark. Do not silently adopt the failed 2/4-substep settings.
+2. Profile finer ABA and Jacobian/response costs; test any kinematics/mass reuse
+   against reversed joints, mimic updates and immutable-state boundaries.
+3. Continue full-plan pressure lifecycle/UI/save-reload, calibration and
+   timestep convergence, sleep/islands/fleet, generic/GPU joints and soil gates.
+
+### Relevant Files
+
+- `crates/molla-geometry/src/narrow_phase.rs` — corrected mid-plane witnesses.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — paired timing and
+  explicit test-only iteration override; existing optional solver profiler.
+- `/tmp/molla-box-witness-before.log`, `/tmp/molla-box-witness-full.log` —
+  failing reproduction and final combined CPU regression lane.
+- `/tmp/molla-paired-backend-baseline.log` — default uninstrumented timings.
+- `/tmp/molla-current-cpu-trace.json`, `/tmp/molla-current-cpu-profile.tsv` —
+  instrumented spans and per-frame inclusive/exclusive summary.
+- `/tmp/molla-two-substep-experiment.log`, `/tmp/molla-four-substep-experiment.log`
+  — rejected lower-fidelity experiments; unchanged failure thresholds.
+- `/tmp/molla-midpoint-default-imported.log` — final default-settings rerun.
+- `/tmp/molla-midpoint-{molla,rapier}-binary.log` — ordinary regression lanes.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
