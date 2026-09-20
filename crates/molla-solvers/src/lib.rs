@@ -19,6 +19,7 @@ pub use molla_storage as storage;
 
 mod articulated_response;
 mod joint_limits;
+mod joint_mass;
 pub mod barrier_contact;
 pub mod barrier_solver;
 pub mod crba;

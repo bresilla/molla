@@ -18,10 +18,17 @@ pub(crate) fn react_scalar_stops(
     acceleration: &mut [Real],
     dt: Real,
     damping: Real,
+    joint_mass: &mut crate::joint_mass::JointMass<'_>,
 ) -> Result<()> {
     let starts = model.articulation_start.host()?;
-    let begin = starts[articulation] as usize;
-    let end = starts[articulation + 1] as usize;
+    let (begin, end) = if model.articulation_count == 0 {
+        (0, model.joint_count)
+    } else {
+        (
+            starts[articulation] as usize,
+            starts[articulation + 1] as usize,
+        )
+    };
     let offsets = model.joint_dof_offset.host()?;
     let first = offsets[begin] as usize;
     let count = (offsets[end] - offsets[begin]) as usize;
@@ -67,10 +74,7 @@ pub(crate) fn react_scalar_stops(
     if !stops.iter().any(|s| s.sign * velocity[s.dof] < s.velocity) {
         return Ok(());
     }
-    let factor = crate::rigid_impulse::MassFactor::new(
-        &crate::mass_matrix(model, state, articulation)?,
-        count,
-    )?;
+    let factor = joint_mass.factor(articulation, count)?;
     for stop in &mut stops {
         let mut unit = vec![0.0; count];
         unit[stop.dof] = stop.sign;

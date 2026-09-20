@@ -217,6 +217,23 @@ enum MassDecomposition {
 }
 
 impl MassFactor {
+    /// Retain a normalized full-rank Cholesky with the impulse solver's pivot cutoff.
+    pub(crate) fn from_cholesky(factor: Vec<Real>, n: usize, scale: Real) -> Option<Self> {
+        if n.checked_mul(n) != Some(factor.len())
+            || !scale.is_finite()
+            || scale <= 0.0
+            || factor.iter().any(|v| !v.is_finite())
+            || (0..n).any(|i| factor[i * n + i] <= 0.0 || factor[i * n + i].powi(2) <= 1e-12)
+        {
+            return None;
+        }
+        Some(Self {
+            n,
+            scale,
+            decomposition: MassDecomposition::Cholesky(factor),
+        })
+    }
+
     pub(crate) fn new(matrix: &[Real], n: usize) -> Result<Self> {
         if n.checked_mul(n) != Some(matrix.len()) || matrix.iter().any(|v| !v.is_finite()) {
             return Err(Error::Solver("invalid impulse mass matrix".into()));
@@ -375,6 +392,34 @@ impl MassFactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_cholesky_matches_fresh_factors_and_preserves_cutoff() {
+        for scale in [1e-100, 1.0, 1e100] {
+            let matrix = [4.0, 1.0, 1.0, 3.0].map(|v| v * scale);
+            let normalizer = 4.0 * scale;
+            let mut cholesky = matrix.map(|v| v / normalizer).to_vec();
+            dense_chol(&mut cholesky, 2).unwrap();
+            let retained = MassFactor::from_cholesky(cholesky, 2, normalizer).unwrap();
+            let fresh = MassFactor::new(&matrix, 2).unwrap();
+            for rhs in [[1.0, 0.0], [0.0, 1.0], [-3.0, 7.0]] {
+                assert_eq!(retained.solve(&rhs).unwrap(), fresh.solve(&rhs).unwrap());
+                assert_eq!(
+                    retained.quadratic(&rhs).unwrap(),
+                    fresh.quadratic(&rhs).unwrap()
+                );
+            }
+        }
+        for pivot in [0.0, -1.0, 1e-7, 1e-6, f64::NAN, f64::INFINITY] {
+            assert!(
+                MassFactor::from_cholesky(vec![1.0, 0.0, 0.0, pivot], 2, 1.0).is_none()
+            );
+        }
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(MassFactor::from_cholesky(vec![1.0], 1, scale).is_none());
+        }
+        assert!(MassFactor::from_cholesky(vec![1.0], 2, 1.0).is_none());
+    }
 
     #[test]
     fn reusable_factors_match_analytic_full_and_reduced_rank_solutions() {

@@ -757,8 +757,9 @@ fn cpu_step(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
+    let mut joint_mass = crate::joint_mass::JointMass::new(model, state_out);
     let motor_inertias =
-        effective_drive_inertias(model, state_out, control, stable_motor_feedback)?;
+        effective_drive_inertias(model, control, stable_motor_feedback, &mut joint_mass)?;
 
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
@@ -1372,7 +1373,13 @@ fn cpu_step(
         }
 
         crate::joint_limits::react_scalar_stops(
-            model, state_out, art, &mut q_dd, dt, joint_damping,
+            model,
+            state_out,
+            art,
+            &mut q_dd,
+            dt,
+            joint_damping,
+            &mut joint_mass,
         )?;
 
         // ── Integrate q, q̇ for joints in this articulation ──────────────
@@ -1755,9 +1762,9 @@ fn project_angular_limits(
 /// Compute 1 / (M^-1)[i,i] for active feedback motors and joint springs.
 fn effective_drive_inertias(
     model: &Model,
-    state: &State,
     control: &Control,
     stable_feedback: bool,
+    joint_mass: &mut crate::joint_mass::JointMass<'_>,
 ) -> Result<Vec<Real>> {
     let _span = tracing::debug_span!("drive_inertias").entered();
     let mut result = vec![1.0; model.joint_dof_total];
@@ -1790,7 +1797,7 @@ fn effective_drive_inertias(
         if !(first..first + count).any(requested) {
             continue;
         }
-        let mass = crate::mass_matrix(model, state, articulation)?;
+        let mass = joint_mass.matrix(articulation)?;
         if mass.iter().any(|v| !v.is_finite()) {
             return Err(crate::core::Error::Solver(
                 "non-finite drive inertia".into(),
@@ -1834,6 +1841,9 @@ fn effective_drive_inertias(
             if inverse_diagonal > 0.0 {
                 result[first + dof] = scale / inverse_diagonal;
             }
+        }
+        if factored && n == count {
+            joint_mass.retain_cholesky(articulation, factor, count, scale)?;
         }
     }
     Ok(result)
@@ -2062,12 +2072,16 @@ mod tests {
                     .host_mut()
                     .unwrap()
                     .fill(JointTargetMode::Velocity as u32);
-                let result = effective_drive_inertias(&model, &state, &control, true).unwrap();
+                let mut cache = crate::joint_mass::JointMass::new(&model, &state);
+                let result = effective_drive_inertias(&model, &control, true, &mut cache).unwrap();
                 let mass = crate::mass_matrix(&model, &state, 0).unwrap();
+                let shared = cache.factor(0, 5).unwrap();
                 for (i, actual) in result.iter().enumerate() {
                     let mut unit = vec![0.0; 5];
                     unit[i] = 1.0;
-                    let inverse = crate::rigid_impulse::solve_mass(&mass, &unit, 5).unwrap()[i];
+                    let fresh = crate::rigid_impulse::solve_mass(&mass, &unit, 5).unwrap();
+                    assert_eq!(shared.solve(&unit).unwrap(), fresh);
+                    let inverse = fresh[i];
                     let expected = if inverse > 0.0 { inverse.recip() } else { 0.0 };
                     assert!(
                         (actual - expected).abs() <= 1e-10 * scale,
@@ -2075,7 +2089,7 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    effective_drive_inertias(&model, &state, &control, false).unwrap(),
+                    effective_drive_inertias(&model, &control, false, &mut cache).unwrap(),
                     vec![1.0; 5]
                 );
             }
