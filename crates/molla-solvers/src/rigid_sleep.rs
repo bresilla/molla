@@ -348,7 +348,13 @@ impl RigidWorld {
                     Some(&selected),
                 )?;
                 if any_awake {
-                    crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                    crate::loop_forces::apply_selected(
+                        scene,
+                        &mut response,
+                        sub_dt,
+                        wrenches,
+                        Some(&selected),
+                    )?;
                 }
                 Ok(articulations)
             },

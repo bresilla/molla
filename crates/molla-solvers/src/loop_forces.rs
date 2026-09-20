@@ -6,6 +6,10 @@ use molla_sim::joint_control::{JointAxis, JointMotor, JointSoftness, MotorModel}
 use molla_sim::runtime::RigidScene;
 use molla_sim::{JointTargetMode, JointType, State};
 
+#[cfg(test)]
+#[path = "loop_forces/selection.rs"]
+mod selection;
+
 struct Row {
     ends: Vec<(usize, SpatialVector)>,
     error: Real,
@@ -15,7 +19,10 @@ struct Row {
     bounds: [Real; 2],
 }
 
-fn rows(scene: &RigidScene, state: &State) -> Result<Vec<Row>> {
+fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<Vec<Row>> {
+    if selected.is_some_and(|mask| mask.len() != scene.model().body_count) {
+        return Err(Error::Solver("loop body selection length mismatch".into()));
+    }
     let poses = state.body_q.host()?;
     let velocities = state.body_qd.host()?;
     let centers = scene.model().body_com.host()?;
@@ -31,6 +38,23 @@ fn rows(scene: &RigidScene, state: &State) -> Result<Vec<Row>> {
         }
         let child = scene.body_index(joint.child).unwrap().index();
         let parent = joint.parent.map(|p| scene.body_index(p).unwrap().index());
+        if let Some(selected) = selected {
+            let mut awake = false;
+            let mut asleep = false;
+            for body in [Some(joint.child), joint.parent].into_iter().flatten() {
+                if scene.body(body).unwrap().kind == molla_sim::runtime::BodyKind::Dynamic {
+                    let active = selected[scene.body_index(body).unwrap().index()];
+                    awake |= active;
+                    asleep |= !active;
+                }
+            }
+            if awake && asleep {
+                return Err(Error::Solver("loop body selection splits a dependency".into()));
+            }
+            if !awake {
+                continue;
+            }
+        }
         let mut a = parent.map_or(joint.frame_parent, |p| {
             poses[p].compose(&joint.frame_parent)
         });
@@ -155,9 +179,19 @@ pub(crate) fn apply(
     dt: Real,
     forces: &mut [SpatialVector],
 ) -> Result<()> {
+    apply_selected(scene, cache, dt, forces, None)
+}
+
+pub(crate) fn apply_selected(
+    scene: &RigidScene,
+    cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
+    dt: Real,
+    forces: &mut [SpatialVector],
+    selected: Option<&[bool]>,
+) -> Result<()> {
     let state = cache.state();
     let _span = tracing::debug_span!("loop_forces").entered();
-    let rows = tracing::debug_span!("loop_rows").in_scope(|| rows(scene, state))?;
+    let rows = tracing::debug_span!("loop_rows").in_scope(|| rows(scene, state, selected))?;
     let count = rows.len();
     if count == 0 {
         return Ok(());
@@ -549,7 +583,7 @@ mod tests {
             SpatialVector::new(Vec3::new(0.3, -0.2, 0.5), Vec3::new(0.2, 0.3, -0.1));
         state.body_qd.host_mut().unwrap()[1] =
             SpatialVector::new(Vec3::new(-0.1, 0.4, 0.2), Vec3::new(-0.3, 0.1, 0.2));
-        let base = rows(&scene, &state).unwrap();
+        let base = rows(&scene, &state, None).unwrap();
         let h = 1e-6;
         let shift = |dt: Real| {
             let mut next = state.clone_host().unwrap();
@@ -562,7 +596,7 @@ mod tests {
                 next.body_q.host_mut().unwrap()[body] =
                     Transform::new(center - rotation * com, rotation);
             }
-            rows(&scene, &next).unwrap()
+            rows(&scene, &next, None).unwrap()
         };
         let plus = shift(h);
         let minus = shift(-h);
