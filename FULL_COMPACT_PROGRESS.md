@@ -4368,6 +4368,124 @@ plan and isolated checkout were re-read before changing storage.
 - `/tmp/molla-local-scratch-final-{full,backend,rapier,gpu,imported,format}.log` —
   final gates; `final-scale-{1..4}` and `final-normal-{1..8}` logs — final timings.
 
+## Mixed-fleet sleeping loop-force checkpoint (2026-09-20)
+
+### Goal
+
+Continue the complete `FULL_COMPACT.md` objective by measuring real same-world
+fleets and removing loop-constraint work belonging to sleeping machines.
+
+### Instructions
+
+- Original Gearbox remains untouched; integration changes are confined to
+  `robolibs/gearbox-physics`. Shared machine assets are read-only.
+- Engram tools are unavailable; this tracked checkpoint preserves the handoff.
+- No viewer was launched or stopped. User interaction with the earlier
+  `molla-gram-perf` run is not unattended-failure evidence.
+
+### Discoveries
+
+- Synthetic articulation scaling did not expose the whole real-fleet cost.
+  Loop forces still assembled and solved rows for sleeping machines whenever
+  another machine was awake, although inactive ABA discarded their forces.
+- The new fixture composes 1/2/4 real Kubota references into one USD stage and
+  one physics world, 25 m apart, sharing ground. It checks unique IDs,
+  per-machine body/joint/collider counts, mass, pressure, support and speed.
+  Controllers/services run outside the measured physics step. It warms for
+  60 s, then measures all parked, one driving and all driving, with 5 s phase
+  warmup and 1,200 measured 120 Hz steps. No explicit sleep calls are used.
+- The initial Rapier per-tick 0.15 m/s speed assertion failed at 2.166 m/s.
+  Rapier diagnostics now follow the existing paired benchmark's endpoint
+  0.2 m/s tolerance and log the complete measured speed range and excursion
+  flag. Molla retains 0.15 m/s validation on every measured driving tick and
+  verifies every parked body's sleep state on every measured tick.
+- Rapier's four-machine run reproducibly includes a roughly 44 m/s transient
+  on the tractor at x=50 m, despite recovering by the endpoint. This is an
+  unresolved reference stability issue, not clean stable-fleet parity evidence.
+  It is recorded rather than hidden by changing spacing or weakening Molla.
+- Selecting only awake loop rows also prevents unrelated sleeping masses from
+  influencing the active system's numerical conditioning. The new regression
+  checks exact force independence across zero and 1e-15 through 1e15 sleeping
+  mass/inertia scales, including physical singular inertias `(0, I, I)`.
+  The first test used invalid `(0, I, 2I)` inertia and was corrected after the
+  existing mass validation rejected its triangle-inequality violation.
+
+### Accomplished
+
+- Added an internal selected loop-force path. Disabled joints are unchanged;
+  selected dynamic endpoints determine whether a row participates. Fixed and
+  kinematic boundaries do not activate unrelated sleeping loops. Malformed
+  masks and split dynamic loop dependencies fail before force-buffer writes.
+  The world continues fresh collision/filter and wake propagation each substep.
+- Added fixed/kinematic shared-boundary, bounded motor, active-response,
+  unchanged sleeping-force, invalid-selection atomicity and extreme sleeping
+  mass/singular-inertia regression tests. Three focused selection tests pass.
+- Final complete sim/solver gate passed **482 tests, nine ignored, 95 binaries**;
+  both ordinary backend lanes passed **91 tests, 12 ignored each**; all **ten**
+  prior imported-machine gates passed. GPU-feature compilation and new-file
+  formatting checks passed, not GPU runtime parity. The earlier failed
+  `final-full` log contains the invalid test inertia; `validated-full` is the
+  final passing gate, including actual mass-readback assertions.
+- Same-harness real-fleet A/B/B/A, mean of medians (ms per physics step):
+
+  | Fleet / active | Before | After | Change |
+  | --- | ---: | ---: | ---: |
+  | 1 / 1 | 0.8525205 | 0.8517910 | -0.086% |
+  | 2 / 1 | 1.4630095 | 1.0671495 | -27.058% |
+  | 4 / 1 | 3.7799685 | 1.5569930 | -58.809% |
+  | 2 / 2 | 1.9515850 | 1.9518135 | +0.012% |
+  | 4 / 4 | 5.3900285 | 5.2427970 | -2.732% |
+
+- All four complete fleet runs passed; parked machines stayed asleep when
+  another drove. Maximum difference across corresponding logged mechanical
+  state values was 2.14e-14. Rapier medians shifted about 1.5–2.7%; the all-active
+  4-machine change is similar to that control drift, not a claimed speedup.
+  Four-machine/one-active p95 mean fell 5.0188915 to 3.2095255 ms, still far from
+  latency parity. Parked timings were noisy: 1-machine mean medians rose
+  0.1236115 to 0.1427790 ms and 4-machine 0.7542765 to 0.8521150 ms; no parked
+  speedup is claimed. No owned builds/tests overlapped these timing runs.
+- The matched A binary uses the final benchmark and unselected loop call;
+  B uses the selected call. A second true pre-change baseline is retained for
+  additional single-machine before/after checks. Restoring source formatting
+  changed binary bytes, so the final rebuilt B artifact was retained separately,
+  checked against build output, and used for all four fleet measurements.
+- Two additional true pre-change A/B/B/A single-machine cycles passed. Mean
+  medians across normal parked/driving phases: Molla **0.868609625 →
+  0.853958250 ms** (-1.687%), Rapier control **0.227466813 → 0.226177250 ms**
+  (-0.567%). All logged mechanical states match exactly across all eight runs.
+  This guards against a single-machine regression; Molla remains **3.78×**
+  Rapier, and quiet-host tail/real-time parity is not established.
+- Committed solver change as `40989de` and isolated fleet fixture as `1eab2d4`.
+  All owned build/test handles are terminal. Original Gearbox and the user's
+  untracked `FULL_COMPACT.md` are unchanged. The complete goal remains active.
+
+### Next Steps
+
+1. Optimize the remaining all-active global closure solve/FK/collision work.
+   Revisit the rejected compact-closure checkpoint before repeating it; preserve
+   numerical rank/normalization semantics across genuinely coupled articulations.
+2. Investigate the Rapier reference's transient separately. This test does not
+   prove stable Rapier fleet behavior or broad backend performance parity.
+3. Complete every original lifecycle, wake, joint/GPU, towing replay, service,
+   pressure UI/CLI persistence, calibrated tyre/terrain and rendered soil gate.
+   Fleet timing and sleeping-loop selection are not full-plan acceptance.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/loop_forces.rs` — selected loop rows and validation.
+- `crates/molla-solvers/src/loop_forces/selection.rs` — force/mass-scale oracles.
+- `crates/molla-solvers/src/rigid_sleep.rs` — substep activation-mask forwarding.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — shared imported fixture.
+- Isolated `bin/gearbox/src/controller/benchmark/fleet.rs` — same-world fleet gate.
+- Isolated `target/perf/gearbox-fleet-{before,matched-before,after}-selected-loops`
+  and `gearbox-fleet-after-selected-loops-final` — retained timing artifacts.
+- `/tmp/molla-fleet-{initial,diagnostic,range}.log` — fixture diagnostics.
+- `/tmp/molla-selected-loops-*` — tests/builds; `fleet-{1..4}.log` is the final
+  same-harness A/B/B/A evidence; imported gate timing is correctness-only because
+  its run overlapped other validation/build work.
+- `/tmp/molla-selected-loops-normal-{1..8}.log` — true pre-change normal-machine
+  comparisons; `validated-{full,gpu,format}.log` — final core validation.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
