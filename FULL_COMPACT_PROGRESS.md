@@ -4611,6 +4611,181 @@ progress, not a wait or completion of the full objective.
   imported,trace}.log` — final validation; `active-fleet-{1..4}.log` and
   `active-normal-{1..4}.log` — final A/B/B/A measurements.
 
+### 2026-09-20 viewer terrain profiling and candidate bounds reuse
+
+#### Goal
+
+- Continue the full replacement plan; investigate real viewer performance.
+
+#### Instructions
+
+- User requested a live launch while validation was in progress. Leave
+  `molla-terrain-fix` open for their interaction; do not treat that window as an
+  unattended benchmark or stop it as profiling cleanup. Original Gearbox is also
+  running under user control and remains untouched.
+
+#### Discoveries
+
+- The isolated viewer needed an actual release executable; existing retained
+  artifacts were test harnesses. Added `build-release-profile` to its Oslo recipes
+  and `GEARBOX_LOG_FILE` support so launches do not truncate the original's log.
+- First release viewer trace, 30–80 s: 1340 main frames, physics 31.352 s
+  inclusive (23.397 ms/frame), render schedule 17.537 s inclusive. Tyre update
+  systems totaled 232.266 ms across 2680 invocations; all 28 rubber meshes used
+  GPU deformation. Inclusive/thread-overlapping durations are not additive.
+- Targeted solver trace, 15–30 s: 1780 rigid steps totaled 9954.531 ms;
+  collision totaled 7620.671 ms across 14241 substeps, about 77% of step time.
+  Full terrain is an 801x801 heightfield; `local_aabb()` scans every height on
+  each broad-phase substep. Headless cuboid fixtures did not expose that cost.
+- Both diagnostic viewers were stopped by explicit instance name. Startup logged
+  one Bevy slab allocator use-after-free warning; no conclusion or fix yet.
+
+#### Accomplished
+
+- Candidate `PreparedShapeBounds` borrows the immutable model, computes each
+  heightfield's local bounds once, and transforms them using fresh body poses.
+  `CollisionPipeline::collide_prepared` derives its model from that borrow;
+  ordinary collision remains an uncached oracle. Both normal and active-set
+  Featherstone stepping prepare bounds once per step, refresh contacts every
+  substep, and retain all existing filters/resolution/solver iterations.
+- Focused exact-bound/contact/filter/mutation tests pass. Combined geometry,
+  simulation and solver lane: 682 passed, 10 ignored, 120 test binaries.
+  Ordinary isolated backend: 91 passed, 12 ignored. GPU feature check passes.
+  These changes are not committed yet; performance acceptance remains pending.
+- Launched candidate instance `molla-terrain-fix`, confirmed one Kubota, PLAYING,
+  and inspected `/tmp/molla-terrain-fix.png` showing rear tyres on the ground.
+
+#### Next Steps
+
+- Poll imported validation handle 72892 (`/tmp/molla-prepared-imported.log`),
+  which was still running when the user requested launch. Its timings overlap
+  the live viewer, so use them for correctness only.
+- Leave user viewer handle 48050 alive. Its launch log is
+  `/tmp/molla-terrain-fix-launch.log`; dedicated log `/tmp/molla-terrain-fix.log`.
+- Run the ignored full-resolution collision timing and before/after viewer
+  trials when not competing with owned builds/tests. The prepared A/B/B/A script
+  has NOT run. Do not claim a measured terrain speedup from the implementation.
+- Audit candidate, add any missing edge coverage, then commit if real evidence
+  supports retention. Full plan remains incomplete and active.
+
+#### Relevant Files
+
+- `crates/molla-geometry/src/{shape_world,broad_phase,pipeline}.rs` — bounds reuse.
+- `crates/molla-geometry/tests/prepared_bounds.rs` — exact oracles and ignored timing.
+- `crates/molla-solvers/src/{featherstone,featherstone_activation}.rs` — step routing.
+- Isolated `.make.lua`, `bin/gearbox/src/main.rs` — release trace build and log isolation.
+- Isolated `target/perf/gearbox-viewer-profile-before` SHA256
+  `42518d0f7517aadbfeb22b5afa30df238fddb893784446c545364dff8fcff3b3`.
+- Isolated `target/perf/gearbox-viewer-profile-after` SHA256
+  `1d12cb135c1a3c4552685508f50000ef989af0a39196f3bf120c7a6d0a9ce0d6`.
+- Isolated `target/perf/run-terrain-viewer.sh` — unexecuted viewer A/B/B/A script.
+- Isolated `target/perf/molla-{viewer,world}-profile.json` — diagnostic traces;
+  broad viewer trace is approximately 7 GB, targeted solver trace 330 MB.
+- `/tmp/molla-{viewer,world}-systems.json` — per-thread stack summaries.
+- `/tmp/molla-prepared-{bounds-focused,bounds-full,backend,gpu-check,imported}.log`
+  and `/tmp/molla-prepared-viewer-build.log` — validation/build evidence.
+- Engram APIs remain unavailable in discovered tools; this tracked handoff
+  records session context without editing the protected memory folder.
+
+### 2026-09-20 matched meadow validation
+
+#### Goal
+
+- Validate and retain the terrain bounds optimization against the complete
+  replacement plan's physics correctness and real-machine performance gates.
+
+#### Instructions
+
+- Keep the original Gearbox untouched. The user-facing `molla-terrain-fix`
+  process subsequently exited normally (handle 48050 returned exit 0); no
+  panic/quarantine/step-rejection appeared in its log. It was not stopped by
+  benchmark cleanup, and it has not been automatically relaunched.
+
+#### Discoveries
+
+- The bounds microbenchmark with two instances of the same 801x801 field and
+  eight fresh collision substeps averaged 8.629263 ms uncached versus
+  1.239330 ms prepared, an 85.64% reduction. This is collision-only, not a
+  whole-machine or viewer-FPS result.
+- `RigidScene::stamp()` is a compiled-scene identity retained by simulation
+  steps and motor updates; `scene.model()` is immutable. A future scoped
+  runtime cache can potentially eliminate the remaining once-per-step scan.
+  Do not cache public mutable `Model` geometry by pointer identity alone.
+
+#### Accomplished
+
+- Added a headless real-Kubota fixture using the viewer's actual meadow
+  sampling/heightfield conversion, explicitly 801x801 over 800x800 m. It
+  preserves full collision resolution, 120 Hz and solver settings, verifies
+  finite/enabled bodies and tyre support, and drives within the flat spawn
+  region. It excludes rendering, field visuals and the distant safety floor.
+- Built a matched reference by temporarily routing both Featherstone entry
+  points through fresh bounds, retaining all other candidate code and the
+  same new fixture. Restored the prepared routes before the final build.
+  The worktree is the candidate, not the temporary reference.
+- Sequential reference/candidate/candidate/reference runs each passed. Every
+  fixture runs Rapier/Molla/Molla/Rapier internally; four medians per table cell:
+
+  | Full meadow physics | Reference ms | Prepared ms | Change |
+  | --- | ---: | ---: | ---: |
+  | Molla parked | 4.994811250 | 1.483867250 | -70.292% |
+  | Molla driving | 5.020794750 | 1.494853250 | -70.227% |
+  | Rapier parked control | 0.280457750 | 0.281478000 | +0.364% |
+  | Rapier driving control | 0.290884500 | 0.292275250 | +0.478% |
+
+- Driving p95 means were 6.104681500 -> 1.817279750 ms. All logged Molla tyre
+  and chassis states match exactly across all four executions; this comparison
+  covers the logged values, not a full-world state hash. Prepared meadow Molla
+  remains 5.11x Rapier and above the plan's 1 ms CPU target.
+- Matched original cuboid-ground A/B/B/A also passed: Molla parked medians
+  0.851540750 -> 0.848152250 ms, driving 0.864012000 -> 0.862633750 ms.
+  No substantive single-machine speedup/regression is established by these
+  tiny differences. Rapier driving control shifted +2.29%; host activity exists.
+  All logged Molla states match exactly across these runs too.
+- No owned builds or correctness tests overlapped those matched timings.
+  User-controlled GUI activity was not interrupted, so these are not quiet-host
+  tail-latency acceptance and not an end-to-end viewer A/B/B/A comparison.
+- All ten existing imported-machine gates passed (130.36 s; timings overlapped
+  the user viewer and are not performance evidence). Final ordinary backend
+  lanes pass 91 tests each for Molla/default and Rapier, with 13 ignored after
+  adding the meadow fixture. Earlier combined geometry/sim/solver gate passed
+  682 tests; final post-restoration repetition also passes 682 tests, ten ignored,
+  120 binaries. Final GPU feature compilation and new-file formatting pass.
+- Isolated profiling support committed as `9946da9`; meadow fixture `c7910cb`.
+- Library optimization committed as `88c2ae7`. All owned validation and viewer
+  handles are terminal; the original user's Gearbox was not stopped or changed.
+  `FULL_COMPACT.md` remains untracked and untouched; the full goal stays active.
+
+#### Next Steps
+
+- Consider a typed scene-identity cache for terrain bounds, retaining exact
+  query/contact oracles and all geometry/pose/rebuild invalidation semantics.
+- End-to-end viewer comparison is still pending: the prepared viewer A/B/B/A
+  script has never run. Preserve all remaining full-plan requirements.
+
+#### Relevant Files
+
+- Isolated `bin/gearbox/src/controller/benchmark/terrain.rs` — new real meadow gate.
+- Isolated `bin/gearbox/src/terrain.rs` — test-only native meadow collider helper.
+- Isolated `target/perf/gearbox-meadow-reference` SHA256
+  `7980751b7dafb8343896def65eeade334486c2b8de14d8163a02b9cf52c297ab`.
+- Isolated `target/perf/gearbox-meadow-prepared-final` SHA256
+  `fd59d7ff72f7f607126317a0b6bfea30c89b8461b2e3856ac02e40b1a9ba373f`.
+- `/tmp/molla-meadow-abba-{1,2,3,4}.log` — matched meadow executions.
+- `/tmp/molla-meadow-normal-{1,2,3,4}.log` — matched original fixture executions.
+- `/tmp/molla-meadow-{reference-build,prepared-final-build,prepared-first}.log`
+  — builds and initial candidate diagnostic.
+- `/tmp/molla-prepared-{terrain-timing,rapier,final-full}.log` — supplemental gates.
+- Matched timing handle 19573 and imported validation 72892 are terminal, exit 0.
+- The first final combined repetition (25496) returned exit 2 with its `/tmp`
+  log abruptly ending at 4096 bytes and no failure summary. The cause was not
+  established; a later append probe succeeded. Retained the truncated log as
+  `target/perf/prepared-bounds-truncated.log` and reran the same gate with output
+  in `target/perf/prepared-bounds-final-full.log` (handle 87993).
+- That rerun completed successfully with the full 682-test result above. Final
+  check logs: `target/perf/prepared-bounds-final-gpu.log` and
+  `target/perf/prepared-bounds-format.log`; handles 87993 and 78971 exit 0.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
