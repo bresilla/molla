@@ -59,9 +59,9 @@ fn compare(mut matrix: Vec<Real>, n: usize) {
 
 #[test]
 fn factors_match_scalar_order_bitwise() {
-    for n in [0, 1, 2, 3, 6, 26, 39, 78, 128] {
+    for n in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 26, 39, 78, 128] {
         for seed in 0..8 {
-            for scale in [1e-18, 1.0, 1e18] {
+            for scale in [1e-60, 1e-18, 1.0, 1e18, 1e60] {
                 compare(spd(n, seed, scale), n);
             }
         }
@@ -70,7 +70,7 @@ fn factors_match_scalar_order_bitwise() {
 
 #[test]
 fn failed_factors_preserve_partial_updates() {
-    for n in [1, 2, 6, 39] {
+    for n in [1, 2, 6, 7, 8, 9, 10, 39] {
         for pivot in 0..n {
             for value in [0.0, -1.0, -Real::INFINITY] {
                 let mut matrix = spd(n, 13, 1.0);
@@ -87,6 +87,26 @@ fn failed_factors_preserve_partial_updates() {
         compare(vec![1.0; n * n], n);
     }
     compare(vec![1.0, 2.0], 2);
+}
+
+#[test]
+fn exceptional_coefficients_preserve_scalar_updates() {
+    for n in [7, 8, 9, 10] {
+        for index in 0..n * n {
+            for value in [
+                Real::NAN,
+                Real::INFINITY,
+                Real::NEG_INFINITY,
+                -0.0,
+                1e-310,
+                -1e-310,
+            ] {
+                let mut matrix = spd(n, 19, 1.0);
+                matrix[index] = value;
+                compare(matrix, n);
+            }
+        }
+    }
 }
 
 #[test]
