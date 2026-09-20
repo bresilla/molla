@@ -6385,6 +6385,114 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   0.29 ms baseline; tails/full-viewer performance and full-plan acceptance are
   incomplete. Do not provide an invented completion percentage.
 
+### Singular continuous-force correction checkpoint
+
+- Confirmed the offset zero-inertia failure through public RigidWorld, not only
+  raw Featherstone. With mass 2, COM (0.03,0.1,-0.02), zero inertia and a small
+  applied wrench, frame 2 produced COM/angular velocities around 1e22/1e23.
+  BodyParams explicitly documents Mat3::ZERO as skipping angular dynamics;
+  this is a real supported-case defect, not merely an invalid test fixture.
+  Failure log: target/perf/singular-force-runtime-repro.log. Initial compile
+  used nonexistent with_rotation; corrected to BodyParams::with_pose first.
+- Candidate inside Featherstone handles isolated world-root Free/Distance/D6
+  articulations with positive mass and singular rotational inertia. It reuses
+  the impulse path's constrained reduced mass solve, projects COM wrenches,
+  includes applied joint torques and RNEA velocity/gravity bias, and restricts
+  zero principal angular modes. Existing Featherstone integration and stepping
+  remain unchanged. Normal positive-definite/multi-link paths are not replaced.
+- Three focused regressions pass: scale sweep 1e-6/1/1e6, full/partial zero
+  moments, zero/offset COM, rotated pose, sustained locked-axis wrench; allowed
+  spin with initial velocity at translated origins; exact raw offset-frame
+  point-mass reproducer. Tests require finite COM acceleration and locked-axis
+  behavior, not merely absence of panic/quarantine.
+- Important scope: this is NOT a general constrained-inertia solve for linked
+  singular bodies, spherical roots, or GPU. Those remain unverified/open.
+  Positive-definite fast path uses a determinant gate before principal axes.
+- Source is uncommitted. New modules formatted individually. Full solver handle
+  51587 and isolated Molla/Oxbo/imported/native-viewer chain 74264 are live.
+  Focused handles 96080 (compile failure), 12752 (reproduced physical failure),
+  25249 and 91501 (candidate passes) are terminal. Engram APIs unavailable.
+- Files: crates/molla-solvers/src/featherstone.rs, featherstone_singular_root.rs,
+  rigid_impulse.rs (crate-private constrained solve reuse), and
+  tests/rigid_singular_forces.rs. Original Gearbox and shared assets untouched.
+
+### Session summary: isolated singular-root force fix accepted
+
+#### Goal
+
+- Implement FULL_COMPACT.md; resolve the newly reproduced continuous-force
+  singular-inertia failure without changing the normal machine integration.
+
+#### Instructions
+
+- Molla development only. Original Gearbox, machine USD assets and user-owned
+  builds/viewers remain untouched. Rapier retained only as comparison control.
+
+#### Discoveries
+
+- Public RigidWorld reproduces the raw solver failure for a supported zero
+  inertia body with offset COM. This is not an asset issue. Impulse handling
+  already constrains zero principal angular response; continuous-force ABA
+  lacked equivalent handling for this isolated free-root case.
+- The corrected reduced-coordinate RHS must include COM wrench projection,
+  applied joint torque, and RNEA gravity/velocity bias. The existing integrator
+  remains the single update path; no extra chassis/spin integration was added.
+
+#### Accomplished
+
+- Core commit `9078f35 fix(solver): constrain singular root response` reuses the
+  constrained mass response for isolated world-root Free/Distance/D6 bodies
+  whose principal rotational inertia has null modes. Positive-definite and
+  multi-link articulations retain the existing dynamics path.
+- Solver release suite: **498 passed, 9 ignored, 92 binaries**. Final focused
+  three-test file additionally covers zero/gravity cases, 1/8 substeps and
+  mass/inertia scales 1e-6/1/1e6. Offset-frame raw and public regressions now
+  remain finite with correct COM acceleration and principal-axis response;
+  an allowed-spin case checks existing angular velocity is not frozen.
+- Isolated Molla ordinary **111 passed, 18 ignored**; Oxbo **3 passed**;
+  Kubota/Krampe imported **10 passed**. GPU-feature all-targets compilation
+  passed (NOT runtime GPU parity). Native viewer build passed in 29.37 s,
+  not launched. Ordinary test executable refreshed from the rejected candidate.
+- Four grid-enabled full-meadow A/B/B/A runs passed; logged tyre/chassis states
+  exactly match between corresponding before/after runs. No owned builds/tests
+  overlapped timings. However, a user-owned original Gearbox release build was
+  observed in the initial load snapshot, so these are diagnostic timings only.
+  Do NOT claim the apparent baseline change is a speedup from this correctness fix.
+- Diagnostic means of four medians: Molla parked 0.983287500 -> 0.976375750 ms,
+  driving 1.164836500 -> 0.986713250 ms; Rapier driving control 0.285903500 ->
+  0.290181250 ms. Baseline driving was contaminated by competing build load.
+  Candidate mean driving p95 1.293255500 ms. No performance-parity claim.
+- All owned handles terminal: 51587 solver, 74264 integration/viewer, 63827
+  final focused/GPU check, 25261 timing. Earlier focused handles 96080/12752
+  reproduce compile/physical failures; 25249/91501 pass candidate cases.
+  Engram APIs unavailable. Source fix committed; no owned GUI or asset edits.
+
+#### Next Steps
+
+- General linked singular bodies, spherical roots and GPU singular-force parity
+  remain open; do not generalize this isolated free-root fix to those cases.
+  Add targeted cases and extend constrained response where required.
+- Resume larger measured Molla optimizations; use a new controlled comparison
+  rather than the contaminated baseline from this turn. Keep full 801x801
+  terrain and enabled pressure model/solver settings.
+- Full-plan joint/lifecycle/rendered/calibrated tyre/GPU/towing/replay/soil
+  acceptance remains incomplete. Goal active, not complete or blocked.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/featherstone_singular_root.rs` — constrained root RHS.
+- `crates/molla-solvers/src/featherstone.rs` — force capture and acceleration handoff.
+- `crates/molla-solvers/src/rigid_impulse.rs` — shared crate-private constrained solve.
+- `crates/molla-solvers/tests/rigid_singular_forces.rs` — three regression families.
+- Core `target/perf/singular-force-{runtime-repro,runtime-candidate,expanded,
+  final-focused,solvers,gpu-check}.log` — failure and final validation evidence.
+- Isolated `target/perf/singular-force-{molla,oxbo,imported,viewer}.log`,
+  `singular-force-grid-{before-a,after-a,after-b,before-b}.log`,
+  `singular-force-timing-summary.txt`, `singular-force-load-{before,after}.txt`.
+- Isolated retained `target/perf/gearbox-singular-force-after` SHA256
+  f1cd2555411944323c4c6d26935bbd0c6a1aad587552e361c95d4a81ba1f98f6;
+  reference remains gearbox-small-block-after. Hash file singular-force-binaries.sha256.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
