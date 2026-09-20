@@ -8123,6 +8123,138 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   and `tyre-coverage-integration.log`. `physical_shape.rs` temporary logging removed.
 - Engram APIs unavailable; this project checkpoint is the session handoff.
 
+### Load-response question and recovered validation checkpoint
+
+#### Goal
+- Continue FULL_COMPACT while answering whether rubber responds to wheel load as
+  well as pressure. No new preview launch, asset edit or original Gearbox change.
+
+#### Instructions
+- Keep pressures independent per wheel; never close previews without the user's
+  request. The current question does not request a launch.
+
+#### Discoveries
+- Existing isolated CPU mesh and GPU uniform tests change actual supported mass
+  at fixed 1.8 bar, check increased compression and reduced loaded radius, then
+  restore the original load and shape. These are headless checks, not screenshots.
+- Partial coverage acceptance work added independent circle/polygon bounds and
+  equal-friction/mirrored-slip controls; production friction was not retuned.
+- The new nonfinite-metric mutation test exposes a report-helper issue:
+  `TireRigAcceptanceCheck::at_most` in `rig/snapshot.rs` replaces nonfinite observed
+  values with zero before comparison. The continuity report correctly fails its
+  overall finite gate, but the named mirrored-moment check incorrectly passes.
+  This has not been fixed; do not weaken the mutation test to accept the candidate.
+
+#### Accomplished
+- Recovered sessions 56970, 89858 and 75041 are all terminal; no owned live job.
+- Native GPU brush lane: 13 passed, exit 0.
+- Isolated integration lane: 113 ordinary tests plus payload, prop lifecycle,
+  four Oxbo tests, slope parking, straight/turn/tracks, hitch/PTO, trailer parking,
+  pressure replay, automatic sleep and explicit sleep all passed, exit 0.
+- Full core lane exited 2 on the new nonfinite-metric mutation test. The three
+  formerly failing vehicle tests now pass. The following GPU compile check in
+  that shell was not run because the shell used `set -e`.
+- No new implementation commit or native preview rebuild. Engram tools remain
+  unavailable; this project checkpoint preserves the session findings.
+
+#### Next Steps
+- Correct nonfinite acceptance semantics with dedicated tests, then rerun core
+  validation and GPU-feature all-target compile check. Review the acceptance
+  changes documented in `TYRE_CONTACT_VALIDATION.md` without treating numerical
+  geometry tests as physical tyre calibration.
+- Build the isolated native binary without launching, measure uncontaminated
+  current performance, and commit only after required validation succeeds.
+- Preserve the remaining FULL_COMPACT physical and lifecycle acceptance scope.
+
+#### Relevant Files
+- `crates/molla-vehicle/src/real_tire/rig/snapshot.rs`: existing acceptance helpers.
+- `crates/molla-vehicle/src/real_tire/reports/physical_shape.rs`: pending controls.
+- `crates/molla-vehicle/src/real_tire/tests.rs`: pending mutation regression.
+- `target/perf/tyre-coverage-accepted-core.log`: one remaining core failure.
+- `target/perf/tyre-coverage-accepted-gpu.log`: successful 13-test GPU lane.
+- Isolated `target/perf/tyre-coverage-accepted-integration.log`: successful imported
+  and ordinary regression lane; no claim of clean performance from this run.
+
+### Partial-contact coverage accepted checkpoint
+
+#### Goal
+- Continue FULL_COMPACT, finish the load-driven footprint correction and validate
+  its native integration. The previous turn made progress by recovering completed
+  jobs and identifying the exact remaining acceptance-helper defect.
+
+#### Instructions
+- No preview launch or closure, original Gearbox change, asset change or Rapier
+  development. No subagents. FULL_COMPACT.md remains untracked and untouched.
+
+#### Discoveries
+- All three acceptance constructors (`at_least`, `at_most`, `between`) must reject
+  nonfinite source values before sanitizing printable fields. Otherwise both
+  invalid observations and invalid bounds can silently pass individual checks.
+- General unrelated-machine lifecycle coverage remains open: wheel insert,
+  remove and configure call whole-readout `invalidate()`, and dependency capture
+  aggregates every registered wheel's component. The existing remote-prop test
+  does not establish independent-machine readout preservation.
+
+#### Accomplished
+- Core **97e8b6e** `fix(tyres): reject nonfinite acceptance inputs`: rejects invalid
+  observations/bounds while keeping finite report fields. Two dedicated tests
+  cover NaN, both infinities, finite inclusivity and reversed range normalization.
+  Focused lane passed (three matching tests plus the formerly failing mutation).
+- Core **9be813d** `fix(tyres): integrate partial contact coverage`: committed CPU
+  and GPU clipped cells, analytic geometry/refinement tests, independent friction
+  controls, stronger report checks and TYRE_CONTACT_VALIDATION.md. The former
+  unsourced magnitude/sign assumptions were replaced with explicit model controls,
+  not production parameter tuning or widened continuity tolerances. No claim of
+  calibrated physical moment or passenger-tyre footprint accuracy.
+- Isolated **65d7513** `test(tyres): cover imported payload footprint`: committed
+  1500 kg add/remove payload regression with unchanged area-growth assertion.
+- Final core session **66060**, exit 0: **770 passed, 0 failed, 9 ignored across
+  93 binaries**, followed by successful solver GPU-feature all-target compile check.
+  Log: `target/perf/tyre-coverage-final-accepted-core.log`.
+- Previously recovered GPU lane: **13 passed**; isolated lane: **113 ordinary
+  tests** plus all listed payload/lifecycle/Oxbo/terrain/control/sleep checks pass.
+- Native isolated `oslo make build-release-profile` session **43861**, exit 0,
+  44.13 s. Binary SHA256:
+  `6690126c839eef70509102f07b028919dac0614ed21a475f0d93ad3b54b690b8`.
+  Log: isolated `target/perf/tyre-coverage-native-build.log`. Not launched.
+- Benchmark session **54220**, exit 0, passed all six pressure/driving cases. It
+  started after all owned validation/build jobs became terminal; renderer absent,
+  controllers outside measured step, 600 samples per case at 120 Hz. Results in
+  milliseconds (pressure bar / driving / median / p95 / max):
+  - 0.5 / false / **0.679669 / 1.175108 / 1.741010**
+  - 1.8 / false / **0.666114 / 0.723716 / 0.906170**
+  - 4.0 / false / **0.645587 / 0.833108 / 1.307967**
+  - 0.5 / true / **0.681798 / 1.136845 / 2.492129**
+  - 1.8 / true / **0.673459 / 1.064547 / 2.380657**
+  - 4.0 / true / **0.653181 / 1.119596 / 1.728396**
+  Logs: isolated `target/perf/tyre-coverage-performance.log` and
+  `tyre-coverage-performance-context.log`. Shared-host desktop/other agent
+  activity remains; endpoint process snapshots do not prove isolation throughout.
+  Medians are below 1 ms, but several p95 values and maxima exceed 1 ms. The full
+  under-1-ms performance requirement is therefore **not established**. No timing
+  gate was relaxed, and no speculative optimization or Rapier work was started.
+- All owned sessions are terminal. New-file rustfmt and both worktree diff checks
+  pass. Isolated worktree is clean; core retains only this handoff and the user's
+  untracked FULL_COMPACT.md before the documentation commit.
+
+#### Next Steps
+- Keep the recorded timing distributions as current evidence, not a strict
+  under-1-ms guarantee; do not restart speculative performance work by default.
+- Extend lifecycle regression to independently spawned/removed machines and
+  pressure configuration, preserving unaffected per-wheel readouts and dynamics.
+- Continue UI/CLI hitch/save/reload, pressure-extreme towing/slope, surface-response
+  and timestep gates; calibrated tyre behavior, soil coupling and remaining
+  general-joint/GPU work are still open. No FULL_COMPACT completion claim.
+
+#### Relevant Files
+- `crates/molla-vehicle/src/real_tire/rig/snapshot.rs` and `snapshot/tests.rs`:
+  finite acceptance checks and regressions.
+- `TYRE_CONTACT_VALIDATION.md`: geometric integration/control evidence and limits.
+- `crates/molla-solvers/src/wheel_forces.rs` and `wheel_forces/readout.rs`: next
+  independent-machine lifecycle target; inspected only, not changed this turn.
+- `target/perf/tyre-acceptance-finite-fix.log`: focused reporting-fix results.
+- Engram APIs unavailable; this project checkpoint is the session summary.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
