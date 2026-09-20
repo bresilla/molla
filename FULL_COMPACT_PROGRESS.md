@@ -2796,6 +2796,94 @@ the authoritative terminal test log and completed the next safe validation.
 - `/tmp/{molla-field,rapier-field}-track-gate.log` — live viewer logs;
   `/tmp/molla-field-{low,high}-state.json` — applied pressure readback.
 
+## 2026-09-20 — towing exposed uncoupled Krampe tipping
+
+### Goal
+
+Continue full-plan rear-drawbar attach/tow/detach acceptance, including Molla
+pressure extremes. Previous goal turn was progress (dual-backend turn/track
+gate plus inspected live screenshots). This turn also made progress, but
+uncovered a failing stability requirement; the full objective stays active.
+
+### Instructions
+
+- Original Gearbox, assets, peerbus and agentio were not edited. Only the
+  isolated integration test/docs and this checkpoint changed.
+- Do not treat host API timeouts as a physics crash: the specific viewer was
+  confirmed live by new physics logs and successful screenshots.
+- Engram tools remain unavailable; this is the session-summary fallback.
+
+### Discoveries
+
+- The real Krampe tips nose-up under Molla even before being hitched. Live
+  high-pressure pitch was -0.50662 rad after spawn, -0.55680 after detach and
+  -0.45518 later. Rapier's detached trailer was nearly level (+0.00199 rad).
+- New headless reproduction removes tractor, hitch/teleport, rendering and
+  network entirely. After 15 simulated seconds, Molla pitches -0.32082,
+  -0.38409 and -0.42598 rad at 0.5/1.8/4 bar. Front tyres lose ground contact.
+  Final speeds are 0.01368/0.05080/0.10532 m/s. Rapier parks nose-down at
+  +0.10997 rad, speed 0.01861 m/s. Root cause is not established.
+- Diagnostic trace showed negative pitch before ordinary collider contacts:
+  low-pressure Molla at step 120 had pitch -0.06539 with no penalty contacts.
+  By step 240 chassis collider 19 contacted ground 48. At final low-pressure
+  state rear wheel normal readouts were about 46.7 kN each, fronts zero.
+  Investigate load/moment dynamics, not just stand-enable or detach code.
+- Imported Krampe has 15 bodies, 14 joints, four tyres, 19 colliders including
+  the floor. Body-mass totals are Molla 6728.10030 vs Rapier 6728.86735 kg.
+  Probe per-body data localizes this difference to the four rounded wheel
+  colliders (140.796294 vs 140.988058 kg per wheel); Molla's rounded-cylinder
+  mass calculation explicitly uses the inner cylinder. This does not explain
+  the large tipping discrepancy by itself.
+
+### Accomplished
+
+- Isolated commit `36fefd6 test(physics): reproduce parked trailer tipping`
+  generalizes the imported fixture to the real Krampe and adds a reproducible
+  external-asset support gate. It remains failing; its bounds were not removed
+  to produce a green result. |pitch| <0.2 permits the reference parked angle,
+  while rejecting the Molla gross tip. Every step also checks finite/enabled
+  bodies and absence of quarantine.
+- Live rear_drawbar/front_coupler teleport attach, 8 s turn and detach commands
+  executed on Molla and Rapier, with inspected screenshots showing towing.
+  No rejected-step/quarantine/non-finite diagnostics were found in these logs.
+  Physical detach acceptance is NOT passed because of the nose-up fault.
+- Low run: tractor at 0.5 bar, trailer at defaults; tractor pressures survived
+  unrelated trailer spawn, attach and towing. Post-detach host discovery failed
+  despite a live viewer; do not claim verified low-run detached API readback.
+- High run: all eight tyres at 4 bar; detach returned an empty attachment list
+  and the trailer retained 4 bar on all four tyres. Native standalone telemetry
+  before attach independently confirms the tip is not exclusive to detach.
+- Ordinary release suites still pass 87 each, now seven ignored (six imported
+  assets plus Vulkan). Kubota straight/turn/track gate passes again after the
+  fixture refactor. The Krampe acceptance gate fails as recorded above.
+- All jobs are terminal, including final gate/regressions 73605 and Kubota
+  recheck 25870. Owned viewers `molla-tow-gate` (21775), `rapier-tow-gate`
+  (19807), `molla-tow-high-gate` (23897) were explicitly stopped and polled
+  terminal. No original/user viewer was stopped. No production code changed.
+
+### Next Steps
+
+1. Fix uncoupled Krampe support dynamics using the new gate. Compare total
+   force/moment and articulated response, including the bogie-rooted tree,
+   versus actual mass/COM and Rapier. Do not guess or freeze the trailer.
+2. Repeat stable detach, both-machine low/high pressure towing, deterministic
+   replay and master/slave service propagation after fixing the underlying bug.
+3. Continue all remaining full-plan lifecycle, sleep/island/fleet, calibration,
+   terrain/Bekker/MPM, GPU and performance work. No parity claim from these runs.
+
+### Relevant Files
+
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — new failing
+  `imported_krampe_parking_support`; use `GEARBOX_BENCH_TRAILER` with real USDZ.
+- Isolated `docs/MOLLA_BACKEND.md` — reproduction command and honest acceptance.
+- `/tmp/gearbox-krampe-parking-final.log` — all four support scenarios, failure.
+- `/tmp/gearbox-krampe-parking-probe.log` — earlier per-body/contact diagnostics.
+- `/tmp/gearbox-krampe-{molla,rapier}-regression.log` — ordinary suites pass.
+- `/tmp/gearbox-krampe-kubota-regression.log` — imported Kubota gate passes.
+- `/tmp/{molla-tow-gate,molla-tow-high-gate,rapier-tow-gate}.log` — live logs.
+- `/tmp/{molla-tow-low,molla-tow-high,rapier-tow}-{driven,detached}.png` —
+  inspected visual evidence; corresponding JSON captures are in `/tmp`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
