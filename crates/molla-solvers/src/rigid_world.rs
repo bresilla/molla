@@ -140,7 +140,19 @@ impl RigidWorld {
         id: BodyHandle,
         additional: molla_sim::MassProperties,
     ) -> Result<()> {
-        molla_geometry::mass_properties::set_body_additional_mass(&mut self.scene, id, additional)
+        self.set_body_additional_mass_with_wake(id, additional, true)
+    }
+
+    /// Replace additional mass with optional dependency-group activation.
+    pub fn set_body_additional_mass_with_wake(
+        &mut self,
+        id: BodyHandle,
+        additional: molla_sim::MassProperties,
+        wake: bool,
+    ) -> Result<()> {
+        molla_geometry::mass_properties::set_body_additional_mass_with_wake(
+            &mut self.scene, id, additional, wake,
+        )
     }
 
     pub fn recompute_body_mass(&mut self, id: BodyHandle) -> Result<()> {

@@ -1231,14 +1231,35 @@ impl RigidScene {
 
     /// Replace total mass while preserving the velocity field and world force application points.
     pub fn set_body_mass_properties(&mut self, id: BodyHandle, mass: MassProperties) -> Result<()> {
+        self.set_body_mass_properties_with_wake(id, mass, true)
+    }
+
+    /// Replace total mass, optionally activating the edited body's dependents.
+    pub fn set_body_mass_properties_with_wake(
+        &mut self,
+        id: BodyHandle,
+        mass: MassProperties,
+        wake: bool,
+    ) -> Result<()> {
         mass.validate()?;
-        self.edit(|d| {
+        let body = self.body(id).ok_or_else(|| missing("body"))?;
+        if body.params.mass == mass.mass
+            && body.params.com == mass.local_com
+            && body.params.inertia == mass.inertia
+        {
+            return Ok(());
+        }
+        self.rebuild(|d| {
             let params = &mut d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?.params;
             params.mass = mass.mass;
             params.com = mass.local_com;
             params.inertia = mass.inertia;
             Ok(())
-        })
+        })?;
+        if wake {
+            self.activate_body(id);
+        }
+        Ok(())
     }
 
     /// Commit a recomputed total and its independently replaceable additional component.
@@ -1248,16 +1269,39 @@ impl RigidScene {
         total: MassProperties,
         additional: MassProperties,
     ) -> Result<()> {
+        self.set_body_mass_components_with_wake(id, total, additional, true)
+    }
+
+    /// Replace total and additional mass atomically with optional body activation.
+    pub fn set_body_mass_components_with_wake(
+        &mut self,
+        id: BodyHandle,
+        total: MassProperties,
+        additional: MassProperties,
+        wake: bool,
+    ) -> Result<()> {
         total.validate()?;
         additional.validate()?;
-        self.edit(|d| {
+        let body = self.body(id).ok_or_else(|| missing("body"))?;
+        if body.params.mass == total.mass
+            && body.params.com == total.local_com
+            && body.params.inertia == total.inertia
+            && body.additional_mass == Some(additional)
+        {
+            return Ok(());
+        }
+        self.rebuild(|d| {
             let body = d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?;
             body.params.mass = total.mass;
             body.params.com = total.local_com;
             body.params.inertia = total.inertia;
             body.additional_mass = Some(additional);
             Ok(())
-        })
+        })?;
+        if wake {
+            self.activate_body(id);
+        }
+        Ok(())
     }
 
     pub fn insert_collider(&mut self, desc: ColliderDesc) -> Result<ColliderHandle> {
@@ -1350,13 +1394,18 @@ impl RigidScene {
     }
 
     fn edit<T>(&mut self, change: impl FnOnce(&mut Description) -> Result<T>) -> Result<T> {
+        let result = self.rebuild(change)?;
+        self.activate_all();
+        Ok(result)
+    }
+
+    fn rebuild<T>(&mut self, change: impl FnOnce(&mut Description) -> Result<T>) -> Result<T> {
         let mut next = self.description.clone();
         let result = change(&mut next)?;
         let snapshot = compile(&next, self.gravity, Some(&self.snapshot))?;
         self.description = next;
         self.snapshot = snapshot;
         self.revision += 1;
-        self.activate_all();
         Ok(result)
     }
 }

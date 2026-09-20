@@ -55,8 +55,18 @@ pub fn set_body_additional_mass(
     body: BodyHandle,
     additional: MassProperties,
 ) -> Result<()> {
+    set_body_additional_mass_with_wake(scene, body, additional, true)
+}
+
+/// Replace additional mass and recompute the total, optionally activating the body.
+pub fn set_body_additional_mass_with_wake(
+    scene: &mut RigidScene,
+    body: BodyHandle,
+    additional: MassProperties,
+    wake: bool,
+) -> Result<()> {
     let total = body_mass_properties(scene, body, additional)?;
-    scene.set_body_mass_components(body, total, additional)
+    scene.set_body_mass_components_with_wake(body, total, additional, wake)
 }
 
 pub fn recompute_body_mass(scene: &mut RigidScene, body: BodyHandle) -> Result<()> {

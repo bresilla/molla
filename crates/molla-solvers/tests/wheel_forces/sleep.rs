@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn nonwaking_mass_rebuild_preserves_sleeping_tyre_state_and_resumes_normally() {
+    let (mut world, chassis, wheel, _, _) = shear_fixture();
+    world.step(0.001).unwrap();
+    world.sleep_body(chassis).unwrap();
+    let pose = world.scene.body_pose(chassis).unwrap();
+    let pressure = *world.wheels.pressure_tire(&world.scene, wheel).unwrap();
+    let before = world.wheels.samples(&world.scene).last().unwrap().clone();
+    let mut mass = world.scene.body_mass_properties(chassis).unwrap();
+    mass.mass *= 2.0;
+    world
+        .set_body_additional_mass_with_wake(chassis, mass, false)
+        .unwrap();
+    assert!(world.is_sleeping(chassis) && world.is_sleeping(wheel));
+    for _ in 0..5 {
+        world.step(0.001).unwrap();
+    }
+    assert_eq!(world.scene.body_pose(chassis).unwrap(), pose);
+    let after = world.wheels.samples(&world.scene).last().unwrap();
+    assert_eq!(after.ground, before.ground);
+    assert_eq!(after.output.force, before.output.force);
+    assert_eq!(after.dt, 0.0);
+    assert_eq!(
+        world
+            .wheels
+            .pressure_tire(&world.scene, wheel)
+            .unwrap()
+            .pressure_pa,
+        pressure.pressure_pa
+    );
+    world.wake_body(chassis).unwrap();
+    world.step(0.001).unwrap();
+    assert!(!world.is_sleeping(chassis));
+    assert!(!world.wheels.samples(&world.scene).is_empty());
+    assert!(
+        world
+            .wheels
+            .samples(&world.scene)
+            .iter()
+            .all(|sample| sample.dt > 0.0 && sample.output.force.iter().all(|f| f.is_finite()))
+    );
+}
+
+#[test]
 fn automatic_sleep_waits_for_pressure_and_resumes_on_target_change() {
     let (mut world, chassis, wheel, _, _) = fixture(true);
     world

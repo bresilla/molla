@@ -12,6 +12,9 @@ mod settling;
 #[path = "rigid_settling/nonwaking.rs"]
 mod nonwaking;
 
+#[path = "rigid_settling/mass.rs"]
+mod mass;
+
 fn body(world: &mut RigidWorld, x: f64, kind: BodyKind) -> BodyHandle {
     world
         .scene
