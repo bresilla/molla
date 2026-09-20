@@ -42,6 +42,10 @@ impl PartialEq for SceneStamp {
 }
 impl Eq for SceneStamp {}
 
+/// Input-mutation identity for one body, including global scene edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BodyActivationStamp(SceneStamp, u64, u64);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BodyKind {
     Dynamic,
@@ -359,6 +363,9 @@ pub struct RigidScene {
     snapshot: Snapshot,
     gravity: Vec3,
     revision: u64,
+    activation_global: u64,
+    activation_identity: SceneStamp,
+    activation_bodies: BTreeMap<BodyHandle, u64>,
 }
 
 impl RigidScene {
@@ -371,6 +378,9 @@ impl RigidScene {
             snapshot,
             gravity,
             revision: 0,
+            activation_global: 0,
+            activation_identity: SceneStamp(Arc::new(())),
+            activation_bodies: BTreeMap::new(),
         })
     }
 
@@ -381,12 +391,14 @@ impl RigidScene {
         &self.snapshot.state
     }
     pub fn state_mut(&mut self) -> &mut State {
+        self.activate_all();
         &mut self.snapshot.state
     }
     pub fn control(&self) -> &Control {
         &self.snapshot.control
     }
     pub fn control_mut(&mut self) -> &mut Control {
+        self.activate_all();
         &mut self.snapshot.control
     }
     pub fn revision(&self) -> u64 {
@@ -397,6 +409,26 @@ impl RigidScene {
     }
     pub fn gravity(&self) -> Vec3 {
         self.gravity
+    }
+
+    pub fn activation_stamp(&self, id: BodyHandle) -> Option<BodyActivationStamp> {
+        self.body(id).map(|_| {
+            BodyActivationStamp(
+                self.activation_identity.clone(),
+                self.activation_global,
+                self.activation_bodies.get(&id).copied().unwrap_or(0),
+            )
+        })
+    }
+
+    fn activate_all(&mut self) {
+        self.activation_global = self.activation_global.wrapping_add(1);
+        self.activation_bodies.clear();
+    }
+
+    fn activate_body(&mut self, id: BodyHandle) {
+        let version = self.activation_bodies.entry(id).or_default();
+        *version = version.wrapping_add(1);
     }
 
     pub fn body_index(&self, id: BodyHandle) -> Option<BodyId> {
@@ -530,7 +562,7 @@ impl RigidScene {
             next.joint_q.host_mut()?.copy_from_slice(&coordinates);
         }
         crate::eval_body_velocities(self.model(), &mut next)?;
-        self.commit_body_state(next)
+        self.commit_body_state(next, &[id])
     }
 
     /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
@@ -563,7 +595,7 @@ impl RigidScene {
         }
         crate::eval_fk(self.model(), &mut next)?;
         crate::eval_body_velocities(self.model(), &mut next)?;
-        self.commit_body_state(next)
+        self.commit_body_state(next, &[id])
     }
 
     /// Atomically set world poses; unlisted descendants follow their parent.
@@ -631,11 +663,17 @@ impl RigidScene {
         }
         crate::eval_fk(model, &mut next)?;
         crate::eval_body_velocities(model, &mut next)?;
-        self.commit_body_state(next)
+        self.commit_body_state(
+            next,
+            &poses.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        )
     }
 
-    fn commit_body_state(&mut self, next: State) -> Result<()> {
-        self.commit_step(next)?;
+    fn commit_body_state(&mut self, next: State, changed: &[BodyHandle]) -> Result<()> {
+        self.commit_state(next)?;
+        for &id in changed {
+            self.activate_body(id);
+        }
         self.snapshot.stamp = SceneStamp(Arc::new(()));
         self.revision += 1;
         Ok(())
@@ -643,6 +681,12 @@ impl RigidScene {
 
     /// Commit finite rigid state while retaining the scene identity and last valid poses.
     pub fn commit_step(&mut self, next: State) -> Result<()> {
+        self.commit_state(next)?;
+        self.activate_all();
+        Ok(())
+    }
+
+    fn commit_state(&mut self, next: State) -> Result<()> {
         if next.body_q.host()?.len() != self.model().body_count
             || next.body_qd.host()?.len() != self.model().body_count
             || next.body_f.host()?.len() != self.model().body_count
@@ -704,8 +748,12 @@ impl RigidScene {
             .bodies
             .get_mut(&id)
             .ok_or_else(|| missing("body"))?;
+        let changed = body.linear_damping != linear || body.angular_damping != angular;
         body.linear_damping = linear;
         body.angular_damping = angular;
+        if changed {
+            self.activate_body(id);
+        }
         Ok(())
     }
 
@@ -727,7 +775,10 @@ impl RigidScene {
         if !next.linear.is_finite() || !next.angular.is_finite() {
             return Err(Error::Build("body wrench overflow".into()));
         }
-        self.state_mut().body_f.host_mut()?[i] = next;
+        self.snapshot.state.body_f.host_mut()?[i] = next;
+        if current != next {
+            self.activate_body(id);
+        }
         Ok(())
     }
 
@@ -745,7 +796,11 @@ impl RigidScene {
 
     pub fn reset_body_forces(&mut self, id: BodyHandle) -> Result<()> {
         let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
-        self.state_mut().body_f.host_mut()?[i] = SpatialVector::ZERO;
+        let changed = self.snapshot.state.body_f.host()?[i] != SpatialVector::ZERO;
+        self.snapshot.state.body_f.host_mut()?[i] = SpatialVector::ZERO;
+        if changed {
+            self.activate_body(id);
+        }
         Ok(())
     }
 
@@ -965,15 +1020,39 @@ impl RigidScene {
         motor.validate()?;
         axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
         let dof = self.snapshot.joint_layouts[&id][axis as usize].expect("validated joint axis");
+        let mut changed = self.description.joint_axes[&id][axis as usize].motor != Some(motor);
+        let ends = self
+            .joint(id)
+            .map(|joint| [joint.parent, Some(joint.child)])
+            .unwrap();
         if let Some(joint) = self.joint_index(id) {
             let offset = self.model().joint_dof_offset.host()?[joint.index()] as usize;
-            motor.apply(&mut self.snapshot.control, offset + dof)?;
+            let i = offset + dof;
+            let values = |control: &Control| -> Result<_> {
+                Ok((
+                    control.joint_target_mode.host()?[i],
+                    control.joint_motor_model.host()?[i],
+                    control.joint_target_pos.host()?[i],
+                    control.joint_target_vel.host()?[i],
+                    control.joint_target_kp.host()?[i],
+                    control.joint_target_kd.host()?[i],
+                    control.joint_motor_max_force.host()?[i],
+                ))
+            };
+            let before = values(&self.snapshot.control)?;
+            motor.apply(&mut self.snapshot.control, i)?;
+            changed |= before != values(&self.snapshot.control)?;
         }
         self.description
             .joint_axes
             .get_mut(&id)
             .ok_or_else(|| missing("joint"))?[axis as usize]
             .motor = Some(motor);
+        if changed {
+            for body in ends.into_iter().flatten() {
+                self.activate_body(body);
+            }
+        }
         Ok(())
     }
 
@@ -1177,6 +1256,9 @@ impl RigidScene {
         if !gravity.is_finite() {
             return Err(Error::Build("non-finite gravity".into()));
         }
+        if self.gravity != gravity {
+            self.activate_all();
+        }
         self.snapshot.model.gravity.host_mut()?[0] = gravity;
         self.gravity = gravity;
         Ok(())
@@ -1189,6 +1271,7 @@ impl RigidScene {
         self.description = next;
         self.snapshot = snapshot;
         self.revision += 1;
+        self.activate_all();
         Ok(result)
     }
 }

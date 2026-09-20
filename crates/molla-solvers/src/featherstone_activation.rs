@@ -172,6 +172,83 @@ impl ActiveSet {
 }
 
 impl FeatherstoneSolver {
+    /// Refresh contacts, select complete articulations and apply transient wrenches each substep.
+    /// The force callback returns the activation mask after inspecting fresh contacts.
+    pub fn step_with_collision_active(
+        &mut self,
+        model: &Model,
+        input: &State,
+        control: &Control,
+        pipeline: &mut molla_geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        output: &mut State,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        mut forces: impl FnMut(
+            &State,
+            &Contacts,
+            Real,
+            &mut [molla_math::SpatialVector],
+        ) -> Result<Vec<bool>>,
+    ) -> Result<()> {
+        self.contact_forces.clear();
+        if self.is_gpu() || !dt.is_finite() || dt <= 0.0 {
+            return Err(invalid(
+                "active collision stepping requires CPU and positive finite dt",
+            ));
+        }
+        let count = self.substeps.max(1);
+        let sub_dt = dt / count as Real;
+        if sub_dt == 0.0 {
+            return Err(invalid("activation substep dt underflows"));
+        }
+        let mut scratch = input.clone_host()?;
+        molla_sim::eval_fk(model, &mut scratch)?;
+        molla_sim::eval_body_velocities(model, &mut scratch)?;
+        let persistent = input.body_f.host()?.to_vec();
+        let mut applied = persistent.clone();
+        let mut samples = Vec::new();
+        for substep in 0..count {
+            pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)?;
+            applied.copy_from_slice(&persistent);
+            let mask = forces(&scratch, contacts, sub_dt, &mut applied)?;
+            let active = ActiveSet::new(model, contacts, &mask)?;
+            if applied
+                .iter()
+                .any(|force| !force.linear.is_finite() || !force.angular.is_finite())
+            {
+                return Err(invalid("non-finite transient body force"));
+            }
+            scratch.body_f.host_mut()?.copy_from_slice(&applied);
+            self.contact_forces.clear();
+            cpu_step(
+                model,
+                &scratch,
+                control,
+                contacts,
+                sub_dt,
+                output,
+                self.joint_damping,
+                self.stable_motor_feedback,
+                self.rigorous_d_solve,
+                self.rigorous_distance,
+                &mut self.contact_forces,
+                Some(&active),
+            )?;
+            for reading in &mut self.contact_forces {
+                reading.sample_dt = sub_dt;
+                reading.normal_impulse = reading.normal_force * sub_dt;
+            }
+            output.body_f.host_mut()?.copy_from_slice(&persistent);
+            samples.append(&mut self.contact_forces);
+            if substep + 1 < count {
+                std::mem::swap(&mut scratch, output);
+            }
+        }
+        self.contact_forces = samples;
+        Ok(())
+    }
+
     /// CPU advancement of selected whole articulations; inactive rigid state is retained.
     /// Mixed active/inactive dynamic contacts and mimic links are rejected.
     /// The caller supplies force-coupling closure and wake policy; this does not detect sleep.

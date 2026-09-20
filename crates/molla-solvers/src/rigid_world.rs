@@ -16,6 +16,9 @@ use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
 use crate::FeatherstoneSolver;
 use crate::penalty_contact::ContactForce;
 
+#[path = "rigid_sleep.rs"]
+mod sleep;
+
 #[derive(Clone, Debug)]
 pub struct ContactPair {
     pub colliders: [ColliderHandle; 2],
@@ -34,6 +37,7 @@ pub struct RigidWorld {
     contact_revision: Option<SceneStamp>,
     queries: Mutex<CpuRaycaster>,
     quarantined: Vec<BodyHandle>,
+    sleeping: sleep::SleepingGroups,
 }
 
 impl RigidWorld {
@@ -54,6 +58,7 @@ impl RigidWorld {
             contact_revision: None,
             queries: Mutex::new(CpuRaycaster::default()),
             quarantined: Vec::new(),
+            sleeping: sleep::SleepingGroups::default(),
         })
     }
 
@@ -168,6 +173,9 @@ impl RigidWorld {
         dt: Real,
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
     ) -> Result<()> {
+        if self.sleeping.any_valid(&self.scene, &self.wheels) {
+            return self.step_sleeping(dt, excluded);
+        }
         self.step_with_forces(dt, excluded, |_, _, _, _| Ok(()))
     }
 
@@ -245,6 +253,7 @@ impl RigidWorld {
             },
         )?;
         self.scene.commit_step(next)?;
+        self.sleeping.clear();
         self.wheels.publish(&self.scene, wheel_step);
         self.contact_revision = Some(self.scene.stamp());
         Ok(())

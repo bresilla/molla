@@ -10,6 +10,9 @@ use molla_solvers::rigid_world::RigidWorld;
 use molla_solvers::wheel_forces::{FrictionGrid, WheelDesc};
 use molla_vehicle::{RigidTire, TireModel};
 
+#[path = "wheel_forces/sleep.rs"]
+mod sleep;
+
 fn body(w: &mut RigidWorld, mass: f64) -> BodyHandle {
     w.scene
         .insert_body(BodyDesc {

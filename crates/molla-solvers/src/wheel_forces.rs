@@ -69,6 +69,7 @@ pub struct WheelSample {
     pub wheel: BodyHandle,
     pub ground: ColliderHandle,
     pub ground_point: Vec3,
+    /// Integration duration; zero denotes retained support from a sleeping wheel.
     pub dt: Real,
     pub normal: Vec3,
     pub friction: Real,
@@ -80,6 +81,7 @@ pub(crate) struct WheelStep {
     samples: Vec<WheelSample>,
     pressure_states: BTreeMap<BodyHandle, PressureTireState>,
     shear: BTreeMap<BodyHandle, WheelShear>,
+    held_samples: BTreeMap<BodyHandle, WheelSample>,
 }
 
 #[derive(Clone)]
@@ -101,6 +103,8 @@ pub struct WheelForces {
     prepared_stamp: Option<SceneStamp>,
     height_range: Option<(Real, Real)>,
     exclusions: Vec<(ShapeId, ShapeId)>,
+    activation_revision: u64,
+    activation_identity: Arc<()>,
 }
 
 fn invalid(message: &str) -> Error {
@@ -129,6 +133,20 @@ fn validate_ground(scene: &RigidScene, id: ColliderHandle) -> Result<()> {
 }
 
 impl WheelForces {
+    pub(crate) fn activation_stamp(&self) -> (Arc<()>, u64) {
+        (self.activation_identity.clone(), self.activation_revision)
+    }
+
+    pub(crate) fn matches_activation(&self, stamp: &(Arc<()>, u64)) -> bool {
+        Arc::ptr_eq(&self.activation_identity, &stamp.0) && self.activation_revision == stamp.1
+    }
+
+    pub(crate) fn transitioning(&self, body: BodyHandle) -> bool {
+        self.pressure_states
+            .get(&body)
+            .is_some_and(|state| state.pressure_pa != state.target_pressure_pa)
+    }
+
     pub fn descriptor(&self, body: BodyHandle) -> Option<&WheelDesc> {
         self.wheels.get(&body)
     }
@@ -163,12 +181,14 @@ impl WheelForces {
             return Err(invalid("wheel radius differs from pressure tyre geometry"));
         }
         self.wheels.insert(desc.body, desc);
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
         self.invalidate();
         Ok(())
     }
 
     pub fn remove(&mut self, body: BodyHandle) -> Option<WheelDesc> {
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
         self.invalidate();
         self.pressure_states.remove(&body);
@@ -206,6 +226,7 @@ impl WheelForces {
         }
         state.config = config;
         self.pressure_states.insert(body, state);
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.invalidate();
         Ok(())
     }
@@ -241,6 +262,9 @@ impl WheelForces {
             }
         }
         for &(body, target) in targets {
+            if self.pressure_states[&body].target_pressure_pa != target {
+                self.activation_revision = self.activation_revision.wrapping_add(1);
+            }
             self.pressure_states
                 .get_mut(&body)
                 .unwrap()
@@ -250,6 +274,7 @@ impl WheelForces {
     }
 
     pub fn remove_pressure_tire(&mut self, body: BodyHandle) -> Option<PressureTireState> {
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.invalidate();
         self.shear.remove(&body);
         self.pressure_states.remove(&body)
@@ -266,6 +291,7 @@ impl WheelForces {
             grid.validate()?;
         }
         self.grounds.insert(id, friction);
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.shear.retain(|_, shear| shear.ground != id);
         self.prepared_stamp = None;
         self.invalidate();
@@ -273,6 +299,7 @@ impl WheelForces {
     }
 
     pub fn remove_ground(&mut self, id: ColliderHandle) {
+        self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
         self.grounds.remove(&id);
         self.shear.retain(|_, shear| shear.ground != id);
@@ -298,7 +325,16 @@ impl WheelForces {
             samples: Vec::new(),
             pressure_states: self.pressure_states.clone(),
             shear: self.shear.clone(),
+            held_samples: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn begin_sleeping_step(&self, samples: &[WheelSample]) -> WheelStep {
+        let mut step = self.begin_step();
+        for sample in samples {
+            step.held_samples.insert(sample.wheel, sample.clone());
+        }
+        step
     }
 
     pub(crate) fn publish(&mut self, scene: &RigidScene, mut step: WheelStep) {
@@ -381,17 +417,33 @@ impl WheelForces {
         dt: Real,
         forces: &mut [SpatialVector],
         step: &mut WheelStep,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+    ) -> Result<()> {
+        self.apply_selected(scene, response, dt, forces, step, excluded, None)
+    }
+
+    pub(crate) fn apply_selected(
+        &mut self,
+        scene: &RigidScene,
+        response: &mut crate::articulated_response::ArticulatedResponse<'_>,
+        dt: Real,
+        forces: &mut [SpatialVector],
+        step: &mut WheelStep,
         mut excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+        selected: Option<&[bool]>,
     ) -> Result<()> {
         let WheelStep {
             samples,
             pressure_states,
             shear,
+            held_samples,
         } = step;
         let state = response.state();
         let _span = tracing::debug_span!("wheel_forces").entered();
-        for state in pressure_states.values_mut() {
-            state.advance(dt);
+        for (body, state) in pressure_states.iter_mut() {
+            if selected.is_none_or(|mask| scene.body_index(*body).is_some_and(|i| mask[i.index()])) {
+                state.advance(dt);
+            }
         }
         if self.wheels.is_empty() || self.grounds.is_empty() {
             shear.clear();
@@ -413,6 +465,16 @@ impl WheelForces {
                 .body_index(w.heading_body)
                 .ok_or_else(|| invalid("missing wheel heading body"))?
                 .index();
+            if selected.is_some_and(|mask| !mask[body]) {
+                if let Some(sample) = held_samples.get(&w.body) {
+                    let mut sample = sample.clone();
+                    sample.dt = 0.0;
+                    sample.output.slip_ratio = 0.0;
+                    sample.output.slip_angle = 0.0;
+                    samples.push(sample);
+                }
+                continue;
+            }
             let joint = scene
                 .joint_index(w.spin_joint)
                 .ok_or_else(|| invalid("missing wheel joint"))?
