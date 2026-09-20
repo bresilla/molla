@@ -2437,6 +2437,107 @@ implements and tests the constitutive component before changing live forces.
 - `/tmp/molla-bristle-full.log` — initial full vehicle suite, 240 passed.
 - `/tmp/molla-bristle-full-final.log` — final suite after budget/atomicity tests.
 
+## Live persistent pressure-shear checkpoint
+
+### Goal
+
+Continue the full objective by wiring the preceding tested bristle primitive
+into the actual pressure-tyre/Featherstone path. The preceding goal turn was
+progress (committed constitutive mechanics and tests); this turn adds live
+force integration, lifecycle regressions and imported-machine evidence.
+
+### Instructions
+
+- Original Gearbox, assets and shared dependencies remain untouched. No
+  machine is frozen or given a second wheel/chassis integrator.
+- Engram tools remain unavailable. This tracked checkpoint is the handoff.
+
+### Discoveries
+
+- Retained shear materially reduces the reproduced slope failure but does
+  not fix parking: current zero-velocity wheel motors still allow rotation.
+  Final +/-10-degree tests at 0.5/4.0 bar creep 3.8369–4.4852 m in 60 seconds,
+  versus 7.9736–9.0427 m before this change. The unchanged acceptance gate
+  still FAILS; no tolerance, brake gain or motor was changed.
+- Final +10-degree/4-bar wheel slip magnitudes are about 0.00068–0.00213,
+  rather than about 0.215–0.220 previously. Nonzero wheel rotation remains;
+  this directs the next investigation to bounded parking hold rather than
+  increasing terrain friction or freezing the chassis.
+- The compiled scene stamp survives normal simulation/motor edits. Checking
+  committed wheel/bearing/ground poses on scene edits distinguishes actual
+  teleports from unrelated rebuilds without clearing every tyre's shear.
+- Removing tyre-ground registration restores ordinary collider contact. The
+  contact-loss regression explicitly zeros its subsequent test input velocity
+  before checking for stale shear; otherwise new collider-induced motion can
+  legitimately generate a new tyre force. Production bodies are not frozen.
+
+### Accomplished
+
+- Added `TireBrushState` and a transactional planar persistent-brush evaluator.
+  It shares normal/patch geometry, pressure/load-dependent shear stiffness,
+  surface budgets and cell readout with the steady brush. Per-segment history
+  renews with tread transport, clears for absent cells/changed geometry, and
+  projects into changed tangent frames without increasing shear magnitude.
+  Existing material damping and structural bias remain in the cell force.
+- Pressure tyre evaluation transforms retained shear between world contact
+  frames and maps the resulting forces/moments back to the same Featherstone
+  body wrench. Normal support and rolling-resistance moment remain single
+  force contributions; actual slip reporting is not replaced by elastic strain.
+- `WheelStep` owns cloned transient history and publishes only after a
+  successful rigid step. Unrelated rebuild/re-registration preserves history;
+  wheel/pressure removal, ground removal/re-registration, disabled/missing
+  contact and detected teleport clear it. Contact-ground handle changes reset
+  that wheel. Frame changes project the cell state.
+- Pressure contacts no longer pass through the purely dissipative tangent
+  limiter, which would erase elastic recovery at standstill. Legacy tyres
+  retain it. This is an explicit constitutive force integration, not a fully
+  coupled implicit elastic solve; timestep/convergence coverage must continue.
+- Added tests for 60 seconds of held zero-speed force, world-frame projection,
+  airborne reset, non-expansive/atomic frame transforms, live shear persistence
+  across unrelated rebuild and failed-step rollback, teleport and ground loss.
+- Native Make release suite passed 621 tests (379 solver + 242 vehicle), five
+  ignored across 88 binaries: `/tmp/molla-shear-full.log`. Synthetic pressure
+  replay and loop/timestep convergence gates passed. Final focused solver
+  library/wheel tests and isolated release binary tests also pass (84 binary
+  tests, four external-asset tests ignored).
+- Real imported pressure benchmark and exact replay pass. Driving speed stays
+  about 2.004 m/s across 0.5/1.8/4 bar, with four-wheel support and decreasing
+  deflection under inflation. The combined imported command reports two
+  passes and one failure because slope parking is still failing.
+- This run's complete imported-machine physics medians were 0.7423–0.7587 ms;
+  p95 0.8522–1.1040 ms and maxima up to 2.0531 ms on the shared host. No other
+  assistant build/test overlapped those samples. These are CPU step timings,
+  not rendered frame times, paired speedup evidence, hard real-time guarantees
+  or Rapier parity. No live viewer was launched for this checkpoint.
+
+### Next Steps
+
+- Implement physically bounded parking hold and retest both slope directions
+  and pressure extremes; preserve drive/pressure replay and measured speed.
+- Continue energy/timestep stress tests and calibration. The primitive's
+  local kinematic passivity proof does not establish passivity of its complete
+  damped/material-biased, load-scaled articulated coupling. There is no GPU
+  dynamic-shear parity claim.
+- Audit same-handle ground geometry edits beyond pose changes and explicit
+  re-registration, pressure-driven energy changes, and lifecycle combinations
+  not yet covered. Preserve state through unrelated edits as required.
+- Continue every remaining `FULL_COMPACT.md` requirement. Goal stays active.
+
+### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/{bristle,mod}.rs` — cell history/frame API.
+- `crates/molla-vehicle/src/real_tire/rig/runners.rs` — shared persistent evaluator.
+- `crates/molla-solvers/src/{pressure_tire,wheel_forces}.rs` — live shear forces,
+  world contact frames, transactional history and mutation checks.
+- `crates/molla-solvers/tests/wheel_forces.rs` — lifecycle/rollback regressions.
+- `/tmp/molla-shear-{wheel,pressure,lifecycle,reset,full,final-focused}.log` —
+  local validation; earlier reset/lifecycle logs include the test-input issue.
+- `/tmp/gearbox-shear-imported-final.log` — final benchmark/replay and failing
+  slope gate. `/tmp/gearbox-slope-shear.log` is an earlier pre-damping snapshot.
+- `/tmp/gearbox-shear-unit.log` — passing ordinary isolated binary suite.
+- All assistant sessions for this checkpoint are terminal (including 88576,
+  43170, 88091 and 86281); no assistant viewer/build/test is left running.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested

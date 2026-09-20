@@ -23,6 +23,10 @@ pub struct TreadBristleOutput {
 }
 
 impl TreadBristle {
+    pub(crate) fn project(&mut self, matrix: [[f64; 2]; 2]) {
+        self.displacement =
+            matrix.map(|row| row[0] * self.displacement[0] + row[1] * self.displacement[1]);
+    }
     pub fn displacement(&self) -> [f64; 2] {
         self.displacement
     }
@@ -84,6 +88,36 @@ impl TreadBristle {
             elastic_energy,
             sliding,
         })
+    }
+}
+
+/// Persistent cells of a planar brush, in the caller's retained tangent frame.
+#[derive(Clone, Debug, Default)]
+pub struct TireBrushState {
+    pub(crate) cells: Vec<TreadBristle>,
+    pub(crate) geometry: Option<(f64, f64, usize)>,
+}
+
+impl TireBrushState {
+    pub fn reset(&mut self) {
+        self.cells.clear();
+        self.geometry = None;
+    }
+
+    /// Project old tangent components into a new orthonormal tangent frame.
+    pub fn project_frame(&mut self, matrix: [[f64; 2]; 2]) -> Result<(), &'static str> {
+        let a = matrix[0][0] * matrix[0][0] + matrix[1][0] * matrix[1][0];
+        let b = matrix[0][0] * matrix[0][1] + matrix[1][0] * matrix[1][1];
+        let c = matrix[0][1] * matrix[0][1] + matrix[1][1] * matrix[1][1];
+        let eigenvalue = 0.5 * (a + c + (a - c).hypot(2.0 * b));
+        if !eigenvalue.is_finite() || eigenvalue > 1.0 + 1e-12 {
+            return Err("tread frame projection must not expand shear");
+        }
+        let scale = 1.0 / eigenvalue.max(1.0).sqrt();
+        for cell in &mut self.cells {
+            cell.project(matrix.map(|row| row.map(|v| v * scale)));
+        }
+        Ok(())
     }
 }
 
@@ -274,6 +308,22 @@ mod tests {
         assert!((out.force[0] + 60.0).abs() < 1e-12);
         assert!((out.force[1] + 80.0).abs() < 1e-12);
         assert!((out.elastic_energy - 0.05).abs() < 1e-14);
+    }
+
+    #[test]
+    fn brush_frame_projection_is_contractive_and_rejects_expansion() {
+        let mut brush = TireBrushState::default();
+        brush.cells.push(TreadBristle::default());
+        brush.cells[0].advance([0.1, 0.2], 0.01, params()).unwrap();
+        let saved = brush.cells.clone();
+        for matrix in [[[2.0, 0.0], [0.0, 1.0]], [[f64::NAN, 0.0], [0.0, 1.0]]] {
+            assert!(brush.project_frame(matrix).is_err());
+            assert_eq!(brush.cells, saved);
+        }
+        brush.project_frame([[0.0, 1.0], [-1.0, 0.0]]).unwrap();
+        assert_eq!(brush.cells[0].displacement(), [0.002, -0.001]);
+        brush.project_frame([[0.5, 0.0], [0.0, 0.0]]).unwrap();
+        assert_eq!(brush.cells[0].displacement(), [0.001, 0.0]);
     }
 
     #[test]

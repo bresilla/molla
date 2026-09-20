@@ -44,9 +44,9 @@ pub use envelope::LoadedTireEnvelope;
 mod wheel;
 pub use wheel::{RealWheelOrientation, RealWheelState};
 
-mod brush;
 mod bristle;
-pub use bristle::{TreadBristle, TreadBristleOutput, TreadBristleParams};
+mod brush;
+pub use bristle::{TireBrushState, TreadBristle, TreadBristleOutput, TreadBristleParams};
 pub use brush::RealBrushTireModel;
 pub(crate) use brush::{
     brush_bristle_profile, brush_load_sensitivity, brush_pressure_patch_gain,
@@ -145,9 +145,9 @@ pub use condition::{
 
 pub(crate) use rig::runners::surface_material_with_terrain_film;
 pub use rig::runners::{
-    evaluate_brush_tire, evaluate_brush_tire_oriented, solve_loaded_tire_hub_height,
-    tire_rig_camber_sweep, tire_rig_combined_slip_sweep, tire_rig_step_brake_response,
-    tire_rig_step_steer_response, tire_rig_step_torque_response,
+    evaluate_brush_tire, evaluate_brush_tire_oriented, evaluate_planar_brush_tire_persistent,
+    solve_loaded_tire_hub_height, tire_rig_camber_sweep, tire_rig_combined_slip_sweep,
+    tire_rig_step_brake_response, tire_rig_step_steer_response, tire_rig_step_torque_response,
 };
 pub(crate) use rig::sensitivity::tire_rig_step_response_snapshot;
 pub use rig::sensitivity::{

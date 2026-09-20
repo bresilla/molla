@@ -7,10 +7,10 @@ use crate::pressure_tire::{PressureTireConfig, PressureTireSample, PressureTireS
 use molla_core::{Error, Result, ShapeId};
 use molla_geometry::{collider_query::collider_world_aabb, raycast_cpu::CpuRaycaster};
 use molla_math::{Real, SpatialVector, Vec3};
+use molla_sim::JointType;
 use molla_sim::runtime::{
     BodyHandle, BodyKind, ColliderGeometry, ColliderHandle, JointHandle, RigidScene, SceneStamp,
 };
-use molla_sim::JointType;
 use molla_vehicle::{Terrain, TireModel, TireOutput, WheelContact, wheel_ground_wrench};
 
 #[derive(Clone)]
@@ -79,12 +79,21 @@ pub struct WheelSample {
 pub(crate) struct WheelStep {
     samples: Vec<WheelSample>,
     pressure_states: BTreeMap<BodyHandle, PressureTireState>,
+    shear: BTreeMap<BodyHandle, WheelShear>,
+}
+
+#[derive(Clone)]
+struct WheelShear {
+    ground: ColliderHandle,
+    state: crate::pressure_tire::PressureShear,
+    poses: Option<[molla_math::Transform; 3]>,
 }
 
 #[derive(Default)]
 pub struct WheelForces {
     wheels: BTreeMap<BodyHandle, WheelDesc>,
     pressure_states: BTreeMap<BodyHandle, PressureTireState>,
+    shear: BTreeMap<BodyHandle, WheelShear>,
     grounds: BTreeMap<ColliderHandle, Option<FrictionGrid>>,
     queries: CpuRaycaster,
     samples: Vec<WheelSample>,
@@ -163,6 +172,7 @@ impl WheelForces {
         self.prepared_stamp = None;
         self.invalidate();
         self.pressure_states.remove(&body);
+        self.shear.remove(&body);
         self.wheels.remove(&body)
     }
 
@@ -241,6 +251,7 @@ impl WheelForces {
 
     pub fn remove_pressure_tire(&mut self, body: BodyHandle) -> Option<PressureTireState> {
         self.invalidate();
+        self.shear.remove(&body);
         self.pressure_states.remove(&body)
     }
 
@@ -255,6 +266,7 @@ impl WheelForces {
             grid.validate()?;
         }
         self.grounds.insert(id, friction);
+        self.shear.retain(|_, shear| shear.ground != id);
         self.prepared_stamp = None;
         self.invalidate();
         Ok(())
@@ -263,6 +275,7 @@ impl WheelForces {
     pub fn remove_ground(&mut self, id: ColliderHandle) {
         self.prepared_stamp = None;
         self.grounds.remove(&id);
+        self.shear.retain(|_, shear| shear.ground != id);
         self.invalidate();
     }
 
@@ -284,12 +297,20 @@ impl WheelForces {
         WheelStep {
             samples: Vec::new(),
             pressure_states: self.pressure_states.clone(),
+            shear: self.shear.clone(),
         }
     }
 
-    pub(crate) fn publish(&mut self, scene: &RigidScene, step: WheelStep) {
+    pub(crate) fn publish(&mut self, scene: &RigidScene, mut step: WheelStep) {
+        for (body, shear) in &mut step.shear {
+            shear.poses = self
+                .wheels
+                .get(body)
+                .and_then(|wheel| shear_poses(scene, wheel, shear.ground));
+        }
         self.samples = step.samples;
         self.pressure_states = step.pressure_states;
+        self.shear = step.shear;
         self.sample_stamp = Some(scene.stamp());
     }
 
@@ -306,6 +327,19 @@ impl WheelForces {
         });
         self.pressure_states
             .retain(|body, _| self.wheels.contains_key(body));
+        self.shear.retain(|body, shear| {
+            self.wheels.get(body).is_some_and(|wheel| {
+                active(scene, wheel)
+                    && self.pressure_states.contains_key(body)
+                    && match (shear.poses, shear_poses(scene, wheel, shear.ground)) {
+                        (Some(old), Some(new)) => old.iter().zip(new).all(|(a, b)| {
+                            (a.position - b.position).length() < 1e-8
+                                && a.rotation.dot(b.rotation).abs() > 1.0 - 1e-12
+                        }),
+                        _ => false,
+                    }
+            })
+        });
         self.grounds.retain(|id, _| scene.collider(*id).is_some());
         for &id in self.grounds.keys() {
             validate_ground(scene, id)?;
@@ -352,6 +386,7 @@ impl WheelForces {
         let WheelStep {
             samples,
             pressure_states,
+            shear,
         } = step;
         let state = response.state();
         let _span = tracing::debug_span!("wheel_forces").entered();
@@ -359,9 +394,11 @@ impl WheelForces {
             state.advance(dt);
         }
         if self.wheels.is_empty() || self.grounds.is_empty() {
+            shear.clear();
             return Ok(());
         }
         let Some((top, bottom)) = self.height_range else {
+            shear.clear();
             return Ok(());
         };
         let poses = state.body_q.host()?;
@@ -393,6 +430,7 @@ impl WheelForces {
                 },
             )?
             else {
+                shear.remove(&w.body);
                 continue;
             };
             let normal = if hit.normal.y < 0.0 {
@@ -401,6 +439,7 @@ impl WheelForces {
                 hit.normal
             };
             if normal.y < 1e-6 {
+                shear.remove(&w.body);
                 continue;
             }
             let collider = scene
@@ -435,10 +474,28 @@ impl WheelForces {
                 normal_stiffness: w.normal_stiffness,
                 normal_damping: w.normal_damping,
             };
-            let (mut output, mut pressure) = if let Some(state) = pressure_states.get(&w.body) {
+            let (mut output, pressure) = if let Some(state) = pressure_states.get(&w.body) {
                 let distance = (hub - hit.point).dot(normal);
-                let (output, sample) =
-                    crate::pressure_tire::evaluate(state, &contact, normal, distance, friction)?;
+                let history = shear.entry(w.body).or_insert_with(|| WheelShear {
+                    ground: hit.collider,
+                    state: Default::default(),
+                    poses: None,
+                });
+                if history.ground != hit.collider {
+                    history.ground = hit.collider;
+                    history.state = Default::default();
+                }
+                let (output, sample) = crate::pressure_tire::evaluate_with_shear(
+                    state,
+                    &contact,
+                    normal,
+                    distance,
+                    friction,
+                    Some((&mut history.state, dt)),
+                )?;
+                if !output.in_contact {
+                    shear.remove(&w.body);
+                }
                 (output, Some(sample))
             } else {
                 (
@@ -446,7 +503,7 @@ impl WheelForces {
                     None,
                 )
             };
-            if output.in_contact {
+            if output.in_contact && pressure.is_none() {
                 let tangent = Vec3::from_array(output.force) - normal * output.fz;
                 let point = Vec3::from_array(output.contact_point);
                 let wrench = SpatialVector::new(
@@ -462,9 +519,6 @@ impl WheelForces {
                     let scale = (-power / (dt * mobility)).clamp(0.0, 1.0);
                     output.force = (normal * output.fz + tangent * scale).to_array();
                     output.aligning_moment *= scale;
-                    if let Some(p) = &mut pressure {
-                        p.scale_tangent(scale);
-                    }
                 }
             }
             let force = Vec3::from_array(output.force);
@@ -495,6 +549,18 @@ impl WheelForces {
         }
         Ok(())
     }
+}
+
+fn shear_poses(
+    scene: &RigidScene,
+    wheel: &WheelDesc,
+    ground: ColliderHandle,
+) -> Option<[molla_math::Transform; 3]> {
+    Some([
+        scene.body_pose(wheel.body).ok()?,
+        scene.body_pose(wheel.heading_body).ok()?,
+        scene.collider_world_pose(ground).ok()?,
+    ])
 }
 
 fn active(scene: &RigidScene, w: &WheelDesc) -> bool {

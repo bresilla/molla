@@ -3,7 +3,8 @@
 use molla_core::{Error, Result};
 use molla_math::{Real, Vec3};
 use molla_vehicle::real_tire::{
-    RealTireParams, RealWheelState, SurfaceMaterial, TireContactCell, evaluate_brush_tire,
+    RealTireParams, RealWheelState, SurfaceMaterial, TireBrushState, TireContactCell,
+    evaluate_brush_tire, evaluate_planar_brush_tire_persistent,
 };
 use molla_vehicle::{FlatTerrain, TireOutput, WheelContact};
 
@@ -88,22 +89,30 @@ pub struct PressureTireSample {
     pub cells: Vec<TireContactCell>,
 }
 
-impl PressureTireSample {
-    pub(crate) fn scale_tangent(&mut self, scale: Real) {
-        self.rolling_moment *= scale;
-        for cell in &mut self.cells {
-            cell.tangential_force *= scale;
-            cell.lateral_force *= scale;
-        }
-    }
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PressureShear {
+    brush: TireBrushState,
+    frame: Option<(Vec3, Vec3)>,
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate(
     state: &PressureTireState,
     wheel: &WheelContact,
     normal: Vec3,
     distance: Real,
     friction: Real,
+) -> Result<(TireOutput, PressureTireSample)> {
+    evaluate_with_shear(state, wheel, normal, distance, friction, None)
+}
+
+pub(crate) fn evaluate_with_shear(
+    state: &PressureTireState,
+    wheel: &WheelContact,
+    normal: Vec3,
+    distance: Real,
+    friction: Real,
+    shear: Option<(&mut PressureShear, Real)>,
 ) -> Result<(TireOutput, PressureTireSample)> {
     let mut params = state.config.tire;
     params.pressure_pa = state.pressure_pa;
@@ -129,8 +138,29 @@ pub(crate) fn evaluate(
     let mut material = SurfaceMaterial::from_terrain_friction(friction);
     let rolling_coefficient = material.rolling_resistance;
     material.rolling_resistance = 0.0;
-    let mut contact =
-        evaluate_brush_tire(&params, &local, &FlatTerrain::new(0.0, friction), &material);
+    let mut contact = if let Some((shear, dt)) = shear {
+        if let Some((old_forward, old_side)) = shear.frame {
+            shear
+                .brush
+                .project_frame([
+                    [forward.dot(old_forward), forward.dot(old_side)],
+                    [side.dot(old_forward), side.dot(old_side)],
+                ])
+                .map_err(|e| Error::Solver(e.into()))?;
+        }
+        shear.frame = Some((forward, side));
+        evaluate_planar_brush_tire_persistent(
+            &params,
+            &local,
+            &FlatTerrain::new(0.0, friction),
+            &material,
+            &mut shear.brush,
+            dt,
+        )
+        .map_err(|e| Error::Solver(e.into()))?
+    } else {
+        evaluate_brush_tire(&params, &local, &FlatTerrain::new(0.0, friction), &material)
+    };
     if !contact.is_finite() {
         return Err(Error::Solver("non-finite pressure tyre contact".into()));
     }
@@ -241,6 +271,90 @@ mod tests {
             normal_damping: 0.0,
         };
         evaluate(&state, &contact, Vec3::Y, height, 0.8).unwrap()
+    }
+
+    #[test]
+    fn persistent_patch_holds_shear_rotates_frames_and_clears_airborne() {
+        let state = state(180_000.0);
+        let mut history = PressureShear::default();
+        let mut wheel = WheelContact {
+            hub_pos: [0.0, 0.46, 0.0],
+            hub_vel: [0.1, 0.0, 0.0],
+            heading: [1.0, 0.0, 0.0],
+            spin: 0.0,
+            radius: 0.5,
+            normal_stiffness: 0.0,
+            normal_damping: 0.0,
+        };
+        evaluate_with_shear(
+            &state,
+            &wheel,
+            Vec3::Y,
+            0.46,
+            0.8,
+            Some((&mut history, 0.01)),
+        )
+        .unwrap();
+        wheel.hub_vel = [0.0; 3];
+        let held = evaluate_with_shear(
+            &state,
+            &wheel,
+            Vec3::Y,
+            0.46,
+            0.8,
+            Some((&mut history, 0.01)),
+        )
+        .unwrap()
+        .0;
+        assert!(held.force[0] < -10.0);
+        for _ in 0..7200 {
+            let out = evaluate_with_shear(
+                &state,
+                &wheel,
+                Vec3::Y,
+                0.46,
+                0.8,
+                Some((&mut history, 1.0 / 120.0)),
+            )
+            .unwrap()
+            .0;
+            assert_eq!(out.force, held.force);
+        }
+        wheel.heading = [0.0, 0.0, 1.0];
+        let rotated = evaluate_with_shear(
+            &state,
+            &wheel,
+            Vec3::Y,
+            0.46,
+            0.8,
+            Some((&mut history, 0.01)),
+        )
+        .unwrap()
+        .0;
+        assert!((Vec3::from_array(rotated.force) - Vec3::from_array(held.force)).length() < 1e-8);
+        let airborne = evaluate_with_shear(
+            &state,
+            &wheel,
+            Vec3::Y,
+            0.6,
+            0.8,
+            Some((&mut history, 0.01)),
+        )
+        .unwrap()
+        .0;
+        assert!(!airborne.in_contact);
+        let landed = evaluate_with_shear(
+            &state,
+            &wheel,
+            Vec3::Y,
+            0.46,
+            0.8,
+            Some((&mut history, 0.01)),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(landed.force[0], 0.0);
+        assert_eq!(landed.force[2], 0.0);
     }
 
     #[test]

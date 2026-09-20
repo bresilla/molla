@@ -2,7 +2,8 @@
 //!
 //! Moved out of `real_tire/mod.rs` as part of PLAN_REALTIRE Stream A.
 
-use crate::terrain::Terrain;
+use super::super::{TireBrushState, TreadBristle, TreadBristleParams};
+use crate::terrain::{FlatTerrain, Terrain};
 
 use super::super::internal::{
     add, cross, dot, finite_nonnegative, finite_or, finite_positive_or, finite_vec3, normalize,
@@ -230,12 +231,61 @@ pub fn evaluate_brush_tire_oriented(
     material: &SurfaceMaterial,
     orientation: &RealWheelOrientation,
 ) -> RealTireContact {
+    evaluate_brush_impl(params, state, terrain, material, orientation, None)
+        .unwrap_or_else(|_| RealTireContact::empty())
+}
+
+/// Evaluate a planar patch with persistent cell shear; errors retain the previous state.
+/// The caller projects history when the tangent frame changes.
+pub fn evaluate_planar_brush_tire_persistent(
+    params: &RealTireParams,
+    state: &RealWheelState,
+    terrain: &FlatTerrain,
+    material: &SurfaceMaterial,
+    history: &mut TireBrushState,
+    dt: f64,
+) -> Result<RealTireContact, &'static str> {
+    if !dt.is_finite() || dt <= 0.0 {
+        return Err("invalid brush timestep");
+    }
+    let mut next = history.clone();
+    let sanitized = sanitize_brush_params(params);
+    let geometry = (sanitized.radius, sanitized.width, sanitized.segments);
+    if next.geometry != Some(geometry) {
+        next.reset();
+        next.geometry = Some(geometry);
+        next.cells
+            .resize(sanitized.segments, TreadBristle::default());
+    }
+    let output = evaluate_brush_impl(
+        params,
+        state,
+        terrain,
+        material,
+        &RealWheelOrientation::default(),
+        Some((&mut next, dt)),
+    )?;
+    if !output.is_finite() {
+        return Err("non-finite persistent brush output");
+    }
+    *history = next;
+    Ok(output)
+}
+
+fn evaluate_brush_impl(
+    params: &RealTireParams,
+    state: &RealWheelState,
+    terrain: &dyn Terrain,
+    material: &SurfaceMaterial,
+    orientation: &RealWheelOrientation,
+    mut persistent: Option<(&mut TireBrushState, f64)>,
+) -> Result<RealTireContact, &'static str> {
     if !finite_vec3(state.hub_pos)
         || !finite_vec3(state.hub_vel)
         || !finite_vec3(state.heading)
         || !finite_vec3(orientation.wheel_up)
     {
-        return RealTireContact::empty();
+        return Err("invalid brush kinematics");
     }
     let params = sanitize_brush_params(params);
     let material = sanitized_surface_material(material);
@@ -340,6 +390,9 @@ pub fn evaluate_brush_tire_oriented(
         let point_y = state.hub_pos[1] + local_y;
         let penetration = ground_y - point_y;
         if penetration <= 0.0 {
+            if let Some((history, _)) = &mut persistent {
+                history.cells[i].reset();
+            }
             continue;
         }
 
@@ -368,7 +421,49 @@ pub fn evaluate_brush_tire_oriented(
         let dynamic_cap =
             mu_dynamic_cell * load_mu_factor * fn_i + cell_material.cohesion * cell_area;
         let (ft_long, ft_lat, sliding, available_i, consumed_i) =
-            smooth_combined_brush_force(trial_long, trial_lat, static_cap, dynamic_cap);
+            if let Some((history, dt)) = &mut persistent {
+                let config = TreadBristleParams {
+                    stiffness: shear_k_eff * cell_area,
+                    friction_limit: static_cap,
+                    renewal_rate: wheel_speed.abs() / (params.radius * profile).max(arc_len * 0.5),
+                };
+                let velocity = [-slip_speed_cell, -lateral_slip_speed_cell];
+                let previous = history.cells[i];
+                let mut result = history.cells[i].advance(velocity, *dt, config)?;
+                if result.sliding {
+                    history.cells[i] = previous;
+                    result = history.cells[i].advance(
+                        velocity,
+                        *dt,
+                        TreadBristleParams {
+                            friction_limit: dynamic_cap,
+                            ..config
+                        },
+                    )?;
+                }
+                let mut force = [
+                    result.force[0] + cell_material.bristle_damping * cell_area * slip_speed_cell,
+                    result.force[1]
+                        + cell_material.bristle_damping * cell_area * lateral_slip_speed_cell
+                        + camber_thrust
+                        + structural_lateral_bias,
+                ];
+                let magnitude = force[0].hypot(force[1]);
+                let sliding = result.sliding || magnitude > static_cap;
+                let limit = if sliding { dynamic_cap } else { static_cap };
+                if magnitude > limit {
+                    force = force.map(|f| f * limit / magnitude);
+                }
+                (
+                    force[0],
+                    force[1],
+                    sliding,
+                    static_cap,
+                    force[0].hypot(force[1]),
+                )
+            } else {
+                smooth_combined_brush_force(trial_long, trial_lat, static_cap, dynamic_cap)
+            };
         let rolling_i = cell_material.rolling_resistance * fn_i * v_long_cell.signum();
         rolling_resistance_force += rolling_i;
 
@@ -410,7 +505,7 @@ pub fn evaluate_brush_tire_oriented(
     }
 
     if cells.is_empty() {
-        return RealTireContact::empty();
+        return Ok(RealTireContact::empty());
     }
 
     let rolling = rolling_resistance_force;
@@ -452,7 +547,7 @@ pub fn evaluate_brush_tire_oriented(
         })
         .sum();
     let force = force_vec;
-    RealTireContact {
+    Ok(RealTireContact {
         in_contact: true,
         force,
         normal_load,
@@ -479,5 +574,5 @@ pub fn evaluate_brush_tire_oriented(
         effective_cornering_stiffness,
         cells,
         dissipated_power,
-    }
+    })
 }

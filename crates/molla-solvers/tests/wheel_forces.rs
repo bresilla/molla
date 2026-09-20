@@ -690,3 +690,89 @@ fn pressure_tyres_drive_in_both_directions_during_inflation() {
         assert!(w.contact_pairs().is_empty());
     }
 }
+
+fn shear_fixture() -> (
+    RigidWorld,
+    BodyHandle,
+    BodyHandle,
+    JointHandle,
+    ColliderHandle,
+) {
+    let (mut w, chassis, wheel, spin, ground) = fixture(true);
+    w.solver.substeps = 1;
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    let joint = w.scene.joint_index(spin).unwrap().index();
+    let offset = w.scene.model().joint_dof_offset.host().unwrap()[joint] as usize;
+    w.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 0.2;
+    w.step(0.001).unwrap();
+    w.scene
+        .set_body_velocity(chassis, SpatialVector::ZERO)
+        .unwrap();
+    w.scene
+        .set_body_velocity(wheel, SpatialVector::ZERO)
+        .unwrap();
+    (w, chassis, wheel, spin, ground)
+}
+
+#[test]
+fn pressure_shear_survives_unrelated_rebuild_and_failed_steps() {
+    let (mut reference, _, _, _, _) = shear_fixture();
+    reference.step(0.001).unwrap();
+    let expected = reference.wheels.samples(&reference.scene)[0].output.force[0];
+    assert!(
+        expected > 0.1,
+        "static shear must survive zero spin: {expected}"
+    );
+    let (mut w, chassis, wheel, spin, _) = shear_fixture();
+    let extra = body(&mut w, 1.0);
+    w.scene.remove_body(extra).unwrap();
+    w.wheels
+        .insert(&w.scene, descriptor(chassis, wheel, spin))
+        .unwrap();
+    w.wheels
+        .configure_pressure_tire(wheel, pressure_config())
+        .unwrap();
+    assert!(
+        w.step_with_forces(
+            0.001,
+            |_, _| false,
+            |_, _, _, _| Err(molla_core::Error::Solver("injected shear failure".into()))
+        )
+        .is_err()
+    );
+    w.step(0.001).unwrap();
+    let actual = w.wheels.samples(&w.scene)[0].output.force[0];
+    assert!(
+        (actual - expected).abs() < 1e-10,
+        "shear changed across rebuild/rollback {actual} != {expected}"
+    );
+}
+
+#[test]
+fn pressure_shear_clears_on_teleport_and_ground_loss() {
+    for teleport in [false, true] {
+        let (mut w, chassis, wheel, _, ground) = shear_fixture();
+        if teleport {
+            let poses: Vec<_> = [chassis, wheel]
+                .into_iter()
+                .map(|id| {
+                    let mut pose = w.scene.body_pose(id).unwrap();
+                    pose.position.x += 1.0;
+                    (id, pose)
+                })
+                .collect();
+            w.scene.set_body_poses(&poses, true).unwrap();
+        } else {
+            w.wheels.remove_ground(ground);
+            w.step(0.001).unwrap();
+            w.wheels.register_ground(&w.scene, ground, None).unwrap();
+            w.scene.set_body_velocity(chassis, SpatialVector::ZERO).unwrap();
+            w.scene.set_body_velocity(wheel, SpatialVector::ZERO).unwrap();
+        }
+        w.step(0.001).unwrap();
+        let force = w.wheels.samples(&w.scene)[0].output.force[0];
+        assert!(force.abs() < 1e-10, "teleport={teleport} residual force={force}");
+    }
+}
