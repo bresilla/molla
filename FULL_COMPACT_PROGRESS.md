@@ -2279,6 +2279,91 @@ tyre fidelity, loop constraints or acceptance scope.
 - `/tmp/molla-shared-response-solver.json` — post-change short trace when complete.
 - `/tmp/molla-shared-response-solver-summary.txt` — streamed post-change stage counts.
 
+## Imported Kubota slope acceptance checkpoint
+
+### Goal
+
+Continue the complete `FULL_COMPACT.md` objective with its real-machine,
+60-second, 10-degree slope-parking gate at both supported pressure extremes.
+The preceding acknowledgement-only turn made no implementation progress;
+this turn resumed with a new reproducible acceptance test and failure evidence.
+
+### Instructions
+
+- Original Gearbox and shared dependencies remain untouched. Only the isolated
+  Gearbox-physics test fixture/documentation and this progress file changed.
+- The user confirmed interacting with `molla-gram-perf`; that is not evidence
+  that they closed it or that its stop/closure was spontaneous.
+- Engram tools are unavailable in the current tool registry. This tracked
+  checkpoint is the handoff fallback, not a claim that memory calls succeeded.
+
+### Discoveries
+
+- The imported Kubota fails unattended slope parking on current Molla
+  `b6d8f27`. After 10 simulated seconds of settling, all four combinations
+  creep about 8–9 m during the next 60 seconds. Two complete runs reproduced
+  identical reported drift/speed values. This is actual test evidence, not a
+  window-interaction inference.
+- The test checks both +/-10-degree slopes and 0.5/4.0 bar. Maximum tangent
+  drift / maximum speed were: -10/.5: 7.998699257 m / 0.133314298 m/s;
+  -10/4: 9.031795585 / 0.150532806; +10/.5: 7.973623087 / 0.133080483;
+  +10/4: 9.042705112 / 0.149730977.
+- Every step remained finite/enabled with no quarantine. Per-second checks
+  passed for all four tyre contacts, applied pressure, actual rotated ground
+  normals, and normal load within 500 N of `mass*g*cos(10 degrees)`.
+- Final tyre slip magnitudes were approximately 0.19–0.22 with nonzero wheel
+  rotation. The fixture records these diagnostics, but they do not alone
+  isolate how much drift comes from each force/drive mechanism.
+- Source inspection shows the pressure path evaluates a steady brush law:
+  tread displacement comes from instantaneous regularized slip, not retained
+  contact shear. At zero longitudinal slip its longitudinal support vanishes.
+  `wheel_forces::apply` also dissipatively limits tangent wrench using current
+  velocity. A static shear implementation cannot blindly keep that limiter:
+  elastic recovery can do positive work using previously stored energy.
+- Parking currently uses zero-velocity motors, not a retained wheel-angle
+  brake. Featherstone's scalar feedback regularization scales damping by
+  `1 + kd*dt/effective_inertia` without external-acceleration prediction. These
+  are code-level mechanisms to investigate, not yet isolated causal fixes.
+
+### Accomplished
+
+- Added `Fixture::incline`, retaining the ground collider handle and rotating
+  all imported poses plus the slab by the same transform before settling.
+  Poses are collected before writes, and body order is deterministic.
+- Added the explicitly invoked external-asset slope gate. It measures maximum
+  drift/speed across all 7,200 steps, requiring <10 mm tangent drift and
+  <1 mm/s chassis speed, and reports all four scenarios before asserting.
+  These tolerances were fixed before the first measured run and not relaxed.
+- The gate fails as recorded; its ignore attribute is only for the external
+  asset requirement. No production physics/gains were altered or bodies frozen
+  to manufacture a pass. No Rapier or rendered slope acceptance is claimed.
+- Release binary regression suite passes 84 tests, with four external-asset
+  tests ignored. Test sessions 21490, 35115 and 10127 are terminal; there is no
+  outstanding assistant test/build/viewer process for this checkpoint.
+
+### Next Steps
+
+- Fix physical standstill tyre shear and parking-brake behavior, with isolated
+  force/drive regressions before rerunning the full imported slope gate.
+  Preserve finite-state, pressure/support checks and existing drive/replay
+  behavior; remeasure whole-machine performance after any solver change.
+- Review persistent contact-state lifecycle (airborne, teleport, pressure,
+  topology/ground changes) and elastic energy when adding static shear.
+- Continue every remaining full-plan requirement; this failing gate is not
+  slope completion and the goal remains active.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/{pressure_tire,wheel_forces,featherstone}.rs` —
+  inspected pressure/force/motor paths; no production edits this checkpoint.
+- `crates/molla-vehicle/src/real_tire/rig/runners.rs` — steady brush law.
+- `/home/bresilla/data/code/robolibs/gearbox-physics/bin/gearbox/src/controller/benchmark.rs`
+  — imported slope fixture, continuous drift/speed and support checks.
+- `/home/bresilla/data/code/robolibs/gearbox-physics/docs/MOLLA_BACKEND.md`
+  — reproducible command, thresholds and explicitly failing results.
+- `/tmp/gearbox-slope-{initial,diagnostic}.log` — two failed acceptance runs.
+- `/tmp/gearbox-slope-unit.log` — passing ordinary release binary suite.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
