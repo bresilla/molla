@@ -4183,6 +4183,90 @@ Gearbox checkout or weakening the existing machine-dynamics acceptance gates.
 - Isolated `target/perf/gearbox-after-settling` — retained final candidate;
   `/tmp/gearbox-after-sleep` — pre-change normal-path baseline.
 
+## Fully inactive CPU-step overhead (2026-09-20)
+
+### Goal
+
+Continue the full compatibility/performance plan after the verified automatic
+settling checkpoint. The previous goal turn made progress (`346c2ed`, `f672656`,
+`3266638`); current checkouts and plan were re-read before this work.
+
+### Instructions
+
+- Original Gearbox remains out of scope; use only its isolated physics checkout.
+- Keep active-physics substeps and the contact/pressure/wake contracts intact.
+
+### Discoveries
+
+- Even with every articulation inactive, CPU Featherstone allocated all global
+  ABA scratch arrays and repeated final FK before restoring inactive state.
+- Skipping the remainder after validated contact readout avoids those unused
+  allocations without skipping any collision query or per-substep callback.
+  A callback may still wake the whole world on a later substep.
+- Mixed-active worlds still allocate per-joint ABA arrays for total joint count;
+  this fast return only removes that cost when every joint is inactive. The
+  collision pipeline still performs SAP/filter/narrow-phase work each substep.
+- Engram tools remain unavailable; this journal is the persistent handoff.
+
+### Accomplished
+
+- Fully inactive steps restore rigid state and persistent forces immediately
+  after normal contact evaluation/filtering. Mixed/active dynamics are unchanged.
+- Added regression coverage for later-substep callback wake and exact contact
+  geometry/material metadata with zero inactive forces/impulses. Existing frozen
+  state, mimic, fixed/kinematic, pressure and wake tests remain enabled.
+- Initial retained-binary A/B/B/A on the real automatic-sleep fixture measured
+  **0.1559455 → 0.1185420 ms** average parked median (about 24% less). Sleep tick
+  5383, pressure resettle tick 1533, and post-wake driving/tyre state match exactly.
+- Added an isolated paired long-parked benchmark with the same real Kubota,
+  7200 warmup ticks and 1200 measured ticks on each backend, in R/M/M/R order.
+- Final gates pass **475 simulation/solver tests, nine ignored**, in 95 binaries;
+  **91 ordinary backend binary tests, eleven ignored** under each backend
+  environment; and all **ten imported-machine tests**. GPU-feature compilation
+  and activation-test formatting checks pass. This remains CPU activation work,
+  not a GPU execution/parity result.
+- Across both retained-binary A/B/B/A cycles, parked medians average
+  **0.155761250 → 0.131412250 ms** (**15.632% less**). All samples are retained,
+  including one candidate run at 0.168253 ms (p95 0.408111 ms); the other three
+  candidate medians are 0.117497–0.120312 ms. The initial 24% result above is one
+  cycle, not the full-run aggregate. Sleep/pressure timing and logged post-wake
+  driving/tyre state match across all eight runs.
+- The new paired long-parked lane measured average medians **0.145525 ms Molla**
+  and **0.226860 ms Rapier**. Molla is asleep **26/26** and Rapier remains awake
+  **0/26** after identical 60-second warmups. This is a narrow parked-policy
+  comparison, not equal-active-state or general performance parity.
+- One ordinary-path A/B/B/A guard cycle measured Molla **0.852211750 →
+  0.846100125 ms** (-0.717%), Rapier control **0.230603750 → 0.231464250 ms**.
+  All logged ordinary-path poses, deflections, loads and speeds match across
+  binaries. No material active-path speedup is claimed; Molla remains **3.66×**
+  Rapier in this lane. No owned build/test ran concurrently with timed lanes.
+- Core change is committed as `61f53ff`; the isolated benchmark is committed as
+  `7c35eb6`. All owned command handles are terminal. Original Gearbox is untouched;
+  no live viewer was launched and no new rendered acceptance is claimed.
+
+### Next Steps
+
+1. Benchmark actual parked/mixed-active fleets and remove remaining mixed-world
+   scratch/collision overhead while preserving per-substep callbacks and wakes.
+2. Finish non-waking body mutations and strong/weak wake
+   policy semantics; do not confuse a frozen single machine with driving parity.
+3. Continue every remaining full-plan dynamics, GPU, calibrated tyre, rendered,
+   lifecycle, service, terrain and soil requirement.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/featherstone.rs` — inactive CPU early return.
+- `crates/molla-solvers/tests/featherstone_islands/activation.rs` — regressions.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — long-parked paired timing.
+- `/tmp/molla-inactive-*` — test and retained-binary timing logs.
+- Isolated `target/perf/gearbox-after-settling` — prior checkpoint baseline.
+- Isolated `target/perf/gearbox-after-inactive` — initial optimized candidate.
+- Isolated `target/perf/gearbox-after-inactive-validated` — final candidate with
+  the added long-parked benchmark; verified copy of the tested binary.
+- `/tmp/molla-inactive-auto-{1..8}.log` — paired sleep/pressure/drive comparisons.
+- `/tmp/molla-inactive-normal-{1..4}.log` — ordinary-path regression comparison.
+- `/tmp/molla-inactive-imported-final.log` — ten imported tests and paired parking.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
