@@ -2066,8 +2066,8 @@ without interrupting driving or touching the original Gearbox checkout.
 
 - Redundant backward solves have now been removed from tyre quadratic responses
   and motor inverse diagonals. The release CPU solver suite passes 374 tests,
-  zero failures, five ignored across 87 binaries. Isolated viewer rebuild and
-  post-optimization live verification are still in progress.
+  zero failures, five ignored across 87 binaries. The isolated viewer rebuild
+  and 84 binary tests pass, one ignored. See the live qualification below.
 - Continue whole imported-machine profiling and all remaining performance,
   lifecycle, calibration, slope, fleet and deterministic replay gates.
 
@@ -2099,6 +2099,28 @@ without interrupting driving or touching the original Gearbox checkout.
   not measure factorization, whole physics steps or imported-machine parity.
 - Evidence: `/tmp/molla-quadratic-{unit-tests,full-tests,timings}.log`.
 - Files: `crates/molla-solvers/src/{rigid_impulse,articulated_response,featherstone}.rs`.
+
+### Live verification and remaining work
+
+- Rebuilt selected Kubota completed a 60-second 2 m/s, 0.12 rad/s drive.
+  Fresh 4-bar telemetry after the 0.5-to-4-bar transition showed 2.004 m/s,
+  front deflection 34.60/35.66 mm and rear 36.94/38.29 mm. Inspected the
+  high-pressure screenshot; it confirms the selected playing machine but is
+  not a close-up shape comparison. Drive log ended with normal release.
+- A return-to-0.5-bar request was accepted, but fresh readback then failed at
+  `/gearbox/info` resolution, including a longer-timeout retry. The same viewer
+  process and physics logs were confirmed still live. This is not evidence of
+  a physics crash or proof of completed deflation. The return-low JSON is empty.
+  Stopped only `molla-quadratic-perf` by its exact name after verification.
+- Warm live physics samples ranged 1.40–2.01 ms under changing user workloads.
+  The under-1-ms whole-machine gate remains unmet; microbenchmarks are not parity.
+- Next: controlled imported-machine/headless profiling, remaining CPU mass/Jacobian
+  and loop work, and the full plan's fleet, lifecycle, GPU and tyre acceptance
+  gates. Investigate the CLI reachability failure separately if reproduced;
+  do not change shared peerbus/agentio or original Gearbox as a shortcut.
+- Additional evidence: `/tmp/gearbox-quadratic-{tests,build}.log`,
+  `/tmp/molla-quadratic-{live,drive,stop}.log`, `/tmp/molla-quadratic-{low,high}.json`,
+  `/tmp/molla-quadratic-high.png`.
 
 ## Next implementation steps
 
