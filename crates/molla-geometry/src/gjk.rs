@@ -251,41 +251,33 @@ fn do_simplex_triangle(s: &mut Vec<SupportPoint>) -> SimplexStep {
 }
 
 fn do_simplex_tetra(s: &mut Vec<SupportPoint>) -> SimplexStep {
-    // s = [d, c, b, a], with `a` the newest. Test the three faces
-    // ABC / ACD / ADB; if origin is on the inside of all three, the
-    // tetra contains it.
-    let a = s[3].w;
-    let b = s[2].w;
-    let c = s[1].w;
-    let d = s[0].w;
-    let ab = b - a;
-    let ac = c - a;
-    let ad = d - a;
-    let ao = -a;
-
-    let abc = ab.cross(ac);
-    let acd = ac.cross(ad);
-    let adb = ad.cross(ab);
-
-    if abc.dot(ao) > 0.0 {
-        // Drop d, recurse to triangle [c, b, a].
-        s.remove(0);
-        return do_simplex_triangle(s);
+    let mut best = None;
+    let mut distance = Real::INFINITY;
+    for [a, b, c, opposite] in [[0, 1, 2, 3], [0, 1, 3, 2], [0, 2, 3, 1], [1, 2, 3, 0]] {
+        let normal = (s[b].w - s[a].w).cross(s[c].w - s[a].w);
+        let origin_side = normal.dot(-s[a].w);
+        let interior_side = normal.dot(s[opposite].w - s[a].w);
+        if interior_side != 0.0 && (origin_side >= 0.0) == (interior_side >= 0.0) {
+            continue;
+        }
+        let (u, v, w) = bary_triangle(s[a].w, s[b].w, s[c].w, Vec3::ZERO);
+        let closest = s[a].w * u + s[b].w * v + s[c].w * w;
+        if closest.length_squared() < distance {
+            distance = closest.length_squared();
+            best = Some(([s[a], s[b], s[c]], [u, v, w], closest));
+        }
     }
-    if acd.dot(ao) > 0.0 {
-        // Drop b, recurse to triangle [d, c, a].
-        s.remove(2);
-        return do_simplex_triangle(s);
+    if let Some((face, weights, closest)) = best {
+        s.clear();
+        for (point, weight) in face.into_iter().zip(weights) {
+            if weight > 0.0 {
+                s.push(point);
+            }
+        }
+        SimplexStep::Continue(-closest)
+    } else {
+        SimplexStep::ContainsOrigin
     }
-    if adb.dot(ao) > 0.0 {
-        // Drop c, reorder to triangle [b, d, a].
-        s.remove(1);
-        // Current order: [d, b, a]. We want [b, d, a] for the
-        // triangle routine's [c, b, a] convention. Swap [0] and [1].
-        s.swap(0, 1);
-        return do_simplex_triangle(s);
-    }
-    SimplexStep::ContainsOrigin
 }
 
 /// `(a × b) × c` — the GJK "triple product".
@@ -455,6 +447,44 @@ fn closest_face_points(s: &[SupportPoint]) -> (Vec3, Vec3) {
 mod tests {
     use super::*;
     use molla_math::Quat;
+
+    #[test]
+    fn tetra_reduction_uses_closest_exterior_face_for_every_ordering() {
+        let points = [
+            Vec3::new(-9999.719990700014, 0.13484077099753794, -9998.347861554801),
+            Vec3::new(10000.280016359986, 0.1855493556080049, 10003.655617578956),
+            Vec3::new(10000.280009299986, 0.13484077099753794, -9998.347861554801),
+            Vec3::new(-9999.719986740014, -0.12183483142821039, 10003.615430994745),
+        ];
+        for a in 0..4 {
+            for b in 0..4 {
+                for c in 0..4 {
+                    for d in 0..4 {
+                        let order = [a, b, c, d];
+                        if (0..4).any(|i| order[i + 1..].contains(&order[i])) {
+                            continue;
+                        }
+                        let mut simplex: Vec<_> = order
+                            .iter()
+                            .map(|&i| SupportPoint {
+                                w: points[i],
+                                a: points[i],
+                                b: Vec3::ZERO,
+                            })
+                            .collect();
+                        assert!(matches!(
+                            do_simplex_tetra(&mut simplex),
+                            SimplexStep::Continue(_)
+                        ));
+                        assert!(
+                            simplex_closest_point(&simplex).length() < 0.007,
+                            "order={order:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn gjk_two_separated_spheres_distance() {

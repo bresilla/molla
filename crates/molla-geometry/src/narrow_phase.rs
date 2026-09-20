@@ -2227,6 +2227,149 @@ mod tests {
     }
 
     #[test]
+    fn hull_contact_survives_small_pose_changes_on_wide_thin_ground() {
+        let mut points = Vec::new();
+        for x in [-0.28, 0.28] {
+            for y in [-3.68, -1.70] {
+                for z in [0.59, 0.90] {
+                    points.push(Vec3::new(x, y, z));
+                }
+            }
+        }
+        let hulls = vec![points];
+        let hull = ShapeGeometry::ConvexHull { hull_id: 0 };
+        let ground = ShapeGeometry::Box {
+            half_extents: Vec3::new(10_000.0, 0.02, 10_000.0),
+        };
+        let floor = Transform::from_translation(Vec3::new(0.0, -0.02, 0.0));
+        for i in 0..100 {
+            let pose = Transform {
+                position: Vec3::new(0.0, -0.23 + i as Real * 0.0001, -0.11),
+                rotation: Quat::from_rotation_x(-std::f64::consts::FRAC_PI_2 + 0.13)
+                    * Quat::from_rotation_y(1e-5)
+                    * Quat::from_rotation_z(i as Real * 1e-6),
+            };
+            let depth = -hulls[0]
+                .iter()
+                .map(|p| (pose.position + pose.rotation * *p).y)
+                .fold(Real::INFINITY, Real::min);
+            assert!(depth > 0.1);
+            let contact = gjk_epa_pair_with_hulls(
+                hull,
+                &pose,
+                ground,
+                &floor,
+                ShapePair { a: 0, b: 1 },
+                &hulls,
+            );
+            let contact = contact.unwrap_or_else(|| {
+                panic!(
+                    "lost penetrating contact at sample {i}, depth={depth}, gjk={:?}",
+                    gjk_with_hulls(hull, &pose, ground, &floor, &hulls)
+                )
+            });
+            assert!(
+                (contact.depth - depth).abs() < 1e-6,
+                "sample {i}: {:?}",
+                contact
+            );
+            assert!(contact.normal.dot(-Vec3::Y) > 1.0 - 1e-8);
+            let swapped = gjk_epa_pair_with_hulls(
+                ground,
+                &floor,
+                hull,
+                &pose,
+                ShapePair { a: 1, b: 0 },
+                &hulls,
+            )
+            .unwrap();
+            assert!((swapped.depth - depth).abs() < 1e-6);
+            assert!(swapped.normal.dot(Vec3::Y) > 1.0 - 1e-8);
+            let lifted = Transform {
+                position: pose.position + Vec3::Y,
+                ..pose
+            };
+            assert!(
+                gjk_epa_pair_with_hulls(
+                    hull,
+                    &lifted,
+                    ground,
+                    &floor,
+                    ShapePair { a: 0, b: 1 },
+                    &hulls
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn hull_gjk_matches_box_sat_for_rotated_translated_pairs() {
+        let half = Vec3::new(0.28, 0.99, 0.155);
+        let hulls = vec![
+            (0..8)
+                .map(|i| {
+                    Vec3::new(
+                        if i & 1 == 0 { -half.x } else { half.x },
+                        if i & 2 == 0 { -half.y } else { half.y },
+                        if i & 4 == 0 { -half.z } else { half.z },
+                    )
+                })
+                .collect(),
+        ];
+        let hull = ShapeGeometry::ConvexHull { hull_id: 0 };
+        let mut seed = 0x52d07751a31u64;
+        let mut sample = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 11) as Real / ((1u64 << 53) as Real) * 2.0 - 1.0
+        };
+        let mut overlaps = 0;
+        let mut separated = 0;
+        for i in 0..1000 {
+            let shift = if i % 2 == 0 {
+                Vec3::ZERO
+            } else {
+                Vec3::new(30_000.0, -4000.0, 2000.0)
+            };
+            let a = Transform {
+                position: shift + Vec3::new(sample(), sample() * 1.5, sample()),
+                rotation: Quat::from_rotation_x(sample() * 3.0)
+                    * Quat::from_rotation_y(sample() * 3.0)
+                    * Quat::from_rotation_z(sample() * 3.0),
+            };
+            let b = Transform {
+                position: shift,
+                rotation: Quat::from_rotation_x(sample()) * Quat::from_rotation_z(sample()),
+            };
+            let other_half = match i % 3 {
+                0 => Vec3::new(10_000.0, 0.02, 10_000.0),
+                1 => Vec3::new(1.0, 0.4, 0.8),
+                _ => Vec3::new(0.1, 0.2, 0.12),
+            };
+            let other = ShapeGeometry::Box {
+                half_extents: other_half,
+            };
+            let mut oracle = Vec::new();
+            box_box_sat(&a, half, &b, other_half, 0, 1, &mut oracle);
+            let expected = !oracle.is_empty();
+            if expected {
+                overlaps += 1;
+            } else {
+                separated += 1;
+            }
+            for (ga, xa, gb, xb) in [(hull, &a, other, &b), (other, &b, hull, &a)] {
+                let actual = gjk_with_hulls(ga, xa, gb, xb, &hulls);
+                assert_eq!(
+                    matches!(actual, GjkResult::Overlap(_)),
+                    expected,
+                    "case={i} a={a:?} b={b:?} result={actual:?}"
+                );
+            }
+        }
+        assert!(overlaps > 100 && separated > 100);
+    }
+
+    #[test]
     fn box_box_face_overlap() {
         // Two unit boxes, B sitting on top of A with 0.1 overlap.
         let a_xf = Transform::IDENTITY;
