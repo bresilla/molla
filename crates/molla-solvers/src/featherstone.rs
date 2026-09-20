@@ -1231,8 +1231,8 @@ fn cpu_step_inner<const LOCAL: bool>(
                     }
 
                     // Pack n_act × n_act D and n_act-vector u_tau.
-                    let mut d_mat = vec![0.0_f64; n_act * n_act];
-                    let mut u_tau_packed = vec![0.0_f64; n_act];
+                    let mut d_mat = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
+                    let mut u_tau_packed = [0.0; MAX_JOINT_DOFS];
                     for ai in 0..n_act {
                         let ki = active_idx[ai];
                         let s_ki = s_cols[j][ki];
@@ -1245,8 +1245,8 @@ fn cpu_step_inner<const LOCAL: bool>(
 
                     // Cholesky factor — fall back to per-DOF rank-1 if D
                     // is not SPD (singular column / locked DOFs).
-                    let mut d_chol = d_mat.clone();
-                    let chol_ok = dense_chol(&mut d_chol, n_act).is_ok();
+                    let mut d_chol = d_mat;
+                    let chol_ok = dense_chol(&mut d_chol[..n_act * n_act], n_act).is_ok();
                     if !chol_ok {
                         // Degenerate D — fall back to sequential rank-1.
                         apply_rank1_backward(
@@ -1273,8 +1273,7 @@ fn cpu_step_inner<const LOCAL: bool>(
                         }
                     }
                     // Solve D · y = u_tau via the cached Cholesky factor.
-                    let y = forward_sub_packed(&d_chol, &u_tau_packed, n_act);
-                    let d_inv_u_tau = back_sub_packed(&d_chol, &y, n_act);
+                    let d_inv_u_tau = solve_joint_block(&d_chol, &u_tau_packed, n_act);
 
                     // I^a = I^A − Σ_{i,j} U_i · (D^{-1})_{ij} · U_j^T
                     // Build via the Cholesky factor too: for each column k
@@ -1286,17 +1285,15 @@ fn cpu_step_inner<const LOCAL: bool>(
                     // intermediate is column k of D^{-1} U^T.
                     // Compute cols of D^{-1} U^T: for each spatial component
                     // c in 0..6, pack u_c = (U_0[c], U_1[c], …) and solve.
-                    let mut dinv_ut: Vec<Vec<f64>> =
-                        (0..6).map(|_| Vec::with_capacity(n_act)).collect();
+                    let mut dinv_ut = [[0.0; MAX_JOINT_DOFS]; 6];
                     for cc in 0..6 {
-                        let mut rhs = vec![0.0_f64; n_act];
+                        let mut rhs = [0.0; MAX_JOINT_DOFS];
                         for ai in 0..n_act {
                             let ki = active_idx[ai];
                             let u_ki = u_per_dof[j][ki];
                             rhs[ai] = sv_component(u_ki, cc);
                         }
-                        let y = forward_sub_packed(&d_chol, &rhs, n_act);
-                        dinv_ut[cc] = back_sub_packed(&d_chol, &y, n_act);
+                        dinv_ut[cc] = solve_joint_block(&d_chol, &rhs, n_act);
                     }
                     // Now i_a = i_a − Σ_k U_k · row_k(D^{-1} U^T)
                     // row_k(D^{-1} U^T) is a 6-vector: (dinv_ut[0][k], …, dinv_ut[5][k]).
@@ -1401,13 +1398,13 @@ fn cpu_step_inner<const LOCAL: bool>(
                         }
                     }
                     if n_act > 0 {
-                        let mut rhs = vec![0.0_f64; n_act];
+                        let mut rhs = [0.0; MAX_JOINT_DOFS];
                         for ai in 0..n_act {
                             let ki = active_idx[ai];
                             rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_bias);
                         }
                         // Re-pack the cached Cholesky factor into a flat n_act×n_act.
-                        let mut l_packed = vec![0.0_f64; n_act * n_act];
+                        let mut l_packed = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
                         for r in 0..n_act {
                             for c in 0..n_act {
                                 l_packed[r * n_act + c] =
@@ -1431,8 +1428,7 @@ fn cpu_step_inner<const LOCAL: bool>(
                                 s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                             }
                         } else {
-                            let y = forward_sub_packed(&l_packed, &rhs, n_act);
-                            let q_dd_active = back_sub_packed(&l_packed, &y, n_act);
+                            let q_dd_active = solve_joint_block(&l_packed, &rhs, n_act);
                             for ai in 0..n_act {
                                 let ki = active_idx[ai];
                                 let q_dd_k = q_dd_active[ai];
@@ -2013,7 +2009,35 @@ fn forward_sub_packed(l: &[Real], b: &[Real], n: usize) -> Vec<Real> {
     y
 }
 
+/// Solve a packed joint Cholesky block using stack-backed substitutions.
+fn solve_joint_block(
+    l: &[Real],
+    rhs: &[Real; MAX_JOINT_DOFS],
+    n: usize,
+) -> [Real; MAX_JOINT_DOFS] {
+    let mut y = [0.0; MAX_JOINT_DOFS];
+    for i in 0..n {
+        let mut value = rhs[i];
+        for k in 0..i {
+            value -= l[i * n + k] * y[k];
+        }
+        let pivot = l[i * n + i];
+        y[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+    }
+    let mut x = [0.0; MAX_JOINT_DOFS];
+    for i in (0..n).rev() {
+        let mut value = y[i];
+        for k in i + 1..n {
+            value -= l[k * n + i] * x[k];
+        }
+        let pivot = l[i * n + i];
+        x[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+    }
+    x
+}
+
 /// Back substitution `Lᵀ · x = y` returning `x`.
+#[cfg(test)]
 fn back_sub_packed(l: &[Real], y: &[Real], n: usize) -> Vec<Real> {
     let mut x = vec![0.0_f64; n];
     for i in (0..n).rev() {
@@ -2155,6 +2179,30 @@ mod tests {
     use crate::core::BodyId;
     use crate::math::{SpatialInertia, Transform, Vec3 as V3};
     use crate::sim::{BodyParams, ModelBuilder};
+
+    #[test]
+    fn joint_blocks_match_allocated_substitutions_exactly() {
+        for n in 0..=MAX_JOINT_DOFS {
+            for pivot in [0.0, 1e-31, 1e-30, 1e-25, -0.7, 0.7, Real::INFINITY, Real::NAN] {
+                let mut factor = [Real::NAN; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
+                let mut rhs = [Real::NAN; MAX_JOINT_DOFS];
+                for i in 0..n {
+                    rhs[i] = ((i * 5 + 1) as Real).cos();
+                    factor[i * n + i] = if i == n / 2 { pivot } else { 0.5 + i as Real * 0.2 };
+                    for k in 0..i {
+                        factor[i * n + k] = ((i * 7 + k * 3) as Real).sin() * 0.03;
+                    }
+                }
+                let expected = back_sub_packed(&factor, &forward_sub_packed(&factor, &rhs, n), n);
+                let actual = solve_joint_block(&factor, &rhs, n);
+                for (&a, &b) in actual[..n].iter().zip(&expected) {
+                    assert!(a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                        "n={n}, pivot={pivot}: {a} != {b}");
+                }
+                assert!(actual[n..].iter().all(|&x| x == 0.0));
+            }
+        }
+    }
 
     #[test]
     fn unit_inverse_diagonals_match_full_forward_substitution() {
