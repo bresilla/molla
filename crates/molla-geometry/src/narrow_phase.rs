@@ -879,14 +879,14 @@ fn emit_face_manifold(
             let d = -signed;
             // Contact point: midway between the incident point and its
             // projection on the reference face.
-            let mid = p - ref_n * (0.5 * d);
+            let mid = p + ref_n * (0.5 * d);
             candidates.push((mid, d));
         }
     }
 
     if candidates.is_empty() {
         // Fallback to the SAT-reported depth at the incident face centre.
-        let mid = inc_face_centre - ref_n * (0.5 * depth);
+        let mid = inc_face_centre + ref_n * (0.5 * depth);
         candidates.push((mid, depth));
     }
 
@@ -2367,6 +2367,83 @@ mod tests {
             }
         }
         assert!(overlaps > 100 && separated > 100);
+    }
+
+    #[test]
+    fn box_face_contacts_are_midpoints_of_surface_witnesses() {
+        for rotation in [
+            Quat::IDENTITY,
+            Quat::from_rotation_z(0.43) * Quat::from_rotation_x(-0.27),
+        ] {
+            for shift in [Vec3::ZERO, Vec3::new(300.0, -40.0, 20.0)] {
+                for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                    for sign in [-1.0, 1.0] {
+                        let normal = rotation * axis * sign;
+                        let a = Transform {
+                            position: shift,
+                            rotation,
+                        };
+                        let b = Transform {
+                            position: shift + normal * 1.9,
+                            rotation,
+                        };
+                        for (first, second, direction) in [(&a, &b, normal), (&b, &a, -normal)] {
+                            let mut contacts = Vec::new();
+                            box_box_sat(first, Vec3::ONE, second, Vec3::ONE, 0, 1, &mut contacts);
+                            assert_eq!(contacts.len(), 4);
+                            for contact in contacts {
+                                assert!((contact.depth - 0.1).abs() < 1e-9);
+                                assert!((contact.normal - direction).length() < 1e-9);
+                                let midpoint_distance = (contact.point - shift).dot(normal);
+                                assert!(
+                                    (midpoint_distance - 0.95).abs() < 1e-9,
+                                    "midpoint={midpoint_distance}"
+                                );
+                                let witness_a =
+                                    contact.point + contact.normal * (0.5 * contact.depth);
+                                let witness_b =
+                                    contact.point - contact.normal * (0.5 * contact.depth);
+                                assert!(
+                                    ((witness_a - first.position).dot(direction) - 1.0).abs()
+                                        < 1e-9
+                                );
+                                assert!(
+                                    ((witness_b - second.position).dot(-direction) - 1.0).abs()
+                                        < 1e-9
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tilted_box_ground_contacts_reconstruct_the_reference_plane() {
+        let half = Vec3::ONE;
+        let pose = Transform {
+            position: Vec3::new(0.0, 0.9, 0.0),
+            rotation: Quat::from_rotation_z(0.1),
+        };
+        let floor = Transform::from_translation(Vec3::new(0.0, -0.02, 0.0));
+        let floor_half = Vec3::new(4.0, 0.02, 4.0);
+        for reversed in [false, true] {
+            let mut contacts = Vec::new();
+            if reversed {
+                box_box_sat(&floor, floor_half, &pose, half, 0, 1, &mut contacts);
+            } else {
+                box_box_sat(&pose, half, &floor, floor_half, 0, 1, &mut contacts);
+            }
+            assert_eq!(contacts.len(), 2);
+            for contact in contacts {
+                let on_floor = contact.point + Vec3::Y * (contact.depth * 0.5);
+                let on_box = contact.point - Vec3::Y * (contact.depth * 0.5);
+                assert!(on_floor.y.abs() < 1e-12);
+                let local = pose.rotation.inverse() * (on_box - pose.position);
+                assert!((local.abs() - half).length() < 1e-12);
+            }
+        }
     }
 
     #[test]
