@@ -7789,6 +7789,147 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   in the isolated Gearbox worktree; original Gearbox/shared assets unchanged.
 - Engram APIs remain unavailable.
 
+### Imported Kubota pressure topology checkpoint
+
+#### Goal
+- Extend FULL_COMPACT.md lifecycle evidence from independent wheel pressures to
+  preservation through unrelated runtime topology edits, including transitions.
+
+#### Instructions
+- Headless only. No automatic GUI relaunch/closure or original Gearbox/assets edits.
+
+#### Discoveries
+- Earlier live configuration work verified paused Kubota save/reload, but the
+  mid-transition reload/resume and unrelated topology acceptance remained open.
+  The imported fixture supports deterministic snapshots of every machine body
+  plus wheel loads, slips, pressures and geometry.
+
+#### Accomplished
+- Added a real-Kubota paired oracle: identical independently pressured fixtures,
+  with fixed/dynamic remote prop body+collider insertion/removal in only one.
+  Compare complete machine snapshot bits and per-wheel telemetry each tick while
+  parked, driving/turning and changing two wheel pressures. Immediate mutations
+  must preserve machine state; final applied pressures must reach separate targets.
+- First focused test **6468** failed at the immediate post-insert snapshot.
+  Diagnosed all 32 differences: eight derived contact/geometry fields per tyre,
+  not body poses/velocities or applied/target pressure. `WheelForces::samples`
+  deliberately returns no old contact samples after any scene-stamp change;
+  backend readout then reports zero load/slip/deflection and unloaded radius.
+- Refined immediate mutation assertion to exact body/pressure persistent state;
+  complete per-step state+force/geometry comparisons remain bitwise. This separates
+  intended contact-cache invalidation from actual mechanical state loss. Paused
+  visual readout discontinuity remains a separate open issue, not silently fixed.
+  Corrected oracle **78036** also completed with a failure. Immediate persistent
+  state checks now pass, and full-state bit comparisons pass through fixed-body
+  insertion at step 60 and removal at 120. At step 300, insertion of a remote
+  dynamic body while driving causes the first post-step difference: chassis X
+  0.054627320565865965 versus control 0.054647187287021406 (~19.9 micrometres).
+  This is not merely a paused visual readout mismatch. No assertion was relaxed
+  for the post-step physical difference. Both processes are terminal; no live jobs.
+- Source trace: `WheelForces::samples` suppresses every old sample when the global
+  scene stamp changes; backend `wheel_force_output` then exposes zero grip/load
+  and default undeformed geometry although per-wheel pressures and body state
+  remain intact. `controller/traction.rs` directly forwards this zero grip;
+  `controller.rs` lines around 1987–2002 use it to choose drive torque. This is
+  the leading cause of the one-frame drive-response change; not fixed yet.
+- Current production core/backend source remains unchanged. The reproduction is
+  test-only and uncommitted in the isolated worktree at HEAD 9a7884e. Core HEAD
+  38b3121 has only this handoff modified, plus the untouched untracked plan.
+
+#### Next Steps
+- Fix unrelated-edit readout invalidation without reviving stale samples after
+  wheel/heading teleport, ground geometry/material/enable changes, joint removal,
+  failed steps or removed bodies. Existing core wheel-force and isolated
+  wheel_readout_tests explicitly cover stale-load clearing and must still pass.
+- Existing per-collider stamps are available; body activation stamps include a
+  global edit version, so they cannot distinguish unrelated changes. A selective
+  dependency witness or a validated readout-refresh design needs careful scope;
+  no production design has been chosen or implemented yet.
+- Re-run the paired imported oracle, then ordinary/integration/core regression
+  lanes. Do not call this a passing lifecycle gate while the test fails.
+- This backend mutation oracle is not full UI/CLI save/reload or hitch acceptance.
+
+#### Relevant Files
+- Isolated `bin/gearbox/src/controller/benchmark.rs`, new
+  `benchmark/pressure_lifecycle.rs`, `target/perf/kubota-pressure-topology.log`,
+  `kubota-pressure-topology-persistent.log`; extracted before/actual JSON arrays.
+- Core `crates/molla-solvers/src/wheel_forces.rs` (`samples`, `publish`, `prepare`),
+  `crates/molla-sim/src/runtime.rs` (SceneStamp/collider_stamp/edit/rebuild), core
+  `tests/wheel_forces.rs`; isolated `physics/molla/wheel.rs`,
+  `physics/molla/wheel_readout_tests.rs`, `controller/traction.rs`, `controller.rs`.
+- Engram APIs unavailable. Previous goal turn made progress via committed Oxbo
+  pressure regression and completed ordinary/imported validation.
+
+### Selective tyre readout invalidation checkpoint
+
+#### Goal
+- Fix the reproduced unrelated-prop drive discontinuity without retaining stale
+  tyre loads after edits to the machine or its registered terrain.
+
+#### Instructions
+- Continue headlessly; the user confirmed closing the latest preview. Do not
+  relaunch or close a GUI automatically. Original Gearbox and assets stay untouched.
+
+#### Discoveries
+- The global scene-stamp invalidation was causal: preserving readout only across
+  unrelated structural edits makes the complete 960-tick paired Kubota oracle pass.
+- Body activation versions are still global on edits and remain unchanged by this
+  fix. Readout validity needs a separate structural dependency identity.
+
+#### Accomplished
+- Added body-component structural stamps, propagated through both old and new
+  joint graphs on successful rebuilds. Body descriptors, collider identity/mass,
+  joint descriptors/settings/axes/softness and loop membership participate.
+  Rejected edits leave stamps untouched; disconnected props retain existing stamps.
+- Added an explicit state-edit identity for pose/velocity edits and mutable state
+  access. Normal solver commits retain it. Readout witnesses include wheel/heading
+  components, every registered ground collider and any ground-parent component.
+- Normal readout uses the existing scene-stamp fast path plus state-edit identity;
+  a changed scene requires matching dependency stamps. Dependency lists are rebuilt
+  only when scene identity or wheel registration/configuration revision changes.
+- Initial focused core lane passed 33 existing tests. The initial new regression
+  lane passed 557 sim/solver tests (9 ignored), including five new readout tests.
+- Initial imported Kubota reproduction now passes all 960 ticks bit-for-bit and
+  reaches four distinct final pressures. Strengthened the immediate mutation checks
+  back to the complete snapshot, including tyre load/shape readout, not just body
+  poses and applied pressure.
+- Final cached implementation validation completed successfully:
+  - Session **14411**: **560 sim/solver tests passed**, 9 ignored across 101 test
+    binaries, including three new runtime stamp tests; GPU all-targets check passed.
+  - Session **70764**: 111 ordinary tests passed (20 ignored), strengthened Kubota
+    paired oracle passed, all four imported Oxbo tests passed. Cache change occurred
+    between earlier phases and the final Oxbo build, so ordinary/Kubota were rerun.
+  - Session **71487**: final ordinary **111 passed**, strengthened Kubota **1 passed**.
+    Immediate prop edits now preserve every snapshot bit, including derived tyre
+    loads/geometry, and all 960 post-step snapshots/pressure telemetry match.
+  - Session **52949**: native `oslo make build-release-profile` passed, 39.15s.
+    No GUI was launched or closed. This build result is not visual acceptance.
+  - Focused new-file rustfmt checks and both worktree diff checks passed.
+- Core implementation/tests committed **3246e43** (`fix(tyres): preserve readout
+  across prop edits`); isolated imported regression committed **70fcbc0**
+  (`test(tyres): cover imported topology edits`). Both unsigned, title-only.
+- All owned sessions are terminal. Observed unrelated external Oslo/Cargo activity
+  was not stopped or modified. No new timing/performance comparison was claimed.
+
+#### Next Steps
+- This is unrelated-prop lifecycle coverage, not full multi-machine spawn/despawn,
+  UI/CLI hitch, mid-transition save/reload or native visual acceptance. Adding or
+  removing registered wheel elements still invalidates the entire sample collection;
+  preservation of other machines' readouts remains to be tested and addressed.
+- Continue the full plan with these wider lifecycle cases and remaining physical,
+  calibrated tyre/terrain, joint/GPU and performance gates; goal remains active.
+
+#### Relevant Files
+- Core `crates/molla-sim/src/{builder.rs,runtime.rs,runtime/readout.rs}`,
+  `crates/molla-sim/tests/runtime_readout.rs`,
+  `crates/molla-solvers/src/wheel_forces{.rs,/readout.rs}`,
+  `crates/molla-solvers/tests/wheel_forces{.rs,/readout.rs}`.
+- Isolated `bin/gearbox/src/controller/benchmark{.rs,/pressure_lifecycle.rs}`.
+- Core logs `target/perf/tyre-readout-structure-{initial,core,final-core}.log`;
+  isolated logs `kubota-pressure-topology-structure.log` and
+  `tyre-readout-structure-{integration,final-integration,native}.log`.
+  Engram APIs are unavailable; this checkpoint provides the session handoff.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
