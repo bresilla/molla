@@ -250,6 +250,52 @@ impl RigidWorld {
         Ok(())
     }
 
+    /// Built-in dependencies from active joints and the latest valid contact/tyre samples.
+    pub fn islands(&self) -> Result<crate::rigid_islands::RigidIslands> {
+        let scene = &self.scene;
+        let mut connections = Vec::new();
+        let mut handles = vec![None; scene.model().body_count];
+        for (body, desc) in scene.bodies() {
+            let index = scene
+                .body_index(body)
+                .ok_or_else(|| Error::Solver("missing island body index".into()))?;
+            handles[index.index()] = Some(body);
+            if desc.enabled
+                && desc.kind == molla_sim::runtime::BodyKind::Dynamic
+                && let Some(wheel) = self.wheels.descriptor(body)
+                && scene
+                    .body(wheel.heading_body)
+                    .is_some_and(|body| body.enabled)
+                && scene.joint_index(wheel.spin_joint).is_some()
+            {
+                connections.push([Some(body), Some(wheel.heading_body)]);
+            }
+        }
+        if self.contact_revision == Some(scene.stamp()) {
+            for reading in self.solver.contact_forces() {
+                if reading.penetration < 0.0
+                    || reading.colliders.iter().flatten().any(|&shape| {
+                        scene
+                            .collider_handle(shape)
+                            .and_then(|id| scene.collider(id))
+                            .is_none_or(|desc| !desc.enabled || desc.sensor)
+                    })
+                {
+                    continue;
+                }
+                connections.push(reading.bodies.map(|body| {
+                    body.and_then(|id| handles.get(id.index()).copied().flatten())
+                }));
+            }
+        }
+        for sample in self.wheels.samples(scene) {
+            if let Some(ground) = scene.collider(sample.ground) {
+                connections.push([Some(sample.wheel), ground.parent]);
+            }
+        }
+        crate::rigid_islands::RigidIslands::build(scene, connections)
+    }
+
     /// All substep samples grouped by stable collider pair; sum impulses, not instantaneous forces.
     pub fn contact_pairs(&self) -> Vec<ContactPair> {
         if self.contact_revision != Some(self.scene.stamp()) {

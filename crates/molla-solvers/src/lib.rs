@@ -35,6 +35,7 @@ pub mod mpm_oracle;
 pub mod penalty_contact;
 pub mod pressure_tire;
 pub mod rigid_impulse;
+pub mod rigid_islands;
 pub mod rigid_world;
 pub mod rnea;
 pub mod semi_implicit;
