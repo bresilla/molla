@@ -200,18 +200,34 @@ impl RigidWorld {
 
     /// Wake dynamic dependents of a dynamic body or an immovable boundary.
     pub fn wake_body(&mut self, body: BodyHandle) -> Result<()> {
+        self.wake_body_with_strength(body, true)
+    }
+
+    /// Wake dependents; strong wakes restart quiet time, weak wakes retain sleep eligibility.
+    pub fn wake_body_with_strength(&mut self, body: BodyHandle, strong: bool) -> Result<()> {
         let graph = self.islands()?;
-        let affected = graph.affected_bodies(&[body])?;
-        self.settling.reset_bodies(&affected);
-        self.settling.reset_bodies(&[body]);
-        let watched: Vec<_> = self
-            .sleeping
-            .groups
-            .values()
-            .filter(|group| group.watched.contains_key(&body))
-            .map(|group| group.bodies[0])
-            .collect();
-        for body in affected.into_iter().chain(watched) {
+        let mut affected = graph.affected_bodies(&[body])?;
+        affected.extend(
+            self.sleeping
+                .groups
+                .values()
+                .filter(|group| group.watched.contains_key(&body))
+                .flat_map(|group| group.bodies.iter().copied()),
+        );
+        if strong {
+            self.settling.reset_bodies(&affected);
+            self.settling.reset_bodies(&[body]);
+        } else {
+            for island in graph.groups() {
+                if island.bodies.iter().any(|body| affected.contains(body))
+                    && island.bodies.iter().all(|&body| self.is_sleeping(body))
+                {
+                    self.settling
+                        .retain_sleep_eligibility(&self.scene, &self.wheels, island);
+                }
+            }
+        }
+        for body in affected {
             self.sleeping.wake(body);
         }
         Ok(())

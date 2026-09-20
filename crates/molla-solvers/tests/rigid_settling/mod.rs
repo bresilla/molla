@@ -1,6 +1,8 @@
 use super::*;
 use molla_solvers::rigid_world::SleepSettings;
 
+mod wake;
+
 fn configured() -> (RigidWorld, BodyHandle, BodyHandle) {
     let (mut world, a, b) = two();
     world.scene.set_gravity(Vec3::ZERO).unwrap();

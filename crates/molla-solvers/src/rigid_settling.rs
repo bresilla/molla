@@ -50,6 +50,37 @@ impl Settling {
             .retain(|_, window| !bodies.iter().any(|body| window.watched.contains_key(body)));
     }
 
+    pub(super) fn retain_sleep_eligibility(
+        &mut self,
+        scene: &RigidScene,
+        wheels: &WheelForces,
+        island: &RigidIsland,
+    ) {
+        let Some(settings) = self.settings else {
+            return;
+        };
+        let watched = island
+            .bodies
+            .iter()
+            .chain(&island.boundaries)
+            .map(|&body| {
+                (
+                    body,
+                    scene.activation_stamp(body).expect("wake island body"),
+                )
+            })
+            .collect();
+        self.windows.insert(
+            island.bodies[0],
+            QuietWindow {
+                island: island.clone(),
+                elapsed: settings.quiet_time,
+                watched,
+                wheels: wheels.activation_stamp(),
+            },
+        );
+    }
+
     pub(super) fn changed_inputs(
         &self,
         scene: &RigidScene,
