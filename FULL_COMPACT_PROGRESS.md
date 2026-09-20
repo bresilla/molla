@@ -1949,6 +1949,74 @@ and its live acceptance scenes. This is a checkpoint, not a completion report.
 - `/tmp/molla-gram-stages.json`, `/tmp/molla-gram-stages-summary.txt`,
   `/tmp/molla-gram-live.log`, `/tmp/molla-gram-drive.log` — live evidence.
 
+### Selected-machine command ownership checkpoint (2026-09-20)
+
+#### Goal
+
+- Resolve the live straight-drive stop before accepting physics optimizations.
+
+#### Instructions
+
+- Original Gearbox remains untouched; all controller changes are isolated.
+- Keep UI/gamepad control available, but selection alone must not own driving.
+
+#### Discoveries
+
+- Isolated keyboard routing unconditionally sent zero `UiDrive` commands for
+  a focused selected machine, even with no WASD key held. `apply_ui_drive`
+  applies those after bus input, overriding a continuing CLI drive command.
+- Two headless Bevy regression tests reproduced this before the fix: incoming
+  `(2, 0.4)` commands became `(0, 0)` on idle selection and after key release.
+- A separate mid-drive tyre edit was refused because its CLI process tried
+  to claim the session already held by `machine move`. `--take` would interrupt
+  that driving session and is not a valid concurrent-edit acceptance solution.
+
+#### Accomplished
+
+- Keyboard ownership now starts only with a held driving key. Key release,
+  focus loss and leaving a keyboard-owned selection send one stop then yield.
+  A gamepad takeover clears keyboard ownership; idle selection does not
+  overwrite slider or remote commands. Opposing held keys still explicitly
+  command zero. Six headless tests cover these cases.
+- Both isolated backend selections pass 84 binary tests, one ignored each.
+  Native `oslo make build` passes. Before-fix tests failed as expected.
+- Live selected Kubota completed a 30-second straight CLI drive, with steady
+  2 m/s samples throughout, no reported physics quarantine/nonfinite error,
+  and four applied pressures at 1.8 bar. API selection readback and an inspected
+  screenshot confirm the machine was selected and playing. Physics timings
+  still approximately 1.43–1.51 ms/step; under-1-ms acceptance remains open.
+- A selected-machine low-pressure turn also maintained approximately 2.02 m/s
+  and 0.25 rad/s yaw. All tyres were at 0.5 bar before that run. The attempted
+  4-bar mid-drive command was refused, so no transition acceptance is claimed.
+- Stopped the isolated test instance by its exact name after collection.
+
+#### Next Steps
+
+- Support an explicit borrowed active drive session for tyre commands without
+  stealing/releasing it; verify same-identity ownership, failures, and live
+  pressure readback while `machine move` continues. Current CLI entry is
+  `crates/gearbox-cli/src/cli/machine.rs::set_tyre_pressure`.
+- Inspect the existing protocol rather than assuming session authentication:
+  `gearbox-api/src/machine.rs` checks command session IDs; holder strings alone
+  must not be described as transport-authenticated per-command ownership.
+- Build a controlled imported-machine benchmark/headless acceptance path.
+  Physics reading now uses `usd_bevy::route::physics` components and Gearbox's
+  `physics/attach.rs`; the old `physics/reader/read.rs` no longer exists.
+- Continue performance, fleet/sleeping, lifecycle and all remaining plan gates.
+
+#### Relevant Files
+
+- Isolated `bin/gearbox/src/viewer/drive/keyboard.rs` — routing fix and tests.
+- `/tmp/gearbox-keyboard-before.log`, `/tmp/gearbox-keyboard-{molla,rapier}-tests.log`,
+  `/tmp/gearbox-keyboard-build.log` — regression/build evidence.
+- `/tmp/molla-control-check.log`, `/tmp/molla-control-drive.log`,
+  `/tmp/molla-control-selected-state.json`, `/tmp/molla-control-selected.png` —
+  selected live driving evidence.
+- `/tmp/molla-control-low-state.json`, `/tmp/molla-control-pressure-drive.log`,
+  `/tmp/molla-control-transition-start.json` — 0.5-bar turning evidence.
+  Files named `/tmp/molla-control-high-state.json` and `-high.png` were captured
+  after the refused high-pressure request and do not prove 4-bar operation.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
