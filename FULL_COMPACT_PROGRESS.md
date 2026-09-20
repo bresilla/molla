@@ -3817,6 +3817,84 @@ closure responses, without changing physics equations or numerical thresholds.
 - `/tmp/molla-gram-batch-{trace.json,profile.tsv,profile.log}` — candidate
   profiling and warm-state verification.
 
+## Rigid island dependency checkpoint (2026-09-20)
+
+### Goal
+
+Start full-plan sleeping/islands with deterministic dynamic-body connectivity
+and wake dependencies, before integrating actual dormant solver execution.
+
+### Instructions
+
+- Preserve original Gearbox, assets and unrelated processes. No owned viewers
+  are launched. Engram tools remain unavailable; this is the session handoff.
+- The previous turn was progress: batched whitening is committed and validated.
+
+### Discoveries
+
+- Solver ownership is a whole Featherstone articulation. Dynamic branches of
+  one fixed-root tree remain grouped conservatively; separate articulations
+  must not merge merely because they contact the same fixed/kinematic body.
+- Active loop joints and physical contacts connect dynamic groups. Immovable
+  endpoints are separate wake dependencies: editing the ground can affect both
+  nearby groups without waking one machine merely because another wakes.
+- Tyres bypass rigid ground contacts. Their ground samples and heading-body
+  dependencies must participate separately; removed wheel/heading references
+  must not poison queries before the next wheel `prepare` call.
+- Island snapshots expose stable body handles and transient articulation
+  indices. They do not update themselves after scene edits or steps. Future
+  activation must use freshly detected contacts before each substep, not just
+  the latest-step diagnostic snapshot returned by `RigidWorld::islands()`.
+
+### Accomplished
+
+- Added `RigidIslands::build` for whole-articulation groups, active loop joints
+  and supplied body-force/contact links. Disabled endpoints are excluded;
+  unknown handles are rejected. Ordering is deterministic under reversed or
+  duplicate edges. Input scenes are not mutated.
+- Added dynamic-body ownership and reverse boundary ownership for affected-body
+  expansion without scanning every island on each wake request.
+- Added on-demand `RigidWorld::islands()` using valid nonsensor contact samples,
+  active wheel heading references and published tyre ground samples. Stale
+  samples after scene edits or failed steps do not supply contact links.
+- Eight new focused tests pass: tree/loop activation, removal/reindexing,
+  fixed/kinematic dependencies, fixed-root ownership, deterministic links,
+  filtered/sensor contacts, stale samples, tyre-only support and stale heading
+  cleanup. Reverse boundary ownership is covered by the final full regression.
+- Final CPU solver lane: **398 passed, seven ignored**, across 90 test binaries.
+  Ordinary Molla and Rapier binary lanes each pass **87 tests, eight ignored**.
+  The final imported-machine suite passes **all seven tests**. Those imported
+  timings are not paired performance evidence and no speedup is claimed here.
+- Final focused rerun passes all eight tests; formatting checks pass and all
+  owned build/test handles are terminal.
+- No stepping path calls the new query automatically. This is dependency
+  infrastructure, NOT implemented sleeping or a performance improvement.
+  Backend `sleep`/`wake_up` remain no-ops and reporting remains truthful.
+
+### Next Steps
+
+1. Add actual per-body activation state and whole-island solver skipping.
+   Connect it to fresh substep contacts and motion/force/control/pressure events before
+   changing the backend's sleeping readout or honoring start-asleep requests.
+2. Parentless ground has no body handle; collider/terrain edits require explicit
+   dependency/invalidation handling. Arbitrary external force callbacks need
+   supplied coupling edges or conservative activation. Raw state/control mutation
+   paths also need a defined wake contract. Do not infer these from this graph.
+3. Validate parked/mixed-active fleets, collision wakes, runtime merge/split,
+   pressure changes, kinematic contacts and lifecycle preservation, then continue
+   the remaining full-plan calibration/GPU/rendered/soil acceptance work.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/rigid_islands.rs` — dependency graph and wake expansion.
+- `crates/molla-solvers/src/rigid_world.rs` — on-demand built-in island snapshot.
+- `crates/molla-solvers/src/lib.rs` — public solver-layer module export.
+- `crates/molla-solvers/tests/rigid_islands.rs` — dependency/lifecycle/contact tests.
+- `/tmp/molla-rigid-islands-{build,focused}.log` — initial focused checks.
+- `/tmp/molla-rigid-islands-{full,final}.log` — final CPU and focused checks.
+- `/tmp/molla-rigid-islands-{molla-binary,rapier-binary,imported}.log` — ordinary
+  backend and imported-machine regressions.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
