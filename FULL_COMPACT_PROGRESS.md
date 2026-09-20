@@ -6752,6 +6752,150 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Next source investigation: `articulated_response.rs`, `joint_mass.rs`,
   `featherstone.rs` force callback/step and post-FK effective-drive inertia path.
 
+### Shared substep mass-matrix candidate checkpoint
+
+- Previous goal turn was progress: sparse projection was measured, rejected,
+  restored exactly and documented in `5f9a3df`; accepted baseline unchanged.
+- Candidate retains matrices already computed for tyre/loop articulated response
+  and moves them into the CPU motor/constraint mass cache within the same substep.
+  It shares matrices, NOT factors: the existing drive and singular-response
+  factorization thresholds/fallbacks remain unchanged.
+- `MassSeed` borrows the immutable Model, snapshots joint coordinates/body poses
+  only when a response matrix exists, and transfers owned matrix allocations.
+  The post-FK cache accepts them only for pointer-identical Model and bit-identical
+  finite coordinates/poses. Changed mimic coordinates, FK poses, signed zero,
+  non-finite states or different model fall back to fresh matrices. The Model
+  borrow prevents mutation/pointer reuse during the seed lifetime.
+- Ordinary CPU RigidWorld stepping publishes the seed after built-in/custom
+  forces. Public Featherstone force callbacks retain their existing signature
+  through a wrapper; raw stepping, GPU and selected-island stepping do not seed
+  mass caches. No claim of a new GPU or sleeping-path optimization.
+- Initial all-targets check passed (96300 terminal); removed its newly reported
+  unused-mut warning. Focused seed/allocation and full-step oracle tests passed
+  (59204 terminal). Extended the oracle afterward with an explicitly locked
+  hinge and zero mass-matrix diagonal to exercise singular response, alongside
+  mimic/no-mimic, zero/nonzero tip inertia, two articulations and two substeps.
+- Full solver tests passed 500 (nine ignored, 92 binaries), followed by 111
+  isolated ordinary tests (18 ignored); handle 28875 terminal. This includes
+  the final explicitly singular/mimic oracle. Source remains uncommitted.
+- First scalar/grid A/B/B/A completed (77251 terminal) without overlapping owned
+  builds/tests; all logged state lines match exactly across before/after runs.
+  Full terrain, model and controller settings unchanged. Mean of four driving
+  medians: scalar 0.831122250 -> 0.793371750 ms (4.54% reduction), field-grid
+  0.850799750 -> 0.825107000 ms (3.02%). Rapier controls: scalar 0.291135500 ->
+  0.297510000, grid 0.297713750 -> 0.291354000. Host load is variable; repeat
+  timing is still needed before accepting this optimization. Candidate driving
+  mean p95 1.1355655 / 1.33171025 ms, so neither tail nor parity target is met.
+- Oxbo/imported/native-viewer/Molla-only trace/GPU-check sequence passed (41868
+  terminal): three Oxbo tests, ten imported tests, native profile viewer build,
+  one full-meadow trace fixture and GPU-feature all-targets solver compilation.
+  No new GPU runtime parity or rendered acceptance claim.
+- Trace confirms 960 mass_matrix spans versus 1920 in the accepted baseline
+  over 120 frames at eight substeps: one matrix build rather than two per
+  substep. Trace before/after logged state lines also compare exactly. Use this
+  for work-count evidence, not traced-duration speedup claims.
+- Second scalar/grid A/B/B/A passed (16785 terminal); all owned validation/builds
+  finished before it started. Every repeat state log matches the corresponding
+  first-batch baseline exactly. Engram APIs unavailable; memory registry has no
+  hits for JointMass, ArticulatedResponse or shared mass-matrix cache.
+- Source: `articulated_response.rs`, `joint_mass.rs`, `joint_mass/seed.rs`,
+  `featherstone.rs`, `featherstone_mass_seed.rs`, `featherstone_activation.rs`,
+  `rigid_world.rs`. Core logs `target/perf/shared-mass-{check,focused,solvers}.log`;
+  isolated `target/perf/shared-mass-molla.log`. Accepted baseline remains
+  `target/perf/gearbox-heightfield-tile-after`, SHA256 40ae96b5... .
+- Candidate retained executable `target/perf/gearbox-shared-mass-after`, SHA256
+  fbc35a267e7f252f719516bcc95f7a16f07c397250717dd9d0b1638d05fa0803.
+  First batch evidence: isolated `shared-mass-{scalar,grid}-
+  {before-a,after-a,after-b,before-b}{.log,-load.txt}`, `shared-mass-summary.txt`,
+  `shared-mass-binaries.sha256` under target/perf.
+
+### Session summary: guarded substep mass reuse accepted
+
+#### Goal
+
+- Implement the full FULL_COMPACT.md objective, continuing the user-prioritized
+  full-machine Molla performance work without reducing physical fidelity.
+
+#### Instructions
+
+- Only Molla and its isolated Gearbox integration are writable; original Gearbox
+  and shared machines/assets remain untouched. Rapier stays a timing control.
+- No new environment files or asset edits, no pushes/merges, no owned GUI launch.
+  Make/Oslo native gates and unsigned title-only Conventional Commits retained.
+- Engram APIs absent; this project handoff substitutes for unavailable session
+  persistence. No writes to the persistent memory folder.
+
+#### Discoveries
+
+- Exact-configuration guards allow ordinary CPU RigidWorld external-response
+  matrices to be reused after FK without changing physics results. Model lifetime
+  protection plus finite bitwise coordinate/pose checks avoid stale matrices.
+- Trace confirms halved mass-matrix construction count; this is not a claim of
+  halving total physics cost. Factorization and solver work still dominate.
+- Mimic/FK changes must invalidate reuse. Velocity/force changes do not invalidate
+  configuration-dependent matrices. Factors remain independently recomputed so
+  drive-inertia and singular-response thresholds are unchanged.
+
+#### Accomplished
+
+- Accepted core source in `6b55781` (`perf(solver): reuse substep mass matrices`).
+  Public force callback API preserved, selected-island/raw/GPU paths unseeded.
+- Validation: 500 solver tests (nine ignored), 111 ordinary integration tests
+  (18 ignored), three Oxbo tests, ten tractor/trailer imported tests, one Molla
+  full-meadow trace, GPU-feature all-targets compile, native profile-viewer build,
+  new-file rustfmt check and diff check all passed. GPU runtime/visual acceptance
+  was not rerun or claimed. All owned handles are terminal, including 50088.
+- Two complete scalar/grid A/B/B/A batches passed with enabled pressure model,
+  unchanged 120 Hz/settings and full 801x801 terrain. Logged machine states match
+  exactly across all before/after/repeat runs and the Molla trace.
+- Repeat means of four medians, milliseconds per step:
+
+  | mode / backend | before parked | after parked | before driving | after driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | scalar Molla | 0.812377750 | 0.792201750 | 0.820156250 | 0.799049250 |
+  | scalar control | 0.280930500 | 0.283043500 | 0.288321750 | 0.291852750 |
+  | field-grid Molla | 0.830178000 | 0.815205750 | 0.837955750 | 0.821221250 |
+  | field-grid control | 0.280747250 | 0.282360500 | 0.291022750 | 0.290445750 |
+
+- Repeat driving improvement: 2.57% scalar / 2.00% grid. Both independent
+  batches improve both modes (first 4.54% / 3.02%). Retain this modest gain,
+  not a broader claim of performance parity. Repeat candidate/control ratios
+  remain about 2.74x / 2.83x; mean driving p95 1.2471815 / 1.2622905 ms.
+- No owned builds/tests overlapped timing. Original user viewer remained active;
+  per-run snapshots did not show competing builds in the repeat. These remain
+  loaded-workstation physics timings, not rendering/frame-time acceptance.
+- Accepted next retained baseline is `gearbox-shared-mass-after`; the rejected
+  sparse-projection artifact remains only diagnostic and must not be launched.
+
+#### Next Steps
+
+- Investigate remaining factorization/Featherstone costs. Reusing a normalized
+  Cholesky factor may be possible only after proving identical dimensions,
+  normalization and pivot/fallback eligibility; do not silently change the
+  spectral/locked-axis/drive-inertia semantics. This is an investigation, not a
+  decided implementation or proven additional gain.
+- Keep complete FULL_COMPACT.md scope: performance tails/parity and rendered
+  acceptance, tyre lifecycle/calibration/replay, general joints/singular bodies,
+  GPU limitations and soil coupling still require work. Goal active, not complete.
+
+#### Relevant Files
+
+- `crates/molla-solvers/src/joint_mass/seed.rs` — model-borrowed exact-state seed
+  and reuse/invalidation tests. `joint_mass.rs` imports only matching matrices.
+- `articulated_response.rs` — retains/exports already computed mass matrices.
+- `featherstone.rs`, `rigid_world.rs` — private seeded substep handoff.
+- `featherstone_activation.rs` — explicit unseeded selected-island calls.
+- `featherstone_mass_seed.rs` — fresh/cached full-step oracle, including mimic,
+  locked-axis singular matrices, multiple articulations and substeps.
+- Core `target/perf/shared-mass-{check,focused,solvers,gpu-check,format}.log`.
+- Isolated `target/perf/shared-mass-{molla,oxbo,imported,viewer,trace}.log`,
+  `shared-mass-trace.json`, `shared-mass-span-counts.txt`.
+- Isolated `target/perf/shared-mass-repeat-{scalar,grid}-
+  {before-a,after-a,after-b,before-b}{.log,-load.txt}` and
+  `shared-mass-repeat-summary.txt`, plus first-batch artifacts listed above.
+- Accepted `target/perf/gearbox-shared-mass-after`, SHA256
+  fbc35a267e7f252f719516bcc95f7a16f07c397250717dd9d0b1638d05fa0803.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
