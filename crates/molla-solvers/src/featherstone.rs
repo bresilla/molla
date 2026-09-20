@@ -1816,6 +1816,8 @@ fn effective_drive_inertias(
         }
         let mut factor = matrix.clone();
         let factored = dense_chol(&mut factor, n).is_ok();
+        let finite_factor = factored && factor.iter().all(|v| v.is_finite());
+        let mut workspace = vec![0.0; n];
         let mut singular = None;
         for dof in 0..count {
             if !requested(first + dof) {
@@ -1825,18 +1827,22 @@ fn effective_drive_inertias(
             let Some(index) = active.iter().position(|&i| i == dof) else {
                 continue;
             };
-            let mut unit = vec![0.0; n];
-            unit[index] = 1.0;
-            let inverse_diagonal = if factored {
-                forward_sub_packed(&factor, &unit, n)
-                    .iter()
-                    .map(|v| v * v)
-                    .sum()
+            let inverse_diagonal = if finite_factor {
+                unit_inverse_diagonal(&factor, n, index, &mut workspace)
             } else {
-                if singular.is_none() {
-                    singular = Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
+                workspace.fill(0.0);
+                workspace[index] = 1.0;
+                if factored {
+                    forward_sub_packed(&factor, &workspace, n)
+                        .iter()
+                        .map(|v| v * v)
+                        .sum()
+                } else {
+                    if singular.is_none() {
+                        singular = Some(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
+                    }
+                    singular.as_ref().unwrap().solve(&workspace)?[index]
                 }
-                singular.as_ref().unwrap().solve(&unit)?[index]
             };
             if inverse_diagonal > 0.0 {
                 result[first + dof] = scale / inverse_diagonal;
@@ -1847,6 +1853,27 @@ fn effective_drive_inertias(
         }
     }
     Ok(result)
+}
+
+/// Diagonal of `(L Lᵀ)⁻¹` from the nonzero suffix of `L⁻¹ e_index`, for finite L.
+/// Uses the packed forward solve's `1e-30` pivot cutoff.
+fn unit_inverse_diagonal(l: &[Real], n: usize, index: usize, work: &mut [Real]) -> Real {
+    for i in index..n {
+        let mut value = if i == index { 1.0 } else { 0.0 };
+        for (&coefficient, &previous) in l[i * n + index..i * n + i]
+            .iter()
+            .zip(&work[index..i])
+        {
+            value -= coefficient * previous;
+        }
+        let diagonal = l[i * n + i];
+        work[i] = if diagonal.abs() < 1e-30 {
+            0.0
+        } else {
+            value / diagonal
+        };
+    }
+    work[index..n].iter().map(|v| v * v).sum()
 }
 
 fn sv_component(s: SpatialVector, c: usize) -> Real {
@@ -2035,6 +2062,36 @@ mod tests {
     use crate::sim::{BodyParams, ModelBuilder};
 
     #[test]
+    fn unit_inverse_diagonals_match_full_forward_substitution() {
+        for n in [1, 2, 6, 39, 78] {
+            for pivot in [0.0, 1e-31, 1e-25, 0.7] {
+                let mut factor = vec![0.0; n * n];
+                for i in 0..n {
+                    factor[i * n + i] = if i == n / 2 {
+                        pivot
+                    } else {
+                        0.5 + i as Real * 0.02
+                    };
+                    for k in 0..i {
+                        factor[i * n + k] = ((i * 7 + k * 3) as Real).sin() * 0.03;
+                    }
+                }
+                let mut work = vec![Real::NAN; n];
+                for index in (0..n).rev() {
+                    let mut unit = vec![0.0; n];
+                    unit[index] = 1.0;
+                    let expected: Real = forward_sub_packed(&factor, &unit, n)
+                        .iter()
+                        .map(|v| v * v)
+                        .sum();
+                    let actual = unit_inverse_diagonal(&factor, n, index, &mut work);
+                    assert_eq!(actual, expected, "n={n}, index={index}, pivot={pivot}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn drive_inertias_match_full_inverse_diagonals() {
         for scale in [1e-60, 1.0, 1e60] {
             for massless_tip in [false, true] {
@@ -2093,6 +2150,47 @@ mod tests {
                     vec![1.0; 5]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn drive_inertias_preserve_singular_response_fallback() {
+        let mut builder = ModelBuilder::new();
+        let body = builder.add_body(
+            BodyParams::new().with_spatial_inertia(SpatialInertia {
+                mass: 1.0,
+                com: V3::ZERO,
+                inertia: Mat3::from_cols(V3::new(1.0, 1.0, 0.0), V3::new(1.0, 1.0, 0.0), V3::ZERO),
+            }),
+        );
+        builder
+            .add_joint_free(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
+            .unwrap();
+        let model = builder.build().unwrap();
+        let mut state = model.state().unwrap();
+        eval_fk(&model, &mut state).unwrap();
+        let mut control = model.control();
+        control
+            .joint_target_mode
+            .host_mut()
+            .unwrap()
+            .fill(JointTargetMode::Velocity as u32);
+        let mut cache = crate::joint_mass::JointMass::new(&model, &state);
+        let actual = effective_drive_inertias(&model, &control, true, &mut cache).unwrap();
+        let mass = crate::mass_matrix(&model, &state, 0).unwrap();
+        let mut compact = vec![0.0; 25];
+        for i in 0..5 {
+            for j in 0..5 {
+                compact[i * 5 + j] = mass[i * 6 + j];
+            }
+        }
+        assert!(dense_chol(&mut compact, 5).is_err());
+        for index in 0..6 {
+            let mut unit = vec![0.0; 6];
+            unit[index] = 1.0;
+            let inverse = crate::rigid_impulse::solve_mass(&mass, &unit, 6).unwrap()[index];
+            let expected = if inverse > 0.0 { inverse.recip() } else { 0.0 };
+            assert!((actual[index] - expected).abs() < 1e-12);
         }
     }
 
