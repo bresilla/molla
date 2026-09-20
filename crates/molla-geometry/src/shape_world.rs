@@ -8,15 +8,20 @@ use std::borrow::Cow;
 
 use crate::aabb::Aabb;
 
+#[path = "heightfield_bounds.rs"]
+mod heightfield_bounds;
+use heightfield_bounds::HeightfieldTiles;
+
 #[cfg(test)]
 #[path = "scene_bounds_tests.rs"]
 mod scene_bounds_tests;
 
-/// Heightfield bounds retained until the compiled scene identity changes.
+/// Heightfield bounds and tile maxima retained until the compiled scene identity changes.
 #[derive(Default)]
 pub struct SceneShapeBounds {
     stamp: Option<SceneStamp>,
     heightfields: Vec<(Vec3, Vec3)>,
+    tiles: Vec<Option<HeightfieldTiles>>,
 }
 
 impl SceneShapeBounds {
@@ -30,10 +35,12 @@ impl SceneShapeBounds {
                 .map(|field| field.local_aabb())
                 .collect();
             self.stamp = Some(stamp);
+            self.tiles = scene.model().heightfields.iter().map(HeightfieldTiles::new).collect();
         }
         PreparedShapeBounds {
             model: scene.model(),
             heightfields: Cow::Borrowed(&self.heightfields),
+            tiles: Cow::Borrowed(&self.tiles),
         }
     }
 }
@@ -42,6 +49,7 @@ impl SceneShapeBounds {
 pub struct PreparedShapeBounds<'a> {
     model: &'a Model,
     heightfields: Cow<'a, [(Vec3, Vec3)]>,
+    tiles: Cow<'a, [Option<HeightfieldTiles>]>,
 }
 
 impl<'a> PreparedShapeBounds<'a> {
@@ -55,11 +63,32 @@ impl<'a> PreparedShapeBounds<'a> {
                     .map(|field| field.local_aabb())
                     .collect(),
             ),
+            tiles: Cow::Owned(model.heightfields.iter().map(HeightfieldTiles::new).collect()),
         }
     }
 
     pub fn model(&self) -> &'a Model {
         self.model
+    }
+
+    pub(crate) fn heightfield_may_contact(&self, state: &State, field_shape: usize, other: Aabb) -> bool {
+        let ShapeGeometry::Heightfield { field_id } = self.model.shape_geometry[field_shape] else {
+            return true;
+        };
+        let Some(Some(tiles)) = self.tiles.get(field_id as usize) else {
+            return true;
+        };
+        let Some(field) = self.model.heightfields.get(field_id as usize) else {
+            return true;
+        };
+        if !other.min.is_finite() || !other.max.is_finite() {
+            return true;
+        }
+        let pose = shape_world_transform(self.model, state, field_shape).inverse();
+        let padding = 1e-9 * (1.0 + other.min.abs().max_element()
+            .max(other.max.abs().max_element()).max(pose.position.abs().max_element()));
+        let local = transformed_bounds(other.min, other.max, pose, padding);
+        tiles.may_contact(field, local)
     }
 
     pub fn world_aabb(&self, state: &State, shape: usize, margin: Real) -> Aabb {

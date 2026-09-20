@@ -92,6 +92,10 @@ pub struct BroadPhase {
 }
 
 impl BroadPhase {
+    pub(crate) fn shape_aabb(&self, shape: usize) -> Aabb {
+        self.aabbs[shape]
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()

@@ -13,6 +13,7 @@ fn scene_steps_reuse_storage_and_distinct_scenes_refresh_bounds() {
     let mut cache = SceneShapeBounds::default();
     cache.prepare(&scene);
     let allocation = cache.heightfields.as_ptr();
+    let tile_allocation = cache.tiles.as_ptr();
     let stamp = scene.stamp();
     for _ in 0..20 {
         scene
@@ -21,6 +22,8 @@ fn scene_steps_reuse_storage_and_distinct_scenes_refresh_bounds() {
         let bounds = cache.prepare(&scene);
         assert!(matches!(bounds.heightfields, Cow::Borrowed(_)));
         assert_eq!(bounds.heightfields.as_ptr(), allocation);
+        assert!(matches!(bounds.tiles, Cow::Borrowed(_)));
+        assert_eq!(bounds.tiles.as_ptr(), tile_allocation);
         assert_eq!(scene.stamp(), stamp);
     }
     let mut other = RigidScene::new().unwrap();

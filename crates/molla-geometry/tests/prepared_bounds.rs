@@ -4,6 +4,9 @@ use molla_geometry::{CollisionPipeline, NarrowPhaseBackend};
 use molla_math::{Quat, Transform, Vec3};
 use molla_sim::{BodyParams, Contacts, Heightfield, Model, ModelBuilder, State};
 
+#[path = "prepared_bounds/tiles.rs"]
+mod tiles;
+
 fn fixture(side: usize) -> (Model, State) {
     let mut builder = ModelBuilder::new();
     let terrain = builder.add_heightfield(

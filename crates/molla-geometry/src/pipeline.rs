@@ -467,6 +467,7 @@ impl CollisionPipeline {
             return Ok(0);
         }
 
+        let broad_span = tracing::debug_span!("collision_broad_phase").entered();
         // Pick GPU LBVH broad phase if enabled, otherwise CPU SAP.
         #[cfg(feature = "gpu")]
         let used_gpu_broad = self.run_gpu_broad_phase(model, state)?;
@@ -481,6 +482,8 @@ impl CollisionPipeline {
                     .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
             }
         }
+        drop(broad_span);
+        let filter_span = tracing::debug_span!("collision_pair_filter").entered();
         let bodies = model.shape_body.host()?;
         let body_id = |s: u32| {
             let b = bodies[s as usize];
@@ -496,6 +499,7 @@ impl CollisionPipeline {
                     .contains(&(p.a.min(p.b), p.a.max(p.b)))
         });
         self.last_broad_phase_pairs = self.pair_buf.len();
+        drop(filter_span);
 
         // Full GPU narrow phase takes precedence over the prefilter.
         #[cfg(feature = "gpu")]
@@ -539,9 +543,16 @@ impl CollisionPipeline {
                 continue;
             }
             let pair = self.pair_buf[i];
+            if !used_gpu_broad && bounds.is_some_and(|bounds| {
+                !bounds.heightfield_may_contact(state, pair.a as usize, self.broad.shape_aabb(pair.b as usize))
+                    || !bounds.heightfield_may_contact(state, pair.b as usize, self.broad.shape_aabb(pair.a as usize))
+            }) {
+                continue;
+            }
             self.dispatch_pair_cpu(model, state, pair);
         }
 
+        let _span = tracing::debug_span!("collision_contact_output").entered();
         push_contacts_into(contacts, &self.manifolds, model)?;
         Ok(self.manifolds.len())
     }
@@ -554,6 +565,7 @@ impl CollisionPipeline {
     /// [`pair_contact`] dispatch. Bumps `last_cpu_np_calls` on each
     /// invocation that touches the CPU GJK + EPA path.
     fn dispatch_pair_cpu(&mut self, model: &Model, state: &State, pair: ShapePair) {
+        let _span = tracing::debug_span!("collision_pair", a = pair.a, b = pair.b).entered();
         let geom_a = model.shape_geometry[pair.a as usize];
         let geom_b = model.shape_geometry[pair.b as usize];
         let want_mpr = self.narrow_phase_backend == NarrowPhaseBackend::MprCpu
