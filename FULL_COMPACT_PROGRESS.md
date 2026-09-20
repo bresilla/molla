@@ -2538,6 +2538,101 @@ force integration, lifecycle regressions and imported-machine evidence.
 - All assistant sessions for this checkpoint are terminal (including 88576,
   43170, 88091 and 86281); no assistant viewer/build/test is left running.
 
+## Imported Kubota parking-hold checkpoint
+
+### Goal
+
+Continue the complete plan by fixing the remaining rolling/parking failure
+after retained tyre shear. Previous goal turn was progress: live shear landed
+and reduced slip, but the unchanged 60-second slope gate still failed.
+
+### Instructions
+
+- All runtime changes are confined to isolated Gearbox-physics; original
+  Gearbox, shared dependencies and assets remain untouched. Molla's solver
+  source is unchanged this turn. No body freezing or direct velocity override.
+- Engram tools remain unavailable; this tracked checkpoint is the handoff.
+
+### Discoveries
+
+- A bounded captured-angle motor hold stops the residual rolling that the
+  velocity-only parking motor allowed. Combined with Molla's retained tyre
+  shear, all four real Kubota slope/pressure combinations now pass the exact
+  existing gate, with no tolerance, ground friction or solver-step changes.
+- Capturing the actual motor coordinate avoids winding a multi-turn wheel
+  toward an arbitrary zero or a principal quaternion angle. Molla hard
+  revolute/prismatic coordinates can be read directly; unsupported coordinates
+  must report `None`, not a fabricated zero. Soft angular coordinates and
+  non-Molla coordinate support remain outside this new read capability.
+- This is a torque-limited compliant angular hold with bounded reference error,
+  not a calibrated dry-friction brake model. Broader braking/pressure/terrain
+  calibration and lifecycle combinations remain full-plan work.
+
+### Accomplished
+
+- Isolated commit `176e945 fix(physics): hold parked wheel angles` adds the
+  optional `Joint::motor_position` read capability and Molla's unwrapped hard
+  joint implementation. Rapier returns the default `None` and retains its
+  original velocity-brake behavior.
+- New `controller/parking.rs` captures wheel angle on parking engagement,
+  writes force-based position feedback using the existing torque budget, and
+  drops the reference when driving resumes. Normal velocity motor application
+  clears position stiffness before the parking override. Removed/unsupported
+  joints, nonpositive/nonfinite budgets and unavailable coordinates lose holds.
+- Reference stiffness is torque/0.01 rad and damping torque/(0.25 rad/s).
+  Target error is bounded to 0.25 rad under sustained slip; jumps over pi
+  between observations rebase the reference. Gains are uncalibrated reference
+  controller parameters, not measured tractor brake stiffness.
+- Three focused tests cover multi-turn capture, load resistance, drive release
+  and re-engagement, zero budget, joint removal, overload slip with bounded
+  stored error, and Rapier fallback. Overload still accelerates the wheel;
+  it is not secretly locked. Wrong-axis coordinate queries return `None`.
+- Two independent imported slope runs passed after 10 s settling and 60 s
+  measurement at 120 Hz. Max drift / max speed:
+  - -10 degrees, 0.5 bar: 0.000000393 m / 0.000002449 m/s.
+  - -10 degrees, 4.0 bar: 0.000000489 m / 0.000002610 m/s.
+  - +10 degrees, 0.5 bar: 0.000000207 m / 0.000001517 m/s.
+  - +10 degrees, 4.0 bar: 0.000000250 m / 0.000001653 m/s.
+  The original <10 mm drift / <1 mm/s gates, all-body finite/enabled and no
+  quarantine checks, applied pressure, ground normals and support loads pass.
+- The final imported release command passes all three tests: pressure/driving
+  benchmark, exact deterministic replay and slope parking. Ordinary release
+  binary suites pass 87 tests each with explicit Molla and Rapier selection;
+  four external-asset tests remain ignored only in the ordinary suites.
+- Native `GEARBOX_PHYSICS=molla nix develop --impure -c oslo make build`
+  passes. The debug viewer is rebuilt, not launched. Existing Bevy deprecated
+  API warning remains; no complete workspace/release acceptance is claimed.
+- Final CPU-step medians were 0.7320–0.7448 ms, p95 0.7643–1.2219 ms, maxima
+  up to 2.3572 ms on this shared host. No assistant build/test overlapped the
+  imported samples. These are headless step timings excluding controllers,
+  not rendered FPS, hard real-time bounds or matched Rapier performance.
+
+### Next Steps
+
+- Continue full-plan acceptance: exact requested straight/0.4-turn track run,
+  five-controller hitch/PTO actuation, real drawbar capture/tow/detach, pressure
+  lifecycle/save-reload and terrain/calibration, sleeping/fleet and GPU work.
+- Add parking lifecycle/reconfiguration and further load/terrain coverage as
+  those scenes are exercised. Current slope evidence is the real Kubota on a
+  firm planar slab; it does not prove all machines, Rapier slope parity,
+  deformable soil or a physically calibrated dry-friction brake.
+- All assistant jobs from this checkpoint are terminal, including final
+  imported session 91686 and regression/native-build session 80552. The full
+  goal remains active and incomplete; no blocker or pause is requested.
+
+### Relevant Files
+
+- `/home/bresilla/data/code/robolibs/gearbox-physics/bin/gearbox/src/controller/parking.rs`
+  — captured-angle hold and three focused tests.
+- Isolated `controller.rs` — per-runtime cache and Ackermann parking override.
+- Isolated `physics/{backend.rs,molla/joint.rs}` — optional motor-coordinate
+  read, with Molla hard-joint support; `physics/mod.rs` exports Rapier for tests.
+- Isolated `docs/MOLLA_BACKEND.md` — historical failures and current passing
+  gate, controller limits, commands and measurement scope.
+- `/tmp/gearbox-parking-{slope,imported,unit}.log` — imported and focused evidence.
+- `/tmp/gearbox-parking-{molla,rapier}-regression.log` — 87 passed each.
+- `/tmp/gearbox-parking-build.log` — successful native viewer build.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
