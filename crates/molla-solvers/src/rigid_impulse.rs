@@ -320,10 +320,14 @@ impl MassFactor {
         let _span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
         if let MassDecomposition::Cholesky(factor) = &self.decomposition {
             let whiten_span = tracing::debug_span!("loop_mass_whiten").entered();
-            let whitened: Vec<_> = projected
-                .iter()
-                .map(|row| forward_sub(factor, row, self.n))
-                .collect::<Result<_>>()?;
+            let whitened = if self.n <= 6 || count < 4 {
+                projected
+                    .iter()
+                    .map(|row| forward_sub(factor, row, self.n))
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                whiten_rows(factor, projected, self.n)?
+            };
             drop(whiten_span);
             let _gram_span = tracing::debug_span!("loop_mass_gram").entered();
             for row in 0..count {
@@ -391,6 +395,44 @@ impl MassFactor {
         }
     }
 }
+
+fn whiten_rows(factor: &[Real], rows: &[Vec<Real>], n: usize) -> Result<Vec<Vec<Real>>> {
+    const LANES: usize = 4;
+    let full_count = rows.len() / LANES * LANES;
+    let mut result = Vec::with_capacity(rows.len());
+    if full_count != 0 {
+        result.extend((0..full_count).map(|_| vec![0.0; n]));
+        let mut work = vec![[0.0; LANES]; n];
+        for start in (0..full_count).step_by(LANES) {
+            for i in 0..n {
+                let mut values: [Real; LANES] = std::array::from_fn(|lane| rows[start + lane][i]);
+                let coefficients = &factor[i * n..(i + 1) * n];
+                for (&coefficient, previous) in coefficients[..i].iter().zip(&work[..i]) {
+                    for lane in 0..LANES {
+                        values[lane] -= coefficient * previous[lane];
+                    }
+                }
+                let diagonal = coefficients[i];
+                if diagonal.abs() < 1e-30 {
+                    return Err(Error::Build(format!("forward_sub: zero diagonal at row {i}")));
+                }
+                for lane in 0..LANES {
+                    values[lane] /= diagonal;
+                    result[start + lane][i] = values[lane];
+                }
+                work[i] = values;
+            }
+        }
+    }
+    for row in &rows[full_count..] {
+        result.push(forward_sub(factor, row, n)?);
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+#[path = "gram_batch_tests.rs"]
+mod gram_batch_tests;
 
 #[cfg(test)]
 mod tests {
