@@ -6167,6 +6167,112 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   `field-friction-load-{before,after}.txt`, `field-friction-timing-binary.sha256`
   — final validation, timings and competing-load evidence.
 
+### Profiling checkpoint before Oxbo asset clarification
+
+- Goal: continue Molla-only performance work without changing solver quality.
+- Added an ignored profile-feature `imported_kubota_meadow_trace` in isolated
+  controller/benchmark/terrain.rs (uncommitted). Uses current full meadow,
+  Molla only, 600 settling + 600 driving warmup, 120 traced steps, real tyre and
+  speed assertions. Handle 9778 terminal: trace test passed; profile build 19.53 s.
+- Current trace inclusive ms/frame: rigid_step 1.308964, external_forces 0.554715,
+  Featherstone substeps 0.471727, collision 0.250936, loop_forces 0.419029,
+  drive_inertias 0.119581, wheel_forces 0.116060. Tracing adds overhead: these
+  are hotspot diagnostics, not replacement acceptance timings. Loop projection,
+  repeated mass construction and ABA remain optimization candidates; no new
+  solver optimization or weakened settings has been applied this turn.
+- Artifacts: isolated target/perf/molla-meadow-current-{trace.json,trace.log,
+  profile.tsv}. No live owned jobs. Next: choose and validate a measured
+  optimization, then commit the trace fixture with its evidence.
+- User asked whether earlier Oxbo fixes changed USD assets. Verified commits
+  b9421af and f10b0b7 modify loader alignment and Molla joint winding only.
+  Prior checkpoints explicitly record shared assets untouched. Machines directory
+  is not a Git repository, so Git cannot independently prove its historical state.
+  No asset writes performed during this work. Engram APIs unavailable.
+
+### Session summary: stack-backed Featherstone joint solves
+
+#### Goal
+
+- Continue FULL_COMPACT.md performance work using the current full meadow,
+  without weakening solver accuracy, tyre resolution or substeps.
+
+#### Instructions
+
+- Only Molla development; Rapier stays a timing control. Original Gearbox,
+  shared assets and user-owned processes remain untouched.
+
+#### Discoveries
+
+- Rigorous multi-DOF ABA allocated heap vectors for blocks bounded by six DOFs,
+  including six separate inertia-response right-hand sides per joint/substep.
+  Fixed-size stack storage removes that overhead without changing arithmetic.
+- Traced phase durations include instrumentation and changing host load. Use
+  uninstrumented matched runs for speed claims, not total traced frame duration.
+
+#### Accomplished
+
+- Core `757896f perf(solver): stack-allocate joint block solves`: stack-backed
+  packed matrices, RHS vectors and triangular substitutions in both rigorous
+  ABA passes. Existing singular fallback, pivot threshold and summation order
+  retained. Large articulation mass solves keep their existing dynamic storage.
+- Added bit-exact reference comparison for widths 0 through 6, regular/negative/
+  tiny/zero pivots, cutoff equality, infinities/NaNs, and poisoned unused lanes.
+- Solver release suite: **495 passed, 9 ignored, 91 binaries**. Isolated Molla:
+  **111 passed, 18 ignored**. Oxbo: **3 passed**. Kubota/Krampe imported gates:
+  **10 passed**. GPU-feature all-targets check passed (compilation, not GPU parity).
+  Native Oslo viewer build passed in 28.39 s; not launched.
+- Isolated `6ae3b7d test(perf): trace Molla on full meadow` adds the Molla-only
+  profile fixture. Final candidate trace passed with matching before/after
+  logged machine state. Profiling is diagnostic, not viewer FPS acceptance.
+- Sequential A/B/B/A for scalar and enabled uniform-map terrain, each execution
+  containing R/M/M/R controls. Full 801x801 meadow, 120 Hz, unchanged settings,
+  600 warmup and 1200 samples per parked/driving phase. Eight runs passed.
+
+  | Mean of four medians, ms/step | Before | Stack blocks |
+  | --- | ---: | ---: |
+  | Scalar Molla parked | 0.980823750 | 0.956727250 |
+  | Scalar Molla driving | 0.994046250 | 0.964394500 |
+  | Scalar Rapier driving control | 0.286014750 | 0.287320500 |
+  | Grid Molla parked | 1.002469250 | 0.990606500 |
+  | Grid Molla driving | 1.007298500 | 0.986846750 |
+  | Grid Rapier driving control | 0.286130750 | 0.285825250 |
+
+- Driving reduction: about **2.98% scalar / 2.03% grid**. Logged Molla pressure,
+  load, deflections, speed and position match exactly between each corresponding
+  before/after run. All eight candidate driving medians were below 1 ms, but
+  tails were not: mean driving p95 1.192419 ms scalar / 1.385355 ms grid.
+  Molla remains about 3.36x / 3.45x the respective Rapier control; not comparable.
+- No owned builds/tests overlapped timings. Process snapshot before timings
+  contained no original viewer; afterwards the user's original debug viewer
+  was running. It was not stopped. No quiet-host/tail guarantee is claimed.
+- All owned handles terminal: 3731 solver, 18221 imported validation, 49798 GPU
+  check/viewer build, 57775 timings, 47064 candidate trace. No owned viewer.
+  Engram APIs unavailable; this checkpoint persists the handoff.
+
+#### Next Steps
+
+- Further reduce actual solver/collision cost using measured phases, preserving
+  exact dynamics where possible. Candidate: avoid root-only articulated-inertia
+  propagation that has no parent, after verifying caches needed by forward solve.
+  This candidate is not implemented or accepted yet.
+- Continue remaining complete-plan requirements: joint/GPU parity, calibrated
+  pressure/surface/footprint physics, lifecycle/UI/rendered acceptance, towing,
+  replay/PTO, USD/flat material publication, Bekker and MPM. Goal remains active.
+
+#### Relevant Files
+
+- Core `crates/molla-solvers/src/featherstone.rs` — bounded stack solves and oracle.
+- Core `target/perf/joint-block-stack-{solvers,gpu-check}.log` — validation.
+- Isolated `bin/gearbox/src/controller/benchmark/terrain.rs` — trace fixture.
+- Isolated `target/perf/joint-block-stack-{molla,oxbo,imported,viewer}.log`.
+- Isolated `target/perf/joint-block-stack-{scalar,grid}-{before-a,after-a,after-b,before-b}.log`,
+  `joint-block-stack-timing-summary.txt`, `joint-block-stack-load-{before,after}.txt`.
+- Isolated retained `target/perf/gearbox-small-block-{before,after}`; SHA256s in
+  `joint-block-stack-binaries.sha256`: before 5927b0f4e04754414d27260f5b4c38305f8292e0edac34442fe7e60aabf52de6,
+  after 5dc39342c53890c07b496931e4025fe17242f023580e4f1e53a4f2dfaca7d192.
+- Isolated `target/perf/joint-block-stack-{trace.json,trace.log,profile.tsv}` —
+  candidate diagnostics, alongside molla-meadow-current-* baseline artifacts.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
