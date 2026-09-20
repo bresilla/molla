@@ -13,6 +13,10 @@ use molla_sim::runtime::{
 };
 use molla_vehicle::{Terrain, TireModel, TireOutput, WheelContact, wheel_ground_wrench};
 
+mod sleeping;
+pub(crate) use sleeping::SleepWheelGeometry;
+use sleeping::query_ground;
+
 #[derive(Clone)]
 pub struct WheelDesc {
     pub body: BodyHandle,
@@ -449,7 +453,7 @@ impl WheelForces {
             shear.clear();
             return Ok(());
         }
-        let Some((top, bottom)) = self.height_range else {
+        let Some(range) = self.height_range else {
             shear.clear();
             return Ok(());
         };
@@ -481,39 +485,20 @@ impl WheelForces {
                 .index();
             let pose = poses[body];
             let hub = pose.transform_point(w.local_hub);
-            let Some(hit) = self.queries.cast_ray_filtered(
+            let Some(hit) = query_ground(
+                &mut self.queries,
                 scene,
-                Vec3::new(hub.x, top + 1.0, hub.z),
-                -Vec3::Y,
-                top - bottom + 2.0,
-                |id| {
-                    self.grounds.contains_key(&id)
-                        && !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent))
-                },
+                &self.grounds,
+                range,
+                hub,
+                |id| !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent)),
             )?
             else {
                 shear.remove(&w.body);
                 continue;
             };
-            let normal = if hit.normal.y < 0.0 {
-                -hit.normal
-            } else {
-                hit.normal
-            };
-            if normal.y < 1e-6 {
-                shear.remove(&w.body);
-                continue;
-            }
-            let collider = scene
-                .collider(hit.collider)
-                .ok_or_else(|| invalid("missing terrain collider"))?;
-            let local = scene
-                .collider_world_pose(hit.collider)?
-                .inverse_transform_point(hit.point);
-            let friction = self.grounds[&hit.collider]
-                .as_ref()
-                .and_then(|g| g.sample(local))
-                .unwrap_or(collider.friction);
+            let normal = hit.normal;
+            let friction = hit.friction;
             let terrain = Surface {
                 point: hit.point,
                 normal,

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use molla_core::{Error, Result};
 use molla_math::{Mat3, Real, SpatialVector};
-use molla_sim::runtime::{BodyActivationStamp, BodyHandle, BodyKind, ColliderHandle, RigidScene};
+use molla_sim::runtime::{
+    BodyActivationStamp, BodyHandle, BodyKind, ColliderHandle, RigidScene, SceneStamp,
+};
 use molla_sim::{Contacts, ShapeFlags, State};
 
 use super::RigidWorld;
@@ -15,6 +17,8 @@ struct SleepingGroup {
     watched: BTreeMap<BodyHandle, BodyActivationStamp>,
     wheels: (std::sync::Arc<()>, u64),
     wheel_samples: Vec<WheelSample>,
+    wheel_geometry: std::sync::Arc<crate::wheel_forces::SleepWheelGeometry>,
+    geometry_stamp: SceneStamp,
     contacts: BTreeSet<[ColliderHandle; 2]>,
 }
 
@@ -130,6 +134,15 @@ impl RigidWorld {
             self.sleeping = sleeping;
             return Ok(());
         }
+        let geometries = groups
+            .iter()
+            .map(|(&owner, group)| {
+                Ok((
+                    owner,
+                    std::sync::Arc::new(self.wheels.sleep_geometry(&self.scene, &group.bodies)?),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let mut next = self.scene.state().clone_host()?;
         let model = self.scene.model();
         let starts = model.articulation_start.host()?;
@@ -187,6 +200,8 @@ impl RigidWorld {
                     watched,
                     wheels: self.wheels.activation_stamp(),
                     wheel_samples,
+                    wheel_geometry: geometries[&owner].clone(),
+                    geometry_stamp: self.scene.stamp(),
                     contacts,
                 },
             );
@@ -247,14 +262,47 @@ impl RigidWorld {
         let scene = &self.scene;
         let mut sleeping = self.sleeping.clone();
         sleeping.refresh(scene, &self.wheels);
+        self.pipeline
+            .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
+        let mut wake = Vec::new();
+        for (&owner, group) in &mut sleeping.groups {
+            if group.geometry_stamp != scene.stamp() {
+                let geometry = self.wheels.sleep_geometry(scene, &group.bodies)?;
+                if geometry != *group.wheel_geometry {
+                    if group.wheel_samples.iter().any(|sample| {
+                        excluded(
+                            Some(sample.wheel),
+                            scene.collider(sample.ground).and_then(|c| c.parent),
+                        )
+                    }) {
+                        wake.push(owner);
+                        continue;
+                    }
+                    group.wheel_samples =
+                        self.wheels
+                            .observe_sleeping(scene, &group.bodies, &mut excluded)?;
+                    for sample in &group.wheel_samples {
+                        if let Some(parent) = scene.collider(sample.ground).and_then(|c| c.parent) {
+                            group.watched.insert(
+                                parent,
+                                scene.activation_stamp(parent).expect("terrain parent"),
+                            );
+                        }
+                    }
+                    group.wheel_geometry = std::sync::Arc::new(geometry);
+                }
+                group.geometry_stamp = scene.stamp();
+            }
+        }
+        for owner in wake {
+            sleeping.wake(owner);
+        }
         let held: Vec<_> = sleeping
             .groups
             .values()
             .flat_map(|group| group.wheel_samples.iter().cloned())
             .collect();
         let mut wheel_step = self.wheels.begin_sleeping_step(&held);
-        self.pipeline
-            .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
         let handles = dense_handles(scene)?;
         let mut connections = Vec::new();
         for (body, desc) in scene.bodies() {

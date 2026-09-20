@@ -614,9 +614,23 @@ impl RigidScene {
 
     /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
     pub fn set_body_pose(&mut self, id: BodyHandle, pose: Transform) -> Result<()> {
+        self.set_body_pose_with_wake(id, pose, true)
+    }
+
+    /// Teleport a subtree with optional activation; geometry and query state always update.
+    pub fn set_body_pose_with_wake(
+        &mut self,
+        id: BodyHandle,
+        pose: Transform,
+        wake: bool,
+    ) -> Result<()> {
         validate_pose(pose)?;
         let kind = self.body(id).ok_or_else(|| missing("body"))?.kind;
-        let delta = pose.compose(&self.body_pose(id)?.inverse());
+        let previous = self.body_pose(id)?;
+        if pose == previous {
+            return Ok(());
+        }
+        let delta = pose.compose(&previous.inverse());
         let root = self.body_index(id).ok_or_else(|| missing("body"))?.index();
         let mut moved = BTreeSet::from([root]);
         let parents = self.model().joint_parent.host()?;
@@ -642,7 +656,8 @@ impl RigidScene {
         }
         crate::eval_fk(self.model(), &mut next)?;
         crate::eval_body_velocities(self.model(), &mut next)?;
-        self.commit_body_state(next, &[id])
+        let changed = [id];
+        self.commit_body_state(next, if wake { &changed } else { &[] })
     }
 
     /// Atomically set world poses; unlisted descendants follow their parent.

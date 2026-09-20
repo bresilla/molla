@@ -13,6 +13,9 @@ use molla_vehicle::{RigidTire, TireModel};
 #[path = "wheel_forces/sleep.rs"]
 mod sleep;
 
+#[path = "wheel_forces/pose.rs"]
+mod pose;
+
 fn body(w: &mut RigidWorld, mass: f64) -> BodyHandle {
     w.scene
         .insert_body(BodyDesc {

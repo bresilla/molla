@@ -1,0 +1,170 @@
+use super::*;
+use molla_math::Transform;
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct SleepWheelGeometry {
+    wheels: Vec<(BodyHandle, Transform, Transform)>,
+    grounds: Vec<(ColliderHandle, Transform)>,
+}
+
+pub(super) struct GroundHit {
+    pub collider: ColliderHandle,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub friction: Real,
+}
+
+pub(super) fn query_ground(
+    queries: &mut CpuRaycaster,
+    scene: &RigidScene,
+    grounds: &BTreeMap<ColliderHandle, Option<FrictionGrid>>,
+    (top, bottom): (Real, Real),
+    hub: Vec3,
+    mut include: impl FnMut(ColliderHandle) -> bool,
+) -> Result<Option<GroundHit>> {
+    let Some(hit) = queries.cast_ray_filtered(
+        scene,
+        Vec3::new(hub.x, top + 1.0, hub.z),
+        -Vec3::Y,
+        top - bottom + 2.0,
+        |id| grounds.contains_key(&id) && include(id),
+    )?
+    else {
+        return Ok(None);
+    };
+    let normal = if hit.normal.y < 0.0 {
+        -hit.normal
+    } else {
+        hit.normal
+    };
+    if normal.y < 1e-6 {
+        return Ok(None);
+    }
+    let collider = scene
+        .collider(hit.collider)
+        .ok_or_else(|| invalid("missing terrain collider"))?;
+    let local = scene
+        .collider_world_pose(hit.collider)?
+        .inverse_transform_point(hit.point);
+    let friction = grounds[&hit.collider]
+        .as_ref()
+        .and_then(|g| g.sample(local))
+        .unwrap_or(collider.friction);
+    Ok(Some(GroundHit {
+        collider: hit.collider,
+        point: hit.point,
+        normal,
+        friction,
+    }))
+}
+
+impl WheelForces {
+    pub(crate) fn sleep_geometry(
+        &self,
+        scene: &RigidScene,
+        bodies: &[BodyHandle],
+    ) -> Result<SleepWheelGeometry> {
+        let mut wheels = Vec::new();
+        for w in self
+            .wheels
+            .values()
+            .filter(|w| bodies.contains(&w.body) && active(scene, w))
+        {
+            wheels.push((
+                w.body,
+                scene.body_pose(w.body)?,
+                scene.body_pose(w.heading_body)?,
+            ));
+        }
+        let mut grounds = Vec::new();
+        if !wheels.is_empty() {
+            for &ground in self
+                .grounds
+                .keys()
+                .filter(|&&id| scene.collider(id).is_some())
+            {
+                grounds.push((ground, scene.collider_world_pose(ground)?));
+            }
+        }
+        Ok(SleepWheelGeometry { wheels, grounds })
+    }
+
+    pub(crate) fn observe_sleeping(
+        &mut self,
+        scene: &RigidScene,
+        bodies: &[BodyHandle],
+        mut excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+    ) -> Result<Vec<WheelSample>> {
+        let mut samples = Vec::new();
+        let Some(range) = self.height_range else {
+            return Ok(samples);
+        };
+        for w in self
+            .wheels
+            .values()
+            .filter(|w| bodies.contains(&w.body) && active(scene, w))
+        {
+            let hub = scene.body_pose(w.body)?.transform_point(w.local_hub);
+            let Some(hit) =
+                query_ground(&mut self.queries, scene, &self.grounds, range, hub, |id| {
+                    !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent))
+                })?
+            else {
+                continue;
+            };
+            let contact = WheelContact {
+                hub_pos: hub.to_array(),
+                hub_vel: [0.0; 3],
+                heading: (scene.body_pose(w.heading_body)?.rotation * w.local_heading.normalize())
+                    .to_array(),
+                spin: 0.0,
+                radius: w.radius,
+                normal_stiffness: w.normal_stiffness,
+                normal_damping: w.normal_damping,
+            };
+            let (output, pressure) = if let Some(state) = self.pressure_states.get(&w.body) {
+                let (output, pressure) = crate::pressure_tire::evaluate_with_shear(
+                    state,
+                    &contact,
+                    hit.normal,
+                    (hub - hit.point).dot(hit.normal),
+                    hit.friction,
+                    None,
+                )?;
+                (output, Some(pressure))
+            } else {
+                (
+                    wheel_ground_wrench(
+                        &contact,
+                        &Surface {
+                            point: hit.point,
+                            normal: hit.normal,
+                            friction: hit.friction,
+                        },
+                        w.tire.as_ref(),
+                    ),
+                    None,
+                )
+            };
+            if output.force.iter().any(|v| !v.is_finite())
+                || !output.fz.is_finite()
+                || !output.slip_ratio.is_finite()
+                || !output.slip_angle.is_finite()
+                || !output.aligning_moment.is_finite()
+            {
+                return Err(Error::Solver("non-finite sleeping tyre observation".into()));
+            }
+            samples.push(WheelSample {
+                wheel: w.body,
+                ground: hit.collider,
+                ground_point: hit.point,
+                dt: 0.0,
+                normal: hit.normal,
+                friction: hit.friction,
+                output,
+                pressure,
+            });
+        }
+        Ok(samples)
+    }
+}
