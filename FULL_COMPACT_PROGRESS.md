@@ -3541,6 +3541,93 @@ full replacement plan, solver equations or numerical acceptance thresholds.
 - `/tmp/molla-islands-imported.log` — final imported-machine checks.
 - `/tmp/molla-islands-{molla,rapier}-binary.log` — ordinary backend checks.
 
+## Rejected compact closure response checkpoint (2026-09-20)
+
+### Goal
+
+Continue `FULL_COMPACT.md` by reducing unrelated closure-row work, without
+changing the global bounded constraint solve or numerical rank thresholds.
+
+### Instructions
+
+- The user confirmed interacting with the old `molla-gram-perf` window. Its
+  stopping is not unattended-failure evidence; the later closure is unexplained.
+- Keep original Gearbox untouched. Only Molla and the isolated physics worktree
+  are in scope; no viewer was launched or stopped in this checkpoint.
+- Engram tools remain unavailable. This tracked checkpoint preserves the handoff.
+
+### Discoveries
+
+- Each articulation previously whitened every global closure row, including
+  rows whose endpoints belong exclusively to other articulations. Topological
+  row selection removes this work without a floating-point sparsity threshold.
+- The first compact implementation reduced the 32-group synthetic response
+  calculation from **4.657699 to 0.132739 ms** (97.15%), but the entire closure
+  force pass only fell from **33.8073275 to 28.935823 ms** (14.41%). The unchanged
+  global bounded solve dominates. This is not whole-physics or imported-fleet
+  timing. One group regressed about 5%, approximately 0.00037 ms per force pass.
+- The initial real Kubota A/B/B/A regressed **0.902220375 to 0.924508125 ms**
+  (2.47%); Rapier controls stayed **0.225081625 to 0.225192 ms**. A fast path
+  limited to models with one dynamic articulation still regressed 1.585%.
+  Neither result supports a single-tractor performance improvement.
+- The final candidate retained dense projection whenever all closure rows
+  participated in the current articulation. Its real Kubota A/B/B/A still
+  regressed **0.908614750 to 0.927983750 ms** (2.132%), while Rapier controls
+  moved **0.225140500 to 0.227534750 ms** (1.063% slower). Relative to Rapier,
+  this did not recover the original single-machine performance either.
+- Rejected all three production variants rather than claiming the synthetic
+  scaling win as a real-machine improvement. The original solver source is
+  restored exactly to HEAD. The experimental patch includes the reusable test
+  fixture, so future work can reproduce this attempt without reimplementing it.
+
+### Accomplished
+
+- Extracted closure response construction and added exact comparisons against
+  an independent dense reference. Cases include independent groups, bridging
+  constraints, fixed/world endpoints, unrelated dynamic bodies, zero DOFs,
+  singular inertia, and mass/inertia scales from 1e-9 through 1e9.
+- Added a release-only ignored synthetic scaling fixture for 1/4/16/32 groups,
+  separately measuring response construction and the whole closure force pass.
+- Initial candidate: CPU **390 passed, seven ignored** across 89 binaries;
+  imported machines **seven passed**. Single-dynamic-articulation revision:
+  CPU **390 passed, seven ignored**; ordinary Molla/Rapier lanes **87 passed,
+  eight ignored each**. Logged real-machine states match before/after exactly.
+- Final dense-participation candidate: CPU **390 passed, seven ignored**, and
+  ordinary Molla/Rapier lanes **87 passed, eight ignored each**. All four paired
+  timing tests passed; logged mechanical states matched exactly. No owned
+  build/test overlapped any A/B/B/A timing; unrelated user processes were left
+  alone. These are not quiet-host latency acceptance results.
+- Removed the rejected production change and its test-only module from the
+  checkout, saving both in `/tmp/molla-compact-closures-rejected.patch`.
+  The saved patch passes `git apply --check`. Restored-source CPU checks pass
+  **388 tests, six ignored** across 89 binaries; ordinary Molla/Rapier lanes
+  each pass **87 tests, eight ignored**; the final imported-machine suite
+  passes **all seven tests**. All owned build/test handles are terminal.
+  No runtime improvement ships from this checkpoint, and the full objective
+  remains unfinished. Single-machine CPU step time is still about 4x Rapier.
+
+### Next Steps
+
+1. Rework row selection/allocation and evaluate response extraction/code
+   generation before retrying compact response work;
+   preserve the dense single-machine path and require paired timing evidence.
+2. Investigate disconnected components of the global bounded solve. Per-block
+   normalization/rank cutoffs can change tiny or singular block behavior; retain
+   global numerical semantics and test actual cross-articulation couplings.
+3. Continue original full-plan imported-fleet, sleeping, lifecycle, tyre/terrain
+   calibration, generic/GPU joint and rendered acceptance work.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/loop_forces.rs` — restored unchanged to HEAD.
+- `/tmp/molla-compact-closures-rejected.patch` — rejected production candidate,
+  exact dense-reference comparisons and ignored scaling fixture.
+- `/tmp/molla-closures-abba-{1..4}.log` — initial synthetic scaling measurements.
+- `/tmp/molla-closures-machine-abba-{1..4}.log` — initial Kubota regression.
+- `/tmp/molla-closures-fastpath-abba-{1..4}.log` — one-articulation fast path.
+- `/tmp/molla-closures-densepath-*` — revised dense-participation validation.
+- `/tmp/molla-closures-restored-*` — restored-source validation.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
