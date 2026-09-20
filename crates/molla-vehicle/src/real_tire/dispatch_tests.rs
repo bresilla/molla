@@ -7,7 +7,7 @@ macro_rules! same_bits {
     };
 }
 
-fn compare_contact(a: &RealTireContact, b: &RealTireContact) {
+pub(super) fn compare_contact(a: &RealTireContact, b: &RealTireContact) {
     assert_eq!(a.in_contact, b.in_contact);
     assert_eq!(a.contact_count, b.contact_count);
     assert_eq!(a.sliding_count, b.sliding_count);
@@ -56,7 +56,7 @@ fn compare_contact(a: &RealTireContact, b: &RealTireContact) {
     }
 }
 
-fn compare_history(a: &TireBrushState, b: &TireBrushState) {
+pub(super) fn compare_history(a: &TireBrushState, b: &TireBrushState) {
     assert_eq!(a.geometry, b.geometry);
     assert_eq!(a.profile.len(), b.profile.len());
     for (a, b) in a.profile.iter().zip(b.profile.iter()) {
@@ -71,7 +71,7 @@ fn compare_history(a: &TireBrushState, b: &TireBrushState) {
     }
 }
 
-struct MixedTerrain;
+pub(super) struct MixedTerrain;
 
 impl Terrain for MixedTerrain {
     fn height(&self, x: f64, z: f64) -> f64 {

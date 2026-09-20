@@ -5,6 +5,12 @@
 use super::super::{TireBrushState, TreadBristle, TreadBristleParams};
 use crate::terrain::Terrain;
 
+mod brush_factors;
+use brush_factors::BrushFactors;
+
+#[cfg(test)]
+mod brush_factor_tests;
+
 use super::super::internal::{
     add, cross, dot, finite_nonnegative, finite_or, finite_positive_or, finite_vec3, normalize,
     scale, sub,
@@ -246,6 +252,17 @@ pub fn evaluate_planar_brush_tire_persistent<T: Terrain + ?Sized>(
     history: &mut TireBrushState,
     dt: f64,
 ) -> Result<RealTireContact, &'static str> {
+    evaluate_persistent_inner::<T, true>(params, state, terrain, material, history, dt)
+}
+
+fn evaluate_persistent_inner<T: Terrain + ?Sized, const CACHED: bool>(
+    params: &RealTireParams,
+    state: &RealWheelState,
+    terrain: &T,
+    material: &SurfaceMaterial,
+    history: &mut TireBrushState,
+    dt: f64,
+) -> Result<RealTireContact, &'static str> {
     if !dt.is_finite() || dt <= 0.0 {
         return Err("invalid brush timestep");
     }
@@ -259,7 +276,7 @@ pub fn evaluate_planar_brush_tire_persistent<T: Terrain + ?Sized>(
         next.cells
             .resize(sanitized.segments * sanitized.width_segments, TreadBristle::default());
     }
-    let output = evaluate_brush_impl(
+    let output = evaluate_brush_inner::<T, CACHED>(
         params,
         state,
         terrain,
@@ -285,6 +302,17 @@ fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize
 }
 
 fn evaluate_brush_impl<T: Terrain + ?Sized>(
+    params: &RealTireParams,
+    state: &RealWheelState,
+    terrain: &T,
+    material: &SurfaceMaterial,
+    orientation: &RealWheelOrientation,
+    persistent: Option<(&mut TireBrushState, f64)>,
+) -> Result<RealTireContact, &'static str> {
+    evaluate_brush_inner::<T, true>(params, state, terrain, material, orientation, persistent)
+}
+
+fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
     params: &RealTireParams,
     state: &RealWheelState,
     terrain: &T,
@@ -355,6 +383,7 @@ fn evaluate_brush_impl<T: Terrain + ?Sized>(
         params.radius,
     );
 
+    let mut factors = BrushFactors::<CACHED>::new(params.pressure_pa);
     let mut cells = Vec::new();
     let mut normal_load = 0.0;
     let mut fx = 0.0;
@@ -410,10 +439,10 @@ fn evaluate_brush_impl<T: Terrain + ?Sized>(
         .clamp(0.35, 1.65);
         let fn_i = normal_per_area_per_m * penetration * cell_area * camber_pressure_bias;
         let normal_pressure = fn_i / cell_area.max(1.0e-9);
-        let (load_mu_factor, load_stiffness_factor) = brush_load_sensitivity(normal_pressure);
+        let (load_mu_factor, load_stiffness_factor) = factors.load(normal_pressure);
         let shear_k_eff = params.tread_shear_stiffness
             * load_stiffness_factor
-            * brush_pressure_stiffness_factor(params.pressure_pa);
+            * factors.inflation();
         let profile = patch_gain * brush_bristle_profile(local_x, leading_x, patch_extent, arc_len);
         let bristle_disp_long = slip_ratio_cell * params.radius * profile;
         let bristle_disp_lat = lateral_slip_speed_cell / denom_cell * params.radius * profile;
