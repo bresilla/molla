@@ -124,7 +124,7 @@ pub fn apply_impulse(
     Ok(())
 }
 
-fn solve_constrained_mass(
+pub(crate) fn solve_constrained_mass(
     matrix: &[Real],
     rhs: &[Real],
     n: usize,

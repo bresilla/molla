@@ -51,6 +51,9 @@ mod activation;
 mod scratch;
 use scratch::JointScratch;
 
+#[path = "featherstone_singular_root.rs"]
+mod singular_root;
+
 /// Maximum DOFs in any single joint — Free/Distance/D6 hit 6.
 pub(crate) const MAX_JOINT_DOFS: usize = 6;
 
@@ -936,6 +939,7 @@ fn cpu_step_inner<const LOCAL: bool>(
         u_tau_per_dof.reset(j_begin, j_end);
         l_chol_per_joint.reset(j_begin, j_end);
         a_body.reset(j_begin, j_end);
+        let mut root_applied_tau = [0.0; MAX_JOINT_DOFS];
 
         // ── Pass 1: forward kinematics + body kinematics ─────────────────
         for j in j_begin..j_end {
@@ -1191,6 +1195,9 @@ fn cpu_step_inner<const LOCAL: bool>(
                         effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),
                     );
                     u_tau_per_dof[j][k] = tau_app - sv_dot(s_k, p_a[j]);
+                    if j == j_begin {
+                        root_applied_tau[k] = tau_app;
+                    }
                 }
 
                 if rigorous_d_solve && n_dof > 1 {
@@ -1452,6 +1459,16 @@ fn cpu_step_inner<const LOCAL: bool>(
             } else {
                 a_body[j] = a_bias;
             }
+        }
+
+        if j_end == j_begin + 1
+            && let Some(acceleration) = singular_root::acceleration(
+                model, state_out, art, j_begin, &root_applied_tau,
+                &body_f_in, &mut joint_mass,
+            )?
+        {
+            let first = joint_dof_offset[j_begin] as usize;
+            q_dd[first..first + acceleration.len()].copy_from_slice(&acceleration);
         }
 
         crate::joint_limits::react_scalar_stops(
