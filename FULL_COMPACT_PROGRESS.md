@@ -2715,6 +2715,87 @@ the slope gate; this turn strengthens the fixture and controller acceptance.
 - `/tmp/gearbox-five-controller-final.log` — strengthened actuator gate passing.
 - `/tmp/gearbox-five-controller-{molla,rapier}-regression.log` — 87 passed each.
 
+## 2026-09-20 — same-scene turns and live field tracks
+
+### Goal
+
+Continue the entire `FULL_COMPACT.md` objective, specifically the straight/
+0.4-rad/s turn and visible track acceptance. Full completion remains unproven.
+The preceding acknowledgement-only turn was no progress; this turn recovered
+the authoritative terminal test log and completed the next safe validation.
+
+### Instructions
+
+- Preserve the original Gearbox checkout and shared renderer/assets; only the
+  isolated integration worktree and this Molla checkpoint were changed.
+- The user interacted with the old `molla-gram-perf` test. Do not classify its
+  stopping/closure as an unattended crash or use it as controlled timing data.
+- Engram tools remain unavailable in the tool registry. This tracked checkpoint
+  is the session-summary fallback, not a claim that memory-tool calls succeeded.
+
+### Discoveries
+
+- Current same-asset Rapier turns about 1.495 rad in four simulated seconds
+  at 2 m/s and +0.4 rad/s, not the historical +0.60 rad stated in the plan.
+  Molla gives 1.461–1.470 rad across 0.5/1.8/4 bar. This discrepancy is reported,
+  not concealed by changing the plan or tuning to its historical number.
+- Imported masses differ by about 2.561 kg (0.052%): 4916.010223 kg Molla vs
+  4913.449268 kg Rapier. The fixture now asserts backend-specific snapshots;
+  the underlying difference still needs an audit, not a mass-equivalence claim.
+- `GEARBOX_TERRAIN=flat` has no field cover/stamping. The initial flat live
+  probe drove correctly but showed no tracks. Meadow enables the existing
+  grass/harvested-wheat renderer, which visibly stamps tracks on both backends.
+- CLI move summaries can lag the final pose. Fresh state subscriptions give
+  better end-state evidence; wall-clock live commands are not deterministic
+  four-simulated-second comparisons. Startup still reports Vulkan loader and
+  Bevy slab allocator diagnostics on both backends.
+
+### Accomplished
+
+- Isolated commit `ba98498 test(physics): verify Kubota turns and tracks`
+  adds the real dual-backend gate and production track-input scheduling.
+- Twelve fresh scenes cover straight and both ±0.4 turns: Rapier plus Molla
+  at three pressures. All five Kubota controllers run. Each step checks finite,
+  enabled bodies/no quarantine; each sampled tick has four valid track inputs.
+  Molla heading and final speed must match the same-scene Rapier reference
+  within 0.1 rad and 0.1 m/s. Straight drift, movement and speed gates also pass.
+- Mean straight footprint lengths decrease 0.60443 → 0.49442 → 0.40880 m
+  across 0.5/1.8/4 bar. This is regression evidence, not physical calibration.
+- Strengthened imported gate passes. Ordinary release suites pass 87 tests
+  each on explicit Molla/Rapier, with six ignored: five imported plus Vulkan.
+- Live CLI turn and straight commands work on both backends; screenshots were
+  visually inspected and show tracks across grass and harvested ground.
+  Molla applied/read back 0.5 bar before the turn and 4 bar before the straight
+  run on all four wheels. No quarantine/non-finite log diagnostics were found.
+  Different trajectories/cameras do not prove calibrated footprint-size parity.
+- All assistant-owned viewers were explicitly stopped: `molla-track-gate`,
+  `molla-field-track-gate`, `rapier-field-track-gate`. Their process handles
+  63793, 6996, 49226 are terminal. Test handles 78953/2619 are also terminal.
+  No production physics/render code changed this turn; no viewer rebuild needed.
+
+### Next Steps
+
+- Real rear-drawbar teleport attach, towing through a turn and detach on both
+  backends, repeating Molla pressure extremes and checking service propagation.
+- Resolve the mass difference; keep historical vs current turn measurements
+  explicit. Extend pressure visual/lifecycle/UI and save/reload acceptance.
+- Continue every remaining runtime/failure, sleep/island/fleet, calibrated
+  grip/braking/coast-down, authored friction, Bekker/MPM, GPU and performance
+  requirement. These live debug runs do not establish Rapier performance parity.
+
+### Relevant Files
+
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — backend-selectable fixture,
+  real track recording, straight/turn/pressure regression gate.
+- Isolated `docs/MOLLA_BACKEND.md` — measurements, reproduction and limitations.
+- `/tmp/gearbox-drive-track-final.log` — passing strengthened imported test.
+- `/tmp/gearbox-drive-track-{molla,rapier}-regression.log` — 87 passed each.
+- `/tmp/molla-track-{before,after}.png` — flat-ground visual probe.
+- `/tmp/molla-field-{before,low-after,high-after}.png` — visible Molla tracks.
+- `/tmp/rapier-field-{before,after,straight}.png` — visible Rapier tracks.
+- `/tmp/{molla-field,rapier-field}-track-gate.log` — live viewer logs;
+  `/tmp/molla-field-{low,high}-state.json` — applied pressure readback.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
