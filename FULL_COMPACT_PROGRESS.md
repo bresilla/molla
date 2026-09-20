@@ -7160,6 +7160,103 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   project handoff records the session findings instead of claiming a memory
   save or session-summary tool call succeeded.
 
+### 2026-09-20 — Reject batched Cholesky column updates
+
+#### Goal
+
+- Continue FULL_COMPACT.md and the Molla performance priority, using the
+  accepted stop-response batching binary as the new baseline. The previous
+  turn was progress: source `6a95c3f` and validation `ba61c2c` remain accepted.
+
+#### Instructions
+
+- Original Gearbox, shared assets and outside processes remain untouched.
+  Rapier is only a control. No owned GUI launch, merges, pushes, new environment
+  files or solver/tyre/terrain-setting reductions. Use Make/Nix, isolated Oslo
+  viewer builds, patch edits and unsigned title-only commits.
+
+#### Discoveries
+
+- The latest accepted trace still spends about 0.048359 ms/frame in the
+  response mass factor. All 960 loop responses have 39 DOFs and 22 rows.
+- A candidate computed four independent below-diagonal Cholesky entries at
+  once for dimensions >=8, preserving each entry's reduction order, pivot
+  checks, scalar tails and untouched upper triangle. Correctness passed, but
+  the factor trace changed only to 0.047878 ms/frame and whole-machine timings
+  did not establish a repeatable gain above host variation.
+- The batching result for joint-stop triangular solves does not imply that
+  batching Cholesky construction is worthwhile. Keep acceptance tied to the
+  whole machine rather than extrapolating a previous optimization's gain.
+
+#### Accomplished
+
+- Expanded bitwise factorization reference tests retained in `6071b5a`
+  (`test(math): expand factorization edge cases`). Added dimensions 4/5/7/8/9/10,
+  scales 1e-60/1e60, more failing-pivot dimensions, and every matrix coefficient
+  replaced in turn with NaN/infinities/signed zero/subnormal values. Tests check
+  success/failure and every output bit, including partial updates on failure.
+- Candidate validation: **806 passed, 11 ignored across 123 binaries** in the
+  math/geometry/solver lane; **111 ordinary integration**, **3 Oxbo**, **10
+  imported tractor/trailer** and the full-meadow profile trace passed. GPU-
+  feature all-targets compile, native profile viewer build, formatting and diff
+  checks passed. No new GPU-runtime or rendered-acceptance claim.
+- Two scalar/grid A/B/B/A batches, each internally R/M/M/R, completed with the
+  enabled tyre model and unchanged full 801x801 terrain/120-Hz/settings. Mean
+  of four medians per cell, driving milliseconds per physics step:
+
+  | batch / mode | Molla before | candidate | control before | control after |
+  | --- | ---: | ---: | ---: | ---: |
+  | repeat scalar | 0.663663500 | 0.657857500 | 0.289783750 | 0.299518500 |
+  | repeat grid | 0.674821500 | 0.676812250 | 0.304618000 | 0.292096750 |
+  | confirm scalar | 0.661043000 | 0.651897000 | 0.293485500 | 0.301022750 |
+  | confirm grid | 0.680686750 | 0.674263000 | 0.314093500 | 0.297069750 |
+
+- Candidate changes are -0.875%/+0.295% repeat and -1.384%/-0.944% confirm
+  scalar/grid. Controls vary +3.36%/-4.11% and +2.57%/-5.42%. This does not
+  justify another runtime path: **rejected and fully reverted production
+  changes**. Test coverage is retained independently of the failed experiment.
+- All four logged state lines in each timing run match exactly within and
+  across batches; trace states also match the accepted stop-batch trace.
+  Snapshots show no competing cargo/rustc activity; the original viewer remains
+  active. No owned tests/builds overlapped the accepted observation batches.
+- After restoration, the expanded full math lane passes **102 tests, 1 ignored
+  across 5 binaries**; ordinary integration again passes **111, 18 ignored**.
+  Native profile viewer rebuild also passed. All owned handles are terminal:
+  59840, 64145, 34710, 54866, 49370, 32482, 40979, 50698, 15021 and 26288.
+  The rebuilt ordinary binary is byte-identical to the accepted stop-batch
+  executable, SHA256
+  `8fbebbc7ac3cbcc49edc746946dbfe3aae8c9757ed5550801cda68199525fbc8`.
+- Accepted baseline remains `target/perf/gearbox-stop-batch-after`. The rejected
+  `gearbox-chol-batch-after` has SHA256
+  `753bb6c2c36da2bc33e25af5600725c9e25f6cb15f590283eff9a849f9d06c7d`;
+  do not launch or use it as an accepted baseline.
+
+#### Next Steps
+
+- Target remaining measured loop projection/Jacobian, wheel-force and collision
+  costs rather than adding unproven Cholesky complexity. Preserve reference
+  tests, machine states and controlled before/after gates; do not resurrect
+  the previously rejected sparse projection without new evidence.
+- Full-plan performance parity/tails and viewer-frame evidence, pressure
+  calibration/lifecycle/reference acceptance, general joint/singular/GPU issues
+  and soil coupling remain open. Goal stays active; Rapier is not removed.
+
+#### Relevant Files
+
+- `crates/molla-math/tests/dense_chol.rs` — expanded bitwise/error-state coverage.
+- `crates/molla-math/src/dense_solve.rs` — restored exactly to accepted source.
+- Core `target/perf/chol-batch-{focused,core,gpu-check,format,restored-math}.log`
+  and `chol-batch-rejected.patch` — candidate/restoration evidence.
+- Isolated `target/perf/chol-batch-{molla,oxbo,imported,trace,viewer}.log`,
+  `chol-batch-trace.json`, `chol-batch-profile.tsv`, `chol-batch-binaries.sha256`,
+  `chol-batch-{repeat,confirm}-summary.txt`, `run-chol-batch-timing.sh` and
+  `chol-batch-{repeat,confirm}-{scalar,grid}-{before-a,after-a,after-b,before-b}`
+  `.log`/`-load.txt` — rejected experiment evidence.
+- Isolated `target/perf/chol-batch-restored-{molla,viewer}.log` and
+  `chol-batch-restored-binaries.sha256` — accepted runtime restoration.
+- Engram APIs still absent from the configured tool registry; this project
+  handoff records the session without claiming unavailable memory calls.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
