@@ -4886,6 +4886,112 @@ progress, not a wait or completion of the full objective.
 - Engram tool discovery still returns no memory API; this tracked summary
   preserves the handoff without editing protected memory files.
 
+## Viewer launch and wake-strength checkpoint (2026-09-20)
+
+### Goal
+
+Continue the complete `FULL_COMPACT.md` integration and performance work, keep
+the user's requested interactive preview open, and close the explicit strong/
+weak wake gap without changing solver settings or the original Gearbox checkout.
+The preceding launch turn made progress: the latest terrain-cache GUI was
+launched and its rendered Kubota frame was inspected successfully.
+
+### Instructions
+
+- Leave the user's `molla-preview` window available for interaction. Do not
+  drive it, close it, or use its user-controlled activity as a benchmark.
+- Work only in Molla and isolated `gearbox-physics`; preserve the original
+  Gearbox checkout, shared dependencies/assets, and untracked `FULL_COMPACT.md`.
+
+### Discoveries
+
+- Fresh viewer CLI clients can fail to resolve `/gearbox/info` while the
+  renderer and physics keep running. `Ctx::client` uses the registry DID but
+  ignores its concrete `addr`; the current directory/discovery path is a
+  suspect, not an established root cause. No networking source was changed.
+- The automated viewer attempts were not a completed A/B/B/A: one failed
+  Nix startup after XDG isolation, one Rapier control drove successfully then
+  failed its status query, and the next Rapier control repeatedly failed
+  readiness. Only the owned benchmark windows were stopped. The early control
+  also overlapped an accidentally broad read-only source scan; no controlled
+  performance acceptance is claimed from it.
+- Molla's `BodyMut::wake_up` ignored `strong`. The pinned Rapier 0.32 source
+  resets its quiet timer only for strong wakes; weak wakes can sleep again on
+  the next step if still eligible. Molla now implements that distinction.
+- The first three-body explicit-sleep reference test exposed an unconditional
+  Rapier assertion in `island_manager/sleep.rs:124` when some bodies were woken
+  before the next step. The exact case passes on Molla. An explicitly ignored
+  reference reproducer remains in the isolated tests; it fails with exit 101
+  when invoked directly. This is a known reference failure, not a passing gate.
+
+### Accomplished
+
+- Launched the retained `gearbox-viewer-scene-bounds` GUI as `molla-preview`
+  with `GEARBOX_PHYSICS=molla`, loaded the real Kubota, and moved only its camera
+  to frame the tractor. Inspected `target/perf/molla-preview.png`: the Kubota
+  and terrain render and the title reads `molla-preview | molla | PLAYING`.
+  This is launch/render evidence, not driving or pressure visual acceptance.
+- Added `RigidWorld::wake_body_with_strength(body, strong)`; the existing
+  `wake_body` remains a strong wake. Both wake the full dependency group,
+  including watched immovable boundaries. Strong wakes reset affected quiet
+  windows; weak wakes preserve existing windows and restore eligibility only
+  for currently valid sleeping groups. Ordinary motion/input checks still
+  decide whether the next step may sleep. Automatic sleep remains opt-in.
+- Added seven sleep tests covering awake quiet history, explicit/automatic
+  sleepers, trees/loops/static boundaries, unrelated sleepers, invalid handles,
+  failed steps, disabled automatic sleep, input edits, gravity and persistent
+  forces. Wired the isolated backend's `wake_up(strong)` to the new API.
+- Backend comparison checks automatic-sleep weak/strong transitions on both
+  Molla and Rapier, and the explicit-sleep transition on Molla. Kept a separate
+  ignored reproducer for the failing Rapier explicit-sleep case.
+- Focused final sleep gate: **31 passed, one ignored**. GPU-feature compile
+  passes, not runtime parity. Ordinary isolated Molla and Rapier lanes each
+  pass **92 tests, 14 ignored**, including the newly recorded reference failure.
+- The final combined geometry/sim/solver run passed **692 tests, ten ignored,
+  120 binaries**, including all seven new wake tests. All **ten real imported-
+  machine gates pass** (131.91 s), including pressure replay, steering/tracks,
+  towing, slopes and controller exercise. These are correctness results;
+  their incidental timings overlapped other tests and an interactive viewer.
+- Committed Molla as `63c797b fix(solvers): distinguish weak and strong wakes`
+  and isolated integration as `25197e1 fix(physics): honor wake strength in molla`.
+- All owned build/test handles are terminal. Only the requested interactive
+  preview is deliberately left running. No full-viewer performance or final
+  goal completion claim is made.
+
+### Next Steps
+
+- Finish the remaining non-waking body mutation flags (pose/velocity/kind/
+  mass/force/impulse), including failure atomicity and dependency behavior.
+- Diagnose viewer directory discovery in the isolated integration only, then
+  resume controlled full-viewer comparison in separate owned windows. The
+  interactive preview uses the prior scene-bounds binary, not this new wake fix.
+- Keep the complete joint/GPU/towing/service/pressure-lifecycle, calibrated
+  tyre/surface/soil, rendered acceptance and Rapier-parity work open. The full
+  objective is not complete.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/{rigid_sleep,rigid_settling}.rs` — strength-aware
+  wake propagation and validated quiet-window retention.
+- `crates/molla-solvers/tests/rigid_settling/{mod,wake}.rs` — sleep regression
+  wiring and seven new wake/failure/input tests.
+- Isolated `bin/gearbox/src/physics/molla/{body,tests}.rs` — backend forwarding,
+  cross-backend comparison and known failing Rapier reference reproducer.
+- Molla `target/perf/wake-strength-{focused,full,final,full-final}.log` — CPU
+  correctness, focused final regression and GPU compile evidence.
+- Isolated `target/perf/wake-strength-{backend,backend-final,molla,rapier,
+  rapier-reproducer,imported}.log` — backend/reference and imported evidence.
+- Isolated `target/perf/viewer-check-{20260920T101150,20260920T101419}/` — failed
+  control-channel viewer attempts; not final viewer performance evidence.
+- Isolated `target/perf/run-terrain-viewer.sh` — ignored benchmark runner now
+  uses latest scene-bounds candidate, explicit Nix features, and waits for the
+  fly-camera request to be consumed before follow; no full comparison completed.
+- Isolated `target/perf/molla-preview.{log,png}` — interactive launch/render
+  evidence. Preview PID 1574460 was confirmed live during this checkpoint;
+  revalidate process identity before any future action.
+- Engram tool discovery still exposes no memory API. This tracked summary
+  preserves the handoff without editing protected memory files.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
