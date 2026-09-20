@@ -9,6 +9,7 @@ use molla_sim::{MassProperties, Model, State, eval_body_velocities};
 
 pub(crate) mod blocks;
 mod compact;
+mod response_batch;
 
 /// Apply a world impulse and COM angular impulse through the articulation mass matrix.
 pub fn apply_impulse(

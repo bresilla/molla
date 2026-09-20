@@ -803,6 +803,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
+    let setup_span = tracing::debug_span!("aba_setup").entered();
     if model.joint_count == 0 {
         state_out.copy_host_from(state_in)?;
         for (i, &flags) in model.body_flags.host()?.iter().enumerate() {
@@ -952,6 +953,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     let mut q_new: Vec<Real> = q_in.clone();
     let mut qd_new: Vec<Real> = qd_in.clone();
     let mut q_dd = vec![0.0_f64; model.joint_dof_total];
+    drop(setup_span);
     let mut a_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
     for art in 0..art_count {
         if activation.is_some_and(|active| !active.articulations[art]) {
@@ -978,6 +980,7 @@ fn cpu_step_inner<const LOCAL: bool>(
         let mut root_applied_tau = [0.0; MAX_JOINT_DOFS];
 
         // ── Pass 1: forward kinematics + body kinematics ─────────────────
+        let kinematics_span = tracing::debug_span!("aba_kinematics").entered();
         for j in j_begin..j_end {
             let jt = joint_type_from_u32(joint_type[j]);
             let parent = joint_parent[j];
@@ -1078,8 +1081,10 @@ fn cpu_step_inner<const LOCAL: bool>(
             i_a[j] = i_s;
             p_a[j] = p_init;
         }
+        drop(kinematics_span);
 
         // ── Pass 2: backward — articulated inertia accumulation ──────────
+        let backward_span = tracing::debug_span!("aba_backward").entered();
         for j in (j_begin..j_end).rev() {
             let parent = joint_parent[j];
             let jt = joint_type_from_u32(joint_type[j]);
@@ -1400,7 +1405,9 @@ fn cpu_step_inner<const LOCAL: bool>(
             }
         }
 
+        drop(backward_span);
         // ── Pass 3: forward — solve for joint accelerations ──────────────
+        let acceleration_span = tracing::debug_span!("aba_accelerations").entered();
         for j in j_begin..j_end {
             let parent = joint_parent[j];
             let jt = joint_type_from_u32(joint_type[j]);
@@ -1497,6 +1504,8 @@ fn cpu_step_inner<const LOCAL: bool>(
             }
         }
 
+        drop(acceleration_span);
+        let limits_span = tracing::debug_span!("aba_constraints").entered();
         if j_end == j_begin + 1
             && let Some(acceleration) = singular_root::acceleration(
                 model, state_out, art, j_begin, &root_applied_tau,
@@ -1518,6 +1527,8 @@ fn cpu_step_inner<const LOCAL: bool>(
         )?;
 
         // ── Integrate q, q̇ for joints in this articulation ──────────────
+        drop(limits_span);
+        let integration_span = tracing::debug_span!("aba_integration").entered();
         for j in j_begin..j_end {
             let jt = joint_type_from_u32(joint_type[j]);
             let coord_idx = joint_coord_offset[j] as usize;
@@ -1830,8 +1841,10 @@ fn cpu_step_inner<const LOCAL: bool>(
                 }
             }
         }
+        drop(integration_span);
     } // end per-articulation outer loop
 
+    let _finalize_span = tracing::debug_span!("aba_finalize").entered();
     state_out.joint_q.host_mut()?.copy_from_slice(&q_new);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
     eval_fk(model, state_out)?;

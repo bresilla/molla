@@ -74,12 +74,22 @@ pub(crate) fn react_scalar_stops(
     if !stops.iter().any(|s| s.sign * velocity[s.dof] < s.velocity) {
         return Ok(());
     }
+    let _span = tracing::debug_span!("scalar_stops", stops = stops.len()).entered();
+    let response_span = tracing::debug_span!("scalar_stop_responses").entered();
     let factor = joint_mass.factor(articulation, count)?;
-    for stop in &mut stops {
-        let mut unit = vec![0.0; count];
-        unit[stop.dof] = stop.sign;
-        stop.response = factor.solve(&unit)?;
+    let units: Vec<_> = stops
+        .iter()
+        .map(|stop| {
+            let mut unit = vec![0.0; count];
+            unit[stop.dof] = stop.sign;
+            unit
+        })
+        .collect();
+    for (stop, response) in stops.iter_mut().zip(factor.solve_batch(&units)?) {
+        stop.response = response;
     }
+    drop(response_span);
+    let gram_span = tracing::debug_span!("scalar_stop_gram").entered();
     stops.retain(|s| s.sign * s.response[s.dof] > 0.0);
     let n = stops.len();
     let mut gram = vec![0.0; n * n];
@@ -94,7 +104,9 @@ pub(crate) fn react_scalar_stops(
                     + stops[j].sign * stops[i].response[stops[j].dof]);
         }
     }
-    let impulses = nonnegative_impulses(&gram, &rhs)?;
+    drop(gram_span);
+    let impulses = tracing::debug_span!("scalar_stop_impulses")
+        .in_scope(|| nonnegative_impulses(&gram, &rhs))?;
     for (stop, impulse) in stops.iter().zip(impulses) {
         for (v, response) in velocity.iter_mut().zip(&stop.response) {
             *v += impulse * response;
