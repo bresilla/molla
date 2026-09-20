@@ -3377,6 +3377,82 @@ Reduce the measured loop-response projection cost while preserving the full
 - `/tmp/molla-projection-imported.log` — final imported-machine regression.
 - `/tmp/molla-projection-{molla,rapier}-binary.log` — ordinary backend regressions.
 
+## Drive inverse-diagonal suffix checkpoint (2026-09-20)
+
+### Goal
+
+Continue the full replacement plan's performance work at unchanged integration
+settings, targeting effective drive-inertia calculations.
+
+### Instructions
+
+- Preserve original Gearbox and user-owned processes. A user-owned original
+  Gearbox viewer was running during this checkpoint and was left untouched.
+- Keep the numerical rank policy, motor gains, eight-substep integration and
+  mechanical acceptance thresholds unchanged.
+
+### Discoveries
+
+- `effective_drive_inertias` solved a full triangular system for each unit
+  right-hand side, allocating both the unit vector and solve result each time.
+  For finite lower-triangular L, `L^-1 e_i` is identically zero before row i.
+- Computing only that suffix preserves the packed solver's arithmetic order
+  and `1e-30` pivot cutoff. One articulation-scoped workspace can serve every
+  requested motor without clearing/reading its unused prefix.
+- The shortcut checks factor finiteness once; a non-finite successful factor
+  retains the old full-substitution path. Singular factors retain the existing
+  spectral fallback. No mass-matrix rank thresholds or cache lifetimes change.
+- A singular regression initially normalized its rank-one block by two, which
+  produced a tiny positive floating-point Cholesky pivot rather than the
+  intended failure. The corrected fixture uses exactly representable unit
+  pivots and asserts that factorization actually fails before checking fallback.
+- Separately found a fleet-scaling issue to address next: `cpu_step` allocates
+  world-sized `q_dd` and `a_body` arrays inside its articulation loop. Their
+  zero-initialization scales with articulation count times world size. The
+  consumers currently index disjoint articulation ranges, including scalar
+  stop reactions, so substep-scoped scratch is a candidate; it still needs
+  independent-island equivalence tests and a fleet benchmark before adoption.
+
+### Accomplished
+
+- Implemented a finite-factor unit-column suffix solve and reusable workspace
+  in `effective_drive_inertias`; existing fallback paths remain intact.
+- Added exact comparisons against the full substitution for every column of
+  1/2/6/39/78-dimensional factors, including zero/tiny pivots and a NaN-filled
+  scratch buffer. Added an explicitly singular free-body motor regression.
+- A/B/B/A run mean Molla medians (ms): A1 **0.94242025**, B1 **0.93356725**,
+  B2 **0.93580975**, A2 **0.941804**. Aggregate A **0.942112125**, B
+  **0.9346885**, about **0.79%** lower. Rapier controls were **0.226453** and
+  **0.22590025** respectively. This is a small observed improvement with an
+  active background viewer, not a quiet-host latency or Rapier-parity result.
+- All four paired timing fixtures passed, at unchanged settings. Logged
+  pressure/load/deflection/position readouts match before and after.
+- Final corrected CPU lane: **387 passed, five ignored**, 88 test binaries.
+  Final imported suite: **seven passed**, with the original slope/controller/
+  pressure/replay/turning/trailer thresholds. Explicit Molla and Rapier ordinary
+  binary lanes each pass **87 tests, eight ignored**.
+- All owned build/test handles are terminal. No viewers were launched or
+  stopped; the user-owned original Gearbox viewer remains outside this work.
+  Full-plan performance, fleet, GPU and visual acceptance remain incomplete.
+
+### Next Steps
+
+1. Validate substep-scoped acceleration scratch against independent islands,
+   then measure many-articulation scaling and real-machine regressions.
+2. Continue the original full-plan stability, timestep convergence, lifecycle,
+   calibration, sleeping, generic/GPU joint, terrain/soil and visual gates.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/featherstone.rs` — suffix solve, workspace and tests.
+- `/tmp/molla-drive-suffix-full.log` — initial full lane with fixture failure.
+- `/tmp/molla-drive-suffix-singular.log` — corrected singular fixture passes.
+- `/tmp/molla-drive-suffix-full-final.log` — final CPU lane.
+- `/tmp/gearbox-{before,after}-drive-suffix` — retained timing binaries.
+- `/tmp/molla-drive-suffix-abba-{1,2,3,4}.log` — timing evidence.
+- `/tmp/molla-drive-suffix-imported.log` — final real-machine regression.
+- `/tmp/molla-drive-suffix-{molla,rapier}-binary.log` — ordinary backend lanes.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
