@@ -429,7 +429,29 @@ impl CollisionPipeline {
         model: &Model,
         state: &State,
         contacts: &mut Contacts,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+    ) -> Result<usize> {
+        self.collide_filtered_inner(model, state, contacts, excluded, None)
+    }
+
+    /// Refresh contacts using bounds prepared for this immutably borrowed model.
+    pub fn collide_prepared(
+        &mut self,
+        bounds: &crate::shape_world::PreparedShapeBounds<'_>,
+        state: &State,
+        contacts: &mut Contacts,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+    ) -> Result<usize> {
+        self.collide_filtered_inner(bounds.model(), state, contacts, excluded, Some(bounds))
+    }
+
+    fn collide_filtered_inner(
+        &mut self,
+        model: &Model,
+        state: &State,
+        contacts: &mut Contacts,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        bounds: Option<&crate::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<usize> {
         contacts.clear();
         self.last_cpu_np_calls = 0;
@@ -451,8 +473,13 @@ impl CollisionPipeline {
         #[cfg(not(feature = "gpu"))]
         let used_gpu_broad = false;
         if !used_gpu_broad {
-            self.broad
-                .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+            if let Some(bounds) = bounds {
+                self.broad
+                    .sap_pairs_prepared(bounds, state, model.contact_margin, &mut self.pair_buf);
+            } else {
+                self.broad
+                    .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
+            }
         }
         let bodies = model.shape_body.host()?;
         let body_id = |s: u32| {

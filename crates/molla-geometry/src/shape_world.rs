@@ -6,6 +6,63 @@ use molla_sim::{Model, SdfShape, ShapeGeometry, State};
 
 use crate::aabb::Aabb;
 
+/// Heightfield bounds reusable while the model remains immutably borrowed.
+pub struct PreparedShapeBounds<'a> {
+    model: &'a Model,
+    heightfields: Vec<(Vec3, Vec3)>,
+}
+
+impl<'a> PreparedShapeBounds<'a> {
+    pub fn new(model: &'a Model) -> Self {
+        Self {
+            model,
+            heightfields: model
+                .heightfields
+                .iter()
+                .map(|field| field.local_aabb())
+                .collect(),
+        }
+    }
+
+    pub fn model(&self) -> &'a Model {
+        self.model
+    }
+
+    pub fn world_aabb(&self, state: &State, shape: usize, margin: Real) -> Aabb {
+        let pose = shape_world_transform(self.model, state, shape);
+        if let ShapeGeometry::Heightfield { field_id } = self.model.shape_geometry[shape] {
+            return self
+                .heightfields
+                .get(field_id as usize)
+                .map_or_else(Aabb::infinite, |&(lo, hi)| {
+                    transformed_bounds(lo, hi, pose, margin)
+                });
+        }
+        shape_aabb_at_pose(self.model, shape, pose, margin)
+    }
+}
+
+fn transformed_bounds(lo: Vec3, hi: Vec3, pose: Transform, margin: Real) -> Aabb {
+    let corners = [
+        Vec3::new(lo.x, lo.y, lo.z),
+        Vec3::new(hi.x, lo.y, lo.z),
+        Vec3::new(lo.x, hi.y, lo.z),
+        Vec3::new(hi.x, hi.y, lo.z),
+        Vec3::new(lo.x, lo.y, hi.z),
+        Vec3::new(hi.x, lo.y, hi.z),
+        Vec3::new(lo.x, hi.y, hi.z),
+        Vec3::new(hi.x, hi.y, hi.z),
+    ];
+    let mut min = Vec3::splat(Real::INFINITY);
+    let mut max = Vec3::splat(-Real::INFINITY);
+    for corner in corners {
+        let point = pose.transform_point(corner);
+        min = min.min(point);
+        max = max.max(point);
+    }
+    Aabb { min, max }.expanded(margin)
+}
+
 /// Compute the world-frame transform of `shape_idx`. If the shape is
 /// attached to a body, this is `body_q * shape_local_transform`. If
 /// it's static (`shape_body == -1`), it's just the local transform.
@@ -163,25 +220,7 @@ pub fn shape_aabb_at_pose(model: &Model, shape_idx: usize, xf: Transform, margin
                 None => return Aabb::infinite(),
             };
             let (lo_local, hi_local) = field.local_aabb();
-            // Conservative world AABB: 8 local-AABB corners → world.
-            let corners = [
-                Vec3::new(lo_local.x, lo_local.y, lo_local.z),
-                Vec3::new(hi_local.x, lo_local.y, lo_local.z),
-                Vec3::new(lo_local.x, hi_local.y, lo_local.z),
-                Vec3::new(hi_local.x, hi_local.y, lo_local.z),
-                Vec3::new(lo_local.x, lo_local.y, hi_local.z),
-                Vec3::new(hi_local.x, lo_local.y, hi_local.z),
-                Vec3::new(lo_local.x, hi_local.y, hi_local.z),
-                Vec3::new(hi_local.x, hi_local.y, hi_local.z),
-            ];
-            let mut lo = Vec3::splat(Real::INFINITY);
-            let mut hi = Vec3::splat(-Real::INFINITY);
-            for c in corners {
-                let w = xf.transform_point(c);
-                lo = lo.min(w);
-                hi = hi.max(w);
-            }
-            Aabb { min: lo, max: hi }.expanded(margin)
+            transformed_bounds(lo_local, hi_local, xf, margin)
         }
         ShapeGeometry::Ellipsoid { half_axes } => {
             // World-axis half-extents of an oriented ellipsoid:

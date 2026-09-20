@@ -438,9 +438,10 @@ impl FeatherstoneSolver {
         let mut samples = Vec::new();
         let persistent = state_in.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
+        let bounds = crate::geometry::shape_world::PreparedShapeBounds::new(model);
         for substep in 0..n {
             tracing::debug_span!("collision").in_scope(|| {
-                pipeline.collide_filtered(model, &scratch, contacts, &mut excluded)
+                pipeline.collide_prepared(&bounds, &scratch, contacts, &mut excluded)
             })?;
             applied.copy_from_slice(&persistent);
             tracing::debug_span!("external_forces")

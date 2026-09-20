@@ -106,6 +106,25 @@ impl BroadPhase {
         margin: Real,
         out: &mut Vec<ShapePair>,
     ) {
+        self.sap_pairs_with_bounds(model, out, |i| shape_world_aabb(model, state, i, margin));
+    }
+
+    pub(crate) fn sap_pairs_prepared(
+        &mut self,
+        bounds: &crate::shape_world::PreparedShapeBounds<'_>,
+        state: &State,
+        margin: Real,
+        out: &mut Vec<ShapePair>,
+    ) {
+        self.sap_pairs_with_bounds(bounds.model(), out, |i| bounds.world_aabb(state, i, margin));
+    }
+
+    fn sap_pairs_with_bounds(
+        &mut self,
+        model: &Model,
+        out: &mut Vec<ShapePair>,
+        bounds: impl Fn(usize) -> Aabb,
+    ) {
         out.clear();
         let n = model.shape_count;
         if n < 2 {
@@ -118,7 +137,7 @@ impl BroadPhase {
         self.aabbs.clear();
         self.aabbs.reserve(n);
         for i in 0..n {
-            self.aabbs.push(shape_world_aabb(model, state, i, margin));
+            self.aabbs.push(bounds(i));
         }
 
         // Partition: planes (infinite AABB) vs finite shapes.
