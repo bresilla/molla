@@ -6896,6 +6896,160 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Accepted `target/perf/gearbox-shared-mass-after`, SHA256
   fbc35a267e7f252f719516bcc95f7a16f07c397250717dd9d0b1638d05fa0803.
 
+### Shared full-rank factor candidate checkpoint
+
+- Previous goal turn made verified progress: guarded matrix reuse accepted in
+  `6b55781`, validation/timing handoff in `31e7769`. Next baseline is retained
+  `gearbox-shared-mass-after` (fbc35a26...).
+- Candidate extends the same exact-model/configuration seed to carry eligible
+  normalized Cholesky factors. Only finite positive-scale full-rank Cholesky
+  with squared pivots >1e-12 is exported. Spectral/zero/weak-pivot decompositions
+  are discarded and retain the fresh motor fallback path.
+- A compatible cached factor computes requested drive inverse diagonals with
+  the existing `unit_inverse_diagonal` operation order. Positive squared pivots
+  >1e-12 imply every normalized mass diagonal exceeds the old active-column
+  selection cutoff 1e-14, so this path has the full original column ordering.
+  Dimensions and finite factor contents are checked; partial/locked-axis cases
+  stay on the unchanged active-submatrix path. Exact seed validity checks still
+  gate both matrices and factors after mimic/FK changes.
+- Focused tests passed (23299 terminal): bitwise fresh/cached drive inertias
+  across scales 1e-60/1/1e60, full-rank/weak/zero angular modes, offset COM,
+  stale poses, requested-axis subsets, force/acceleration/no-feedback modes;
+  allocation identity confirms eligible factors survive rather than refactor.
+  Full-step seeded oracle now includes factors and still passes mimic/locked
+  singular cases; existing seed invalidation oracle passes.
+- The last accepted full-meadow trace has 960 `loop_mass_rhs` calls with
+  cholesky=true, so this workload has eligible factor decompositions. This is
+  eligibility evidence, not a measured speedup from the new candidate.
+- Full solver tests passed 501 (nine ignored, 92 binaries), followed by 111
+  ordinary isolated tests (18 ignored); 43441 terminal. Source uncommitted.
+- First scalar/grid A/B/B/A passed physically with identical logged states
+  (88883 terminal), but timing is contaminated by independently running Nerv
+  scrolling/store tests and workspace compilation. Load snapshots directly
+  captured these processes. One candidate scalar median was 1.452282 ms while
+  adjacent candidate medians were 0.75-0.82 ms; do not remove just that sample
+  or claim the first grid improvement while ignoring the control's load drift.
+  Preserve the entire first batch as diagnostic only and rerun after validation.
+- Oxbo/imported/native-viewer/Molla trace/GPU compile sequence passed (33091
+  terminal): three Oxbo tests, ten imported tests, native profile-viewer build,
+  one full-meadow trace and GPU-feature all-targets compilation. Trace state
+  logs exactly match the prior matrix-only baseline. No GPU runtime or new
+  rendered-acceptance claim. No external process was changed/stopped.
+- Two new scalar/grid A/B/B/A batches (`repeat`, `confirm`) passed (89193 terminal)
+  after all owned validation/builds completed. Every run's logged state lines
+  matched the original baseline exactly. No competing build/test appeared in
+  their per-run host snapshots; original user viewer remained active. Both
+  independent batches improve median Molla timings in both modes; accept this
+  candidate based on those batches, not the contaminated first run. Engram APIs
+  unavailable; memory registry has no hits.
+- Rechecked the imported fixture's 4913.449268 versus 4916.010223 kg mass logs:
+  these are explicit backend-specific fixture expectations in benchmark.rs,
+  also present in prior logs, not an asset/cache regression. Shared USDZ mtimes
+  remain September 14. No asset copy/edit was made during that check.
+- Source: `rigid_impulse.rs`, `joint_mass.rs`, `joint_mass/seed.rs`,
+  `articulated_response.rs`, `featherstone.rs`, `featherstone_mass_seed.rs`, new
+  `featherstone_factor_seed.rs`. Core `target/perf/shared-factor-{focused,solvers}.log`;
+  isolated `target/perf/shared-factor-molla.log`.
+- Candidate `target/perf/gearbox-shared-factor-after` SHA256
+  b364462764fba8da9f50de952cfdd35374ca094a3cf0e867764eb6053e08d622;
+  baseline `gearbox-shared-mass-after` SHA256
+  fbc35a267e7f252f719516bcc95f7a16f07c397250717dd9d0b1638d05fa0803.
+  Isolated first-batch logs: `shared-factor-{scalar,grid}-
+  {before-a,after-a,after-b,before-b}{.log,-load.txt}`, `shared-factor-summary.txt`,
+  `shared-factor-external-load.txt`, `shared-factor-binaries.sha256` in target/perf.
+
+### Session summary: compatible mass-factor reuse accepted
+
+#### Goal
+
+- Continue full FULL_COMPACT.md implementation, prioritizing measured full-machine
+  CPU performance with the pressure-dependent tyre system enabled.
+
+#### Instructions
+
+- Original Gearbox and shared assets remain read-only. No Rapier feature work,
+  removed physics features, changed solver settings, merges, pushes or GUI launches.
+- Use native Make/Oslo validation and unsigned title-only Conventional Commits.
+- Engram APIs remain unavailable; this file is the project handoff, without
+  writing the persistent memory folder.
+
+#### Discoveries
+
+- The strict full-rank Cholesky path can reuse the existing normalized factor
+  for motor inverse diagonals. Its pivot threshold is stricter than the motor
+  active-column threshold, preserving the full column ordering. Existing
+  spectral/weak/locked-axis fallback behavior remains unchanged.
+- Eligibility and immutable exact-state checks are both required: matching
+  dimensions alone is not sufficient to reuse a factor across a pose change.
+- First timing batch was contaminated by external tests/builds. Kept all its
+  observations but excluded the whole batch from acceptance rather than trimming
+  the slow candidate sample. Two subsequent independent batches confirm gains.
+
+#### Accomplished
+
+- Accepted source in `ff4badb` (`perf(solver): reuse full-rank mass factors`).
+  This extends `6b55781` matrix reuse; no change to penalty/tyre equations,
+  integration, substeps, terrain detail or controller settings.
+- Passed 501 solver tests (nine ignored), 111 ordinary integration tests
+  (18 ignored), three Oxbo tests, ten imported tractor/trailer tests, one Molla
+  meadow trace, GPU-feature all-targets compile, native profile-viewer build,
+  new/owned test-module rustfmt check and git diff check. GPU runtime parity and
+  new rendered acceptance are not claimed. All owned handles terminal, including
+  23299, 43441, 88883, 33091, 89193 and 83605.
+- Two accepted A/B/B/A batches per scalar/grid mode, each fixture internally
+  R/M/M/R with unchanged warmup/samples/120 Hz/full 801x801 terrain and tyres.
+  All logged before/after/repeat/confirm machine state lines and trace state lines
+  compare exactly. Bitwise unit oracles cover factor reuse and fallback cases.
+- Mean of four medians per cell, milliseconds per physics step:
+
+  | batch / mode / backend | before parked | after parked | before driving | after driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | repeat scalar Molla | 0.794166250 | 0.745492750 | 0.798725000 | 0.760282500 |
+  | repeat scalar control | 0.282141250 | 0.287179000 | 0.296574250 | 0.289062250 |
+  | repeat grid Molla | 0.807199500 | 0.769026000 | 0.821797000 | 0.769045000 |
+  | repeat grid control | 0.283660250 | 0.280832750 | 0.294478000 | 0.294236750 |
+  | confirm scalar Molla | 0.792944750 | 0.746063250 | 0.801595000 | 0.750745500 |
+  | confirm scalar control | 0.291371000 | 0.281581500 | 0.294663000 | 0.289350500 |
+  | confirm grid Molla | 0.817433500 | 0.773528750 | 0.825827250 | 0.779399000 |
+  | confirm grid control | 0.283726000 | 0.286837500 | 0.296462750 | 0.294007000 |
+
+- Driving median reductions: repeat 4.81% scalar / 6.42% grid; confirm 6.34%
+  scalar / 5.62% grid. Retain this repeatable improvement. Confirm candidate
+  mean driving p95 remains 1.2750735 / 1.4516885 ms and candidate/control ratio
+  about 2.59x / 2.65x: no tail or Rapier-parity claim. Absolute timings still
+  include the loaded workstation; original viewer stayed running throughout.
+- Accepted repeat/confirm snapshots showed no competing build/test. No owned
+  build/test overlapped any timing. Nothing was killed to obtain the result.
+- Next accepted retained baseline: `gearbox-shared-factor-after`, replacing
+  `gearbox-shared-mass-after` for subsequent before/after comparisons.
+
+#### Next Steps
+
+- Profile remaining work using the latest Molla full-meadow trace before choosing
+  the next solver optimization. Preserve exact/reference checks and full-machine
+  timing; local operation savings alone are insufficient (see sparse rejection).
+- Full-plan performance parity/tails, rendered acceptance, tyre calibration and
+  lifecycle/replay, remaining general joint/singular/GPU issues and soil coupling
+  remain open. Keep the goal active; these commits do not complete FULL_COMPACT.md.
+
+#### Relevant Files
+
+- `rigid_impulse.rs` — finite full-rank normalized-factor eligibility/access.
+- `joint_mass.rs`, `joint_mass/seed.rs`, `articulated_response.rs` — move eligible
+  factors with matching matrices under existing model/configuration guards.
+- `featherstone.rs` — cached full-rank requested inverse-diagonal path.
+- `featherstone_factor_seed.rs`, `featherstone_mass_seed.rs` — bitwise/fallback,
+  allocation, stale-pose and complete stepping coverage.
+- Core `target/perf/shared-factor-{focused,solvers,gpu-check,format}.log`.
+- Isolated `target/perf/shared-factor-{molla,oxbo,imported,viewer,trace}.log`,
+  `shared-factor-trace.json`, `shared-factor-{repeat,confirm}-{scalar,grid}-
+  {before-a,after-a,after-b,before-b}{.log,-load.txt}`,
+  `shared-factor-repeat-summary.txt`, `shared-factor-binaries.sha256`.
+- Contaminated first batch remains in the unsuffixed scalar/grid artifacts and
+  `shared-factor-summary.txt`; do not use it as accepted timing evidence.
+- Accepted binary `target/perf/gearbox-shared-factor-after`, SHA256
+  b364462764fba8da9f50de952cfdd35374ca094a3cf0e867764eb6053e08d622.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
