@@ -7257,6 +7257,163 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Engram APIs still absent from the configured tool registry; this project
   handoff records the session without claiming unavailable memory calls.
 
+### Interrupted checkpoint — tyre terrain dispatch, later accepted below
+
+#### Goal
+- Continue FULL_COMPACT.md's performance work; original Gearbox/assets remain
+  untouched. Previous accepted runtime is still `gearbox-stop-batch-after`.
+
+#### Discoveries
+- New `wheel_ground_query`, `pressure_tire` and `pressure_brush` spans identify
+  brush evaluation as larger than ground queries (instrumented 0.120461 versus
+  0.020466 ms/frame). Profiling overhead is not an acceptance timing.
+- Keeping `T: Terrain + ?Sized` through persistent brush evaluation and the
+  film helper allows concrete terrain specialization while retaining dyn callers.
+
+#### Accomplished
+- Uncommitted candidate in vehicle `real_tire/rig/runners.rs`, with new
+  `dispatch_tests.rs` and module wiring; solver edits are profiling spans only.
+- Concrete versus black-box-erased terrain tests compare every contact scalar,
+  cell output and history displacement bitwise over pressure/resolution/frame/
+  airborne/geometry changes and invalid timesteps, including mixed friction,
+  moving terrain and water film. Focused test passed; vehicle/solver full lane
+  752 passed, 9 ignored, 93 binaries. Ordinary integration 111 passed;
+  Oxbo 3 and imported tractor/trailer 10 passed. GPU-feature compile, native
+  profile viewer build, new-file formatting, diff checks and trace passed.
+- Before/after trace state lines match accepted runtime. Candidate retained as
+  isolated `target/perf/gearbox-tyre-dispatch-after`; NOT accepted yet.
+- First `tyre-dispatch-repeat-*` batch overlapped external Nerv/balthasar tests
+  and the user's original Gearbox build: diagnostic only. `clean-*` also started
+  with an external cargo test present; its name is not proof of no interference.
+  Its Molla driving means: scalar 0.654778 -> 0.646938 ms, grid
+  0.671772 -> 0.669878 ms. These small shifts do not yet justify acceptance.
+
+#### Next Steps
+- At this checkpoint confirmation A/B/B/A was live on tool session **59559**.
+  The user asked for a status update while it was running. No pause was requested.
+  The handle subsequently completed; final disposition is recorded below.
+- Evaluate full confirmation/control/load evidence before accepting or reverting
+  candidate. If rejected, restore both ordinary and native viewer builds, retain
+  accepted stop-batch baseline, and document evidence. Full plan remains open.
+
+#### Relevant Files
+- Core `target/perf/tyre-dispatch-{focused,core,gpu-check,format}.log`.
+- Isolated `target/perf/tyre-stages-{trace.json,trace.log,profile.tsv}` and
+  `tyre-dispatch-{molla,oxbo,imported,trace,viewer}.log`, trace JSON/profile TSV,
+  binaries SHA256, `run-tyre-dispatch-timing.sh`, and
+  `tyre-dispatch-{repeat,clean,confirm}-*` timing/load logs.
+- Other handles are terminal: 21679, 56398, 68489, 68384, 89660, 71195, 72776,
+  13051, 62866. Engram APIs remain unavailable; checkpoint is project-local.
+
+### 2026-09-20 — Concrete terrain dispatch accepted
+
+#### Goal
+
+- Continue FULL_COMPACT.md's performance priority without reducing tyre detail,
+  changing physical equations or touching original Gearbox/shared assets.
+- Resumed the actual live confirmation handle 59559 after the user's status
+  question, rather than restarting its work. All candidate source stayed fixed
+  throughout the additional timing batches.
+
+#### Discoveries
+
+- Generic `T: Terrain + ?Sized` preserves concrete terrain dispatch through the
+  persistent brush evaluator, its internal evaluator and film helper. Concrete
+  pressure planes can specialize terrain queries; trait-object callers remain
+  supported. No terrain capability assumptions, cell omissions, approximations,
+  added runtime cache or changes to sample resolution/force equations were made.
+- Profiling spans added to ground queries, pressure evaluation and brush work
+  identify the brush as larger than the ray query. The before trace has 3840
+  calls each and 0.120461/0.020466 ms/frame respectively. New spans themselves
+  add overhead; do not compare these whole-frame trace times to older traces
+  without the spans or to non-profile acceptance timings.
+- External Nerv/balthasar tests and the user's original Gearbox builds appeared
+  during the first three timing batches. None were stopped. `repeat`, `clean`
+  and `confirm` remain supporting diagnostics, not accepted timing evidence;
+  the filename `clean` does not establish quiet conditions.
+
+#### Accomplished
+
+- Accepted source `7c0405a` (`perf(tyres): specialize terrain dispatch`). The
+  numerical implementation body is unchanged: three terrain-parameter types
+  become generic, plus profiling and regression coverage.
+- Exact-bit tests compare concrete and black-box-erased terrain calls for every
+  contact scalar/vector, patch cell and persistent bristle displacement/profile.
+  Cover segments 8/32/128/512, width strips 1/3/16, pressure 50/180/400 kPa,
+  reverse/forward/combined slip, changing tangent frames, airborne/recontact,
+  geometry changes and atomic invalid timesteps. Mixed terrain includes spatial
+  friction, varying heights, moving surface and wet/dry film.
+- Validation already completed before timings: **752 passed, 9 ignored across
+  93 vehicle/solver binaries**; **111 ordinary integration**, **3 Oxbo**,
+  **10 imported tractor/trailer**, and full-meadow trace passed. GPU-feature
+  all-targets compile, native profile viewer build, new-file formatting and diff
+  checks passed. No new GPU-runtime or rendered-acceptance claim.
+- Two further A/B/B/A batches `verify` and `verify2` each used the same internal
+  R/M/M/R order, full 801x801 meadow, enabled pressure tyres, 120 Hz and unchanged
+  settings. A one-second activity monitor plus per-run snapshots saw no cargo/
+  rustc processes during either batch. The user's original viewer stayed active:
+  these are loaded-workstation physics timings, not full-frame/viewer timings.
+- Mean of four medians per cell, driving milliseconds per physics step:
+
+  | batch / mode | Molla before | Molla after | control before | control after |
+  | --- | ---: | ---: | ---: | ---: |
+  | verify scalar | 0.656154250 | 0.634895250 | 0.290665250 | 0.287464750 |
+  | verify grid | 0.676799750 | 0.652704500 | 0.292322500 | 0.292419500 |
+  | verify2 scalar | 0.649539500 | 0.639201000 | 0.296291500 | 0.292883000 |
+  | verify2 grid | 0.671861250 | 0.657298000 | 0.300554500 | 0.287054000 |
+
+- Retain the small, consistent raw median gain: 3.24%/3.56% in verify and
+  1.59%/2.17% in verify2 scalar/grid. Control variation remains visible, notably
+  verify2 grid's approximately 4.5% faster reference. Do not turn these observed
+  shifts into a precise universal speedup claim. Parked Molla medians also
+  decrease in all four accepted cells (full summaries retained).
+- Verify2 candidate/reference ratio remains **2.18x/2.29x**. Its scalar/grid
+  mean driving p95 is **0.8872665/1.3038005 ms**; grid tails regressed relative
+  to 1.16101375 ms before. This does not meet parity or consistently under-1-ms
+  acceptance. No full-plan completion claim.
+- All four logged state lines in each of 40 before/after runs across five
+  batches match exactly; the before/after trace lines match the accepted
+  stop-batch trace. Focused bitwise checks cover individual outputs/history;
+  logged states are not a claim to compare every unlogged machine field.
+- Accepted next baseline `target/perf/gearbox-tyre-dispatch-after`, SHA256
+  `8b75a29671a8d58884ab212ef2c31c661f04e4fe66db4a7e644b24b5e6040842`, supersedes
+  `gearbox-stop-batch-after`. Isolated integration source remains clean at
+  `e8292b1`; no original checkout, machine asset, Rapier development or GUI launch.
+- All owned handles terminal, including resumed 59559 and monitored 11993/80413;
+  earlier test/build handles are listed in the checkpoint immediately above.
+
+#### Next Steps
+
+- Continue measured brush/loop/collision work against this new accepted binary.
+  A concrete next hypothesis, not implemented: `brush_pressure_stiffness_factor`
+  is a pure per-inflation-pressure `powf` inside every penetrating-cell loop;
+  `brush_load_sensitivity` computes two `powf`s from local normal pressure.
+  Adjacent width-strip cells often have bit-identical normal pressures on the
+  local plane. Investigate per-evaluation invariant/identical-input reuse with
+  an uncached bitwise oracle, retaining per-cell friction, film and shear and
+  falling back naturally when pressure inputs differ. Measure before retaining.
+- Do not assume CPU arithmetic savings imply a GPU implementation or parity.
+  Full-plan performance/tails/full-frame evidence, calibrated pressure/lifecycle
+  acceptance, general joint/singular/GPU issues and soil coupling remain open.
+  Keep the goal active and Rapier as reference until the replacement gates pass.
+
+#### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/rig/runners.rs` — typed terrain propagation.
+- `crates/molla-vehicle/src/real_tire/{dispatch_tests.rs,mod.rs}` — exact-output
+  and state oracle coverage/module wiring.
+- `crates/molla-solvers/src/{pressure_tire.rs,wheel_forces/sleeping.rs}` — stages.
+- Core `target/perf/tyre-dispatch-{focused,core,gpu-check,format}.log`.
+- Isolated `target/perf/tyre-stages-{trace.json,trace.log,profile.tsv}` and
+  `tyre-dispatch-{molla,oxbo,imported,trace,viewer}.log`, trace JSON/profile TSV,
+  `tyre-dispatch-binaries.sha256`, `run-tyre-dispatch-timing.sh`.
+- Isolated `target/perf/tyre-dispatch-{verify,verify2}-{scalar,grid}-`
+  `{before-a,after-a,after-b,before-b}{.log,-load.txt}`, corresponding
+  `*-summary.txt` and `*-activity.txt` — accepted observations. Earlier
+  `repeat`/`clean`/`confirm` artifacts are diagnostic only.
+- Engram APIs remain unavailable in the configured registry. This project
+  handoff records the session without claiming unavailable memory calls.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
