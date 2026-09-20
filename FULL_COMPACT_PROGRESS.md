@@ -2122,6 +2122,83 @@ without interrupting driving or touching the original Gearbox checkout.
   `/tmp/molla-quadratic-{live,drive,stop}.log`, `/tmp/molla-quadratic-{low,high}.json`,
   `/tmp/molla-quadratic-high.png`.
 
+## Checkpoint: real imported-machine headless acceptance
+
+### Goal
+
+Continue all of `FULL_COMPACT.md`, with a repeatable imported-machine physics
+benchmark and replay gate rather than relying on window activity or synthetic
+solver microbenchmarks.
+
+### Instructions
+
+- Original Gearbox, machine assets, shared USD/renderer dependencies and build
+  recipes remain untouched. Changes are in the isolated physics checkout.
+- No subagents. Use patch tools and unsigned title-only Conventional Commits.
+
+### Discoveries
+
+- The real asset's authored id is `robot`; the live loader changes it to the
+  filename-based `kubota_tractor`. Headless physics can retain the authored id.
+- The projected Kubota fixture has 26 bodies, 31 joints, 18 colliders including
+  flat ground, four pressure tyres and 4916.010223 kg in this setup. It uses
+  native USD projection, adapters, inertia guard and drive/wheel systems, not
+  a reconstructed toy tractor. Imported rubber radii match the live values.
+- Exact replay initially differed by 5.36e-14 after 60 steps. Sorting only the
+  harness's initial placement order still differed by 2.68e-13. Production
+  `prepare_machine_physics` collected body handles from a randomized HashMap;
+  sorting this list stabilizes mass recomputation and tyre mass accumulation.
+- Focused headless tracing confirms the remaining work is spread across
+  collision, wheels, loop response and Featherstone; mass matrices are still
+  rebuilt in wheels, loops and drive inertia within each substep.
+
+### Accomplished
+
+- Isolated commit `6dc1369` adds external-asset ignored benchmark/replay tests,
+  a profile-only trace test, and stable production body preparation order.
+- All six 0.5/1.8/4-bar parked/driving phases passed applied-pressure, support,
+  imported-radius, finite-body, no-quarantine and speed checks. Increasing
+  pressure decreases mean loaded deflection. Driving remains about 2.004 m/s.
+- 600-sample dev/test-profile physics-step medians were 1.049–1.054 ms parked
+  and 1.064–1.107 ms driving. Dependencies are optimized but the adapter/test
+  harness is not a release build. This still does not meet the under-1-ms gate.
+- Two independent imported scenes now match exactly at 30 checkpoints over
+  1,800 steps with pressure, drive and stop edits. Snapshots include body
+  poses/velocities and tyre pressure/load/grip/slip/deflection/footprint output.
+  Separate after-fix runs passed; this does not establish every lifecycle replay.
+- Both backend selections pass 84 binary tests, three ignored. Explicit external
+  benchmark/replay run passes two tests, and the profile-only trace test passes.
+- The trace records only 120 already-warmed driving steps (4.9 MB). Inclusive
+  substep means: collision 19.91 us, wheels 44.70 us, loops 51.60 us, Featherstone
+  44.68 us including drive inertia 20.83 us. Each of three mass-matrix builds is
+  about 5–6 us. Traced step mean 1.401 ms is not an untraced timing comparison.
+
+### Next Steps
+
+- A release imported benchmark/replay build is running with four Cargo jobs;
+  poll exec session `9005`, log `/tmp/gearbox-imported-release.log`. Do not restart
+  merely because output is quiet, and do not change its source before collecting
+  the baseline. The command runs both `controller::benchmark::imported_kubota_pressure*`
+  tests with the real asset after compilation.
+- Consider substep-scoped mass/factor reuse across wheel, loop and motor response
+  only where state/control semantics permit it; preserve reference correctness,
+  singular matrices, replay and convergence. Measure on the imported harness.
+- Remaining full-plan gates include performance tails/fleet, sleep/islands,
+  runtime lifecycle, GPU semantics/parity, slope/hitch and calibrated tyre/soil
+  response. No completion or Rapier parity claim is warranted.
+
+### Relevant Files
+
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — real-asset benchmark,
+  bitwise replay and short solver trace with fixed 120-Hz stepping.
+- Isolated `bin/gearbox/src/physics/benchmark.rs` — native projection/conversion
+  fixture; controller.rs sorts prepared body handles.
+- Isolated `specs/TYRE_PERFORMANCE.md` — measurements, limitations and commands.
+- `/tmp/gearbox-imported-{final,replay-before,replay-sorted-fixture,replay-sorted-runtime,replay-telemetry,unit-tests,rapier-tests,trace}.log`.
+- `/tmp/molla-imported-solver.json`, `/tmp/molla-imported-solver-summary.txt`,
+  `/tmp/molla-imported-trace-summary.mjs` — trace and streaming summarizer.
+- Asset SHA-256: `8aa28ea5bb56c0af11ac233d884661d1d775a2a7ab2d6c860dd2af3effb77718`.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
