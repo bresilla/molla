@@ -5166,6 +5166,98 @@ and passed the full CPU, backend and imported-machine lanes.
 - Engram tool discovery remains empty; this tracked summary preserves session
   continuity without writing protected memory files.
 
+## Mass-edit activation checkpoint (2026-09-20)
+
+### Goal
+
+Continue full compatibility by implementing mass-edit wake flags, without
+globally waking independent parked machines. The previous turn made progress:
+impulse wake handling and scoped generalized-rate commits were implemented,
+validated and committed in both permitted checkouts.
+
+### Instructions
+
+- Leave original Gearbox and the interactive preview untouched. Keep reusable
+  physics in Molla and integration changes in isolated `gearbox-physics`.
+- Preserve untracked `FULL_COMPACT.md`; use repo-native gates, patch tools and
+  unsigned title-only Conventional Commits.
+
+### Discoveries
+
+- Mass edits previously used the same global activation path as topology edits.
+  Mass-only rebuilds retain handles/joint layout, so their wake policy can be
+  scoped to the edited body without acknowledging unrelated pending changes.
+- The existing compiler already preserves the velocity field and force/torque
+  application points when COM changes, and rejects overflow before committing.
+  The new policy retains that transaction; it does not bypass recompilation or
+  patch only inverse-mass fields.
+- Identical total/additional mass values need neither rebuilding nor activation.
+  This also prevents unchanged explicit mass recomputation from waking sleepers.
+- Sleeping tyre samples remain held reactions (`dt = 0`), and pressure state is
+  retained across a non-waking mass rebuild. Once woken, samples are recomputed
+  with the new model; no new load-calibration claim is made from this test.
+
+### Accomplished
+
+- Factored private transactional `rebuild` from globally activating `edit`.
+  Structural edits retain their existing activation behavior. Total mass and
+  total/additional-component setters have explicit wake variants, activate only
+  the edited body when requested, and detect unchanged values before rebuilding.
+- Threaded optional activation through geometry's collider-plus-additional
+  mass recomputation, `RigidWorld`, and isolated `BodyMut::set_additional_mass`.
+- Added three runtime tests covering targeted/no-op activation, COM velocity/
+  wrench invariance, invalid handles/values and rebuild-overflow atomicity.
+- Added a geometry test for a noncentral collider plus authored additional
+  mass, including correct total/COM, no-op identity and rejected-update atomicity.
+- Added three rigid-sleep tests covering trees and loops, unrelated sleepers/
+  quiet windows, prior pending wakes, mass recomputation and post-wake impulse
+  response. Added a tyre sleep/rebuild/resume lifecycle test.
+- Added two adapter tests: Rapier/Molla comparison for waking and non-waking
+  additional mass edits and subsequent impulse response, plus Molla invalid/
+  unchanged-mass behavior. Both focused adapter tests pass.
+- Focused runtime/geometry gates pass; final focused sleep and wheel suites pass
+  after correcting a test-only `[f64; 3]` finiteness check. Final combined CPU
+  gate: **717 passed, ten ignored, 124 binaries**. Both ordinary backend lanes
+  pass **96 tests, 14 ignored**. GPU-feature compilation passes, not GPU runtime
+  parity. All **ten imported-machine gates pass** (133.29 s), covering pressure
+  replay, slopes, towing, controls and steering/tracks. Incidental timings are
+  not controlled performance evidence.
+- Committed Molla as `a8aec06 fix(sim): scope activation for mass edits` and
+  isolated integration as `4ae4f39 fix(physics): honor additional mass wake flag`.
+- All owned build/test handles are terminal. The requested preview is still
+  live on the retained scene-bounds GUI and was not driven or closed. Full-goal
+  completion and end-to-end performance parity remain unproven.
+
+### Next Steps
+
+- Finish non-waking pose/kind behavior with correct held-tyre refresh and
+  dependency reconstruction; do not apply mass-only activation suppression
+  indiscriminately to structural or pose changes.
+- Retain every remaining full-viewer/performance, joint/GPU, towing/service,
+  pressure calibration/lifecycle, surface/soil and visual acceptance requirement.
+  Full implementation and Rapier performance parity are still unproven.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — mass-specific wake policy and no-op guards.
+- `crates/molla-geometry/src/mass_properties.rs` — wake-aware component summation.
+- `crates/molla-solvers/src/rigid_world.rs` — public additional-mass wake variant.
+- `crates/molla-sim/tests/runtime_mass_wake.rs` and
+  `crates/molla-geometry/tests/collider_mass_wake.rs` — property/atomicity tests.
+- `crates/molla-solvers/tests/rigid_settling/mass.rs` and
+  `crates/molla-solvers/tests/wheel_forces/sleep.rs` — group and sleeping-tyre
+  lifecycle tests; `crates/molla-solvers/tests/rigid_sleep.rs` wires the module.
+- Isolated `bin/gearbox/src/physics/molla/{body,tests,mass_wake_tests}.rs` —
+  adapter forwarding and reference comparisons.
+- Molla `target/perf/mass-wake-{focused,focused-final,full}.log` — focused/final
+  CPU and GPU-feature compilation evidence.
+- Isolated `target/perf/mass-wake-{backend,molla,rapier,imported}.log` — backend
+  and imported-machine gates.
+- Preview PID 1574460 was verified live during this work and left untouched.
+  It still runs the retained scene-bounds GUI, not these later body-input edits.
+- Engram discovery still exposes no memory API. This tracked handoff preserves
+  continuity without modifying protected memory files.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
