@@ -7534,6 +7534,107 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Engram APIs remain absent from the tool registry; this project handoff records
   evidence without claiming unavailable memory calls.
 
+### Live checkpoint — retained ABA storage candidate
+
+#### Goal
+- Continue full replacement performance work after accepted brush factors
+  `776f2e2`, documented in `3f26597`. User requested another progress update.
+
+#### Discoveries
+- Twelve per-substep JointScratch allocations can borrow solver-owned vectors.
+  Global construction clears/resizes; local construction clears/reserves and
+  resets per articulation. Only capacity persists, never previous numerical data.
+
+#### Accomplished
+- Uncommitted candidate adds CpuScratch to CPU/GPU constructors and passes it
+  through ordinary and selected CPU stepping. No arithmetic or GPU kernel edits.
+- Storage tests cover poison/reset, signed zero, grow/shrink and local/global
+  switching. Integration oracle compares reused versus fresh solvers bitwise
+  across model sizes, empty scenes, activation masks, substeps and rigor modes.
+- Focused native Make test **62989** completed exit 0: four storage unit tests
+  and two integration oracles passed. Log `target/perf/aba-storage-focused.log`.
+- Full solver lane **76562** completed: 506 passed, 9 ignored, 92 binaries.
+  Ordinary integration **48566** passed 111, with 18 ignored. GPU-feature check
+  **64873** passed. Helper/test rustfmt and diff checks passed.
+- Imported/trace/native-viewer combined lane **22473** completed exit 0:
+  3 Oxbo, 10 imported, trace and native profile viewer build passed. Trace states
+  match the accepted baseline exactly; no rendered/GPU-runtime claim.
+  Ordinary candidate retained as `gearbox-aba-storage-after`, SHA256
+  `1bf6c144bf8d253ccbf5c9ffc0b69572f73cf7df5928037282426ff7139a1740`.
+  No timing acceptance yet. Previous goal turn made progress (tests/evidence).
+  Profile setup own time is 0.055405 ms/frame versus 0.060049 previously, but
+  whole profiled frame is slightly slower; diagnostic only, not acceptance.
+
+#### Next Steps
+- Resolve focused test results, format only changed helper/test files, run full
+  solver and machine lanes, retain ordinary candidate binary and compare against
+  accepted brush-factors baseline. Reject runtime candidate without real benefit.
+
+#### Relevant Files
+- `crates/molla-solvers/src/featherstone{,_scratch,_activation}.rs` and
+  `crates/molla-solvers/tests/featherstone_islands/scratch.rs`.
+- Original Gearbox/assets remain untouched. Engram tools remain unavailable.
+
+### ABA retained storage decision — runtime candidate rejected
+
+#### Goal
+- Continue FULL_COMPACT.md with measured performance improvements, not allocation
+  reductions assumed to improve machine timing.
+
+#### Discoveries
+- Persistent capacity removed twelve repeated scratch allocations without changing
+  tested results, but did not establish a full-machine speedup. Profile setup own
+  time fell ~0.0046 ms/frame while whole profiled frame was slightly slower.
+- No observed cargo/rustc overlap in complete repeat-scalar and confirm-grid
+  cycles (one-second monitoring, five-second run margins). Both had slightly
+  slower candidate medians; reference timing also shifted, so this does not
+  prove a universal regression. Other complete modes overlapped external builds.
+
+#### Accomplished
+- Candidate validation: 506 solver tests passed, 9 ignored; 111 ordinary tests,
+  3 Oxbo, 10 imported tractor/trailer, full trace, GPU-feature compilation,
+  native profile viewer build, formatting/diff checks passed. All 16 timing-run
+  logged states and accepted/candidate trace states matched exactly.
+- All timing handles terminal: 1485 repeat, 84463 confirm. Driving means of
+  four medians in ms/step:
+
+  | cycle | Molla before -> candidate | reference before -> candidate | build overlap |
+  | --- | --- | --- | --- |
+  | repeat scalar | 0.630694750 -> 0.631733750 | 0.288993000 -> 0.295911750 | not observed |
+  | repeat grid | 0.646167250 -> 0.638008000 | 0.290680500 -> 0.290522250 | observed |
+  | confirm scalar | 0.619094500 -> 0.634308250 | 0.288455250 -> 0.294420000 | observed |
+  | confirm grid | 0.639413000 -> 0.645907500 | 0.290520500 -> 0.295437500 | not observed |
+
+- Archived candidate patch, restored all three runtime files to HEAD, retained
+  a general bitwise reused/fresh-solver regression across different models,
+  global/local layouts, empty scenes, selection, substeps and rigor modes.
+- Accepted runtime remains brush factors `776f2e2`, baseline SHA256
+  `f0e5cb7207a685d3dca543104ac196e4ff7ae662d3353a1c671a89527f5e47ff`.
+  Rejected `gearbox-aba-storage-after` SHA256
+  `1bf6c144bf8d253ccbf5c9ffc0b69572f73cf7df5928037282426ff7139a1740` is only
+  a diagnostic artifact; do not launch or use as a replacement baseline.
+- Retained oracle committed as `9252499`. Restored core lane **94158** passed
+  95 tests, 5 ignored across library/islands binaries. Restored integration and
+  native viewer lane **95445** completed: 111 ordinary tests passed, 18 ignored;
+  native profile build passed. Restored ordinary binary is byte-identical to the
+  accepted brush-factors baseline (cmp plus matching SHA256). No live owned jobs.
+
+#### Next Steps
+- Retained test and ordinary/profile native builds are restored and verified.
+  No goal completion claim: performance parity/tails and all
+  other open replacement requirements remain unresolved.
+- Investigate measured loop-response work rather than repeating allocation-only
+  tuning. Current trace: 39 DOFs, 22 loop rows and ten COM Jacobians per substep.
+  Rejected sparse projection remains rejected; no new response optimization has
+  been implemented or accepted.
+
+#### Relevant Files
+- `crates/molla-solvers/tests/featherstone_islands/scratch.rs` — retained oracle.
+- Core ignored `target/perf/aba-storage-candidate.patch`, focused/core/GPU/format
+  logs; isolated `target/perf/aba-storage-*` validation logs, trace/profile,
+  timing scripts, summaries, activity mappings and binary hashes.
+- Original Gearbox/assets untouched. Engram APIs remain unavailable.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
