@@ -5375,10 +5375,12 @@ preview available to the user while continuing FULL_COMPACT.md.
 
 ### Next Steps
 
-- Poll isolated validation session 56994 until terminal and record its final
-  ten imported Kubota/Krampe gates. Do not restart solely because a wait expires.
-- Leave the user's playing Oxbo available; avoid changing pressure or controls
-  while they inspect it. Pressure sweeps/visual acceptance across axles, surfaces
+- Isolated validation session 56994 finished successfully: all ten imported
+  Kubota/Krampe gates passed in 126.04 seconds. All owned build/test handles are
+  terminal. These correctness timings are not controlled performance evidence.
+- The corrected Oxbo preview has since exited (PID 2235934 is absent); do not
+  claim it is still open or treat window closure alone as a physics failure.
+  Pressure sweeps/visual acceptance across axles, surfaces
   and drive states still require their full specified verification.
 - Retain all remaining FULL_COMPACT body-kind, GPU, performance, lifecycle,
   towing/service and soil requirements. Full-goal completion is unproven.
@@ -5396,8 +5398,9 @@ preview available to the user while continuing FULL_COMPACT.md.
   `oxbo-diagnostic-{before,after}.json` — captured initial state and live failure.
 - Isolated `target/perf/oxbo-fixed2-{playing.png,playing.json,settled.json}` —
   inspected corrected GUI and readbacks; `molla-oxbo-fixed2.log` is its live log.
-- Current user preview: `molla-oxbo | molla | PLAYING`, PID 2235934 (revalidate
-  identity before any interaction), isolated `target/release/gearbox launch`.
+- Last verified user preview: `molla-oxbo | molla | PLAYING`, PID 2235934,
+  isolated `target/release/gearbox launch`. It exited after the successful live
+  readbacks and screenshot; a future launch must use the corrected binary below.
 - Retained corrected GUI `target/perf/gearbox-viewer-oxbo-winding`, SHA256
   `b37947b5c5be8b5e1e912a5266bef41ca03e56afd05ea3b7f61f73b893769779`.
 - Engram memory APIs remain unavailable; this tracked summary preserves handoff.
