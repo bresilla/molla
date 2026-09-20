@@ -3982,6 +3982,109 @@ inactive whole-articulation groups. This is not automatic sleep/wake integration
 - `/tmp/molla-activation-imported.log` — full imported-machine regressions.
 - `/tmp/gearbox-after-activation` — retained final machine test binary.
 
+## Explicit runtime sleep/wake checkpoint (2026-09-20)
+
+### Goal
+
+Connect selected articulation execution to real runtime sleep/wake and the isolated
+Gearbox body API. Automatic settling detection and the complete replacement plan
+remain unfinished.
+
+### Instructions
+
+- Preserve original Gearbox and all shared assets. Only Molla and isolated
+  `gearbox-physics` are being edited; no viewers were launched.
+- Keep eight machine substeps and existing acceptance limits.
+
+### Discoveries
+
+- Runtime motor writes retain `SceneStamp`; gravity and raw mutable access also
+  need independent activation invalidation. Added per-body mutation versions and
+  conservative global versions for raw access, topology edits and public state
+  commits. Successful world-owned steps acknowledge their own commits.
+- Both scene handles and mutation counts can repeat after replacing a public
+  `world.scene`. Activation stamps also retain a unique scene identity. Wheel
+  storage uses its own retained identity plus revision, not a bare counter.
+- A sleeping group must wake when contact pairs appear or disappear, including
+  pair-filter changes, and when a cached tyre support is excluded. Fresh contacts
+  are inspected before every substep; graph connectivity is reused only while
+  those substep edges stay identical.
+- Frozen tyres retain pressure/shear state and cached support/footprint readout.
+  Held samples use `dt = 0`, so they do not invent integrated impulses. The backend
+  explicitly exposes their static support rather than treating them as airborne.
+
+### Accomplished
+
+- Added `RigidWorld::{sleep_body,wake_body,is_sleeping}` for complete dynamic
+  dependency groups, with zeroed generalized velocities and selected CPU stepping.
+  No automatic sleep thresholds or timers are enabled.
+- Added fresh-contact selected substeps. Collision/moving-kinematic wakes, motor
+  and body-input changes, pressure transitions and surface edits resume dynamics.
+  Unknown external-force callbacks run fully awake on successful steps; failures
+  preserve sleep and rigid/tyre state. Structural/raw edits conservatively wake all.
+- Connected isolated Gearbox's sleep/readout/wake methods and start-asleep request.
+  Existing `_wake` mutation arguments still conservatively wake on actual edits;
+  honoring explicit non-waking edits and strong/weak automatic-wake policy remains.
+- New tests cover exact inactive poses, independent active motion/damping, tree
+  and loop wake propagation, later-substep collision wakes, sensor/exclusion cases,
+  fixed/kinematic boundaries, rollback, raw access, pressure/shear resume parity,
+  retained support, storage replacement, backend start asleep and motor wake.
+- Final checks passed **461 simulation/solver tests, nine ignored**, in
+  95 binaries, and **90 ordinary backend binary tests, nine ignored**, under each
+  backend environment. Final GPU-feature compilation and new-file formatting
+  checks pass. GPU sleep execution/parity is not implemented.
+- The final collider-free 128-body explicit-sleep microbenchmark measured
+  **0.410540 ms** all asleep, **0.420646 ms** one awake and **1.640728 ms** all
+  awake. These sequential synthetic samples are not parked-machine or Rapier
+  acceptance. Substep connectivity caching avoids repeated identical graph builds.
+- Two retained-binary A/B/B/A cycles on the ordinary Kubota path measured Molla
+  **0.839948938 → 0.848724063 ms** (+1.045%) and Rapier control **0.225196688 →
+  0.228182688 ms** (+1.326%), averaging parked/driving medians. Both move upward
+  slightly; no normal-machine speedup is claimed. Molla remains **3.72×** Rapier.
+  All logged Molla poses, deflections, loads and speeds match across binaries.
+  No owned build/test ran concurrently with these cycles.
+- All **eight imported-machine tests pass**, including the new explicit-sleep
+  diagnostic and pressure/drive recovery. The real Kubota accepts explicit sleep,
+  but remains asleep for **0/240 subsequent full-controller ticks** (median
+  0.842015 ms). There is no live tractor sleep performance benefit yet.
+- Source inspection identifies a concrete repeated wake path: Ackermann applies
+  wheel velocity motors, then `ParkingBrakes::apply` overrides them with position
+  holds. Both writes reach `RigidScene::set_joint_motor`; input-change activation
+  is currently conservative even when that frame's final motor equals its prior
+  value. Resolve this alongside the explicit non-waking update contract rather
+  than suppressing genuine command or pressure wakes.
+- All owned build/test handles are terminal. Core implementation and isolated
+  integration are committed as `f981627` and `f567c44` respectively; no original
+  Gearbox changes or GUI claims.
+
+### Next Steps
+
+1. Resolve controller velocity/parking-hold rewrite wakes and define non-waking
+   motor/body edits. Require the full-controller diagnostic to demonstrate useful
+   sleep persistence without breaking command/pressure/contact wakes.
+2. Add automatic quiet detection and granular wake policy; preserve scene-edit,
+   contact, pressure and failure semantics. Optimize remaining sleeping-loop/global
+   scratch work, and measure real parked/mixed-active fleets against Rapier.
+3. Continue every outstanding full-plan calibration, GPU, rendered, lifecycle,
+   hitch/PTO service, terrain and soil acceptance requirement.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — activation identities and mutation versions.
+- `crates/molla-solvers/src/rigid_sleep.rs` — explicit sleeping groups and wakes.
+- `crates/molla-solvers/src/rigid_world.rs` — selected runtime routing.
+- `crates/molla-solvers/src/featherstone_activation.rs` — fresh-contact selected steps.
+- `crates/molla-solvers/src/wheel_forces.rs` — frozen tyre state and held support.
+- `crates/molla-solvers/tests/rigid_sleep.rs` and `tests/wheel_forces/sleep.rs` — tests.
+- Isolated `bin/gearbox/src/physics/molla/{body,mod,wheel,tests}.rs` — backend wiring.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — explicit-sleep diagnostic.
+- `/tmp/molla-sleep-cache-{full,backend,rapier,gpu}.log` — final checks.
+- `/tmp/molla-sleep-fleet-{initial,final}.log` — collider-free scaling diagnostics.
+- `/tmp/molla-sleep-abba-{1..8}.log` — two normal-path timing guard cycles.
+- `/tmp/molla-sleep-imported.log` — eight imported-machine tests and sleep diagnostic.
+- `/tmp/gearbox-after-sleep` — retained final candidate binary.
+- `/tmp/gearbox-after-activation` — ordinary-path pre-sleep baseline.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
