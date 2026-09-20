@@ -14,6 +14,7 @@ use molla_sim::runtime::{
 use molla_vehicle::{Terrain, TireModel, TireOutput, WheelContact, wheel_ground_wrench};
 
 mod readout;
+pub use readout::{WheelSampleIter, WheelSamples};
 mod sleeping;
 pub(crate) use sleeping::SleepWheelGeometry;
 use sleeping::query_ground;
@@ -191,17 +192,20 @@ impl WheelForces {
         {
             return Err(invalid("wheel radius differs from pressure tyre geometry"));
         }
+        self.invalidate_wheel(desc.body);
         self.wheels.insert(desc.body, desc);
         self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
-        self.invalidate();
         Ok(())
     }
 
     pub fn remove(&mut self, body: BodyHandle) -> Option<WheelDesc> {
+        if !self.wheels.contains_key(&body) {
+            return None;
+        }
         self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
-        self.invalidate();
+        self.invalidate_wheel(body);
         self.pressure_states.remove(&body);
         self.shear.remove(&body);
         self.wheels.remove(&body)
@@ -238,7 +242,7 @@ impl WheelForces {
         state.config = config;
         self.pressure_states.insert(body, state);
         self.activation_revision = self.activation_revision.wrapping_add(1);
-        self.invalidate();
+        self.invalidate_wheel(body);
         Ok(())
     }
 
@@ -285,8 +289,11 @@ impl WheelForces {
     }
 
     pub fn remove_pressure_tire(&mut self, body: BodyHandle) -> Option<PressureTireState> {
+        if !self.pressure_states.contains_key(&body) {
+            return None;
+        }
         self.activation_revision = self.activation_revision.wrapping_add(1);
-        self.invalidate();
+        self.invalidate_wheel(body);
         self.shear.remove(&body);
         self.pressure_states.remove(&body)
     }
@@ -321,16 +328,20 @@ impl WheelForces {
     }
 
     /// All tyre samples from the last successful step; integrate force times `dt` for impulse.
-    pub fn samples(&self, scene: &RigidScene) -> &[WheelSample] {
-        if self.sample_stamp.is_some()
-            && self.sample_dependencies.matches_state(scene)
-            && (self.sample_stamp == Some(scene.stamp())
-                || self.sample_dependencies.matches_structure(scene))
-        {
-            &self.samples
-        } else {
-            &[]
-        }
+    pub fn samples<'a>(&'a self, scene: &'a RigidScene) -> WheelSamples<'a> {
+        let unchanged = self.sample_stamp == Some(scene.stamp())
+            && self.sample_dependencies.matches_state(scene);
+        let valid = self.sample_stamp.is_some()
+            && (unchanged || self.sample_dependencies.matches_grounds(scene));
+        WheelSamples::new(
+            if valid { &self.samples } else { &[] },
+            scene,
+            if unchanged { None } else { Some(&self.sample_dependencies) },
+        )
+    }
+
+    fn invalidate_wheel(&mut self, body: BodyHandle) {
+        self.samples.retain(|sample| sample.wheel != body);
     }
 
     pub(crate) fn invalidate(&mut self) {

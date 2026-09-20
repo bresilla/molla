@@ -81,3 +81,49 @@ fn state_edit_identity_distinguishes_edits_from_solver_commits() {
     let _ = scene.state_mut();
     assert_ne!(scene.state_edit_stamp(), teleported);
 }
+
+#[test]
+fn body_state_edits_follow_only_the_edited_joint_component() {
+    let mut scene = RigidScene::new().unwrap();
+    let chassis = scene.insert_body(BodyDesc::default()).unwrap();
+    let wheel = scene.insert_body(BodyDesc::default()).unwrap();
+    let other = scene.insert_body(BodyDesc::default()).unwrap();
+    scene
+        .insert_joint(JointDesc {
+            parent: Some(chassis),
+            child: wheel,
+            kind: JointType::Revolute,
+            frame_parent: Transform::IDENTITY,
+            frame_child: Transform::IDENTITY,
+            axis: Vec3::Z,
+        })
+        .unwrap();
+    let original = scene.body_state_stamp(other).unwrap();
+    scene
+        .set_body_pose_with_wake(chassis, Transform::from_translation(Vec3::X), false)
+        .unwrap();
+    let edited = scene.body_state_stamp(chassis).unwrap();
+    assert_ne!(edited, original);
+    assert_eq!(scene.body_state_stamp(wheel), Some(edited.clone()));
+    assert_eq!(scene.body_state_stamp(other), Some(original.clone()));
+    scene
+        .commit_step(scene.state().clone_host().unwrap())
+        .unwrap();
+    assert_eq!(scene.body_state_stamp(chassis), Some(edited.clone()));
+    assert_eq!(scene.body_state_stamp(other), Some(original.clone()));
+    assert!(
+        scene
+            .set_body_pose(wheel, Transform::from_translation(Vec3::splat(f64::NAN)))
+            .is_err()
+    );
+    assert_eq!(scene.body_state_stamp(chassis), Some(edited));
+    assert_eq!(scene.body_state_stamp(other), Some(original.clone()));
+    let _ = scene.state_mut();
+    assert_ne!(scene.body_state_stamp(other), Some(original));
+    assert_eq!(
+        scene.body_state_stamp(chassis),
+        scene.body_state_stamp(other)
+    );
+    scene.remove_body(wheel).unwrap();
+    assert_eq!(scene.body_state_stamp(wheel), None);
+}

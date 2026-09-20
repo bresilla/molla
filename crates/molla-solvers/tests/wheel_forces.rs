@@ -22,6 +22,9 @@ mod footprint_material;
 #[path = "wheel_forces/readout.rs"]
 mod readout;
 
+#[path = "wheel_forces/lifecycle.rs"]
+mod lifecycle;
+
 fn body(w: &mut RigidWorld, mass: f64) -> BodyHandle {
     w.scene
         .insert_body(BodyDesc {

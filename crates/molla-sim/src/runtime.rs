@@ -369,6 +369,8 @@ pub struct RigidScene {
     activation_bodies: BTreeMap<BodyHandle, u64>,
     structure_stamps: BTreeMap<BodyHandle, SceneStamp>,
     state_edit_stamp: SceneStamp,
+    state_base_stamp: SceneStamp,
+    body_state_stamps: BTreeMap<BodyHandle, SceneStamp>,
 }
 
 impl RigidScene {
@@ -386,6 +388,8 @@ impl RigidScene {
             activation_bodies: BTreeMap::new(),
             structure_stamps: BTreeMap::new(),
             state_edit_stamp: SceneStamp(Arc::new(())),
+            state_base_stamp: SceneStamp(Arc::new(())),
+            body_state_stamps: BTreeMap::new(),
         })
     }
 
@@ -398,6 +402,8 @@ impl RigidScene {
     pub fn state_mut(&mut self) -> &mut State {
         self.activate_all();
         self.state_edit_stamp = SceneStamp(Arc::new(()));
+        self.state_base_stamp = self.state_edit_stamp.clone();
+        self.body_state_stamps.clear();
         &mut self.snapshot.state
     }
     pub fn control(&self) -> &Control {
@@ -579,7 +585,7 @@ impl RigidScene {
         }
         crate::eval_body_velocities(self.model(), &mut next)?;
         let changed = [id];
-        self.commit_body_state(next, if wake { &changed } else { &[] })
+        self.commit_body_state(next, &changed, wake)
     }
 
     /// Atomically set dense rates in the current model layout and optionally activate changed joints.
@@ -615,7 +621,7 @@ impl RigidScene {
         let mut next = self.state().clone_host()?;
         next.joint_qd.host_mut()?.copy_from_slice(velocities);
         crate::eval_body_velocities(self.model(), &mut next)?;
-        self.commit_body_state(next, if wake { &changed } else { &[] })
+        self.commit_body_state(next, &changed, wake)
     }
 
     /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
@@ -663,7 +669,7 @@ impl RigidScene {
         crate::eval_fk(self.model(), &mut next)?;
         crate::eval_body_velocities(self.model(), &mut next)?;
         let changed = [id];
-        self.commit_body_state(next, if wake { &changed } else { &[] })
+        self.commit_body_state(next, &changed, wake)
     }
 
     /// Atomically set world poses; unlisted descendants follow their parent.
@@ -728,16 +734,20 @@ impl RigidScene {
         self.commit_body_state(
             next,
             &poses.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            true,
         )
     }
 
-    fn commit_body_state(&mut self, next: State, changed: &[BodyHandle]) -> Result<()> {
+    fn commit_body_state(&mut self, next: State, changed: &[BodyHandle], wake: bool) -> Result<()> {
         self.commit_state(next)?;
-        for &id in changed {
-            self.activate_body(id);
+        if wake {
+            for &id in changed {
+                self.activate_body(id);
+            }
         }
         self.snapshot.stamp = SceneStamp(Arc::new(()));
         self.state_edit_stamp = self.snapshot.stamp.clone();
+        self.mark_body_state_edits(changed);
         self.revision += 1;
         Ok(())
     }
@@ -1437,6 +1447,7 @@ impl RigidScene {
         let result = change(&mut next)?;
         let snapshot = compile(&next, self.gravity, Some(&self.snapshot))?;
         readout::update_structure_stamps(&mut self.structure_stamps, &self.description, &next);
+        self.body_state_stamps.retain(|body, _| next.bodies.contains_key(body));
         self.description = next;
         self.snapshot = snapshot;
         self.revision += 1;

@@ -10,6 +10,38 @@ impl RigidScene {
     pub fn state_edit_stamp(&self) -> SceneStamp {
         self.state_edit_stamp.clone()
     }
+
+    /// Explicit state edits to a body's joint component; raw mutable access affects all bodies.
+    pub fn body_state_stamp(&self, body: BodyHandle) -> Option<SceneStamp> {
+        self.body(body)?;
+        Some(
+            self.body_state_stamps
+                .get(&body)
+                .unwrap_or(&self.state_base_stamp)
+                .clone(),
+        )
+    }
+
+    pub(super) fn mark_body_state_edits(&mut self, changed: &[BodyHandle]) {
+        let mut neighbours = BTreeMap::<BodyHandle, Vec<BodyHandle>>::new();
+        for joint in self.description.joints.values() {
+            if let Some(parent) = joint.parent {
+                neighbours.entry(parent).or_default().push(joint.child);
+                neighbours.entry(joint.child).or_default().push(parent);
+            }
+        }
+        let mut visited: BTreeSet<_> = changed.iter().copied().collect();
+        let mut pending = changed.to_vec();
+        while let Some(body) = pending.pop() {
+            self.body_state_stamps
+                .insert(body, self.state_edit_stamp.clone());
+            for &neighbour in neighbours.get(&body).into_iter().flatten() {
+                if visited.insert(neighbour) {
+                    pending.push(neighbour);
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn update_structure_stamps(
