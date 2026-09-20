@@ -18,6 +18,9 @@ mod mass;
 #[path = "rigid_settling/pose.rs"]
 mod pose;
 
+#[path = "rigid_settling/kind.rs"]
+mod kind;
+
 fn body(world: &mut RigidWorld, x: f64, kind: BodyKind) -> BodyHandle {
     world
         .scene

@@ -1223,10 +1223,27 @@ impl RigidScene {
     }
 
     pub fn set_body_kind(&mut self, id: BodyHandle, kind: BodyKind) -> Result<()> {
-        self.edit(|d| {
+        self.set_body_kind_with_wake(id, kind, true)
+    }
+
+    /// Change mobility, optionally activating a non-fixed body's dependents.
+    pub fn set_body_kind_with_wake(
+        &mut self,
+        id: BodyHandle,
+        kind: BodyKind,
+        wake: bool,
+    ) -> Result<()> {
+        if self.body(id).ok_or_else(|| missing("body"))?.kind == kind {
+            return Ok(());
+        }
+        self.rebuild(|d| {
             d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?.kind = kind;
             Ok(())
-        })
+        })?;
+        if wake && kind != BodyKind::Fixed {
+            self.activate_body(id);
+        }
+        Ok(())
     }
 
     pub fn body_mass_properties(&self, id: BodyHandle) -> Result<MassProperties> {
