@@ -3895,6 +3895,93 @@ and wake dependencies, before integrating actual dormant solver execution.
 - `/tmp/molla-rigid-islands-{molla-binary,rapier-binary,imported}.log` — ordinary
   backend and imported-machine regressions.
 
+## Selected articulation execution checkpoint (2026-09-20)
+
+### Goal
+
+Continue the full replacement plan with an actual CPU execution primitive for
+inactive whole-articulation groups. This is not automatic sleep/wake integration.
+
+### Instructions
+
+- Original Gearbox, shared assets and unrelated user processes remain untouched.
+- Keep the existing eight-substep machine configuration and acceptance tolerances.
+- The user confirmed interacting with `molla-gram-perf`; its stopping is not an
+  unattended failure observation. That answer does not explain the window closing.
+
+### Discoveries
+
+- Whole-articulation selection can omit drive-inertia factorization, ABA and
+  integration while retaining inactive coordinates, velocities, poses and persistent
+  forces exactly. Global FK, contact evaluation and scratch allocation still run.
+- Dynamic contacts and enabled mimic links cannot cross the active/inactive
+  boundary. Fixed/kinematic contacts do not require matching activation; sensor,
+  disabled-collider and nonpenetrating contacts do not physically couple groups.
+- A selected solver step is not a sleep policy: retained inactive velocities may
+  be nonzero. The caller remains responsible for arbitrary force dependencies,
+  wake events and fresh substep collision detection.
+
+### Accomplished
+
+- Added CPU `FeatherstoneSolver::step_active_articulations`, with explicit GPU
+  rejection, mask/dependency validation and substep-underflow rejection. The normal
+  stepping path still passes no selection and changes no physics settings.
+- Inactive-only contact samples report no acted force or normal impulse. Active
+  samples preserve the ordinary solver's force and substep impulse accounting.
+- Twelve new functional tests pass. All-active trajectories match the ordinary
+  solver exactly; mixed selections match separately paused/resumed simulations for
+  120 steps with one, two and eight substeps, both rigorous solve settings, limits,
+  disabled joints, motors and persistent wrenches. Tests cover contact readout,
+  mimic dependencies, malformed inputs, immovable boundaries, sensors, empty and
+  implicit articulations, and selection from `RigidIslands` snapshots.
+- Final full CPU solver lane: **410 passed, eight ignored**, across 90 test
+  binaries. Final focused lane: **13 passed, two ignored**. Ordinary isolated
+  Gearbox binary lanes: **87 passed, eight ignored** on each backend. GPU-feature
+  compilation passes; this is not GPU activation implementation or parity proof.
+- Added an interleaved, alternating-order ignored scaling benchmark using the
+  same rigorous solve and stable-feedback settings for ordinary/all/one/no-active
+  execution. At 512 independent two-body articulations, ordinary stepping measured
+  **1.438456 ms**, selected all-active **1.480955 ms**, selected one-active
+  **0.502024 ms**, and selected none-active **0.502692 ms** median. These are
+  solver-only synthetic timings, not real parked fleets or Rapier comparisons.
+- Two retained-binary A/B/B/A cycles leave normal real-machine timing effectively
+  unchanged: Molla's average of parked/driving medians is **0.851901938 →
+  0.850407625 ms** (-0.175%, individual cycles +0.248% and -0.594%). Rapier control
+  is **0.226564500 → 0.227791813 ms** (+0.542%). This is noise-scale variation,
+  not a machine speedup; Molla remains about **3.73×** Rapier on this fixture.
+  All recorded speeds/sleep counts match between binaries. No owned builds or
+  tests ran concurrently with the timing cycles. Renderer and controller work
+  remain outside the timed physics step.
+- All **seven imported-machine regressions pass**, including pressure replay,
+  controller actuation, slope parking, trailer parking and straight/turning track
+  behavior. Implementation/tests are committed as `3970617`. All owned build/test
+  handles are terminal; no viewer was launched in this checkpoint.
+
+### Next Steps
+
+1. Connect selection to fresh collision detection and external-force dependency
+   closure before each substep, then implement runtime sleep/wake state and events.
+2. Handle control/raw-state mutations, pressure transitions, static terrain edits,
+   kinematic motion, contact wakes and topology merge/split. Do not change backend
+   `is_sleeping` or honor start-asleep by merely freezing individual bodies.
+3. Benchmark actual parked and mixed-active fleets, and continue the remaining
+   calibration, GPU, visual, lifecycle, service and soil acceptance requirements.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/featherstone_activation.rs` — opt-in CPU selection.
+- `crates/molla-solvers/src/featherstone.rs` — skip selected dynamics and restore
+  inactive state; ordinary stepping remains unselected.
+- `crates/molla-solvers/tests/featherstone_islands.rs` — shared tree/mimic fixture.
+- `crates/molla-solvers/tests/featherstone_islands/activation.rs` — selection
+  correctness, dependency validation and synthetic scaling tests.
+- `/tmp/molla-activation-{full-final,focused-final,gpu-check}.log` — solver gates.
+- `/tmp/molla-activation-{molla-final,rapier-final}.log` — backend binary gates.
+- `/tmp/molla-activation-scaling-final.log` — alternating synthetic benchmark.
+- `/tmp/molla-activation-abba-{1..8}.log` — two real-machine timing cycles.
+- `/tmp/molla-activation-imported.log` — full imported-machine regressions.
+- `/tmp/gearbox-after-activation` — retained final machine test binary.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
