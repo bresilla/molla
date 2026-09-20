@@ -6493,6 +6493,155 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   f1cd2555411944323c4c6d26935bbd0c6a1aad587552e361c95d4a81ba1f98f6;
   reference remains gearbox-small-block-after. Hash file singular-force-binaries.sha256.
 
+### Local heightfield bounds candidate checkpoint
+
+- Added debug tracing to CPU broad phase, pair filtering, contact output and
+  individual shape pairs. Geometry now uses the existing tracing 0.1 dependency;
+  core and isolated Cargo.lock add that dependency edge. Isolated meadow trace
+  filter also enables molla_geometry. No new physics engine dependency.
+- Full-meadow trace passed (handle 23372 terminal). All 13 surviving non-wheel
+  pairs were machine shapes versus ground shape 17, 960 calls each over 120
+  frames. Individual span overhead is substantial; traced durations are not an
+  acceptance timing. Artifact: isolated target/perf/molla-collision-breakdown
+  {-trace.json,.log,.tsv}. Global terrain bounds include distant hills and leave
+  flat-patch parts in detailed collision detection even when locally airborne.
+- Candidate caches maximum heights in 8x8-cell tiles alongside scene-stamped
+  global heightfield bounds. Each tile includes shared boundary vertices and
+  partial final tiles. The CPU prepared path transforms its existing broad-phase
+  shape AABB into field coordinates and skips narrow phase only above all covered
+  tiles. Bounds expand conservatively for floating-point transforms; non-finite
+  or invalid/missing data falls back to normal collision. No resolution/substep
+  reduction, no changed contact equations, no approximation of accepted contacts.
+- Broad-phase pair/filter callback behavior and reported candidate counts stay
+  unchanged. CPU narrow-phase call counts decrease. GPU broad/full-narrow paths
+  retain their original behavior; no new GPU culling/parity claim.
+- Focused verification passed: geometry lib 120 tests and prepared bounds 4
+  tests (one timing ignored). New exact-contact oracle covers six shapes, both
+  pair orders, tilted/translated terrain, non-square cells, peaks on tile edges,
+  corners and partially filled tiles, both airborne and penetrating positions.
+  Existing scene-edit/removal/replacement oracle still passes; storage-reuse
+  test now checks tile cache allocation as well. New files formatted separately.
+- Initial focused attempts had a test-only missing direct glam dependency
+  (replaced EulerRot with quaternion products) and a wrong test point that was
+  inside a peak-containing tile (corrected to a genuinely flat tile). No physics
+  assertions were relaxed. Handles 4358/56203/31569/85425 all terminal.
+- Source uncommitted at this checkpoint. Full geometry/solver handle 87446
+  subsequently passed 697 tests (10 ignored, 118 binaries). Isolated handle
+  90869 passed 111 ordinary tests (18 ignored), three Oxbo tests, ten imported
+  tractor/trailer tests, and the native profile-viewer build. GPU-feature
+  all-targets geometry/solver compilation passed (handle 48291); this is not
+  new GPU runtime parity. All these handles are terminal.
+- Molla-only full-meadow trace passed (58674 terminal). Its 120-frame segment
+  rejects all 13 non-wheel ground pairs before detailed dispatch, with logged
+  before/after machine states identical. Instrumented collision time changes
+  from 0.439835 to 0.121920 ms/frame, but much of that is removed per-pair trace
+  overhead: use the uninstrumented measurements below for performance claims.
+
+### Session summary: local terrain culling validation and timing
+
+#### Goal
+
+- Continue the full FULL_COMPACT.md goal, prioritizing Molla performance without
+  changing tyre mechanics, terrain resolution, substeps, or the original checkout.
+- Previous user-facing status turn was no implementation progress; this turn
+  resumes source review, adds cache-refresh coverage and measures the candidate.
+
+#### Instructions
+
+- Original Gearbox, shared assets and other dependencies remain read-only.
+  Rapier is a timing control only; no Rapier development or removal in this work.
+- Engram context/save/session-summary APIs are unavailable in the tool registry;
+  this project file retains the handoff. No persistent memory-folder edits.
+
+#### Discoveries
+
+- The cached local terrain-height bound can skip all non-wheel ground narrow
+  phases in the measured tractor segment without changing any logged states.
+- Terrain replacements must invalidate tile maxima even when global extrema,
+  dimensions and collider identity stay the same. Added an explicit regression
+  that toggles local surface contact while a distant peak preserves global bounds.
+- Workstation activity affects tails: original Gearbox viewers remain running,
+  and an external Cargo test was observed briefly during the first scalar block.
+  No user process was stopped or changed. No owned build/test overlapped timing.
+
+#### Accomplished
+
+- First complete scalar and field-grid A/B/B/A run passed (59035 terminal), each
+  fixture internally using R/M/M/R, 600 warmup + 1200 samples for parked/driving,
+  full 801x801 meadow, 120 Hz and enabled pressure model at unchanged settings.
+- Mean of four medians per cell, milliseconds per physics step:
+
+  | mode / backend | before parked | after parked | before driving | after driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | scalar Molla | 0.982812250 | 0.814927750 | 0.986504750 | 0.834251000 |
+  | scalar control | 0.281612250 | 0.290394500 | 0.293469000 | 0.305380000 |
+  | field-grid Molla | 0.993381500 | 0.832526500 | 1.000986250 | 0.841129250 |
+  | field-grid control | 0.291841750 | 0.282838750 | 0.292514250 | 0.295424500 |
+
+- First-run driving medians improve about 15.4% scalar and 16.0% field-grid.
+  Driving mean p95 remains 1.554327 ms scalar / 1.3265605 ms grid. This does NOT
+  meet full under-1-ms/tail or Rapier-parity acceptance. All logged state lines
+  compare exactly across before-a/after-a/after-b/before-b in both modes.
+- Additional cache-refresh regression passed with all prepared-bounds tests:
+  five passed, one timing ignored (85743 terminal). No production source changed
+  after the full validation and candidate build; the extra change is test-only.
+- A second complete scalar/grid A/B/B/A passed (95707 terminal). All eight repeat
+  logs have exactly the same state lines as the corresponding first baseline.
+  Mean of four medians per cell for the independent repeat:
+
+  | mode / backend | before parked | after parked | before driving | after driving |
+  | --- | ---: | ---: | ---: | ---: |
+  | scalar Molla | 0.976688000 | 0.810530750 | 0.984374000 | 0.816371500 |
+  | scalar control | 0.284607500 | 0.281572500 | 0.299135750 | 0.296365250 |
+  | field-grid Molla | 1.000283250 | 0.834697000 | 1.011874250 | 0.845121750 |
+  | field-grid control | 0.284119250 | 0.281543750 | 0.296535000 | 0.294005750 |
+
+- Repeat driving reduction is 17.1% scalar / 16.5% grid, with the unchanged
+  control moving less than 1%. Keep this optimization: both independent batches
+  show a substantial median reduction and preserve logged machine states.
+  Repeat candidate driving mean p95 is still 1.172439 / 1.6161695 ms; no stable
+  tail reduction or parity claim. Candidate is still about 2.75x / 2.87x the
+  repeat control. Original user viewer remained active in every repeat load
+  snapshot; no competing build appeared in those snapshots. These are loaded-
+  workstation physics timings, not full-render frame times or isolated-host tails.
+- All owned validation/timing handles are terminal. No owned GUI launched and
+  no shared USD/asset changes. Only Molla and isolated Gearbox source changed.
+- Accepted source commit: core `16dfe4c` (local terrain bounds/culling, tracing
+  and regression coverage). Isolated `e8292b1` enables geometry trace capture
+  and updates the dependency lockfile. Both are unsigned, title-only commits;
+  no merge, push or original-checkout operation was performed.
+
+#### Next Steps
+
+- Retain the measured local terrain culling and its exact-contact/cache tests;
+  use `gearbox-heightfield-tile-after` as the next accepted timing reference.
+- Next measured hotspots are constrained-joint response and Featherstone work;
+  do not reduce physical fidelity to reach a smaller number.
+- Full-plan lifecycle, calibrated tyre/surface, visual, replay, joint/GPU, soil
+  and performance acceptance remains incomplete. Goal remains active.
+
+#### Relevant Files
+
+- `crates/molla-geometry/src/heightfield_bounds.rs` — shared-vertex tile maxima.
+- `crates/molla-geometry/src/shape_world.rs` — scene-stamped tile cache and
+  conservative field-local shape bounds.
+- `crates/molla-geometry/src/{broad_phase,pipeline}.rs` — cached AABB reuse,
+  prepared CPU narrow-phase culling and geometry tracing.
+- `crates/molla-geometry/tests/prepared_bounds/tiles.rs` — shape/pose/edge contact
+  oracle and unchanged-global-bounds terrain-edit regression.
+- Core `target/perf/heightfield-tile-{core,gpu-check,final-cache}.log`.
+- Isolated `target/perf/heightfield-tile-{molla,oxbo,imported,viewer,trace}.log`,
+  `heightfield-tile-trace.json`, `heightfield-tile-profile.tsv`,
+  `heightfield-tile-{scalar,grid}-{before-a,after-a,after-b,before-b}.log`,
+  `heightfield-tile-timing-summary.txt`, `heightfield-tile-load-{before,after}.txt`.
+- Repeat logs/load snapshots `heightfield-tile-repeat-{scalar,grid}-
+  {before-a,after-a,after-b,before-b}{.log,-load.txt}` and
+  `heightfield-tile-repeat-summary.txt`.
+- Retained candidate `target/perf/gearbox-heightfield-tile-after`, SHA256
+  40ae96b5a4b3925e1ece27c3f77eb4e9627bb9d92364c8c9eb316c7c61c6a924.
+- Retained baseline `target/perf/gearbox-singular-force-after`, SHA256
+  f1cd2555411944323c4c6d26935bbd0c6a1aad587552e361c95d4a81ba1f98f6.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
