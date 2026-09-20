@@ -6,6 +6,10 @@ use molla_sim::{
 use molla_solvers::{FeatherstoneSolver, Solver};
 
 fn fixture(ids: &[usize]) -> (Model, State, Control) {
+    fixture_with_mimic(ids, false)
+}
+
+fn fixture_with_mimic(ids: &[usize], mimic: bool) -> (Model, State, Control) {
     let mut builder = ModelBuilder::new();
     for &id in ids {
         builder.begin_articulation();
@@ -37,6 +41,11 @@ fn fixture(ids: &[usize]) -> (Model, State, Control) {
         let (lower, upper) = if id % 4 == 2 { (0.0, 0.0) } else { (-0.2, 0.2) };
         builder.set_joint_limits(hinge, &[lower], &[upper]).unwrap();
     }
+    if mimic {
+        builder
+            .add_mimic_constraint(molla_core::JointId(1), molla_core::JointId(3), 0.1, -1.0)
+            .unwrap();
+    }
     let mut model = builder.build().unwrap();
     for (local, &id) in ids.iter().enumerate() {
         if id % 5 == 0 {
@@ -64,6 +73,9 @@ fn fixture(ids: &[usize]) -> (Model, State, Control) {
     molla_sim::eval_body_velocities(&model, &mut state).unwrap();
     (model, state, control)
 }
+
+#[path = "featherstone_islands/activation.rs"]
+mod activation;
 
 #[test]
 fn independent_articulations_match_separate_simulations() {

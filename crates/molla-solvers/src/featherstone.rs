@@ -44,6 +44,9 @@ use crate::sim::{
 
 use super::Solver;
 
+#[path = "featherstone_activation.rs"]
+mod activation;
+
 /// Maximum DOFs in any single joint — Free/Distance/D6 hit 6.
 pub(crate) const MAX_JOINT_DOFS: usize = 6;
 
@@ -501,6 +504,7 @@ impl FeatherstoneSolver {
                     self.rigorous_d_solve,
                     self.rigorous_distance,
                     &mut self.contact_forces,
+                    None,
                 )?;
                 for reading in &mut self.contact_forces {
                     reading.sample_dt = dt;
@@ -702,6 +706,7 @@ fn cpu_step(
     rigorous_d_solve: bool,
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
+    activation: Option<&activation::ActiveSet>,
 ) -> Result<()> {
     if model.joint_count == 0 {
         state_out.copy_host_from(state_in)?;
@@ -736,6 +741,9 @@ fn cpu_step(
             if a >= model.joint_count || b >= model.joint_count {
                 continue;
             }
+            if activation.is_some_and(|active| !active.joints[a]) {
+                continue;
+            }
             let coord_a = coord_off[a] as usize;
             let coord_b = coord_off[b] as usize;
             let dof_a = dof_off[a] as usize;
@@ -758,8 +766,10 @@ fn cpu_step(
     eval_body_velocities(model, state_out)?;
 
     let mut joint_mass = crate::joint_mass::JointMass::new(model, state_out);
-    let motor_inertias =
-        effective_drive_inertias(model, control, stable_motor_feedback, &mut joint_mass)?;
+    let motor_inertias = effective_drive_inertias(
+        model, control, stable_motor_feedback, &mut joint_mass,
+        activation.map(|active| active.articulations.as_slice()),
+    )?;
 
     let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
@@ -777,6 +787,9 @@ fn cpu_step(
     crate::joint_compliance::apply(model, state_out, &motor_inertias, dt, &mut body_f_in)?;
     *contact_forces =
         crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?;
+    if let Some(active) = activation {
+        active.filter_readings(model, contact_forces)?;
+    }
     let body_mass = model.body_mass.host()?;
     let body_flags = model.body_flags.host()?;
     let body_inertia = model.body_inertia.host()?;
@@ -841,6 +854,9 @@ fn cpu_step(
     let mut q_dd = vec![0.0_f64; model.joint_dof_total];
     let mut a_body = vec![SpatialVector::ZERO; n];
     for art in 0..art_count {
+        if activation.is_some_and(|active| !active.articulations[art]) {
+            continue;
+        }
         let j_begin = art_start[art] as usize;
         let j_end = art_start[art + 1] as usize;
         if j_begin == j_end {
@@ -1701,6 +1717,10 @@ fn cpu_step(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
+    if let Some(active) = activation {
+        active.restore(model, state_in, state_out)?;
+    }
+
     // Propagate input body_f to output so substepping (which swaps
     // state_a / state_b each iteration) sees the same external wrench
     // each substep until the caller overwrites it.
@@ -1764,6 +1784,7 @@ fn effective_drive_inertias(
     control: &Control,
     stable_feedback: bool,
     joint_mass: &mut crate::joint_mass::JointMass<'_>,
+    active: Option<&[bool]>,
 ) -> Result<Vec<Real>> {
     let _span = tracing::debug_span!("drive_inertias").entered();
     let mut result = vec![1.0; model.joint_dof_total];
@@ -1793,6 +1814,10 @@ fn effective_drive_inertias(
         };
         let first = offsets[begin] as usize;
         let count = (offsets[end] - offsets[begin]) as usize;
+        if active.is_some_and(|active| !active[articulation]) {
+            result[first..first + count].fill(0.0);
+            continue;
+        }
         if !(first..first + count).any(requested) {
             continue;
         }
@@ -2129,7 +2154,7 @@ mod tests {
                     .unwrap()
                     .fill(JointTargetMode::Velocity as u32);
                 let mut cache = crate::joint_mass::JointMass::new(&model, &state);
-                let result = effective_drive_inertias(&model, &control, true, &mut cache).unwrap();
+                let result = effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
                 let mass = crate::mass_matrix(&model, &state, 0).unwrap();
                 let shared = cache.factor(0, 5).unwrap();
                 for (i, actual) in result.iter().enumerate() {
@@ -2145,7 +2170,7 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    effective_drive_inertias(&model, &control, false, &mut cache).unwrap(),
+                    effective_drive_inertias(&model, &control, false, &mut cache, None).unwrap(),
                     vec![1.0; 5]
                 );
             }
@@ -2175,7 +2200,7 @@ mod tests {
             .unwrap()
             .fill(JointTargetMode::Velocity as u32);
         let mut cache = crate::joint_mass::JointMass::new(&model, &state);
-        let actual = effective_drive_inertias(&model, &control, true, &mut cache).unwrap();
+        let actual = effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
         let mass = crate::mass_matrix(&model, &state, 0).unwrap();
         let mut compact = vec![0.0; 25];
         for i in 0..5 {
