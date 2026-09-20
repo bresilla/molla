@@ -4992,6 +4992,89 @@ launched and its rendered Kubota frame was inspected successfully.
 - Engram tool discovery still exposes no memory API. This tracked summary
   preserves the handoff without editing protected memory files.
 
+## Non-waking body input checkpoint (2026-09-20)
+
+### Goal
+
+Continue `FULL_COMPACT.md` body/sleep compatibility without disturbing the
+interactive preview. The preceding turn made verified progress: strong/weak
+wakes were implemented, tested and committed in both allowed checkouts.
+
+### Instructions
+
+- Keep the requested preview open and leave original Gearbox untouched.
+- Use the Molla Makefile, isolated backend test lane and unsigned title-only
+  Conventional Commits. Preserve untracked `FULL_COMPACT.md`.
+
+### Discoveries
+
+- Non-waking edits need to retain pending inputs, not discard them or put the
+  body back to sleep. The active-articulation solver already preserves inactive
+  generalized rates and persistent wrenches; suppressing only the requested
+  body's activation stamp lets these inputs take effect on a subsequent wake.
+- Geometry/query invalidation is separate from activation. A velocity edit
+  still commits validated state and changes the scene stamp, even when it does
+  not wake the body. Existing pending wakes must never be acknowledged away.
+- Do not blindly apply the same stamp suppression to pose, kind or mass edits:
+  pose edits interact with held sleeping tyre samples, and kind/mass edits
+  rebuild the model. Those remaining paths need their own lifecycle checks.
+
+### Accomplished
+
+- Added explicit `RigidScene` wake-policy variants for COM velocity, persistent
+  force/torque, force at a world point, and force reset. Existing entry points
+  retain their waking behavior. Finite-value, overflow, handle and fixed-body
+  validation remains before mutation/activation.
+- Wired isolated `BodyMut::{set_linvel,set_angvel,add_force,add_torque,
+  reset_forces}` to the caller's wake flag instead of discarding it.
+- Added three runtime tests for per-body activation isolation, point-force
+  torque, finite/overflow/removed-handle failure atomicity, scene stamp
+  invalidation, fixed bodies and zero wrench/reset behavior.
+- Added six sleep integration tests for stored velocity/wrench retention,
+  exact post-wake response, whole-tree rates, reset with/without wake,
+  later contact wake, preserving prior wake requests, and quiet-window behavior.
+- Added two backend tests: real Rapier/Molla non-waking input comparisons,
+  and Molla waking/invalid-input/unrelated-sleeper behavior. The reference
+  comparison starts from automatic sleep; the separately recorded Rapier
+  explicit-sleep assertion remains unresolved and is not hidden by this gate.
+- Final combined geometry/sim/solver gate: **701 passed, ten ignored, 121
+  binaries**, including all three new runtime and six new sleep cases. Both
+  ordinary backend lanes pass **94 tests, 14 ignored**. GPU-feature compilation
+  passes; no GPU runtime parity is claimed. All **ten imported-machine gates
+  pass** (132.02 s), covering pressure replay, slopes, towing, controller motion
+  and steering/tracks. Incidental timing output is not a controlled benchmark.
+- Committed Molla as `138c52f fix(sim): honor nonwaking velocity and force edits`
+  and isolated integration as
+  `399c3f6 fix(physics): forward nonwaking body input flags`.
+- All owned test/build handles are terminal. The user-requested interactive
+  preview remains running on its retained scene-bounds binary, not this newer
+  body-input implementation. No final compatibility/performance claim is made.
+
+### Next Steps
+
+- Finish non-waking pose/kind/mass/impulse behavior, preserving dependency and
+  failure semantics rather than globally acknowledging unrelated edits.
+- Continue the controlled viewer/performance work and all remaining joint/GPU,
+  towing/service, tyre calibration/lifecycle, terrain/soil and visual acceptance
+  requirements. The complete objective remains active and incomplete.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — explicit wake-policy mutation variants.
+- `crates/molla-sim/tests/runtime_nonwaking.rs` — activation and atomicity tests.
+- `crates/molla-solvers/tests/rigid_sleep.rs` and
+  `crates/molla-solvers/tests/rigid_settling/nonwaking.rs` — stepping/dependency/
+  quiet-time tests.
+- Isolated `bin/gearbox/src/physics/molla/{body,tests,nonwaking_tests}.rs` — flag
+  forwarding and backend reference comparisons.
+- Molla `target/perf/nonwaking-{focused,full}.log` — CPU and GPU compile gates.
+- Isolated `target/perf/nonwaking-{backend-focused,molla,rapier,imported}.log` —
+  backend and real-machine correctness evidence.
+- Preview PID 1574460 was confirmed live during this work and was not driven
+  or closed. Revalidate identity before any future interaction.
+- Engram tool discovery still returns no memory API; this tracked summary is
+  the available session handoff and does not alter protected memory files.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
