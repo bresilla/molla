@@ -4486,6 +4486,131 @@ fleets and removing loop-constraint work belonging to sleeping machines.
 - `/tmp/molla-selected-loops-normal-{1..8}.log` — true pre-change normal-machine
   comparisons; `validated-{full,gpu,format}.log` — final core validation.
 
+## Active-fleet response compaction checkpoint (2026-09-20)
+
+### Goal
+
+Continue full compatibility/performance work by reducing the all-active fleet's
+global loop-response work. Previous checkpoint was verified implementation
+progress, not a wait or completion of the full objective.
+
+### Instructions
+
+- Same worktree, original Gearbox and shared-asset boundaries remain in force.
+- Engram tools remain unavailable. No original checkout edits or viewer actions.
+
+### Discoveries
+
+- A block-Cholesky-only candidate passed the real 1/2/4-machine fleet gate but
+  showed no clear total-step improvement: initial four-active median 5.363281 ms.
+- Added an ignored profile-feature fleet trace in the isolated test fixture.
+  Its first 120-step trace recorded 773.318 ms inside `rigid_step`, 407.353 ms
+  in loop forces, 353.767 ms in loop response construction, but only 21.901 ms
+  in the bounded solve. Response Gram construction was 130.207 ms, projection
+  87.463 ms, whitening 49.676 ms. These are instrumented inclusive durations,
+  not normal step-time acceptance measurements. No rank/Cholesky fallback
+  events occurred in that trace.
+
+### Accomplished
+
+- Implemented exact-zero disconnected matrix components
+  inside each global active-set linear solve. It retains the global matrix
+  normalizer and pivot cutoff; any singular/near-cutoff/indefinite block falls
+  back to the original complete solve. Active-set clamp/release order is not
+  split. Dense/reference tests pass bit-exactly, including interleaved blocks,
+  scales 1e-100–1e100 and arbitrarily small nonzero cross-block couplings.
+- Second candidate compacts exactly zero projected Gram rows only for
+  multi-articulation models. It scatters the small response back into the same
+  global matrix and retains the original single-articulation route. Tests cover
+  non-diagonal full-rank/singular matrices, empty/sparse/dense rows, scale and
+  whiten-path cutovers, with exact equality to the dense path and atomic invalid
+  input rejection. A final no-zero-row fast path delegates directly to the old
+  Gram routine. Final validation and timing evidence is recorded below.
+- Baseline is isolated `target/perf/gearbox-fleet-after-selected-loops-final`
+  from the last committed checkpoint. Do not replace it with an older pre-sleep
+  baseline. Initial block-only artifact is `gearbox-after-loop-blocks-initial`;
+  first compact candidate is `gearbox-after-loop-blocks-compact`; final candidate
+  build targets `gearbox-after-loop-blocks-final`. Verify build logs and byte
+  comparisons before using an artifact.
+- First combined-candidate fleet A/B/B/A passed with bit-identical logged states:
+  4 active **5.322799 → 4.155651 ms** (-21.927%); 2 active **1.962706 →
+  1.877601 ms** (-4.336%). Rapier corresponding controls changed +0.051% and
+  +0.210%. Normal single-machine A/B/B/A **0.85804425 → 0.864436375 ms**
+  (+0.745%), Rapier **0.2267145 → 0.22768825 ms** (+0.430%). However, one active
+  in four regressed **1.5512545 → 1.5948885 ms** (+2.813%). No owned validation
+  work overlapped these timings.
+- Final revision counts articulations actually contributing to
+  the loop response and invokes block solving only when more than one
+  contributes, rather than using total model articulation count. This avoids
+  partition-search overhead for a lone active tractor beside sleepers. Latest
+  artifact is `gearbox-after-loop-blocks-active`; all final measurements below
+  use that artifact, not the earlier `*-final` combined candidate.
+- Final same-world fleet A/B/B/A mean medians (ms per physics step):
+
+  | Fleet / active | Before | After | Change |
+  | --- | ---: | ---: | ---: |
+  | 1 / 1 | 0.8416895 | 0.8534365 | +1.396% |
+  | 2 / 1 | 1.0557885 | 1.0747825 | +1.799% |
+  | 4 / 1 | 1.5276820 | 1.5409375 | +0.868% |
+  | 2 / 2 | 1.9373775 | 1.8430790 | -4.867% |
+  | 4 / 4 | 5.2665860 | 4.0705825 | -22.709% |
+
+- Corresponding Rapier all-active controls changed +0.235% (two machines) and
+  +0.265% (four). Four-machine/one-active Rapier changed +1.340%; the small
+  Molla mixed-fleet variation is not claimed as a speedup. Parked measurements
+  remain noisy (two-machine mean medians +10.589%, four-machine -1.255%).
+  Four-active p95 mean fell **5.9448975 → 4.6727190 ms**. Single-machine and
+  quiet-host latency parity are not established by these fleet improvements.
+- Final original single-machine paired A/B/B/A: Molla **0.843792750 →
+  0.847208750 ms** (+0.405%); Rapier **0.224941625 → 0.223544750 ms** (-0.621%).
+  This is a small measured single-machine cost, not a single-machine speedup;
+  retain the optimization for the demonstrated real all-active fleet benefit.
+  Molla remains about **3.79×** Rapier on that ordinary fixture.
+- All four final fleet runs and all four final normal runs passed. Every logged
+  mechanical state matches exactly across corresponding runs. The fleet gate
+  checks all parked bodies remain asleep while others drive. The pre-existing
+  Rapier 44 m/s transient remains flagged; no broad stable-backend-parity claim.
+  No owned builds/tests overlapped final timings; user processes were not stopped.
+- Final solver/simulation gate: **488 passed, nine ignored, 95 binaries**.
+  Ordinary Molla/Rapier lanes each pass **91 tests, 12 ignored**; profile-feature
+  binary passes **91 tests, 14 ignored**; all **ten** prior imported-machine
+  tests pass. GPU feature compilation and new-file formatting checks pass.
+  Imported validation ran alongside other correctness/build work, so its timing
+  numbers are not used as performance evidence. GPU runtime parity remains open.
+- Final four-active profile capture passes. Its 120-step inclusive durations
+  were `rigid_step` **632.633 ms**, `loop_response` **204.200 ms**, Gram
+  **9.307 ms**, whitening **15.439 ms**, and projection **88.196 ms**. Compared
+  with the initial block-only trace, Gram/whitening work is substantially smaller;
+  projection remains. These traces are diagnostic, not uninstrumented timings.
+- Solver changes committed as `45f1e60`; isolated fleet trace as `bb8a47c`.
+  All owned command handles are terminal. Original Gearbox and the user's
+  untracked `FULL_COMPACT.md` remain unchanged. The complete goal remains active.
+
+### Next Steps
+
+1. Reduce remaining loop projection/global allocation work, without repeating
+   the earlier compact-response attempt's single-machine regression. Consider
+   repeated articulated mass computation only after checking its distinct
+   drive/force conditioning semantics. Require actual-machine before/after gates.
+2. Profile end-to-end viewer performance separately from headless CPU stepping;
+   do not equate the latter with rendered performance or visual tyre acceptance.
+3. Complete remaining body wake semantics, joints/GPU parity, towing replay,
+   pressure lifecycle/persistence, service propagation, calibrated tyre/terrain
+   mechanics and rendered soil requirements. This is not full-plan completion.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/rigid_impulse/{blocks,compact}.rs` — candidates/tests.
+- `crates/molla-solvers/src/loop_forces{.rs,/blocks.rs}` — routing/bounded oracle.
+- `crates/molla-solvers/src/articulated_response.rs` — compact response entry.
+- Isolated `bin/gearbox/src/controller/benchmark/fleet.rs` — added fleet trace.
+- `/tmp/molla-loop-blocks-*` — diagnostic/build/test logs.
+- Isolated `target/perf/molla-loop-blocks-fleet-trace.json` — first profile trace.
+- Isolated `target/perf/molla-loop-blocks-active-trace.json` — final profile trace.
+- `/tmp/molla-loop-blocks-active-{full,gpu,format,backend,rapier,profile-build,
+  imported,trace}.log` — final validation; `active-fleet-{1..4}.log` and
+  `active-normal-{1..4}.log` — final A/B/B/A measurements.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
