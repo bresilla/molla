@@ -193,6 +193,88 @@ fn inactive_contact_has_no_reported_force_or_impulse() {
 }
 
 #[test]
+fn fully_inactive_substeps_still_run_callbacks_and_can_wake_later() {
+    let (model, input, control) = fixture(&[3]);
+    let mut actual = input.clone_host().unwrap();
+    let mut expected = input.clone_host().unwrap();
+    let mut solver = FeatherstoneSolver::new_cpu().with_substeps(8);
+    let mut pipeline = molla_geometry::CollisionPipeline::new();
+    let mut contacts = Contacts::with_capacity(0);
+    let mut calls = 0;
+    solver
+        .step_with_collision_active(
+            &model,
+            &input,
+            &control,
+            &mut pipeline,
+            &mut contacts,
+            0.01,
+            &mut actual,
+            |_, _| false,
+            |state, _, dt, _| {
+                calls += 1;
+                assert_eq!(dt, 0.01 / 8.0);
+                if calls <= 5 {
+                    assert_state(state, &input);
+                }
+                Ok(vec![calls > 4])
+            },
+        )
+        .unwrap();
+    assert_eq!(calls, 8);
+    solver.substeps = 4;
+    solver
+        .step(
+            &model,
+            &input,
+            &control,
+            &Contacts::with_capacity(0),
+            0.005,
+            &mut expected,
+        )
+        .unwrap();
+    assert_state(&actual, &expected);
+}
+
+#[test]
+fn inactive_contact_metadata_matches_active_geometry_and_material() {
+    let (model, input, control) = fixture(&[3]);
+    let mut contacts = contact(u32::MAX, 0);
+    contacts.point.host_mut().unwrap()[0] = Vec3::new(1.0, 0.1, -0.2);
+    contacts.normal.host_mut().unwrap()[0] = Vec3::Y * 3.0;
+    contacts.friction.host_mut().unwrap()[0] = 0.37;
+    let mut output = input.clone_host().unwrap();
+    let mut solver = FeatherstoneSolver::new_cpu();
+    solver
+        .step(&model, &input, &control, &contacts, 0.001, &mut output)
+        .unwrap();
+    let expected = solver.contact_forces()[0].clone();
+    solver
+        .step_active_articulations(
+            &model,
+            &input,
+            &control,
+            &contacts,
+            0.001,
+            &mut output,
+            &[false],
+        )
+        .unwrap();
+    let actual = &solver.contact_forces()[0];
+    assert_eq!(actual.bodies, expected.bodies);
+    assert_eq!(actual.colliders, expected.colliders);
+    assert_eq!(actual.point, expected.point);
+    assert_eq!(actual.normal, expected.normal);
+    assert_eq!(actual.penetration, expected.penetration);
+    assert_eq!(actual.friction, expected.friction);
+    assert_eq!(actual.sample_dt, expected.sample_dt);
+    assert!(!actual.acted);
+    assert_eq!(actual.force_on_b, Vec3::ZERO);
+    assert_eq!(actual.normal_impulse, 0.0);
+    assert_state(&output, &input);
+}
+
+#[test]
 fn active_contact_state_and_readout_match_ordinary_step() {
     for substeps in [1, 2, 8] {
         let (model, input, control) = fixture(&[3, 4]);

@@ -789,6 +789,11 @@ fn cpu_step(
         crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?;
     if let Some(active) = activation {
         active.filter_readings(model, contact_forces)?;
+        if !active.joints.iter().any(|&selected| selected) {
+            active.restore(model, state_in, state_out)?;
+            state_out.body_f.host_mut()?.copy_from_slice(state_in.body_f.host()?);
+            return Ok(());
+        }
     }
     let body_mass = model.body_mass.host()?;
     let body_flags = model.body_flags.host()?;
