@@ -2633,6 +2633,88 @@ and reduced slip, but the unchanged 60-second slope gate still failed.
 - `/tmp/gearbox-parking-{molla,rapier}-regression.log` — 87 passed each.
 - `/tmp/gearbox-parking-build.log` — successful native viewer build.
 
+## Five-controller imported Kubota checkpoint
+
+### Goal
+
+Continue the full plan with actual hitch and PTO actuation on the imported
+Kubota. The previous goal turn made progress by fixing parking and passing
+the slope gate; this turn strengthens the fixture and controller acceptance.
+
+### Instructions
+
+- Only isolated Gearbox-physics test wiring/docs and this handoff changed.
+  Original Gearbox, assets, shared dependencies and production physics stay
+  untouched. No viewer was launched. Engram tools remain unavailable.
+
+### Discoveries
+
+- Earlier imported headless fixtures stepped the drive controllers but not
+  the four service controllers. The fixture now runs production
+  `apply_service_controllers` before each physics step, with its actual
+  resources. All existing imported gates were rerun with this stronger setup.
+  Earlier timings are not a five-active-controller baseline.
+- The front hitch's authored range is negative (-0.395016 rad); the rear's
+  range is +0.961676 rad. Normalized commands must preserve those authored
+  signs rather than assuming positive hinge rotation means raising.
+- Ordinary ignored-test counts include a Vulkan parity test. Correction to
+  earlier summaries: the previous four ignored tests were three imported-asset
+  gates plus Vulkan; the current five are four imported gates plus Vulkan.
+- Source-level follow-up for towing: `MasterState::pto_rad_s` selects the first
+  engaged value from a HashMap. Named front/rear service propagation deserves
+  separate inspection when testing attachments; direct PTO actuation below
+  does not validate that selection or master/slave service exchange.
+
+### Accomplished
+
+- Isolated commit `274e37d test(physics): exercise all Kubota controllers`
+  adds a test-only service schedule and the real hitch/PTO acceptance gate.
+  Every imported fixture now executes the drive and service controllers.
+- New gate asserts all five discovered controllers, resolves the four actual
+  target joints and moved links, then uses production-consumed LinkValues.
+  It checks actual unwrapped joint coordinates, not just target readback.
+- Commands 0.75 then 0.15 move and return both hitches, with raised-state
+  authored-limit checks and <=0.05 rad tracking error. Raised front/rear
+  coordinates are -0.295727/+0.686723 rad; returned -0.058691/+0.106347 rad.
+- Front/rear PTOs engage at their authored 1000/540 RPM. Measured settled
+  one-second rates are 104.404530/56.378446 rad/s (within 0.5 rad/s of targets).
+  After disengagement and settling, every step of a one-second observation
+  stays below 0.01 rad/s; observed peaks were 1.3861e-8 and zero rad/s.
+  Body finiteness/enabled state and no-quarantine checks run every step.
+- All four imported release gates pass together: hitch/PTO, pressure/driving,
+  exact replay, and 60-second slope hold at both pressure extremes/directions.
+  The final actuator test also passes its strengthened per-step stop check.
+- Corrected-fixture CPU-step medians were 0.7472–0.7992 ms, p95
+  0.7945–1.4431 ms, maxima up to 1.8752 ms on the shared host. No assistant
+  workload overlapped timing samples. Controller execution remains outside
+  the timer; these are not full-frame, paired speedup or Rapier-parity results.
+- Ordinary release binary suites pass 87 tests each with explicit Molla and
+  Rapier selection, five ignored as clarified above. All jobs are terminal:
+  initial 26722, full gates 88204, final actuation 44188, regressions 94134.
+  This is test-only wiring; no production viewer rebuild was needed this turn.
+
+### Next Steps
+
+- Continue exact straight/0.4-turn track acceptance and real drawbar attach,
+  tow/turn/detach. Include production attached-service propagation, rather than
+  assuming the current isolated service schedule covers that exchange.
+- Add Rapier actuator/slope scene evidence separately; the current imported
+  fixture explicitly uses Molla. LinkValues-based actuation does not prove
+  CLI/network delivery, ownership, visual output or full scheduling parity.
+- Continue every remaining lifecycle, pressure calibration/terrain,
+  sleep/fleet, performance and GPU requirement. Full goal remains active.
+
+### Relevant Files
+
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — service-aware fixture,
+  joint-motion tracking, authored RPM and per-step stop assertions.
+- Isolated `bin/gearbox/src/services.rs` — cfg(test) production-system schedule.
+- Isolated `docs/MOLLA_BACKEND.md` — corrected scope, measurements and commands.
+- `/tmp/gearbox-services-imported.log` — initial actuation probe.
+- `/tmp/gearbox-five-controller-gates.log` — four imported gates passing.
+- `/tmp/gearbox-five-controller-final.log` — strengthened actuator gate passing.
+- `/tmp/gearbox-five-controller-{molla,rapier}-regression.log` — 87 passed each.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
