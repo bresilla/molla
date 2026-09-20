@@ -9,6 +9,9 @@ use molla_solvers::rigid_world::RigidWorld;
 #[path = "rigid_settling/mod.rs"]
 mod settling;
 
+#[path = "rigid_settling/nonwaking.rs"]
+mod nonwaking;
+
 fn body(world: &mut RigidWorld, x: f64, kind: BodyKind) -> BodyHandle {
     world
         .scene

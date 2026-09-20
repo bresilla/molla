@@ -539,6 +539,16 @@ impl RigidScene {
 
     /// Set COM velocity projected onto the body's joint freedoms; descendants follow.
     pub fn set_body_velocity(&mut self, id: BodyHandle, velocity: SpatialVector) -> Result<()> {
+        self.set_body_velocity_with_wake(id, velocity, true)
+    }
+
+    /// Set projected COM velocity, optionally activating the body's dependency group.
+    pub fn set_body_velocity_with_wake(
+        &mut self,
+        id: BodyHandle,
+        velocity: SpatialVector,
+        wake: bool,
+    ) -> Result<()> {
         if !velocity.linear.is_finite() || !velocity.angular.is_finite() {
             return Err(Error::Build("non-finite body velocity".into()));
         }
@@ -562,7 +572,8 @@ impl RigidScene {
             next.joint_q.host_mut()?.copy_from_slice(&coordinates);
         }
         crate::eval_body_velocities(self.model(), &mut next)?;
-        self.commit_body_state(next, &[id])
+        let changed = [id];
+        self.commit_body_state(next, if wake { &changed } else { &[] })
     }
 
     /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
@@ -759,6 +770,16 @@ impl RigidScene {
 
     /// Add a world-space force and torque about the current COM.
     pub fn add_body_wrench(&mut self, id: BodyHandle, wrench: SpatialVector) -> Result<()> {
+        self.add_body_wrench_with_wake(id, wrench, true)
+    }
+
+    /// Accumulate a persistent COM wrench, optionally activating the body on change.
+    pub fn add_body_wrench_with_wake(
+        &mut self,
+        id: BodyHandle,
+        wrench: SpatialVector,
+        wake: bool,
+    ) -> Result<()> {
         if !wrench.linear.is_finite() || !wrench.angular.is_finite() {
             return Err(Error::Build("non-finite body wrench".into()));
         }
@@ -776,7 +797,7 @@ impl RigidScene {
             return Err(Error::Build("body wrench overflow".into()));
         }
         self.snapshot.state.body_f.host_mut()?[i] = next;
-        if current != next {
+        if wake && current != next {
             self.activate_body(id);
         }
         Ok(())
@@ -788,17 +809,34 @@ impl RigidScene {
         force: Vec3,
         point: Vec3,
     ) -> Result<()> {
-        self.add_body_wrench(
+        self.add_body_force_at_point_with_wake(id, force, point, true)
+    }
+
+    /// Accumulate a world-space point force with optional activation.
+    pub fn add_body_force_at_point_with_wake(
+        &mut self,
+        id: BodyHandle,
+        force: Vec3,
+        point: Vec3,
+        wake: bool,
+    ) -> Result<()> {
+        self.add_body_wrench_with_wake(
             id,
             SpatialVector::new(force, (point - self.body_world_com(id)?).cross(force)),
+            wake,
         )
     }
 
     pub fn reset_body_forces(&mut self, id: BodyHandle) -> Result<()> {
+        self.reset_body_forces_with_wake(id, true)
+    }
+
+    /// Clear persistent force and torque, optionally activating the body on change.
+    pub fn reset_body_forces_with_wake(&mut self, id: BodyHandle, wake: bool) -> Result<()> {
         let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
         let changed = self.snapshot.state.body_f.host()?[i] != SpatialVector::ZERO;
         self.snapshot.state.body_f.host_mut()?[i] = SpatialVector::ZERO;
-        if changed {
+        if wake && changed {
             self.activate_body(id);
         }
         Ok(())
