@@ -13,6 +13,7 @@ use molla_sim::runtime::{
 };
 use molla_vehicle::{Terrain, TireModel, TireOutput, WheelContact, wheel_ground_wrench};
 
+mod readout;
 mod sleeping;
 pub(crate) use sleeping::SleepWheelGeometry;
 use sleeping::query_ground;
@@ -109,6 +110,7 @@ pub struct WheelForces {
     queries: CpuRaycaster,
     samples: Vec<WheelSample>,
     sample_stamp: Option<SceneStamp>,
+    sample_dependencies: readout::SampleDependencies,
     prepared_stamp: Option<SceneStamp>,
     height_range: Option<(Real, Real)>,
     exclusions: Vec<(ShapeId, ShapeId)>,
@@ -320,7 +322,11 @@ impl WheelForces {
 
     /// All tyre samples from the last successful step; integrate force times `dt` for impulse.
     pub fn samples(&self, scene: &RigidScene) -> &[WheelSample] {
-        if self.sample_stamp == Some(scene.stamp()) {
+        if self.sample_stamp.is_some()
+            && self.sample_dependencies.matches_state(scene)
+            && (self.sample_stamp == Some(scene.stamp())
+                || self.sample_dependencies.matches_structure(scene))
+        {
             &self.samples
         } else {
             &[]
@@ -359,6 +365,12 @@ impl WheelForces {
         self.samples = step.samples;
         self.pressure_states = step.pressure_states;
         self.shear = step.shear;
+        self.sample_dependencies.capture(
+            scene,
+            &self.wheels,
+            &self.grounds,
+            self.activation_revision,
+        );
         self.sample_stamp = Some(scene.stamp());
     }
 

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod readout;
 mod tree;
 
 use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor, JointSoftness};
@@ -53,7 +54,7 @@ pub enum BodyKind {
     Fixed,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BodyDesc {
     pub params: BodyParams,
     pub kind: BodyKind,
@@ -214,7 +215,7 @@ impl ColliderDesc {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct JointDesc {
     pub parent: Option<BodyHandle>,
     pub child: BodyHandle,
@@ -366,6 +367,8 @@ pub struct RigidScene {
     activation_global: u64,
     activation_identity: SceneStamp,
     activation_bodies: BTreeMap<BodyHandle, u64>,
+    structure_stamps: BTreeMap<BodyHandle, SceneStamp>,
+    state_edit_stamp: SceneStamp,
 }
 
 impl RigidScene {
@@ -381,6 +384,8 @@ impl RigidScene {
             activation_global: 0,
             activation_identity: SceneStamp(Arc::new(())),
             activation_bodies: BTreeMap::new(),
+            structure_stamps: BTreeMap::new(),
+            state_edit_stamp: SceneStamp(Arc::new(())),
         })
     }
 
@@ -392,6 +397,7 @@ impl RigidScene {
     }
     pub fn state_mut(&mut self) -> &mut State {
         self.activate_all();
+        self.state_edit_stamp = SceneStamp(Arc::new(()));
         &mut self.snapshot.state
     }
     pub fn control(&self) -> &Control {
@@ -731,6 +737,7 @@ impl RigidScene {
             self.activate_body(id);
         }
         self.snapshot.stamp = SceneStamp(Arc::new(()));
+        self.state_edit_stamp = self.snapshot.stamp.clone();
         self.revision += 1;
         Ok(())
     }
@@ -1429,6 +1436,7 @@ impl RigidScene {
         let mut next = self.description.clone();
         let result = change(&mut next)?;
         let snapshot = compile(&next, self.gravity, Some(&self.snapshot))?;
+        readout::update_structure_stamps(&mut self.structure_stamps, &self.description, &next);
         self.description = next;
         self.snapshot = snapshot;
         self.revision += 1;

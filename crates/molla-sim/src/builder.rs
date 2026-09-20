@@ -128,7 +128,7 @@ pub enum ShapeGeometry {
 }
 
 /// Parameters for [`ModelBuilder::add_body`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BodyParams {
     /// Mass in kg. Set to 0 for static / kinematic bodies.
     pub mass: Real,
