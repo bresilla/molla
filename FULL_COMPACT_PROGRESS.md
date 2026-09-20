@@ -2973,6 +2973,87 @@ The complete goal remains active; trailer parking acceptance is still failing.
 - `/tmp/gearbox-limit-active-build.log` — native debug build passed.
 - `/tmp/molla-limit-fixed{.log,.png,-state.jsonl}` — live standalone validation.
 
+## Shared drive/stop mass cache checkpoint (2026-09-20)
+
+### Goal
+
+Continue the entire `FULL_COMPACT.md`; reduce duplicated CPU work introduced
+by scalar stop reactions without changing the validated mechanics.
+
+### Instructions
+
+- Original Gearbox remains untouched. This turn changes only Molla; integration
+  validation uses the existing isolated `gearbox-physics` checkout.
+- User confirmed interacting with the earlier `molla-gram-perf` viewer. That
+  run is not unattended stability/performance evidence, and the confirmation
+  does not establish who or what closed the window.
+
+### Discoveries
+
+- Drive inertia and scalar limit reactions use the same post-mimic/FK state.
+  The state remains immutable through every articulation's reaction phase;
+  new coordinates are written only after all these phases finish.
+- Motor inertia eliminates near-zero diagonal axes and has a different
+  singularity policy from impulse response. Sharing those reduced factors
+  indiscriminately changes dynamics. Only complete, well-conditioned Cholesky
+  factors may be directly retained; other cases reuse the full matrix and
+  lazily construct the original impulse pseudoinverse.
+- User-owned original Gearbox processes were present on the host and were
+  not disturbed. Repeated headless comparisons remove this agent's overlapping
+  work, but do not constitute a dedicated/isolated-host latency guarantee.
+
+### Accomplished
+
+- Commit `02054f0`: immutable-state-scoped lazy `JointMass` cache shares mass
+  matrices between drive inertia and scalar stops. Full-rank Cholesky retention
+  preserves the impulse solver's exact normalized pivot cutoff. No across-step
+  cache, changed gains, new integrator, or relaxed acceptance threshold.
+- Tests verify matrix/factor reuse, independent articulations, cache refresh
+  after removal, retained versus fresh responses across scales, singular
+  fallback, and invalid/cutoff rejection. Drive-inertia tests compare complete
+  shared response columns exactly with independent impulse solves.
+- Final CPU solver lane: **384 passed, 0 failed, 5 ignored**, 88 test binaries.
+  Explicit Molla and Rapier isolated binary lanes each: **87 passed, 7 ignored**.
+- Sequential retained release binaries, A/B/B/A, real Kubota at 120 Hz with
+  pressure tyres, parked/driving at 0.5/1.8/4 bar, 600 measured steps per case:
+  average of 12 medians per version **1.020805 -> 0.957713 ms**, a **6.18%**
+  reduction. Before median range 1.011678–1.027910 ms; after
+  0.945239–0.977099 ms. All 12 reported physical-state samples match exactly
+  across all four runs. This samples output state; it is not a full-state
+  before/after replay comparison.
+- After-run p95 reached 1.818128 ms and max 4.560390 ms. Under-1-ms tail latency,
+  fleet performance and Rapier speed parity are **not achieved/proven**.
+- Krampe low-pressure failure reproduces unchanged: 0.077537 m/s after 15 s,
+  mostly vertical (+0.074302 m/s). This optimization is not its stability fix.
+- Imported functional suite finishes **5 passed, 1 failed**: all five Kubota
+  gates pass (controllers, benchmark mechanics, replay, slope parking and
+  dual-backend drive/turn/track inputs); only Krampe fails. All launched test
+  handles are terminal. No viewer was launched or stopped in this turn.
+
+### Next Steps
+
+1. Resolve the unchanged low-pressure trailer rocking using measured
+   stop/contact/tyre dynamics; retain the original speed acceptance bound.
+2. Profile remaining CPU work and compare against Rapier under matched load;
+   no claim of full performance acceptance from sub-ms medians.
+3. Repeat stable live tow/turn/detach and continue the remaining full-plan
+   lifecycle, calibration, generic-joint/GPU, terrain and sleep/islands gates.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/joint_mass.rs` — lazy immutable-state mass cache.
+- `crates/molla-solvers/src/featherstone.rs` — shared drive/stop cache scope.
+- `crates/molla-solvers/src/joint_limits.rs` — cached stop response lookup.
+- `crates/molla-solvers/src/rigid_impulse.rs` — checked Cholesky retention.
+- `/tmp/molla-shared-mass-final-full.log` — final CPU solver results.
+- `/tmp/molla-shared-mass-{molla,rapier}-binary.log` — isolated binary results.
+- `/tmp/molla-shared-mass-abba-{1-before,2-after,3-after,4-before}.log` —
+  paired timing and physical-state samples; no concurrent agent build/test/viewer.
+- `/tmp/gearbox-{before,after}-shared-mass` — retained release test executables,
+  respectively baseline `aa75128` and the cache implementation `02054f0`.
+- `/tmp/molla-shared-mass-imported.log` — imported functional validation;
+  overlapped CPU tests/builds, so its timings are not performance evidence.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
