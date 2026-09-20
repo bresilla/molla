@@ -7414,6 +7414,126 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
 - Engram APIs remain unavailable in the configured registry. This project
   handoff records the session without claiming unavailable memory calls.
 
+### Live checkpoint — brush factor reuse awaiting timing acceptance
+
+#### Goal
+- Continue FULL_COMPACT.md performance work; accepted baseline remains terrain
+  dispatch `7c0405a` / `gearbox-tyre-dispatch-after` (SHA256 8b75a296...0842).
+- Original Gearbox/assets untouched; user requested a status update while work
+  was ongoing, not a pause. No timing acceptance claimed for this candidate.
+
+#### Discoveries
+- Normal-pressure load coefficients are pure calculations; adjacent width cells
+  can reuse results only when their input pressure bits match. Inflation factor
+  is invariant within an evaluation. Per-cell friction/film/shear stay separate.
+
+#### Accomplished
+- Uncommitted `rig/runners/brush_factors.rs`: lazy per-evaluation inflation factor
+  plus one-entry exact-bit load-factor cache, with const-generic uncached oracle.
+- `rig/runners.rs` routes persistent/stateless brush through private const-generic
+  inner functions. Public generic terrain APIs remain as previously accepted.
+  Existing force arithmetic/order, resolution and state-update semantics retained.
+- `brush_factor_tests.rs` compares all outputs/history against uncached execution
+  for flat and mixed wet/moving terrain, pressure changes, airborne/recontact,
+  frame/geometry changes, camber, multiple resolutions and invalid kinematics.
+  Direct helper tests include zero/signed-zero/subnormal/negative/non-finite
+  pressures and repeat/change sequences. Both focused tests passed (50943 exit 0).
+- Shared test comparers/MixedTerrain in `dispatch_tests.rs` made parent-visible.
+  New files formatted. Full vehicle/solver lane **75247** completed successfully:
+  754 passed, 9 ignored. Isolated ordinary lane **1256** passed 111, with 18 ignored.
+  Oxbo (3), imported tractor/trailer (10), trace, GPU-feature compile and native
+  viewer build also passed. Build success is not rendered visual acceptance.
+  Scalar-only timing **42244** completed all four A/B/B/A runs; no cargo/rustc
+  entries were observed in its activity monitor. Candidate remains unaccepted.
+  Two complete grid cycles without observed cargo/rustc overlap measured driving
+  medians 0.658887 -> 0.644277 and 0.654809 -> 0.644605 ms; reference variation
+  and a worse p95 in the second cycle prevent a broad speedup/tail claim.
+  Other scalar/grid batches overlapped external builds and remain diagnostic.
+
+#### Next Steps
+- Repeat the quiet scalar-only cycle and finish timing/state comparisons. Candidate
+  binary is retained separately as `gearbox-brush-factors-after`.
+- Assess monitored A/B/B/A meadow runs against the terrain-dispatch baseline.
+  Accept only with adequate evidence; otherwise revert runtime changes
+  and restore builds. Entire FULL_COMPACT.md goal remains active and incomplete.
+
+#### Relevant Files
+- `crates/molla-vehicle/src/real_tire/rig/runners.rs`, new `runners/brush_factors.rs`
+  and `runners/brush_factor_tests.rs`; shared `real_tire/dispatch_tests.rs` helpers.
+- Core `target/perf/brush-factors-{focused,core}.log` and isolated
+  `target/perf/brush-factors-molla.log`. Engram APIs remain unavailable.
+
+### Brush factor reuse acceptance — 2026-09-20
+
+#### Goal
+- Continue the full FULL_COMPACT.md objective and performance priority. The
+  preceding turn made progress by completing scalar1 and refreshing evidence;
+  this turn completed scalar2/scalar3, reviewed the candidate and accepted it.
+
+#### Instructions
+- Original Gearbox and shared machine assets remain untouched. No Rapier
+  development, external process termination, owned GUI launch or goal narrowing.
+
+#### Discoveries
+- Adjacent identical normal-pressure bits permit exact reuse of the pure brush
+  load coefficients. Inflation stiffness is constant within an evaluation.
+- Whole scalar/grid A/B/B/A modes are independent acceptance cycles. Activity
+  was mapped to every run with five-second margins; no individual timing samples
+  were cherry-picked. Complete grid cycles in repeat/verify had no observed
+  cargo/rustc overlap even though their scalar cycles did. Confirm and scalar2
+  overlapped builds and are diagnostic only. Scalar1/scalar3 monitors saw none.
+- The original viewer and general workstation load remain uncontrolled. Quiet
+  here means no sampled cargo/rustc, not an idle host or statistically established
+  universal speedup. Reference variation and tail regressions remain visible.
+
+#### Accomplished
+- Accepted lazy inflation and one-entry exact-bit load-factor reuse; numerical
+  operations, tyre resolution, per-cell terrain/film/shear and state semantics
+  retained. Const-generic uncached test oracle compares full outputs/history.
+- 754 vehicle/solver tests passed, 9 ignored across 93 binaries; 111 ordinary
+  integration passed, 18 ignored; 3 Oxbo and 10 imported tractor/trailer passed.
+  Trace, GPU-feature all-target compile, native profile viewer build, new-file
+  formatting and diff checks passed. This is not GPU/runtime visual acceptance.
+- Completed all timing processes, including 17781 (scalar2) and 8644 (scalar3).
+  Driving ms/step means of four medians, before -> after:
+
+  | complete cycle | Molla | reference |
+  | --- | --- | --- |
+  | scalar1 | 0.637531750 -> 0.627050000 | 0.288027000 -> 0.288986000 |
+  | scalar3 | 0.640491750 -> 0.629511250 | 0.295575250 -> 0.288953750 |
+  | repeat grid | 0.658887250 -> 0.644277000 | 0.297170250 -> 0.290912750 |
+  | verify grid | 0.654808750 -> 0.644605000 | 0.289520750 -> 0.288872500 |
+
+  Raw median reductions are about 1.56–2.22%; reference variation exceeds the
+  measured gain in some cycles. Scalar1 and verify-grid have steadier controls.
+  Candidate driving p95 is 1.048773/1.170278 ms in scalar1/scalar3 and
+  1.138002/1.300698 ms in the grid cycles; three of four are worse than before.
+  This is a small median optimization, not a tail or Rapier-parity achievement.
+- All logged state lines match across the six batches (36 executable runs),
+  including diagnostic runs, and the before/after full trace states match.
+- New retained baseline: isolated `target/perf/gearbox-brush-factors-after`,
+  SHA256 `f0e5cb7207a685d3dca543104ac196e4ff7ae662d3353a1c671a89527f5e47ff`.
+  Integration checkout remains clean at e8292b1. No acceptance binary replaced
+  by a profile build; the ordinary binary was retained before profile compilation.
+
+#### Next Steps
+- Investigate persistent CPU ABA scratch capacity reuse: twelve scratch vectors
+  are currently allocated each substep. Retain complete resets and test changing
+  models, activation/local indexing, empty scenes and error recovery. Profile
+  setup own time is only about 0.060 ms/frame, so require measured benefit.
+- Full replacement gates, tail performance, physical calibration, rendered
+  machine acceptance and the other open FULL_COMPACT.md requirements remain open.
+
+#### Relevant Files
+- `real_tire/rig/runners.rs`, `runners/brush_factors.rs`,
+  `runners/brush_factor_tests.rs` and shared `real_tire/dispatch_tests.rs` helpers.
+- Core `target/perf/brush-factors-{focused,core,gpu-check,format}.log`; isolated
+  `target/perf/brush-factors-{molla,oxbo,imported,trace,viewer}.log`, profile TSV,
+  trace JSON, binaries SHA256 file, timing script, batch logs/load snapshots,
+  summaries/activity monitors and `brush-factors-run-activity-summary.txt`.
+- Engram APIs remain absent from the tool registry; this project handoff records
+  evidence without claiming unavailable memory calls.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
