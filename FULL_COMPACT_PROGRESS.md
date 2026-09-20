@@ -5951,6 +5951,222 @@ The full objective remains active, not complete.
   -fem-fixed}.log`; isolated `target/perf/gpu-brush-width-{molla,rapier,oxbo,
   imported}.log` — final and deliberately retained failing evidence.
 
+## 2026-09-20 — Field friction publication in progress
+
+### Goal
+
+Continue FULL_COMPACT.md by connecting authored surface friction to the live
+isolated Gearbox tyre backend. Previous goal turn made concrete progress on
+GPU width and zero-speed resistance. The full goal remains active.
+
+### Instructions
+
+Original Gearbox and shared assets remain read-only. Changes below are ONLY in
+gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launch.
+
+### Discoveries
+
+- Contrary to the plan's historical wording, field layouts/profile structs in
+  this worktree had appearance and region metadata but no physical friction.
+  All live ground registrations passed None despite Molla supporting a grid.
+- Field rendering supports mixed regions on procedural terrain only. Existing
+  USD adapter is material-only and flat ground has no published field regions.
+- Runtime field geometry is startup-only (`ensure_fields` returns when root is
+  unchanged). The new publisher therefore permits friction-value edits but
+  rejects geometry/profile changes until terrain reload, avoiding visual/physics
+  disagreement.
+- Original Gearbox's opt-in multibody comment records a Rapier 0.32 Jacobian
+  indexing failure during multi-frame assembly and missing two-axis joints.
+  These are recorded reasons, not independently reproduced in this turn.
+
+### Accomplished
+
+- Added optional FieldLayout.default_friction and FieldSpec.friction, finite
+  nonnegative validation, authored zero preservation, inheritance to collider
+  friction, deterministic half-open region boundaries and row-major samples.
+  No guessed grass/stubble coefficients: bundled layouts still use scalar
+  collider friction without allocating a map.
+- Added TerrainPlugin publisher after CoverUpdates/before physics stepping.
+  It registers collider-local XZ maps on generated world-aligned procedural
+  terrain, caches terrain/grid identity and change ticks, retains valid maps on
+  rejected edits, clears overrides on removal, and skips Rapier.
+- Added real Molla pressure-wheel ECS integration tests proving zero vs nonzero
+  grip with normal support, no duplicate ground contacts, target-pressure
+  preservation after invalid edits, reset/removal fallback and no republishing
+  after unrelated spawns. Documented limits in fields README/TYRE_PRESSURE spec.
+- Fields library: **11 passed** (`cargo test --release -p gearbox-fields --lib`).
+  Live publisher: **4 passed** (`cargo test --release -p gearbox-sim --bin gearbox
+  terrain::friction:: -- --nocapture --test-threads=1`). Commands used the Nix
+  environment and CARGO_BUILD_JOBS=4. Initial publisher compile used the wrong
+  PhysicsWorld.step signature; corrected to step(), rerun passed.
+- All handles terminal: 49896 initial layout/compile (compile error), 95988
+  corrected publisher tests (success). No live owned jobs or timing runs.
+  Engram tools remain unavailable; this checkpoint preserves work in progress.
+
+### Next Steps
+
+- Review and finish publication lifecycle tests (replacement ground/grid and
+  fallback material changes), then run ordinary isolated backend tests, imported
+  Oxbo/Kubota/Krampe gates and native Oslo GUI build. New modules may be formatted
+  individually; do not format whole legacy source files.
+- Benchmark enabled authored grids on full-resolution terrain without concurrent
+  owned builds/tests. No performance evidence for this new path yet.
+- Commit validated isolated changes unsigned/title-only. Update this checkpoint
+  with final outcomes. Current isolated HEAD is still 559d055.
+- USD/flat authoring publication, calibrated pressure/surface trends, explicit
+  compatibility metadata, full GPU parity, rendered/UI/lifecycle acceptance,
+  CPU/frame performance, towing/replay/PTO and Bekker/MPM remain incomplete.
+
+### Relevant Files
+
+- Isolated `crates/gearbox-fields/src/layout.rs` and new
+  `layout/friction_tests.rs` — authoring, validation, grid samples and tests.
+- Isolated `bin/gearbox/src/terrain.rs` and new `terrain/friction.rs`,
+  `terrain/friction/tests.rs` — live publication/cache and real backend tests.
+- Isolated `crates/gearbox-fields/README.md`, `specs/TYRE_PRESSURE.md` — schema,
+  interpolation, inheritance, update behavior and explicit limitations.
+- Isolated `target/perf/field-friction-layout.log` and
+  `field-friction-publication.log` — successful focused validation.
+
+### Field publication follow-up before multibody clarification
+
+- Added recovery after replacement terrain initially has invalid metadata,
+  inherited collider-friction updates and height-grid replacement tests.
+  Accepted layout identity now carries its terrain entity independently of
+  attempted publication, so rejected edits do not poison replacement recovery.
+- Isolated ordinary lanes now **110 passed, 18 ignored each** (Molla/Rapier).
+  Includes six live publication tests. Native Oslo GUI build passed in 39.05 s.
+  Handle 62915 terminal; earlier 96410 ended with missing remove_collider wake
+  argument, corrected before the successful full lanes. No live owned jobs.
+- Added ignored `controller::benchmark::terrain::imported_kubota_meadow_field_friction_timing`.
+  Same full-resolution 801x801 terrain, warmup/sample counts and actual drive
+  assertions as scalar timing; uses a uniform authored grid matching baseline
+  friction to measure sampling cost without changing the motion case. Not run
+  yet. Imported Oxbo/Kubota/Krampe gates and controlled timings remain next.
+- New modules formatted individually via rustfmt; original Gearbox untouched.
+  All isolated edits still uncommitted; core source unchanged this turn.
+- Molla multibody clarification: RigidWorld always constructs FeatherstoneSolver;
+  its articulated-tree path is already active. The optional reduced flag selects
+  Rapier's joint implementation, not whether Molla uses articulated dynamics.
+
+### User scope update: Molla replaces Rapier
+
+- User explicitly instructed: do not spend time developing Rapier. Once Molla
+  is comparable in performance, Rapier is to be removed completely.
+- Concentrate implementation, debugging and optimization on Molla. Retain
+  Rapier only as the performance comparison baseline until the user's removal
+  condition is met. Do not add Rapier features/fixes or repeat separate Rapier
+  validation lanes unnecessarily. Do not remove it prematurely or touch the
+  original Gearbox checkout.
+- Latest goal progress: imported Oxbo (3) and Kubota/Krampe (10) gates passed;
+  handle 16618 terminal. Those gates were initiated before this scope update.
+  No owned jobs currently live. Another user-owned Oslo build/run was observed
+  and left alone; check competing load before accepting performance timings.
+- Review added an unchanged-value layout cache guard and moved friction-grid
+  size validation before the no-map fast path. These final changes still need
+  the Molla/fields test lane and native viewer rebuild before committing.
+  Do not claim the earlier binary validated those later edits.
+- The field-friction scalar-vs-grid timing comparison is still pending. All
+  isolated field changes remain uncommitted. Engram APIs are unavailable.
+
+### Field publication final lifecycle validation
+
+- Added a resource-removal regression covering both FieldLayout and FieldProfiles.
+  Removing authoring resources restores scalar friction but must not forget the
+  rendered terrain's accepted region geometry. Re-adding changed regions is
+  rejected until terrain reload; restoring the original regions must recover.
+- The first run caught a cache bug: comparing a restored layout to the last
+  accepted layout could skip publication after a rejected attempt. The attempt
+  cache now stores its own layout value, independent of accepted region identity.
+  This preserves identical-write fast paths without skipping recovery.
+- Fields library final lane: 11 passed. Isolated Molla final ordinary lane:
+  111 passed, 18 ignored, including seven live field-publication regressions.
+  Initial handle 46099 failed the new regression (110 passed, one failed);
+  corrected tests passed in handle 87167, whose native GUI build is still running.
+  No separate Rapier correctness lane was repeated after the scope update.
+- Logs: isolated target/perf/field-friction-{layout,molla,viewer}-final.log.
+  User-owned original Gearbox GUI/build activity remains untouched; performance
+  timings must account for competing user load and wait for owned builds to end.
+  Engram APIs remain unavailable; this file is the project handoff.
+
+### Session summary: authored field friction delivered
+
+#### Goal
+
+- Continue FULL_COMPACT.md, including actual terrain-material coupling to the
+  pressure tyre model and its enabled-model CPU performance gate.
+
+#### Instructions
+
+- Spend development effort on Molla; Rapier is only the performance baseline
+  until comparable performance permits removal. Original Gearbox remains
+  untouched. No premature backend removal or separate Rapier feature work.
+
+#### Discoveries
+
+- Rejected publication attempts and accepted render-region identity must have
+  separate layout caches. Otherwise restoring valid settings after resource
+  removal can incorrectly retain scalar fallback. The new regression failed
+  before this correction and passes afterwards.
+- Uniform authored maps preserve the scalar benchmark's logged pressure,
+  deflections, normal loads, speed and chassis position exactly in these runs.
+  Their enabled sampling cost is small compared with the remaining solver cost;
+  this does not establish heterogeneous-surface calibration or GPU parity.
+
+#### Accomplished
+
+- Isolated commit `bee6719 feat(tyres): publish authored field friction` includes
+  schema/validation, live procedural publication, lifecycle caching, seven live
+  Molla regressions, three layout tests, documentation and the timing fixture.
+  Isolated worktree clean after commit. No original-checkout edits.
+- Final fields: 11 passed. Molla binary suite: 111 passed, 18 ignored.
+  Native Oslo release/profile viewer build passed in 40.85 s. Handle 87167
+  terminal. Viewer rebuilt, not launched; no new rendered acceptance claim.
+- Timing handle 22235 terminal: sequential scalar/grid/grid/scalar, each with
+  R/M/M/R control order; 600 warmup and 1200 samples per parked/driving phase.
+  Full 801x801 terrain, 120 Hz, existing 16 solver / 4 internal iteration settings;
+  no resolution, accuracy or substep reduction. All four runs passed.
+
+  | Mean of four medians, ms/step | Scalar | Authored uniform grid |
+  | --- | ---: | ---: |
+  | Molla parked | 0.993225500 | 1.009362000 |
+  | Molla driving | 1.002627500 | 1.022466500 |
+  | Rapier parked control | 0.280942000 | 0.281805250 |
+  | Rapier driving control | 0.291173000 | 0.289433000 |
+
+- Driving grid overhead measured about 1.98%; grid Molla remains about 3.53x
+  its scalar Rapier control. Molla driving mean p95: 1.507243750 scalar,
+  1.658911500 grid. No performance parity or consistent sub-1-ms claim.
+- No owned builds/tests overlapped timings. The user's original debug viewer
+  remained active (roughly 176-181% lifetime CPU in process snapshots), untouched.
+  Treat these as loaded-host comparisons, not quiet-host tail acceptance.
+- Timing executable SHA256:
+  `5927b0f4e04754414d27260f5b4c38305f8292e0edac34442fe7e60aabf52de6`.
+  All owned handles terminal; no owned viewer. Engram tools unavailable.
+
+#### Next Steps
+
+- Re-profile current Molla on the full meadow to select the next material CPU
+  optimization (loop projection, mass/FK work), preserving correctness and
+  unchanged solver quality; do not optimize Rapier or remove it yet.
+- Procedural field friction is implemented, but USD/flat publication, physical
+  surface calibration, full footprint/load-distribution realism, GPU parity,
+  rendered pressure/lifecycle acceptance, towing/replay/PTO and Bekker/MPM
+  remain outstanding. FULL_COMPACT.md is not complete; goal remains active.
+
+#### Relevant Files
+
+- Isolated `bin/gearbox/src/terrain/friction.rs`, `terrain/friction/tests.rs` —
+  live publication and lifecycle regressions.
+- Isolated `crates/gearbox-fields/src/layout.rs`, `layout/friction_tests.rs` —
+  validated field-friction schema and rasterization.
+- Isolated `bin/gearbox/src/controller/benchmark/terrain.rs` — matched map timing.
+- Isolated `crates/gearbox-fields/README.md`, `specs/TYRE_PRESSURE.md` — contract.
+- Isolated `target/perf/field-friction-*-final.log`,
+  `field-friction-timing-{scalar-a,grid-a,grid-b,scalar-b}.log`,
+  `field-friction-load-{before,after}.txt`, `field-friction-timing-binary.sha256`
+  — final validation, timings and competing-load evidence.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
