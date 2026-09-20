@@ -319,10 +319,13 @@ impl MassFactor {
         let factored = matches!(self.decomposition, MassDecomposition::Cholesky(_));
         let _span = tracing::debug_span!("loop_mass_rhs", cholesky = factored).entered();
         if let MassDecomposition::Cholesky(factor) = &self.decomposition {
+            let whiten_span = tracing::debug_span!("loop_mass_whiten").entered();
             let whitened: Vec<_> = projected
                 .iter()
                 .map(|row| forward_sub(factor, row, self.n))
                 .collect::<Result<_>>()?;
+            drop(whiten_span);
+            let _gram_span = tracing::debug_span!("loop_mass_gram").entered();
             for row in 0..count {
                 for col in 0..=row {
                     let value = whitened[row]

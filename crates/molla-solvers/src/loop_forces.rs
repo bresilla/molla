@@ -182,6 +182,7 @@ pub(crate) fn apply(
         }
         let _response_span =
             tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
+        let project_span = tracing::debug_span!("loop_project_wrenches").entered();
         let mut projected = vec![vec![0.0; n]; count];
         for (r, row) in rows.iter().enumerate() {
             for &(body, wrench) in &row.ends {
@@ -199,6 +200,7 @@ pub(crate) fn apply(
                 }
             }
         }
+        drop(project_span);
         cache.add_gram(art, n, &projected, &mut response)?;
     }
     let mut rhs = vec![0.0; count];

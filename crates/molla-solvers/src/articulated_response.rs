@@ -28,6 +28,7 @@ impl<'a> ArticulatedResponse<'a> {
     fn factor(&mut self, art: usize, n: usize) -> Result<&crate::rigid_impulse::MassFactor> {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
             let matrix = crate::mass_matrix(self.model, self.state, art)?;
+            let _span = tracing::debug_span!("response_mass_factor", dofs = n).entered();
             entry.insert(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
         }
         Ok(&self.masses[&art])
@@ -35,6 +36,7 @@ impl<'a> ArticulatedResponse<'a> {
 
     pub(crate) fn jacobian(&mut self, art: usize, body: usize) -> Result<&[Real]> {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.jacobians.entry((art, body)) {
+            let _span = tracing::debug_span!("response_jacobian", art, body).entered();
             let point = *self.model.body_com.host()?.get(body)
                 .ok_or_else(|| Error::Solver("missing response body".into()))?;
             entry.insert(crate::jacobian(self.model, self.state, art, body, point)?);

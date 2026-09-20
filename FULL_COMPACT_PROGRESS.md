@@ -3234,6 +3234,93 @@ goal turn made verified collision and live-acceptance progress.
 - `/tmp/molla-midpoint-default-imported.log` — final default-settings rerun.
 - `/tmp/molla-midpoint-{molla,rapier}-binary.log` — ordinary regression lanes.
 
+## Rejected kinematics cache and profiling checkpoint (2026-09-20)
+
+### Goal
+
+Continue `FULL_COMPACT.md` performance work without reducing the validated
+eight-substep fidelity or changing the original Gearbox checkout.
+
+### Instructions
+
+- The user interacted with `molla-gram-perf`; that run is not an unattended
+  failure reproduction. Its window closure remains unexplained.
+- Keep reusable calculations in Molla. Only the isolated Gearbox worktree is
+  used for the imported-machine tests; no original Gearbox changes or merges.
+
+### Discoveries
+
+- Body COM Jacobians already had a per-state cache, but every first body query
+  repeated its ancestors' frame composition, normalized axes and lock checks.
+- `Model::joint_ancestor` is documented as informational. The candidate used
+  it only after checking the articulation bounds and matching parent body;
+  missing/stale hints fall back to the same child search as the public oracle.
+- Joint-origin columns can be shared without a world-origin moment-arm
+  subtraction: each body query first subtracts its target from the cached
+  joint position, then applies the angular cross product and traversal sign.
+- A separate unrelated host build overlapped the first imported regression
+  run. That run's timings are not used as optimization evidence. No unrelated
+  process was stopped or modified.
+
+### Accomplished
+
+- Experimented with lazy articulation-local joint-motion caches owned by the existing
+  immutable `ArticulatedResponse` state scope. Storage scales with requested
+  articulations' joints, not fleet body count times articulation count.
+- Kept the public uncached Jacobian algorithm as an independent comparison.
+  Four new tests cover all eight joint kinds, branching and multiple trees,
+  reversed traversal, locked/disabled/fixed joints, COM and body-origin points,
+  billion-meter translations, absent/stale ancestor hints, empty/implicit
+  articulations, and runtime reroot/split/removal/pose-change reconstruction.
+- Candidate CPU solver lane: **388 passed, five ignored**, across 88 test
+  binaries. The initial cache variant passed all seven imported-machine tests;
+  the final variant passed four paired timing tests and the independent oracle
+  tests. These counts describe the experiment, not additional shipped tests.
+- Completed uninstrumented A/B/B/A with retained before/after binaries after
+  the concurrent builds and owned regression processes finished. Each run uses
+  the identical Rapier/Molla/Molla/Rapier fixture sequence at default settings.
+  Run mean Molla medians (ms): A1 **0.9498975**, B1 **0.94454075**,
+  B2 **0.9456455**, A2 **0.94497875**. Aggregate A **0.947438125** versus B
+  **0.945093125**, only **0.2475%** lower. A2 itself beats B2; this is not a
+  convincing performance gain. No Rapier-parity or tail-latency claim follows.
+- Rejected and removed the cache and its experimental tests. Saved the full
+  candidate patch in `/tmp/molla-kinematics-rejected.patch` for reproducibility.
+- Added finer profiling spans for response Jacobian construction, mass
+  factorization, wrench projection, and Gram whitening/dot products. Solver
+  settings, mathematical operations and acceptance thresholds are unchanged.
+- Finer 120-step profile passed the real Kubota mechanics checks. Inclusive
+  timings (ms/frame, tracing enabled): wrench projection **0.16105**, including
+  Jacobians **0.06117** (10 newly cached bodies/substep); mass factorization
+  **0.05545**, whitening **0.06158**, Gram products **0.01891**. Projection
+  excluding its Jacobian children is **0.09988**. The total traced step is
+  **1.24663 ms**; extra span overhead means these are diagnostic attribution,
+  not uninstrumented latency or a performance acceptance result.
+
+### Next Steps
+
+1. Use the finer profile to select the next optimization, then repeat the
+   uninstrumented paired timing and unchanged mechanical acceptance gates.
+   Inspect dense wrench projection's indexed row loads and bounds checks
+   before expanding another state/kinematics cache.
+2. Continue profiling at unchanged settings; Rapier timing parity remains
+   unproven. Finish the remaining full-plan sleep/islands/fleet, generic/GPU
+   joints, pressure lifecycle/calibration, and terrain/soil acceptance work.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/articulated_response.rs` — Jacobian/factor profiling.
+- `crates/molla-solvers/src/loop_forces.rs` — wrench projection profiling.
+- `crates/molla-solvers/src/rigid_impulse.rs` — whitening/Gram profiling.
+- `/tmp/molla-kinematics-rejected.patch` — rejected implementation and four tests.
+- `/tmp/molla-kinematics-full-final.log` — candidate CPU solver regression lane.
+- `/tmp/molla-kinematics-imported.log` — first imported regression run.
+- `/tmp/gearbox-before-kinematics-cache`, `/tmp/gearbox-after-kinematics-final`
+  — retained uninstrumented binaries for the same-host comparison.
+- `/tmp/molla-kinematics-abba-{1,2,3,4}.log` — paired timing sequence.
+- `/tmp/molla-response-detail-trace.json` — finer response profile.
+- `/tmp/molla-response-detail-profile.tsv` — per-frame span totals.
+- `/tmp/molla-response-detail-profile.log` — passing profile fixture output.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
