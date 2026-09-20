@@ -652,7 +652,7 @@ impl RigidScene {
                 .iter()
                 .position(|&child| child as usize == i)
                 .ok_or_else(|| missing("body joint"))?;
-            seed_joint(self.model(), &mut next, JointId::from_index(joint))?;
+            seed_joint_near(self.model(), &mut next, JointId::from_index(joint), self.state())?;
         }
         crate::eval_fk(self.model(), &mut next)?;
         crate::eval_body_velocities(self.model(), &mut next)?;
@@ -702,13 +702,7 @@ impl RigidScene {
         let rates = next.joint_qd.host()?.to_vec();
         for (j, &child) in children.iter().enumerate() {
             if requested.contains_key(&(child as usize)) {
-                seed_joint(model, &mut next, JointId::from_index(j))?;
-                if model.joint_type.host()?[j] == JointType::Revolute as u32 {
-                    let c = model.joint_coord_offset.host()?[j] as usize;
-                    let old = self.state().joint_q.host()?[c];
-                    let q = &mut next.joint_q.host_mut()?[c];
-                    *q += ((old - *q) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
-                }
+                seed_joint_near(model, &mut next, JointId::from_index(j), self.state())?;
             }
         }
         next.joint_qd.host_mut()?.copy_from_slice(&rates);
@@ -1822,6 +1816,18 @@ fn add_joint(
             Err(Error::Build("runtime joint kind is not supported".into()))
         }
     }
+}
+
+fn seed_joint_near(model: &Model, state: &mut State, joint: JointId, previous: &State) -> Result<()> {
+    seed_joint(model, state, joint)?;
+    let j = joint.index();
+    if model.joint_type.host()?[j] == JointType::Revolute as u32 {
+        let c = model.joint_coord_offset.host()?[j] as usize;
+        let old = previous.joint_q.host()?[c];
+        let q = &mut state.joint_q.host_mut()?[c];
+        *q += ((old - *q) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+    }
+    Ok(())
 }
 
 fn seed_joint(model: &Model, state: &mut State, joint: JointId) -> Result<()> {

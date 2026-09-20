@@ -143,3 +143,32 @@ fn fixed_root_batch_moves_its_dynamic_descendants() {
     scene.set_body_poses(&[(ids[0], delta)], true).unwrap();
     close(scene.body_pose(ids[2]).unwrap(), delta.compose(&before));
 }
+
+#[test]
+fn single_body_teleport_preserves_revolute_winding_for_equivalent_quaternions() {
+    for wake in [false, true] {
+        let (mut scene, ids) = fixture();
+        let model = scene.model();
+        let joint = model
+            .joint_type
+            .host()
+            .unwrap()
+            .iter()
+            .position(|&kind| kind == JointType::Revolute as u32)
+            .unwrap();
+        let c = model.joint_coord_offset.host().unwrap()[joint] as usize;
+        let v = model.joint_dof_offset.host().unwrap()[joint] as usize;
+        let before = scene.state().joint_q.host().unwrap()[c];
+        let rate = scene.state().joint_qd.host().unwrap()[v];
+        let old_pose = scene.body_pose(ids[1]).unwrap();
+        let mut pose = old_pose;
+        pose.rotation = -pose.rotation;
+        scene.set_body_pose_with_wake(ids[1], pose, wake).unwrap();
+        close(scene.body_pose(ids[1]).unwrap(), old_pose);
+        assert!((scene.state().joint_q.host().unwrap()[c] - before).abs() < 1e-12);
+        assert!((scene.state().joint_qd.host().unwrap()[v] - rate).abs() < 1e-12);
+        pose.rotation = old_pose.rotation * Quat::from_rotation_x(0.05);
+        scene.set_body_pose_with_wake(ids[1], pose, wake).unwrap();
+        assert!((scene.state().joint_q.host().unwrap()[c] - before - 0.05).abs() < 1e-12);
+    }
+}
