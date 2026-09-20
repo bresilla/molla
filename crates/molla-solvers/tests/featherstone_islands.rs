@@ -77,6 +77,9 @@ fn fixture_with_mimic(ids: &[usize], mimic: bool) -> (Model, State, Control) {
 #[path = "featherstone_islands/activation.rs"]
 mod activation;
 
+#[path = "featherstone_islands/scratch.rs"]
+mod scratch;
+
 #[test]
 fn independent_articulations_match_separate_simulations() {
     for rigorous in [false, true] {

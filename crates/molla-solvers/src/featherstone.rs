@@ -47,6 +47,10 @@ use super::Solver;
 #[path = "featherstone_activation.rs"]
 mod activation;
 
+#[path = "featherstone_scratch.rs"]
+mod scratch;
+use scratch::JointScratch;
+
 /// Maximum DOFs in any single joint — Free/Distance/D6 hit 6.
 pub(crate) const MAX_JOINT_DOFS: usize = 6;
 
@@ -708,6 +712,31 @@ fn cpu_step(
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
     activation: Option<&activation::ActiveSet>,
 ) -> Result<()> {
+    if model.articulation_count <= 1 {
+        cpu_step_inner::<false>(model, state_in, control, contacts, dt, state_out,
+            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
+            contact_forces, activation)
+    } else {
+        cpu_step_inner::<true>(model, state_in, control, contacts, dt, state_out,
+            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
+            contact_forces, activation)
+    }
+}
+
+fn cpu_step_inner<const LOCAL: bool>(
+    model: &Model,
+    state_in: &State,
+    control: &Control,
+    contacts: &Contacts,
+    dt: Real,
+    state_out: &mut State,
+    joint_damping: Real,
+    stable_motor_feedback: bool,
+    rigorous_d_solve: bool,
+    rigorous_distance: bool,
+    contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
+    activation: Option<&activation::ActiveSet>,
+) -> Result<()> {
     if model.joint_count == 0 {
         state_out.copy_host_from(state_in)?;
         for (i, &flags) in model.body_flags.host()?.iter().enumerate() {
@@ -771,7 +800,6 @@ fn cpu_step(
         activation.map(|active| active.articulations.as_slice()),
     )?;
 
-    let n = model.joint_count;
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
     let joint_child = model.joint_child.host()?;
@@ -833,31 +861,32 @@ fn cpu_step(
     let motor_max_force = control.joint_motor_max_force.host()?;
     let motor_models = control.joint_motor_model.host()?;
 
-    // ── Per-joint scratch — indexed by joint id ──────────────────────
-    let mut v_body = vec![SpatialVector::ZERO; n]; // body spatial velocity
-    let mut c_term = vec![SpatialVector::ZERO; n]; // Coriolis bias
-    let mut i_a = vec![SpatialMatrix6::ZERO; n]; // articulated inertia
-    let mut p_a = vec![SpatialVector::ZERO; n]; // articulated bias force
-    // Per-joint motion-subspace columns + active mask + DOF count.
-    let mut s_cols = vec![[SpatialVector::ZERO; MAX_JOINT_DOFS]; n];
-    let mut dof_active = vec![[false; MAX_JOINT_DOFS]; n];
-    let mut dof_count = vec![0usize; n];
-    // Per-DOF accumulators (column-by-column).
-    let mut u_per_dof = vec![[SpatialVector::ZERO; MAX_JOINT_DOFS]; n];
-    let mut d_inv_per_dof = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
-    let mut u_tau_per_dof = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
-    // Stage 17.1 rigorous D solve: per-joint Cholesky factor of the
-    // n_dof×n_dof D matrix (`L` lower triangular, packed row-major as a
-    // 6×6 with unused entries left zero). Active count is `dof_count[j]`.
-    let mut l_chol_per_joint = vec![[0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]; n];
-    // Per-joint solved q̈ vector after `D · q̈ = u_tau − U^T · a_p`.
-    let mut q_dd_local = vec![[0.0_f64; MAX_JOINT_DOFS]; n];
+    let scratch_len = if LOCAL {
+        (0..art_count)
+            .filter(|&art| activation.is_none_or(|active| active.articulations[art]))
+            .map(|art| (art_start[art + 1] - art_start[art]) as usize)
+            .max()
+            .unwrap_or(0)
+    } else {
+        model.joint_count
+    };
+    let mut v_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+    let mut c_term = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+    let mut i_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialMatrix6::ZERO);
+    let mut p_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+    let mut s_cols = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut dof_active = JointScratch::<_, LOCAL>::new(scratch_len, [false; MAX_JOINT_DOFS]);
+    let mut dof_count = JointScratch::<_, LOCAL>::new(scratch_len, 0usize);
+    let mut u_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut d_inv_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
+    let mut u_tau_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
+    let mut l_chol_per_joint = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
 
     // ── Per-articulation outer loop ─────────────────────────────────
     let mut q_new: Vec<Real> = q_in.clone();
     let mut qd_new: Vec<Real> = qd_in.clone();
     let mut q_dd = vec![0.0_f64; model.joint_dof_total];
-    let mut a_body = vec![SpatialVector::ZERO; n];
+    let mut a_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
     for art in 0..art_count {
         if activation.is_some_and(|active| !active.articulations[art]) {
             continue;
@@ -867,6 +896,19 @@ fn cpu_step(
         if j_begin == j_end {
             continue;
         }
+
+        v_body.reset(j_begin, j_end);
+        c_term.reset(j_begin, j_end);
+        i_a.reset(j_begin, j_end);
+        p_a.reset(j_begin, j_end);
+        s_cols.reset(j_begin, j_end);
+        dof_active.reset(j_begin, j_end);
+        dof_count.reset(j_begin, j_end);
+        u_per_dof.reset(j_begin, j_end);
+        d_inv_per_dof.reset(j_begin, j_end);
+        u_tau_per_dof.reset(j_begin, j_end);
+        l_chol_per_joint.reset(j_begin, j_end);
+        a_body.reset(j_begin, j_end);
 
         // ── Pass 1: forward kinematics + body kinematics ─────────────────
         for j in j_begin..j_end {
@@ -1359,7 +1401,6 @@ fn cpu_step(
                                     - sv_dot(u_per_dof[j][k], a_bias))
                                     * d_inv_per_dof[j][k];
                                 q_dd[dof_idx + k] = q_dd_k;
-                                q_dd_local[j][k] = q_dd_k;
                                 s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                             }
                         } else {
@@ -1369,7 +1410,6 @@ fn cpu_step(
                                 let ki = active_idx[ai];
                                 let q_dd_k = q_dd_active[ai];
                                 q_dd[dof_idx + ki] = q_dd_k;
-                                q_dd_local[j][ki] = q_dd_k;
                                 s_qdd = s_qdd + s_cols[j][ki].scale(q_dd_k);
                             }
                         }
@@ -1382,7 +1422,6 @@ fn cpu_step(
                         let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_bias))
                             * d_inv_per_dof[j][k];
                         q_dd[dof_idx + k] = q_dd_k;
-                        q_dd_local[j][k] = q_dd_k;
                         s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                     }
                 }
@@ -1969,17 +2008,17 @@ fn back_sub_packed(l: &[Real], y: &[Real], n: usize) -> Vec<Real> {
 /// path can fall back to it cleanly when the dense `D` block turns out
 /// to be singular (e.g. all DOFs locked through limits).
 #[allow(clippy::too_many_arguments)]
-fn apply_rank1_backward(
+fn apply_rank1_backward<const LOCAL: bool>(
     j: usize,
     n_dof: usize,
-    i_a: &mut [SpatialMatrix6],
-    p_a: &mut [SpatialVector],
-    dof_active: &[[bool; MAX_JOINT_DOFS]],
-    s_cols: &[[SpatialVector; MAX_JOINT_DOFS]],
-    u_per_dof: &mut [[SpatialVector; MAX_JOINT_DOFS]],
-    d_inv_per_dof: &mut [[Real; MAX_JOINT_DOFS]],
-    u_tau_per_dof: &[[Real; MAX_JOINT_DOFS]],
-    c_term: &[SpatialVector],
+    i_a: &mut JointScratch<SpatialMatrix6, LOCAL>,
+    p_a: &mut JointScratch<SpatialVector, LOCAL>,
+    dof_active: &JointScratch<[bool; MAX_JOINT_DOFS], LOCAL>,
+    s_cols: &JointScratch<[SpatialVector; MAX_JOINT_DOFS], LOCAL>,
+    u_per_dof: &mut JointScratch<[SpatialVector; MAX_JOINT_DOFS], LOCAL>,
+    d_inv_per_dof: &mut JointScratch<[Real; MAX_JOINT_DOFS], LOCAL>,
+    u_tau_per_dof: &JointScratch<[Real; MAX_JOINT_DOFS], LOCAL>,
+    c_term: &JointScratch<SpatialVector, LOCAL>,
     joint_parent: &[i32],
     joint_child: &[i32],
     j_begin: usize,
