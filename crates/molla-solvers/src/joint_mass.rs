@@ -4,6 +4,10 @@ use molla_sim::{Model, State};
 
 use crate::rigid_impulse::MassFactor;
 
+#[path = "joint_mass/seed.rs"]
+mod seed;
+pub(crate) use seed::MassSeed;
+
 struct Entry {
     matrix: Vec<Real>,
     factor: Option<MassFactor>,
@@ -92,6 +96,18 @@ impl<'a> JointMass<'a> {
             state,
             entries: (0..model.articulation_count.max(1)).map(|_| None).collect(),
         }
+    }
+
+    pub(crate) fn with_seed(
+        model: &'a Model, state: &'a State, seed: Option<MassSeed<'_>>,
+    ) -> Result<Self> {
+        let mut result = Self::new(model, state);
+        if let Some(seed) = seed {
+            for (art, matrix) in seed.into_matrices(model, state)? {
+                result.entries[art] = Some(Entry { matrix, factor: None });
+            }
+        }
+        Ok(result)
     }
 
     fn entry(&mut self, articulation: usize) -> Result<&mut Entry> {

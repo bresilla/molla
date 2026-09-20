@@ -7,7 +7,7 @@ use molla_sim::{Model, State};
 pub(crate) struct ArticulatedResponse<'a> {
     model: &'a Model,
     state: &'a State,
-    masses: BTreeMap<usize, crate::rigid_impulse::MassFactor>,
+    masses: BTreeMap<usize, (Vec<Real>, crate::rigid_impulse::MassFactor)>,
     jacobians: BTreeMap<(usize, usize), Vec<Real>>,
 }
 
@@ -29,9 +29,15 @@ impl<'a> ArticulatedResponse<'a> {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
             let matrix = crate::mass_matrix(self.model, self.state, art)?;
             let _span = tracing::debug_span!("response_mass_factor", dofs = n).entered();
-            entry.insert(crate::rigid_impulse::MassFactor::new(&matrix, n)?);
+            let factor = crate::rigid_impulse::MassFactor::new(&matrix, n)?;
+            entry.insert((matrix, factor));
         }
-        Ok(&self.masses[&art])
+        Ok(&self.masses[&art].1)
+    }
+
+    pub(crate) fn export_mass(self, seed: &mut crate::joint_mass::MassSeed<'_>) -> Result<()> {
+        seed.record(self.model, self.state,
+            self.masses.into_iter().map(|(art, (matrix, _))| (art, matrix)).collect())
     }
 
     pub(crate) fn jacobian(&mut self, art: usize, body: usize) -> Result<&[Real]> {

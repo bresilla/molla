@@ -266,6 +266,7 @@ impl FeatherstoneSolver {
                 self.rigorous_distance,
                 &mut self.contact_forces,
                 Some(&active),
+                None,
             )?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;
@@ -325,6 +326,7 @@ impl FeatherstoneSolver {
                 self.rigorous_distance,
                 &mut self.contact_forces,
                 Some(&active),
+                None,
             )?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;

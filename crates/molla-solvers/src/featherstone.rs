@@ -436,8 +436,27 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         state_out: &mut State,
-        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
         mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
+        bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
+    ) -> Result<()> {
+        self.step_with_collision_response(model, state_in, control, pipeline, contacts, dt,
+            state_out, excluded, |model, state, dt, wrenches, _| {
+                forces(model, state, dt, wrenches)
+            }, bounds)
+    }
+
+    pub(crate) fn step_with_collision_response(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        pipeline: &mut crate::geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        state_out: &mut State,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector], &mut crate::joint_mass::MassSeed<'_>) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
@@ -473,8 +492,9 @@ impl FeatherstoneSolver {
                 pipeline.collide_prepared(bounds, &scratch, contacts, &mut excluded)
             })?;
             applied.copy_from_slice(&persistent);
+            let mut mass_seed = crate::joint_mass::MassSeed::new(model);
             tracing::debug_span!("external_forces")
-                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied))?;
+                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied, &mut mass_seed))?;
             if applied
                 .iter()
                 .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
@@ -485,7 +505,7 @@ impl FeatherstoneSolver {
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
             tracing::debug_span!("featherstone_substep").in_scope(|| {
-                self.step_inner(model, &scratch, control, contacts, sub_dt, state_out)
+                self.step_inner_seeded(model, &scratch, control, contacts, sub_dt, state_out, Some(mass_seed))
             })?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
@@ -505,6 +525,19 @@ impl FeatherstoneSolver {
         contacts: &Contacts,
         dt: Real,
         state_out: &mut State,
+    ) -> Result<()> {
+        self.step_inner_seeded(model, state_in, control, contacts, dt, state_out, None)
+    }
+
+    fn step_inner_seeded(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        contacts: &Contacts,
+        dt: Real,
+        state_out: &mut State,
+        mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if self.is_gpu() && model.joint_reversed.host()?.iter().any(|&r| r != 0) {
@@ -539,6 +572,7 @@ impl FeatherstoneSolver {
                     self.rigorous_distance,
                     &mut self.contact_forces,
                     None,
+                    mass_seed,
                 )?;
                 for reading in &mut self.contact_forces {
                     reading.sample_dt = dt;
@@ -741,15 +775,16 @@ fn cpu_step(
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
     activation: Option<&activation::ActiveSet>,
+    mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
     if model.articulation_count <= 1 {
         cpu_step_inner::<false>(model, state_in, control, contacts, dt, state_out,
             joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation)
+            contact_forces, activation, mass_seed)
     } else {
         cpu_step_inner::<true>(model, state_in, control, contacts, dt, state_out,
             joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation)
+            contact_forces, activation, mass_seed)
     }
 }
 
@@ -766,6 +801,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
     activation: Option<&activation::ActiveSet>,
+    mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
     if model.joint_count == 0 {
         state_out.copy_host_from(state_in)?;
@@ -824,7 +860,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
-    let mut joint_mass = crate::joint_mass::JointMass::new(model, state_out);
+    let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, mass_seed)?;
     let motor_inertias = effective_drive_inertias(
         model, control, stable_motor_feedback, &mut joint_mass,
         activation.map(|active| active.articulations.as_slice()),
@@ -2189,6 +2225,10 @@ fn joint_type_from_u32(v: u32) -> JointType {
         _ => JointType::Fixed,
     }
 }
+
+#[cfg(test)]
+#[path = "featherstone_mass_seed.rs"]
+mod mass_seed_tests;
 
 #[cfg(test)]
 mod tests {

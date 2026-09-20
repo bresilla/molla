@@ -268,7 +268,7 @@ impl RigidWorld {
         let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
         let bounds = self.bounds.prepare(scene);
-        self.solver.step_with_collision_bounds(
+        self.solver.step_with_collision_response(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -282,7 +282,7 @@ impl RigidWorld {
                     b.and_then(|i| scene.body_handle(i)),
                 )
             },
-            |model, state, sub_dt, wrenches| {
+            |model, state, sub_dt, wrenches, mass_seed| {
                 let poses = state.body_q.host()?;
                 let velocities = state.body_qd.host()?;
                 let masses = model.body_mass.host()?;
@@ -316,7 +316,8 @@ impl RigidWorld {
                     excluded.borrow_mut()(a, b)
                 })?;
                 crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
-                forces(scene, state, sub_dt, wrenches)
+                forces(scene, state, sub_dt, wrenches)?;
+                response.export_mass(mass_seed)
             },
             Some(&bounds),
         )?;
