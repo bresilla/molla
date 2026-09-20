@@ -3,6 +3,9 @@
 //!
 //! Moved out of `real_tire/mod.rs` as part of PLAN_REALTIRE Stream A.
 
+#[cfg(test)]
+mod tests;
+
 use crate::terrain::Terrain;
 
 use super::super::internal::{
@@ -163,6 +166,7 @@ impl TireRigAcceptanceCheck {
         observed_value: f64,
         min_value: f64,
     ) -> Self {
+        let valid = observed_value.is_finite() && min_value.is_finite();
         let observed_value = finite_or(observed_value, 0.0);
         let min_value = finite_or(min_value, 0.0);
         Self {
@@ -172,7 +176,7 @@ impl TireRigAcceptanceCheck {
             observed_value,
             min_value: Some(min_value),
             max_value: None,
-            passed: observed_value >= min_value,
+            passed: valid && observed_value >= min_value,
         }
     }
 
@@ -183,6 +187,7 @@ impl TireRigAcceptanceCheck {
         observed_value: f64,
         max_value: f64,
     ) -> Self {
+        let valid = observed_value.is_finite() && max_value.is_finite();
         let observed_value = finite_or(observed_value, 0.0);
         let max_value = finite_or(max_value, 0.0);
         Self {
@@ -192,7 +197,7 @@ impl TireRigAcceptanceCheck {
             observed_value,
             min_value: None,
             max_value: Some(max_value),
-            passed: observed_value <= max_value,
+            passed: valid && observed_value <= max_value,
         }
     }
 
@@ -204,6 +209,7 @@ impl TireRigAcceptanceCheck {
         min_value: f64,
         max_value: f64,
     ) -> Self {
+        let valid = observed_value.is_finite() && min_value.is_finite() && max_value.is_finite();
         let observed_value = finite_or(observed_value, 0.0);
         let lo = finite_or(min_value.min(max_value), 0.0);
         let hi = finite_or(max_value.max(min_value), lo);
@@ -214,7 +220,7 @@ impl TireRigAcceptanceCheck {
             observed_value,
             min_value: Some(lo),
             max_value: Some(hi),
-            passed: observed_value >= lo && observed_value <= hi,
+            passed: valid && observed_value >= lo && observed_value <= hi,
         }
     }
 
