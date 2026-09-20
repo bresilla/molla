@@ -4085,6 +4085,104 @@ remain unfinished.
 - `/tmp/gearbox-after-sleep` — retained final candidate binary.
 - `/tmp/gearbox-after-activation` — ordinary-path pre-sleep baseline.
 
+## Automatic settling and controller wake work (2026-09-20)
+
+### Goal
+
+Continue `FULL_COMPACT.md` sleep/performance work without changing the original
+Gearbox checkout or weakening the existing machine-dynamics acceptance gates.
+
+### Instructions
+
+- The user confirmed interacting with the earlier `molla-gram-perf` window.
+  Its stopping is not evidence of an unattended failure; closure is unexplained.
+- Keep all integration in `robolibs/gearbox-physics`, not original Gearbox.
+
+### Discoveries
+
+- Parking rewrote velocity then position motors every frame. Selecting the final
+  hold before writing controls eliminates those artificial activation changes.
+- Real Kubota quiet detection cannot use chassis speed alone: four-/two-kilogram
+  articulated bodies still rotate while its chassis appears stationary. At the
+  conservative per-body thresholds, first automatic sleep occurs at tick 5383
+  (about 44.87 seconds). Do not relax thresholds merely to hide that motion.
+- Quiet-window activation stamps must be checked before the solver commits its
+  own next state. Post-commit comparisons otherwise reset every timer each tick.
+- Engram tools are unavailable in this session; this journal holds the handoff.
+
+### Accomplished
+
+- Added opt-in CPU `SleepSettings` and whole-island quiet windows; defaults are
+  0.0001 m/s, 0.0001 rad/s and one continuous quiet second. Isolated Molla backend
+  enables them; generic `RigidWorld` remains opt-in.
+- Dynamic/boundary input changes and explicit wake reset affected windows.
+  Pressure transitions, moving boundaries, persistent body forces, joint
+  feed-forward, and nonzero velocity/effort commands prevent automatic sleep.
+  Both compiled tree controls and authored loop motors are inspected.
+- Invalid settings and failed steps preserve quiet time. Successful arbitrary
+  force-callback steps clear it. Optional policy inspection failure logs and
+  keeps normal committed dynamics successful rather than falsely rolling back.
+- Batch sleep validates all handles before mutation and commits all selected
+  groups together. Fully sleeping groups skip unused loop-force computation.
+- Added non-waking joint motor updates and wired the adapter's mutation flag;
+  the original motor method still wakes on input changes. Body mutation flags
+  and strong/weak wake distinctions remain separate outstanding work.
+- Parking keeps original force caps/hold compliance while avoiding intermediate
+  velocity writes. The full-controller explicit-sleep diagnostic now requires
+  all 240 measured ticks to stay asleep and verifies pressure/drive recovery.
+- Added automatic-pressure/drive acceptance and core quiet-window, dependency,
+  failure, tiny-command, pressure and batch-atomicity tests.
+- Final CPU gates pass **473 simulation/solver tests, nine ignored**, in 95
+  binaries. Both backend environments pass **91 ordinary binary tests, ten
+  ignored** each. GPU-feature compilation and new-file formatting checks pass;
+  GPU automatic-sleep execution/parity is not implemented.
+- All **nine imported-machine tests pass**, including unchanged slope,
+  pressure-replay and driving tolerances. Automatic sleep first occurs at tick
+  5383; pressure reduction wakes immediately, re-settles after another 1534 ticks
+  (about 12.78 seconds), and drive commands wake and reach the expected speed.
+  The final automatic-sleep sample measured **0.163554 ms median**, **0.222162 ms
+  p95** over 240 ticks; explicit sleep stays asleep **240/240**, median 0.192356
+  ms. These are parked single-machine results, not general Rapier parity.
+- Two retained-binary A/B/B/A cycles on the ordinary Kubota path measured Molla
+  **0.863419000 → 0.853635688 ms** (-1.133%), with Rapier control **0.229341375 →
+  0.229080438 ms** (-0.114%), averaging parked/driving medians. This is a small
+  normal-path change, not parity: Molla remains **3.73×** Rapier. The short
+  ordinary parked lane does not run long enough for automatic sleep. All logged
+  poses, deflections, loads and speeds match byte-for-byte across all eight runs.
+  No owned builds/tests ran concurrently with the final imported-machine lane or
+  comparison runs.
+- `/tmp` refused the candidate copy with a user-quota error despite free space.
+  The partial copy was removed; the retained candidate is verified byte-identical
+  under the isolated checkout's ignored `target/perf/gearbox-after-settling`.
+- Core implementation is committed as `346c2ed`; isolated integration is committed
+  as `f672656`. All owned build/test handles are terminal. No original Gearbox
+  edits, merges, launches or rendered acceptance claims.
+
+### Next Steps
+
+1. Reduce parked stepping overhead and diagnose long internal settling without
+   freezing real motion; benchmark real parked/mixed-active fleets.
+2. Complete non-waking body mutations and strong/weak wake semantics; preserve
+   controller, contact, pressure and failure coverage.
+3. Continue all remaining full-plan dynamics, GPU, calibration, rendered tyre,
+   lifecycle, service propagation, terrain and soil acceptance requirements.
+
+### Relevant Files
+
+- `crates/molla-solvers/src/rigid_settling.rs` — automatic quiet policy.
+- `crates/molla-solvers/src/rigid_sleep.rs` — atomic batch sleep and wake reset.
+- `crates/molla-solvers/src/rigid_world.rs` — policy step routing.
+- `crates/molla-sim/src/runtime.rs` — non-waking motor update API.
+- `crates/molla-solvers/tests/rigid_settling/mod.rs` — quiet-policy tests.
+- `crates/molla-solvers/tests/wheel_forces/sleep.rs` — automatic pressure wake.
+- Isolated `bin/gearbox/src/controller{,/parking,/benchmark}.rs` — final holds
+  and full-controller imported tests.
+- Isolated `bin/gearbox/src/physics/molla/{mod,joint,tests}.rs` — backend wiring.
+- `/tmp/molla-auto-*` — test/diagnostic logs; diagnostic builds are not timing
+  baselines. Temporary diagnostic printing was removed before final validation.
+- Isolated `target/perf/gearbox-after-settling` — retained final candidate;
+  `/tmp/gearbox-after-sleep` — pre-change normal-path baseline.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
