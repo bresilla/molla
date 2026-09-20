@@ -5258,6 +5258,66 @@ validated and committed in both permitted checkouts.
 - Engram discovery still exposes no memory API. This tracked handoff preserves
   continuity without modifying protected memory files.
 
+## 2026-09-20: Teleport activation and Oxbo viewer regression
+
+### Goal
+
+Continue FULL_COMPACT.md; validate non-waking teleports and investigate the
+user-reported Oxbo instability when pressing Play.
+
+### Discoveries
+
+- Sleeping tyre observations must refresh after a non-waking teleport without
+  integrating pressure, shear, latent velocity or rigid motion. Static terrain
+  movement also changes the observation. Pair exclusions must be applied before
+  evaluating a potentially degenerate tyre heading.
+- The retained scene-bounds viewer loads the six-wheel Oxbo, but the user reports
+  violent motion on Play. This is not accepted machine compatibility. Initial
+  headless Oxbo tests, including the viewer's terrain/alignment helper, remain
+  stable; they have not reproduced the full viewer failure.
+- The original Kubota preview and both initial Oxbo windows have exited. Cause
+  of closure has not been established. No user/original Gearbox process was killed.
+
+### Accomplished
+
+- Molla `d67134e fix(solvers): refresh sleeping tyres on teleport` adds optional
+  pose activation, exact no-op preservation, shared ground sampling and geometry-
+  keyed sleeping tyre observations. Isolated integration `1d40a8d` forwards the
+  teleport wake flag. Failed steps retain sleeping/pressure state.
+- Focused gates pass 43 sleep tests (one ignored) and 29 wheel tests. Combined
+  CPU gate passes 724 tests (ten ignored, 124 binaries); GPU-feature compilation
+  passes, not GPU runtime parity. Both backend lanes pass 97 tests (14 ignored).
+  All ten imported Kubota/Krampe gates pass in 128.87 seconds. Incidental timings
+  overlap correctness work and are not performance acceptance.
+- Added uncommitted isolated Oxbo fixture coverage for 40 bodies, six wheels,
+  roughly 20.38 tonnes. Flat-ground and viewer-terrain/alignment settling tests
+  each pass both backends for ten simulated seconds. Attachment-order and live
+  frame-path investigation remains ongoing; no Oxbo fix is claimed.
+
+### Next Steps
+
+- Reproduce the user's Oxbo Play failure with actual viewer ordering/lifecycle,
+  fix the demonstrated cause and verify rendered tyre pressure changes before
+  offering another playing preview. Do not equate headless settling with success.
+- Check live build/test handles before starting any replacement jobs. Preserve
+  every outstanding body-kind, GPU, performance, lifecycle and soil requirement.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — pose wake control.
+- `crates/molla-solvers/src/{rigid_sleep,wheel_forces}.rs` and
+  `crates/molla-solvers/src/wheel_forces/sleeping.rs` — held observation refresh.
+- `crates/molla-solvers/tests/{rigid_settling,wheel_forces}/pose.rs` — regressions.
+- Isolated `bin/gearbox/src/physics/molla/pose_wake_tests.rs` — reference check.
+- Isolated `bin/gearbox/src/controller/benchmark{.rs,/oxbo.rs,/fleet.rs}`,
+  `bin/gearbox/src/physics/benchmark.rs` and `bin/gearbox/src/load.rs` — pending
+  real-Oxbo diagnostic fixture and actual alignment helper.
+- Molla `target/perf/pose-wake-{focused-final,full}.log`; isolated
+  `target/perf/pose-wake-{molla,rapier,imported}.log` — completed validation.
+- Isolated `target/perf/oxbo-*.log` and `target/perf/molla-oxbo-*.log` — diagnostic
+  runs, not a completed fix. `target/perf/oxbo-paused.toml` loads without auto-play.
+- Engram memory APIs remain unavailable; this handoff records continuity.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
