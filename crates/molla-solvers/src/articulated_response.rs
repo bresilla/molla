@@ -54,6 +54,16 @@ impl<'a> ArticulatedResponse<'a> {
         self.factor(art, n)?.add_gram(projected, response)
     }
 
+    pub(crate) fn add_gram_compact(
+        &mut self,
+        art: usize,
+        n: usize,
+        projected: Vec<Vec<Real>>,
+        response: &mut [Real],
+    ) -> Result<()> {
+        self.factor(art, n)?.add_gram_compact(projected, response)
+    }
+
     /// COM wrench quadratic response `wᵀ J M⁻¹ Jᵀ w` at the current substep state.
     pub(crate) fn quadratic(
         &mut self,

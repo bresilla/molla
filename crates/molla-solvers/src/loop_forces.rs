@@ -10,6 +10,10 @@ use molla_sim::{JointTargetMode, JointType, State};
 #[path = "loop_forces/selection.rs"]
 mod selection;
 
+#[cfg(test)]
+#[path = "loop_forces/blocks.rs"]
+mod block_tests;
+
 struct Row {
     ends: Vec<(usize, SpatialVector)>,
     error: Real,
@@ -201,6 +205,7 @@ pub(crate) fn apply_selected(
     let offsets = model.joint_dof_offset.host()?;
     let children = model.joint_child.host()?;
     let mut response = vec![0.0; count * count];
+    let mut response_articulations = 0;
     for (art, range) in starts.windows(2).enumerate() {
         let begin = range[0] as usize;
         let end = range[1] as usize;
@@ -214,6 +219,7 @@ pub(crate) fn apply_selected(
         {
             continue;
         }
+        response_articulations += 1;
         let _response_span =
             tracing::debug_span!("loop_response", dofs = n, rows = count).entered();
         let project_span = tracing::debug_span!("loop_project_wrenches").entered();
@@ -228,7 +234,11 @@ pub(crate) fn apply_selected(
             }
         }
         drop(project_span);
-        cache.add_gram(art, n, &projected, &mut response)?;
+        if model.articulation_count > 1 {
+            cache.add_gram_compact(art, n, projected, &mut response)?;
+        } else {
+            cache.add_gram(art, n, &projected, &mut response)?;
+        }
     }
     let mut rhs = vec![0.0; count];
     let mut bounds = vec![[0.0; 2]; count];
@@ -274,7 +284,11 @@ pub(crate) fn apply_selected(
             response[i * count + i] += 1.0;
         }
     }
-    let impulses = bounded_solve(&response, &rhs, &bounds)?;
+    let impulses = if response_articulations > 1 {
+        bounded_solve_inner::<true>(&response, &rhs, &bounds)?
+    } else {
+        bounded_solve(&response, &rhs, &bounds)?
+    };
     for (row, impulse) in rows.iter().zip(impulses) {
         for &(body, wrench) in &row.ends {
             forces[body].linear += wrench.linear * (impulse / dt);
@@ -320,6 +334,12 @@ fn add_mass_response(
 }
 
 fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<Vec<Real>> {
+    bounded_solve_inner::<false>(matrix, rhs, bounds)
+}
+
+fn bounded_solve_inner<const BLOCKS: bool>(
+    matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]],
+) -> Result<Vec<Real>> {
     let n = rhs.len();
     let _span = tracing::debug_span!("loop_bounded_solve", rows = n).entered();
     let mut x = vec![0.0; n];
@@ -341,7 +361,11 @@ fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<
                         .sum::<Real>()
             })
             .collect();
-        let candidate = crate::rigid_impulse::solve_mass(&a, &b, size)?;
+        let candidate = if BLOCKS {
+            crate::rigid_impulse::blocks::solve(&a, &b, size)?
+        } else {
+            crate::rigid_impulse::solve_mass(&a, &b, size)?
+        };
         let mut alpha: Real = 1.0;
         let mut hit = None;
         for (&i, &value) in free.iter().zip(&candidate) {
