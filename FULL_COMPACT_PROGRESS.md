@@ -5405,6 +5405,88 @@ preview available to the user while continuing FULL_COMPACT.md.
   `b37947b5c5be8b5e1e912a5266bef41ca03e56afd05ea3b7f61f73b893769779`.
 - Engram memory APIs remain unavailable; this tracked summary preserves handoff.
 
+## 2026-09-20: Batched articulated spawn alignment
+
+### Goal
+
+Continue FULL_COMPACT.md by correcting the separate spawn-alignment distortion
+observed while diagnosing the Oxbo, then verify the real pressure-enabled machine.
+
+### Instructions
+
+- Original Gearbox and shared assets remain untouched. No user process was killed.
+- The user is interacting with the new `molla-alignment-check` window, including
+  pressure controls and driving. Stop automation against that window and leave it
+  available; do not overwrite their settings or close it as a disposable test.
+
+### Discoveries
+
+- The loader applied terrain translation to each body's *current* pose in a
+  mutable loop. Molla's parent teleport also moves descendants, so a prismatic
+  suspension could receive the same shift twice. The regression placed a knuckle
+  at -0.44 m instead of the intended +0.53 m before the fix.
+- Invalid projected transforms were skipped individually while other bodies
+  moved and the pending marker was cleared. Missing colliders also allowed an
+  initial partial relocation before the loader waited. These are separate from
+  the already-fixed quaternion/winding failure.
+- A validated pose batch already exists behind PhysicsBackend; use it for
+  articulated group relocation rather than sequential body mutations. Collecting
+  descendants once also avoids per-body repeated hierarchy traversal.
+
+### Accomplished
+
+- Changed isolated `load.rs` to collect the complete projected pose batch, wait
+  for transforms/colliders, then apply poses atomically with velocities reset.
+  Terrain adjustment captures all current target poses before one second batch;
+  the scene-root translation updates only after that batch succeeds. Invalid
+  sources keep the machine pending rather than partially activating it.
+- Updated imported benchmark initial alignment and slope rotation to use the
+  same batch API. The benchmark no longer relies on order-sensitive incremental
+  descendant relocation.
+- Three new loader regressions pass on Molla and Rapier: whole-suspension
+  translation with both body insertion orders, invalid-transform atomicity and
+  recovery/activation, and missing-transform/collider waiting without mutation.
+  The first two were observed failing before the fix.
+- Both ordinary backend lanes pass 100 tests (17 ignored). All three explicit
+  real-Oxbo gates pass (28.77 s), and all ten imported Kubota/Krampe gates pass
+  (134.34 s). The GUI builds through Oslo. All owned build/test handles are
+  terminal. Incidental benchmark timings overlap correctness work and are not
+  controlled performance acceptance. Molla core code was unchanged this turn.
+- Inspected the real Oxbo playing after the corrected alignment. Paused readback
+  showed height 1.850870575 m and effectively zero velocity. A front-axle command
+  while paused accepted exactly two 0.5-bar targets while applied pressures stayed
+  at 1.8 bar; the other four tyres retained their original targets at that read.
+- Subsequent captures showed live UI pressure transitions and driving without
+  runaway motion, but the user changed all-wheel pressure and drove during the
+  attempted low/high comparison. Those captures are therefore **not** a matched
+  pressure sweep: the nominal low capture had all tyres transitioning around
+  3.46 bar, and the high capture had fronts at 4 bar, other axles about 0.606 bar,
+  and speed about 3.8 m/s. Do not mislabel these as controlled low/high acceptance.
+
+### Next Steps
+
+- Keep the user's interactive Oxbo untouched. A controlled pressure sweep still
+  needs isolated inputs and matched load/surface; complete every pressure UI/CLI,
+  lifecycle, calibration and rendered acceptance requirement, not just this run.
+- Continue remaining body-kind activation, GPU parity, end-to-end performance,
+  towing/service, and Bekker/MPM work. FULL_COMPACT.md is still incomplete.
+
+### Relevant Files
+
+- Isolated `bin/gearbox/src/load.rs` — batched spawn/terrain alignment and wait
+  behavior; `load/alignment_tests.rs` — regression fixture and recovery tests.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — batched fixture relocation.
+- Isolated `target/perf/spawn-alignment-{repro,final,molla,rapier,oxbo,imported}.log`
+  — failing-before and passing-after evidence.
+- Isolated `target/perf/alignment-oxbo-{reference,paused-target,low,high}.json`
+  and reference/low/high PNGs — inspected live results, with interactive caveat.
+- Isolated `target/perf/spawn-alignment-viewer.log` — active GUI log.
+- Last verified live PID 2328595: `molla-alignment-check | molla | PLAYING`,
+  isolated `target/release/gearbox launch`; revalidate identity before interaction.
+- Retained GUI `target/perf/gearbox-viewer-batch-alignment`, SHA256
+  `a1ea51fdb9174da170f30bddc6d385b044dfe68cf51448315c3597e7c77faacd`.
+- Engram APIs remain unavailable; this tracked handoff preserves session context.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
