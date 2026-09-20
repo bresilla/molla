@@ -5318,6 +5318,90 @@ user-reported Oxbo instability when pressing Play.
   runs, not a completed fix. `target/perf/oxbo-paused.toml` loads without auto-play.
 - Engram memory APIs remain unavailable; this handoff records continuity.
 
+## 2026-09-20: Fixed the Oxbo launch-on-Play failure
+
+### Goal
+
+Stop the real Oxbo from flying away on Play, then leave its pressure-enabled
+preview available to the user while continuing FULL_COMPACT.md.
+
+### Instructions
+
+- The user confirmed they were closing the unstable test windows themselves;
+  their disappearance was not evidence of a renderer crash.
+- Continue using only the isolated Gearbox checkout. Do not relaunch the older
+  retained scene-bounds viewer for user tests: it contains this teleport bug.
+
+### Discoveries
+
+- Captured the live failure: after 53 physics steps the reported machine height
+  changed from about 1.93 m to 326.29 m. Render/physics transform disagreement was
+  only about 0.000016 m, ruling out a camera-only/render-only explanation.
+- Physics snapshots of headless and live initial states showed antipodal
+  quaternions on the hopper and hydraulic linkage bodies. These represent the
+  same physical rotations, but individual body teleports reseeded revolute
+  coordinates through `atan2` without retaining their previous winding. Existing
+  batch teleports already preserved winding. A spurious full revolution violated
+  joint limits and caused explosive corrective forces.
+- A focused runtime regression failed before the fix. The imported Oxbo with
+  equivalent antipodal pose edits also failed before the fix on its first Molla
+  step (over 3000 m/s vertical speed), while Rapier remained stable. The same
+  regression passes after the fix without reducing forces, substeps or limits.
+- Sequential spawn alignment also produced an approximately 18.5 mm difference
+  at the middle suspension relative to the headless fixture; that separate
+  uniform-alignment issue was not changed or claimed fixed here.
+
+### Accomplished
+
+- `f10b0b7 fix(sim): preserve joint winding on teleport` shares nearest-phase
+  reseeding between single-body and batch teleports. Regression covers both wake
+  flags, existing multi-turn coordinates, equivalent quaternion signs and a real
+  small rotation. Combined CPU gate: 725 passed, ten ignored, 124 binaries.
+  GPU-feature compilation passes, not GPU runtime parity.
+- Isolated `45c263d test(physics): cover Oxbo teleport stability` adds strict
+  real-Oxbo fixture dimensions (40 bodies, 46 joints, 13 machine colliders,
+  six tyres, about 20.38 tonnes), real viewer-alignment test support, and three
+  ten-second settling tests. Flat terrain, viewer meadow/alignment and antipodal
+  teleports pass both backends. Ordinary backend lanes each pass 97 tests with
+  17 ignored; the three new ignored Oxbo tests were explicitly run and passed.
+- Rebuilt the actual GUI with Oslo and visually inspected the corrected playing
+  Oxbo. Live readback settled at height 1.85088256 m and approximately 1.1e-13 m/s
+  forward speed. Six tyres reported 1.8 bar with deflections around 0.100 m front,
+  0.087 m middle and 0.069 m rear. This proves the launch regression is fixed in
+  that run, not complete cross-machine tyre calibration or performance acceptance.
+- Removed temporary physics snapshot instrumentation and attachment-order hooks
+  from production/test code after collecting evidence. Original Gearbox and
+  shared machine assets were not edited. No user process was killed.
+
+### Next Steps
+
+- Poll isolated validation session 56994 until terminal and record its final
+  ten imported Kubota/Krampe gates. Do not restart solely because a wait expires.
+- Leave the user's playing Oxbo available; avoid changing pressure or controls
+  while they inspect it. Pressure sweeps/visual acceptance across axles, surfaces
+  and drive states still require their full specified verification.
+- Retain all remaining FULL_COMPACT body-kind, GPU, performance, lifecycle,
+  towing/service and soil requirements. Full-goal completion is unproven.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — nearest-phase reseeding on teleports.
+- `crates/molla-sim/tests/runtime_pose_batch.rs` — winding/sign regression.
+- Isolated `bin/gearbox/src/controller/benchmark{.rs,/oxbo.rs,/fleet.rs}` and
+  `bin/gearbox/src/load.rs` — real machine and viewer-alignment regression tests.
+- Molla `target/perf/pose-winding-{repro,final,full}.log`; isolated
+  `target/perf/oxbo-antipodal-repro.log`, `oxbo-settling-final.log` and
+  `winding-{molla,rapier,imported}.log` — failure, fix and validation evidence.
+- Isolated `target/perf/oxbo-{headless,viewer}-snapshot.txt` and
+  `oxbo-diagnostic-{before,after}.json` — captured initial state and live failure.
+- Isolated `target/perf/oxbo-fixed2-{playing.png,playing.json,settled.json}` —
+  inspected corrected GUI and readbacks; `molla-oxbo-fixed2.log` is its live log.
+- Current user preview: `molla-oxbo | molla | PLAYING`, PID 2235934 (revalidate
+  identity before any interaction), isolated `target/release/gearbox launch`.
+- Retained corrected GUI `target/perf/gearbox-viewer-oxbo-winding`, SHA256
+  `b37947b5c5be8b5e1e912a5266bef41ca03e56afd05ea3b7f61f73b893769779`.
+- Engram memory APIs remain unavailable; this tracked summary preserves handoff.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
