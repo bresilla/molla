@@ -45,6 +45,8 @@ mod wheel;
 pub use wheel::{RealWheelOrientation, RealWheelState};
 
 mod brush;
+mod bristle;
+pub use bristle::{TreadBristle, TreadBristleOutput, TreadBristleParams};
 pub use brush::RealBrushTireModel;
 pub(crate) use brush::{
     brush_bristle_profile, brush_load_sensitivity, brush_pressure_patch_gain,

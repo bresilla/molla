@@ -2364,6 +2364,79 @@ this turn resumed with a new reproducible acceptance test and failure evidence.
 - `/tmp/gearbox-slope-{initial,diagnostic}.log` — two failed acceptance runs.
 - `/tmp/gearbox-slope-unit.log` — passing ordinary release binary suite.
 
+## Persistent tread-shear constitutive checkpoint
+
+### Goal
+
+Continue the full plan by implementing the retained contact shear needed by
+the reproduced slope-parking failure. The previous goal turn made progress:
+it committed the imported-machine gate and measured its failure. This turn
+implements and tests the constitutive component before changing live forces.
+
+### Instructions
+
+- Original Gearbox and the isolated Gearbox integration are unchanged here.
+- Keep reusable tyre behavior in `molla-vehicle`, with no viewer dependencies
+  or second wheel/chassis integrator. Engram tools remain unavailable.
+
+### Discoveries
+
+- Elastic tread contact can legitimately do positive instantaneous work while
+  unloading. A velocity-only dissipative wrench limiter would erase this
+  response. Its admissibility must include the change in stored elastic energy.
+- The new constitutive update satisfies `force dot slip_displacement +
+  change_in_elastic_energy <= 0` for fixed parameters. This local kinematic
+  work/energy bound is not proof of stability after coupling to Featherstone.
+- Changing tread stiffness externally changes stored energy even without slip;
+  inflation/load/geometry transitions need explicit handling at integration.
+
+### Accomplished
+
+- Added public `TreadBristle`, `TreadBristleParams` and `TreadBristleOutput` in
+  `molla-vehicle::real_tire`. State stores two tangent-frame elastic displacements;
+  inputs are ground-relative tread velocity, dt, integrated shear stiffness,
+  one combined friction budget, and loaded-material renewal rate.
+- The update uses backward-Euler renewal and circular elastic/plastic return.
+  Zero renewal retains static shear. Friction saturation projects stored shear
+  as well as force, preventing windup. Zero budget/stiffness clears history.
+  Invalid/non-finite updates reject atomically. Runtime work is allocation-free.
+- Tests cover 60 simulated seconds of retained standstill force, combined-slip
+  saturation, plastic reversal, recoverable elastic work, analytic renewal,
+  tangent-frame covariance, deterministic work/energy bounds, reduced budgets,
+  input rejection/reset, and a driven mass that settles below the friction
+  limit but continues moving when overloaded.
+- This is a tested constitutive primitive, not live tyre adoption or a slope
+  fix. The existing pressure brush, wheel force limiter, parking controller,
+  imported slope results and measured performance are unchanged.
+- Final native Make release gate passed all 241 vehicle library tests, zero
+  failures or ignored tests, including nine new bristle tests. Command:
+  `nix develop --impure -c make test PROJECT_NAME=molla PROJECT_VERSION=0.0.1
+  APP_TARGET='-p molla-vehicle --release --lib --tests --no-fail-fast -- --test-threads=1'`.
+  Final session 54564 is terminal; no assistant process remains running.
+
+### Next Steps
+
+- Integrate retained shear into pressure contact with consistent per-cell load,
+  force/moment readout and surface budgets. Preserve current pressure/load
+  response rather than replacing it with a universal grip multiplier.
+- Keep history transactional across solver steps; preserve it on unrelated
+  edits and clear/transform it appropriately on separation, removal, teleport,
+  contact/frame changes and pressure-driven patch changes.
+- Couple elastic recovery through a stiffness/timestep-aware force path, not
+  the current purely dissipative tangent limiter. Validate full dynamics and
+  timestep convergence; constitutive passivity alone is insufficient.
+- Implement/validate bounded parking hold, rerun the imported 60-second slope
+  gate at both pressure extremes, then drive/replay and whole-machine timing.
+- The complete `FULL_COMPACT.md` objective remains active and incomplete.
+
+### Relevant Files
+
+- `crates/molla-vehicle/src/real_tire/bristle.rs` — persistent shear and tests.
+- `crates/molla-vehicle/src/real_tire/mod.rs` — public constitutive API exports.
+- `/tmp/molla-bristle-unit.log` — initial eight focused tests passed.
+- `/tmp/molla-bristle-full.log` — initial full vehicle suite, 240 passed.
+- `/tmp/molla-bristle-full-final.log` — final suite after budget/atomicity tests.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
