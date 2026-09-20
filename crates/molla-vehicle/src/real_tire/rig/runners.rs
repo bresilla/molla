@@ -3,7 +3,7 @@
 //! Moved out of `real_tire/mod.rs` as part of PLAN_REALTIRE Stream A.
 
 use super::super::{TireBrushState, TreadBristle, TreadBristleParams};
-use crate::terrain::{FlatTerrain, Terrain};
+use crate::terrain::Terrain;
 
 use super::super::internal::{
     add, cross, dot, finite_nonnegative, finite_or, finite_positive_or, finite_vec3, normalize,
@@ -236,11 +236,12 @@ pub fn evaluate_brush_tire_oriented(
 }
 
 /// Evaluate a planar patch with persistent cell shear; errors retain the previous state.
+/// Terrain friction and film properties may vary across the planar contact patch.
 /// The caller projects history when the tangent frame changes.
 pub fn evaluate_planar_brush_tire_persistent(
     params: &RealTireParams,
     state: &RealWheelState,
-    terrain: &FlatTerrain,
+    terrain: &dyn Terrain,
     material: &SurfaceMaterial,
     history: &mut TireBrushState,
     dt: f64,

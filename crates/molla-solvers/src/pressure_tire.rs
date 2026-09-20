@@ -6,7 +6,7 @@ use molla_vehicle::real_tire::{
     RealTireParams, RealWheelState, SurfaceMaterial, TireBrushState, TireContactCell,
     evaluate_brush_tire, evaluate_planar_brush_tire_persistent,
 };
-use molla_vehicle::{FlatTerrain, TireOutput, WheelContact};
+use molla_vehicle::{Terrain, TireOutput, WheelContact};
 
 #[derive(Clone, Copy, Debug)]
 pub struct PressureTireConfig {
@@ -106,13 +106,45 @@ pub(crate) fn evaluate(
     evaluate_with_shear(state, wheel, normal, distance, friction, None)
 }
 
-pub(crate) fn evaluate_with_shear(
+#[cfg(test)]
+fn evaluate_with_shear(
     state: &PressureTireState,
     wheel: &WheelContact,
     normal: Vec3,
     distance: Real,
     friction: Real,
     shear: Option<(&mut PressureShear, Real)>,
+) -> Result<(TireOutput, PressureTireSample)> {
+    evaluate_with_surface(state, wheel, normal, distance, friction, shear, None)
+}
+
+struct FrictionPlane<'a> {
+    reference: Real,
+    origin: Vec3,
+    forward: Vec3,
+    side: Vec3,
+    sample: Option<&'a dyn Fn(Vec3) -> Real>,
+}
+
+impl Terrain for FrictionPlane<'_> {
+    fn height(&self, _: Real, _: Real) -> Real { 0.0 }
+    fn normal(&self, _: Real, _: Real) -> [Real; 3] { [0.0, 1.0, 0.0] }
+    fn friction(&self) -> Real { self.reference }
+    fn friction_at(&self, x: Real, z: Real) -> Real {
+        self.sample.map_or(self.reference, |sample| {
+            sample(self.origin + self.forward * x + self.side * z)
+        })
+    }
+}
+
+pub(crate) fn evaluate_with_surface(
+    state: &PressureTireState,
+    wheel: &WheelContact,
+    normal: Vec3,
+    distance: Real,
+    friction: Real,
+    shear: Option<(&mut PressureShear, Real)>,
+    friction_at: Option<&dyn Fn(Vec3) -> Real>,
 ) -> Result<(TireOutput, PressureTireSample)> {
     let mut params = state.config.tire;
     params.pressure_pa = state.pressure_pa;
@@ -125,6 +157,13 @@ pub(crate) fn evaluate_with_shear(
     let velocity = Vec3::from_array(wheel.hub_vel);
     let loaded_radius = distance.clamp(0.0, params.radius);
     let deflection = params.radius - loaded_radius;
+    let terrain = FrictionPlane {
+        reference: friction,
+        origin: Vec3::from_array(wheel.hub_pos) - normal * loaded_radius,
+        forward,
+        side,
+        sample: friction_at,
+    };
     let local = RealWheelState {
         hub_pos: [0.0, distance, 0.0],
         hub_vel: [
@@ -152,14 +191,14 @@ pub(crate) fn evaluate_with_shear(
         evaluate_planar_brush_tire_persistent(
             &params,
             &local,
-            &FlatTerrain::new(0.0, friction),
+            &terrain,
             &material,
             &mut shear.brush,
             dt,
         )
         .map_err(|e| Error::Solver(e.into()))?
     } else {
-        evaluate_brush_tire(&params, &local, &FlatTerrain::new(0.0, friction), &material)
+        evaluate_brush_tire(&params, &local, &terrain, &material)
     };
     if !contact.is_finite() {
         return Err(Error::Solver("non-finite pressure tyre contact".into()));
@@ -228,6 +267,7 @@ pub(crate) fn evaluate_with_shear(
 mod tests {
     use super::*;
     use molla_math::Quat;
+    use molla_vehicle::FlatTerrain;
     use molla_vehicle::real_tire::solve_loaded_tire_hub_height;
 
     fn state(pressure_pa: Real) -> PressureTireState {

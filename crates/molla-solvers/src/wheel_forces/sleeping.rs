@@ -7,21 +7,36 @@ pub(crate) struct SleepWheelGeometry {
     grounds: Vec<(ColliderHandle, Transform)>,
 }
 
-pub(super) struct GroundHit {
+pub(super) struct GroundHit<'a> {
     pub collider: ColliderHandle,
     pub point: Vec3,
     pub normal: Vec3,
     pub friction: Real,
+    pub surface: GroundSurface<'a>,
 }
 
-pub(super) fn query_ground(
+pub(super) struct GroundSurface<'a> {
+    pub grid: Option<&'a FrictionGrid>,
+    pub reference: Real,
+    fallback: Real,
+    pose: Transform,
+}
+
+impl GroundSurface<'_> {
+    pub fn sample(&self, point: Vec3) -> Real {
+        self.grid.and_then(|grid| grid.sample(self.pose.inverse_transform_point(point)))
+            .unwrap_or(self.fallback)
+    }
+}
+
+pub(super) fn query_ground<'a>(
     queries: &mut CpuRaycaster,
     scene: &RigidScene,
-    grounds: &BTreeMap<ColliderHandle, Option<FrictionGrid>>,
+    grounds: &'a BTreeMap<ColliderHandle, GroundMaterial>,
     (top, bottom): (Real, Real),
     hub: Vec3,
     mut include: impl FnMut(ColliderHandle) -> bool,
-) -> Result<Option<GroundHit>> {
+) -> Result<Option<GroundHit<'a>>> {
     let Some(hit) = queries.cast_ray_filtered(
         scene,
         Vec3::new(hub.x, top + 1.0, hub.z),
@@ -43,18 +58,20 @@ pub(super) fn query_ground(
     let collider = scene
         .collider(hit.collider)
         .ok_or_else(|| invalid("missing terrain collider"))?;
-    let local = scene
-        .collider_world_pose(hit.collider)?
-        .inverse_transform_point(hit.point);
-    let friction = grounds[&hit.collider]
-        .as_ref()
-        .and_then(|g| g.sample(local))
-        .unwrap_or(collider.friction);
+    let material = &grounds[&hit.collider];
+    let surface = GroundSurface {
+        grid: material.grid.as_ref(),
+        reference: material.max_friction.max(collider.friction),
+        fallback: collider.friction,
+        pose: scene.collider_world_pose(hit.collider)?,
+    };
+    let friction = surface.sample(hit.point);
     Ok(Some(GroundHit {
         collider: hit.collider,
         point: hit.point,
         normal,
         friction,
+        surface,
     }))
 }
 
@@ -123,13 +140,15 @@ impl WheelForces {
                 normal_damping: w.normal_damping,
             };
             let (output, pressure) = if let Some(state) = self.pressure_states.get(&w.body) {
-                let (output, pressure) = crate::pressure_tire::evaluate_with_shear(
+                let friction_at = |point| hit.surface.sample(point);
+                let (output, pressure) = crate::pressure_tire::evaluate_with_surface(
                     state,
                     &contact,
                     hit.normal,
                     (hub - hit.point).dot(hit.normal),
-                    hit.friction,
+                    hit.surface.reference,
                     None,
+                    hit.surface.grid.map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
                 )?;
                 (output, Some(pressure))
             } else {

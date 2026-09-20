@@ -16,6 +16,9 @@ mod sleep;
 #[path = "wheel_forces/pose.rs"]
 mod pose;
 
+#[path = "wheel_forces/footprint_material.rs"]
+mod footprint_material;
+
 fn body(w: &mut RigidWorld, mass: f64) -> BodyHandle {
     w.scene
         .insert_body(BodyDesc {

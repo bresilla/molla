@@ -68,6 +68,11 @@ impl FrictionGrid {
     }
 }
 
+struct GroundMaterial {
+    grid: Option<FrictionGrid>,
+    max_friction: Real,
+}
+
 #[derive(Clone, Debug)]
 pub struct WheelSample {
     pub wheel: BodyHandle,
@@ -100,7 +105,7 @@ pub struct WheelForces {
     wheels: BTreeMap<BodyHandle, WheelDesc>,
     pressure_states: BTreeMap<BodyHandle, PressureTireState>,
     shear: BTreeMap<BodyHandle, WheelShear>,
-    grounds: BTreeMap<ColliderHandle, Option<FrictionGrid>>,
+    grounds: BTreeMap<ColliderHandle, GroundMaterial>,
     queries: CpuRaycaster,
     samples: Vec<WheelSample>,
     sample_stamp: Option<SceneStamp>,
@@ -294,7 +299,10 @@ impl WheelForces {
         if let Some(grid) = &friction {
             grid.validate()?;
         }
-        self.grounds.insert(id, friction);
+        let max_friction = friction.as_ref().map_or(0.0, |grid| {
+            grid.values.iter().copied().fold(0.0, Real::max)
+        });
+        self.grounds.insert(id, GroundMaterial { grid: friction, max_friction });
         self.activation_revision = self.activation_revision.wrapping_add(1);
         self.shear.retain(|_, shear| shear.ground != id);
         self.prepared_stamp = None;
@@ -532,13 +540,15 @@ impl WheelForces {
                     history.ground = hit.collider;
                     history.state = Default::default();
                 }
-                let (output, sample) = crate::pressure_tire::evaluate_with_shear(
+                let friction_at = |point| hit.surface.sample(point);
+                let (output, sample) = crate::pressure_tire::evaluate_with_surface(
                     state,
                     &contact,
                     normal,
                     distance,
-                    friction,
+                    hit.surface.reference,
                     Some((&mut history.state, dt)),
+                    hit.surface.grid.map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
                 )?;
                 if !output.in_contact {
                     shear.remove(&w.body);
