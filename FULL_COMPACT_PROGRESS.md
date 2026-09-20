@@ -4786,6 +4786,106 @@ progress, not a wait or completion of the full objective.
   check logs: `target/perf/prepared-bounds-final-gpu.log` and
   `target/perf/prepared-bounds-format.log`; handles 87993 and 78971 exit 0.
 
+### 2026-09-20 persistent scene-bound terrain cache
+
+#### Goal
+
+- Remove the remaining per-step heightfield scan without weakening geometry
+  mutation correctness, substep contacts, pressure mechanics or the full plan.
+
+#### Instructions
+
+- Original Gearbox remains user-owned and untouched. No new viewer was launched
+  this turn. Its latest release executable was built only in the isolated tree.
+
+#### Discoveries
+
+- A cache keyed by the compiled `SceneStamp` is safe for `RigidScene`'s immutable
+  model access; raw `Model` geometry remains publicly mutable and must not use an
+  address-only persistent cache. Scene changes/replacements refresh the cache;
+  state commits retain it, while world-space bounds still use current body poses.
+- One candidate meadow driving median was 1.001204 ms. A mean of medians below
+  1 ms does not establish a consistently sub-millisecond step or tail acceptance.
+- A user-owned `cargo test --all-targets` in original Gearbox was observed during
+  the later normal-fixture timings (PID 1496227 cwd verified). It was not stopped.
+
+#### Accomplished
+
+- `SceneShapeBounds::prepare` produces a borrowed `PreparedShapeBounds` backed
+  by retained local bounds. Standalone mutable-Model calls still own their
+  per-call bounds. Normal and sleeping rigid-world steps both use the scene
+  cache; private solver entry points reject mismatched model/bounds identities.
+- Added exact contact/AABB oracles across body motion without a scene rebuild,
+  collider pose edits, heightfield replacement, invalid atomic edits, enable
+  toggles, heightfield/cuboid swaps, body removal and entire-scene replacement.
+  Storage-reuse coverage verifies steady state does not replace the bounds vector.
+- A 600-step rigid-world oracle compares retained versus forcibly rebuilt bounds
+  through terrain edits, removal/reinsertion, explicit sleep/wake and a failed
+  transient-force callback. Body/joint state and contact arrays match exactly;
+  the test requires at least ten genuinely sleeping steps.
+- Final combined geometry/sim/solver gate: **685 passed, ten ignored, 120
+  binaries**. Focused final storage test and formatting pass. GPU feature
+  compilation passes, not GPU runtime parity. Ordinary backend lanes each pass
+  91 tests, 13 ignored; all ten prior imported-machine gates pass (126.06 s).
+- Matched sequential A/B/B/A uses the previous per-step cache as reference and
+  the persistent-scene cache as candidate. Each execution contains R/M/M/R;
+  every full-meadow and original-cuboid execution passed:
+
+  | Full meadow physics | Per-step ms | Per-scene ms | Change |
+  | --- | ---: | ---: | ---: |
+  | Molla parked | 1.487369000 | 0.977754500 | -34.263% |
+  | Molla driving | 1.495692500 | 0.993062250 | -33.605% |
+  | Rapier parked control | 0.279459250 | 0.281061250 | +0.573% |
+  | Rapier driving control | 0.289816250 | 0.290686750 | +0.300% |
+
+- Meadow driving mean p95: 1.999104250 -> 1.673707750 ms. Candidate remains
+  **3.42x Rapier**. All logged Molla tyre/chassis states match exactly in the four
+  corresponding runs. These are CPU step measurements, not viewer FPS.
+- Original cuboid fixture parked medians 0.872897250 -> 0.869863000 ms; driving
+  0.884168250 -> 0.870963750 ms. Rapier driving control 0.227768500 -> 0.230612250
+  ms; tiny original-fixture differences are not claimed as a meaningful speedup.
+  Logged Molla states match exactly across all four runs.
+- No owned build/test jobs overlapped final timings; user activity continued.
+  The diagnostic first meadow run overlapped correctness work and is not used
+  for the accepted timing table. No quiet-host or full-viewer parity claim.
+- Committed as `59e14a8 perf(geometry): cache terrain bounds by scene`. All owned
+  build/test/timing handles are terminal. Full goal remains active and incomplete.
+
+#### Next Steps
+
+- Run the outstanding end-to-end viewer comparison with explicit isolated names,
+  controlled camera/drive setup, logging and screenshots; do not stop the user's
+  original app. The existing `run-terrain-viewer.sh` still points at older arms
+  and has NEVER run: update its binary mapping before using it.
+- Re-profile remaining active physics work (loop projections, repeated mass
+  computation and FK) rather than changing stiffness, resolution or substeps.
+- Retain the entire outstanding wake/joint/GPU/towing/pressure-lifecycle,
+  calibrated tyre/field/soil and rendered acceptance requirements.
+
+#### Relevant Files
+
+- `crates/molla-geometry/src/shape_world.rs` — scene-stamped borrowed bounds.
+- `crates/molla-geometry/src/scene_bounds_tests.rs` — storage/scene identity oracle.
+- `crates/molla-geometry/tests/prepared_bounds.rs` — runtime mutation/contact oracle.
+- `crates/molla-solvers/src/{featherstone,featherstone_activation}.rs` — private
+  prepared-bound entry points with unchanged public stepping APIs.
+- `crates/molla-solvers/src/{rigid_world,rigid_sleep}.rs` — retained cache routing.
+- `crates/molla-solvers/src/rigid_bounds_tests.rs` — warm/cold full-step oracle.
+- Molla `target/perf/scene-bounds-{focused,full,final-full,check,gpu,runtime,
+  storage-final,format}.log` — validation evidence.
+- Isolated `target/perf/scene-bounds-{backend-build,imported,meadow-first,rapier,
+  viewer-build}.log` — imported/build evidence.
+- Isolated `target/perf/scene-bounds-{meadow,normal}-{1,2,3,4}.log` — final A/B/B/A.
+- Isolated `target/perf/gearbox-meadow-scene-bounds` SHA256
+  `1915dc16de87e6c3bac830283ad2e730a07a729e318df1ecca84fc54d70899e8`.
+- Reference remains `target/perf/gearbox-meadow-prepared-final`, SHA256
+  `fd59d7ff72f7f607126317a0b6bfea30c89b8461b2e3856ac02e40b1a9ba373f`.
+- Latest GUI `target/perf/gearbox-viewer-scene-bounds` SHA256
+  `2cbc13d61fb7f17dfa3952b8b231b1b04114df644a0a11c77ddf384eee005abb`;
+  `target/release/gearbox` is the same build, not launched after this change.
+- Engram tool discovery still returns no memory API; this tracked summary
+  preserves the handoff without editing protected memory files.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
