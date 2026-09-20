@@ -25,10 +25,11 @@ pub fn dense_chol(a: &mut [Real], n: usize) -> Result<()> {
         )));
     }
     for j in 0..n {
+        let (leading, trailing) = a.split_at_mut((j + 1) * n);
+        let pivot_row = &mut leading[j * n..];
         // Diagonal: L[j,j]² = A[j,j] - Σ L[j,k]² for k < j.
-        let mut diag = a[j * n + j];
-        for k in 0..j {
-            let l_jk = a[j * n + k];
+        let mut diag = pivot_row[j];
+        for &l_jk in &pivot_row[..j] {
             diag -= l_jk * l_jk;
         }
         if diag <= 0.0 {
@@ -37,15 +38,15 @@ pub fn dense_chol(a: &mut [Real], n: usize) -> Result<()> {
             )));
         }
         let l_jj = diag.sqrt();
-        a[j * n + j] = l_jj;
+        pivot_row[j] = l_jj;
 
         // Below-diagonal column: L[i,j] = (A[i,j] - Σ L[i,k]·L[j,k]) / L[j,j].
-        for i in (j + 1)..n {
-            let mut s = a[i * n + j];
-            for k in 0..j {
-                s -= a[i * n + k] * a[j * n + k];
+        for row in trailing.chunks_exact_mut(n) {
+            let mut s = row[j];
+            for (&l_ik, &l_jk) in row[..j].iter().zip(&pivot_row[..j]) {
+                s -= l_ik * l_jk;
             }
-            a[i * n + j] = s / l_jj;
+            row[j] = s / l_jj;
         }
     }
     Ok(())
