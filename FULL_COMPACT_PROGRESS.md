@@ -3054,6 +3054,100 @@ by scalar stop reactions without changing the validated mechanics.
 - `/tmp/molla-shared-mass-imported.log` — imported functional validation;
   overlapped CPU tests/builds, so its timings are not performance evidence.
 
+## Convex support continuity checkpoint (2026-09-20)
+
+### Goal
+
+Continue the entire `FULL_COMPACT.md`, resolving the remaining Krampe support
+failure before repeating live towing acceptance. Previous goal turn made
+verified performance progress; this turn makes collision/stability progress.
+
+### Instructions
+
+- Only Molla and the isolated `gearbox-physics` worktree changed. Original
+  Gearbox and shared assets remain untouched. All owned test viewers were
+  explicitly stopped; no user-owned process was stopped.
+- Engram tools remain unavailable; this tracked checkpoint records the session.
+
+### Discoveries
+
+- Low-pressure Krampe rocking was traced to intermittent missing convex-hull
+  versus ground contacts, not tyre damping. The chassis drawbar penetrated
+  the slab by about 0.13 m while its contact force switched between zero and
+  roughly 13 kN. A small geometry regression reproduced a GJK false disjoint
+  result (reported gap 2.06 m) at true penetration 0.121835 m.
+- The distance-query GJK reused a boolean tetrahedron reducer selecting the
+  first exterior face. That can increase the closest distance, triggering
+  the distance algorithm's non-improvement termination. The reducer now
+  evaluates exterior faces with explicit opposite-vertex orientation and
+  retains the closest feature.
+- Diagnostic per-contact `normal_impulse / dt` is that sample's contribution
+  to the full-step mean force, not its instantaneous substep force. The
+  optional fixture trace labels it `step_mean_force` and includes body/shape
+  identity, kinetic/gravitational energy, contact points and wheel support.
+
+### Accomplished
+
+- Molla commit `c95b4c3` fixes CPU GJK tetrahedron distance reduction. Tests
+  cover all 24 vertex orders, 100 near-identical wide-slab poses including
+  reversed pairs and separation, plus 1,000 deterministic rotated/translated
+  hull-box pairs in both orders against independent box SAT.
+- Geometry CPU lane: **190 passed**, 24 test binaries. CPU solver lane:
+  **384 passed, 5 ignored**, 88 test binaries. Both explicit-backend isolated
+  binary lanes: **87 passed, 7 ignored** each. Native `oslo make build` passes.
+- All **six imported-machine gates pass**, including unchanged Krampe speed
+  threshold. After 15 s at 0.5/1.8/4 bar, Krampe speeds are
+  **0.0000342/0.0000548/0.0000145 m/s**, versus 0.077537/0.049655/0.002957
+  before the fix. No damping/stiffness tuning, asset edits or relaxed bounds.
+- Fresh live owned instances `molla-gjk-tow-low`, `molla-gjk-tow-high` and
+  `rapier-gjk-tow` completed attach with teleport, `--forward 2 --turn 0.4
+  --for 8s`, detach and empty attachment-list readback. Fresh post-detach
+  trailer telemetry has no `attached_to`; final trailer pitch was
+  -0.000223/+0.003044/+0.013473 rad respectively. Four trailer pressure
+  readouts retain 0.5/4 bar; the high-run tractor's four readouts retain 4 bar.
+- All three detached screenshots inspected. These are rear views, not
+  calibrated side-view tyre-deformation or all-wheel-contact proof. No rejected
+  step, quarantine or non-finite diagnostics appeared in these viewer logs;
+  existing renderer startup diagnostics are not claimed fixed.
+- Sequential A/B/B/A release-binary Kubota comparison after stopping owned
+  viewers: average of 12 medians **0.956771 -> 0.958640 ms** (about +0.2%,
+  small compared with run variation). Reported physical-state samples match
+  across all four runs. New medians range 0.943500–0.970420 ms; p95 reaches
+  1.739881 ms and max 4.301520 ms. No under-1-ms tail or Rapier-speed-parity claim.
+- All launched build/test/CLI/viewer handles are terminal. Core full-plan
+  completion remains unproven; CPU collision correctness is not GPU parity.
+
+### Next Steps
+
+1. Continue CPU profiling and matched Rapier/fleet performance gates; current
+   per-machine medians do not satisfy the full performance requirement.
+2. Audit box-box mid-plane contact witnesses in `emit_face_manifold`: it
+   currently subtracts positive penetration along the reference normal.
+   This was noticed statically; add a witness-position regression first.
+3. Continue full pressure lifecycle/save-reload/UI acceptance, calibration,
+   generic-joint/GPU semantics, per-cell terrain and sleep/islands/soil work.
+   Towing deterministic replay and calibrated pressure visual proof remain.
+
+### Relevant Files
+
+- `crates/molla-geometry/src/gjk.rs` — closest exterior tetrahedron feature.
+- `crates/molla-geometry/src/narrow_phase.rs` — independent contact regressions.
+- Isolated `bin/gearbox/src/controller/benchmark.rs` — optional
+  `GEARBOX_BENCH_TRACE_SUPPORT=1` trace for the Krampe fixture.
+- `/tmp/molla-hull-support-before.log`, `/tmp/molla-support-trace-before.log`
+  — failing minimal contact case and original support discontinuity.
+- `/tmp/molla-gjk-expanded.log`, `/tmp/molla-gjk-full-solvers.log`,
+  `/tmp/molla-gjk-all-imported.log`, `/tmp/molla-gjk-{molla,rapier}-binary.log`
+  — final regression results.
+- `/tmp/molla-support-fixed-gjk.log` — fixed headless support trace.
+- `/tmp/molla-gjk-{low,high}-*-state.json`, `/tmp/rapier-gjk-*-state.json`
+  — live attached/detached/settled state; `*-detached.png` screenshots inspected.
+- `/tmp/molla-gjk-tow-{low,high}.log`, `/tmp/rapier-gjk-tow.log` — viewer logs.
+- `/tmp/molla-gjk-high-cli.log`, `/tmp/rapier-gjk-cli.log` — scripted command
+  evidence; low-run command evidence is in this turn's tool transcript.
+- `/tmp/molla-gjk-abba-{1-before,2-after,3-after,4-before}.log` — sequential
+  timing comparison against the previous shared-mass-cache implementation.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
