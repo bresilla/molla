@@ -4,6 +4,9 @@ use molla_sim::runtime::{BodyDesc, BodyKind, ColliderDesc, ColliderGeometry, Joi
 use molla_sim::{ColliderMass, JointType, MassProperties};
 use molla_solvers::rigid_world::RigidWorld;
 
+#[path = "body_mutation/impulse_wake.rs"]
+mod impulse_wake;
+
 fn near(a: Vec3, b: Vec3) {
     assert!((a - b).length() < 1e-8, "{a:?} != {b:?}");
 }

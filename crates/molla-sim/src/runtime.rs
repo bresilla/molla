@@ -576,6 +576,42 @@ impl RigidScene {
         self.commit_body_state(next, if wake { &changed } else { &[] })
     }
 
+    /// Atomically set dense rates in the current model layout and optionally activate changed joints.
+    pub fn set_generalized_velocities_with_wake(
+        &mut self,
+        velocities: &[Real],
+        wake: bool,
+    ) -> Result<()> {
+        if velocities.len() != self.model().joint_dof_total
+            || velocities.iter().any(|v| !v.is_finite())
+        {
+            return Err(Error::Build("invalid generalized velocities".into()));
+        }
+        let previous = self.state().joint_qd.host()?;
+        if previous.len() != velocities.len() {
+            return Err(Error::Build("invalid generalized velocity state".into()));
+        }
+        let offsets = self.model().joint_dof_offset.host()?;
+        let children = self.model().joint_child.host()?;
+        let mut changed = Vec::new();
+        for (joint, range) in offsets.windows(2).enumerate() {
+            let range = range[0] as usize..range[1] as usize;
+            if previous[range.clone()] != velocities[range] {
+                changed.push(
+                    self.body_handle(BodyId(children[joint] as u32))
+                        .ok_or_else(|| missing("joint body"))?,
+                );
+            }
+        }
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let mut next = self.state().clone_host()?;
+        next.joint_qd.host_mut()?.copy_from_slice(velocities);
+        crate::eval_body_velocities(self.model(), &mut next)?;
+        self.commit_body_state(next, if wake { &changed } else { &[] })
+    }
+
     /// Teleport a body's subtree, projecting its pose onto any incoming joint freedoms.
     pub fn set_body_pose(&mut self, id: BodyHandle, pose: Transform) -> Result<()> {
         validate_pose(pose)?;

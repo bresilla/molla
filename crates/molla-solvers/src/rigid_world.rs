@@ -148,6 +148,16 @@ impl RigidWorld {
     }
 
     pub fn apply_body_impulse(&mut self, id: BodyHandle, impulse: SpatialVector) -> Result<()> {
+        self.apply_body_impulse_with_wake(id, impulse, true)
+    }
+
+    /// Apply an articulated impulse, optionally activating only its dependency group.
+    pub fn apply_body_impulse_with_wake(
+        &mut self,
+        id: BodyHandle,
+        impulse: SpatialVector,
+        wake: bool,
+    ) -> Result<()> {
         let desc = self
             .scene
             .body(id)
@@ -155,7 +165,10 @@ impl RigidWorld {
         if !impulse.linear.is_finite() || !impulse.angular.is_finite() {
             return Err(Error::Build("non-finite body impulse".into()));
         }
-        if !desc.enabled || desc.kind != molla_sim::runtime::BodyKind::Dynamic {
+        if !desc.enabled
+            || desc.kind != molla_sim::runtime::BodyKind::Dynamic
+            || impulse == SpatialVector::ZERO
+        {
             return Ok(());
         }
         let i = self
@@ -165,8 +178,12 @@ impl RigidWorld {
             .index();
         let mut next = self.scene.state().clone_host()?;
         crate::rigid_impulse::apply_impulse(self.scene.model(), &mut next, i, impulse)?;
-        self.scene.commit_step(next)?;
-        Ok(())
+        let velocities = next.joint_qd.host()?;
+        if wake && velocities == self.scene.state().joint_qd.host()? {
+            return self.wake_body(id);
+        }
+        self.scene
+            .set_generalized_velocities_with_wake(velocities, wake)
     }
 
     pub fn apply_body_impulse_at_point(
@@ -175,8 +192,19 @@ impl RigidWorld {
         impulse: Vec3,
         point: Vec3,
     ) -> Result<()> {
+        self.apply_body_impulse_at_point_with_wake(id, impulse, point, true)
+    }
+
+    /// Apply a world-point impulse with optional dependency-group activation.
+    pub fn apply_body_impulse_at_point_with_wake(
+        &mut self,
+        id: BodyHandle,
+        impulse: Vec3,
+        point: Vec3,
+        wake: bool,
+    ) -> Result<()> {
         let torque = (point - self.scene.body_world_com(id)?).cross(impulse);
-        self.apply_body_impulse(id, SpatialVector::new(impulse, torque))
+        self.apply_body_impulse_with_wake(id, SpatialVector::new(impulse, torque), wake)
     }
 
     /// Quarantine invalid input, then advance atomically; `true` excludes that body pair.
