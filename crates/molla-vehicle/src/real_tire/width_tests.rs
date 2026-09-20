@@ -85,8 +85,16 @@ fn changing_width_resolution_resets_history_and_invalid_steps_are_atomic() {
     assert!(evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, f64::NAN).is_err());
     assert_eq!(history.geometry, stored.geometry);
     assert_eq!(history.cells, stored.cells);
+    assert!(std::sync::Arc::ptr_eq(&history.profile, &stored.profile));
     let actual = evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.001).unwrap();
     let fresh = evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut TireBrushState::default(), 0.001).unwrap();
     assert_eq!(actual.force, fresh.force);
     assert_eq!(actual.aligning_moment_z, fresh.aligning_moment_z);
+    assert!(!std::sync::Arc::ptr_eq(&history.profile, &stored.profile));
+    let geometry = history.profile.clone();
+    params.pressure_pa *= 1.1;
+    evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.001).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&history.profile, &geometry));
+    history.reset();
+    assert!(history.profile.is_empty());
 }

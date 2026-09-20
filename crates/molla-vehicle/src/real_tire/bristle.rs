@@ -96,12 +96,14 @@ impl TreadBristle {
 pub struct TireBrushState {
     pub(crate) cells: Vec<TreadBristle>,
     pub(crate) geometry: Option<(f64, f64, usize, usize)>,
+    pub(crate) profile: std::sync::Arc<[[f64; 3]]>,
 }
 
 impl TireBrushState {
     pub fn reset(&mut self) {
         self.cells.clear();
         self.geometry = None;
+        self.profile = Default::default();
     }
 
     /// Project old tangent components into a new orthonormal tangent frame.

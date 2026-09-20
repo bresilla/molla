@@ -255,6 +255,7 @@ pub fn evaluate_planar_brush_tire_persistent(
     if next.geometry != Some(geometry) {
         next.reset();
         next.geometry = Some(geometry);
+        next.profile = brush_profile(sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
         next.cells
             .resize(sanitized.segments * sanitized.width_segments, TreadBristle::default());
     }
@@ -271,6 +272,16 @@ pub fn evaluate_planar_brush_tire_persistent(
     }
     *history = next;
     Ok(output)
+}
+
+fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize) -> std::sync::Arc<[[f64; 3]]> {
+    (0..segments).flat_map(|i| {
+        let theta = i as f64 * (std::f64::consts::TAU / segments as f64);
+        let (x, y) = (radius * theta.sin(), -radius * theta.cos());
+        (0..width_segments).map(move |strip| {
+            [x, y, ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width]
+        })
+    }).collect()
 }
 
 fn evaluate_brush_impl(
@@ -292,7 +303,10 @@ fn evaluate_brush_impl(
     let material = sanitized_surface_material(material);
     let segments = params.segments;
     let width_segments = params.width_segments;
-    let cell_count = segments * width_segments;
+    let profile = persistent.as_ref().map_or_else(
+        || brush_profile(params.radius, params.width, segments, width_segments),
+        |(history, _)| history.profile.clone(),
+    );
     let normal = terrain.normal(state.hub_pos[0], state.hub_pos[2]);
     let heading = normalize(project_to_ground(state.heading, normal));
     let side = normalize(cross(heading, normal));
@@ -321,12 +335,7 @@ fn evaluate_brush_impl(
     // geometry-only pre-pass over the penetrating segments first.
     let mut patch_min_x = f64::INFINITY;
     let mut patch_max_x = f64::NEG_INFINITY;
-    for cell_index in 0..cell_count {
-        let i = cell_index / width_segments;
-        let local_z = (((cell_index % width_segments) as f64 + 0.5) / width_segments as f64 - 0.5) * params.width;
-        let theta = (i as f64) * dtheta;
-        let local_x = params.radius * theta.sin();
-        let local_y = -params.radius * theta.cos();
+    for &[local_x, local_y, local_z] in profile.iter() {
         let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
         let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
         if terrain.height(world_x, world_z) - (state.hub_pos[1] + local_y) > 0.0 {
@@ -361,14 +370,7 @@ fn evaluate_brush_impl(
     let mut force_vec = [0.0; 3];
     let mut rolling_resistance_force = 0.0;
 
-    for cell_index in 0..cell_count {
-        let i = cell_index / width_segments;
-        let local_z = (((cell_index % width_segments) as f64 + 0.5) / width_segments as f64 - 0.5) * params.width;
-        // theta = 0 is the bottom of the wheel. local_x spans the rolling
-        // direction through the patch.
-        let theta = (i as f64) * dtheta;
-        let local_x = params.radius * theta.sin();
-        let local_y = -params.radius * theta.cos();
+    for (cell_index, &[local_x, local_y, local_z]) in profile.iter().enumerate() {
         let world_x = state.hub_pos[0] + heading[0] * local_x + side[0] * local_z;
         let world_z = state.hub_pos[2] + heading[2] * local_x + side[2] * local_z;
         let point_y = state.hub_pos[1] + local_y;
