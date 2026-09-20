@@ -5075,6 +5075,97 @@ wakes were implemented, tested and committed in both allowed checkouts.
 - Engram tool discovery still returns no memory API; this tracked summary is
   the available session handoff and does not alter protected memory files.
 
+## Impulse activation checkpoint (2026-09-20)
+
+### Goal
+
+Continue the complete `FULL_COMPACT.md` body/sleep integration by implementing
+impulse wake flags and eliminating unrelated impulse-driven wakeups. The prior
+goal turn made verified progress: non-waking velocity/force edits were committed
+and passed the full CPU, backend and imported-machine lanes.
+
+### Instructions
+
+- Leave the interactive preview and original Gearbox untouched; continue only
+  in Molla and isolated `gearbox-physics`. Preserve untracked `FULL_COMPACT.md`.
+- Keep physical impulse response in the reusable libraries, not the adapter.
+  Use repo-native validation and unsigned title-only Conventional Commits.
+
+### Discoveries
+
+- `RigidWorld::apply_body_impulse` used `RigidScene::commit_step`, which
+  invalidated every body's activation stamp, including unrelated sleepers and
+  quiet windows. The adapter also discarded all three impulse wake flags.
+- A validated dense-rate update is sufficient to commit the impulse response:
+  poses and persistent forces are unchanged. Derive activation from the joints
+  whose rates actually changed instead of accepting a caller-supplied list of
+  affected bodies or acknowledging all previous sleep stamps after a raw commit.
+- A nonzero impulse can have zero velocity response when a joint fully blocks
+  it. Its explicit waking request still needs to activate that body's group;
+  a zero input impulse remains a no-op. Both cases are covered separately.
+
+### Accomplished
+
+- Added `RigidScene::set_generalized_velocities_with_wake` for the current
+  compiled model layout. It checks input and existing rate-buffer dimensions,
+  finite rates and finite derived body state before committing; no-op updates
+  retain scene/activation identity. Only changed joint children are activated
+  when requested, and normal dependency grouping propagates their wake.
+- Added waking-policy variants for COM/angular and world-point impulses in
+  `RigidWorld`; retained the existing methods as waking entry points. The
+  mass-matrix response remains unchanged. Non-waking impulses retain latent
+  generalized rates without integrating asleep bodies or waking other groups.
+- Forwarded the isolated adapter's linear, torque and point impulse flags.
+- Added three dense-rate tests for selective activation/no-op identity, invalid
+  input and finite-rate overflow atomicity, and malformed existing buffers.
+- Added five rigid-world impulse tests covering all three impulse forms, latent
+  response, whole-tree activation, unrelated sleepers/quiet windows, prior
+  pending edits, zero/invalid/overflow inputs and fully constrained impulses.
+- Extended the existing cross-backend tests to cover all three impulse forms
+  and their exact stored linear/angular rates before wake; added invalid and
+  waking impulse cases to the adapter isolation test.
+- Final combined geometry/sim/solver gate: **709 passed, ten ignored, 122
+  binaries**, including all three dense-rate and five impulse wake tests. Both
+  ordinary backend lanes pass **94 tests, 14 ignored**. GPU-feature compilation
+  passes, not GPU runtime parity. All **ten imported-machine checks pass**
+  (127.53 s): pressure replay, slopes, towing, controls and steering/tracks.
+  Incidental timing output overlapped correctness work and the live preview;
+  it is not a controlled performance result.
+- Committed reusable implementation as `6d64f36 fix(solvers): scope impulse
+  activation by body`, and isolated adapter as `918398f fix(physics): honor
+  impulse wake flags`.
+- All owned build/test handles are terminal. The requested interactive preview
+  remains live on its retained binary, and was not driven or closed. Neither
+  full-plan completion nor end-to-end performance parity is established.
+
+### Next Steps
+
+- Finish non-waking pose/kind/mass lifecycle behavior, including held tyre
+  sample refresh and dependency changes, without hiding prior pending wakes.
+- Retain all end-to-end performance, joint/GPU/towing/service/pressure,
+  calibration/terrain/soil and rendered acceptance requirements. The complete
+  goal remains active; this checkpoint is not final implementation or parity.
+
+### Relevant Files
+
+- `crates/molla-sim/src/runtime.rs` — validated dense-rate mutation and scoped
+  activation rather than globally activating a committed impulse result.
+- `crates/molla-sim/tests/runtime_generalized_velocity.rs` — transactional
+  rate/state validation and activation isolation.
+- `crates/molla-solvers/src/rigid_world.rs` — explicit impulse wake policies.
+- `crates/molla-solvers/tests/body_mutation{.rs,/impulse_wake.rs}` — real-step
+  impulse, sleep, atomicity and unrelated-window regression tests.
+- Isolated `bin/gearbox/src/physics/molla/{body,nonwaking_tests}.rs` — impulse
+  wake forwarding and expanded Rapier/Molla comparisons.
+- Molla `target/perf/impulse-wake-{focused,full}.log` — correctness/compile gates.
+- Isolated `target/perf/impulse-wake-{backend,molla,rapier,imported}.log` —
+  backend and imported-machine evidence.
+- Preview PID 1574460 was verified live and left untouched; revalidate its
+  identity before future interaction. It still uses the retained scene-bounds
+  GUI, not the newer body-input changes.
+- Engram tool discovery remains empty; this tracked summary preserves session
+  continuity without writing protected memory files.
+
 ## Next implementation steps
 
 1. Finish runtime descriptor/integration semantics; retain the tested
