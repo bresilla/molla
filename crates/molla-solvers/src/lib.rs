@@ -18,6 +18,7 @@ pub use molla_sim as sim;
 pub use molla_storage as storage;
 
 mod articulated_response;
+mod joint_limits;
 pub mod barrier_contact;
 pub mod barrier_solver;
 pub mod crba;

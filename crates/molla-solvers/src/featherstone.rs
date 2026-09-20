@@ -1371,6 +1371,10 @@ fn cpu_step(
             }
         }
 
+        crate::joint_limits::react_scalar_stops(
+            model, state_out, art, &mut q_dd, dt, joint_damping,
+        )?;
+
         // ── Integrate q, q̇ for joints in this articulation ──────────────
         for j in j_begin..j_end {
             let jt = joint_type_from_u32(joint_type[j]);
