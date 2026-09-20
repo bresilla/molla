@@ -23,6 +23,10 @@ mod sleep;
 mod settling;
 pub use settling::SleepSettings;
 
+#[cfg(test)]
+#[path = "rigid_bounds_tests.rs"]
+mod bounds_tests;
+
 #[derive(Clone, Debug)]
 pub struct ContactPair {
     pub colliders: [ColliderHandle; 2],
@@ -37,6 +41,7 @@ pub struct RigidWorld {
     pub solver: FeatherstoneSolver,
     pub wheels: crate::wheel_forces::WheelForces,
     pipeline: CollisionPipeline,
+    bounds: molla_geometry::shape_world::SceneShapeBounds,
     contacts: Contacts,
     contact_revision: Option<SceneStamp>,
     queries: Mutex<CpuRaycaster>,
@@ -59,6 +64,7 @@ impl RigidWorld {
                 .with_substeps(8),
             wheels: crate::wheel_forces::WheelForces::default(),
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
+            bounds: molla_geometry::shape_world::SceneShapeBounds::default(),
             contacts: Contacts::with_capacity(64),
             contact_revision: None,
             queries: Mutex::new(CpuRaycaster::default()),
@@ -221,7 +227,8 @@ impl RigidWorld {
         let excluded = std::cell::RefCell::new(&mut excluded);
         let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
-        self.solver.step_with_collision_and_forces(
+        let bounds = self.bounds.prepare(scene);
+        self.solver.step_with_collision_bounds(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -271,6 +278,7 @@ impl RigidWorld {
                 crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)
             },
+            Some(&bounds),
         )?;
         self.scene.commit_step(next)?;
         self.sleeping.clear();

@@ -137,6 +137,112 @@ fn new_borrow_observes_raw_heightfield_edits_and_replacements() {
 }
 
 #[test]
+fn scene_cache_tracks_edits_removals_failed_edits_and_scene_replacement() {
+    use molla_geometry::shape_world::SceneShapeBounds;
+    use molla_sim::runtime::{BodyDesc, BodyKind, ColliderDesc, ColliderGeometry, RigidScene};
+
+    let mut scene = RigidScene::new().unwrap();
+    let body = scene.insert_body(BodyDesc::default()).unwrap();
+    let fixed = scene
+        .insert_body(BodyDesc {
+            kind: BodyKind::Fixed,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Heightfield(
+        Heightfield::from_scaled(3, 3, vec![0.0; 9], Vec3::new(4.0, 1.0, 6.0)).unwrap(),
+    ));
+    ground_desc.parent = Some(fixed);
+    let ground = scene.insert_collider(ground_desc.clone()).unwrap();
+    let mut ball = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.5 });
+    ball.parent = Some(body);
+    scene.insert_collider(ball).unwrap();
+    let mut cache = SceneShapeBounds::default();
+    let mut cached = CollisionPipeline::new().with_sensor_overlaps(true);
+    let mut oracle = CollisionPipeline::new().with_sensor_overlaps(true);
+    let mut contacts_seen = 0;
+    for edit in 0..12 {
+        match edit {
+            0 => {}
+            1 => {
+                let index = scene.body_index(fixed).unwrap().index();
+                scene.state_mut().body_q.host_mut().unwrap()[index]
+                    .position
+                    .y = -0.2;
+            }
+            2 => {
+                scene
+                    .set_collider_pose(
+                        ground,
+                        Transform::new(Vec3::Y * 0.1, Quat::from_rotation_x(0.05)),
+                    )
+                    .unwrap();
+            }
+            3 => {
+                ground_desc.geometry = ColliderGeometry::Heightfield(
+                    Heightfield::from_scaled(2, 3, vec![0.1; 6], Vec3::new(5.0, 1.0, 8.0)).unwrap(),
+                );
+                scene.replace_collider(ground, ground_desc.clone()).unwrap();
+            }
+            4 => {
+                let stamp = scene.stamp();
+                let mut invalid = ground_desc.clone();
+                invalid.pose.position.x = f64::NAN;
+                assert!(scene.replace_collider(ground, invalid).is_err());
+                assert_eq!(scene.stamp(), stamp);
+            }
+            5 => {
+                scene.set_body_enabled(fixed, false).unwrap();
+            }
+            6 => {
+                scene.set_body_enabled(fixed, true).unwrap();
+            }
+            7 => {
+                ground_desc.geometry = ColliderGeometry::Cuboid {
+                    half_extents: Vec3::ONE,
+                };
+                scene.replace_collider(ground, ground_desc.clone()).unwrap();
+            }
+            8 => {
+                ground_desc.geometry = ColliderGeometry::Heightfield(
+                    Heightfield::from_scaled(2, 2, vec![-0.1; 4], Vec3::new(3.0, 1.0, 2.0))
+                        .unwrap(),
+                );
+                scene.replace_collider(ground, ground_desc.clone()).unwrap();
+            }
+            9 => {
+                scene.remove_body(fixed).unwrap();
+            }
+            10 => {
+                scene = RigidScene::new().unwrap();
+            }
+            _ => {
+                ground_desc.parent = None;
+                scene.insert_collider(ground_desc.clone()).unwrap();
+            }
+        }
+        let bounds = cache.prepare(&scene);
+        for shape in 0..scene.model().shape_count {
+            let a = bounds.world_aabb(scene.state(), shape, 0.1);
+            let b = shape_world_aabb(scene.model(), scene.state(), shape, 0.1);
+            assert_eq!(a.min, b.min, "edit={edit}");
+            assert_eq!(a.max, b.max, "edit={edit}");
+        }
+        let mut a = Contacts::with_capacity(64);
+        let mut b = Contacts::with_capacity(64);
+        cached
+            .collide_prepared(&bounds, scene.state(), &mut a, |_, _| false)
+            .unwrap();
+        oracle
+            .collide(scene.model(), scene.state(), &mut b)
+            .unwrap();
+        equal_contacts(&a, &b);
+        contacts_seen += a.count;
+    }
+    assert!(contacts_seen > 0);
+}
+
+#[test]
 #[ignore = "release timing of full-resolution terrain bounds"]
 fn full_resolution_terrain_collision_timing() {
     let (model, state) = fixture(801);

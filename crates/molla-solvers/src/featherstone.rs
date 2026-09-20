@@ -416,8 +416,26 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         state_out: &mut State,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
+    ) -> Result<()> {
+        self.step_with_collision_bounds(
+            model, state_in, control, pipeline, contacts, dt, state_out, excluded, forces, None,
+        )
+    }
+
+    pub(crate) fn step_with_collision_bounds(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        pipeline: &mut crate::geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        state_out: &mut State,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
         mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
+        bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if !dt.is_finite() || dt <= 0.0 {
@@ -438,10 +456,18 @@ impl FeatherstoneSolver {
         let mut samples = Vec::new();
         let persistent = state_in.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
-        let bounds = crate::geometry::shape_world::PreparedShapeBounds::new(model);
+        let owned_bounds;
+        let bounds = match bounds {
+            Some(bounds) if std::ptr::eq(bounds.model(), model) => bounds,
+            Some(_) => return Err(crate::core::Error::Solver("bounds model mismatch".into())),
+            None => {
+                owned_bounds = crate::geometry::shape_world::PreparedShapeBounds::new(model);
+                &owned_bounds
+            }
+        };
         for substep in 0..n {
             tracing::debug_span!("collision").in_scope(|| {
-                pipeline.collide_prepared(&bounds, &scratch, contacts, &mut excluded)
+                pipeline.collide_prepared(bounds, &scratch, contacts, &mut excluded)
             })?;
             applied.copy_from_slice(&persistent);
             tracing::debug_span!("external_forces")

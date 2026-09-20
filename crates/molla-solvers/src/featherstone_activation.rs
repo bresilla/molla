@@ -183,6 +183,28 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         output: &mut State,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        forces: impl FnMut(
+            &State,
+            &Contacts,
+            Real,
+            &mut [molla_math::SpatialVector],
+        ) -> Result<Vec<bool>>,
+    ) -> Result<()> {
+        self.step_with_active_bounds(
+            model, input, control, pipeline, contacts, dt, output, excluded, forces, None,
+        )
+    }
+
+    pub(crate) fn step_with_active_bounds(
+        &mut self,
+        model: &Model,
+        input: &State,
+        control: &Control,
+        pipeline: &mut molla_geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        output: &mut State,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
         mut forces: impl FnMut(
             &State,
@@ -190,6 +212,7 @@ impl FeatherstoneSolver {
             Real,
             &mut [molla_math::SpatialVector],
         ) -> Result<Vec<bool>>,
+        bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if self.is_gpu() || !dt.is_finite() || dt <= 0.0 {
@@ -208,9 +231,17 @@ impl FeatherstoneSolver {
         let persistent = input.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
         let mut samples = Vec::new();
-        let bounds = crate::geometry::shape_world::PreparedShapeBounds::new(model);
+        let owned_bounds;
+        let bounds = match bounds {
+            Some(bounds) if std::ptr::eq(bounds.model(), model) => bounds,
+            Some(_) => return Err(invalid("bounds model mismatch")),
+            None => {
+                owned_bounds = crate::geometry::shape_world::PreparedShapeBounds::new(model);
+                &owned_bounds
+            }
+        };
         for substep in 0..count {
-            pipeline.collide_prepared(&bounds, &scratch, contacts, &mut excluded)?;
+            pipeline.collide_prepared(bounds, &scratch, contacts, &mut excluded)?;
             applied.copy_from_slice(&persistent);
             let mask = forces(&scratch, contacts, sub_dt, &mut applied)?;
             let active = ActiveSet::new(model, contacts, &mask)?;

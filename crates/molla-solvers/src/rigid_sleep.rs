@@ -257,7 +257,8 @@ impl RigidWorld {
         let mut graph_cache: Option<(Vec<[Option<BodyHandle>; 2]>, RigidIslands)> = None;
         let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
-        self.solver.step_with_collision_active(
+        let bounds = self.bounds.prepare(scene);
+        self.solver.step_with_active_bounds(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -358,6 +359,7 @@ impl RigidWorld {
                 }
                 Ok(articulations)
             },
+            Some(&bounds),
         )?;
         self.scene.commit_step(next)?;
         sleeping.acknowledge(&self.scene);

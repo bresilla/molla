@@ -2,25 +2,59 @@
 //! collision pipeline.
 
 use molla_math::{Mat3, Real, Transform, Vec3};
+use molla_sim::runtime::{RigidScene, SceneStamp};
 use molla_sim::{Model, SdfShape, ShapeGeometry, State};
+use std::borrow::Cow;
 
 use crate::aabb::Aabb;
+
+#[cfg(test)]
+#[path = "scene_bounds_tests.rs"]
+mod scene_bounds_tests;
+
+/// Heightfield bounds retained until the compiled scene identity changes.
+#[derive(Default)]
+pub struct SceneShapeBounds {
+    stamp: Option<SceneStamp>,
+    heightfields: Vec<(Vec3, Vec3)>,
+}
+
+impl SceneShapeBounds {
+    pub fn prepare<'a>(&'a mut self, scene: &'a RigidScene) -> PreparedShapeBounds<'a> {
+        let stamp = scene.stamp();
+        if self.stamp.as_ref() != Some(&stamp) {
+            self.heightfields = scene
+                .model()
+                .heightfields
+                .iter()
+                .map(|field| field.local_aabb())
+                .collect();
+            self.stamp = Some(stamp);
+        }
+        PreparedShapeBounds {
+            model: scene.model(),
+            heightfields: Cow::Borrowed(&self.heightfields),
+        }
+    }
+}
 
 /// Heightfield bounds reusable while the model remains immutably borrowed.
 pub struct PreparedShapeBounds<'a> {
     model: &'a Model,
-    heightfields: Vec<(Vec3, Vec3)>,
+    heightfields: Cow<'a, [(Vec3, Vec3)]>,
 }
 
 impl<'a> PreparedShapeBounds<'a> {
     pub fn new(model: &'a Model) -> Self {
         Self {
             model,
-            heightfields: model
-                .heightfields
-                .iter()
-                .map(|field| field.local_aabb())
-                .collect(),
+            heightfields: Cow::Owned(
+                model
+                    .heightfields
+                    .iter()
+                    .map(|field| field.local_aabb())
+                    .collect(),
+            ),
         }
     }
 
