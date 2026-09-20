@@ -123,3 +123,125 @@ fn heterogeneous_articulations_match_separate_worlds_through_wake_changes() {
         }
     }
 }
+
+fn assert_state_bits(a: &State, b: &State) {
+    let equal = |a: f64, b: f64| assert_eq!(a.to_bits(), b.to_bits());
+    for (a, b) in [
+        (a.joint_q.host().unwrap(), b.joint_q.host().unwrap()),
+        (a.joint_qd.host().unwrap(), b.joint_qd.host().unwrap()),
+    ] {
+        assert_eq!(a.len(), b.len());
+        for (&a, &b) in a.iter().zip(b) {
+            equal(a, b);
+        }
+    }
+    for (a, b) in a
+        .body_q
+        .host()
+        .unwrap()
+        .iter()
+        .zip(b.body_q.host().unwrap())
+    {
+        for (a, b) in a.position.to_array().into_iter().zip(b.position.to_array()) {
+            equal(a, b);
+        }
+        for (a, b) in a.rotation.to_array().into_iter().zip(b.rotation.to_array()) {
+            equal(a, b);
+        }
+    }
+    for (a, b) in [
+        (a.body_qd.host().unwrap(), b.body_qd.host().unwrap()),
+        (a.body_f.host().unwrap(), b.body_f.host().unwrap()),
+    ] {
+        assert_eq!(a.len(), b.len());
+        for (a, b) in a.iter().zip(b) {
+            for (a, b) in a.linear.to_array().into_iter().zip(b.linear.to_array()) {
+                equal(a, b);
+            }
+            for (a, b) in a.angular.to_array().into_iter().zip(b.angular.to_array()) {
+                equal(a, b);
+            }
+        }
+    }
+}
+
+#[test]
+fn reused_solver_matches_fresh_solver_across_models_and_selection() {
+    let layouts: &[&[(usize, usize)]] = &[
+        &[(1, 11)],
+        &[(0, 1), (1, 7), (2, 3), (3, 11), (4, 2)],
+        &[],
+        &[(3, 1)],
+        &[(1, 2), (2, 1)],
+        &[(1, 17)],
+    ];
+    let contacts = Contacts::with_capacity(0);
+    for rigorous in [false, true] {
+        for substeps in [1, 4] {
+            let new_solver = || {
+                FeatherstoneSolver::new_cpu()
+                    .with_substeps(substeps)
+                    .with_rigorous_d_solve(rigorous)
+                    .with_stable_motor_feedback(true)
+            };
+            let mut reused = new_solver();
+            for &layout in layouts.iter().cycle().take(layouts.len() * 2) {
+                let (model, mut state, control) = chains(layout);
+                let mut actual = state.clone_host().unwrap();
+                let mut expected = state.clone_host().unwrap();
+                for step in 0..12 {
+                    let selected: Vec<_> = (0..model.articulation_count)
+                        .map(|art| step % 5 != 0 && (step + art) % 3 != 0)
+                        .collect();
+                    assert!(
+                        reused
+                            .step_active_articulations(
+                                &model,
+                                &state,
+                                &control,
+                                &contacts,
+                                f64::NAN,
+                                &mut actual,
+                                &selected,
+                            )
+                            .is_err()
+                    );
+                    let mut fresh = new_solver();
+                    if step % 4 == 0 {
+                        reused
+                            .step(&model, &state, &control, &contacts, 0.002, &mut actual)
+                            .unwrap();
+                        fresh
+                            .step(&model, &state, &control, &contacts, 0.002, &mut expected)
+                            .unwrap();
+                    } else {
+                        reused
+                            .step_active_articulations(
+                                &model,
+                                &state,
+                                &control,
+                                &contacts,
+                                0.002,
+                                &mut actual,
+                                &selected,
+                            )
+                            .unwrap();
+                        fresh
+                            .step_active_articulations(
+                                &model,
+                                &state,
+                                &control,
+                                &contacts,
+                                0.002,
+                                &mut expected,
+                                &selected,
+                            )
+                            .unwrap();
+                    }
+                    assert_state_bits(&actual, &expected);
+                    std::mem::swap(&mut state, &mut actual);
+                }
+            }
+        }
+    }
+}
