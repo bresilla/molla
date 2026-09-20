@@ -37,7 +37,7 @@ impl<'a> ArticulatedResponse<'a> {
 
     pub(crate) fn export_mass(self, seed: &mut crate::joint_mass::MassSeed<'_>) -> Result<()> {
         seed.record(self.model, self.state,
-            self.masses.into_iter().map(|(art, (matrix, _))| (art, matrix)).collect())
+            self.masses.into_iter().map(|(art, (matrix, factor))| (art, (matrix, factor.into_full_rank()))).collect())
     }
 
     pub(crate) fn jacobian(&mut self, art: usize, body: usize) -> Result<&[Real]> {

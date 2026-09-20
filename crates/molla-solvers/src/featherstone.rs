@@ -1941,6 +1941,16 @@ fn effective_drive_inertias(
         if !(first..first + count).any(requested) {
             continue;
         }
+        if let Some((scale, factor)) = joint_mass.cached_cholesky(articulation, count) {
+            let mut workspace = vec![0.0; count];
+            for dof in 0..count {
+                if requested(first + dof) {
+                    let inverse = unit_inverse_diagonal(factor, count, dof, &mut workspace);
+                    result[first + dof] = if inverse > 0.0 { scale / inverse } else { 0.0 };
+                }
+            }
+            continue;
+        }
         let mass = joint_mass.matrix(articulation)?;
         if mass.iter().any(|v| !v.is_finite()) {
             return Err(crate::core::Error::Solver(
@@ -2229,6 +2239,10 @@ fn joint_type_from_u32(v: u32) -> JointType {
 #[cfg(test)]
 #[path = "featherstone_mass_seed.rs"]
 mod mass_seed_tests;
+
+#[cfg(test)]
+#[path = "featherstone_factor_seed.rs"]
+mod factor_seed_tests;
 
 #[cfg(test)]
 mod tests {

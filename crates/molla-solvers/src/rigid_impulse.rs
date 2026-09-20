@@ -220,6 +220,21 @@ enum MassDecomposition {
 }
 
 impl MassFactor {
+    pub(crate) fn full_rank_cholesky(&self, n: usize) -> Option<(Real, &[Real])> {
+        let MassDecomposition::Cholesky(factor) = &self.decomposition else {
+            return None;
+        };
+        (self.n == n && self.scale.is_finite() && self.scale > 0.0
+            && factor.iter().all(|v| v.is_finite())
+            && (0..n).all(|i| factor[i * n + i] > 0.0
+                && factor[i * n + i].powi(2) > 1e-12))
+            .then_some((self.scale, factor.as_slice()))
+    }
+
+    pub(crate) fn into_full_rank(self) -> Option<Self> {
+        self.full_rank_cholesky(self.n).is_some().then_some(self)
+    }
+
     /// Retain a normalized full-rank Cholesky with the impulse solver's pivot cutoff.
     pub(crate) fn from_cholesky(factor: Vec<Real>, n: usize, scale: Real) -> Option<Self> {
         if n.checked_mul(n) != Some(factor.len())

@@ -8,7 +8,7 @@ pub(crate) struct MassSeed<'a> {
     model: &'a Model,
     coordinates: Vec<Real>,
     poses: Vec<Transform>,
-    matrices: BTreeMap<usize, Vec<Real>>,
+    matrices: BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>,
 }
 
 #[cfg(test)]
@@ -37,7 +37,7 @@ mod tests {
             let matrix = crate::mass_matrix(model, state, 0).unwrap();
             let allocation = matrix.as_ptr();
             let mut seed = MassSeed::new(model);
-            seed.record(model, state, BTreeMap::from([(0, matrix)]))
+            seed.record(model, state, BTreeMap::from([(0, (matrix, None))]))
                 .unwrap();
             let mut next = state.clone_host().unwrap();
             match edit {
@@ -74,7 +74,7 @@ mod tests {
         seed.record(
             scene.model(),
             scene.state(),
-            BTreeMap::from([(0, vec![1.0; 36])]),
+            BTreeMap::from([(0, (vec![1.0; 36], None))]),
         )
         .unwrap();
         assert!(
@@ -99,7 +99,7 @@ impl<'a> MassSeed<'a> {
         &mut self,
         model: &Model,
         state: &State,
-        matrices: BTreeMap<usize, Vec<Real>>,
+        matrices: BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>,
     ) -> Result<()> {
         if !std::ptr::eq(self.model, model) {
             return Err(Error::Solver("mass seed model mismatch".into()));
@@ -116,7 +116,7 @@ impl<'a> MassSeed<'a> {
         self,
         model: &Model,
         state: &State,
-    ) -> Result<BTreeMap<usize, Vec<Real>>> {
+    ) -> Result<BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>> {
         if self.matrices.is_empty() || !std::ptr::eq(self.model, model) {
             return Ok(BTreeMap::new());
         }

@@ -89,7 +89,12 @@ fn seeded_steps_match_fresh_mass_after_mimic_fk_and_singular_changes() {
                                 if cached {
                                     let matrices = (0..model.articulation_count)
                                         .map(|art| {
-                                            Ok((art, crate::mass_matrix(model, state, art)?))
+                                            let matrix = crate::mass_matrix(model, state, art)?;
+                                            let n = (matrix.len() as Real).sqrt() as usize;
+                                            let factor =
+                                                crate::rigid_impulse::MassFactor::new(&matrix, n)?
+                                                    .into_full_rank();
+                                            Ok((art, (matrix, factor)))
                                         })
                                         .collect::<Result<BTreeMap<_, _>>>()?;
                                     seed.record(model, state, matrices)?;

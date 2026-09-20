@@ -103,8 +103,8 @@ impl<'a> JointMass<'a> {
     ) -> Result<Self> {
         let mut result = Self::new(model, state);
         if let Some(seed) = seed {
-            for (art, matrix) in seed.into_matrices(model, state)? {
-                result.entries[art] = Some(Entry { matrix, factor: None });
+            for (art, (matrix, factor)) in seed.into_matrices(model, state)? {
+                result.entries[art] = Some(Entry { matrix, factor });
             }
         }
         Ok(result)
@@ -122,6 +122,10 @@ impl<'a> JointMass<'a> {
 
     pub(crate) fn matrix(&mut self, articulation: usize) -> Result<&[Real]> {
         Ok(&self.entry(articulation)?.matrix)
+    }
+
+    pub(crate) fn cached_cholesky(&self, articulation: usize, n: usize) -> Option<(Real, &[Real])> {
+        self.entries.get(articulation)?.as_ref()?.factor.as_ref()?.full_rank_cholesky(n)
     }
 
     pub(crate) fn retain_cholesky(
