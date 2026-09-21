@@ -342,6 +342,7 @@ pub struct ModelBuilder {
     spring_rest_length: Vec<Real>,
     spring_compliance: Vec<Real>,
     spring_max_stretch: Vec<Real>,
+    spring_tension_only: Vec<u32>,
 
     // Triangle topology — flat `tri_count*3` u32 array.
     tri_indices: Vec<u32>,
@@ -648,7 +649,36 @@ impl ModelBuilder {
         self.spring_rest_length.push(rest_length);
         self.spring_compliance.push(compliance);
         self.spring_max_stretch.push(max_stretch);
+        self.spring_tension_only.push(0);
         id
+    }
+
+    /// Add an axial tension-only element with energy k/2 · max(length - rest, 0)².
+    pub fn add_tension_element(
+        &mut self,
+        a: u32,
+        b: u32,
+        rest: Real,
+        stiffness: Real,
+    ) -> Result<usize> {
+        if a == b
+            || a as usize >= self.particle_q0.len()
+            || b as usize >= self.particle_q0.len()
+            || !rest.is_finite()
+            || rest as f32 <= 0.0
+            || !(rest as f32).is_finite()
+            || !stiffness.is_finite()
+            || stiffness <= 0.0
+            || !(stiffness as f32).is_finite()
+            || !(1.0 / stiffness).is_finite()
+            || !((1.0 / stiffness) as f32).is_finite()
+            || ((1.0 / stiffness) as f32) < f32::MIN_POSITIVE
+        {
+            return Err(Error::Build("invalid tension element".into()));
+        }
+        let id = self.add_distance_constraint(a, b, rest, 1.0 / stiffness, 1.0);
+        self.spring_tension_only[id] = 1;
+        Ok(id)
     }
 
     /// Build a CABLE polyline through the given particle indices.
@@ -2941,6 +2971,7 @@ impl ModelBuilder {
             spring_rest_length: Buffer::from_vec(self.spring_rest_length, s),
             spring_compliance: Buffer::from_vec(self.spring_compliance, s),
             spring_max_stretch: Buffer::from_vec(self.spring_max_stretch, s),
+            spring_tension_only: Buffer::from_vec(self.spring_tension_only, s),
             spring_color_count,
             spring_color_offsets: Buffer::from_vec(spring_color_offsets, s),
             spring_indices_by_color: Buffer::from_vec(spring_indices_by_color, s),

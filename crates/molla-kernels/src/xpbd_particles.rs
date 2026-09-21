@@ -107,11 +107,10 @@ impl XpbdParticlesKernel {
             label: Some("molla::xpbd_particles state"),
             entries: &storage_entries(6, true),
         });
-        // Springs group: 7 read-only inputs (a, b, rest, comp, max_stretch,
-        // color_offsets, indices_by_color).
+        // Springs group: 8 read-only inputs.
         let layout_springs = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::xpbd_particles springs"),
-            entries: &storage_entries(7, true),
+            entries: &storage_entries(8, true),
         });
         // Output / scratch group: 5 read-write (q, qd, lambdas, deltas, counts).
         let layout_out = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -397,6 +396,14 @@ impl XpbdParticlesKernel {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: color_idx_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: model
+                        .spring_tension_only
+                        .device_buffer()
+                        .unwrap_or(dummy_u32_buf)
+                        .as_entire_binding(),
                 },
             ],
         });

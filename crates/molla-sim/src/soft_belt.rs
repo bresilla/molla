@@ -42,7 +42,112 @@ pub struct RubberBeltMesh {
     params: RubberBeltParams,
 }
 
+/// Longitudinal EA (N), additional reference line density (kg/m), and installed engineering prestrain.
+#[derive(Clone, Copy, Debug)]
+pub struct RubberCordParams {
+    pub axial_rigidity: Real,
+    pub linear_density: Real,
+    pub prestrain: Real,
+}
+
+impl Default for RubberCordParams {
+    fn default() -> Self {
+        Self {
+            axial_rigidity: 2e5,
+            linear_density: 0.1,
+            prestrain: 0.0,
+        }
+    }
+}
+
+pub struct ReinforcedBelt {
+    pub mesh: TetMeshId,
+    pub nodes: Vec<u32>,
+    pub cords: Vec<usize>,
+}
+
 impl RubberBeltMesh {
+    /// Add midpoint-layer, perfectly bonded axial cords sharing the rubber nodes.
+    pub fn append_reinforced_to(
+        &self,
+        builder: &mut ModelBuilder,
+        world: WorldId,
+        center: Vec3,
+        cord: RubberCordParams,
+    ) -> Result<ReinforcedBelt> {
+        let p = self.params;
+        if !center.is_finite()
+            || p.thickness_cells % 2 != 0
+            || !cord.axial_rigidity.is_finite()
+            || cord.axial_rigidity <= 0.0
+            || !cord.linear_density.is_finite()
+            || cord.linear_density < 0.0
+            || !cord.prestrain.is_finite()
+            || !(0.0..=0.1).contains(&cord.prestrain)
+        {
+            return Err(Error::Build(
+                "invalid rubber cord parameters or midpoint layer".into(),
+            ));
+        }
+        let index = |s: usize, w: usize| {
+            ((s % p.segments) * (p.width_cells + 1) + w) * (p.thickness_cells + 1)
+                + p.thickness_cells / 2
+        };
+        let mut masses = self.masses.clone();
+        let mut elements = Vec::with_capacity(p.segments * (p.width_cells + 1));
+        for s in 0..p.segments {
+            for w in 0..=p.width_cells {
+                let a = index(s, w);
+                let b = index(s + 1, w);
+                let weight = if w == 0 || w == p.width_cells {
+                    0.5
+                } else {
+                    1.0
+                } / p.width_cells as Real;
+                let rest =
+                    (self.positions[b] - self.positions[a]).length() / (1.0 + cord.prestrain);
+                let stiffness = cord.axial_rigidity * weight / rest;
+                let mass = cord.linear_density * weight * rest;
+                if !mass.is_finite()
+                    || !stiffness.is_finite()
+                    || !(stiffness as f32).is_finite()
+                    || stiffness <= 0.0
+                    || !((1.0 / stiffness) as f32).is_finite()
+                    || ((1.0 / stiffness) as f32) < f32::MIN_POSITIVE
+                    || rest as f32 <= 0.0
+                {
+                    return Err(Error::Build("unrepresentable rubber cord element".into()));
+                }
+                masses[a] += mass * 0.5;
+                masses[b] += mass * 0.5;
+                elements.push((a, b, rest, stiffness));
+            }
+        }
+        if masses
+            .iter()
+            .any(|m| !m.is_finite() || !(*m as f32).is_finite())
+        {
+            return Err(Error::Build("unrepresentable reinforced belt mass".into()));
+        }
+        let nodes: Vec<_> = self
+            .positions
+            .iter()
+            .zip(masses)
+            .map(|(&q, m)| builder.add_particle(center + q, m, 0.0, world))
+            .collect();
+        let tets: Vec<_> = self
+            .tets
+            .iter()
+            .map(|t| t.map(|v| nodes[v as usize]))
+            .collect();
+        let mesh = builder.add_tet_mesh(&tets, p.youngs_modulus, p.poisson_ratio, None)?;
+        let cords = elements
+            .into_iter()
+            .map(|(a, b, rest, k)| builder.add_tension_element(nodes[a], nodes[b], rest, k))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ReinforcedBelt { mesh, nodes, cords })
+    }
+
     pub fn circular(params: RubberBeltParams) -> Result<Self> {
         let p = params;
         let nodes = p
@@ -194,6 +299,71 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn closed_cords_preserve_axial_rigidity_mass_and_prestrain_under_refinement() {
+        for (segments, width_cells) in [(16, 1), (32, 2), (64, 4)] {
+            for prestrain in [0.0, 0.01] {
+                let p = RubberBeltParams {
+                    segments,
+                    width_cells,
+                    ..Default::default()
+                };
+                let mesh = RubberBeltMesh::circular(p).unwrap();
+                let cord = RubberCordParams {
+                    prestrain,
+                    ..Default::default()
+                };
+                let mut builder = ModelBuilder::new();
+                let handles = mesh
+                    .append_reinforced_to(&mut builder, WorldId(0), Vec3::ZERO, cord)
+                    .unwrap();
+                let model = builder.build().unwrap();
+                assert_eq!(handles.cords.len(), segments * (width_cells + 1));
+                assert!(
+                    model
+                        .spring_tension_only
+                        .host()
+                        .unwrap()
+                        .iter()
+                        .all(|&v| v == 1)
+                );
+                assert!(
+                    model
+                        .spring_max_stretch
+                        .host()
+                        .unwrap()
+                        .iter()
+                        .all(|&v| v == 1.0)
+                );
+                let length = 2.0
+                    * p.radius
+                    * (std::f64::consts::PI / segments as Real).sin()
+                    * segments as Real
+                    / (1.0 + prestrain);
+                let added_mass = model.particle_mass.host().unwrap().iter().sum::<Real>()
+                    - mesh.masses.iter().sum::<Real>();
+                assert!((added_mass - cord.linear_density * length).abs() < 1e-10);
+                let mut energy = 0.0;
+                let mut valence = HashMap::new();
+                for s in handles.cords {
+                    let a = model.spring_a.host().unwrap()[s] as usize;
+                    let b = model.spring_b.host().unwrap()[s] as usize;
+                    *valence.entry(a).or_insert(0) += 1;
+                    *valence.entry(b).or_insert(0) += 1;
+                    let current_length = (mesh.positions[a] - mesh.positions[b]).length() * 1.02;
+                    let extension = current_length - model.spring_rest_length.host().unwrap()[s];
+                    energy +=
+                        0.5 * extension * extension / model.spring_compliance.host().unwrap()[s];
+                }
+                let strain = 1.02 * (1.0 + prestrain) - 1.0;
+                assert!(
+                    (energy - 0.5 * cord.axial_rigidity * length * strain * strain).abs() < 1e-8
+                );
+                assert!(valence.values().all(|&v| v == 2));
+            }
+        }
+    }
+
+    #[test]
     fn closed_belt_has_positive_volume_and_watertight_surface() {
         let p = RubberBeltParams::default();
         let mesh = RubberBeltMesh::circular(p).unwrap();
@@ -238,6 +408,41 @@ mod tests {
             },
         ] {
             assert!(RubberBeltMesh::circular(p).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_cords_are_rejected_before_adding_particles() {
+        let mesh = RubberBeltMesh::circular(RubberBeltParams::default()).unwrap();
+        for cord in [
+            RubberCordParams {
+                axial_rigidity: 0.0,
+                ..Default::default()
+            },
+            RubberCordParams {
+                linear_density: -1.0,
+                ..Default::default()
+            },
+            RubberCordParams {
+                prestrain: Real::NAN,
+                ..Default::default()
+            },
+            RubberCordParams {
+                prestrain: 0.2,
+                ..Default::default()
+            },
+            RubberCordParams {
+                axial_rigidity: 1e-300,
+                ..Default::default()
+            },
+        ] {
+            let mut b = ModelBuilder::new();
+            b.add_particle(Vec3::X, 1.0, 0.0, WorldId(0));
+            assert!(
+                mesh.append_reinforced_to(&mut b, WorldId(0), Vec3::ZERO, cord)
+                    .is_err()
+            );
+            assert_eq!(b.build().unwrap().particle_count, 1);
         }
     }
 }

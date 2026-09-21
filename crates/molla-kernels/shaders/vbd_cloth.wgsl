@@ -87,6 +87,7 @@ const IDENTITY3 = mat3x3<f32>(
 @group(1) @binding(6) var<storage, read>      particle_color_offsets:   array<u32>;
 /// Particle indices sorted by colour.
 @group(1) @binding(7) var<storage, read>      particle_indices_by_color: array<u32>;
+@group(1) @binding(8) var<storage, read>      spring_tension_only: array<u32>;
 
 // ── Group 2: read/write working state ───────────────────────────────
 /// Current iterate of vertex positions (overwritten each block solve).
@@ -620,6 +621,11 @@ fn spring_force_hessian(
         + (particle_delta[self_idx].xyz - particle_delta[other].xyz);
     let len = max(length(diff), 1e-8);
     let rest = spring_rest_length[spring_idx];
+    if (spring_tension_only[spring_idx] != 0u && len <= rest) {
+        *out_force = vec3<f32>(0.0);
+        *out_hess = mat3x3<f32>();
+        return;
+    }
     let k = spring_stiffness[spring_idx];
 
     let f = -k * (1.0 - rest / len) * diff;

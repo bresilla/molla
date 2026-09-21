@@ -323,6 +323,8 @@ pub struct Model {
     /// inextensible (length capped at rest length). 0.05 = 5 %
     /// stretchy linen. >= ~1.0 effectively disables the cap.
     pub spring_max_stretch: Buffer<Real>,
+    /// One for tension-only axial elements, zero for bilateral springs.
+    pub spring_tension_only: Buffer<u32>,
 
     // ── Spring graph colouring ──────────────────────────────────────
     // Computed once at build time so the GPU XPBD kernel can solve
@@ -940,6 +942,7 @@ impl Model {
             spring_rest_length: Buffer::from_vec(Vec::new(), s),
             spring_compliance: Buffer::from_vec(Vec::new(), s),
             spring_max_stretch: Buffer::from_vec(Vec::new(), s),
+            spring_tension_only: Buffer::from_vec(Vec::new(), s),
             spring_color_count: 0,
             // Single sentinel offset so empty models don't need a
             // separate device-side branch.
@@ -1159,6 +1162,7 @@ impl Model {
         up!(spring_rest_length);
         up!(spring_compliance);
         up!(spring_max_stretch);
+        up!(spring_tension_only);
         up!(spring_color_offsets);
         up!(spring_indices_by_color);
         up!(vertex_adjacent_springs_offsets);

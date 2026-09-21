@@ -107,10 +107,10 @@ impl VbdClothKernel {
             label: Some("molla::vbd_cloth state"),
             entries: &storage_entries(7, true),
         });
-        // Topology group: 8 read-only inputs.
+        // Topology group: 9 read-only inputs.
         let layout_topo = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::vbd_cloth topo"),
-            entries: &storage_entries(8, true),
+            entries: &storage_entries(9, true),
         });
         // Output / scratch group: 5 read-write (added contact_lambda
         // at binding 4 for Stage 20.1 hard-mode AVBD).
@@ -428,6 +428,14 @@ impl VbdClothKernel {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: pcol_idx_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: model
+                        .spring_tension_only
+                        .device_buffer()
+                        .unwrap_or(dummy_u32_buf)
+                        .as_entire_binding(),
                 },
             ],
         });

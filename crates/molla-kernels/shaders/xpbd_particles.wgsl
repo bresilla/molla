@@ -62,6 +62,7 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 @group(1) @binding(1) var<storage, read>      spring_b:                array<u32>;
 @group(1) @binding(2) var<storage, read>      spring_rest_length:      array<f32>;
 @group(1) @binding(3) var<storage, read>      spring_compliance:       array<f32>;
+@group(1) @binding(7) var<storage, read>      spring_tension_only: array<u32>;
 @group(1) @binding(4) var<storage, read>      spring_max_stretch:      array<f32>;
 @group(1) @binding(5) var<storage, read>      spring_color_offsets:    array<u32>;
 @group(1) @binding(6) var<storage, read>      spring_indices_by_color: array<u32>;
@@ -166,7 +167,10 @@ fn solve_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c_val = len - spring_rest_length[c];
     let dt2 = u.dt * u.dt;
     let alpha = spring_compliance[c] / dt2;
-    let dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+    var dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+    if (spring_tension_only[c] != 0u) {
+        dlambda = min(lambdas[c] + dlambda, 0.0) - lambdas[c];
+    }
     lambdas[c] = lambdas[c] + dlambda;
     let dp = n_dir * dlambda;
     particle_q[a] = vec4<f32>(pa - dp * wa, 0.0);

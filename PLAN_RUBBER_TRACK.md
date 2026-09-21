@@ -58,9 +58,13 @@ physical implementations. Runtime mode switching/menu implementation is pending.
    claim at this stage. Initial fixture: 288 nodes, 768 tetrahedra, density
    1100 kg/m³, E=2 MPa, nu=0.45, dt=1/480 s, 16 CPU iterations. Broader
    near-incompressibility, refinement and timestep convergence remain open.
-2. **Reinforcement:** embedded longitudinal tensile cords, bending and shear
-   response, volume preservation, hysteresis/damping, prestretch and tensioner.
-   Establish resolution/timestep convergence before increasing stiffness.
+2. **Reinforcement (initial axial gates pass):** embedded longitudinal tensile
+   cords share the rubber midpoint-layer nodes. EA/L axial elements carry
+   tension only; width quadrature preserves total EA as the mesh refines.
+   Reference line density adds lumped nodal mass, and optional prestrain
+   shortens cord rest length. Material shear/bending remains volumetric rubber.
+   Full mesh/timestep convergence, hysteresis and a physical tensioner remain
+   open; cord bending, slip and delamination are not implemented.
 3. **Contact bench:** one powered rigid sprocket, unpowered rollers and a
    supported belt. Resolve actual tooth/lug contact and two-way linear/angular
    reaction with the rigid solver. Validate energy and momentum; no rotation
@@ -146,6 +150,21 @@ tunnelling, cord/rubber stiffness contrast and substep cost are explicit risks.
 A coarse tetra mesh is a continuum approximation, not molecular rubber. No
 claim of tear, heat, wear, fatigue or experimentally validated traction is made.
 
+`RubberBeltMesh::append_reinforced_to` defaults to total axial rigidity
+200 kN and additional line density 0.1 kg/m, with zero prestrain. The initial
+reinforced bench uses 96 tension elements sharing the 288 tetrahedral nodes.
+Its 2% radial expansion produces about 15 times the initial radial restoring
+impulse of bare rubber. After 48 GPU steps at 1/4800 s, CPU/GPU positions agree
+within 1.10 micrometres and momentum stays below 0.00034 kg m/s. Total energy
+falls from 188.71 J to 110.79 J under implicit integration; this is numerical
+dissipation, not a calibrated rubber hysteresis law. Pure tensile element tests
+match implicit-Euler axial response, including stiffness above the bilateral
+spring cap; slack compression produces no force. GPU VBD and XPBD both support
+the tension flag; the barrier solver explicitly rejects it. Analytic closed-loop
+mass, strain energy and prestrain gates span longitudinal/width refinement.
+These are material tests, not full reinforced sprocket engagement or vehicle
+acceptance. No imposed motion or hard strain cap is used for the cords.
+
 GPU-first architecture with the CPU as correctness oracle remains required.
 Keep physical laws in Molla; Gearbox owns rendering and machine binding.
 The user reaffirmed that every GPU-suitable stage must execute on GPU, including
@@ -155,6 +174,8 @@ delivery. Keep deformable positions, velocities and iterative contact state
 device-resident; no per-node host round trips inside substeps.
 
 Primary references:
+- https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
+- https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
 - https://graphics.cs.utah.edu/research/projects/vbd/
 - https://graphics.cs.utah.edu/research/projects/avbd/
 - https://www.tkim.graphics/NEO/StableNeoHookean2018.pdf

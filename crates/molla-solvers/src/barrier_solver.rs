@@ -167,6 +167,11 @@ impl BarrierSolver {
     /// uses.
     #[cfg(feature = "gpu")]
     fn build_gpu(&self, model: &Model, state: &State) -> Result<molla_kernels::BarrierNewtonGpu> {
+        if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
+            return Err(molla_core::Error::Solver(
+                "barrier solver does not support tension-only elements".into(),
+            ));
+        }
         use molla_kernels::{BarrierGpuObstacle, BarrierGpuSpring, BarrierNewtonGpu};
         let positions: Vec<[f32; 3]> = state
             .particle_q
@@ -278,6 +283,11 @@ impl BarrierSolver {
 
     /// Build the shell topology from the model + initial state.
     fn build_shell(&mut self, model: &Model, state: &State) -> Result<BarrierShell> {
+        if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
+            return Err(molla_core::Error::Solver(
+                "barrier solver does not support tension-only elements".into(),
+            ));
+        }
         let positions = state.particle_q.host()?.to_vec();
         let velocities = state.particle_qd.host()?.to_vec();
         let masses = model.particle_mass.host()?.to_vec();

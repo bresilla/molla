@@ -1558,6 +1558,7 @@ pub(crate) fn step_particles(
         let sb = model.spring_b.host()?;
         let rest = model.spring_rest_length.host()?;
         let comp = model.spring_compliance.host()?;
+        let tension_only = model.spring_tension_only.host()?;
 
         // λ accumulator — one entry per spring, reset each substep.
         let mut lambdas = vec![0.0; model.spring_count];
@@ -1588,7 +1589,10 @@ pub(crate) fn step_particles(
                 // populations (cloth vs rope) can have different
                 // stiffness without rebuilding the model.
                 let alpha = comp[c] / dt2;
-                let dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+                let mut dlambda = -(c_val + alpha * lambdas[c]) / (w_sum + alpha);
+                if tension_only[c] != 0 {
+                    dlambda = (lambdas[c] + dlambda).min(0.0) - lambdas[c];
+                }
                 lambdas[c] += dlambda;
                 let dp = n_dir * dlambda;
                 // grad_c_xa = -n, grad_c_xb = +n →

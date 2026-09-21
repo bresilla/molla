@@ -1273,10 +1273,15 @@ pub(crate) fn project_tet_tet_contacts(model: &Model, state: &mut State) -> Resu
 #[cfg(feature = "gpu")]
 fn derive_stiffness_table(model: &Model, max_k: f64) -> Result<Vec<Real>> {
     let comp = model.spring_compliance.host()?;
+    let tension_only = model.spring_tension_only.host()?;
     let mut out = Vec::with_capacity(comp.len());
-    for &a in comp {
+    for (i, &a) in comp.iter().enumerate() {
         let k = if a > 1.0e-12 { 1.0 / a } else { max_k };
-        out.push(k.min(max_k).max(1.0));
+        out.push(if tension_only[i] != 0 {
+            1.0 / a
+        } else {
+            k.min(max_k).max(1.0)
+        });
     }
     Ok(out)
 }
@@ -1342,6 +1347,7 @@ pub(crate) fn cpu_step(
     let spring_b = model.spring_b.host()?;
     let spring_rest = model.spring_rest_length.host()?;
     let spring_comp = model.spring_compliance.host()?;
+    let spring_tension_only = model.spring_tension_only.host()?;
     let vadj_off = model.vertex_adjacent_springs_offsets.host()?;
     let vadj_idx = model.vertex_adjacent_springs.host()?;
     let pcol_off = model.particle_color_offsets.host()?;
@@ -1364,13 +1370,18 @@ pub(crate) fn cpu_step(
     // Pre-compute per-spring stiffness from compliance.
     let stiffness: Vec<Real> = spring_comp
         .iter()
-        .map(|&a| {
+        .enumerate()
+        .map(|(i, &a)| {
             let k = if a > 1.0e-12 {
                 1.0 / a
             } else {
                 max_spring_stiffness
             };
-            k.min(max_spring_stiffness).max(1.0)
+            if spring_tension_only[i] != 0 {
+                1.0 / a
+            } else {
+                k.min(max_spring_stiffness).max(1.0)
+            }
         })
         .collect();
 
@@ -1542,6 +1553,9 @@ pub(crate) fn cpu_step(
                     let diff = x[v] - x[other];
                     let len = diff.length().max(1.0e-8);
                     let rest = spring_rest[s];
+                    if spring_tension_only[s] != 0 && len <= rest {
+                        continue;
+                    }
                     let kk = stiffness[s];
                     let f_self = -kk * (1.0 - rest / len) * diff;
                     let outer = mat3_outer(diff, diff);
