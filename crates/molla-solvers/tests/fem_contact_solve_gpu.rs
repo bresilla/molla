@@ -106,13 +106,17 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
-    for (friction, fault, locked) in [
-        (0.0, 0, false),
-        (0.4, 0, false),
-        (1.0, 0, false),
-        (0.4, 0, true),
-        (0.4, 1, false),
-        (0.4, 2, false),
+    let mut dense_reference = None;
+    for (friction, fault, locked, sparse) in [
+        (0.0, 0, false, 0),
+        (0.4, 0, false, 0),
+        (1.0, 0, false, 0),
+        (0.4, 0, true, 0),
+        (0.4, 1, false, 0),
+        (0.4, 2, false, 0),
+        (0.4, 0, false, 1),
+        (0.4, 0, false, 2),
+        (0.4, 0, false, 3),
     ] {
         let (mut rigid, mut gpu_rigid) = rigid_model();
         if locked {
@@ -205,13 +209,30 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
         if fault == 2 {
             gpu_contacts[0].ids[0] = u32::MAX;
         }
+        let (candidate_count, indices) = match sparse {
+            0 => (3, [0, 1, 2]),
+            1 => (131, [0, 64, 130]),
+            2 => (129, [63, 64, 128]),
+            _ => (65536, [0, 32768, 65535]),
+        };
+        let mut candidates = vec![
+            SoftRigidContactGpu {
+                normal_gap: [0.0; 4],
+                material: [0.0; 4],
+                ids: [0; 4],
+            };
+            candidate_count
+        ];
+        for (contact, index) in gpu_contacts.iter().zip(indices) {
+            candidates[index] = *contact;
+        }
         let contact_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("test contacts"),
-            contents: bytemuck::cast_slice(&gpu_contacts),
-            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(&candidates),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let kernel =
-            SoftRigidSolveKernel::new(device, rigid.joint_dof_total as u32, contacts.len() as u32)
+            SoftRigidSolveKernel::new(device, rigid.joint_dof_total as u32, candidate_count as u32)
                 .unwrap();
         let mut encoder = device.create_command_encoder(&Default::default());
         kernel
@@ -242,6 +263,10 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
             .unwrap();
         queue.submit([encoder.finish()]);
         assert_eq!(read::<u32>(&engine, kernel.status(), 1), [fault]);
+        assert_eq!(
+            read::<u32>(&engine, kernel.active_rows(), 4),
+            [3, indices[0] as u32, indices[1] as u32, indices[2] as u32]
+        );
         if fault != 0 {
             let rigid_after = read::<f32>(
                 &engine,
@@ -269,6 +294,20 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
         gpu_soft.particle_qd.download(device, queue).unwrap();
         gpu_rigid.joint_qd.download(device, queue).unwrap();
         gpu_rigid.body_qd.download(device, queue).unwrap();
+        if friction == 0.4 && !locked {
+            let result = (
+                gpu_soft.particle_qd.host().unwrap().to_vec(),
+                gpu_rigid.joint_qd.host().unwrap().to_vec(),
+            );
+            if let Some(reference) = &dense_reference {
+                assert_eq!(
+                    &result, reference,
+                    "sparse candidate padding changed contact order/results"
+                );
+            } else {
+                dense_reference = Some(result);
+            }
+        }
         for (gpu, cpu) in gpu_rigid
             .body_qd
             .host()
@@ -300,12 +339,65 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
         {
             assert!((gpu - cpu).abs() < 3e-5, "GPU={gpu}, CPU={cpu}");
         }
-        let rows = read::<f32>(&engine, kernel.row_state(), contacts.len() * 8);
+        let rows = read::<f32>(&engine, kernel.row_state(), candidate_count * 8);
         for (r, contact) in contacts.iter().enumerate() {
-            let normal = rows[r * 8 + 4] as Real;
-            let tangent = (rows[r * 8 + 5] as Real).hypot(rows[r * 8 + 6] as Real);
+            let index = indices[r];
+            let normal = rows[index * 8 + 4] as Real;
+            let tangent = (rows[index * 8 + 5] as Real).hypot(rows[index * 8 + 6] as Real);
             assert!(tangent <= friction * normal + 1e-6);
             assert!((cpu_report.impulses[r].dot(contact.normal) - normal).abs() < 3e-5);
+        }
+        if sparse == 2 {
+            for contact in &mut candidates {
+                contact.ids[3] = 0;
+            }
+            queue.write_buffer(&contact_buffer, 0, bytemuck::cast_slice(&candidates));
+            let empty = SoftRigidSolveKernel::new(device, rigid.joint_dof_total as u32, 0).unwrap();
+            let before = read::<f32>(
+                &engine,
+                gpu_rigid.joint_qd.device_buffer().unwrap(),
+                rigid.joint_dof_total,
+            );
+            for kernel in [&kernel, &empty] {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                kernel
+                    .encode(
+                        device,
+                        &mut encoder,
+                        SoftRigidSolveBindings {
+                            positions: gpu_soft.particle_q.device_buffer().unwrap(),
+                            velocities: gpu_soft.particle_qd.device_buffer().unwrap(),
+                            inverse_mass: soft.particle_inv_mass.device_buffer().unwrap(),
+                            contacts: &contact_buffer,
+                            body_poses: gpu_rigid.body_q.device_buffer().unwrap(),
+                            body_com: rigid.body_com.device_buffer().unwrap(),
+                            jacobians: &jacobians,
+                            mass_matrix: &mass,
+                            rigid_velocities: gpu_rigid.joint_qd.device_buffer().unwrap(),
+                            body_velocities: gpu_rigid.body_qd.device_buffer().unwrap(),
+                            particle_count: soft.particle_count as u32,
+                            body_count: rigid.body_count as u32,
+                        },
+                        SoftRigidSolveSettings {
+                            iterations: 60,
+                            dt: 1.0 / 2400.0,
+                            penetration_recovery: 0.2,
+                            max_recovery_speed: 0.5,
+                        },
+                    )
+                    .unwrap();
+                queue.submit([encoder.finish()]);
+                assert_eq!(read::<u32>(&engine, kernel.active_rows(), 1), [0]);
+                assert_eq!(read::<u32>(&engine, kernel.status(), 1), [0]);
+                assert_eq!(
+                    read::<f32>(
+                        &engine,
+                        gpu_rigid.joint_qd.device_buffer().unwrap(),
+                        rigid.joint_dof_total
+                    ),
+                    before
+                );
+            }
         }
         eprintln!(
             "GPU articulated two-way contact matches CPU at friction={friction}, locked={locked}"

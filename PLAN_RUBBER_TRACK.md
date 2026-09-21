@@ -89,9 +89,22 @@ This detects invalid material states; it does not itself prevent inversion.
 
 The 1/9600 s, 0.5%-prestrain, 12 mm tooth fixture passes the full forward
 circulation/retention gate with lifetime minJ 0.672318 and 76.85 mm material
-travel. The reverse case still fails material acceptance (lifetime minJ
-0.403477 despite 73.54 mm travel); a smaller-step run is pending. Neither
-result proves two-track vehicle traction, long-run robustness or native delivery.
+travel. Reverse at the same timestep fails material acceptance (lifetime minJ
+0.403477 despite 73.54 mm travel). At 1/19200 s reverse passes: lifetime minJ
+0.749723, travel 72.16 mm and maximum envelope departure 16.29 mm. This run
+took 616.52 s for 0.26 simulated seconds, not real time. Neither direction
+proves two-track vehicle traction, long-run robustness or native delivery.
+
+The free-carrier/ground fixture adds actual gravity, a 500 kg free chassis,
+unmotorized support rollers and primitive ground contact. It measures belt
+circulation relative to the moving chassis, requires chassis displacement and
+ground traction impulse, and includes a zero-friction horizontal-momentum
+control. In the first 0.24 s powered trial the carrier advances 27.15 mm,
+ground penetration is zero, lifetime minJ is 0.598409 and final minJ is
+0.903480. The trial fails the unchanged one-pitch circulation gate: material
+travel is only 28.66 mm versus 56.45 mm required. The loaded drive window is
+extended to 0.60 s with the same torque cap, timestep and acceptance limits;
+this longer case and the frictionless control remain unverified.
 
 GPU articulated dynamics now implements dense Cholesky joint blocks when
 `rigorous_d_solve` is enabled; the FEM composition enables it. Fixed-child
@@ -119,13 +132,13 @@ must not be applied again. Existing articulated impulse and free-carrier
 momentum gates retain their 0.001 tolerances. The updated anchored CPU tooth
 speeds are 0.275111/0.274986 rad/s; the GPU negative case is 0.275179 rad/s.
 
-The installed full-loop gate is still failing. With 2% prestrain, material
+Earlier coarse installed full-loop runs failed. With 2% prestrain, material
 circulates 67.1 mm (pitch 56.5 mm) and envelope departure is 10.7 mm, but a
 tetrahedron inverts (minJ -0.0169). At 0.5% prestrain the belt circulates
 78.8 mm with 17.3 mm departure, but lug elements compress excessively
 (minJ 0.2251; settled minJ already 0.4743). No volume or circulation acceptance
 threshold was weakened. Contact/elastic coupling and geometric resolution
-remain required work before any full-track or native-simulator claim.
+remain required work before robust full-track or native-simulator acceptance.
 
 Installed track geometry now has an analytic common-tangent/arc envelope for
 convex ordered pulleys, periodic arc-length sampling and diagnostic nearest
@@ -168,7 +181,15 @@ The CPU oracle is not the delivery path.
 GPU response parity covers floating 25-DOF trees, reversed frames and locks;
 contact parity covers friction 0/0.4/1, locked axes and rejected invalid inputs.
 Contact sweeps remain serialized on device, parallelism is currently in FEM
-and response assembly, and no real-time performance claim is made.
+and response assembly, and no real-time performance claim is made. GPU-only
+stable compaction now builds an ascending active-candidate index list using
+parallel 64-lane counts, block offsets and scatter. Contact sweeps no longer
+scan inactive node/shape pairs on every iteration; the numerical ordering and
+contact law are unchanged. Sparse 129/131/65536-candidate checks match dense
+results bit-for-bit, including workgroup boundaries, reset-to-empty and zero
+rows. Clean motor/contact/airborne regressions pass; the full forward track
+retains identical measured circulation and volume results. Timings were taken
+with concurrent GPU jobs and do not establish a performance improvement.
 Primitive gathering is presently
 dense node/shape pairing, not a production broad phase or continuous collision
 detection implementation.

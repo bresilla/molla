@@ -22,6 +22,54 @@ struct Params {
 @group(0) @binding(13) var<storage, read_write> status: atomic<u32>;
 @group(0) @binding(14) var<uniform> params: Params;
 @group(0) @binding(15) var<storage, read_write> body_velocity: array<SpatialVelocity>;
+@group(0) @binding(16) var<storage, read_write> active_rows: array<u32>;
+var<workgroup> active_prefix: array<u32, 64>;
+
+fn scan_contacts(row: u32, lane: u32) -> u32 {
+    var enabled = 0u;
+    if row < params.rows {
+        enabled = select(0u, 1u, contacts[row].ids.w == 1u);
+    }
+    active_prefix[lane] = enabled;
+    workgroupBarrier();
+    for (var offset = 1u; offset < 64u; offset *= 2u) {
+        var previous = 0u;
+        if lane >= offset { previous = active_prefix[lane-offset]; }
+        workgroupBarrier();
+        active_prefix[lane] += previous;
+        workgroupBarrier();
+    }
+    return enabled;
+}
+
+@compute @workgroup_size(64)
+fn count_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    let enabled = scan_contacts(gid.x, lane);
+    if lane == 63u { active_rows[params.rows+1u+group.x] = active_prefix[63]; }
+}
+
+@compute @workgroup_size(1)
+fn offset_contacts() {
+    var total = 0u;
+    for (var group = 0u; group < (params.rows+63u)/64u; group += 1u) {
+        let index = params.rows+1u+group;
+        let count = active_rows[index];
+        active_rows[index] = total;
+        total += count;
+    }
+    active_rows[0] = total;
+}
+
+@compute @workgroup_size(64)
+fn scatter_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    let enabled = scan_contacts(gid.x, lane);
+    if enabled != 0u {
+        let index = active_rows[params.rows+1u+group.x] + active_prefix[lane];
+        active_rows[index] = gid.x;
+    }
+}
 
 fn finite(x: f32) -> bool { return abs(x) <= 3.402823e38; }
 fn rotate(q: vec4<f32>, p: vec3<f32>) -> vec3<f32> {
@@ -145,7 +193,8 @@ fn apply_delta(r: u32, direction: vec3<f32>, k: u32, impulse: f32) {
 fn solve() {
     if atomicLoad(&status) != 0u { return; }
     for (var iteration = 0u; iteration < params.iterations; iteration += 1u) {
-        for (var r = 0u; r < params.rows; r += 1u) {
+        for (var rank = 0u; rank < active_rows[0]; rank += 1u) {
+            let r = active_rows[rank+1u];
             let contact = contacts[r];
             if contact.ids.w != 1u { continue; }
             let directions = basis(contact.normal_gap.xyz);

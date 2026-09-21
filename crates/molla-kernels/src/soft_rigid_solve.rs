@@ -43,12 +43,13 @@ pub struct SoftRigidSolveBindings<'a> {
 /// One coupled articulation, at most 64 DOFs, with serialized contact sweeps on device.
 pub struct SoftRigidSolveKernel {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::ComputePipeline; 4],
+    pipelines: [wgpu::ComputePipeline; 7],
     factor: wgpu::Buffer,
     projected: wgpu::Buffer,
     response: wgpu::Buffer,
     rows: wgpu::Buffer,
     status: wgpu::Buffer,
+    active_rows: wgpu::Buffer,
     dofs: u32,
     row_count: u32,
 }
@@ -57,6 +58,7 @@ impl SoftRigidSolveKernel {
     pub fn new(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
         if !(1..=64).contains(&dofs)
             || row_count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
+            || device.limits().max_storage_buffers_per_shader_stage < 16
         {
             return Err(Error::Build(
                 "unsupported GPU FEM contact dimensions".into(),
@@ -78,7 +80,7 @@ impl SoftRigidSolveKernel {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             })
         };
-        let entries: Vec<_> = (0..16)
+        let entries: Vec<_> = (0..17)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
@@ -88,7 +90,7 @@ impl SoftRigidSolveKernel {
                         wgpu::BufferBindingType::Uniform
                     } else {
                         wgpu::BufferBindingType::Storage {
-                            read_only: !matches!(binding, 1 | 8..=13 | 15),
+                            read_only: !matches!(binding, 1 | 8..=13 | 15..=16),
                         }
                     },
                     has_dynamic_offset: false,
@@ -111,7 +113,16 @@ impl SoftRigidSolveKernel {
                 include_str!("../shaders/soft_rigid_solve.wgsl").into(),
             ),
         });
-        let pipelines = ["factor_mass", "prepare", "solve", "recover_body_velocity"].map(|entry| {
+        let pipelines = [
+            "factor_mass",
+            "prepare",
+            "count_contacts",
+            "offset_contacts",
+            "scatter_contacts",
+            "solve",
+            "recover_body_velocity",
+        ]
+        .map(|entry| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -129,6 +140,10 @@ impl SoftRigidSolveKernel {
             response: allocate("FEM contact responses", response_size),
             rows: allocate("FEM contact impulses", row_count.max(1) as u64 * 32),
             status: allocate("FEM contact solver status", 4),
+            active_rows: allocate(
+                "FEM stable active contact rows",
+                (row_count as u64 + 1 + row_count.div_ceil(64) as u64) * 4,
+            ),
             dofs,
             row_count,
         })
@@ -141,6 +156,11 @@ impl SoftRigidSolveKernel {
     /// Eight floats per contact: normal inverse mass, tangent bound, target, pad, three impulses, pad.
     pub fn row_state(&self) -> &wgpu::Buffer {
         &self.rows
+    }
+
+    /// Active count followed by contact indices in ascending candidate order; scratch offsets follow.
+    pub fn active_rows(&self) -> &wgpu::Buffer {
+        &self.active_rows
     }
 
     /// Encode mass factorization, parallel response assembly and contact sweeps without host readback.
@@ -234,6 +254,7 @@ impl SoftRigidSolveKernel {
             &self.status,
             &uniform,
             b.body_velocities,
+            &self.active_rows,
         ];
         let entries: Vec<_> = buffers
             .iter()
@@ -251,10 +272,18 @@ impl SoftRigidSolveKernel {
         for (index, (pipeline, count)) in self
             .pipelines
             .iter()
-            .zip([1, self.row_count.div_ceil(64), 1, b.body_count.div_ceil(64)])
+            .zip([
+                1,
+                self.row_count.div_ceil(64),
+                self.row_count.div_ceil(64),
+                1,
+                self.row_count.div_ceil(64),
+                1,
+                b.body_count.div_ceil(64),
+            ])
             .enumerate()
         {
-            if count == 0 || (recover_only && index != 3) {
+            if count == 0 || (recover_only && index != 6) {
                 continue;
             }
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
