@@ -78,6 +78,24 @@ physical implementations. Runtime mode switching/menu implementation is pending.
 
 ## Model limits and evidence
 
+Installed track geometry now has an analytic common-tangent/arc envelope for
+convex ordered pulleys, periodic arc-length sampling and diagnostic nearest
+projection. `installed_positions` initializes the deformed state without
+changing the circular elastic reference mesh; it is not a runtime path-following
+constraint. Shared-face tetrahedral inner lugs add their actual volume and mass.
+The 56-lug, 112-cell fixture is one connected watertight volume (2016 nodes,
+6048 tets); installation at multiple phases retains positive element volumes.
+The complete powered-loop acceptance gate must demonstrate material circulation
+and retention, not just sprocket rotation or vertex movement. Its first run
+failed: after 0.24 s of motor drive, mean material travel was only 34.2 mm versus
+56.5 mm pitch, with a 60.4 mm envelope departure. The new gate remains required;
+idler groove support, tension and engagement are under investigation.
+
+GPU VBD reuses per-colour and dual uniforms across iterations. On the unchanged
+reinforced-tooth gate this reduced observed test duration from 62.60 s to 24.66 s
+with identical numerical output. Hard AVBD and plasticity regressions pass.
+This eliminates redundant host setup; it does not make the full FEM track real-time.
+
 Two-way contact now has a reusable CPU oracle in `soft_rigid_contact` and a
 substep composition in `fem_rigid`. It uses articulated mass responses, not
 independent-body inertia, for equal/opposite contact impulses and Coulomb

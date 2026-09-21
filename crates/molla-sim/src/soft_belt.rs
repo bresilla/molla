@@ -4,6 +4,8 @@ use crate::{ModelBuilder, TetMeshId};
 use molla_core::{Error, Result, WorldId};
 use molla_math::{Mat3, Real, Vec3};
 
+pub mod path;
+
 #[derive(Clone, Copy, Debug)]
 pub struct RubberBeltParams {
     pub radius: Real,
@@ -66,7 +68,150 @@ pub struct ReinforcedBelt {
     pub cords: Vec<usize>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RubberLugParams {
+    pub count: usize,
+    pub segment_span: usize,
+    pub width_start: usize,
+    pub width_cells: usize,
+    pub depth: Real,
+    pub depth_cells: usize,
+}
+
 impl RubberBeltMesh {
+    /// Generate initial installed positions while retaining the circular elastic reference mesh.
+    pub fn installed_positions(
+        &self,
+        path: &path::BeltPath,
+        phase: Real,
+        center: Vec3,
+    ) -> Result<Vec<Vec3>> {
+        if !center.is_finite() || !phase.is_finite() {
+            return Err(Error::Build("invalid installed belt transform".into()));
+        }
+        let positions = self
+            .positions
+            .iter()
+            .map(|q| {
+                let s = q.z.atan2(q.y).rem_euclid(std::f64::consts::TAU) * path.length()
+                    / std::f64::consts::TAU
+                    + phase;
+                let frame = path.sample(s)?;
+                let offset = q.y.hypot(q.z) - self.params.radius;
+                Ok(center + frame.position + Vec3::X * q.x + frame.outward * offset)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if self.minimum_volume_ratio(&positions)? <= 0.0 {
+            return Err(Error::Build(
+                "installed belt contains inverted tetrahedra".into(),
+            ));
+        }
+        Ok(positions)
+    }
+
+    /// Add volumetric inner lugs whose base faces share the belt's tetrahedral nodes.
+    pub fn with_drive_lugs(&self, lug: RubberLugParams) -> Result<Self> {
+        let p = self.params;
+        let original = p.segments * (p.width_cells + 1) * (p.thickness_cells + 1);
+        let extra = lug
+            .count
+            .saturating_mul(lug.segment_span.saturating_add(1))
+            .saturating_mul(lug.width_cells.saturating_add(1))
+            .saturating_mul(lug.depth_cells);
+        if self.positions.len() != original
+            || lug.count < 2
+            || p.segments % lug.count != 0
+            || lug.segment_span == 0
+            || lug.segment_span >= p.segments / lug.count
+            || lug.width_cells == 0
+            || lug.width_start.saturating_add(lug.width_cells) > p.width_cells
+            || lug.depth_cells == 0
+            || original.saturating_add(extra) > 1_000_000
+            || !lug.depth.is_finite()
+            || lug.depth <= 0.0
+            || lug.depth >= p.radius - p.thickness * 0.5
+        {
+            return Err(Error::Build("invalid rubber drive lug geometry".into()));
+        }
+        let mut mesh = self.clone();
+        for tooth in 0..lug.count {
+            let start = tooth * (p.segments / lug.count);
+            let mut grid = Vec::new();
+            for r in 0..=lug.depth_cells {
+                for s in 0..=lug.segment_span {
+                    for w in 0..=lug.width_cells {
+                        let segment = (start + s) % p.segments;
+                        let width = lug.width_start + w;
+                        if r == lug.depth_cells {
+                            grid.push(
+                                ((segment * (p.width_cells + 1) + width) * (p.thickness_cells + 1))
+                                    as u32,
+                            );
+                        } else {
+                            let angle =
+                                std::f64::consts::TAU * segment as Real / p.segments as Real;
+                            let radius = p.radius
+                                - p.thickness * 0.5
+                                - lug.depth * (1.0 - r as Real / lug.depth_cells as Real);
+                            grid.push(mesh.positions.len() as u32);
+                            mesh.positions.push(Vec3::new(
+                                p.width * (width as Real / p.width_cells as Real - 0.5),
+                                radius * angle.cos(),
+                                radius * angle.sin(),
+                            ));
+                            mesh.masses.push(0.0);
+                        }
+                    }
+                }
+            }
+            let index = |r: usize, s: usize, w: usize| {
+                grid[(r * (lug.segment_span + 1) + s) * (lug.width_cells + 1) + w]
+            };
+            for r in 0..lug.depth_cells {
+                for s in 0..lug.segment_span {
+                    for w in 0..lug.width_cells {
+                        let [a, b, c, d, e, f, g, h] = [
+                            index(r, s, w),
+                            index(r, s + 1, w),
+                            index(r, s, w + 1),
+                            index(r, s + 1, w + 1),
+                            index(r + 1, s, w),
+                            index(r + 1, s + 1, w),
+                            index(r + 1, s, w + 1),
+                            index(r + 1, s + 1, w + 1),
+                        ];
+                        for mut tet in [
+                            [a, b, d, h],
+                            [a, d, c, h],
+                            [a, c, g, h],
+                            [a, g, e, h],
+                            [a, e, f, h],
+                            [a, f, b, h],
+                        ] {
+                            let mut determinant = tet_basis(&mesh.positions, tet).determinant();
+                            if determinant < 0.0 {
+                                tet.swap(1, 2);
+                                determinant = -determinant;
+                            }
+                            if !determinant.is_finite() || determinant <= 1e-18 {
+                                return Err(Error::Build(
+                                    "degenerate drive lug tetrahedron".into(),
+                                ));
+                            }
+                            let volume = determinant / 6.0;
+                            for node in tet {
+                                mesh.masses[node as usize] += volume * p.density / 4.0;
+                            }
+                            mesh.tets.push(tet);
+                            mesh.volumes.push(volume);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(mesh)
+    }
+
     /// Add midpoint-layer, perfectly bonded axial cords sharing the rubber nodes.
     pub fn append_reinforced_to(
         &self,
@@ -297,6 +442,106 @@ fn tet_basis(q: &[Vec3], tet: [u32; 4]) -> Mat3 {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn installed_lugged_belt_is_connected_watertight_and_noninverted() {
+        use super::path::{BeltPath, BeltPulley};
+        let path = BeltPath::around_pulleys(&[
+            BeltPulley {
+                center: Vec3::new(0.0, -0.52, -0.11),
+                radius: 0.144,
+            },
+            BeltPulley {
+                center: Vec3::new(0.0, 0.54, -0.11),
+                radius: 0.144,
+            },
+            BeltPulley {
+                center: Vec3::new(0.0, 0.405, 0.194),
+                radius: 0.133,
+            },
+        ])
+        .unwrap();
+        let base = RubberBeltMesh::circular(RubberBeltParams {
+            radius: path.length() / std::f64::consts::TAU,
+            segments: 112,
+            width_cells: 4,
+            ..Default::default()
+        })
+        .unwrap();
+        let mesh = base
+            .with_drive_lugs(RubberLugParams {
+                count: 56,
+                segment_span: 1,
+                width_start: 1,
+                width_cells: 2,
+                depth: 0.012,
+                depth_cells: 1,
+            })
+            .unwrap();
+        assert!(mesh.positions.len() > base.positions.len());
+        assert!(mesh.tets.len() > base.tets.len());
+        let mut adjacency = vec![Vec::new(); mesh.positions.len()];
+        for tet in &mesh.tets {
+            for &a in tet {
+                for &b in tet {
+                    adjacency[a as usize].push(b);
+                }
+            }
+        }
+        let mut visited = vec![false; mesh.positions.len()];
+        let mut stack = vec![0u32];
+        while let Some(i) = stack.pop() {
+            if visited[i as usize] {
+                continue;
+            }
+            visited[i as usize] = true;
+            stack.extend(&adjacency[i as usize]);
+        }
+        assert!(visited.iter().all(|v| *v));
+        let mut edges = HashMap::new();
+        for tri in crate::compute_tet_surface_triangles(&mesh.tets) {
+            for mut edge in [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]] {
+                edge.sort();
+                *edges.entry(edge).or_insert(0) += 1;
+            }
+        }
+        assert!(
+            edges.values().all(|&v| v == 2),
+            "non-manifold lug/base seam"
+        );
+        let volume: Real = mesh.volumes.iter().sum();
+        assert!((mesh.masses.iter().sum::<Real>() - volume * base.params.density).abs() < 1e-10);
+        for phase in [0.0, 0.015, path.length() * 0.37] {
+            let installed = mesh
+                .installed_positions(&path, phase, Vec3::new(0.4, 0.12, 0.3))
+                .unwrap();
+            let ratio = mesh.minimum_volume_ratio(&installed).unwrap();
+            assert!(ratio > 0.75, "installed element collapse {ratio}");
+        }
+        let mut builder = ModelBuilder::new();
+        let handles = mesh
+            .append_reinforced_to(
+                &mut builder,
+                WorldId(0),
+                Vec3::ZERO,
+                RubberCordParams::default(),
+            )
+            .unwrap();
+        let model = builder.build().unwrap();
+        assert_eq!(handles.nodes.len(), mesh.positions.len());
+        assert!(model.particle_mass.host().unwrap().iter().all(|m| *m > 0.0));
+        assert!(
+            base.with_drive_lugs(RubberLugParams {
+                count: usize::MAX,
+                segment_span: 1,
+                width_start: 0,
+                width_cells: 1,
+                depth: 0.01,
+                depth_cells: 1
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn closed_cords_preserve_axial_rigidity_mass_and_prestrain_under_refinement() {
