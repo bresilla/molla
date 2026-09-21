@@ -441,7 +441,7 @@ impl FeatherstoneSolver {
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.step_with_collision_response(model, state_in, control, pipeline, contacts, dt,
-            state_out, excluded, |model, state, dt, wrenches, _| {
+            state_out, excluded, |model, state, dt, wrenches, _, _| {
                 forces(model, state, dt, wrenches)
             }, bounds)
     }
@@ -456,7 +456,7 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
-        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector], &mut crate::joint_mass::MassSeed<'_>) -> Result<()>,
+        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector], &mut crate::joint_mass::MassSeed<'_>, &mut Contacts) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
@@ -494,7 +494,7 @@ impl FeatherstoneSolver {
             applied.copy_from_slice(&persistent);
             let mut mass_seed = crate::joint_mass::MassSeed::new(model);
             tracing::debug_span!("external_forces")
-                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied, &mut mass_seed))?;
+                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied, &mut mass_seed, contacts))?;
             if applied
                 .iter()
                 .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
