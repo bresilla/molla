@@ -78,6 +78,33 @@ physical implementations. Runtime mode switching/menu implementation is pending.
 
 ## Model limits and evidence
 
+### Current full-track boundary (2026-09-22)
+
+The undamped free-carrier frictionless run now passes horizontal momentum:
+0.000482 kg m/s after 0.70 s against the unchanged 0.02 limit. Its belt still
+fails circulation (about -0.15 mm instead of one 56.45 mm pitch), so the
+mechanism is not accepted. Preserving relative Newton increments in the GPU
+tetrahedral stress calculation removed most remaining numerical drift; no
+momentum projection or acceptance relaxation was used. The earlier 95 mm
+grounded travel result used an older damped fixture and is not final acceptance.
+
+The initial 112-segment mesh had clear vertices but intersecting surfaces:
+sampled edge/face penetration reached 0.697 mm at an idler and 0.637 mm at a
+drive tooth. The fixture now checks vertices, edge midpoints and triangle
+centroids before GPU execution. A coarse regression reproduces the missed
+intersection. Refinement to 224/448 longitudinal segments reduces maximum
+sampled penetration to 0.174/0.044 mm, below the unchanged 0.5 mm gate.
+The runtime fixture uses 224 segments, preserving physical lug width and
+56-lug pitch; its dynamic acceptance remains pending. Sampling is not an
+exhaustive clearance proof. Runtime primitive contact remains node-based,
+without triangle/edge contact or continuous collision detection.
+
+Direct GPU effort controls allow a genuinely unpowered rotor after settling.
+The powered/passive ground comparison checks at least one pitch of additional
+motor-driven carrier travel beyond passive rubber relaxation. Full two-track
+motion, obstacles, stalls, energy/convergence, performance and native Gearbox
+FEM/menu delivery remain incomplete.
+
 `TetVolumeMonitor` records the initial configuration and every accepted GPU
 substep, retaining the lifetime minimum determinant rather than only inspecting
 frame-end meshes. Invalid/nonpositive elements set sticky status bit 8;
