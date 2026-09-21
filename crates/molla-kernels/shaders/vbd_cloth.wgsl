@@ -336,27 +336,12 @@ fn mat3_inverse(m: mat3x3<f32>) -> mat3x3<f32> {
     );
 }
 
-// Cofactor (adjugate) of a 3×3 — numerically stable when det ≈ 0.
+// Determinant gradient, including singular matrices.
 fn cofactor3(m: mat3x3<f32>) -> mat3x3<f32> {
-    let a11 = m[0].x; let a21 = m[0].y; let a31 = m[0].z;
-    let a12 = m[1].x; let a22 = m[1].y; let a32 = m[1].z;
-    let a13 = m[2].x; let a23 = m[2].y; let a33 = m[2].z;
     return mat3x3<f32>(
-        vec3<f32>(
-            a22 * a33 - a23 * a32,
-            a23 * a31 - a21 * a33,
-            a21 * a32 - a22 * a31,
-        ),
-        vec3<f32>(
-            a13 * a32 - a12 * a33,
-            a11 * a33 - a13 * a31,
-            a12 * a31 - a11 * a32,
-        ),
-        vec3<f32>(
-            a12 * a23 - a13 * a22,
-            a13 * a21 - a11 * a23,
-            a11 * a22 - a12 * a21,
-        ),
+        cross(m[1], m[2]),
+        cross(m[2], m[0]),
+        cross(m[0], m[1]),
     );
 }
 

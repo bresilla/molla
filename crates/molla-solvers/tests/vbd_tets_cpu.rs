@@ -29,7 +29,7 @@ fn cube_to_six_tets(corners: [u32; 8]) -> [[u32; 4]; 6] {
 }
 
 #[test]
-fn vbd_tet_cube_drops_on_kinematic_sphere_without_penetration() {
+fn vbd_tet_cube_contacts_sphere_and_settles_on_floor() {
     let cube_center = Vec3::new(0.0, 1.45, 0.0);
     let side: Real = 0.36;
     let n = 3u32;
@@ -80,6 +80,8 @@ fn vbd_tet_cube_drops_on_kinematic_sphere_without_penetration() {
         Transform::from_translation(sphere_center),
     )
     .unwrap();
+    b.add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
     let model = b.build().unwrap();
 
     let mut solver = VbdSolver::new_cpu()
@@ -105,14 +107,16 @@ fn vbd_tet_cube_drops_on_kinematic_sphere_without_penetration() {
     let q = s_a.particle_q.host().unwrap();
     let qd = s_a.particle_qd.host().unwrap();
     let max_speed = qd.iter().map(|v| v.length()).fold(0.0, Real::max);
+    let center = q.iter().copied().sum::<Vec3>() / q.len() as Real;
     for (i, (p, v)) in q.iter().zip(qd.iter()).enumerate() {
         assert!(
             p.is_finite() && v.is_finite(),
             "tet particle {i} produced non-finite state: p={p:?}, v={v:?}"
         );
+        assert!(p.y >= -1e-2, "tet particle {i} penetrated the floor");
     }
     eprintln!(
-        "VBD tet/sphere CPU contact: max_penetration={max_penetration:.5}, min_center_dist={min_center_dist:.5}, max_speed={max_speed:.5}"
+        "VBD tet/sphere CPU contact: max_penetration={max_penetration:.5}, min_center_dist={min_center_dist:.5}, max_speed={max_speed:.5}, center={center:?}"
     );
     assert!(
         max_penetration < 1.0e-2,

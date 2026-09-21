@@ -2052,35 +2052,13 @@ pub(crate) fn neo_hookean_vertex_block(
     (f_clean, h_block)
 }
 
-/// Cofactor (adjugate) matrix of `m`, computed without `m.inverse()`
-/// — numerically stable when `det(m) ≈ 0`.
+/// Determinant gradient, including singular matrices.
 #[inline]
 fn cofactor3(m: crate::math::Mat3) -> crate::math::Mat3 {
-    let f11 = m.x_axis.x;
-    let f21 = m.x_axis.y;
-    let f31 = m.x_axis.z;
-    let f12 = m.y_axis.x;
-    let f22 = m.y_axis.y;
-    let f32 = m.y_axis.z;
-    let f13 = m.z_axis.x;
-    let f23 = m.z_axis.y;
-    let f33 = m.z_axis.z;
     crate::math::Mat3::from_cols(
-        Vec3::new(
-            f22 * f33 - f23 * f32,
-            f23 * f31 - f21 * f33,
-            f21 * f32 - f22 * f31,
-        ),
-        Vec3::new(
-            f13 * f32 - f12 * f33,
-            f11 * f33 - f13 * f31,
-            f12 * f31 - f11 * f32,
-        ),
-        Vec3::new(
-            f12 * f23 - f13 * f22,
-            f13 * f21 - f11 * f23,
-            f11 * f22 - f12 * f21,
-        ),
+        m.y_axis.cross(m.z_axis),
+        m.z_axis.cross(m.x_axis),
+        m.x_axis.cross(m.y_axis),
     )
 }
 
@@ -2467,6 +2445,31 @@ mod tests {
     use crate::core::WorldId;
     use crate::math::Real;
     use crate::sim::{Contacts, ModelBuilder};
+
+    #[test]
+    fn cofactor_matches_determinant_gradient() {
+        use crate::math::Mat3;
+        for f in [
+            Mat3::from_cols(
+                Vec3::new(1.2, 0.3, -0.2),
+                Vec3::new(0.1, 0.8, 0.4),
+                Vec3::new(-0.3, 0.2, 1.1),
+            ),
+            Mat3::from_cols(Vec3::X, Vec3::Y, Vec3::X + Vec3::Y),
+        ] {
+            let gradient = cofactor3(f).to_cols_array();
+            for i in 0..9 {
+                let mut plus = f.to_cols_array();
+                let mut minus = plus;
+                plus[i] += 1e-6;
+                minus[i] -= 1e-6;
+                let derivative = (Mat3::from_cols_array(&plus).determinant()
+                    - Mat3::from_cols_array(&minus).determinant())
+                    / 2e-6;
+                assert!((gradient[i] - derivative).abs() < 1e-8);
+            }
+        }
+    }
 
     /// Smoke: CPU VBD on a 4×4 cloth runs end-to-end without NaNs
     /// and the cloth actually falls.
