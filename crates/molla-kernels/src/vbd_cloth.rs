@@ -60,9 +60,9 @@ pub struct VbdClothKernel {
     /// compliance lives in the `Model`; converting once on the host
     /// avoids a per-step conversion in WGSL.
     spring_stiffness: Buffer<Real>,
-    /// Per-particle previous-step position scratch.
-    particle_q_prev: Buffer<Vec3>,
-    /// Per-particle inertial target `y` scratch.
+    /// Per-particle displacement from the input position.
+    particle_delta: Buffer<Vec3>,
+    /// Per-particle inertial displacement target.
     inertia_y: Buffer<Vec3>,
     /// Per-particle augmented-Lagrangian multiplier (Stage 20.1
     /// hard-mode AVBD). Zero in soft mode. Stored as `Real` (host)
@@ -102,10 +102,10 @@ impl VbdClothKernel {
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/vbd_cloth.wgsl").into()),
         });
 
-        // State group: 6 read-only inputs.
+        // State group: 7 read-only inputs.
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::vbd_cloth state"),
-            entries: &storage_entries(6, true),
+            entries: &storage_entries(7, true),
         });
         // Topology group: 8 read-only inputs.
         let layout_topo = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -216,14 +216,14 @@ impl VbdClothKernel {
             vec![0.0_f64; sn]
         };
         let mut spring_stiffness = Buffer::from_vec(stiffness_init, BufferUsage::Storage);
-        let mut particle_q_prev =
+        let mut particle_delta =
             Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut inertia_y = Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut contact_lambda = Buffer::from_vec(vec![0.0_f64; pn], BufferUsage::StorageReadWrite);
         let _ = spring_stiffness.ensure_device(device);
         let _ = spring_stiffness.upload(queue);
-        let _ = particle_q_prev.ensure_device(device);
-        let _ = particle_q_prev.upload(queue);
+        let _ = particle_delta.ensure_device(device);
+        let _ = particle_delta.upload(queue);
         let _ = inertia_y.ensure_device(device);
         let _ = inertia_y.upload(queue);
         let _ = contact_lambda.ensure_device(device);
@@ -270,7 +270,7 @@ impl VbdClothKernel {
             layout_shapes,
             layout_tets,
             spring_stiffness,
-            particle_q_prev,
+            particle_delta,
             inertia_y,
             contact_lambda,
             dummy_u32,
@@ -354,6 +354,7 @@ impl VbdClothKernel {
                 buffer_entry(3, model.particle_radius.device_buffer())?,
                 buffer_entry(4, model.particle_world.device_buffer())?,
                 buffer_entry(5, model.gravity.device_buffer())?,
+                buffer_entry(6, model.initial_particle_q.device_buffer())?,
             ],
         });
 
@@ -437,7 +438,7 @@ impl VbdClothKernel {
             entries: &[
                 buffer_entry(0, state_out.particle_q.device_buffer())?,
                 buffer_entry(1, state_out.particle_qd.device_buffer())?,
-                buffer_entry(2, self.particle_q_prev.device_buffer())?,
+                buffer_entry(2, self.particle_delta.device_buffer())?,
                 buffer_entry(3, self.inertia_y.device_buffer())?,
                 buffer_entry(4, self.contact_lambda.device_buffer())?,
             ],

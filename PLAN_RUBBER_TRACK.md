@@ -78,8 +78,8 @@ Two-way contact now has a reusable CPU oracle in `soft_rigid_contact` and a
 substep composition in `fem_rigid`. It uses articulated mass responses, not
 independent-body inertia, for equal/opposite contact impulses and Coulomb
 friction. A powered frictionless tooth transfers torque into the tetrahedral
-loop in both directions: at 0.1 s the loaded rotor reaches about 0.235 rad/s
-versus 1.775 rad/s unloaded, rubber angular momentum is about 0.453 kg m²/s,
+loop in both directions: at 0.1 s the loaded rotor reaches about 0.259 rad/s
+versus 1.775 rad/s unloaded, rubber angular momentum is about 0.448 kg m²/s,
 and peak penetration is below 0.165 mm. This is one tooth pressing rubber,
 not yet a circulating sprocket/lug mechanism or reinforced track.
 
@@ -91,8 +91,9 @@ response and resident substep scheduling now have a one-articulation prototype:
 `FemRigidGpuSystem` dispatches GPU FEM, rigid integration, CRBA/Jacobian,
 primitive gather, mass factorization, contact response and Coulomb iterations.
 Its powered-tooth test runs 0.1 s without substep state readbacks in both
-directions. Loaded speed is about 0.225 rad/s, unloaded 1.779 rad/s, and belt
-angular momentum about 0.449 kg m²/s. The CPU oracle is not the delivery path.
+directions. At 128 elastic iterations, loaded speed is about 0.259 rad/s,
+unloaded 1.779 rad/s, and belt angular momentum about 0.448 kg m²/s.
+The CPU oracle is not the delivery path.
 GPU response parity covers floating 25-DOF trees, reversed frames and locks;
 contact parity covers friction 0/0.4/1, locked axes and rejected invalid inputs.
 Contact sweeps remain serialized on device, parallelism is currently in FEM
@@ -107,9 +108,26 @@ failure status; callers must check it before accepting results. Existing GPU
 Featherstone does not implement reversed joints, motor-only caps or the CPU
 dense multi-DOF acceleration solve; those are not silently delegated to CPU.
 The driven bench uses the physical joint effort limit for its 5 Nm cap.
-Full floating-carrier drive/conservation, reinforced circulating belt with
-sprocket/lug/roller engagement, ground traction and native CEOL delivery are
-still required. GPU mass/Jacobian support alone does not prove those gates.
+The same tooth bench now includes a free 750 kg carrier and its 2 kg rotor.
+Both directions pass airborne conservation without prescribed motion or a
+momentum projection: total linear momentum stays below 0.00045 kg m/s and
+angular momentum below 0.000071 kg m²/s after 0.1 s, against unchanged 0.001
+limits. Loaded relative rotor speed is about 0.266 rad/s. This coaxial test
+does not validate arbitrary multi-DOF GPU acceleration coupling.
+Reinforced circulating belt with sprocket/lug/roller engagement, ground
+traction and native CEOL delivery are still required.
+
+That gate exposed two f32 VBD issues. Rest-state matrix multiplication and
+stress cancellation generated motion in untouched rubber; displacement-form
+deformation and cancellation-free stress now give exact zero rest velocity.
+World-position rounding also erased substep motion, so GPU VBD now iterates
+on displacement from the input position and recovers velocity from it.
+Sub-ULP velocity, rigid rotation, cloth, tetrahedral and plasticity GPU gates
+pass; CPU/GPU strained-loop position difference is about 2.52 micrometres.
+An isolated impulse convergence gate separates precision from iteration error:
+16 sweeps lose significant momentum on both CPU and GPU, while 64 sweeps
+reduce GPU drift below 0.0002 kg m/s over 48 steps. Coupled FEM defaults to
+128 sweeps; automatic residual stopping and performance work remain open.
 
 The first rigid-motion invariance test exposed a pre-existing CPU/GPU VBD
 error: `cofactor3` returned the adjugate instead of the determinant gradient.

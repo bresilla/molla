@@ -223,3 +223,186 @@ fn rubber_loop_cpu_gpu_deformation_parity() {
             > 0.65
     );
 }
+
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn rubber_loop_gpu_rest_and_momentum_convergence() {
+    let engine = molla_compute::Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for moving in [false, true] {
+        let mut coarse_error = 0.0;
+        for iterations in [16, 64] {
+            let (mesh, mut model) = fixture();
+            model.linear_damping = 0.0;
+            model.upload_to_device(device, queue).unwrap();
+            let mut gpu = model.state().unwrap();
+            let mut cpu = model.state().unwrap();
+            if moving {
+                gpu.particle_qd.host_mut().unwrap()[0] = Vec3::Z * 2.0;
+                cpu.particle_qd.host_mut().unwrap()[0] = Vec3::Z * 2.0;
+            }
+            let initial: Vec3 = gpu
+                .particle_qd
+                .host()
+                .unwrap()
+                .iter()
+                .zip(&mesh.masses)
+                .map(|(v, m)| *v * *m)
+                .sum();
+            let mut gpu_next = model.state().unwrap();
+            let mut cpu_next = model.state().unwrap();
+            gpu.upload_to_device(device, queue).unwrap();
+            gpu_next.upload_to_device(device, queue).unwrap();
+            let mut gpu_solver = VbdSolver::new_gpu(&engine, &model)
+                .unwrap()
+                .with_iterations(iterations)
+                .with_contact_stiffness(0.0);
+            let mut cpu_solver = VbdSolver::new_cpu()
+                .with_iterations(iterations)
+                .with_contact_stiffness(0.0);
+            let control = model.control();
+            let contacts = Contacts::with_capacity(0);
+            for _ in 0..48 {
+                gpu_solver
+                    .step(
+                        &model,
+                        &gpu,
+                        &control,
+                        &contacts,
+                        1.0 / 2400.0,
+                        &mut gpu_next,
+                    )
+                    .unwrap();
+                cpu_solver
+                    .step(
+                        &model,
+                        &cpu,
+                        &control,
+                        &contacts,
+                        1.0 / 2400.0,
+                        &mut cpu_next,
+                    )
+                    .unwrap();
+                std::mem::swap(&mut gpu, &mut gpu_next);
+                std::mem::swap(&mut cpu, &mut cpu_next);
+            }
+            assert!(gpu.particle_qd.host().is_err());
+            gpu.particle_qd.download(device, queue).unwrap();
+            let momentum: Vec3 = gpu
+                .particle_qd
+                .host()
+                .unwrap()
+                .iter()
+                .zip(&mesh.masses)
+                .map(|(v, m)| *v * *m)
+                .sum();
+            let cpu_momentum: Vec3 = cpu
+                .particle_qd
+                .host()
+                .unwrap()
+                .iter()
+                .zip(&mesh.masses)
+                .map(|(v, m)| *v * *m)
+                .sum();
+            eprintln!(
+                "free rubber: moving={moving}, iterations={iterations}, initial={initial:?}, GPU P={momentum:?}, CPU P={cpu_momentum:?}"
+            );
+            if !moving {
+                assert!(
+                    gpu.particle_qd
+                        .host()
+                        .unwrap()
+                        .iter()
+                        .all(|v| *v == Vec3::ZERO)
+                );
+            }
+            assert!(
+                (momentum - cpu_momentum).length() < 5e-4,
+                "GPU/CPU momentum disagreement"
+            );
+            let error = (momentum - initial).length();
+            if iterations == 16 {
+                coarse_error = error;
+            } else {
+                assert!(error < 1e-3, "free rubber momentum drift {error}");
+                if moving {
+                    assert!(
+                        error < coarse_error * 0.05,
+                        "elastic iteration refinement did not converge"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn rubber_loop_gpu_rigid_motion_and_sub_ulp_velocity() {
+    let engine = molla_compute::Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for rotated in [false, true] {
+        let (_, mut model) = fixture();
+        model.linear_damping = 0.0;
+        model.upload_to_device(device, queue).unwrap();
+        let mut state = model.state().unwrap();
+        let velocity = if rotated {
+            Vec3::ZERO
+        } else {
+            Vec3::new(1e-6, 2e-6, 3e-6)
+        };
+        state.particle_qd.host_mut().unwrap().fill(velocity);
+        if rotated {
+            let rotation = Quat::from_rotation_y(1.1) * Quat::from_rotation_x(0.7);
+            for q in state.particle_q.host_mut().unwrap() {
+                *q = rotation * *q + Vec3::new(0.3, 0.8, -0.2);
+            }
+        }
+        let initial = state.particle_q.host().unwrap().to_vec();
+        let mut next = model.state().unwrap();
+        state.upload_to_device(device, queue).unwrap();
+        next.upload_to_device(device, queue).unwrap();
+        VbdSolver::new_gpu(&engine, &model)
+            .unwrap()
+            .with_iterations(64)
+            .with_contact_stiffness(0.0)
+            .step(
+                &model,
+                &state,
+                &model.control(),
+                &Contacts::with_capacity(0),
+                1.0 / 2400.0,
+                &mut next,
+            )
+            .unwrap();
+        next.particle_q.download(device, queue).unwrap();
+        next.particle_qd.download(device, queue).unwrap();
+        let displacement = initial
+            .iter()
+            .zip(next.particle_q.host().unwrap())
+            .map(|(a, b)| (*a - *b).length())
+            .fold(0.0, Real::max);
+        let velocity_error = next
+            .particle_qd
+            .host()
+            .unwrap()
+            .iter()
+            .map(|v| (*v - velocity).length())
+            .fold(0.0, Real::max);
+        eprintln!(
+            "GPU rigid motion: rotated={rotated}, displacement={displacement}, velocity error={velocity_error}"
+        );
+        assert!(
+            displacement < 2e-6,
+            "rigid motion creates elastic displacement"
+        );
+        assert!(
+            velocity_error < if rotated { 2e-3 } else { 1e-10 },
+            "rigid motion velocity error {velocity_error}"
+        );
+    }
+}

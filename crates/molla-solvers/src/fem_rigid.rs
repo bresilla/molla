@@ -19,7 +19,7 @@ impl Default for FemRigidConfig {
     fn default() -> Self {
         Self {
             max_substep: 1.0 / 2400.0,
-            elastic_iterations: 16,
+            elastic_iterations: 128,
             contact_margin: 0.001,
             contact: SoftRigidContactConfig::default(),
         }

@@ -56,6 +56,11 @@ struct Uniforms {
 };
 
 const MAX_STRETCH_DISABLED: f32 = 1.0;
+const IDENTITY3 = mat3x3<f32>(
+    vec3<f32>(1.0, 0.0, 0.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+    vec3<f32>(0.0, 0.0, 1.0),
+);
 
 // ── Group 0: read-only model topology + state-in ────────────────────
 @group(0) @binding(0) var<storage, read>      particle_q_in:    array<vec4<f32>>;
@@ -64,6 +69,7 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 @group(0) @binding(3) var<storage, read>      particle_radius:  array<f32>;
 @group(0) @binding(4) var<storage, read>      particle_world:   array<i32>;
 @group(0) @binding(5) var<storage, read>      gravity:          array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read>      particle_rest:    array<vec4<f32>>;
 
 // ── Group 1: spring topology + per-vertex CSR adjacency ─────────────
 @group(1) @binding(0) var<storage, read>      spring_a:                 array<u32>;
@@ -87,10 +93,9 @@ const MAX_STRETCH_DISABLED: f32 = 1.0;
 @group(2) @binding(0) var<storage, read_write> particle_q:  array<vec4<f32>>;
 /// Output velocities (filled by `velocity_recovery`).
 @group(2) @binding(1) var<storage, read_write> particle_qd: array<vec4<f32>>;
-/// Per-particle previous-step position `x_n` (for v = (x - x_n)/dt).
-@group(2) @binding(2) var<storage, read_write> particle_q_prev: array<vec4<f32>>;
-/// Inertial target `y = x_n + dt·(v_n + dt·g)`. Held constant during
-/// the block iterations (the "right-hand side" of the implicit step).
+/// Per-particle displacement from the input position.
+@group(2) @binding(2) var<storage, read_write> particle_delta: array<vec4<f32>>;
+/// Inertial displacement target dt·(v_n + dt·g).
 @group(2) @binding(3) var<storage, read_write> inertia_y:   array<vec4<f32>>;
 /// Hard-mode AVBD per-particle augmented-Lagrangian multiplier λ
 /// (one scalar per particle, applied along the most-penetrating
@@ -179,7 +184,7 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (i >= u.work_count) { return; }
 
     let x = particle_q_in[i].xyz;
-    particle_q_prev[i] = vec4<f32>(x, 0.0);
+    particle_delta[i] = vec4<f32>(0.0);
     // Reset the AVBD dual variable at the start of each substep —
     // contact lambdas are *substep*-local (they decay back through
     // velocity recovery; persisting them across substeps over-pushes
@@ -188,10 +193,10 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let inv_m = particle_inv_mass[i];
     if (inv_m <= 0.0) {
-        // Pinned: target = current position; velocities zero.
+        // Pinned: displacement and velocity are zero.
         particle_q[i]  = vec4<f32>(x, 0.0);
         particle_qd[i] = vec4<f32>(0.0);
-        inertia_y[i]   = vec4<f32>(x, 0.0);
+        inertia_y[i]   = vec4<f32>(0.0);
         return;
     }
     let world = max(particle_world[i], 0);
@@ -200,9 +205,10 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (u.linear_damping > 0.0) {
         v = v * max(0.0, 1.0 - u.linear_damping * u.dt);
     }
-    let y = x + v * u.dt;
+    let y = v * u.dt;
     inertia_y[i]    = vec4<f32>(y, 0.0);
-    particle_q[i]   = vec4<f32>(y, 0.0); // warm start
+    particle_delta[i] = vec4<f32>(y, 0.0);
+    particle_q[i]   = vec4<f32>(x + y, 0.0);
     particle_qd[i]  = vec4<f32>(v, 0.0); // tentative; rewritten by velocity_recovery
 }
 
@@ -463,10 +469,10 @@ fn tet_neo_hookean_block(
     let i1 = tet_indices[tet_id * 4u + 1u];
     let i2 = tet_indices[tet_id * 4u + 2u];
     let i3 = tet_indices[tet_id * 4u + 3u];
-    let v0 = particle_q[i0].xyz;
-    let v1 = particle_q[i1].xyz;
-    let v2 = particle_q[i2].xyz;
-    let v3 = particle_q[i3].xyz;
+    let v0 = (particle_q_in[i0].xyz - particle_rest[i0].xyz) + particle_delta[i0].xyz;
+    let v1 = (particle_q_in[i1].xyz - particle_rest[i1].xyz) + particle_delta[i1].xyz;
+    let v2 = (particle_q_in[i2].xyz - particle_rest[i2].xyz) + particle_delta[i2].xyz;
+    let v3 = (particle_q_in[i3].xyz - particle_rest[i3].xyz) + particle_delta[i3].xyz;
 
     // Inverse rest-state basis: stored as 3 padded vec4 columns
     // (Mat3Cols / GpuMat3 layout, same as body_inertia uploads).
@@ -479,12 +485,9 @@ fn tet_neo_hookean_block(
     let mu = mu_l;
     let lam = lam_l + mu_l;
 
-    // Deformation gradient F = Ds · Dm⁻¹. Stage 20.3 — for plastic
-    // tets the elastic Neo-Hookean energy is evaluated on
-    // `F_e = F · F_p⁻¹` (multiplicative split). Pure-elastic path
-    // (F_p = I) short-circuits the inverse + multiply.
+    // Displacement-gradient form F = I + Du · Dm⁻¹.
     let ds = mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0);
-    let f_full = ds * dm_inv;
+    let f_full = IDENTITY3 + ds * dm_inv;
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_mat);
@@ -502,18 +505,14 @@ fn tet_neo_hookean_block(
     }
 
     let j = determinant(f_mat);
-    let lam_safe = select(sign(lam) * 1e-6, lam, abs(lam) > 1e-6);
-    let alpha = 1.0 + mu / lam_safe;
-
     let cof = cofactor3(f_mat);
-    let s_scalar = lam * (j - alpha);
+    let s_scalar = lam * (j - 1.0);
 
-    // First Piola-Kirchhoff stress P = μ·F + s·cof(F), scaled by rest
-    // volume.
+    // First Piola-Kirchhoff stress P = μ·(F - cof(F)) + λ·(J - 1)·cof(F).
     let p_mat = mat3x3<f32>(
-        f_mat[0] * mu + cof[0] * s_scalar,
-        f_mat[1] * mu + cof[1] * s_scalar,
-        f_mat[2] * mu + cof[2] * s_scalar,
+        (f_mat[0] - cof[0]) * mu + cof[0] * s_scalar,
+        (f_mat[1] - cof[1]) * mu + cof[1] * s_scalar,
+        (f_mat[2] - cof[2]) * mu + cof[2] * s_scalar,
     );
     let p_vec = mat3x3<f32>(
         p_mat[0] * rest_vol,
@@ -611,15 +610,14 @@ fn tet_neo_hookean_block(
 fn spring_force_hessian(
     self_idx: u32,
     spring_idx: u32,
-    pos_self: vec3<f32>,
     out_force: ptr<function, vec3<f32>>,
     out_hess:  ptr<function, mat3x3<f32>>,
 ) {
     let a = spring_a[spring_idx];
     let b = spring_b[spring_idx];
     let other = select(a, b, self_idx == a);
-    let pos_other = particle_q[other].xyz;
-    let diff = pos_self - pos_other;
+    let diff = (particle_q_in[self_idx].xyz - particle_q_in[other].xyz)
+        + (particle_delta[self_idx].xyz - particle_delta[other].xyz);
     let len = max(length(diff), 1e-8);
     let rest = spring_rest_length[spring_idx];
     let k = spring_stiffness[spring_idx];
@@ -683,8 +681,8 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = particle_q[v].xyz;
     let y = inertia_y[v].xyz;
 
-    // Inertia term: f_inertia = m/dt² · (y - x), H_inertia = m/dt² · I.
-    var f = m_over_dt2 * (y - x);
+    // Inertia term in displacement coordinates.
+    var f = m_over_dt2 * (y - particle_delta[v].xyz);
     var h = mat3x3<f32>(
         vec3<f32>(m_over_dt2, 0.0, 0.0),
         vec3<f32>(0.0, m_over_dt2, 0.0),
@@ -698,7 +696,7 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
         let spring_idx = vertex_adj_springs[s];
         var f_s: vec3<f32>;
         var h_s: mat3x3<f32>;
-        spring_force_hessian(v, spring_idx, x, &f_s, &h_s);
+        spring_force_hessian(v, spring_idx, &f_s, &h_s);
         f = f + f_s;
         h = mat3x3<f32>(h[0] + h_s[0], h[1] + h_s[1], h[2] + h_s[2]);
     }
@@ -733,7 +731,10 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
         let i_next = vertex_cable_bend_entries[e + 2u];
         let role = vertex_cable_bend_entries[e + 3u];
         let kb = vertex_cable_bend_k[e / 4u];
-        let kappa = particle_q[i_prev].xyz + particle_q[i_next].xyz - 2.0 * particle_q[i_mid].xyz;
+        let kappa = (particle_q_in[i_prev].xyz - particle_q_in[i_mid].xyz)
+            + (particle_q_in[i_next].xyz - particle_q_in[i_mid].xyz)
+            + (particle_delta[i_prev].xyz - particle_delta[i_mid].xyz)
+            + (particle_delta[i_next].xyz - particle_delta[i_mid].xyz);
         var f_b: vec3<f32>;
         var h_diag: f32;
         if (role == 1u) {
@@ -810,7 +811,8 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (dx_ok) {
         let dx_len = length(dx_raw);
         let dx = select(dx_raw, dx_raw * (0.5 / dx_len), dx_len > 0.5);
-        particle_q[v] = vec4<f32>(x + dx, 0.0);
+        particle_delta[v] = vec4<f32>(particle_delta[v].xyz + dx, 0.0);
+        particle_q[v] = vec4<f32>(particle_q_in[v].xyz + particle_delta[v].xyz, 0.0);
     }
 }
 
@@ -849,7 +851,9 @@ fn apply_shape_contacts(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (pen > 0.0) {
             let denom = kc + m_over_dt2;
             let alpha = kc / denom;
-            p = p + nd.xyz * (pen * alpha);
+            let delta = nd.xyz * (pen * alpha);
+            particle_delta[i] = vec4<f32>(particle_delta[i].xyz + delta, 0.0);
+            p = particle_q_in[i].xyz + particle_delta[i].xyz;
         }
     }
     particle_q[i] = vec4<f32>(p, 0.0);
@@ -895,7 +899,7 @@ fn velocity_recovery(@builtin(global_invocation_id) gid: vec3<u32>) {
         particle_qd[i] = vec4<f32>(0.0);
         return;
     }
-    let dx = particle_q[i].xyz - particle_q_prev[i].xyz;
+    let dx = particle_delta[i].xyz;
     particle_qd[i] = vec4<f32>(dx / u.dt, 0.0);
 }
 
@@ -933,15 +937,15 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i1 = tet_indices[tet * 4u + 1u];
     let i2 = tet_indices[tet * 4u + 2u];
     let i3 = tet_indices[tet * 4u + 3u];
-    let p0 = particle_q[i0].xyz;
-    let p1 = particle_q[i1].xyz;
-    let p2 = particle_q[i2].xyz;
-    let p3 = particle_q[i3].xyz;
+    let p0 = (particle_q_in[i0].xyz - particle_rest[i0].xyz) + particle_delta[i0].xyz;
+    let p1 = (particle_q_in[i1].xyz - particle_rest[i1].xyz) + particle_delta[i1].xyz;
+    let p2 = (particle_q_in[i2].xyz - particle_rest[i2].xyz) + particle_delta[i2].xyz;
+    let p3 = (particle_q_in[i3].xyz - particle_rest[i3].xyz) + particle_delta[i3].xyz;
 
     let dm_inv_raw = tet_dm_inv[tet];
     let dm_inv = mat3x3<f32>(dm_inv_raw.col0.xyz, dm_inv_raw.col1.xyz, dm_inv_raw.col2.xyz);
     let ds = mat3x3<f32>(p1 - p0, p2 - p0, p3 - p0);
-    let f_full = ds * dm_inv;
+    let f_full = IDENTITY3 + ds * dm_inv;
 
     let fp_raw = tet_f_plastic[tet];
     var fp_old = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);

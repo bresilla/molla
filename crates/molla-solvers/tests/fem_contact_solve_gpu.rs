@@ -327,7 +327,7 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
     };
     use std::sync::Arc;
     let engine = Arc::new(Engine::new_gpu().unwrap());
-    for sign in [-1.0, 1.0] {
+    for (sign, floating) in [(-1.0, false), (1.0, false), (-1.0, true), (1.0, true)] {
         let mut speeds = Vec::new();
         for coupled in [false, true] {
             let mesh = RubberBeltMesh::circular(RubberBeltParams {
@@ -346,6 +346,21 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
             let soft_state = soft_model.state().unwrap();
             let mut builder = ModelBuilder::new();
             builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+            builder.begin_articulation();
+            let carrier = if floating {
+                let body =
+                    builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+                        mass: 750.0,
+                        com: Vec3::ZERO,
+                        inertia: Mat3::from_diagonal(Vec3::splat(120.0)),
+                    }));
+                builder
+                    .add_joint_free(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
+                    .unwrap();
+                body
+            } else {
+                BodyId::NONE
+            };
             let rotor = builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
                 mass: 2.0,
                 com: Vec3::ZERO,
@@ -353,7 +368,7 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
             }));
             builder
                 .add_joint_revolute(
-                    BodyId::NONE,
+                    carrier,
                     rotor,
                     Transform::IDENTITY,
                     Transform::IDENTITY,
@@ -361,18 +376,22 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
                 )
                 .unwrap();
             let mut rigid_model = builder.build().unwrap();
-            rigid_model.joint_effort_limit.host_mut().unwrap()[0] = 5.0;
+            let drive_dof = if floating { 6 } else { 0 };
+            let rigid_masses = rigid_model.body_mass.host().unwrap().to_vec();
+            let rigid_inertias = rigid_model.body_inertia.host().unwrap().to_vec();
+            rigid_model.joint_effort_limit.host_mut().unwrap()[drive_dof] = 5.0;
             let rigid_state = rigid_model.state().unwrap();
             let mut control = rigid_model.control();
-            control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::Velocity as u32;
-            control.joint_target_vel.host_mut().unwrap()[0] = sign * 2.0;
-            control.joint_target_kd.host_mut().unwrap()[0] = 5.0;
+            control.joint_target_mode.host_mut().unwrap()[drive_dof] =
+                JointTargetMode::Velocity as u32;
+            control.joint_target_vel.host_mut().unwrap()[drive_dof] = sign * 2.0;
+            control.joint_target_kd.host_mut().unwrap()[drive_dof] = 5.0;
             let shapes = if coupled {
                 vec![SoftRigidShapeGpu {
                     position: [0.0, 0.48, (-sign * 0.016) as f32, 0.0],
                     rotation: [0.0, 0.0, 0.0, 1.0],
                     data: [0.11, 0.04, 0.015, 0.0],
-                    ids: [1, 0, 0, 0],
+                    ids: [1, rotor.index() as u32, 0, 0],
                 }]
             } else {
                 vec![]
@@ -414,8 +433,8 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
             let omega = read::<f32>(
                 &engine,
                 system.rigid_state().joint_qd.device_buffer().unwrap(),
-                1,
-            )[0] as Real;
+                drive_dof + 1,
+            )[drive_dof] as Real;
             let angular: Vec3 = q
                 .iter()
                 .zip(&v)
@@ -429,22 +448,84 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
                 .fold(0.0, Real::max);
             assert!(mesh.minimum_volume_ratio(&q).unwrap() > 0.75);
             eprintln!(
-                "resident GPU tooth: sign={sign}, coupled={coupled}, omega={omega}, rubber Lx={}, displacement={displacement}",
+                "resident GPU tooth: sign={sign}, floating={floating}, coupled={coupled}, omega={omega}, rubber Lx={}, displacement={displacement}",
                 angular.x
             );
+            if floating {
+                let poses = read::<[f32; 8]>(
+                    &engine,
+                    system.rigid_state().body_q.device_buffer().unwrap(),
+                    rigid_masses.len(),
+                );
+                let velocities = read::<[f32; 8]>(
+                    &engine,
+                    system.rigid_state().body_qd.device_buffer().unwrap(),
+                    rigid_masses.len(),
+                );
+                let mut momentum: Vec3 = v.iter().zip(&mesh.masses).map(|(v, m)| *v * *m).sum();
+                eprintln!("GPU airborne soft P={momentum:?}, L={angular:?}");
+                let mut total_angular = angular;
+                for i in 0..rigid_masses.len() {
+                    let p = Vec3::new(
+                        poses[i][0] as Real,
+                        poses[i][1] as Real,
+                        poses[i][2] as Real,
+                    );
+                    let rotation = Mat3::from_quat(molla_math::Quat::from_xyzw(
+                        poses[i][4] as Real,
+                        poses[i][5] as Real,
+                        poses[i][6] as Real,
+                        poses[i][7] as Real,
+                    ));
+                    let v = Vec3::new(
+                        velocities[i][0] as Real,
+                        velocities[i][1] as Real,
+                        velocities[i][2] as Real,
+                    );
+                    let w = Vec3::new(
+                        velocities[i][4] as Real,
+                        velocities[i][5] as Real,
+                        velocities[i][6] as Real,
+                    );
+                    eprintln!(
+                        "GPU airborne rigid {i}: P={:?}, w={w:?}",
+                        v * rigid_masses[i]
+                    );
+                    momentum += v * rigid_masses[i];
+                    total_angular += p.cross(v * rigid_masses[i])
+                        + rotation * rigid_inertias[i] * rotation.transpose() * w;
+                }
+                eprintln!("GPU airborne totals P={momentum:?}, L={total_angular:?}");
+                assert!(
+                    momentum.length() < 1e-3,
+                    "airborne linear momentum {momentum:?}"
+                );
+                assert!(
+                    total_angular.length() < 1e-3,
+                    "airborne angular momentum {total_angular:?}"
+                );
+            }
             if coupled {
                 assert!(sign * angular.x > 0.1);
                 assert!(displacement > 0.001);
-                assert!(
-                    (omega.abs() - 0.2352).abs() < 0.04,
-                    "CPU/GPU coupled speed disagreement"
-                );
+                if !floating {
+                    assert!(
+                        (omega.abs() - 0.2594451).abs() < 0.002,
+                        "CPU/GPU coupled speed disagreement"
+                    );
+                }
             } else {
-                assert!(angular.length() < 0.001);
-                assert!(
-                    displacement < 5e-5,
-                    "unloaded f32 rest drift {displacement} m"
-                );
+                assert!(v.iter().all(|v| *v == Vec3::ZERO));
+                for (actual, rest) in q.iter().zip(&mesh.positions) {
+                    assert_eq!(
+                        *actual,
+                        Vec3::new(
+                            rest.x as f32 as Real,
+                            rest.y as f32 as Real,
+                            rest.z as f32 as Real
+                        )
+                    );
+                }
             }
             speeds.push(sign * omega);
         }
