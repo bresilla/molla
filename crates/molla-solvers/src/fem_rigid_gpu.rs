@@ -3,6 +3,7 @@
 use crate::{FeatherstoneSolver, Solver, VbdSolver, fem_rigid::FemRigidConfig};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
+use molla_kernels::momentum::{GeneralizedMomentumBindings, MomentumBindings, MomentumMonitor};
 use molla_kernels::soft_rigid_contact::{
     SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidShapeGpu,
 };
@@ -47,6 +48,7 @@ pub struct FemRigidGpuSystem {
     solve: SoftRigidSolveKernel,
     drift: SoftParticleDriftKernel,
     volume: TetVolumeMonitor,
+    momentum: Option<MomentumMonitor>,
     config: FemRigidConfig,
 }
 
@@ -263,6 +265,7 @@ impl FemRigidGpuSystem {
             solve,
             drift,
             volume,
+            momentum: None,
             config,
         })
     }
@@ -281,6 +284,56 @@ impl FemRigidGpuSystem {
     /// Lifetime minimum J and smallest invalid tet index, including initial and every accepted substep.
     pub fn volume_diagnostics_buffer(&self) -> &wgpu::Buffer {
         self.volume.diagnostics()
+    }
+
+    /// Enable cumulative device-only momentum diagnostics without changing simulated state.
+    pub fn enable_momentum_diagnostics(&mut self) {
+        if self.momentum.is_none() {
+            self.momentum = Some(MomentumMonitor::new(self.engine.device().unwrap()));
+        }
+    }
+
+    /// Input, FEM prediction, rigid prediction, contact and final-drift momentum pairs, then deltas.
+    pub fn momentum_diagnostics_buffer(&self) -> Option<&wgpu::Buffer> {
+        self.momentum.as_ref().map(MomentumMonitor::diagnostics)
+    }
+
+    fn record_momentum(&self, phase: u32) -> Result<()> {
+        let Some(monitor) = &self.momentum else {
+            return Ok(());
+        };
+        let device = self.engine.device().unwrap();
+        let soft = if phase == 0 {
+            &self.soft_state
+        } else {
+            &self.soft_next
+        };
+        let rigid = if phase < 2 {
+            &self.rigid_state
+        } else {
+            &self.rigid_next
+        };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        monitor.encode(
+            device,
+            &mut encoder,
+            MomentumBindings {
+                particle_mass: self.soft_model.particle_mass.device_buffer().unwrap(),
+                particle_velocity: soft.particle_qd.device_buffer().unwrap(),
+                body_mass: self.rigid_model.body_mass.device_buffer().unwrap(),
+                body_velocity: rigid.body_qd.device_buffer().unwrap(),
+                particles: self.soft_model.particle_count as u32,
+                bodies: self.rigid_model.body_count as u32,
+                generalized: (phase == 2).then_some(GeneralizedMomentumBindings {
+                    joint_velocity: rigid.joint_qd.device_buffer().unwrap(),
+                    jacobians: &self.jacobian_buffer,
+                    dofs: self.rigid_model.joint_dof_total as u32,
+                }),
+            },
+            phase,
+        )?;
+        self.engine.queue().unwrap().submit([encoder.finish()]);
+        Ok(())
     }
 
     /// Update a velocity motor command without transferring simulated state to the host.
@@ -310,6 +363,7 @@ impl FemRigidGpuSystem {
         let device = self.engine.device().unwrap();
         let queue = self.engine.queue().unwrap();
         for _ in 0..count as usize {
+            self.record_momentum(0)?;
             self.fem.step(
                 &self.soft_model,
                 &self.soft_state,
@@ -318,6 +372,7 @@ impl FemRigidGpuSystem {
                 h,
                 &mut self.soft_next,
             )?;
+            self.record_momentum(1)?;
             self.rigid.step(
                 &self.rigid_model,
                 &self.rigid_state,
@@ -339,6 +394,7 @@ impl FemRigidGpuSystem {
                 &self.requests,
                 &self.jacobian_buffer,
             )?;
+            self.record_momentum(2)?;
             let mut encoder = device.create_command_encoder(&Default::default());
             self.gather.encode(
                 device,
@@ -402,6 +458,7 @@ impl FemRigidGpuSystem {
                 },
             )?;
             queue.submit([encoder.finish()]);
+            self.record_momentum(3)?;
             self.rigid.drift_gpu(
                 &self.rigid_model,
                 &self.rigid_state,
@@ -442,6 +499,7 @@ impl FemRigidGpuSystem {
                 },
             )?;
             queue.submit([encoder.finish()]);
+            self.record_momentum(4)?;
             self.soft_next.particle_qd.mark_device_dirty();
             self.rigid_next.joint_qd.mark_device_dirty();
             self.rigid_next.body_qd.mark_device_dirty();

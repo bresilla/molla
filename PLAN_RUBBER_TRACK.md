@@ -103,8 +103,28 @@ control. In the first 0.24 s powered trial the carrier advances 27.15 mm,
 ground penetration is zero, lifetime minJ is 0.598409 and final minJ is
 0.903480. The trial fails the unchanged one-pitch circulation gate: material
 travel is only 28.66 mm versus 56.45 mm required. The loaded drive window is
-extended to 0.60 s with the same torque cap, timestep and acceptance limits;
-this longer case and the frictionless control remain unverified.
+extended to 0.60 s with the same torque cap, timestep and acceptance limits.
+That longer loaded case passes: carrier travel 95.17 mm, belt circulation 95.97 mm,
+departure 12.07 mm, ground penetration zero, lifetime minJ 0.598409 and final
+minJ 0.788392. It took 701.54 s for 0.70 simulated seconds, not real time.
+The initial 0.24 s frictionless control
+fails its unchanged horizontal momentum gate: |Pxy|=0.02944 kg m/s versus
+0.02 allowed. Carrier displacement is only 0.053 mm longitudinally and ground
+penetration is zero, but numerical drift is not accepted. Its material
+circulation is also insufficient (2.44 mm); lifetime minJ is 0.668554.
+Free-vehicle acceptance still requires resolving these failures and separating
+motor-driven motion from passive prestress relaxation with an unpowered control.
+
+The full-loop fixture was applying 1/s global velocity damping to the soft
+particles only. This is external drag, not internal material damping or a
+unity velocity-retention factor, so the frictionless case was not a closed
+horizontal momentum system. The fixture now sets damping to zero; the same
+gates are being rerun. Earlier results above describe the damped fixture.
+Optional GPU diagnostics record separate soft/rigid momentum at input, elastic
+prediction, rigid prediction, contact and accepted drift, plus cumulative phase
+deltas. The rigid predictor is measured using current Jacobians and generalized
+velocities rather than stale body-velocity caches. Synthetic mixed-size GPU
+tests verify phase totals and repeated-step deltas with poisoned body caches.
 
 GPU articulated dynamics now implements dense Cholesky joint blocks when
 `rigorous_d_solve` is enabled; the FEM composition enables it. Fixed-child
