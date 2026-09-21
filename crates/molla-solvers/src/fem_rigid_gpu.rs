@@ -353,6 +353,21 @@ impl FemRigidGpuSystem {
             .upload(self.engine.queue().unwrap())
     }
 
+    /// Select a direct generalized motor effort, subject to the model's joint effort limit.
+    pub fn set_drive_effort(&mut self, dof: usize, effort: Real) -> Result<()> {
+        if !effort.is_finite()
+            || !(effort as f32).is_finite()
+            || dof >= self.rigid_model.joint_dof_total
+        {
+            return Err(Error::Build("invalid GPU FEM effort command".into()));
+        }
+        self.control.joint_target_pos.host_mut()?[dof] = effort;
+        self.control.joint_target_mode.host_mut()?[dof] = molla_sim::JointTargetMode::Effort as u32;
+        let queue = self.engine.queue().unwrap();
+        self.control.joint_target_pos.upload(queue)?;
+        self.control.joint_target_mode.upload(queue)
+    }
+
     /// Submit GPU substeps; callers must inspect the sticky device status before accepting results.
     pub fn step(&mut self, dt: Real) -> Result<()> {
         let count = (dt / self.config.max_substep).ceil();

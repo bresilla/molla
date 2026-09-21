@@ -407,6 +407,95 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn gpu_direct_effort_releases_velocity_drive_and_keeps_limits() {
+    use molla_sim::JointTargetMode;
+    use molla_sim::soft_belt::{RubberBeltMesh, RubberBeltParams};
+    use molla_solvers::fem_rigid::FemRigidConfig;
+    use molla_solvers::fem_rigid_gpu::{FemRigidGpuScene, FemRigidGpuSystem};
+    let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
+    let mesh = RubberBeltMesh::circular(RubberBeltParams {
+        segments: 8,
+        width_cells: 1,
+        thickness_cells: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut soft_builder = ModelBuilder::new();
+    soft_builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+    mesh.append_to(&mut soft_builder, WorldId(0), Vec3::ZERO)
+        .unwrap();
+    let soft_model = soft_builder.build().unwrap();
+    let soft_state = soft_model.state().unwrap();
+    let mut builder = ModelBuilder::new();
+    builder.begin_articulation();
+    builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+    let rotor = builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+        mass: 2.0,
+        com: Vec3::ZERO,
+        inertia: Mat3::from_diagonal(Vec3::splat(0.3)),
+    }));
+    builder
+        .add_joint_revolute(
+            BodyId::NONE,
+            rotor,
+            Transform::IDENTITY,
+            Transform::IDENTITY,
+            Vec3::X,
+        )
+        .unwrap();
+    let mut rigid_model = builder.build().unwrap();
+    rigid_model.joint_effort_limit.host_mut().unwrap()[0] = 1.0;
+    let mut rigid_state = rigid_model.state().unwrap();
+    eval_fk(&rigid_model, &mut rigid_state).unwrap();
+    let mut control = rigid_model.control();
+    control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::Velocity as u32;
+    control.joint_target_vel.host_mut().unwrap()[0] = 4.0;
+    control.joint_target_kd.host_mut().unwrap()[0] = 2.0;
+    let mut system = FemRigidGpuSystem::new(
+        engine.clone(),
+        FemRigidGpuScene {
+            soft_model,
+            soft_state,
+            rigid_model,
+            rigid_state,
+            control,
+            shapes: Vec::new(),
+        },
+        FemRigidConfig {
+            max_substep: 0.001,
+            elastic_iterations: 4,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    system.step(0.001).unwrap();
+    let rate = |system: &FemRigidGpuSystem| {
+        read::<f32>(
+            &engine,
+            system.rigid_state().joint_qd.device_buffer().unwrap(),
+            1,
+        )[0] as Real
+    };
+    let mut expected = 0.001 / 0.3;
+    assert!((rate(&system) - expected).abs() < 1e-7);
+    system.set_drive_effort(0, 0.0).unwrap();
+    for effort in [Real::NAN, Real::INFINITY, Real::MAX] {
+        assert!(system.set_drive_effort(0, effort).is_err());
+    }
+    assert!(system.set_drive_effort(1, 0.0).is_err());
+    system.step(0.001).unwrap();
+    assert!((rate(&system) - expected).abs() < 1e-7);
+    for (requested, accepted) in [(0.6_f64, 0.6), (-0.6, -0.6), (100.0, 1.0), (-100.0, -1.0)] {
+        system.set_drive_effort(0, requested).unwrap();
+        system.step(0.001).unwrap();
+        expected += accepted * 0.001 / 0.3;
+        assert!((rate(&system) - expected).abs() < 1e-7);
+    }
+    assert_eq!(read::<u32>(&engine, system.status_buffer(), 1), [0]);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
     motor_to_rubber(false);
 }
