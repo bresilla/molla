@@ -24,6 +24,7 @@ mod mass;
 mod model;
 mod muscle;
 pub mod runtime;
+pub mod soft_belt;
 mod soft_surface;
 mod state;
 
