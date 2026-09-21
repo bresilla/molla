@@ -25,6 +25,8 @@ pub mod barrier_solver;
 pub mod crba;
 mod featherstone;
 pub mod fem_rigid;
+#[cfg(feature = "gpu")]
+pub mod fem_rigid_gpu;
 pub mod ik;
 pub mod implicit_mpm;
 pub mod jacobian;

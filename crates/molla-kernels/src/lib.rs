@@ -83,6 +83,8 @@ mod soft_vt_contact;
 #[cfg(feature = "gpu")]
 pub mod soft_rigid_contact;
 #[cfg(feature = "gpu")]
+pub mod soft_rigid_solve;
+#[cfg(feature = "gpu")]
 mod sparse_gpu;
 #[cfg(feature = "gpu")]
 mod sparse_grid;

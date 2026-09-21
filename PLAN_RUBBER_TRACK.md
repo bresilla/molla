@@ -87,10 +87,29 @@ GPU primitive contact generation reads live device FEM positions and rigid
 transforms directly. The first real-GPU test checks 768 candidates and 39
 active contacts against the CPU oracle, including ball/box/cylinder surfaces.
 Only test acceptance downloads the resulting state. GPU articulated contact
-response/solve and complete resident substep scheduling remain pending; the
-CPU coupled bench is not the delivery path. Primitive gathering is presently
+response and resident substep scheduling now have a one-articulation prototype:
+`FemRigidGpuSystem` dispatches GPU FEM, rigid integration, CRBA/Jacobian,
+primitive gather, mass factorization, contact response and Coulomb iterations.
+Its powered-tooth test runs 0.1 s without substep state readbacks in both
+directions. Loaded speed is about 0.225 rad/s, unloaded 1.779 rad/s, and belt
+angular momentum about 0.449 kg m²/s. The CPU oracle is not the delivery path.
+GPU response parity covers floating 25-DOF trees, reversed frames and locks;
+contact parity covers friction 0/0.4/1, locked axes and rejected invalid inputs.
+Contact sweeps remain serialized on device, parallelism is currently in FEM
+and response assembly, and no real-time performance claim is made.
+Primitive gathering is presently
 dense node/shape pairing, not a production broad phase or continuous collision
 detection implementation.
+
+The resident composition currently accepts one unreversed dynamic articulation
+up to 64 DOFs and explicit primitive contact shapes. It exposes sticky GPU
+failure status; callers must check it before accepting results. Existing GPU
+Featherstone does not implement reversed joints, motor-only caps or the CPU
+dense multi-DOF acceleration solve; those are not silently delegated to CPU.
+The driven bench uses the physical joint effort limit for its 5 Nm cap.
+Full floating-carrier drive/conservation, reinforced circulating belt with
+sprocket/lug/roller engagement, ground traction and native CEOL delivery are
+still required. GPU mass/Jacobian support alone does not prove those gates.
 
 The first rigid-motion invariance test exposed a pre-existing CPU/GPU VBD
 error: `cofactor3` returned the adjugate instead of the determinant gradient.
