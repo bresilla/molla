@@ -534,7 +534,7 @@ fn motor_to_rubber(reinforced: bool) {
                 assert!(displacement > 0.001);
                 if !floating {
                     assert!(
-                        (omega.abs() - 0.2594451).abs() < 0.002,
+                        (omega.abs() - 0.27505).abs() < 0.002,
                         "CPU/GPU coupled speed disagreement"
                     );
                 }

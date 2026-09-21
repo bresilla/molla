@@ -31,7 +31,7 @@ struct Uniforms {
     rigorous_d_solve:   u32,
     /// Stage 17.1: 1 = velocity-level Lagrange projection on Distance.
     rigorous_distance:  u32,
-    _pad0:              u32,
+    drift_only:         u32,
     _pad1:              u32,
 };
 
@@ -369,6 +369,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     // and compare to a CPU dense-Cholesky reference.
     var p_pre_arr:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
 
+    if uniforms.drift_only == 0u {
     // ── Pass 1 — FK + body kinematics + motion subspace ─────────
     for (var k = 0u; k < n; k = k + 1u) {
         let j = j_begin + k;
@@ -693,6 +694,16 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             a_lin[k] = ap_l + c_lin[k];
             a_ang[k] = ap_a + c_ang[k];
+        }
+    }
+
+    } else {
+        for (var k = 0u; k < n; k += 1u) {
+            let j = j_begin + k;
+            let coord = joint_coord_offset[j];
+            if joint_type[j] >= JOINT_FREE && joint_type[j] <= JOINT_D6 {
+                p_pre_arr[k] = vec3<f32>(joint_q[coord], joint_q[coord+1u], joint_q[coord+2u]);
+            }
         }
     }
 

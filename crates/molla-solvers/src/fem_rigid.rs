@@ -135,6 +135,15 @@ impl FemRigidSystem {
         };
         self.failed = true;
         for _ in 0..substeps {
+            let rigid_start = world.scene.state().clone_host()?;
+            let contacts = gather_primitive_contacts(
+                &self.model,
+                &self.state,
+                &self.surface,
+                &world.scene,
+                colliders,
+                self.config.contact_margin,
+            )?;
             self.solver.step(
                 &self.model,
                 &self.state,
@@ -144,15 +153,20 @@ impl FemRigidSystem {
                 &mut self.next,
             )?;
             world.step(h)?;
-            let contacts = gather_primitive_contacts(
-                &self.model,
-                &self.next,
-                &self.surface,
-                &world.scene,
-                colliders,
-                self.config.contact_margin,
-            )?;
             let mut rigid = world.scene.state().clone_host()?;
+            rigid
+                .body_q
+                .host_mut()?
+                .copy_from_slice(rigid_start.body_q.host()?);
+            rigid
+                .joint_q
+                .host_mut()?
+                .copy_from_slice(rigid_start.joint_q.host()?);
+            molla_sim::eval_body_velocities(world.scene.model(), &mut rigid)?;
+            self.next
+                .particle_q
+                .host_mut()?
+                .copy_from_slice(self.state.particle_q.host()?);
             let solved = solve_cpu(
                 &self.model,
                 &mut self.next,
@@ -162,9 +176,14 @@ impl FemRigidSystem {
                 h,
                 self.config.contact,
             )?;
+            let velocities = self.next.particle_qd.host()?.to_vec();
+            for (q, v) in self.next.particle_q.host_mut()?.iter_mut().zip(velocities) {
+                *q += v * h;
+            }
             world
-                .scene
-                .set_generalized_velocities_with_wake(rigid.joint_qd.host()?, true)?;
+                .solver
+                .drift_cpu(world.scene.model(), &rigid_start, h, &mut rigid)?;
+            *world.scene.state_mut() = rigid;
             std::mem::swap(&mut self.state, &mut self.next);
             report.active_contacts += solved
                 .impulses

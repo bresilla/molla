@@ -151,6 +151,28 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
+        self.encode_internal(device, encoder, bindings, settings, false)
+    }
+
+    /// Recover COM body velocities from the current Jacobians and generalized velocities.
+    pub fn encode_velocity_recovery(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+    ) -> Result<()> {
+        self.encode_internal(device, encoder, bindings, settings, true)
+    }
+
+    fn encode_internal(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+        recover_only: bool,
+    ) -> Result<()> {
         if settings.iterations == 0
             || !settings.dt.is_finite()
             || settings.dt <= 0.0
@@ -226,13 +248,13 @@ impl SoftRigidSolveKernel {
             layout: &self.layout,
             entries: &entries,
         });
-        for (pipeline, count) in self.pipelines.iter().zip([
-            1,
-            self.row_count.div_ceil(64),
-            1,
-            b.body_count.div_ceil(64),
-        ]) {
-            if count == 0 {
+        for (index, (pipeline, count)) in self
+            .pipelines
+            .iter()
+            .zip([1, self.row_count.div_ceil(64), 1, b.body_count.div_ceil(64)])
+            .enumerate()
+        {
+            if count == 0 || (recover_only && index != 3) {
                 continue;
             }
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -242,6 +264,108 @@ impl SoftRigidSolveKernel {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(count, 1, 1);
+        }
+        Ok(())
+    }
+}
+
+pub struct SoftParticleDriftKernel {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+impl SoftParticleDriftKernel {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let entries: Vec<_> = (0..5)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: if binding == 4 {
+                        wgpu::BufferBindingType::Uniform
+                    } else {
+                        wgpu::BufferBindingType::Storage {
+                            read_only: binding < 2,
+                        }
+                    },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            })
+            .collect();
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("FEM drift bindings"),
+            entries: &entries,
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("FEM drift layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("FEM drift"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/soft_particle_drift.wgsl").into(),
+            ),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("FEM drift"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("drift"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        Self { layout, pipeline }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &wgpu::Buffer,
+        velocities: &wgpu::Buffer,
+        output: &wgpu::Buffer,
+        status: &wgpu::Buffer,
+        count: u32,
+        dt: f32,
+    ) -> Result<()> {
+        if !dt.is_finite()
+            || dt <= 0.0
+            || status.size() < 4
+            || count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
+            || [input, velocities, output]
+                .iter()
+                .any(|b| b.size() < count.max(1) as u64 * 16)
+        {
+            return Err(Error::Build("invalid GPU particle drift input".into()));
+        }
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("FEM drift parameters"),
+            contents: bytemuck::cast_slice(&[count, dt.to_bits(), 0, 0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let buffers = [input, velocities, output, status, &uniform];
+        let entries: Vec<_> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, b)| wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: b.as_entire_binding(),
+            })
+            .collect();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("FEM drift"),
+            layout: &self.layout,
+            entries: &entries,
+        });
+        if count > 0 {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
         }
         Ok(())
     }

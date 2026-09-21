@@ -23,7 +23,7 @@ struct Uniforms {
     /// Stage 17.1: 1 if Distance joints should use velocity-level
     /// Lagrange-multiplier projection instead of the v1 hard-clamp.
     rigorous_distance: u32,
-    _pad0: u32,
+    drift_only: u32,
     _pad1: u32,
 }
 
@@ -203,6 +203,67 @@ impl FeatherstoneKernel {
         state_out: &mut State,
         muscle_torque: Option<&wgpu::Buffer>,
     ) -> Result<()> {
+        self.dispatch_internal(
+            device,
+            queue,
+            model,
+            state_in,
+            control,
+            joint_damping,
+            dt,
+            rigorous_d_solve,
+            rigorous_distance,
+            state_out,
+            muscle_torque,
+            false,
+        )
+    }
+
+    /// Integrate input coordinates with output velocities and evaluate FK without applying forces.
+    #[allow(clippy::too_many_arguments)]
+    pub fn drift(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        dt: f64,
+        rigorous_distance: bool,
+        state_out: &mut State,
+    ) -> Result<()> {
+        self.dispatch_internal(
+            device,
+            queue,
+            model,
+            state_in,
+            control,
+            0.0,
+            dt,
+            false,
+            rigorous_distance,
+            state_out,
+            None,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_internal(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        joint_damping: f32,
+        dt: f64,
+        rigorous_d_solve: bool,
+        rigorous_distance: bool,
+        state_out: &mut State,
+        muscle_torque: Option<&wgpu::Buffer>,
+        drift_only: bool,
+    ) -> Result<()> {
         if model.joint_count == 0 {
             return Ok(());
         }
@@ -214,7 +275,9 @@ impl FeatherstoneKernel {
         // every substep (until they overwrite it).
         copy_buffer(device, queue, &state_in.body_q, &state_out.body_q)?;
         copy_buffer(device, queue, &state_in.joint_q, &state_out.joint_q)?;
-        copy_buffer(device, queue, &state_in.joint_qd, &state_out.joint_qd)?;
+        if !drift_only {
+            copy_buffer(device, queue, &state_in.joint_qd, &state_out.joint_qd)?;
+        }
         copy_buffer(device, queue, &state_in.body_f, &state_out.body_f)?;
 
         let bg_model = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -299,7 +362,7 @@ impl FeatherstoneKernel {
             articulation_count: self.articulation_count,
             rigorous_d_solve: u32::from(rigorous_d_solve),
             rigorous_distance: u32::from(rigorous_distance),
-            _pad0: 0,
+            drift_only: u32::from(drift_only),
             _pad1: 0,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {

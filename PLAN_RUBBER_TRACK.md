@@ -78,6 +78,31 @@ physical implementations. Runtime mode switching/menu implementation is pending.
 
 ## Model limits and evidence
 
+Contact correction now precedes the accepted position drift on both the GPU
+runtime and CPU oracle. Elastic/rigid predictors provide velocities; contact
+geometry and articulated responses use the beginning-of-step configuration;
+corrected velocities integrate particles and joint coordinates exactly once.
+GPU FK and final-pose Jacobians refresh body velocities without host readback.
+This is first-order split integration, not a fully implicit coupled contact
+energy solve or an intersection-free guarantee.
+
+A prestressed ring exposed the former velocity-only-after-drift defect: it sank
+2.423 mm into its cylindrical support, and raising the recovery-speed cap still
+left 1.969 mm penetration. The new ring gate measures 1.49e-8 m penetration at
+1/2400, 1/4800 and 1/9600 s, with positive material volumes. Drift parity covers
+all eight joint types, including locked D6 axes and active force inputs that
+must not be applied again. Existing articulated impulse and free-carrier
+momentum gates retain their 0.001 tolerances. The updated anchored CPU tooth
+speeds are 0.275111/0.274986 rad/s; the GPU negative case is 0.275179 rad/s.
+
+The installed full-loop gate is still failing. With 2% prestrain, material
+circulates 67.1 mm (pitch 56.5 mm) and envelope departure is 10.7 mm, but a
+tetrahedron inverts (minJ -0.0169). At 0.5% prestrain the belt circulates
+78.8 mm with 17.3 mm departure, but lug elements compress excessively
+(minJ 0.2251; settled minJ already 0.4743). No volume or circulation acceptance
+threshold was weakened. Contact/elastic coupling and geometric resolution
+remain required work before any full-track or native-simulator claim.
+
 Installed track geometry now has an analytic common-tangent/arc envelope for
 convex ordered pulleys, periodic arc-length sampling and diagnostic nearest
 projection. `installed_positions` initializes the deformed state without
@@ -125,7 +150,7 @@ dense node/shape pairing, not a production broad phase or continuous collision
 detection implementation.
 
 The resident composition currently accepts one unreversed dynamic articulation
-up to 64 DOFs and explicit primitive contact shapes. It exposes sticky GPU
+up to 32 joints and 64 DOFs and explicit primitive contact shapes. It exposes sticky GPU
 failure status; callers must check it before accepting results. Existing GPU
 Featherstone does not implement reversed joints, motor-only caps or the CPU
 dense multi-DOF acceleration solve; those are not silently delegated to CPU.

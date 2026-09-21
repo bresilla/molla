@@ -7,7 +7,7 @@ use molla_kernels::soft_rigid_contact::{
     SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidShapeGpu,
 };
 use molla_kernels::soft_rigid_solve::{
-    SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
+    SoftParticleDriftKernel, SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
 };
 use molla_kernels::{JacobianKernel, JacobianRequest, MassMatrixKernel};
 use molla_math::Real;
@@ -44,6 +44,7 @@ pub struct FemRigidGpuSystem {
     shapes: wgpu::Buffer,
     gather: SoftRigidContactKernel,
     solve: SoftRigidSolveKernel,
+    drift: SoftParticleDriftKernel,
     config: FemRigidConfig,
 }
 
@@ -90,7 +91,7 @@ impl FemRigidGpuSystem {
             || scene.soft_model.shape_count != 0
             || scene.rigid_model.articulation_count > 1
             || scene.rigid_model.shape_count != 0
-            || scene.rigid_model.joint_count > 64
+            || scene.rigid_model.joint_count > 32
             || !(1..=64).contains(&scene.rigid_model.joint_dof_total)
             || scene
                 .rigid_model
@@ -215,6 +216,7 @@ impl FemRigidGpuSystem {
             .collect();
         let gather = SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?;
         let solve = SoftRigidSolveKernel::new(device, n as u32, gather.row_count())?;
+        let drift = SoftParticleDriftKernel::new(device);
         let fem = VbdSolver::new_gpu(&engine, &scene.soft_model)?
             .with_iterations(config.elastic_iterations)
             .with_contact_stiffness(0.0);
@@ -239,6 +241,7 @@ impl FemRigidGpuSystem {
             shapes,
             gather,
             solve,
+            drift,
             config,
         })
     }
@@ -299,8 +302,72 @@ impl FemRigidGpuSystem {
             self.mass.dispatch(
                 &self.engine,
                 &self.rigid_model,
-                &self.rigid_next,
+                &self.rigid_state,
                 &self.mass_buffer,
+            )?;
+            self.jacobian.dispatch(
+                &self.engine,
+                &self.rigid_model,
+                &self.rigid_state,
+                &self.requests,
+                &self.jacobian_buffer,
+            )?;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            self.gather.encode(
+                device,
+                &mut encoder,
+                SoftRigidContactBindings {
+                    positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                    radii: self.soft_model.particle_radius.device_buffer().unwrap(),
+                    surface: &self.surface,
+                    shapes: &self.shapes,
+                    body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                    particle_count: self.soft_model.particle_count as u32,
+                    body_count: self.rigid_model.body_count as u32,
+                },
+                self.config.contact_margin as f32,
+            )?;
+            self.solve.encode(
+                device,
+                &mut encoder,
+                SoftRigidSolveBindings {
+                    positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                    velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                    inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
+                    contacts: self.gather.rows(),
+                    body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                    body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                    jacobians: &self.jacobian_buffer,
+                    mass_matrix: &self.mass_buffer,
+                    rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                    body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                    particle_count: self.soft_model.particle_count as u32,
+                    body_count: self.rigid_model.body_count as u32,
+                },
+                SoftRigidSolveSettings {
+                    iterations: self.config.contact.iterations as u32,
+                    dt: h as f32,
+                    penetration_recovery: self.config.contact.penetration_recovery as f32,
+                    max_recovery_speed: self.config.contact.max_recovery_speed as f32,
+                },
+            )?;
+            self.drift.encode(
+                device,
+                &mut encoder,
+                self.soft_state.particle_q.device_buffer().unwrap(),
+                self.soft_next.particle_qd.device_buffer().unwrap(),
+                self.soft_next.particle_q.device_buffer().unwrap(),
+                self.solve.status(),
+                self.soft_model.particle_count as u32,
+                h as f32,
+            )?;
+            queue.submit([encoder.finish()]);
+            self.rigid.drift_gpu(
+                &self.rigid_model,
+                &self.rigid_state,
+                &self.control,
+                h,
+                &mut self.rigid_next,
             )?;
             self.jacobian.dispatch(
                 &self.engine,
@@ -310,21 +377,7 @@ impl FemRigidGpuSystem {
                 &self.jacobian_buffer,
             )?;
             let mut encoder = device.create_command_encoder(&Default::default());
-            self.gather.encode(
-                device,
-                &mut encoder,
-                SoftRigidContactBindings {
-                    positions: self.soft_next.particle_q.device_buffer().unwrap(),
-                    radii: self.soft_model.particle_radius.device_buffer().unwrap(),
-                    surface: &self.surface,
-                    shapes: &self.shapes,
-                    body_poses: self.rigid_next.body_q.device_buffer().unwrap(),
-                    particle_count: self.soft_model.particle_count as u32,
-                    body_count: self.rigid_model.body_count as u32,
-                },
-                self.config.contact_margin as f32,
-            )?;
-            self.solve.encode(
+            self.solve.encode_velocity_recovery(
                 device,
                 &mut encoder,
                 SoftRigidSolveBindings {

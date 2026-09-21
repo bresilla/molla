@@ -30,7 +30,6 @@
 //! spring + damper coefficients live in `Model.joint_cable_*`). Fixed
 //! passes through.
 
-#[cfg(feature = "gpu")]
 use crate::core::Error;
 use crate::core::Result;
 use crate::math::{
@@ -53,6 +52,9 @@ use scratch::JointScratch;
 
 #[path = "featherstone_singular_root.rs"]
 mod singular_root;
+
+#[path = "featherstone_integrate.rs"]
+mod integration;
 
 /// Maximum DOFs in any single joint — Free/Distance/D6 hit 6.
 pub(crate) const MAX_JOINT_DOFS: usize = 6;
@@ -167,6 +169,62 @@ impl FeatherstoneSolver {
             }),
             contact_forces: Vec::new(),
         })
+    }
+
+    /// Integrate input coordinates using output velocities without evaluating dynamics.
+    pub fn drift_cpu(
+        &self,
+        model: &Model,
+        state_in: &State,
+        dt: Real,
+        state_out: &mut State,
+    ) -> Result<()> {
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(Error::Solver("invalid articulated drift timestep".into()));
+        }
+        let q_in = state_in.joint_q.host()?;
+        let qd_in = state_out.joint_qd.host()?.to_vec();
+        let mut q = q_in.to_vec();
+        let mut qd = qd_in.clone();
+        integration::integrate(
+            model, 0..model.joint_count, q_in, &qd_in,
+            &vec![0.0; model.joint_dof_total], dt, 0.0,
+            self.rigorous_distance, &mut q, &mut qd,
+        )?;
+        state_out.joint_q.host_mut()?.copy_from_slice(&q);
+        state_out.joint_qd.host_mut()?.copy_from_slice(&qd);
+        eval_fk(model, state_out)?;
+        eval_body_velocities(model, state_out)
+    }
+
+    /// Integrate input coordinates using contact-corrected output velocities on the GPU.
+    #[cfg(feature = "gpu")]
+    pub fn drift_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        dt: Real,
+        state_out: &mut State,
+    ) -> Result<()> {
+        if !dt.is_finite() || !(dt as f32).is_finite() || dt as f32 <= 0.0 {
+            return Err(Error::Solver("invalid articulated drift timestep".into()));
+        }
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.drift(
+                &gpu.device,
+                &gpu.queue,
+                model,
+                state_in,
+                control,
+                dt,
+                self.rigorous_distance,
+                state_out,
+            ),
+            _ => Err(Error::Gpu(
+                "articulated drift requires a GPU backend".into(),
+            )),
+        }
     }
 
     /// Per-DOF joint damping coefficient (`τ_damp = -d · qd`),
@@ -901,7 +959,6 @@ fn cpu_step_inner<const LOCAL: bool>(
     let limit_upper = model.joint_limit_upper.host()?;
     let joint_friction = model.joint_friction.host()?;
     let effort_limit = model.joint_effort_limit.host()?;
-    let velocity_limit = model.joint_velocity_limit.host()?;
     let cable_k_lin = model.joint_cable_stiffness_linear.host()?;
     let cable_k_bend = model.joint_cable_stiffness_bend.host()?;
     let cable_c_lin = model.joint_cable_damping_linear.host()?;
@@ -1529,318 +1586,10 @@ fn cpu_step_inner<const LOCAL: bool>(
         // ── Integrate q, q̇ for joints in this articulation ──────────────
         drop(limits_span);
         let integration_span = tracing::debug_span!("aba_integration").entered();
-        for j in j_begin..j_end {
-            let jt = joint_type_from_u32(joint_type[j]);
-            let coord_idx = joint_coord_offset[j] as usize;
-            let dof_idx = joint_dof_offset[j] as usize;
-            if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0
-                || joint_enabled[j] == 0
-            {
-                let end = joint_dof_offset[j + 1] as usize;
-                qd_new[dof_idx..end].fill(0.0);
-                continue;
-            }
-            match jt {
-                JointType::Revolute | JointType::Prismatic => {
-                    let qd_old = qd_in[dof_idx];
-                    let qd_int = qd_old + q_dd[dof_idx] * dt;
-                    let qd_damped = qd_int * (1.0 - joint_damping * dt).max(0.0);
-                    let qd_capped = clamp_or_passthrough(
-                        qd_damped,
-                        velocity_limit.get(dof_idx).copied().unwrap_or(Real::NAN),
-                    );
-                    let q_pred = q_in[coord_idx] + qd_capped * dt;
-                    let lo = limit_lower.get(dof_idx).copied().unwrap_or(Real::NAN);
-                    let hi = limit_upper.get(dof_idx).copied().unwrap_or(Real::NAN);
-                    let (q_clamped, qd_after) = clamp_joint_pos(q_pred, qd_capped, lo, hi);
-                    qd_new[dof_idx] = qd_after;
-                    q_new[coord_idx] = q_clamped;
-                }
-                JointType::Ball => {
-                    // 4 coords (qx, qy, qz, qw) + 3 dof (ω in joint frame).
-                    // Symplectic Euler with quaternion integration.
-                    let mut omega = Vec3::new(
-                        qd_in.get(dof_idx).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 1).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 2).copied().unwrap_or(0.0),
-                    );
-                    let alpha = Vec3::new(
-                        q_dd.get(dof_idx).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 1).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 2).copied().unwrap_or(0.0),
-                    );
-                    omega += alpha * dt;
-                    let damp = (1.0 - joint_damping * dt).max(0.0);
-                    omega *= damp;
-                    for k in 0..3 {
-                        omega[k] = clamp_or_passthrough(omega[k], velocity_limit[dof_idx + k]);
-                    }
-                    let q_old = Quat::from_xyzw(
-                        q_in[coord_idx],
-                        q_in[coord_idx + 1],
-                        q_in[coord_idx + 2],
-                        q_in[coord_idx + 3],
-                    );
-                    let dq = Quat::from_xyzw(omega.x * 0.5, omega.y * 0.5, omega.z * 0.5, 0.0);
-                    let q_dot = dq * q_old;
-                    let q_pred = Quat::from_xyzw(
-                        q_old.x + q_dot.x * dt,
-                        q_old.y + q_dot.y * dt,
-                        q_old.z + q_dot.z * dt,
-                        q_old.w + q_dot.w * dt,
-                    )
-                    .normalize();
-                    let (q_pred, bounded_omega) =
-                        project_angular_limits(q_pred, omega, dof_idx, limit_lower, limit_upper);
-                    omega = bounded_omega;
-                    q_new[coord_idx] = q_pred.x;
-                    q_new[coord_idx + 1] = q_pred.y;
-                    q_new[coord_idx + 2] = q_pred.z;
-                    q_new[coord_idx + 3] = q_pred.w;
-                    qd_new[dof_idx] = omega.x;
-                    qd_new[dof_idx + 1] = omega.y;
-                    qd_new[dof_idx + 2] = omega.z;
-                }
-                JointType::Free | JointType::Distance | JointType::D6 => {
-                    // 7 coords [tx, ty, tz, qx, qy, qz, qw], 6 dof
-                    // [vx, vy, vz, ωx, ωy, ωz] expressed in joint world frame.
-                    let mut v = Vec3::new(
-                        qd_in.get(dof_idx).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 1).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 2).copied().unwrap_or(0.0),
-                    );
-                    let mut omega = Vec3::new(
-                        qd_in.get(dof_idx + 3).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 4).copied().unwrap_or(0.0),
-                        qd_in.get(dof_idx + 5).copied().unwrap_or(0.0),
-                    );
-                    let a_lin = Vec3::new(
-                        q_dd.get(dof_idx).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 1).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 2).copied().unwrap_or(0.0),
-                    );
-                    let alpha = Vec3::new(
-                        q_dd.get(dof_idx + 3).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 4).copied().unwrap_or(0.0),
-                        q_dd.get(dof_idx + 5).copied().unwrap_or(0.0),
-                    );
-                    v += a_lin * dt;
-                    omega += alpha * dt;
-                    let damp = (1.0 - joint_damping * dt).max(0.0);
-                    v *= damp;
-                    omega *= damp;
-                    for k in 0..3 {
-                        v[k] = clamp_or_passthrough(v[k], velocity_limit[dof_idx + k]);
-                        omega[k] = clamp_or_passthrough(omega[k], velocity_limit[dof_idx + 3 + k]);
-                    }
-
-                    let p_old =
-                        Vec3::new(q_in[coord_idx], q_in[coord_idx + 1], q_in[coord_idx + 2]);
-                    let p_new = p_old + v * dt;
-                    let r_old = Quat::from_xyzw(
-                        q_in[coord_idx + 3],
-                        q_in[coord_idx + 4],
-                        q_in[coord_idx + 5],
-                        q_in[coord_idx + 6],
-                    );
-                    let dq = Quat::from_xyzw(omega.x * 0.5, omega.y * 0.5, omega.z * 0.5, 0.0);
-                    let r_dot = dq * r_old;
-                    let r_new = Quat::from_xyzw(
-                        r_old.x + r_dot.x * dt,
-                        r_old.y + r_dot.y * dt,
-                        r_old.z + r_dot.z * dt,
-                        r_old.w + r_dot.w * dt,
-                    )
-                    .normalize();
-                    q_new[coord_idx] = p_new.x;
-                    q_new[coord_idx + 1] = p_new.y;
-                    q_new[coord_idx + 2] = p_new.z;
-                    q_new[coord_idx + 3] = r_new.x;
-                    q_new[coord_idx + 4] = r_new.y;
-                    q_new[coord_idx + 5] = r_new.z;
-                    q_new[coord_idx + 6] = r_new.w;
-                    qd_new[dof_idx] = v.x;
-                    qd_new[dof_idx + 1] = v.y;
-                    qd_new[dof_idx + 2] = v.z;
-                    qd_new[dof_idx + 3] = omega.x;
-                    qd_new[dof_idx + 4] = omega.y;
-                    qd_new[dof_idx + 5] = omega.z;
-
-                    // Distance constraint. Stage 17.1 default is the
-                    // velocity-level Lagrange-multiplier projection: enforce
-                    // `d/dt(|p|² − L²) = 0 ⇒ p · v = 0` (or |p|=L_target),
-                    // then re-integrate position from the projected velocity.
-                    // The v1 hard `p ← p · L / |p|` clamp + radial-velocity
-                    // zeroing remains as a fallback when
-                    // `rigorous_distance == false` (used by parity tests).
-                    if matches!(jt, JointType::Distance) {
-                        let lo = limit_lower.get(dof_idx).copied().unwrap_or(Real::NAN);
-                        let hi = limit_upper.get(dof_idx).copied().unwrap_or(Real::NAN);
-
-                        if rigorous_distance {
-                            // Decide which bound (if any) is active for the
-                            // pre-integration p. Use lower or upper as the
-                            // target length L; if both are NaN, no-op.
-                            let p_pre = p_old;
-                            let dist_pre = p_pre.length();
-                            let l_target = if !lo.is_nan() && !hi.is_nan() && (hi - lo).abs() < 1e-9
-                            {
-                                // Equality form: lo == hi.
-                                Some(lo)
-                            } else if !lo.is_nan() && dist_pre <= lo + 1e-9 {
-                                Some(lo)
-                            } else if !hi.is_nan() && dist_pre >= hi - 1e-9 {
-                                Some(hi)
-                            } else if !lo.is_nan() && hi.is_nan() {
-                                Some(lo)
-                            } else if !hi.is_nan() && lo.is_nan() {
-                                Some(hi)
-                            } else {
-                                None
-                            };
-                            if let Some(l_t) = l_target {
-                                // Velocity-level Lagrange: enforce
-                                //   φ̇ = p · v_pred = 0  (so |p|² stays put)
-                                // by adding Δv = −λ · p̂; effective mass is
-                                //   m_eff = (p̂ · M⁻¹ · p̂)
-                                // For a 6-DOF Free root with mass-only inertia
-                                // we use mass scaled by sum, but the simplest
-                                // single-particle case is just the inverse
-                                // mass at the root child body. We use a unit
-                                // inverse mass — robustness is governed by
-                                // doing both velocity AND position projection.
-                                let n_hat = if dist_pre > 1e-12 {
-                                    p_pre / dist_pre
-                                } else {
-                                    Vec3::Y
-                                };
-                                // Velocity projection along radial.
-                                let v_int = v; // post-integration v already
-                                let v_radial = n_hat.dot(v_int);
-                                let v_proj = v_int - n_hat * v_radial;
-                                // Position projection in two stages:
-                                //   1) re-integrate using the projected v.
-                                //   2) finally clamp |p| ← L_t exactly to
-                                //      kill machine-precision residual drift.
-                                let p_re = p_old + v_proj * dt;
-                                let mut p_final = p_re;
-                                let dist_re = p_re.length();
-                                if dist_re > 1e-12 {
-                                    p_final = p_re * (l_t / dist_re);
-                                }
-                                // Make sure the final v has zero radial component.
-                                let n_hat_final = if l_t > 1e-12 { p_final / l_t } else { n_hat };
-                                let v_radial2 = n_hat_final.dot(v_proj);
-                                let v_final = v_proj - n_hat_final * v_radial2;
-
-                                q_new[coord_idx] = p_final.x;
-                                q_new[coord_idx + 1] = p_final.y;
-                                q_new[coord_idx + 2] = p_final.z;
-                                qd_new[dof_idx] = v_final.x;
-                                qd_new[dof_idx + 1] = v_final.y;
-                                qd_new[dof_idx + 2] = v_final.z;
-                            }
-                        } else {
-                            // v1 hard-clamp fallback.
-                            let p_curr = Vec3::new(
-                                q_new[coord_idx],
-                                q_new[coord_idx + 1],
-                                q_new[coord_idx + 2],
-                            );
-                            let dist = p_curr.length();
-                            let mut clamped = p_curr;
-                            let mut zero_radial_v = false;
-                            if !lo.is_nan() && dist < lo && dist > 1e-12 {
-                                clamped = p_curr * (lo / dist);
-                                zero_radial_v = true;
-                            }
-                            if !hi.is_nan() && dist > hi && dist > 1e-12 {
-                                clamped = p_curr * (hi / dist);
-                                zero_radial_v = true;
-                            }
-                            if zero_radial_v {
-                                q_new[coord_idx] = clamped.x;
-                                q_new[coord_idx + 1] = clamped.y;
-                                q_new[coord_idx + 2] = clamped.z;
-                                let n = clamped.normalize_or_zero();
-                                let radial = n * v.dot(n);
-                                let v_proj = v - radial;
-                                qd_new[dof_idx] = v_proj.x;
-                                qd_new[dof_idx + 1] = v_proj.y;
-                                qd_new[dof_idx + 2] = v_proj.z;
-                            }
-                        }
-                    }
-
-                    // Project D6 translation and XYZ angular limits.
-                    if matches!(jt, JointType::D6) {
-                        for k in 0..3 {
-                            let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
-                            let hi = limit_upper.get(dof_idx + k).copied().unwrap_or(Real::NAN);
-                            let p_k = q_new[coord_idx + k];
-                            let qd_k = qd_new[dof_idx + k];
-                            let (p_c, qd_c) = clamp_joint_pos(p_k, qd_k, lo, hi);
-                            q_new[coord_idx + k] = p_c;
-                            qd_new[dof_idx + k] = qd_c;
-                        }
-
-                        let r_now = Quat::from_xyzw(
-                            q_new[coord_idx + 3],
-                            q_new[coord_idx + 4],
-                            q_new[coord_idx + 5],
-                            q_new[coord_idx + 6],
-                        );
-                        let omega = Vec3::new(
-                            qd_new[dof_idx + 3],
-                            qd_new[dof_idx + 4],
-                            qd_new[dof_idx + 5],
-                        );
-                        let (r_proj, omega) = project_angular_limits(
-                            r_now,
-                            omega,
-                            dof_idx + 3,
-                            limit_lower,
-                            limit_upper,
-                        );
-                        q_new[coord_idx + 3] = r_proj.x;
-                        q_new[coord_idx + 4] = r_proj.y;
-                        q_new[coord_idx + 5] = r_proj.z;
-                        q_new[coord_idx + 6] = r_proj.w;
-                        qd_new[dof_idx + 3] = omega.x;
-                        qd_new[dof_idx + 4] = omega.y;
-                        qd_new[dof_idx + 5] = omega.z;
-                    }
-                }
-                JointType::Cable => {
-                    // Stage 39E — 2 scalar coords (q_l linear stretch, q_b
-                    // bend angle), 2 scalar dofs. Symplectic Euler per DoF,
-                    // analogous to two stacked 1-DoF revolute/prismatic
-                    // integrators. Per-DoF limits + velocity caps are
-                    // honoured via the standard helpers.
-                    for k in 0..2 {
-                        let qd_old = qd_in[dof_idx + k];
-                        let qd_int = qd_old + q_dd[dof_idx + k] * dt;
-                        let qd_damped = qd_int * (1.0 - joint_damping * dt).max(0.0);
-                        let qd_capped = clamp_or_passthrough(
-                            qd_damped,
-                            velocity_limit
-                                .get(dof_idx + k)
-                                .copied()
-                                .unwrap_or(Real::NAN),
-                        );
-                        let q_pred = q_in[coord_idx + k] + qd_capped * dt;
-                        let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
-                        let hi = limit_upper.get(dof_idx + k).copied().unwrap_or(Real::NAN);
-                        let (q_clamped, qd_after) = clamp_joint_pos(q_pred, qd_capped, lo, hi);
-                        qd_new[dof_idx + k] = qd_after;
-                        q_new[coord_idx + k] = q_clamped;
-                    }
-                }
-                JointType::Fixed => {
-                    // No coords / no dof — pass through.
-                }
-            }
-        }
+        integration::integrate(
+            model, j_begin..j_end, &q_in, &qd_in, &q_dd, dt,
+            joint_damping, rigorous_distance, &mut q_new, &mut qd_new,
+        )?;
         drop(integration_span);
     } // end per-articulation outer loop
 
