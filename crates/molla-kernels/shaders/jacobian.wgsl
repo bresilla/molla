@@ -43,6 +43,12 @@ const MAX_JOINTS_PER_ART: u32 = 64u;
 @group(0) @binding(3) var<storage, read> joint_x_p:         array<Transform>;
 @group(0) @binding(4) var<storage, read> joint_axis:        array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> joint_dof_offset:  array<u32>;
+@group(0) @binding(6) var<storage, read> joint_x_c: array<Transform>;
+@group(0) @binding(7) var<storage, read> joint_reversed: array<u32>;
+@group(0) @binding(8) var<storage, read> joint_enabled: array<u32>;
+@group(0) @binding(9) var<storage, read> body_flags: array<u32>;
+@group(0) @binding(10) var<storage, read> joint_limit_lower: array<f32>;
+@group(0) @binding(11) var<storage, read> joint_limit_upper: array<f32>;
 
 // Group 1 — State
 @group(1) @binding(0) var<storage, read> body_q: array<Transform>;
@@ -115,7 +121,7 @@ fn jacobian_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (!found) { break; }
     }
 
-    // Articulation DOF count (sum widths of revolute+prismatic joints).
+    // Articulation-local generalized velocity width.
     let qd_base = joint_dof_offset[j_begin];
     let dof_total = joint_dof_offset[j_end] - qd_base;
     if (dof_total == 0u) { return; }
@@ -131,41 +137,16 @@ fn jacobian_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (is_ancestor[k] == 0u) { continue; }
         let j = j_begin + k;
         let jt = joint_type[j];
-        let parent_body = joint_parent[j];
-        let axis = joint_axis[j].xyz;
-
-        var parent_world: Transform;
-        if (parent_body < 0) {
-            parent_world.position = vec4<f32>(0.0);
-            parent_world.rotation = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-        } else {
-            parent_world = body_q[bq_off + u32(parent_body)];
+        let frame = response_frame(j, bq_off);
+        for (var d = 0u; d < response_width(jt); d += 1u) {
+            let column = response_column(j, d, frame, target_world);
+            let offset = out_base + joint_dof_offset[j] - qd_base + d;
+            jacobian_out[offset] = column.linear.x;
+            jacobian_out[offset + dof_total] = column.linear.y;
+            jacobian_out[offset + 2u * dof_total] = column.linear.z;
+            jacobian_out[offset + 3u * dof_total] = column.angular.x;
+            jacobian_out[offset + 4u * dof_total] = column.angular.y;
+            jacobian_out[offset + 5u * dof_total] = column.angular.z;
         }
-        let xpw = transform_compose(parent_world, joint_x_p[j]);
-        let origin_w = xpw.position.xyz;
-        let axis_w = quat_rotate(xpw.rotation, axis);
-
-        var col_lin = vec3<f32>(0.0);
-        var col_ang = vec3<f32>(0.0);
-        var dw: u32 = 0u;
-        if (jt == JOINT_REVOLUTE) {
-            col_lin = cross(axis_w, target_world - origin_w);
-            col_ang = axis_w;
-            dw = 1u;
-        } else if (jt == JOINT_PRISMATIC) {
-            col_lin = axis_w;
-            col_ang = vec3<f32>(0.0);
-            dw = 1u;
-        }
-        if (dw == 0u) { continue; }
-
-        let dof_local = joint_dof_offset[j] - qd_base;
-        // Layout: row r ∈ [0, 6), col k ∈ [0, dof_total). Index r*dof_total + k.
-        jacobian_out[out_base + 0u * dof_total + dof_local] = col_lin.x;
-        jacobian_out[out_base + 1u * dof_total + dof_local] = col_lin.y;
-        jacobian_out[out_base + 2u * dof_total + dof_local] = col_lin.z;
-        jacobian_out[out_base + 3u * dof_total + dof_local] = col_ang.x;
-        jacobian_out[out_base + 4u * dof_total + dof_local] = col_ang.y;
-        jacobian_out[out_base + 5u * dof_total + dof_local] = col_ang.z;
     }
 }

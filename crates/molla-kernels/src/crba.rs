@@ -4,7 +4,7 @@
 //! Mirrors `solvers/crba.rs::mass_matrix`. Per-articulation parallelism:
 //! one workgroup invocation per chain. Output is a flat `f32` buffer of
 //! `Σ N_a · N_a` entries (CSR-style, one block per articulation), where
-//! `N_a` is articulation `a`'s revolute+prismatic DOF count. The
+//! `N_a` is articulation `a`'s generalized velocity count. The
 //! per-articulation byte offsets are computed in
 //! [`MassMatrixKernel::mass_offsets`].
 
@@ -51,12 +51,18 @@ impl MassMatrixKernel {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::crba"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/crba.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/crba.wgsl"),
+                    include_str!("../shaders/articulated_response_common.wgsl")
+                )
+                .into(),
+            ),
         });
 
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::crba model"),
-            entries: &storage_entries(10, true),
+            entries: &storage_entries(16, true),
         });
         let layout_arts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::crba arts"),
@@ -105,6 +111,13 @@ impl MassMatrixKernel {
                 .unwrap_or_else(|_| vec![0u32, joint_count])
         };
         let articulation_count = (art_offsets.len().saturating_sub(1)) as u32;
+        if art_offsets.windows(2).any(|r| r[1] - r[0] > 64)
+            || model.joint_type.host()?.iter().any(|&k| k > 7)
+        {
+            return Err(Error::Gpu(
+                "CRBA supports at most 64 joints per articulation and joint kinds 0..7".into(),
+            ));
+        }
 
         // Mass-matrix output offsets: each articulation owns `N²` floats.
         let joint_dof_offset = model
@@ -118,7 +131,10 @@ impl MassMatrixKernel {
             let j_b = art_offsets[a] as usize;
             let j_e = art_offsets[a + 1] as usize;
             let n = (joint_dof_offset[j_e] - joint_dof_offset[j_b]) as u32;
-            acc = acc.saturating_add(n.saturating_mul(n));
+            acc = n
+                .checked_mul(n)
+                .and_then(|tile| acc.checked_add(tile))
+                .ok_or_else(|| Error::Gpu("CRBA output size overflow".into()))?;
         }
         mass_offsets_host.push(acc);
 
@@ -209,6 +225,9 @@ impl MassMatrixKernel {
         if self.articulation_count == 0 {
             return Ok(());
         }
+        if mass_out.size() < self.output_len().max(1) as u64 * 4 {
+            return Err(Error::Gpu("CRBA output buffer is undersized".into()));
+        }
 
         let bg_model = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::crba model bg"),
@@ -224,6 +243,12 @@ impl MassMatrixKernel {
                 buffer_entry(7, model.body_inertia.device_buffer())?,
                 buffer_entry(8, model.body_com.device_buffer())?,
                 buffer_entry(9, state.body_q.device_buffer())?,
+                buffer_entry(10, model.joint_x_c.device_buffer())?,
+                buffer_entry(11, model.joint_reversed.device_buffer())?,
+                buffer_entry(12, model.joint_enabled.device_buffer())?,
+                buffer_entry(13, model.body_flags.device_buffer())?,
+                buffer_entry(14, model.joint_limit_lower.device_buffer())?,
+                buffer_entry(15, model.joint_limit_upper.device_buffer())?,
             ],
         });
 

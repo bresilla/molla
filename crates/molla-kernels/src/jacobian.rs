@@ -59,12 +59,18 @@ impl JacobianKernel {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::jacobian"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/jacobian.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/jacobian.wgsl"),
+                    include_str!("../shaders/articulated_response_common.wgsl")
+                )
+                .into(),
+            ),
         });
 
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::jacobian model"),
-            entries: &storage_entries(6, true),
+            entries: &storage_entries(12, true),
         });
         let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::jacobian state"),
@@ -117,6 +123,13 @@ impl JacobianKernel {
                 .unwrap_or_else(|_| vec![0u32, joint_count])
         };
 
+        if art_offsets.windows(2).any(|r| r[1] - r[0] > 64)
+            || model.joint_type.host()?.iter().any(|&k| k > 7)
+        {
+            return Err(Error::Gpu(
+                "Jacobian supports at most 64 joints per articulation and joint kinds 0..7".into(),
+            ));
+        }
         // Cumulative DOF offsets per articulation.
         let joint_dof_offset = model
             .joint_dof_offset
@@ -210,6 +223,33 @@ impl JacobianKernel {
         if requests.is_empty() {
             return Ok(());
         }
+        let mut ranges = Vec::with_capacity(requests.len());
+        for r in requests {
+            if r.articulation as usize + 1 >= self.dof_offsets.len()
+                || r.target_body as usize >= model.body_count
+                || r.point_local.iter().any(|v| !v.is_finite())
+                || (r.body_q_offset as u64 + model.body_count as u64) * 32 > body_q.size()
+            {
+                return Err(Error::Gpu("invalid Jacobian request".into()));
+            }
+            let start = r.output_offset as u64;
+            let end = start + 6 * self.dof_width(r.articulation as usize) as u64;
+            if end * 4 > jacobian_out.size() {
+                return Err(Error::Gpu("Jacobian output buffer is undersized".into()));
+            }
+            if end > start {
+                ranges.push((start, end));
+            }
+        }
+        ranges.sort_unstable();
+        if ranges.windows(2).any(|w| w[0].1 > w[1].0)
+            || requests.len().div_ceil(WORKGROUP_SIZE as usize)
+                > device.limits().max_compute_workgroups_per_dimension as usize
+        {
+            return Err(Error::Gpu(
+                "overlapping or excessive Jacobian requests".into(),
+            ));
+        }
 
         let req_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::jacobian requests"),
@@ -229,6 +269,12 @@ impl JacobianKernel {
                 buffer_entry(3, model.joint_x_p.device_buffer())?,
                 buffer_entry(4, model.joint_axis.device_buffer())?,
                 buffer_entry(5, model.joint_dof_offset.device_buffer())?,
+                buffer_entry(6, model.joint_x_c.device_buffer())?,
+                buffer_entry(7, model.joint_reversed.device_buffer())?,
+                buffer_entry(8, model.joint_enabled.device_buffer())?,
+                buffer_entry(9, model.body_flags.device_buffer())?,
+                buffer_entry(10, model.joint_limit_lower.device_buffer())?,
+                buffer_entry(11, model.joint_limit_upper.device_buffer())?,
             ],
         });
 

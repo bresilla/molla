@@ -7,7 +7,7 @@
 // Output: dense `N×N` row-major mass matrix per articulation, packed
 // into a flat `f32` buffer with per-articulation offsets given by
 // `mass_offsets[a..a+1]`. `N` is the articulation's local DOF total
-// (revolute + prismatic only — `Fixed` skipped, multi-DOF not yet).
+// (including multi-DOF joints and zero columns for locked axes).
 //
 // Spatial-vector convention: `[linear; angular]`. Spatial inertia is
 // expressed about the world origin via `smat6_world_origin` — the
@@ -48,6 +48,12 @@ const MAX_JOINTS_PER_ART: u32 = 64u;
 @group(0) @binding(7)  var<storage, read> body_inertia:       array<Mat3Cols>;
 @group(0) @binding(8)  var<storage, read> body_com:           array<vec4<f32>>;
 @group(0) @binding(9)  var<storage, read> body_q:             array<Transform>;
+@group(0) @binding(10) var<storage, read> joint_x_c: array<Transform>;
+@group(0) @binding(11) var<storage, read> joint_reversed: array<u32>;
+@group(0) @binding(12) var<storage, read> joint_enabled: array<u32>;
+@group(0) @binding(13) var<storage, read> body_flags: array<u32>;
+@group(0) @binding(14) var<storage, read> joint_limit_lower: array<f32>;
+@group(0) @binding(15) var<storage, read> joint_limit_upper: array<f32>;
 
 // Group 1 — Articulation CSR + output
 @group(1) @binding(0) var<storage, read>       art_offsets:  array<u32>;
@@ -189,20 +195,21 @@ fn crba_step(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Parent joint within articulation (-1 for root or unmatched).
     var parent_local: array<i32, MAX_JOINTS_PER_ART>;
-    var s_lin:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
-    var s_ang:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
+    var s_lin:  array<array<vec3<f32>, 6>, MAX_JOINTS_PER_ART>;
+    var s_ang:  array<array<vec3<f32>, 6>, MAX_JOINTS_PER_ART>;
     var dof_local_offset: array<u32, MAX_JOINTS_PER_ART>;
     var dof_local_width:  array<u32, MAX_JOINTS_PER_ART>;
     var i_a:    array<array<f32, 36>, MAX_JOINTS_PER_ART>;
 
-    // Pass 1 — per-joint S, parent linkage, body inertia at world origin.
-    var dof_total: u32 = 0u;
+    let origin = body_q[u32(joint_child[j_begin])].position.xyz;
+    let dof_base = joint_dof_offset[j_begin];
+    let dof_total = joint_dof_offset[j_end] - dof_base;
+    // Motion columns and body inertia about the articulation origin.
     for (var k = 0u; k < n; k = k + 1u) {
         let j = j_begin + k;
         let jt = joint_type[j];
         let parent_body = joint_parent[j];
         let child = u32(joint_child[j]);
-        let axis  = joint_axis[j].xyz;
 
         // Walk earlier joints in this articulation.
         var pl: i32 = -1;
@@ -216,31 +223,19 @@ fn crba_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         parent_local[k] = pl;
 
-        var dw: u32 = 0u;
-        if (jt == JOINT_REVOLUTE || jt == JOINT_PRISMATIC) { dw = 1u; }
-        dof_local_offset[k] = dof_total;
+        let dw = response_width(jt);
+        dof_local_offset[k] = joint_dof_offset[j] - dof_base;
         dof_local_width[k]  = dw;
-        dof_total = dof_total + dw;
-
-        // Joint origin & axis in world.
-        var parent_world: Transform;
-        if (parent_body < 0) {
-            parent_world.position = vec4<f32>(0.0);
-            parent_world.rotation = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-        } else {
-            parent_world = body_q[u32(parent_body)];
+        let frame = response_frame(j, 0u);
+        for (var d = 0u; d < dw; d += 1u) {
+            let column = response_column(j, d, frame, origin);
+            s_lin[k][d] = column.linear;
+            s_ang[k][d] = column.angular;
         }
-        let xpw = transform_compose(parent_world, joint_x_p[j]);
-        let origin_w = xpw.position.xyz;
-        let axis_w = quat_rotate(xpw.rotation, axis);
-
-        let s = jacobian_col_world_origin(jt, axis_w, origin_w);
-        s_lin[k] = s.lin;
-        s_ang[k] = s.ang;
 
         // Body spatial inertia at world origin.
         let cw = body_q[child];
-        let com_world = cw.position.xyz + quat_rotate(cw.rotation, body_com[child].xyz);
+        let com_world = cw.position.xyz - origin + quat_rotate(cw.rotation, body_com[child].xyz);
         let i_local = mat3_from_cols(body_inertia[child]);
         let i_world = rotate_inertia(cw.rotation, i_local);
         i_a[k] = smat6_world_origin(body_mass[child], com_world, i_world);
@@ -265,31 +260,27 @@ fn crba_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     for (var k = 0u; k < n; k = k + 1u) {
-        if (dof_local_width[k] == 0u) { continue; }
-        let s_l = s_lin[k];
-        let s_a = s_ang[k];
-        // F = Iᶜ · S
-        let f_arr = smat6_mul_sv(i_a[k], s_l, s_a);
-        let f_l = vec3<f32>(f_arr[0u], f_arr[1u], f_arr[2u]);
-        let f_a = vec3<f32>(f_arr[3u], f_arr[4u], f_arr[5u]);
-
         let dof_k = dof_local_offset[k];
-        // Diagonal
-        let m_kk = dot(s_l, f_l) + dot(s_a, f_a);
-        mass_matrix[m_off + dof_k * n_dof + dof_k] = m_kk;
-
-        // Walk ancestors.
-        var cur = parent_local[k];
-        loop {
-            if (cur < 0) { break; }
-            let p = u32(cur);
-            if (dof_local_width[p] > 0u) {
-                let m_kp = dot(s_lin[p], f_l) + dot(s_ang[p], f_a);
-                let dof_p = dof_local_offset[p];
-                mass_matrix[m_off + dof_k * n_dof + dof_p] = m_kp;
-                mass_matrix[m_off + dof_p * n_dof + dof_k] = m_kp;
+        for (var a = 0u; a < dof_local_width[k]; a += 1u) {
+            let force = smat6_mul_sv(i_a[k], s_lin[k][a], s_ang[k][a]);
+            let linear = vec3<f32>(force[0], force[1], force[2]);
+            let angular = vec3<f32>(force[3], force[4], force[5]);
+            for (var b = 0u; b < dof_local_width[k]; b += 1u) {
+                mass_matrix[m_off + (dof_k + a) * n_dof + dof_k + b] =
+                    dot(s_lin[k][b], linear) + dot(s_ang[k][b], angular);
             }
-            cur = parent_local[p];
+            var cur = parent_local[k];
+            loop {
+                if cur < 0 { break; }
+                let p = u32(cur);
+                let dof_p = dof_local_offset[p];
+                for (var b = 0u; b < dof_local_width[p]; b += 1u) {
+                    let value = dot(s_lin[p][b], linear) + dot(s_ang[p][b], angular);
+                    mass_matrix[m_off + (dof_k + a) * n_dof + dof_p + b] = value;
+                    mass_matrix[m_off + (dof_p + b) * n_dof + dof_k + a] = value;
+                }
+                cur = parent_local[p];
+            }
         }
     }
 }
