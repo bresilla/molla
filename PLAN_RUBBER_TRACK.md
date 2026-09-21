@@ -126,6 +126,16 @@ deltas. The rigid predictor is measured using current Jacobians and generalized
 velocities rather than stale body-velocity caches. Synthetic mixed-size GPU
 tests verify phase totals and repeated-step deltas with poisoned body caches.
 
+The undamped 0.70 s control still showed |Pxy|=0.023893 kg m/s, mainly from
+FEM. An isolated unforced, rotated and deformed reinforced loop reproduced
+0.000282 kg m/s drift in 128 substeps, failing its 0.0001 limit. GPU tetrahedron
+evaluation now combines relative Newton increments with base edge displacement
+instead of adding tiny increments to large world/rest offsets first. The same
+gate passes at the origin and after translation (0.0000514/0.0000290 kg m/s).
+Clean cord, plasticity, multimaterial, contact and airborne regressions pass.
+At 0.22 s the full control's cumulative FEM Py error drops from 0.00410 to
+0.0000902 kg m/s; its final conservation/circulation gates are still running.
+
 GPU articulated dynamics now implements dense Cholesky joint blocks when
 `rigorous_d_solve` is enabled; the FEM composition enables it. Fixed-child
 inertias/wrenches propagate to their parent. Free/Distance/D6 subspaces use

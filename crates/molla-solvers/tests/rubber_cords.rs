@@ -63,6 +63,62 @@ fn belt_energy(model: &Model, q: &[Vec3], v: &[Vec3]) -> Real {
     energy
 }
 
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn deformed_reinforced_loop_preserves_gpu_momentum() {
+    let engine = molla_compute::Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for offset in [Vec3::ZERO, Vec3::new(0.7, -0.4, 0.9)] {
+        let (_, mut model) = belt(true);
+        let masses = model.particle_mass.host().unwrap().to_vec();
+        let mut state = model.state().unwrap();
+        let rotation =
+            molla_math::Quat::from_rotation_x(1.3) * molla_math::Quat::from_rotation_y(0.7);
+        for q in state.particle_q.host_mut().unwrap() {
+            q.y *= 1.02;
+            q.z *= 0.99;
+            *q = rotation * *q + offset;
+        }
+        let mut next = model.state().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        state.upload_to_device(device, queue).unwrap();
+        next.upload_to_device(device, queue).unwrap();
+        let mut solver = VbdSolver::new_gpu(&engine, &model)
+            .unwrap()
+            .with_iterations(128)
+            .with_contact_stiffness(0.0);
+        for _ in 0..128 {
+            solver
+                .step(
+                    &model,
+                    &state,
+                    &model.control(),
+                    &Contacts::with_capacity(0),
+                    1.0 / 19200.0,
+                    &mut next,
+                )
+                .unwrap();
+            std::mem::swap(&mut state, &mut next);
+        }
+        state.particle_qd.download(device, queue).unwrap();
+        let momentum: Vec3 = state
+            .particle_qd
+            .host()
+            .unwrap()
+            .iter()
+            .zip(&masses)
+            .map(|(v, m)| *v * *m)
+            .sum();
+        eprintln!("deformed reinforced loop offset={offset:?}, momentum={momentum:?}");
+        assert!(
+            momentum.length() < 1e-4,
+            "unforced loop changed momentum {momentum:?}"
+        );
+    }
+}
+
 #[test]
 fn reinforced_belt_adds_elastic_restoring_force() {
     let mut forces = Vec::new();

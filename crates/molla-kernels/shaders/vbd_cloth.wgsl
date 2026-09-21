@@ -470,10 +470,10 @@ fn tet_neo_hookean_block(
     let i1 = tet_indices[tet_id * 4u + 1u];
     let i2 = tet_indices[tet_id * 4u + 2u];
     let i3 = tet_indices[tet_id * 4u + 3u];
-    let v0 = (particle_q_in[i0].xyz - particle_rest[i0].xyz) + particle_delta[i0].xyz;
-    let v1 = (particle_q_in[i1].xyz - particle_rest[i1].xyz) + particle_delta[i1].xyz;
-    let v2 = (particle_q_in[i2].xyz - particle_rest[i2].xyz) + particle_delta[i2].xyz;
-    let v3 = (particle_q_in[i3].xyz - particle_rest[i3].xyz) + particle_delta[i3].xyz;
+    let v0 = particle_q_in[i0].xyz - particle_rest[i0].xyz;
+    let v1 = particle_q_in[i1].xyz - particle_rest[i1].xyz;
+    let v2 = particle_q_in[i2].xyz - particle_rest[i2].xyz;
+    let v3 = particle_q_in[i3].xyz - particle_rest[i3].xyz;
 
     // Inverse rest-state basis: stored as 3 padded vec4 columns
     // (Mat3Cols / GpuMat3 layout, same as body_inertia uploads).
@@ -487,7 +487,11 @@ fn tet_neo_hookean_block(
     let lam = lam_l + mu_l;
 
     // Displacement-gradient form F = I + Du · Dm⁻¹.
-    let ds = mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0);
+    let ds = mat3x3<f32>(
+        (v1 - v0) + (particle_delta[i1].xyz - particle_delta[i0].xyz),
+        (v2 - v0) + (particle_delta[i2].xyz - particle_delta[i0].xyz),
+        (v3 - v0) + (particle_delta[i3].xyz - particle_delta[i0].xyz),
+    );
     let f_full = IDENTITY3 + ds * dm_inv;
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
