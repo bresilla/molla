@@ -8,6 +8,22 @@ contact must generate vehicle motion with equal/opposite reactions. No imposed
 belt phase, prescribed belt velocity, or chassis velocity override qualifies.
 Retain the current reduced model as a separately named, usable baseline.
 
+## User-selectable simulation modes
+
+Keep both implementations permanently. Gearbox will expose a per-machine menu:
+
+- **Simple / fast**: current torque-driven ideal continuous belt; default.
+- **Deformable rubber / experimental**: volumetric reinforced belt and physical
+  sprocket/lug contact; higher cost. Unavailable until the complete drive path
+  passes its contact and vehicle gates, not a silent fallback to simple mode.
+
+Simulation fidelity is separate from visual quality. Both modes use the same
+machine/controller interface and authored machine identity. Mode changes must
+occur paused and rebuild the affected physics safely; preserve chassis pose
+but explicitly reset incompatible belt deformation/tension state. Only one
+mode owns traction at a time. Gearbox owns menu/configuration; Molla owns both
+physical implementations. Runtime mode switching/menu implementation is pending.
+
 ## Verified starting point (2026-09-21)
 
 - `molla-solvers/src/vbd.rs` and GPU VBD kernels already solve tetrahedral
