@@ -699,21 +699,14 @@ impl VbdClothKernel {
 
         // Predict.
         push_uniforms(&base(particle_count_u, 0, 0.0));
-        // iterations × colours × solve_color. Contact penalty lives
-        // INSIDE `solve_color` so the per-vertex Newton block sees
-        // the contact force/Hessian — applying it as a separate
-        // post-pass leaks contact energy directly into velocity.
-        // In hard-mode we push an extra `update_dual` uniform after
-        // each outer iteration's colour sweep.
-        for _ in 0..iterations {
-            for k in 0..color_count {
-                let lo = color_offsets_host[k as usize];
-                let hi = color_offsets_host[k as usize + 1];
-                push_uniforms(&base(hi - lo, k, contact_stiffness));
-            }
-            if hard_mode {
-                push_uniforms(&base(particle_count_u, 0, contact_stiffness));
-            }
+        // All elastic iterations share the per-colour and dual uniforms.
+        for k in 0..color_count {
+            let lo = color_offsets_host[k as usize];
+            let hi = color_offsets_host[k as usize + 1];
+            push_uniforms(&base(hi - lo, k, contact_stiffness));
+        }
+        if hard_mode {
+            push_uniforms(&base(particle_count_u, 0, contact_stiffness));
         }
         let _ = shape_count_u; // referenced in the apply_shape_contacts
         // dispatch path; kept for future use.
@@ -793,7 +786,6 @@ impl VbdClothKernel {
             let mut idx = 0usize;
             // Predict.
             dispatch(&mut pass, &self.pipe_predict, idx, particle_count_u);
-            idx += 1;
             // Outer iterations × colours. Soft rigid contacts are
             // baked into `solve_color` so each per-vertex Newton
             // block sees the contact force + Hessian directly. In
@@ -801,6 +793,7 @@ impl VbdClothKernel {
             // `update_dual` dispatch that bumps the per-particle λ
             // by the residual penetration.
             for _ in 0..iterations {
+                idx = 1;
                 for k in 0..color_count {
                     let lo = color_offsets_host[k as usize];
                     let hi = color_offsets_host[k as usize + 1];
@@ -810,9 +803,9 @@ impl VbdClothKernel {
                 }
                 if hard_mode {
                     dispatch(&mut pass, &self.pipe_update_dual, idx, particle_count_u);
-                    idx += 1;
                 }
             }
+            idx = 1 + color_count as usize + usize::from(hard_mode);
             // Velocity recovery.
             dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
             idx += 1;
