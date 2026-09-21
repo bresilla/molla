@@ -9,6 +9,7 @@ use molla_kernels::soft_rigid_contact::{
 use molla_kernels::soft_rigid_solve::{
     SoftParticleDriftKernel, SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
 };
+use molla_kernels::tet_volume::{TetVolumeBindings, TetVolumeMonitor};
 use molla_kernels::{JacobianKernel, JacobianRequest, MassMatrixKernel};
 use molla_math::Real;
 use molla_sim::{Contacts, Control, Model, State};
@@ -45,6 +46,7 @@ pub struct FemRigidGpuSystem {
     gather: SoftRigidContactKernel,
     solve: SoftRigidSolveKernel,
     drift: SoftParticleDriftKernel,
+    volume: TetVolumeMonitor,
     config: FemRigidConfig,
 }
 
@@ -217,6 +219,22 @@ impl FemRigidGpuSystem {
         let gather = SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?;
         let solve = SoftRigidSolveKernel::new(device, n as u32, gather.row_count())?;
         let drift = SoftParticleDriftKernel::new(device);
+        let volume = TetVolumeMonitor::new(device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        volume.encode(
+            device,
+            &mut encoder,
+            TetVolumeBindings {
+                positions: scene.soft_state.particle_q.device_buffer().unwrap(),
+                reference: scene.soft_model.initial_particle_q.device_buffer().unwrap(),
+                indices: scene.soft_model.tet_indices.device_buffer().unwrap(),
+                inverse_rest: scene.soft_model.tet_dm_inv.device_buffer().unwrap(),
+                status: solve.status(),
+                particle_count: scene.soft_model.particle_count as u32,
+                tet_count: scene.soft_model.tet_count as u32,
+            },
+        )?;
+        queue.submit([encoder.finish()]);
         let fem = VbdSolver::new_gpu(&engine, &scene.soft_model)?
             .with_iterations(config.elastic_iterations)
             .with_contact_stiffness(0.0);
@@ -242,6 +260,7 @@ impl FemRigidGpuSystem {
             gather,
             solve,
             drift,
+            volume,
             config,
         })
     }
@@ -252,8 +271,14 @@ impl FemRigidGpuSystem {
     pub fn rigid_state(&self) -> &State {
         &self.rigid_state
     }
+    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 invalid or nonpositive tetrahedron volume.
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         self.solve.status()
+    }
+
+    /// Lifetime minimum J and smallest invalid tet index, including initial and every accepted substep.
+    pub fn volume_diagnostics_buffer(&self) -> &wgpu::Buffer {
+        self.volume.diagnostics()
     }
 
     /// Update a velocity motor command without transferring simulated state to the host.
@@ -360,6 +385,19 @@ impl FemRigidGpuSystem {
                 self.solve.status(),
                 self.soft_model.particle_count as u32,
                 h as f32,
+            )?;
+            self.volume.encode(
+                device,
+                &mut encoder,
+                TetVolumeBindings {
+                    positions: self.soft_next.particle_q.device_buffer().unwrap(),
+                    reference: self.soft_model.initial_particle_q.device_buffer().unwrap(),
+                    indices: self.soft_model.tet_indices.device_buffer().unwrap(),
+                    inverse_rest: self.soft_model.tet_dm_inv.device_buffer().unwrap(),
+                    status: self.solve.status(),
+                    particle_count: self.soft_model.particle_count as u32,
+                    tet_count: self.soft_model.tet_count as u32,
+                },
             )?;
             queue.submit([encoder.finish()]);
             self.rigid.drift_gpu(

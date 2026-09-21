@@ -114,6 +114,12 @@ fn prestressed_rubber_stays_outside_its_support() {
         system.step(0.02).unwrap();
         assert!(system.soft_state().particle_q.host().is_err());
         assert!(system.soft_state().particle_qd.host().is_err());
+        let volume = read::<u32>(&engine, system.volume_diagnostics_buffer(), 2);
+        assert!(
+            f32::from_bits(volume[0]) > 0.5,
+            "substep volume diagnostics {volume:?}"
+        );
+        assert_eq!(volume[1], u32::MAX);
         let poses = read::<[f32; 8]>(
             &engine,
             system.rigid_state().body_q.device_buffer().unwrap(),

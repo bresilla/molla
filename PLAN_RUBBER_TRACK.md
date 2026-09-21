@@ -78,6 +78,15 @@ physical implementations. Runtime mode switching/menu implementation is pending.
 
 ## Model limits and evidence
 
+`TetVolumeMonitor` records the initial configuration and every accepted GPU
+substep, retaining the lifetime minimum determinant rather than only inspecting
+frame-end meshes. Invalid/nonpositive elements set sticky status bit 8;
+nonfinite determinants set bit 4. A restored final mesh cannot erase an earlier
+failure. Unit GPU checks cover transient compression, recovery, inversion,
+collapse, NaN/Inf, invalid indices and preservation of other status flags.
+The track gate now requires lifetime minJ > 0.5 without per-substep readbacks.
+This detects invalid material states; it does not itself prevent inversion.
+
 Contact correction now precedes the accepted position drift on both the GPU
 runtime and CPU oracle. Elastic/rigid predictors provide velocities; contact
 geometry and articulated responses use the beginning-of-step configuration;
