@@ -87,6 +87,21 @@ collapse, NaN/Inf, invalid indices and preservation of other status flags.
 The track gate now requires lifetime minJ > 0.5 without per-substep readbacks.
 This detects invalid material states; it does not itself prevent inversion.
 
+The 1/9600 s, 0.5%-prestrain, 12 mm tooth fixture passes the full forward
+circulation/retention gate with lifetime minJ 0.672318 and 76.85 mm material
+travel. The reverse case still fails material acceptance (lifetime minJ
+0.403477 despite 73.54 mm travel); a smaller-step run is pending. Neither
+result proves two-track vehicle traction, long-run robustness or native delivery.
+
+GPU articulated dynamics now implements dense Cholesky joint blocks when
+`rigorous_d_solve` is enabled; the FEM composition enables it. Fixed-child
+inertias/wrenches propagate to their parent. Free/Distance/D6 subspaces use
+the translated joint anchor and their translation bias term, with acceleration
+bias included before solving joint accelerations. A carrier/offset-COM/fixed-
+payload/driven-rotor GPU gate agrees with the CPU oracle within 1.1e-7 per step;
+the moving 0.105 s case differs by 1.7e-6 in velocity and 7e-8 in coordinates.
+This replaces a measured 0.0172 velocity error for the fixed-payload case.
+
 Contact correction now precedes the accepted position drift on both the GPU
 runtime and CPU oracle. Elastic/rigid predictors provide velocities; contact
 geometry and articulated responses use the beginning-of-step configuration;
@@ -161,8 +176,8 @@ detection implementation.
 The resident composition currently accepts one unreversed dynamic articulation
 up to 32 joints and 64 DOFs and explicit primitive contact shapes. It exposes sticky GPU
 failure status; callers must check it before accepting results. Existing GPU
-Featherstone does not implement reversed joints, motor-only caps or the CPU
-dense multi-DOF acceleration solve; those are not silently delegated to CPU.
+Featherstone does not implement reversed joints or motor-only caps;
+those are not silently delegated to CPU. Dense joint blocks execute on GPU.
 The driven bench uses the physical joint effort limit for its 5 Nm cap.
 The same tooth bench now includes a free 750 kg carrier and its 2 kg rotor.
 Both directions pass airborne conservation without prescribed motion or a

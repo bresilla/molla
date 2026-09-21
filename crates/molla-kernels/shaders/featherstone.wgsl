@@ -2,12 +2,8 @@
 // (ABA) per Featherstone (2008) ch. 7. Mirrors the CPU path in
 // `solvers/featherstone.rs::cpu_step`.
 //
-// Stage 17 — multi-DOF support: each joint provides up to MAX_DOFS_PER_JOINT
-// motion-subspace columns S_k. The backward ABA pass applies sequential
-// rank-1 updates per DOF (correct for joints whose D matrix is diagonal;
-// approximate but stable when DOFs are coupled via inertia). Supported
-// joint types: REVOLUTE, PRISMATIC (1 DOF); BALL (3 angular DOFs);
-// FREE / DISTANCE / D6 (6 DOFs in joint world frame).
+// Multi-DOF blocks use dense Cholesky when rigorous_d_solve is enabled;
+// the alternate path uses sequential scalar elimination.
 //
 // Per-articulation parallelism: one workgroup invocation per chain.
 
@@ -309,14 +305,6 @@ fn quat_from_euler_xyz(e: vec3<f32>) -> vec4<f32> {
     return normalize(quat_mul(quat_mul(rz, ry), rx));
 }
 
-// Note: dense Cholesky / forward+back substitution helpers live on the
-// CPU side only (see `solvers/featherstone.rs` and `math/dense_solve.rs`).
-// WGSL doesn't ergonomically support the per-thread function-scoped
-// dynamic linear algebra we'd need here, so the GPU kernel always uses
-// the sequential rank-1 deflation in pass-2 even when
-// `uniforms.rigorous_d_solve == 1u`. The angular-limit + Distance
-// projection polish is honoured on both backends.
-
 // ─── Kernel ────────────────────────────────────────────────────────
 
 @compute @workgroup_size(64)
@@ -352,21 +340,11 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     var u_lin:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var u_ang:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var d_inv_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
+    var d_dense_inv: array<array<f32, 36>, MAX_JOINTS_PER_ART>;
     var u_tau_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var dof_active_arr: array<array<u32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var q_dd_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    // Stage 17.1 — pre-integration position copy for the Distance
-    // Lagrange projection (used by the velocity-level multiplier path
-    // in pass-4). Only stored for FREE / DISTANCE / D6.
-    //
-    // **Caveat — dense Cholesky D solve is CPU-only for now.** WGSL's
-    // function-pointer / dynamic-indexing limits make the in-place
-    // dense Cholesky on a per-joint 6×6 painful (we'd need per-thread
-    // scratch with run-time-sized linear algebra). The CPU path
-    // implements it; the GPU path here always uses the sequential
-    // rank-1 deflation that's exact when `D` is diagonal. For the
-    // asymmetric-inertia coupled-D parity test we run the CPU backend
-    // and compare to a CPU dense-Cholesky reference.
+    // Pre-integration translations for Distance-joint projection.
     var p_pre_arr:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
 
     if uniforms.drift_only == 0u {
@@ -401,7 +379,8 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the linear moment-arm term is mandatory or the solver
         // becomes origin-dependent (mirrors CPU build_motion_subspace).
         let r_jw = xpw.rotation;
-        let p_jw = xpw.position.xyz;
+        var p_jw = xpw.position.xyz;
+        if jt == JOINT_FREE || jt == JOINT_DISTANCE || jt == JOINT_D6 { p_jw = after.position.xyz; }
         let ex = quat_rotate(r_jw, vec3<f32>(1.0, 0.0, 0.0));
         let ey = quat_rotate(r_jw, vec3<f32>(0.0, 1.0, 0.0));
         let ez = quat_rotate(r_jw, vec3<f32>(0.0, 0.0, 1.0));
@@ -513,6 +492,10 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         c_lin[k] = spatial_cross_lin(vi_l, vi_a, v_j_l, v_j_a);
         c_ang[k] = spatial_cross_ang(vi_l, vi_a, v_j_l, v_j_a);
+        if jt == JOINT_FREE || jt == JOINT_DISTANCE || jt == JOINT_D6 {
+            let translation = ex * joint_qd[dof] + ey * joint_qd[dof+1u] + ez * joint_qd[dof+2u];
+            c_lin[k] -= cross(v_j_a, translation);
+        }
 
         let cw = body_q[child];
         let com_world = cw.position.xyz + quat_rotate(cw.rotation, body_com[child].xyz);
@@ -548,7 +531,6 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let jt = joint_type[j];
         let n_dof = n_dof_arr[k];
         let supported = (jt != JOINT_FIXED) && (n_dof > 0u);
-        if (!supported) { continue; }
 
         let dof = joint_dof_offset[j];
         let coord = joint_coord_offset[j];
@@ -559,7 +541,9 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (dof_active_arr[k][d] == 0u) { continue; }
             let s_l = s_lin[k][d];
             let s_a = s_ang[k][d];
-            let u_arr = smat6_mul_sv(i_curr, s_l, s_a);
+            var inertia = i_curr;
+            if uniforms.rigorous_d_solve == 1u { inertia = i_a[k]; }
+            let u_arr = smat6_mul_sv(inertia, s_l, s_a);
             let u_l = vec3<f32>(u_arr[0u], u_arr[1u], u_arr[2u]);
             let u_a = vec3<f32>(u_arr[3u], u_arr[4u], u_arr[5u]);
             let dval = dot(s_l, u_l) + dot(s_a, u_a);
@@ -567,6 +551,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             u_lin[k][d] = u_l;
             u_ang[k][d] = u_a;
             d_inv_arr[k][d] = d_i;
+            d_dense_inv[k][d*6u+d] = d_i;
 
             // Drive / friction / effort.
             let dof_g = dof + d;
@@ -613,11 +598,58 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let tau_app = clamp_or_passthrough(tau_raw, joint_effort_limit[dof_g]);
             u_tau_arr[k][d] = tau_app - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));
 
-            // Deflate i_curr := i_curr - U·U^T / D
+            // Scalar block elimination.
+            if uniforms.rigorous_d_solve == 0u || n_dof == 1u {
             let ua = array<f32, 6>(u_l.x, u_l.y, u_l.z, u_a.x, u_a.y, u_a.z);
             for (var rr = 0u; rr < 6u; rr = rr + 1u) {
                 for (var cc = 0u; cc < 6u; cc = cc + 1u) {
                     i_curr[rr * 6u + cc] = i_curr[rr * 6u + cc] - ua[rr] * ua[cc] * d_i;
+                }
+            }
+            }
+        }
+
+        if uniforms.rigorous_d_solve == 1u && supported && n_dof > 1u {
+            var factor: array<f32, 36>;
+            for (var r = 0u; r < n_dof; r += 1u) {
+                for (var c = 0u; c <= r; c += 1u) {
+                    var value = 0.0;
+                    if dof_active_arr[k][r] != 0u && dof_active_arr[k][c] != 0u {
+                        value = dot(s_lin[k][r], u_lin[k][c]) + dot(s_ang[k][r], u_ang[k][c]);
+                    } else if r == c { value = 1.0; }
+                    for (var d = 0u; d < c; d += 1u) { value -= factor[r*6u+d] * factor[c*6u+d]; }
+                    if r == c { factor[r*6u+c] = sqrt(value); }
+                    else { factor[r*6u+c] = value / factor[c*6u+c]; }
+                }
+            }
+            for (var c = 0u; c < n_dof; c += 1u) {
+                var solution: array<f32, 6>;
+                for (var r = 0u; r < n_dof; r += 1u) {
+                    var value = select(0.0, 1.0, r == c);
+                    for (var d = 0u; d < r; d += 1u) { value -= factor[r*6u+d] * solution[d]; }
+                    solution[r] = value / factor[r*6u+r];
+                }
+                for (var back = 0u; back < n_dof; back += 1u) {
+                    let r = n_dof - 1u - back;
+                    var value = solution[r];
+                    for (var d = r+1u; d < n_dof; d += 1u) { value -= factor[d*6u+r] * solution[d]; }
+                    solution[r] = value / factor[r*6u+r];
+                    d_dense_inv[k][r*6u+c] = solution[r];
+                }
+            }
+            for (var c = 0u; c < n_dof; c += 1u) {
+                var weighted_l = vec3<f32>(0.0);
+                var weighted_a = vec3<f32>(0.0);
+                for (var d = 0u; d < n_dof; d += 1u) {
+                    weighted_l += u_lin[k][d] * d_dense_inv[k][d*6u+c];
+                    weighted_a += u_ang[k][d] * d_dense_inv[k][d*6u+c];
+                }
+                let u = array<f32, 6>(u_lin[k][c].x, u_lin[k][c].y, u_lin[k][c].z,
+                    u_ang[k][c].x, u_ang[k][c].y, u_ang[k][c].z);
+                let v = array<f32, 6>(weighted_l.x, weighted_l.y, weighted_l.z,
+                    weighted_a.x, weighted_a.y, weighted_a.z);
+                for (var r = 0u; r < 6u; r += 1u) {
+                    for (var d = 0u; d < 6u; d += 1u) { i_curr[r*6u+d] -= u[r] * v[d]; }
                 }
             }
         }
@@ -628,7 +660,11 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         var p_art_a = p_ang[k] + vec3<f32>(cv[3u], cv[4u], cv[5u]);
         for (var d = 0u; d < n_dof; d = d + 1u) {
             if (dof_active_arr[k][d] == 0u) { continue; }
-            let scale_u = u_tau_arr[k][d] * d_inv_arr[k][d];
+            var scale_u = u_tau_arr[k][d] * d_inv_arr[k][d];
+            if uniforms.rigorous_d_solve == 1u {
+                scale_u = 0.0;
+                for (var c = 0u; c < n_dof; c += 1u) { scale_u += d_dense_inv[k][d*6u+c] * u_tau_arr[k][c]; }
+            }
             p_art_l = p_art_l + u_lin[k][d] * scale_u;
             p_art_a = p_art_a + u_ang[k][d] * scale_u;
         }
@@ -674,6 +710,8 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+        ap_l += c_lin[k];
+        ap_a += c_ang[k];
         var s_qdd_l = vec3<f32>(0.0);
         var s_qdd_a = vec3<f32>(0.0);
         if (supported) {
@@ -682,18 +720,25 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                     q_dd_arr[k][d] = 0.0;
                     continue;
                 }
-                let q_dd_d = (u_tau_arr[k][d]
+                var q_dd_d = (u_tau_arr[k][d]
                               - (dot(u_lin[k][d], ap_l) + dot(u_ang[k][d], ap_a)))
                               * d_inv_arr[k][d];
+                if uniforms.rigorous_d_solve == 1u {
+                    q_dd_d = 0.0;
+                    for (var c = 0u; c < n_dof; c += 1u) {
+                        let rhs = u_tau_arr[k][c] - dot(u_lin[k][c], ap_l) - dot(u_ang[k][c], ap_a);
+                        q_dd_d += d_dense_inv[k][d*6u+c] * rhs;
+                    }
+                }
                 q_dd_arr[k][d] = q_dd_d;
                 s_qdd_l = s_qdd_l + s_lin[k][d] * q_dd_d;
                 s_qdd_a = s_qdd_a + s_ang[k][d] * q_dd_d;
             }
-            a_lin[k] = ap_l + s_qdd_l + c_lin[k];
-            a_ang[k] = ap_a + s_qdd_a + c_ang[k];
+            a_lin[k] = ap_l + s_qdd_l;
+            a_ang[k] = ap_a + s_qdd_a;
         } else {
-            a_lin[k] = ap_l + c_lin[k];
-            a_ang[k] = ap_a + c_ang[k];
+            a_lin[k] = ap_l;
+            a_ang[k] = ap_a;
         }
     }
 

@@ -238,7 +238,9 @@ impl FemRigidGpuSystem {
         let fem = VbdSolver::new_gpu(&engine, &scene.soft_model)?
             .with_iterations(config.elastic_iterations)
             .with_contact_stiffness(0.0);
-        let rigid = FeatherstoneSolver::new_gpu(&engine, &scene.rigid_model)?.with_substeps(1);
+        let rigid = FeatherstoneSolver::new_gpu(&engine, &scene.rigid_model)?
+            .with_substeps(1)
+            .with_rigorous_d_solve(true);
         Ok(Self {
             engine,
             soft_model: scene.soft_model,
