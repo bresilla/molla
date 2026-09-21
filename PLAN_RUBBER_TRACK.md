@@ -2,13 +2,24 @@
 
 ## Goal and acceptance boundary
 
-Replace the ideal continuous-belt drive with a volumetric deformable belt.
+Add a volumetric deformable belt alongside the ideal continuous-belt drive.
 Motor torque must reach belt nodes through sprocket/lug contact; belt-ground
 contact must generate vehicle motion with equal/opposite reactions. No imposed
 belt phase, prescribed belt velocity, or chassis velocity override qualifies.
 Retain the current reduced model as a separately named, usable baseline.
 
 ## User-selectable simulation modes
+
+This is a machine-wide tyre/track fidelity contract, not a CEOL-only feature.
+All supported wheeled and tracked machines retain their current simplified
+physics alongside an actual FEM option. Gearbox's per-machine physics menu
+uses **Simplified / fast** and **FEM / experimental** consistently: pneumatic
+tyres select a deformable tyre model; tracked machines select a deformable
+reinforced belt model. Neither setting implies FEM for the entire chassis.
+Different machines may use different modes in the same scene. The simplified
+mode remains the default and is not removed when FEM becomes available.
+An asset without a validated FEM implementation shows that option unavailable;
+visual tyre deformation alone must never be labelled FEM physics.
 
 Keep both implementations permanently. Gearbox will expose a per-machine menu:
 
@@ -63,6 +74,24 @@ physical implementations. Runtime mode switching/menu implementation is pending.
 
 ## Model limits and evidence
 
+Two-way contact now has a reusable CPU oracle in `soft_rigid_contact` and a
+substep composition in `fem_rigid`. It uses articulated mass responses, not
+independent-body inertia, for equal/opposite contact impulses and Coulomb
+friction. A powered frictionless tooth transfers torque into the tetrahedral
+loop in both directions: at 0.1 s the loaded rotor reaches about 0.235 rad/s
+versus 1.775 rad/s unloaded, rubber angular momentum is about 0.453 kg m²/s,
+and peak penetration is below 0.165 mm. This is one tooth pressing rubber,
+not yet a circulating sprocket/lug mechanism or reinforced track.
+
+GPU primitive contact generation reads live device FEM positions and rigid
+transforms directly. The first real-GPU test checks 768 candidates and 39
+active contacts against the CPU oracle, including ball/box/cylinder surfaces.
+Only test acceptance downloads the resulting state. GPU articulated contact
+response/solve and complete resident substep scheduling remain pending; the
+CPU coupled bench is not the delivery path. Primitive gathering is presently
+dense node/shape pairing, not a production broad phase or continuous collision
+detection implementation.
+
 The first rigid-motion invariance test exposed a pre-existing CPU/GPU VBD
 error: `cofactor3` returned the adjugate instead of the determinant gradient.
 A stress-free rotated loop moved 0.124 m in one 1/480 s step. Both paths now
@@ -82,6 +111,11 @@ claim of tear, heat, wear, fatigue or experimentally validated traction is made.
 
 GPU-first architecture with the CPU as correctness oracle remains required.
 Keep physical laws in Molla; Gearbox owns rendering and machine binding.
+The user reaffirmed that every GPU-suitable stage must execute on GPU, including
+contact generation and two-way coupling, not only the elastic material update.
+CPU coupling benches are correctness oracles and do not qualify as native FEM
+delivery. Keep deformable positions, velocities and iterative contact state
+device-resident; no per-node host round trips inside substeps.
 
 Primary references:
 - https://graphics.cs.utah.edu/research/projects/vbd/
