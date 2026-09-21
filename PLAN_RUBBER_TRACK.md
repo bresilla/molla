@@ -162,8 +162,14 @@ match implicit-Euler axial response, including stiffness above the bilateral
 spring cap; slack compression produces no force. GPU VBD and XPBD both support
 the tension flag; the barrier solver explicitly rejects it. Analytic closed-loop
 mass, strain energy and prestrain gates span longitudinal/width refinement.
-These are material tests, not full reinforced sprocket engagement or vehicle
-acceptance. No imposed motion or hard strain cap is used for the cords.
+The reinforced loop also passes the floating powered-tooth test in both
+directions: loaded relative rotor speed about 0.294 rad/s versus 1.780 unloaded,
+rubber angular momentum about 0.442 kg m²/s, and displacement about 8.18 mm.
+Composite mass is included in conservation checks; total airborne linear
+momentum stays below 0.00028 kg m/s and angular momentum below 0.000057 kg m²/s
+after 0.1 s. Unloaded reinforced controls have zero measured velocity.
+This is not full circulating sprocket engagement or vehicle acceptance.
+No imposed motion or hard strain cap is used for the cords.
 
 GPU-first architecture with the CPU as correctness oracle remains required.
 Keep physical laws in Molla; Gearbox owns rendering and machine binding.

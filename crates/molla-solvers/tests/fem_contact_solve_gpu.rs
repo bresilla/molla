@@ -316,10 +316,20 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
+    motor_to_rubber(false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn gpu_motor_drives_reinforced_rubber_with_airborne_reaction() {
+    motor_to_rubber(true);
+}
+
+fn motor_to_rubber(reinforced: bool) {
     use molla_kernels::soft_rigid_contact::SoftRigidShapeGpu;
     use molla_sim::{
         JointTargetMode,
-        soft_belt::{RubberBeltMesh, RubberBeltParams},
+        soft_belt::{RubberBeltMesh, RubberBeltParams, RubberCordParams},
     };
     use molla_solvers::{
         fem_rigid::FemRigidConfig,
@@ -328,6 +338,9 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
     use std::sync::Arc;
     let engine = Arc::new(Engine::new_gpu().unwrap());
     for (sign, floating) in [(-1.0, false), (1.0, false), (-1.0, true), (1.0, true)] {
+        if reinforced && !floating {
+            continue;
+        }
         let mut speeds = Vec::new();
         for coupled in [false, true] {
             let mesh = RubberBeltMesh::circular(RubberBeltParams {
@@ -340,9 +353,20 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
             let mut builder = ModelBuilder::new();
             builder.set_world_gravity(WorldId(0), Vec3::ZERO);
             builder.set_linear_damping(0.0);
-            mesh.append_to(&mut builder, WorldId(0), Vec3::ZERO)
+            if reinforced {
+                mesh.append_reinforced_to(
+                    &mut builder,
+                    WorldId(0),
+                    Vec3::ZERO,
+                    RubberCordParams::default(),
+                )
                 .unwrap();
+            } else {
+                mesh.append_to(&mut builder, WorldId(0), Vec3::ZERO)
+                    .unwrap();
+            }
             let soft_model = builder.build().unwrap();
+            let soft_masses = soft_model.particle_mass.host().unwrap().to_vec();
             let soft_state = soft_model.state().unwrap();
             let mut builder = ModelBuilder::new();
             builder.set_world_gravity(WorldId(0), Vec3::ZERO);
@@ -438,7 +462,7 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
             let angular: Vec3 = q
                 .iter()
                 .zip(&v)
-                .zip(&mesh.masses)
+                .zip(&soft_masses)
                 .map(|((p, v), m)| p.cross(*v * *m))
                 .sum();
             let displacement = q
@@ -448,7 +472,7 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
                 .fold(0.0, Real::max);
             assert!(mesh.minimum_volume_ratio(&q).unwrap() > 0.75);
             eprintln!(
-                "resident GPU tooth: sign={sign}, floating={floating}, coupled={coupled}, omega={omega}, rubber Lx={}, displacement={displacement}",
+                "resident GPU tooth: reinforced={reinforced}, sign={sign}, floating={floating}, coupled={coupled}, omega={omega}, rubber Lx={}, displacement={displacement}",
                 angular.x
             );
             if floating {
@@ -462,7 +486,7 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
                     system.rigid_state().body_qd.device_buffer().unwrap(),
                     rigid_masses.len(),
                 );
-                let mut momentum: Vec3 = v.iter().zip(&mesh.masses).map(|(v, m)| *v * *m).sum();
+                let mut momentum: Vec3 = v.iter().zip(&soft_masses).map(|(v, m)| *v * *m).sum();
                 eprintln!("GPU airborne soft P={momentum:?}, L={angular:?}");
                 let mut total_angular = angular;
                 for i in 0..rigid_masses.len() {
@@ -514,6 +538,15 @@ fn gpu_motor_to_tetrahedral_rubber_runs_without_substep_readback() {
                         "CPU/GPU coupled speed disagreement"
                     );
                 }
+            } else if reinforced {
+                assert!(
+                    displacement < 1e-6,
+                    "unstressed cord displacement {displacement}"
+                );
+                assert!(
+                    v.iter().all(|v| v.length() < 1e-3),
+                    "unstressed cord velocity"
+                );
             } else {
                 assert!(v.iter().all(|v| *v == Vec3::ZERO));
                 for (actual, rest) in q.iter().zip(&mesh.positions) {
