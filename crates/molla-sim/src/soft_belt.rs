@@ -79,6 +79,20 @@ pub struct RubberLugParams {
 }
 
 impl RubberBeltMesh {
+    fn recompute_volumes_and_masses(&mut self) -> Result<()> {
+        self.masses.fill(0.0);
+        for (tet, volume) in self.tets.iter().zip(&mut self.volumes) {
+            *volume = tet_basis(&self.positions, *tet).determinant() / 6.0;
+            if !volume.is_finite() || *volume <= 1e-18 {
+                return Err(Error::Build("degenerate graded belt tetrahedron".into()));
+            }
+            for &node in tet {
+                self.masses[node as usize] += *volume * self.params.density / 4.0;
+            }
+        }
+        Ok(())
+    }
+
     /// Redistribute the base mesh's width columns with unchanged total width and density.
     pub fn with_width_stations(&self, stations: &[Real]) -> Result<Self> {
         let p = self.params;
@@ -97,16 +111,49 @@ impl RubberBeltMesh {
         for (i, point) in mesh.positions.iter_mut().enumerate() {
             point.x = stations[(i / (p.thickness_cells + 1)) % (p.width_cells + 1)];
         }
-        mesh.masses.fill(0.0);
-        for (tet, volume) in mesh.tets.iter().zip(&mut mesh.volumes) {
-            *volume = tet_basis(&mesh.positions, *tet).determinant() / 6.0;
-            if !volume.is_finite() || *volume <= 1e-18 {
-                return Err(Error::Build("degenerate graded belt tetrahedron".into()));
-            }
-            for &node in tet {
-                mesh.masses[node as usize] += *volume * p.density / 4.0;
+        mesh.recompute_volumes_and_masses()?;
+        Ok(mesh)
+    }
+
+    /// Shift outer-surface angular stations in metres along the neutral circumference.
+    /// Offsets are width-major then pitch-node-major; the inner half and cords stay fixed.
+    pub fn with_outer_phase_offsets(&self, count: usize, offsets: &[Real]) -> Result<Self> {
+        let p = self.params;
+        let invalid = || Error::Build("invalid outer belt phase grid".into());
+        if count < 2
+            || p.segments % count != 0
+            || p.thickness_cells % 2 != 0
+            || self.positions.len() != p.segments * (p.width_cells + 1) * (p.thickness_cells + 1)
+        {
+            return Err(invalid());
+        }
+        let span = p.segments / count;
+        let step = std::f64::consts::TAU * p.radius / p.segments as Real;
+        if offsets.len() != (p.width_cells + 1) * span || offsets.iter().any(|v| !v.is_finite()) {
+            return Err(invalid());
+        }
+        for row in offsets.chunks_exact(span) {
+            for i in 0..span {
+                if step + row[(i + 1) % span] - row[i] <= 0.0 {
+                    return Err(invalid());
+                }
             }
         }
+        let mut mesh = self.clone();
+        for s in 0..p.segments {
+            for w in 0..=p.width_cells {
+                for r in p.thickness_cells / 2 + 1..=p.thickness_cells {
+                    let i = (s * (p.width_cells + 1) + w) * (p.thickness_cells + 1) + r;
+                    let blend = 2.0 * r as Real / p.thickness_cells as Real - 1.0;
+                    let angle = std::f64::consts::TAU * s as Real / p.segments as Real
+                        + offsets[w * span + s % span] * blend / p.radius;
+                    let radius = mesh.positions[i].y.hypot(mesh.positions[i].z);
+                    mesh.positions[i].y = radius * angle.cos();
+                    mesh.positions[i].z = radius * angle.sin();
+                }
+            }
+        }
+        mesh.recompute_volumes_and_masses()?;
         Ok(mesh)
     }
 
@@ -147,111 +194,126 @@ impl RubberBeltMesh {
 
     /// Attach separated inner lug rows to shared base faces on the width grid.
     pub fn with_drive_lug_rows(&self, lugs: &[RubberLugParams]) -> Result<Self> {
+        self.with_surface_lug_rows(lugs, &[])
+    }
+
+    /// Bond inner guide rows and outer tread rows to the corresponding base faces.
+    pub fn with_surface_lug_rows(
+        &self,
+        inner: &[RubberLugParams],
+        outer: &[RubberLugParams],
+    ) -> Result<Self> {
         let p = self.params;
         let original = p.segments * (p.width_cells + 1) * (p.thickness_cells + 1);
-        if lugs.is_empty()
-            || lugs.iter().enumerate().any(|(i, a)| {
+        if (inner.is_empty() && outer.is_empty()) || self.positions.len() != original {
+            return Err(Error::Build("empty belt lugs or non-base mesh".into()));
+        }
+        for lugs in [inner, outer] {
+            if lugs.iter().enumerate().any(|(i, a)| {
                 lugs[..i].iter().any(|b| {
                     !(a.width_start.saturating_add(a.width_cells) < b.width_start
                         || b.width_start.saturating_add(b.width_cells) < a.width_start)
                 })
-            })
-        {
-            return Err(Error::Build("empty or overlapping belt lug rows".into()));
+            }) {
+                return Err(Error::Build("overlapping belt lug rows".into()));
+            }
         }
         let mut mesh = self.clone();
-        for &lug in lugs {
-            let extra = lug
-                .count
-                .saturating_mul(lug.segment_span.saturating_add(1))
-                .saturating_mul(lug.width_cells.saturating_add(1))
-                .saturating_mul(lug.depth_cells);
-            if self.positions.len() != original
-                || lug.count < 2
-                || p.segments % lug.count != 0
-                || lug.segment_span == 0
-                || lug.segment_span >= p.segments / lug.count
-                || lug.width_cells == 0
-                || lug.width_start.saturating_add(lug.width_cells) > p.width_cells
-                || lug.depth_cells == 0
-                || mesh.positions.len().saturating_add(extra) > 1_000_000
-                || !lug.depth.is_finite()
-                || lug.depth <= 0.0
-                || lug.depth >= p.radius - p.thickness * 0.5
-            {
-                return Err(Error::Build("invalid rubber drive lug geometry".into()));
-            }
-            for tooth in 0..lug.count {
-                let start = tooth * (p.segments / lug.count);
-                let mut grid = Vec::new();
-                for r in 0..=lug.depth_cells {
-                    for s in 0..=lug.segment_span {
-                        for w in 0..=lug.width_cells {
-                            let segment = (start + s) % p.segments;
-                            let width = lug.width_start + w;
-                            if r == lug.depth_cells {
-                                grid.push(
-                                    ((segment * (p.width_cells + 1) + width)
-                                        * (p.thickness_cells + 1))
-                                        as u32,
-                                );
-                            } else {
-                                let angle =
-                                    std::f64::consts::TAU * segment as Real / p.segments as Real;
-                                let radius = p.radius
-                                    - p.thickness * 0.5
-                                    - lug.depth * (1.0 - r as Real / lug.depth_cells as Real);
-                                grid.push(mesh.positions.len() as u32);
-                                mesh.positions.push(Vec3::new(
-                                    self.positions[width * (p.thickness_cells + 1)].x,
-                                    radius * angle.cos(),
-                                    radius * angle.sin(),
-                                ));
-                                mesh.masses.push(0.0);
+        for (outward, lugs) in [(false, inner), (true, outer)] {
+            for &lug in lugs {
+                let extra = lug
+                    .count
+                    .saturating_mul(lug.segment_span.saturating_add(1))
+                    .saturating_mul(lug.width_cells.saturating_add(1))
+                    .saturating_mul(lug.depth_cells);
+                if self.positions.len() != original
+                    || lug.count < 2
+                    || p.segments % lug.count != 0
+                    || lug.segment_span == 0
+                    || lug.segment_span >= p.segments / lug.count
+                    || lug.width_cells == 0
+                    || lug.width_start.saturating_add(lug.width_cells) > p.width_cells
+                    || lug.depth_cells == 0
+                    || mesh.positions.len().saturating_add(extra) > 1_000_000
+                    || !lug.depth.is_finite()
+                    || lug.depth <= 0.0
+                    || (!outward && lug.depth >= p.radius - p.thickness * 0.5)
+                {
+                    return Err(Error::Build("invalid rubber drive lug geometry".into()));
+                }
+                for tooth in 0..lug.count {
+                    let start = tooth * (p.segments / lug.count);
+                    let mut grid = Vec::new();
+                    for r in 0..=lug.depth_cells {
+                        for s in 0..=lug.segment_span {
+                            for w in 0..=lug.width_cells {
+                                let segment = (start + s) % p.segments;
+                                let width = lug.width_start + w;
+                                let base = (segment * (p.width_cells + 1) + width)
+                                    * (p.thickness_cells + 1)
+                                    + if outward { p.thickness_cells } else { 0 };
+                                if (outward && r == 0) || (!outward && r == lug.depth_cells) {
+                                    grid.push(base as u32);
+                                } else {
+                                    let point = self.positions[base];
+                                    let angle = point.z.atan2(point.y);
+                                    let radius = point.y.hypot(point.z)
+                                        + lug.depth
+                                            * (r as Real / lug.depth_cells as Real
+                                                - if outward { 0.0 } else { 1.0 });
+                                    grid.push(mesh.positions.len() as u32);
+                                    mesh.positions.push(Vec3::new(
+                                        point.x,
+                                        radius * angle.cos(),
+                                        radius * angle.sin(),
+                                    ));
+                                    mesh.masses.push(0.0);
+                                }
                             }
                         }
                     }
-                }
-                let index = |r: usize, s: usize, w: usize| {
-                    grid[(r * (lug.segment_span + 1) + s) * (lug.width_cells + 1) + w]
-                };
-                for r in 0..lug.depth_cells {
-                    for s in 0..lug.segment_span {
-                        for w in 0..lug.width_cells {
-                            let [a, b, c, d, e, f, g, h] = [
-                                index(r, s, w),
-                                index(r, s + 1, w),
-                                index(r, s, w + 1),
-                                index(r, s + 1, w + 1),
-                                index(r + 1, s, w),
-                                index(r + 1, s + 1, w),
-                                index(r + 1, s, w + 1),
-                                index(r + 1, s + 1, w + 1),
-                            ];
-                            for mut tet in [
-                                [a, b, d, h],
-                                [a, d, c, h],
-                                [a, c, g, h],
-                                [a, g, e, h],
-                                [a, e, f, h],
-                                [a, f, b, h],
-                            ] {
-                                let mut determinant = tet_basis(&mesh.positions, tet).determinant();
-                                if determinant < 0.0 {
-                                    tet.swap(1, 2);
-                                    determinant = -determinant;
+                    let index = |r: usize, s: usize, w: usize| {
+                        grid[(r * (lug.segment_span + 1) + s) * (lug.width_cells + 1) + w]
+                    };
+                    for r in 0..lug.depth_cells {
+                        for s in 0..lug.segment_span {
+                            for w in 0..lug.width_cells {
+                                let [a, b, c, d, e, f, g, h] = [
+                                    index(r, s, w),
+                                    index(r, s + 1, w),
+                                    index(r, s, w + 1),
+                                    index(r, s + 1, w + 1),
+                                    index(r + 1, s, w),
+                                    index(r + 1, s + 1, w),
+                                    index(r + 1, s, w + 1),
+                                    index(r + 1, s + 1, w + 1),
+                                ];
+                                for mut tet in [
+                                    [a, b, d, h],
+                                    [a, d, c, h],
+                                    [a, c, g, h],
+                                    [a, g, e, h],
+                                    [a, e, f, h],
+                                    [a, f, b, h],
+                                ] {
+                                    let mut determinant =
+                                        tet_basis(&mesh.positions, tet).determinant();
+                                    if determinant < 0.0 {
+                                        tet.swap(1, 2);
+                                        determinant = -determinant;
+                                    }
+                                    if !determinant.is_finite() || determinant <= 1e-18 {
+                                        return Err(Error::Build(
+                                            "degenerate drive lug tetrahedron".into(),
+                                        ));
+                                    }
+                                    let volume = determinant / 6.0;
+                                    for node in tet {
+                                        mesh.masses[node as usize] += volume * p.density / 4.0;
+                                    }
+                                    mesh.tets.push(tet);
+                                    mesh.volumes.push(volume);
                                 }
-                                if !determinant.is_finite() || determinant <= 1e-18 {
-                                    return Err(Error::Build(
-                                        "degenerate drive lug tetrahedron".into(),
-                                    ));
-                                }
-                                let volume = determinant / 6.0;
-                                for node in tet {
-                                    mesh.masses[node as usize] += volume * p.density / 4.0;
-                                }
-                                mesh.tets.push(tet);
-                                mesh.volumes.push(volume);
                             }
                         }
                     }
