@@ -102,6 +102,22 @@ This is investigation tooling, not evidence that a higher sweep count fixes
 the pivot. The baseline/configuration CPU gates pass; full convergence runs
 remain pending.
 
+### Elastic convergence comparison (2026-09-22)
+
+The controlled 256-sweep positive-pivot run also fails the unchanged 20 mm
+retention gate: side 0 reaches 30.786309 mm, less than 0.004 mm different from
+the 128-sweep result. Mean circulation is 183.041457 mm and lifetime minJ is
+0.55169. Material, timestep, motor settings and contact sweeps were unchanged.
+The later floor/momentum/yaw assertions again did not execute. Runtime was
+1829.96 seconds for 0.7 simulated seconds. Doubling elastic iterations does
+not resolve this failure; its physical/numerical cause is not yet established.
+
+The authored CEOL is not the test rig: Gearbox's asset-binding regression finds
+22 rigid bodies, 21 tree joints and 2 closed-loop hitch constraints, plus two
+powered sprockets and ten passive wheels. The test fixture has 13 bodies.
+Native integration must preserve the authored constraints rather than substitute
+the test articulation or silently discard the closed loops.
+
 ### Renderer-paced submissions (2026-09-22)
 
 `try_step_substep` submits at most one configured substep and refuses new work
