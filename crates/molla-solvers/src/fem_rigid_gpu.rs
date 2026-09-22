@@ -48,6 +48,27 @@ fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
     Ok(())
 }
 
+/// Raise a device request to the FEM kernel minimums without lowering other limits.
+/// Unsupported adapters return an error without changing the request.
+pub fn request_fem_device_limits(
+    requested: &mut wgpu::Limits,
+    supported: &wgpu::Limits,
+) -> Result<()> {
+    validate_device_limits(supported)?;
+    requested.max_bind_groups = requested.max_bind_groups.max(6);
+    requested.max_bindings_per_bind_group = requested.max_bindings_per_bind_group.max(17);
+    requested.max_storage_buffers_per_shader_stage =
+        requested.max_storage_buffers_per_shader_stage.max(42);
+    requested.max_uniform_buffers_per_shader_stage =
+        requested.max_uniform_buffers_per_shader_stage.max(1);
+    requested.max_compute_invocations_per_workgroup =
+        requested.max_compute_invocations_per_workgroup.max(64);
+    requested.max_compute_workgroup_size_x = requested.max_compute_workgroup_size_x.max(64);
+    requested.max_compute_workgroup_storage_size =
+        requested.max_compute_workgroup_storage_size.max(2048);
+    Ok(())
+}
+
 pub struct FemRigidGpuScene {
     pub soft_model: Model,
     pub soft_state: State,
@@ -59,7 +80,7 @@ pub struct FemRigidGpuScene {
 
 #[cfg(test)]
 mod device_limits_tests {
-    use super::validate_device_limits;
+    use super::{request_fem_device_limits, validate_device_limits};
 
     #[test]
     fn external_device_requires_all_kernel_limits() {
@@ -75,6 +96,23 @@ mod device_limits_tests {
             ..Default::default()
         };
         assert!(validate_device_limits(&limits).is_ok());
+        let mut requested = wgpu::Limits::default();
+        let original = requested.clone();
+        request_fem_device_limits(&mut requested, &limits).unwrap();
+        assert!(validate_device_limits(&requested).is_ok());
+        assert_eq!(requested.max_bind_groups, 6);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 42);
+        let mut expected = original.clone();
+        expected.max_bind_groups = 6;
+        expected.max_storage_buffers_per_shader_stage = 42;
+        assert_eq!(requested, expected);
+        let mut larger = requested.clone();
+        larger.max_bind_groups = 8;
+        larger.max_storage_buffers_per_shader_stage = 64;
+        larger.max_texture_array_layers = 2048;
+        let preserved = larger.clone();
+        request_fem_device_limits(&mut larger, &preserved).unwrap();
+        assert_eq!(larger, preserved);
         let reductions: [fn(&mut wgpu::Limits); 7] = [
             |v| v.max_bind_groups -= 1,
             |v| v.max_bindings_per_bind_group -= 1,
@@ -88,6 +126,9 @@ mod device_limits_tests {
             let mut insufficient = limits.clone();
             reduce(&mut insufficient);
             assert!(validate_device_limits(&insufficient).is_err());
+            let mut unchanged = original.clone();
+            assert!(request_fem_device_limits(&mut unchanged, &insufficient).is_err());
+            assert_eq!(unchanged, original);
         }
     }
 }

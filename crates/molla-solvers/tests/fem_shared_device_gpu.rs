@@ -2,7 +2,9 @@
 
 use molla_compute::Engine;
 use molla_math::Vec3;
-use molla_solvers::fem_rigid_gpu::{FemRigidGpuScene, FemRigidGpuSystem};
+use molla_solvers::fem_rigid_gpu::{
+    FemRigidGpuScene, FemRigidGpuSystem, request_fem_device_limits,
+};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -180,6 +182,51 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
             std::task::Poll::Pending => std::thread::park(),
         }
     }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn negotiated_renderer_limits_support_fem_and_direct_rendering() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
+    let mut descriptor = wgpu::DeviceDescriptor::default();
+    request_fem_device_limits(&mut descriptor.required_limits, &adapter.limits()).unwrap();
+    let (device, queue) = block_on(adapter.request_device(&descriptor)).unwrap();
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+    let mut system = FemRigidGpuSystem::new_on_device(
+        device.clone(),
+        queue.clone(),
+        moving_scene(),
+        fem_rotor::config(),
+    )
+    .unwrap();
+    let before = render(
+        &device,
+        &queue,
+        system.soft_state().particle_q.device_buffer().unwrap(),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut submitted = 0;
+    while submitted < 65 {
+        assert!(std::time::Instant::now() < deadline);
+        if system.try_step_substep(1.0 / 4096.0).unwrap() {
+            submitted += 1;
+        }
+        std::thread::yield_now();
+    }
+    let after = render(
+        &device,
+        &queue,
+        system.soft_state().particle_q.device_buffer().unwrap(),
+    );
+    assert!(system.poll_completion().unwrap());
+    assert!(system.soft_state().particle_q.host().is_err());
+    assert_eq!(read(&device, &queue, system.status_buffer()), [0; 4]);
+    let (before_x, before_count) = centroid(&before);
+    let (after_x, after_count) = centroid(&after);
+    assert!(after_x > before_x + 2.0);
+    assert_eq!(before_count, after_count);
 }
 
 #[test]

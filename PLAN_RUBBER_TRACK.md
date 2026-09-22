@@ -95,6 +95,13 @@ latency or realtime performance. Native Gearbox scheduling remains pending.
 
 ### Externally managed device and queue (2026-09-22)
 
+`request_fem_device_limits` raises the caller's requested limits to the kernel
+minimums before shared-device creation, preserving larger renderer limits.
+Unsupported adapters leave the request unchanged and return an error. Boundary
+tests cover every minimum and preservation of unrelated limits; a real GPU test
+constructs a device using the negotiated limits, advances65 asynchronous
+substeps, and renders the resident moving FEM positions directly.
+
 FEM now accepts caller-owned matching device/queue handles, with additive
 VBD, Featherstone, mass-matrix and Jacobian entry points. Existing Engine
 constructors delegate; no Engine/device-health ownership changes are needed.
