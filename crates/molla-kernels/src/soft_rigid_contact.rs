@@ -19,7 +19,7 @@ pub struct SoftRigidShapeGpu {
 pub struct SoftRigidContactGpu {
     pub normal_gap: [f32; 4],
     pub material: [f32; 4],
-    /// Particle/body A, body B, shape, status (0 inactive, 1 contact, 2 invalid, 3 ball joint).
+    /// Particle/body A, body B, shape, status (0 inactive, 1 contact, 2 invalid, 3 ball, 4 overflow).
     pub ids: [u32; 4],
     /// Additional particles, support count (1..=3, or zero for ball rows), reserved.
     pub support: [u32; 4],
@@ -78,7 +78,8 @@ struct Params {
     bodies: u32,
     margin: f32,
     sampled: u32,
-    padding: [u32; 2],
+    capacity: u32,
+    tiles: u32,
 }
 
 pub struct SoftRigidContactBindings<'a> {
@@ -100,16 +101,23 @@ pub struct SoftRigidContactKernel {
     shape_count: u32,
     sampled: bool,
     extra_rows: u32,
+    capacity: u32,
+    compact: Option<CompactGather>,
+}
+
+struct CompactGather {
+    ranges: wgpu::Buffer,
+    pipelines: [wgpu::ComputePipeline; 3],
 }
 
 impl SoftRigidContactKernel {
     pub fn new(device: &wgpu::Device, node_count: u32, shape_count: u32) -> Result<Self> {
-        Self::build(device, node_count, shape_count, false, 0)
+        Self::build(device, node_count, shape_count, false, 0, None)
     }
 
     /// Gather primitive contacts at barycentric surface samples.
     pub fn new_sampled(device: &wgpu::Device, sample_count: u32, shape_count: u32) -> Result<Self> {
-        Self::build(device, sample_count, shape_count, true, 0)
+        Self::build(device, sample_count, shape_count, true, 0, None)
     }
 
     /// Gather sampled contacts before a persistent tail of bilateral loop rows.
@@ -127,7 +135,7 @@ impl SoftRigidContactKernel {
             .collect::<Result<Vec<_>>>()?;
         let extra = u32::try_from(rows.len())
             .map_err(|_| Error::Build("too many FEM loop joints".into()))?;
-        let kernel = Self::build(device, samples, shapes, true, extra)?;
+        let kernel = Self::build(device, samples, shapes, true, extra, None)?;
         if !rows.is_empty() {
             queue.write_buffer(
                 &kernel.output,
@@ -140,24 +148,59 @@ impl SoftRigidContactKernel {
         Ok(kernel)
     }
 
+    /// Stable device compaction into capacity rows, followed by persistent ball joints.
+    pub fn new_compact_sampled_with_ball_joints(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        samples: u32,
+        shapes: u32,
+        bodies: u32,
+        capacity: u32,
+        joints: &[SoftRigidBallJoint],
+    ) -> Result<Self> {
+        let rows = joints
+            .iter()
+            .map(|j| j.row(bodies))
+            .collect::<Result<Vec<_>>>()?;
+        let extra = u32::try_from(rows.len())
+            .map_err(|_| Error::Build("too many FEM loop joints".into()))?;
+        let kernel = Self::build(device, samples, shapes, true, extra, Some(capacity))?;
+        if !rows.is_empty() {
+            queue.write_buffer(
+                &kernel.output,
+                u64::from(capacity) * std::mem::size_of::<SoftRigidContactGpu>() as u64,
+                bytemuck::cast_slice(&rows),
+            );
+        }
+        Ok(kernel)
+    }
+
     fn build(
         device: &wgpu::Device,
         node_count: u32,
         shape_count: u32,
         sampled: bool,
         extra_rows: u32,
+        compact_capacity: Option<u32>,
     ) -> Result<Self> {
-        let count = node_count
+        let candidates = node_count
             .checked_mul(shape_count)
-            .and_then(|count| count.checked_add(extra_rows))
             .ok_or_else(|| Error::Build("FEM contact pair count overflow".into()))?;
+        let capacity = compact_capacity.unwrap_or(candidates);
+        if candidates > 0 && capacity == 0 {
+            return Err(Error::Build("zero FEM contact capacity".into()));
+        }
+        let count = capacity
+            .checked_add(extra_rows)
+            .ok_or_else(|| Error::Build("FEM contact row count overflow".into()))?;
         let bytes = count.max(1) as u64 * std::mem::size_of::<SoftRigidContactGpu>() as u64;
         if bytes > device.limits().max_storage_buffer_binding_size as u64
             || count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
+            || candidates.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
         {
             return Err(Error::Build("FEM contact pairs exceed GPU limits".into()));
         }
-        let entries: Vec<_> = (0..7)
+        let entries: Vec<_> = (0..if compact_capacity.is_some() { 8 } else { 7 })
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
@@ -166,7 +209,7 @@ impl SoftRigidContactKernel {
                         wgpu::BufferBindingType::Uniform
                     } else {
                         wgpu::BufferBindingType::Storage {
-                            read_only: binding != 5,
+                            read_only: !matches!(binding, 5 | 7),
                         }
                     },
                     has_dynamic_offset: false,
@@ -198,6 +241,24 @@ impl SoftRigidContactKernel {
             compilation_options: Default::default(),
             cache: None,
         });
+        let compact = compact_capacity.map(|_| CompactGather {
+            ranges: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("FEM compact contact ranges"),
+                size: (u64::from(candidates.div_ceil(64)) + 1) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            pipelines: ["count_contacts", "offset_contacts", "scatter_contacts"].map(|entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            }),
+        });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FEM contact rows"),
             size: bytes,
@@ -214,6 +275,8 @@ impl SoftRigidContactKernel {
             shape_count,
             sampled,
             extra_rows,
+            capacity,
+            compact,
         })
     }
 
@@ -221,7 +284,7 @@ impl SoftRigidContactKernel {
         &self.output
     }
     pub fn row_count(&self) -> u32 {
-        self.node_count * self.shape_count + self.extra_rows
+        self.capacity + self.extra_rows
     }
 
     /// Encode parallel gather from current device positions and rigid transforms without readback.
@@ -258,14 +321,15 @@ impl SoftRigidContactKernel {
             bodies: bindings.body_count,
             margin,
             sampled: u32::from(self.sampled),
-            padding: [0; 2],
+            capacity: self.capacity,
+            tiles: (self.node_count * self.shape_count).div_ceil(64),
         };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM contact parameters"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let buffers = [
+        let mut buffers = vec![
             bindings.positions,
             bindings.radii,
             bindings.surface,
@@ -274,6 +338,9 @@ impl SoftRigidContactKernel {
             &self.output,
             &uniform,
         ];
+        if let Some(compact) = &self.compact {
+            buffers.push(&compact.ranges);
+        }
         let entries: Vec<_> = buffers
             .iter()
             .enumerate()
@@ -287,6 +354,27 @@ impl SoftRigidContactKernel {
             layout: &self.layout,
             entries: &entries,
         });
+        if let Some(compact) = &self.compact {
+            encoder.clear_buffer(
+                &self.output,
+                0,
+                Some(u64::from(self.capacity) * std::mem::size_of::<SoftRigidContactGpu>() as u64),
+            );
+            for (pipeline, groups) in compact
+                .pipelines
+                .iter()
+                .zip([params.tiles, 1, params.tiles])
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("FEM compact contact gather"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(groups, 1, 1);
+            }
+            return Ok(());
+        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FEM contact gather"),
             timestamp_writes: None,

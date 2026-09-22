@@ -151,7 +151,7 @@ impl SoftRigidSolveKernel {
         })
     }
 
-    /// Sticky bits: 1 invalid mass, 2 invalid contact/loop/response, 4 nonfinite solve.
+    /// Sticky bits: 1 invalid mass, 2 invalid input/response, 4 nonfinite solve, 16 contact overflow.
     pub fn status(&self) -> &wgpu::Buffer {
         &self.status
     }

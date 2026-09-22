@@ -8,7 +8,7 @@ struct Contact {
 }
 struct Params {
     node_count: u32, shape_count: u32, particle_count: u32, body_count: u32,
-    margin: f32, sampled: u32, pad1: u32, pad2: u32,
+    margin: f32, sampled: u32, capacity: u32, tiles: u32,
 }
 @group(0) @binding(0) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> radii: array<f32>;
@@ -17,6 +17,8 @@ struct Params {
 @group(0) @binding(4) var<storage, read> poses: array<Transform>;
 @group(0) @binding(5) var<storage, read_write> contacts: array<Contact>;
 @group(0) @binding(6) var<uniform> params: Params;
+@group(0) @binding(7) var<storage, read_write> ranges: array<u32>;
+var<workgroup> prefix: array<u32, 64>;
 
 fn rotate(q: vec4<f32>, p: vec3<f32>) -> vec3<f32> {
     return p + 2.0 * cross(q.xyz, cross(q.xyz, p) + q.w * p);
@@ -59,10 +61,7 @@ fn distance(kind: u32, data: vec3<f32>, p: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(n, outside + min(max(dr, dy), 0.0));
 }
 
-@compute @workgroup_size(64)
-fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let row = gid.x;
-    if row >= params.node_count * params.shape_count { return; }
+fn contact_at(row: u32) -> Contact {
     let shape_id = row / params.node_count;
     let index = row % params.node_count;
     var nodes = vec4<u32>(surface[index], 0u, 0u, 1u);
@@ -84,8 +83,7 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
         || (shape.ids.y != 0xffffffffu && shape.ids.y >= params.body_count)
         || nodes.w == 0u || nodes.w > 3u {
         result.ids.w = 2u;
-        contacts[row] = result;
-        return;
+        return result;
     }
     var point = vec3<f32>(0.0);
     var radius = 0.0;
@@ -94,7 +92,7 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
         var valid = nodes[i] < params.particle_count && weights[i] >= 0.0 && weights[i] <= 1.0;
         for (var j = 0u; j < i; j += 1u) { valid = valid && nodes[i] != nodes[j]; }
         if !valid {
-            result.ids.w = 2u; contacts[row] = result; return;
+            result.ids.w = 2u; return result;
         }
         point += weights[i] * positions[nodes[i]].xyz;
         radius += weights[i] * radii[nodes[i]];
@@ -102,7 +100,7 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if abs(weight_sum - 1.0) > 1e-5 || !(dot(point, point) <= 3.402823e38)
         || !(radius >= 0.0 && radius <= 3.402823e38) {
-        result.ids.w = 2u; contacts[row] = result; return;
+        result.ids.w = 2u; return result;
     }
     var center = shape.position.xyz;
     var rotation = shape.rotation;
@@ -115,5 +113,58 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sample = distance(shape.ids.x, shape.data.xyz, local);
     result.normal_gap = vec4<f32>(rotate(rotation, sample.xyz), sample.w - radius);
     result.ids.w = select(0u, 1u, result.normal_gap.w <= params.margin);
-    contacts[row] = result;
+    return result;
+}
+
+@compute @workgroup_size(64)
+fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < params.node_count * params.shape_count { contacts[gid.x] = contact_at(gid.x); }
+}
+
+fn scan(enabled: u32, lane: u32) {
+    prefix[lane] = enabled;
+    workgroupBarrier();
+    for (var offset = 1u; offset < 64u; offset *= 2u) {
+        var previous = 0u;
+        if lane >= offset { previous = prefix[lane - offset]; }
+        workgroupBarrier();
+        prefix[lane] += previous;
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(64)
+fn count_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    var enabled = 0u;
+    if gid.x < params.node_count * params.shape_count {
+        enabled = select(0u, 1u, contact_at(gid.x).ids.w != 0u);
+    }
+    scan(enabled, lane);
+    if lane == 63u { ranges[group.x] = prefix[63]; }
+}
+
+@compute @workgroup_size(1)
+fn offset_contacts() {
+    var total = 0u;
+    for (var tile = 0u; tile < params.tiles; tile += 1u) {
+        let count = ranges[tile];
+        ranges[tile] = total;
+        total += count;
+    }
+    ranges[params.tiles] = total;
+    if total > params.capacity { contacts[0].ids.w = 4u; }
+}
+
+@compute @workgroup_size(64)
+fn scatter_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    var result: Contact;
+    var enabled = 0u;
+    if gid.x < params.node_count * params.shape_count && ranges[params.tiles] <= params.capacity {
+        result = contact_at(gid.x);
+        enabled = select(0u, 1u, result.ids.w != 0u);
+    }
+    scan(enabled, lane);
+    if enabled != 0u { contacts[ranges[group.x] + prefix[lane] - 1u] = result; }
 }

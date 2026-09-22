@@ -174,6 +174,8 @@ impl FemRigidGpuSystem {
     }
 
     /// Use vertices, edge midpoints and triangle centroids for primitive contacts.
+    /// GPU compaction reserves up to four contact rows per feature in a shared pool.
+    /// Exhausting that pool latches status bit 16; no contacts are silently dropped.
     pub fn new_surface_sampled(
         engine: Arc<Engine>,
         scene: FemRigidGpuScene,
@@ -194,7 +196,7 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, false, &[])
+        Self::build(device, queue, scene, config, false, &[], None)
     }
 
     /// Construct sampled surface contacts on an externally managed device/queue.
@@ -204,7 +206,7 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, true, &[])
+        Self::build(device, queue, scene, config, true, &[], None)
     }
 
     /// Sampled surface contacts and bilateral body-local spherical closures.
@@ -215,7 +217,28 @@ impl FemRigidGpuSystem {
         config: FemRigidConfig,
         joints: &[SoftRigidBallJoint],
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, true, joints)
+        Self::build(device, queue, scene, config, true, joints, None)
+    }
+
+    /// Sampled contacts with an explicit shared contact capacity, excluding loop rows.
+    /// Overflow latches device status bit 16 and prevents contact impulses.
+    pub fn new_surface_sampled_with_contact_capacity_on_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+        joints: &[SoftRigidBallJoint],
+        contact_capacity: u32,
+    ) -> Result<Self> {
+        Self::build(
+            device,
+            queue,
+            scene,
+            config,
+            true,
+            joints,
+            Some(contact_capacity),
+        )
     }
 
     fn build(
@@ -225,6 +248,7 @@ impl FemRigidGpuSystem {
         config: FemRigidConfig,
         sample_surface: bool,
         joints: &[SoftRigidBallJoint],
+        contact_capacity: Option<u32>,
     ) -> Result<Self> {
         validate_device_limits(&device.limits())?;
         let device = &device;
@@ -409,12 +433,23 @@ impl FemRigidGpuSystem {
             })
             .collect();
         let gather = if sample_surface {
-            SoftRigidContactKernel::new_sampled_with_ball_joints(
+            let sample_count = u32::try_from(samples.len())
+                .map_err(|_| Error::Build("too many FEM surface features".into()))?;
+            let shape_count = u32::try_from(shape_count)
+                .map_err(|_| Error::Build("too many FEM contact shapes".into()))?;
+            let capacity = match contact_capacity {
+                Some(capacity) => capacity,
+                None => sample_count
+                    .checked_mul(shape_count.min(4))
+                    .ok_or_else(|| Error::Build("FEM contact capacity overflow".into()))?,
+            };
+            SoftRigidContactKernel::new_compact_sampled_with_ball_joints(
                 device,
                 queue,
-                samples.len() as u32,
-                shape_count as u32,
+                sample_count,
+                shape_count,
                 scene.rigid_model.body_count as u32,
+                capacity,
                 joints,
             )?
         } else {
@@ -485,6 +520,11 @@ impl FemRigidGpuSystem {
         &self.rigid_state
     }
     /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 invalid or nonpositive tetrahedron volume.
+    /// Allocated contact capacity plus persistent bilateral loop rows.
+    pub fn contact_row_count(&self) -> u32 {
+        self.gather.row_count()
+    }
+
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         self.solve.status()
     }

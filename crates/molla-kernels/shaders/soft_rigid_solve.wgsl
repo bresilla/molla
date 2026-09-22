@@ -143,6 +143,7 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     rows[r] = Row(0.0, 0.0, 0.0, 0.0, vec4<f32>(0.0));
     let contact = contacts[r];
     if contact.ids.w == 0u || atomicLoad(&status) != 0u { return; }
+    if contact.ids.w == 4u {atomicOr(&status,16u); return;}
     let body = contact.ids.y;
     let ball = contact.ids.w == 3u;
     if ball {
