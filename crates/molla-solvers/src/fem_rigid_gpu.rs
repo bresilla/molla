@@ -4,9 +4,9 @@ use crate::{FeatherstoneSolver, Solver, VbdSolver, fem_rigid::FemRigidConfig};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::momentum::{GeneralizedMomentumBindings, MomentumBindings, MomentumMonitor};
-pub use molla_kernels::soft_rigid_contact::SoftRigidBallJoint;
+pub use molla_kernels::soft_rigid_contact::{SoftRigidBallJoint, SoftRigidShapeGpu};
 use molla_kernels::soft_rigid_contact::{
-    SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidSampleGpu, SoftRigidShapeGpu,
+    SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidSampleGpu,
 };
 use molla_kernels::soft_rigid_solve::{
     SoftParticleDriftKernel, SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
