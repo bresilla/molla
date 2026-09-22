@@ -100,8 +100,15 @@ from `Model::state` before FK. The FEM constructor now evaluates rigid FK and
 body velocities from generalized state before its initial upload. Otherwise
 the first closure used inconsistent poses and articulated mass response.
 
-These are solver and mechanism gates, not actual CEOL delivery. The authored
-two hitch closures still need machine binding and validation; actual track
+Gearbox505115b binds both authored CEOL hitch closures into this GPU path.
+Its isolated mechanism test loads the actual22-body/29-DOF USD articulation,
+applies100 Nm at the hitch lift, and accepts128 substeps at1/4096 s without
+CPU body-pose updates. Open-closure gaps are8.347 mm; closed gaps are0.075 and
+0.127 micrometres. All9 native GPU tests, actual asset binding,6 CPU tests and
+the all-target check pass. This uses a small separate tetrahedron for the FEM
+island, not the actual rubber tracks or full-machine runtime ownership.
+
+These are solver and mechanism gates, not actual CEOL delivery. Actual track
 geometry, exclusive backend ownership, pose/TF updates, menu selection, pivot
 retention and the remaining full-vehicle gates are still pending.
 
