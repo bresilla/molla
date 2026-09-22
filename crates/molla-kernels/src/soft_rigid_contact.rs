@@ -194,9 +194,15 @@ impl SoftRigidContactKernel {
             .checked_add(extra_rows)
             .ok_or_else(|| Error::Build("FEM contact row count overflow".into()))?;
         let bytes = count.max(1) as u64 * std::mem::size_of::<SoftRigidContactGpu>() as u64;
+        let tiles = candidates.div_ceil(64);
+        let max_groups = device.limits().max_compute_workgroups_per_dimension;
+        let range_bytes = (u64::from(tiles) + 1) * 4;
         if bytes > device.limits().max_storage_buffer_binding_size as u64
-            || count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
-            || candidates.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
+            || count.div_ceil(64) > max_groups
+            || (compact_capacity.is_none() && tiles > max_groups)
+            || u64::from(tiles) > u64::from(max_groups).pow(2)
+            || (compact_capacity.is_some()
+                && range_bytes > device.limits().max_storage_buffer_binding_size as u64)
         {
             return Err(Error::Build("FEM contact pairs exceed GPU limits".into()));
         }
@@ -244,7 +250,7 @@ impl SoftRigidContactKernel {
         let compact = compact_capacity.map(|_| CompactGather {
             ranges: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("FEM compact contact ranges"),
-                size: (u64::from(candidates.div_ceil(64)) + 1) * 4,
+                size: range_bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
@@ -371,7 +377,8 @@ impl SoftRigidContactKernel {
                 });
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &group, &[]);
-                pass.dispatch_workgroups(groups, 1, 1);
+                let x = groups.min(device.limits().max_compute_workgroups_per_dimension);
+                pass.dispatch_workgroups(x, groups.div_ceil(x), 1);
             }
             return Ok(());
         }
