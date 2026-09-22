@@ -94,6 +94,14 @@ These chord-based diagnostics locate the problem; they do not replace the
 analytic acceptance gate. Tensioning and numerical convergence remain open;
 no retention threshold or material parameter has been changed to hide it.
 
+The full vehicle runner accepts `MOLLA_FEM_ELASTIC_ITERATIONS=128..2048` for
+stronger-solve convergence comparisons; the default remains128, with unchanged
+timestep, contact sweeps and acceptance gates. Captures now include solver
+settings, track grid layout and exact reinforcement rest lengths/compliances.
+This is investigation tooling, not evidence that a higher sweep count fixes
+the pivot. The baseline/configuration CPU gates pass; full convergence runs
+remain pending.
+
 ### Renderer-paced submissions (2026-09-22)
 
 `try_step_substep` submits at most one configured substep and refuses new work

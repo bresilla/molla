@@ -297,7 +297,54 @@ fn save_state(
     std::fs::write(dir.join(format!("{name}-rigid.csv")), csv).unwrap();
 }
 
+fn vehicle_config(sampled: bool, iterations: Option<&str>) -> Result<FemRigidConfig, String> {
+    let elastic_iterations = iterations
+        .map(str::parse::<usize>)
+        .transpose()
+        .map_err(|error| format!("invalid elastic iteration count: {error}"))?
+        .unwrap_or(128);
+    if !(128..=2048).contains(&elastic_iterations) {
+        return Err("convergence iterations must be between 128 and 2048".into());
+    }
+    Ok(FemRigidConfig {
+        max_substep: 1.0 / 19200.0,
+        elastic_iterations,
+        contact: molla_solvers::soft_rigid_contact::SoftRigidContactConfig {
+            iterations: if sampled { 64 } else { 12 },
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
+#[test]
+fn convergence_settings_keep_the_baseline_and_only_raise_solver_work() {
+    for sampled in [false, true] {
+        let baseline = vehicle_config(sampled, None).unwrap();
+        assert_eq!(baseline.elastic_iterations, 128);
+        assert_eq!(baseline.max_substep, 1.0 / 19200.0);
+        assert_eq!(baseline.contact.iterations, if sampled { 64 } else { 12 });
+        for count in [128, 256, 512, 2048] {
+            let config = vehicle_config(sampled, Some(&count.to_string())).unwrap();
+            assert_eq!(config.elastic_iterations, count);
+            assert_eq!(config.max_substep, baseline.max_substep);
+            assert_eq!(config.contact.iterations, baseline.contact.iterations);
+        }
+        for invalid in ["", "-1", "0", "64", "2049", "abc"] {
+            assert!(vehicle_config(sampled, Some(invalid)).is_err());
+        }
+    }
+}
+
 fn vehicle_run(name: &str, directions: [Real; 2], friction: Option<Real>, sampled: bool) -> Vec3 {
+    let iterations = std::env::var_os("MOLLA_FEM_ELASTIC_ITERATIONS");
+    let config = vehicle_config(
+        sampled,
+        iterations
+            .as_ref()
+            .map(|s| s.to_str().expect("UTF-8 iteration count")),
+    )
+    .unwrap();
     let pivot = directions[0] * directions[1] < 0.0;
     let (scene, tracks, drives) = vehicle_scene(friction, pivot);
     let masses = scene.soft_model.particle_mass.host().unwrap().to_vec();
@@ -318,6 +365,36 @@ fn vehicle_run(name: &str, directions: [Real; 2], friction: Option<Real>, sample
         .map(|dir| std::path::PathBuf::from(dir).join(name));
     if let Some(dir) = &evidence {
         std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("solver.txt"), format!(
+            "max_substep={}\nelastic_iterations={}\ncontact_iterations={}\nsampled={}\nfriction={friction:?}\ndirections={directions:?}\n",
+            config.max_substep, config.elastic_iterations, config.contact.iterations, sampled,
+        )).unwrap();
+        let layout = tracks
+            .iter()
+            .map(|track| {
+                format!(
+                    "{},{},{},{}\n",
+                    track.nodes[7],
+                    track.params.segments,
+                    track.params.width_cells,
+                    track.params.thickness_cells,
+                )
+            })
+            .collect::<String>();
+        std::fs::write(dir.join("track-layout.csv"), layout).unwrap();
+        let model = &scene.soft_model;
+        let mut cords = String::from("a,b,rest,compliance,tension_only\n");
+        for i in 0..model.spring_count {
+            cords.push_str(&format!(
+                "{},{},{},{},{}\n",
+                model.spring_a.host().unwrap()[i],
+                model.spring_b.host().unwrap()[i],
+                model.spring_rest_length.host().unwrap()[i],
+                model.spring_compliance.host().unwrap()[i],
+                model.spring_tension_only.host().unwrap()[i],
+            ));
+        }
+        std::fs::write(dir.join("cords.csv"), cords).unwrap();
         std::fs::write(
             dir.join("marker-nodes.txt"),
             format!("{}\n{}\n", tracks[0].nodes[7], tracks[1].nodes[7]),
@@ -358,16 +435,9 @@ fn vehicle_run(name: &str, directions: [Real; 2], friction: Option<Real>, sample
         save_state(dir, "installed", &initial, &faces, &initial_poses);
     }
     let engine = Arc::new(Engine::new_gpu().unwrap());
-    let config = FemRigidConfig {
-        max_substep: 1.0 / 19200.0,
-        contact: molla_solvers::soft_rigid_contact::SoftRigidContactConfig {
-            iterations: if sampled { 64 } else { 12 },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
     eprintln!(
-        "vehicle={name}, directions={directions:?}, friction={friction:?}, sampled={sampled}, GPU storage limit={}",
+        "vehicle={name}, directions={directions:?}, friction={friction:?}, sampled={sampled}, elastic iterations={}, GPU storage limit={}",
+        config.elastic_iterations,
         engine
             .device()
             .unwrap()
