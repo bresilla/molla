@@ -78,6 +78,21 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Immutable VBD binding reuse (2026-09-22)
+
+VBD keeps separate 64-entry LRU caches for storage groups and immutable
+uniform groups across substeps. Storage keys include layout, binding index,
+buffer identity, offset and size; uniform keys include layout and exact bytes.
+Eviction does not mutate resources referenced by already encoded GPU work.
+Cache hits avoid new GPU groups, uniform buffers and uniform uploads.
+
+Focused GPU tests verify identity, layout/range separation, bounded eviction,
+and encoded commands surviving cache destruction. Alternating two tetrahedral
+models and ping-pong states with changing timestep, damping, gravity and hard
+mode produces identical positions, velocities and plasticity state to freshly
+created kernels. This establishes reuse correctness, not a throughput or VRAM
+improvement. Long vehicle performance and native integration remain open.
+
 ### Two-track vehicle fixture
 
 The single-track engineering fixture now shares its physical assembly with a
@@ -99,6 +114,8 @@ Molla pin. Engine has no externally supplied render-device constructor yet.
 Native GPU deformation needs explicit device sharing and exclusive physics
 ownership, rather than per-node CPU readback. Current main Engine device-loss
 edits are unrelated work and must be preserved when adding that interface.
+Molla currently depends on wgpu 27 while Gearbox/Bevy 0.19 uses wgpu 29;
+their typed device/buffer handles cannot be shared without aligning versions.
 
 GPU submission is now fenced every 32 substeps, including across separate
 step calls. These are completion waits, not state downloads or CPU physics.

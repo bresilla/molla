@@ -11,6 +11,9 @@ use molla_math::{GpuMat3, Mat3, Real, Transform, Vec3};
 use molla_sim::{Model, State};
 use molla_storage::{Buffer, BufferUsage};
 
+mod bindings;
+use bindings::BindingCache;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -34,6 +37,7 @@ const WORKGROUP_SIZE: u32 = 64;
 /// Sized for a specific `(particle_count, spring_count)` — rebuild
 /// the kernel if either changes.
 pub struct VbdClothKernel {
+    bindings: BindingCache,
     pipe_predict: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
     pipe_shape_contacts: wgpu::ComputePipeline,
@@ -257,6 +261,7 @@ impl VbdClothKernel {
         let _ = dummy_real_rw.upload(queue);
 
         Self {
+            bindings: BindingCache::new(64),
             pipe_predict,
             pipe_solve_color,
             pipe_shape_contacts,
@@ -344,19 +349,22 @@ impl VbdClothKernel {
         let color_count = model.particle_color_count as u32;
 
         // ── Bind groups ───────────────────────────────────────────
-        let bg_state = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::vbd_cloth state bg"),
-            layout: &self.layout_state,
-            entries: &[
-                buffer_entry(0, state_in.particle_q.device_buffer())?,
-                buffer_entry(1, state_in.particle_qd.device_buffer())?,
-                buffer_entry(2, model.particle_inv_mass.device_buffer())?,
-                buffer_entry(3, model.particle_radius.device_buffer())?,
-                buffer_entry(4, model.particle_world.device_buffer())?,
-                buffer_entry(5, model.gravity.device_buffer())?,
-                buffer_entry(6, model.initial_particle_q.device_buffer())?,
-            ],
-        });
+        let bg_state = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth state bg"),
+                layout: &self.layout_state,
+                entries: &[
+                    buffer_entry(0, state_in.particle_q.device_buffer())?,
+                    buffer_entry(1, state_in.particle_qd.device_buffer())?,
+                    buffer_entry(2, model.particle_inv_mass.device_buffer())?,
+                    buffer_entry(3, model.particle_radius.device_buffer())?,
+                    buffer_entry(4, model.particle_world.device_buffer())?,
+                    buffer_entry(5, model.gravity.device_buffer())?,
+                    buffer_entry(6, model.initial_particle_q.device_buffer())?,
+                ],
+            },
+        );
 
         let dummy_u32_buf = self
             .dummy_u32
@@ -393,64 +401,70 @@ impl VbdClothKernel {
             .device_buffer()
             .unwrap_or(dummy_u32_buf);
 
-        let bg_topo = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::vbd_cloth topo bg"),
-            layout: &self.layout_topo,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: sa_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: sb_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: rest_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: stiff_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: vadj_off_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: vadj_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: pcol_off_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: pcol_idx_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: model
-                        .spring_tension_only
-                        .device_buffer()
-                        .unwrap_or(dummy_u32_buf)
-                        .as_entire_binding(),
-                },
-            ],
-        });
+        let bg_topo = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth topo bg"),
+                layout: &self.layout_topo,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: sa_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: sb_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rest_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: stiff_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: vadj_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: vadj_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: pcol_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: pcol_idx_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: model
+                            .spring_tension_only
+                            .device_buffer()
+                            .unwrap_or(dummy_u32_buf)
+                            .as_entire_binding(),
+                    },
+                ],
+            },
+        );
 
-        let bg_out = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::vbd_cloth out bg"),
-            layout: &self.layout_out,
-            entries: &[
-                buffer_entry(0, state_out.particle_q.device_buffer())?,
-                buffer_entry(1, state_out.particle_qd.device_buffer())?,
-                buffer_entry(2, self.particle_delta.device_buffer())?,
-                buffer_entry(3, self.inertia_y.device_buffer())?,
-                buffer_entry(4, self.contact_lambda.device_buffer())?,
-            ],
-        });
+        let bg_out = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth out bg"),
+                layout: &self.layout_out,
+                entries: &[
+                    buffer_entry(0, state_out.particle_q.device_buffer())?,
+                    buffer_entry(1, state_out.particle_qd.device_buffer())?,
+                    buffer_entry(2, self.particle_delta.device_buffer())?,
+                    buffer_entry(3, self.inertia_y.device_buffer())?,
+                    buffer_entry(4, self.contact_lambda.device_buffer())?,
+                ],
+            },
+        );
 
         // Shapes bind group.
         let dummy_vec3_buf = self
@@ -479,32 +493,35 @@ impl VbdClothKernel {
             .device_buffer()
             .unwrap_or(dummy_xform_buf);
         let body_q_buf = state_in.body_q.device_buffer().unwrap_or(dummy_xform_buf);
-        let bg_shapes = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::vbd_cloth shapes bg"),
-            layout: &self.layout_shapes,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: kind_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: data_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: body_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: xform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: body_q_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let bg_shapes = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth shapes bg"),
+                layout: &self.layout_shapes,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: kind_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: data_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: body_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: xform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: body_q_buf.as_entire_binding(),
+                    },
+                ],
+            },
+        );
 
         // Stage 20.2 — tet bind group. All buffers may be empty when
         // the model has no tets; fall through to the dummy buffers in
@@ -586,99 +603,88 @@ impl VbdClothKernel {
             .device_buffer()
             .unwrap_or(dummy_real_buf);
 
-        let bg_tets = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::vbd_cloth tets bg"),
-            layout: &self.layout_tets,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tet_indices_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: tet_dm_inv_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: tet_rest_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tet_mu_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: tet_lambda_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: vat_off_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: vat_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: vcb_off_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: vcb_entries_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: vcb_k_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: fp_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: eps_p_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: yield_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: hard_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 14,
-                    resource: alpha_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 15,
-                    resource: kin_hard_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let bg_tets = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth tets bg"),
+                layout: &self.layout_tets,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: tet_indices_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: tet_dm_inv_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: tet_rest_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: tet_mu_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: tet_lambda_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: vat_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: vat_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: vcb_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: vcb_entries_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: vcb_k_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: fp_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: eps_p_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: yield_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: hard_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: alpha_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: kin_hard_buf.as_entire_binding(),
+                    },
+                ],
+            },
+        );
 
         // ── Uniforms (one per dispatch) ──────────────────────────
         let color_offsets_host = model.particle_color_offsets.host()?.to_vec();
 
-        let mut uniform_bufs: Vec<wgpu::Buffer> = Vec::new();
         let mut bg_uniforms: Vec<wgpu::BindGroup> = Vec::new();
         let mut push_uniforms = |u: &Uniforms| {
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::vbd_cloth uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, bytemuck::bytes_of(u));
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("molla::vbd_cloth uniforms bg"),
-                layout: &self.layout_uniforms,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf.as_entire_binding(),
-                }],
-            });
-            uniform_bufs.push(buf);
+            let bg =
+                self.bindings
+                    .uniform_group(device, &self.layout_uniforms, bytemuck::bytes_of(u));
             bg_uniforms.push(bg);
         };
 
@@ -820,7 +826,7 @@ impl VbdClothKernel {
             // (warm-start initialiser, alternate AVBD safety pass);
             // silence the unused-field warning.
             let _ = &self.pipe_shape_contacts;
-            debug_assert_eq!(idx, uniform_bufs.len());
+            debug_assert_eq!(idx, bg_uniforms.len());
         }
         queue.submit(std::iter::once(encoder.finish()));
 
