@@ -78,6 +78,22 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Positive-pivot retention failure (2026-09-22)
+
+The full two-track positive pivot completed all five drive intervals but failed
+the unchanged 20 mm belt-envelope gate: side 0 reached 30.782 mm. Its circulation
+mean was 183.042 mm (range 181.022–189.607 mm), and lifetime minJ was 0.55167913.
+The later floor/momentum/yaw assertions were not executed after this failure.
+Runtime was 1631.21 seconds for 0.7 simulated seconds; this is not realtime.
+
+Postprocessing the captured nodes in the chassis frame separates side 0's
+30.773 mm in-plane distortion from only 1.578 mm maximum axial drift. Side 1
+has 24.142 mm in-plane distortion and 4.347 mm axial drift. The primary problem
+is belt-shape distortion during loaded turning, not lateral derailment.
+These chord-based diagnostics locate the problem; they do not replace the
+analytic acceptance gate. Tensioning and numerical convergence remain open;
+no retention threshold or material parameter has been changed to hide it.
+
 ### Renderer-paced submissions (2026-09-22)
 
 `try_step_substep` submits at most one configured substep and refuses new work
