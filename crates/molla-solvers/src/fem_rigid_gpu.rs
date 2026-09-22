@@ -31,6 +31,30 @@ fn device_queue(engine: &Engine) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)
     Ok((device.clone(), queue.clone()))
 }
 
+fn sampled_contact_capacity(
+    limits: &wgpu::Limits,
+    samples: u32,
+    shapes: u32,
+    dofs: usize,
+    loops: usize,
+) -> Result<u32> {
+    let desired = u64::from(samples) * u64::from(shapes.min(4));
+    let row_bytes = (12 * dofs as u64)
+        .max(std::mem::size_of::<molla_kernels::soft_rigid_contact::SoftRigidContactGpu>() as u64);
+    let bytes = (128 * 1024 * 1024_u64)
+        .min(u64::from(limits.max_storage_buffer_binding_size))
+        .min(limits.max_buffer_size);
+    let rows = (bytes / row_bytes).min(u64::from(limits.max_compute_workgroups_per_dimension) * 64);
+    let capacity = rows
+        .checked_sub(loops as u64)
+        .ok_or_else(|| Error::Build("FEM loop rows exceed contact budget".into()))?
+        .min(desired);
+    if desired != 0 && capacity == 0 {
+        return Err(Error::Build("FEM contact budget has no sample rows".into()));
+    }
+    u32::try_from(capacity).map_err(|_| Error::Build("FEM contact capacity overflow".into()))
+}
+
 fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
     if limits.max_bind_groups < 6
         || limits.max_bindings_per_bind_group < 17
@@ -47,6 +71,41 @@ fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::sampled_contact_capacity;
+
+    #[test]
+    fn sampled_rows_respect_response_budget_and_loop_tail() {
+        let mut limits = wgpu::Limits::default();
+        let old = sampled_contact_capacity(&limits, 53760, 70, 29, 2).unwrap();
+        assert_eq!(old, 53760 * 4);
+        let large = sampled_contact_capacity(&limits, 160000, 70, 29, 2).unwrap();
+        assert_eq!(large, 128 * 1024 * 1024 / (12 * 29) - 2);
+        assert!(u64::from(large + 2) * 12 * 29 <= 128 * 1024 * 1024);
+        limits.max_storage_buffer_binding_size = 4096;
+        assert_eq!(
+            sampled_contact_capacity(&limits, 160000, 70, 29, 2).unwrap(),
+            4096 / (12 * 29) - 2
+        );
+        limits.max_storage_buffer_binding_size = 1024 * 1024;
+        limits.max_buffer_size = 2048;
+        assert_eq!(
+            sampled_contact_capacity(&limits, 160000, 70, 29, 2).unwrap(),
+            2048 / (12 * 29) - 2
+        );
+        limits.max_compute_workgroups_per_dimension = 1;
+        limits.max_buffer_size = 1024 * 1024;
+        assert_eq!(
+            sampled_contact_capacity(&limits, 160000, 70, 6, 2).unwrap(),
+            62
+        );
+        assert!(sampled_contact_capacity(&limits, 1, 1, 6, 64).is_err());
+        assert!(sampled_contact_capacity(&limits, 1, 1, 6, 65).is_err());
+        assert_eq!(sampled_contact_capacity(&limits, 1000, 0, 6, 2).unwrap(), 0);
+    }
 }
 
 /// Raise a device request to the FEM kernel minimums without lowering other limits.
@@ -174,7 +233,7 @@ impl FemRigidGpuSystem {
     }
 
     /// Use vertices, edge midpoints and triangle centroids for primitive contacts.
-    /// GPU compaction reserves up to four contact rows per feature in a shared pool.
+    /// GPU compaction reserves up to four rows per feature, capped at 128 MiB per buffer.
     /// Exhausting that pool latches status bit 16; no contacts are silently dropped.
     pub fn new_surface_sampled(
         engine: Arc<Engine>,
@@ -439,9 +498,13 @@ impl FemRigidGpuSystem {
                 .map_err(|_| Error::Build("too many FEM contact shapes".into()))?;
             let capacity = match contact_capacity {
                 Some(capacity) => capacity,
-                None => sample_count
-                    .checked_mul(shape_count.min(4))
-                    .ok_or_else(|| Error::Build("FEM contact capacity overflow".into()))?,
+                None => sampled_contact_capacity(
+                    &device.limits(),
+                    sample_count,
+                    shape_count,
+                    n,
+                    joints.len(),
+                )?,
             };
             SoftRigidContactKernel::new_compact_sampled_with_ball_joints(
                 device,

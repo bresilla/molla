@@ -375,3 +375,95 @@ fn compact_overflow_and_invalid_rows_stop_the_solver_without_partial_impulses() 
         .is_err()
     );
 }
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn compact_candidates_cross_dispatch_rows_without_losing_order_or_tail() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mut fixture = Fixture::new(&engine);
+    let shape = SoftRigidShapeGpu {
+        position: [0.0; 4],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        data: [0.1, 0.1, 0.1, 0.4],
+        ids: [0, 0, 0, 0],
+    };
+    queue.write_buffer(&fixture.shapes, 12 * 64, bytemuck::bytes_of(&shape));
+    let small = SoftRigidContactKernel::new_sampled(device, 130, 13).unwrap();
+    let oracle = fixture.gather(&engine, &small);
+    let boundary = device.limits().max_compute_workgroups_per_dimension * 64;
+    let samples = boundary / 13 + 17;
+    assert!(samples * 13 > boundary);
+    let samples_data = (0..samples)
+        .map(|i| SoftRigidSampleGpu {
+            nodes: [i % 130, 0, 0, 1],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        })
+        .collect::<Vec<_>>();
+    fixture.surface = buffer(device, &samples_data);
+    let mut expected = Vec::new();
+    let mut after_boundary = 0;
+    for shape in 0..13 {
+        for i in 0..samples {
+            let row = oracle[(shape * 130 + i % 130) as usize];
+            if row.ids[3] != 0 {
+                expected.push(row);
+                if shape * samples + i >= boundary {
+                    after_boundary += 1;
+                }
+            }
+        }
+    }
+    assert!(after_boundary > 0);
+    let joint = SoftRigidBallJoint {
+        body_a: 0,
+        body_b: 1,
+        anchor_a: [0.0; 3],
+        anchor_b: [0.0; 3],
+    };
+    let capacity = expected.len() as u32 + 7;
+    let compact = SoftRigidContactKernel::new_compact_sampled_with_ball_joints(
+        device,
+        queue,
+        samples,
+        13,
+        2,
+        capacity,
+        &[joint],
+    )
+    .unwrap();
+    let rows = fixture.gather(&engine, &compact);
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&rows[..expected.len()]),
+        bytemuck::cast_slice::<_, u8>(&expected)
+    );
+    assert!(
+        rows[expected.len()..capacity as usize]
+            .iter()
+            .all(|r| r.ids[3] == 0)
+    );
+    assert_eq!(rows.last().unwrap().ids, [0, 1, 0, 3]);
+    let overflow = SoftRigidContactKernel::new_compact_sampled_with_ball_joints(
+        device,
+        queue,
+        samples,
+        13,
+        2,
+        expected.len() as u32 - 1,
+        &[joint],
+    )
+    .unwrap();
+    let rows = fixture.gather(&engine, &overflow);
+    assert_eq!(rows[0].ids[3], 4);
+    assert!(rows[..rows.len() - 1].iter().all(|r| r.ids[3] != 1));
+    assert_eq!(rows.last().unwrap().ids, [0, 1, 0, 3]);
+    queue.write_buffer(
+        &fixture.positions,
+        0,
+        bytemuck::cast_slice(&[[100.0_f32; 4]; 130]),
+    );
+    let rows = fixture.gather(&engine, &compact);
+    assert!(rows[..capacity as usize].iter().all(|r| r.ids[3] == 0));
+    assert_eq!(rows.last().unwrap().ids, [0, 1, 0, 3]);
+}

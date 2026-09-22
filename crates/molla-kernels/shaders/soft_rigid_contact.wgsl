@@ -134,14 +134,17 @@ fn scan(enabled: u32, lane: u32) {
 }
 
 @compute @workgroup_size(64)
-fn count_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+fn count_contacts(@builtin(local_invocation_index) lane: u32,
+    @builtin(workgroup_id) group: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let tile = group.x + group.y * groups.x;
+    if tile >= params.tiles { return; }
+    let row = tile * 64u + lane;
     var enabled = 0u;
-    if gid.x < params.node_count * params.shape_count {
-        enabled = select(0u, 1u, contact_at(gid.x).ids.w != 0u);
+    if row < params.node_count * params.shape_count {
+        enabled = select(0u, 1u, contact_at(row).ids.w != 0u);
     }
     scan(enabled, lane);
-    if lane == 63u { ranges[group.x] = prefix[63]; }
+    if lane == 63u { ranges[tile] = prefix[63]; }
 }
 
 @compute @workgroup_size(1)
@@ -157,14 +160,17 @@ fn offset_contacts() {
 }
 
 @compute @workgroup_size(64)
-fn scatter_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+fn scatter_contacts(@builtin(local_invocation_index) lane: u32,
+    @builtin(workgroup_id) group: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let tile = group.x + group.y * groups.x;
+    if tile >= params.tiles { return; }
+    let row = tile * 64u + lane;
     var result: Contact;
     var enabled = 0u;
-    if gid.x < params.node_count * params.shape_count && ranges[params.tiles] <= params.capacity {
-        result = contact_at(gid.x);
+    if row < params.node_count * params.shape_count && ranges[params.tiles] <= params.capacity {
+        result = contact_at(row);
         enabled = select(0u, 1u, result.ids.w != 0u);
     }
     scan(enabled, lane);
-    if enabled != 0u { contacts[ranges[group.x] + prefix[lane] - 1u] = result; }
+    if enabled != 0u { contacts[ranges[tile] + prefix[lane] - 1u] = result; }
 }
