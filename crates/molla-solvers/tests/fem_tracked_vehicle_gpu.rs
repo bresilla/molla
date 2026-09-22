@@ -171,6 +171,38 @@ fn two_tracks_drive_forward() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn two_track_gpu_scene_finishes_one_submission_window() {
+    let (scene, _, _) = vehicle_scene(Some(0.8), false);
+    let engine = Arc::new(Engine::new_gpu().unwrap());
+    let h = 1.0 / 19200.0;
+    let mut system = FemRigidGpuSystem::new(
+        engine.clone(),
+        scene,
+        FemRigidConfig {
+            max_substep: h,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    eprintln!(
+        "two-track submission window starts, pid={}",
+        std::process::id()
+    );
+    system.step(32.0 * h).unwrap();
+    assert_eq!(system.queued_substeps(), 0);
+    assert_eq!(read::<u32>(&engine, system.status_buffer(), 1), [0]);
+    let volume = read::<u32>(&engine, system.volume_diagnostics_buffer(), 2);
+    assert!(f32::from_bits(volume[0]) > 0.5);
+    assert_eq!(volume[1], u32::MAX);
+    assert!(system.soft_state().particle_q.host().is_err());
+    eprintln!(
+        "two-track submission window finished, lifetimeJ={}",
+        f32::from_bits(volume[0])
+    );
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn two_tracks_drive_reverse() {
     vehicle_run("reverse", [-1.0, -1.0], Some(0.8), false);
 }

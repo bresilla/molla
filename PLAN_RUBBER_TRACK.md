@@ -100,6 +100,15 @@ Native GPU deformation needs explicit device sharing and exclusive physics
 ownership, rather than per-node CPU readback. Current main Engine device-loss
 edits are unrelated work and must be preserved when adding that interface.
 
+GPU submission is now fenced every 32 substeps, including across separate
+step calls. These are completion waits, not state downloads or CPU physics.
+The 65-substep monolithic/split test gives bit-identical GPU states and the
+analytic rotor acceleration; a two-track 32-substep smoke gate passes with
+lifetime minJ 0.830070. Clean contact/motor/effort/airborne regressions pass.
+This bounds queued substeps, not retained driver memory: the long two-track
+run still reports about 6.3 GiB, so the fence does not establish a VRAM fix or
+throughput improvement. Avoid concurrent long full-track cases while profiling.
+
 ### Current full-track boundary (2026-09-22)
 
 The undamped free-carrier frictionless run now passes horizontal momentum:

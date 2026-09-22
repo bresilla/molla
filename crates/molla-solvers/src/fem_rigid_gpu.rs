@@ -50,6 +50,7 @@ pub struct FemRigidGpuSystem {
     volume: TetVolumeMonitor,
     momentum: Option<MomentumMonitor>,
     config: FemRigidConfig,
+    queued_substeps: u32,
 }
 
 impl FemRigidGpuSystem {
@@ -312,6 +313,7 @@ impl FemRigidGpuSystem {
             volume,
             momentum: None,
             config,
+            queued_substeps: 0,
         })
     }
 
@@ -413,7 +415,12 @@ impl FemRigidGpuSystem {
         self.control.joint_target_mode.upload(queue)
     }
 
-    /// Submit GPU substeps; callers must inspect the sticky device status before accepting results.
+    /// Upper bound on substeps submitted since the last completion fence.
+    pub fn queued_substeps(&self) -> u32 {
+        self.queued_substeps
+    }
+
+    /// Submit substeps in windows of 32; callers must inspect the sticky device status.
     pub fn step(&mut self, dt: Real) -> Result<()> {
         let count = (dt / self.config.max_substep).ceil();
         if !dt.is_finite() || !(1.0..=4096.0).contains(&count) {
@@ -565,6 +572,13 @@ impl FemRigidGpuSystem {
             self.rigid_next.body_qd.mark_device_dirty();
             std::mem::swap(&mut self.soft_state, &mut self.soft_next);
             std::mem::swap(&mut self.rigid_state, &mut self.rigid_next);
+            self.queued_substeps += 1;
+            if self.queued_substeps >= 32 {
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|error| Error::Gpu(format!("FEM submission fence failed: {error}")))?;
+                self.queued_substeps = 0;
+            }
         }
         Ok(())
     }
