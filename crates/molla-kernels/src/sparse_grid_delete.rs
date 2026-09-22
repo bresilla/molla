@@ -154,8 +154,8 @@ impl<V: Value> SparseGridDeleteKernel<V> {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::sparse_grid_delete layout"),
-            bind_group_layouts: &[&layout_storage, &layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_storage), Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let make_pipeline = |entry: &str| {

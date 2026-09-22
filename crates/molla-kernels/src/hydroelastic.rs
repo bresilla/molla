@@ -193,8 +193,8 @@ impl HydroelasticKernel {
         let pipeline_layout_pressure =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::kernels::hydroelastic pressure pipeline layout"),
-                bind_group_layouts: &[&layout_pressure],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_pressure)],
+                immediate_size: 0,
             });
         let pipe_pressure = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::kernels::hydroelastic hydro_contact"),
@@ -249,8 +249,8 @@ impl HydroelasticKernel {
         let pipeline_layout_anchor =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::kernels::hydroelastic anchor pipeline layout"),
-                bind_group_layouts: &[&layout_pressure, &layout_anchor],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_pressure), Some(&layout_anchor)],
+                immediate_size: 0,
             });
         let pipe_anchor = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::kernels::hydroelastic reduce_to_anchor"),

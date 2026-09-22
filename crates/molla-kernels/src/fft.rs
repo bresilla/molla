@@ -96,8 +96,8 @@ impl FftKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fft layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let pipeline_pass = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

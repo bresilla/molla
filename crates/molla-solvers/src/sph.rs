@@ -319,8 +319,12 @@ impl SphSimulation {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::sph pipeline layout"),
-            bind_group_layouts: &[&layout_uniforms, &layout_particles, &layout_grid],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_uniforms),
+                Some(&layout_particles),
+                Some(&layout_grid),
+            ],
+            immediate_size: 0,
         });
 
         let mk = |entry: &str| {

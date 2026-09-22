@@ -71,8 +71,13 @@ impl ActuatorDelayKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::actuator_delay layout"),
-            bind_group_layouts: &[&layout_in, &layout_state, &layout_out, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_in),
+                Some(&layout_state),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+            ],
+            immediate_size: 0,
         });
 
         let push_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

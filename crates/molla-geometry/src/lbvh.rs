@@ -221,14 +221,18 @@ impl LbvhBroadPhase {
         let pipeline_layout_no_pairs =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::lbvh layout (no pairs)"),
-                bind_group_layouts: &[&layout_tree, &layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_tree), Some(&layout_uniforms)],
+                immediate_size: 0,
             });
         let pipeline_layout_with_pairs =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::lbvh layout (pairs)"),
-                bind_group_layouts: &[&layout_tree, &layout_uniforms, &layout_pairs],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&layout_tree),
+                    Some(&layout_uniforms),
+                    Some(&layout_pairs),
+                ],
+                immediate_size: 0,
             });
         // Build pipeline now needs the pair-output bind group too —
         // it writes the root index into `pair_count[1]`.

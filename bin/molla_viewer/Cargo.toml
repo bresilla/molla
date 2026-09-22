@@ -27,11 +27,10 @@ profile = ["bevy/trace_tracy"]
 log_diag = []
 
 [dependencies]
-# molla's `gpu` feature is on. molla and Bevy share wgpu 27, so the
-# viewer can step on either CPU or GPU based on the user's UI toggle.
+# Physics kernels use wgpu 29 independently of the Bevy renderer.
 molla = { path = "../../crates/molla" }
 molla-vehicle = { path = "../../crates/molla-vehicle" }
-wgpu = { version = "27", default-features = false, features = [
+wgpu = { version = "29", default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

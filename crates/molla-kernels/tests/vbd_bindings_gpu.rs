@@ -137,8 +137,8 @@ fn cached_bindings_preserve_identity_and_pending_commands() {
     );
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&layout, &uniform_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout), Some(&uniform_layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,

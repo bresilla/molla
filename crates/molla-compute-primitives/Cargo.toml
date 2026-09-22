@@ -18,7 +18,7 @@ gpu = ["dep:wgpu", "molla-core/gpu"]
 molla-core = { path = "../molla-core", default-features = false }
 molla-math = { path = "../molla-math" }
 bytemuck = { version = "1.18", features = ["derive"] }
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

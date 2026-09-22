@@ -91,8 +91,8 @@ impl XpbdEqualityKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::xpbd_equality layout"),
-            bind_group_layouts: &[&layout_body, &layout_eq, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_body), Some(&layout_eq), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let pipeline_project = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -132,12 +132,12 @@ impl XpbdEqualityKernel {
         let pipeline_layout_jm = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::xpbd_equality::project_joint_mimic layout"),
             bind_group_layouts: &[
-                &layout_body,
-                &layout_eq,
-                &layout_uniforms,
-                &layout_joint_mimic,
+                Some(&layout_body),
+                Some(&layout_eq),
+                Some(&layout_uniforms),
+                Some(&layout_joint_mimic),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let pipeline_project_joint_mimic =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

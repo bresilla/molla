@@ -177,8 +177,8 @@ impl JacobiKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::pf layout"),
-            bind_group_layouts: &[&layout_mat, &layout_io, &layout_uniform],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_mat), Some(&layout_io), Some(&layout_uniform)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::pf pipeline"),

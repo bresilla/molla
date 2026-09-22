@@ -178,14 +178,14 @@ impl VbdClothKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::vbd_cloth layout"),
             bind_group_layouts: &[
-                &layout_state,
-                &layout_topo,
-                &layout_out,
-                &layout_uniforms,
-                &layout_shapes,
-                &layout_tets,
+                Some(&layout_state),
+                Some(&layout_topo),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+                Some(&layout_shapes),
+                Some(&layout_tets),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let make_pipeline = |entry: &str| -> wgpu::ComputePipeline {

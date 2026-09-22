@@ -66,12 +66,12 @@ impl IntegrateBodiesKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::integrate_bodies layout"),
             bind_group_layouts: &[
-                &layout_model,
-                &layout_state,
-                &layout_control,
-                &layout_uniforms,
+                Some(&layout_model),
+                Some(&layout_state),
+                Some(&layout_control),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

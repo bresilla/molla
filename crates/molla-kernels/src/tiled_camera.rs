@@ -71,8 +71,8 @@ impl CameraRaysKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::camera_rays layout"),
-            bind_group_layouts: &[&layout_main],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_main)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::camera_rays::generate_rays"),
@@ -238,8 +238,13 @@ impl CameraTraceKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::camera_trace layout"),
-            bind_group_layouts: &[&layout_model, &layout_rays, &layout_out, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_model),
+                Some(&layout_rays),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+            ],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::camera_trace::trace"),

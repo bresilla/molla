@@ -232,12 +232,12 @@ impl ApicGpuState {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::apic pipeline layout"),
             bind_group_layouts: &[
-                &layout_uniforms,
-                &layout_mesh,
-                &layout_particles,
-                &layout_grid,
+                Some(&layout_uniforms),
+                Some(&layout_mesh),
+                Some(&layout_particles),
+                Some(&layout_grid),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let mk_pipe = |entry: &str| {

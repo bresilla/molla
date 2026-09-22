@@ -98,8 +98,13 @@ impl MuscleKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::muscle layout"),
-            bind_group_layouts: &[&layout_uniforms, &layout_params, &layout_joint, &layout_out],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_uniforms),
+                Some(&layout_params),
+                Some(&layout_joint),
+                Some(&layout_out),
+            ],
+            immediate_size: 0,
         });
 
         let pipeline_activation =

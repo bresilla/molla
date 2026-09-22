@@ -94,8 +94,8 @@ impl FemNsRhsAssembleKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fem::ns_rhs layout"),
-            bind_group_layouts: &[&layout_src, &layout_pin, &layout_dst],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_src), Some(&layout_pin), Some(&layout_dst)],
+            immediate_size: 0,
         });
 
         let pipe_step = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

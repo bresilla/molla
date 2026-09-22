@@ -37,7 +37,7 @@ molla-storage = { path = "../molla-storage", default-features = false }
 molla-vehicle = { path = "../molla-vehicle", optional = true }
 bytemuck = { version = "1.18", features = ["derive"] }
 rayon = "1.10"
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

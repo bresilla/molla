@@ -172,12 +172,12 @@ impl SplatRaytraceKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::splat_raytrace layout"),
             bind_group_layouts: &[
-                &layout_splats,
-                &layout_rays,
-                &layout_outputs,
-                &layout_uniforms,
+                Some(&layout_splats),
+                Some(&layout_rays),
+                Some(&layout_outputs),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -211,12 +211,12 @@ impl SplatRaytraceKernel {
         let pipeline_layout_back = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::splat_raytrace_backward layout"),
             bind_group_layouts: &[
-                &layout_splats,
-                &layout_back_rays,
-                &layout_back_outputs,
-                &layout_uniforms,
+                Some(&layout_splats),
+                Some(&layout_back_rays),
+                Some(&layout_back_outputs),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let pipeline_backward = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::splat_raytrace::backward"),
@@ -242,12 +242,12 @@ impl SplatRaytraceKernel {
         let pipeline_layout_sh = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::splat_raytrace_sh layout"),
             bind_group_layouts: &[
-                &layout_splats,
-                &layout_rays,
-                &layout_outputs,
-                &layout_uniforms,
+                Some(&layout_splats),
+                Some(&layout_rays),
+                Some(&layout_outputs),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let pipeline_sh_forward =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -269,12 +269,12 @@ impl SplatRaytraceKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::splat_raytrace_sh_backward layout"),
                 bind_group_layouts: &[
-                    &layout_splats,
-                    &layout_back_rays,
-                    &layout_back_outputs,
-                    &layout_uniforms,
+                    Some(&layout_splats),
+                    Some(&layout_back_rays),
+                    Some(&layout_back_outputs),
+                    Some(&layout_uniforms),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let pipeline_sh_backward =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -300,12 +300,12 @@ impl SplatRaytraceKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::splat_raytrace_sh_band3 layout"),
                 bind_group_layouts: &[
-                    &layout_splats,
-                    &layout_rays,
-                    &layout_outputs,
-                    &layout_uniforms,
+                    Some(&layout_splats),
+                    Some(&layout_rays),
+                    Some(&layout_outputs),
+                    Some(&layout_uniforms),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let pipeline_sh_band3_forward =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -327,12 +327,12 @@ impl SplatRaytraceKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::splat_raytrace_sh_band3_backward layout"),
                 bind_group_layouts: &[
-                    &layout_splats,
-                    &layout_back_rays,
-                    &layout_back_outputs,
-                    &layout_uniforms,
+                    Some(&layout_splats),
+                    Some(&layout_back_rays),
+                    Some(&layout_back_outputs),
+                    Some(&layout_uniforms),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let pipeline_sh_band3_backward =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -355,12 +355,12 @@ impl SplatRaytraceKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::splat_raytrace_sh_diffuse_view layout"),
                 bind_group_layouts: &[
-                    &layout_splats_diffuse_view,
-                    &layout_rays,
-                    &layout_outputs,
-                    &layout_uniforms,
+                    Some(&layout_splats_diffuse_view),
+                    Some(&layout_rays),
+                    Some(&layout_outputs),
+                    Some(&layout_uniforms),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let pipeline_sh_diffuse_view_forward =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

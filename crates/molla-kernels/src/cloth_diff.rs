@@ -245,12 +245,12 @@ impl ClothDiffGpu {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::cloth_diff pipeline layout"),
             bind_group_layouts: &[
-                &layout_uniforms,
-                &layout_topology,
-                &layout_traj,
-                &layout_adj,
+                Some(&layout_uniforms),
+                Some(&layout_topology),
+                Some(&layout_traj),
+                Some(&layout_adj),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let mk_pipe = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

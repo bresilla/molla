@@ -76,11 +76,11 @@ impl ActuatorNeuralMlpKernel {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::actuator_neural_mlp::forward layout"),
                 bind_group_layouts: &[
-                    &forward_layout_io,
-                    &forward_layout_weights,
-                    &forward_layout_uniforms,
+                    Some(&forward_layout_io),
+                    Some(&forward_layout_weights),
+                    Some(&forward_layout_uniforms),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -109,8 +109,8 @@ impl ActuatorNeuralMlpKernel {
         let scatter_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::actuator_neural_mlp::scatter layout"),
-                bind_group_layouts: &[&scatter_layout_io, &scatter_layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&scatter_layout_io), Some(&scatter_layout_uniforms)],
+                immediate_size: 0,
             });
         let scatter_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::actuator_neural_mlp::scatter"),

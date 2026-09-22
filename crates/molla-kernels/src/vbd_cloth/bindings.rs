@@ -134,3 +134,19 @@ impl BindingCache {
         (self.storage.len(), self.uniforms.len())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BindingCache;
+
+    #[test]
+    fn new_cache_has_no_retained_resources() {
+        assert_eq!(BindingCache::new(2).entry_counts(), (0, 0));
+    }
+
+    #[test]
+    #[should_panic]
+    fn cache_requires_positive_capacity() {
+        let _ = BindingCache::new(0);
+    }
+}

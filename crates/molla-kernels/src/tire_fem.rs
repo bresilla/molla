@@ -3488,8 +3488,8 @@ impl TireFemGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_fem layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem::step_nodes"),
@@ -3515,8 +3515,8 @@ impl TireFemGpuKernel {
         let atlas_contract_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas contract layout"),
-                bind_group_layouts: &[&atlas_contract_layout_io],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&atlas_contract_layout_io)],
+                immediate_size: 0,
             });
         let atlas_contract_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3543,8 +3543,8 @@ impl TireFemGpuKernel {
         let atlas_hub_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas hub layout"),
-                bind_group_layouts: &[&atlas_hub_layout_io],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&atlas_hub_layout_io)],
+                immediate_size: 0,
             });
         let atlas_hub_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem_atlas::hub_reduce_atlas"),
@@ -3565,8 +3565,11 @@ impl TireFemGpuKernel {
         let atlas_hub_params_from_brush_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas brush-to-hub-param layout"),
-                bind_group_layouts: &[&atlas_hub_params_from_brush_layout_io, &layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&atlas_hub_params_from_brush_layout_io),
+                    Some(&layout_uniforms),
+                ],
+                immediate_size: 0,
             });
         let atlas_hub_params_from_brush_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3588,8 +3591,11 @@ impl TireFemGpuKernel {
         let atlas_hub_params_from_contact_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas contact-reduction-to-hub-param layout"),
-                bind_group_layouts: &[&atlas_hub_params_from_contact_layout_io, &layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&atlas_hub_params_from_contact_layout_io),
+                    Some(&layout_uniforms),
+                ],
+                immediate_size: 0,
             });
         let atlas_hub_params_from_contact_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3612,8 +3618,11 @@ impl TireFemGpuKernel {
         let atlas_hub_params_from_feedback_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas feedback-force-to-hub-param layout"),
-                bind_group_layouts: &[&atlas_hub_params_from_feedback_layout_io, &layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&atlas_hub_params_from_feedback_layout_io),
+                    Some(&layout_uniforms),
+                ],
+                immediate_size: 0,
             });
         let atlas_hub_params_from_feedback_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3653,8 +3662,8 @@ impl TireFemGpuKernel {
         let atlas_feedback_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem_atlas_feedback pipeline layout"),
-                bind_group_layouts: &[&atlas_feedback_layout_io, &layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&atlas_feedback_layout_io), Some(&layout_uniforms)],
+                immediate_size: 0,
             });
         let atlas_feedback_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3697,8 +3706,8 @@ impl TireFemGpuKernel {
             });
         let hub_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_fem hub layout"),
-            bind_group_layouts: &[&hub_layout_io, &hub_layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&hub_layout_io), Some(&hub_layout_uniforms)],
+            immediate_size: 0,
         });
         let hub_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem::hub_reduce"),
@@ -3726,8 +3735,8 @@ impl TireFemGpuKernel {
         let hub_tread_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_fem hub tread layout"),
-                bind_group_layouts: &[&hub_tread_layout_io, &hub_layout_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&hub_tread_layout_io), Some(&hub_layout_uniforms)],
+                immediate_size: 0,
             });
         let hub_tread_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem::hub_reduce_with_tread_wrench"),
@@ -7579,8 +7588,8 @@ impl TireFemContactReductionKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_fem_contact_reduce layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem_contact_reduce pipeline"),
@@ -8119,8 +8128,8 @@ impl TireFemContactFeedbackKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_fem_contact_feedback layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_fem_contact_feedback pipeline"),
@@ -9630,8 +9639,8 @@ impl TireFemMatrixFreeNewtonGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_fem_matrix_free_newton layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let make = |entry_point: &'static str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

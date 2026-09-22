@@ -111,8 +111,8 @@ impl RadixSortKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::radix_sort layout"),
-            bind_group_layouts: &[&layout_data, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let pipeline_count = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -501,8 +501,8 @@ impl RadixSortKernel64 {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::radix_sort_64 layout"),
-            bind_group_layouts: &[&layout_data, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let pipeline_count = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

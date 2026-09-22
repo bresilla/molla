@@ -37,7 +37,7 @@ molla-kernels = { path = "../molla-kernels", default-features = false, optional 
 molla-storage = { path = "../molla-storage", default-features = false }
 molla-vehicle = { path = "../molla-vehicle" }
 tracing = "0.1"
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

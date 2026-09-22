@@ -78,6 +78,20 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Renderer-compatible GPU API (2026-09-22)
+
+Physics crates and the viewer's direct physics handles use wgpu 29, matching
+Gearbox/Bevy 0.19. Explicit pipeline layouts use optional layout slots and
+zero immediate bytes; headless compute uses the new instance constructor.
+The standalone Molla viewer retains Bevy 0.18 and its independent wgpu 27
+renderer. No renderer/device sharing or simulator FEM delivery is implied.
+
+The isolated migration passes workspace/all-target checks with GPU enabled,
+two cache-construction CPU tests, and eleven GPU cache, submission, barycentric
+contact, articulated-dynamics, VBD-tet and two-track smoke gates. The 32-step
+vehicle smoke retains lifetime minJ 0.83006966. Native shared-device ownership,
+render deformation and full vehicle validation remain required.
+
 ### Immutable VBD binding reuse (2026-09-22)
 
 VBD keeps separate 64-entry LRU caches for storage groups and immutable
@@ -92,6 +106,8 @@ models and ping-pong states with changing timestep, damping, gravity and hard
 mode produces identical positions, velocities and plasticity state to freshly
 created kernels. This establishes reuse correctness, not a throughput or VRAM
 improvement. Long vehicle performance and native integration remain open.
+The broader wgpu 27 regression suite passes 25 GPU tests across binding reuse,
+submission, coupled contact/motors and cloth/cable/tetrahedral/plasticity paths.
 
 ### Two-track vehicle fixture
 
@@ -104,18 +120,29 @@ unpowered revolute joints. These test parameters are not measured CEOL data.
 
 Explicit GPU cases cover forward/reverse, both differential pivot signs,
 airborne conservation, frictionless circulation, sampled-surface forward drive
-and a powered/passive comparison. Dynamic acceptance is pending. Straight
+and a powered/passive comparison. Forward vertex-contact acceptance passes;
+the other full-vehicle gates remain pending. Straight
 cases retain the single-track 40 Nm cap per motor; pivot cases use 300 Nm and
 higher velocity gain. No chassis or belt velocity is prescribed. Captures
 include both belts, rigid poses and intermediate drive-interval snapshots.
+
+The wgpu 27 forward run at commit 9542924 settles for 0.10 s and drives for
+0.60 s: chassis travel 76.985 mm forward, 1.288 mm lateral, yaw -0.000126573 rad.
+Mean belt circulation is 82.405/81.551 mm, with envelope departures
+10.330/10.208 mm and lifetime minJ 0.61785346. Unchanged circulation, volume,
+ground clearance, tilt and travel gates pass. Runtime is 1693.26 s, not real
+time. This predates binding reuse and does not validate sampled full-surface
+contact or establish a performance improvement. Offline Blender inspection
+of exported measured states confirms both belts remain around their rollers;
+the rendering is not a native simulator screenshot.
 
 Native Gearbox currently uses a CPU RigidWorld adapter and the older d5476026
 Molla pin. Engine has no externally supplied render-device constructor yet.
 Native GPU deformation needs explicit device sharing and exclusive physics
 ownership, rather than per-node CPU readback. Current main Engine device-loss
 edits are unrelated work and must be preserved when adding that interface.
-Molla currently depends on wgpu 27 while Gearbox/Bevy 0.19 uses wgpu 29;
-their typed device/buffer handles cannot be shared without aligning versions.
+The local physics GPU API now matches Gearbox's wgpu 29, but the Gearbox
+dependency pin still needs updating after native integration is validated.
 
 GPU submission is now fenced every 32 substeps, including across separate
 step calls. These are completion waits, not state downloads or CPU physics.

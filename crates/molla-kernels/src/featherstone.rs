@@ -99,14 +99,14 @@ impl FeatherstoneKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::featherstone layout"),
             bind_group_layouts: &[
-                &layout_model,
-                &layout_state,
-                &layout_control,
-                &layout_arts,
-                &layout_uniforms,
-                &layout_cable_muscle,
+                Some(&layout_model),
+                Some(&layout_state),
+                Some(&layout_control),
+                Some(&layout_arts),
+                Some(&layout_uniforms),
+                Some(&layout_cable_muscle),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

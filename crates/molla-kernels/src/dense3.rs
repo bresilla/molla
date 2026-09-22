@@ -91,8 +91,8 @@ impl Dense3Kernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::dense3 layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let mk = |entry: &str, label: &str| {
@@ -126,8 +126,8 @@ impl Dense3Kernel {
         });
         let adj_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::dense3 adj layout"),
-            bind_group_layouts: &[&layout_adj_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_adj_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline_adj_svd = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::dense3::adj_svd"),

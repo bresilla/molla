@@ -71,7 +71,7 @@ rayon = "1.10"
 # wgpu version Bevy 0.18 ships so molla + Bevy can share one wgpu in
 # the viewer binary. We pull every desktop backend (Vulkan / Metal /
 # DX12 / GL) plus WebGPU so the same build works wherever wgpu does.
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

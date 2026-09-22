@@ -99,8 +99,12 @@ impl FemGpuKernel {
             });
         let asm_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fem::asm layout"),
-            bind_group_layouts: &[&layout_asm_mesh, &layout_asm_csr, &layout_asm_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_asm_mesh),
+                Some(&layout_asm_csr),
+                Some(&layout_asm_uniforms),
+            ],
+            immediate_size: 0,
         });
         let pipe_assemble_tet = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::fem::assemble_p1_stiffness_tet"),
@@ -159,8 +163,8 @@ impl FemGpuKernel {
             });
         let mv_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fem::mv layout"),
-            bind_group_layouts: &[&layout_mv_io, &layout_mv_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_mv_io), Some(&layout_mv_uniforms)],
+            immediate_size: 0,
         });
         let pipe_matvec = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::fem::csr_matvec"),
@@ -194,8 +198,8 @@ impl FemGpuKernel {
             });
         let diag_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fem::diag layout"),
-            bind_group_layouts: &[&layout_diag_io, &layout_diag_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_diag_io), Some(&layout_diag_uniforms)],
+            immediate_size: 0,
         });
         let pipe_extract_diag = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::fem::extract_diag"),

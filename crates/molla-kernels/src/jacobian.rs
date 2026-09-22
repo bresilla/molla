@@ -99,8 +99,13 @@ impl JacobianKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::jacobian layout"),
-            bind_group_layouts: &[&layout_model, &layout_state, &layout_arts, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_model),
+                Some(&layout_state),
+                Some(&layout_arts),
+                Some(&layout_uniforms),
+            ],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::jacobian pipeline"),

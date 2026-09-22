@@ -1519,8 +1519,8 @@ pub fn tire_dem_build_sparse_lbvh_morton_order_gpu_radix(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("molla::tire_dem gpu sparse lbvh morton layout"),
-        bind_group_layouts: &[&layout_data, &layout_uniforms],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+        immediate_size: 0,
     });
     let keygen_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("molla::tire_dem::build_sparse_lbvh_morton_keys"),
@@ -1722,8 +1722,8 @@ pub fn tire_dem_build_sparse_lbvh_leaf_rows_gpu_radix(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("molla::tire_dem gpu sparse lbvh leaf layout"),
-        bind_group_layouts: &[&layout_data, &layout_uniforms],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+        immediate_size: 0,
     });
     let keygen_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("molla::tire_dem::build_sparse_lbvh_leaf_morton_keys"),
@@ -1965,8 +1965,8 @@ pub fn tire_dem_build_sparse_lbvh_tree_rows_gpu_radix(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("molla::tire_dem gpu sparse lbvh tree layout"),
-        bind_group_layouts: &[&layout_data, &layout_uniforms],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+        immediate_size: 0,
     });
     let keygen_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("molla::tire_dem::build_sparse_lbvh_tree_morton_keys"),
@@ -2821,8 +2821,8 @@ pub fn tire_dem_build_unbounded_sorted_grid_step_input_gpu_radix(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("molla::tire_dem gpu radix grid layout"),
-        bind_group_layouts: &[&layout_data, &layout_uniforms],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout_data), Some(&layout_uniforms)],
+        immediate_size: 0,
     });
     let keygen_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("molla::tire_dem::build_unbounded_cell_keys"),
@@ -3385,8 +3385,8 @@ impl TireDemGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_dem layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_dem::apply_impulses"),
@@ -3412,8 +3412,8 @@ impl TireDemGpuKernel {
             });
         let step_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_dem step layout"),
-            bind_group_layouts: &[&layout_io, &layout_step_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_step_uniforms)],
+            immediate_size: 0,
         });
         let step_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_dem::step_dem"),
@@ -3426,8 +3426,8 @@ impl TireDemGpuKernel {
         let grid_step_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_dem grid step layout"),
-                bind_group_layouts: &[&layout_grid_io, &layout_step_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_grid_io), Some(&layout_step_uniforms)],
+                immediate_size: 0,
             });
         let grid_step_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_dem::step_dem_grid"),
@@ -3440,8 +3440,8 @@ impl TireDemGpuKernel {
         let lbvh_step_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_dem lbvh step layout"),
-                bind_group_layouts: &[&layout_lbvh_io, &layout_step_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_lbvh_io), Some(&layout_step_uniforms)],
+                immediate_size: 0,
             });
         let lbvh_step_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_dem::step_dem_lbvh"),
@@ -3454,8 +3454,8 @@ impl TireDemGpuKernel {
         let terrain_raster_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_dem terrain raster layout"),
-                bind_group_layouts: &[&layout_terrain_io, &layout_step_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_terrain_io), Some(&layout_step_uniforms)],
+                immediate_size: 0,
             });
         let terrain_raster_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3469,8 +3469,8 @@ impl TireDemGpuKernel {
         let unbounded_grid_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_dem unbounded grid layout"),
-                bind_group_layouts: &[&layout_unbounded_grid_io, &layout_step_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout_unbounded_grid_io), Some(&layout_step_uniforms)],
+                immediate_size: 0,
             });
         let unbounded_key_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -3493,8 +3493,11 @@ impl TireDemGpuKernel {
         let sparse_lbvh_build_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("molla::tire_dem sparse lbvh build layout"),
-                bind_group_layouts: &[&layout_sparse_lbvh_build_io, &layout_step_uniforms],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&layout_sparse_lbvh_build_io),
+                    Some(&layout_step_uniforms),
+                ],
+                immediate_size: 0,
             });
         let sparse_lbvh_morton_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

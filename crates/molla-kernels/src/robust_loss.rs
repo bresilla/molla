@@ -89,8 +89,8 @@ impl RobustLossKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::robust_loss layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let mk = |entry: &str, label: &str| {

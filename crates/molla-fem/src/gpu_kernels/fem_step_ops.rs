@@ -127,8 +127,8 @@ impl WaveStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::wave_predictor layout"),
-                    bind_group_layouts: &[&layout_pred_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_pred_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -141,8 +141,8 @@ impl WaveStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::wave_rhs layout"),
-                    bind_group_layouts: &[&layout_rhs_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_rhs_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -155,8 +155,8 @@ impl WaveStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::wave_corrector layout"),
-                    bind_group_layouts: &[&layout_corr_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_corr_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -169,8 +169,8 @@ impl WaveStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::wave_copy_u layout"),
-                    bind_group_layouts: &[&layout_copy_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_copy_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -573,8 +573,8 @@ impl TransientStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::transient_rhs layout"),
-                    bind_group_layouts: &[&layout_rhs_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_rhs_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -587,8 +587,8 @@ impl TransientStepOpsKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_step_ops::transient_copy_u layout"),
-                    bind_group_layouts: &[&layout_copy_io, &layout_uniforms],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_copy_io), Some(&layout_uniforms)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,

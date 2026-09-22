@@ -28,7 +28,7 @@ molla-kernels = { path = "../molla-kernels", default-features = false, optional 
 molla-math = { path = "../molla-math" }
 molla-sim = { path = "../molla-sim", default-features = false }
 molla-storage = { path = "../molla-storage", default-features = false, optional = true }
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

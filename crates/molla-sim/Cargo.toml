@@ -20,7 +20,7 @@ molla-math = { path = "../molla-math" }
 molla-storage = { path = "../molla-storage", default-features = false }
 bytemuck = { version = "1.18", features = ["derive"] }
 slotmap = "1"
-wgpu = { version = "27", optional = true, default-features = false, features = [
+wgpu = { version = "29", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",

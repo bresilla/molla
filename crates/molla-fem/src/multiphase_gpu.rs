@@ -186,8 +186,8 @@ impl MultiphaseKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::mp layout"),
-            bind_group_layouts: &[&layout_data, &layout_uniform],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_data), Some(&layout_uniform)],
+            immediate_size: 0,
         });
         let mk = |entry_point: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

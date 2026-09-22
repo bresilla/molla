@@ -66,12 +66,12 @@ impl ActuatorPipelinePdKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::actuator_pipeline_pd layout"),
             bind_group_layouts: &[
-                &layout_state,
-                &layout_actuator,
-                &layout_out,
-                &layout_uniforms,
+                Some(&layout_state),
+                Some(&layout_actuator),
+                Some(&layout_out),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

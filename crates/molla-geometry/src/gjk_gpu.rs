@@ -72,8 +72,13 @@ impl GjkKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::gjk layout"),
-            bind_group_layouts: &[&layout_shapes, &layout_pairs, &layout_out, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_shapes),
+                Some(&layout_pairs),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+            ],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::gjk pipeline"),

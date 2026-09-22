@@ -667,12 +667,12 @@ impl MpmSimulation {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::mpm pipeline layout"),
             bind_group_layouts: &[
-                &layout_uniforms,
-                &layout_particles,
-                &layout_grid,
-                &layout_rigid,
+                Some(&layout_uniforms),
+                Some(&layout_particles),
+                Some(&layout_grid),
+                Some(&layout_rigid),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let mk = |entry: &str| {

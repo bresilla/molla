@@ -1367,23 +1367,23 @@ impl TireVehicleYawGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_vehicle_yaw layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline_layout_io4 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_vehicle_yaw io4 layout"),
-            bind_group_layouts: &[&layout_io4, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io4), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline_layout_io5 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_vehicle_yaw io5 layout"),
-            bind_group_layouts: &[&layout_io5, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io5), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline_layout_io6 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::tire_vehicle_yaw io6 layout"),
-            bind_group_layouts: &[&layout_io6, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io6), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
         let pipeline_yaw = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::tire_vehicle_yaw pipeline"),

@@ -239,14 +239,14 @@ impl SoftVtContactKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::soft_vt_contact layout"),
             bind_group_layouts: &[
-                &layout_state,
-                &layout_topo,
-                &layout_aabbs,
-                &layout_bvh,
-                &layout_contacts,
-                &layout_friction,
+                Some(&layout_state),
+                Some(&layout_topo),
+                Some(&layout_aabbs),
+                Some(&layout_bvh),
+                Some(&layout_contacts),
+                Some(&layout_friction),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let make = |entry: &str| -> wgpu::ComputePipeline {

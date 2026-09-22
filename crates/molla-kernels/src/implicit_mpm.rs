@@ -114,8 +114,8 @@ impl ImplicitMpmKernel {
         });
         let pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::implicit_mpm layout"),
-            bind_group_layouts: &[&layout_io, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout_io), Some(&layout_uniforms)],
+            immediate_size: 0,
         });
 
         let mk_pipe = |entry: &'static str, label: &'static str| {

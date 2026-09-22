@@ -367,8 +367,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::mv layout"),
-                    bind_group_layouts: &[&layout_mv_io, &layout_mv_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_mv_io), Some(&layout_mv_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &mv_shader,
@@ -391,8 +391,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::axpy layout"),
-                    bind_group_layouts: &[&layout_axpy_io, &layout_axpy_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_axpy_io), Some(&layout_axpy_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &axpy_shader,
@@ -415,8 +415,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::transpose layout"),
-                    bind_group_layouts: &[&layout_tr_io, &layout_tr_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_tr_io), Some(&layout_tr_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &tr_shader,
@@ -445,8 +445,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::spgemm layout"),
-                    bind_group_layouts: &[&layout_spgemm_io, &layout_spgemm_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_spgemm_io), Some(&layout_spgemm_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &spgemm_shader,
@@ -480,8 +480,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::sym_count layout"),
-                    bind_group_layouts: &[&layout_sym_count_io, &layout_sym_count_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_sym_count_io), Some(&layout_sym_count_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &spgemm_sym_shader,
@@ -507,8 +507,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::sym_write layout"),
-                    bind_group_layouts: &[&layout_sym_write_io, &layout_sym_write_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_sym_write_io), Some(&layout_sym_write_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &spgemm_sym_shader,
@@ -547,8 +547,8 @@ impl BsrAlgebraKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::sparse_gpu::num_atomic layout"),
-                    bind_group_layouts: &[&layout_num_atomic_io, &layout_num_atomic_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_num_atomic_io), Some(&layout_num_atomic_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &spgemm_sym_shader,

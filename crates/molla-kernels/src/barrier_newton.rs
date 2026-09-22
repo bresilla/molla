@@ -387,12 +387,12 @@ impl BarrierNewtonGpu {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::barrier_newton pl"),
             bind_group_layouts: &[
-                &layout_uniforms,
-                &layout_topology,
-                &layout_state,
-                &layout_work,
+                Some(&layout_uniforms),
+                Some(&layout_topology),
+                Some(&layout_state),
+                Some(&layout_work),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let mut pipes = std::collections::HashMap::new();
         for &entry in ENTRIES {

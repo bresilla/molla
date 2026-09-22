@@ -73,8 +73,13 @@ impl RaycastKernel {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::raycast layout"),
-            bind_group_layouts: &[&layout_model, &layout_rays, &layout_hits, &layout_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&layout_model),
+                Some(&layout_rays),
+                Some(&layout_hits),
+                Some(&layout_uniforms),
+            ],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

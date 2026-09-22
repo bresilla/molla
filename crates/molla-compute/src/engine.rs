@@ -116,9 +116,9 @@ impl Engine {
 }
 
 fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

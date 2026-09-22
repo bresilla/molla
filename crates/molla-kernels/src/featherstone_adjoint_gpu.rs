@@ -151,8 +151,8 @@ impl FeatherstoneAdjointGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::adj_jac layout"),
-            bind_group_layouts: &[&bgl_storage, &bgl_uniforms],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl_storage), Some(&bgl_uniforms)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::adj_jac pipeline"),

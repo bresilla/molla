@@ -172,8 +172,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::axpy layout"),
-                    bind_group_layouts: &[&layout_axpy_io, &layout_axpy_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_axpy_io), Some(&layout_axpy_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -199,8 +199,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::axpby layout"),
-                    bind_group_layouts: &[&layout_axpby_io, &layout_axpby_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_axpby_io), Some(&layout_axpby_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -227,8 +227,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::dot layout"),
-                    bind_group_layouts: &[&layout_dot_io, &layout_dot_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_dot_io), Some(&layout_dot_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -260,8 +260,8 @@ impl FemCgGpuKernel {
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("molla::fem_cg::diag layout"),
-                        bind_group_layouts: &[&layout_diag_io, &layout_diag_u],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout_diag_io), Some(&layout_diag_u)],
+                        immediate_size: 0,
                     }),
                 ),
                 module: &shader,
@@ -293,8 +293,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::finalize layout"),
-                    bind_group_layouts: &[&layout_finalize_io, &layout_finalize_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_finalize_io), Some(&layout_finalize_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -314,8 +314,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::cg_alpha layout"),
-                    bind_group_layouts: &[&layout_alpha_io],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_alpha_io)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -335,8 +335,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::cg_beta layout"),
-                    bind_group_layouts: &[&layout_beta_io],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_beta_io)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -356,8 +356,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::axpy_s layout"),
-                    bind_group_layouts: &[&layout_axpys_io, &layout_axpy_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_axpys_io), Some(&layout_axpy_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -377,8 +377,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::axpby_s layout"),
-                    bind_group_layouts: &[&layout_axpbys_io, &layout_axpby_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_axpbys_io), Some(&layout_axpby_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -405,8 +405,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::cg_axpy_xr layout"),
-                    bind_group_layouts: &[&layout_xrx_io, &layout_axpy_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_xrx_io), Some(&layout_axpy_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -426,8 +426,8 @@ impl FemCgGpuKernel {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("molla::fem_cg::cg_axpby_p layout"),
-                    bind_group_layouts: &[&layout_bp_io, &layout_axpy_u],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout_bp_io), Some(&layout_axpy_u)],
+                    immediate_size: 0,
                 }),
             ),
             module: &shader,
@@ -476,8 +476,8 @@ impl FemCgGpuKernel {
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("molla::fem_cg::fused mv layout"),
-                        bind_group_layouts: &[&layout_fused_mv_io, &layout_fused_mv_u],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout_fused_mv_io), Some(&layout_fused_mv_u)],
+                        immediate_size: 0,
                     }),
                 ),
                 module: &fused_shader,
@@ -512,8 +512,8 @@ impl FemCgGpuKernel {
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("molla::fem_cg::fused xr layout"),
-                        bind_group_layouts: &[&layout_fused_xr_io, &layout_fused_xr_u],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout_fused_xr_io), Some(&layout_fused_xr_u)],
+                        immediate_size: 0,
                     }),
                 ),
                 module: &fused_shader,
@@ -536,8 +536,8 @@ impl FemCgGpuKernel {
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("molla::fem_cg::fused bp layout"),
-                        bind_group_layouts: &[&layout_fused_bp_io, &layout_fused_xr_u],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout_fused_bp_io), Some(&layout_fused_xr_u)],
+                        immediate_size: 0,
                     }),
                 ),
                 module: &fused_shader,

@@ -110,13 +110,13 @@ impl XpbdKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::xpbd layout"),
             bind_group_layouts: &[
-                &layout_model,
-                &layout_state,
-                &layout_control,
-                &layout_contacts,
-                &layout_uniforms,
+                Some(&layout_model),
+                Some(&layout_state),
+                Some(&layout_control),
+                Some(&layout_contacts),
+                Some(&layout_uniforms),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let make_pipeline = |entry: &str, label: &str| -> wgpu::ComputePipeline {

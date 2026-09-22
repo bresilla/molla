@@ -143,13 +143,13 @@ impl XpbdParticlesKernel {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::xpbd_particles layout"),
             bind_group_layouts: &[
-                &layout_state,
-                &layout_springs,
-                &layout_out,
-                &layout_uniforms,
-                &layout_shapes,
+                Some(&layout_state),
+                Some(&layout_springs),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+                Some(&layout_shapes),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let make_pipeline = |entry: &str| -> wgpu::ComputePipeline {
