@@ -44,6 +44,70 @@ pub struct BeltPath {
 }
 
 impl BeltPath {
+    /// Construct a convex CCW YZ polygon with a nonnegative inward miter offset.
+    pub fn from_closed_polyline(points: &[Vec3], inset: Real) -> Result<Self> {
+        let invalid = || Error::Build("invalid convex belt polyline or inset".into());
+        if points.len() < 3
+            || points.len() > 4096
+            || !inset.is_finite()
+            || inset < 0.0
+            || points.iter().any(|p| !p.is_finite() || p.x != 0.0)
+        {
+            return Err(invalid());
+        }
+        let normals = |points: &[Vec3]| -> Result<Vec<Vec3>> {
+            let mut result = Vec::with_capacity(points.len());
+            let mut area = 0.0;
+            for i in 0..points.len() {
+                let edge = points[(i + 1) % points.len()] - points[i];
+                let length = edge.length();
+                if !length.is_finite() || length <= 1e-12 {
+                    return Err(invalid());
+                }
+                let normal = Vec3::new(0.0, edge.z, -edge.y) / length;
+                if points
+                    .iter()
+                    .any(|p| (*p - points[i]).dot(normal) > 1e-10 * length)
+                {
+                    return Err(invalid());
+                }
+                area += (points[i] - points[0]).cross(edge).x;
+                result.push(normal);
+            }
+            if !area.is_finite() || area <= 0.0 {
+                return Err(invalid());
+            }
+            Ok(result)
+        };
+        let original = normals(points)?;
+        let shifted = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let a = original[(i + points.len() - 1) % points.len()];
+                let b = original[i];
+                *p - (a + b) * (inset / (1.0 + a.dot(b)))
+            })
+            .collect::<Vec<_>>();
+        if shifted.iter().any(|p| !p.is_finite()) {
+            return Err(invalid());
+        }
+        let directions = normals(&shifted)?;
+        let mut pieces = Vec::with_capacity(points.len());
+        for i in 0..points.len() {
+            if directions[i].dot(original[i]) < 1.0 - 1e-10 {
+                return Err(invalid());
+            }
+            pieces.push(Piece::Line {
+                start: shifted[i],
+                end: shifted[(i + 1) % points.len()],
+                outward: directions[i],
+            });
+        }
+        let length = pieces.iter().map(Piece::length).sum();
+        Ok(Self { pieces, length })
+    }
+
     /// Construct the outer CCW common-tangent envelope of disjoint pulleys in the YZ plane.
     pub fn around_pulleys(pulleys: &[BeltPulley]) -> Result<Self> {
         let invalid = || Error::Build("invalid or non-convex ordered belt pulleys".into());
@@ -258,5 +322,43 @@ mod tests {
         assert!(BeltPath::around_pulleys(&[pulleys[2], pulleys[1], pulleys[0]]).is_err());
         assert!(BeltPath::around_pulleys(&[pulleys[0], pulleys[0]]).is_err());
         assert!(path.sample(Real::NAN).is_err());
+    }
+    #[test]
+    fn convex_polyline_inset_preserves_distances_and_periodicity() {
+        let points = [
+            Vec3::new(0.0, -2.0, -1.0),
+            Vec3::new(0.0, 2.0, -1.0),
+            Vec3::new(0.0, 2.0, 1.0),
+            Vec3::new(0.0, -2.0, 1.0),
+        ];
+        let outer = BeltPath::from_closed_polyline(&points, 0.0).unwrap();
+        let inner = BeltPath::from_closed_polyline(&points, 0.25).unwrap();
+        assert_eq!(outer.length(), 12.0);
+        assert_eq!(inner.length(), 10.0);
+        for i in 0..100 {
+            let s = i as Real * inner.length() / 100.0 + 0.013;
+            let sample = inner.sample(s).unwrap();
+            let repeated = inner.sample(s - inner.length()).unwrap();
+            assert!((sample.position - repeated.position).length() < 1e-12);
+            assert!((outer.project(sample.position).unwrap().1 - 0.25).abs() < 1e-12);
+            assert!((sample.tangent.length() - 1.0).abs() < 1e-12);
+            assert!(sample.outward.dot(sample.tangent).abs() < 1e-12);
+        }
+        assert!(BeltPath::from_closed_polyline(&points, 1.0).is_err());
+        assert!(BeltPath::from_closed_polyline(&points, 2.5).is_err());
+        assert!(BeltPath::from_closed_polyline(&points, -0.1).is_err());
+        assert!(BeltPath::from_closed_polyline(&points, Real::NAN).is_err());
+        let mut reversed = points;
+        reversed.reverse();
+        assert!(BeltPath::from_closed_polyline(&reversed, 0.0).is_err());
+        let mut concave = points;
+        concave[1] = Vec3::new(0.0, -1.9, 0.9);
+        assert!(BeltPath::from_closed_polyline(&concave, 0.0).is_err());
+        let mut duplicate = points;
+        duplicate[1] = duplicate[0];
+        assert!(BeltPath::from_closed_polyline(&duplicate, 0.0).is_err());
+        let mut nonplanar = points;
+        nonplanar[1].x = 0.1;
+        assert!(BeltPath::from_closed_polyline(&nonplanar, 0.0).is_err());
     }
 }
