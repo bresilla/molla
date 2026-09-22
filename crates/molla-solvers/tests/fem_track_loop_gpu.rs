@@ -89,14 +89,24 @@ fn installed_track_nodes_clear_rigid_shapes() {
 
 #[test]
 fn coarse_track_surface_sampling_detects_missed_intersections() {
-    let report = track_run_resolution(0.005, 1.0 / 19200.0, 4, true, 1.0, None, true, 112);
+    let report = track_run_resolution(0.005, 1.0 / 19200.0, 4, true, 1.0, None, true, 112, false);
     assert!(report.surface_penetration > 0.0005);
 }
 
 #[test]
 fn longitudinally_refined_track_surface_clears_rigid_shapes() {
     for segments in [224, 448] {
-        let report = track_run_resolution(0.005, 1.0 / 19200.0, 4, true, 1.0, None, true, segments);
+        let report = track_run_resolution(
+            0.005,
+            1.0 / 19200.0,
+            4,
+            true,
+            1.0,
+            None,
+            true,
+            segments,
+            false,
+        );
         assert!(
             report.surface_penetration < 0.0005,
             "{segments} segments: {} m penetration",
@@ -115,6 +125,22 @@ fn rubber_track_propels_a_free_carrier_against_ground() {
 #[ignore = "requires a real GPU through make test-gpu"]
 fn frictionless_ground_cannot_supply_horizontal_track_impulse() {
     track_case(0.005, 1.0 / 19200.0, 4, false, 1.0, Some(0.0));
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn sampled_surface_track_circulates_on_frictionless_ground() {
+    track_run_resolution(
+        0.005,
+        1.0 / 19200.0,
+        4,
+        false,
+        1.0,
+        Some(0.0),
+        true,
+        224,
+        true,
+    );
 }
 
 #[test]
@@ -209,6 +235,7 @@ fn track_run(
         ground_friction,
         powered,
         224,
+        false,
     )
 }
 
@@ -221,8 +248,11 @@ fn track_run_resolution(
     ground_friction: Option<Real>,
     powered: bool,
     segments: usize,
+    sample_surface: bool,
 ) -> TrackReport {
-    eprintln!("track case powered={powered}, ground friction={ground_friction:?}");
+    eprintln!(
+        "track case powered={powered}, ground friction={ground_friction:?}, sampled surface={sample_surface}"
+    );
     let floating = ground_friction.is_some();
     let gravity = if floating {
         Vec3::new(0.0, 0.0, -9.81)
@@ -510,7 +540,19 @@ fn track_run_resolution(
     let mut control = rigid_model.control();
     control.joint_target_mode.host_mut().unwrap()[drive_dof] = JointTargetMode::Velocity as u32;
     control.joint_target_kd.host_mut().unwrap()[drive_dof] = 10.0;
-    let mut system = FemRigidGpuSystem::new(
+    let mut config = FemRigidConfig {
+        max_substep,
+        ..Default::default()
+    };
+    if sample_surface {
+        config.contact.iterations = 64;
+    }
+    let constructor = if sample_surface {
+        FemRigidGpuSystem::new_surface_sampled
+    } else {
+        FemRigidGpuSystem::new
+    };
+    let mut system = constructor(
         engine.clone(),
         FemRigidGpuScene {
             soft_model,
@@ -520,10 +562,7 @@ fn track_run_resolution(
             control,
             shapes,
         },
-        FemRigidConfig {
-            max_substep,
-            ..Default::default()
-        },
+        config,
     )
     .unwrap();
     if std::env::var_os("MOLLA_FEM_MOMENTUM_DIAGNOSTICS").is_some() {

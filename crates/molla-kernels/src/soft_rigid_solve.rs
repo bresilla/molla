@@ -208,7 +208,11 @@ impl SoftRigidSolveKernel {
             (b.positions, b.particle_count.max(1) as u64 * 16),
             (b.velocities, b.particle_count.max(1) as u64 * 16),
             (b.inverse_mass, b.particle_count.max(1) as u64 * 4),
-            (b.contacts, self.row_count.max(1) as u64 * 48),
+            (
+                b.contacts,
+                self.row_count.max(1) as u64
+                    * std::mem::size_of::<crate::soft_rigid_contact::SoftRigidContactGpu>() as u64,
+            ),
             (b.body_poses, b.body_count.max(1) as u64 * 32),
             (b.body_com, b.body_count.max(1) as u64 * 16),
             (

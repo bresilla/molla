@@ -94,14 +94,38 @@ drive tooth. The fixture now checks vertices, edge midpoints and triangle
 centroids before GPU execution. A coarse regression reproduces the missed
 intersection. Refinement to 224/448 longitudinal segments reduces maximum
 sampled penetration to 0.174/0.044 mm, below the unchanged 0.5 mm gate.
-The runtime fixture uses 224 segments, preserving physical lug width and
-56-lug pitch; its dynamic acceptance remains pending. Sampling is not an
-exhaustive clearance proof. Runtime primitive contact remains node-based,
-without triangle/edge contact or continuous collision detection.
+The 224-segment fixture preserves physical lug width and 56-lug pitch and now
+passes the full undamped frictionless case: 150.290 mm belt circulation after
+0.10 s settling plus 0.60 s drive, range 148.655..153.175 mm, maximum envelope
+departure 9.237 mm, drive speed 1.974 rad/s. Horizontal momentum magnitude is
+0.001016 kg m/s, ground penetration zero, lifetime minJ 0.617943 and finalJ
+0.633438. Carrier horizontal travel is only 0.0232 mm. This run uses vertex
+contacts and predates the sampled-contact kernel extension. It took 802.67 s
+and does not establish realtime performance. Sampling is not an exhaustive
+clearance proof. Default runtime contact remains node-based.
+
+An opt-in GPU surface-sampled composition now adds unique edge midpoints and
+triangle centroids without adding particle mass. Contact point and velocity
+use barycentric interpolation; soft effective inverse mass sums squared
+weights times inverse masses. Impulses distribute through the same weights,
+and articulated reaction acts at the interpolated point. Analytic GPU gates
+cover one/two/three-node support, sphere/box/cylinder geometry, friction cones,
+linear/angular momentum and malformed descriptor rejection. Edge/face cases
+also verify that vertex-only gathering misses their contacts.
+
+On the prestressed-ring bench, vertex-only contact leaves 0.587 mm sampled
+surface penetration. The new path with 64 contact sweeps reduces it to
+0.021/0.009/0.004 mm at substeps 1/2400, 1/4800 and 1/9600 s, below the fixed
+0.05 mm gate. Twelve sweeps failed that gate at 1/2400 s (0.102 mm); shared
+surface support needs more iterations. This is discrete sampled contact,
+not exact triangle/edge closest-point detection or CCD. Full-track sampled
+contact acceptance and performance remain unverified.
 
 Direct GPU effort controls allow a genuinely unpowered rotor after settling.
-The powered/passive ground comparison checks at least one pitch of additional
-motor-driven carrier travel beyond passive rubber relaxation. Full two-track
+The undamped 112-segment powered/passive comparison passes with 95.905 mm
+driven travel versus 11.028 mm passive relaxation: 84.877 mm additional motion,
+above the unchanged one-pitch requirement. Its coarse initial surface
+intersections still preclude full mechanism acceptance. Full two-track
 motion, obstacles, stalls, energy/convergence, performance and native Gearbox
 FEM/menu delivery remain incomplete.
 

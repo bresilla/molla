@@ -5,7 +5,7 @@ use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::momentum::{GeneralizedMomentumBindings, MomentumBindings, MomentumMonitor};
 use molla_kernels::soft_rigid_contact::{
-    SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidShapeGpu,
+    SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidSampleGpu, SoftRigidShapeGpu,
 };
 use molla_kernels::soft_rigid_solve::{
     SoftParticleDriftKernel, SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
@@ -55,8 +55,26 @@ pub struct FemRigidGpuSystem {
 impl FemRigidGpuSystem {
     pub fn new(
         engine: Arc<Engine>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+    ) -> Result<Self> {
+        Self::build(engine, scene, config, false)
+    }
+
+    /// Use vertices, edge midpoints and triangle centroids for primitive contacts.
+    pub fn new_surface_sampled(
+        engine: Arc<Engine>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+    ) -> Result<Self> {
+        Self::build(engine, scene, config, true)
+    }
+
+    fn build(
+        engine: Arc<Engine>,
         mut scene: FemRigidGpuScene,
         config: FemRigidConfig,
+        sample_surface: bool,
     ) -> Result<Self> {
         let device = engine
             .device()
@@ -169,15 +187,38 @@ impl FemRigidGpuSystem {
             .chunks_exact(4)
             .map(|t| [t[0], t[1], t[2], t[3]])
             .collect();
-        let mut nodes: Vec<_> = molla_sim::compute_tet_surface_triangles(&tets)
-            .into_iter()
-            .flatten()
-            .collect();
+        let triangles = molla_sim::compute_tet_surface_triangles(&tets);
+        let mut nodes: Vec<_> = triangles.iter().flatten().copied().collect();
         nodes.sort_unstable();
         nodes.dedup();
+        let mut samples = Vec::new();
+        if sample_surface {
+            samples.extend(nodes.iter().map(|&node| SoftRigidSampleGpu {
+                nodes: [node, 0, 0, 1],
+                weights: [1.0, 0.0, 0.0, 0.0],
+            }));
+            let mut edges = std::collections::BTreeSet::new();
+            for &[a, b, c] in &triangles {
+                for (i, j) in [(a, b), (b, c), (c, a)] {
+                    edges.insert((i.min(j), i.max(j)));
+                }
+            }
+            samples.extend(edges.into_iter().map(|(a, b)| SoftRigidSampleGpu {
+                nodes: [a, b, 0, 2],
+                weights: [0.5, 0.5, 0.0, 0.0],
+            }));
+            samples.extend(triangles.iter().map(|&[a, b, c]| SoftRigidSampleGpu {
+                nodes: [a, b, c, 3],
+                weights: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0],
+            }));
+        }
         let surface = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM surface nodes"),
-            contents: bytemuck::cast_slice(&nodes),
+            label: Some("FEM surface features"),
+            contents: if sample_surface {
+                bytemuck::cast_slice(&samples)
+            } else {
+                bytemuck::cast_slice(&nodes)
+            },
             usage: wgpu::BufferUsages::STORAGE,
         });
         let shape_count = scene.shapes.len();
@@ -218,7 +259,11 @@ impl FemRigidGpuSystem {
                 point_local: [p.x as f32, p.y as f32, p.z as f32, 0.0],
             })
             .collect();
-        let gather = SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?;
+        let gather = if sample_surface {
+            SoftRigidContactKernel::new_sampled(device, samples.len() as u32, shape_count as u32)?
+        } else {
+            SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?
+        };
         let solve = SoftRigidSolveKernel::new(device, n as u32, gather.row_count())?;
         let drift = SoftParticleDriftKernel::new(device);
         let volume = TetVolumeMonitor::new(device);

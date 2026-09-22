@@ -1,4 +1,4 @@
-//! Device-resident primitive contact generation for deformable surface nodes.
+//! Device-resident primitive contacts for deformable nodes and barycentric samples.
 
 use molla_core::{Error, Result};
 use wgpu::util::DeviceExt;
@@ -21,6 +21,18 @@ pub struct SoftRigidContactGpu {
     pub material: [f32; 4],
     /// Particle, body, shape, status (0 inactive, 1 contact, 2 invalid input).
     pub ids: [u32; 4],
+    /// Additional two particles, support count (1..=3), reserved.
+    pub support: [u32; 4],
+    /// Barycentric weights for the primary and additional particles.
+    pub weights: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SoftRigidSampleGpu {
+    /// Up to three distinct particles and support count (1..=3).
+    pub nodes: [u32; 4],
+    pub weights: [f32; 4],
 }
 
 #[repr(C)]
@@ -31,12 +43,14 @@ struct Params {
     particles: u32,
     bodies: u32,
     margin: f32,
-    padding: [u32; 3],
+    sampled: u32,
+    padding: [u32; 2],
 }
 
 pub struct SoftRigidContactBindings<'a> {
     pub positions: &'a wgpu::Buffer,
     pub radii: &'a wgpu::Buffer,
+    /// Node indices for new(), or SoftRigidSampleGpu entries for new_sampled().
     pub surface: &'a wgpu::Buffer,
     pub shapes: &'a wgpu::Buffer,
     pub body_poses: &'a wgpu::Buffer,
@@ -50,10 +64,25 @@ pub struct SoftRigidContactKernel {
     output: wgpu::Buffer,
     node_count: u32,
     shape_count: u32,
+    sampled: bool,
 }
 
 impl SoftRigidContactKernel {
     pub fn new(device: &wgpu::Device, node_count: u32, shape_count: u32) -> Result<Self> {
+        Self::build(device, node_count, shape_count, false)
+    }
+
+    /// Gather primitive contacts at barycentric surface samples.
+    pub fn new_sampled(device: &wgpu::Device, sample_count: u32, shape_count: u32) -> Result<Self> {
+        Self::build(device, sample_count, shape_count, true)
+    }
+
+    fn build(
+        device: &wgpu::Device,
+        node_count: u32,
+        shape_count: u32,
+        sampled: bool,
+    ) -> Result<Self> {
         let count = node_count
             .checked_mul(shape_count)
             .ok_or_else(|| Error::Build("FEM contact pair count overflow".into()))?;
@@ -116,6 +145,7 @@ impl SoftRigidContactKernel {
             output,
             node_count,
             shape_count,
+            sampled,
         })
     }
 
@@ -143,7 +173,10 @@ impl SoftRigidContactKernel {
         let required = [
             (bindings.positions, bindings.particle_count as u64 * 16),
             (bindings.radii, bindings.particle_count as u64 * 4),
-            (bindings.surface, self.node_count as u64 * 4),
+            (
+                bindings.surface,
+                self.node_count as u64 * if self.sampled { 32 } else { 4 },
+            ),
             (bindings.shapes, self.shape_count as u64 * 64),
             (bindings.body_poses, bindings.body_count.max(1) as u64 * 32),
         ];
@@ -156,7 +189,8 @@ impl SoftRigidContactKernel {
             particles: bindings.particle_count,
             bodies: bindings.body_count,
             margin,
-            padding: [0; 3],
+            sampled: u32::from(self.sampled),
+            padding: [0; 2],
         };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM contact parameters"),

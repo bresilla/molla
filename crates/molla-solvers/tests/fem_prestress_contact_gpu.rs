@@ -34,6 +34,25 @@ fn read<T: bytemuck::Pod>(engine: &Engine, buffer: &wgpu::Buffer, count: usize) 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn prestressed_rubber_stays_outside_its_support() {
+    let penetrations = prestress_support(false);
+    assert!(
+        penetrations.iter().all(|p| p.0 < 0.001),
+        "prestressed rubber penetrates support: {penetrations:?}"
+    );
+    assert!(penetrations.iter().all(|p| p.1 > 0.0005));
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn prestressed_surface_samples_stay_outside_support() {
+    let penetrations = prestress_support(true);
+    assert!(
+        penetrations.iter().all(|p| p.0 < 0.00005 && p.1 < 0.00005),
+        "prestressed surface samples penetrate support: {penetrations:?}"
+    );
+}
+
+fn prestress_support(sampled: bool) -> Vec<(f32, f32)> {
     let engine = Arc::new(Engine::new_gpu().unwrap());
     let mut penetrations = Vec::new();
     for (max_substep, recovery_speed) in [
@@ -98,7 +117,15 @@ fn prestressed_rubber_stays_outside_its_support() {
             ..Default::default()
         };
         config.contact.max_recovery_speed = recovery_speed;
-        let mut system = FemRigidGpuSystem::new(
+        if sampled {
+            config.contact.iterations = 64;
+        }
+        let constructor = if sampled {
+            FemRigidGpuSystem::new_surface_sampled
+        } else {
+            FemRigidGpuSystem::new
+        };
+        let mut system = constructor(
             engine.clone(),
             FemRigidGpuScene {
                 soft_model,
@@ -141,12 +168,28 @@ fn prestressed_rubber_stays_outside_its_support() {
             .iter()
             .map(|p| Vec3::new(p[0] as f64, p[1] as f64, p[2] as f64))
             .collect();
+        let mut surface_penetration = 0.0_f32;
+        for [a, b, c] in molla_sim::compute_tet_surface_triangles(&mesh.tets) {
+            let [a, b, c] = [
+                positions[a as usize],
+                positions[b as usize],
+                positions[c as usize],
+            ];
+            for p in [
+                (a + b) * 0.5,
+                (b + c) * 0.5,
+                (c + a) * 0.5,
+                (a + b + c) / 3.0,
+            ] {
+                surface_penetration = surface_penetration.max((0.122 - p.y.hypot(p.z)) as f32);
+            }
+        }
+        eprintln!(
+            "sampled={sampled}, vertex penetration={penetration}, surface penetration={surface_penetration}"
+        );
         assert!(mesh.minimum_volume_ratio(&positions).unwrap() > 0.5);
         assert_eq!(read::<u32>(&engine, system.status_buffer(), 1), [0]);
-        penetrations.push(penetration);
+        penetrations.push((penetration, surface_penetration));
     }
-    assert!(
-        penetrations.iter().all(|p| *p < 0.001),
-        "prestressed rubber penetrates support: {penetrations:?}"
-    );
+    penetrations
 }

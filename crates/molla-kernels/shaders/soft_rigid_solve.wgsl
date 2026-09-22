@@ -1,6 +1,9 @@
 struct Transform { position: vec4<f32>, rotation: vec4<f32> }
 struct SpatialVelocity { linear: vec4<f32>, angular: vec4<f32> }
-struct Contact { normal_gap: vec4<f32>, material: vec4<f32>, ids: vec4<u32> }
+struct Contact {
+    normal_gap: vec4<f32>, material: vec4<f32>, ids: vec4<u32>,
+    support: vec4<u32>, weights: vec4<f32>,
+}
 struct Row { inverse_normal: f32, tangent_lipschitz: f32, target_speed: f32, pad: f32, lambda: vec4<f32> }
 struct Params {
     dofs: u32, rows: u32, particles: u32, bodies: u32,
@@ -72,6 +75,10 @@ fn scatter_contacts(@builtin(global_invocation_id) gid: vec3<u32>,
 }
 
 fn finite(x: f32) -> bool { return abs(x) <= 3.402823e38; }
+fn support_node(contact: Contact, i: u32) -> u32 {
+    if i == 0u { return contact.ids.x; }
+    return contact.support[i-1u];
+}
 fn rotate(q: vec4<f32>, p: vec3<f32>) -> vec3<f32> {
     return p + 2.0 * cross(q.xyz, cross(q.xyz, p) + q.w * p);
 }
@@ -115,22 +122,40 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     rows[r] = Row(0.0, 0.0, 0.0, 0.0, vec4<f32>(0.0));
     let contact = contacts[r];
     if contact.ids.w == 0u || atomicLoad(&status) != 0u { return; }
-    let particle = contact.ids.x;
     let body = contact.ids.y;
-    if contact.ids.w != 1u || particle >= params.particles
+    if contact.ids.w != 1u || contact.support.z == 0u || contact.support.z > 3u
         || (body != 0xffffffffu && body >= params.bodies)
         || !finite(contact.normal_gap.w) || !finite(contact.material.x) || contact.material.x < 0.0
         || abs(dot(contact.normal_gap.xyz, contact.normal_gap.xyz) - 1.0) > 1e-4
         || !finite(dot(contact.normal_gap.xyz, contact.normal_gap.xyz)) {
         atomicOr(&status, 2u); return;
     }
-    let w = inverse_mass[particle];
-    if !finite(w) || w < 0.0 { atomicOr(&status, 2u); return; }
+    var w = 0.0;
+    var point = vec3<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var i = 0u; i < contact.support.z; i += 1u) {
+        let particle = support_node(contact, i);
+        let weight = contact.weights[i];
+        if particle >= params.particles || !finite(weight) || weight < 0.0 || weight > 1.0 {
+            atomicOr(&status, 2u); return;
+        }
+        for (var j = 0u; j < i; j += 1u) {
+            if particle == support_node(contact, j) { atomicOr(&status, 2u); return; }
+        }
+        let inverse = inverse_mass[particle];
+        if !finite(inverse) || inverse < 0.0 { atomicOr(&status, 2u); return; }
+        w += weight * weight * inverse;
+        point += weight * positions[particle].xyz;
+        weight_sum += weight;
+    }
+    if abs(weight_sum-1.0) > 1e-5 || !finite(dot(point, point)) {
+        atomicOr(&status, 2u); return;
+    }
     let n = params.dofs;
     let directions = basis(contact.normal_gap.xyz);
     var offset = vec3<f32>(0.0);
     if body != 0xffffffffu {
-        offset = positions[particle].xyz - poses[body].position.xyz - rotate(poses[body].rotation, body_com[body].xyz);
+        offset = point - poses[body].position.xyz - rotate(poses[body].rotation, body_com[body].xyz);
     }
     var diagonal = vec3<f32>(w);
     for (var k = 0u; k < 3u; k += 1u) {
@@ -175,15 +200,22 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 fn relative_velocity(r: u32, direction: vec3<f32>, k: u32) -> f32 {
-    var value = dot(velocities[contacts[r].ids.x].xyz, direction);
+    let contact = contacts[r];
+    var value = 0.0;
+    for (var i = 0u; i < contact.support.z; i += 1u) {
+        value += contact.weights[i] * dot(velocities[support_node(contact, i)].xyz, direction);
+    }
     for (var d = 0u; d < params.dofs; d += 1u) {
         value -= projected[(r*3u+k)*params.dofs+d] * rigid_velocity[d];
     }
     return value;
 }
 fn apply_delta(r: u32, direction: vec3<f32>, k: u32, impulse: f32) {
-    let particle = contacts[r].ids.x;
-    velocities[particle] = vec4<f32>(velocities[particle].xyz + direction * (impulse*inverse_mass[particle]), 0.0);
+    let contact = contacts[r];
+    for (var i = 0u; i < contact.support.z; i += 1u) {
+        let particle = support_node(contact, i);
+        velocities[particle] = vec4<f32>(velocities[particle].xyz + direction * (impulse*contact.weights[i]*inverse_mass[particle]), 0.0);
+    }
     for (var d = 0u; d < params.dofs; d += 1u) {
         rigid_velocity[d] -= response[(r*3u+k)*params.dofs+d] * impulse;
     }

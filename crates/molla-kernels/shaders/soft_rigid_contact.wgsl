@@ -2,10 +2,13 @@ struct Transform { position: vec4<f32>, rotation: vec4<f32> }
 struct Shape {
     position: vec4<f32>, rotation: vec4<f32>, data: vec4<f32>, ids: vec4<u32>,
 }
-struct Contact { normal_gap: vec4<f32>, material: vec4<f32>, ids: vec4<u32> }
+struct Contact {
+    normal_gap: vec4<f32>, material: vec4<f32>, ids: vec4<u32>,
+    support: vec4<u32>, weights: vec4<f32>,
+}
 struct Params {
     node_count: u32, shape_count: u32, particle_count: u32, body_count: u32,
-    margin: f32, pad0: u32, pad1: u32, pad2: u32,
+    margin: f32, sampled: u32, pad1: u32, pad2: u32,
 }
 @group(0) @binding(0) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> radii: array<f32>;
@@ -61,17 +64,45 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
     let row = gid.x;
     if row >= params.node_count * params.shape_count { return; }
     let shape_id = row / params.node_count;
-    let node = surface[row % params.node_count];
+    let index = row % params.node_count;
+    var nodes = vec4<u32>(surface[index], 0u, 0u, 1u);
+    var weights = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    if params.sampled != 0u {
+        let start = index * 8u;
+        nodes = vec4<u32>(surface[start], surface[start+1u], surface[start+2u], surface[start+3u]);
+        weights = bitcast<vec4<f32>>(vec4<u32>(surface[start+4u], surface[start+5u], surface[start+6u], surface[start+7u]));
+    }
+    let node = nodes.x;
     let shape = shapes[shape_id];
     var result: Contact;
     result.normal_gap = vec4<f32>(0.0);
     result.material = vec4<f32>(shape.data.w, 0.0, 0.0, 0.0);
     result.ids = vec4<u32>(node, shape.ids.y, shape_id, 0u);
+    result.support = vec4<u32>(nodes.yz, nodes.w, 0u);
+    result.weights = weights;
     if node >= params.particle_count || shape.ids.x > 2u
-        || (shape.ids.y != 0xffffffffu && shape.ids.y >= params.body_count) {
+        || (shape.ids.y != 0xffffffffu && shape.ids.y >= params.body_count)
+        || nodes.w == 0u || nodes.w > 3u {
         result.ids.w = 2u;
         contacts[row] = result;
         return;
+    }
+    var point = vec3<f32>(0.0);
+    var radius = 0.0;
+    var weight_sum = 0.0;
+    for (var i = 0u; i < nodes.w; i += 1u) {
+        var valid = nodes[i] < params.particle_count && weights[i] >= 0.0 && weights[i] <= 1.0;
+        for (var j = 0u; j < i; j += 1u) { valid = valid && nodes[i] != nodes[j]; }
+        if !valid {
+            result.ids.w = 2u; contacts[row] = result; return;
+        }
+        point += weights[i] * positions[nodes[i]].xyz;
+        radius += weights[i] * radii[nodes[i]];
+        weight_sum += weights[i];
+    }
+    if abs(weight_sum - 1.0) > 1e-5 || !(dot(point, point) <= 3.402823e38)
+        || !(radius >= 0.0 && radius <= 3.402823e38) {
+        result.ids.w = 2u; contacts[row] = result; return;
     }
     var center = shape.position.xyz;
     var rotation = shape.rotation;
@@ -80,9 +111,9 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
         center = pose.position.xyz + rotate(pose.rotation, center);
         rotation = multiply(pose.rotation, rotation);
     }
-    let local = rotate(vec4<f32>(-rotation.xyz, rotation.w), positions[node].xyz - center);
+    let local = rotate(vec4<f32>(-rotation.xyz, rotation.w), point - center);
     let sample = distance(shape.ids.x, shape.data.xyz, local);
-    result.normal_gap = vec4<f32>(rotate(rotation, sample.xyz), sample.w - radii[node]);
+    result.normal_gap = vec4<f32>(rotate(rotation, sample.xyz), sample.w - radius);
     result.ids.w = select(0u, 1u, result.normal_gap.w <= params.margin);
     contacts[row] = result;
 }

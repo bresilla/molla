@@ -198,6 +198,8 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
                     c.separation as f32,
                 ],
                 material: [c.friction as f32, 0.0, 0.0, 0.0],
+                support: [0, 0, 1, 0],
+                weights: [1.0, 0.0, 0.0, 0.0],
                 ids: [
                     c.particle as u32,
                     c.body.map_or(u32::MAX, |b| b as u32),
@@ -220,6 +222,8 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
                 normal_gap: [0.0; 4],
                 material: [0.0; 4],
                 ids: [0; 4],
+                support: [0; 4],
+                weights: [0.0; 4],
             };
             candidate_count
         ];
