@@ -1,5 +1,5 @@
 use super::{clamp_joint_pos, clamp_or_passthrough, joint_type_from_u32, project_angular_limits};
-use crate::core::Result;
+use crate::core::{Error, Result};
 use crate::math::{Quat, Real, Vec3};
 use crate::sim::{BodyFlags, JointType, Model};
 
@@ -47,8 +47,16 @@ pub(super) fn integrate(
                 let q_pred = q_in[coord_idx] + qd_capped * dt;
                 let lo = limit_lower.get(dof_idx).copied().unwrap_or(Real::NAN);
                 let hi = limit_upper.get(dof_idx).copied().unwrap_or(Real::NAN);
-                let (q_clamped, qd_after) = clamp_joint_pos(q_pred, qd_capped, lo, hi);
-                qd_new[dof_idx] = qd_after;
+                let q_clamped = q_pred.clamp(lo, hi);
+                let roundoff =
+                    64.0 * Real::EPSILON * (1.0 + q_in[coord_idx].abs() + (qd_capped * dt).abs());
+                let reaction_tolerance = 1e-8 * (dt + (q_clamped - q_in[coord_idx]).abs());
+                if (q_pred - q_clamped).abs() > roundoff + reaction_tolerance {
+                    return Err(Error::Solver(
+                        "scalar stop reaction left an infeasible velocity".into(),
+                    ));
+                }
+                qd_new[dof_idx] = qd_capped;
                 q_new[coord_idx] = q_clamped;
             }
             JointType::Ball => {
