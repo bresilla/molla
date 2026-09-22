@@ -4,47 +4,17 @@ use molla_compute::Engine;
 use molla_core::{BodyId, WorldId};
 use molla_kernels::soft_rigid_contact::SoftRigidShapeGpu;
 use molla_math::{Mat3, Quat, Real, SpatialInertia, Transform, Vec3};
-use molla_sim::soft_belt::{
-    RubberBeltMesh, RubberBeltParams, RubberCordParams, RubberLugParams,
-    path::{BeltPath, BeltPulley},
-};
 use molla_sim::{BodyParams, JointTargetMode, ModelBuilder, eval_fk};
 use molla_solvers::fem_rigid::FemRigidConfig;
 use molla_solvers::fem_rigid_gpu::{FemRigidGpuScene, FemRigidGpuSystem};
 use std::sync::Arc;
 
-fn read<T: bytemuck::Pod>(engine: &Engine, buffer: &wgpu::Buffer, count: usize) -> Vec<T> {
-    let device = engine.device().unwrap();
-    let queue = engine.queue().unwrap();
-    let size = (std::mem::size_of::<T>() * count) as u64;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("track acceptance"),
-        size,
-        mapped_at_creation: false,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-    queue.submit([encoder.finish()]);
-    let (tx, rx) = std::sync::mpsc::channel();
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    rx.recv().unwrap().unwrap();
-    bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec()
-}
+#[path = "common/reinforced_track.rs"]
+mod reinforced_track;
 
-fn cylinder(body: BodyId, x: Real, radius: Real, half_width: Real) -> SoftRigidShapeGpu {
-    SoftRigidShapeGpu {
-        position: [x as f32, 0.0, 0.0, 0.0],
-        rotation: Quat::from_rotation_z(std::f64::consts::FRAC_PI_2)
-            .to_array()
-            .map(|v| v as f32),
-        data: [radius as f32, half_width as f32, 0.0, 0.8],
-        ids: [2, body.index() as u32, 0, 0],
-    }
-}
+#[path = "common/gpu_readback.rs"]
+mod gpu_readback;
+use gpu_readback::{body_poses, read};
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
@@ -166,21 +136,6 @@ struct TrackReport {
     surface_penetration: Real,
 }
 
-fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
-    read::<[f32; 8]>(
-        engine,
-        system.rigid_state().body_q.device_buffer().unwrap(),
-        count,
-    )
-    .iter()
-    .map(|p| Transform {
-        position: Vec3::new(p[0] as Real, p[1] as Real, p[2] as Real),
-        rotation: Quat::from_xyzw(p[4] as Real, p[5] as Real, p[6] as Real, p[7] as Real)
-            .normalize(),
-    })
-    .collect()
-}
-
 fn track_loop(
     prestrain: Real,
     max_substep: Real,
@@ -259,67 +214,9 @@ fn track_run_resolution(
     } else {
         Vec3::ZERO
     };
-    let mut pulleys = [
-        BeltPulley {
-            center: Vec3::new(0.0, -0.52, -0.11),
-            radius: 0.132,
-        },
-        BeltPulley {
-            center: Vec3::new(0.0, 0.54, -0.11),
-            radius: 0.132,
-        },
-        BeltPulley {
-            center: Vec3::new(0.0, 0.405, 0.194),
-            radius: 0.111,
-        },
-    ];
-    let teeth = 12;
-    let lugs = 56;
-    for _ in 0..16 {
-        let path = BeltPath::around_pulleys(&pulleys).unwrap();
-        pulleys[2].radius = path.length() * teeth as Real / (std::f64::consts::TAU * lugs as Real);
-    }
-    let path = BeltPath::around_pulleys(&pulleys).unwrap();
-    let params = RubberBeltParams {
-        radius: path.length() / std::f64::consts::TAU,
-        segments,
-        width_cells,
-        thickness_cells: 2,
-        ..Default::default()
-    };
-    let mesh = RubberBeltMesh::circular(params)
-        .unwrap()
-        .with_drive_lugs(RubberLugParams {
-            count: lugs,
-            segment_span: segments / lugs / 2,
-            width_start: width_cells / 4,
-            width_cells: width_cells / 2,
-            depth: 0.012,
-            depth_cells: 2,
-        })
-        .unwrap();
-    let mut builder = ModelBuilder::new();
-    builder.set_world_gravity(WorldId(0), gravity);
-    builder.set_linear_damping(0.0);
-    mesh.append_reinforced_to(
-        &mut builder,
-        WorldId(0),
-        Vec3::ZERO,
-        RubberCordParams {
-            prestrain,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let soft_model = builder.build().unwrap();
-    let soft_masses = soft_model.particle_mass.host().unwrap().to_vec();
-    let mut soft_state = soft_model.state().unwrap();
-    let installed = mesh.installed_positions(&path, 0.0, Vec3::ZERO).unwrap();
-    soft_state
-        .particle_q
-        .host_mut()
-        .unwrap()
-        .copy_from_slice(&installed);
+    let mut soft_builder = ModelBuilder::new();
+    soft_builder.set_world_gravity(WorldId(0), gravity);
+    soft_builder.set_linear_damping(0.0);
     let mut builder = ModelBuilder::new();
     builder.begin_articulation();
     builder.set_world_gravity(WorldId(0), gravity);
@@ -347,101 +244,32 @@ fn track_run_resolution(
             )
             .unwrap();
     }
-    let mut shapes = Vec::new();
-    let mut drive = BodyId::NONE;
-    for (i, pulley) in pulleys.iter().enumerate() {
-        let wheel = builder.add_body(
-            BodyParams::new()
-                .with_pose(Transform::from_translation(pulley.center))
-                .with_spatial_inertia(SpatialInertia {
-                    mass: 6.0,
-                    com: Vec3::ZERO,
-                    inertia: Mat3::from_diagonal(Vec3::splat(0.05)),
-                }),
-        );
-        builder
-            .add_joint_revolute(
-                carrier,
-                wheel,
-                Transform::from_translation(pulley.center),
-                Transform::IDENTITY,
-                Vec3::X,
-            )
-            .unwrap();
-        if i == 2 {
-            drive = wheel;
-            let mut core = cylinder(wheel, 0.0, pulley.radius - 0.024, 0.044);
-            core.data[3] = 0.0;
-            shapes.push(core);
-        } else {
-            shapes.push(cylinder(
-                wheel,
-                0.0,
-                pulley.radius - params.thickness * 0.5 - 0.012,
-                0.05,
-            ));
-            for x in [-0.075, 0.075] {
-                shapes.push(cylinder(
-                    wheel,
-                    x,
-                    pulley.radius - params.thickness * 0.5,
-                    0.025,
-                ));
-            }
-        }
-    }
-    for y in [-0.28, 0.005, 0.29] {
-        let center = Vec3::new(0.0, y, -0.18);
-        let wheel = builder.add_body(
-            BodyParams::new()
-                .with_pose(Transform::from_translation(center))
-                .with_spatial_inertia(SpatialInertia {
-                    mass: 3.0,
-                    com: Vec3::ZERO,
-                    inertia: Mat3::from_diagonal(Vec3::splat(0.01)),
-                }),
-        );
-        builder
-            .add_joint_revolute(
-                carrier,
-                wheel,
-                Transform::from_translation(center),
-                Transform::IDENTITY,
-                Vec3::X,
-            )
-            .unwrap();
-        for x in [-0.075, 0.075] {
-            shapes.push(cylinder(wheel, x, 0.052, 0.025));
-        }
-        shapes.push(cylinder(wheel, 0.0, 0.040, 0.05));
-    }
-    let mut gap_angle = 0.0;
-    let mut nearest = Real::INFINITY;
-    for lug in 0..lugs {
-        let sample = path
-            .sample((lug as Real + 0.75) * path.length() / lugs as Real)
-            .unwrap();
-        let radial = sample.position - pulleys[2].center;
-        let error = (radial.length() - pulleys[2].radius).abs();
-        if error < nearest {
-            nearest = error;
-            gap_angle = radial.z.atan2(radial.y);
-        }
-    }
-    for t in 0..teeth {
-        let angle = gap_angle + std::f64::consts::TAU * t as Real / teeth as Real;
-        let radius = pulleys[2].radius - 0.0181;
-        shapes.push(SoftRigidShapeGpu {
-            position: [
-                0.0,
-                (radius * angle.cos()) as f32,
-                (radius * angle.sin()) as f32,
-                0.0,
-            ],
-            rotation: Quat::from_rotation_x(angle).to_array().map(|v| v as f32),
-            data: [0.043, 0.0079, 0.006, 0.0],
-            ids: [1, drive.index() as u32, 0, 0],
-        });
+    let reinforced_track::TrackRig {
+        mesh,
+        path,
+        params,
+        pulleys,
+        lugs,
+        nodes,
+        drive_joint,
+        mut shapes,
+        installed,
+        center,
+    } = reinforced_track::build_track(
+        &mut soft_builder,
+        &mut builder,
+        carrier,
+        Vec3::ZERO,
+        segments,
+        width_cells,
+        prestrain,
+    );
+    assert_eq!(center, Vec3::ZERO);
+    let soft_model = soft_builder.build().unwrap();
+    let soft_masses = soft_model.particle_mass.host().unwrap().to_vec();
+    let mut soft_state = soft_model.state().unwrap();
+    for (&node, &position) in nodes.iter().zip(&installed) {
+        soft_state.particle_q.host_mut().unwrap()[node as usize] = position;
     }
     if let Some(friction) = ground_friction {
         shapes.push(SoftRigidShapeGpu {
@@ -452,7 +280,7 @@ fn track_run_resolution(
         });
     }
     let mut rigid_model = builder.build().unwrap();
-    let drive_dof = if floating { 8 } else { 2 };
+    let drive_dof = rigid_model.joint_dof_offset.host().unwrap()[drive_joint.index()] as usize;
     let dof_count = rigid_model.joint_dof_total;
     let coord_count = rigid_model.joint_coord_total;
     let rigid_masses = rigid_model.body_mass.host().unwrap().to_vec();
@@ -480,34 +308,8 @@ fn track_run_resolution(
         } else {
             rigid_state.body_q.host().unwrap()[shape.ids[1] as usize]
         };
-        let rotation = Quat::from_xyzw(
-            shape.rotation[0] as Real,
-            shape.rotation[1] as Real,
-            shape.rotation[2] as Real,
-            shape.rotation[3] as Real,
-        )
-        .normalize();
-        let center = Vec3::new(
-            shape.position[0] as Real,
-            shape.position[1] as Real,
-            shape.position[2] as Real,
-        );
-        let data = Vec3::new(
-            shape.data[0] as Real,
-            shape.data[1] as Real,
-            shape.data[2] as Real,
-        );
         for (node, q) in installed.iter().chain(samples.iter()).enumerate() {
-            let p =
-                rotation.conjugate() * (pose.rotation.conjugate() * (*q - pose.position) - center);
-            let d = if shape.ids[0] == 1 {
-                let delta = p.abs() - data;
-                delta.max(Vec3::ZERO).length() + delta.max_element().min(0.0)
-            } else {
-                let radial = p.x.hypot(p.z) - data.x;
-                let axial = p.y.abs() - data.y;
-                radial.max(0.0).hypot(axial.max(0.0)) + radial.max(axial).min(0.0)
-            };
+            let d = reinforced_track::primitive_gap(shape, pose, *q);
             surface_penetration = surface_penetration.max(-d);
             if node < installed.len() && -d > deepest.0 {
                 deepest = (-d, s, node);

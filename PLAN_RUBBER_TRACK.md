@@ -63,7 +63,7 @@ physical implementations. Runtime mode switching/menu implementation is pending.
    tension only; width quadrature preserves total EA as the mesh refines.
    Reference line density adds lumped nodal mass, and optional prestrain
    shortens cord rest length. Material shear/bending remains volumetric rubber.
-   Full mesh/timestep convergence, hysteresis and a physical tensioner remain
+Full mesh/timestep convergence, hysteresis and a physical tensioner remain
    open; cord bending, slip and delamination are not implemented.
 3. **Contact bench:** one powered rigid sprocket, unpowered rollers and a
    supported belt. Resolve actual tooth/lug contact and two-way linear/angular
@@ -77,6 +77,28 @@ physical implementations. Runtime mode switching/menu implementation is pending.
    asset and labelled controls. Do not switch CEOL's default until it passes.
 
 ## Model limits and evidence
+
+### Two-track vehicle fixture
+
+The single-track engineering fixture now shares its physical assembly with a
+two-track test carrier: 1000 kg chassis, 0.82 m track spacing, 13 rigid bodies,
+18 DOFs and independent motor DOFs 8/14. The two belts contain 8736 particles
+and 26880 tetrahedra. CPU topology and sampled initial-clearance gates pass;
+maximum initial penetration is 0.174284 mm per side. All passive rollers are
+unpowered revolute joints. These test parameters are not measured CEOL data.
+
+Explicit GPU cases cover forward/reverse, both differential pivot signs,
+airborne conservation, frictionless circulation, sampled-surface forward drive
+and a powered/passive comparison. Dynamic acceptance is pending. Straight
+cases retain the single-track 40 Nm cap per motor; pivot cases use 300 Nm and
+higher velocity gain. No chassis or belt velocity is prescribed. Captures
+include both belts, rigid poses and intermediate drive-interval snapshots.
+
+Native Gearbox currently uses a CPU RigidWorld adapter and the older d5476026
+Molla pin. Engine has no externally supplied render-device constructor yet.
+Native GPU deformation needs explicit device sharing and exclusive physics
+ownership, rather than per-node CPU readback. Current main Engine device-loss
+edits are unrelated work and must be preserved when adding that interface.
 
 ### Current full-track boundary (2026-09-22)
 
