@@ -80,6 +80,7 @@ struct SpatialVecGpu {
 @group(2) @binding(3) var<storage, read> joint_target_vel:   array<f32>;
 @group(2) @binding(4) var<storage, read> joint_target_kp:    array<f32>;
 @group(2) @binding(5) var<storage, read> joint_target_kd:    array<f32>;
+@group(2) @binding(6) var<storage, read> joint_motor_max_force: array<f32>;
 
 const TARGET_NONE: u32 = 0u;
 const TARGET_POS:  u32 = 1u;
@@ -593,7 +594,9 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             // `joint_muscle_torque[dof_g]`. Only the cable linear-
             // stretch DoF is populated; everything else is zero.
             let muscle_tau = joint_muscle_torque[dof_g];
-            let tau_raw = joint_force[dof_g] + drv - mu_jt * qd_now
+            let motor_cap = joint_motor_max_force[dof_g];
+            let motor_torque = clamp(drv, -motor_cap, motor_cap);
+            let tau_raw = joint_force[dof_g] + motor_torque - mu_jt * qd_now
                           + cable_tau + muscle_tau;
             let tau_app = clamp_or_passthrough(tau_raw, joint_effort_limit[dof_g]);
             u_tau_arr[k][d] = tau_app - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));

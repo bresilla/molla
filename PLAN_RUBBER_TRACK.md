@@ -434,8 +434,19 @@ detection implementation.
 The resident composition currently accepts one unreversed dynamic articulation
 up to 32 joints and 64 DOFs and explicit primitive contact shapes. It exposes sticky GPU
 failure status; callers must check it before accepting results. Existing GPU
-Featherstone does not implement reversed joints or motor-only caps;
-those are not silently delegated to CPU. Dense joint blocks execute on GPU.
+Featherstone rejects reversed joints and acceleration motors rather than
+silently delegating them to CPU. Motor-only force caps execute on GPU before
+feedforward, friction, cable and muscle forces are added; total joint effort
+limits still apply to the resulting sum. NaN and negative motor caps are
+rejected. Zero and positive-infinite caps retain their zero-drive and unlimited
+semantics. Dense joint blocks execute on GPU.
+
+`featherstone_motor_caps_gpu` checks all four driven modes against CPU and
+analytic unit-inertia results, including both signs, zero/infinite motor caps,
+separate feedforward and total-effort clipping. A coupled FEM island regression
+also verifies capped rotor acceleration and zero GPU status. The extra control
+binding raises Featherstone to35 storage buffers, below the FEM composition's
+existing42-buffer minimum; shared-device minimum-limit rendering tests pass.
 The driven bench uses the physical joint effort limit for its 5 Nm cap.
 The same tooth bench now includes a free 750 kg carrier and its 2 kg rotor.
 Both directions pass airborne conservation without prescribed motion or a

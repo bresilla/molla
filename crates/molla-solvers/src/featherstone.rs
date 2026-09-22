@@ -613,16 +613,20 @@ impl FeatherstoneSolver {
                 "reversed joints require CPU Featherstone".into(),
             ));
         }
+        if self.is_gpu() && control.joint_motor_model.host()?.iter().any(|&m| m != 0) {
+            return Err(crate::core::Error::Solver(
+                "acceleration motors require CPU Featherstone".into(),
+            ));
+        }
         if self.is_gpu()
-            && (control.joint_motor_model.host()?.iter().any(|&m| m != 0)
-                || control
-                    .joint_motor_max_force
-                    .host()?
-                    .iter()
-                    .any(|cap| cap.is_finite()))
+            && control
+                .joint_motor_max_force
+                .host()?
+                .iter()
+                .any(|cap| cap.is_nan() || *cap < 0.0)
         {
             return Err(crate::core::Error::Solver(
-                "acceleration motors and motor-only caps require CPU Featherstone".into(),
+                "motor-only caps must be nonnegative and not NaN".into(),
             ));
         }
         match &mut self.backend {

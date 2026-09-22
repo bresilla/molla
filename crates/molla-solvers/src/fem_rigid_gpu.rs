@@ -277,7 +277,7 @@ impl FemRigidGpuSystem {
                 .joint_motor_max_force
                 .host()?
                 .iter()
-                .any(|v| v.is_finite())
+                .any(|v| v.is_nan() || *v < 0.0)
             || !config.max_substep.is_finite()
             || config.max_substep <= 0.0
             || config.elastic_iterations == 0

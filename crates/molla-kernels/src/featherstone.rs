@@ -69,7 +69,7 @@ impl FeatherstoneKernel {
         });
         let layout_control = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone control"),
-            entries: &storage_entries(6, true),
+            entries: &storage_entries(7, true),
         });
         let layout_arts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone arts"),
@@ -326,6 +326,7 @@ impl FeatherstoneKernel {
                 buffer_entry(3, control.joint_target_vel.device_buffer())?,
                 buffer_entry(4, control.joint_target_kp.device_buffer())?,
                 buffer_entry(5, control.joint_target_kd.device_buffer())?,
+                buffer_entry(6, control.joint_motor_max_force.device_buffer())?,
             ],
         });
 
