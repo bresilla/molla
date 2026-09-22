@@ -174,7 +174,18 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, false, None)
+        self.encode_internal(device, encoder, bindings, settings, 0..=6, None)
+    }
+
+    /// Encode mass factorization and contact responses without applying impulses.
+    pub fn encode_preparation(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+    ) -> Result<()> {
+        self.encode_internal(device, encoder, bindings, settings, 0..=1, None)
     }
 
     /// Submit individual contact passes and report queue completion without state readback.
@@ -192,7 +203,7 @@ impl SoftRigidSolveKernel {
             encoder,
             bindings,
             settings,
-            false,
+            0..=6,
             Some((queue, completed)),
         )
     }
@@ -205,7 +216,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, true, None)
+        self.encode_internal(device, encoder, bindings, settings, 6..=6, None)
     }
 
     fn encode_internal(
@@ -214,7 +225,7 @@ impl SoftRigidSolveKernel {
         encoder: &mut wgpu::CommandEncoder,
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
-        recover_only: bool,
+        stages: std::ops::RangeInclusive<usize>,
         trace: Option<(&wgpu::Queue, std::sync::Arc<dyn Fn(usize) + Send + Sync>)>,
     ) -> Result<()> {
         if settings.iterations == 0
@@ -311,7 +322,7 @@ impl SoftRigidSolveKernel {
             ])
             .enumerate()
         {
-            if count == 0 || (recover_only && index != 6) {
+            if count == 0 || !stages.contains(&index) {
                 continue;
             }
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
