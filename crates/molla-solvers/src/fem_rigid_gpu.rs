@@ -17,7 +17,7 @@ use molla_math::Real;
 use molla_sim::{Contacts, Control, Model, State};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use wgpu::util::DeviceExt;
 
@@ -217,6 +217,7 @@ pub struct FemRigidGpuSystem {
     drift: SoftParticleDriftKernel,
     volume: TetVolumeMonitor,
     momentum: Option<MomentumMonitor>,
+    momentum_fences: Option<Arc<[AtomicU64; 5]>>,
     config: FemRigidConfig,
     queued_substeps: u32,
     completion: Option<Arc<AtomicBool>>,
@@ -571,6 +572,7 @@ impl FemRigidGpuSystem {
             drift,
             volume,
             momentum: None,
+            momentum_fences: None,
             config,
             queued_substeps: 0,
             completion: None,
@@ -602,7 +604,15 @@ impl FemRigidGpuSystem {
     pub fn enable_momentum_diagnostics(&mut self) {
         if self.momentum.is_none() {
             self.momentum = Some(MomentumMonitor::new(&self.device));
+            self.momentum_fences = Some(Arc::new(std::array::from_fn(|_| AtomicU64::new(0))));
         }
+    }
+
+    /// Queue-completed counts for diagnostic phases; not a physical-validity check or state readback.
+    pub fn completed_momentum_phases(&self) -> Option<[u64; 5]> {
+        self.momentum_fences
+            .as_ref()
+            .map(|counts| std::array::from_fn(|phase| counts[phase].load(Ordering::Acquire)))
     }
 
     /// Input, FEM prediction, rigid prediction, contact and final-drift momentum pairs, then deltas.
@@ -645,6 +655,10 @@ impl FemRigidGpuSystem {
             phase,
         )?;
         self.queue.submit([encoder.finish()]);
+        let counts = self.momentum_fences.as_ref().unwrap().clone();
+        self.queue.on_submitted_work_done(move || {
+            counts[phase as usize].fetch_add(1, Ordering::Release);
+        });
         Ok(())
     }
 

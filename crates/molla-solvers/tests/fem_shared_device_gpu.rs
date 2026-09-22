@@ -306,11 +306,14 @@ fn external_device_renders_resident_fem_and_retains_owner_lifecycle() {
     );
     for system in [&mut baseline, &mut external, &mut sampled] {
         system.set_drive_effort(0, 0.5).unwrap();
+        assert_eq!(system.completed_momentum_phases(), None);
         system.enable_momentum_diagnostics();
+        assert_eq!(system.completed_momentum_phases(), Some([0; 5]));
         system.step(65.0 / 4096.0).unwrap();
         assert!(system.soft_state().particle_q.host().is_err());
         assert!(system.soft_state().particle_qd.host().is_err());
         assert_eq!(read(&device, &queue, system.status_buffer()), [0; 4]);
+        assert_eq!(system.completed_momentum_phases(), Some([65; 5]));
     }
     let snapshot = |system: &FemRigidGpuSystem| {
         [
