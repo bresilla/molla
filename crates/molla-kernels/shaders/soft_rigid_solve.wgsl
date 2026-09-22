@@ -31,7 +31,7 @@ var<workgroup> active_prefix: array<u32, 64>;
 fn scan_contacts(row: u32, lane: u32) -> u32 {
     var enabled = 0u;
     if row < params.rows {
-        enabled = select(0u, 1u, contacts[row].ids.w == 1u);
+        enabled = select(0u, 1u, contacts[row].ids.w == 1u || contacts[row].ids.w == 3u);
     }
     active_prefix[lane] = enabled;
     workgroupBarrier();
@@ -88,6 +88,27 @@ fn basis(normal: vec3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(normal, tangent, cross(normal, tangent));
 }
 
+fn anchor(body: u32, local: vec3<f32>) -> vec3<f32> {
+    return poses[body].position.xyz + rotate(poses[body].rotation, local);
+}
+fn valid_body(body: u32) -> bool {
+    let norm = dot(poses[body].rotation, poses[body].rotation);
+    return finite(dot(poses[body].position.xyz, poses[body].position.xyz))
+        && finite(dot(body_com[body].xyz, body_com[body].xyz)) && finite(norm) && abs(norm-1.0) <= 1e-4;
+}
+fn point_jacobian(body: u32, offset: vec3<f32>, d: u32) -> vec3<f32> {
+    let n = params.dofs;
+    let start = body*6u*n+d;
+    let linear = vec3<f32>(jacobians[start], jacobians[start+n], jacobians[start+2u*n]);
+    let angular = vec3<f32>(jacobians[start+3u*n], jacobians[start+4u*n], jacobians[start+5u*n]);
+    return linear + cross(angular, offset);
+}
+fn loop_target(contact: Contact) -> vec3<f32> {
+    let error = anchor(contact.ids.x, contact.material.xyz) - anchor(contact.ids.y, contact.weights.xyz);
+    let speed = -error * (params.recovery / params.dt);
+    return clamp(speed, vec3<f32>(-params.max_recovery), vec3<f32>(params.max_recovery));
+}
+
 @compute @workgroup_size(1)
 fn factor_mass() {
     if atomicLoad(&status) != 0u { return; }
@@ -123,7 +144,17 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     let contact = contacts[r];
     if contact.ids.w == 0u || atomicLoad(&status) != 0u { return; }
     let body = contact.ids.y;
-    if contact.ids.w != 1u || contact.support.z == 0u || contact.support.z > 3u
+    let ball = contact.ids.w == 3u;
+    if ball {
+        if contact.ids.x >= params.bodies || body >= params.bodies || contact.ids.x == body
+            || contact.support.z != 0u || !finite(dot(contact.material.xyz, contact.material.xyz))
+            || !finite(dot(contact.weights.xyz, contact.weights.xyz)) {
+            atomicOr(&status, 2u); return;
+        }
+        if !valid_body(contact.ids.x) || !valid_body(body) {
+            atomicOr(&status, 2u); return;
+        }
+    } else if contact.ids.w != 1u || contact.support.z == 0u || contact.support.z > 3u
         || (body != 0xffffffffu && body >= params.bodies)
         || !finite(contact.normal_gap.w) || !finite(contact.material.x) || contact.material.x < 0.0
         || abs(dot(contact.normal_gap.xyz, contact.normal_gap.xyz) - 1.0) > 1e-4
@@ -148,11 +179,17 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         point += weight * positions[particle].xyz;
         weight_sum += weight;
     }
-    if abs(weight_sum-1.0) > 1e-5 || !finite(dot(point, point)) {
+    if (!ball && abs(weight_sum-1.0) > 1e-5) || !finite(dot(point, point)) {
         atomicOr(&status, 2u); return;
     }
     let n = params.dofs;
-    let directions = basis(contact.normal_gap.xyz);
+    var directions = basis(contact.normal_gap.xyz);
+    var offset_a = vec3<f32>(0.0);
+    if ball {
+        directions = mat3x3<f32>(vec3<f32>(1.0,0.0,0.0), vec3<f32>(0.0,1.0,0.0), vec3<f32>(0.0,0.0,1.0));
+        point = anchor(body, contact.weights.xyz);
+        offset_a = rotate(poses[contact.ids.x].rotation, contact.material.xyz - body_com[contact.ids.x].xyz);
+    }
     var offset = vec3<f32>(0.0);
     if body != 0xffffffffu {
         offset = point - poses[body].position.xyz - rotate(poses[body].rotation, body_com[body].xyz);
@@ -164,11 +201,10 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var d = 0u; d < n; d += 1u) {
             var value = 0.0;
             if body != 0xffffffffu {
-                let start = body*6u*n+d;
-                let linear = vec3<f32>(jacobians[start], jacobians[start+n], jacobians[start+2u*n]);
-                let angular = vec3<f32>(jacobians[start+3u*n], jacobians[start+4u*n], jacobians[start+5u*n]);
-                value = dot(directions[k], linear + cross(angular, offset));
+                value = dot(directions[k], point_jacobian(body, offset, d));
             }
+            if ball { value -= dot(directions[k], point_jacobian(contact.ids.x, offset_a, d)); }
+            if !finite(value) { atomicOr(&status, 2u); return; }
             projected[base+d] = value;
             for (var j = 0u; j < d; j += 1u) { value -= factor[d*n+j]*solution[j]; }
             solution[d] = 0.0;
@@ -185,6 +221,14 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
             if !finite(solution[d]) { atomicOr(&status, 2u); return; }
         }
         for (var d = 0u; d < n; d += 1u) { diagonal[k] += projected[base+d]*solution[d]; }
+    }
+    if ball {
+        let desired = loop_target(contact);
+        if !finite(dot(diagonal,diagonal)) || any(diagonal < vec3<f32>(0.0)) || !finite(dot(desired,desired)) {
+            atomicOr(&status, 2u); return;
+        }
+        rows[r] = Row(diagonal.x, diagonal.y, diagonal.z, 0.0, vec4<f32>(0.0));
+        return;
     }
     var off_diagonal = 0.0;
     for (var d = 0u; d < n; d += 1u) {
@@ -228,6 +272,27 @@ fn solve() {
         for (var rank = 0u; rank < active_rows[0]; rank += 1u) {
             let r = active_rows[rank+1u];
             let contact = contacts[r];
+            if contact.ids.w == 3u {
+                let row = rows[r];
+                let diagonal = vec3<f32>(row.inverse_normal, row.tangent_lipschitz, row.target_speed);
+                let desired = loop_target(contact);
+                var lambda = row.lambda.xyz;
+                for (var k = 0u; k < 3u; k += 1u) {
+                    let residual = desired[k] - relative_velocity(r,vec3<f32>(0.0),k);
+                    if !finite(residual) { atomicStore(&status,4u); return; }
+                    if diagonal[k] == 0.0 {
+                        if residual != 0.0 { atomicStore(&status,2u); return; }
+                        continue;
+                    }
+                    let impulse = residual / diagonal[k];
+                    if !finite(impulse) { atomicStore(&status,4u); return; }
+                    apply_delta(r, vec3<f32>(0.0), k, impulse);
+                    lambda[k] += impulse;
+                }
+                if !finite(dot(lambda,lambda)) { atomicStore(&status,4u); return; }
+                rows[r].lambda = vec4<f32>(lambda,0.0);
+                continue;
+            }
             if contact.ids.w != 1u { continue; }
             let directions = basis(contact.normal_gap.xyz);
             let row = rows[r];

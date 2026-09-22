@@ -5,7 +5,8 @@ use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::momentum::{GeneralizedMomentumBindings, MomentumBindings, MomentumMonitor};
 use molla_kernels::soft_rigid_contact::{
-    SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidSampleGpu, SoftRigidShapeGpu,
+    SoftRigidBallJoint, SoftRigidContactBindings, SoftRigidContactKernel, SoftRigidSampleGpu,
+    SoftRigidShapeGpu,
 };
 use molla_kernels::soft_rigid_solve::{
     SoftParticleDriftKernel, SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveSettings,
@@ -182,7 +183,8 @@ impl FemRigidGpuSystem {
         Self::new_surface_sampled_on_device(device, queue, scene, config)
     }
 
-    /// Construct on a matching externally managed device and queue.
+    /// Construct on a matching externally managed device and queue, initializing
+    /// rigid body transforms and velocities from generalized coordinates.
     /// The caller retains device-loss handling and queue scheduling; this system
     /// neither replaces callbacks nor destroys the device. State buffers remain
     /// on that device and can be bound directly by its renderer.
@@ -192,7 +194,7 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, false)
+        Self::build(device, queue, scene, config, false, &[])
     }
 
     /// Construct sampled surface contacts on an externally managed device/queue.
@@ -202,7 +204,18 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, true)
+        Self::build(device, queue, scene, config, true, &[])
+    }
+
+    /// Sampled surface contacts and bilateral body-local spherical closures.
+    pub fn new_surface_sampled_with_ball_joints_on_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+        joints: &[SoftRigidBallJoint],
+    ) -> Result<Self> {
+        Self::build(device, queue, scene, config, true, joints)
     }
 
     fn build(
@@ -211,6 +224,7 @@ impl FemRigidGpuSystem {
         mut scene: FemRigidGpuScene,
         config: FemRigidConfig,
         sample_surface: bool,
+        joints: &[SoftRigidBallJoint],
     ) -> Result<Self> {
         validate_device_limits(&device.limits())?;
         let device = &device;
@@ -363,6 +377,8 @@ impl FemRigidGpuSystem {
             contents: bytemuck::cast_slice(&scene.shapes),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        molla_sim::eval_fk(&scene.rigid_model, &mut scene.rigid_state)?;
+        molla_sim::eval_body_velocities(&scene.rigid_model, &mut scene.rigid_state)?;
         scene.soft_model.upload_to_device(device, queue)?;
         scene.rigid_model.upload_to_device(device, queue)?;
         scene.soft_state.upload_to_device(device, queue)?;
@@ -393,7 +409,14 @@ impl FemRigidGpuSystem {
             })
             .collect();
         let gather = if sample_surface {
-            SoftRigidContactKernel::new_sampled(device, samples.len() as u32, shape_count as u32)?
+            SoftRigidContactKernel::new_sampled_with_ball_joints(
+                device,
+                queue,
+                samples.len() as u32,
+                shape_count as u32,
+                scene.rigid_model.body_count as u32,
+                joints,
+            )?
         } else {
             SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?
         };

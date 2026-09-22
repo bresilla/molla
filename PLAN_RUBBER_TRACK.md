@@ -78,6 +78,33 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### GPU spherical closures (2026-09-22)
+
+`SoftRigidBallJoint` supplies two body-local anchors to persistent GPU rows.
+The sampled FEM constructor accepts these closures without changing existing
+scene literals. They participate in the same contact sweeps through signed
+XYZ impulses and the articulated mass response; no body pose is snapped and
+no per-node runtime readback is added. Separation recovery uses the contact
+recovery fraction and a speed cap per world axis. Exactly zero response axes
+with a nonzero residual fail explicitly rather than silently discarding it.
+
+`fem_ball_joint_gpu` checks a dense impulse oracle, rotated frames with nonzero
+COM offsets, linear/angular momentum, soft contact coupling, planar redundancy,
+invalid inputs and an incompatible locked direction. A driven floating
+four-bar mechanism over128 substeps closes to about0.081 micrometres versus
+6.14 mm without its closure; final momentum is about0.000100 kg m/s.
+This includes repeated primitive gather before the persistent loop tail.
+
+The integration fixture exposed inconsistent startup body transforms copied
+from `Model::state` before FK. The FEM constructor now evaluates rigid FK and
+body velocities from generalized state before its initial upload. Otherwise
+the first closure used inconsistent poses and articulated mass response.
+
+These are solver and mechanism gates, not actual CEOL delivery. The authored
+two hitch closures still need machine binding and validation; actual track
+geometry, exclusive backend ownership, pose/TF updates, menu selection, pivot
+retention and the remaining full-vehicle gates are still pending.
+
 ### Positive-pivot retention failure (2026-09-22)
 
 The full two-track positive pivot completed all five drive intervals but failed

@@ -19,12 +19,46 @@ pub struct SoftRigidShapeGpu {
 pub struct SoftRigidContactGpu {
     pub normal_gap: [f32; 4],
     pub material: [f32; 4],
-    /// Particle, body, shape, status (0 inactive, 1 contact, 2 invalid input).
+    /// Particle/body A, body B, shape, status (0 inactive, 1 contact, 2 invalid, 3 ball joint).
     pub ids: [u32; 4],
-    /// Additional two particles, support count (1..=3), reserved.
+    /// Additional particles, support count (1..=3, or zero for ball rows), reserved.
     pub support: [u32; 4],
-    /// Barycentric weights for the primary and additional particles.
+    /// Barycentric weights; ball rows instead store body B's local anchor in xyz.
     pub weights: [f32; 4],
+}
+
+/// Body-local spherical loop anchors in one articulation.
+#[derive(Clone, Copy, Debug)]
+pub struct SoftRigidBallJoint {
+    pub body_a: u32,
+    pub body_b: u32,
+    pub anchor_a: [f32; 3],
+    pub anchor_b: [f32; 3],
+}
+
+impl SoftRigidBallJoint {
+    pub fn row(&self, body_count: u32) -> Result<SoftRigidContactGpu> {
+        if self.body_a == self.body_b
+            || self.body_a >= body_count
+            || self.body_b >= body_count
+            || self
+                .anchor_a
+                .iter()
+                .chain(&self.anchor_b)
+                .any(|v| !v.is_finite())
+        {
+            return Err(Error::Build(
+                "invalid FEM spherical loop anchors or bodies".into(),
+            ));
+        }
+        Ok(SoftRigidContactGpu {
+            normal_gap: [1.0, 0.0, 0.0, 0.0],
+            material: [self.anchor_a[0], self.anchor_a[1], self.anchor_a[2], 0.0],
+            ids: [self.body_a, self.body_b, 0, 3],
+            support: [0; 4],
+            weights: [self.anchor_b[0], self.anchor_b[1], self.anchor_b[2], 0.0],
+        })
+    }
 }
 
 #[repr(C)]
@@ -65,16 +99,45 @@ pub struct SoftRigidContactKernel {
     node_count: u32,
     shape_count: u32,
     sampled: bool,
+    extra_rows: u32,
 }
 
 impl SoftRigidContactKernel {
     pub fn new(device: &wgpu::Device, node_count: u32, shape_count: u32) -> Result<Self> {
-        Self::build(device, node_count, shape_count, false)
+        Self::build(device, node_count, shape_count, false, 0)
     }
 
     /// Gather primitive contacts at barycentric surface samples.
     pub fn new_sampled(device: &wgpu::Device, sample_count: u32, shape_count: u32) -> Result<Self> {
-        Self::build(device, sample_count, shape_count, true)
+        Self::build(device, sample_count, shape_count, true, 0)
+    }
+
+    /// Gather sampled contacts before a persistent tail of bilateral loop rows.
+    pub fn new_sampled_with_ball_joints(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        samples: u32,
+        shapes: u32,
+        bodies: u32,
+        joints: &[SoftRigidBallJoint],
+    ) -> Result<Self> {
+        let rows = joints
+            .iter()
+            .map(|j| j.row(bodies))
+            .collect::<Result<Vec<_>>>()?;
+        let extra = u32::try_from(rows.len())
+            .map_err(|_| Error::Build("too many FEM loop joints".into()))?;
+        let kernel = Self::build(device, samples, shapes, true, extra)?;
+        if !rows.is_empty() {
+            queue.write_buffer(
+                &kernel.output,
+                u64::from(samples)
+                    * u64::from(shapes)
+                    * std::mem::size_of::<SoftRigidContactGpu>() as u64,
+                bytemuck::cast_slice(&rows),
+            );
+        }
+        Ok(kernel)
     }
 
     fn build(
@@ -82,9 +145,11 @@ impl SoftRigidContactKernel {
         node_count: u32,
         shape_count: u32,
         sampled: bool,
+        extra_rows: u32,
     ) -> Result<Self> {
         let count = node_count
             .checked_mul(shape_count)
+            .and_then(|count| count.checked_add(extra_rows))
             .ok_or_else(|| Error::Build("FEM contact pair count overflow".into()))?;
         let bytes = count.max(1) as u64 * std::mem::size_of::<SoftRigidContactGpu>() as u64;
         if bytes > device.limits().max_storage_buffer_binding_size as u64
@@ -136,7 +201,9 @@ impl SoftRigidContactKernel {
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FEM contact rows"),
             size: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         Ok(Self {
@@ -146,6 +213,7 @@ impl SoftRigidContactKernel {
             node_count,
             shape_count,
             sampled,
+            extra_rows,
         })
     }
 
@@ -153,7 +221,7 @@ impl SoftRigidContactKernel {
         &self.output
     }
     pub fn row_count(&self) -> u32 {
-        self.node_count * self.shape_count
+        self.node_count * self.shape_count + self.extra_rows
     }
 
     /// Encode parallel gather from current device positions and rigid transforms without readback.
@@ -167,7 +235,7 @@ impl SoftRigidContactKernel {
         if !margin.is_finite() || margin < 0.0 {
             return Err(Error::Build("invalid FEM GPU contact margin".into()));
         }
-        if self.row_count() == 0 {
+        if self.node_count * self.shape_count == 0 {
             return Ok(());
         }
         let required = [
@@ -225,7 +293,7 @@ impl SoftRigidContactKernel {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &group, &[]);
-        pass.dispatch_workgroups(self.row_count().div_ceil(64), 1, 1);
+        pass.dispatch_workgroups((self.node_count * self.shape_count).div_ceil(64), 1, 1);
         Ok(())
     }
 }

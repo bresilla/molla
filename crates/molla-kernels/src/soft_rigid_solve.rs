@@ -20,7 +20,9 @@ struct Params {
 pub struct SoftRigidSolveSettings {
     pub iterations: u32,
     pub dt: f32,
+    /// Fraction of contact penetration or spherical-anchor separation corrected per step.
     pub penetration_recovery: f32,
+    /// Contact-normal speed cap; spherical loops clamp each world-axis component.
     pub max_recovery_speed: f32,
 }
 
@@ -149,11 +151,12 @@ impl SoftRigidSolveKernel {
         })
     }
 
-    /// Sticky status bits: 1 invalid mass, 2 invalid contact/response, 4 nonfinite solve.
+    /// Sticky bits: 1 invalid mass, 2 invalid contact/loop/response, 4 nonfinite solve.
     pub fn status(&self) -> &wgpu::Buffer {
         &self.status
     }
     /// Eight floats per contact: normal inverse mass, tangent bound, target, pad, three impulses, pad.
+    /// Ball rows store XYZ effective inverse masses in the first three floats.
     pub fn row_state(&self) -> &wgpu::Buffer {
         &self.rows
     }
