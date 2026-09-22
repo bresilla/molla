@@ -3,6 +3,8 @@
 use molla_core::{Error, Result};
 use wgpu::util::DeviceExt;
 
+const PREPARE_BATCH_GROUPS: u32 = 8;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -14,6 +16,8 @@ struct Params {
     dt: f32,
     recovery: f32,
     max_recovery: f32,
+    base_row: u32,
+    pad: [u32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -270,6 +274,8 @@ impl SoftRigidSolveKernel {
             dt: settings.dt,
             recovery: settings.penetration_recovery,
             max_recovery: settings.max_recovery_speed,
+            base_row: 0,
+            pad: [0; 3],
         };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM solve parameters"),
@@ -295,19 +301,26 @@ impl SoftRigidSolveKernel {
             b.body_velocities,
             &self.active_rows,
         ];
-        let entries: Vec<_> = buffers
-            .iter()
-            .enumerate()
-            .map(|(i, b)| wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: b.as_entire_binding(),
+        let bind = |uniform: &wgpu::Buffer| {
+            let entries: Vec<_> = buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: if i == 14 {
+                        uniform.as_entire_binding()
+                    } else {
+                        b.as_entire_binding()
+                    },
+                })
+                .collect();
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("FEM solve bindings"),
+                layout: &self.layout,
+                entries: &entries,
             })
-            .collect();
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("FEM solve bindings"),
-            layout: &self.layout,
-            entries: &entries,
-        });
+        };
+        let group = bind(&uniform);
         for (index, (pipeline, count)) in self
             .pipelines
             .iter()
@@ -331,7 +344,23 @@ impl SoftRigidSolveKernel {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(count, 1, 1);
+            if index == 1 {
+                for base in (0..count).step_by(PREPARE_BATCH_GROUPS as usize) {
+                    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("FEM response batch parameters"),
+                        contents: bytemuck::bytes_of(&Params {
+                            base_row: base * 64,
+                            ..params
+                        }),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                    let group = bind(&uniform);
+                    pass.set_bind_group(0, &group, &[]);
+                    pass.dispatch_workgroups((count - base).min(PREPARE_BATCH_GROUPS), 1, 1);
+                }
+            } else {
+                pass.dispatch_workgroups(count, 1, 1);
+            }
             drop(pass);
             if let Some((queue, completed)) = &trace {
                 let pending =

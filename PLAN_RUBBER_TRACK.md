@@ -549,6 +549,31 @@ CPU coupling benches are correctness oracles and do not qualify as native FEM
 delivery. Keep deformable positions, velocities and iterative contact state
 device-resident; no per-node host round trips inside substeps.
 
+### Contact response launch regression
+
+Contact preparation uses disjoint batches of eight 64-thread workgroups, with
+an immutable `base_row` uniform per batch. Every candidate row is assembled;
+mass factorization, stable contact ordering, Coulomb sweeps and recovery are
+unchanged. Batching introduces no CPU physics or simulated-state readback.
+
+On RTX 4080 / NVIDIA 595.84 / wgpu 29.0.4, constructing a Featherstone pipeline
+was sufficient to make a subsequent 385683-row preparation launch time out.
+No Featherstone dispatch was necessary. The same captured CEOL inputs completed
+on a cold device, and a 65-row preparation completed after construction. Full
+response-buffer allocation with a single workgroup also completed. Moving the
+private triangular-solve scratch into storage and reducing workgroup width did
+not resolve the full launch. Eight-workgroup batches completed the full captured
+input; 64-workgroup batches still timed out. The driver-internal cause is not
+established, and this is not evidence of a physical material or joint-stop error.
+
+`make test-gpu P=molla-solvers T=fem_contact_prepare_gpu` constructs Featherstone
+before checking all sparse and dense native-scale response rows against an
+independent double-precision oracle, including ground and spherical-loop rows.
+`MOLLA_CONTACT_FIXTURE=<directory> make test-gpu P=molla-solvers T=fem_contact_replay_gpu`
+replays the ten `.bin` inputs exported by Gearbox's native contact preparation
+test. Capture and response readback occur only in tests. A completed preparation
+kernel is not full vehicle traction, retention, energy or real-time acceptance.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

@@ -8,6 +8,7 @@ struct Row { inverse_normal: f32, tangent_lipschitz: f32, target_speed: f32, pad
 struct Params {
     dofs: u32, rows: u32, particles: u32, bodies: u32,
     iterations: u32, dt: f32, recovery: f32, max_recovery: f32,
+    base_row: u32, pad0: u32, pad1: u32, pad2: u32,
 }
 @group(0) @binding(0) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> velocities: array<vec4<f32>>;
@@ -138,7 +139,7 @@ fn factor_mass() {
 
 @compute @workgroup_size(64)
 fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let r = gid.x;
+    let r = params.base_row + gid.x;
     if r >= params.rows { return; }
     rows[r] = Row(0.0, 0.0, 0.0, 0.0, vec4<f32>(0.0));
     let contact = contacts[r];

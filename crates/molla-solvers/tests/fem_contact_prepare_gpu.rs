@@ -41,6 +41,20 @@ fn native_scale_contact_preparation_has_bounded_completion_and_correct_response(
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
+    let mut builder = molla_sim::ModelBuilder::new();
+    builder.begin_articulation();
+    let body = builder.add_body(molla_sim::BodyParams::new());
+    builder
+        .add_joint_revolute(
+            molla_core::BodyId::NONE,
+            body,
+            molla_math::Transform::IDENTITY,
+            molla_math::Transform::IDENTITY,
+            molla_math::Vec3::X,
+        )
+        .unwrap();
+    let _featherstone =
+        molla_kernels::FeatherstoneKernel::new(device, queue, &builder.build().unwrap());
     let n = 29;
     let bodies = 22;
     let mut lower = vec![0.0; n * n];
