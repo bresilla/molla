@@ -78,6 +78,21 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Renderer-paced submissions (2026-09-22)
+
+`try_step_substep` submits at most one configured substep and refuses new work
+until the previous queue-completion callback has fired. `poll_completion` uses
+a non-waiting device poll; neither API reads simulated state back to the host.
+An accepted submission is not completed simulation time. Completion does not
+prove device health or valid physics; the host still owns those checks.
+The blocking `step` API retains its 32-substep fences and can alternate with
+the renderer-paced API without dropping or repeating integration steps.
+
+Three GPU submission tests pass: existing window equivalence, 65 asynchronous
+substeps versus the blocking result with stale CPU state, and mixed API calls
+across a window boundary. These tests validate scheduling, not interactive
+latency or realtime performance. Native Gearbox scheduling remains pending.
+
 ### Externally managed device and queue (2026-09-22)
 
 FEM now accepts caller-owned matching device/queue handles, with additive

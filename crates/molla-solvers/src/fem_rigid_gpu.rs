@@ -14,7 +14,10 @@ use molla_kernels::tet_volume::{TetVolumeBindings, TetVolumeMonitor};
 use molla_kernels::{JacobianKernel, JacobianRequest, MassMatrixKernel};
 use molla_math::Real;
 use molla_sim::{Contacts, Control, Model, State};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use wgpu::util::DeviceExt;
 
 fn device_queue(engine: &Engine) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
@@ -115,6 +118,7 @@ pub struct FemRigidGpuSystem {
     momentum: Option<MomentumMonitor>,
     config: FemRigidConfig,
     queued_substeps: u32,
+    completion: Option<Arc<AtomicBool>>,
 }
 
 impl FemRigidGpuSystem {
@@ -406,6 +410,7 @@ impl FemRigidGpuSystem {
             momentum: None,
             config,
             queued_substeps: 0,
+            completion: None,
         })
     }
 
@@ -510,13 +515,68 @@ impl FemRigidGpuSystem {
         self.queued_substeps
     }
 
+    fn arm_completion(&mut self) {
+        if self.completion.is_none() && self.queued_substeps != 0 {
+            let complete = Arc::new(AtomicBool::new(false));
+            let signal = complete.clone();
+            self.queue.on_submitted_work_done(move || {
+                signal.store(true, Ordering::Release);
+            });
+            self.completion = Some(complete);
+        }
+    }
+
+    /// Poll queue completion without waiting or transferring simulation state.
+    /// Completion is not a device-health or physical-validity check.
+    pub fn poll_completion(&mut self) -> Result<bool> {
+        self.arm_completion();
+        let Some(complete) = &self.completion else {
+            return Ok(true);
+        };
+        self.device
+            .poll(wgpu::PollType::Poll)
+            .map_err(|error| Error::Gpu(format!("FEM completion poll failed: {error}")))?;
+        if !complete.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        self.completion = None;
+        self.queued_substeps = 0;
+        Ok(true)
+    }
+
+    /// Submit at most one substep, returning false while earlier work is pending.
+    /// True means submitted, not completed. No explicit GPU completion wait or
+    /// state readback is performed; callers must handle device loss and status.
+    pub fn try_step_substep(&mut self, dt: Real) -> Result<bool> {
+        if !dt.is_finite() || dt <= 0.0 || dt > self.config.max_substep {
+            return Err(Error::Solver("invalid GPU FEM single timestep".into()));
+        }
+        if !self.poll_completion()? {
+            return Ok(false);
+        }
+        self.step_inner(dt, false)?;
+        self.arm_completion();
+        Ok(true)
+    }
+
     /// Submit substeps in windows of 32; callers must inspect the sticky device status.
     pub fn step(&mut self, dt: Real) -> Result<()> {
+        self.step_inner(dt, true)
+    }
+
+    fn step_inner(&mut self, dt: Real, wait: bool) -> Result<()> {
         let count = (dt / self.config.max_substep).ceil();
         if !dt.is_finite() || !(1.0..=4096.0).contains(&count) {
             return Err(Error::Solver("invalid GPU FEM timestep".into()));
         }
         let h = dt / count;
+        if wait && self.completion.is_some() {
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|error| Error::Gpu(format!("FEM submission fence failed: {error}")))?;
+            self.completion = None;
+            self.queued_substeps = 0;
+        }
         let device = &self.device;
         let queue = &self.queue;
         for _ in 0..count as usize {
@@ -666,7 +726,7 @@ impl FemRigidGpuSystem {
             std::mem::swap(&mut self.soft_state, &mut self.soft_next);
             std::mem::swap(&mut self.rigid_state, &mut self.rigid_next);
             self.queued_substeps += 1;
-            if self.queued_substeps >= 32 {
+            if wait && self.queued_substeps >= 32 {
                 device
                     .poll(wgpu::PollType::wait_indefinitely())
                     .map_err(|error| Error::Gpu(format!("FEM submission fence failed: {error}")))?;
