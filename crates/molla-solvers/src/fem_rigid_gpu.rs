@@ -17,6 +17,34 @@ use molla_sim::{Contacts, Control, Model, State};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+fn device_queue(engine: &Engine) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
+    let device = engine
+        .device()
+        .ok_or_else(|| Error::Gpu("FEM requires a GPU device".into()))?;
+    let queue = engine
+        .queue()
+        .ok_or_else(|| Error::Gpu("FEM requires a GPU queue".into()))?;
+    Ok((device.clone(), queue.clone()))
+}
+
+fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
+    if limits.max_bind_groups < 6
+        || limits.max_bindings_per_bind_group < 17
+        || limits.max_storage_buffers_per_shader_stage < 42
+        || limits.max_uniform_buffers_per_shader_stage < 1
+        || limits.max_compute_invocations_per_workgroup < 64
+        || limits.max_compute_workgroup_size_x < 64
+        || limits.max_compute_workgroup_storage_size < 2048
+    {
+        return Err(Error::Gpu(
+            "FEM device requires 6 bind groups, 17 bindings per group, 42 storage buffers, \
+             1 uniform buffer, 64 compute invocations in X, and 2048 workgroup bytes"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub struct FemRigidGpuScene {
     pub soft_model: Model,
     pub soft_state: State,
@@ -26,8 +54,44 @@ pub struct FemRigidGpuScene {
     pub shapes: Vec<SoftRigidShapeGpu>,
 }
 
+#[cfg(test)]
+mod device_limits_tests {
+    use super::validate_device_limits;
+
+    #[test]
+    fn external_device_requires_all_kernel_limits() {
+        assert!(validate_device_limits(&wgpu::Limits::default()).is_err());
+        let limits = wgpu::Limits {
+            max_bind_groups: 6,
+            max_bindings_per_bind_group: 17,
+            max_storage_buffers_per_shader_stage: 42,
+            max_uniform_buffers_per_shader_stage: 1,
+            max_compute_invocations_per_workgroup: 64,
+            max_compute_workgroup_size_x: 64,
+            max_compute_workgroup_storage_size: 2048,
+            ..Default::default()
+        };
+        assert!(validate_device_limits(&limits).is_ok());
+        let reductions: [fn(&mut wgpu::Limits); 7] = [
+            |v| v.max_bind_groups -= 1,
+            |v| v.max_bindings_per_bind_group -= 1,
+            |v| v.max_storage_buffers_per_shader_stage -= 1,
+            |v| v.max_uniform_buffers_per_shader_stage -= 1,
+            |v| v.max_compute_invocations_per_workgroup -= 1,
+            |v| v.max_compute_workgroup_size_x -= 1,
+            |v| v.max_compute_workgroup_storage_size -= 1,
+        ];
+        for reduce in reductions {
+            let mut insufficient = limits.clone();
+            reduce(&mut insufficient);
+            assert!(validate_device_limits(&insufficient).is_err());
+        }
+    }
+}
+
 pub struct FemRigidGpuSystem {
-    engine: Arc<Engine>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     soft_model: Model,
     soft_state: State,
     soft_next: State,
@@ -59,7 +123,8 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(engine, scene, config, false)
+        let (device, queue) = device_queue(&engine)?;
+        Self::new_on_device(device, queue, scene, config)
     }
 
     /// Use vertices, edge midpoints and triangle centroids for primitive contacts.
@@ -68,21 +133,43 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(engine, scene, config, true)
+        let (device, queue) = device_queue(&engine)?;
+        Self::new_surface_sampled_on_device(device, queue, scene, config)
+    }
+
+    /// Construct on a matching externally managed device and queue.
+    /// The caller retains device-loss handling and queue scheduling; this system
+    /// neither replaces callbacks nor destroys the device. State buffers remain
+    /// on that device and can be bound directly by its renderer.
+    pub fn new_on_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+    ) -> Result<Self> {
+        Self::build(device, queue, scene, config, false)
+    }
+
+    /// Construct sampled surface contacts on an externally managed device/queue.
+    pub fn new_surface_sampled_on_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+    ) -> Result<Self> {
+        Self::build(device, queue, scene, config, true)
     }
 
     fn build(
-        engine: Arc<Engine>,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
         mut scene: FemRigidGpuScene,
         config: FemRigidConfig,
         sample_surface: bool,
     ) -> Result<Self> {
-        let device = engine
-            .device()
-            .ok_or_else(|| Error::Gpu("FEM requires a GPU device".into()))?;
-        let queue = engine
-            .queue()
-            .ok_or_else(|| Error::Gpu("FEM requires a GPU queue".into()))?;
+        validate_device_limits(&device.limits())?;
+        let device = &device;
+        let queue = &queue;
         if scene.soft_state.particle_q.len() != scene.soft_model.particle_count
             || scene.soft_state.particle_qd.len() != scene.soft_model.particle_count
             || scene.rigid_state.body_q.len() != scene.rigid_model.body_count
@@ -240,8 +327,8 @@ impl FemRigidGpuSystem {
         let mut rigid_next = scene.rigid_model.state()?;
         soft_next.upload_to_device(device, queue)?;
         rigid_next.upload_to_device(device, queue)?;
-        let mass = MassMatrixKernel::new(&engine, &scene.rigid_model)?;
-        let jacobian = JacobianKernel::new(&engine, &scene.rigid_model)?;
+        let mass = MassMatrixKernel::new_on_device(device, queue, &scene.rigid_model)?;
+        let jacobian = JacobianKernel::new_on_device(device, queue, &scene.rigid_model)?;
         let n = scene.rigid_model.joint_dof_total;
         let mass_buffer = mass.create_output_buffer(device);
         let jacobian_buffer =
@@ -283,14 +370,19 @@ impl FemRigidGpuSystem {
             },
         )?;
         queue.submit([encoder.finish()]);
-        let fem = VbdSolver::new_gpu(&engine, &scene.soft_model)?
+        let fem = VbdSolver::new_gpu_on_device(device.clone(), queue.clone(), &scene.soft_model)?
             .with_iterations(config.elastic_iterations)
             .with_contact_stiffness(0.0);
-        let rigid = FeatherstoneSolver::new_gpu(&engine, &scene.rigid_model)?
-            .with_substeps(1)
-            .with_rigorous_d_solve(true);
+        let rigid = FeatherstoneSolver::new_gpu_on_device(
+            device.clone(),
+            queue.clone(),
+            &scene.rigid_model,
+        )?
+        .with_substeps(1)
+        .with_rigorous_d_solve(true);
         Ok(Self {
-            engine,
+            device: device.clone(),
+            queue: queue.clone(),
             soft_model: scene.soft_model,
             soft_state: scene.soft_state,
             soft_next,
@@ -336,7 +428,7 @@ impl FemRigidGpuSystem {
     /// Enable cumulative device-only momentum diagnostics without changing simulated state.
     pub fn enable_momentum_diagnostics(&mut self) {
         if self.momentum.is_none() {
-            self.momentum = Some(MomentumMonitor::new(self.engine.device().unwrap()));
+            self.momentum = Some(MomentumMonitor::new(&self.device));
         }
     }
 
@@ -349,7 +441,7 @@ impl FemRigidGpuSystem {
         let Some(monitor) = &self.momentum else {
             return Ok(());
         };
-        let device = self.engine.device().unwrap();
+        let device = &self.device;
         let soft = if phase == 0 {
             &self.soft_state
         } else {
@@ -379,7 +471,7 @@ impl FemRigidGpuSystem {
             },
             phase,
         )?;
-        self.engine.queue().unwrap().submit([encoder.finish()]);
+        self.queue.submit([encoder.finish()]);
         Ok(())
     }
 
@@ -395,9 +487,7 @@ impl FemRigidGpuSystem {
             ));
         }
         self.control.joint_target_vel.host_mut()?[dof] = target;
-        self.control
-            .joint_target_vel
-            .upload(self.engine.queue().unwrap())
+        self.control.joint_target_vel.upload(&self.queue)
     }
 
     /// Select a direct generalized motor effort, subject to the model's joint effort limit.
@@ -410,7 +500,7 @@ impl FemRigidGpuSystem {
         }
         self.control.joint_target_pos.host_mut()?[dof] = effort;
         self.control.joint_target_mode.host_mut()?[dof] = molla_sim::JointTargetMode::Effort as u32;
-        let queue = self.engine.queue().unwrap();
+        let queue = &self.queue;
         self.control.joint_target_pos.upload(queue)?;
         self.control.joint_target_mode.upload(queue)
     }
@@ -427,8 +517,8 @@ impl FemRigidGpuSystem {
             return Err(Error::Solver("invalid GPU FEM timestep".into()));
         }
         let h = dt / count;
-        let device = self.engine.device().unwrap();
-        let queue = self.engine.queue().unwrap();
+        let device = &self.device;
+        let queue = &self.queue;
         for _ in 0..count as usize {
             self.record_momentum(0)?;
             self.fem.step(
@@ -448,16 +538,18 @@ impl FemRigidGpuSystem {
                 h,
                 &mut self.rigid_next,
             )?;
-            self.mass.dispatch(
-                &self.engine,
+            self.mass.dispatch_on_device(
+                device,
+                queue,
                 &self.rigid_model,
                 &self.rigid_state,
                 &self.mass_buffer,
             )?;
-            self.jacobian.dispatch(
-                &self.engine,
+            self.jacobian.dispatch_with_body_q_on_device(
+                device,
+                queue,
                 &self.rigid_model,
-                &self.rigid_state,
+                self.rigid_state.body_q.device_buffer().unwrap(),
                 &self.requests,
                 &self.jacobian_buffer,
             )?;
@@ -533,10 +625,11 @@ impl FemRigidGpuSystem {
                 h,
                 &mut self.rigid_next,
             )?;
-            self.jacobian.dispatch(
-                &self.engine,
+            self.jacobian.dispatch_with_body_q_on_device(
+                device,
+                queue,
                 &self.rigid_model,
-                &self.rigid_next,
+                self.rigid_next.body_q.device_buffer().unwrap(),
                 &self.requests,
                 &self.jacobian_buffer,
             )?;

@@ -49,6 +49,16 @@ impl MassMatrixKernel {
             .ok_or_else(|| Error::Gpu("MassMatrixKernel: no GPU queue".into()))?
             .clone();
 
+        Self::new_on_device(&device, &queue, model)
+    }
+
+    /// Construct the mass-matrix kernel on the caller's device and queue.
+    pub fn new_on_device(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+    ) -> Result<Self> {
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::crba"),
             source: wgpu::ShaderSource::Wgsl(
@@ -221,6 +231,19 @@ impl MassMatrixKernel {
             .queue()
             .ok_or_else(|| Error::Gpu("MassMatrixKernel::dispatch: no queue".into()))?
             .clone();
+
+        self.dispatch_on_device(&device, &queue, model, state, mass_out)
+    }
+
+    /// Dispatch on the device and queue used to construct this kernel.
+    pub fn dispatch_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state: &State,
+        mass_out: &wgpu::Buffer,
+    ) -> Result<()> {
 
         if self.articulation_count == 0 {
             return Ok(());

@@ -149,6 +149,16 @@ impl FeatherstoneSolver {
             .queue()
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
+        Self::new_gpu_on_device(device, queue, model)
+    }
+
+    /// Construct articulated dynamics on the caller's matching device and queue.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_on_device(
+        device: std::sync::Arc<wgpu::Device>,
+        queue: std::sync::Arc<wgpu::Queue>,
+        model: &Model,
+    ) -> Result<Self> {
         let kernel = crate::kernels::FeatherstoneKernel::new(&device, &queue, model);
         let muscle_kernel = if model.muscle_count > 0 {
             Some(crate::kernels::MuscleKernel::new(&device, model))

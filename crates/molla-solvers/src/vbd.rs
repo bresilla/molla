@@ -274,6 +274,16 @@ impl VbdSolver {
             .queue()
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
+        Self::new_gpu_on_device(device, queue, model)
+    }
+
+    /// Construct GPU VBD on the caller's matching device and queue.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_on_device(
+        device: std::sync::Arc<wgpu::Device>,
+        queue: std::sync::Arc<wgpu::Queue>,
+        model: &Model,
+    ) -> Result<Self> {
         let particle_count = model.particle_count as u32;
         let spring_count = model.spring_count as u32;
         let max_k = 1.0e7_f64;

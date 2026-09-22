@@ -78,6 +78,25 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Externally managed device and queue (2026-09-22)
+
+FEM now accepts caller-owned matching device/queue handles, with additive
+VBD, Featherstone, mass-matrix and Jacobian entry points. Existing Engine
+constructors delegate; no Engine/device-health ownership changes are needed.
+The caller owns device-loss handling and submission scheduling. Construction
+does not replace callbacks, and dropping physics does not destroy the device.
+Minimum kernel limits are checked before resource allocation.
+
+The shared-device GPU test binds live FEM positions directly in a vertex
+shader. After 65 substeps the rendered triangle moves three pixels, retaining
+1326 covered pixels, while host particle shadows remain stale. Engine-backed,
+external-device and sampled external-device states are identical. Rendering
+still works after all physics systems are dropped, and the owner's loss
+callback fires exactly once on explicit owner destruction. A real default-limit
+device is rejected before physics allocation and remains usable afterward.
+The submission regression and each static device-limit boundary also pass.
+This is offscreen interoperability evidence, not Gearbox/native CEOL delivery.
+
 ### Renderer-compatible GPU API (2026-09-22)
 
 Physics crates and the viewer's direct physics handles use wgpu 29, matching

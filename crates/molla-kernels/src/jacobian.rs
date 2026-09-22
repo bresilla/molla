@@ -57,6 +57,16 @@ impl JacobianKernel {
             .ok_or_else(|| Error::Gpu("JacobianKernel: no GPU queue".into()))?
             .clone();
 
+        Self::new_on_device(&device, &queue, model)
+    }
+
+    /// Construct the Jacobian kernel on the caller's device and queue.
+    pub fn new_on_device(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+    ) -> Result<Self> {
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::jacobian"),
             source: wgpu::ShaderSource::Wgsl(
@@ -224,6 +234,22 @@ impl JacobianKernel {
             .queue()
             .ok_or_else(|| Error::Gpu("JacobianKernel::dispatch: no queue".into()))?
             .clone();
+
+        self.dispatch_with_body_q_on_device(
+            &device, &queue, model, body_q, requests, jacobian_out,
+        )
+    }
+
+    /// Dispatch on the kernel's device and queue with caller-supplied body poses.
+    pub fn dispatch_with_body_q_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        body_q: &wgpu::Buffer,
+        requests: &[JacobianRequest],
+        jacobian_out: &wgpu::Buffer,
+    ) -> Result<()> {
 
         if requests.is_empty() {
             return Ok(());
