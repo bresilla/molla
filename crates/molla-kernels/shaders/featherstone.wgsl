@@ -103,6 +103,7 @@ fn drive_torque(mode: u32, q: f32, qd: f32, kp: f32, kd: f32, pos_t: f32, vel_t:
 }
 
 @group(3) @binding(0) var<storage, read> art_offsets: array<u32>;
+@group(3) @binding(1) var<storage, read_write> stop_status: atomic<u32>;
 @group(4) @binding(0) var<uniform> uniforms: Uniforms;
 
 // Stage 42 v3 + 39E — per-joint cable spring/damper + per-DOF muscle
@@ -310,6 +311,7 @@ fn quat_from_euler_xyz(e: vec3<f32>) -> vec4<f32> {
 
 @compute @workgroup_size(64)
 fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if atomicLoad(&stop_status) != 0u { return; }
     let art = gid.x;
     if (art >= uniforms.articulation_count) {
         return;
@@ -318,8 +320,17 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let j_end   = art_offsets[art + 1u];
     let n = j_end - j_begin;
     if (n > MAX_JOINTS_PER_ART) {
+        atomicOr(&stop_status, 32u);
         return;
     }
+    var has_stops = false;
+    for (var j = j_begin; j < j_end; j += 1u) {
+        if joint_type[j] == JOINT_REVOLUTE || joint_type[j] == JOINT_PRISMATIC {
+            let dof = joint_dof_offset[j];
+            has_stops = has_stops || abs(joint_limit_lower[dof]) < 1e30 || abs(joint_limit_upper[dof]) < 1e30;
+        }
+    }
+    let rigorous = uniforms.rigorous_d_solve == 1u || has_stops;
 
     // Per-joint scratch.
     var v_lin:    array<vec3<f32>, MAX_JOINTS_PER_ART>;
@@ -331,24 +342,24 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     var p_ang:    array<vec3<f32>, MAX_JOINTS_PER_ART>;
     var a_lin:    array<vec3<f32>, MAX_JOINTS_PER_ART>;
     var a_ang:    array<vec3<f32>, MAX_JOINTS_PER_ART>;
-    var n_dof_arr: array<u32, MAX_JOINTS_PER_ART>;
+    var n_dof_arr: StopCounts;
 
     // Per-joint × per-DOF scratch.
     // S_lin[k][d] / S_ang[k][d] is the d-th column of joint k's
     // motion subspace in world frame.
-    var s_lin:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    var s_ang:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    var u_lin:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    var u_ang:  array<array<vec3<f32>, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
+    var s_lin: StopVectors;
+    var s_ang: StopVectors;
+    var u_lin: StopVectors;
+    var u_ang: StopVectors;
     var d_inv_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    var d_dense_inv: array<array<f32, 36>, MAX_JOINTS_PER_ART>;
+    var d_dense_inv: StopBlocks;
     var u_tau_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
     var dof_active_arr: array<array<u32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
-    var q_dd_arr: array<array<f32, MAX_DOFS_PER_JOINT>, MAX_JOINTS_PER_ART>;
+    var q_dd_arr: StopScalars;
     // Pre-integration translations for Distance-joint projection.
     var p_pre_arr:  array<vec3<f32>, MAX_JOINTS_PER_ART>;
 
-    if uniforms.drift_only == 0u {
+    if uniforms.drift_only == 0u || has_stops {
     // ── Pass 1 — FK + body kinematics + motion subspace ─────────
     for (var k = 0u; k < n; k = k + 1u) {
         let j = j_begin + k;
@@ -543,7 +554,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let s_l = s_lin[k][d];
             let s_a = s_ang[k][d];
             var inertia = i_curr;
-            if uniforms.rigorous_d_solve == 1u { inertia = i_a[k]; }
+            if rigorous { inertia = i_a[k]; }
             let u_arr = smat6_mul_sv(inertia, s_l, s_a);
             let u_l = vec3<f32>(u_arr[0u], u_arr[1u], u_arr[2u]);
             let u_a = vec3<f32>(u_arr[3u], u_arr[4u], u_arr[5u]);
@@ -602,7 +613,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             u_tau_arr[k][d] = tau_app - (dot(s_l, p_lin[k]) + dot(s_a, p_ang[k]));
 
             // Scalar block elimination.
-            if uniforms.rigorous_d_solve == 0u || n_dof == 1u {
+            if !rigorous || n_dof == 1u {
             let ua = array<f32, 6>(u_l.x, u_l.y, u_l.z, u_a.x, u_a.y, u_a.z);
             for (var rr = 0u; rr < 6u; rr = rr + 1u) {
                 for (var cc = 0u; cc < 6u; cc = cc + 1u) {
@@ -612,7 +623,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        if uniforms.rigorous_d_solve == 1u && supported && n_dof > 1u {
+        if rigorous && supported && n_dof > 1u {
             var factor: array<f32, 36>;
             for (var r = 0u; r < n_dof; r += 1u) {
                 for (var c = 0u; c <= r; c += 1u) {
@@ -664,7 +675,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var d = 0u; d < n_dof; d = d + 1u) {
             if (dof_active_arr[k][d] == 0u) { continue; }
             var scale_u = u_tau_arr[k][d] * d_inv_arr[k][d];
-            if uniforms.rigorous_d_solve == 1u {
+            if rigorous {
                 scale_u = 0.0;
                 for (var c = 0u; c < n_dof; c += 1u) { scale_u += d_dense_inv[k][d*6u+c] * u_tau_arr[k][c]; }
             }
@@ -726,7 +737,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 var q_dd_d = (u_tau_arr[k][d]
                               - (dot(u_lin[k][d], ap_l) + dot(u_ang[k][d], ap_a)))
                               * d_inv_arr[k][d];
-                if uniforms.rigorous_d_solve == 1u {
+                if rigorous {
                     q_dd_d = 0.0;
                     for (var c = 0u; c < n_dof; c += 1u) {
                         let rhs = u_tau_arr[k][c] - dot(u_lin[k][c], ap_l) - dot(u_ang[k][c], ap_a);
@@ -745,6 +756,15 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+        if uniforms.drift_only != 0u {
+            for (var k = 0u; k < n; k += 1u) {
+                for (var d = 0u; d < n_dof_arr[k]; d += 1u) { q_dd_arr[k][d] = 0.0; }
+            }
+        }
+        if has_stops && !react_scalar_stops(j_begin, n, &n_dof_arr, &s_lin, &s_ang, &u_lin, &u_ang, &d_dense_inv, &q_dd_arr) {
+            atomicOr(&stop_status, 32u);
+            return;
+        }
     } else {
         for (var k = 0u; k < n; k += 1u) {
             let j = j_begin + k;
@@ -772,18 +792,8 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let q_pred = joint_q[coord] + qd_capped * uniforms.dt;
             let lo = joint_limit_lower[dof];
             let hi = joint_limit_upper[dof];
-            var q_clamped = q_pred;
-            var qd_after = qd_capped;
-            if ((lo == lo) && (q_clamped < lo)) {
-                q_clamped = lo;
-                if (qd_after < 0.0) { qd_after = 0.0; }
-            }
-            if ((hi == hi) && (q_clamped > hi)) {
-                q_clamped = hi;
-                if (qd_after > 0.0) { qd_after = 0.0; }
-            }
-            joint_qd[dof] = qd_after;
-            joint_q[coord] = q_clamped;
+            joint_qd[dof] = qd_capped;
+            joint_q[coord] = clamp(q_pred, lo, hi);
         } else if (jt == JOINT_CABLE) {
             // Stage 39E — 2 scalar coords (q_l, q_b), 2 dofs. Symplectic
             // Euler per DoF, identical to two stacked 1-DoF integrators.

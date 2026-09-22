@@ -539,13 +539,14 @@ impl FemRigidGpuSystem {
         let fem = VbdSolver::new_gpu_on_device(device.clone(), queue.clone(), &scene.soft_model)?
             .with_iterations(config.elastic_iterations)
             .with_contact_stiffness(0.0);
-        let rigid = FeatherstoneSolver::new_gpu_on_device(
+        let mut rigid = FeatherstoneSolver::new_gpu_on_device(
             device.clone(),
             queue.clone(),
             &scene.rigid_model,
         )?
         .with_substeps(1)
         .with_rigorous_d_solve(true);
+        rigid.set_gpu_status_buffer(solve.status())?;
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -582,12 +583,12 @@ impl FemRigidGpuSystem {
     pub fn rigid_state(&self) -> &State {
         &self.rigid_state
     }
-    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 invalid or nonpositive tetrahedron volume.
     /// Allocated contact capacity plus persistent bilateral loop rows.
     pub fn contact_row_count(&self) -> u32 {
         self.gather.row_count()
     }
 
+    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 tet volume, 16 contact capacity, 32 joint stops.
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         self.solve.status()
     }

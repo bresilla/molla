@@ -196,9 +196,20 @@ impl FeatherstoneSolver {
         let qd_in = state_out.joint_qd.host()?.to_vec();
         let mut q = q_in.to_vec();
         let mut qd = qd_in.clone();
+        let mut acceleration = vec![0.0; model.joint_dof_total];
+        if model.joint_count > 0 {
+            state_out.joint_q.host_mut()?.copy_from_slice(q_in);
+            eval_fk(model, state_out)?;
+            let mut mass = crate::joint_mass::JointMass::new(model, state_out);
+            for art in 0..model.articulation_count.max(1) {
+                crate::joint_limits::react_scalar_stops(
+                    model, state_out, art, &mut acceleration, dt, 0.0, &mut mass,
+                )?;
+            }
+        }
         integration::integrate(
             model, 0..model.joint_count, q_in, &qd_in,
-            &vec![0.0; model.joint_dof_total], dt, 0.0,
+            &acceleration, dt, 0.0,
             self.rigorous_distance, &mut q, &mut qd,
         )?;
         state_out.joint_q.host_mut()?.copy_from_slice(&q);
@@ -324,6 +335,25 @@ impl FeatherstoneSolver {
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// Sticky GPU scalar-stop failure bit 32; no state readback is performed.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_status_buffer(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.status_buffer()),
+            FeatherstoneBackend::Cpu => None,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_gpu_status_buffer(&mut self, buffer: &wgpu::Buffer) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.set_status_buffer(buffer),
+            FeatherstoneBackend::Cpu => Err(crate::core::Error::Solver(
+                "GPU status requires GPU Featherstone".into(),
+            )),
         }
     }
 

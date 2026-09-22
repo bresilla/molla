@@ -43,6 +43,7 @@ pub struct FeatherstoneKernel {
     /// Articulation CSR — built from `model.articulation_start` at
     /// kernel construction. Length = `articulation_count + 1`.
     art_offsets: wgpu::Buffer,
+    stop_status: wgpu::Buffer,
     /// Zero-filled fallback buffer used when the caller doesn't pass
     /// a custom per-DOF muscle torque buffer. Size = `dof_total *
     /// sizeof(f32)`, allocated once at kernel construction.
@@ -56,7 +57,14 @@ impl FeatherstoneKernel {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, model: &Model) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::featherstone"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/featherstone.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("../shaders/featherstone.wgsl"),
+                    include_str!("../shaders/featherstone_stops.wgsl")
+                )
+                .into(),
+            ),
         });
 
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -73,7 +81,7 @@ impl FeatherstoneKernel {
         });
         let layout_arts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone arts"),
-            entries: &storage_entries(1, true),
+            entries: &[storage_entries(1, true)[0], storage_entries(2, false)[1]],
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone uniforms"),
@@ -139,6 +147,14 @@ impl FeatherstoneKernel {
             mapped_at_creation: false,
         });
         queue.write_buffer(&art_offsets, 0, bytemuck::cast_slice(&art_offsets_data));
+        let stop_status = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::featherstone stop status"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let dof_total = model.joint_dof_total.max(1) as u32;
         let zero_dof_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -160,11 +176,25 @@ impl FeatherstoneKernel {
             layout_uniforms,
             layout_cable_muscle,
             art_offsets,
+            stop_status,
             zero_dof_buf,
             articulation_count,
             joint_count,
             dof_total,
         }
+    }
+
+    /// Sticky scalar-stop failure bit 32, shared with a caller-supplied status buffer if configured.
+    pub fn status_buffer(&self) -> &wgpu::Buffer {
+        &self.stop_status
+    }
+
+    pub fn set_status_buffer(&mut self, buffer: &wgpu::Buffer) -> Result<()> {
+        if buffer.size() < 4 || !buffer.usage().contains(wgpu::BufferUsages::STORAGE) {
+            return Err(Error::Solver("invalid Featherstone status buffer".into()));
+        }
+        self.stop_status = buffer.clone();
+        Ok(())
     }
 
     /// Borrow the cable+muscle bind-group layout so external callers
@@ -333,10 +363,16 @@ impl FeatherstoneKernel {
         let bg_arts = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::featherstone arts bg"),
             layout: &self.layout_arts,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.art_offsets.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.art_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.stop_status.as_entire_binding(),
+                },
+            ],
         });
 
         // Bind group 5 — cable spring/damper + muscle torque accumulator.
