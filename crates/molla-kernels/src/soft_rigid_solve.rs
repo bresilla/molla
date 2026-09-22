@@ -174,7 +174,27 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, false)
+        self.encode_internal(device, encoder, bindings, settings, false, None)
+    }
+
+    /// Submit individual contact passes and report queue completion without state readback.
+    pub fn encode_with_completion(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+        completed: std::sync::Arc<dyn Fn(usize) + Send + Sync>,
+    ) -> Result<()> {
+        self.encode_internal(
+            device,
+            encoder,
+            bindings,
+            settings,
+            false,
+            Some((queue, completed)),
+        )
     }
 
     /// Recover COM body velocities from the current Jacobians and generalized velocities.
@@ -185,7 +205,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, true)
+        self.encode_internal(device, encoder, bindings, settings, true, None)
     }
 
     fn encode_internal(
@@ -195,6 +215,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
         recover_only: bool,
+        trace: Option<(&wgpu::Queue, std::sync::Arc<dyn Fn(usize) + Send + Sync>)>,
     ) -> Result<()> {
         if settings.iterations == 0
             || !settings.dt.is_finite()
@@ -300,6 +321,14 @@ impl SoftRigidSolveKernel {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(count, 1, 1);
+            drop(pass);
+            if let Some((queue, completed)) = &trace {
+                let pending =
+                    std::mem::replace(encoder, device.create_command_encoder(&Default::default()));
+                queue.submit([pending.finish()]);
+                let completed = completed.clone();
+                queue.on_submitted_work_done(move || completed(index));
+            }
         }
         Ok(())
     }

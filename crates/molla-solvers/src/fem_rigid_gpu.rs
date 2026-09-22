@@ -218,6 +218,7 @@ pub struct FemRigidGpuSystem {
     volume: TetVolumeMonitor,
     momentum: Option<MomentumMonitor>,
     momentum_fences: Option<Arc<[AtomicU64; 5]>>,
+    contact_fences: Option<Arc<[AtomicU64; 7]>>,
     config: FemRigidConfig,
     queued_substeps: u32,
     completion: Option<Arc<AtomicBool>>,
@@ -573,6 +574,7 @@ impl FemRigidGpuSystem {
             volume,
             momentum: None,
             momentum_fences: None,
+            contact_fences: None,
             config,
             queued_substeps: 0,
             completion: None,
@@ -605,6 +607,7 @@ impl FemRigidGpuSystem {
         if self.momentum.is_none() {
             self.momentum = Some(MomentumMonitor::new(&self.device));
             self.momentum_fences = Some(Arc::new(std::array::from_fn(|_| AtomicU64::new(0))));
+            self.contact_fences = Some(Arc::new(std::array::from_fn(|_| AtomicU64::new(0))));
         }
     }
 
@@ -613,6 +616,13 @@ impl FemRigidGpuSystem {
         self.momentum_fences
             .as_ref()
             .map(|counts| std::array::from_fn(|phase| counts[phase].load(Ordering::Acquire)))
+    }
+
+    /// Completed factor, prepare, count, offset, scatter, solve and recovery passes in diagnostic mode.
+    pub fn completed_contact_passes(&self) -> Option<[u64; 7]> {
+        self.contact_fences
+            .as_ref()
+            .map(|counts| std::array::from_fn(|pass| counts[pass].load(Ordering::Acquire)))
     }
 
     /// Input, FEM prediction, rigid prediction, contact and final-drift momentum pairs, then deltas.
@@ -811,30 +821,42 @@ impl FemRigidGpuSystem {
                 },
                 self.config.contact_margin as f32,
             )?;
-            self.solve.encode(
-                device,
-                &mut encoder,
-                SoftRigidSolveBindings {
-                    positions: self.soft_state.particle_q.device_buffer().unwrap(),
-                    velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
-                    inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
-                    contacts: self.gather.rows(),
-                    body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
-                    body_com: self.rigid_model.body_com.device_buffer().unwrap(),
-                    jacobians: &self.jacobian_buffer,
-                    mass_matrix: &self.mass_buffer,
-                    rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
-                    body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
-                    particle_count: self.soft_model.particle_count as u32,
-                    body_count: self.rigid_model.body_count as u32,
-                },
-                SoftRigidSolveSettings {
-                    iterations: self.config.contact.iterations as u32,
-                    dt: h as f32,
-                    penetration_recovery: self.config.contact.penetration_recovery as f32,
-                    max_recovery_speed: self.config.contact.max_recovery_speed as f32,
-                },
-            )?;
+            let solve_bindings = SoftRigidSolveBindings {
+                positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
+                contacts: self.gather.rows(),
+                body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                jacobians: &self.jacobian_buffer,
+                mass_matrix: &self.mass_buffer,
+                rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                particle_count: self.soft_model.particle_count as u32,
+                body_count: self.rigid_model.body_count as u32,
+            };
+            let solve_settings = SoftRigidSolveSettings {
+                iterations: self.config.contact.iterations as u32,
+                dt: h as f32,
+                penetration_recovery: self.config.contact.penetration_recovery as f32,
+                max_recovery_speed: self.config.contact.max_recovery_speed as f32,
+            };
+            if let Some(counts) = &self.contact_fences {
+                let counts = counts.clone();
+                self.solve.encode_with_completion(
+                    device,
+                    queue,
+                    &mut encoder,
+                    solve_bindings,
+                    solve_settings,
+                    Arc::new(move |pass| {
+                        counts[pass].fetch_add(1, Ordering::Release);
+                    }),
+                )?;
+            } else {
+                self.solve
+                    .encode(device, &mut encoder, solve_bindings, solve_settings)?;
+            }
             self.drift.encode(
                 device,
                 &mut encoder,
