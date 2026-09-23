@@ -1276,6 +1276,29 @@ sampled distance needs GPU/f64 verification; no geometry fix or constraint
 pruning has been implemented. Simply adding cycles or shifting the convergence
 endpoint is not a demonstrated remedy for this plateau.
 
+### Face-relative box geometry validation (2026-09-23)
+
+The GPU gather now accumulates support offsets relative to the three signed
+box faces, retaining the box edge/corner distance and normal calculation.
+A failing real-GPU regression reproduced a represented gap4.8428774e-8m being
+rounded to5.9604645e-8m. Three geometry tests now pass: signed faces,
+static/dynamic translation, barycentric vertices/edges/triangles, radii,
+dense/compact parity, rotated faces/edges/corners and composed body/shape poses
+against f64 oracles. Existing surface2/compact4/static2/two-way drive5 GPU
+tests pass, as do CPU84 (3ignored) and all-target GPU compilation.
+
+A test-only captured step13 control re-gathers5700ground rows using this
+shader, preserves all old normals/supports/friction/impulses, and recomputes
+the gap-dependent velocity targets. Maximum f64 ground-gap error is1.80e-11m.
+After128contact/material cycles, material passes (GPU8.58e-5/f648.00e-5),
+but contact remains GPU2.069e-4/f642.069e-4. The independent simultaneous
+gate correctly FAILS; contact-only continuation also plateaus near2.064e-4.
+This is a validated geometry correction, NOT a complete contact convergence
+fix or native trajectory acceptance. Worst remaining point rows3100/3784
+have tiny penetrating gaps and positive normal impulses; remaining sampled
+constraint/recovery convergence still needs diagnosis. No physical tolerances
+or constraints were relaxed, and no CPU runtime fallback was introduced.
+
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
