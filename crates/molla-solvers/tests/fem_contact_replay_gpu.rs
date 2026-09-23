@@ -38,13 +38,19 @@ fn buffer<T: bytemuck::Pod>(device: &wgpu::Device, values: &[T]) -> wgpu::Buffer
 #[test]
 #[ignore = "requires MOLLA_CONTACT_FIXTURE and a real GPU through make test-gpu"]
 fn captured_contact_preparation_completes() {
-    replay(false);
+    replay(false, 1);
 }
 
 #[test]
 #[ignore = "requires MOLLA_CONTACT_FIXTURE and GPU timestamp queries through make test-gpu"]
 fn captured_full_contact_profile_preserves_solver_outputs() {
-    replay(true);
+    replay(true, 12);
+}
+
+#[test]
+#[ignore = "requires MOLLA_CONTACT_FIXTURE and GPU timestamp queries through make test-gpu"]
+fn captured_single_sweep_profile_preserves_solver_outputs() {
+    replay(true, 1);
 }
 
 #[test]
@@ -99,7 +105,7 @@ fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
     }
 }
 
-fn replay(profile: bool) {
+fn replay(profile: bool, iterations: u32) {
     let path = std::path::PathBuf::from(
         std::env::var_os("MOLLA_CONTACT_FIXTURE").expect("MOLLA_CONTACT_FIXTURE"),
     );
@@ -119,7 +125,7 @@ fn replay(profile: bool) {
         .iter()
         .map(|name| std::fs::read(path.join(format!("{name}.bin"))).unwrap())
         .collect();
-    replay_inputs(profile, inputs);
+    replay_inputs(profile, iterations, inputs);
 }
 
 #[test]
@@ -177,6 +183,7 @@ fn cooperative_contact_dof_boundaries_match_serial_bitwise() {
         let bytes = |values: &[f32]| bytemuck::cast_slice(values).to_vec();
         replay_inputs(
             true,
+            12,
             vec![
                 bytes(&[0.2, 0.0, 0.1, 0.0, 0.3, 0.1, 0.2, 0.0, 0.1, 0.2, 0.0, 0.0]),
                 bytes(&[
@@ -197,7 +204,7 @@ fn cooperative_contact_dof_boundaries_match_serial_bitwise() {
     }
 }
 
-fn replay_inputs(profile: bool, inputs: Vec<Vec<u8>>) {
+fn replay_inputs(profile: bool, iterations: u32, inputs: Vec<Vec<u8>>) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
     eprintln!("contact replay adapter: {:?}", adapter.get_info());
@@ -254,7 +261,7 @@ fn replay_inputs(profile: bool, inputs: Vec<Vec<u8>>) {
         body_count: bodies,
     };
     let settings = SoftRigidSolveSettings {
-        iterations: if profile { 12 } else { 1 },
+        iterations,
         dt: 1.0 / 19200.0,
         penetration_recovery: 0.2,
         max_recovery_speed: 0.5,
@@ -313,7 +320,11 @@ fn replay_inputs(profile: bool, inputs: Vec<Vec<u8>>) {
         let cooperative =
             SoftRigidSolveKernel::new_cooperative(device, dofs, (buffers[3].size() / 80) as u32)
                 .unwrap();
-        for (mode, kernel) in [("serial", &kernel), ("cooperative", &cooperative)] {
+        for (mode, kernel) in [("serial", &kernel), ("cooperative", &cooperative)]
+            .into_iter()
+            .cycle()
+            .take(if iterations == 1 { 6 } else { 2 })
+        {
             for (destination, bytes) in buffers.iter().zip(&inputs) {
                 queue.write_buffer(destination, 0, bytes);
             }
@@ -402,6 +413,9 @@ fn replay_inputs(profile: bool, inputs: Vec<Vec<u8>>) {
             eprintln!(
                 "{mode} contact GPU total={total:.6}ms, submit/wait={elapsed:?}; outputs bitwise identical"
             );
+            if iterations == 1 {
+                continue;
+            }
             for (destination, bytes) in buffers.iter().zip(&inputs) {
                 queue.write_buffer(destination, 0, bytes);
             }

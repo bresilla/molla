@@ -159,6 +159,7 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                         timed.rigid_state().body_q.device_buffer().unwrap(),
                     ),
                     (plain.status_buffer(), timed.status_buffer()),
+                    (plain.active_contact_rows(), timed.active_contact_rows()),
                 ] {
                     assert_eq!(read(&device, &queue, a), read(&device, &queue, b));
                 }

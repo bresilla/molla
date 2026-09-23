@@ -657,6 +657,11 @@ impl FemRigidGpuSystem {
         self.timing.as_ref().and_then(|t| t.contact_ticks())
     }
 
+    /// Active count, ordered candidate row indices and compaction scratch; read after completion.
+    pub fn active_contact_rows(&self) -> &wgpu::Buffer {
+        self.solve.active_rows()
+    }
+
     /// Select retained material iterates and their per-correction sweep count; None uses full restarts.
     pub fn configure_material_contact_reuse(&mut self, iterations: Option<u32>) -> Result<()> {
         if self.queued_substeps != 0

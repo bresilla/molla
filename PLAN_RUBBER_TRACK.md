@@ -1047,7 +1047,21 @@ GPU regression passes uncoupled,2outer,130outer/page-crossing and native-style
 momentum-fence cases over2substeps, checking nested timestamps and bitwise
 physical/momentum state. Missing feature, pending/disabled/reconfigured
 states and4096iteration allocation are covered. GPU all-target check and
-87CPU library tests (4ignored) pass. Native attribution remains pending.
+87CPU library tests (4ignored) pass. Nativef8870c9 first-step physics matches
+752d5f9 exactly and passes independent force/volume/mass/momentum checks.
+Continued copies take0.008868s, solve/recovery26.601653s and feedback/final
+residual0.020513s: solving is99.89% of26.631034s contact time within a
+32.953980s total timeline. Copies/feedback are not the dominant cost.
+
+Batched response-prefetch trials preserve bitwise state but do not establish
+a speedup and are reverted. Twelve-sweep replay grows from119..125ms to
+140..156ms; single-sweep comparisons vary with the serial control. A fixed
+single-sweep regression now repeats alternating serial/cooperative profiles
+three times, retaining bitwise state checks and the original12sweep and4+8
+continuation gates. All5replay tests pass. Archived fixture positions/masses
+match current initial inputs; its2386active rows comprise2384dynamic and2ball
+rows, with no static rows. A read-only active-contact buffer accessor and
+timing parity test support checking the current native workload directly.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
