@@ -487,13 +487,39 @@ fn tet_displacement_edge(origin: u32, node: u32) -> vec3<f32> {
         - (particle_rest[node].xyz - particle_rest[origin].xyz);
 }
 
+// Rounding remainder from aligned f32 significands.
 fn tet_sum_error(a: vec3<f32>, b: vec3<f32>, sum: vec3<f32>) -> vec3<f32> {
-    let recovered_b = sum - a;
-    return (a - (sum - recovered_b)) + (b - recovered_b);
+    let a_bits = bitcast<vec3<u32>>(a);
+    let b_bits = bitcast<vec3<u32>>(b);
+    let a_larger = (a_bits & vec3<u32>(0x7fffffffu)) >= (b_bits & vec3<u32>(0x7fffffffu));
+    let high = select(b_bits, a_bits, a_larger);
+    let low = select(a_bits, b_bits, a_larger);
+    let result = bitcast<vec3<u32>>(sum);
+    let eh_raw = (high >> vec3<u32>(23u)) & vec3<u32>(255u);
+    let el_raw = (low >> vec3<u32>(23u)) & vec3<u32>(255u);
+    let es_raw = (result >> vec3<u32>(23u)) & vec3<u32>(255u);
+    let eh = max(eh_raw, vec3<u32>(1u));
+    let el = max(el_raw, vec3<u32>(1u));
+    let es = max(es_raw, vec3<u32>(1u));
+    let mh = (high & vec3<u32>(0x7fffffu)) | select(vec3<u32>(), vec3<u32>(0x800000u), eh_raw != vec3<u32>());
+    let ml = (low & vec3<u32>(0x7fffffu)) | select(vec3<u32>(), vec3<u32>(0x800000u), el_raw != vec3<u32>());
+    let ms = (result & vec3<u32>(0x7fffffu)) | select(vec3<u32>(), vec3<u32>(0x800000u), es_raw != vec3<u32>());
+    let base = min(eh, es);
+    let difference = (vec3<i32>(mh << (eh - base)) - vec3<i32>(ms << (es - base))) << (base - el);
+    let sh = select(vec3<i32>(1), vec3<i32>(-1), (high >> vec3<u32>(31u)) != vec3<u32>());
+    let sl = select(vec3<i32>(1), vec3<i32>(-1), (low >> vec3<u32>(31u)) != vec3<u32>());
+    let residual = ldexp(vec3<f32>(difference * sh + vec3<i32>(ml) * sl), vec3<i32>(el) - vec3<i32>(150));
+    let cancellation = select(residual, vec3<f32>(), es < el);
+    return select(cancellation, bitcast<vec3<f32>>(low), eh - el > vec3<u32>(25u));
 }
 
-fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> mat3x3<f32> {
-    var product: mat3x3<f32>;
+struct TetGradient {
+    value: mat3x3<f32>,
+    correction: mat3x3<f32>,
+}
+
+fn tet_gradient_parts(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> TetGradient {
+    var product: TetGradient;
     for (var column = 0u; column < 3u; column++) {
         let p0 = a[0] * b[column].x;
         let p1 = a[1] * b[column].y;
@@ -507,9 +533,15 @@ fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> 
             + tet_sum_error(p0, p1, sum01)
             + tet_sum_error(sum01, p2, sum012)
             + tet_sum_error(sum012, origin[column], value);
-        product[column] = value + error;
+        product.value[column] = value;
+        product.correction[column] = error;
     }
     return product;
+}
+
+fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> mat3x3<f32> {
+    let product = tet_gradient_parts(a, b, origin);
+    return product.value + product.correction;
 }
 
 // Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
@@ -545,13 +577,19 @@ fn tet_neo_hookean_block(
     let lam = lam_l + mu_l;
 
     // Displacement-gradient form F = I + Du · Dm⁻¹.
-    let previous = tet_gradient_product(mat3x3<f32>(v1, v2, v3), dm_inv, IDENTITY3);
+    let previous_parts = tet_gradient_parts(mat3x3<f32>(v1, v2, v3), dm_inv, IDENTITY3);
+    let previous = previous_parts.value + previous_parts.correction;
     let increment = tet_gradient_product(mat3x3<f32>(
         particle_delta[i1].xyz - particle_delta[i0].xyz,
         particle_delta[i2].xyz - particle_delta[i0].xyz,
         particle_delta[i3].xyz - particle_delta[i0].xyz,
     ), dm_inv, mat3x3<f32>());
-    let f_full = previous + increment;
+    var f_full: mat3x3<f32>;
+    for (var column = 0u; column < 3u; column++) {
+        let value = previous_parts.value[column] + increment[column];
+        f_full[column] = value + (previous_parts.correction[column]
+            + tet_sum_error(previous_parts.value[column], increment[column], value));
+    }
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_mat);

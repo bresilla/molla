@@ -5,6 +5,7 @@ use molla_core::WorldId;
 use molla_math::{Mat3, Vec3};
 use molla_sim::{ModelBuilder, TetViscosity};
 use molla_solvers::VbdSolver;
+use wgpu::util::DeviceExt;
 
 #[path = "common/fem_gradient_fixtures.rs"]
 mod fixtures;
@@ -24,6 +25,116 @@ fn vectors(bits: &[u32]) -> Vec<Vec3> {
 
 fn projected(v: Vec3) -> Vec3 {
     Vec3::from_array(v.to_array().map(|x| x as f32 as f64))
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn tet_sum_corrections_match_exact_rounding() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let source = include_str!("../../molla-kernels/shaders/vbd_cloth.wgsl");
+    let start = source.find("fn tet_sum_error(").unwrap();
+    let end = source[start..].find("fn tet_gradient_product(").unwrap() + start;
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("tet sum correction regression"),
+        source: wgpu::ShaderSource::Wgsl(
+            format!(
+                r#"
+{}
+@group(0) @binding(0) var<storage, read> inputs: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<vec4<f32>>;
+@compute @workgroup_size(64)
+fn check(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if gid.x >= arrayLength(&inputs) {{ return; }}
+    let pair = inputs[gid.x];
+    let a = vec3<f32>(pair.x, pair.y, pair.x);
+    let b = vec3<f32>(pair.y, pair.x, -pair.y);
+    let sum = a + b;
+    outputs[gid.x] = vec4<f32>(tet_sum_error(a, b, sum), sum.x);
+}}
+"#,
+                &source[start..end]
+            )
+            .into(),
+        ),
+    });
+    let mut pairs = vec![[0.0f32, 0.0, 0.0, 0.0], [1.0, -1.0, 0.0, 0.0]];
+    let mut rng = 0x1935a73du32;
+    for exponent in [47u32, 80, 100, 127, 160, 207] {
+        for gap in (0..=27).chain([32, 60, 100]) {
+            if gap >= exponent - 24 {
+                continue;
+            }
+            for sign in 0..4u32 {
+                for _ in 0..32 {
+                    rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let a =
+                        f32::from_bits((exponent << 23) | (rng & 0x7fffff) | ((sign & 1) << 31));
+                    rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let b = f32::from_bits(
+                        ((exponent - gap) << 23) | (rng & 0x7fffff) | ((sign >> 1) << 31),
+                    );
+                    pairs.push([a, b, 0.0, 0.0]);
+                }
+            }
+        }
+    }
+    let inputs = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&pairs),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let outputs = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: inputs.size(),
+        mapped_at_creation: false,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: None,
+        module: &shader,
+        entry_point: Some("check"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: inputs.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: outputs.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups((pairs.len() as u32).div_ceil(64), 1, 1);
+    }
+    queue.submit([encoder.finish()]);
+    let values = readback::read::<[f32; 4]>(&engine, &outputs, pairs.len());
+    for (index, (pair, gpu)) in pairs.iter().zip(values).enumerate() {
+        assert_eq!(gpu[3], pair[0] + pair[1], "sum at {index}");
+        for (lane, (a, b)) in [(pair[0], pair[1]), (pair[1], pair[0]), (pair[0], -pair[1])]
+            .into_iter()
+            .enumerate()
+        {
+            let sum = (a + b) as f64;
+            let recovered_b = sum - a as f64;
+            let expected = ((a as f64 - (sum - recovered_b)) + (b as f64 - recovered_b)) as f32;
+            assert_eq!(gpu[lane], expected, "correction at {index}/{lane}: {a}+{b}");
+        }
+    }
+    eprintln!("exact sum corrections: {} lanes", pairs.len() * 3);
 }
 
 #[test]

@@ -1334,7 +1334,38 @@ trajectory acceptance. Fresh coupled validation, settling, torque-driven
 traction, energy/refinement, performance and selectable simulator ownership
 remain required before enabling full FEM for users.
 
+### Preserved rounding corrections (2026-09-24)
+
+The next compensated native trajectory passed 64 GPU steps in 997.77 seconds,
+but independent verification rejected step 42/node 20199: 1.056395e-4 versus
+the unchanged 1e-4 force limit. The other 63 states passed. This remains failed
+native acceptance and covers only 3.333 milliseconds of physical time.
+
+Recorded GPU intermediates showed ordinary TwoSum corrections returning zero
+despite nonzero exact rounding remainders. Product residuals were correct.
+WGSL permits reassociation; FMA-subtraction, sign-bit subtraction and ordered
+FastTwoSum formulations reproduced the missing corrections on this backend.
+The sum remainder now uses integer significand/exponent alignment. The base
+gradient retains high/low parts until the current displacement increment is
+added. Material laws, storage, timestep, budgets and tolerances are unchanged.
+No optional GPU feature, CPU runtime work or runtime readback was added.
+
+A direct GPU regression checks 67206 arithmetic lanes against exact projected
+sum remainders. The old helper fails; the new helper passes. Keeping the base
+gradient correction through the increment also preserves the original force
+regressions: errors 6.95924e-6 and 2.47731e-5 remain below 3e-5. The step 42 local
+fixed-neighbor replay reaches independent 7.32628e-5 after 8 sweeps rather than
+the old 1.12505e-4 plateau. This does not prove a fresh coupled trajectory.
+
+Isolated validation passed 27 GPU tests: gradient 2, material-force 8,
+plasticity/multimaterial 3, kinematic 3 and coupling 11 (230.62 seconds).
+Both high-friction exhaustion controls still reject status 64 with independent
+forces above 6. CPU 84 tests pass/3 ignored; all-target GPU compilation passes.
+Fresh native verification, full physical scenarios and performance remain
+required before simulator FEM activation.
+
 Primary references:
+- https://www.w3.org/TR/WGSL/#reassociation-fusion
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
