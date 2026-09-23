@@ -845,6 +845,14 @@ force convergence. The artificial friction1000 case now passes two steps but
 rejects its third retained step (force0.119683m/s, correction0.002782m/s);
 the regression checks that rejection rather than accepting the trajectory.
 
+Native validation at c2a419f (256outer,8retained) still rejects after84.73s:
+GPU force0.000739600m/s and independent float64 force0.000748168m/s identify
+the same worst node12972. Maximum nodewise scalar disagreement falls from
+0.002543063 to7.70176e-5m/s (33x smaller), but that remaining discrepancy is
+still significant against1e-4. GPU/oracle counts above tolerance are282/294,
+versus266/19994 before the fix. This confirms improved precision and genuine
+remaining under-convergence, not an accepted native substep or practical speed.
+
 GPU force diagnostics now expose the existing per-node target/residual scratch
 and projected spring stiffness buffers. These are optional diagnostic handles,
 not runtime CPU readbacks. Samples are unavailable before evaluation or after
