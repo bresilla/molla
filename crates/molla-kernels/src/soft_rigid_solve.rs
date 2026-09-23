@@ -96,6 +96,23 @@ pub struct SoftRigidSolveKernel {
 
 impl SoftRigidSolveKernel {
     pub fn new(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
+        Self::build(device, dofs, row_count, false)
+    }
+
+    /// Cooperative row loading with ordered contact updates and cached rigid velocities.
+    pub fn new_cooperative(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
+        if device.limits().max_compute_invocations_per_workgroup < 64
+            || device.limits().max_compute_workgroup_size_x < 64
+            || device.limits().max_compute_workgroup_storage_size < 2048
+        {
+            return Err(Error::Build(
+                "unsupported cooperative contact workgroup".into(),
+            ));
+        }
+        Self::build(device, dofs, row_count, true)
+    }
+
+    fn build(device: &wgpu::Device, dofs: u32, row_count: u32, cooperative: bool) -> Result<Self> {
         if !(1..=64).contains(&dofs)
             || row_count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
             || device.limits().max_storage_buffers_per_shader_stage < 16
@@ -150,7 +167,12 @@ impl SoftRigidSolveKernel {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("FEM two-way contact"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../shaders/soft_rigid_solve.wgsl").into(),
+                format!(
+                    "{}\n{}",
+                    include_str!("../shaders/soft_rigid_solve.wgsl"),
+                    include_str!("../shaders/soft_rigid_cooperative.wgsl")
+                )
+                .into(),
             ),
         });
         let pipelines = [
@@ -159,7 +181,11 @@ impl SoftRigidSolveKernel {
             "count_contacts",
             "offset_contacts",
             "scatter_contacts",
-            "solve",
+            if cooperative {
+                "solve_cooperative"
+            } else {
+                "solve"
+            },
             "recover_body_velocity",
         ]
         .map(|entry| {

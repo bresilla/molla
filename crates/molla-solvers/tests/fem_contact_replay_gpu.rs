@@ -46,6 +46,45 @@ fn captured_full_contact_profile_preserves_solver_outputs() {
     replay(true);
 }
 
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
+    for (invocations, width, storage, supported) in [
+        (64, 64, 2048, true),
+        (32, 64, 2048, false),
+        (64, 32, 2048, false),
+        (64, 64, 1024, false),
+    ] {
+        let mut descriptor = wgpu::DeviceDescriptor::default();
+        molla_solvers::fem_rigid_gpu::request_fem_device_limits(
+            &mut descriptor.required_limits,
+            &adapter.limits(),
+        )
+        .unwrap();
+        descriptor
+            .required_limits
+            .max_compute_invocations_per_workgroup = invocations;
+        descriptor.required_limits.max_compute_workgroup_size_x = width;
+        descriptor
+            .required_limits
+            .max_compute_workgroup_storage_size = storage;
+        let (device, _) = block_on(adapter.request_device(&descriptor)).unwrap();
+        if storage == 1024 {
+            assert!(SoftRigidSolveKernel::new(&device, 64, 1).is_ok());
+        }
+        for (dofs, rows) in [(1, 0), (64, 1), (0, 1), (65, 1), (1, u32::MAX)] {
+            let valid = supported && (1..=64).contains(&dofs) && rows != u32::MAX;
+            assert_eq!(
+                SoftRigidSolveKernel::new_cooperative(&device, dofs, rows).is_ok(),
+                valid,
+                "invocations={invocations}, width={width}, storage={storage}, dofs={dofs}, rows={rows}"
+            );
+        }
+    }
+}
+
 fn replay(profile: bool) {
     let path = std::path::PathBuf::from(
         std::env::var_os("MOLLA_CONTACT_FIXTURE").expect("MOLLA_CONTACT_FIXTURE"),
@@ -178,79 +217,98 @@ fn replay(profile: bool) {
             read(&buffers[9]),
             bytes,
         ];
-        for (destination, bytes) in buffers.iter().zip(&inputs) {
-            queue.write_buffer(destination, 0, bytes);
-        }
-        let profile = SoftRigidSolveProfile::new(device).unwrap();
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let mut empty = bindings();
-        empty.body_count = 0;
-        assert!(
-            kernel
-                .encode_profiled(device, &mut encoder, empty, settings, &profile)
-                .is_err()
-        );
-        kernel
-            .encode_profiled(device, &mut encoder, bindings(), settings, &profile)
-            .unwrap();
-        let submitted = Instant::now();
-        let submission = queue.submit([encoder.finish()]);
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(Duration::from_secs(30)),
-            })
-            .expect("profiled contact solve exceeded 30 seconds");
-        let elapsed = submitted.elapsed();
-        assert_eq!(read(kernel.status()), 0u32.to_le_bytes());
-        for (actual, expected) in [
-            read(&buffers[1]),
-            read(&buffers[8]),
-            read(&buffers[9]),
-            read(kernel.row_state()),
-        ]
-        .iter()
-        .zip(&expected)
-        {
-            assert_eq!(
-                actual, expected,
-                "timestamp instrumentation changed contact state"
-            );
+        let cooperative =
+            SoftRigidSolveKernel::new_cooperative(device, dofs, (buffers[3].size() / 80) as u32)
+                .unwrap();
+        for (mode, kernel) in [("serial", &kernel), ("cooperative", &cooperative)] {
+            for (destination, bytes) in buffers.iter().zip(&inputs) {
+                queue.write_buffer(destination, 0, bytes);
+            }
+            let profile = SoftRigidSolveProfile::new(device).unwrap();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let mut empty = bindings();
+            empty.body_count = 0;
             assert!(
-                actual
+                kernel
+                    .encode_profiled(device, &mut encoder, empty, settings, &profile)
+                    .is_err()
+            );
+            kernel
+                .encode_profiled(device, &mut encoder, bindings(), settings, &profile)
+                .unwrap();
+            let submitted = Instant::now();
+            let submission = queue.submit([encoder.finish()]);
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: Some(Duration::from_secs(30)),
+                })
+                .expect("profiled contact solve exceeded 30 seconds");
+            let elapsed = submitted.elapsed();
+            assert_eq!(read(kernel.status()), 0u32.to_le_bytes());
+            for (field, (actual, expected)) in [
+                read(&buffers[1]),
+                read(&buffers[8]),
+                read(&buffers[9]),
+                read(kernel.row_state()),
+            ]
+            .iter()
+            .zip(&expected)
+            .enumerate()
+            {
+                let difference = actual
                     .chunks_exact(4)
-                    .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
+                    .zip(expected.chunks_exact(4))
+                    .enumerate()
+                    .find(|(_, (a, b))| a != b)
+                    .map(|(index, (a, b))| {
+                        (
+                            index,
+                            f32::from_le_bytes(a.try_into().unwrap()),
+                            f32::from_le_bytes(b.try_into().unwrap()),
+                        )
+                    });
+                assert!(
+                    actual == expected,
+                    "{mode} contact state mismatch field={field}, first word={difference:?}"
+                );
+                assert!(
+                    actual
+                        .chunks_exact(4)
+                        .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
+                );
+            }
+            let ticks = read(profile.ticks());
+            let ticks: Vec<_> = ticks
+                .chunks_exact(8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            assert_eq!(ticks.len(), 14);
+            let mut total = 0.0;
+            for (pass, pair) in [
+                "factor", "prepare", "count", "offset", "scatter", "solve", "recover",
+            ]
+            .iter()
+            .zip(ticks.chunks_exact(2))
+            {
+                let milliseconds = pair[1].wrapping_sub(pair[0]) as f64
+                    * queue.get_timestamp_period() as f64
+                    / 1e6;
+                assert!(milliseconds.is_finite() && (0.0..30000.0).contains(&milliseconds));
+                total += milliseconds;
+                eprintln!("{mode} contact GPU pass {pass}: {milliseconds:.6}ms");
+            }
+            assert!(total > 0.0);
+            let active = read(kernel.active_rows());
+            let active = u32::from_le_bytes(active[..4].try_into().unwrap());
+            assert!(active > 0 && active <= (buffers[3].size() / 80) as u32);
+            eprintln!(
+                "contact active rows={active}, sweeps={}",
+                settings.iterations
+            );
+            eprintln!(
+                "{mode} contact GPU total={total:.6}ms, submit/wait={elapsed:?}; outputs bitwise identical"
             );
         }
-        let ticks = read(profile.ticks());
-        let ticks: Vec<_> = ticks
-            .chunks_exact(8)
-            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        assert_eq!(ticks.len(), 14);
-        let mut total = 0.0;
-        for (pass, pair) in [
-            "factor", "prepare", "count", "offset", "scatter", "solve", "recover",
-        ]
-        .iter()
-        .zip(ticks.chunks_exact(2))
-        {
-            let milliseconds =
-                pair[1].wrapping_sub(pair[0]) as f64 * queue.get_timestamp_period() as f64 / 1e6;
-            assert!(milliseconds.is_finite() && (0.0..30000.0).contains(&milliseconds));
-            total += milliseconds;
-            eprintln!("contact GPU pass {pass}: {milliseconds:.6}ms");
-        }
-        assert!(total > 0.0);
-        let active = read(kernel.active_rows());
-        let active = u32::from_le_bytes(active[..4].try_into().unwrap());
-        assert!(active > 0 && active <= (buffers[3].size() / 80) as u32);
-        eprintln!(
-            "contact active rows={active}, sweeps={}",
-            settings.iterations
-        );
-        eprintln!(
-            "contact GPU total={total:.6}ms, submit/wait={elapsed:?}; outputs bitwise identical"
-        );
     }
 }

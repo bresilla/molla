@@ -103,6 +103,21 @@ fn response_buffers(engine: &Engine, model: &Model, state: &State) -> (wgpu::Buf
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
+    check_two_way_contact(false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn cooperative_gpu_two_way_contact_matches_articulated_cpu_oracle() {
+    check_two_way_contact(true);
+}
+
+fn check_two_way_contact(cooperative: bool) {
+    let constructor = if cooperative {
+        SoftRigidSolveKernel::new_cooperative
+    } else {
+        SoftRigidSolveKernel::new
+    };
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
@@ -236,8 +251,7 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let kernel =
-            SoftRigidSolveKernel::new(device, rigid.joint_dof_total as u32, candidate_count as u32)
-                .unwrap();
+            constructor(device, rigid.joint_dof_total as u32, candidate_count as u32).unwrap();
         let mut encoder = device.create_command_encoder(&Default::default());
         kernel
             .encode(
@@ -356,7 +370,7 @@ fn gpu_two_way_contact_matches_articulated_cpu_oracle() {
                 contact.ids[3] = 0;
             }
             queue.write_buffer(&contact_buffer, 0, bytemuck::cast_slice(&candidates));
-            let empty = SoftRigidSolveKernel::new(device, rigid.joint_dof_total as u32, 0).unwrap();
+            let empty = constructor(device, rigid.joint_dof_total as u32, 0).unwrap();
             let before = read::<f32>(
                 &engine,
                 gpu_rigid.joint_qd.device_buffer().unwrap(),

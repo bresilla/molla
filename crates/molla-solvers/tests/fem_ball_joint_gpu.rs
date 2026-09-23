@@ -31,6 +31,7 @@ fn buffer<T: bytemuck::Pod>(device: &wgpu::Device, values: &[T]) -> wgpu::Buffer
 struct ResultData {
     qd: Vec<f32>,
     soft: Vec<f32>,
+    body: Vec<f32>,
     status: u32,
     rows: Vec<f32>,
 }
@@ -148,41 +149,74 @@ fn solve(
         &[0.0_f32, if coupled { -3.0 } else { 0.0 }, 0.0, 0.0],
     );
     let inv = buffer(device, &[1.0_f32]);
-    let kernel = SoftRigidSolveKernel::new(device, 12, rows.len() as u32).unwrap();
-    let mut encoder = device.create_command_encoder(&Default::default());
-    kernel
-        .encode(
-            device,
-            &mut encoder,
-            SoftRigidSolveBindings {
-                positions: &positions,
-                velocities: &soft,
-                inverse_mass: &inv,
-                contacts: &contacts,
-                body_poses: &poses,
-                body_com: &com_buffer,
-                jacobians: &jac,
-                mass_matrix: &mass,
-                rigid_velocities: &qd,
-                body_velocities: &body_vel,
-                particle_count: 1,
-                body_count: 2,
-            },
-            SoftRigidSolveSettings {
-                iterations: 100,
-                dt: 0.01,
-                penetration_recovery: 0.2,
-                max_recovery_speed: 0.25,
-            },
-        )
-        .unwrap();
-    queue.submit([encoder.finish()]);
-    ResultData {
-        qd: gpu_readback::read(engine, &qd, 12),
-        soft: gpu_readback::read(engine, &soft, 4),
-        status: gpu_readback::read::<u32>(engine, kernel.status(), 1)[0],
-        rows: gpu_readback::read(engine, kernel.row_state(), rows.len() * 8),
+    let mut results = Vec::new();
+    for constructor in [
+        SoftRigidSolveKernel::new,
+        SoftRigidSolveKernel::new_cooperative,
+    ] {
+        queue.write_buffer(&qd, 0, bytemuck::cast_slice(&initial));
+        queue.write_buffer(
+            &soft,
+            0,
+            bytemuck::cast_slice(&[0.0_f32, if coupled { -3.0 } else { 0.0 }, 0.0, 0.0]),
+        );
+        queue.write_buffer(&body_vel, 0, bytemuck::cast_slice(&[0.0_f32; 16]));
+        let kernel = constructor(device, 12, rows.len() as u32).unwrap();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        kernel
+            .encode(
+                device,
+                &mut encoder,
+                SoftRigidSolveBindings {
+                    positions: &positions,
+                    velocities: &soft,
+                    inverse_mass: &inv,
+                    contacts: &contacts,
+                    body_poses: &poses,
+                    body_com: &com_buffer,
+                    jacobians: &jac,
+                    mass_matrix: &mass,
+                    rigid_velocities: &qd,
+                    body_velocities: &body_vel,
+                    particle_count: 1,
+                    body_count: 2,
+                },
+                SoftRigidSolveSettings {
+                    iterations: 100,
+                    dt: 0.01,
+                    penetration_recovery: 0.2,
+                    max_recovery_speed: 0.25,
+                },
+            )
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        results.push(ResultData {
+            qd: gpu_readback::read(engine, &qd, 12),
+            soft: gpu_readback::read(engine, &soft, 4),
+            body: gpu_readback::read(engine, &body_vel, 16),
+            status: gpu_readback::read::<u32>(engine, kernel.status(), 1)[0],
+            rows: gpu_readback::read(engine, kernel.row_state(), rows.len() * 8),
+        });
     }
+    let cooperative = results.pop().unwrap();
+    let serial = results.pop().unwrap();
+    assert_eq!(cooperative.status, serial.status);
+    for (label, actual, expected) in [
+        ("generalized", &cooperative.qd, &serial.qd),
+        ("particle", &cooperative.soft, &serial.soft),
+        ("body", &cooperative.body, &serial.body),
+        ("rows", &cooperative.rows, &serial.rows),
+    ] {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "{label}[{i}]: cooperative={a}, serial={b}"
+            );
+        }
+    }
+    cooperative
 }
 
 fn oracle(offsets: [Vec3; 2], initial: [f32; 12], target: Vec3) -> Vec<f64> {
@@ -305,6 +339,35 @@ fn gpu_ball_joint_couples_contact_and_rejects_invalid_constraints() {
         0,
     );
     assert_ne!(incompatible.status & 2, 0);
+    let partial = solve(
+        &engine,
+        [Vec3::ZERO; 2],
+        Vec3::Z * 0.01,
+        initial,
+        true,
+        false,
+        0,
+    );
+    assert_eq!(partial.status, 2);
+    assert!((partial.qd[1] + 0.2).abs() < 2e-5 && (partial.qd[7] + 0.2).abs() < 2e-5);
+    assert_eq!(&partial.rows[4..8], &[0.0; 4]);
+    let mut extreme = [0.0; 12];
+    extreme[1] = 1e20;
+    extreme[7] = -1e20;
+    let overflow = solve(
+        &engine,
+        [Vec3::ZERO; 2],
+        Vec3::ZERO,
+        extreme,
+        false,
+        false,
+        0,
+    );
+    assert_eq!(overflow.status, 4);
+    assert!(overflow.qd.iter().all(|v| v.is_finite()));
+    assert_ne!(overflow.qd, extreme);
+    assert_eq!(&overflow.rows[4..8], &[0.0; 4]);
+    assert_eq!(overflow.body, [0.0; 16]);
     for fault in 1..=3 {
         let invalid = solve(
             &engine,

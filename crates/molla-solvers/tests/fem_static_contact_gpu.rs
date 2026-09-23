@@ -24,10 +24,20 @@ fn buffer<T: bytemuck::Pod>(device: &wgpu::Device, values: &[T]) -> wgpu::Buffer
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn fixed_ground_matches_barycentric_coulomb_oracle_without_rigid_reaction() {
+    check_fixed_ground(false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn cooperative_fixed_ground_matches_barycentric_coulomb_oracle_without_rigid_reaction() {
+    check_fixed_ground(true);
+}
+
+fn check_fixed_ground(cooperative: bool) {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
-    for n in [1, 29, 64] {
+    for n in [1, 29, 32, 33, 64] {
         for (friction, gap, invalid) in [
             (0.0_f32, 0.0_f32, false),
             (0.5, -0.0001, false),
@@ -56,7 +66,12 @@ fn fixed_ground_matches_barycentric_coulomb_oracle_without_rigid_reaction() {
                 weights: [0.25, 0.25, 0.5, 0.0],
             };
             let contacts = buffer(device, &[contact]);
-            let kernel = SoftRigidSolveKernel::new(device, n as u32, 1).unwrap();
+            let constructor = if cooperative {
+                SoftRigidSolveKernel::new_cooperative
+            } else {
+                SoftRigidSolveKernel::new
+            };
+            let kernel = constructor(device, n as u32, 1).unwrap();
             let bindings = || SoftRigidSolveBindings {
                 positions: &position,
                 velocities: &velocity,
@@ -85,6 +100,44 @@ fn fixed_ground_matches_barycentric_coulomb_oracle_without_rigid_reaction() {
             assert_eq!(gpu_readback::read::<u32>(&engine, kernel.status(), 1), [0]);
             let seeded = gpu_readback::read::<[f32; 8]>(&engine, kernel.row_state(), 1);
             assert!(seeded[0][0] > 0.75);
+            if friction == 0.0 {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                kernel
+                    .encode(device, &mut encoder, bindings(), settings)
+                    .unwrap();
+                queue.submit([encoder.finish()]);
+                assert_eq!(gpu_readback::read::<u32>(&engine, kernel.status(), 1), [0]);
+                let effective = 0.75
+                    + (0..n)
+                        .map(|i| 0.125_f64.powi(2) / (i + 1) as f64)
+                        .sum::<f64>();
+                let relative = -2.0 - initial_rigid.iter().map(|v| 0.125 * *v as f64).sum::<f64>();
+                let impulse = -relative / effective;
+                let soft = gpu_readback::read::<[f32; 4]>(&engine, &velocity, 3);
+                for (v, weight) in soft.iter().zip([0.25, 0.25, 0.5]) {
+                    assert!(
+                        (v[1] as f64 - (-2.0 + 2.0 * weight * impulse)).abs() < 3e-6,
+                        "dynamic contact n={n}, cooperative={cooperative}, v={v:?}, impulse={impulse}"
+                    );
+                    assert_eq!([v[0], v[2], v[3]], [3.0, 1.0, 0.0]);
+                }
+                let rigid_after = gpu_readback::read::<f32>(&engine, &rigid, n);
+                for (i, (&v, &before)) in rigid_after.iter().zip(&initial_rigid).enumerate() {
+                    let expected = before as f64 - 0.125 * impulse / (i + 1) as f64;
+                    assert!(
+                        (v as f64 - expected).abs() < 3e-6,
+                        "dynamic DOF{i}/{n}: {v} != {expected}"
+                    );
+                }
+                let row = gpu_readback::read::<[f32; 8]>(&engine, kernel.row_state(), 1)[0];
+                assert!((row[4] as f64 - impulse).abs() < 3e-6);
+                queue.write_buffer(
+                    &velocity,
+                    0,
+                    bytemuck::cast_slice(&[[3.0_f32, -2.0, 1.0, 0.0]; 3]),
+                );
+                queue.write_buffer(&rigid, 0, bytemuck::cast_slice(&initial_rigid));
+            }
             contact.ids[1] = u32::MAX;
             queue.write_buffer(&contacts, 0, bytemuck::bytes_of(&contact));
             if invalid {

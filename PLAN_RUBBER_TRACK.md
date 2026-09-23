@@ -586,7 +586,7 @@ nonfinite values once during mass factorization, including world-only scenes.
 
 `make test-gpu T=fem_static_contact_gpu` checks sliding, sticking, normal
 recovery and a finite positive gap against an independent barycentric Coulomb
-oracle at 1, 29 and 64 DOFs. It reuses a formerly dynamic contact row, requires
+oracle at 1, 29, 32, 33 and 64 DOFs. It reuses a formerly dynamic contact row, requires
 bitwise-unchanged rigid velocities and rejects nonfinite generalized velocity
 without changing particle velocities. The existing mixed CPU/GPU, native-scale
 preparation and spherical-loop gates remain required.
@@ -638,8 +638,35 @@ velocities plus contact rows must be bitwise identical. The2026-09-23 RTX4080
 capture with29DOFs,29568particles and385683candidate rows measured291.795ms
 in `solve` of294.643ms total GPU pass time; preparation was1.817ms. These are
 fixture measurements, not real-time vehicle acceptance or a speedup claim.
-The serial contact sweep is the next measured optimization target. Preserve
-the physical constraints and validate any arithmetic/order changes independently.
+The serial contact sweep accounts for approximately99% of this contact profile.
+
+### Cooperative contact sweep
+
+`SoftRigidSolveKernel::new_cooperative` opts into64-lane loading of projected
+contact Jacobians and inverse-mass responses, with generalized velocities cached
+in workgroup memory. Lane0 retains the original contact order, normal/friction
+updates and scalar accumulation order. Particle updates remain on that lane.
+Faults stop subsequent row corrections without skipping required workgroup
+barriers; the partial generalized state is flushed and the shared status prevents
+body-velocity recovery. The default constructor still selects the serial kernel.
+
+The captured CEOL replay compares all particle/generalized/body velocities and
+contact rows bitwise between ordinary serial, profiled serial and cooperative
+solves. The first RTX4080 comparison measured294.646ms versus198.023ms total
+contact GPU time, with the sweep reduced from291.792ms to195.010ms. This is a
+single captured-state benchmark, not full-vehicle performance acceptance.
+
+`fem_static_contact_gpu` runs both paths against independent world-contact and
+dynamic barycentric impulse oracles through64DOFs, including row reuse and
+nonfinite input rejection. `fem_contact_solve_gpu` runs both paths against the
+articulated CPU oracle with friction, locked coordinates, sparse/empty rows and
+invalid inputs. `fem_ball_joint_gpu` compares every output word across paths
+before checking its dense impulse and momentum oracle, mixed contact/ball rows,
+singular responses, partial-row failures and finite-input overflow. The replay
+lane also checks reduced workgroup limits and invalid dimensions.
+
+Full native settling and powered traction remain unaccepted. End-to-end
+cooperative FEM substeps and native trajectories are required before promotion.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
