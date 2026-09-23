@@ -96,6 +96,11 @@ pub struct SoftRigidSolveKernel {
 
 impl SoftRigidSolveKernel {
     pub fn new(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
+        Self::new_cooperative(device, dofs, row_count)
+    }
+
+    /// Single-invocation reference sweep with storage-resident rigid velocities.
+    pub fn new_serial(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
         Self::build(device, dofs, row_count, false)
     }
 

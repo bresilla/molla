@@ -69,7 +69,7 @@ fn check_fixed_ground(cooperative: bool) {
             let constructor = if cooperative {
                 SoftRigidSolveKernel::new_cooperative
             } else {
-                SoftRigidSolveKernel::new
+                SoftRigidSolveKernel::new_serial
             };
             let kernel = constructor(device, n as u32, 1).unwrap();
             let bindings = || SoftRigidSolveBindings {

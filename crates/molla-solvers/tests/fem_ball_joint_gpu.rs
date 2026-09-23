@@ -151,7 +151,7 @@ fn solve(
     let inv = buffer(device, &[1.0_f32]);
     let mut results = Vec::new();
     for constructor in [
-        SoftRigidSolveKernel::new,
+        SoftRigidSolveKernel::new_serial,
         SoftRigidSolveKernel::new_cooperative,
     ] {
         queue.write_buffer(&qd, 0, bytemuck::cast_slice(&initial));

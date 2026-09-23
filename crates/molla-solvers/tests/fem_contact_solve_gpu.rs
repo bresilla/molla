@@ -116,7 +116,7 @@ fn check_two_way_contact(cooperative: bool) {
     let constructor = if cooperative {
         SoftRigidSolveKernel::new_cooperative
     } else {
-        SoftRigidSolveKernel::new
+        SoftRigidSolveKernel::new_serial
     };
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();

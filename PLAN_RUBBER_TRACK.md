@@ -642,13 +642,14 @@ The serial contact sweep accounts for approximately99% of this contact profile.
 
 ### Cooperative contact sweep
 
-`SoftRigidSolveKernel::new_cooperative` opts into64-lane loading of projected
+`SoftRigidSolveKernel::new` selects64-lane loading of projected
 contact Jacobians and inverse-mass responses, with generalized velocities cached
 in workgroup memory. Lane0 retains the original contact order, normal/friction
 updates and scalar accumulation order. Particle updates remain on that lane.
 Faults stop subsequent row corrections without skipping required workgroup
 barriers; the partial generalized state is flushed and the shared status prevents
-body-velocity recovery. The default constructor still selects the serial kernel.
+body-velocity recovery. `new_serial` retains the single-invocation reference;
+`new_cooperative` explicitly selects the same sweep as the default constructor.
 
 The captured CEOL replay compares all particle/generalized/body velocities and
 contact rows bitwise between ordinary serial, profiled serial and cooperative
@@ -665,8 +666,14 @@ before checking its dense impulse and momentum oracle, mixed contact/ball rows,
 singular responses, partial-row failures and finite-input overflow. The replay
 lane also checks reduced workgroup limits and invalid dimensions.
 
-Full native settling and powered traction remain unaccepted. End-to-end
-cooperative FEM substeps and native trajectories are required before promotion.
+The default is exercised through full FEM substeps by the existing four-bar
+closure, motor-to-rubber, reinforced airborne momentum and stabilized feedback
+tests. Submission-window, shared-renderer-device and bounded-contact failure
+tests also use the default path. Serial and cooperative references remain
+explicit in the independent contact and spherical-loop oracle comparisons.
+
+Full native settling and powered traction remain unaccepted. Native trajectory
+comparison is still required when updating Gearbox to the cooperative default.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

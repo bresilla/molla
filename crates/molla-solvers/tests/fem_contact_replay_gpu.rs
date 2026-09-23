@@ -72,10 +72,14 @@ fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
             .max_compute_workgroup_storage_size = storage;
         let (device, _) = block_on(adapter.request_device(&descriptor)).unwrap();
         if storage == 1024 {
-            assert!(SoftRigidSolveKernel::new(&device, 64, 1).is_ok());
+            assert!(SoftRigidSolveKernel::new_serial(&device, 64, 1).is_ok());
         }
         for (dofs, rows) in [(1, 0), (64, 1), (0, 1), (65, 1), (1, u32::MAX)] {
             let valid = supported && (1..=64).contains(&dofs) && rows != u32::MAX;
+            assert_eq!(
+                SoftRigidSolveKernel::new(&device, dofs, rows).is_ok(),
+                valid
+            );
             assert_eq!(
                 SoftRigidSolveKernel::new_cooperative(&device, dofs, rows).is_ok(),
                 valid,
@@ -144,7 +148,7 @@ fn replay(profile: bool) {
         molla_kernels::FeatherstoneKernel::new(device, queue, &builder.build().unwrap())
     };
     assert_eq!(buffers[7].size(), dofs as u64 * dofs as u64 * 4);
-    let kernel = SoftRigidSolveKernel::new(device, dofs, rows).unwrap();
+    let kernel = SoftRigidSolveKernel::new_serial(device, dofs, rows).unwrap();
     let mut encoder = device.create_command_encoder(&Default::default());
     let bindings = || SoftRigidSolveBindings {
         positions: &buffers[0],
