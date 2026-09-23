@@ -487,11 +487,27 @@ fn tet_displacement_edge(origin: u32, node: u32) -> vec3<f32> {
         - (particle_rest[node].xyz - particle_rest[origin].xyz);
 }
 
+fn tet_sum_error(a: vec3<f32>, b: vec3<f32>, sum: vec3<f32>) -> vec3<f32> {
+    let recovered_b = sum - a;
+    return (a - (sum - recovered_b)) + (b - recovered_b);
+}
+
 fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> mat3x3<f32> {
     var product: mat3x3<f32>;
     for (var column = 0u; column < 3u; column++) {
-        product[column] = fma(a[0], vec3<f32>(b[column].x),
-            fma(a[1], vec3<f32>(b[column].y), fma(a[2], vec3<f32>(b[column].z), origin[column])));
+        let p0 = a[0] * b[column].x;
+        let p1 = a[1] * b[column].y;
+        let p2 = a[2] * b[column].z;
+        let sum01 = p0 + p1;
+        let sum012 = sum01 + p2;
+        let value = sum012 + origin[column];
+        let error = fma(a[0], vec3<f32>(b[column].x), -p0)
+            + fma(a[1], vec3<f32>(b[column].y), -p1)
+            + fma(a[2], vec3<f32>(b[column].z), -p2)
+            + tet_sum_error(p0, p1, sum01)
+            + tet_sum_error(sum01, p2, sum012)
+            + tet_sum_error(sum012, origin[column], value);
+        product[column] = value + error;
     }
     return product;
 }

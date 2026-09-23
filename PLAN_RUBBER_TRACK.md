@@ -1299,6 +1299,41 @@ have tiny penetrating gaps and positive normal impulses; remaining sampled
 constraint/recovery convergence still needs diagnosis. No physical tolerances
 or constraints were relaxed, and no CPU runtime fallback was introduced.
 
+### Compensated material gradients (2026-09-24)
+
+The stable-box native probe completed 64 substeps in 898.33 seconds, but its
+independent material audit rejected steps 10 and 34: residuals 1.07241734e-4
+and 1.01548442e-4 exceeded the unchanged 1e-4 velocity-equivalent force limit.
+GPU status alone did not detect these violations. The trajectory covers only
+3.333 milliseconds and establishes neither settling nor usable performance.
+
+Gradient matrix products now accumulate product residuals and error-free sum
+corrections, including the identity/origin term. This preserves f32 storage,
+material laws, iteration budgets and physical tolerances without optional GPU
+features or CPU runtime work. A self-contained production-API GPU regression
+uses two recorded seven-node, four-tet neighborhoods and an independent f64
+force oracle. The published shader fails with scalar error 5.4765163e-5;
+compensated accumulation passes with errors 7.9024e-6 and 2.2911e-5 against
+the 3e-5 arithmetic-parity limit. This is not exact f64 equivalence.
+
+The previous high-friction negative trajectory now genuinely converges: all
+six cold/reused candidates pass independent force, contact-row, energy and
+state-parity checks. It remains a positive regression. A separate two-outer
+case verifies both cold and reused paths reject actual non-equilibrium with
+status 64; independent residuals are 6.232366 and 7.187426, not near a threshold.
+All 11 coupling tests pass, with independent all-node force checks on the
+accepted trajectories. Existing material-force 8, plasticity/multimaterial 3,
+kinematic 3 and new gradient 1 GPU tests also pass.
+
+Whole-mesh fixed-target replays of steps 10 and 34 preserve the initial force
+failures. After one compensated material sweep, all 29568 nodes satisfy the
+unchanged GPU and f64 force limits through checkpoints 1, 8, 32, 128 and 512.
+At eight sweeps their maximum independent residuals are 8.759651e-5 and
+8.008606e-5. These replay gates do not re-solve contact and are NOT fresh native
+trajectory acceptance. Fresh coupled validation, settling, torque-driven
+traction, energy/refinement, performance and selectable simulator ownership
+remain required before enabling full FEM for users.
+
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

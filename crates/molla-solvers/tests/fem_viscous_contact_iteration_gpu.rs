@@ -428,7 +428,13 @@ fn short_contact_sweeps_preserve_real_friction_trajectory() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_rejects_unconverged_high_friction_trajectory() {
-    material_reuse_trajectory(1000.0, Some(2), None);
+    material_reuse_trajectory_configured(1000.0, Some(0), None, false, 1, 2);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn material_reuse_converges_high_friction_trajectory() {
+    material_reuse_trajectory(1000.0, None, None);
 }
 
 fn material_reuse_trajectory(
@@ -436,19 +442,19 @@ fn material_reuse_trajectory(
     rejection_deadline: Option<usize>,
     sweeps: Option<u32>,
 ) {
-    material_reuse_trajectory_configured(friction, rejection_deadline, sweeps, false, 1);
+    material_reuse_trajectory_configured(friction, rejection_deadline, sweeps, false, 1, 256);
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn final_material_polish_preserves_friction_energy_and_lifecycle() {
-    material_reuse_trajectory_configured(0.85, None, Some(1), true, 1);
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 1, 256);
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn coupled_polish_cycles_preserve_friction_energy_and_lifecycle() {
-    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17);
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256);
 }
 
 fn material_reuse_trajectory_configured(
@@ -457,12 +463,14 @@ fn material_reuse_trajectory_configured(
     sweeps: Option<u32>,
     polish: bool,
     cycles: u32,
+    outer: u32,
 ) {
     use molla_solvers::fem_rigid_gpu::{
         FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
     };
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let h = 1.0 / 19200.0;
+    let oracle_model = model(false, true);
     let build = |outer| {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
@@ -498,8 +506,8 @@ fn material_reuse_trajectory_configured(
             .unwrap();
         system
     };
-    let mut cold = build(256);
-    let mut retained = build(256);
+    let mut cold = build(outer);
+    let mut retained = build(outer);
     retained.configure_material_contact_sweeps(sweeps).unwrap();
     assert!(retained.configure_material_contact_polish(Some(8)).is_err());
     assert!(
@@ -534,7 +542,13 @@ fn material_reuse_trajectory_configured(
             assert!(retained.configure_material_contact_reuse(None).is_err());
         }
         let mut results = Vec::new();
+        let mut rejected = 0;
         for (index, system) in [&mut cold, &mut retained].into_iter().enumerate() {
+            let previous = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_q.device_buffer().unwrap(),
+                4,
+            );
             assert!(system.try_step_substep(h).unwrap());
             assert!(system.configure_material_contact_reuse(None).is_err());
             assert!(system.configure_material_contact_sweeps(None).is_err());
@@ -556,21 +570,38 @@ fn material_reuse_trajectory_configured(
                 readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
             let corrections =
                 readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
+            let velocity = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_qd.device_buffer().unwrap(),
+                4,
+            );
+            let samples =
+                readback::read::<[f32; 4]>(&engine, system.material_force_samples().unwrap(), 4);
+            let oracle = trajectory_force_oracle(&oracle_model, &previous, &velocity, &samples, h);
             eprintln!(
-                "step={step} index={index} reuse={reuse:?} force={force} corrections={corrections:?} status={status}"
+                "step={step} index={index} reuse={reuse:?} force={force} oracle={oracle:?} corrections={corrections:?} status={status}"
             );
             if rejection_deadline.is_some_and(|limit| step <= limit) && status != 0 {
                 assert_eq!(status, 64);
                 assert!(force.is_finite() && force > 1e-4);
+                assert!(oracle.iter().any(|r| r.is_finite() && *r > 1e-4));
                 assert!(corrections.iter().all(|v| v.is_finite()));
                 assert!(corrections[0] > 1e-4);
-                return;
+                rejected += 1;
+                continue;
             }
             assert_eq!(
                 status, 0,
                 "step={step} index={index} reuse={reuse:?} force={force}"
             );
             assert!(force.is_finite() && force <= 1e-4);
+            assert!(oracle.iter().all(|r| r.is_finite() && *r <= 1e-4));
+            let rows = readback::read::<[f32; 8]>(
+                &engine,
+                system.contact_row_diagnostics(),
+                system.contact_row_count() as usize,
+            );
+            assert!(rows.iter().all(|r| r[3].is_finite() && r[3] <= 1e-4));
             while !system.poll_completion().unwrap() {
                 std::thread::yield_now();
             }
@@ -615,6 +646,10 @@ fn material_reuse_trajectory_configured(
             previous_energy[index] = elastic + kinetic;
             results.push((q, v));
         }
+        if rejected != 0 {
+            assert_eq!(rejected, 2);
+            return;
+        }
         for field in 0..2 {
             let a = if field == 0 {
                 &results[0].0
@@ -644,6 +679,72 @@ fn material_reuse_trajectory_configured(
             .configure_material_contact_polish_cycles(1)
             .is_err()
     );
+}
+
+fn trajectory_force_oracle(
+    model: &Model,
+    previous: &[[f32; 4]],
+    velocity: &[[f32; 4]],
+    samples: &[[f32; 4]],
+    dt: f64,
+) -> [f64; 4] {
+    let project = |v: f64| v as f32 as f64;
+    let vector = |v: [f32; 4]| Vec3::new(v[0] as f64, v[1] as f64, v[2] as f64);
+    let h = project(dt);
+    let delta: Vec<_> = velocity
+        .iter()
+        .map(|v| Vec3::from_array((vector(*v) * h).to_array().map(project)))
+        .collect();
+    let rest: Vec<_> = model
+        .initial_particle_q
+        .host()
+        .unwrap()
+        .iter()
+        .map(|p| Vec3::from_array(p.to_array().map(project)))
+        .collect();
+    let inverse = Mat3::from_cols_array(
+        &model.tet_dm_inv.host().unwrap()[0]
+            .to_cols_array()
+            .map(project),
+    );
+    let edge = |i: usize| vector(previous[i]) - vector(previous[0]) - (rest[i] - rest[0]);
+    let old = Mat3::IDENTITY + Mat3::from_cols(edge(1), edge(2), edge(3)) * inverse;
+    let increment = Mat3::from_cols(
+        delta[1] - delta[0],
+        delta[2] - delta[0],
+        delta[3] - delta[0],
+    ) * inverse;
+    let f = old + increment;
+    let cof = Mat3::from_cols(
+        f.y_axis.cross(f.z_axis),
+        f.z_axis.cross(f.x_axis),
+        f.x_axis.cross(f.y_axis),
+    );
+    let mu = project(model.tet_mu.host().unwrap()[0]);
+    let lambda = project(model.tet_lambda.host().unwrap()[0]);
+    let strain = (old.transpose() * increment
+        + increment.transpose() * old
+        + increment.transpose() * increment)
+        * 0.5;
+    let trace = strain.x_axis.x + strain.y_axis.y + strain.z_axis.z;
+    let viscosity = model.tet_viscosity.host().unwrap()[0];
+    let viscous = (strain - Mat3::IDENTITY * (trace / 3.0)) * (2.0 * project(viscosity.shear))
+        + Mat3::IDENTITY * (trace * project(viscosity.bulk));
+    let stress = (f - cof) * mu + cof * ((lambda + mu) * (f.determinant() - 1.0)) + f * viscous / h;
+    let rows = inverse.transpose();
+    let gradients = [
+        -(rows.x_axis + rows.y_axis + rows.z_axis),
+        rows.x_axis,
+        rows.y_axis,
+        rows.z_axis,
+    ];
+    let volume = project(model.tet_rest_volume.host().unwrap()[0]);
+    std::array::from_fn(|i| {
+        let inverse_mass = project(model.particle_inv_mass.host().unwrap()[i]);
+        let force = (vector(samples[i]) - delta[i]) / (inverse_mass * h * h)
+            - stress * gradients[i] * volume;
+        force.length() * h * inverse_mass
+    })
 }
 
 #[test]
