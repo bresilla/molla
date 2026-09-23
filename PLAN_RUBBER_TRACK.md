@@ -870,6 +870,18 @@ Intervals include inter-submission idle time, not just shader execution.
 Bitwise state equivalence, missing-feature rejection, idle restrictions,
 multi-page130iteration capture and4096iteration allocation are GPU-tested.
 
+Native phase capture at027c2a4 exactly preserves the unprofiled candidate and
+force samples. GPU timeline75.7136s contains74.6644s of continued contact
+solves (98.614%) and0.5493s of continued material solves. This measures GPU
+timeline spans, including queue idle, not isolated shader busy time.
+
+`configure_material_contact_sweeps(Some(n))` optionally selects1..4096 contact
+sweeps after each material correction. None preserves the initial solve count;
+the first full contact solve is unchanged. Configuration is idle-only and
+requires material coupling. Final contact, force and volume gates still apply.
+One continuation sweep passes static/dynamic CPU references and the three-step
+CEOL-friction cold/retained comparison; native accuracy/performance is pending.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

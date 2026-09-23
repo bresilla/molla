@@ -667,6 +667,23 @@ impl FemRigidGpuSystem {
         Ok(())
     }
 
+    /// Select contact sweeps after each material correction; None uses the initial solve count.
+    pub fn configure_material_contact_sweeps(&mut self, sweeps: Option<u32>) -> Result<()> {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || sweeps.is_some_and(|n| !(1..=4096).contains(&n))
+        {
+            return Err(Error::Build(
+                "invalid or pending material contact sweep configuration".into(),
+            ));
+        }
+        let coupling = self.material_contact.as_mut().ok_or_else(|| {
+            Error::Build("contact sweep configuration requires material contact".into())
+        })?;
+        coupling.contact_sweeps = sweeps;
+        Ok(())
+    }
+
     /// Last soft linear, rigid linear and rigid angular fixed-point corrections.
     pub fn material_contact_diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.material_contact
@@ -1055,14 +1072,22 @@ impl FemRigidGpuSystem {
                         particle_count: self.soft_model.particle_count as u32,
                         body_count: self.rigid_model.body_count as u32,
                     };
-                    self.solve
-                        .encode_continuation(device, &mut pass, bindings, solve_settings)?;
+                    let continuation_settings = SoftRigidSolveSettings {
+                        iterations: coupling.contact_sweeps.unwrap_or(solve_settings.iterations),
+                        ..solve_settings
+                    };
+                    self.solve.encode_continuation(
+                        device,
+                        &mut pass,
+                        bindings,
+                        continuation_settings,
+                    )?;
                     if iteration + 1 == coupling.config.iterations {
                         self.solve.encode_residual_check(
                             device,
                             &mut pass,
                             bindings,
-                            solve_settings,
+                            continuation_settings,
                             coupling.config.linear_tolerance,
                         )?;
                     }

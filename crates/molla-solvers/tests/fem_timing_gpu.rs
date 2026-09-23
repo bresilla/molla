@@ -99,6 +99,9 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                 system.set_drive_effort(0, 0.25).unwrap();
             }
             timed.configure_gpu_timing(true).unwrap();
+            if outer.is_some() {
+                timed.configure_material_contact_sweeps(Some(12)).unwrap();
+            }
             assert!(timed.gpu_timing_ticks().is_none());
             let count = 2 * outer.unwrap_or(1) + 3;
             for _ in 0..2 {

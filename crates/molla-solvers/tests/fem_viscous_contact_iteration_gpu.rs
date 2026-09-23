@@ -86,15 +86,17 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
     let h = 1.0 / 19200.0;
     let expected = reference(h, true);
     let mut baseline = None;
-    for (iterations, disable, reuse) in [
-        (None, false, None),
-        (Some(2), false, None),
-        (Some(256), false, None),
-        (Some(256), true, None),
-        (Some(2), false, Some(1)),
-        (Some(256), false, Some(1)),
-        (Some(256), false, Some(8)),
-        (Some(256), true, Some(1)),
+    for (iterations, disable, reuse, sweeps) in [
+        (None, false, None, None),
+        (Some(2), false, None, None),
+        (Some(256), false, None, None),
+        (Some(256), true, None, None),
+        (Some(2), false, Some(1), None),
+        (Some(256), false, Some(1), None),
+        (Some(256), false, Some(8), None),
+        (Some(256), true, Some(1), None),
+        (Some(2), false, Some(8), Some(1)),
+        (Some(256), false, Some(8), Some(1)),
     ] {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
@@ -140,7 +142,13 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
             );
             assert!(system.material_contact_diagnostics().is_some());
             system.configure_material_contact_reuse(reuse).unwrap();
+            system.configure_material_contact_sweeps(sweeps).unwrap();
             for invalid in [0, 4097, u32::MAX] {
+                assert!(
+                    system
+                        .configure_material_contact_sweeps(Some(invalid))
+                        .is_err()
+                );
                 assert!(
                     system
                         .configure_material_contact_reuse(Some(invalid))
@@ -149,12 +157,14 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
             }
         } else {
             assert!(system.configure_material_contact_reuse(Some(1)).is_err());
+            assert!(system.configure_material_contact_sweeps(Some(1)).is_err());
         }
         if disable {
             system.configure_material_contact(None).unwrap();
         }
         system.step(h).unwrap();
         assert!(system.configure_material_contact(None).is_err());
+        assert!(system.configure_material_contact_sweeps(None).is_err());
         assert!(system.configure_material_contact_reuse(None).is_err());
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
         let velocities = readback::read::<[f32; 4]>(
@@ -220,11 +230,13 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let m = 1000.0 * 0.02_f64.powi(3) / 24.0;
     let rigid_mass = 0.001;
-    for (h, reuse) in [
-        (1.0 / 19200.0, None),
-        (1.0 / 38400.0, None),
-        (1.0 / 19200.0, Some(1)),
-        (1.0 / 38400.0, Some(1)),
+    for (h, reuse, sweeps) in [
+        (1.0 / 19200.0, None, None),
+        (1.0 / 38400.0, None, None),
+        (1.0 / 19200.0, Some(1), None),
+        (1.0 / 38400.0, Some(1), None),
+        (1.0 / 19200.0, Some(8), Some(1)),
+        (1.0 / 38400.0, Some(8), Some(1)),
     ] {
         let mut oracle = model(true, true);
         let reduced_mass = m * (rigid_mass + 3.0 * m) / (rigid_mass + 4.0 * m);
@@ -301,6 +313,7 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
             }))
             .unwrap();
         system.configure_material_contact_reuse(reuse).unwrap();
+        system.configure_material_contact_sweeps(sweeps).unwrap();
         system.step(h).unwrap();
         assert_eq!(
             readback::read::<u32>(&engine, system.status_buffer(), 1),
@@ -343,16 +356,22 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_survives_substeps_and_idle_mode_changes() {
-    material_reuse_trajectory(0.85, None);
+    material_reuse_trajectory(0.85, None, None);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn short_contact_sweeps_preserve_real_friction_trajectory() {
+    material_reuse_trajectory(0.85, None, Some(1));
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_rejects_unconverged_high_friction_trajectory() {
-    material_reuse_trajectory(1000.0, Some(2));
+    material_reuse_trajectory(1000.0, Some(2), None);
 }
 
-fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
+fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>, sweeps: Option<u32>) {
     use molla_solvers::fem_rigid_gpu::{
         FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
     };
@@ -395,6 +414,7 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
     };
     let mut cold = build(256);
     let mut retained = build(256);
+    retained.configure_material_contact_sweeps(sweeps).unwrap();
     let mass = 1000.0 * 0.02_f64.powi(3) / 24.0;
     let mut previous_energy = [2.0 * mass; 2];
     for (step, reuse) in [Some(8), None, Some(8)].into_iter().enumerate() {
@@ -403,6 +423,7 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
         for (index, system) in [&mut cold, &mut retained].into_iter().enumerate() {
             assert!(system.try_step_substep(h).unwrap());
             assert!(system.configure_material_contact_reuse(None).is_err());
+            assert!(system.configure_material_contact_sweeps(None).is_err());
             let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
             let force =
                 readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
