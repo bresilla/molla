@@ -676,18 +676,25 @@ fn spring_force_hessian(
     let a = spring_a[spring_idx];
     let b = spring_b[spring_idx];
     let other = select(a, b, self_idx == a);
-    let diff = (particle_q_in[self_idx].xyz - particle_q_in[other].xyz)
-        + (particle_delta[self_idx].xyz - particle_delta[other].xyz);
+    let previous = particle_q_in[self_idx].xyz - particle_q_in[other].xyz;
+    let increment = particle_delta[self_idx].xyz - particle_delta[other].xyz;
+    let diff = previous + increment;
     let len = max(length(diff), 1e-8);
     let rest = spring_rest_length[spring_idx];
-    if (spring_tension_only[spring_idx] != 0u && len <= rest) {
+    let previous_len = length(previous);
+    var extension = len - rest;
+    if length(diff) >= 1e-8 {
+        let extension_increment = (2.0 * dot(previous, increment) + dot(increment, increment)) / (len + previous_len);
+        extension = (previous_len - rest) + extension_increment;
+    }
+    if (spring_tension_only[spring_idx] != 0u && extension <= 0.0) {
         *out_force = vec3<f32>(0.0);
         *out_hess = mat3x3<f32>();
         return;
     }
     let k = spring_stiffness[spring_idx];
 
-    let f = -k * (1.0 - rest / len) * diff;
+    let f = -k * (extension / len) * diff;
     let outer = mat3x3<f32>(
         vec3<f32>(diff.x * diff.x, diff.y * diff.x, diff.z * diff.x),
         vec3<f32>(diff.x * diff.y, diff.y * diff.y, diff.z * diff.y),

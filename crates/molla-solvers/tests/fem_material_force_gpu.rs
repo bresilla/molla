@@ -238,6 +238,68 @@ fn diagnostic_stiffness_matches_projected_spring_table() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn spring_force_resolves_sub_position_ulp_extension() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let h = (1.0 / 19200.0) as f32;
+    for tension in [false, true] {
+        for rest in [0.02_f32, 0.019, 0.021] {
+            let mut builder = ModelBuilder::new();
+            builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+            builder.set_linear_damping(0.0);
+            builder.add_particle(Vec3::ZERO, 0.001, 0.0, WorldId(0));
+            builder.add_particle(Vec3::X * 0.02_f32 as f64, 0.001, 0.0, WorldId(0));
+            if tension {
+                builder.add_tension_element(0, 1, rest as f64, 2e8).unwrap();
+            } else {
+                builder.add_distance_constraint(0, 1, rest as f64, 1e-7, 1.0);
+            }
+            let mut model = builder.build().unwrap();
+            let mut input = model.state().unwrap();
+            let mut output = model.state().unwrap();
+            model.upload_to_device(device, queue).unwrap();
+            input.upload_to_device(device, queue).unwrap();
+            output.upload_to_device(device, queue).unwrap();
+            let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+            let stiffness =
+                readback::read::<f32>(&engine, solver.spring_stiffness_gpu().unwrap(), 1)[0] as f64;
+            for velocity in [-1e-6_f32, 1e-6, 0.0, -0.1, 0.1, -192.0, -384.0, -768.0] {
+                queue.write_buffer(
+                    output.particle_qd.device_buffer().unwrap(),
+                    16,
+                    bytemuck::cast_slice(&[velocity, 0.0, 0.0, 0.0]),
+                );
+                let residual = solver
+                    .material_force_residual_gpu(&model, &input, &mut output, h as f64)
+                    .unwrap();
+                let actual = readback::read::<[f32; 4]>(&engine, residual, 2);
+                let delta = (h * velocity) as f64;
+                let edge = 0.02_f32 as f64 + delta;
+                let length = edge.abs().max(1e-8);
+                let force = if tension && length <= rest as f64 {
+                    0.0
+                } else {
+                    -stiffness * ((length - rest as f64) / length) * edge
+                };
+                let inertial = -delta / (1000.0 * (h as f64).powi(2));
+                let expected = (inertial + force).abs() * h as f64 * 1000.0;
+                let other = force.abs() * h as f64 * 1000.0;
+                for (node, reference) in [(0, other), (1, expected)] {
+                    let error = (actual[node][3] as f64 - reference).abs();
+                    assert!(
+                        error < 1e-5 + 3e-6 * reference,
+                        "tension={tension} rest={rest} v={velocity} node={node}: gpu={} expected={reference}",
+                        actual[node][3]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn translated_thin_tet_force_matches_projected_geometry() {
     let engine = Engine::new_gpu().unwrap();
     let h = 1.0 / 19200.0;

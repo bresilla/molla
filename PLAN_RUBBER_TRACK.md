@@ -896,6 +896,29 @@ At2048outer the worst node5332 is a cord node with gravity-only inertial target,
 not a node accumulating contact impulse. No accepted native step, settling,
 sustained motion or practical simulator performance is established.
 
+### Cord extension precision
+
+Spring forces resolve length increments using
+`dL = (2 dot(e,du) + dot(du,du)) / (length(e+du)+length(e))`.
+The extension is `(length(e)-rest)+dL`; tension activation uses this extension.
+Edges shorter than1e-8 retain the existing regularized force. This changes
+neither material coefficients nor force/contact acceptance thresholds.
+
+The GPU regression covers bilateral/tension-only springs, sub-position-ULP
+increments, slack/preloaded states, compression, collapse and reversal. The
+previous shader fails the same projected-float64 force reference.
+Validation passes the GPU all-target check,7material-force GPU tests,
+8coupling GPU tests and87CPU library tests (4ignored).
+
+At the rejected native2048outer candidate, individual fixed-neighbor GPU
+updates reduce node5332 residual from2.13391e-4 to3.05207e-7. Whole-mesh
+fixed-target sweeps with the original shader instead oscillate:512sweeps
+leave2.62992e-4 GPU and2.85476e-4 independent force residual. Incremental
+spring lengths reduce the512sweep values to7.40579e-5 and9.17758e-5.
+The128sweep independent value remains1.05065e-4: convergence margin is small.
+These are material-only replays, not accepted coupled dynamics. Native
+settling, sustained drive/turn/brake and practical performance remain open.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
