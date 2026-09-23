@@ -829,6 +829,13 @@ Force-component/precision analysis and GPU timing are needed before more costly
 iteration increases; neither a roundoff floor nor a converged native step is
 established. Sustained tracked motion and simulator activation remain unaccepted.
 
+GPU force diagnostics now expose the existing per-node target/residual scratch
+and projected spring stiffness buffers. These are optional diagnostic handles,
+not runtime CPU readbacks. Samples are unavailable before evaluation or after
+a subsequent solve, invalid evaluation or stiffness change. Tests verify
+sample identity, pinned-node zeros, targets, force reduction and capped versus
+tension-only spring stiffness. Native force reconstruction remains test-only.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

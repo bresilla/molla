@@ -88,6 +88,8 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
             .unwrap()
             .with_iterations(128)
             .with_contact_stiffness(0.0);
+        assert!(solver.material_force_samples_gpu().is_none());
+        assert_eq!(solver.spring_stiffness_gpu().unwrap().size(), 4);
         solver
             .step(
                 &model,
@@ -100,6 +102,7 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
             .unwrap();
         let velocities =
             readback::read::<[f32; 4]>(&engine, output.particle_qd.device_buffer().unwrap(), 4);
+        assert!(solver.material_force_samples_gpu().is_none());
         for velocity in [-1.0_f32, 0.0, 0.2, velocities[2][1]] {
             let mut candidate = velocities.clone();
             candidate[2] = [0.0, velocity, 0.0, 0.0];
@@ -113,10 +116,19 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
                 .material_force_residual_gpu(&model, &input, &mut output, h)
                 .unwrap();
             let actual = readback::read::<[f32; 4]>(&engine, residual, 4);
+            assert_eq!(
+                actual,
+                readback::read::<[f32; 4]>(
+                    &engine,
+                    solver.material_force_samples_gpu().unwrap(),
+                    4
+                )
+            );
+            assert_eq!(&actual[2][..3], &[0.0, -(h as f32), 0.0]);
             let after = snapshot(&engine, &input, &output);
             assert_eq!(before, after);
             for i in [0, 1, 3] {
-                assert_eq!(actual[i][3], 0.0);
+                assert_eq!(actual[i], [0.0; 4]);
             }
             let gpu_previous = (previous_y as f32 as f64 - 0.02_f32 as f64) * 50.0 + 1.0;
             let expected = axial_residual(h as f32 as f64, gpu_previous, velocity as f64, viscous);
@@ -150,6 +162,7 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
                     .material_force_residual_gpu(&model, &input, &mut output, dt)
                     .is_err()
             );
+            assert!(solver.material_force_samples_gpu().is_none());
         }
         solver
             .step(
@@ -165,6 +178,7 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
             velocities,
             readback::read::<[f32; 4]>(&engine, output.particle_qd.device_buffer().unwrap(), 4)
         );
+        assert!(solver.material_force_samples_gpu().is_none());
         queue.write_buffer(
             output.tet_f_plastic.device_buffer().unwrap(),
             0,
@@ -180,6 +194,7 @@ fn material_force_matches_axial_oracle_without_mutating_state() {
                 .material_force_residual_gpu(&model, &input, &mut output, h)
                 .is_err()
         );
+        assert!(solver.material_force_samples_gpu().is_none());
     }
 }
 
@@ -197,6 +212,28 @@ fn snapshot(engine: &Engine, input: &molla_sim::State, output: &molla_sim::State
         })
         .map(|b| readback::read::<u32>(engine, b, b.size() as usize / 4))
         .collect()
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn diagnostic_stiffness_matches_projected_spring_table() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut builder = ModelBuilder::new();
+    builder.add_particle(Vec3::ZERO, 1.0, 0.0, WorldId(0));
+    builder.add_particle(Vec3::X, 1.0, 0.0, WorldId(0));
+    builder.add_distance_constraint(0, 1, 1.0, 1e-9, 1.0);
+    builder.add_tension_element(0, 1, 1.0, 2e8).unwrap();
+    builder.add_distance_constraint(0, 1, 1.0, 2.0, 1.0);
+    let mut model = builder.build().unwrap();
+    model
+        .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+        .unwrap();
+    let solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+    assert_eq!(
+        readback::read::<f32>(&engine, solver.spring_stiffness_gpu().unwrap(), 3),
+        vec![1e7, 2e8, 1.0]
+    );
+    assert!(solver.material_force_samples_gpu().is_none());
 }
 
 #[test]
@@ -287,11 +324,13 @@ fn retained_material_iterates_match_uninterrupted_sweeps_and_enforce_lifecycle()
         solver
             .material_force_residual_gpu(&model, &input, &mut output, h)
             .unwrap();
+        assert!(solver.material_force_samples_gpu().is_some());
         assert!(
             solver
                 .material_iteration_gpu(&model, &input, &mut output, h, 1, false)
                 .is_err()
         );
+        assert!(solver.material_force_samples_gpu().is_none());
         solver
             .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
             .unwrap();
@@ -433,6 +472,8 @@ fn runtime_rejects_internal_force_error_with_zero_contact_correction() {
             },
         )
         .unwrap();
+        assert!(system.material_force_samples().is_none());
+        assert!(system.material_spring_stiffness().is_none());
         system
             .configure_material_contact(Some(MaterialContactConfig {
                 iterations: 2,
@@ -440,12 +481,17 @@ fn runtime_rejects_internal_force_error_with_zero_contact_correction() {
                 angular_tolerance: 1e-4,
             }))
             .unwrap();
+        assert!(system.material_force_samples().is_none());
+        assert_eq!(system.material_spring_stiffness().unwrap().size(), 4);
         system.step(h).unwrap();
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
         let corrections =
             readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
         let force =
             readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
+        let samples =
+            readback::read::<[f32; 4]>(&engine, system.material_force_samples().unwrap(), 4);
+        assert_eq!(force, samples.iter().map(|s| s[3]).fold(0.0_f32, f32::max));
         assert_eq!(corrections, [0.0; 3]);
         eprintln!("inner={inner} force={force} status={status}");
         if inner == 1 {

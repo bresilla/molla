@@ -652,6 +652,19 @@ impl FemRigidGpuSystem {
             .as_ref()
             .map(|state| state.kernel.force_diagnostics())
     }
+
+    /// Last enqueued coupled force samples: inertial target xyz and velocity-equivalent residual w.
+    /// Device completion must be checked before consuming the buffer.
+    pub fn material_force_samples(&self) -> Option<&wgpu::Buffer> {
+        self.material_contact.as_ref()?;
+        self.fem.material_force_samples_gpu()
+    }
+
+    /// Device stiffness table used by the configured material/contact solver.
+    pub fn material_spring_stiffness(&self) -> Option<&wgpu::Buffer> {
+        self.material_contact.as_ref()?;
+        self.fem.spring_stiffness_gpu()
+    }
     pub fn rigid_state(&self) -> &State {
         &self.rigid_state
     }

@@ -55,6 +55,7 @@ pub struct VbdClothKernel {
     pipe_predict: wgpu::ComputePipeline,
     pipe_retarget: wgpu::ComputePipeline,
     continuation: Option<MaterialContinuation>,
+    force_samples_ready: bool,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
@@ -294,6 +295,7 @@ impl VbdClothKernel {
             pipe_predict,
             pipe_retarget,
             continuation: None,
+            force_samples_ready: false,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
@@ -334,6 +336,7 @@ impl VbdClothKernel {
         per_spring_stiffness: &[Real],
     ) -> Result<()> {
         self.continuation = None;
+        self.force_samples_ready = false;
         let sn = self.spring_count.max(1) as usize;
         let host = self.spring_stiffness.host_mut()?;
         for (dst, src) in host
@@ -403,6 +406,7 @@ impl VbdClothKernel {
         iterations: u32,
         begin: bool,
     ) -> Result<()> {
+        self.force_samples_ready = false;
         if begin {
             self.continuation = None;
         }
@@ -459,6 +463,7 @@ impl VbdClothKernel {
         dt: Real,
     ) -> Result<&wgpu::Buffer> {
         self.continuation = None;
+        self.force_samples_ready = false;
         if model.particle_count == 0
             || model.linear_damping != 0.0
             || model
@@ -501,6 +506,7 @@ impl VbdClothKernel {
         mode: DispatchMode,
     ) -> Result<()> {
         let previous = self.continuation.take();
+        self.force_samples_ready = false;
         let residual_only = mode == DispatchMode::ForceResidual;
         let reuse = mode == DispatchMode::ContinueMaterial;
         if model.particle_count == 0 {
@@ -1061,6 +1067,7 @@ impl VbdClothKernel {
         self.continuation = continuation;
 
         if residual_only {
+            self.force_samples_ready = true;
             return Ok(());
         }
 
@@ -1072,6 +1079,21 @@ impl VbdClothKernel {
             state_out.tet_back_stress.mark_device_dirty();
         }
         Ok(())
+    }
+
+    /// Last enqueued force evaluation: inertial displacement targets in xyz, speed residual in w.
+    /// Callers must wait for device completion; any later solve invalidates these samples.
+    pub fn force_samples(&self) -> Option<&wgpu::Buffer> {
+        if self.force_samples_ready {
+            self.inertia_y.device_buffer()
+        } else {
+            None
+        }
+    }
+
+    /// Device-projected spring stiffness table, with one padding entry for a spring-free model.
+    pub fn spring_stiffness_buffer(&self) -> &wgpu::Buffer {
+        self.spring_stiffness.device_buffer().unwrap()
     }
 
     pub fn particle_count(&self) -> u32 {

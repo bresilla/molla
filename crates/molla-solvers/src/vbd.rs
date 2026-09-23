@@ -715,6 +715,22 @@ impl Solver for VbdSolver {
 
 #[cfg(feature = "gpu")]
 impl VbdSolver {
+    /// Last enqueued inertial targets and per-node force residuals; requires device completion.
+    pub fn material_force_samples_gpu(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            VbdBackend::Gpu(gpu) => gpu.kernel.force_samples(),
+            _ => None,
+        }
+    }
+
+    /// Device-projected spring stiffnesses, padded to at least one element.
+    pub fn spring_stiffness_gpu(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            VbdBackend::Gpu(gpu) => Some(gpu.kernel.spring_stiffness_buffer()),
+            _ => None,
+        }
+    }
+
     /// Starts or continues GPU elastic material iterations with no inline shape penalties.
     /// Original positions, history, model and dt stay fixed; input velocities may change.
     #[allow(clippy::too_many_arguments)]
