@@ -860,6 +860,16 @@ a subsequent solve, invalid evaluation or stiffness change. Tests verify
 sample identity, pinned-node zeros, targets, force reduction and capped versus
 tension-only spring stiffness. Native force reconstruction remains test-only.
 
+Optional `configure_gpu_timing(true)` records2*N+3 GPU timeline boundaries
+for each substep: initial material, rigid prediction/gather, first contact,
+alternating material/contact continuations, and final force checks/drift.
+It requires timestamp-query support and an idle island; material-contact
+reconfiguration disables it. Queries are paged in groups of256. Runtime
+does not read timestamps back; diagnostic consumers wait for completion.
+Intervals include inter-submission idle time, not just shader execution.
+Bitwise state equivalence, missing-feature rejection, idle restrictions,
+multi-page130iteration capture and4096iteration allocation are GPU-tested.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

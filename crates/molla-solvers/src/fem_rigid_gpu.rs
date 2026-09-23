@@ -22,6 +22,7 @@ use std::sync::{
 use wgpu::util::DeviceExt;
 
 mod coupling;
+mod timing;
 pub use coupling::MaterialContactConfig;
 use coupling::MaterialContactState;
 
@@ -224,6 +225,7 @@ pub struct FemRigidGpuSystem {
     momentum_fences: Option<Arc<[AtomicU64; 5]>>,
     contact_fences: Option<Arc<[AtomicU64; 7]>>,
     material_contact: Option<MaterialContactState>,
+    timing: Option<timing::SubstepTiming>,
     config: FemRigidConfig,
     queued_substeps: u32,
     completion: Option<Arc<AtomicBool>>,
@@ -584,6 +586,7 @@ impl FemRigidGpuSystem {
             queued_substeps: 0,
             completion: None,
             material_contact: None,
+            timing: None,
         })
     }
 
@@ -619,7 +622,32 @@ impl FemRigidGpuSystem {
             })
             .transpose()?;
         self.material_contact = state;
+        self.timing = None;
         Ok(())
+    }
+
+    /// Enable GPU phase timestamps while idle; material/contact reconfiguration disables timing.
+    pub fn configure_gpu_timing(&mut self, enabled: bool) -> Result<()> {
+        if self.queued_substeps != 0 || self.completion.is_some() {
+            return Err(Error::Build(
+                "FEM timing configuration requires an idle island".into(),
+            ));
+        }
+        let iterations = self
+            .material_contact
+            .as_ref()
+            .map_or(1, |c| c.config.iterations);
+        self.timing = enabled
+            .then(|| timing::SubstepTiming::new(&self.device, iterations))
+            .transpose()?;
+        Ok(())
+    }
+
+    /// Last enqueued substep's 2*N+3 u64 timestamps; wait for completion before reading.
+    /// Boundaries: start, initial material, rigid/gather, first contact, alternating material/contact, final drift.
+    /// Differences include queue idle time; multiply by the queue timestamp period for nanoseconds.
+    pub fn gpu_timing_ticks(&self) -> Option<&wgpu::Buffer> {
+        self.timing.as_ref().and_then(|t| t.ticks())
     }
 
     /// Select retained material iterates and their per-correction sweep count; None uses full restarts.
@@ -854,9 +882,15 @@ impl FemRigidGpuSystem {
         let queue = &self.queue;
         for _ in 0..count as usize {
             self.record_momentum(0)?;
-            if let Some(coupling) = &mut self.material_contact {
+            if self.material_contact.is_some() || self.timing.is_some() {
                 let mut encoder = device.create_command_encoder(&Default::default());
-                coupling.begin(&mut encoder, &self.soft_state);
+                if let Some(coupling) = &mut self.material_contact {
+                    coupling.begin(&mut encoder, &self.soft_state);
+                }
+                if let Some(timing) = &mut self.timing {
+                    timing.ready = false;
+                    timing.mark(&mut encoder, 0);
+                }
                 queue.submit([encoder.finish()]);
             }
             if let Some(coupling) = self
@@ -883,6 +917,11 @@ impl FemRigidGpuSystem {
                 )?;
             }
             self.record_momentum(1)?;
+            if let Some(timing) = &self.timing {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                timing.mark(&mut encoder, 1);
+                queue.submit([encoder.finish()]);
+            }
             self.rigid.step(
                 &self.rigid_model,
                 &self.rigid_state,
@@ -942,6 +981,9 @@ impl FemRigidGpuSystem {
                 penetration_recovery: self.config.contact.penetration_recovery as f32,
                 max_recovery_speed: self.config.contact.max_recovery_speed as f32,
             };
+            if let Some(timing) = &self.timing {
+                timing.mark(&mut encoder, 2);
+            }
             if let Some(coupling) = &self.material_contact {
                 coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
             }
@@ -970,6 +1012,9 @@ impl FemRigidGpuSystem {
                     self.solve.status(),
                     false,
                 )?;
+                if let Some(timing) = &self.timing {
+                    timing.mark(&mut encoder, 3);
+                }
                 queue.submit([encoder.finish()]);
                 for iteration in 1..coupling.config.iterations {
                     if let Some(iterations) = coupling.reuse_iterations {
@@ -992,6 +1037,9 @@ impl FemRigidGpuSystem {
                         )?;
                     }
                     let mut pass = device.create_command_encoder(&Default::default());
+                    if let Some(timing) = &self.timing {
+                        timing.mark(&mut pass, 2 * iteration + 2);
+                    }
                     coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
                     let bindings = SoftRigidSolveBindings {
                         positions: self.soft_state.particle_q.device_buffer().unwrap(),
@@ -1026,6 +1074,9 @@ impl FemRigidGpuSystem {
                         self.solve.status(),
                         iteration + 1 == coupling.config.iterations,
                     )?;
+                    if let Some(timing) = &self.timing {
+                        timing.mark(&mut pass, 2 * iteration + 3);
+                    }
                     queue.submit([pass.finish()]);
                 }
                 encoder = device.create_command_encoder(&Default::default());
@@ -1043,6 +1094,8 @@ impl FemRigidGpuSystem {
                     self.soft_model.particle_count as u32,
                     coupling.config.linear_tolerance,
                 )?;
+            } else if let Some(timing) = &self.timing {
+                timing.mark(&mut encoder, 3);
             }
             self.drift.encode(
                 device,
@@ -1109,6 +1162,10 @@ impl FemRigidGpuSystem {
                     max_recovery_speed: self.config.contact.max_recovery_speed as f32,
                 },
             )?;
+            if let Some(timing) = &mut self.timing {
+                timing.mark(&mut encoder, 2 * timing.iterations + 2);
+                timing.resolve(&mut encoder);
+            }
             queue.submit([encoder.finish()]);
             self.record_momentum(4)?;
             self.soft_next.particle_qd.mark_device_dirty();
