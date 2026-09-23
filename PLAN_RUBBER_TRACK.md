@@ -1182,13 +1182,35 @@ remains GPU resident, with no node readback or imposed motion.
 Validation passes87CPU tests,9material/contact GPU tests including dynamic
 support momentum, real-friction energy/lifecycle and exhausted-budget rejection,
 the immutable-input/nonfinite check-only kernel, snapshot replay, timing parity
-including polish and motor-feedback regression. Native CEOL polish acceptance
-is pending; no full-machine fix or practical-performance claim is established.
+including polish and motor-feedback regression. Gearboxf1c454b pinsc2566ed
+and opts into8polish sweeps for authored-friction probes. Native step10 now
+passes, with independent force7.521611e-5 versus GPU8.105209e-5m/s. However,
+the64step probe rejects step12 after11accepted steps (222.85s wall time):
+status64 while GPU force6.804205e-5, independent force9.243336e-5 and final
+polish correction5.929813e-5 all remain below1e-4. The next diagnostic must
+separate pre-polish sticky rejection from final contact complementarity.
+The longer trajectory is NOT accepted, and no driveability or performance
+claim follows from the accepted0.000572917s prefix.
+
+Read-only contact-row diagnostics now expose the existing per-row residuals,
+and a16byte device checkpoint preserves pre-polish status and three correction
+channels before the final polish overwrites them. No status or physical state
+is altered; the checkpoint is cleared each substep. Real-GPU coverage passes
+all9coupling tests (197.32s), including low-budget sticky rejection and repeated
+polish disable/re-enable, plus timing/state parity (26.84s). Capturing these
+channels on the native step12 rejection remains the next gate.
 
 Gearbox CPU energy-reference export now includes partitioned rigid COM inertias
 and joint-servo metadata. It matches native mass/geometry/spring data, but the
 three572957.75stiffness servos require sampled joint coordinates and servo work
-in the eventual energy audit. Rigid/rubber-only energy is not full acceptance.
+in the eventual energy audit. Test-only joint-coordinate sidecars now pass
+step/time/revision/length/finiteness checks. An independent offline diagnostic
+includes COM gravity, rotated anisotropic inertia, rubber/reinforcement elastic
+energy and unsaturated static-target servo potential. The known component sum
+decreases3869.102971 to3797.017704J through step11; this excludes viscous
+incremental potential from stored energy. Contact/motor/limit work, dissipation
+balance, intervening saturation and time/mesh refinement remain unverified.
+These component measurements are not complete energy or dynamics acceptance.
 
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions

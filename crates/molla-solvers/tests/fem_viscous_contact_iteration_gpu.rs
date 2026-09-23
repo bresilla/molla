@@ -171,6 +171,32 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
         assert!(system.configure_material_contact_sweeps(None).is_err());
         assert!(system.configure_material_contact_reuse(None).is_err());
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+        if polish.is_some() && !disable {
+            let checkpoint = readback::read::<u32>(
+                &engine,
+                system.material_pre_polish_diagnostics().unwrap(),
+                4,
+            );
+            assert_eq!(checkpoint[0], if iterations == Some(2) { 64 } else { 0 });
+            let corrections = checkpoint[1..]
+                .iter()
+                .copied()
+                .map(f32::from_bits)
+                .collect::<Vec<_>>();
+            assert!(corrections.iter().all(|v| v.is_finite()));
+            assert_eq!(corrections[0] > 1e-4, iterations == Some(2));
+        } else {
+            assert!(system.material_pre_polish_diagnostics().is_none());
+        }
+        let rows = readback::read::<[f32; 8]>(
+            &engine,
+            system.contact_row_diagnostics(),
+            system.contact_row_count() as usize,
+        );
+        assert!(rows.iter().all(|r| r[3].is_finite()));
+        if iterations.is_some() && !disable && status == 0 {
+            assert!(rows.iter().all(|r| r[3] <= 1e-4));
+        }
         let velocities = readback::read::<[f32; 4]>(
             &engine,
             system.soft_state().particle_qd.device_buffer().unwrap(),
@@ -469,6 +495,17 @@ fn material_reuse_trajectory_configured(
             assert!(system.configure_material_contact_sweeps(None).is_err());
             assert!(system.configure_material_contact_polish(None).is_err());
             let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+            if index == 1 && polish && reuse.is_some() {
+                let checkpoint = readback::read::<u32>(
+                    &engine,
+                    system.material_pre_polish_diagnostics().unwrap(),
+                    4,
+                );
+                assert_eq!(checkpoint[0], 0);
+                assert!(checkpoint[1..].iter().all(|&v| f32::from_bits(v) <= 1e-4));
+            } else {
+                assert!(system.material_pre_polish_diagnostics().is_none());
+            }
             let force =
                 readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
             let corrections =

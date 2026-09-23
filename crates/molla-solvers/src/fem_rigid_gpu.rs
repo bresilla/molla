@@ -775,6 +775,20 @@ impl FemRigidGpuSystem {
             .map(|state| state.kernel.diagnostics())
     }
 
+    /// Pre-polish sticky status u32 followed by three contact-correction f32 values.
+    /// Cleared at substep start; consume after device completion with polish enabled.
+    pub fn material_pre_polish_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        let state = self.material_contact.as_ref()?;
+        state.polish_iterations?;
+        Some(&state.pre_polish)
+    }
+
+    /// Eight f32 values per contact: normal inverse mass, tangent bound, target, residual,
+    /// three impulses and padding. Ball rows start with three effective inverse masses.
+    pub fn contact_row_diagnostics(&self) -> &wgpu::Buffer {
+        self.solve.row_state()
+    }
+
     /// Maximum h M^-1 force residual at the final coupled candidate, as one f32.
     pub fn material_force_diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.material_contact
@@ -1208,6 +1222,20 @@ impl FemRigidGpuSystem {
                 }
                 encoder = device.create_command_encoder(&Default::default());
                 if let Some(iterations) = coupling.polish_iterations {
+                    encoder.copy_buffer_to_buffer(
+                        self.solve.status(),
+                        0,
+                        &coupling.pre_polish,
+                        0,
+                        4,
+                    );
+                    encoder.copy_buffer_to_buffer(
+                        coupling.kernel.diagnostics(),
+                        0,
+                        &coupling.pre_polish,
+                        4,
+                        12,
+                    );
                     coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
                     queue.submit([encoder.finish()]);
                     self.fem.material_iteration_gpu(
