@@ -30,6 +30,7 @@ pub(super) struct MaterialContactState {
     pub(super) reuse_iterations: Option<u32>,
     pub(super) contact_sweeps: Option<u32>,
     pub(super) polish_iterations: Option<u32>,
+    pub(super) polish_cycles: u32,
     pub(super) pre_polish: wgpu::Buffer,
     pub(super) input: State,
     predicted: wgpu::Buffer,
@@ -75,6 +76,7 @@ impl MaterialContactState {
             reuse_iterations: None,
             contact_sweeps: None,
             polish_iterations: None,
+            polish_cycles: 1,
             pre_polish: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("material pre-polish diagnostics"),
                 size: 16,

@@ -1230,6 +1230,34 @@ incremental potential from stored energy. Contact/motor/limit work, dissipation
 balance, intervening saturation and time/mesh refinement remain unverified.
 These component measurements are not complete energy or dynamics acceptance.
 
+### Coupled final polish cycles
+
+A fixed-geometry GPU replay restores the rejected step12 material target,
+velocities, contact impulses and generalized state after preparing responses.
+Its zero-extra contact rows, material target and velocities are exact; the
+material maximum is exact, while482per-node scalar residuals differ by at
+most1.46678e-7. Four additional contact1/material8 cycles bring GPU/f64
+material residual to7.20003e-5/8.94663e-5 and contact residual to
+9.84235e-5/9.84241e-5. Momentum imbalance is about5.8e-8kgm/s after accounting
+for changed ground impulses.8/16/32/64/128cycles also pass the simultaneous
+residual checks. Replay3.71s and independent analysis pass; this is not a
+native trajectory, volume/energy audit or practical-performance result.
+
+The opt-in `configure_material_contact_polish_cycles(cycles)` implementation
+interleaves retained contact corrections with final material passes. Default1
+preserves existing polish behavior;1..4096requires idle enabled polish, and
+polish reconfiguration resets1. Contact corrections update the accumulated
+material input, not prescribed motion. Existing pre-loop sticky faults and
+final contact, constitutive, velocity-change and volume guards are retained;
+there is no CPU runtime readback/fallback or tolerance change. The diagnostic
+replay's status restoration is test-only and is NOT used by this solver path.
+Runtime validation passes all10GPU coupling tests194.55s, timing/state parity
+28.83s and expanded dynamic-support momentum/CPU-oracle coverage42.81s,
+including17cycles at both1/19200s and1/38400s. Low-budget sticky rejection,
+real-friction energy/lifecycle and invalid/pending configuration remain covered.
+Fresh native CEOL acceptance is pending; the implementation is not yet a
+validated fix for its longer trajectory.
+
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

@@ -84,11 +84,12 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
             continue;
         }
         for (outer, diagnostics, polish) in [
-            (None, false, false),
-            (Some(2), false, false),
-            (Some(130), false, false),
-            (Some(2), true, false),
-            (Some(2), true, true),
+            (None, false, 0),
+            (Some(2), false, 0),
+            (Some(130), false, 0),
+            (Some(2), true, 0),
+            (Some(2), true, 1),
+            (Some(2), true, 17),
         ] {
             let mut plain = make();
             let mut timed = make();
@@ -102,8 +103,11 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                         }))
                         .unwrap();
                     system.configure_material_contact_reuse(Some(1)).unwrap();
-                    if polish {
+                    if polish > 0 {
                         system.configure_material_contact_polish(Some(8)).unwrap();
+                        system
+                            .configure_material_contact_polish_cycles(polish)
+                            .unwrap();
                     }
                 }
                 system.set_drive_effort(0, 0.25).unwrap();
