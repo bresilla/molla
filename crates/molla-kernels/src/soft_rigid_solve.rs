@@ -5,6 +5,40 @@ use wgpu::util::DeviceExt;
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
+/// GPU start/end ticks for factor, prepare, count, offset, scatter, solve and recovery.
+pub struct SoftRigidSolveProfile {
+    queries: wgpu::QuerySet,
+    resolved: wgpu::Buffer,
+}
+
+impl SoftRigidSolveProfile {
+    pub fn new(device: &wgpu::Device) -> Result<Self> {
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return Err(Error::Build(
+                "contact profiling requires timestamp queries".into(),
+            ));
+        }
+        Ok(Self {
+            queries: device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("FEM contact pass timestamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 14,
+            }),
+            resolved: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("FEM contact pass ticks"),
+                size: 14 * 8,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+        })
+    }
+
+    /// Fourteen u64 ticks, resolved when the profiled GPU submission completes.
+    pub fn ticks(&self) -> &wgpu::Buffer {
+        &self.resolved
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -178,7 +212,34 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 0..=6, None)
+        self.encode_internal(device, encoder, bindings, settings, 0..=6, None, None)
+    }
+
+    /// Encode a nonempty full solve with seven GPU timestamp pairs and no host readback.
+    pub fn encode_profiled(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+        profile: &SoftRigidSolveProfile,
+    ) -> Result<()> {
+        if self.row_count == 0 || bindings.body_count == 0 {
+            return Err(Error::Build(
+                "contact profiling requires nonempty passes".into(),
+            ));
+        }
+        self.encode_internal(
+            device,
+            encoder,
+            bindings,
+            settings,
+            0..=6,
+            None,
+            Some(profile),
+        )?;
+        encoder.resolve_query_set(&profile.queries, 0..14, &profile.resolved, 0);
+        Ok(())
     }
 
     /// Encode mass factorization and contact responses without applying impulses.
@@ -189,7 +250,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 0..=1, None)
+        self.encode_internal(device, encoder, bindings, settings, 0..=1, None, None)
     }
 
     /// Submit individual contact passes and report queue completion without state readback.
@@ -209,6 +270,7 @@ impl SoftRigidSolveKernel {
             settings,
             0..=6,
             Some((queue, completed)),
+            None,
         )
     }
 
@@ -220,7 +282,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 6..=6, None)
+        self.encode_internal(device, encoder, bindings, settings, 6..=6, None, None)
     }
 
     fn encode_internal(
@@ -231,6 +293,7 @@ impl SoftRigidSolveKernel {
         settings: SoftRigidSolveSettings,
         stages: std::ops::RangeInclusive<usize>,
         trace: Option<(&wgpu::Queue, std::sync::Arc<dyn Fn(usize) + Send + Sync>)>,
+        profile: Option<&SoftRigidSolveProfile>,
     ) -> Result<()> {
         if settings.iterations == 0
             || !settings.dt.is_finite()
@@ -340,7 +403,11 @@ impl SoftRigidSolveKernel {
             }
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FEM two-way solve"),
-                timestamp_writes: None,
+                timestamp_writes: profile.map(|profile| wgpu::ComputePassTimestampWrites {
+                    query_set: &profile.queries,
+                    beginning_of_pass_write_index: Some(index as u32 * 2),
+                    end_of_pass_write_index: Some(index as u32 * 2 + 1),
+                }),
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);

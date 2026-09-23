@@ -624,6 +624,23 @@ These are solver gates, not full CEOL settling or traction acceptance. Native
 CEOL equilibrium, causal ground propulsion, sustained maneuvers and simulator
 delivery remain required before claiming tracked FEM completion.
 
+### Contact GPU pass profiling
+
+`SoftRigidSolveProfile` records14 timestamp ticks for the seven full contact
+passes on devices explicitly created with `TIMESTAMP_QUERY`. Ordinary solver
+encoding remains uninstrumented. `encode_profiled` resolves ticks into a GPU
+buffer; it does not transfer simulation state to the host.
+
+`MOLLA_CONTACT_FIXTURE=<directory> make test-gpu T=fem_contact_replay_gpu`
+retains the warmed preparation regression and compares a complete12-sweep
+captured solve with its timestamped replay. Particle, generalized and body
+velocities plus contact rows must be bitwise identical. The2026-09-23 RTX4080
+capture with29DOFs,29568particles and385683candidate rows measured291.795ms
+in `solve` of294.643ms total GPU pass time; preparation was1.817ms. These are
+fixture measurements, not real-time vehicle acceptance or a speedup claim.
+The serial contact sweep is the next measured optimization target. Preserve
+the physical constraints and validate any arithmetic/order changes independently.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
