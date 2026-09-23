@@ -1017,6 +1017,25 @@ impl ModelBuilder {
         }
     }
 
+    /// Set uniform shear/bulk viscosity on every element of an existing mesh.
+    pub fn set_tet_mesh_viscosity(&mut self, id: TetMeshId, viscosity: TetViscosity) -> Result<()> {
+        viscosity.validate()?;
+        let end = id
+            .index()
+            .checked_add(2)
+            .ok_or_else(|| Error::Build("tet viscosity mesh id overflow".into()))?;
+        let offsets = self
+            .tet_mesh_offsets
+            .get(id.index()..end)
+            .ok_or_else(|| Error::Build("tet viscosity mesh id out of range".into()))?;
+        let values = self
+            .tet_viscosity
+            .get_mut(offsets[0] as usize..offsets[1] as usize)
+            .ok_or_else(|| Error::Build("tet viscosity mesh range out of bounds".into()))?;
+        values.fill(viscosity);
+        Ok(())
+    }
+
     /// Add a triangle (CCW) referencing three particles. Used for
     /// rendering / future bending constraints.
     pub fn add_triangle(&mut self, v0: u32, v1: u32, v2: u32) -> usize {

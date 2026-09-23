@@ -136,4 +136,66 @@ mod tests {
             molla_storage::Buffer::from_vec(vec![], molla_storage::BufferUsage::Storage);
         assert!(model.validate_tet_viscosity().is_err());
     }
+
+    #[test]
+    fn mesh_viscosity_overrides_only_its_elements_and_rejects_atomically() {
+        let mut builder = ModelBuilder::new();
+        for p in [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z] {
+            builder.add_particle(p, 1.0, 0.01, WorldId(0));
+        }
+        let first = builder
+            .add_tet_mesh(&[[0, 1, 2, 3]], 2000.0, 0.3, None)
+            .unwrap();
+        let second = builder
+            .add_tet_mesh(&[[0, 1, 2, 3]; 2], 2000.0, 0.3, None)
+            .unwrap();
+        let third = builder
+            .add_tet_mesh(&[[0, 1, 2, 3]], 2000.0, 0.3, None)
+            .unwrap();
+        let viscosity = TetViscosity {
+            shear: 3.0,
+            bulk: 7.0,
+        };
+        builder.set_tet_mesh_viscosity(second, viscosity).unwrap();
+        for value in [-1.0, Real::NAN, Real::INFINITY, Real::MAX, 1e-40] {
+            assert!(
+                builder
+                    .set_tet_mesh_viscosity(
+                        second,
+                        TetViscosity {
+                            shear: value,
+                            bulk: 0.0
+                        }
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            builder
+                .set_tet_mesh_viscosity(crate::TetMeshId(u32::MAX), viscosity)
+                .is_err()
+        );
+        assert!(
+            builder
+                .set_tet_mesh_viscosity(crate::TetMeshId(3), viscosity)
+                .is_err()
+        );
+        builder.set_tet_mesh_viscosity(first, viscosity).unwrap();
+        builder
+            .set_tet_mesh_viscosity(first, TetViscosity::default())
+            .unwrap();
+        builder
+            .set_tet_mesh_viscosity(third, TetViscosity::default())
+            .unwrap();
+        let model = builder.build().unwrap();
+        assert_eq!(
+            model.tet_viscosity.host().unwrap(),
+            &[
+                TetViscosity::default(),
+                viscosity,
+                viscosity,
+                TetViscosity::default()
+            ]
+        );
+    }
 }
