@@ -715,6 +715,23 @@ impl Solver for VbdSolver {
 
 #[cfg(feature = "gpu")]
 impl VbdSolver {
+    /// Evaluates the elastic material residual at the supplied candidate velocity, without advancing state.
+    pub fn material_force_residual_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+    ) -> Result<&wgpu::Buffer> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build(
+                "material force residual requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel
+            .force_residual(&gpu.device, &gpu.queue, model, state_in, state_out, dt)
+    }
+
     /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
     /// soft-VT contact pipeline, and the host-side tet-tet / SDF
     /// fallbacks. Extracted from `step` so the multi-substep driver

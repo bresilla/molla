@@ -17,6 +17,9 @@ pub struct SoftMaterialIterationKernel {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 2],
     diagnostics: wgpu::Buffer,
+    force_layout: wgpu::BindGroupLayout,
+    force_pipeline: wgpu::ComputePipeline,
+    force_diagnostics: wgpu::Buffer,
 }
 
 impl SoftMaterialIterationKernel {
@@ -72,16 +75,118 @@ impl SoftMaterialIterationKernel {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         });
+        let entries = (0..4)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: if binding == 3 {
+                        wgpu::BufferBindingType::Uniform
+                    } else {
+                        wgpu::BufferBindingType::Storage {
+                            read_only: binding == 0,
+                        }
+                    },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            })
+            .collect::<Vec<_>>();
+        let force_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("FEM force residual"),
+            entries: &entries,
+        });
+        let force_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&force_layout)],
+                immediate_size: 0,
+            });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("FEM force residual"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/soft_material_force.wgsl").into(),
+            ),
+        });
+        let force_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("FEM force residual"),
+            layout: Some(&force_pipeline_layout),
+            module: &shader,
+            entry_point: Some("check_force"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let force_diagnostics = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("FEM maximum force residual"),
+            size: 4,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        });
         Self {
             layout,
             pipelines,
             diagnostics,
+            force_layout,
+            force_pipeline,
+            force_diagnostics,
         }
     }
 
     /// Maximum soft linear, rigid linear and rigid angular correction, as three f32 values.
     pub fn diagnostics(&self) -> &wgpu::Buffer {
         &self.diagnostics
+    }
+
+    /// Maximum velocity-equivalent constitutive residual, as one f32.
+    pub fn force_diagnostics(&self) -> &wgpu::Buffer {
+        &self.force_diagnostics
+    }
+
+    pub fn encode_force_check(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        values: &wgpu::Buffer,
+        status: &wgpu::Buffer,
+        count: u32,
+        tolerance: f32,
+    ) -> Result<()> {
+        if count == 0
+            || values.size() < count as u64 * 16
+            || status.size() < 4
+            || count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
+            || !tolerance.is_normal()
+            || tolerance <= 0.0
+        {
+            return Err(Error::Build("invalid FEM force residual inputs".into()));
+        }
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[count, tolerance.to_bits(), 0, 0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let entries = [values, status, &self.force_diagnostics, &uniform]
+            .iter()
+            .enumerate()
+            .map(|(i, buffer)| wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect::<Vec<_>>();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.force_layout,
+            entries: &entries,
+        });
+        encoder.clear_buffer(&self.force_diagnostics, 0, None);
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.force_pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+        Ok(())
     }
 
     pub fn encode(

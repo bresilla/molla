@@ -180,6 +180,10 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
                     3,
                 );
                 assert!(residual.iter().all(|v| v.is_finite() && *v <= 1e-4));
+                let force =
+                    readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)
+                        [0];
+                assert!(force.is_finite() && force <= 1e-4, "force residual={force}");
                 eprintln!("runtime material contact matches CPU, residuals={residual:?}");
             }
         }
@@ -300,6 +304,12 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
         let residuals =
             readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
         assert!(residuals.iter().all(|v| v.is_finite() && *v <= 1e-4));
+        let force =
+            readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
+        assert!(
+            force.is_finite() && force <= 1e-4,
+            "dynamic force residual={force}"
+        );
         eprintln!(
             "dynamic support h={h}: body={body_velocity}/{expected_body}, top={}/{expected_top}, residuals={residuals:?}",
             velocities[2][1]

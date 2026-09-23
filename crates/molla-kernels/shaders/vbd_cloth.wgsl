@@ -214,6 +214,18 @@ fn predict(@builtin(global_invocation_id) gid: vec3<u32>) {
     particle_qd[i]  = vec4<f32>(v, 0.0); // tentative; rewritten by velocity_recovery
 }
 
+@compute @workgroup_size(64)
+fn residual_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= u.particle_count { return; }
+    particle_delta[i] = vec4<f32>(0.0);
+    inertia_y[i] = vec4<f32>(0.0);
+    if particle_inv_mass[i] <= 0.0 { return; }
+    let g = gravity[u32(max(particle_world[i], 0))].xyz;
+    inertia_y[i] = vec4<f32>((particle_qd_in[i].xyz + g * u.dt) * u.dt, 0.0);
+    particle_delta[i] = vec4<f32>(particle_qd[i].xyz * u.dt, 0.0);
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Quaternion + transform helpers (mirror xpbd_particles.wgsl).
 // ─────────────────────────────────────────────────────────────────
@@ -464,6 +476,7 @@ fn svd3_jacobi(m_in: mat3x3<f32>) -> Svd3 {
 fn tet_neo_hookean_block(
     tet_id: u32,
     v_order: u32,
+    strict: bool,
     out_force: ptr<function, vec3<f32>>,
     out_hess:  ptr<function, mat3x3<f32>>,
 ) {
@@ -497,6 +510,14 @@ fn tet_neo_hookean_block(
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_mat);
+    if strict && (!(abs(fp_det) >= 1e-6 && abs(fp_det) <= 3.402823e38)
+        || !all(abs(fp_mat[0]) <= vec3<f32>(3.402823e38))
+        || !all(abs(fp_mat[1]) <= vec3<f32>(3.402823e38))
+        || !all(abs(fp_mat[2]) <= vec3<f32>(3.402823e38))) {
+        *out_force = vec3<f32>(bitcast<f32>(0x7fc00000u));
+        *out_hess = IDENTITY3;
+        return;
+    }
     var f_mat = f_full;
     // NaN/degenerate sentinel — bail to identity-F_p when the prior
     // step wrote something we can't safely invert (defensive — the
@@ -588,7 +609,7 @@ fn tet_neo_hookean_block(
         || !(h_block[1].y == h_block[1].y)
         || !(h_block[2].z == h_block[2].z);
     if (any_nan) {
-        if (any(tet_viscosity[tet_id] > vec2<f32>(0.0))) {
+        if (strict || any(tet_viscosity[tet_id] > vec2<f32>(0.0))) {
             *out_force = vec3<f32>(bitcast<f32>(0x7fc00000u));
             *out_hess = h_block;
             return;
@@ -700,6 +721,17 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v = particle_indices_by_color[base + slot];
     if (v >= u.particle_count) { return; }
 
+    solve_vertex(v, false);
+}
+
+@compute @workgroup_size(64)
+fn force_residual(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= u.particle_count { return; }
+    solve_vertex(gid.x, true);
+}
+
+fn solve_vertex(v: u32, residual_only: bool) {
+
     let inv_m = particle_inv_mass[v];
     if (inv_m <= 0.0) {
         return; // Pinned: position frozen at `inertia_y` (= x_prev).
@@ -744,7 +776,7 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
         viscosity_active = viscosity_active || any(tet_viscosity[tet_id] > vec2<f32>(0.0));
         var f_t: vec3<f32>;
         var h_t: mat3x3<f32>;
-        tet_neo_hookean_block(tet_id, v_order, &f_t, &h_t);
+        tet_neo_hookean_block(tet_id, v_order, residual_only, &f_t, &h_t);
         f = f + f_t;
         h = mat3x3<f32>(h[0] + h_t[0], h[1] + h_t[1], h[2] + h_t[2]);
     }
@@ -826,6 +858,15 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
                 );
             }
         }
+    }
+
+    if residual_only {
+        var value = length(f * (u.dt * inv_m));
+        if !all(abs(f) <= vec3<f32>(3.402823e38)) || !(value <= 3.402823e38) {
+            value = bitcast<f32>(0x7fc00000u);
+        }
+        inertia_y[v].w = value;
+        return;
     }
 
     // Newton-Raphson step in position space. Skip if the Hessian is

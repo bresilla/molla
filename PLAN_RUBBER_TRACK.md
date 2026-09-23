@@ -758,13 +758,30 @@ unchanged disabled results, momentum transfer and two timesteps. Kernel tests
 include cyclic constraints, sticking/complementarity errors, valid Coulomb sliding
 and nonfinite inputs. See `fem_viscous_contact_iteration_gpu.rs`.
 
-This is not native CEOL acceptance. The native quarter/eighth timestep trials
-finish13.333ms without volume faults but disagree materially in local deformation
-and do not settle. The new opt-in iteration has not yet been enabled there.
-Internal VBD force convergence still requires iteration refinement; a small
-coupling correction alone does not certify the constitutive solve. Reusing VBD
-iterates efficiently, multi-step/moving-contact validation, native settling and
-traction, and production performance remain open gates before simulator exposure.
+The final candidate also receives an independent assembled-force residual check:
+each free vertex evaluates `h * |M^-1 (M/h^2 (y-delta) + f_internal)|` using
+`delta = h * v_contact` and the original position/strain history. The inertial
+target includes the accumulated contact impulse. The same spring, cable and tet
+force assembly supplies the solve and the residual; this is not the norm of a
+Newton correction. GPU reduction rejects a maximum above the linear tolerance
+with bit64, or nonfinite force arithmetic with bit4. The separate scalar buffer
+is exposed by `material_force_diagnostics`; the three existing correction
+diagnostics retain their layout. No particle state or history is changed by the
+residual pass. Pinned vertices are excluded from the free-DOF force equation.
+
+`fem_material_force_gpu.rs` checks analytic axial elastic/viscous force balance,
+previous deformation, timestep changes, bitwise state preservation, nonfinite
+faults, and reduction tails. A runtime regression has exactly zero contact
+corrections but a0.006145m/s internal residual at one inner iteration: it now
+rejects, whereas256 inner iterations pass the same1e-4m/s tolerance.
+
+This is not native CEOL acceptance. The earlier quarter/eighth timestep trials
+finish13.333ms without volume faults but disagree in local deformation and do
+not settle. One full CEOL coupled substep passed the previous contact/volume
+guards, taking104.80s including setup for52.083us simulated; the new internal
+force guard still needs that native trial. Reusing VBD iterates efficiently,
+multi-step/moving-contact validation, native settling and traction, refinement,
+energy accounting and production performance remain open before simulator exposure.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

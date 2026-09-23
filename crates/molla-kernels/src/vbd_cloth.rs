@@ -39,6 +39,8 @@ const WORKGROUP_SIZE: u32 = 64;
 pub struct VbdClothKernel {
     bindings: BindingCache,
     pipe_predict: wgpu::ComputePipeline,
+    pipe_residual_seed: wgpu::ComputePipeline,
+    pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
     pipe_shape_contacts: wgpu::ComputePipeline,
     pipe_update_dual: wgpu::ComputePipeline,
@@ -208,6 +210,8 @@ impl VbdClothKernel {
         };
 
         let pipe_predict = make_pipeline("predict");
+        let pipe_residual_seed = make_pipeline("residual_seed");
+        let pipe_force_residual = make_pipeline("force_residual");
         let pipe_solve_color = make_pipeline("solve_color");
         let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
         let pipe_update_dual = make_pipeline("update_dual");
@@ -271,6 +275,8 @@ impl VbdClothKernel {
         Self {
             bindings: BindingCache::new(64),
             pipe_predict,
+            pipe_residual_seed,
+            pipe_force_residual,
             pipe_solve_color,
             pipe_shape_contacts,
             pipe_update_dual,
@@ -347,6 +353,63 @@ impl VbdClothKernel {
         iterations: u32,
         contact_stiffness: f32,
         hard_mode: bool,
+    ) -> Result<()> {
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            contact_stiffness,
+            hard_mode,
+            false,
+        )
+    }
+
+    /// Evaluates h M^-1 |force| at q_n + h v_out; returns vec4 inertial targets with residuals in w.
+    /// Supports elastic, zero-world-damping models without shape penalties; leaves states unchanged.
+    pub fn force_residual(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+    ) -> Result<&wgpu::Buffer> {
+        if model.particle_count == 0
+            || model.linear_damping != 0.0
+            || model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            return Err(Error::Build(
+                "force residual requires nonempty elastic model and zero world damping".into(),
+            ));
+        }
+        self.dispatch_inner(
+            device, queue, model, state_in, state_out, dt, 0, 0.0, false, true,
+        )?;
+        Ok(self.inertia_y.device_buffer().unwrap())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_inner(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        contact_stiffness: f32,
+        hard_mode: bool,
+        residual_only: bool,
     ) -> Result<()> {
         if model.particle_count == 0 {
             return Ok(());
@@ -769,7 +832,7 @@ impl VbdClothKernel {
         // (state_in → state_out → state_in) sees the cumulative effect
         // without the host having to read back F_p between substeps.
         // Skip the copy entirely when `tet_count == 0`.
-        if tet_count_u > 0 {
+        if tet_count_u > 0 && !residual_only {
             if let (Some(src_fp), Some(dst_fp)) = (
                 state_in.tet_f_plastic.device_buffer(),
                 state_out.tet_f_plastic.device_buffer(),
@@ -825,46 +888,55 @@ impl VbdClothKernel {
                 pass.dispatch_workgroups(groups.max(1), 1, 1);
             };
 
-            let mut idx = 0usize;
-            // Predict.
-            dispatch(&mut pass, &self.pipe_predict, idx, particle_count_u);
-            // Outer iterations × colours. Soft rigid contacts are
-            // baked into `solve_color` so each per-vertex Newton
-            // block sees the contact force + Hessian directly. In
-            // hard mode we follow each outer iteration with an
-            // `update_dual` dispatch that bumps the per-particle λ
-            // by the residual penetration.
-            for _ in 0..iterations {
-                idx = 1;
-                for k in 0..color_count {
-                    let lo = color_offsets_host[k as usize];
-                    let hi = color_offsets_host[k as usize + 1];
-                    let nc = hi - lo;
-                    dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
+            if residual_only {
+                dispatch(&mut pass, &self.pipe_residual_seed, 0, particle_count_u);
+                dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+            } else {
+                let mut idx = 0usize;
+                // Predict.
+                dispatch(&mut pass, &self.pipe_predict, idx, particle_count_u);
+                // Outer iterations × colours. Soft rigid contacts are
+                // baked into `solve_color` so each per-vertex Newton
+                // block sees the contact force + Hessian directly. In
+                // hard mode we follow each outer iteration with an
+                // `update_dual` dispatch that bumps the per-particle λ
+                // by the residual penetration.
+                for _ in 0..iterations {
+                    idx = 1;
+                    for k in 0..color_count {
+                        let lo = color_offsets_host[k as usize];
+                        let hi = color_offsets_host[k as usize + 1];
+                        let nc = hi - lo;
+                        dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
+                        idx += 1;
+                    }
+                    if hard_mode {
+                        dispatch(&mut pass, &self.pipe_update_dual, idx, particle_count_u);
+                    }
+                }
+                idx = 1 + color_count as usize + usize::from(hard_mode);
+                // Velocity recovery.
+                dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
+                idx += 1;
+                // Stage 20.3 — plasticity return mapping (one thread per
+                // tet). The kernel mutates `tet_f_plastic` / `tet_plastic_strain`
+                // in `state_out` directly (read_write storage in bind group 5).
+                if tet_count_u > 0 {
+                    dispatch(&mut pass, &self.pipe_plasticity, idx, tet_count_u);
                     idx += 1;
                 }
-                if hard_mode {
-                    dispatch(&mut pass, &self.pipe_update_dual, idx, particle_count_u);
-                }
+                // `pipe_shape_contacts` kept compiled for future use
+                // (warm-start initialiser, alternate AVBD safety pass);
+                // silence the unused-field warning.
+                let _ = &self.pipe_shape_contacts;
+                debug_assert_eq!(idx, bg_uniforms.len());
             }
-            idx = 1 + color_count as usize + usize::from(hard_mode);
-            // Velocity recovery.
-            dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
-            idx += 1;
-            // Stage 20.3 — plasticity return mapping (one thread per
-            // tet). The kernel mutates `tet_f_plastic` / `tet_plastic_strain`
-            // in `state_out` directly (read_write storage in bind group 5).
-            if tet_count_u > 0 {
-                dispatch(&mut pass, &self.pipe_plasticity, idx, tet_count_u);
-                idx += 1;
-            }
-            // `pipe_shape_contacts` kept compiled for future use
-            // (warm-start initialiser, alternate AVBD safety pass);
-            // silence the unused-field warning.
-            let _ = &self.pipe_shape_contacts;
-            debug_assert_eq!(idx, bg_uniforms.len());
         }
         queue.submit(std::iter::once(encoder.finish()));
+
+        if residual_only {
+            return Ok(());
+        }
 
         state_out.particle_q.mark_device_dirty();
         state_out.particle_qd.mark_device_dirty();

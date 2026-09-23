@@ -628,6 +628,13 @@ impl FemRigidGpuSystem {
             .as_ref()
             .map(|state| state.kernel.diagnostics())
     }
+
+    /// Maximum h M^-1 force residual at the final contact-projected candidate, as one f32.
+    pub fn material_force_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        self.material_contact
+            .as_ref()
+            .map(|state| state.kernel.force_diagnostics())
+    }
     pub fn rigid_state(&self) -> &State {
         &self.rigid_state
     }
@@ -966,6 +973,20 @@ impl FemRigidGpuSystem {
                     queue.submit([pass.finish()]);
                 }
                 encoder = device.create_command_encoder(&Default::default());
+                let residual = self.fem.material_force_residual_gpu(
+                    &self.soft_model,
+                    &coupling.input,
+                    &mut self.soft_next,
+                    h,
+                )?;
+                coupling.kernel.encode_force_check(
+                    device,
+                    &mut encoder,
+                    residual,
+                    self.solve.status(),
+                    self.soft_model.particle_count as u32,
+                    coupling.config.linear_tolerance,
+                )?;
             }
             self.drift.encode(
                 device,
