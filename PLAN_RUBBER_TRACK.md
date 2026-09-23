@@ -815,8 +815,19 @@ This is bounded iteration, not a universal convergence guarantee. The artificial
 friction1000 sticking fixture passes the first substep but can fail later after
 tiny state differences; more iterations are not monotonically better. It remains
 an explicit rejection regression (force0.0014995 >1e-4 with256outer/128inner),
-not a claimed solved trajectory. Native CEOL reuse performance and acceptance
-still require measurement; the earlier112.62s failure used full restarts.
+not a claimed solved trajectory.
+
+Native CEOL at09f77f6 with8retained sweeps and256outer iterations takes89.05s
+including setup, versus112.62s for the full-restart test. It still rejects:
+force0.000740895m/s, contact correction1.010057e-5m/s. At512outer iterations,
+the test takes165.15s and rejects force0.000264319m/s despite contact correction
+4.96953e-7m/s. All force limits remain1e-4m/s. Independent capture comparison
+confirms identical materials, masses and initial geometry; candidate minimumJ
+remains0.669218, with maximum position difference5.96e-8m and velocity
+difference3.37e-5m/s from the full-restart candidate. These are rejected states.
+Force-component/precision analysis and GPU timing are needed before more costly
+iteration increases; neither a roundoff floor nor a converged native step is
+established. Sustained tracked motion and simulator activation remain unaccepted.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
