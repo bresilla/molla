@@ -484,7 +484,10 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
             }
         }
     }
-    assert!(rejected_step.is_none(), "expected force guard did not reject");
+    assert!(
+        rejected_step.is_none(),
+        "expected force guard did not reject"
+    );
 }
 
 #[test]
