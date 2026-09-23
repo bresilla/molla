@@ -1097,7 +1097,7 @@ sweeps. A paired12-sweep replay measures208.954ms cooperative versus123.371ms
 separated solve, with7.967ms one-time scheduling. Repeated single-sweep solves
 also improve, although clocks/timings vary and fresh preparation overhead can
 outweigh a one-sweep saving. Native material continuation amortizes scheduling;
-native trajectory/performance validation of this candidate remains pending.
+Published2c4c83d passes the native control one-step and eight-step gates below.
 Six replay tests cover the CPU schedule oracle, wide point/edge/triangle layers,
 overlap,64/65layer boundary, static-only/dynamic-only, sparse mixed1/29/31/32/33/64
 DOF fixtures and constructor/dimension rejection. Snapshot and timing lifecycle
@@ -1106,9 +1106,55 @@ Additional gates pass87CPU library tests (4ignored),5contact/motor tests,
 2static-contact tests,3ball-loop tests,8material/contact tests and1motor-feedback
 test. These are solver regressions, not full-machine driving acceptance.
 
+The first control step preserves every physical packet field, including forces,
+against2536e29. Its GPU timeline measures12.0837s versus19.3809s; continued
+solve/recovery measures10.5723s versus17.7637s. The eight-step control sequence
+matches752d5f9 exactly and independently passes force, volume,750kg mass and
+momentum checks. These timings are not practical-performance acceptance.
+
+### Authored wheel-friction acceptance
+
+The earlier native trajectories deliberately used `frictionless_drive_contacts`,
+which clears friction on every retained wheel shape, including passive rollers.
+Their ground friction remained enabled. They are causal controls, not evidence
+for the full authored wheel-contact model. Gearbox now retains those controls
+and adds explicit one/eight-step probes using the unmodified prepared shapes;
+captures label this profile `authored_wheel_friction`.
+
+The authored first-contact snapshot has2384dynamic rows with friction0.6,
+5700ground rows and2ball rows. Positions/inverse masses match native inputs;
+static/dynamic support remains disjoint. All six replay regressions pass against
+this fixture, with serial/cooperative/separated outputs and4+8continuations
+bitwise identical. Paired12-sweep solve timings are213.890ms cooperative and
+128.245ms separated; these are replay timings, not a full trajectory speedup.
+
+At2c4c83d the authored8step trajectory passes device and independent material
+force, volume, mass and momentum checks without changing budgets or tolerances:
+
+| Step | GPU force m/s | Independent force m/s | Minimum independent J |
+|---|---|---|---|
+|1|6.66971e-5|6.92646e-5|0.669221|
+|2|6.83102e-5|8.16208e-5|0.687116|
+|3|6.60377e-5|7.64838e-5|0.703812|
+|4|6.74232e-5|7.66750e-5|0.718663|
+|5|7.31414e-5|9.56847e-5|0.731768|
+|6|6.86624e-5|7.23965e-5|0.743375|
+|7|7.09902e-5|8.14230e-5|0.753767|
+|8|7.76133e-5|7.77538e-5|0.763193|
+
+All29568nodes pass each independent force gate. Final retention0.000810106m,
+penetration1.52e-8m and max particle speed3.01087m/s are measured, but quiet
+load-balanced time is zero. The sequence spans only0.000416667s. The separately
+captured authored first-step timeline is18.1993s, including15.5492s continued
+solve/recovery. Do not compare changed friction as an exact-state speedup.
+
+Evidence is under Machines `.work/ceol/authored-friction-{native,eight-step}-evidence`
+and `authored-friction-inputs`. Gearbox commitf8bac72 adds the profile probes;
+the independent sequence verifier rejects mislabeled control profiles.
+
 Full settling, sustained traction, practical performance, selectable simulator
-ownership/menu/TF and wheel FEM remain incomplete. The largest independently
-validated native sequence still covers only8steps/0.000416667s at752d5f9.
+ownership/menu/TF and wheel FEM remain incomplete. No canonical asset or
+simulator FEM mode has been promoted from these short-step gates.
 
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
