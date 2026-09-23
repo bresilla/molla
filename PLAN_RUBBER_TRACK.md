@@ -964,7 +964,28 @@ step's cold solve. Finite residuals above the unchanged1e-4 thresholds and
 status64 remain mandatory; real-friction accepted-trajectory gates are intact.
 Validation passes the GPU all-target check,8material-force tests,3V3plastic/
 multimaterial tests,3V4kinematic-hardening tests,8coupling tests and87CPU
-library tests (4ignored). Native rerun remains the next acceptance gate.
+library tests (4ignored).
+
+Native3fa3e1d passes the GPU four-step probe and the independent sequence
+gate with unchanged1e-4 force tolerance:
+
+| Step | GPU force m/s | Independent force m/s | Minimum independent J |
+|---|---|---|---|
+|1|7.63633e-5|6.78361e-5|0.669221|
+|2|8.44963e-5|8.38412e-5|0.687116|
+|3|6.46574e-5|6.81780e-5|0.703812|
+|4|7.04056e-5|9.30258e-5|0.718663|
+
+All29568nodes pass independent force checks in each sample. The sequence
+also checks total750kg, per-step momentum/state consistency and volume,
+final retention0.000488279m and penetration9.61e-9m. Its duration is only
+0.000208333s; quiet load-balanced time remains zero, so it is not settled
+or sustained drive/turn/brake acceptance.
+
+The first-step GPU timeline is26.2387s, including24.6537s continued contact
+(93.96%) and1.07459s continued material. This is a measured run, not a
+controlled performance comparison. Contact/coupling cost still prevents
+practical simulator use and longer physical validation remains necessary.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
