@@ -29,6 +29,13 @@ fn accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 @compute @workgroup_size(64)
+fn check_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= params.particles { return; }
+    monitor(corrected_velocity[i].xyz - predicted_velocity[i].xyz, 0u, params.linear_tolerance);
+}
+
+@compute @workgroup_size(64)
 fn check_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if i >= params.bodies { return; }

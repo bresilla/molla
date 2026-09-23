@@ -29,6 +29,7 @@ pub(super) struct MaterialContactState {
     pub(super) config: MaterialContactConfig,
     pub(super) reuse_iterations: Option<u32>,
     pub(super) contact_sweeps: Option<u32>,
+    pub(super) polish_iterations: Option<u32>,
     pub(super) input: State,
     predicted: wgpu::Buffer,
     previous_body: wgpu::Buffer,
@@ -72,6 +73,7 @@ impl MaterialContactState {
             config,
             reuse_iterations: None,
             contact_sweeps: None,
+            polish_iterations: None,
             kernel: SoftMaterialIterationKernel::new(device),
             predicted: allocate(
                 "material predictor velocities",
@@ -144,6 +146,32 @@ impl MaterialContactState {
         )?;
         self.input.particle_qd.mark_device_dirty();
         Ok(())
+    }
+
+    pub(super) fn check_polish(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        soft: &State,
+        rigid: &State,
+        status: &wgpu::Buffer,
+    ) -> Result<()> {
+        self.kernel.encode_check(
+            device,
+            encoder,
+            SoftMaterialIterationBindings {
+                input_velocity: self.input.particle_qd.device_buffer().unwrap(),
+                predicted_velocity: &self.predicted,
+                corrected_velocity: soft.particle_qd.device_buffer().unwrap(),
+                previous_body_velocity: &self.previous_body,
+                corrected_body_velocity: rigid.body_qd.device_buffer().unwrap(),
+                status,
+                particles: self.particles,
+                bodies: self.bodies,
+            },
+            self.config.linear_tolerance,
+            self.config.angular_tolerance,
+        )
     }
 }
 

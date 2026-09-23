@@ -720,6 +720,11 @@ impl FemRigidGpuSystem {
         let coupling = self.material_contact.as_mut().ok_or_else(|| {
             Error::Build("material reuse requires configured material contact".into())
         })?;
+        if iterations.is_none() && coupling.polish_iterations.is_some() {
+            return Err(Error::Build(
+                "disable material polish before retained iterates".into(),
+            ));
+        }
         coupling.reuse_iterations = iterations;
         Ok(())
     }
@@ -741,14 +746,36 @@ impl FemRigidGpuSystem {
         Ok(())
     }
 
-    /// Last soft linear, rigid linear and rigid angular fixed-point corrections.
+    /// Select final retained material sweeps with fresh contact, force and velocity-change checks.
+    pub fn configure_material_contact_polish(&mut self, iterations: Option<u32>) -> Result<()> {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || iterations.is_some_and(|n| !(1..=4096).contains(&n))
+        {
+            return Err(Error::Build(
+                "invalid or pending material polish configuration".into(),
+            ));
+        }
+        let coupling = self.material_contact.as_mut().ok_or_else(|| {
+            Error::Build("material polish requires configured material contact".into())
+        })?;
+        if iterations.is_some() && coupling.reuse_iterations.is_none() {
+            return Err(Error::Build(
+                "material polish requires retained iterates".into(),
+            ));
+        }
+        coupling.polish_iterations = iterations;
+        Ok(())
+    }
+
+    /// Last soft linear, rigid linear and rigid angular contact or material-polish corrections.
     pub fn material_contact_diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.material_contact
             .as_ref()
             .map(|state| state.kernel.diagnostics())
     }
 
-    /// Maximum h M^-1 force residual at the final contact-projected candidate, as one f32.
+    /// Maximum h M^-1 force residual at the final coupled candidate, as one f32.
     pub fn material_force_diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.material_contact
             .as_ref()
@@ -1180,6 +1207,52 @@ impl FemRigidGpuSystem {
                     queue.submit([pass.finish()]);
                 }
                 encoder = device.create_command_encoder(&Default::default());
+                if let Some(iterations) = coupling.polish_iterations {
+                    coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
+                    queue.submit([encoder.finish()]);
+                    self.fem.material_iteration_gpu(
+                        &self.soft_model,
+                        &coupling.input,
+                        &mut self.soft_next,
+                        h,
+                        iterations,
+                        false,
+                    )?;
+                    encoder = device.create_command_encoder(&Default::default());
+                    coupling.check_polish(
+                        device,
+                        &mut encoder,
+                        &self.soft_next,
+                        &self.rigid_next,
+                        self.solve.status(),
+                    )?;
+                    self.solve.encode_residual_check(
+                        device,
+                        &mut encoder,
+                        SoftRigidSolveBindings {
+                            positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                            velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                            inverse_mass: self
+                                .soft_model
+                                .particle_inv_mass
+                                .device_buffer()
+                                .unwrap(),
+                            contacts: self.gather.rows(),
+                            body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                            body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                            jacobians: &self.jacobian_buffer,
+                            mass_matrix: &self.mass_buffer,
+                            rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                            body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                            particle_count: self.soft_model.particle_count as u32,
+                            body_count: self.rigid_model.body_count as u32,
+                        },
+                        solve_settings,
+                        coupling.config.linear_tolerance,
+                    )?;
+                    queue.submit([encoder.finish()]);
+                    encoder = device.create_command_encoder(&Default::default());
+                }
                 let residual = self.fem.material_force_residual_gpu(
                     &self.soft_model,
                     &coupling.input,

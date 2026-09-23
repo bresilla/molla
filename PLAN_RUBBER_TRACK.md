@@ -1156,6 +1156,40 @@ Full settling, sustained traction, practical performance, selectable simulator
 ownership/menu/TF and wheel FEM remain incomplete. No canonical asset or
 simulator FEM mode has been promoted from these short-step gates.
 
+### Guarded final material polish
+
+The authored64step probe at2c4c83d rejects step10 after9accepted steps:
+status64, GPU material force4.447519e-4m/s versus the unchanged1e-4limit.
+Independent reconstruction finds4.4839997e-4 at tread node10925 with20nodes
+over tolerance. Contact velocity corrections remain1.28212e-5m/s or less.
+This is genuine constitutive under-convergence, not volume failure or a
+float representability floor; the longer trajectory is not accepted.
+
+Fixed-target GPU replay of that rejected state converges after8additional
+material sweeps: GPU7.478728e-5, independent7.094515e-5m/s, zero independent
+violations and maximum velocity change1.11376e-5m/s. This replay excludes
+coupled contact acceptance and cannot substitute for a native rerun.
+
+An opt-in idle-only `configure_material_contact_polish(Some(sweeps))` adds
+bounded retained material sweeps after the final contact correction. It keeps
+the accumulated contact input unchanged and then rechecks velocity changes,
+normal/friction/loop residuals and material force before drift. Existing
+sticky faults and all tolerances are retained. Retained material context is
+required; disabling reuse requires first disabling polish. Reconfiguration
+resets polish, and default None preserves the original path. All solve work
+remains GPU resident, with no node readback or imposed motion.
+
+Validation passes87CPU tests,9material/contact GPU tests including dynamic
+support momentum, real-friction energy/lifecycle and exhausted-budget rejection,
+the immutable-input/nonfinite check-only kernel, snapshot replay, timing parity
+including polish and motor-feedback regression. Native CEOL polish acceptance
+is pending; no full-machine fix or practical-performance claim is established.
+
+Gearbox CPU energy-reference export now includes partitioned rigid COM inertias
+and joint-servo metadata. It matches native mass/geometry/spring data, but the
+three572957.75stiffness servos require sampled joint coordinates and servo work
+in the eventual energy audit. Rigid/rubber-only energy is not full acceptance.
+
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

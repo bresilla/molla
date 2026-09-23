@@ -15,7 +15,7 @@ pub struct SoftMaterialIterationBindings<'a> {
 /// Accumulates contact velocity increments and monitors the last fixed-point correction.
 pub struct SoftMaterialIterationKernel {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::ComputePipeline; 2],
+    pipelines: [wgpu::ComputePipeline; 3],
     diagnostics: wgpu::Buffer,
     force_layout: wgpu::BindGroupLayout,
     force_pipeline: wgpu::ComputePipeline,
@@ -57,7 +57,7 @@ impl SoftMaterialIterationKernel {
                 include_str!("../../shaders/soft_material_iteration.wgsl").into(),
             ),
         });
-        let pipelines = ["accumulate", "check_bodies"].map(|name| {
+        let pipelines = ["accumulate", "check_bodies", "check_particles"].map(|name| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(name),
                 layout: Some(&pipeline_layout),
@@ -198,6 +198,47 @@ impl SoftMaterialIterationKernel {
         angular_tolerance: f32,
         final_iteration: bool,
     ) -> Result<()> {
+        self.encode_internal(
+            device,
+            encoder,
+            b,
+            linear_tolerance,
+            angular_tolerance,
+            final_iteration,
+            true,
+        )
+    }
+
+    /// Check velocity changes without modifying the accumulated contact input.
+    pub fn encode_check(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        b: SoftMaterialIterationBindings<'_>,
+        linear_tolerance: f32,
+        angular_tolerance: f32,
+    ) -> Result<()> {
+        self.encode_internal(
+            device,
+            encoder,
+            b,
+            linear_tolerance,
+            angular_tolerance,
+            true,
+            false,
+        )
+    }
+
+    fn encode_internal(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        b: SoftMaterialIterationBindings<'_>,
+        linear_tolerance: f32,
+        angular_tolerance: f32,
+        final_iteration: bool,
+        accumulate: bool,
+    ) -> Result<()> {
         if !linear_tolerance.is_normal()
             || linear_tolerance <= 0.0
             || !angular_tolerance.is_normal()
@@ -256,9 +297,9 @@ impl SoftMaterialIterationKernel {
             entries: &entries,
         });
         encoder.clear_buffer(&self.diagnostics, 0, None);
-        for (pipeline, count) in self.pipelines.iter().zip([b.particles, b.bodies]) {
+        for (index, count) in [(if accumulate { 0 } else { 2 }, b.particles), (1, b.bodies)] {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(pipeline);
+            pass.set_pipeline(&self.pipelines[index]);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
         }
