@@ -1255,8 +1255,26 @@ Runtime validation passes all10GPU coupling tests194.55s, timing/state parity
 28.83s and expanded dynamic-support momentum/CPU-oracle coverage42.81s,
 including17cycles at both1/19200s and1/38400s. Low-budget sticky rejection,
 real-friction energy/lifecycle and invalid/pending configuration remain covered.
-Fresh native CEOL acceptance is pending; the implementation is not yet a
-validated fix for its longer trajectory.
+Native17cycle first-step acceptance passes22.64s and independent force
+6.645742e-5. Gearboxbe5ae8b pins67fd3ac and records the explicit cycle setting.
+The longer trajectory now accepts12steps, all independently verified for
+force/volume/mass/momentum, including step12force8.833364e-5 and minJ0.790282.
+It rejects step13 after181.10s: status64, material6.842328e-5 but six final
+ground normal residuals up to GPU3.604538e-4/f643.604647e-4. The64step
+trajectory is NOT accepted; accepted physical time remains only0.000625s.
+
+Captured step13 continuation through128cycles does not resolve the contact
+plateau; its independent simultaneous gate correctly fails. A contact-only
+control also plateaus near3.50377e-4. Planar geometry analysis finds2497sampled
+rows with all vertex supports present and550stronger-than-implied bounds.
+Edge3831 reports zero gap while its two vertex gaps imply2.9802322e-8m;
+the resulting target discrepancy5.7220459e-4m/s exceeds the tolerance.
+Symmetric edge5237 behaves identically. Maximum planar gap disagreement is
+5.9604645e-8m. The box distance calculation subtracts its0.5m half-height from
+local coordinates near0.5m to recover nanometer gaps. A stable face-relative
+sampled distance needs GPU/f64 verification; no geometry fix or constraint
+pruning has been implemented. Simply adding cycles or shifting the convergence
+endpoint is not a demonstrated remedy for this plateau.
 
 Primary references:
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
