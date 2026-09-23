@@ -1364,6 +1364,37 @@ forces above 6. CPU 84 tests pass/3 ignored; all-target GPU compilation passes.
 Fresh native verification, full physical scenarios and performance remain
 required before simulator FEM activation.
 
+### Strict material force precision (2026-09-24)
+
+The next native trajectory rejected step16 after15 accepted states. Independent
+force reconstruction passed every node (maximum6.70948e-5), while the GPU guard
+reported1.01796e-4. The threshold remains1e-4. Four captured tet neighborhoods
+now test both scalar parity and acceptance-side agreement, including the older
+step42 false acceptance. Strict force evaluation carries gradient and cofactor
+low parts through stress and compensates determinant-minus-one. Their errors
+are5.87e-7,7.73e-7,1.57e-6 and4.26e-7; ordinary Newton evaluation is unchanged.
+
+Captured cord16660 independently exposed another4.05899e-5 velocity-equivalent
+error from two spring forces. Strict spring evaluation uses compensated
+squared-length minus squared-rest and displacement low parts; the same captured
+error falls to4.46564e-7. A production-API rotated/prestressed cord regression
+fails before the correction (1.09177e-5 error) and passes afterward, including
+tension-only slack and compression. No material law, budget or tolerance changes.
+
+Validation:28 GPU tests pass (gradient2, material9, plasticity3, kinematic3,
+coupling11);84 CPU tests pass/3 ignored, and all-target GPU compilation passes.
+The coupling suite retains rejection of independently unconverged high-friction
+states. Recorded whole-mesh material replays pass GPU/f64 gates from sweep0 at
+step16 and sweep1 at step42; step42/sweep0 correctly rejects in both. Newton
+delta buffers are bitwise unchanged at0/1/8/32/128/512 in both replays. These are
+material-only controls, not fresh native/contact trajectory acceptance.
+
+Remaining whole-mesh scalar disagreements reach4.34e-5 away from the maximum
+residual. Uniform force accuracy is not proven. Fresh native acceptance, current
+asset mass/inertia integration, settling, drive/reverse/turn/brake, obstacles,
+energy/refinement, practical GPU performance and simulator ownership/menu remain
+required. No simulator FEM activation or FEM-wheel completion is claimed.
+
 Primary references:
 - https://www.w3.org/TR/WGSL/#reassociation-fusion
 - https://www.w3.org/TR/WGSL/#synchronization-builtin-functions

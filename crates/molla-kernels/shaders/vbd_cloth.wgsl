@@ -544,6 +544,34 @@ fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> 
     return product.value + product.correction;
 }
 
+fn tet_cofactor_parts(f: mat3x3<f32>) -> TetGradient {
+    var result: TetGradient;
+    for (var column = 0u; column < 3u; column++) {
+        let a = f[(column + 1u) % 3u];
+        let b = f[(column + 2u) % 3u];
+        let positive = a.yzx * b.zxy;
+        let negative = a.zxy * b.yzx;
+        let value = positive - negative;
+        let error = fma(a.yzx, b.zxy, -positive) - fma(a.zxy, b.yzx, -negative)
+            + tet_sum_error(positive, -negative, value);
+        result.value[column] = value + error;
+        result.correction[column] = tet_sum_error(value, error, result.value[column]);
+    }
+    return result;
+}
+
+fn tet_dot_minus_one(a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let products = a * b;
+    let sum01 = products.x + products.y;
+    let sum012 = sum01 + products.z;
+    let value = sum012 - 1.0;
+    let error = dot(fma(a, b, -products), vec3<f32>(1.0))
+        + tet_sum_error(vec3<f32>(products.x), vec3<f32>(products.y), vec3<f32>(sum01)).x
+        + tet_sum_error(vec3<f32>(sum01), vec3<f32>(products.z), vec3<f32>(sum012)).x
+        + tet_sum_error(vec3<f32>(sum012), vec3<f32>(-1.0), vec3<f32>(value)).x;
+    return value + error;
+}
+
 // Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
 // vertex order `v_order ∈ {0..3}`. Mirrors the CPU
 // `neo_hookean_vertex_block`. Uses the Smith et al. 2018 stable-NH
@@ -585,10 +613,15 @@ fn tet_neo_hookean_block(
         particle_delta[i3].xyz - particle_delta[i0].xyz,
     ), dm_inv, mat3x3<f32>());
     var f_full: mat3x3<f32>;
+    var f_low: mat3x3<f32>;
     for (var column = 0u; column < 3u; column++) {
         let value = previous_parts.value[column] + increment[column];
-        f_full[column] = value + (previous_parts.correction[column]
-            + tet_sum_error(previous_parts.value[column], increment[column], value));
+        let correction = previous_parts.correction[column]
+            + tet_sum_error(previous_parts.value[column], increment[column], value);
+        f_full[column] = value + correction;
+        if strict {
+            f_low[column] = tet_sum_error(value, correction, f_full[column]);
+        }
     }
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
@@ -611,20 +644,52 @@ fn tet_neo_hookean_block(
         f_mat = f_full;
     } else if (abs(fp_det - 1.0) > 1e-6) {
         // Real plastic deformation — multiply by F_p⁻¹ (3×3 inverse).
-        f_mat = f_full * mat3_inverse(fp_mat);
+        let fp_inverse = mat3_inverse(fp_mat);
+        f_mat = f_full * fp_inverse;
+        if strict {
+            let elastic = tet_gradient_parts(f_full, fp_inverse, mat3x3<f32>());
+            f_mat = elastic.value + elastic.correction;
+            f_low = f_low * fp_inverse;
+            for (var column = 0u; column < 3u; column++) {
+                f_low[column] += tet_sum_error(elastic.value[column], elastic.correction[column], f_mat[column]);
+            }
+        }
     }
 
-    let cof = cofactor3(f_mat);
-    let j_minus_one = fma(f_mat[0].x, cof[0].x, -1.0)
+    var cof = cofactor3(f_mat);
+    var cof_rounding: mat3x3<f32>;
+    if strict {
+        let parts = tet_cofactor_parts(f_mat);
+        cof = parts.value;
+        cof_rounding = parts.correction;
+    }
+    var j_minus_one = fma(f_mat[0].x, cof[0].x, -1.0)
         + fma(f_mat[0].y, cof[0].y, f_mat[0].z * cof[0].z);
+    if strict {
+        j_minus_one = tet_dot_minus_one(f_mat[0], cof[0]);
+    }
     let s_scalar = lam * j_minus_one;
 
     // First Piola-Kirchhoff stress P = μ·(F - cof(F)) + λ·(J - 1)·cof(F).
-    let p_mat = mat3x3<f32>(
+    var p_mat = mat3x3<f32>(
         (f_mat[0] - cof[0]) * mu + cof[0] * s_scalar,
         (f_mat[1] - cof[1]) * mu + cof[1] * s_scalar,
         (f_mat[2] - cof[2]) * mu + cof[2] * s_scalar,
     );
+    if strict {
+        var cof_low: mat3x3<f32>;
+        for (var column = 0u; column < 3u; column++) {
+            let b = (column + 1u) % 3u;
+            let c = (column + 2u) % 3u;
+            cof_low[column] = cof_rounding[column] + cross(f_mat[b], f_low[c]) + cross(f_low[b], f_mat[c])
+                + cross(f_low[b], f_low[c]);
+        }
+        let j_low = dot(f_low[0], cof[0]) + dot(f_mat[0], cof_low[0]) + dot(f_low[0], cof_low[0]);
+        for (var column = 0u; column < 3u; column++) {
+            p_mat[column] += (f_low[column] - cof_low[column]) * mu
+                + lam * (j_low * cof[column] + (j_minus_one + j_low) * cof_low[column]);
+        }
+    }
     let p_vec = mat3x3<f32>(
         p_mat[0] * rest_vol,
         p_mat[1] * rest_vol,
@@ -719,21 +784,27 @@ fn tet_neo_hookean_block(
     }
 }
 
-// Spring contribution to a vertex's local force/hessian. Mirrors
-// Newton's `evaluate_spring_force_and_hessian_both_vertices` but
-// returns just the "self-vertex" side.
-//
-// For spring (a, b) with current length L, rest length L0, stiffness k:
-//
-//   diff = x_self - x_other
-//   f_self = -k · (1 - L0/L) · diff
-//   H = k · ( I - (L0/L) · (I - diff⊗diff/L²) )
-//
-// (Identical for both endpoints; sign of force flips because diff
-// flips.)
+// Compensated (length squared - rest squared) / (length + rest).
+fn spring_length_extension(diff: vec3<f32>, low: vec3<f32>, rest: f32, len: f32) -> f32 {
+    let products = diff * diff;
+    let rest_squared = rest * rest;
+    let sum01 = products.x + products.y;
+    let sum012 = sum01 + products.z;
+    let value = sum012 - rest_squared;
+    let error = dot(fma(diff, diff, -products), vec3<f32>(1.0))
+        - fma(rest, rest, -rest_squared)
+        + tet_sum_error(vec3<f32>(products.x), vec3<f32>(products.y), vec3<f32>(sum01)).x
+        + tet_sum_error(vec3<f32>(sum01), vec3<f32>(products.z), vec3<f32>(sum012)).x
+        + tet_sum_error(vec3<f32>(sum012), vec3<f32>(-rest_squared), vec3<f32>(value)).x;
+    let correction = 2.0 * dot(diff, low) + dot(low, low);
+    return (value + (error + correction)) / (len + rest);
+}
+
+// Spring force and local Hessian at one endpoint.
 fn spring_force_hessian(
     self_idx: u32,
     spring_idx: u32,
+    strict: bool,
     out_force: ptr<function, vec3<f32>>,
     out_hess:  ptr<function, mat3x3<f32>>,
 ) {
@@ -750,6 +821,12 @@ fn spring_force_hessian(
     if length(diff) >= 1e-8 {
         let extension_increment = (2.0 * dot(previous, increment) + dot(increment, increment)) / (len + previous_len);
         extension = (previous_len - rest) + extension_increment;
+        if strict {
+            let low = tet_sum_error(particle_q_in[self_idx].xyz, -particle_q_in[other].xyz, previous)
+                + tet_sum_error(particle_delta[self_idx].xyz, -particle_delta[other].xyz, increment)
+                + tet_sum_error(previous, increment, diff);
+            extension = spring_length_extension(diff, low, rest, len);
+        }
     }
     if (spring_tension_only[spring_idx] != 0u && extension <= 0.0) {
         *out_force = vec3<f32>(0.0);
@@ -843,7 +920,7 @@ fn solve_vertex(v: u32, residual_only: bool) {
         let spring_idx = vertex_adj_springs[s];
         var f_s: vec3<f32>;
         var h_s: mat3x3<f32>;
-        spring_force_hessian(v, spring_idx, &f_s, &h_s);
+        spring_force_hessian(v, spring_idx, residual_only, &f_s, &h_s);
         f = f + f_s;
         h = mat3x3<f32>(h[0] + h_s[0], h[1] + h_s[1], h[2] + h_s[2]);
     }

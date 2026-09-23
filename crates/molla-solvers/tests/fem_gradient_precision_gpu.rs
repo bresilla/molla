@@ -263,5 +263,10 @@ fn cancelling_tet_gradients_match_f64_force() {
             error < 3e-5,
             "case={case}: GPU/oracle force mismatch {error}"
         );
+        assert_eq!(
+            samples[node][3] > 1e-4,
+            expected > 1e-4,
+            "case={case}: force acceptance mismatch"
+        );
     }
 }
