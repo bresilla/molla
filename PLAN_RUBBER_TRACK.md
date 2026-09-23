@@ -1074,7 +1074,44 @@ not changed. Earlier timing variation remains unexplained, so this is not
 a controlled speedup claim. Capture the actual native workload before the
 next contact-parallelism change; full tracked acceptance remains incomplete.
 
+### Native input capture and separated static layers
+
+The opt-in snapshot API published in2536e29 copies the ten contact inputs on
+device immediately before the first solve. Gearbox test-only binary export
+preserves settings and provenance without runtime node readback. The native
+first step exactly matches1594cd1, including all force samples, and independently
+passes force, volume,750kg mass and momentum checks. Its8086contacts contain
+5700ground,2384dynamic and2ball rows. Ground support touches1368nodes and
+dynamic support648nodes, with no shared nodes in this captured step.
+
+The separated-static candidate builds its schedule entirely on GPU. It retains
+dynamic row order and assigns static rows to at most64dependency layers,
+preserving ascending row order at every node. One64-lane workgroup solves
+independent rows in each layer with storage barriers between layers and sweeps.
+Any overlap with dynamic support or layer-cap exhaustion selects the original
+whole-island ordered GPU solve. Constraints, impulses and physical tolerances
+are unchanged; continuation retains the schedule for its unchanged geometry.
+
+The full native fixture matches the serial solver bitwise, including4+8versus12
+sweeps. A paired12-sweep replay measures208.954ms cooperative versus123.371ms
+separated solve, with7.967ms one-time scheduling. Repeated single-sweep solves
+also improve, although clocks/timings vary and fresh preparation overhead can
+outweigh a one-sweep saving. Native material continuation amortizes scheduling;
+native trajectory/performance validation of this candidate remains pending.
+Six replay tests cover the CPU schedule oracle, wide point/edge/triangle layers,
+overlap,64/65layer boundary, static-only/dynamic-only, sparse mixed1/29/31/32/33/64
+DOF fixtures and constructor/dimension rejection. Snapshot and timing lifecycle
+regressions pass with the integrated system constructor.
+Additional gates pass87CPU library tests (4ignored),5contact/motor tests,
+2static-contact tests,3ball-loop tests,8material/contact tests and1motor-feedback
+test. These are solver regressions, not full-machine driving acceptance.
+
+Full settling, sustained traction, practical performance, selectable simulator
+ownership/menu/TF and wheel FEM remain incomplete. The largest independently
+validated native sequence still covers only8steps/0.000416667s at752d5f9.
+
 Primary references:
+- https://www.w3.org/TR/WGSL/#synchronization-builtin-functions
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
 - https://graphics.cs.utah.edu/research/projects/vbd/

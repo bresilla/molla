@@ -5,6 +5,7 @@ var<workgroup> sweep_projected: array<array<f32, 64>, 3>;
 var<workgroup> sweep_response: array<array<f32, 64>, 3>;
 var<workgroup> sweep_count: u32;
 var<workgroup> sweep_fault: u32;
+var<workgroup> sweep_separated: u32;
 
 fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
     var value = 0.0;
@@ -79,15 +80,22 @@ fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
     if lane == 0u {
         sweep_count = active_rows[0];
         sweep_fault = atomicLoad(&status);
+        sweep_separated = 0u;
+        if SEPARATE_STATIC {
+            sweep_separated = active_rows[schedule_base()];
+            if sweep_separated != 0u { sweep_count = active_rows[schedule_base()+1u]; }
+        }
     }
     let count = workgroupUniformLoad(&sweep_count);
     let initial_fault = workgroupUniformLoad(&sweep_fault);
+    let separated = workgroupUniformLoad(&sweep_separated);
     if initial_fault != 0u { return; }
     if lane < SWEEP_DOFS { sweep_velocity[lane] = rigid_velocity[lane]; }
     workgroupBarrier();
     for (var iteration = 0u; iteration < params.iterations; iteration += 1u) {
         for (var rank = 0u; rank < count; rank += 1u) {
-            let r = active_rows[rank+1u];
+            var r = active_rows[rank+1u];
+            if separated != 0u { r = active_rows[schedule_dynamic()+rank]; }
             if lane < SWEEP_DOFS && contacts[r].ids.y != 0xffffffffu {
                 for (var k = 0u; k < 3u; k += 1u) {
                     sweep_projected[k][lane] = projected[(r*3u+k)*SWEEP_DOFS+lane];

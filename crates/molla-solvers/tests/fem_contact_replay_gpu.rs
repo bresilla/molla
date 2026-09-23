@@ -35,6 +35,153 @@ fn buffer<T: bytemuck::Pod>(device: &wgpu::Device, values: &[T]) -> wgpu::Buffer
     })
 }
 
+fn check_static_schedule(inputs: &[Vec<u8>], bytes: &[u8]) {
+    let contacts: &[SoftRigidContactGpu] = bytemuck::cast_slice(&inputs[3]);
+    let words: &[u32] = bytemuck::cast_slice(bytes);
+    let base = contacts.len() + 1 + contacts.len().div_ceil(64);
+    let enabled: Vec<_> = contacts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.ids[3], 1 | 3))
+        .collect();
+    let nodes = |c: &SoftRigidContactGpu| {
+        [c.ids[0], c.support[0], c.support[1]]
+            .into_iter()
+            .take(c.support[2] as usize)
+    };
+    let mut levels = vec![0u32; inputs[0].len() / 16];
+    let dynamic: Vec<_> = enabled
+        .iter()
+        .filter(|(_, c)| c.ids[1] != u32::MAX)
+        .map(|(r, c)| {
+            for n in nodes(c) {
+                levels[n as usize] = u32::MAX;
+            }
+            *r as u32
+        })
+        .collect();
+    let mut layers = vec![Vec::new(); 64];
+    let mut supported = true;
+    for &(r, c) in &enabled {
+        if c.ids[1] != u32::MAX {
+            continue;
+        }
+        let level = nodes(c).map(|n| levels[n as usize]).max().unwrap();
+        if level >= 64 {
+            supported = false;
+            break;
+        }
+        layers[level as usize].push(r as u32);
+        for n in nodes(c) {
+            levels[n as usize] = level + 1;
+        }
+    }
+    assert_eq!(words[base], u32::from(supported));
+    if !supported {
+        return;
+    }
+    let count = layers
+        .iter()
+        .rposition(|v| !v.is_empty())
+        .map_or(0, |n| n + 1);
+    assert_eq!(words[base + 1] as usize, dynamic.len());
+    assert_eq!(words[base + 2] as usize, count);
+    let dynamic_start = base + 132 + levels.len() + contacts.len();
+    assert_eq!(
+        &words[dynamic_start..dynamic_start + dynamic.len()],
+        dynamic
+    );
+    let static_start = dynamic_start + contacts.len();
+    let mut offset = 0usize;
+    for (level, rows) in layers.iter().enumerate() {
+        assert_eq!(words[base + 3 + level] as usize, offset);
+        assert_eq!(
+            &words[static_start + offset..static_start + offset + rows.len()],
+            rows
+        );
+        offset += rows.len();
+    }
+    assert_eq!(words[base + 67] as usize, offset);
+}
+
+#[test]
+#[ignore = "requires GPU timestamp queries through make test-gpu"]
+fn separated_static_layers_cover_overlap_depth_and_wide_supports() {
+    for mode in [
+        "wide",
+        "overlap",
+        "depth64",
+        "depth65",
+        "static_only",
+        "dynamic_only",
+    ] {
+        let point = SoftRigidContactGpu {
+            normal_gap: [0.0, 1.0, 0.0, -0.00001],
+            material: [0.6, 0.0, 0.0, 0.0],
+            ids: [0, 0, 0, 1],
+            support: [0, 0, 1, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+        let mut contacts = Vec::new();
+        if mode != "static_only" {
+            contacts.push(point);
+        }
+        if mode != "dynamic_only" {
+            let first = if mode == "overlap" { 0 } else { 1 };
+            for node in first..130 {
+                contacts.push(SoftRigidContactGpu {
+                    ids: [node, u32::MAX, 0, 1],
+                    ..point
+                });
+            }
+            if mode.starts_with("depth") {
+                let depth = if mode == "depth64" { 64 } else { 65 };
+                for _ in 1..depth {
+                    contacts.push(SoftRigidContactGpu {
+                        ids: [1, u32::MAX, 0, 1],
+                        ..point
+                    });
+                }
+            } else {
+                for node in (1..128).step_by(3) {
+                    contacts.push(SoftRigidContactGpu {
+                        normal_gap: [0.6, 0.8, 0.0, -0.00002],
+                        ids: [node, u32::MAX, 0, 1],
+                        support: [node + 1, 0, 2, 0],
+                        weights: [0.4, 0.6, 0.0, 0.0],
+                        ..point
+                    });
+                    contacts.push(SoftRigidContactGpu {
+                        normal_gap: [0.0, 0.0, 1.0, -0.00003],
+                        ids: [node, u32::MAX, 0, 1],
+                        support: [node + 1, node + 2, 3, 0],
+                        weights: [0.2, 0.3, 0.5, 0.0],
+                        ..point
+                    });
+                }
+            }
+        }
+        let bytes = |v: &[f32]| bytemuck::cast_slice(v).to_vec();
+        eprintln!("separated static fixture: {mode}");
+        replay_inputs(
+            true,
+            12,
+            vec![
+                bytes(&[0.2, 0.1, 0.3, 0.0].repeat(130)),
+                bytes(&[0.2, -0.3, -0.1, 0.0].repeat(130)),
+                bytes(&[0.7; 130]),
+                bytemuck::cast_slice(&contacts).to_vec(),
+                bytes(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+                bytes(&[0.0; 4]),
+                bytes(&[0.2, 0.3, 0.4, 0.1, 0.2, 0.3]),
+                bytes(&[2.0]),
+                bytes(&[0.2]),
+                bytes(&[0.0; 8]),
+            ],
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires MOLLA_CONTACT_FIXTURE and a real GPU through make test-gpu"]
 fn captured_contact_preparation_completes() {
@@ -101,7 +248,12 @@ fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
                 valid,
                 "invocations={invocations}, width={width}, storage={storage}, dofs={dofs}, rows={rows}"
             );
+            assert_eq!(
+                SoftRigidSolveKernel::new_separated_static(&device, dofs, rows, 3).is_ok(),
+                valid
+            );
         }
+        assert!(SoftRigidSolveKernel::new_separated_static(&device, 1, 1, u32::MAX).is_err());
     }
 }
 
@@ -320,10 +472,21 @@ fn replay_inputs(profile: bool, iterations: u32, inputs: Vec<Vec<u8>>) {
         let cooperative =
             SoftRigidSolveKernel::new_cooperative(device, dofs, (buffers[3].size() / 80) as u32)
                 .unwrap();
-        for (mode, kernel) in [("serial", &kernel), ("cooperative", &cooperative)]
-            .into_iter()
-            .cycle()
-            .take(if iterations == 1 { 6 } else { 2 })
+        let separated = SoftRigidSolveKernel::new_separated_static(
+            device,
+            dofs,
+            (buffers[3].size() / 80) as u32,
+            particles,
+        )
+        .unwrap();
+        for (mode, kernel) in [
+            ("serial", &kernel),
+            ("cooperative", &cooperative),
+            ("separated", &separated),
+        ]
+        .into_iter()
+        .cycle()
+        .take(if iterations == 1 { 9 } else { 3 })
         {
             for (destination, bytes) in buffers.iter().zip(&inputs) {
                 queue.write_buffer(destination, 0, bytes);
@@ -337,6 +500,15 @@ fn replay_inputs(profile: bool, iterations: u32, inputs: Vec<Vec<u8>>) {
                     .encode_profiled(device, &mut encoder, empty, settings, &profile)
                     .is_err()
             );
+            if mode == "separated" {
+                let mut wrong = bindings();
+                wrong.particle_count += 1;
+                assert!(
+                    kernel
+                        .encode(device, &mut encoder, wrong, settings)
+                        .is_err()
+                );
+            }
             kernel
                 .encode_profiled(device, &mut encoder, bindings(), settings, &profile)
                 .unwrap();
@@ -404,6 +576,18 @@ fn replay_inputs(profile: bool, iterations: u32, inputs: Vec<Vec<u8>>) {
             }
             assert!(total > 0.0);
             let active = read(kernel.active_rows());
+            if mode == "separated" {
+                check_static_schedule(&inputs, &active);
+                let base = buffers[3].size() as usize / 80;
+                let base = base + 1 + base.div_ceil(64);
+                let words: &[u32] = bytemuck::cast_slice(&active);
+                eprintln!(
+                    "separated enabled={}, dynamic={}, static_layers={}",
+                    words[base],
+                    words[base + 1],
+                    words[base + 2]
+                );
+            }
             let active = u32::from_le_bytes(active[..4].try_into().unwrap());
             assert!(active > 0 && active <= (buffers[3].size() / 80) as u32);
             eprintln!(

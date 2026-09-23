@@ -91,7 +91,7 @@ pub struct SoftRigidSolveBindings<'a> {
     pub body_count: u32,
 }
 
-/// One coupled articulation, at most 64 DOFs, with serialized contact sweeps on device.
+/// One coupled articulation, at most 64 DOFs, with ordered GPU contact updates.
 pub struct SoftRigidSolveKernel {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 8],
@@ -103,6 +103,7 @@ pub struct SoftRigidSolveKernel {
     active_rows: wgpu::Buffer,
     dofs: u32,
     row_count: u32,
+    static_schedule: Option<([wgpu::ComputePipeline; 2], u32)>,
 }
 
 impl SoftRigidSolveKernel {
@@ -112,7 +113,7 @@ impl SoftRigidSolveKernel {
 
     /// Single-invocation reference sweep with storage-resident rigid velocities.
     pub fn new_serial(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
-        Self::build(device, dofs, row_count, false)
+        Self::build(device, dofs, row_count, false, None)
     }
 
     /// Cooperative row loading with ordered contact updates and cached rigid velocities.
@@ -125,10 +126,35 @@ impl SoftRigidSolveKernel {
                 "unsupported cooperative contact workgroup".into(),
             ));
         }
-        Self::build(device, dofs, row_count, true)
+        Self::build(device, dofs, row_count, true, None)
     }
 
-    fn build(device: &wgpu::Device, dofs: u32, row_count: u32, cooperative: bool) -> Result<Self> {
+    /// Parallel ordered static layers when their nodes are disjoint from all dynamic contacts.
+    /// Overlap or more than 64 layers selects the full ordered GPU sweep.
+    pub fn new_separated_static(
+        device: &wgpu::Device,
+        dofs: u32,
+        row_count: u32,
+        particles: u32,
+    ) -> Result<Self> {
+        if device.limits().max_compute_invocations_per_workgroup < 64
+            || device.limits().max_compute_workgroup_size_x < 64
+            || device.limits().max_compute_workgroup_storage_size < 2048
+        {
+            return Err(Error::Build(
+                "unsupported separated contact workgroup".into(),
+            ));
+        }
+        Self::build(device, dofs, row_count, true, Some(particles))
+    }
+
+    fn build(
+        device: &wgpu::Device,
+        dofs: u32,
+        row_count: u32,
+        cooperative: bool,
+        particles: Option<u32>,
+    ) -> Result<Self> {
         if !(1..=64).contains(&dofs)
             || row_count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
             || device.limits().max_storage_buffers_per_shader_stage < 16
@@ -138,8 +164,14 @@ impl SoftRigidSolveKernel {
             ));
         }
         let response_size = row_count.max(1) as u64 * 3 * dofs as u64 * 4;
+        let active_words = row_count as u64
+            + 1
+            + row_count.div_ceil(64) as u64
+            + particles.map_or(0, |n| 132 + n as u64 + 3 * row_count as u64);
         if response_size > device.limits().max_storage_buffer_binding_size as u64
             || row_count.max(1) as u64 * 32 > device.limits().max_storage_buffer_binding_size as u64
+            || active_words * 4 > device.limits().max_storage_buffer_binding_size as u64
+            || active_words > u32::MAX as u64
         {
             return Err(Error::Build(
                 "GPU FEM response exceeds buffer limits".into(),
@@ -184,9 +216,10 @@ impl SoftRigidSolveKernel {
             label: Some("FEM two-way contact"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}",
                     include_str!("../shaders/soft_rigid_solve.wgsl"),
                     include_str!("../shaders/soft_rigid_cooperative.wgsl"),
+                    include_str!("../shaders/soft_rigid_static.wgsl"),
                     cooperative_delta_shader(dofs)
                 )
                 .into(),
@@ -210,6 +243,10 @@ impl SoftRigidSolveKernel {
             let constants = [
                 ("SWEEP_LANES", if dofs <= 32 { 32.0 } else { 64.0 }),
                 ("SWEEP_DOFS", dofs as f64),
+                (
+                    "SEPARATE_STATIC",
+                    if particles.is_some() { 1.0 } else { 0.0 },
+                ),
             ];
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
@@ -227,6 +264,22 @@ impl SoftRigidSolveKernel {
                 cache: None,
             })
         });
+        let static_schedule = particles.map(|particles| {
+            let pipelines = ["schedule_static_contacts", "solve_static_contacts"].map(|entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("SWEEP_DOFS", dofs as f64)],
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
+            });
+            (pipelines, particles)
+        });
         Ok(Self {
             layout,
             pipelines,
@@ -235,12 +288,10 @@ impl SoftRigidSolveKernel {
             response: allocate("FEM contact responses", response_size),
             rows: allocate("FEM contact impulses", row_count.max(1) as u64 * 32),
             status: allocate("FEM contact solver status", 4),
-            active_rows: allocate(
-                "FEM stable active contact rows",
-                (row_count as u64 + 1 + row_count.div_ceil(64) as u64) * 4,
-            ),
+            active_rows: allocate("FEM stable active contact rows", active_words * 4),
             dofs,
             row_count,
+            static_schedule,
         })
     }
 
@@ -401,6 +452,15 @@ impl SoftRigidSolveKernel {
             return Err(Error::Build("invalid GPU FEM contact settings".into()));
         }
         let b = &bindings;
+        if self
+            .static_schedule
+            .as_ref()
+            .is_some_and(|(_, n)| *n != b.particle_count)
+        {
+            return Err(Error::Build(
+                "separated contact particle count changed".into(),
+            ));
+        }
         let sizes = [
             (b.positions, b.particle_count.max(1) as u64 * 16),
             (b.velocities, b.particle_count.max(1) as u64 * 16),
@@ -523,6 +583,17 @@ impl SoftRigidSolveKernel {
                 }
             } else {
                 pass.dispatch_workgroups(count, 1, 1);
+            }
+            if let Some((pipelines, _)) = &self.static_schedule {
+                let extra = match index {
+                    4 => Some(0),
+                    5 => Some(1),
+                    _ => None,
+                };
+                if let Some(extra) = extra {
+                    pass.set_pipeline(&pipelines[extra]);
+                    pass.dispatch_workgroups(1, 1, 1);
+                }
             }
             drop(pass);
             if let Some((queue, completed)) = &trace {

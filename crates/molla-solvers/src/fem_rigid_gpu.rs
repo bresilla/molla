@@ -530,7 +530,12 @@ impl FemRigidGpuSystem {
         } else {
             SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?
         };
-        let solve = SoftRigidSolveKernel::new(device, n as u32, gather.row_count())?;
+        let solve = SoftRigidSolveKernel::new_separated_static(
+            device,
+            n as u32,
+            gather.row_count(),
+            scene.soft_model.particle_count as u32,
+        )?;
         let drift = SoftParticleDriftKernel::new(device);
         let volume = TetVolumeMonitor::new(device);
         let mut encoder = device.create_command_encoder(&Default::default());
