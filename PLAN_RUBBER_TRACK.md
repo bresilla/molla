@@ -672,8 +672,39 @@ tests. Submission-window, shared-renderer-device and bounded-contact failure
 tests also use the default path. Serial and cooperative references remain
 explicit in the independent contact and spherical-loop oracle comparisons.
 
-Full native settling and powered traction remain unaccepted. Native trajectory
-comparison is still required when updating Gearbox to the cooperative default.
+The native512-step passive CEOL trajectory with the cooperative default matches
+all eight prior stable-feedback snapshots: particle positions/velocities,
+generalized velocities and momentum packets match float32 bits; normalized
+poses and COM travel match exactly. Retention15.902mm, minJ0.653345 and negligible
+floor penetration pass the unchanged short-run gates. This covers26.667ms of
+simulated time, not settled or powered driving. Full native settling, sustained
+traction, simulator ownership/menu integration and wheel FEM remain unfinished.
+
+### Objective rubber viscosity prototype
+
+Test-only `vbd::viscosity` and the standalone `tet_viscosity.wgsl` validate an
+isothermal finite-step Green-strain dissipation potential. Neither is connected
+to VBD stepping or authored material parameters yet. The existing track has no
+new damping, and no claim of settled operation follows from these block tests.
+
+For previous deformation F0 and increment A, define
+`dE=(F0^T*A+A^T*F0+A^T*A)/2` and
+`D=V/h*(eta*||dev(dE)||^2+kappa/2*tr(dE)^2)` with nonnegative viscosity
+coefficients in Pa s. CPU finite differences check the force and exact local
+Hessian; the solver candidate uses its positive-semidefinite Gauss-Newton part,
+with the geometric term tested separately. Independent rotations of current
+and previous configurations leave the potential unchanged. Internal force and
+torque balance, zero viscosity and scalar dilation have independent checks.
+GPU force/tangent/potential comparisons cover256 cases, including strain
+increments down to1e-10 with a relative force check. Incremental evaluation
+avoids cancellation between near-equal right-Cauchy-Green tensors.
+
+The frame-indifference construction follows the squared C-tensor difference
+in [Badal et al., section2.1, equations2.8–2.9](https://arxiv.org/html/2604.27923v1).
+The local isotropic blocks and Gauss-Newton approximation are independently
+derived here; the paper's full thermoviscoelastic PDE/heat model is not included.
+Runtime material storage, CPU/GPU VBD integration, energy/momentum and refinement
+tests, constitutive calibration and native settling/traction remain required.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

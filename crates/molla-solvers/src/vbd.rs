@@ -77,6 +77,9 @@ use crate::sim::{Contacts, Control, Model, State};
 
 use super::Solver;
 
+#[cfg(test)]
+mod viscosity;
+
 /// Backend selector for [`VbdSolver`]. Mirrors `XpbdBackend` —
 /// CPU is the oracle / fallback; GPU is the production path.
 #[allow(
