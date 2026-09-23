@@ -349,7 +349,7 @@ fn material_reuse_survives_substeps_and_idle_mode_changes() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_rejects_unconverged_high_friction_trajectory() {
-    material_reuse_trajectory(1000.0, Some(1));
+    material_reuse_trajectory(1000.0, Some(2));
 }
 
 fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
@@ -414,7 +414,8 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
             if rejected_step == Some(step) && index == 1 {
                 assert_eq!(status, 64);
                 assert!(force.is_finite() && force > 1e-4);
-                assert!(corrections.iter().all(|v| v.is_finite() && *v <= 1e-4));
+                assert!(corrections.iter().all(|v| v.is_finite()));
+                assert!(corrections[0] > 1e-4);
                 return;
             }
             assert_eq!(

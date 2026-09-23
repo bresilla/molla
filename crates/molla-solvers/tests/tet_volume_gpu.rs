@@ -109,4 +109,40 @@ fn gpu_minimum_remembers_transient_compression_and_faults() {
     sample(&monitor, &reference);
     assert_eq!(read(&engine, monitor.diagnostics(), 2), [0, 0]);
     assert_eq!(read(&engine, &status, 1), [8]);
+
+    let mut thin = reference;
+    thin[2][1] = 0.0005;
+    thin[6][1] = 0.0005;
+    queue.write_buffer(&rest, 0, bytemuck::cast_slice(&thin));
+    queue.write_buffer(
+        &indices,
+        0,
+        bytemuck::cast_slice(&[0_u32, 1, 2, 3, 4, 5, 6, 7]),
+    );
+    queue.write_buffer(
+        &inv,
+        0,
+        bytemuck::cast_slice(
+            &[[
+                1.0_f32, 0.0, 0.0, 0.0, 0.0, 2000.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+            ]; 2],
+        ),
+    );
+    queue.write_buffer(&status, 0, bytemuck::cast_slice(&[0_u32]));
+    let positions = thin.map(|p| [p[0] + 1.03, p[1] + 0.87, p[2] - 0.63, 0.0]);
+    let expected = (0..3)
+        .map(|axis| {
+            let change = (positions[axis + 1][axis] as f64 - positions[0][axis] as f64)
+                - (thin[axis + 1][axis] as f64 - thin[0][axis] as f64);
+            1.0 + change * if axis == 1 { 2000.0 } else { 1.0 }
+        })
+        .product::<f64>();
+    let monitor = TetVolumeMonitor::new(device);
+    sample(&monitor, &positions);
+    let measured = f32::from_bits(read(&engine, monitor.diagnostics(), 2)[0]) as f64;
+    assert!(
+        (measured - expected).abs() < 2e-7,
+        "GPU={measured} oracle={expected}"
+    );
+    assert_eq!(read(&engine, &status, 1), [0]);
 }

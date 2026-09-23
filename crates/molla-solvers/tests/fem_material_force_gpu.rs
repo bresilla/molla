@@ -3,7 +3,7 @@
 use molla_compute::Engine;
 use molla_core::WorldId;
 use molla_kernels::soft_rigid_solve::SoftMaterialIterationKernel;
-use molla_math::Vec3;
+use molla_math::{Mat3, Vec3};
 use molla_sim::{Contacts, MaterialNeoHookean, Model, ModelBuilder, TetViscosity};
 use molla_solvers::{Solver, VbdSolver};
 use wgpu::util::DeviceExt;
@@ -234,6 +234,104 @@ fn diagnostic_stiffness_matches_projected_spring_table() {
         vec![1e7, 2e8, 1.0]
     );
     assert!(solver.material_force_samples_gpu().is_none());
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn translated_thin_tet_force_matches_projected_geometry() {
+    let engine = Engine::new_gpu().unwrap();
+    let h = 1.0 / 19200.0;
+    let rest = [
+        Vec3::ZERO,
+        Vec3::X * 0.02,
+        Vec3::Y * 0.0005,
+        Vec3::Z * 0.005,
+    ];
+    for offset in [
+        Vec3::ZERO,
+        Vec3::new(1.03, 0.87, -0.63),
+        Vec3::new(-0.83, -1.07, 0.79),
+    ] {
+        let mut builder = ModelBuilder::new();
+        builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+        builder.set_linear_damping(0.0);
+        for p in rest {
+            builder.add_particle(p, 1000.0 * 0.02 * 0.0005 * 0.005 / 24.0, 0.0, WorldId(0));
+        }
+        builder
+            .add_tet_mesh_per_material(
+                &[[0, 1, 2, 3]],
+                &[MaterialNeoHookean::elastic(2e6, 0.45)],
+                &[0],
+                None,
+            )
+            .unwrap();
+        let mut model = builder.build().unwrap();
+        let mut input = model.state().unwrap();
+        for p in input.particle_q.host_mut().unwrap() {
+            *p += offset;
+        }
+        let mut output = model.state().unwrap();
+        let project = |v: f64| v as f32 as f64;
+        let q: Vec<_> = input
+            .particle_q
+            .host()
+            .unwrap()
+            .iter()
+            .map(|v| Vec3::from_array(v.to_array().map(project)))
+            .collect();
+        let rest = rest.map(|v| Vec3::from_array(v.to_array().map(project)));
+        let inverse = Mat3::from_cols_array(
+            &model.tet_dm_inv.host().unwrap()[0]
+                .to_cols_array()
+                .map(project),
+        );
+        let edge = |i: usize| (q[i] - q[0]) - (rest[i] - rest[0]);
+        let f = Mat3::IDENTITY + Mat3::from_cols(edge(1), edge(2), edge(3)) * inverse;
+        let cof = Mat3::from_cols(
+            f.y_axis.cross(f.z_axis),
+            f.z_axis.cross(f.x_axis),
+            f.x_axis.cross(f.y_axis),
+        );
+        let mu = project(model.tet_mu.host().unwrap()[0]);
+        let lam = project(model.tet_lambda.host().unwrap()[0]);
+        let stress = (f - cof) * mu + cof * ((lam + mu) * (f.determinant() - 1.0));
+        let volume = project(model.tet_rest_volume.host().unwrap()[0]);
+        let inverse_mass = project(model.particle_inv_mass.host().unwrap()[0]);
+        let rows = inverse.transpose();
+        let gradients = [
+            -(rows.x_axis + rows.y_axis + rows.z_axis),
+            rows.x_axis,
+            rows.y_axis,
+            rows.z_axis,
+        ];
+        let expected =
+            gradients.map(|g| (stress * g * volume).length() * project(h) * inverse_mass);
+        model
+            .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+            .unwrap();
+        input
+            .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+            .unwrap();
+        output
+            .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+            .unwrap();
+        let mut solver = VbdSolver::new_gpu(&engine, &model)
+            .unwrap()
+            .with_contact_stiffness(0.0);
+        let residual = solver
+            .material_force_residual_gpu(&model, &input, &mut output, h)
+            .unwrap();
+        let actual = readback::read::<[f32; 4]>(&engine, residual, 4);
+        for i in 0..4 {
+            let error = (actual[i][3] as f64 - expected[i]).abs();
+            eprintln!(
+                "offset={offset:?} node={i} GPU={} oracle={} error={error}",
+                actual[i][3], expected[i]
+            );
+            assert!(error < 5e-5 + expected[i] * 1e-5);
+        }
+    }
 }
 
 #[test]

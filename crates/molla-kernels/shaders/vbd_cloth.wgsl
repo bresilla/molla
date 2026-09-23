@@ -477,6 +477,11 @@ fn svd3_jacobi(m_in: mat3x3<f32>) -> Svd3 {
     return Svd3(u_out, sigma, v);
 }
 
+fn tet_displacement_edge(origin: u32, node: u32) -> vec3<f32> {
+    return (particle_q_in[node].xyz - particle_q_in[origin].xyz)
+        - (particle_rest[node].xyz - particle_rest[origin].xyz);
+}
+
 // Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
 // vertex order `v_order ∈ {0..3}`. Mirrors the CPU
 // `neo_hookean_vertex_block`. Uses the Smith et al. 2018 stable-NH
@@ -494,10 +499,9 @@ fn tet_neo_hookean_block(
     let i1 = tet_indices[tet_id * 4u + 1u];
     let i2 = tet_indices[tet_id * 4u + 2u];
     let i3 = tet_indices[tet_id * 4u + 3u];
-    let v0 = particle_q_in[i0].xyz - particle_rest[i0].xyz;
-    let v1 = particle_q_in[i1].xyz - particle_rest[i1].xyz;
-    let v2 = particle_q_in[i2].xyz - particle_rest[i2].xyz;
-    let v3 = particle_q_in[i3].xyz - particle_rest[i3].xyz;
+    let v1 = tet_displacement_edge(i0, i1);
+    let v2 = tet_displacement_edge(i0, i2);
+    let v3 = tet_displacement_edge(i0, i3);
 
     // Inverse rest-state basis: stored as 3 padded vec4 columns
     // (Mat3Cols / GpuMat3 layout, same as body_inertia uploads).
@@ -512,9 +516,9 @@ fn tet_neo_hookean_block(
 
     // Displacement-gradient form F = I + Du · Dm⁻¹.
     let ds = mat3x3<f32>(
-        (v1 - v0) + (particle_delta[i1].xyz - particle_delta[i0].xyz),
-        (v2 - v0) + (particle_delta[i2].xyz - particle_delta[i0].xyz),
-        (v3 - v0) + (particle_delta[i3].xyz - particle_delta[i0].xyz),
+        v1 + (particle_delta[i1].xyz - particle_delta[i0].xyz),
+        v2 + (particle_delta[i2].xyz - particle_delta[i0].xyz),
+        v3 + (particle_delta[i3].xyz - particle_delta[i0].xyz),
     );
     let f_full = IDENTITY3 + ds * dm_inv;
     let fp_raw = tet_f_plastic[tet_id];
@@ -637,7 +641,7 @@ fn tet_neo_hookean_block(
     *out_hess  = h_block;
     let viscosity = tet_viscosity[tet_id];
     if (viscosity.x > 0.0 || viscosity.y > 0.0) {
-        let previous = IDENTITY3 + mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0) * dm_inv;
+        let previous = IDENTITY3 + mat3x3<f32>(v1, v2, v3) * dm_inv;
         let increment = mat3x3<f32>(
             particle_delta[i1].xyz - particle_delta[i0].xyz,
             particle_delta[i2].xyz - particle_delta[i0].xyz,
@@ -1029,14 +1033,13 @@ fn plasticity_return_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i1 = tet_indices[tet * 4u + 1u];
     let i2 = tet_indices[tet * 4u + 2u];
     let i3 = tet_indices[tet * 4u + 3u];
-    let p0 = (particle_q_in[i0].xyz - particle_rest[i0].xyz) + particle_delta[i0].xyz;
-    let p1 = (particle_q_in[i1].xyz - particle_rest[i1].xyz) + particle_delta[i1].xyz;
-    let p2 = (particle_q_in[i2].xyz - particle_rest[i2].xyz) + particle_delta[i2].xyz;
-    let p3 = (particle_q_in[i3].xyz - particle_rest[i3].xyz) + particle_delta[i3].xyz;
+    let p1 = tet_displacement_edge(i0, i1) + (particle_delta[i1].xyz - particle_delta[i0].xyz);
+    let p2 = tet_displacement_edge(i0, i2) + (particle_delta[i2].xyz - particle_delta[i0].xyz);
+    let p3 = tet_displacement_edge(i0, i3) + (particle_delta[i3].xyz - particle_delta[i0].xyz);
 
     let dm_inv_raw = tet_dm_inv[tet];
     let dm_inv = mat3x3<f32>(dm_inv_raw.col0.xyz, dm_inv_raw.col1.xyz, dm_inv_raw.col2.xyz);
-    let ds = mat3x3<f32>(p1 - p0, p2 - p0, p3 - p0);
+    let ds = mat3x3<f32>(p1, p2, p3);
     let f_full = IDENTITY3 + ds * dm_inv;
 
     let fp_raw = tet_f_plastic[tet];

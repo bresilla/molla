@@ -18,14 +18,18 @@ fn fail(tet: u32, flag: u32) {
 fn measure(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tet = gid.x;
     if tet >= params.tets { return; }
-    var displacement: array<vec3<f32>, 4>;
+    var nodes: array<u32, 4>;
     for (var c = 0u; c < 4u; c += 1u) {
         let node = indices[4u*tet+c];
         if node >= params.particles { fail(tet, 8u); return; }
-        displacement[c] = positions[node].xyz - reference[node].xyz;
+        nodes[c] = node;
     }
-    let du = mat3x3<f32>(displacement[1]-displacement[0],
-        displacement[2]-displacement[0], displacement[3]-displacement[0]);
+    var edges: array<vec3<f32>, 3>;
+    for (var c = 0u; c < 3u; c += 1u) {
+        edges[c] = (positions[nodes[c+1u]].xyz - positions[nodes[0]].xyz)
+            - (reference[nodes[c+1u]].xyz - reference[nodes[0]].xyz);
+    }
+    let du = mat3x3<f32>(edges[0], edges[1], edges[2]);
     let identity = mat3x3<f32>(vec3<f32>(1.0,0.0,0.0), vec3<f32>(0.0,1.0,0.0), vec3<f32>(0.0,0.0,1.0));
     let j = determinant(identity + du * inverse_rest[tet]);
     if !(abs(j) <= 3.402823e38) { fail(tet, 4u); return; }

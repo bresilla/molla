@@ -829,6 +829,22 @@ Force-component/precision analysis and GPU timing are needed before more costly
 iteration increases; neither a roundoff floor nor a converged native step is
 established. Sustained tracked motion and simulator activation remain unaccepted.
 
+Native force-sample reconstruction at c63932f found a precision problem in
+the per-node displacement-gradient evaluation. The captured current/rest
+offset reaches1.018m. Against float64 forces on the same projected inputs,
+float32 displacement-first geometry contributes up to0.002535m/s force error;
+edge-first geometry reduces this estimate to9.16e-5m/s. The GPU-worst node
+still fails the independent residual test, so under-convergence is also real.
+
+GPU VBD elastic/viscous forces, plasticity gradients and volume diagnostics
+now difference current/rest edges before assembling the displacement gradient.
+A translated thin-tet regression fails before this change (GPU0 versus
+oracle0.143237m/s), then matches within3.54e-5m/s on projected coordinates.
+This does not eliminate coordinate-upload quantization or guarantee native
+force convergence. The artificial friction1000 case now passes two steps but
+rejects its third retained step (force0.119683m/s, correction0.002782m/s);
+the regression checks that rejection rather than accepting the trajectory.
+
 GPU force diagnostics now expose the existing per-node target/residual scratch
 and projected spring stiffness buffers. These are optional diagnostic handles,
 not runtime CPU readbacks. Samples are unavailable before evaluation or after
