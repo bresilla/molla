@@ -893,8 +893,8 @@ less than half its GPU timeline cost. Doubling again barely lowers the force
 residual; contact corrections already fall below6e-7m/s. The residual plateau
 requires material/precision diagnosis, not another blind iteration increase.
 At2048outer the worst node5332 is a cord node with gravity-only inertial target,
-not a node accumulating contact impulse. No accepted native step, settling,
-sustained motion or practical simulator performance is established.
+not a node accumulating contact impulse. That revision established no accepted
+native step, settling, sustained motion or practical simulator performance.
 
 ### Cord extension precision
 
@@ -918,6 +918,27 @@ spring lengths reduce the512sweep values to7.40579e-5 and9.17758e-5.
 The128sweep independent value remains1.05065e-4: convergence margin is small.
 These are material-only replays, not accepted coupled dynamics. Native
 settling, sustained drive/turn/brake and practical performance remain open.
+
+With the spring fix at e239ae1, the actual CEOL1024outer/1contact-sweep step
+passes the unchanged GPU guard and independent force/volume/mass/momentum/
+retention checks. Force is8.31871e-5 GPU and9.23243e-5 float64. The GPU
+timeline is34.6208s for1/19200s simulated: contact still consumes88.878%.
+
+A four-consecutive-step probe passes the GPU guard throughout, but the
+independent material-force sequence gate FAILS at step2:
+
+| Step | GPU force m/s | Independent force m/s | Independent nodes above1e-4 |
+|---|---|---|---|
+|1|8.31871e-5|9.23243e-5|0|
+|2|7.53080e-5|1.37307e-4|3|
+|3|7.79857e-5|9.13297e-5|0|
+|4|6.68653e-5|9.57039e-5|0|
+
+The oracle uses each immediately preceding accepted position buffer, current
+inertial targets and projected material inputs. Step2's worst node15122 is
+carcass material. Thus the native sequence is not independently accepted;
+tet force/geometry precision requires further work before longer trajectories.
+The4steps cover only0.000208333s and are not settled or performant.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
