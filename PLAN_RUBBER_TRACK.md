@@ -1012,6 +1012,28 @@ expanded. Validation passes the GPU all-target check,4replay/boundary tests,
 coupling tests,1timing test and87CPU library tests (4ignored). Native
 trajectory and practical performance acceptance remain pending.
 
+Native752d5f9 now passes8consecutive GPU steps and the independent force,
+volume,750kg mass and per-step momentum/state checks. Every physical field
+in the first4packets exactly matches3fa3e1d. The additional steps have:
+
+| Step | GPU force m/s | Independent force m/s | Minimum independent J |
+|---|---|---|---|
+|5|6.81369e-5|8.48641e-5|0.731768|
+|6|6.86268e-5|8.27206e-5|0.743375|
+|7|6.47577e-5|7.96821e-5|0.753767|
+|8|6.65585e-5|7.60340e-5|0.763193|
+
+Final retention is0.000810114m and penetration1.52e-8m. The run covers
+only0.000416667s, with maximum particle speed3.01087m/s and zero sustained
+quiet time. It is not settling or motor-driven trajectory acceptance.
+
+The faster isolated replay does NOT establish native end-to-end speedup:
+the new first-step timeline is30.5302s versus the historical26.2387s,
+including25.2492s continued contact and4.86279s continued material.
+These phase spans include capture/recovery/accumulation or submission idle,
+not just individual kernel busy time. Finer native profiling is required;
+practical performance and full simulator integration remain incomplete.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
