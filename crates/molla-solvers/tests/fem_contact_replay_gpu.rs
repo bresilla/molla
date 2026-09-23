@@ -313,6 +313,49 @@ fn replay(profile: bool) {
             eprintln!(
                 "{mode} contact GPU total={total:.6}ms, submit/wait={elapsed:?}; outputs bitwise identical"
             );
+            for (destination, bytes) in buffers.iter().zip(&inputs) {
+                queue.write_buffer(destination, 0, bytes);
+            }
+            let mut encoder = device.create_command_encoder(&Default::default());
+            kernel
+                .encode(
+                    device,
+                    &mut encoder,
+                    bindings(),
+                    SoftRigidSolveSettings {
+                        iterations: 4,
+                        ..settings
+                    },
+                )
+                .unwrap();
+            kernel
+                .encode_continuation(
+                    device,
+                    &mut encoder,
+                    bindings(),
+                    SoftRigidSolveSettings {
+                        iterations: 8,
+                        ..settings
+                    },
+                )
+                .unwrap();
+            queue.submit([encoder.finish()]);
+            assert_eq!(read(kernel.status()), 0u32.to_le_bytes());
+            for (actual, expected) in [
+                read(&buffers[1]),
+                read(&buffers[8]),
+                read(&buffers[9]),
+                read(kernel.row_state()),
+            ]
+            .iter()
+            .zip(&expected)
+            {
+                assert_eq!(
+                    actual, expected,
+                    "{mode} continued sweeps changed contact outputs"
+                );
+            }
+            eprintln!("{mode} continued 4+8 sweeps match uninterrupted 12 sweeps bitwise");
         }
     }
 }

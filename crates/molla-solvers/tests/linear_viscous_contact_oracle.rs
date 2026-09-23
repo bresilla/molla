@@ -71,6 +71,28 @@ fn mass_projection_leaves_a_free_dof_implicit_residual() {
 }
 
 #[test]
+fn lagged_impulses_converge_to_the_implicit_contact_response() {
+    let mass = Vec3::new(0.001, 0.002, 0.1);
+    let rhs = mass * Vec3::new(-1.0, 0.0, 0.0);
+    for damping in [0.0, 20.0, 200.0] {
+        for normal in [Vec3::X, Vec3::new(1.0, 0.0, -1.0)] {
+            let a = metric(mass, 1.0 / 19200.0, damping, 10000.0);
+            let inverse = a.inverse();
+            let (expected, expected_impulse) = contact(inverse * rhs, inverse, normal);
+            let inverse_normal = normal.dot(mass.recip() * normal);
+            let mut impulse = 0.0;
+            for _ in 0..512 {
+                let velocity = inverse * (rhs + normal * impulse);
+                impulse = (impulse - normal.dot(velocity) / inverse_normal).max(0.0);
+            }
+            let actual = inverse * (rhs + normal * impulse);
+            assert!((actual - expected).length() < 1e-12);
+            assert!((impulse - expected_impulse).abs() < 1e-14);
+        }
+    }
+}
+
+#[test]
 fn zero_internal_tangent_and_separating_contact_preserve_the_predictor() {
     let mass = Vec3::new(0.001, 0.002, 0.1);
     let a = metric(mass, 1.0 / 19200.0, 0.0, 0.0);

@@ -273,6 +273,18 @@ impl SoftRigidSolveKernel {
         Ok(())
     }
 
+    /// Continue sweeps with existing responses, active rows and accumulated impulses.
+    /// Requires a preceding full encode with unchanged geometry, mass and settings except iterations.
+    pub fn encode_continuation(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+    ) -> Result<()> {
+        self.encode_internal(device, encoder, bindings, settings, 5..=6, None, None)
+    }
+
     /// Encode mass factorization and contact responses without applying impulses.
     pub fn encode_preparation(
         &self,
