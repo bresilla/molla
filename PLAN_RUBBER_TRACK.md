@@ -880,7 +880,21 @@ sweeps after each material correction. None preserves the initial solve count;
 the first full contact solve is unchanged. Configuration is idle-only and
 requires material coupling. Final contact, force and volume gates still apply.
 One continuation sweep passes static/dynamic CPU references and the three-step
-CEOL-friction cold/retained comparison; native accuracy/performance is pending.
+CEOL-friction cold/retained comparison. Native tests remain rejected:
+
+| Outer iterations | GPU timeline | GPU force residual | Float64 force residual |
+|---|---|---|---|
+|256|8.9945s|0.0259891m/s|0.0259865m/s|
+|1024|33.3008s|0.000221572m/s|0.000228551m/s|
+|2048|70.4467s|0.000213391m/s|0.000220476m/s|
+
+At1024outer, error is lower than the original256outer/12sweep candidate at
+less than half its GPU timeline cost. Doubling again barely lowers the force
+residual; contact corrections already fall below6e-7m/s. The residual plateau
+requires material/precision diagnosis, not another blind iteration increase.
+At2048outer the worst node5332 is a cord node with gravity-only inertial target,
+not a node accumulating contact impulse. No accepted native step, settling,
+sustained motion or practical simulator performance is established.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
