@@ -21,6 +21,10 @@ use std::sync::{
 };
 use wgpu::util::DeviceExt;
 
+mod coupling;
+pub use coupling::MaterialContactConfig;
+use coupling::MaterialContactState;
+
 fn device_queue(engine: &Engine) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
     let device = engine
         .device()
@@ -219,6 +223,7 @@ pub struct FemRigidGpuSystem {
     momentum: Option<MomentumMonitor>,
     momentum_fences: Option<Arc<[AtomicU64; 5]>>,
     contact_fences: Option<Arc<[AtomicU64; 7]>>,
+    material_contact: Option<MaterialContactState>,
     config: FemRigidConfig,
     queued_substeps: u32,
     completion: Option<Arc<AtomicBool>>,
@@ -578,6 +583,7 @@ impl FemRigidGpuSystem {
             config,
             queued_substeps: 0,
             completion: None,
+            material_contact: None,
         })
     }
 
@@ -591,6 +597,37 @@ impl FemRigidGpuSystem {
     pub fn soft_state(&self) -> &State {
         &self.soft_state
     }
+    /// Configure material/contact re-solves while the submission queue is idle.
+    pub fn configure_material_contact(
+        &mut self,
+        config: Option<MaterialContactConfig>,
+    ) -> Result<()> {
+        if self.queued_substeps != 0 || self.completion.is_some() {
+            return Err(Error::Build(
+                "material contact configuration requires an idle island".into(),
+            ));
+        }
+        let state = config
+            .map(|config| {
+                MaterialContactState::new(
+                    &self.device,
+                    &self.queue,
+                    &self.soft_model,
+                    self.rigid_model.body_count,
+                    config,
+                )
+            })
+            .transpose()?;
+        self.material_contact = state;
+        Ok(())
+    }
+
+    /// Last soft linear, rigid linear and rigid angular fixed-point corrections.
+    pub fn material_contact_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        self.material_contact
+            .as_ref()
+            .map(|state| state.kernel.diagnostics())
+    }
     pub fn rigid_state(&self) -> &State {
         &self.rigid_state
     }
@@ -599,7 +636,7 @@ impl FemRigidGpuSystem {
         self.gather.row_count()
     }
 
-    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 tet volume, 16 contact capacity, 32 scalar solve.
+    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 volume, 16 capacity, 32 scalar, 64 material/contact convergence.
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         self.solve.status()
     }
@@ -780,6 +817,11 @@ impl FemRigidGpuSystem {
         let queue = &self.queue;
         for _ in 0..count as usize {
             self.record_momentum(0)?;
+            if let Some(coupling) = &mut self.material_contact {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                coupling.begin(&mut encoder, &self.soft_state);
+                queue.submit([encoder.finish()]);
+            }
             self.fem.step(
                 &self.soft_model,
                 &self.soft_state,
@@ -848,6 +890,9 @@ impl FemRigidGpuSystem {
                 penetration_recovery: self.config.contact.penetration_recovery as f32,
                 max_recovery_speed: self.config.contact.max_recovery_speed as f32,
             };
+            if let Some(coupling) = &self.material_contact {
+                coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
+            }
             if let Some(counts) = &self.contact_fences {
                 let counts = counts.clone();
                 self.solve.encode_with_completion(
@@ -863,6 +908,64 @@ impl FemRigidGpuSystem {
             } else {
                 self.solve
                     .encode(device, &mut encoder, solve_bindings, solve_settings)?;
+            }
+            if let Some(coupling) = &mut self.material_contact {
+                coupling.accumulate(
+                    device,
+                    &mut encoder,
+                    &self.soft_next,
+                    &self.rigid_next,
+                    self.solve.status(),
+                    false,
+                )?;
+                queue.submit([encoder.finish()]);
+                for iteration in 1..coupling.config.iterations {
+                    self.fem.step(
+                        &self.soft_model,
+                        &coupling.input,
+                        &self.soft_model.control(),
+                        &Contacts::with_capacity(0),
+                        h,
+                        &mut self.soft_next,
+                    )?;
+                    let mut pass = device.create_command_encoder(&Default::default());
+                    coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
+                    let bindings = SoftRigidSolveBindings {
+                        positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                        velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                        inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
+                        contacts: self.gather.rows(),
+                        body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                        body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                        jacobians: &self.jacobian_buffer,
+                        mass_matrix: &self.mass_buffer,
+                        rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                        body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                        particle_count: self.soft_model.particle_count as u32,
+                        body_count: self.rigid_model.body_count as u32,
+                    };
+                    self.solve
+                        .encode_continuation(device, &mut pass, bindings, solve_settings)?;
+                    if iteration + 1 == coupling.config.iterations {
+                        self.solve.encode_residual_check(
+                            device,
+                            &mut pass,
+                            bindings,
+                            solve_settings,
+                            coupling.config.linear_tolerance,
+                        )?;
+                    }
+                    coupling.accumulate(
+                        device,
+                        &mut pass,
+                        &self.soft_next,
+                        &self.rigid_next,
+                        self.solve.status(),
+                        iteration + 1 == coupling.config.iterations,
+                    )?;
+                    queue.submit([pass.finish()]);
+                }
+                encoder = device.create_command_encoder(&Default::default());
             }
             self.drift.encode(
                 device,

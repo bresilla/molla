@@ -3,6 +3,9 @@
 use molla_core::{Error, Result};
 use wgpu::util::DeviceExt;
 
+mod material_iteration;
+pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIterationKernel};
+
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
 /// GPU start/end ticks for factor, prepare, count, offset, scatter, solve and recovery.
@@ -64,6 +67,7 @@ pub struct SoftRigidSolveSettings {
     pub max_recovery_speed: f32,
 }
 
+#[derive(Clone, Copy)]
 pub struct SoftRigidSolveBindings<'a> {
     pub positions: &'a wgpu::Buffer,
     pub velocities: &'a wgpu::Buffer,
@@ -83,7 +87,7 @@ pub struct SoftRigidSolveBindings<'a> {
 /// One coupled articulation, at most 64 DOFs, with serialized contact sweeps on device.
 pub struct SoftRigidSolveKernel {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::ComputePipeline; 7],
+    pipelines: [wgpu::ComputePipeline; 8],
     factor: wgpu::Buffer,
     projected: wgpu::Buffer,
     response: wgpu::Buffer,
@@ -192,6 +196,7 @@ impl SoftRigidSolveKernel {
                 "solve"
             },
             "recover_body_velocity",
+            "check_residuals",
         ]
         .map(|entry| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -243,7 +248,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 0..=6, None, None)
+        self.encode_internal(device, encoder, bindings, settings, 0..=6, None, None, None)
     }
 
     /// Encode a nonempty full solve with seven GPU timestamp pairs and no host readback.
@@ -268,6 +273,7 @@ impl SoftRigidSolveKernel {
             0..=6,
             None,
             Some(profile),
+            None,
         )?;
         encoder.resolve_query_set(&profile.queries, 0..14, &profile.resolved, 0);
         Ok(())
@@ -282,7 +288,32 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 5..=6, None, None)
+        self.encode_internal(device, encoder, bindings, settings, 5..=6, None, None, None)
+    }
+
+    /// Check prepared normal, friction and loop residuals; store speed residual in row padding.
+    /// Residuals above tolerance latch convergence status bit 64.
+    pub fn encode_residual_check(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+        tolerance: f32,
+    ) -> Result<()> {
+        if !tolerance.is_normal() || tolerance <= 0.0 {
+            return Err(Error::Build("invalid contact residual tolerance".into()));
+        }
+        self.encode_internal(
+            device,
+            encoder,
+            bindings,
+            settings,
+            7..=7,
+            None,
+            None,
+            Some(tolerance),
+        )
     }
 
     /// Encode mass factorization and contact responses without applying impulses.
@@ -293,7 +324,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 0..=1, None, None)
+        self.encode_internal(device, encoder, bindings, settings, 0..=1, None, None, None)
     }
 
     /// Submit individual contact passes and report queue completion without state readback.
@@ -314,6 +345,7 @@ impl SoftRigidSolveKernel {
             0..=6,
             Some((queue, completed)),
             None,
+            None,
         )
     }
 
@@ -325,7 +357,7 @@ impl SoftRigidSolveKernel {
         bindings: SoftRigidSolveBindings<'_>,
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
-        self.encode_internal(device, encoder, bindings, settings, 6..=6, None, None)
+        self.encode_internal(device, encoder, bindings, settings, 6..=6, None, None, None)
     }
 
     fn encode_internal(
@@ -337,6 +369,7 @@ impl SoftRigidSolveKernel {
         stages: std::ops::RangeInclusive<usize>,
         trace: Option<(&wgpu::Queue, std::sync::Arc<dyn Fn(usize) + Send + Sync>)>,
         profile: Option<&SoftRigidSolveProfile>,
+        residual_tolerance: Option<f32>,
     ) -> Result<()> {
         if settings.iterations == 0
             || !settings.dt.is_finite()
@@ -381,7 +414,7 @@ impl SoftRigidSolveKernel {
             recovery: settings.penetration_recovery,
             max_recovery: settings.max_recovery_speed,
             base_row: 0,
-            pad: [0; 3],
+            pad: [residual_tolerance.unwrap_or(0.0).to_bits(), 0, 0],
         };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM solve parameters"),
@@ -438,6 +471,7 @@ impl SoftRigidSolveKernel {
                 self.row_count.div_ceil(64),
                 1,
                 b.body_count.div_ceil(64),
+                self.row_count.div_ceil(64),
             ])
             .enumerate()
         {

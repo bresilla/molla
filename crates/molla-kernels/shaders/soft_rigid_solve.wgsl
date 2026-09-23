@@ -337,6 +337,46 @@ fn solve() {
 }
 
 @compute @workgroup_size(64)
+fn check_residuals(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let r = gid.x;
+    if r >= params.rows { return; }
+    let contact = contacts[r];
+    if contact.ids.w != 1u && contact.ids.w != 3u { return; }
+    let row = rows[r];
+    var error = 0.0;
+    if contact.ids.w == 3u {
+        let desired = loop_target(contact);
+        for (var k = 0u; k < 3u; k += 1u) {
+            let value = abs(desired[k] - relative_velocity(r, vec3<f32>(0.0), k));
+            if !finite(value) { atomicOr(&status, 4u); return; }
+            error = max(error, value);
+        }
+    } else {
+        let directions = basis(contact.normal_gap.xyz);
+        let normal_error = row.target_speed - relative_velocity(r, directions[0], 0u);
+        let tangent_velocity = vec2<f32>(relative_velocity(r, directions[1], 1u), relative_velocity(r, directions[2], 2u));
+        if !finite(normal_error) || !all(abs(tangent_velocity) <= vec2<f32>(3.402823e38)) {
+            atomicOr(&status, 4u); return;
+        }
+        error = max(0.0, normal_error);
+        if row.inverse_normal > 0.0 {
+            error = abs(max(0.0, row.lambda.x + normal_error / row.inverse_normal) - row.lambda.x) * row.inverse_normal;
+        }
+        if row.tangent_lipschitz > 0.0 {
+            var trial = row.lambda.yz - tangent_velocity / row.tangent_lipschitz;
+            let limit = contact.material.x * row.lambda.x;
+            let magnitude = length(trial);
+            if !finite(magnitude) || !finite(limit) { atomicOr(&status, 4u); return; }
+            if magnitude > limit { trial *= limit / magnitude; }
+            error = max(error, length(trial - row.lambda.yz) * row.tangent_lipschitz);
+        }
+    }
+    if !finite(error) { atomicOr(&status, 4u); return; }
+    rows[r].pad = error;
+    if error > bitcast<f32>(params.pad0) { atomicOr(&status, 64u); }
+}
+
+@compute @workgroup_size(64)
 fn recover_body_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let body = gid.x;
     if body >= params.bodies || atomicLoad(&status) != 0u { return; }

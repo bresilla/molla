@@ -15,6 +15,10 @@ use wgpu::util::DeviceExt;
 #[allow(dead_code)]
 mod readback;
 
+#[path = "common/fem_rotor.rs"]
+#[allow(dead_code)]
+mod fem_rotor;
+
 fn model(pinned: bool, viscous: bool) -> Model {
     let mut builder = ModelBuilder::new();
     builder.set_world_gravity(WorldId(0), Vec3::ZERO);
@@ -70,6 +74,431 @@ fn reference(h: f64, viscous: bool) -> Vec3 {
         )
         .unwrap();
     output.particle_qd.host().unwrap()[2]
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion() {
+    use molla_solvers::fem_rigid_gpu::{
+        FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
+    };
+    let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
+    let h = 1.0 / 19200.0;
+    let expected = reference(h, true);
+    let mut baseline = None;
+    for (iterations, disable) in [
+        (None, false),
+        (Some(2), false),
+        (Some(256), false),
+        (Some(256), true),
+    ] {
+        let mut scene = fem_rotor::scene();
+        scene.soft_model = model(false, true);
+        scene.soft_state = scene.soft_model.state().unwrap();
+        scene
+            .soft_state
+            .particle_qd
+            .host_mut()
+            .unwrap()
+            .fill(Vec3::NEG_Y);
+        scene.shapes.push(SoftRigidShapeGpu {
+            position: [0.0, -0.1, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            data: [10.0, 0.1, 10.0, 1000.0],
+            ids: [1, u32::MAX, 0, 0],
+        });
+        let mut system = FemRigidGpuSystem::new(
+            engine.clone(),
+            scene,
+            molla_solvers::fem_rigid::FemRigidConfig {
+                max_substep: h,
+                elastic_iterations: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if let Some(iterations) = iterations {
+            system
+                .configure_material_contact(Some(MaterialContactConfig {
+                    iterations,
+                    linear_tolerance: 1e-4,
+                    angular_tolerance: 1e-4,
+                }))
+                .unwrap();
+            assert!(
+                system
+                    .configure_material_contact(Some(MaterialContactConfig {
+                        iterations: 0,
+                        linear_tolerance: 1e-4,
+                        angular_tolerance: 1e-4,
+                    }))
+                    .is_err()
+            );
+            assert!(system.material_contact_diagnostics().is_some());
+        }
+        if disable {
+            system.configure_material_contact(None).unwrap();
+        }
+        system.step(h).unwrap();
+        assert!(system.configure_material_contact(None).is_err());
+        let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+        let velocities = readback::read::<[f32; 4]>(
+            &engine,
+            system.soft_state().particle_qd.device_buffer().unwrap(),
+            4,
+        );
+        let positions = readback::read::<[f32; 4]>(
+            &engine,
+            system.soft_state().particle_q.device_buffer().unwrap(),
+            4,
+        );
+        if iterations == Some(2) {
+            assert_eq!(status, 64);
+            let residual =
+                readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
+            assert!(residual[0] > 1e-4);
+        } else {
+            assert_eq!(status, 0);
+            if iterations.is_none() {
+                baseline = Some((positions.clone(), velocities.clone()));
+            }
+            if disable {
+                assert_eq!(baseline.as_ref().unwrap(), &(positions, velocities));
+            } else if iterations.is_some() {
+                let actual = Vec3::new(
+                    velocities[2][0] as f64,
+                    velocities[2][1] as f64,
+                    velocities[2][2] as f64,
+                );
+                assert!(
+                    (actual - expected).length() < 5e-4,
+                    "runtime {actual:?}, oracle {expected:?}"
+                );
+                let residual = readback::read::<f32>(
+                    &engine,
+                    system.material_contact_diagnostics().unwrap(),
+                    3,
+                );
+                assert!(residual.iter().all(|v| v.is_finite() && *v <= 1e-4));
+                eprintln!("runtime material contact matches CPU, residuals={residual:?}");
+            }
+        }
+        assert!(system.soft_state().particle_q.host().is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
+    use molla_core::BodyId;
+    use molla_math::{SpatialInertia, Transform};
+    use molla_sim::BodyParams;
+    use molla_solvers::fem_rigid_gpu::{
+        FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
+    };
+    let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
+    let m = 1000.0 * 0.02_f64.powi(3) / 24.0;
+    let rigid_mass = 0.001;
+    for h in [1.0 / 19200.0, 1.0 / 38400.0] {
+        let mut oracle = model(true, true);
+        let reduced_mass = m * (rigid_mass + 3.0 * m) / (rigid_mass + 4.0 * m);
+        oracle.particle_mass.host_mut().unwrap()[2] = reduced_mass;
+        oracle.particle_inv_mass.host_mut().unwrap()[2] = 1.0 / reduced_mass;
+        let mut input = oracle.state().unwrap();
+        input.particle_qd.host_mut().unwrap()[2].y = -rigid_mass / (rigid_mass + 3.0 * m);
+        let mut output = oracle.state().unwrap();
+        VbdSolver::new_cpu()
+            .with_iterations(256)
+            .step(
+                &oracle,
+                &input,
+                &oracle.control(),
+                &Contacts::with_capacity(0),
+                h,
+                &mut output,
+            )
+            .unwrap();
+        let relative = output.particle_qd.host().unwrap()[2].y;
+        let expected_body = (-4.0 * m - m * relative) / (rigid_mass + 4.0 * m);
+        let expected_top = expected_body + relative;
+        let mut scene = fem_rotor::scene();
+        scene.soft_model = model(false, true);
+        scene.soft_state = scene.soft_model.state().unwrap();
+        scene
+            .soft_state
+            .particle_qd
+            .host_mut()
+            .unwrap()
+            .fill(Vec3::NEG_Y);
+        let mut builder = ModelBuilder::new();
+        builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+        builder.set_linear_damping(0.0);
+        builder.begin_articulation();
+        let body = builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: rigid_mass,
+            com: Vec3::ZERO,
+            inertia: Mat3::IDENTITY * 0.01,
+        }));
+        builder
+            .add_joint_prismatic(
+                BodyId::NONE,
+                body,
+                Transform::IDENTITY,
+                Transform::IDENTITY,
+                Vec3::Y,
+            )
+            .unwrap();
+        scene.rigid_model = builder.build().unwrap();
+        scene.rigid_state = scene.rigid_model.state().unwrap();
+        scene.control = scene.rigid_model.control();
+        scene.shapes.push(SoftRigidShapeGpu {
+            position: [0.0, -0.1, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            data: [10.0, 0.1, 10.0, 1000.0],
+            ids: [1, body.index() as u32, 0, 0],
+        });
+        let mut system = FemRigidGpuSystem::new(
+            engine.clone(),
+            scene,
+            molla_solvers::fem_rigid::FemRigidConfig {
+                max_substep: h,
+                elastic_iterations: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        system
+            .configure_material_contact(Some(MaterialContactConfig {
+                iterations: 256,
+                linear_tolerance: 1e-4,
+                angular_tolerance: 1e-4,
+            }))
+            .unwrap();
+        system.step(h).unwrap();
+        assert_eq!(
+            readback::read::<u32>(&engine, system.status_buffer(), 1),
+            [0]
+        );
+        let velocities = readback::read::<[f32; 4]>(
+            &engine,
+            system.soft_state().particle_qd.device_buffer().unwrap(),
+            4,
+        );
+        let body_velocity = readback::read::<f32>(
+            &engine,
+            system.rigid_state().joint_qd.device_buffer().unwrap(),
+            1,
+        )[0] as f64;
+        assert!((body_velocity - expected_body).abs() < 5e-4);
+        assert!((velocities[2][1] as f64 - expected_top).abs() < 5e-4);
+        for i in [0, 1, 3] {
+            assert!((velocities[i][1] as f64 - body_velocity).abs() < 1e-4);
+        }
+        let momentum =
+            m * velocities.iter().map(|v| v[1] as f64).sum::<f64>() + rigid_mass * body_velocity;
+        assert!((momentum + 4.0 * m).abs() < 1e-7);
+        let residuals =
+            readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
+        assert!(residuals.iter().all(|v| v.is_finite() && *v <= 1e-4));
+        eprintln!(
+            "dynamic support h={h}: body={body_velocity}/{expected_body}, top={}/{expected_top}, residuals={residuals:?}",
+            velocities[2][1]
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn contact_residual_guard_rejects_cycles_and_accepts_coulomb_sliding() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for case in 0..5 {
+        let contact = |normal: [f32; 3], gap, friction| SoftRigidContactGpu {
+            normal_gap: [normal[0], normal[1], normal[2], gap],
+            material: [friction, 0.0, 0.0, 0.0],
+            ids: [0, u32::MAX, 0, 1],
+            support: [0, 0, 1, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+        let rows = if case == 0 {
+            vec![
+                contact([1.0, 0.0, 0.0], -0.005, 0.0),
+                contact([-1.0, 0.0, 0.0], -0.005, 0.0),
+            ]
+        } else {
+            vec![contact(
+                [0.0, 1.0, 0.0],
+                0.0,
+                if case == 3 { 0.5 } else { 1.0 },
+            )]
+        };
+        let contacts = buffer(device, &rows);
+        let positions = buffer(device, &[[0.0_f32; 4]]);
+        let velocities = buffer(
+            device,
+            &[[
+                if case == 3 { 2.0_f32 } else { 0.0 },
+                if case == 0 { 0.0 } else { -1.0 },
+                0.0,
+                0.0,
+            ]],
+        );
+        let inverse = buffer(device, &[1.0_f32]);
+        let poses = buffer(device, &[[0.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]]);
+        let com = buffer(device, &[[0.0_f32; 4]]);
+        let jacobian = buffer(device, &[0.0_f32; 6]);
+        let mass = buffer(device, &[1.0_f32]);
+        let rigid = buffer(device, &[0.0_f32]);
+        let bodies = buffer(device, &[[0.0_f32; 8]]);
+        let bindings = SoftRigidSolveBindings {
+            positions: &positions,
+            velocities: &velocities,
+            inverse_mass: &inverse,
+            contacts: &contacts,
+            body_poses: &poses,
+            body_com: &com,
+            jacobians: &jacobian,
+            mass_matrix: &mass,
+            rigid_velocities: &rigid,
+            body_velocities: &bodies,
+            particle_count: 1,
+            body_count: 1,
+        };
+        let settings = SoftRigidSolveSettings {
+            iterations: 4,
+            dt: 0.001,
+            penetration_recovery: 0.2,
+            max_recovery_speed: 2.0,
+        };
+        let kernel = SoftRigidSolveKernel::new(device, 1, rows.len() as u32).unwrap();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        kernel
+            .encode(device, &mut encoder, bindings, settings)
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let before = readback::read::<[f32; 4]>(&engine, &velocities, 1);
+        if case == 1 {
+            queue.write_buffer(
+                &velocities,
+                0,
+                bytemuck::cast_slice(&[[0.0_f32, 1.0, 0.0, 0.0]]),
+            );
+        }
+        if case == 2 || case == 4 {
+            queue.write_buffer(
+                &velocities,
+                0,
+                bytemuck::cast_slice(&[[if case == 4 { 1e30_f32 } else { 1.0 }, 0.0, 0.0, 0.0]]),
+            );
+        }
+        let mut encoder = device.create_command_encoder(&Default::default());
+        if case == 0 {
+            kernel
+                .encode_continuation(device, &mut encoder, bindings, settings)
+                .unwrap();
+        }
+        kernel
+            .encode_residual_check(device, &mut encoder, bindings, settings, 1e-4)
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let actual = readback::read::<u32>(&engine, kernel.status(), 1)[0];
+        assert_eq!(
+            actual,
+            match case {
+                3 => 0,
+                4 => 4,
+                _ => 64,
+            },
+            "case {case}"
+        );
+        let after = readback::read::<[f32; 4]>(&engine, &velocities, 1);
+        if case == 0 {
+            assert_eq!(
+                before, after,
+                "cyclic constraint residual despite zero net correction"
+            );
+        }
+        if case == 3 {
+            assert!((after[0][0] - 1.5).abs() < 1e-6);
+        }
+        let residuals = readback::read::<[f32; 8]>(&engine, kernel.row_state(), rows.len());
+        if case == 3 {
+            assert!(residuals.iter().all(|r| r[3] <= 1e-4));
+        } else if case < 3 {
+            assert!(residuals.iter().any(|r| r[3] > 0.5));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn material_contact_residual_kernel_checks_all_channels_and_nonfinite_values() {
+    use molla_kernels::soft_rigid_solve::{
+        SoftMaterialIterationBindings, SoftMaterialIterationKernel,
+    };
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = SoftMaterialIterationKernel::new(device);
+    for (channel, value, final_iteration, expected_status) in [
+        (0, 0.1_f32, false, 0),
+        (0, 0.1, true, 64),
+        (1, 0.1, true, 64),
+        (2, 0.1, true, 64),
+        (0, 1e-6, true, 0),
+        (0, f32::NAN, true, 4),
+        (1, f32::INFINITY, true, 4),
+        (2, f32::NAN, true, 4),
+    ] {
+        let input = buffer(device, &[[0.0_f32; 4]]);
+        let predicted = buffer(device, &[[0.0_f32; 4]]);
+        let corrected = buffer(
+            device,
+            &[[if channel == 0 { value } else { 0.0 }, 0.0, 0.0, 0.0]],
+        );
+        let before = buffer(device, &[[0.0_f32; 8]]);
+        let mut body = [0.0_f32; 8];
+        if channel > 0 {
+            body[(channel - 1) * 4] = value;
+        }
+        let after = buffer(device, &[body]);
+        let status = buffer(device, &[0_u32]);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        kernel
+            .encode(
+                device,
+                &mut encoder,
+                SoftMaterialIterationBindings {
+                    input_velocity: &input,
+                    predicted_velocity: &predicted,
+                    corrected_velocity: &corrected,
+                    previous_body_velocity: &before,
+                    corrected_body_velocity: &after,
+                    status: &status,
+                    particles: 1,
+                    bodies: 1,
+                },
+                1e-4,
+                1e-4,
+                final_iteration,
+            )
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        assert_eq!(
+            readback::read::<u32>(&engine, &status, 1),
+            [expected_status]
+        );
+        if value.is_finite() {
+            let residual = readback::read::<f32>(&engine, kernel.diagnostics(), 3);
+            assert!((residual[channel] - value).abs() < 1e-7);
+            for i in 0..3 {
+                if i != channel {
+                    assert_eq!(residual[i], 0.0);
+                }
+            }
+        }
+    }
 }
 
 #[test]

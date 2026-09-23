@@ -733,6 +733,39 @@ refined native load settling, sustained torque-to-ground traction and production
 performance remain required. Small free-tet convergence is not full
 tracked-machine acceptance.
 
+### Opt-in material/contact iteration
+
+`FemRigidGpuSystem::configure_material_contact` enables bounded GPU re-solves
+with original step positions and strain history held fixed. Contact impulses
+accumulate into a separate inertial-input velocity buffer. Prepared contact
+responses and multipliers persist between re-solves; rigid generalized velocity
+receives the opposite impulse. Positions drift once at the end. The existing
+uncoupled path remains the default and allocates no iteration scratch buffers.
+This path currently accepts only elastic tets and zero world-velocity damping.
+
+The final soft-linear, rigid-linear and rigid-angular velocity corrections are
+checked on device. A separate projected contact residual checks normal
+complementarity, the Coulomb disk and spherical loops. Net velocity correction
+alone is insufficient: inconsistent alternating constraints can produce zero
+net correction while violating an individual contact. Status bit64 rejects
+excess residuals; bit4 rejects nonfinite arithmetic. No runtime node readback
+or CPU physics path is introduced. Configuration changes require an idle queue.
+
+The actual GPU integration is checked against a constrained viscous tetrahedron
+CPU oracle and a dynamically translating support with an independent reduced-mass
+reference. Tests cover insufficient iteration budgets, configuration preservation,
+unchanged disabled results, momentum transfer and two timesteps. Kernel tests
+include cyclic constraints, sticking/complementarity errors, valid Coulomb sliding
+and nonfinite inputs. See `fem_viscous_contact_iteration_gpu.rs`.
+
+This is not native CEOL acceptance. The native quarter/eighth timestep trials
+finish13.333ms without volume faults but disagree materially in local deformation
+and do not settle. The new opt-in iteration has not yet been enabled there.
+Internal VBD force convergence still requires iteration refinement; a small
+coupling correction alone does not certify the constitutive solve. Reusing VBD
+iterates efficiently, multi-step/moving-contact validation, native settling and
+traction, and production performance remain open gates before simulator exposure.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
