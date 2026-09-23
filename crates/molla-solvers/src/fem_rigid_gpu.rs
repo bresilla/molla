@@ -21,8 +21,10 @@ use std::sync::{
 };
 use wgpu::util::DeviceExt;
 
+mod contact_snapshot;
 mod coupling;
 mod timing;
+pub use contact_snapshot::ContactSolveSnapshot;
 pub use coupling::MaterialContactConfig;
 use coupling::MaterialContactState;
 
@@ -226,6 +228,7 @@ pub struct FemRigidGpuSystem {
     contact_fences: Option<Arc<[AtomicU64; 7]>>,
     material_contact: Option<MaterialContactState>,
     timing: Option<timing::SubstepTiming>,
+    contact_snapshot: Option<ContactSolveSnapshot>,
     config: FemRigidConfig,
     queued_substeps: u32,
     completion: Option<Arc<AtomicBool>>,
@@ -587,6 +590,7 @@ impl FemRigidGpuSystem {
             completion: None,
             material_contact: None,
             timing: None,
+            contact_snapshot: None,
         })
     }
 
@@ -599,6 +603,42 @@ impl FemRigidGpuSystem {
 
     pub fn soft_state(&self) -> &State {
         &self.soft_state
+    }
+
+    /// Enable device-only first-contact input copies while the submission queue is idle.
+    pub fn configure_contact_snapshot(&mut self, enabled: bool) -> Result<()> {
+        if self.queued_substeps != 0 || self.completion.is_some() {
+            return Err(Error::Build(
+                "contact snapshot configuration requires an idle island".into(),
+            ));
+        }
+        self.contact_snapshot = enabled.then(|| {
+            ContactSolveSnapshot::new(
+                &self.device,
+                SoftRigidSolveBindings {
+                    positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                    velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                    inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
+                    contacts: self.gather.rows(),
+                    body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                    body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                    jacobians: &self.jacobian_buffer,
+                    mass_matrix: &self.mass_buffer,
+                    rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                    body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                    particle_count: self.soft_model.particle_count as u32,
+                    body_count: self.rigid_model.body_count as u32,
+                },
+            )
+        });
+        Ok(())
+    }
+
+    /// Inputs of the last enqueued substep's first solve; wait for completion before reading.
+    pub fn contact_snapshot(&self) -> Option<&ContactSolveSnapshot> {
+        self.contact_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.settings.is_some())
     }
     /// Configure material/contact re-solves while the submission queue is idle.
     pub fn configure_material_contact(
@@ -910,6 +950,9 @@ impl FemRigidGpuSystem {
         let device = &self.device;
         let queue = &self.queue;
         for _ in 0..count as usize {
+            if let Some(snapshot) = &mut self.contact_snapshot {
+                snapshot.settings = None;
+            }
             self.record_momentum(0)?;
             if self.material_contact.is_some() || self.timing.is_some() {
                 let mut encoder = device.create_command_encoder(&Default::default());
@@ -1015,6 +1058,9 @@ impl FemRigidGpuSystem {
             }
             if let Some(coupling) = &self.material_contact {
                 coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
+            }
+            if let Some(snapshot) = &mut self.contact_snapshot {
+                snapshot.capture(&mut encoder, solve_bindings, solve_settings);
             }
             if let Some(timing) = &self.timing {
                 timing.mark_contact(&mut encoder, 0);
