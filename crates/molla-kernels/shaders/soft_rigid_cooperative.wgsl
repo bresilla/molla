@@ -1,3 +1,5 @@
+override SWEEP_LANES: u32 = 64u;
+override SWEEP_DOFS: u32 = 64u;
 var<workgroup> sweep_velocity: array<f32, 64>;
 var<workgroup> sweep_projected: array<array<f32, 64>, 3>;
 var<workgroup> sweep_response: array<array<f32, 64>, 3>;
@@ -10,7 +12,7 @@ fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
         value += contact.weights[i] * dot(velocities[support_node(contact, i)].xyz, direction);
     }
     if contact.ids.y != 0xffffffffu {
-        for (var d = 0u; d < params.dofs; d += 1u) {
+        for (var d = 0u; d < SWEEP_DOFS; d += 1u) {
             value -= sweep_projected[k][d] * sweep_velocity[d];
         }
     }
@@ -23,9 +25,7 @@ fn cooperative_delta(contact: Contact, direction: vec3<f32>, k: u32, impulse: f3
         velocities[particle] = vec4<f32>(velocities[particle].xyz + direction * (impulse*contact.weights[i]*inverse_mass[particle]), 0.0);
     }
     if contact.ids.y != 0xffffffffu {
-        for (var d = 0u; d < params.dofs; d += 1u) {
-            sweep_velocity[d] -= sweep_response[k][d] * impulse;
-        }
+        cooperative_rigid_delta(k, impulse);
     }
 }
 
@@ -74,7 +74,7 @@ fn cooperative_row(r: u32) -> u32 {
     return 0u;
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(SWEEP_LANES)
 fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
     if lane == 0u {
         sweep_count = active_rows[0];
@@ -83,15 +83,15 @@ fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
     let count = workgroupUniformLoad(&sweep_count);
     let initial_fault = workgroupUniformLoad(&sweep_fault);
     if initial_fault != 0u { return; }
-    if lane < params.dofs { sweep_velocity[lane] = rigid_velocity[lane]; }
+    if lane < SWEEP_DOFS { sweep_velocity[lane] = rigid_velocity[lane]; }
     workgroupBarrier();
     for (var iteration = 0u; iteration < params.iterations; iteration += 1u) {
         for (var rank = 0u; rank < count; rank += 1u) {
             let r = active_rows[rank+1u];
-            if lane < params.dofs && contacts[r].ids.y != 0xffffffffu {
+            if lane < SWEEP_DOFS && contacts[r].ids.y != 0xffffffffu {
                 for (var k = 0u; k < 3u; k += 1u) {
-                    sweep_projected[k][lane] = projected[(r*3u+k)*params.dofs+lane];
-                    sweep_response[k][lane] = response[(r*3u+k)*params.dofs+lane];
+                    sweep_projected[k][lane] = projected[(r*3u+k)*SWEEP_DOFS+lane];
+                    sweep_response[k][lane] = response[(r*3u+k)*SWEEP_DOFS+lane];
                 }
             }
             workgroupBarrier();
@@ -99,6 +99,6 @@ fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
             workgroupBarrier();
         }
     }
-    if lane < params.dofs { rigid_velocity[lane] = sweep_velocity[lane]; }
+    if lane < SWEEP_DOFS { rigid_velocity[lane] = sweep_velocity[lane]; }
     if lane == 0u && sweep_fault != 0u { atomicOr(&status, sweep_fault); }
 }

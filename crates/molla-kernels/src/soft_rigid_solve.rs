@@ -8,6 +8,13 @@ pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIteratio
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
+fn cooperative_delta_shader(dofs: u32) -> String {
+    let delta: String = (0..dofs)
+        .map(|d| format!("sweep_velocity[{d}] -= sweep_response[k][{d}] * impulse;\n"))
+        .collect();
+    format!("fn cooperative_rigid_delta(k: u32, impulse: f32) {{\n{delta}}}\n")
+}
+
 /// GPU start/end ticks for factor, prepare, count, offset, scatter, solve and recovery.
 pub struct SoftRigidSolveProfile {
     queries: wgpu::QuerySet,
@@ -177,9 +184,10 @@ impl SoftRigidSolveKernel {
             label: Some("FEM two-way contact"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     include_str!("../shaders/soft_rigid_solve.wgsl"),
-                    include_str!("../shaders/soft_rigid_cooperative.wgsl")
+                    include_str!("../shaders/soft_rigid_cooperative.wgsl"),
+                    cooperative_delta_shader(dofs)
                 )
                 .into(),
             ),
@@ -199,12 +207,23 @@ impl SoftRigidSolveKernel {
             "check_residuals",
         ]
         .map(|entry| {
+            let constants = [
+                ("SWEEP_LANES", if dofs <= 32 { 32.0 } else { 64.0 }),
+                ("SWEEP_DOFS", dofs as f64),
+            ];
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some(entry),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: if entry == "solve_cooperative" {
+                        &constants
+                    } else {
+                        &[]
+                    },
+                    ..Default::default()
+                },
                 cache: None,
             })
         });

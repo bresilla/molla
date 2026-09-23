@@ -987,6 +987,31 @@ The first-step GPU timeline is26.2387s, including24.6537s continued contact
 controlled performance comparison. Contact/coupling cost still prevents
 practical simulator use and longer physical validation remains necessary.
 
+### Ordered contact specialization
+
+The cooperative contact pipeline specializes its DOF bounds/strides and
+uses32lanes at1..32DOFs,64lanes above32. Preparation still uses64lanes;
+device-limit and dimension validation remain unchanged. Independent rigid
+velocity updates are emitted as constant-index GPU statements. Ordered
+relative-velocity accumulation and contact order remain unchanged.
+
+The captured29DOF native fixture has385683candidate rows and2386active
+contacts. Original cooperative12-sweep solve time was196.047ms; the
+specialized update replay measured119.935ms with particle/generalized/body
+velocities and row impulses bitwise identical to the serial reference.
+These are replay measurements, not full native or practical performance
+acceptance. Unrolling the dot-product accumulation was rejected: it matched
+the native fixture but changed rounding in a mixed-contact29DOF regression.
+
+A self-contained sparse fixture exercises point/edge/triangle contacts,
+static ground, two dynamic bodies and a ball loop at1/29/31/32/33/64DOFs.
+It requires bitwise serial/cooperative equivalence and4+8continued sweeps
+equal to12uninterrupted sweeps. Constructor boundary/limit gates are also
+expanded. Validation passes the GPU all-target check,4replay/boundary tests,
+5contact/motor tests,2static-contact tests,3ball-loop tests,8material/contact
+coupling tests,1timing test and87CPU library tests (4ignored). Native
+trajectory and practical performance acceptance remain pending.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

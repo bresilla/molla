@@ -1,5 +1,6 @@
 #![cfg(feature = "gpu")]
 
+use molla_kernels::soft_rigid_contact::SoftRigidContactGpu;
 use molla_kernels::soft_rigid_solve::{
     SoftRigidSolveBindings, SoftRigidSolveKernel, SoftRigidSolveProfile, SoftRigidSolveSettings,
 };
@@ -74,7 +75,16 @@ fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
         if storage == 1024 {
             assert!(SoftRigidSolveKernel::new_serial(&device, 64, 1).is_ok());
         }
-        for (dofs, rows) in [(1, 0), (64, 1), (0, 1), (65, 1), (1, u32::MAX)] {
+        for (dofs, rows) in [
+            (1, 0),
+            (31, 1),
+            (32, 1),
+            (33, 1),
+            (64, 1),
+            (0, 1),
+            (65, 1),
+            (1, u32::MAX),
+        ] {
             let valid = supported && (1..=64).contains(&dofs) && rows != u32::MAX;
             assert_eq!(
                 SoftRigidSolveKernel::new(&device, dofs, rows).is_ok(),
@@ -93,6 +103,101 @@ fn replay(profile: bool) {
     let path = std::path::PathBuf::from(
         std::env::var_os("MOLLA_CONTACT_FIXTURE").expect("MOLLA_CONTACT_FIXTURE"),
     );
+    let names = [
+        "positions",
+        "velocities",
+        "inverse_mass",
+        "contacts",
+        "body_poses",
+        "body_com",
+        "jacobians",
+        "mass_matrix",
+        "rigid_velocities",
+        "body_velocities",
+    ];
+    let inputs: Vec<_> = names
+        .iter()
+        .map(|name| std::fs::read(path.join(format!("{name}.bin"))).unwrap())
+        .collect();
+    replay_inputs(profile, inputs);
+}
+
+#[test]
+#[ignore = "requires a real GPU with timestamp queries through make test-gpu"]
+fn cooperative_contact_dof_boundaries_match_serial_bitwise() {
+    for dofs in [1, 29, 31, 32, 33, 64] {
+        let mut jacobians = vec![0.0_f32; 12 * dofs];
+        let mut mass = vec![0.0_f32; dofs * dofs];
+        for i in 0..dofs {
+            for j in 0..dofs {
+                mass[i * dofs + j] = if i == j { 2.0 + i as f32 * 0.1 } else { 0.01 };
+            }
+            for body in 0..2 {
+                for axis in 0..6 {
+                    jacobians[(body * 6 + axis) * dofs + i] =
+                        ((i * 7 + axis * 3 + body * 11) % 17) as f32 * 0.02 - 0.15;
+                }
+            }
+        }
+        let point = SoftRigidContactGpu {
+            normal_gap: [0.0, 1.0, 0.0, -0.00001],
+            material: [0.6, 0.0, 0.0, 0.0],
+            ids: [0, 0, 0, 1],
+            support: [0, 0, 1, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+        let mut contacts = vec![
+            SoftRigidContactGpu {
+                ids: [0; 4],
+                ..point
+            };
+            131
+        ];
+        contacts[0] = point;
+        contacts[63] = SoftRigidContactGpu {
+            normal_gap: [0.0, 0.0, 1.0, -0.00002],
+            ids: [0, 1, 0, 1],
+            support: [1, 0, 2, 0],
+            weights: [0.35, 0.65, 0.0, 0.0],
+            ..point
+        };
+        contacts[64] = SoftRigidContactGpu {
+            ids: [0, u32::MAX, 0, 1],
+            support: [1, 2, 3, 0],
+            weights: [0.2, 0.3, 0.5, 0.0],
+            ..point
+        };
+        contacts[130] = SoftRigidContactGpu {
+            ids: [0, 1, 0, 3],
+            material: [0.02, -0.01, 0.03, 0.0],
+            support: [0; 4],
+            weights: [0.0; 4],
+            ..point
+        };
+        let bytes = |values: &[f32]| bytemuck::cast_slice(values).to_vec();
+        replay_inputs(
+            true,
+            vec![
+                bytes(&[0.2, 0.0, 0.1, 0.0, 0.3, 0.1, 0.2, 0.0, 0.1, 0.2, 0.0, 0.0]),
+                bytes(&[
+                    0.3, -0.8, -0.6, 0.0, -0.2, -0.5, 0.1, 0.0, 0.1, -0.3, 0.2, 0.0,
+                ]),
+                bytes(&[1.0, 2.0, 0.5]),
+                bytemuck::cast_slice(&contacts).to_vec(),
+                bytes(&[
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                ]),
+                bytes(&[0.0; 8]),
+                bytes(&jacobians),
+                bytes(&mass),
+                bytes(&(0..dofs).map(|i| 0.1 + i as f32 * 0.01).collect::<Vec<_>>()),
+                bytes(&[0.0; 16]),
+            ],
+        );
+    }
+}
+
+fn replay_inputs(profile: bool, inputs: Vec<Vec<u8>>) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
     eprintln!("contact replay adapter: {:?}", adapter.get_info());
@@ -111,22 +216,6 @@ fn replay(profile: bool) {
     if !profile {
         assert!(SoftRigidSolveProfile::new(device).is_err());
     }
-    let names = [
-        "positions",
-        "velocities",
-        "inverse_mass",
-        "contacts",
-        "body_poses",
-        "body_com",
-        "jacobians",
-        "mass_matrix",
-        "rigid_velocities",
-        "body_velocities",
-    ];
-    let inputs: Vec<_> = names
-        .iter()
-        .map(|name| std::fs::read(path.join(format!("{name}.bin"))).unwrap())
-        .collect();
     let buffers: Vec<_> = inputs.iter().map(|bytes| buffer(device, bytes)).collect();
     let dofs = (buffers[8].size() / 4) as u32;
     let particles = (buffers[0].size() / 16) as u32;
