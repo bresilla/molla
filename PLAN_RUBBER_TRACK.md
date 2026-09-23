@@ -1200,6 +1200,24 @@ all9coupling tests (197.32s), including low-budget sticky rejection and repeated
 polish disable/re-enable, plus timing/state parity (26.84s). Capturing these
 channels on the native step12 rejection remains the next gate.
 
+That diagnostic rerun at62d2de6 now reproduces the same step12 rejection
+(233.54s). Its11accepted samples are bitwise equal to the c2566ed baseline
+after excluding revision/timestamps, and pass the same independent force,
+volume, mass and momentum prefix checks. Pre-polish status is zero, with
+largest contact correction6.357460e-5. The subsequent material polish creates
+two ground normal-complementarity violations: GPUmaximum1.03494836e-4,
+independent1.03496450e-4m/s. Rows3822/5228 exceed1e-4; friction residuals
+remain about3.1e-6. This is a genuine final-contact failure, not stale status
+or constitutive residual. Both contact and material equilibrium must converge
+together; clearing status or loosening the limit would be incorrect.
+
+Evidence is under Machines `.work/ceol/polish-rejection-evidence` and the
+test-only exact first-contact inputs in `rejected-contact-inputs`. Gearbox
+6625710 records the rejection channels and generalized velocities. A coupled
+fixed-geometry replay fixture is being prepared to investigate continuation
+without repeatedly integrating the accepted prefix. This fixture is not a
+physical acceptance result or a replacement for a fresh native trajectory.
+
 Gearbox CPU energy-reference export now includes partitioned rigid COM inertias
 and joint-servo metadata. It matches native mass/geometry/spring data, but the
 three572957.75stiffness servos require sampled joint coordinates and servo work
