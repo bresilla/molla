@@ -650,6 +650,13 @@ impl FemRigidGpuSystem {
         self.timing.as_ref().and_then(|t| t.ticks())
     }
 
+    /// Last enqueued substep's N pairs of u64 contact timestamps, after predictor copies and after recovery.
+    /// The first pair includes contact preparation; later pairs include only continued solve/recovery.
+    /// Wait for completion before reading and multiply differences by the queue timestamp period.
+    pub fn gpu_contact_timing_ticks(&self) -> Option<&wgpu::Buffer> {
+        self.timing.as_ref().and_then(|t| t.contact_ticks())
+    }
+
     /// Select retained material iterates and their per-correction sweep count; None uses full restarts.
     pub fn configure_material_contact_reuse(&mut self, iterations: Option<u32>) -> Result<()> {
         if self.queued_substeps != 0
@@ -1004,6 +1011,9 @@ impl FemRigidGpuSystem {
             if let Some(coupling) = &self.material_contact {
                 coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
             }
+            if let Some(timing) = &self.timing {
+                timing.mark_contact(&mut encoder, 0);
+            }
             if let Some(counts) = &self.contact_fences {
                 let counts = counts.clone();
                 self.solve.encode_with_completion(
@@ -1019,6 +1029,9 @@ impl FemRigidGpuSystem {
             } else {
                 self.solve
                     .encode(device, &mut encoder, solve_bindings, solve_settings)?;
+            }
+            if let Some(timing) = &self.timing {
+                timing.mark_contact(&mut encoder, 1);
             }
             if let Some(coupling) = &mut self.material_contact {
                 coupling.accumulate(
@@ -1058,6 +1071,9 @@ impl FemRigidGpuSystem {
                         timing.mark(&mut pass, 2 * iteration + 2);
                     }
                     coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
+                    if let Some(timing) = &self.timing {
+                        timing.mark_contact(&mut pass, 2 * iteration);
+                    }
                     let bindings = SoftRigidSolveBindings {
                         positions: self.soft_state.particle_q.device_buffer().unwrap(),
                         velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
@@ -1082,6 +1098,9 @@ impl FemRigidGpuSystem {
                         bindings,
                         continuation_settings,
                     )?;
+                    if let Some(timing) = &self.timing {
+                        timing.mark_contact(&mut pass, 2 * iteration + 1);
+                    }
                     if iteration + 1 == coupling.config.iterations {
                         self.solve.encode_residual_check(
                             device,

@@ -1034,6 +1034,21 @@ These phase spans include capture/recovery/accumulation or submission idle,
 not just individual kernel busy time. Finer native profiling is required;
 practical performance and full simulator integration remain incomplete.
 
+### Native contact subphase timestamps
+
+Opt-in GPU timing also exposes N timestamp pairs after predictor copies and
+after solve/recovery. The first pair includes contact preparation; later
+pairs cover continued solve/recovery. Together with the existing2*N+3
+boundaries these separate copies, solving and feedback/final-residual work.
+Both streams use256-query pages and remain device-resident; no runtime
+readback or physics changes are introduced. Timing-off behavior is unchanged.
+
+GPU regression passes uncoupled,2outer,130outer/page-crossing and native-style
+momentum-fence cases over2substeps, checking nested timestamps and bitwise
+physical/momentum state. Missing feature, pending/disabled/reconfigured
+states and4096iteration allocation are covered. GPU all-target check and
+87CPU library tests (4ignored) pass. Native attribution remains pending.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

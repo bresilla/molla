@@ -79,10 +79,16 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
             let mut system = make();
             assert!(system.configure_gpu_timing(true).is_err());
             assert!(system.gpu_timing_ticks().is_none());
+            assert!(system.gpu_contact_timing_ticks().is_none());
             system.configure_gpu_timing(false).unwrap();
             continue;
         }
-        for outer in [None, Some(2), Some(130)] {
+        for (outer, diagnostics) in [
+            (None, false),
+            (Some(2), false),
+            (Some(130), false),
+            (Some(2), true),
+        ] {
             let mut plain = make();
             let mut timed = make();
             for system in [&mut plain, &mut timed] {
@@ -97,14 +103,18 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                     system.configure_material_contact_reuse(Some(1)).unwrap();
                 }
                 system.set_drive_effort(0, 0.25).unwrap();
+                if diagnostics {
+                    system.enable_momentum_diagnostics();
+                }
             }
             timed.configure_gpu_timing(true).unwrap();
             if outer.is_some() {
                 timed.configure_material_contact_sweeps(Some(12)).unwrap();
             }
             assert!(timed.gpu_timing_ticks().is_none());
+            assert!(timed.gpu_contact_timing_ticks().is_none());
             let count = 2 * outer.unwrap_or(1) + 3;
-            for _ in 0..2 {
+            for step in 1..=2 {
                 plain.step(fem_rotor::config().max_substep).unwrap();
                 assert!(
                     timed
@@ -123,6 +133,14 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                     "{ticks:?}"
                 );
                 assert!(ticks[ticks.len() - 1] > ticks[0]);
+                let raw_contact = read(&device, &queue, timed.gpu_contact_timing_ticks().unwrap());
+                let contacts: &[u64] = bytemuck::cast_slice(&raw_contact);
+                assert_eq!(contacts.len(), 2 * outer.unwrap_or(1) as usize);
+                for (iteration, pair) in contacts.chunks_exact(2).enumerate() {
+                    let start = 2 * iteration + 2;
+                    assert!(ticks[start] <= pair[0] && pair[0] < pair[1]);
+                    assert!(pair[1] <= ticks[start + 1]);
+                }
                 for (a, b) in [
                     (
                         plain.soft_state().particle_q.device_buffer().unwrap(),
@@ -148,12 +166,29 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                     read(&device, &queue, timed.status_buffer()),
                     0u32.to_le_bytes()
                 );
+                if diagnostics {
+                    assert_eq!(timed.completed_contact_passes(), Some([step; 7]));
+                    assert_eq!(
+                        read(
+                            &device,
+                            &queue,
+                            plain.momentum_diagnostics_buffer().unwrap()
+                        ),
+                        read(
+                            &device,
+                            &queue,
+                            timed.momentum_diagnostics_buffer().unwrap()
+                        ),
+                    );
+                }
             }
             timed.configure_gpu_timing(false).unwrap();
             assert!(timed.gpu_timing_ticks().is_none());
+            assert!(timed.gpu_contact_timing_ticks().is_none());
             timed.configure_gpu_timing(true).unwrap();
             timed.configure_material_contact(None).unwrap();
             assert!(timed.gpu_timing_ticks().is_none());
+            assert!(timed.gpu_contact_timing_ticks().is_none());
             timed
                 .configure_material_contact(Some(MaterialContactConfig {
                     iterations: 4096,
