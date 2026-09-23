@@ -1,9 +1,11 @@
 use crate::math::{Mat3, Vec3};
 
-struct Block {
-    force: Vec3,
-    tangent: Mat3,
+pub(super) struct Block {
+    pub(super) force: Vec3,
+    pub(super) tangent: Mat3,
+    #[cfg(test)]
     geometric: f64,
+    #[cfg(test)]
     potential: f64,
 }
 
@@ -15,10 +17,12 @@ fn trace(a: Mat3) -> f64 {
     a.x_axis.x + a.y_axis.y + a.z_axis.z
 }
 
+#[cfg(test)]
 fn norm_squared(a: Mat3) -> f64 {
     a.x_axis.length_squared() + a.y_axis.length_squared() + a.z_axis.length_squared()
 }
 
+#[cfg(test)]
 fn block(
     f: Mat3,
     previous: Mat3,
@@ -31,7 +35,7 @@ fn block(
     increment_block(previous, f - previous, gradient, shear, bulk, dt, volume)
 }
 
-fn increment_block(
+pub(super) fn increment_block(
     previous: Mat3,
     increment: Mat3,
     gradient: Vec3,
@@ -55,11 +59,14 @@ fn increment_block(
         tangent: (f * f.transpose() * (shear * gradient.length_squared())
             + outer(a, a) * (bulk + shear / 3.0))
             * scale,
+        #[cfg(test)]
         geometric: gradient.dot(stress * gradient) * scale,
+        #[cfg(test)]
         potential: (shear * norm_squared(deviator) + 0.5 * bulk * tr * tr) * scale,
     }
 }
 
+#[cfg(test)]
 fn states() -> Vec<(Mat3, Mat3)> {
     let mut result = Vec::new();
     for previous in [
@@ -185,5 +192,5 @@ fn green_viscosity_uniform_dilation_matches_scalar_oracle() {
     }
 }
 
-#[cfg(feature = "gpu")]
+#[cfg(all(test, feature = "gpu"))]
 mod gpu;

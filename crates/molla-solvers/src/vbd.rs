@@ -77,7 +77,6 @@ use crate::sim::{Contacts, Control, Model, State};
 
 use super::Solver;
 
-#[cfg(test)]
 mod viscosity;
 
 /// Backend selector for [`VbdSolver`]. Mirrors `XpbdBackend` —
@@ -287,6 +286,16 @@ impl VbdSolver {
         queue: std::sync::Arc<wgpu::Queue>,
         model: &Model,
     ) -> Result<Self> {
+        model.validate_tet_viscosity()?;
+        let limits = device.limits();
+        if limits.max_bind_groups < 6
+            || limits.max_bindings_per_bind_group < 17
+            || limits.max_storage_buffers_per_shader_stage < 43
+        {
+            return Err(Error::Gpu(
+                "VBD requires 6 bind groups, 17 bindings per group and 43 storage buffers".into(),
+            ));
+        }
         let particle_count = model.particle_count as u32;
         let spring_count = model.spring_count as u32;
         let max_k = 1.0e7_f64;
@@ -510,6 +519,11 @@ impl Solver for VbdSolver {
         }
         let n_sub = self.substeps.max(1);
         let dt_sub = dt / n_sub as Real;
+        if !dt_sub.is_finite() || dt_sub <= 0.0 {
+            return Err(molla_core::Error::Build(
+                "VBD timestep must be finite and positive".into(),
+            ));
+        }
 
         // GPU path — handled before the backend match so the substep
         // driver can re-borrow `self` (scratch state + substep helper).
@@ -1373,6 +1387,8 @@ pub(crate) fn cpu_step(
     let tet_rest_volume = model.tet_rest_volume.host()?;
     let tet_mu = model.tet_mu.host()?;
     let tet_lambda = model.tet_lambda.host()?;
+    model.validate_tet_viscosity()?;
+    let tet_viscosity = model.tet_viscosity.host()?;
     let vadj_tets_off = model.vertex_adjacent_tets_offsets.host()?;
     let vadj_tets = model.vertex_adjacent_tets.host()?;
     // Cable bending state (Stage 20.2).
@@ -1616,6 +1632,40 @@ pub(crate) fn cpu_step(
                     );
                     f += f_t;
                     h = mat3_add(h, h_t);
+                    let visc = tet_viscosity[tet];
+                    if visc.shear > 0.0 || visc.bulk > 0.0 {
+                        let ids = &tet_indices[tet * 4..tet * 4 + 4];
+                        let p: [Vec3; 4] = std::array::from_fn(|i| x_prev[ids[i] as usize]);
+                        let d: [Vec3; 4] = std::array::from_fn(|i| x[ids[i] as usize] - p[i]);
+                        let dm = tet_dm_inv[tet];
+                        let previous =
+                            crate::math::Mat3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0])
+                                * dm;
+                        let increment =
+                            crate::math::Mat3::from_cols(d[1] - d[0], d[2] - d[0], d[3] - d[0])
+                                * dm;
+                        let gradient = if order == 0 {
+                            -dm.transpose() * Vec3::ONE
+                        } else {
+                            dm.row(order - 1)
+                        };
+                        let block = viscosity::increment_block(
+                            previous,
+                            increment,
+                            gradient,
+                            visc.shear,
+                            visc.bulk,
+                            dt,
+                            tet_rest_volume[tet],
+                        );
+                        if !block.force.is_finite() || !block.tangent.is_finite() {
+                            return Err(molla_core::Error::Build(
+                                "nonfinite VBD viscous tet block".into(),
+                            ));
+                        }
+                        f += block.force;
+                        h += block.tangent;
+                    }
                 }
 
                 // Cable bending contributions: for every cable that
@@ -2702,6 +2752,7 @@ mod tests {
             }
         }
         let materials = [MaterialNeoHookean {
+            viscosity: Default::default(),
             youngs: 5.0e3,
             poisson: 0.3,
             yield_stress: 5.0e1,
@@ -2787,6 +2838,7 @@ mod tests {
         let p2 = b.add_particle(Vec3::new(0.0, 1.0, 0.0), 0.05, 0.01, WorldId(0));
         let p3 = b.add_particle(Vec3::new(0.0, 0.0, 1.0), 0.05, 0.01, WorldId(0));
         let mat = MaterialNeoHookean {
+            viscosity: Default::default(),
             youngs: 1.0e4,
             poisson: 0.3,
             yield_stress: 50.0,

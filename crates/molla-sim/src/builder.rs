@@ -7,8 +7,8 @@ use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Mat3, Real, SpatialInertia, Transform, Vec3};
 use molla_storage::{Buffer, BufferUsage};
 
-use super::Model;
 use super::flags::BodyFlags;
+use super::{Model, TetViscosity};
 
 /// Per-shape geometry tag. Stage 4 ships sphere, plane, and box;
 /// capsule / cylinder land in stage 6.1 (closed-form narrow phase
@@ -239,6 +239,8 @@ impl Default for BodyParams {
 ///   (`σ_y(ε_p) = σ_y0 + H · ε_p`).
 #[derive(Copy, Clone, Debug)]
 pub struct MaterialNeoHookean {
+    /// Shear and bulk viscosity on total Green strain (Pa s).
+    pub viscosity: TetViscosity,
     /// Young's modulus (Pa). Clamped to `[1, 1e9]` at build time.
     pub youngs: Real,
     /// Poisson ratio. Clamped to `[-0.49, 0.49]` to keep the Lamé
@@ -263,6 +265,7 @@ impl MaterialNeoHookean {
     #[must_use]
     pub fn elastic(youngs: Real, poisson: Real) -> Self {
         Self {
+            viscosity: TetViscosity::default(),
             youngs,
             poisson,
             yield_stress: Real::INFINITY,
@@ -276,6 +279,7 @@ impl MaterialNeoHookean {
     #[must_use]
     pub fn plastic(youngs: Real, poisson: Real, yield_stress: Real, hardening: Real) -> Self {
         Self {
+            viscosity: TetViscosity::default(),
             youngs,
             poisson,
             yield_stress,
@@ -299,6 +303,7 @@ impl MaterialNeoHookean {
             yield_stress,
             hardening,
             kinematic_hardening,
+            viscosity: TetViscosity::default(),
         }
     }
 }
@@ -367,6 +372,7 @@ pub struct ModelBuilder {
     tet_rest_volume: Vec<Real>,
     tet_mu: Vec<Real>,
     tet_lambda: Vec<Real>,
+    tet_viscosity: Vec<TetViscosity>,
     // Stage 20.3 plasticity. F_p starts as identity for every tet;
     // accumulated plastic strain + per-tet yield/hardening stay zero
     // for the back-compat path (yield_stress = INFINITY ⇒ purely
@@ -883,6 +889,7 @@ impl ModelBuilder {
         // `(1+ν)(1-2ν)` finite; clamp E to a sane range.
         let mut lame: Vec<(Real, Real, Real, Real, Real)> = Vec::with_capacity(materials.len());
         for m in materials {
+            m.viscosity.validate()?;
             let nu = m.poisson.clamp(-0.49, 0.49);
             let e = m.youngs.max(1.0).min(1.0e9);
             let mu = e / (2.0 * (1.0 + nu));
@@ -970,6 +977,7 @@ impl ModelBuilder {
             let (mu, lambda, yield_s, hard, kin_hard) = lame[mi];
             self.tet_mu.push(mu);
             self.tet_lambda.push(lambda);
+            self.tet_viscosity.push(materials[mi].viscosity);
             // Plasticity init: F_p = I, ε_p = 0, σ_y / H from material.
             self.tet_f_plastic.push(Mat3::IDENTITY);
             self.tet_plastic_strain.push(0.0);
@@ -3008,6 +3016,7 @@ impl ModelBuilder {
             tet_rest_volume: Buffer::from_vec(self.tet_rest_volume, s),
             tet_mu: Buffer::from_vec(self.tet_mu, s),
             tet_lambda: Buffer::from_vec(self.tet_lambda, s),
+            tet_viscosity: Buffer::from_vec(self.tet_viscosity, s),
             tet_f_plastic: Buffer::from_vec(self.tet_f_plastic, s),
             tet_plastic_strain: Buffer::from_vec(self.tet_plastic_strain, s),
             tet_yield_stress: Buffer::from_vec(self.tet_yield_stress, s),

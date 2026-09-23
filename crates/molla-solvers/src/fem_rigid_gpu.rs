@@ -58,14 +58,14 @@ fn sampled_contact_capacity(
 fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
     if limits.max_bind_groups < 6
         || limits.max_bindings_per_bind_group < 17
-        || limits.max_storage_buffers_per_shader_stage < 42
+        || limits.max_storage_buffers_per_shader_stage < 43
         || limits.max_uniform_buffers_per_shader_stage < 1
         || limits.max_compute_invocations_per_workgroup < 64
         || limits.max_compute_workgroup_size_x < 64
         || limits.max_compute_workgroup_storage_size < 2048
     {
         return Err(Error::Gpu(
-            "FEM device requires 6 bind groups, 17 bindings per group, 42 storage buffers, \
+            "FEM device requires 6 bind groups, 17 bindings per group, 43 storage buffers, \
              1 uniform buffer, 64 compute invocations in X, and 2048 workgroup bytes"
                 .into(),
         ));
@@ -118,7 +118,7 @@ pub fn request_fem_device_limits(
     requested.max_bind_groups = requested.max_bind_groups.max(6);
     requested.max_bindings_per_bind_group = requested.max_bindings_per_bind_group.max(17);
     requested.max_storage_buffers_per_shader_stage =
-        requested.max_storage_buffers_per_shader_stage.max(42);
+        requested.max_storage_buffers_per_shader_stage.max(43);
     requested.max_uniform_buffers_per_shader_stage =
         requested.max_uniform_buffers_per_shader_stage.max(1);
     requested.max_compute_invocations_per_workgroup =
@@ -148,7 +148,7 @@ mod device_limits_tests {
         let limits = wgpu::Limits {
             max_bind_groups: 6,
             max_bindings_per_bind_group: 17,
-            max_storage_buffers_per_shader_stage: 42,
+            max_storage_buffers_per_shader_stage: 43,
             max_uniform_buffers_per_shader_stage: 1,
             max_compute_invocations_per_workgroup: 64,
             max_compute_workgroup_size_x: 64,
@@ -161,10 +161,10 @@ mod device_limits_tests {
         request_fem_device_limits(&mut requested, &limits).unwrap();
         assert!(validate_device_limits(&requested).is_ok());
         assert_eq!(requested.max_bind_groups, 6);
-        assert_eq!(requested.max_storage_buffers_per_shader_stage, 42);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 43);
         let mut expected = original.clone();
         expected.max_bind_groups = 6;
-        expected.max_storage_buffers_per_shader_stage = 42;
+        expected.max_storage_buffers_per_shader_stage = 43;
         assert_eq!(requested, expected);
         let mut larger = requested.clone();
         larger.max_bind_groups = 8;

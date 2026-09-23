@@ -165,6 +165,7 @@ struct Mat3Cols {
 // short-circuits the back-stress branch when c == 0.
 @group(5) @binding(14) var<storage, read_write> tet_back_stress:              array<Mat3Cols>;
 @group(5) @binding(15) var<storage, read>       tet_kinematic_hardening:      array<f32>;
+@group(5) @binding(16) var<storage, read>       tet_viscosity: array<vec2<f32>>;
 
 const KIND_SPHERE:   u32 = 0u;
 const KIND_PLANE:    u32 = 1u;
@@ -587,6 +588,11 @@ fn tet_neo_hookean_block(
         || !(h_block[1].y == h_block[1].y)
         || !(h_block[2].z == h_block[2].z);
     if (any_nan) {
+        if (any(tet_viscosity[tet_id] > vec2<f32>(0.0))) {
+            *out_force = vec3<f32>(bitcast<f32>(0x7fc00000u));
+            *out_hess = h_block;
+            return;
+        }
         *out_force = vec3<f32>(0.0);
         *out_hess = mat3x3<f32>(
             vec3<f32>(h_floor, 0.0, 0.0),
@@ -598,6 +604,20 @@ fn tet_neo_hookean_block(
 
     *out_force = f_clean;
     *out_hess  = h_block;
+    let viscosity = tet_viscosity[tet_id];
+    if (viscosity.x > 0.0 || viscosity.y > 0.0) {
+        let previous = IDENTITY3 + mat3x3<f32>(v1 - v0, v2 - v0, v3 - v0) * dm_inv;
+        let increment = mat3x3<f32>(
+            particle_delta[i1].xyz - particle_delta[i0].xyz,
+            particle_delta[i2].xyz - particle_delta[i0].xyz,
+            particle_delta[i3].xyz - particle_delta[i0].xyz,
+        ) * dm_inv;
+        let viscous = tet_viscous_increment_block(
+            previous, increment, m, viscosity.x, viscosity.y, 1.0 / u.dt, rest_vol,
+        );
+        *out_force += viscous.force;
+        *out_hess += viscous.tangent;
+    }
 }
 
 // Spring contribution to a vertex's local force/hessian. Mirrors
@@ -717,9 +737,11 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     // (cloth-only models pay no GPU cost here).
     let to_lo = vertex_adj_tets_offsets[v];
     let to_hi = vertex_adj_tets_offsets[v + 1u];
+    var viscosity_active = false;
     for (var t = to_lo; t < to_hi; t = t + 2u) {
         let tet_id = vertex_adj_tets[t];
         let v_order = vertex_adj_tets[t + 1u];
+        viscosity_active = viscosity_active || any(tet_viscosity[tet_id] > vec2<f32>(0.0));
         var f_t: vec3<f32>;
         var h_t: mat3x3<f32>;
         tet_neo_hookean_block(tet_id, v_order, &f_t, &h_t);
@@ -810,6 +832,15 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     // numerically singular (mass/dt² guarantees it isn't, but floats).
     let h_inv = mat3_inverse(h);
     let dx_raw = h_inv * f;
+    if (viscosity_active && (!all(abs(f) <= vec3<f32>(3.402823e38))
+        || !all(abs(h[0]) <= vec3<f32>(3.402823e38))
+        || !all(abs(h[1]) <= vec3<f32>(3.402823e38))
+        || !all(abs(h[2]) <= vec3<f32>(3.402823e38))
+        || !all(abs(dx_raw) <= vec3<f32>(3.402823e38)))) {
+        particle_delta[v] = vec4<f32>(vec3<f32>(bitcast<f32>(0x7fc00000u)), 0.0);
+        particle_q[v] = particle_delta[v];
+        return;
+    }
     // Stage 20.3 — NaN/Inf sentinel + magnitude clamp on the position
     // update. With plasticity in the loop, an exotic per-tet F_p can
     // poison the assembled `f`/`h` block in pathological cases

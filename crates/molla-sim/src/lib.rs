@@ -27,6 +27,7 @@ pub mod runtime;
 pub mod soft_belt;
 mod soft_surface;
 mod state;
+mod tet_viscosity;
 
 pub use articulation::{eval_body_velocities, eval_fk};
 pub use builder::{BodyParams, MaterialNeoHookean, ModelBuilder, ShapeGeometry, TetMeshId};
@@ -43,3 +44,4 @@ pub use soft_surface::{
     compute_tet_surface_triangles,
 };
 pub use state::State;
+pub use tet_viscosity::TetViscosity;

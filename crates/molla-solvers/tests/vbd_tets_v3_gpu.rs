@@ -343,6 +343,7 @@ fn plasticity_yield_holds_permanent_set() {
     // which simplifies the test assertion (no need to chase a moving
     // yield surface).
     let materials = [MaterialNeoHookean {
+        viscosity: Default::default(),
         youngs: 5.0e3,
         poisson: 0.3,
         yield_stress: 5.0e1,

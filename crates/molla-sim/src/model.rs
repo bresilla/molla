@@ -455,6 +455,8 @@ pub struct Model {
     pub tet_mu: Buffer<Real>,
     /// Per-tet second Lamé parameter `λ` (N/m²).
     pub tet_lambda: Buffer<Real>,
+    /// Per-tet shear and bulk viscosity on total Green strain (Pa s).
+    pub tet_viscosity: Buffer<crate::TetViscosity>,
 
     // ── Per-tet plasticity (Stage 20.3) ─────────────────────────────
     // Multiplicative split `F = F_e · F_p` with isotropic von Mises
@@ -974,6 +976,7 @@ impl Model {
             tet_rest_volume: Buffer::from_vec(Vec::new(), s),
             tet_mu: Buffer::from_vec(Vec::new(), s),
             tet_lambda: Buffer::from_vec(Vec::new(), s),
+            tet_viscosity: Buffer::from_vec(Vec::new(), s),
             tet_f_plastic: Buffer::from_vec(Vec::new(), s),
             tet_plastic_strain: Buffer::from_vec(Vec::new(), s),
             tet_yield_stress: Buffer::from_vec(Vec::new(), s),
@@ -1138,6 +1141,19 @@ impl Model {
         super::Control::for_model(self)
     }
 
+    /// Validate the immutable per-tet viscosity array before simulation or upload.
+    pub fn validate_tet_viscosity(&self) -> Result<()> {
+        if self.tet_viscosity.len() != self.tet_count {
+            return Err(Error::Build(
+                "tet viscosity length must equal tet count".into(),
+            ));
+        }
+        for material in self.tet_viscosity.host()? {
+            material.validate()?;
+        }
+        Ok(())
+    }
+
     /// Allocate device buffers for every model array and upload host data.
     ///
     /// The model is read-only at simulation time, so this only needs to
@@ -1145,6 +1161,7 @@ impl Model {
     /// re-uploads the same data.
     #[cfg(feature = "gpu")]
     pub fn upload_to_device(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+        self.validate_tet_viscosity()?;
         macro_rules! up {
             ($field:ident) => {{
                 self.$field.ensure_device(device)?;
@@ -1183,6 +1200,7 @@ impl Model {
         up!(tet_rest_volume);
         up!(tet_mu);
         up!(tet_lambda);
+        up!(tet_viscosity);
         up!(tet_f_plastic);
         up!(tet_plastic_strain);
         up!(tet_yield_stress);

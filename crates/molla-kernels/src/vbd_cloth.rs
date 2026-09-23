@@ -103,7 +103,14 @@ impl VbdClothKernel {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::vbd_cloth"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/vbd_cloth.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/tet_viscosity.wgsl"),
+                    "\n",
+                    include_str!("../shaders/vbd_cloth.wgsl"),
+                )
+                .into(),
+            ),
         });
 
         // State group: 7 read-only inputs.
@@ -146,7 +153,8 @@ impl VbdClothKernel {
         //   - 2 read-only entries (yield, hardening) — Stage 20.3 material.
         //   - 1 read-write entry (back-stress α) — Stage 20.4.
         //   - 1 read-only entry (kinematic-hardening modulus c) — Stage 20.4.
-        // 16 total. All buffers are non-empty — when the model has no
+        // 17 total, including shear/bulk viscosity at binding 16.
+        // All buffers are non-empty — when the model has no
         // tets / bending the host binds dummy 1-element placeholders.
         let mut tet_entries = storage_entries(10, true);
         // Bindings 10 + 11: F_p / ε_p as read-write (mutated by the
@@ -166,7 +174,7 @@ impl VbdClothKernel {
             e
         }));
         // Binding 15: kinematic-hardening modulus c (read-only, Stage 20.4).
-        tet_entries.extend(storage_entries(1, true).into_iter().map(|mut e| {
+        tet_entries.extend(storage_entries(2, true).into_iter().map(|mut e| {
             e.binding += 15;
             e
         }));
@@ -343,9 +351,25 @@ impl VbdClothKernel {
         if model.particle_count == 0 {
             return Ok(());
         }
+        let gpu_dt = dt as f32;
+        if !gpu_dt.is_finite() || gpu_dt <= 0.0 || !(1.0 / gpu_dt).is_finite() {
+            return Err(Error::Gpu(
+                "VBD timestep and inverse must be positive finite f32".into(),
+            ));
+        }
+        if model.tet_viscosity.len() != model.tet_count {
+            return Err(Error::Gpu(
+                "tet viscosity length must equal tet count".into(),
+            ));
+        }
         let particle_count_u = model.particle_count as u32;
         let spring_count_u = model.spring_count as u32;
         let shape_count_u = model.shape_count as u32;
+        let contact_stiffness = if shape_count_u == 0 {
+            0.0
+        } else {
+            contact_stiffness
+        };
         let color_count = model.particle_color_count as u32;
 
         // ── Bind groups ───────────────────────────────────────────
@@ -602,6 +626,14 @@ impl VbdClothKernel {
             .tet_kinematic_hardening
             .device_buffer()
             .unwrap_or(dummy_real_buf);
+        let viscosity_buf = if model.tet_count == 0 {
+            dummy_vec3_buf
+        } else {
+            model
+                .tet_viscosity
+                .device_buffer()
+                .ok_or_else(|| Error::Gpu("tet viscosity buffer missing".into()))?
+        };
 
         let bg_tets = self.bindings.storage_group(
             device,
@@ -672,6 +704,10 @@ impl VbdClothKernel {
                     wgpu::BindGroupEntry {
                         binding: 15,
                         resource: kin_hard_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: viscosity_buf.as_entire_binding(),
                     },
                 ],
             },

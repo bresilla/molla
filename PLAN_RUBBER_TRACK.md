@@ -680,12 +680,15 @@ floor penetration pass the unchanged short-run gates. This covers26.667ms of
 simulated time, not settled or powered driving. Full native settling, sustained
 traction, simulator ownership/menu integration and wheel FEM remain unfinished.
 
-### Objective rubber viscosity prototype
+### Objective rubber viscosity
 
-Test-only `vbd::viscosity` and the standalone `tet_viscosity.wgsl` validate an
-isothermal finite-step Green-strain dissipation potential. Neither is connected
-to VBD stepping or authored material parameters yet. The existing track has no
-new damping, and no claim of settled operation follows from these block tests.
+`vbd::viscosity` and `tet_viscosity.wgsl` evaluate an isothermal finite-step
+Green-strain dissipation potential in CPU and GPU VBD. `MaterialNeoHookean`
+stores per-element `TetViscosity { shear, bulk }` in Pa s; constructors default
+both to zero. Builder and upload validation reject negative, nonfinite,
+overflowing and subnormal GPU coefficients. GPU storage uses one vec2 binding;
+FEM device negotiation now requires 43 storage buffers. Existing CEOL material
+settings remain unchanged: no native damping or settled-operation claim yet.
 
 For previous deformation F0 and increment A, define
 `dE=(F0^T*A+A^T*F0+A^T*A)/2` and
@@ -703,8 +706,32 @@ The frame-indifference construction follows the squared C-tensor difference
 in [Badal et al., section2.1, equations2.8–2.9](https://arxiv.org/html/2604.27923v1).
 The local isotropic blocks and Gauss-Newton approximation are independently
 derived here; the paper's full thermoviscoelastic PDE/heat model is not included.
-Runtime material storage, CPU/GPU VBD integration, energy/momentum and refinement
-tests, constitutive calibration and native settling/traction remain required.
+Runtime tests exercise free tetrahedral timesteps with zero, shear-only,
+bulk-only and combined viscosity. CPU/GPU position and velocity tolerances are
+20 micrometres and 0.5 mm/s. Finite rigid rotation and free translation do not
+acquire material drag. A deformed free tet with E=2000 Pa and test viscosities
+30/80 Pa s loses mechanical energy monotonically; after 0.2 s its CPU energy is
+0.0639495 J versus 1.2111966 J without viscosity. These are test coefficients,
+not a CEOL material calibration.
+
+CPU and GPU tests halve the timestep from 2 ms through 0.25 ms and double VBD
+iterations from 32 to 64. GPU endpoint errors against the finest timestep are
+1.02176, 0.443857 and 0.149035 mm; the finest CPU/GPU positions agree within
+20 micrometres. Invalid CPU blocks error; GPU viscous arithmetic failure marks
+the state nonfinite and the existing volume monitor latches status bit 4,
+minimum J=0 and the offending tet index. Tests read back nodes; runtime adds
+no node readback or CPU physics fallback.
+
+The zero-material control exposed dummy origin-shape contact when the authored
+shape count was zero. VBD now disables shape contact in that case; nonempty
+shape contact and FEM's explicitly disabled VBD contact are unchanged.
+Clean verification passes 26 simulation-model tests, 86 solver-library tests,
+four CPU timestep tests and 21 GPU tests across viscosity, shared-device,
+coupled motor/contact, spherical-loop, tetrahedral and plasticity lanes. The
+GPU-feature solver all-target check also passes. Constitutive calibration,
+refined native load settling, sustained torque-to-ground traction and production
+performance remain required. Small free-tet convergence is not full
+tracked-machine acceptance.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
