@@ -3,7 +3,7 @@
 use molla_compute::Engine;
 use molla_core::WorldId;
 use molla_kernels::soft_rigid_solve::SoftMaterialIterationKernel;
-use molla_math::{Mat3, Vec3};
+use molla_math::{Mat3, Quat, Vec3};
 use molla_sim::{Contacts, MaterialNeoHookean, Model, ModelBuilder, TetViscosity};
 use molla_solvers::{Solver, VbdSolver};
 use wgpu::util::DeviceExt;
@@ -392,6 +392,135 @@ fn translated_thin_tet_force_matches_projected_geometry() {
                 actual[i][3], expected[i]
             );
             assert!(error < 5e-5 + expected[i] * 1e-5);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn rotated_thin_tet_increment_matches_projected_force() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let project = |x: f64| x as f32 as f64;
+    let vector = |v: Vec3| Vec3::from_array(v.to_array().map(project));
+    let h = project(1.0 / 19200.0);
+    for viscous in [false, true] {
+        for (axis, angle) in [
+            (Vec3::X, 1.4),
+            (Vec3::X, 2.1),
+            (Vec3::Y, 2.1),
+            (Vec3::Z, 2.1),
+            (Vec3::ONE.normalize(), 2.4),
+        ] {
+            let mut builder = ModelBuilder::new();
+            builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+            builder.set_linear_damping(0.0);
+            let points = [
+                Vec3::ZERO,
+                Vec3::X * 0.02,
+                Vec3::new(0.01, 0.0005, 0.0),
+                Vec3::new(0.01, 0.0, 0.005),
+            ];
+            for p in points {
+                builder.add_particle(p, 0.00005, 0.0, WorldId(0));
+            }
+            let mut material = MaterialNeoHookean::elastic(2e6, 0.45);
+            if viscous {
+                material.viscosity = TetViscosity {
+                    shear: 1379.3103448275863,
+                    bulk: 13333.333333333336,
+                };
+            }
+            builder
+                .add_tet_mesh_per_material(&[[0, 1, 2, 3]], &[material], &[0], None)
+                .unwrap();
+            let mut model = builder.build().unwrap();
+            let mut input = model.state().unwrap();
+            let mut output = model.state().unwrap();
+            let rotation = Quat::from_axis_angle(axis, angle);
+            for (i, p) in input.particle_q.host_mut().unwrap().iter_mut().enumerate() {
+                *p = rotation * *p + Vec3::new(0.5, 0.15, 0.52);
+                output.particle_qd.host_mut().unwrap()[i] = Vec3::new(
+                    0.08 + i as f64 * 0.0007,
+                    -0.05 + i as f64 * 0.0003,
+                    0.04 - i as f64 * 0.0004,
+                );
+            }
+            let q: Vec<_> = input
+                .particle_q
+                .host()
+                .unwrap()
+                .iter()
+                .copied()
+                .map(vector)
+                .collect();
+            let rest = points.map(vector);
+            let delta: Vec<_> = output
+                .particle_qd
+                .host()
+                .unwrap()
+                .iter()
+                .map(|v| vector(vector(*v) * h))
+                .collect();
+            let inverse = Mat3::from_cols_array(
+                &model.tet_dm_inv.host().unwrap()[0]
+                    .to_cols_array()
+                    .map(project),
+            );
+            let edge = |i: usize| (q[i] - q[0]) - (rest[i] - rest[0]);
+            let previous = Mat3::IDENTITY + Mat3::from_cols(edge(1), edge(2), edge(3)) * inverse;
+            let increment = Mat3::from_cols(
+                delta[1] - delta[0],
+                delta[2] - delta[0],
+                delta[3] - delta[0],
+            ) * inverse;
+            let f = previous + increment;
+            let cof = Mat3::from_cols(
+                f.y_axis.cross(f.z_axis),
+                f.z_axis.cross(f.x_axis),
+                f.x_axis.cross(f.y_axis),
+            );
+            let mu = project(model.tet_mu.host().unwrap()[0]);
+            let lam = project(model.tet_lambda.host().unwrap()[0]);
+            let mut stress = (f - cof) * mu + cof * ((lam + mu) * (f.determinant() - 1.0));
+            if viscous {
+                let strain = (previous.transpose() * increment
+                    + increment.transpose() * previous
+                    + increment.transpose() * increment)
+                    * 0.5;
+                let trace = strain.x_axis.x + strain.y_axis.y + strain.z_axis.z;
+                let rate_stress = (strain - Mat3::IDENTITY * (trace / 3.0))
+                    * (2.0 * project(material.viscosity.shear))
+                    + Mat3::IDENTITY * (project(material.viscosity.bulk) * trace);
+                stress += f * rate_stress * (1.0 / h);
+            }
+            let rows = inverse.transpose();
+            let gradients = [
+                -(rows.x_axis + rows.y_axis + rows.z_axis),
+                rows.x_axis,
+                rows.y_axis,
+                rows.z_axis,
+            ];
+            let volume = project(model.tet_rest_volume.host().unwrap()[0]);
+            let inv_mass = project(model.particle_inv_mass.host().unwrap()[0]);
+            model.upload_to_device(device, queue).unwrap();
+            input.upload_to_device(device, queue).unwrap();
+            output.upload_to_device(device, queue).unwrap();
+            let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+            let residual = solver
+                .material_force_residual_gpu(&model, &input, &mut output, h)
+                .unwrap();
+            let actual = readback::read::<[f32; 4]>(&engine, residual, 4);
+            for i in 0..4 {
+                let force = -delta[i] / (inv_mass * h * h) - stress * gradients[i] * volume;
+                let expected = force.length() * h * inv_mass;
+                let error = (actual[i][3] as f64 - expected).abs();
+                eprintln!(
+                    "rotated increment viscous={viscous} axis={axis:?} angle={angle} node={i} error={error}"
+                );
+                assert!(error < 3e-5, "GPU={} oracle={expected}", actual[i][3]);
+            }
         }
     }
 }

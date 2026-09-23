@@ -940,6 +940,32 @@ carcass material. Thus the native sequence is not independently accepted;
 tet force/geometry precision requires further work before longer trajectories.
 The4steps cover only0.000208333s and are not settled or performant.
 
+### Tet gradient and cofactor precision
+
+The elastic force now assembles the previous and incremental deformation
+gradients separately. Explicit fused products include the identity term in
+the previous gradient. Cofactors use compensated differences of products;
+the volumetric stress evaluates determinant-minus-one without first rounding
+the determinant near1. The elastic law, viscosity, Hessian and tolerances
+are unchanged; all operations remain on the GPU.
+
+At the captured step2 node15122, diagnostic gradient/stress arithmetic
+reduced GPU/oracle force disagreement from1.33179e-4 to1.16426e-5 before
+the final fused-identity refinement. A material-only full-mesh replay has
+zero independent force violations after8..512sweeps. This is not native
+trajectory acceptance. A self-contained regression covers rotated thin/skew
+tets about principal and oblique axes, with and without viscosity, using
+40nodal comparisons against projected-input float64 forces at3e-5 accuracy.
+The old shader fails that regression; fused identity assembly passes it.
+The extreme-friction1000 negative regression now requires a genuine force/
+correction rejection within three steps, rather than on one exact third-step
+solver variant. More accurate arithmetic triggers its guard on the second
+step's cold solve. Finite residuals above the unchanged1e-4 thresholds and
+status64 remain mandatory; real-friction accepted-trajectory gates are intact.
+Validation passes the GPU all-target check,8material-force tests,3V3plastic/
+multimaterial tests,3V4kinematic-hardening tests,8coupling tests and87CPU
+library tests (4ignored). Native rerun remains the next acceptance gate.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

@@ -371,7 +371,11 @@ fn material_reuse_rejects_unconverged_high_friction_trajectory() {
     material_reuse_trajectory(1000.0, Some(2), None);
 }
 
-fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>, sweeps: Option<u32>) {
+fn material_reuse_trajectory(
+    friction: f32,
+    rejection_deadline: Option<usize>,
+    sweeps: Option<u32>,
+) {
     use molla_solvers::fem_rigid_gpu::{
         FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
     };
@@ -432,7 +436,7 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>, sweeps
             eprintln!(
                 "step={step} index={index} reuse={reuse:?} force={force} corrections={corrections:?} status={status}"
             );
-            if rejected_step == Some(step) && index == 1 {
+            if rejection_deadline.is_some_and(|limit| step <= limit) && status != 0 {
                 assert_eq!(status, 64);
                 assert!(force.is_finite() && force > 1e-4);
                 assert!(corrections.iter().all(|v| v.is_finite()));
@@ -507,7 +511,7 @@ fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>, sweeps
         }
     }
     assert!(
-        rejected_step.is_none(),
+        rejection_deadline.is_none(),
         "expected force guard did not reject"
     );
 }

@@ -369,10 +369,15 @@ fn mat3_inverse(m: mat3x3<f32>) -> mat3x3<f32> {
 // Determinant gradient, including singular matrices.
 fn cofactor3(m: mat3x3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(
-        cross(m[1], m[2]),
-        cross(m[2], m[0]),
-        cross(m[0], m[1]),
+        cofactor_cross(m[1], m[2]),
+        cofactor_cross(m[2], m[0]),
+        cofactor_cross(m[0], m[1]),
     );
+}
+
+fn cofactor_cross(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    let product = a.zxy * b.yzx;
+    return fma(a.yzx, b.zxy, -product) + fma(-a.zxy, b.yzx, product);
 }
 
 // Stage 20.3 — 3×3 SVD via cyclic one-sided Jacobi (mirrors
@@ -482,6 +487,15 @@ fn tet_displacement_edge(origin: u32, node: u32) -> vec3<f32> {
         - (particle_rest[node].xyz - particle_rest[origin].xyz);
 }
 
+fn tet_gradient_product(a: mat3x3<f32>, b: mat3x3<f32>, origin: mat3x3<f32>) -> mat3x3<f32> {
+    var product: mat3x3<f32>;
+    for (var column = 0u; column < 3u; column++) {
+        product[column] = fma(a[0], vec3<f32>(b[column].x),
+            fma(a[1], vec3<f32>(b[column].y), fma(a[2], vec3<f32>(b[column].z), origin[column])));
+    }
+    return product;
+}
+
 // Per-vertex Neo-Hookean force + 3×3 Hessian for tet `tet_id` /
 // vertex order `v_order ∈ {0..3}`. Mirrors the CPU
 // `neo_hookean_vertex_block`. Uses the Smith et al. 2018 stable-NH
@@ -515,12 +529,13 @@ fn tet_neo_hookean_block(
     let lam = lam_l + mu_l;
 
     // Displacement-gradient form F = I + Du · Dm⁻¹.
-    let ds = mat3x3<f32>(
-        v1 + (particle_delta[i1].xyz - particle_delta[i0].xyz),
-        v2 + (particle_delta[i2].xyz - particle_delta[i0].xyz),
-        v3 + (particle_delta[i3].xyz - particle_delta[i0].xyz),
-    );
-    let f_full = IDENTITY3 + ds * dm_inv;
+    let previous = tet_gradient_product(mat3x3<f32>(v1, v2, v3), dm_inv, IDENTITY3);
+    let increment = tet_gradient_product(mat3x3<f32>(
+        particle_delta[i1].xyz - particle_delta[i0].xyz,
+        particle_delta[i2].xyz - particle_delta[i0].xyz,
+        particle_delta[i3].xyz - particle_delta[i0].xyz,
+    ), dm_inv, mat3x3<f32>());
+    let f_full = previous + increment;
     let fp_raw = tet_f_plastic[tet_id];
     let fp_mat = mat3x3<f32>(fp_raw.col0.xyz, fp_raw.col1.xyz, fp_raw.col2.xyz);
     let fp_det = determinant(fp_mat);
@@ -545,9 +560,10 @@ fn tet_neo_hookean_block(
         f_mat = f_full * mat3_inverse(fp_mat);
     }
 
-    let j = determinant(f_mat);
     let cof = cofactor3(f_mat);
-    let s_scalar = lam * (j - 1.0);
+    let j_minus_one = fma(f_mat[0].x, cof[0].x, -1.0)
+        + fma(f_mat[0].y, cof[0].y, f_mat[0].z * cof[0].z);
+    let s_scalar = lam * j_minus_one;
 
     // First Piola-Kirchhoff stress P = μ·(F - cof(F)) + λ·(J - 1)·cof(F).
     let p_mat = mat3x3<f32>(
@@ -641,12 +657,6 @@ fn tet_neo_hookean_block(
     *out_hess  = h_block;
     let viscosity = tet_viscosity[tet_id];
     if (viscosity.x > 0.0 || viscosity.y > 0.0) {
-        let previous = IDENTITY3 + mat3x3<f32>(v1, v2, v3) * dm_inv;
-        let increment = mat3x3<f32>(
-            particle_delta[i1].xyz - particle_delta[i0].xyz,
-            particle_delta[i2].xyz - particle_delta[i0].xyz,
-            particle_delta[i3].xyz - particle_delta[i0].xyz,
-        ) * dm_inv;
         let viscous = tet_viscous_increment_block(
             previous, increment, m, viscosity.x, viscosity.y, 1.0 / u.dt, rest_vol,
         );
