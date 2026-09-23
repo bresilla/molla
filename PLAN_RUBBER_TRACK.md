@@ -574,6 +574,31 @@ replays the ten `.bin` inputs exported by Gearbox's native contact preparation
 test. Capture and response readback occur only in tests. A completed preparation
 kernel is not full vehicle traction, retention, energy or real-time acceptance.
 
+### Fixed-world contact response
+
+Contacts against the immovable world have no generalized rigid Jacobian.
+Their effective inverse mass is the barycentric particle inverse mass in all
+three orthonormal contact directions. Preparation clears any prior rigid row
+response and bypasses the triangular solves; contact sweeps update only the
+participating particle velocities. Dynamic-body and spherical-loop rows retain
+their coupled articulated response. Generalized velocities are checked for
+nonfinite values once during mass factorization, including world-only scenes.
+
+`make test-gpu T=fem_static_contact_gpu` checks sliding, sticking, normal
+recovery and a finite positive gap against an independent barycentric Coulomb
+oracle at 1, 29 and 64 DOFs. It reuses a formerly dynamic contact row, requires
+bitwise-unchanged rigid velocities and rejects nonfinite generalized velocity
+without changing particle velocities. The existing mixed CPU/GPU, native-scale
+preparation and spherical-loop gates remain required.
+
+The full-scale CEOL loaded/passive trajectory captures use unchanged 512-step
+startup windows. Both reproduce their previous uninstrumented endpoints exactly.
+Their COM travel differs by less than 0.1 micrometre through 13.333 ms, then by
+88.123 micrometres at 26.667 ms. Motor-added forward contact impulse reaches
+14.678 N s, but the 100-micrometre causal displacement gate still fails. Both
+cases are still settling vertically. This is not settled driving acceptance,
+and the fixed-world optimization does not change those physical requirements.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

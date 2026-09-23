@@ -114,6 +114,9 @@ fn loop_target(contact: Contact) -> vec3<f32> {
 fn factor_mass() {
     if atomicLoad(&status) != 0u { return; }
     let n = params.dofs;
+    for (var i = 0u; i < n; i += 1u) {
+        if !finite(rigid_velocity[i]) { atomicOr(&status, 4u); return; }
+    }
     for (var i = 0u; i < n * n; i += 1u) { factor[i] = 0.0; }
     for (var i = 0u; i < n; i += 1u) {
         for (var j = 0u; j <= i; j += 1u) {
@@ -185,6 +188,17 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicOr(&status, 2u); return;
     }
     let n = params.dofs;
+    if body == 0xffffffffu {
+        for (var d = 0u; d < 3u*n; d += 1u) {
+            projected[r*3u*n+d] = 0.0;
+            response[r*3u*n+d] = 0.0;
+        }
+        var target_speed = -contact.normal_gap.w / params.dt;
+        if contact.normal_gap.w < 0.0 { target_speed = min(target_speed*params.recovery, params.max_recovery); }
+        if !finite(w) || w < 0.0 || !finite(target_speed) { atomicOr(&status, 2u); return; }
+        rows[r] = Row(w, w, target_speed, 0.0, vec4<f32>(0.0));
+        return;
+    }
     var directions = basis(contact.normal_gap.xyz);
     var offset_a = vec3<f32>(0.0);
     if ball {
@@ -251,8 +265,10 @@ fn relative_velocity(r: u32, direction: vec3<f32>, k: u32) -> f32 {
     for (var i = 0u; i < contact.support.z; i += 1u) {
         value += contact.weights[i] * dot(velocities[support_node(contact, i)].xyz, direction);
     }
-    for (var d = 0u; d < params.dofs; d += 1u) {
-        value -= projected[(r*3u+k)*params.dofs+d] * rigid_velocity[d];
+    if contact.ids.y != 0xffffffffu {
+        for (var d = 0u; d < params.dofs; d += 1u) {
+            value -= projected[(r*3u+k)*params.dofs+d] * rigid_velocity[d];
+        }
     }
     return value;
 }
@@ -262,8 +278,10 @@ fn apply_delta(r: u32, direction: vec3<f32>, k: u32, impulse: f32) {
         let particle = support_node(contact, i);
         velocities[particle] = vec4<f32>(velocities[particle].xyz + direction * (impulse*contact.weights[i]*inverse_mass[particle]), 0.0);
     }
-    for (var d = 0u; d < params.dofs; d += 1u) {
-        rigid_velocity[d] -= response[(r*3u+k)*params.dofs+d] * impulse;
+    if contact.ids.y != 0xffffffffu {
+        for (var d = 0u; d < params.dofs; d += 1u) {
+            rigid_velocity[d] -= response[(r*3u+k)*params.dofs+d] * impulse;
+        }
     }
 }
 
