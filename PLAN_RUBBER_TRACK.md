@@ -778,8 +778,15 @@ rejects, whereas256 inner iterations pass the same1e-4m/s tolerance.
 This is not native CEOL acceptance. The earlier quarter/eighth timestep trials
 finish13.333ms without volume faults but disagree in local deformation and do
 not settle. One full CEOL coupled substep passed the previous contact/volume
-guards, taking104.80s including setup for52.083us simulated; the new internal
-force guard still needs that native trial. Reusing VBD iterates efficiently,
+guards, taking104.80s including setup for52.083us simulated. The stronger native
+trial (cbfa2b3, same256outer/256inner budget) rejects with status64:
+force residual0.000771915m/s exceeds1e-4m/s by7.72x although the largest contact
+correction is1.102982e-5m/s. All29568 candidate node velocities and all three
+coupling corrections match the previous candidate bitwise; independently
+reconstructed candidate minimumJ remains0.669218 across102144tets. No timestep
+is accepted by the new gate. Total test time112.62s includes setup and rejection
+capture. Both speed and full-candidate force convergence remain unresolved.
+Reusing VBD iterates efficiently,
 multi-step/moving-contact validation, native settling and traction, refinement,
 energy accounting and production performance remain open before simulator exposure.
 
