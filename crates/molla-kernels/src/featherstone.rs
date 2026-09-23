@@ -24,7 +24,7 @@ struct Uniforms {
     /// Lagrange-multiplier projection instead of the v1 hard-clamp.
     rigorous_distance: u32,
     drift_only: u32,
-    _pad1: u32,
+    stable_motor_feedback: u32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -51,6 +51,7 @@ pub struct FeatherstoneKernel {
     articulation_count: u32,
     joint_count: u32,
     dof_total: u32,
+    stable_motor_feedback: bool,
 }
 
 impl FeatherstoneKernel {
@@ -59,9 +60,10 @@ impl FeatherstoneKernel {
             label: Some("molla::featherstone"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     include_str!("../shaders/featherstone.wgsl"),
-                    include_str!("../shaders/featherstone_stops.wgsl")
+                    include_str!("../shaders/featherstone_stops.wgsl"),
+                    include_str!("../shaders/featherstone_feedback.wgsl")
                 )
                 .into(),
             ),
@@ -181,12 +183,18 @@ impl FeatherstoneKernel {
             articulation_count,
             joint_count,
             dof_total,
+            stable_motor_feedback: false,
         }
     }
 
-    /// Sticky scalar-stop failure bit 32, shared with a caller-supplied status buffer if configured.
+    /// Sticky scalar-solve failure bit 32, shared with a caller-supplied status buffer if configured.
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         &self.stop_status
+    }
+
+    /// Enable effective-inertia stabilization of scalar feedback drives.
+    pub fn set_stable_motor_feedback(&mut self, enabled: bool) {
+        self.stable_motor_feedback = enabled;
     }
 
     pub fn set_status_buffer(&mut self, buffer: &wgpu::Buffer) -> Result<()> {
@@ -297,6 +305,25 @@ impl FeatherstoneKernel {
         if model.joint_count == 0 {
             return Ok(());
         }
+        if self.stable_motor_feedback && !drift_only {
+            if !rigorous_d_solve {
+                return Err(Error::Solver(
+                    "GPU stable feedback requires rigorous dynamics".into(),
+                ));
+            }
+            let offsets = model.joint_dof_offset.host()?;
+            let modes = control.joint_target_mode.host()?;
+            for (joint, &kind) in model.joint_type.host()?.iter().enumerate() {
+                let active = modes[offsets[joint] as usize..offsets[joint + 1] as usize]
+                    .iter()
+                    .any(|mode| (1..=3).contains(mode));
+                if active && !matches!(kind, 0 | 1 | 7) {
+                    return Err(Error::Solver(
+                        "GPU stable feedback requires scalar drive coordinates".into(),
+                    ));
+                }
+            }
+        }
 
         // Copy state_in's body_q + joint coords into state_out so the
         // kernel mutates state_out's device buffers in place — same
@@ -400,7 +427,7 @@ impl FeatherstoneKernel {
             rigorous_d_solve: u32::from(rigorous_d_solve),
             rigorous_distance: u32::from(rigorous_distance),
             drift_only: u32::from(drift_only),
-            _pad1: 0,
+            stable_motor_feedback: u32::from(self.stable_motor_feedback),
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::featherstone uniforms"),

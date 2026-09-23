@@ -90,7 +90,7 @@ pub struct FeatherstoneSolver {
     /// Number of substeps per outer `step` call. Each substep advances
     /// `dt/substeps`. Default 1.
     pub substeps: usize,
-    /// CPU feedback gains use a per-DOF effective-inertia backward-Euler denominator.
+    /// Feedback gains use a per-DOF effective-inertia backward-Euler denominator.
     pub stable_motor_feedback: bool,
     /// Stage 17.1 polish: when `true`, the backward ABA pass builds the
     /// full per-joint `D = S^T · I^A · S` matrix and solves
@@ -256,7 +256,7 @@ impl FeatherstoneSolver {
         self
     }
 
-    /// Enable CPU effective-inertia stabilization of feedback motors.
+    /// Enable effective-inertia stabilization; GPU scalar drives require rigorous dynamics.
     #[must_use]
     pub fn with_stable_motor_feedback(mut self, enabled: bool) -> Self {
         self.stable_motor_feedback = enabled;
@@ -426,11 +426,6 @@ impl Solver for FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
-        if self.is_gpu() && self.stable_motor_feedback {
-            return Err(crate::core::Error::Solver(
-                "stable motor feedback requires CPU Featherstone".into(),
-            ));
-        }
         if self.is_gpu()
             && model
                 .joint_compliance
@@ -706,6 +701,7 @@ impl FeatherstoneSolver {
                 } else {
                     None
                 };
+                kernel.set_stable_motor_feedback(self.stable_motor_feedback);
                 kernel.dispatch(
                     device,
                     queue,

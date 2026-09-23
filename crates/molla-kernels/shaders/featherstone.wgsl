@@ -28,7 +28,7 @@ struct Uniforms {
     /// Stage 17.1: 1 = velocity-level Lagrange projection on Distance.
     rigorous_distance:  u32,
     drift_only:         u32,
-    _pad1:              u32,
+    stable_motor_feedback: u32,
 };
 
 const JOINT_PRISMATIC: u32 = 0u;
@@ -756,6 +756,11 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+        if uniforms.drift_only == 0u && uniforms.stable_motor_feedback != 0u
+            && !stabilize_scalar_feedback(j_begin, n, &n_dof_arr, &s_lin, &s_ang, &u_lin, &u_ang, &d_dense_inv, &q_dd_arr) {
+            atomicOr(&stop_status, 32u);
+            return;
+        }
         if uniforms.drift_only != 0u {
             for (var k = 0u; k < n; k += 1u) {
                 for (var d = 0u; d < n_dof_arr[k]; d += 1u) { q_dd_arr[k][d] = 0.0; }

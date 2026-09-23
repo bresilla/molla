@@ -599,6 +599,31 @@ Their COM travel differs by less than 0.1 micrometre through 13.333 ms, then by
 cases are still settling vertically. This is not settled driving acceptance,
 and the fixed-world optimization does not change those physical requirements.
 
+### GPU scalar feedback stabilization
+
+`FeatherstoneSolver::with_stable_motor_feedback(true)` supports scalar force
+drives on the GPU with rigorous dynamics. It uses cached articulated inverse
+mass responses to compute each drive's effective inertia, stabilizes feedback
+with the same per-DOF denominator as the CPU implementation, then applies the
+combined torque correction to every affected articulation coordinate before
+joint-stop reactions. This is not a fully coupled implicit multi-motor solve.
+Motor caps, feedforward and total effort limits retain their separate roles.
+Each unit inertia probe is explicitly cleared before the next drive. Invalid
+or nonfinite feedback solves latch the shared scalar-solve status bit32.
+
+`FemRigidGpuSystem::with_stable_motor_feedback(true)` opts its rigid predictor
+into the same method. The contact-corrected drift does not apply motor torque
+again. Both APIs retain default-off behavior; state remains GPU-authoritative.
+
+`make test-gpu T=featherstone_feedback_gpu` checks96 cap/mode/stop combinations,
+configuration/fault rejection and512 steps of two sibling rotors against both
+CPU feedback and an independent constant-mass analytical recurrence, including
+root reaction and angular momentum. `make test-gpu T=fem_feedback_gpu` checks
+the predictor/contact/drift schedule against a scalar analytical recurrence.
+These are solver gates, not full CEOL settling or traction acceptance. Native
+CEOL equilibrium, causal ground propulsion, sustained maneuvers and simulator
+delivery remain required before claiming tracked FEM completion.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm

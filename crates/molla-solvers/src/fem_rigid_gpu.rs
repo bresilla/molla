@@ -581,6 +581,13 @@ impl FemRigidGpuSystem {
         })
     }
 
+    /// Enable effective-inertia stabilization of scalar rigid feedback drives.
+    #[must_use]
+    pub fn with_stable_motor_feedback(mut self, enabled: bool) -> Self {
+        self.rigid.stable_motor_feedback = enabled;
+        self
+    }
+
     pub fn soft_state(&self) -> &State {
         &self.soft_state
     }
@@ -592,7 +599,7 @@ impl FemRigidGpuSystem {
         self.gather.row_count()
     }
 
-    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 tet volume, 16 contact capacity, 32 joint stops.
+    /// Sticky flags: 1 mass, 2 contact, 4 nonfinite, 8 tet volume, 16 contact capacity, 32 scalar solve.
     pub fn status_buffer(&self) -> &wgpu::Buffer {
         self.solve.status()
     }
