@@ -715,6 +715,35 @@ impl Solver for VbdSolver {
 
 #[cfg(feature = "gpu")]
 impl VbdSolver {
+    /// Starts or continues GPU elastic material iterations with no inline shape penalties.
+    /// Original positions, history, model and dt stay fixed; input velocities may change.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_iteration_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        begin: bool,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build(
+                "material iteration requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.material_iteration(
+            &gpu.device,
+            &gpu.queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            begin,
+        )
+    }
+
     /// Evaluates the elastic material residual at the supplied candidate velocity, without advancing state.
     pub fn material_force_residual_gpu(
         &mut self,

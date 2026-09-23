@@ -622,6 +622,23 @@ impl FemRigidGpuSystem {
         Ok(())
     }
 
+    /// Select retained material iterates and their per-correction sweep count; None uses full restarts.
+    pub fn configure_material_contact_reuse(&mut self, iterations: Option<u32>) -> Result<()> {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || iterations.is_some_and(|n| !(1..=4096).contains(&n))
+        {
+            return Err(Error::Build(
+                "invalid or pending material reuse configuration".into(),
+            ));
+        }
+        let coupling = self.material_contact.as_mut().ok_or_else(|| {
+            Error::Build("material reuse requires configured material contact".into())
+        })?;
+        coupling.reuse_iterations = iterations;
+        Ok(())
+    }
+
     /// Last soft linear, rigid linear and rigid angular fixed-point corrections.
     pub fn material_contact_diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.material_contact
@@ -829,14 +846,29 @@ impl FemRigidGpuSystem {
                 coupling.begin(&mut encoder, &self.soft_state);
                 queue.submit([encoder.finish()]);
             }
-            self.fem.step(
-                &self.soft_model,
-                &self.soft_state,
-                &self.soft_model.control(),
-                &Contacts::with_capacity(0),
-                h,
-                &mut self.soft_next,
-            )?;
+            if let Some(coupling) = self
+                .material_contact
+                .as_ref()
+                .filter(|c| c.reuse_iterations.is_some())
+            {
+                self.fem.material_iteration_gpu(
+                    &self.soft_model,
+                    &coupling.input,
+                    &mut self.soft_next,
+                    h,
+                    self.config.elastic_iterations as u32,
+                    true,
+                )?;
+            } else {
+                self.fem.step(
+                    &self.soft_model,
+                    &self.soft_state,
+                    &self.soft_model.control(),
+                    &Contacts::with_capacity(0),
+                    h,
+                    &mut self.soft_next,
+                )?;
+            }
             self.record_momentum(1)?;
             self.rigid.step(
                 &self.rigid_model,
@@ -927,14 +959,25 @@ impl FemRigidGpuSystem {
                 )?;
                 queue.submit([encoder.finish()]);
                 for iteration in 1..coupling.config.iterations {
-                    self.fem.step(
-                        &self.soft_model,
-                        &coupling.input,
-                        &self.soft_model.control(),
-                        &Contacts::with_capacity(0),
-                        h,
-                        &mut self.soft_next,
-                    )?;
+                    if let Some(iterations) = coupling.reuse_iterations {
+                        self.fem.material_iteration_gpu(
+                            &self.soft_model,
+                            &coupling.input,
+                            &mut self.soft_next,
+                            h,
+                            iterations,
+                            false,
+                        )?;
+                    } else {
+                        self.fem.step(
+                            &self.soft_model,
+                            &coupling.input,
+                            &self.soft_model.control(),
+                            &Contacts::with_capacity(0),
+                            h,
+                            &mut self.soft_next,
+                        )?;
+                    }
                     let mut pass = device.create_command_encoder(&Default::default());
                     coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
                     let bindings = SoftRigidSolveBindings {

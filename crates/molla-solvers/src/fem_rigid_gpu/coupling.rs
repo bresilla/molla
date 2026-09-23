@@ -27,6 +27,7 @@ impl MaterialContactConfig {
 
 pub(super) struct MaterialContactState {
     pub(super) config: MaterialContactConfig,
+    pub(super) reuse_iterations: Option<u32>,
     pub(super) input: State,
     predicted: wgpu::Buffer,
     previous_body: wgpu::Buffer,
@@ -68,6 +69,7 @@ impl MaterialContactState {
         Ok(Self {
             input,
             config,
+            reuse_iterations: None,
             kernel: SoftMaterialIterationKernel::new(device),
             predicted: allocate(
                 "material predictor velocities",

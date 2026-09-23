@@ -86,11 +86,15 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
     let h = 1.0 / 19200.0;
     let expected = reference(h, true);
     let mut baseline = None;
-    for (iterations, disable) in [
-        (None, false),
-        (Some(2), false),
-        (Some(256), false),
-        (Some(256), true),
+    for (iterations, disable, reuse) in [
+        (None, false, None),
+        (Some(2), false, None),
+        (Some(256), false, None),
+        (Some(256), true, None),
+        (Some(2), false, Some(1)),
+        (Some(256), false, Some(1)),
+        (Some(256), false, Some(8)),
+        (Some(256), true, Some(1)),
     ] {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
@@ -135,12 +139,23 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
                     .is_err()
             );
             assert!(system.material_contact_diagnostics().is_some());
+            system.configure_material_contact_reuse(reuse).unwrap();
+            for invalid in [0, 4097, u32::MAX] {
+                assert!(
+                    system
+                        .configure_material_contact_reuse(Some(invalid))
+                        .is_err()
+                );
+            }
+        } else {
+            assert!(system.configure_material_contact_reuse(Some(1)).is_err());
         }
         if disable {
             system.configure_material_contact(None).unwrap();
         }
         system.step(h).unwrap();
         assert!(system.configure_material_contact(None).is_err());
+        assert!(system.configure_material_contact_reuse(None).is_err());
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
         let velocities = readback::read::<[f32; 4]>(
             &engine,
@@ -184,7 +199,9 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
                     readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)
                         [0];
                 assert!(force.is_finite() && force <= 1e-4, "force residual={force}");
-                eprintln!("runtime material contact matches CPU, residuals={residual:?}");
+                eprintln!(
+                    "runtime material contact reuse={reuse:?} matches CPU, residuals={residual:?} force={force}"
+                );
             }
         }
         assert!(system.soft_state().particle_q.host().is_err());
@@ -203,7 +220,12 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let m = 1000.0 * 0.02_f64.powi(3) / 24.0;
     let rigid_mass = 0.001;
-    for h in [1.0 / 19200.0, 1.0 / 38400.0] {
+    for (h, reuse) in [
+        (1.0 / 19200.0, None),
+        (1.0 / 38400.0, None),
+        (1.0 / 19200.0, Some(1)),
+        (1.0 / 38400.0, Some(1)),
+    ] {
         let mut oracle = model(true, true);
         let reduced_mass = m * (rigid_mass + 3.0 * m) / (rigid_mass + 4.0 * m);
         oracle.particle_mass.host_mut().unwrap()[2] = reduced_mass;
@@ -278,6 +300,7 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
                 angular_tolerance: 1e-4,
             }))
             .unwrap();
+        system.configure_material_contact_reuse(reuse).unwrap();
         system.step(h).unwrap();
         assert_eq!(
             readback::read::<u32>(&engine, system.status_buffer(), 1),
@@ -315,6 +338,153 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
             velocities[2][1]
         );
     }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn material_reuse_survives_substeps_and_idle_mode_changes() {
+    material_reuse_trajectory(0.85, None);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn material_reuse_rejects_unconverged_high_friction_trajectory() {
+    material_reuse_trajectory(1000.0, Some(1));
+}
+
+fn material_reuse_trajectory(friction: f32, rejected_step: Option<usize>) {
+    use molla_solvers::fem_rigid_gpu::{
+        FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
+    };
+    let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
+    let h = 1.0 / 19200.0;
+    let build = |outer| {
+        let mut scene = fem_rotor::scene();
+        scene.soft_model = model(false, true);
+        scene.soft_state = scene.soft_model.state().unwrap();
+        scene
+            .soft_state
+            .particle_qd
+            .host_mut()
+            .unwrap()
+            .fill(Vec3::NEG_Y);
+        scene.shapes.push(SoftRigidShapeGpu {
+            position: [0.0, -0.1, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            data: [10.0, 0.1, 10.0, friction],
+            ids: [1, u32::MAX, 0, 0],
+        });
+        let mut system = FemRigidGpuSystem::new(
+            engine.clone(),
+            scene,
+            molla_solvers::fem_rigid::FemRigidConfig {
+                max_substep: h,
+                elastic_iterations: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        system
+            .configure_material_contact(Some(MaterialContactConfig {
+                iterations: outer,
+                linear_tolerance: 1e-4,
+                angular_tolerance: 1e-4,
+            }))
+            .unwrap();
+        system
+    };
+    let mut cold = build(256);
+    let mut retained = build(256);
+    let mass = 1000.0 * 0.02_f64.powi(3) / 24.0;
+    let mut previous_energy = [2.0 * mass; 2];
+    for (step, reuse) in [Some(8), None, Some(8)].into_iter().enumerate() {
+        retained.configure_material_contact_reuse(reuse).unwrap();
+        let mut results = Vec::new();
+        for (index, system) in [&mut cold, &mut retained].into_iter().enumerate() {
+            assert!(system.try_step_substep(h).unwrap());
+            assert!(system.configure_material_contact_reuse(None).is_err());
+            let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+            let force =
+                readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
+            let corrections =
+                readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
+            eprintln!(
+                "step={step} index={index} reuse={reuse:?} force={force} corrections={corrections:?} status={status}"
+            );
+            if rejected_step == Some(step) && index == 1 {
+                assert_eq!(status, 64);
+                assert!(force.is_finite() && force > 1e-4);
+                assert!(corrections.iter().all(|v| v.is_finite() && *v <= 1e-4));
+                return;
+            }
+            assert_eq!(
+                status, 0,
+                "step={step} index={index} reuse={reuse:?} force={force}"
+            );
+            assert!(force.is_finite() && force <= 1e-4);
+            while !system.poll_completion().unwrap() {
+                std::thread::yield_now();
+            }
+            let q = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_q.device_buffer().unwrap(),
+                4,
+            );
+            let v = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_qd.device_buffer().unwrap(),
+                4,
+            );
+            let points = q
+                .iter()
+                .map(|p| Vec3::new(p[0] as f64, p[1] as f64, p[2] as f64))
+                .collect::<Vec<_>>();
+            let f = Mat3::from_cols(
+                points[1] - points[0],
+                points[2] - points[0],
+                points[3] - points[0],
+            ) / 0.02;
+            let j = f.determinant();
+            assert!(j > 0.5);
+            let mu = 2e6 / 2.9;
+            let lambda = 2e6 * 0.45 / (1.45 * 0.1) + mu;
+            let alpha = 1.0 + mu / lambda;
+            let norm =
+                f.x_axis.length_squared() + f.y_axis.length_squared() + f.z_axis.length_squared();
+            let elastic = 0.02_f64.powi(3) / 12.0
+                * (mu * (norm - 3.0) + lambda * ((j - alpha).powi(2) - (1.0 - alpha).powi(2)));
+            let kinetic = v
+                .iter()
+                .map(|v| 0.5 * mass * v[..3].iter().map(|x| (*x as f64).powi(2)).sum::<f64>())
+                .sum::<f64>();
+            assert!(
+                elastic + kinetic <= previous_energy[index] + 1e-8,
+                "reuse={reuse:?} energy={} previous={}",
+                elastic + kinetic,
+                previous_energy[index]
+            );
+            previous_energy[index] = elastic + kinetic;
+            results.push((q, v));
+        }
+        for field in 0..2 {
+            let a = if field == 0 {
+                &results[0].0
+            } else {
+                &results[0].1
+            };
+            let b = if field == 0 {
+                &results[1].0
+            } else {
+                &results[1].1
+            };
+            for (a, b) in a.iter().zip(b) {
+                for i in 0..3 {
+                    assert!((a[i] - b[i]).abs() < 2e-5);
+                }
+            }
+        }
+    }
+    assert!(rejected_step.is_none(), "expected force guard did not reject");
 }
 
 #[test]

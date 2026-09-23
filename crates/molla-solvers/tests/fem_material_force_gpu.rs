@@ -201,6 +201,164 @@ fn snapshot(engine: &Engine, input: &molla_sim::State, output: &molla_sim::State
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn retained_material_iterates_match_uninterrupted_sweeps_and_enforce_lifecycle() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let h = 1.0 / 19200.0;
+    for (pinned, viscous) in [(false, true), (true, true), (false, false)] {
+        let mut model = model(pinned, viscous);
+        let mut input = model.state().unwrap();
+        for (i, v) in input.particle_qd.host_mut().unwrap().iter_mut().enumerate() {
+            *v = Vec3::new(0.1 * i as f64, -0.5 * i as f64, 0.0);
+        }
+        let mut reference = model.state().unwrap();
+        let mut output = model.state().unwrap();
+        let mut other = model.state().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        for state in [&mut input, &mut reference, &mut output, &mut other] {
+            state.upload_to_device(device, queue).unwrap();
+        }
+        let mut solver = VbdSolver::new_gpu(&engine, &model)
+            .unwrap()
+            .with_iterations(128)
+            .with_contact_stiffness(0.0);
+        solver
+            .step(
+                &model,
+                &input,
+                &model.control(),
+                &Contacts::with_capacity(0),
+                h,
+                &mut reference,
+            )
+            .unwrap();
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, false)
+                .is_err()
+        );
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 17, true)
+            .unwrap();
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 111, false)
+            .unwrap();
+        assert_eq!(
+            snapshot(&engine, &input, &reference),
+            snapshot(&engine, &input, &output)
+        );
+        for invalid in [0.0, h * 0.5, f64::NAN] {
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+                .unwrap();
+            assert!(
+                solver
+                    .material_iteration_gpu(&model, &input, &mut output, invalid, 1, false)
+                    .is_err()
+            );
+            assert!(
+                solver
+                    .material_iteration_gpu(&model, &input, &mut output, h, 1, false)
+                    .is_err()
+            );
+        }
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        let before = snapshot(&engine, &input, &other);
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &input, &mut other, h, 1, false)
+                .is_err()
+        );
+        assert_eq!(before, snapshot(&engine, &input, &other));
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &other, &mut output, h, 1, false)
+                .is_err()
+        );
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        solver
+            .material_force_residual_gpu(&model, &input, &mut output, h)
+            .unwrap();
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, false)
+                .is_err()
+        );
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        solver
+            .step(
+                &model,
+                &input,
+                &model.control(),
+                &Contacts::with_capacity(0),
+                h,
+                &mut output,
+            )
+            .unwrap();
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, false)
+                .is_err()
+        );
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 128, true)
+            .unwrap();
+        let target = [[0.0_f32, -0.75, 0.0, 0.0]; 4];
+        queue.write_buffer(
+            input.particle_qd.device_buffer().unwrap(),
+            0,
+            bytemuck::cast_slice(&target),
+        );
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 128, false)
+            .unwrap();
+        let residual = solver
+            .material_force_residual_gpu(&model, &input, &mut output, h)
+            .unwrap();
+        let force = readback::read::<[f32; 4]>(&engine, residual, 4);
+        assert!(
+            force.iter().all(|v| v[3].is_finite() && v[3] <= 1e-4),
+            "{force:?}"
+        );
+        solver
+            .step(
+                &model,
+                &input,
+                &model.control(),
+                &Contacts::with_capacity(0),
+                h,
+                &mut reference,
+            )
+            .unwrap();
+        let cold =
+            readback::read::<[f32; 4]>(&engine, reference.particle_qd.device_buffer().unwrap(), 4);
+        let warm =
+            readback::read::<[f32; 4]>(&engine, output.particle_qd.device_buffer().unwrap(), 4);
+        for (a, b) in cold.iter().zip(&warm) {
+            for i in 0..3 {
+                assert!((a[i] - b[i]).abs() < 2e-5);
+            }
+        }
+        assert!(
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 0, true)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn material_force_monitor_rejects_exhaustion_and_nonfinite_values() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();

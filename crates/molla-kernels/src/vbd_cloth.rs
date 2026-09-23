@@ -33,12 +33,28 @@ struct Uniforms {
 
 const WORKGROUP_SIZE: u32 = 64;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DispatchMode {
+    Step,
+    BeginMaterial,
+    ContinueMaterial,
+    ForceResidual,
+}
+
+#[derive(PartialEq, Eq)]
+struct MaterialContinuation {
+    groups: [wgpu::BindGroup; 5],
+    timestep: u32,
+}
+
 /// Owns the VBD pipelines + per-substep scratch buffers.
 /// Sized for a specific `(particle_count, spring_count)` — rebuild
 /// the kernel if either changes.
 pub struct VbdClothKernel {
     bindings: BindingCache,
     pipe_predict: wgpu::ComputePipeline,
+    pipe_retarget: wgpu::ComputePipeline,
+    continuation: Option<MaterialContinuation>,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
@@ -210,6 +226,7 @@ impl VbdClothKernel {
         };
 
         let pipe_predict = make_pipeline("predict");
+        let pipe_retarget = make_pipeline("retarget");
         let pipe_residual_seed = make_pipeline("residual_seed");
         let pipe_force_residual = make_pipeline("force_residual");
         let pipe_solve_color = make_pipeline("solve_color");
@@ -275,6 +292,8 @@ impl VbdClothKernel {
         Self {
             bindings: BindingCache::new(64),
             pipe_predict,
+            pipe_retarget,
+            continuation: None,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
@@ -314,6 +333,7 @@ impl VbdClothKernel {
         queue: &wgpu::Queue,
         per_spring_stiffness: &[Real],
     ) -> Result<()> {
+        self.continuation = None;
         let sn = self.spring_count.max(1) as usize;
         let host = self.spring_stiffness.host_mut()?;
         for (dst, src) in host
@@ -364,7 +384,66 @@ impl VbdClothKernel {
             iterations,
             contact_stiffness,
             hard_mode,
+            DispatchMode::Step,
+        )
+    }
+
+    /// Starts or continues an elastic solve with an updated inertial velocity target.
+    /// Continuation requires unchanged original positions, history, model and timestep;
+    /// only input velocities may change. Other dispatches invalidate the sequence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_iteration(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        begin: bool,
+    ) -> Result<()> {
+        if begin {
+            self.continuation = None;
+        }
+        if iterations == 0
+            || model.particle_count == 0
+            || model.particle_count as u32 != self.particle_count
+            || model.spring_count as u32 != self.spring_count
+            || model.linear_damping != 0.0
+        {
+            self.continuation = None;
+            return Err(Error::Build(
+                "invalid material continuation configuration".into(),
+            ));
+        }
+        if begin
+            && model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            self.continuation = None;
+            return Err(Error::Build(
+                "material continuation requires elastic tets".into(),
+            ));
+        }
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            0.0,
             false,
+            if begin {
+                DispatchMode::BeginMaterial
+            } else {
+                DispatchMode::ContinueMaterial
+            },
         )
     }
 
@@ -379,6 +458,7 @@ impl VbdClothKernel {
         state_out: &mut State,
         dt: Real,
     ) -> Result<&wgpu::Buffer> {
+        self.continuation = None;
         if model.particle_count == 0
             || model.linear_damping != 0.0
             || model
@@ -392,7 +472,16 @@ impl VbdClothKernel {
             ));
         }
         self.dispatch_inner(
-            device, queue, model, state_in, state_out, dt, 0, 0.0, false, true,
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            0,
+            0.0,
+            false,
+            DispatchMode::ForceResidual,
         )?;
         Ok(self.inertia_y.device_buffer().unwrap())
     }
@@ -409,8 +498,11 @@ impl VbdClothKernel {
         iterations: u32,
         contact_stiffness: f32,
         hard_mode: bool,
-        residual_only: bool,
+        mode: DispatchMode,
     ) -> Result<()> {
+        let previous = self.continuation.take();
+        let residual_only = mode == DispatchMode::ForceResidual;
+        let reuse = mode == DispatchMode::ContinueMaterial;
         if model.particle_count == 0 {
             return Ok(());
         }
@@ -776,6 +868,30 @@ impl VbdClothKernel {
             },
         );
 
+        let continuation = if matches!(
+            mode,
+            DispatchMode::BeginMaterial | DispatchMode::ContinueMaterial
+        ) {
+            let key = MaterialContinuation {
+                groups: [
+                    bg_state.clone(),
+                    bg_topo.clone(),
+                    bg_out.clone(),
+                    bg_shapes.clone(),
+                    bg_tets.clone(),
+                ],
+                timestep: gpu_dt.to_bits(),
+            };
+            if reuse && previous.as_ref() != Some(&key) {
+                return Err(Error::Build(
+                    "material continuation has no matching active solve".into(),
+                ));
+            }
+            Some(key)
+        } else {
+            None
+        };
+
         // ── Uniforms (one per dispatch) ──────────────────────────
         let color_offsets_host = model.particle_color_offsets.host()?.to_vec();
 
@@ -832,7 +948,7 @@ impl VbdClothKernel {
         // (state_in → state_out → state_in) sees the cumulative effect
         // without the host having to read back F_p between substeps.
         // Skip the copy entirely when `tet_count == 0`.
-        if tet_count_u > 0 && !residual_only {
+        if tet_count_u > 0 && !residual_only && !reuse {
             if let (Some(src_fp), Some(dst_fp)) = (
                 state_in.tet_f_plastic.device_buffer(),
                 state_out.tet_f_plastic.device_buffer(),
@@ -894,7 +1010,16 @@ impl VbdClothKernel {
             } else {
                 let mut idx = 0usize;
                 // Predict.
-                dispatch(&mut pass, &self.pipe_predict, idx, particle_count_u);
+                dispatch(
+                    &mut pass,
+                    if reuse {
+                        &self.pipe_retarget
+                    } else {
+                        &self.pipe_predict
+                    },
+                    idx,
+                    particle_count_u,
+                );
                 // Outer iterations × colours. Soft rigid contacts are
                 // baked into `solve_color` so each per-vertex Newton
                 // block sees the contact force + Hessian directly. In
@@ -933,6 +1058,7 @@ impl VbdClothKernel {
             }
         }
         queue.submit(std::iter::once(encoder.finish()));
+        self.continuation = continuation;
 
         if residual_only {
             return Ok(());

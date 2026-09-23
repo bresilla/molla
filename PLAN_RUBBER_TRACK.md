@@ -786,9 +786,37 @@ coupling corrections match the previous candidate bitwise; independently
 reconstructed candidate minimumJ remains0.669218 across102144tets. No timestep
 is accepted by the new gate. Total test time112.62s includes setup and rejection
 capture. Both speed and full-candidate force convergence remain unresolved.
-Reusing VBD iterates efficiently,
-multi-step/moving-contact validation, native settling and traction, refinement,
+Native multi-step/moving-contact validation, settling and traction, refinement,
 energy accounting and production performance remain open before simulator exposure.
+
+### Retained material iterates
+
+After configuring material contact, `configure_material_contact_reuse(Some(n))`
+selects retained VBD iterates with n elastic sweeps per contact correction.
+The first solve keeps the configured full elastic budget. Subsequent solves
+update the inertial velocity target without resetting displacement or the
+original strain history. None retains the full-restart reference. Configuration
+is idle-only and does not change the MaterialContactConfig struct. New material
+contact configuration resets reuse to None; defaults remain unchanged.
+
+The kernel validates bind-group identity and GPU timestep within a sequence.
+An ordinary solve, force residual evaluation or stiffness update invalidates it.
+The low-level caller must keep original positions, model data and history fixed;
+only the inertial velocity input changes. All iteration work stays on device,
+and final contact, internal-force, nonfinite and volume gates remain mandatory.
+
+GPU tests verify17+111 retained sweeps match128 uninterrupted sweeps bitwise,
+changed inertial targets, invalid lifecycle/buffer/timestep rejection, and
+static/dynamic-support CPU references with1 or8 retained sweeps. A three-step
+test using CEOL's ground friction0.85 verifies cold/retained switching, state
+agreement, decreasing mechanical energy and the original residual/volume gates.
+
+This is bounded iteration, not a universal convergence guarantee. The artificial
+friction1000 sticking fixture passes the first substep but can fail later after
+tiny state differences; more iterations are not monotonically better. It remains
+an explicit rejection regression (force0.0014995 >1e-4 with256outer/128inner),
+not a claimed solved trajectory. Native CEOL reuse performance and acceptance
+still require measurement; the earlier112.62s failure used full restarts.
 
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm

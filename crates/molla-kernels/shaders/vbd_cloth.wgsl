@@ -226,6 +226,16 @@ fn residual_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     particle_delta[i] = vec4<f32>(particle_qd[i].xyz * u.dt, 0.0);
 }
 
+@compute @workgroup_size(64)
+fn retarget(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= u.particle_count { return; }
+    inertia_y[i] = vec4<f32>(0.0);
+    if particle_inv_mass[i] <= 0.0 { return; }
+    let g = gravity[u32(max(particle_world[i], 0))].xyz;
+    inertia_y[i] = vec4<f32>((particle_qd_in[i].xyz + g * u.dt) * u.dt, 0.0);
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Quaternion + transform helpers (mirror xpbd_particles.wgsl).
 // ─────────────────────────────────────────────────────────────────
