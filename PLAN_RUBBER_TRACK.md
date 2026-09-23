@@ -1063,6 +1063,17 @@ match current initial inputs; its2386active rows comprise2384dynamic and2ball
 rows, with no static rows. A read-only active-contact buffer accessor and
 timing parity test support checking the current native workload directly.
 
+Native1594cd1 reports8086active rows, not the archived2386. Soft initial
+positions/masses match, but the extra5700rows' type/distribution is not yet
+captured; the archived replay cannot establish native performance. The
+instrumented step exactly matchesf8870c9 physical state and passes independent
+force/volume/mass/momentum checks. Its timeline is22.344843s, with20.338754s
+continued solve/recovery,0.009072s copies and0.017175s feedback.110telemetry
+samples at100% GPU utilization show2775MHzSM/10801MHzmemory/P2; clocks were
+not changed. Earlier timing variation remains unexplained, so this is not
+a controlled speedup claim. Capture the actual native workload before the
+next contact-parallelism change; full tracked acceptance remains incomplete.
+
 Primary references:
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAETHERefMap/simathe-c-trusses.htm
 - https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-embeddedelement.htm
