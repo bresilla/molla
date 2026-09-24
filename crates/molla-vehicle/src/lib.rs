@@ -20,6 +20,7 @@ pub mod suspension;
 pub mod sysid;
 pub mod terrain;
 pub mod tire;
+pub mod track;
 pub mod vehicle;
 
 pub use deformable::{

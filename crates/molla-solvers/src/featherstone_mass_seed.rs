@@ -84,7 +84,7 @@ fn seeded_steps_match_fresh_mass_after_mimic_fk_and_singular_changes() {
                             1.0 / 120.0,
                             &mut output,
                             |_, _| false,
-                            |model, state, _, wrenches, seed| {
+                            |model, state, _, wrenches, seed, _| {
                                 wrenches[1].linear += Vec3::new(0.3, -0.1, 0.2);
                                 if cached {
                                     let matrices = (0..model.articulation_count)

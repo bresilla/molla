@@ -46,6 +46,7 @@ pub mod sph_oracle;
 mod vbd;
 pub mod vbd_soft_contact;
 pub mod wheel_forces;
+pub mod track_forces;
 mod xpbd;
 
 pub use barrier_solver::BarrierSolver;

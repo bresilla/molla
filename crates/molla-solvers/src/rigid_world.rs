@@ -40,6 +40,7 @@ pub struct RigidWorld {
     pub scene: RigidScene,
     pub solver: FeatherstoneSolver,
     pub wheels: crate::wheel_forces::WheelForces,
+    pub tracks: crate::track_forces::TrackForces,
     pipeline: CollisionPipeline,
     bounds: molla_geometry::shape_world::SceneShapeBounds,
     contacts: Contacts,
@@ -63,6 +64,7 @@ impl RigidWorld {
                 .with_stable_motor_feedback(true)
                 .with_substeps(8),
             wheels: crate::wheel_forces::WheelForces::default(),
+            tracks: crate::track_forces::TrackForces::default(),
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
             bounds: molla_geometry::shape_world::SceneShapeBounds::default(),
             contacts: Contacts::with_capacity(64),
@@ -226,6 +228,10 @@ impl RigidWorld {
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
     ) -> Result<()> {
         let changed = self.settling.changed_inputs(&self.scene, &self.wheels);
+        self.tracks.prepare(&self.scene);
+        if !self.tracks.is_empty() {
+            return self.step_with_forces_inner(dt, excluded, |_, _, _, _| Ok(()), true);
+        }
         if self.sleeping.any_valid(&self.scene, &self.wheels) {
             self.step_sleeping(dt, excluded)?;
         } else {
@@ -264,6 +270,8 @@ impl RigidWorld {
         self.pipeline
             .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
         let mut wheel_step = self.wheels.begin_step();
+        self.tracks.prepare(scene);
+        let mut track_step = self.tracks.clone();
         let excluded = std::cell::RefCell::new(&mut excluded);
         let wheels = &mut self.wheels;
         let mut next = scene.model().state()?;
@@ -282,7 +290,7 @@ impl RigidWorld {
                     b.and_then(|i| scene.body_handle(i)),
                 )
             },
-            |model, state, sub_dt, wrenches, mass_seed| {
+            |model, state, sub_dt, wrenches, mass_seed, contacts| {
                 let poses = state.body_q.host()?;
                 let velocities = state.body_qd.host()?;
                 let masses = model.body_mass.host()?;
@@ -316,12 +324,14 @@ impl RigidWorld {
                     excluded.borrow_mut()(a, b)
                 })?;
                 crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                track_step.apply(scene, &mut response, contacts, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)?;
                 response.export_mass(mass_seed)
             },
             Some(&bounds),
         )?;
         self.scene.commit_step(next)?;
+        self.tracks = track_step;
         self.sleeping.clear();
         if custom_forces {
             self.settling.clear_windows();
