@@ -172,17 +172,11 @@ impl GpuGmres {
         })
     }
 
-    /// Encodes `A*x=b`; the callback must overwrite output with the linear operator
-    /// applied to input without changing input, RHS, preconditioner or physical state.
-    /// The initial guess is read from `solution()` unless explicitly zeroed.
-    pub fn encode(
+    pub(crate) fn validate_inputs(
         &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
         rhs: &wgpu::Buffer,
         inverse_diagonal: &wgpu::Buffer,
         settings: GpuGmresSettings,
-        mut operator: impl FnMut(&mut wgpu::CommandEncoder, &wgpu::Buffer, &wgpu::Buffer) -> Result<()>,
     ) -> Result<()> {
         let owned = [
             &self.solution,
@@ -210,6 +204,31 @@ impl GpuGmres {
                 "invalid GPU GMRES settings or aliased input".into(),
             ));
         }
+        Ok(())
+    }
+
+    /// Encodes `A*x=b`; the callback must overwrite output with the linear operator
+    /// applied to input without changing input, RHS, preconditioner or physical state.
+    /// The initial guess is read from `solution()` unless explicitly zeroed.
+    pub fn encode(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        rhs: &wgpu::Buffer,
+        inverse_diagonal: &wgpu::Buffer,
+        settings: GpuGmresSettings,
+        mut operator: impl FnMut(&mut wgpu::CommandEncoder, &wgpu::Buffer, &wgpu::Buffer) -> Result<()>,
+    ) -> Result<()> {
+        self.validate_inputs(rhs, inverse_diagonal, settings)?;
+        let owned = [
+            &self.solution,
+            &self.direction,
+            &self.work,
+            &self.basis,
+            &self.small,
+            &self.partials,
+            &self.diagnostics,
+        ];
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(32);
         let mut bytes = vec![0; stride as usize * (2 + 2 * self.restart) as usize];
         for slot in 0..2 + 2 * self.restart {

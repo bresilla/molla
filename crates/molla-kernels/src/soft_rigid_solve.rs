@@ -7,6 +7,10 @@ mod material_iteration;
 pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIterationKernel};
 mod linearization;
 pub use linearization::{ContactLinearizationBindings, ContactLinearizationKernel};
+mod coupled_newton;
+pub use coupled_newton::{
+    CoupledNewtonBindings, CoupledNewtonDiagnostics, CoupledNewtonKernel, CoupledNewtonSettings,
+};
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 

@@ -40,9 +40,9 @@ pub struct ContactLinearizationKernel {
     rigid: wgpu::Buffer,
     contact: wgpu::Buffer,
     status: wgpu::Buffer,
-    particles: u32,
-    rows: u32,
-    dofs: u32,
+    pub(super) particles: u32,
+    pub(super) rows: u32,
+    pub(super) dofs: u32,
     bodies: u32,
 }
 
