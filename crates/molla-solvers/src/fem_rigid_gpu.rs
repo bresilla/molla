@@ -775,7 +775,6 @@ impl FemRigidGpuSystem {
                 .as_ref()
                 .ok_or_else(|| Error::Build("global Newton requires material contact".into()))?;
             if coupling.coupled_patch
-                || self.timing.is_some()
                 || self.contact_fences.is_some()
                 || config.solve.relative_tolerance != 0.0
                 || config.solve.absolute_tolerance
@@ -802,6 +801,7 @@ impl FemRigidGpuSystem {
             None
         };
         self.global_newton = state;
+        self.timing = None;
         self.fem.clear_material_contact_patch_gpu();
         Ok(())
     }
@@ -834,20 +834,20 @@ impl FemRigidGpuSystem {
             .map(GlobalNewtonState::commit_status)
     }
 
-    /// Enable GPU phase timestamps while idle; material/contact reconfiguration disables timing.
+    /// Enable GPU phase timestamps while idle; material/contact/global reconfiguration disables timing.
     pub fn configure_gpu_timing(&mut self, enabled: bool) -> Result<()> {
-        if self.queued_substeps != 0
-            || self.completion.is_some()
-            || (enabled && self.global_newton.is_some())
-        {
+        if self.queued_substeps != 0 || self.completion.is_some() {
             return Err(Error::Build(
                 "FEM timing configuration requires an idle island".into(),
             ));
         }
-        let iterations = self
-            .material_contact
-            .as_ref()
-            .map_or(1, |c| c.config.iterations);
+        let iterations = if self.global_newton.is_some() {
+            1
+        } else {
+            self.material_contact
+                .as_ref()
+                .map_or(1, |c| c.config.iterations)
+        };
         self.timing = enabled
             .then(|| timing::SubstepTiming::new(&self.device, iterations))
             .transpose()?;
@@ -1432,6 +1432,10 @@ impl FemRigidGpuSystem {
                     self.soft_model.particle_count as u32,
                     coupling.config.linear_tolerance,
                 )?;
+                if let Some(timing) = &self.timing {
+                    timing.mark_contact(&mut encoder, 1);
+                    timing.mark(&mut encoder, 3);
+                }
             } else {
                 if let Some(counts) = &self.contact_fences {
                     let counts = counts.clone();
