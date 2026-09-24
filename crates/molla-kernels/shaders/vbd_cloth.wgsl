@@ -56,6 +56,7 @@ struct Uniforms {
 };
 
 const MAX_STRETCH_DISABLED: f32 = 1.0;
+const CACHE_PREVIOUS_TETS: bool = false;
 const IDENTITY3 = mat3x3<f32>(
     vec3<f32>(1.0, 0.0, 0.0),
     vec3<f32>(0.0, 1.0, 0.0),
@@ -560,6 +561,38 @@ fn tet_cofactor_parts(f: mat3x3<f32>) -> TetGradient {
     return result;
 }
 
+@compute @workgroup_size(64)
+fn cache_previous_tets(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tet = gid.x;
+    if tet >= u.work_count { return; }
+    let i0 = tet_indices[tet * 4u];
+    let edges = mat3x3<f32>(
+        tet_displacement_edge(i0, tet_indices[tet * 4u + 1u]),
+        tet_displacement_edge(i0, tet_indices[tet * 4u + 2u]),
+        tet_displacement_edge(i0, tet_indices[tet * 4u + 3u]),
+    );
+    let raw = tet_dm_inv[tet];
+    let parts = tet_gradient_parts(edges, mat3x3<f32>(raw.col0.xyz, raw.col1.xyz, raw.col2.xyz), IDENTITY3);
+    let base = u.particle_count + 6u * tet;
+    for (var column = 0u; column < 3u; column++) {
+        particle_delta[base + column] = vec4<f32>(parts.value[column], 0.0);
+        particle_delta[base + 3u + column] = vec4<f32>(parts.correction[column], 0.0);
+    }
+}
+
+fn tet_previous_parts(tet: u32, edges: mat3x3<f32>, dm_inv: mat3x3<f32>) -> TetGradient {
+    if CACHE_PREVIOUS_TETS {
+        let base = u.particle_count + 6u * tet;
+        var parts: TetGradient;
+        for (var column = 0u; column < 3u; column++) {
+            parts.value[column] = particle_delta[base + column].xyz;
+            parts.correction[column] = particle_delta[base + 3u + column].xyz;
+        }
+        return parts;
+    }
+    return tet_gradient_parts(edges, dm_inv, IDENTITY3);
+}
+
 fn tet_dot_minus_one(a: vec3<f32>, b: vec3<f32>) -> f32 {
     let products = a * b;
     let sum01 = products.x + products.y;
@@ -605,7 +638,7 @@ fn tet_neo_hookean_block(
     let lam = lam_l + mu_l;
 
     // Displacement-gradient form F = I + Du · Dm⁻¹.
-    let previous_parts = tet_gradient_parts(mat3x3<f32>(v1, v2, v3), dm_inv, IDENTITY3);
+    let previous_parts = tet_previous_parts(tet_id, mat3x3<f32>(v1, v2, v3), dm_inv);
     let previous = previous_parts.value + previous_parts.correction;
     let increment = tet_gradient_product(mat3x3<f32>(
         particle_delta[i1].xyz - particle_delta[i0].xyz,

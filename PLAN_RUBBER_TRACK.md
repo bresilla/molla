@@ -78,6 +78,29 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### GPU previous-gradient cache (2026-09-24)
+
+VBD computes the previous-position deformation-gradient high/low parts once per
+tet on the GPU, retaining them across valid material continuations. A new step,
+begin-material or force-only evaluation refreshes the cache. Current gradients
+and plastic state remain uncached. Six vec4 columns per tet occupy a checked tail
+of existing displacement scratch; the43storage-binding contract is unchanged.
+The CEOL regression adds9,805,824bytes of cache, without host mirrors/readback.
+
+Two102144-tet fixed-state replays retain bitwise-identical displacement and force
+buffers at0/1/8/32/128/512 iterations versus the uncached shader. Warm material-only
+submission/readback timings improve1.49x and1.47x, with1.50/2.76ms preparation.
+These measurements are not full coupled-simulation acceleration or acceptance.
+Lifecycle tests compare reused/fresh kernels under position, rest-basis, history,
+timestep and topology changes, including zero tets and force-only nonmutation.
+Validation passes29 GPU tests (material9, cache lifecycle1, precision2, plasticity3,
+kinematic hardening3 and coupled contact11), the scratch-limit unit test and
+all-target GPU checks. Independent f64 replay gates pass without tolerance
+changes; the previously rejected state42 initial iterate remains rejected.
+Main-checkout material9 and cache lifecycle1 GPU revalidation also pass.
+The cache does not establish sustained settling, torque-driven travel, energy
+balance, refinement or practical simulator performance; those remain open.
+
 ### GPU spherical closures (2026-09-22)
 
 `SoftRigidBallJoint` supplies two body-local anchors to persistent GPU rows.
