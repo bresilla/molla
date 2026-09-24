@@ -21,6 +21,7 @@ fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
 }
 
 fn cooperative_delta(contact: Contact, direction: vec3<f32>, k: u32, impulse: f32) {
+    if impulse == 0.0 { return; }
     for (var i = 0u; i < contact.support.z; i += 1u) {
         let particle = support_node(contact, i);
         velocities[particle] = vec4<f32>(velocities[particle].xyz + direction * (impulse*contact.weights[i]*inverse_mass[particle]), 0.0);

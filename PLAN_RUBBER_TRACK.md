@@ -8,6 +8,27 @@ contact must generate vehicle motion with equal/opposite reactions. No imposed
 belt phase, prescribed belt velocity, or chassis velocity override qualifies.
 Retain the current reduced model as a separately named, usable baseline.
 
+### Current contact throughput and convergence (2026-09-24)
+
+Cooperative contact updates skip exactly zero impulses. Ordered row processing,
+Coulomb projections and acceptance tolerances remain unchanged. Current fitted
+CEOL replay passes bitwise serial/cooperative/separated comparisons, including
+single sweeps, twelve sweeps and 4+8 continuation. With a stable serial timing
+control, the separated single-sweep contact pass decreased from 9.552 ms to
+7.866--7.869 ms; this is not an end-to-end simulator performance claim.
+
+Before this optimization, the fitted 744 kg asset accepted 29 GPU steps at
+1/9600 s then rejected step 30. Independent force/volume/mass/momentum checks
+pass that 29-step prefix, without a final trajectory-envelope gate.
+At step 30 independent material force passes but four tooth
+contact normals fail. Coplanar point/edge gaps are affine within 8.5e-13 m;
+mixed penetration/speculative recovery creates different constraint targets.
+A captured articulated normal-only block remains above tolerance after 8192
+additional PGS sweeps, whereas local active-set enumeration releases the stale
+multiplier immediately. Friction and other impulses were frozen in that oracle:
+it is not a coupled runtime solution. Sustained dynamics and practical speed
+remain unproven; increasing sweep counts is not an adequate performance fix.
+
 ### Current sprocket geometry correction (2026-09-24)
 
 The current 744 kg CEOL starts with 2.0624 mm penetration at one tooth on each
