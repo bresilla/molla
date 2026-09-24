@@ -8,11 +8,44 @@ pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIteratio
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
-fn cooperative_delta_shader(dofs: u32) -> String {
+fn cooperative_dof_shader(dofs: u32) -> String {
     let delta: String = (0..dofs)
         .map(|d| format!("accumulate_rigid_delta({d}u, -sweep_response[k][{d}] * impulse);\n"))
         .collect();
-    format!("fn cooperative_rigid_delta(k: u32, impulse: f32) {{\n{delta}}}\n")
+    let relative: String = (0..dofs)
+        .map(|d| format!("value = fma(-sweep_projected[k][{d}], sweep_velocity[{d}] + sweep_delta_velocity[{d}], value);\n"))
+        .collect();
+    format!(
+        "fn cooperative_rigid_delta(k: u32, impulse: f32) {{\n{delta}}}\n\
+         fn cooperative_rigid_relative(k: u32, initial: f32) -> f32 {{\n\
+         var value = initial;\n{relative}return value;\n}}\n"
+    )
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::cooperative_dof_shader;
+
+    #[test]
+    fn cooperative_expressions_preserve_dof_order() {
+        for dofs in 1..=64 {
+            let source = cooperative_dof_shader(dofs);
+            let actual: Vec<_> = source
+                .lines()
+                .filter(|line| line.starts_with("value = fma("))
+                .collect();
+            let expected: Vec<_> = (0..dofs).map(|d| format!(
+                "value = fma(-sweep_projected[k][{d}], sweep_velocity[{d}] + sweep_delta_velocity[{d}], value);"
+            )).collect();
+            assert_eq!(actual, expected, "DOFs={dofs}");
+            assert_eq!(
+                source.matches("accumulate_rigid_delta(").count(),
+                dofs as usize
+            );
+            assert_eq!(source.matches("var value = initial;").count(), 1);
+            assert_eq!(source.matches("return value;").count(), 1);
+        }
+    }
 }
 
 /// GPU start/end ticks for factor, prepare, count, offset, scatter, solve and recovery.
@@ -240,7 +273,7 @@ impl SoftRigidSolveKernel {
                     include_str!("../shaders/soft_rigid_cooperative.wgsl"),
                     include_str!("../shaders/soft_rigid_static.wgsl"),
                     include_str!("../shaders/soft_rigid_block.wgsl"),
-                    cooperative_delta_shader(dofs)
+                    cooperative_dof_shader(dofs)
                 )
                 .into(),
             ),

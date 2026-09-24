@@ -42,7 +42,7 @@ fn check_static_schedule(inputs: &[Vec<u8>], bytes: &[u8]) {
     let enabled: Vec<_> = contacts
         .iter()
         .enumerate()
-        .filter(|(_, c)| matches!(c.ids[3], 1 | 3))
+        .filter(|(_, c)| matches!(c.ids[3], 1 | 3 | 5))
         .collect();
     let nodes = |c: &SoftRigidContactGpu| {
         [c.ids[0], c.support[0], c.support[1]]

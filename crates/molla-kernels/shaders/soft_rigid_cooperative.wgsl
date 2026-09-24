@@ -18,9 +18,7 @@ fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
         value += contact.weights[i] * dot(velocities[support_node(contact, i)].xyz, direction);
     }
     if contact.ids.y != 0xffffffffu {
-        for (var d = 0u; d < SWEEP_DOFS; d += 1u) {
-            value -= sweep_projected[k][d] * (sweep_velocity[d] + sweep_delta_velocity[d]);
-        }
+        value = cooperative_rigid_relative(k, value);
     }
     return value;
 }
