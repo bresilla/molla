@@ -88,6 +88,10 @@ impl CoupledPatch {
         .replace(
             "const CACHE_PREVIOUS_TETS: bool = false;",
             "const CACHE_PREVIOUS_TETS: bool = true;",
+        )
+        .replace(
+            "const LOCAL_MATERIAL_TRIAL: bool = false;",
+            "const LOCAL_MATERIAL_TRIAL: bool = true;",
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("coupled material/contact Newton"),
