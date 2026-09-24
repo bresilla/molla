@@ -25,6 +25,8 @@ mod barrier_newton;
 #[cfg(feature = "gpu")]
 mod bsr_solve;
 #[cfg(feature = "gpu")]
+mod gmres;
+#[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
 mod clamping_max_effort;
@@ -147,6 +149,8 @@ pub use barrier_newton::{
 };
 #[cfg(feature = "gpu")]
 pub use bsr_solve::{BsrCgResult, BsrGmresResult, bsr_cg_gpu, bsr_gmres_gpu};
+#[cfg(feature = "gpu")]
+pub use gmres::{GpuGmres, GpuGmresDiagnostics, GpuGmresSettings};
 #[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
