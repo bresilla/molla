@@ -78,6 +78,33 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Increment and stress precision (2026-09-24)
+
+At publishedb645845, original/doubled-h native screens pass independent force,
+volume, mass/momentum and energy-reference provenance gates. Their f64 maximum
+forces are1.626412e-5 and3.394021e-5. Quadrupled h falsely accepts one node5924:
+GPU9.831588e-5 versus f641.205820e-4. That screen remains rejected, not a validated
+timestep or sustained physical trajectory.
+
+The captured discrepancy is now predominantly viscous. Rounded displacement-edge
+subtractions introduce6.20648e-6N error; correctly rounded increments predict only
+2.36735e-7N. The increment gradient now retains those subtraction remainders and
+its low parts through total-gradient assembly. Further independent stress detail
+isolates lambda+mu coefficient rounding and stress arithmetic, while compensated
+geometry contributes less than8e-13N error. Strict stress retains coefficient,
+product and sum remainders through its final compensated force projection.
+
+The seventh captured fixture fails before these changes with2.226615e-5 scalar
+error and false acceptance. Afterward all7fixtures pass the unchanged3e-6 error
+bound; the new case correctly rejects with1.955251e-6 error. Physical and contact
+limits remain1e-4. Fixed-target whole-mesh replay now rejects the initial state
+in GPU and f64, then has zero independent force violations at1/8/32/128/512sweeps.
+This is material-only evidence. Whole-mesh scalar disagreement still reaches
+3.60e-5; uniform f64 equivalence is not established. The30-test GPU regression
+matrix and all-target GPU compilation pass, including11coupled tests with
+high-friction exhaustion rejection. Fresh native trajectories and practical
+performance remain required; this does not authorize simulator FEM activation.
+
 ### Compensated final material polish (2026-09-24)
 
 At doubled timestep, the corrected geometry guard rejects the captured state

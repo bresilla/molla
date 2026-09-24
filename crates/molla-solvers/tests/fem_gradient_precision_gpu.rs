@@ -146,6 +146,7 @@ fn cancelling_tet_gradients_match_f64_force() {
     for (case, fixture) in fixtures::CASES
         .iter()
         .chain(fixtures::EDGE_CASES)
+        .chain(fixtures::INCREMENT_CASES)
         .enumerate()
     {
         let rest = vectors(fixture.rest);

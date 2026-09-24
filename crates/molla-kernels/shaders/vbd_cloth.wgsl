@@ -609,6 +609,20 @@ fn tet_previous_parts(tet: u32, edges: mat3x3<f32>, dm_inv: mat3x3<f32>) -> TetG
     return tet_previous_gradient_parts(tet, edges, dm_inv);
 }
 
+fn tet_increment_parts(tet: u32, dm_inv: mat3x3<f32>) -> TetGradient {
+    let origin = tet_indices[tet * 4u];
+    var edges: mat3x3<f32>;
+    var low: mat3x3<f32>;
+    for (var column = 0u; column < 3u; column++) {
+        let node = tet_indices[tet * 4u + column + 1u];
+        edges[column] = particle_delta[node].xyz - particle_delta[origin].xyz;
+        low[column] = tet_sum_error(particle_delta[node].xyz, -particle_delta[origin].xyz, edges[column]);
+    }
+    var parts = tet_gradient_parts(edges, dm_inv, mat3x3<f32>());
+    parts.correction += low * dm_inv;
+    return parts;
+}
+
 fn tet_dot_minus_one(a: vec3<f32>, b: vec3<f32>) -> f32 {
     let products = a * b;
     let sum01 = products.x + products.y;
@@ -656,17 +670,15 @@ fn tet_neo_hookean_block(
     // Displacement-gradient form F = I + Du · Dm⁻¹.
     let previous_parts = tet_previous_parts(tet_id, mat3x3<f32>(v1, v2, v3), dm_inv);
     let previous = previous_parts.value + previous_parts.correction;
-    let increment = tet_gradient_product(mat3x3<f32>(
-        particle_delta[i1].xyz - particle_delta[i0].xyz,
-        particle_delta[i2].xyz - particle_delta[i0].xyz,
-        particle_delta[i3].xyz - particle_delta[i0].xyz,
-    ), dm_inv, mat3x3<f32>());
+    let increment_parts = tet_increment_parts(tet_id, dm_inv);
+    let increment = increment_parts.value + increment_parts.correction;
     var f_full: mat3x3<f32>;
     var f_low: mat3x3<f32>;
     for (var column = 0u; column < 3u; column++) {
-        let value = previous_parts.value[column] + increment[column];
+        let value = previous_parts.value[column] + increment_parts.value[column];
         let correction = previous_parts.correction[column]
-            + tet_sum_error(previous_parts.value[column], increment[column], value);
+            + increment_parts.correction[column]
+            + tet_sum_error(previous_parts.value[column], increment_parts.value[column], value);
         f_full[column] = value + correction;
         if strict {
             f_low[column] = tet_sum_error(value, correction, f_full[column]);
@@ -725,6 +737,7 @@ fn tet_neo_hookean_block(
         (f_mat[1] - cof[1]) * mu + cof[1] * s_scalar,
         (f_mat[2] - cof[2]) * mu + cof[2] * s_scalar,
     );
+    var p_low: mat3x3<f32>;
     if strict {
         var cof_low: mat3x3<f32>;
         for (var column = 0u; column < 3u; column++) {
@@ -734,9 +747,21 @@ fn tet_neo_hookean_block(
                 + cross(f_low[b], f_low[c]);
         }
         let j_low = dot(f_low[0], cof[0]) + dot(f_mat[0], cof_low[0]) + dot(f_low[0], cof_low[0]);
+        let lam_low = tet_sum_error(vec3<f32>(lam_l), vec3<f32>(mu_l), vec3<f32>(lam)).x;
+        let scalar_low = fma(lam, j_minus_one, -s_scalar) + lam_low * j_minus_one;
         for (var column = 0u; column < 3u; column++) {
-            p_mat[column] += (f_low[column] - cof_low[column]) * mu
-                + lam * (j_low * cof[column] + (j_minus_one + j_low) * cof_low[column]);
+            let difference = f_mat[column] - cof[column];
+            let shear_term = difference * mu;
+            let bulk_term = cof[column] * s_scalar;
+            let high = shear_term + bulk_term;
+            let low = fma(difference, vec3<f32>(mu), -shear_term)
+                + fma(cof[column], vec3<f32>(s_scalar), -bulk_term)
+                + tet_sum_error(shear_term, bulk_term, high)
+                + (f_low[column] - cof_low[column]) * mu
+                + lam * (j_low * cof[column] + (j_minus_one + j_low) * cof_low[column])
+                + scalar_low * cof[column];
+            p_mat[column] = high + low;
+            p_low[column] = tet_sum_error(high, low, p_mat[column]);
         }
     }
     let p_vec = mat3x3<f32>(
@@ -764,7 +789,13 @@ fn tet_neo_hookean_block(
     }
 
     // Force = -P · m (column-major reduction).
-    let f_clean = -(p_vec[0] * m.x + p_vec[1] * m.y + p_vec[2] * m.z);
+    var f_clean = -(p_vec[0] * m.x + p_vec[1] * m.y + p_vec[2] * m.z);
+    if strict {
+        let projected = tet_gradient_parts(p_mat, mat3x3<f32>(m, vec3<f32>(), vec3<f32>()), mat3x3<f32>());
+        let high = projected.value[0] * -rest_vol;
+        f_clean = high + (fma(projected.value[0], vec3<f32>(-rest_vol), -high)
+            - rest_vol * (projected.correction[0] + p_low * m));
+    }
 
     // Hessian per-vertex 3×3 block: μ·|m|²·I + λ·(cof·m)·(cof·m)ᵀ,
     // multiplied by rest volume.
