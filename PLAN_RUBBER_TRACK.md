@@ -8,6 +8,26 @@ contact must generate vehicle motion with equal/opposite reactions. No imposed
 belt phase, prescribed belt velocity, or chassis velocity override qualifies.
 Retain the current reduced model as a separately named, usable baseline.
 
+### Current sprocket geometry correction (2026-09-24)
+
+The current 744 kg CEOL starts with 2.0624 mm penetration at one tooth on each
+side. A 1.5 degree rest-phase candidate clears its box contact samples but still
+intersects the Blender mesh. Those boxes omit the wider authored root flanks.
+The candidate is not promoted; canonical Blender/USD remain unchanged.
+
+GPU contact gathering now supports an extruded trapezoid (kind 3), retaining
+the 64-byte shape layout. Its X half-width, bottom Y half-width and Z half-height
+are data.xyz; top Y half-width is position.w; friction remains data.w. Positive
+finite dimensions in [1e-15, 1e15) are validated on host and device. Contact face
+gaps use world-space barycentric plane distances; a nanometer-gap regression
+first failed before that correction. Edge/corner distances remain geometric.
+
+The primitive passes f64 gap/normal comparisons, dense/compact equivalence,
+invalid-dimension rejection and equal/opposite force/torque tests. Existing box,
+compact-contact and loop-joint regressions pass. This is a contact primitive,
+not native CEOL acceptance: Gearbox authoring/binding, corrected tooth/lug
+clearance, sustained motion, energy/refinement and practical performance remain.
+
 ## User-selectable simulation modes
 
 This is a machine-wide tyre/track fidelity contract, not a CEOL-only feature.

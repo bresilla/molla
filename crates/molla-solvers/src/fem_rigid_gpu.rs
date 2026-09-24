@@ -403,24 +403,7 @@ impl FemRigidGpuSystem {
             ));
         }
         for shape in &scene.shapes {
-            let quaternion_norm: f32 = shape.rotation.iter().map(|v| v * v).sum();
-            if shape.ids[0] > 2
-                || (shape.ids[1] != u32::MAX
-                    && shape.ids[1] as usize >= scene.rigid_model.body_count)
-                || shape
-                    .position
-                    .iter()
-                    .chain(&shape.rotation)
-                    .chain(&shape.data)
-                    .any(|v| !v.is_finite())
-                || (quaternion_norm - 1.0).abs() > 1e-5
-                || shape.data[3] < 0.0
-                || shape.data[0] <= 0.0
-                || (shape.ids[0] > 0 && shape.data[1] <= 0.0)
-                || (shape.ids[0] == 1 && shape.data[2] <= 0.0)
-            {
-                return Err(Error::Build("invalid GPU FEM primitive descriptor".into()));
-            }
+            shape.validate(scene.rigid_model.body_count)?;
         }
         let tets: Vec<[u32; 4]> = scene
             .soft_model

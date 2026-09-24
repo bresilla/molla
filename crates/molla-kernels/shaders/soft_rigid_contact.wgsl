@@ -39,6 +39,54 @@ fn box_distance(q: vec3<f32>, s: vec3<f32>) -> vec4<f32> {
     else { n.z = s.z; }
     return vec4<f32>(n, r + min(max(q.x, max(q.y, q.z)), 0.0));
 }
+struct PrismSample { value: vec4<f32>, anchor: vec3<f32>, planar: bool }
+fn prism_distance(p: vec3<f32>, data: vec3<f32>, top: f32) -> PrismSample {
+    let corners = array<vec2<f32>, 4>(vec2<f32>(-data.y, -data.z),
+        vec2<f32>(data.y, -data.z), vec2<f32>(top, data.z), vec2<f32>(-top, data.z));
+    var squared = 3.402823e38;
+    var offset = vec2<f32>(0.0);
+    var edge_normal = vec2<f32>(0.0);
+    var anchor = vec3<f32>(0.0);
+    var on_edge = false;
+    var inside = true;
+    for (var i = 0u; i < 4u; i += 1u) {
+        let edge = corners[(i + 1u) % 4u] - corners[i];
+        let delta = p.yz - corners[i];
+        inside = inside && edge.x * delta.y - edge.y * delta.x >= 0.0;
+        let fraction = clamp(dot(delta, edge) / dot(edge, edge), 0.0, 1.0);
+        let nearest = delta - edge * fraction;
+        let candidate = dot(nearest, nearest);
+        if candidate < squared {
+            squared = candidate;
+            offset = nearest;
+            edge_normal = normalize(vec2<f32>(edge.y, -edge.x));
+            anchor = vec3<f32>(0.0, corners[i]);
+            on_edge = fraction > 0.0 && fraction < 1.0;
+        }
+    }
+    let planar_length = sqrt(squared);
+    let planar_gap = select(planar_length, -planar_length, inside);
+    var planar_normal = edge_normal;
+    if planar_length > 1e-12 {
+        planar_normal = offset * select(1.0, -1.0, inside) / planar_length;
+    }
+    let cap_gap = abs(p.x) - data.x;
+    let cap = vec3<f32>(nonzero_sign(p).x, 0.0, 0.0);
+    let side = vec3<f32>(0.0, planar_normal);
+    let outside = length(max(vec2<f32>(cap_gap, planar_gap), vec2<f32>(0.0)));
+    var normal = select(side, cap, cap_gap >= planar_gap);
+    if outside > 1e-12 {
+        normal = (cap * max(cap_gap, 0.0) + side * max(planar_gap, 0.0)) / outside;
+    }
+    var planar = on_edge;
+    if cap_gap >= planar_gap {
+        anchor = cap * data.x;
+        planar = true;
+    }
+    if cap_gap > 0.0 && planar_gap > 0.0 { planar = false; }
+    if planar { normal = select(vec3<f32>(0.0, edge_normal), cap, cap_gap >= planar_gap); }
+    return PrismSample(vec4<f32>(normal, outside + min(max(cap_gap, planar_gap), 0.0)), anchor, planar);
+}
 fn distance(kind: u32, data: vec3<f32>, p: vec3<f32>) -> vec4<f32> {
     if kind == 0u {
         let r = length(p);
@@ -80,9 +128,14 @@ fn contact_at(row: u32) -> Contact {
     result.ids = vec4<u32>(node, shape.ids.y, shape_id, 0u);
     result.support = vec4<u32>(nodes.yz, nodes.w, 0u);
     result.weights = weights;
-    if node >= params.particle_count || shape.ids.x > 2u
+    if node >= params.particle_count || shape.ids.x > 3u
         || (shape.ids.y != 0xffffffffu && shape.ids.y >= params.body_count)
         || nodes.w == 0u || nodes.w > 3u {
+        result.ids.w = 2u;
+        return result;
+    }
+    if shape.ids.x == 3u && !(all(shape.data.xyz >= vec3<f32>(1e-15))
+        && all(shape.data.xyz < vec3<f32>(1e15)) && shape.position.w >= 1e-15 && shape.position.w < 1e15) {
         result.ids.w = 2u;
         return result;
     }
@@ -126,6 +179,17 @@ fn contact_at(row: u32) -> Contact {
             gaps += weights[i] * vec3<f32>(dot(nx, p - face_x), dot(ny, p - face_y), dot(nz, p - face_z));
         }
         sample = box_distance(gaps, signs);
+    } else if shape.ids.x == 3u {
+        let prism = prism_distance(local, shape.data.xyz, shape.position.w);
+        sample = prism.value;
+        if prism.planar {
+            let normal = rotate(rotation, sample.xyz);
+            let face = center + rotate(rotation, prism.anchor);
+            sample.w = 0.0;
+            for (var i = 0u; i < nodes.w; i += 1u) {
+                sample.w += weights[i] * dot(normal, positions[nodes[i]].xyz - face);
+            }
+        }
     } else {
         sample = distance(shape.ids.x, shape.data.xyz, local);
     }

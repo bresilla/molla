@@ -85,15 +85,21 @@ fn barycentric_contacts_transfer_equal_opposite_force_and_torque() {
                 weights,
             }],
         );
-        for kind in 0..3 {
+        for kind in 0..4 {
             for friction in [0.0, 0.5] {
                 let shape = SoftRigidShapeGpu {
-                    position: [point.x as f32, point.y as f32, -0.15, 0.0],
+                    position: [
+                        point.x as f32,
+                        point.y as f32,
+                        -0.15,
+                        if kind == 3 { 0.05 } else { 0.0 },
+                    ],
                     rotation: [0.0, 0.0, 0.0, 1.0],
                     data: match kind {
                         0 => [0.15, 0.0, 0.0, friction],
                         1 => [0.1, 0.1, 0.15, friction],
-                        _ => [0.15, 0.1, 0.0, friction],
+                        2 => [0.15, 0.1, 0.0, friction],
+                        _ => [0.1, 0.15, 0.15, friction],
                     },
                     ids: [kind, 0, 0, 0],
                 };

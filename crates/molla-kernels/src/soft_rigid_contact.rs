@@ -6,12 +6,68 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SoftRigidShapeGpu {
+    /// Local center in xyz; trapezoid Y half-width at local Z=+data.z in w.
     pub position: [f32; 4],
     pub rotation: [f32; 4],
-    /// Ball radius; box half-extents; cylinder radius/half-height. Friction in w.
+    /// Ball radius; box half-extents; cylinder radius/half-height; prism X/Y-bottom/Z half-extents. Friction in w.
     pub data: [f32; 4],
-    /// Kind (0 ball, 1 box, 2 cylinder), body index or u32::MAX, reserved, reserved.
+    /// Kind (0 ball, 1 box, 2 cylinder, 3 trapezoid prism), body index or u32::MAX, reserved, reserved.
     pub ids: [u32; 4],
+}
+
+impl SoftRigidShapeGpu {
+    /// Validate the primitive; prism dimensions must lie in [1e-15, 1e15).
+    pub fn validate(&self, body_count: usize) -> Result<()> {
+        let quaternion_norm: f32 = self.rotation.iter().map(|v| v * v).sum();
+        if self.ids[0] > 3
+            || (self.ids[1] != u32::MAX && self.ids[1] as usize >= body_count)
+            || self
+                .position
+                .iter()
+                .chain(&self.rotation)
+                .chain(&self.data)
+                .any(|v| !v.is_finite())
+            || (quaternion_norm - 1.0).abs() > 1e-5
+            || self.data[3] < 0.0
+            || self.data[0] <= 0.0
+            || (self.ids[0] > 0 && self.data[1] <= 0.0)
+            || (matches!(self.ids[0], 1 | 3) && self.data[2] <= 0.0)
+            || (self.ids[0] == 3
+                && (self.position[3] < 1e-15
+                    || self.position[3] >= 1e15
+                    || self.data[..3].iter().any(|v| *v < 1e-15 || *v >= 1e15)))
+        {
+            return Err(Error::Build("invalid GPU FEM primitive descriptor".into()));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::SoftRigidShapeGpu;
+
+    #[test]
+    fn trapezoid_descriptor_rejects_invalid_dimensions_and_bodies() {
+        let valid = SoftRigidShapeGpu {
+            position: [0.0, 0.0, 0.0, 0.005],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            data: [0.025, 0.013, 0.013, 0.6],
+            ids: [3, 0, 0, 0],
+        };
+        assert!(valid.validate(1).is_ok());
+        assert!(valid.validate(0).is_err());
+        for value in [0.0, 1e-20, -0.001, f32::NAN, f32::INFINITY, 1e15] {
+            let mut bad = valid;
+            bad.position[3] = value;
+            assert!(bad.validate(1).is_err());
+            for axis in 0..3 {
+                let mut bad = valid;
+                bad.data[axis] = value;
+                assert!(bad.validate(1).is_err());
+            }
+        }
+    }
 }
 
 #[repr(C)]
