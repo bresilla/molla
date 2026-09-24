@@ -840,6 +840,32 @@ impl VbdSolver {
             .force_residual(&gpu.device, &gpu.queue, model, state_in, state_out, dt)
     }
 
+    /// Evaluates material velocity residuals and their analytic directional derivative on GPU.
+    #[cfg(feature = "gpu")]
+    pub fn material_linearization_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        direction: &wgpu::Buffer,
+    ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build(
+                "material linearization requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.material_linearization(
+            &gpu.device,
+            &gpu.queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            direction,
+        )
+    }
+
     /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
     /// soft-VT contact pipeline, and the host-side tet-tet / SDF
     /// fallbacks. Extracted from `step` so the multi-substep driver

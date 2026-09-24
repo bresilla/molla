@@ -16,6 +16,8 @@ use bindings::BindingCache;
 mod coupled_patch;
 use coupled_patch::CoupledPatch;
 pub use coupled_patch::MaterialContactPatchBindings;
+mod linearization;
+use linearization::MaterialLinearization;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,6 +45,7 @@ enum DispatchMode {
     ContinueMaterial,
     PolishMaterial,
     ForceResidual,
+    Linearization,
 }
 
 #[derive(PartialEq, Eq)]
@@ -62,6 +65,7 @@ pub struct VbdClothKernel {
     continuation: Option<MaterialContinuation>,
     force_samples_ready: bool,
     coupled_patch: Option<CoupledPatch>,
+    linearization: Option<MaterialLinearization>,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
@@ -313,6 +317,7 @@ impl VbdClothKernel {
             continuation: None,
             force_samples_ready: false,
             coupled_patch: None,
+            linearization: None,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
@@ -597,6 +602,68 @@ impl VbdClothKernel {
         Ok(self.inertia_y.device_buffer().unwrap())
     }
 
+    /// Signed velocity residual and analytic Jacobian action at q_n + h v_out.
+    /// Elastic tets, viscoelasticity and springs; nonidentity plastic state emits NaN.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_linearization(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        direction: &wgpu::Buffer,
+    ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
+        self.continuation = None;
+        self.force_samples_ready = false;
+        if model.particle_count == 0
+            || model.particle_count as u32 != self.particle_count
+            || model.spring_count as u32 != self.spring_count
+            || model.linear_damping != 0.0
+            || !model.vertex_cable_bending_entries.is_empty()
+            || model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            return Err(Error::Build("material linearization requires matching elastic topology without world damping or cable bending".into()));
+        }
+        if self.linearization.is_none() {
+            self.linearization = Some(MaterialLinearization::new(
+                device,
+                [
+                    &self.layout_state,
+                    &self.layout_topo,
+                    &self.layout_out,
+                    &self.layout_uniforms,
+                    &self.layout_shapes,
+                    &self.layout_tets,
+                ],
+                self.particle_count,
+            )?);
+        }
+        self.linearization
+            .as_mut()
+            .unwrap()
+            .prepare(device, direction)?;
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            0,
+            0.0,
+            false,
+            DispatchMode::Linearization,
+        )?;
+        let linearization = self.linearization.as_ref().unwrap();
+        Ok((&linearization.residual, &linearization.action))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn dispatch_inner(
         &mut self,
@@ -613,7 +680,10 @@ impl VbdClothKernel {
     ) -> Result<()> {
         let previous = self.continuation.take();
         self.force_samples_ready = false;
-        let residual_only = mode == DispatchMode::ForceResidual;
+        let residual_only = matches!(
+            mode,
+            DispatchMode::ForceResidual | DispatchMode::Linearization
+        );
         let reuse = matches!(
             mode,
             DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
@@ -1178,7 +1248,13 @@ impl VbdClothKernel {
             }
             if residual_only {
                 dispatch(&mut pass, &self.pipe_residual_seed, 0, particle_count_u);
-                dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+                if mode == DispatchMode::Linearization {
+                    let linearization = self.linearization.as_ref().unwrap();
+                    pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+                    dispatch(&mut pass, &linearization.pipeline, 0, particle_count_u);
+                } else {
+                    dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+                }
             } else {
                 let mut idx = 0usize;
                 // Predict.
@@ -1255,7 +1331,7 @@ impl VbdClothKernel {
         self.continuation = continuation;
 
         if residual_only {
-            self.force_samples_ready = true;
+            self.force_samples_ready = mode == DispatchMode::ForceResidual;
             return Ok(());
         }
 
