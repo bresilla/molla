@@ -24,6 +24,25 @@ pub struct CoupledNewtonSettings {
     pub armijo: f32,
     pub linear: GpuGmresSettings,
 }
+impl CoupledNewtonSettings {
+    pub fn validate(self) -> Result<()> {
+        self.linear.validate()?;
+        if !(1..=64).contains(&self.iterations)
+            || !(1..=24).contains(&self.backtracks)
+            || !self.absolute_tolerance.is_finite()
+            || self.absolute_tolerance < 0.0
+            || !self.relative_tolerance.is_finite()
+            || !(0.0..1.0).contains(&self.relative_tolerance)
+            || (self.absolute_tolerance == 0.0 && self.relative_tolerance == 0.0)
+            || !self.armijo.is_finite()
+            || !(0.0..1.0).contains(&self.armijo)
+            || self.armijo == 0.0
+        {
+            return Err(Error::Build("invalid coupled Newton settings".into()));
+        }
+        Ok(())
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -249,17 +268,8 @@ impl CoupledNewtonKernel {
         settings: CoupledNewtonSettings,
         mut evaluate: impl FnMut(&mut wgpu::CommandEncoder) -> Result<()>,
     ) -> Result<()> {
-        if !(1..=64).contains(&settings.iterations)
-            || !(1..=24).contains(&settings.backtracks)
-            || !settings.absolute_tolerance.is_finite()
-            || settings.absolute_tolerance < 0.0
-            || !settings.relative_tolerance.is_finite()
-            || !(0.0..1.0).contains(&settings.relative_tolerance)
-            || (settings.absolute_tolerance == 0.0 && settings.relative_tolerance == 0.0)
-            || !settings.armijo.is_finite()
-            || !(0.0..1.0).contains(&settings.armijo)
-            || settings.armijo == 0.0
-            || inverse_diagonal.size() != u64::from(self.dimension) * 4
+        settings.validate()?;
+        if inverse_diagonal.size() != u64::from(self.dimension) * 4
             || !inverse_diagonal
                 .usage()
                 .contains(wgpu::BufferUsages::STORAGE)

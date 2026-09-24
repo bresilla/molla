@@ -9,6 +9,21 @@ pub struct GpuGmresSettings {
     pub relative_tolerance: f32,
     pub zero_initial_guess: bool,
 }
+impl GpuGmresSettings {
+    pub fn validate(self) -> Result<()> {
+        if self.cycles == 0
+            || self.cycles > 256
+            || !self.absolute_tolerance.is_finite()
+            || self.absolute_tolerance < 0.0
+            || !self.relative_tolerance.is_finite()
+            || !(0.0..1.0).contains(&self.relative_tolerance)
+            || (self.absolute_tolerance == 0.0 && self.relative_tolerance == 0.0)
+        {
+            return Err(Error::Build("invalid GPU GMRES settings".into()));
+        }
+        Ok(())
+    }
+}
 
 /// Device diagnostics; convergence is checked against the unpreconditioned residual.
 #[repr(C)]
@@ -187,19 +202,12 @@ impl GpuGmres {
             &self.partials,
             &self.diagnostics,
         ];
-        if settings.cycles == 0
-            || settings.cycles > 256
-            || !settings.absolute_tolerance.is_finite()
-            || settings.absolute_tolerance < 0.0
-            || !settings.relative_tolerance.is_finite()
-            || !(0.0..1.0).contains(&settings.relative_tolerance)
-            || (settings.absolute_tolerance == 0.0 && settings.relative_tolerance == 0.0)
-            || [rhs, inverse_diagonal].iter().any(|b| {
-                b.size() != u64::from(self.n) * 4
-                    || !b.usage().contains(wgpu::BufferUsages::STORAGE)
-                    || owned.contains(b)
-            })
-        {
+        settings.validate()?;
+        if [rhs, inverse_diagonal].iter().any(|b| {
+            b.size() != u64::from(self.n) * 4
+                || !b.usage().contains(wgpu::BufferUsages::STORAGE)
+                || owned.contains(b)
+        }) {
             return Err(Error::Build(
                 "invalid GPU GMRES settings or aliased input".into(),
             ));

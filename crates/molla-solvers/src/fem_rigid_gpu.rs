@@ -24,10 +24,13 @@ use wgpu::util::DeviceExt;
 mod bounds;
 mod contact_snapshot;
 mod coupling;
+mod global_newton;
 mod timing;
 pub use contact_snapshot::ContactSolveSnapshot;
 pub use coupling::MaterialContactConfig;
 use coupling::MaterialContactState;
+pub use global_newton::GlobalNewtonConfig;
+use global_newton::GlobalNewtonState;
 
 fn device_queue(engine: &Engine) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
     let device = engine
@@ -279,6 +282,7 @@ pub struct FemRigidGpuSystem {
     momentum_fences: Option<Arc<[AtomicU64; 5]>>,
     contact_fences: Option<Arc<[AtomicU64; 7]>>,
     material_contact: Option<MaterialContactState>,
+    global_newton: Option<GlobalNewtonState>,
     timing: Option<timing::SubstepTiming>,
     contact_snapshot: Option<ContactSolveSnapshot>,
     config: FemRigidConfig,
@@ -677,6 +681,7 @@ impl FemRigidGpuSystem {
             queued_substeps: 0,
             completion: None,
             material_contact: None,
+            global_newton: None,
             timing: None,
             contact_snapshot: None,
         })
@@ -750,14 +755,77 @@ impl FemRigidGpuSystem {
             })
             .transpose()?;
         self.material_contact = state;
+        self.global_newton = None;
         self.fem.clear_material_contact_patch_gpu();
         self.timing = None;
         Ok(())
     }
 
+    /// Selects the simultaneous GPU solve; None keeps the alternating material/contact path.
+    /// Requires an idle elastic island with material contact configured and no patch/timing trace.
+    pub fn configure_global_newton(&mut self, config: Option<GlobalNewtonConfig>) -> Result<()> {
+        if self.queued_substeps != 0 || self.completion.is_some() {
+            return Err(Error::Build(
+                "global Newton configuration requires an idle island".into(),
+            ));
+        }
+        let state = if let Some(config) = config {
+            let coupling = self
+                .material_contact
+                .as_ref()
+                .ok_or_else(|| Error::Build("global Newton requires material contact".into()))?;
+            if coupling.coupled_patch
+                || self.timing.is_some()
+                || self.contact_fences.is_some()
+                || config.solve.relative_tolerance != 0.0
+                || config.solve.absolute_tolerance
+                    > coupling
+                        .config
+                        .linear_tolerance
+                        .min(coupling.config.angular_tolerance)
+            {
+                return Err(Error::Build(
+                    "global Newton requires matching absolute gates and no patch/contact trace"
+                        .into(),
+                ));
+            }
+            Some(GlobalNewtonState::new(
+                &self.device,
+                &self.queue,
+                &self.soft_model,
+                self.rigid_model.body_count,
+                self.rigid_model.joint_dof_total,
+                self.gather.row_count(),
+                config,
+            )?)
+        } else {
+            None
+        };
+        self.global_newton = state;
+        self.fem.clear_material_contact_patch_gpu();
+        Ok(())
+    }
+
+    /// Last global solve's CoupledNewtonDiagnostics; consume after device completion.
+    pub fn global_newton_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        self.global_newton
+            .as_ref()
+            .and_then(GlobalNewtonState::diagnostics)
+    }
+
+    /// Sticky status used by the last global candidate/impulse commit.
+    pub fn global_newton_commit_status(&self) -> Option<&wgpu::Buffer> {
+        self.global_newton
+            .as_ref()
+            .map(GlobalNewtonState::commit_status)
+    }
+
     /// Enable GPU phase timestamps while idle; material/contact reconfiguration disables timing.
     pub fn configure_gpu_timing(&mut self, enabled: bool) -> Result<()> {
-        if self.queued_substeps != 0 || self.completion.is_some() {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || (enabled && self.global_newton.is_some())
+        {
             return Err(Error::Build(
                 "FEM timing configuration requires an idle island".into(),
             ));
@@ -858,7 +926,10 @@ impl FemRigidGpuSystem {
 
     /// Enables one GPU-selected coupled point/edge patch during final material polish.
     pub fn configure_material_contact_patch(&mut self, enabled: bool) -> Result<()> {
-        if self.queued_substeps != 0 || self.completion.is_some() {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || (enabled && self.global_newton.is_some())
+        {
             return Err(Error::Build(
                 "material contact patch configuration requires an idle island".into(),
             ));
@@ -942,6 +1013,9 @@ impl FemRigidGpuSystem {
 
     /// Last soft linear, rigid linear and rigid angular contact or material-polish corrections.
     pub fn material_contact_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        if self.global_newton.is_some() {
+            return None;
+        }
         self.material_contact
             .as_ref()
             .map(|state| state.kernel.diagnostics())
@@ -950,6 +1024,9 @@ impl FemRigidGpuSystem {
     /// Pre-polish sticky status u32 followed by three contact-correction f32 values.
     /// Cleared at substep start; consume after device completion with polish enabled.
     pub fn material_pre_polish_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        if self.global_newton.is_some() {
+            return None;
+        }
         let state = self.material_contact.as_ref()?;
         state.polish_iterations?;
         Some(&state.pre_polish)
@@ -1297,260 +1374,218 @@ impl FemRigidGpuSystem {
             if let Some(timing) = &self.timing {
                 timing.mark_contact(&mut encoder, 0);
             }
-            if let Some(counts) = &self.contact_fences {
-                let counts = counts.clone();
-                self.solve.encode_with_completion(
+            if let Some(global) = &mut self.global_newton {
+                let coupling = self.material_contact.as_mut().unwrap();
+                global.run(
                     device,
                     queue,
                     &mut encoder,
+                    &mut self.fem,
+                    &self.soft_model,
+                    &mut coupling.input,
+                    &self.soft_next,
+                    &self.solve,
                     solve_bindings,
                     solve_settings,
-                    Arc::new(move |pass| {
-                        counts[pass].fetch_add(1, Ordering::Release);
-                    }),
+                    h,
                 )?;
-            } else {
-                self.solve
-                    .encode(device, &mut encoder, solve_bindings, solve_settings)?;
-            }
-            if let Some(timing) = &self.timing {
-                timing.mark_contact(&mut encoder, 1);
-            }
-            if self.bounds.is_some() && self.material_contact.is_none() {
+                self.solve.encode_velocity_recovery(
+                    device,
+                    &mut encoder,
+                    solve_bindings,
+                    solve_settings,
+                )?;
                 self.solve.encode_residual_check(
                     device,
                     &mut encoder,
                     solve_bindings,
                     solve_settings,
-                    1e-5,
+                    coupling.config.linear_tolerance,
                 )?;
-            }
-            if let Some(coupling) = &mut self.material_contact {
-                coupling.accumulate(
+                queue.submit([encoder.finish()]);
+                let residual = self.fem.material_force_residual_gpu(
+                    &self.soft_model,
+                    &coupling.input,
+                    &mut self.soft_next,
+                    h,
+                )?;
+                encoder = device.create_command_encoder(&Default::default());
+                coupling.kernel.encode_force_check(
                     device,
                     &mut encoder,
-                    &self.soft_next,
-                    &self.rigid_next,
+                    residual,
                     self.solve.status(),
-                    false,
+                    self.soft_model.particle_count as u32,
+                    coupling.config.linear_tolerance,
                 )?;
-                if let Some(timing) = &self.timing {
-                    timing.mark(&mut encoder, 3);
-                }
-                queue.submit([encoder.finish()]);
-                for iteration in 1..coupling.config.iterations {
-                    if let Some(iterations) = coupling.reuse_iterations {
-                        self.fem.material_iteration_gpu(
-                            &self.soft_model,
-                            &coupling.input,
-                            &mut self.soft_next,
-                            h,
-                            iterations,
-                            false,
-                        )?;
-                    } else {
-                        self.fem.step(
-                            &self.soft_model,
-                            &coupling.input,
-                            &self.soft_model.control(),
-                            &Contacts::with_capacity(0),
-                            h,
-                            &mut self.soft_next,
-                        )?;
-                    }
-                    let mut pass = device.create_command_encoder(&Default::default());
-                    if let Some(timing) = &self.timing {
-                        timing.mark(&mut pass, 2 * iteration + 2);
-                    }
-                    coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
-                    if let Some(timing) = &self.timing {
-                        timing.mark_contact(&mut pass, 2 * iteration);
-                    }
-                    let bindings = SoftRigidSolveBindings {
-                        positions: self.soft_state.particle_q.device_buffer().unwrap(),
-                        velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
-                        inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
-                        contacts: self.gather.rows(),
-                        body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
-                        body_com: self.rigid_model.body_com.device_buffer().unwrap(),
-                        jacobians: &self.jacobian_buffer,
-                        mass_matrix: &self.mass_buffer,
-                        rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
-                        body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
-                        particle_count: self.soft_model.particle_count as u32,
-                        body_count: self.rigid_model.body_count as u32,
-                    };
-                    let continuation_settings = SoftRigidSolveSettings {
-                        iterations: coupling.contact_sweeps.unwrap_or(solve_settings.iterations),
-                        ..solve_settings
-                    };
-                    self.solve.encode_continuation(
+            } else {
+                if let Some(counts) = &self.contact_fences {
+                    let counts = counts.clone();
+                    self.solve.encode_with_completion(
                         device,
-                        &mut pass,
-                        bindings,
-                        continuation_settings,
+                        queue,
+                        &mut encoder,
+                        solve_bindings,
+                        solve_settings,
+                        Arc::new(move |pass| {
+                            counts[pass].fetch_add(1, Ordering::Release);
+                        }),
+                    )?;
+                } else {
+                    self.solve
+                        .encode(device, &mut encoder, solve_bindings, solve_settings)?;
+                }
+                if let Some(timing) = &self.timing {
+                    timing.mark_contact(&mut encoder, 1);
+                }
+                if self.bounds.is_some() && self.material_contact.is_none() {
+                    self.solve.encode_residual_check(
+                        device,
+                        &mut encoder,
+                        solve_bindings,
+                        solve_settings,
+                        1e-5,
+                    )?;
+                }
+                if let Some(coupling) = &mut self.material_contact {
+                    coupling.accumulate(
+                        device,
+                        &mut encoder,
+                        &self.soft_next,
+                        &self.rigid_next,
+                        self.solve.status(),
+                        false,
                     )?;
                     if let Some(timing) = &self.timing {
-                        timing.mark_contact(&mut pass, 2 * iteration + 1);
+                        timing.mark(&mut encoder, 3);
                     }
-                    let final_correction = iteration + 1 == coupling.config.iterations
-                        && !(coupling.polish_iterations.is_some() && coupling.polish_cycles > 1);
-                    if final_correction {
-                        self.solve.encode_residual_check(
+                    queue.submit([encoder.finish()]);
+                    for iteration in 1..coupling.config.iterations {
+                        if let Some(iterations) = coupling.reuse_iterations {
+                            self.fem.material_iteration_gpu(
+                                &self.soft_model,
+                                &coupling.input,
+                                &mut self.soft_next,
+                                h,
+                                iterations,
+                                false,
+                            )?;
+                        } else {
+                            self.fem.step(
+                                &self.soft_model,
+                                &coupling.input,
+                                &self.soft_model.control(),
+                                &Contacts::with_capacity(0),
+                                h,
+                                &mut self.soft_next,
+                            )?;
+                        }
+                        let mut pass = device.create_command_encoder(&Default::default());
+                        if let Some(timing) = &self.timing {
+                            timing.mark(&mut pass, 2 * iteration + 2);
+                        }
+                        coupling.capture(&mut pass, &self.soft_next, &self.rigid_next);
+                        if let Some(timing) = &self.timing {
+                            timing.mark_contact(&mut pass, 2 * iteration);
+                        }
+                        let bindings = SoftRigidSolveBindings {
+                            positions: self.soft_state.particle_q.device_buffer().unwrap(),
+                            velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                            inverse_mass: self
+                                .soft_model
+                                .particle_inv_mass
+                                .device_buffer()
+                                .unwrap(),
+                            contacts: self.gather.rows(),
+                            body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
+                            body_com: self.rigid_model.body_com.device_buffer().unwrap(),
+                            jacobians: &self.jacobian_buffer,
+                            mass_matrix: &self.mass_buffer,
+                            rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                            body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                            particle_count: self.soft_model.particle_count as u32,
+                            body_count: self.rigid_model.body_count as u32,
+                        };
+                        let continuation_settings = SoftRigidSolveSettings {
+                            iterations: coupling
+                                .contact_sweeps
+                                .unwrap_or(solve_settings.iterations),
+                            ..solve_settings
+                        };
+                        self.solve.encode_continuation(
                             device,
                             &mut pass,
                             bindings,
                             continuation_settings,
-                            coupling.config.linear_tolerance,
                         )?;
-                    }
-                    coupling.accumulate(
-                        device,
-                        &mut pass,
-                        &self.soft_next,
-                        &self.rigid_next,
-                        self.solve.status(),
-                        final_correction,
-                    )?;
-                    if let Some(timing) = &self.timing {
-                        timing.mark(&mut pass, 2 * iteration + 3);
-                    }
-                    queue.submit([pass.finish()]);
-                }
-                encoder = device.create_command_encoder(&Default::default());
-                if let Some(iterations) = coupling.polish_iterations {
-                    if coupling.coupled_patch {
-                        self.solve.encode_residual_check(
-                            device,
-                            &mut encoder,
-                            solve_bindings,
-                            solve_settings,
-                            f32::MAX,
-                        )?;
-                        self.fem.prepare_material_contact_patch_gpu(
-                            molla_kernels::MaterialContactPatchBindings {
-                                rows: self.solve.row_state(),
-                                projected: self.solve.projected_rows(),
-                                response: self.solve.row_responses(),
-                                rigid_velocity: self.rigid_next.joint_qd.device_buffer().unwrap(),
-                                contacts: self.gather.rows(),
-                                schedule: self.solve.active_rows(),
-                                input_velocity: coupling.input.particle_qd.device_buffer().unwrap(),
-                                inverse_mass: self
-                                    .soft_model
-                                    .particle_inv_mass
-                                    .device_buffer()
-                                    .unwrap(),
-                            },
-                        )?;
-                    }
-                    for cycle in 0..coupling.polish_cycles {
-                        let last_cycle = cycle + 1 == coupling.polish_cycles;
-                        if cycle > 0 {
-                            coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
-                            let bindings = SoftRigidSolveBindings {
-                                positions: self.soft_state.particle_q.device_buffer().unwrap(),
-                                velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
-                                inverse_mass: self
-                                    .soft_model
-                                    .particle_inv_mass
-                                    .device_buffer()
-                                    .unwrap(),
-                                contacts: self.gather.rows(),
-                                body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
-                                body_com: self.rigid_model.body_com.device_buffer().unwrap(),
-                                jacobians: &self.jacobian_buffer,
-                                mass_matrix: &self.mass_buffer,
-                                rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
-                                body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
-                                particle_count: self.soft_model.particle_count as u32,
-                                body_count: self.rigid_model.body_count as u32,
-                            };
-                            let settings = SoftRigidSolveSettings {
-                                iterations: coupling
-                                    .polish_contact_sweeps
-                                    .or(coupling.contact_sweeps)
-                                    .unwrap_or(solve_settings.iterations),
-                                ..solve_settings
-                            };
-                            if coupling.coupled_patch {
-                                self.fem
-                                    .encode_material_patch_contacts_gpu(&mut encoder, false);
-                            }
-                            self.solve.encode_continuation(
+                        if let Some(timing) = &self.timing {
+                            timing.mark_contact(&mut pass, 2 * iteration + 1);
+                        }
+                        let final_correction = iteration + 1 == coupling.config.iterations
+                            && !(coupling.polish_iterations.is_some()
+                                && coupling.polish_cycles > 1);
+                        if final_correction {
+                            self.solve.encode_residual_check(
                                 device,
-                                &mut encoder,
+                                &mut pass,
                                 bindings,
-                                settings,
-                            )?;
-                            if coupling.coupled_patch {
-                                self.fem
-                                    .encode_material_patch_contacts_gpu(&mut encoder, true);
-                            }
-                            if last_cycle {
-                                self.solve.encode_residual_check(
-                                    device,
-                                    &mut encoder,
-                                    bindings,
-                                    settings,
-                                    coupling.config.linear_tolerance,
-                                )?;
-                            }
-                            coupling.accumulate(
-                                device,
-                                &mut encoder,
-                                &self.soft_next,
-                                &self.rigid_next,
-                                self.solve.status(),
-                                last_cycle,
+                                continuation_settings,
+                                coupling.config.linear_tolerance,
                             )?;
                         }
-                        encoder.copy_buffer_to_buffer(
+                        coupling.accumulate(
+                            device,
+                            &mut pass,
+                            &self.soft_next,
+                            &self.rigid_next,
                             self.solve.status(),
-                            0,
-                            &coupling.pre_polish,
-                            0,
-                            4,
-                        );
-                        encoder.copy_buffer_to_buffer(
-                            coupling.kernel.diagnostics(),
-                            0,
-                            &coupling.pre_polish,
-                            4,
-                            12,
-                        );
-                        coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
-                        queue.submit([encoder.finish()]);
-                        self.fem.material_polish_gpu(
-                            &self.soft_model,
-                            &coupling.input,
-                            &mut self.soft_next,
-                            h,
-                            iterations,
+                            final_correction,
                         )?;
-                        encoder = device.create_command_encoder(&Default::default());
+                        if let Some(timing) = &self.timing {
+                            timing.mark(&mut pass, 2 * iteration + 3);
+                        }
+                        queue.submit([pass.finish()]);
+                    }
+                    encoder = device.create_command_encoder(&Default::default());
+                    if let Some(iterations) = coupling.polish_iterations {
                         if coupling.coupled_patch {
-                            coupling.input.particle_qd.mark_device_dirty();
-                            self.rigid_next.joint_qd.mark_device_dirty();
-                            self.solve.encode_velocity_recovery(
+                            self.solve.encode_residual_check(
                                 device,
                                 &mut encoder,
                                 solve_bindings,
                                 solve_settings,
+                                f32::MAX,
+                            )?;
+                            self.fem.prepare_material_contact_patch_gpu(
+                                molla_kernels::MaterialContactPatchBindings {
+                                    rows: self.solve.row_state(),
+                                    projected: self.solve.projected_rows(),
+                                    response: self.solve.row_responses(),
+                                    rigid_velocity: self
+                                        .rigid_next
+                                        .joint_qd
+                                        .device_buffer()
+                                        .unwrap(),
+                                    contacts: self.gather.rows(),
+                                    schedule: self.solve.active_rows(),
+                                    input_velocity: coupling
+                                        .input
+                                        .particle_qd
+                                        .device_buffer()
+                                        .unwrap(),
+                                    inverse_mass: self
+                                        .soft_model
+                                        .particle_inv_mass
+                                        .device_buffer()
+                                        .unwrap(),
+                                },
                             )?;
                         }
-                        if last_cycle {
-                            coupling.check_polish(
-                                device,
-                                &mut encoder,
-                                &self.soft_next,
-                                &self.rigid_next,
-                                self.solve.status(),
-                            )?;
-                            self.solve.encode_residual_check(
-                                device,
-                                &mut encoder,
-                                SoftRigidSolveBindings {
+                        for cycle in 0..coupling.polish_cycles {
+                            let last_cycle = cycle + 1 == coupling.polish_cycles;
+                            if cycle > 0 {
+                                coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
+                                let bindings = SoftRigidSolveBindings {
                                     positions: self.soft_state.particle_q.device_buffer().unwrap(),
                                     velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
                                     inverse_mass: self
@@ -1575,31 +1610,158 @@ impl FemRigidGpuSystem {
                                         .unwrap(),
                                     particle_count: self.soft_model.particle_count as u32,
                                     body_count: self.rigid_model.body_count as u32,
-                                },
-                                solve_settings,
-                                coupling.config.linear_tolerance,
+                                };
+                                let settings = SoftRigidSolveSettings {
+                                    iterations: coupling
+                                        .polish_contact_sweeps
+                                        .or(coupling.contact_sweeps)
+                                        .unwrap_or(solve_settings.iterations),
+                                    ..solve_settings
+                                };
+                                if coupling.coupled_patch {
+                                    self.fem
+                                        .encode_material_patch_contacts_gpu(&mut encoder, false);
+                                }
+                                self.solve.encode_continuation(
+                                    device,
+                                    &mut encoder,
+                                    bindings,
+                                    settings,
+                                )?;
+                                if coupling.coupled_patch {
+                                    self.fem
+                                        .encode_material_patch_contacts_gpu(&mut encoder, true);
+                                }
+                                if last_cycle {
+                                    self.solve.encode_residual_check(
+                                        device,
+                                        &mut encoder,
+                                        bindings,
+                                        settings,
+                                        coupling.config.linear_tolerance,
+                                    )?;
+                                }
+                                coupling.accumulate(
+                                    device,
+                                    &mut encoder,
+                                    &self.soft_next,
+                                    &self.rigid_next,
+                                    self.solve.status(),
+                                    last_cycle,
+                                )?;
+                            }
+                            encoder.copy_buffer_to_buffer(
+                                self.solve.status(),
+                                0,
+                                &coupling.pre_polish,
+                                0,
+                                4,
+                            );
+                            encoder.copy_buffer_to_buffer(
+                                coupling.kernel.diagnostics(),
+                                0,
+                                &coupling.pre_polish,
+                                4,
+                                12,
+                            );
+                            coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
+                            queue.submit([encoder.finish()]);
+                            self.fem.material_polish_gpu(
+                                &self.soft_model,
+                                &coupling.input,
+                                &mut self.soft_next,
+                                h,
+                                iterations,
                             )?;
+                            encoder = device.create_command_encoder(&Default::default());
+                            if coupling.coupled_patch {
+                                coupling.input.particle_qd.mark_device_dirty();
+                                self.rigid_next.joint_qd.mark_device_dirty();
+                                self.solve.encode_velocity_recovery(
+                                    device,
+                                    &mut encoder,
+                                    solve_bindings,
+                                    solve_settings,
+                                )?;
+                            }
+                            if last_cycle {
+                                coupling.check_polish(
+                                    device,
+                                    &mut encoder,
+                                    &self.soft_next,
+                                    &self.rigid_next,
+                                    self.solve.status(),
+                                )?;
+                                self.solve.encode_residual_check(
+                                    device,
+                                    &mut encoder,
+                                    SoftRigidSolveBindings {
+                                        positions: self
+                                            .soft_state
+                                            .particle_q
+                                            .device_buffer()
+                                            .unwrap(),
+                                        velocities: self
+                                            .soft_next
+                                            .particle_qd
+                                            .device_buffer()
+                                            .unwrap(),
+                                        inverse_mass: self
+                                            .soft_model
+                                            .particle_inv_mass
+                                            .device_buffer()
+                                            .unwrap(),
+                                        contacts: self.gather.rows(),
+                                        body_poses: self
+                                            .rigid_state
+                                            .body_q
+                                            .device_buffer()
+                                            .unwrap(),
+                                        body_com: self
+                                            .rigid_model
+                                            .body_com
+                                            .device_buffer()
+                                            .unwrap(),
+                                        jacobians: &self.jacobian_buffer,
+                                        mass_matrix: &self.mass_buffer,
+                                        rigid_velocities: self
+                                            .rigid_next
+                                            .joint_qd
+                                            .device_buffer()
+                                            .unwrap(),
+                                        body_velocities: self
+                                            .rigid_next
+                                            .body_qd
+                                            .device_buffer()
+                                            .unwrap(),
+                                        particle_count: self.soft_model.particle_count as u32,
+                                        body_count: self.rigid_model.body_count as u32,
+                                    },
+                                    solve_settings,
+                                    coupling.config.linear_tolerance,
+                                )?;
+                            }
+                            queue.submit([encoder.finish()]);
+                            encoder = device.create_command_encoder(&Default::default());
                         }
-                        queue.submit([encoder.finish()]);
-                        encoder = device.create_command_encoder(&Default::default());
                     }
+                    let residual = self.fem.material_force_residual_gpu(
+                        &self.soft_model,
+                        &coupling.input,
+                        &mut self.soft_next,
+                        h,
+                    )?;
+                    coupling.kernel.encode_force_check(
+                        device,
+                        &mut encoder,
+                        residual,
+                        self.solve.status(),
+                        self.soft_model.particle_count as u32,
+                        coupling.config.linear_tolerance,
+                    )?;
+                } else if let Some(timing) = &self.timing {
+                    timing.mark(&mut encoder, 3);
                 }
-                let residual = self.fem.material_force_residual_gpu(
-                    &self.soft_model,
-                    &coupling.input,
-                    &mut self.soft_next,
-                    h,
-                )?;
-                coupling.kernel.encode_force_check(
-                    device,
-                    &mut encoder,
-                    residual,
-                    self.solve.status(),
-                    self.soft_model.particle_count as u32,
-                    coupling.config.linear_tolerance,
-                )?;
-            } else if let Some(timing) = &self.timing {
-                timing.mark(&mut encoder, 3);
             }
             if let Some(snapshot) = &self.contact_snapshot {
                 snapshot.capture_solved(
