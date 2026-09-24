@@ -5,6 +5,14 @@ use wgpu::util::DeviceExt;
 
 mod material_iteration;
 pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIterationKernel};
+mod linearization;
+pub use linearization::{ContactLinearizationBindings, ContactLinearizationKernel};
+mod coupled_newton;
+pub use coupled_newton::{
+    CoupledNewtonBindings, CoupledNewtonDiagnostics, CoupledNewtonKernel, CoupledNewtonSettings,
+};
+mod global_bridge;
+pub use global_bridge::{GlobalContactBridge, GlobalContactCommitBindings};
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
@@ -485,6 +493,17 @@ impl SoftRigidSolveKernel {
         settings: SoftRigidSolveSettings,
     ) -> Result<()> {
         self.encode_internal(device, encoder, bindings, settings, 0..=1, None, None, None)
+    }
+
+    /// Prepares responses and the ordered active-row schedule without applying impulses.
+    pub fn encode_preparation_with_schedule(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: SoftRigidSolveBindings<'_>,
+        settings: SoftRigidSolveSettings,
+    ) -> Result<()> {
+        self.encode_internal(device, encoder, bindings, settings, 0..=4, None, None, None)
     }
 
     /// Submit individual contact passes and report queue completion without state readback.

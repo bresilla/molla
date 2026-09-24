@@ -16,6 +16,8 @@ use bindings::BindingCache;
 mod coupled_patch;
 use coupled_patch::CoupledPatch;
 pub use coupled_patch::MaterialContactPatchBindings;
+mod linearization;
+use linearization::MaterialLinearization;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,6 +45,7 @@ enum DispatchMode {
     ContinueMaterial,
     PolishMaterial,
     ForceResidual,
+    Linearization,
 }
 
 #[derive(PartialEq, Eq)]
@@ -62,6 +65,7 @@ pub struct VbdClothKernel {
     continuation: Option<MaterialContinuation>,
     force_samples_ready: bool,
     coupled_patch: Option<CoupledPatch>,
+    linearization: Option<MaterialLinearization>,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
@@ -313,6 +317,7 @@ impl VbdClothKernel {
             continuation: None,
             force_samples_ready: false,
             coupled_patch: None,
+            linearization: None,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
@@ -597,6 +602,185 @@ impl VbdClothKernel {
         Ok(self.inertia_y.device_buffer().unwrap())
     }
 
+    /// Signed velocity residual and analytic Jacobian action at q_n + h v_out.
+    /// Elastic tets, viscoelasticity and springs; nonidentity plastic state emits NaN.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_linearization(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        direction: &wgpu::Buffer,
+    ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
+        self.continuation = None;
+        self.force_samples_ready = false;
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
+        if model.particle_count == 0
+            || model.particle_count as u32 != self.particle_count
+            || model.spring_count as u32 != self.spring_count
+            || model.linear_damping != 0.0
+            || !model.vertex_cable_bending_entries.is_empty()
+            || model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            return Err(Error::Build("material linearization requires matching elastic topology without world damping or cable bending".into()));
+        }
+        if self.linearization.is_none() {
+            self.linearization = Some(MaterialLinearization::new(
+                device,
+                [
+                    &self.layout_state,
+                    &self.layout_topo,
+                    &self.layout_out,
+                    &self.layout_uniforms,
+                    &self.layout_shapes,
+                    &self.layout_tets,
+                ],
+                self.particle_count,
+                model.tet_count as u32,
+            )?);
+        }
+        self.linearization
+            .as_mut()
+            .unwrap()
+            .prepare(device, direction)?;
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            0,
+            0.0,
+            false,
+            DispatchMode::Linearization,
+        )?;
+        let linearization = self.linearization.as_ref().unwrap();
+        Ok((&linearization.residual, &linearization.action))
+    }
+
+    /// Reuses the last material linearization's bindings and cached reference gradients.
+    /// Candidate velocities and directions may change; reference positions, topology,
+    /// material parameters and timestep must stay fixed until preparation is repeated.
+    pub fn encode_material_linearization(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        self.encode_material_operator(encoder, false)
+    }
+
+    /// Overwrites the retained action buffer with positive material inverse diagonal entries.
+    pub fn encode_material_inverse_diagonal(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        self.encode_material_operator(encoder, true)
+    }
+
+    fn encode_material_operator(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        diagonal: bool,
+    ) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        linearization
+            .cache_ready
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let groups = linearization.material_groups.as_ref().ok_or_else(|| {
+            Error::Build("material linearization bindings were invalidated".into())
+        })?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(if diagonal {
+            &linearization.diagonal_pipeline
+        } else {
+            &linearization.pipeline
+        });
+        for (uniform, blocks) in &linearization.batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
+        Ok(())
+    }
+
+    /// Freezes the material stress derivative at the current retained candidate.
+    pub fn encode_material_tangent_cache(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(&linearization.cache_pipeline);
+        for (uniform, blocks) in &linearization.cache_batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
+        linearization
+            .cache_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Applies the frozen tangent; candidate, geometry and reference state must remain unchanged.
+    pub fn encode_cached_material_action(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        if !linearization
+            .cache_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(Error::Build(
+                "material tangent cache is not prepared".into(),
+            ));
+        }
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+        pass.set_pipeline(&linearization.cached_action_pipeline);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn dispatch_inner(
         &mut self,
@@ -612,8 +796,14 @@ impl VbdClothKernel {
         mode: DispatchMode,
     ) -> Result<()> {
         let previous = self.continuation.take();
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
         self.force_samples_ready = false;
-        let residual_only = mode == DispatchMode::ForceResidual;
+        let residual_only = matches!(
+            mode,
+            DispatchMode::ForceResidual | DispatchMode::Linearization
+        );
         let reuse = matches!(
             mode,
             DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
@@ -1090,6 +1280,29 @@ impl VbdClothKernel {
             push_uniforms(&base(tet_count_u, 0, 0.0));
         }
 
+        let mut linearization_batches = Vec::new();
+        let mut tangent_batches = Vec::new();
+        if mode == DispatchMode::Linearization {
+            for start in (0..particle_count_u).step_by(512) {
+                let count = (particle_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                linearization_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+            for start in (0..tet_count_u).step_by(512) {
+                let count = (tet_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                tangent_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+        }
+
         // ── Encode + dispatch ─────────────────────────────────────
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::vbd_cloth encoder"),
@@ -1178,7 +1391,17 @@ impl VbdClothKernel {
             }
             if residual_only {
                 dispatch(&mut pass, &self.pipe_residual_seed, 0, particle_count_u);
-                dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+                if mode == DispatchMode::Linearization {
+                    let linearization = self.linearization.as_ref().unwrap();
+                    pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+                    pass.set_pipeline(&linearization.pipeline);
+                    for (uniform, blocks) in &linearization_batches {
+                        pass.set_bind_group(3, uniform, &[]);
+                        pass.dispatch_workgroups(*blocks, 1, 1);
+                    }
+                } else {
+                    dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+                }
             } else {
                 let mut idx = 0usize;
                 // Predict.
@@ -1254,8 +1477,21 @@ impl VbdClothKernel {
         queue.submit(std::iter::once(encoder.finish()));
         self.continuation = continuation;
 
+        if mode == DispatchMode::Linearization {
+            self.linearization.as_mut().unwrap().batches = linearization_batches;
+            self.linearization.as_mut().unwrap().cache_batches = tangent_batches;
+            self.linearization.as_mut().unwrap().material_groups = Some([
+                bg_state,
+                bg_topo,
+                bg_out,
+                bg_uniforms[0].clone(),
+                bg_shapes,
+                bg_tets,
+            ]);
+        }
+
         if residual_only {
-            self.force_samples_ready = true;
+            self.force_samples_ready = mode == DispatchMode::ForceResidual;
             return Ok(());
         }
 

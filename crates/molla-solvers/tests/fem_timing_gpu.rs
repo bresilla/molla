@@ -1,7 +1,8 @@
 #![cfg(feature = "gpu")]
 
 use molla_solvers::fem_rigid_gpu::{
-    FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu, request_fem_device_limits,
+    FemRigidGpuSystem, GlobalNewtonConfig, MaterialContactConfig, SoftRigidShapeGpu,
+    request_fem_device_limits,
 };
 use std::sync::Arc;
 
@@ -54,6 +55,12 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
     for enabled_feature in [false, true] {
         let mut descriptor = wgpu::DeviceDescriptor::default();
         request_fem_device_limits(&mut descriptor.required_limits, &adapter.limits()).unwrap();
+        assert!(adapter.limits().max_bind_groups >= 7);
+        assert!(adapter.limits().max_storage_buffers_per_shader_stage >= 47);
+        descriptor.required_limits.max_bind_groups = 7;
+        descriptor
+            .required_limits
+            .max_storage_buffers_per_shader_stage = 47;
         if enabled_feature {
             descriptor.required_features = wgpu::Features::TIMESTAMP_QUERY;
         }
@@ -83,13 +90,14 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
             system.configure_gpu_timing(false).unwrap();
             continue;
         }
-        for (outer, diagnostics, polish) in [
-            (None, false, 0),
-            (Some(2), false, 0),
-            (Some(130), false, 0),
-            (Some(2), true, 0),
-            (Some(2), true, 1),
-            (Some(2), true, 17),
+        for (outer, diagnostics, polish, global) in [
+            (None, false, 0, false),
+            (Some(2), false, 0, false),
+            (Some(130), false, 0, false),
+            (Some(2), true, 0, false),
+            (Some(2), true, 1, false),
+            (Some(2), true, 17, false),
+            (Some(2), false, 0, true),
         ] {
             let mut plain = make();
             let mut timed = make();
@@ -111,17 +119,27 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                     }
                 }
                 system.set_drive_effort(0, 0.25).unwrap();
+                if global {
+                    system
+                        .configure_global_newton(Some(GlobalNewtonConfig {
+                            restart: 8,
+                            contact_capacity: 32,
+                            ..Default::default()
+                        }))
+                        .unwrap();
+                }
                 if diagnostics {
                     system.enable_momentum_diagnostics();
                 }
             }
             timed.configure_gpu_timing(true).unwrap();
-            if outer.is_some() {
+            if outer.is_some() && !global {
                 timed.configure_material_contact_sweeps(Some(12)).unwrap();
             }
             assert!(timed.gpu_timing_ticks().is_none());
             assert!(timed.gpu_contact_timing_ticks().is_none());
-            let count = 2 * outer.unwrap_or(1) + 3;
+            let iterations = if global { 1 } else { outer.unwrap_or(1) };
+            let count = 2 * iterations + 3;
             for step in 1..=2 {
                 plain.step(fem_rotor::config().max_substep).unwrap();
                 assert!(
@@ -143,7 +161,7 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                 assert!(ticks[ticks.len() - 1] > ticks[0]);
                 let raw_contact = read(&device, &queue, timed.gpu_contact_timing_ticks().unwrap());
                 let contacts: &[u64] = bytemuck::cast_slice(&raw_contact);
-                assert_eq!(contacts.len(), 2 * outer.unwrap_or(1) as usize);
+                assert_eq!(contacts.len(), 2 * iterations as usize);
                 for (iteration, pair) in contacts.chunks_exact(2).enumerate() {
                     let start = 2 * iteration + 2;
                     assert!(ticks[start] <= pair[0] && pair[0] < pair[1]);
@@ -195,6 +213,11 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
             assert!(timed.gpu_timing_ticks().is_none());
             assert!(timed.gpu_contact_timing_ticks().is_none());
             timed.configure_gpu_timing(true).unwrap();
+            if global {
+                timed.configure_global_newton(None).unwrap();
+                assert!(timed.gpu_timing_ticks().is_none());
+                assert!(timed.gpu_contact_timing_ticks().is_none());
+            }
             timed.configure_material_contact(None).unwrap();
             assert!(timed.gpu_timing_ticks().is_none());
             assert!(timed.gpu_contact_timing_ticks().is_none());

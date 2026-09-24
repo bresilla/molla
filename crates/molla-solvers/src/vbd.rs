@@ -840,6 +840,88 @@ impl VbdSolver {
             .force_residual(&gpu.device, &gpu.queue, model, state_in, state_out, dt)
     }
 
+    /// Evaluates material velocity residuals and their analytic directional derivative on GPU.
+    #[cfg(feature = "gpu")]
+    pub fn material_linearization_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        direction: &wgpu::Buffer,
+    ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build(
+                "material linearization requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.material_linearization(
+            &gpu.device,
+            &gpu.queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            direction,
+        )
+    }
+
+    /// Encodes another residual/action using retained fixed-reference linearization bindings.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_linearization_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material linearization requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_linearization(encoder)
+    }
+
+    /// Freezes the GPU tangent at the retained material candidate.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_tangent_cache_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material tangent cache requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_tangent_cache(encoder)
+    }
+
+    /// Applies the retained tangent without changing candidate or residual buffers.
+    #[cfg(feature = "gpu")]
+    pub fn encode_cached_material_action_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "cached material action requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_cached_material_action(encoder)
+    }
+
+    /// Encodes the retained material inverse diagonal into the material action buffer.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_inverse_diagonal_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material preconditioning requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_inverse_diagonal(encoder)
+    }
+
     /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
     /// soft-VT contact pipeline, and the host-side tet-tet / SDF
     /// fallbacks. Extracted from `step` so the multi-substep driver
