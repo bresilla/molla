@@ -86,20 +86,23 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
     let h = 1.0 / 19200.0;
     let expected = reference(h, true);
     let mut baseline = None;
-    for (iterations, disable, reuse, sweeps, polish) in [
-        (None, false, None, None, None),
-        (Some(2), false, None, None, None),
-        (Some(256), false, None, None, None),
-        (Some(256), true, None, None, None),
-        (Some(2), false, Some(1), None, None),
-        (Some(256), false, Some(1), None, None),
-        (Some(256), false, Some(8), None, None),
-        (Some(256), true, Some(1), None, None),
-        (Some(2), false, Some(8), Some(1), None),
-        (Some(256), false, Some(8), Some(1), None),
-        (Some(2), false, Some(8), Some(1), Some(8)),
-        (Some(256), false, Some(8), Some(1), Some(8)),
-        (Some(256), true, Some(8), Some(1), Some(8)),
+    for (iterations, disable, reuse, sweeps, polish, cycles) in [
+        (None, false, None, None, None, 1),
+        (Some(2), false, None, None, None, 1),
+        (Some(256), false, None, None, None, 1),
+        (Some(256), true, None, None, None, 1),
+        (Some(2), false, Some(1), None, None, 1),
+        (Some(256), false, Some(1), None, None, 1),
+        (Some(256), false, Some(8), None, None, 1),
+        (Some(256), true, Some(1), None, None, 1),
+        (Some(2), false, Some(8), Some(1), None, 1),
+        (Some(256), false, Some(8), Some(1), None, 1),
+        (Some(2), false, Some(8), Some(1), Some(8), 1),
+        (Some(256), false, Some(8), Some(1), Some(8), 1),
+        (Some(256), true, Some(8), Some(1), Some(8), 1),
+        (Some(2), false, Some(8), Some(1), Some(8), 17),
+        (Some(256), false, Some(8), Some(1), Some(8), 17),
+        (Some(256), true, Some(8), Some(1), Some(8), 17),
     ] {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
@@ -147,6 +150,17 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
             system.configure_material_contact_reuse(reuse).unwrap();
             system.configure_material_contact_sweeps(sweeps).unwrap();
             system.configure_material_contact_polish(polish).unwrap();
+            if polish.is_some() {
+                system
+                    .configure_material_contact_polish_cycles(cycles)
+                    .unwrap();
+            } else {
+                assert!(
+                    system
+                        .configure_material_contact_polish_cycles(cycles)
+                        .is_err()
+                );
+            }
             for invalid in [0, 4097, u32::MAX] {
                 assert!(
                     system
@@ -171,6 +185,34 @@ fn runtime_material_contact_matches_reference_and_rejects_iteration_exhaustion()
         assert!(system.configure_material_contact_sweeps(None).is_err());
         assert!(system.configure_material_contact_reuse(None).is_err());
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+        if polish.is_some() && !disable {
+            let checkpoint = readback::read::<u32>(
+                &engine,
+                system.material_pre_polish_diagnostics().unwrap(),
+                4,
+            );
+            assert_eq!(checkpoint[0], if iterations == Some(2) { 64 } else { 0 });
+            let corrections = checkpoint[1..]
+                .iter()
+                .copied()
+                .map(f32::from_bits)
+                .collect::<Vec<_>>();
+            assert!(corrections.iter().all(|v| v.is_finite()));
+            if cycles == 1 {
+                assert_eq!(corrections[0] > 1e-4, iterations == Some(2));
+            }
+        } else {
+            assert!(system.material_pre_polish_diagnostics().is_none());
+        }
+        let rows = readback::read::<[f32; 8]>(
+            &engine,
+            system.contact_row_diagnostics(),
+            system.contact_row_count() as usize,
+        );
+        assert!(rows.iter().all(|r| r[3].is_finite()));
+        if iterations.is_some() && !disable && status == 0 {
+            assert!(rows.iter().all(|r| r[3] <= 1e-4));
+        }
         let velocities = readback::read::<[f32; 4]>(
             &engine,
             system.soft_state().particle_qd.device_buffer().unwrap(),
@@ -238,15 +280,17 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let m = 1000.0 * 0.02_f64.powi(3) / 24.0;
     let rigid_mass = 0.001;
-    for (h, reuse, sweeps, polish) in [
-        (1.0 / 19200.0, None, None, None),
-        (1.0 / 38400.0, None, None, None),
-        (1.0 / 19200.0, Some(1), None, None),
-        (1.0 / 38400.0, Some(1), None, None),
-        (1.0 / 19200.0, Some(8), Some(1), None),
-        (1.0 / 38400.0, Some(8), Some(1), None),
-        (1.0 / 19200.0, Some(8), Some(1), Some(8)),
-        (1.0 / 38400.0, Some(8), Some(1), Some(8)),
+    for (h, reuse, sweeps, polish, cycles) in [
+        (1.0 / 19200.0, None, None, None, 1),
+        (1.0 / 38400.0, None, None, None, 1),
+        (1.0 / 19200.0, Some(1), None, None, 1),
+        (1.0 / 38400.0, Some(1), None, None, 1),
+        (1.0 / 19200.0, Some(8), Some(1), None, 1),
+        (1.0 / 38400.0, Some(8), Some(1), None, 1),
+        (1.0 / 19200.0, Some(8), Some(1), Some(8), 1),
+        (1.0 / 38400.0, Some(8), Some(1), Some(8), 1),
+        (1.0 / 19200.0, Some(8), Some(1), Some(8), 17),
+        (1.0 / 38400.0, Some(8), Some(1), Some(8), 17),
     ] {
         let mut oracle = model(true, true);
         let reduced_mass = m * (rigid_mass + 3.0 * m) / (rigid_mass + 4.0 * m);
@@ -325,6 +369,11 @@ fn runtime_material_contact_transfers_impulse_to_a_dynamic_support() {
         system.configure_material_contact_reuse(reuse).unwrap();
         system.configure_material_contact_sweeps(sweeps).unwrap();
         system.configure_material_contact_polish(polish).unwrap();
+        if polish.is_some() {
+            system
+                .configure_material_contact_polish_cycles(cycles)
+                .unwrap();
+        }
         system.step(h).unwrap();
         assert_eq!(
             readback::read::<u32>(&engine, system.status_buffer(), 1),
@@ -379,7 +428,13 @@ fn short_contact_sweeps_preserve_real_friction_trajectory() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_rejects_unconverged_high_friction_trajectory() {
-    material_reuse_trajectory(1000.0, Some(2), None);
+    material_reuse_trajectory_configured(1000.0, Some(0), None, false, 1, 2);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn material_reuse_converges_high_friction_trajectory() {
+    material_reuse_trajectory(1000.0, None, None);
 }
 
 fn material_reuse_trajectory(
@@ -387,13 +442,19 @@ fn material_reuse_trajectory(
     rejection_deadline: Option<usize>,
     sweeps: Option<u32>,
 ) {
-    material_reuse_trajectory_configured(friction, rejection_deadline, sweeps, false);
+    material_reuse_trajectory_configured(friction, rejection_deadline, sweeps, false, 1, 256);
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn final_material_polish_preserves_friction_energy_and_lifecycle() {
-    material_reuse_trajectory_configured(0.85, None, Some(1), true);
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 1, 256);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn coupled_polish_cycles_preserve_friction_energy_and_lifecycle() {
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256);
 }
 
 fn material_reuse_trajectory_configured(
@@ -401,12 +462,15 @@ fn material_reuse_trajectory_configured(
     rejection_deadline: Option<usize>,
     sweeps: Option<u32>,
     polish: bool,
+    cycles: u32,
+    outer: u32,
 ) {
     use molla_solvers::fem_rigid_gpu::{
         FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
     };
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let h = 1.0 / 19200.0;
+    let oracle_model = model(false, true);
     let build = |outer| {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
@@ -442,10 +506,15 @@ fn material_reuse_trajectory_configured(
             .unwrap();
         system
     };
-    let mut cold = build(256);
-    let mut retained = build(256);
+    let mut cold = build(outer);
+    let mut retained = build(outer);
     retained.configure_material_contact_sweeps(sweeps).unwrap();
     assert!(retained.configure_material_contact_polish(Some(8)).is_err());
+    assert!(
+        retained
+            .configure_material_contact_polish_cycles(1)
+            .is_err()
+    );
     for invalid in [0, 4097, u32::MAX] {
         assert!(
             retained
@@ -460,34 +529,79 @@ fn material_reuse_trajectory_configured(
         retained.configure_material_contact_reuse(reuse).unwrap();
         if polish && reuse.is_some() {
             retained.configure_material_contact_polish(Some(8)).unwrap();
+            for invalid in [0, 4097, u32::MAX] {
+                assert!(
+                    retained
+                        .configure_material_contact_polish_cycles(invalid)
+                        .is_err()
+                );
+            }
+            retained
+                .configure_material_contact_polish_cycles(cycles)
+                .unwrap();
             assert!(retained.configure_material_contact_reuse(None).is_err());
         }
         let mut results = Vec::new();
+        let mut rejected = 0;
         for (index, system) in [&mut cold, &mut retained].into_iter().enumerate() {
+            let previous = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_q.device_buffer().unwrap(),
+                4,
+            );
             assert!(system.try_step_substep(h).unwrap());
             assert!(system.configure_material_contact_reuse(None).is_err());
             assert!(system.configure_material_contact_sweeps(None).is_err());
             assert!(system.configure_material_contact_polish(None).is_err());
+            assert!(system.configure_material_contact_polish_cycles(1).is_err());
             let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+            if index == 1 && polish && reuse.is_some() {
+                let checkpoint = readback::read::<u32>(
+                    &engine,
+                    system.material_pre_polish_diagnostics().unwrap(),
+                    4,
+                );
+                assert_eq!(checkpoint[0], 0);
+                assert!(checkpoint[1..].iter().all(|&v| f32::from_bits(v) <= 1e-4));
+            } else {
+                assert!(system.material_pre_polish_diagnostics().is_none());
+            }
             let force =
                 readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
             let corrections =
                 readback::read::<f32>(&engine, system.material_contact_diagnostics().unwrap(), 3);
+            let velocity = readback::read::<[f32; 4]>(
+                &engine,
+                system.soft_state().particle_qd.device_buffer().unwrap(),
+                4,
+            );
+            let samples =
+                readback::read::<[f32; 4]>(&engine, system.material_force_samples().unwrap(), 4);
+            let oracle = trajectory_force_oracle(&oracle_model, &previous, &velocity, &samples, h);
             eprintln!(
-                "step={step} index={index} reuse={reuse:?} force={force} corrections={corrections:?} status={status}"
+                "step={step} index={index} reuse={reuse:?} force={force} oracle={oracle:?} corrections={corrections:?} status={status}"
             );
             if rejection_deadline.is_some_and(|limit| step <= limit) && status != 0 {
                 assert_eq!(status, 64);
                 assert!(force.is_finite() && force > 1e-4);
+                assert!(oracle.iter().any(|r| r.is_finite() && *r > 1e-4));
                 assert!(corrections.iter().all(|v| v.is_finite()));
                 assert!(corrections[0] > 1e-4);
-                return;
+                rejected += 1;
+                continue;
             }
             assert_eq!(
                 status, 0,
                 "step={step} index={index} reuse={reuse:?} force={force}"
             );
             assert!(force.is_finite() && force <= 1e-4);
+            assert!(oracle.iter().all(|r| r.is_finite() && *r <= 1e-4));
+            let rows = readback::read::<[f32; 8]>(
+                &engine,
+                system.contact_row_diagnostics(),
+                system.contact_row_count() as usize,
+            );
+            assert!(rows.iter().all(|r| r[3].is_finite() && r[3] <= 1e-4));
             while !system.poll_completion().unwrap() {
                 std::thread::yield_now();
             }
@@ -532,6 +646,10 @@ fn material_reuse_trajectory_configured(
             previous_energy[index] = elastic + kinetic;
             results.push((q, v));
         }
+        if rejected != 0 {
+            assert_eq!(rejected, 2);
+            return;
+        }
         for field in 0..2 {
             let a = if field == 0 {
                 &results[0].0
@@ -556,6 +674,77 @@ fn material_reuse_trajectory_configured(
     );
     retained.configure_material_contact(None).unwrap();
     assert!(retained.configure_material_contact_polish(Some(8)).is_err());
+    assert!(
+        retained
+            .configure_material_contact_polish_cycles(1)
+            .is_err()
+    );
+}
+
+fn trajectory_force_oracle(
+    model: &Model,
+    previous: &[[f32; 4]],
+    velocity: &[[f32; 4]],
+    samples: &[[f32; 4]],
+    dt: f64,
+) -> [f64; 4] {
+    let project = |v: f64| v as f32 as f64;
+    let vector = |v: [f32; 4]| Vec3::new(v[0] as f64, v[1] as f64, v[2] as f64);
+    let h = project(dt);
+    let delta: Vec<_> = velocity
+        .iter()
+        .map(|v| Vec3::from_array((vector(*v) * h).to_array().map(project)))
+        .collect();
+    let rest: Vec<_> = model
+        .initial_particle_q
+        .host()
+        .unwrap()
+        .iter()
+        .map(|p| Vec3::from_array(p.to_array().map(project)))
+        .collect();
+    let inverse = Mat3::from_cols_array(
+        &model.tet_dm_inv.host().unwrap()[0]
+            .to_cols_array()
+            .map(project),
+    );
+    let edge = |i: usize| vector(previous[i]) - vector(previous[0]) - (rest[i] - rest[0]);
+    let old = Mat3::IDENTITY + Mat3::from_cols(edge(1), edge(2), edge(3)) * inverse;
+    let increment = Mat3::from_cols(
+        delta[1] - delta[0],
+        delta[2] - delta[0],
+        delta[3] - delta[0],
+    ) * inverse;
+    let f = old + increment;
+    let cof = Mat3::from_cols(
+        f.y_axis.cross(f.z_axis),
+        f.z_axis.cross(f.x_axis),
+        f.x_axis.cross(f.y_axis),
+    );
+    let mu = project(model.tet_mu.host().unwrap()[0]);
+    let lambda = project(model.tet_lambda.host().unwrap()[0]);
+    let strain = (old.transpose() * increment
+        + increment.transpose() * old
+        + increment.transpose() * increment)
+        * 0.5;
+    let trace = strain.x_axis.x + strain.y_axis.y + strain.z_axis.z;
+    let viscosity = model.tet_viscosity.host().unwrap()[0];
+    let viscous = (strain - Mat3::IDENTITY * (trace / 3.0)) * (2.0 * project(viscosity.shear))
+        + Mat3::IDENTITY * (trace * project(viscosity.bulk));
+    let stress = (f - cof) * mu + cof * ((lambda + mu) * (f.determinant() - 1.0)) + f * viscous / h;
+    let rows = inverse.transpose();
+    let gradients = [
+        -(rows.x_axis + rows.y_axis + rows.z_axis),
+        rows.x_axis,
+        rows.y_axis,
+        rows.z_axis,
+    ];
+    let volume = project(model.tet_rest_volume.host().unwrap()[0]);
+    std::array::from_fn(|i| {
+        let inverse_mass = project(model.particle_inv_mass.host().unwrap()[i]);
+        let force = (vector(samples[i]) - delta[i]) / (inverse_mass * h * h)
+            - stress * gradients[i] * volume;
+        force.length() * h * inverse_mass
+    })
 }
 
 #[test]

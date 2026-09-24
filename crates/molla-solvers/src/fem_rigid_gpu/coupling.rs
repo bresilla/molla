@@ -30,6 +30,8 @@ pub(super) struct MaterialContactState {
     pub(super) reuse_iterations: Option<u32>,
     pub(super) contact_sweeps: Option<u32>,
     pub(super) polish_iterations: Option<u32>,
+    pub(super) polish_cycles: u32,
+    pub(super) pre_polish: wgpu::Buffer,
     pub(super) input: State,
     predicted: wgpu::Buffer,
     previous_body: wgpu::Buffer,
@@ -74,6 +76,13 @@ impl MaterialContactState {
             reuse_iterations: None,
             contact_sweeps: None,
             polish_iterations: None,
+            polish_cycles: 1,
+            pre_polish: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("material pre-polish diagnostics"),
+                size: 16,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            }),
             kernel: SoftMaterialIterationKernel::new(device),
             predicted: allocate(
                 "material predictor velocities",
@@ -86,6 +95,7 @@ impl MaterialContactState {
     }
 
     pub(super) fn begin(&mut self, encoder: &mut wgpu::CommandEncoder, state: &State) {
+        encoder.clear_buffer(&self.pre_polish, 0, None);
         macro_rules! copy {
             ($field:ident) => {{
                 let source = state.$field.device_buffer().unwrap();

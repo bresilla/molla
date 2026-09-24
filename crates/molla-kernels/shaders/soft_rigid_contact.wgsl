@@ -29,6 +29,16 @@ fn multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 fn nonzero_sign(p: vec3<f32>) -> vec3<f32> {
     return select(vec3<f32>(-1.0), vec3<f32>(1.0), p >= vec3<f32>(0.0));
 }
+fn box_distance(q: vec3<f32>, s: vec3<f32>) -> vec4<f32> {
+    let outside = max(q, vec3<f32>(0.0));
+    let r = length(outside);
+    var n = vec3<f32>(0.0);
+    if r > 1e-12 { n = s * outside / r; }
+    else if q.x >= q.y && q.x >= q.z { n.x = s.x; }
+    else if q.y >= q.z { n.y = s.y; }
+    else { n.z = s.z; }
+    return vec4<f32>(n, r + min(max(q.x, max(q.y, q.z)), 0.0));
+}
 fn distance(kind: u32, data: vec3<f32>, p: vec3<f32>) -> vec4<f32> {
     if kind == 0u {
         let r = length(p);
@@ -37,16 +47,7 @@ fn distance(kind: u32, data: vec3<f32>, p: vec3<f32>) -> vec4<f32> {
         return vec4<f32>(n, r - data.x);
     }
     if kind == 1u {
-        let q = abs(p) - data;
-        let outside = max(q, vec3<f32>(0.0));
-        let r = length(outside);
-        let s = nonzero_sign(p);
-        var n = vec3<f32>(0.0);
-        if r > 1e-12 { n = s * outside / r; }
-        else if q.x >= q.y && q.x >= q.z { n.x = s.x; }
-        else if q.y >= q.z { n.y = s.y; }
-        else { n.z = s.z; }
-        return vec4<f32>(n, r + min(max(q.x, max(q.y, q.z)), 0.0));
+        return box_distance(abs(p) - data, nonzero_sign(p));
     }
     let radial = vec3<f32>(p.x, 0.0, p.z);
     let r = length(radial);
@@ -110,7 +111,24 @@ fn contact_at(row: u32) -> Contact {
         rotation = multiply(pose.rotation, rotation);
     }
     let local = rotate(vec4<f32>(-rotation.xyz, rotation.w), point - center);
-    let sample = distance(shape.ids.x, shape.data.xyz, local);
+    var sample: vec4<f32>;
+    if shape.ids.x == 1u {
+        let signs = nonzero_sign(local);
+        let nx = rotate(rotation, vec3<f32>(signs.x, 0.0, 0.0));
+        let ny = rotate(rotation, vec3<f32>(0.0, signs.y, 0.0));
+        let nz = rotate(rotation, vec3<f32>(0.0, 0.0, signs.z));
+        let face_x = center + nx * shape.data.x;
+        let face_y = center + ny * shape.data.y;
+        let face_z = center + nz * shape.data.z;
+        var gaps = vec3<f32>(0.0);
+        for (var i = 0u; i < nodes.w; i += 1u) {
+            let p = positions[nodes[i]].xyz;
+            gaps += weights[i] * vec3<f32>(dot(nx, p - face_x), dot(ny, p - face_y), dot(nz, p - face_z));
+        }
+        sample = box_distance(gaps, signs);
+    } else {
+        sample = distance(shape.ids.x, shape.data.xyz, local);
+    }
     result.normal_gap = vec4<f32>(rotate(rotation, sample.xyz), sample.w - radius);
     result.ids.w = select(0u, 1u, result.normal_gap.w <= params.margin);
     return result;

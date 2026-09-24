@@ -38,6 +38,7 @@ enum DispatchMode {
     Step,
     BeginMaterial,
     ContinueMaterial,
+    PolishMaterial,
     ForceResidual,
 }
 
@@ -54,11 +55,13 @@ pub struct VbdClothKernel {
     bindings: BindingCache,
     pipe_predict: wgpu::ComputePipeline,
     pipe_retarget: wgpu::ComputePipeline,
+    pipe_cache_previous: wgpu::ComputePipeline,
     continuation: Option<MaterialContinuation>,
     force_samples_ready: bool,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
+    pipe_polish_color: wgpu::ComputePipeline,
     pipe_shape_contacts: wgpu::ComputePipeline,
     pipe_update_dual: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
@@ -83,8 +86,8 @@ pub struct VbdClothKernel {
     /// compliance lives in the `Model`; converting once on the host
     /// avoids a per-step conversion in WGSL.
     spring_stiffness: Buffer<Real>,
-    /// Per-particle displacement from the input position.
-    particle_delta: Buffer<Vec3>,
+    /// Particle displacements followed by six cached gradient columns per tet.
+    particle_delta: wgpu::Buffer,
     /// Per-particle inertial displacement target.
     inertia_y: Buffer<Vec3>,
     /// Per-particle augmented-Lagrangian multiplier (Stage 20.1
@@ -127,6 +130,10 @@ impl VbdClothKernel {
                     include_str!("../shaders/tet_viscosity.wgsl"),
                     "\n",
                     include_str!("../shaders/vbd_cloth.wgsl"),
+                )
+                .replace(
+                    "const CACHE_PREVIOUS_TETS: bool = false;",
+                    "const CACHE_PREVIOUS_TETS: bool = true;",
                 )
                 .into(),
             ),
@@ -228,9 +235,11 @@ impl VbdClothKernel {
 
         let pipe_predict = make_pipeline("predict");
         let pipe_retarget = make_pipeline("retarget");
+        let pipe_cache_previous = make_pipeline("cache_previous_tets");
         let pipe_residual_seed = make_pipeline("residual_seed");
         let pipe_force_residual = make_pipeline("force_residual");
         let pipe_solve_color = make_pipeline("solve_color");
+        let pipe_polish_color = make_pipeline("polish_color");
         let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
         let pipe_update_dual = make_pipeline("update_dual");
         let pipe_velocity = make_pipeline("velocity_recovery");
@@ -250,14 +259,16 @@ impl VbdClothKernel {
             vec![0.0_f64; sn]
         };
         let mut spring_stiffness = Buffer::from_vec(stiffness_init, BufferUsage::Storage);
-        let mut particle_delta =
-            Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
+        let particle_delta = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::vbd_cloth displacement and gradient scratch"),
+            size: (pn as u64) * 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let mut inertia_y = Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut contact_lambda = Buffer::from_vec(vec![0.0_f64; pn], BufferUsage::StorageReadWrite);
         let _ = spring_stiffness.ensure_device(device);
         let _ = spring_stiffness.upload(queue);
-        let _ = particle_delta.ensure_device(device);
-        let _ = particle_delta.upload(queue);
         let _ = inertia_y.ensure_device(device);
         let _ = inertia_y.upload(queue);
         let _ = contact_lambda.ensure_device(device);
@@ -294,11 +305,13 @@ impl VbdClothKernel {
             bindings: BindingCache::new(64),
             pipe_predict,
             pipe_retarget,
+            pipe_cache_previous,
             continuation: None,
             force_samples_ready: false,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
+            pipe_polish_color,
             pipe_shape_contacts,
             pipe_update_dual,
             pipe_velocity,
@@ -406,6 +419,59 @@ impl VbdClothKernel {
         iterations: u32,
         begin: bool,
     ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            if begin {
+                DispatchMode::BeginMaterial
+            } else {
+                DispatchMode::ContinueMaterial
+            },
+        )
+    }
+
+    /// Continues an active elastic solve using compensated material forces.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_polish(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+    ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            DispatchMode::PolishMaterial,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn material_iterations(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        mode: DispatchMode,
+    ) -> Result<()> {
+        let begin = mode == DispatchMode::BeginMaterial;
         self.force_samples_ready = false;
         if begin {
             self.continuation = None;
@@ -434,20 +500,7 @@ impl VbdClothKernel {
             ));
         }
         self.dispatch_inner(
-            device,
-            queue,
-            model,
-            state_in,
-            state_out,
-            dt,
-            iterations,
-            0.0,
-            false,
-            if begin {
-                DispatchMode::BeginMaterial
-            } else {
-                DispatchMode::ContinueMaterial
-            },
+            device, queue, model, state_in, state_out, dt, iterations, 0.0, false, mode,
         )
     }
 
@@ -508,7 +561,10 @@ impl VbdClothKernel {
         let previous = self.continuation.take();
         self.force_samples_ready = false;
         let residual_only = mode == DispatchMode::ForceResidual;
-        let reuse = mode == DispatchMode::ContinueMaterial;
+        let reuse = matches!(
+            mode,
+            DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
+        );
         if model.particle_count == 0 {
             return Ok(());
         }
@@ -522,6 +578,20 @@ impl VbdClothKernel {
             return Err(Error::Gpu(
                 "tet viscosity length must equal tet count".into(),
             ));
+        }
+        let scratch_bytes = gradient_scratch_bytes(
+            model.particle_count,
+            model.tet_count,
+            u64::from(device.limits().max_storage_buffer_binding_size)
+                .min(device.limits().max_buffer_size),
+        )?;
+        if self.particle_delta.size() < scratch_bytes {
+            self.particle_delta = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("molla::vbd_cloth displacement and gradient scratch"),
+                size: scratch_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
         }
         let particle_count_u = model.particle_count as u32;
         let spring_count_u = model.spring_count as u32;
@@ -644,7 +714,7 @@ impl VbdClothKernel {
                 entries: &[
                     buffer_entry(0, state_out.particle_q.device_buffer())?,
                     buffer_entry(1, state_out.particle_qd.device_buffer())?,
-                    buffer_entry(2, self.particle_delta.device_buffer())?,
+                    buffer_entry(2, Some(&self.particle_delta))?,
                     buffer_entry(3, self.inertia_y.device_buffer())?,
                     buffer_entry(4, self.contact_lambda.device_buffer())?,
                 ],
@@ -876,7 +946,9 @@ impl VbdClothKernel {
 
         let continuation = if matches!(
             mode,
-            DispatchMode::BeginMaterial | DispatchMode::ContinueMaterial
+            DispatchMode::BeginMaterial
+                | DispatchMode::ContinueMaterial
+                | DispatchMode::PolishMaterial
         ) {
             let key = MaterialContinuation {
                 groups: [
@@ -1010,6 +1082,14 @@ impl VbdClothKernel {
                 pass.dispatch_workgroups(groups.max(1), 1, 1);
             };
 
+            if tet_count_u > 0 && !reuse {
+                dispatch(
+                    &mut pass,
+                    &self.pipe_cache_previous,
+                    bg_uniforms.len() - 1,
+                    tet_count_u,
+                );
+            }
             if residual_only {
                 dispatch(&mut pass, &self.pipe_residual_seed, 0, particle_count_u);
                 dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
@@ -1038,7 +1118,12 @@ impl VbdClothKernel {
                         let lo = color_offsets_host[k as usize];
                         let hi = color_offsets_host[k as usize + 1];
                         let nc = hi - lo;
-                        dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
+                        let pipeline = if mode == DispatchMode::PolishMaterial {
+                            &self.pipe_polish_color
+                        } else {
+                            &self.pipe_solve_color
+                        };
+                        dispatch(&mut pass, pipeline, idx, nc);
                         idx += 1;
                     }
                     if hard_mode {
@@ -1101,6 +1186,40 @@ impl VbdClothKernel {
     }
     pub fn spring_count(&self) -> u32 {
         self.spring_count
+    }
+}
+
+fn gradient_scratch_bytes(particles: usize, tets: usize, limit: u64) -> Result<u64> {
+    let slots = tets
+        .checked_mul(6)
+        .and_then(|tet_slots| particles.checked_add(tet_slots))
+        .filter(|slots| *slots <= u32::MAX as usize)
+        .ok_or_else(|| Error::Gpu("VBD gradient scratch index overflow".into()))?;
+    let bytes = (slots.max(1) as u64) * 16;
+    if bytes > limit {
+        return Err(Error::Gpu(
+            "VBD gradient scratch exceeds device binding limit".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod gradient_scratch_tests {
+    use super::gradient_scratch_bytes;
+
+    #[test]
+    fn checks_binding_capacity_and_shader_indices() {
+        assert_eq!(gradient_scratch_bytes(0, 0, 16).unwrap(), 16);
+        assert_eq!(
+            gradient_scratch_bytes(29_568, 102_144, 16 << 20).unwrap(),
+            10_278_912
+        );
+        assert_eq!(gradient_scratch_bytes(4, 1, 160).unwrap(), 160);
+        assert!(gradient_scratch_bytes(4, 1, 159).is_err());
+        assert!(gradient_scratch_bytes(usize::MAX, 1, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(1, usize::MAX, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(u32::MAX as usize, 1, u64::MAX).is_err());
     }
 }
 

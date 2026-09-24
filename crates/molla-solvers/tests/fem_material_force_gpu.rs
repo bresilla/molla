@@ -238,6 +238,96 @@ fn diagnostic_stiffness_matches_projected_spring_table() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn rotated_cord_prestress_matches_balanced_f64_force() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let h = (1.0 / 19200.0) as f32 as f64;
+    let decode = |bits: [u32; 3]| Vec3::from_array(bits.map(|b| f32::from_bits(b) as f64));
+    let project = |v: Vec3| Vec3::from_array(v.to_array().map(|x| x as f32 as f64));
+    let q = [
+        decode([3200589562, 1027526611, 1009447054]),
+        decode([3200589597, 1027518020, 3145421470]),
+        decode([3200589391, 1027511982, 3163834364]),
+    ];
+    let velocity = [
+        decode([3014370048, 919367983, 3036084566]),
+        decode([3022099684, 915001823, 3035613440]),
+        decode([881136076, 907789975, 3034190500]),
+    ]
+    .map(|d| project(d / h));
+    let delta = velocity.map(|v| project(v * h));
+    let inverse_mass = [1141663981, 1141343957, 1141346677].map(|bits| f32::from_bits(bits) as f64);
+    let stiffness = 821926.125;
+    for tension in [false, true] {
+        for rest in [0.014194300398230553_f64, 0.0144_f32 as f64] {
+            let mut builder = ModelBuilder::new();
+            builder.set_world_gravity(WorldId(0), Vec3::ZERO);
+            builder.set_linear_damping(0.0);
+            for i in 0..3 {
+                builder.add_particle(q[i], 1.0 / inverse_mass[i], 0.0, WorldId(0));
+            }
+            for (a, b) in [(0, 1), (1, 2)] {
+                if tension {
+                    builder.add_tension_element(a, b, rest, stiffness).unwrap();
+                } else {
+                    builder.add_distance_constraint(a, b, rest, 1.0 / stiffness, 1.0);
+                }
+            }
+            let mut model = builder.build().unwrap();
+            let mut input = model.state().unwrap();
+            let mut output = model.state().unwrap();
+            model.upload_to_device(device, queue).unwrap();
+            let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+            let stiffness =
+                readback::read::<f32>(&engine, solver.spring_stiffness_gpu().unwrap(), 2);
+            let mut forces = [Vec3::ZERO; 3];
+            for (index, (a, b)) in [(0, 1), (1, 2)].into_iter().enumerate() {
+                let edge = q[a] - q[b] + delta[a] - delta[b];
+                let length = edge.length();
+                if !tension || length > rest {
+                    let force = -stiffness[index] as f64 * ((length - rest) / length) * edge;
+                    forces[a] += force;
+                    forces[b] -= force;
+                }
+            }
+            let incoming: Vec<_> = (0..3)
+                .map(|i| project(velocity[i] - forces[i] * (h * inverse_mass[i]) + Vec3::X * 7e-5))
+                .collect();
+            input
+                .particle_qd
+                .host_mut()
+                .unwrap()
+                .copy_from_slice(&incoming);
+            output
+                .particle_qd
+                .host_mut()
+                .unwrap()
+                .copy_from_slice(&velocity);
+            input.upload_to_device(device, queue).unwrap();
+            output.upload_to_device(device, queue).unwrap();
+            let residual = solver
+                .material_force_residual_gpu(&model, &input, &mut output, h)
+                .unwrap();
+            let samples = readback::read::<[f32; 4]>(&engine, residual, 3);
+            for i in 0..3 {
+                let target = project(incoming[i] * h);
+                let expected =
+                    ((target - delta[i]) / h + forces[i] * (h * inverse_mass[i])).length();
+                let error = (samples[i][3] as f64 - expected).abs();
+                eprintln!(
+                    "cord tension={tension} rest={rest} node={i} gpu={} oracle={expected} error={error}",
+                    samples[i][3]
+                );
+                assert!(error < 3e-6, "cord force precision error {error}");
+                assert_eq!(samples[i][3] > 1e-4, expected > 1e-4);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn spring_force_resolves_sub_position_ulp_extension() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
@@ -406,12 +496,14 @@ fn rotated_thin_tet_increment_matches_projected_force() {
     let vector = |v: Vec3| Vec3::from_array(v.to_array().map(project));
     let h = project(1.0 / 19200.0);
     for viscous in [false, true] {
-        for (axis, angle) in [
-            (Vec3::X, 1.4),
-            (Vec3::X, 2.1),
-            (Vec3::Y, 2.1),
-            (Vec3::Z, 2.1),
-            (Vec3::ONE.normalize(), 2.4),
+        for (axis, angle, plastic_x) in [
+            (Vec3::X, 1.4, 1.0),
+            (Vec3::X, 2.1, 1.0),
+            (Vec3::Y, 2.1, 1.0),
+            (Vec3::Z, 2.1, 1.0),
+            (Vec3::ONE.normalize(), 2.4, 1.0),
+            (Vec3::ONE.normalize(), 2.4, 0.5),
+            (Vec3::Y, 2.1, 2.0),
         ] {
             let mut builder = ModelBuilder::new();
             builder.set_world_gravity(WorldId(0), Vec3::ZERO);
@@ -439,8 +531,10 @@ fn rotated_thin_tet_increment_matches_projected_force() {
             let mut input = model.state().unwrap();
             let mut output = model.state().unwrap();
             let rotation = Quat::from_axis_angle(axis, angle);
+            let plastic = Mat3::from_diagonal(Vec3::new(plastic_x, 1.0, 1.0));
+            output.tet_f_plastic.host_mut().unwrap()[0] = plastic;
             for (i, p) in input.particle_q.host_mut().unwrap().iter_mut().enumerate() {
-                *p = rotation * *p + Vec3::new(0.5, 0.15, 0.52);
+                *p = rotation * (plastic * *p) + Vec3::new(0.5, 0.15, 0.52);
                 output.particle_qd.host_mut().unwrap()[i] = Vec3::new(
                     0.08 + i as f64 * 0.0007,
                     -0.05 + i as f64 * 0.0003,
@@ -475,7 +569,8 @@ fn rotated_thin_tet_increment_matches_projected_force() {
                 delta[2] - delta[0],
                 delta[3] - delta[0],
             ) * inverse;
-            let f = previous + increment;
+            let total_f = previous + increment;
+            let f = total_f * plastic.inverse();
             let cof = Mat3::from_cols(
                 f.y_axis.cross(f.z_axis),
                 f.z_axis.cross(f.x_axis),
@@ -493,7 +588,7 @@ fn rotated_thin_tet_increment_matches_projected_force() {
                 let rate_stress = (strain - Mat3::IDENTITY * (trace / 3.0))
                     * (2.0 * project(material.viscosity.shear))
                     + Mat3::IDENTITY * (project(material.viscosity.bulk) * trace);
-                stress += f * rate_stress * (1.0 / h);
+                stress += total_f * rate_stress * (1.0 / h);
             }
             let rows = inverse.transpose();
             let gradients = [
@@ -517,7 +612,7 @@ fn rotated_thin_tet_increment_matches_projected_force() {
                 let expected = force.length() * h * inv_mass;
                 let error = (actual[i][3] as f64 - expected).abs();
                 eprintln!(
-                    "rotated increment viscous={viscous} axis={axis:?} angle={angle} node={i} error={error}"
+                    "rotated increment viscous={viscous} axis={axis:?} angle={angle} plastic_x={plastic_x} node={i} error={error}"
                 );
                 assert!(error < 3e-5, "GPU={} oracle={expected}", actual[i][3]);
             }
@@ -682,6 +777,111 @@ fn retained_material_iterates_match_uninterrupted_sweeps_and_enforce_lifecycle()
                 .material_iteration_gpu(&model, &input, &mut output, h, 0, true)
                 .is_err()
         );
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn compensated_polish_enforces_lifecycle_and_matches_split_sweeps() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for (pinned, viscous) in [(false, true), (true, true), (false, false)] {
+        let h = 1.0 / 9600.0;
+        let mut model = model(pinned, viscous);
+        let mut input = model.state().unwrap();
+        input.particle_qd.host_mut().unwrap()[2] = Vec3::NEG_Y;
+        let mut output = model.state().unwrap();
+        let mut reference = model.state().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        for state in [&mut input, &mut output, &mut reference] {
+            state.upload_to_device(device, queue).unwrap();
+        }
+        let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut output, h, 8)
+                .is_err()
+        );
+        let before_input =
+            readback::read::<u32>(&engine, input.particle_q.device_buffer().unwrap(), 16);
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 8, true)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut output, h, 8)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut output, h, 120)
+            .unwrap();
+        solver
+            .material_iteration_gpu(&model, &input, &mut reference, h, 8, true)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut reference, h, 128)
+            .unwrap();
+        assert_eq!(
+            snapshot(&engine, &input, &output),
+            snapshot(&engine, &input, &reference)
+        );
+        assert_eq!(
+            before_input,
+            readback::read::<u32>(&engine, input.particle_q.device_buffer().unwrap(), 16)
+        );
+        let force = solver
+            .material_force_residual_gpu(&model, &input, &mut reference, h)
+            .unwrap();
+        let residuals = readback::read::<[f32; 4]>(&engine, force, 4);
+        assert!(
+            residuals.iter().all(|v| v[3].is_finite() && v[3] <= 1e-4),
+            "{residuals:?}"
+        );
+        if pinned {
+            let velocity = readback::read::<[f32; 4]>(
+                &engine,
+                reference.particle_qd.device_buffer().unwrap(),
+                4,
+            );
+            let projected_h = h as f32 as f64;
+            assert!(axial_residual(projected_h, 1.0, velocity[2][1] as f64, viscous) < 1e-4);
+            for i in [0, 1, 3] {
+                assert_eq!(&velocity[i][..3], &[0.0; 3]);
+            }
+        }
+        assert!(solver.material_force_samples_gpu().is_some());
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut reference, h, 8)
+                .is_err()
+        );
+        assert!(solver.material_force_samples_gpu().is_none());
+        for (dt, iterations) in [(0.0, 8), (f64::NAN, 8), (h * 0.5, 8), (h, 0)] {
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+                .unwrap();
+            let before = snapshot(&engine, &input, &output);
+            assert!(
+                solver
+                    .material_polish_gpu(&model, &input, &mut output, dt, iterations)
+                    .is_err()
+            );
+            assert_eq!(before, snapshot(&engine, &input, &output));
+            assert!(
+                solver
+                    .material_polish_gpu(&model, &input, &mut output, h, 8)
+                    .is_err()
+            );
+        }
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        let before = snapshot(&engine, &input, &reference);
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut reference, h, 8)
+                .is_err()
+        );
+        assert_eq!(before, snapshot(&engine, &input, &reference));
     }
 }
 
