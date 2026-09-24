@@ -1,34 +1,16 @@
 @group(6) @binding(0) var<storage, read> material_direction: array<vec4<f32>>;
 @group(6) @binding(1) var<storage, read_write> material_residual: array<vec4<f32>>;
 @group(6) @binding(2) var<storage, read_write> material_action: array<vec4<f32>>;
+struct MaterialTangent { columns: array<mat3x3<f32>,9> }
+@group(6) @binding(3) var<storage, read_write> material_tangents: array<MaterialTangent>;
 
 fn material_free_direction(node: u32) -> vec3<f32> {
     if particle_inv_mass[node] <= 0.0 { return vec3<f32>(0.0); }
     return material_direction[node].xyz;
 }
 
-fn material_tet_action(tet: u32, order: u32) -> vec3<f32> {
-    let plastic = tet_f_plastic[tet];
-    if any(plastic.col0.xyz != IDENTITY3[0]) || any(plastic.col1.xyz != IDENTITY3[1])
-        || any(plastic.col2.xyz != IDENTITY3[2]) {
-        return vec3<f32>(bitcast<f32>(0x7fc00000u));
-    }
-    let origin = tet_indices[tet*4u];
-    let raw = tet_dm_inv[tet];
-    let inverse = mat3x3<f32>(raw.col0.xyz, raw.col1.xyz, raw.col2.xyz);
-    var edges: mat3x3<f32>;
-    var direction_edges: mat3x3<f32>;
-    for (var column = 0u; column < 3u; column++) {
-        let node = tet_indices[tet*4u+column+1u];
-        edges[column] = tet_displacement_edge(origin, node);
-        direction_edges[column] = material_free_direction(node) - material_free_direction(origin);
-    }
-    let previous_parts = tet_previous_parts(tet, edges, inverse);
-    let increment_parts = tet_increment_parts(tet, inverse);
-    let previous = previous_parts.value + previous_parts.correction;
-    let increment = increment_parts.value + increment_parts.correction;
+fn material_stress_action(tet: u32, previous: mat3x3<f32>, increment: mat3x3<f32>, df: mat3x3<f32>) -> mat3x3<f32> {
     let f = previous + increment;
-    let df = direction_edges * inverse;
     let cof = cofactor3(f);
     var dcof: mat3x3<f32>;
     for (var column = 0u; column < 3u; column++) {
@@ -54,6 +36,29 @@ fn material_tet_action(tet: u32, order: u32) -> vec3<f32> {
             + IDENTITY3*(viscosity.y*dtrace);
         dp += (df*stress+f*dstress)*(1.0/u.dt);
     }
+    return dp;
+}
+
+fn material_tet_action(tet: u32, order: u32) -> vec3<f32> {
+    let plastic = tet_f_plastic[tet];
+    if any(plastic.col0.xyz != IDENTITY3[0]) || any(plastic.col1.xyz != IDENTITY3[1])
+        || any(plastic.col2.xyz != IDENTITY3[2]) {
+        return vec3<f32>(bitcast<f32>(0x7fc00000u));
+    }
+    let origin = tet_indices[tet*4u];
+    let raw = tet_dm_inv[tet];
+    let inverse = mat3x3<f32>(raw.col0.xyz, raw.col1.xyz, raw.col2.xyz);
+    var edges: mat3x3<f32>;
+    var direction_edges: mat3x3<f32>;
+    for (var column = 0u; column < 3u; column++) {
+        let node = tet_indices[tet*4u+column+1u];
+        edges[column] = tet_displacement_edge(origin, node);
+        direction_edges[column] = material_free_direction(node) - material_free_direction(origin);
+    }
+    let previous_parts = tet_previous_parts(tet, edges, inverse);
+    let increment_parts = tet_increment_parts(tet, inverse);
+    let dp = material_stress_action(tet, previous_parts.value + previous_parts.correction,
+        increment_parts.value + increment_parts.correction, direction_edges * inverse);
     var gradient: vec3<f32>;
     if order == 0u {
         gradient = -vec3<f32>(dot(inverse[0],vec3<f32>(1.0)),
@@ -62,6 +67,68 @@ fn material_tet_action(tet: u32, order: u32) -> vec3<f32> {
         gradient = vec3<f32>(inverse[0][order-1u],inverse[1][order-1u],inverse[2][order-1u]);
     }
     return -(dp*gradient)*tet_rest_volume[tet];
+}
+
+@compute @workgroup_size(64)
+fn cache_material_tangents(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= u.work_count { return; }
+    let tet = u.color_index + gid.x;
+    let origin = tet_indices[tet*4u];
+    let raw = tet_dm_inv[tet];
+    let inverse = mat3x3<f32>(raw.col0.xyz,raw.col1.xyz,raw.col2.xyz);
+    var edges: mat3x3<f32>;
+    for (var c = 0u; c < 3u; c++) { edges[c] = tet_displacement_edge(origin,tet_indices[tet*4u+c+1u]); }
+    let previous = tet_previous_parts(tet,edges,inverse);
+    let increment = tet_increment_parts(tet,inverse);
+    let plastic = tet_f_plastic[tet];
+    let valid = all(plastic.col0.xyz == IDENTITY3[0]) && all(plastic.col1.xyz == IDENTITY3[1])
+        && all(plastic.col2.xyz == IDENTITY3[2]);
+    for (var c = 0u; c < 9u; c++) {
+        var df = mat3x3<f32>();
+        df[c/3u][c%3u] = 1.0;
+        var value = material_stress_action(tet,previous.value+previous.correction,
+            increment.value+increment.correction,df);
+        if !valid {
+            let invalid = vec3<f32>(bitcast<f32>(0x7fc00000u));
+            value = mat3x3<f32>(invalid,invalid,invalid);
+        }
+        material_tangents[tet].columns[c] = value;
+    }
+}
+
+fn cached_tet_action(tet: u32, order: u32) -> vec3<f32> {
+    let origin = tet_indices[tet*4u];
+    let raw = tet_dm_inv[tet];
+    let inverse = mat3x3<f32>(raw.col0.xyz,raw.col1.xyz,raw.col2.xyz);
+    var edges: mat3x3<f32>;
+    for (var c = 0u; c < 3u; c++) {
+        edges[c] = material_free_direction(tet_indices[tet*4u+c+1u])-material_free_direction(origin);
+    }
+    let df = edges*inverse;
+    var dp = mat3x3<f32>();
+    for (var c = 0u; c < 9u; c++) { dp += material_tangents[tet].columns[c]*df[c/3u][c%3u]; }
+    var gradient: vec3<f32>;
+    if order == 0u {
+        gradient = -vec3<f32>(dot(inverse[0],vec3<f32>(1.0)),dot(inverse[1],vec3<f32>(1.0)),dot(inverse[2],vec3<f32>(1.0)));
+    } else { gradient = vec3<f32>(inverse[0][order-1u],inverse[1][order-1u],inverse[2][order-1u]); }
+    return -(dp*gradient)*tet_rest_volume[tet];
+}
+
+@compute @workgroup_size(64)
+fn material_cached_action(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let node = gid.x;
+    if node >= u.particle_count { return; }
+    let inverse_mass = particle_inv_mass[node];
+    let direction = material_direction[node].xyz;
+    if inverse_mass <= 0.0 { material_action[node] = vec4<f32>(direction,0.0); return; }
+    var derivative = vec3<f32>(0.0);
+    for (var s = vertex_adj_offsets[node]; s < vertex_adj_offsets[node+1u]; s++) {
+        derivative += material_spring_action(node,vertex_adj_springs[s]);
+    }
+    for (var t = vertex_adj_tets_offsets[node]; t < vertex_adj_tets_offsets[node+1u]; t += 2u) {
+        derivative += cached_tet_action(vertex_adj_tets[t],vertex_adj_tets[t+1u]);
+    }
+    material_action[node] = vec4<f32>(direction-(u.dt*u.dt*inverse_mass)*derivative,0.0);
 }
 
 fn material_spring_action(node: u32, spring: u32) -> vec3<f32> {

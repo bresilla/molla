@@ -278,6 +278,20 @@ impl CoupledNewtonKernel {
         settings: CoupledNewtonSettings,
         mut evaluate: impl FnMut(&mut wgpu::CommandEncoder) -> Result<()>,
     ) -> Result<()> {
+        self.encode_split(device, encoder, inverse_diagonal, settings, |encoder, _| {
+            evaluate(encoder)
+        })
+    }
+
+    /// Passes true for frozen-candidate tangent products and false for fresh nonlinear evaluations.
+    pub fn encode_split(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        inverse_diagonal: &wgpu::Buffer,
+        settings: CoupledNewtonSettings,
+        mut evaluate: impl FnMut(&mut wgpu::CommandEncoder, bool) -> Result<()>,
+    ) -> Result<()> {
         settings.validate()?;
         if inverse_diagonal.size() != u64::from(self.dimension) * 4
             || !inverse_diagonal
@@ -373,7 +387,7 @@ impl CoupledNewtonKernel {
         encoder.clear_buffer(&self.diagnostics, 0, None);
         encoder.clear_buffer(&self.history, 0, None);
         dispatch(encoder, 0, 0, vectors);
-        evaluate(encoder)?;
+        evaluate(encoder, false)?;
         dispatch(encoder, 2, 0, blocks);
         dispatch(encoder, 4, 0, blocks);
         dispatch(encoder, 5, 0, 1);
@@ -398,7 +412,7 @@ impl CoupledNewtonKernel {
                         u64::from(self.dimension) * 4,
                     );
                     dispatch(encoder, 1, 0, vectors);
-                    evaluate(encoder)?;
+                    evaluate(encoder, true)?;
                     dispatch(encoder, 3, 0, blocks);
                     encoder.copy_buffer_to_buffer(
                         &self.packed,
@@ -413,7 +427,7 @@ impl CoupledNewtonKernel {
             dispatch(encoder, 8, 0, 1);
             for slot in 0..settings.backtracks {
                 dispatch(encoder, 9, slot, vectors);
-                evaluate(encoder)?;
+                evaluate(encoder, false)?;
                 dispatch(encoder, 2, slot, blocks);
                 dispatch(encoder, 4, slot, blocks);
                 dispatch(encoder, 10, slot, 1);
@@ -429,7 +443,7 @@ impl CoupledNewtonKernel {
             );
         }
         dispatch(encoder, 0, 0, vectors);
-        evaluate(encoder)?;
+        evaluate(encoder, false)?;
         dispatch(encoder, 2, 0, blocks);
         dispatch(encoder, 4, 0, blocks);
         dispatch(encoder, 13, 0, 1);

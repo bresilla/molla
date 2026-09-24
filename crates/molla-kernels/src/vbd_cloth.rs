@@ -645,6 +645,7 @@ impl VbdClothKernel {
                     &self.layout_tets,
                 ],
                 self.particle_count,
+                model.tet_count as u32,
             )?);
         }
         self.linearization
@@ -691,6 +692,9 @@ impl VbdClothKernel {
             .linearization
             .as_ref()
             .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        linearization
+            .cache_ready
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let groups = linearization.material_groups.as_ref().ok_or_else(|| {
             Error::Build("material linearization bindings were invalidated".into())
         })?;
@@ -714,6 +718,66 @@ impl VbdClothKernel {
             pass.set_bind_group(3, uniform, &[]);
             pass.dispatch_workgroups(*blocks, 1, 1);
         }
+        Ok(())
+    }
+
+    /// Freezes the material stress derivative at the current retained candidate.
+    pub fn encode_material_tangent_cache(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(&linearization.cache_pipeline);
+        for (uniform, blocks) in &linearization.cache_batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
+        linearization
+            .cache_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Applies the frozen tangent; candidate, geometry and reference state must remain unchanged.
+    pub fn encode_cached_material_action(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        if !linearization
+            .cache_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(Error::Build(
+                "material tangent cache is not prepared".into(),
+            ));
+        }
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+        pass.set_pipeline(&linearization.cached_action_pipeline);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
         Ok(())
     }
 
@@ -1217,6 +1281,7 @@ impl VbdClothKernel {
         }
 
         let mut linearization_batches = Vec::new();
+        let mut tangent_batches = Vec::new();
         if mode == DispatchMode::Linearization {
             for start in (0..particle_count_u).step_by(512) {
                 let count = (particle_count_u - start).min(512);
@@ -1226,6 +1291,15 @@ impl VbdClothKernel {
                     bytemuck::bytes_of(&base(count, start, 0.0)),
                 );
                 linearization_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+            for start in (0..tet_count_u).step_by(512) {
+                let count = (tet_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                tangent_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
             }
         }
 
@@ -1405,6 +1479,7 @@ impl VbdClothKernel {
 
         if mode == DispatchMode::Linearization {
             self.linearization.as_mut().unwrap().batches = linearization_batches;
+            self.linearization.as_mut().unwrap().cache_batches = tangent_batches;
             self.linearization.as_mut().unwrap().material_groups = Some([
                 bg_state,
                 bg_topo,

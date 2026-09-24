@@ -880,6 +880,34 @@ impl VbdSolver {
         gpu.kernel.encode_material_linearization(encoder)
     }
 
+    /// Freezes the GPU tangent at the retained material candidate.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_tangent_cache_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material tangent cache requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_tangent_cache(encoder)
+    }
+
+    /// Applies the retained tangent without changing candidate or residual buffers.
+    #[cfg(feature = "gpu")]
+    pub fn encode_cached_material_action_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "cached material action requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_cached_material_action(encoder)
+    }
+
     /// Encodes the retained material inverse diagonal into the material action buffer.
     #[cfg(feature = "gpu")]
     pub fn encode_material_inverse_diagonal_gpu(

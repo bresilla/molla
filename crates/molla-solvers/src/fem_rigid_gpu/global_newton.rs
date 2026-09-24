@@ -70,7 +70,7 @@ impl GlobalNewtonState {
             || model.linear_damping != 0.0
             || !model.vertex_cable_bending_entries.is_empty()
             || device.limits().max_bind_groups < 7
-            || device.limits().max_storage_buffers_per_shader_stage < 46
+            || device.limits().max_storage_buffers_per_shader_stage < 47
             || dimension * (u64::from(config.restart) + 1) * 4
                 > u64::from(device.limits().max_storage_buffer_binding_size)
         {
@@ -112,6 +112,9 @@ impl GlobalNewtonState {
         self.newton
             .as_ref()
             .map(CoupledNewtonKernel::iteration_history)
+    }
+    pub(super) fn residual_rhs(&self) -> Option<&wgpu::Buffer> {
+        self.newton.as_ref().map(CoupledNewtonKernel::residual_rhs)
     }
     pub(super) fn commit_status(&self) -> &wgpu::Buffer {
         self.bridge.commit_status()
@@ -217,13 +220,18 @@ impl GlobalNewtonState {
         }
         let newton = self.newton.as_ref().unwrap();
         let mut evaluations = 0_u32;
-        newton.encode(
+        newton.encode_split(
             device,
             encoder,
             self.bridge.inverse_diagonal(),
             self.config.solve,
-            |encoder| {
-                fem.encode_material_linearization_gpu(encoder)?;
+            |encoder, action_only| {
+                if action_only {
+                    fem.encode_cached_material_action_gpu(encoder)?;
+                } else {
+                    fem.encode_material_linearization_gpu(encoder)?;
+                    fem.encode_material_tangent_cache_gpu(encoder)?;
+                }
                 self.contact.encode(encoder)?;
                 evaluations += 1;
                 if evaluations % 16 == 0 {

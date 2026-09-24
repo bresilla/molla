@@ -813,6 +813,13 @@ impl FemRigidGpuSystem {
             .and_then(GlobalNewtonState::diagnostics)
     }
 
+    /// Final negative mixed physical residual at the last accepted Newton candidate.
+    pub fn global_newton_residual_rhs(&self) -> Option<&wgpu::Buffer> {
+        self.global_newton
+            .as_ref()
+            .and_then(GlobalNewtonState::residual_rhs)
+    }
+
     /// Up to 64 global Newton iteration records; consume after device completion.
     pub fn global_newton_iteration_history(&self) -> Option<&wgpu::Buffer> {
         self.global_newton

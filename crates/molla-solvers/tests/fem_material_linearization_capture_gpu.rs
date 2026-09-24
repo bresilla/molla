@@ -34,7 +34,7 @@ fn captured_ceol_material_operator_preserves_state() {
         label: Some("captured CEOL material linearization"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
     });
-    let counts = [7, 9, 5, 1, 5, 17, 3];
+    let counts = [7, 9, 5, 1, 5, 17, 4];
     let layouts: Vec<_> = counts
         .iter()
         .enumerate()
@@ -69,7 +69,13 @@ fn captured_ceol_material_operator_preserves_state() {
         bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
         immediate_size: 0,
     });
-    let pipelines = ["cache_previous_tets", "material_linearization"].map(|entry| {
+    let pipelines = [
+        "cache_previous_tets",
+        "material_linearization",
+        "cache_material_tangents",
+        "material_cached_action",
+    ]
+    .map(|entry| {
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(entry),
             layout: Some(&layout),
@@ -87,7 +93,14 @@ fn captured_ceol_material_operator_preserves_state() {
                 .map(|binding| {
                     let path = root.join(format!("{group}-{binding}.bin"));
                     let mut data = if group == 6 {
-                        vec![0; particles as usize * 16]
+                        vec![
+                            0;
+                            if binding == 3 {
+                                tets as usize * 432
+                            } else {
+                                particles as usize * 16
+                            }
+                        ]
                     } else if path.exists() {
                         std::fs::read(path).unwrap()
                     } else {
@@ -191,6 +204,55 @@ fn captured_ceol_material_operator_preserves_state() {
             )
             .unwrap();
         }
+        let direct = readback::read::<[f32; 4]>(&engine, &buffers[6][2], particles as usize);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            for (group, bindings) in groups.iter().enumerate() {
+                pass.set_bind_group(group as u32, bindings, &[]);
+            }
+            pass.set_pipeline(&pipelines[2]);
+            for start in (0..tets as u32).step_by(512) {
+                let count = (tets as u32 - start).min(512);
+                let mut params = bytes[3][0].clone();
+                params[12..16].copy_from_slice(&start.to_le_bytes());
+                params[16..20].copy_from_slice(&count.to_le_bytes());
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("captured tangent batch"),
+                    contents: &params,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let batch = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &layouts[3],
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    }],
+                });
+                pass.set_bind_group(3, &batch, &[]);
+                pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+            }
+            pass.set_bind_group(3, &groups[3], &[]);
+            pass.set_pipeline(&pipelines[3]);
+            pass.dispatch_workgroups((particles as u32).div_ceil(64), 1, 1);
+        }
+        queue.submit([encoder.finish()]);
+        let cached = readback::read::<[f32; 4]>(&engine, &buffers[6][2], particles as usize);
+        let mut maximum_difference = 0.0_f32;
+        for (a, b) in cached.iter().flatten().zip(direct.iter().flatten()) {
+            assert!(
+                a.is_finite() && (*a - *b).abs() <= 2e-5 * (1.0 + b.abs()),
+                "cached={a} direct={b}"
+            );
+            maximum_difference = maximum_difference.max((*a - *b).abs());
+        }
+        std::fs::write(
+            output.join(format!("action-{case}.bin")),
+            bytemuck::cast_slice(&cached),
+        )
+        .unwrap();
+        println!("cached tangent case={case} maximum_action_difference={maximum_difference}");
         for (group, entries) in buffers.iter().enumerate() {
             if group == 3 || group == 6 {
                 continue;

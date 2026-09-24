@@ -360,6 +360,27 @@ fn analytic_material_action_matches_independent_finite_differences() {
                 let actual_r = readback::read::<[f32; 4]>(&engine, r, 4);
                 let actual_a = readback::read::<[f32; 4]>(&engine, a, 4);
                 let (r, a) = (r.clone(), a.clone());
+                let mut encoder = device.create_command_encoder(&Default::default());
+                assert!(
+                    solver
+                        .encode_cached_material_action_gpu(&mut encoder)
+                        .is_err()
+                );
+                solver
+                    .encode_material_tangent_cache_gpu(&mut encoder)
+                    .unwrap();
+                solver
+                    .encode_cached_material_action_gpu(&mut encoder)
+                    .unwrap();
+                queue.submit([encoder.finish()]);
+                let cached = readback::read::<[f32; 4]>(&engine, &a, 4);
+                for (actual, original) in cached.iter().flatten().zip(actual_a.iter().flatten()) {
+                    assert!(
+                        (*actual - *original).abs() <= 2e-5 * (1.0 + original.abs()),
+                        "cached={actual} direct={original}"
+                    );
+                }
+                assert_eq!(readback::read::<[f32; 4]>(&engine, &r, 4), actual_r);
                 let doubled: Vec<[f32; 4]> = data.iter().map(|v| v.map(|x| 2.0 * x)).collect();
                 queue.write_buffer(&vector, 0, bytemuck::cast_slice(&doubled));
                 let mut encoder = device.create_command_encoder(&Default::default());
@@ -369,6 +390,26 @@ fn analytic_material_action_matches_independent_finite_differences() {
                 queue.submit([encoder.finish()]);
                 assert_eq!(readback::read::<[f32; 4]>(&engine, &r, 4), actual_r);
                 let doubled_action = readback::read::<[f32; 4]>(&engine, &a, 4);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                assert!(
+                    solver
+                        .encode_cached_material_action_gpu(&mut encoder)
+                        .is_err()
+                );
+                solver
+                    .encode_material_tangent_cache_gpu(&mut encoder)
+                    .unwrap();
+                solver
+                    .encode_cached_material_action_gpu(&mut encoder)
+                    .unwrap();
+                queue.submit([encoder.finish()]);
+                for (actual, direct) in readback::read::<[f32; 4]>(&engine, &a, 4)
+                    .iter()
+                    .flatten()
+                    .zip(doubled_action.iter().flatten())
+                {
+                    assert!((*actual - *direct).abs() <= 2e-5 * (1.0 + direct.abs()));
+                }
                 for (actual, original) in doubled_action
                     .iter()
                     .flatten()
