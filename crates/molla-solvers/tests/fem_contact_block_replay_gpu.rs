@@ -180,6 +180,13 @@ fn captured_full_contact_block_continuation() {
             .unwrap();
         queue.submit([encoder.finish()]);
         let status = gpu_readback::read::<u32>(&engine, kernel.status(), 1)[0];
+        if blocked && iterations == 0 {
+            let words = gpu_readback::read::<u32>(&engine, kernel.active_rows(),
+                kernel.active_rows().size() as usize / 4);
+            let base = (rows + 1 + rows.div_ceil(64) + 132 + particles + 3 * rows) as usize;
+            std::fs::write(folder.join("block-map.bin"),
+                bytemuck::cast_slice(&words[base..base + 2 * rows as usize])).unwrap();
+        }
         assert!(status == 0 || status == 64, "unexpected GPU fault {status}");
         let row_state = gpu_readback::read::<f32>(&engine, kernel.row_state(), rows as usize * 8);
         let maximum = row_state

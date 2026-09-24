@@ -20,6 +20,16 @@ mod fem_rotor;
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn sampled_system_uses_bounded_contacts_and_reports_overflow() {
+    check_sampled_system(false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn blocked_sampled_system_keeps_volume_and_overflow_guards() {
+    check_sampled_system(true);
+}
+
+fn check_sampled_system(blocked: bool) {
     use molla_math::Vec3;
     use molla_solvers::fem_rigid_gpu::FemRigidGpuSystem;
     use std::sync::Arc;
@@ -44,6 +54,16 @@ fn sampled_system_uses_bounded_contacts_and_reports_overflow() {
         scene
     };
     let explicit = |capacity| {
+        if blocked {
+            return FemRigidGpuSystem::new_surface_sampled_with_contact_blocks_on_device(
+                engine.device().unwrap().clone(),
+                engine.queue().unwrap().clone(),
+                scene(),
+                fem_rotor::config(),
+                &[],
+                Some(capacity),
+            );
+        }
         FemRigidGpuSystem::new_surface_sampled_with_contact_capacity_on_device(
             engine.device().unwrap().clone(),
             engine.queue().unwrap().clone(),
@@ -53,9 +73,19 @@ fn sampled_system_uses_bounded_contacts_and_reports_overflow() {
             capacity,
         )
     };
-    let mut bounded =
+    let mut bounded = if blocked {
+        FemRigidGpuSystem::new_surface_sampled_with_contact_blocks_on_device(
+            engine.device().unwrap().clone(),
+            engine.queue().unwrap().clone(),
+            scene(),
+            fem_rotor::config(),
+            &[],
+            None,
+        )
+    } else {
         FemRigidGpuSystem::new_surface_sampled(engine.clone(), scene(), fem_rotor::config())
-            .unwrap();
+    }
+    .unwrap();
     let mut full = explicit(14 * 13).unwrap();
     assert_eq!(bounded.contact_row_count(), 14 * 4);
     assert_eq!(full.contact_row_count(), 14 * 13);
@@ -99,6 +129,37 @@ fn sampled_system_uses_bounded_contacts_and_reports_overflow() {
     )
     .unwrap();
     assert_eq!(empty.contact_row_count(), 0);
+    if blocked {
+        let mut inverted = fem_rotor::scene();
+        inverted
+            .soft_state
+            .particle_q
+            .host_mut()
+            .unwrap()
+            .swap(1, 2);
+        let mut rejected = FemRigidGpuSystem::new_surface_sampled_with_contact_blocks_on_device(
+            engine.device().unwrap().clone(),
+            engine.queue().unwrap().clone(),
+            inverted,
+            fem_rotor::config(),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            gpu_readback::read::<u32>(&engine, rejected.status_buffer(), 1),
+            [8]
+        );
+        assert_eq!(gpu_readback::read::<u32>(&engine, rejected.volume_diagnostics_buffer(), 2), [0, 0]);
+        for _ in 0..2 {
+            rejected.step(fem_rotor::config().max_substep).unwrap();
+            assert_eq!(
+                gpu_readback::read::<u32>(&engine, rejected.status_buffer(), 1),
+                [8]
+            );
+            assert_eq!(gpu_readback::read::<u32>(&engine, rejected.volume_diagnostics_buffer(), 2), [0, 0]);
+        }
+    }
 }
 
 fn buffer<T: bytemuck::Pod>(device: &wgpu::Device, data: &[T]) -> wgpu::Buffer {

@@ -25,9 +25,15 @@ independent residual 1.855e-5 and generalized impulse error below 6e-6; ordinary
 residuals at 128 corrections (5.288e-5/2.276e-5). These are frozen-step diagnostic
 replays, not native trajectory, energy, runtime or visual acceptance.
 
-The implementation is experimental and unpublished. GPU grouping adversarial
-coverage, runtime lifecycle/volume/overflow tests, native independent trajectories,
-performance and sustained driving remain required before default integration.
+Nineteen adversarial GPU grouping cases pass, including row ordering, hash
+collisions, body/shape separation, static overlap, singular mass and invalid
+inputs. Runtime gates pass bounded/full capacity parity, sticky overflow and
+initial inversion detection, coupled friction energy/lifecycle checks and
+unconverged material rejection. Failed candidate buffers are diagnostic data,
+not accepted states or a rollback guarantee.
+
+The implementation remains opt-in. Native independent trajectories, performance
+and sustained driving remain required before default integration.
 
 ### Current contact throughput and convergence (2026-09-24)
 

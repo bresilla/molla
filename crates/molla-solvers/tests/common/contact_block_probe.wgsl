@@ -22,11 +22,10 @@ fn normal_block() -> bool {
     }
     for (var mask = 0u; mask < 7u; mask += 1u) {
         var candidate = vec3<f32>(0.0);
-        var ids = vec2<u32>(0u);
-        var count = 0u;
-        for (var i = 0u; i < 3u; i += 1u) {
-            if (mask & (1u << i)) != 0u { ids[count] = i; count += 1u; }
-        }
+        let count = countOneBits(mask);
+        let x = select(select(2u, 1u, (mask & 2u) != 0u), 0u, (mask & 1u) != 0u);
+        let y = select(1u, 2u, (mask & 4u) != 0u);
+        let ids = vec2<u32>(x, y);
         if count == 1u {
             candidate[ids.x] = rhs[ids.x] / input[30u*ids.x];
         }
