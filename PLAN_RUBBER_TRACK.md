@@ -8,6 +8,27 @@ contact must generate vehicle motion with equal/opposite reactions. No imposed
 belt phase, prescribed belt velocity, or chassis velocity override qualifies.
 Retain the current reduced model as a separately named, usable baseline.
 
+### Experimental GPU contact blocks (2026-09-24)
+
+An opt-in GPU point hash groups coplanar two-point/edge constraints with mixed
+recovery targets. The contact sweep enumerates local normal active sets, applies
+the corresponding articulated reactions and projects all three friction cones.
+Unsupported or singular groups use the ordered solver. Existing constructors
+remain unchanged; the sampled contact-block constructor selects the experiment
+before initial volume validation and does not reset an existing solver status.
+
+Both captured CEOL tooth blocks converge to the original f64 Coulomb reference.
+The full failed step-30 contact set converges in 16 continuation sweeps, with
+independent residual 1.855e-5 and generalized impulse error below 6e-6; ordinary
+128 additional sweeps still fail. Coupling the block updates back to the full
+29,568-node/102,144-tet material passes simultaneous independent contact/material
+residuals at 128 corrections (5.288e-5/2.276e-5). These are frozen-step diagnostic
+replays, not native trajectory, energy, runtime or visual acceptance.
+
+The implementation is experimental and unpublished. GPU grouping adversarial
+coverage, runtime lifecycle/volume/overflow tests, native independent trajectories,
+performance and sustained driving remain required before default integration.
+
 ### Current contact throughput and convergence (2026-09-24)
 
 Cooperative contact updates skip exactly zero impulses. Ordered row processing,

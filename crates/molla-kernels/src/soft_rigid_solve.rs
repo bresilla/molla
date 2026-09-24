@@ -104,6 +104,7 @@ pub struct SoftRigidSolveKernel {
     dofs: u32,
     row_count: u32,
     static_schedule: Option<([wgpu::ComputePipeline; 2], u32)>,
+    block_schedule: Option<[wgpu::ComputePipeline; 3]>,
 }
 
 impl SoftRigidSolveKernel {
@@ -113,7 +114,7 @@ impl SoftRigidSolveKernel {
 
     /// Single-invocation reference sweep with storage-resident rigid velocities.
     pub fn new_serial(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
-        Self::build(device, dofs, row_count, false, None)
+        Self::build(device, dofs, row_count, false, None, false)
     }
 
     /// Cooperative row loading with ordered contact updates and cached rigid velocities.
@@ -126,7 +127,7 @@ impl SoftRigidSolveKernel {
                 "unsupported cooperative contact workgroup".into(),
             ));
         }
-        Self::build(device, dofs, row_count, true, None)
+        Self::build(device, dofs, row_count, true, None, false)
     }
 
     /// Parallel ordered static layers when their nodes are disjoint from all dynamic contacts.
@@ -145,7 +146,23 @@ impl SoftRigidSolveKernel {
                 "unsupported separated contact workgroup".into(),
             ));
         }
-        Self::build(device, dofs, row_count, true, Some(particles))
+        Self::build(device, dofs, row_count, true, Some(particles), false)
+    }
+
+    /// Ordered contact sweeps with coplanar point/edge normal blocks and Coulomb projections.
+    pub fn new_blocked_contacts(
+        device: &wgpu::Device,
+        dofs: u32,
+        row_count: u32,
+        particles: u32,
+    ) -> Result<Self> {
+        if device.limits().max_compute_invocations_per_workgroup < 64
+            || device.limits().max_compute_workgroup_size_x < 64
+            || device.limits().max_compute_workgroup_storage_size < 2048
+        {
+            return Err(Error::Build("unsupported blocked contact workgroup".into()));
+        }
+        Self::build(device, dofs, row_count, true, Some(particles), true)
     }
 
     fn build(
@@ -154,6 +171,7 @@ impl SoftRigidSolveKernel {
         row_count: u32,
         cooperative: bool,
         particles: Option<u32>,
+        blocked: bool,
     ) -> Result<Self> {
         if !(1..=64).contains(&dofs)
             || row_count.div_ceil(64) > device.limits().max_compute_workgroups_per_dimension
@@ -167,7 +185,8 @@ impl SoftRigidSolveKernel {
         let active_words = row_count as u64
             + 1
             + row_count.div_ceil(64) as u64
-            + particles.map_or(0, |n| 132 + n as u64 + 3 * row_count as u64);
+            + particles.map_or(0, |n| 132 + n as u64 + 3 * row_count as u64)
+            + if blocked { 3 * row_count as u64 } else { 0 };
         if response_size > device.limits().max_storage_buffer_binding_size as u64
             || row_count.max(1) as u64 * 32 > device.limits().max_storage_buffer_binding_size as u64
             || active_words * 4 > device.limits().max_storage_buffer_binding_size as u64
@@ -216,10 +235,11 @@ impl SoftRigidSolveKernel {
             label: Some("FEM two-way contact"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}",
                     include_str!("../shaders/soft_rigid_solve.wgsl"),
                     include_str!("../shaders/soft_rigid_cooperative.wgsl"),
                     include_str!("../shaders/soft_rigid_static.wgsl"),
+                    include_str!("../shaders/soft_rigid_block.wgsl"),
                     cooperative_delta_shader(dofs)
                 )
                 .into(),
@@ -243,6 +263,7 @@ impl SoftRigidSolveKernel {
             let constants = [
                 ("SWEEP_LANES", if dofs <= 32 { 32.0 } else { 64.0 }),
                 ("SWEEP_DOFS", dofs as f64),
+                ("BLOCK_CONTACTS", if blocked { 1.0 } else { 0.0 }),
                 (
                     "SEPARATE_STATIC",
                     if particles.is_some() { 1.0 } else { 0.0 },
@@ -272,13 +293,33 @@ impl SoftRigidSolveKernel {
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[("SWEEP_DOFS", dofs as f64)],
+                        constants: &[
+                            ("SWEEP_DOFS", dofs as f64),
+                            ("BLOCK_CONTACTS", if blocked { 1.0 } else { 0.0 }),
+                        ],
                         ..Default::default()
                     },
                     cache: None,
                 })
             });
             (pipelines, particles)
+        });
+        let block_schedule = blocked.then(|| {
+            [
+                "reset_contact_blocks",
+                "map_contact_points",
+                "group_contact_blocks",
+            ]
+            .map(|entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            })
         });
         Ok(Self {
             layout,
@@ -292,6 +333,7 @@ impl SoftRigidSolveKernel {
             dofs,
             row_count,
             static_schedule,
+            block_schedule,
         })
     }
 
@@ -593,6 +635,18 @@ impl SoftRigidSolveKernel {
                 if let Some(extra) = extra {
                     pass.set_pipeline(&pipelines[extra]);
                     pass.dispatch_workgroups(1, 1, 1);
+                }
+            }
+            if index == 4 {
+                if let Some(pipelines) = &self.block_schedule {
+                    for (pipeline, groups) in pipelines.iter().zip([
+                        self.row_count.div_ceil(64),
+                        1,
+                        self.row_count.div_ceil(64),
+                    ]) {
+                        pass.set_pipeline(pipeline);
+                        pass.dispatch_workgroups(groups, 1, 1);
+                    }
                 }
             }
             drop(pass);

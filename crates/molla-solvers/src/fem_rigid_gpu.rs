@@ -267,7 +267,7 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, false, &[], None)
+        Self::build(device, queue, scene, config, false, &[], None, false)
     }
 
     /// Construct sampled surface contacts on an externally managed device/queue.
@@ -277,7 +277,7 @@ impl FemRigidGpuSystem {
         scene: FemRigidGpuScene,
         config: FemRigidConfig,
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, true, &[], None)
+        Self::build(device, queue, scene, config, true, &[], None, false)
     }
 
     /// Sampled surface contacts and bilateral body-local spherical closures.
@@ -288,7 +288,7 @@ impl FemRigidGpuSystem {
         config: FemRigidConfig,
         joints: &[SoftRigidBallJoint],
     ) -> Result<Self> {
-        Self::build(device, queue, scene, config, true, joints, None)
+        Self::build(device, queue, scene, config, true, joints, None, false)
     }
 
     /// Sampled contacts with an explicit shared contact capacity, excluding loop rows.
@@ -309,6 +309,28 @@ impl FemRigidGpuSystem {
             true,
             joints,
             Some(contact_capacity),
+            false,
+        )
+    }
+
+    /// Sampled surface contacts with GPU coplanar point/edge blocks and optional capacity.
+    pub fn new_surface_sampled_with_contact_blocks_on_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        scene: FemRigidGpuScene,
+        config: FemRigidConfig,
+        joints: &[SoftRigidBallJoint],
+        contact_capacity: Option<u32>,
+    ) -> Result<Self> {
+        Self::build(
+            device,
+            queue,
+            scene,
+            config,
+            true,
+            joints,
+            contact_capacity,
+            true,
         )
     }
 
@@ -320,6 +342,7 @@ impl FemRigidGpuSystem {
         sample_surface: bool,
         joints: &[SoftRigidBallJoint],
         contact_capacity: Option<u32>,
+        contact_blocks: bool,
     ) -> Result<Self> {
         validate_device_limits(&device.limits())?;
         let device = &device;
@@ -513,12 +536,21 @@ impl FemRigidGpuSystem {
         } else {
             SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?
         };
-        let solve = SoftRigidSolveKernel::new_separated_static(
-            device,
-            n as u32,
-            gather.row_count(),
-            scene.soft_model.particle_count as u32,
-        )?;
+        let solve = if contact_blocks {
+            SoftRigidSolveKernel::new_blocked_contacts(
+                device,
+                n as u32,
+                gather.row_count(),
+                scene.soft_model.particle_count as u32,
+            )
+        } else {
+            SoftRigidSolveKernel::new_separated_static(
+                device,
+                n as u32,
+                gather.row_count(),
+                scene.soft_model.particle_count as u32,
+            )
+        }?;
         let drift = SoftParticleDriftKernel::new(device);
         let volume = TetVolumeMonitor::new(device);
         let mut encoder = device.create_command_encoder(&Default::default());
