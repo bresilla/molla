@@ -526,6 +526,7 @@ fn material_reuse_trajectory_configured(
             FemRigidGpuSystem::new(engine.clone(), scene, config)
         }
         .unwrap();
+        system.configure_contact_snapshot(blocked).unwrap();
         system
             .configure_material_contact(Some(MaterialContactConfig {
                 iterations: outer,
@@ -604,6 +605,22 @@ fn material_reuse_trajectory_configured(
                 system.soft_state().particle_qd.device_buffer().unwrap(),
                 4,
             );
+            if blocked {
+                let snapshot = system.contact_snapshot().unwrap();
+                let solved = snapshot.solved_buffers().collect::<Vec<_>>();
+                assert_eq!(
+                    readback::read::<[f32; 4]>(&engine, solved[0].1, 4),
+                    velocity
+                );
+                assert_eq!(
+                    readback::read::<f32>(&engine, solved[1].1, 1),
+                    readback::read::<f32>(
+                        &engine,
+                        system.rigid_state().joint_qd.device_buffer().unwrap(),
+                        1
+                    )
+                );
+            }
             let samples =
                 readback::read::<[f32; 4]>(&engine, system.material_force_samples().unwrap(), 4);
             let oracle = trajectory_force_oracle(&oracle_model, &previous, &velocity, &samples, h);

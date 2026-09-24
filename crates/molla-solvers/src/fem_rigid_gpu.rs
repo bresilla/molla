@@ -625,7 +625,7 @@ impl FemRigidGpuSystem {
         &self.soft_state
     }
 
-    /// Enable device-only first-contact input copies while the submission queue is idle.
+    /// Enable device-only first-contact input and pre-drift velocity copies while idle.
     pub fn configure_contact_snapshot(&mut self, enabled: bool) -> Result<()> {
         if self.queued_substeps != 0 || self.completion.is_some() {
             return Err(Error::Build(
@@ -654,7 +654,7 @@ impl FemRigidGpuSystem {
         Ok(())
     }
 
-    /// Inputs of the last enqueued substep's first solve; wait for completion before reading.
+    /// Last substep's contact boundary snapshots; wait for completion before reading.
     pub fn contact_snapshot(&self) -> Option<&ContactSolveSnapshot> {
         self.contact_snapshot
             .as_ref()
@@ -1394,6 +1394,13 @@ impl FemRigidGpuSystem {
                 )?;
             } else if let Some(timing) = &self.timing {
                 timing.mark(&mut encoder, 3);
+            }
+            if let Some(snapshot) = &self.contact_snapshot {
+                snapshot.capture_solved(
+                    &mut encoder,
+                    self.soft_next.particle_qd.device_buffer().unwrap(),
+                    self.rigid_next.joint_qd.device_buffer().unwrap(),
+                );
             }
             self.drift.encode(
                 device,

@@ -49,6 +49,14 @@ Anchor arithmetic and post-contact rigid drift must be separated before attribut
 the discrepancy. The prefix is not fully independently accepted, and a fresh
 native trajectory with the subset fix remains required.
 
+Opt-in contact snapshots also preserve soft/generalized velocities after the
+final contact/force checks and before drift. Predictor buffers remain a separate
+unchanged API. GPU capture/replay parity, a rotor upper-stop boundary case and
+coupled accepted/rejected material cases pass; the stopped rotor confirms that
+drift can change a contact-corrected generalized velocity. This does not establish
+the source of CEOL's discrepancy; native before/after capture remains required.
+Snapshots include rejected candidates and do not grant physics acceptance.
+
 ### Current contact throughput and convergence (2026-09-24)
 
 Cooperative contact updates skip exactly zero impulses. Ordered row processing,
