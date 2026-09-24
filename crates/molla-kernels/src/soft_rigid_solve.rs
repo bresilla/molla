@@ -347,6 +347,21 @@ impl SoftRigidSolveKernel {
         &self.rows
     }
 
+    /// Prepared row-axis generalized Jacobians, with DOFs contiguous.
+    pub fn projected_rows(&self) -> &wgpu::Buffer {
+        &self.projected
+    }
+
+    /// Prepared inverse-mass responses for each row-axis generalized Jacobian.
+    pub fn row_responses(&self) -> &wgpu::Buffer {
+        &self.response
+    }
+
+    /// Whether the prepared schedule contains coplanar point/edge blocks.
+    pub fn has_contact_blocks(&self) -> bool {
+        self.block_schedule.is_some()
+    }
+
     /// Active count followed by contact indices in ascending candidate order; scratch offsets follow.
     pub fn active_rows(&self) -> &wgpu::Buffer {
         &self.active_rows

@@ -13,6 +13,9 @@ use molla_storage::{Buffer, BufferUsage};
 
 mod bindings;
 use bindings::BindingCache;
+mod coupled_patch;
+use coupled_patch::CoupledPatch;
+pub use coupled_patch::MaterialContactPatchBindings;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -58,6 +61,7 @@ pub struct VbdClothKernel {
     pipe_cache_previous: wgpu::ComputePipeline,
     continuation: Option<MaterialContinuation>,
     force_samples_ready: bool,
+    coupled_patch: Option<CoupledPatch>,
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
@@ -308,6 +312,7 @@ impl VbdClothKernel {
             pipe_cache_previous,
             continuation: None,
             force_samples_ready: false,
+            coupled_patch: None,
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
@@ -459,6 +464,54 @@ impl VbdClothKernel {
         )
     }
 
+    /// Binds one GPU-selected point/edge patch for the next material polish sequence.
+    pub fn prepare_material_contact_patch(
+        &mut self,
+        device: &wgpu::Device,
+        bindings: MaterialContactPatchBindings<'_>,
+    ) -> Result<()> {
+        if self.coupled_patch.is_none() {
+            self.coupled_patch = Some(CoupledPatch::new(
+                device,
+                [
+                    &self.layout_state,
+                    &self.layout_topo,
+                    &self.layout_out,
+                    &self.layout_uniforms,
+                    &self.layout_shapes,
+                    &self.layout_tets,
+                ],
+            )?);
+        }
+        self.coupled_patch
+            .as_mut()
+            .unwrap()
+            .prepare(device, bindings, self.particle_count)
+    }
+
+    /// Removes the retained patch bindings without changing the particle state.
+    pub fn clear_material_contact_patch(&mut self) {
+        if let Some(patch) = &mut self.coupled_patch {
+            patch.clear();
+        }
+    }
+
+    /// Enables or excludes selected patch rows in the split contact sweep.
+    pub fn encode_material_patch_contacts(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        enabled: bool,
+    ) {
+        if let Some(patch) = &self.coupled_patch {
+            patch.encode_state(encoder, usize::from(enabled));
+        }
+    }
+
+    /// Local solution, residual, active-set mask, counters and last-apply flag.
+    pub fn material_patch_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        self.coupled_patch.as_ref().map(CoupledPatch::diagnostics)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn material_iterations(
         &mut self,
@@ -565,6 +618,27 @@ impl VbdClothKernel {
             mode,
             DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
         );
+        if mode == DispatchMode::PolishMaterial {
+            if let Some(patch) = self
+                .coupled_patch
+                .as_ref()
+                .filter(|patch| patch.group().is_some())
+            {
+                if model.shape_count != 0
+                    || !model.vertex_cable_bending_entries.is_empty()
+                    || !state_in
+                        .particle_qd
+                        .device_buffer()
+                        .zip(model.particle_inv_mass.device_buffer())
+                        .is_some_and(|(input, mass)| patch.matches_target(input, mass))
+                {
+                    return Err(Error::Build(
+                        "material patch requires matching targets and no shape or cable penalties"
+                            .into(),
+                    ));
+                }
+            }
+        }
         if model.particle_count == 0 {
             return Ok(());
         }
@@ -1068,6 +1142,18 @@ impl VbdClothKernel {
             pass.set_bind_group(2, &bg_out, &[]);
             pass.set_bind_group(4, &bg_shapes, &[]);
             pass.set_bind_group(5, &bg_tets, &[]);
+            let patch = self
+                .coupled_patch
+                .as_ref()
+                .filter(|patch| mode == DispatchMode::PolishMaterial && patch.group().is_some());
+            if let Some(patch) = patch {
+                pass.set_bind_group(6, patch.group().unwrap(), &[]);
+                if patch.select_pending {
+                    pass.set_pipeline(&patch.pipelines[0]);
+                    pass.set_bind_group(3, &bg_uniforms[0], &[]);
+                    pass.dispatch_workgroups(1, 1, 1);
+                }
+            }
 
             let dispatch = |pass: &mut wgpu::ComputePass<'_>,
                             pipeline: &wgpu::ComputePipeline,
@@ -1118,7 +1204,9 @@ impl VbdClothKernel {
                         let lo = color_offsets_host[k as usize];
                         let hi = color_offsets_host[k as usize + 1];
                         let nc = hi - lo;
-                        let pipeline = if mode == DispatchMode::PolishMaterial {
+                        let pipeline = if let Some(patch) = patch {
+                            &patch.pipelines[1]
+                        } else if mode == DispatchMode::PolishMaterial {
                             &self.pipe_polish_color
                         } else {
                             &self.pipe_solve_color
@@ -1146,6 +1234,21 @@ impl VbdClothKernel {
                 // silence the unused-field warning.
                 let _ = &self.pipe_shape_contacts;
                 debug_assert_eq!(idx, bg_uniforms.len());
+                if let Some(patch) = patch {
+                    pass.set_bind_group(3, &bg_uniforms[0], &[]);
+                    for pipeline in &patch.pipelines[2..] {
+                        pass.set_pipeline(pipeline);
+                        pass.dispatch_workgroups(1, 1, 1);
+                    }
+                }
+            }
+        }
+        if mode == DispatchMode::PolishMaterial {
+            if let Some(patch) = &mut self.coupled_patch {
+                if patch.group().is_some() {
+                    patch.encode_state(&mut encoder, 2);
+                    patch.select_pending = false;
+                }
             }
         }
         queue.submit(std::iter::once(encoder.finish()));

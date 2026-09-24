@@ -783,6 +783,46 @@ impl VbdSolver {
         )
     }
 
+    /// Binds the GPU contact state for a retained coupled material patch.
+    pub(crate) fn prepare_material_contact_patch_gpu(
+        &mut self,
+        bindings: molla_kernels::MaterialContactPatchBindings<'_>,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build(
+                "material contact patch requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel
+            .prepare_material_contact_patch(&gpu.device, bindings)
+    }
+
+    /// Removes retained GPU material/contact patch bindings.
+    pub(crate) fn clear_material_contact_patch_gpu(&mut self) {
+        if let VbdBackend::Gpu(gpu) = &mut self.backend {
+            gpu.kernel.clear_material_contact_patch();
+        }
+    }
+
+    /// Enables or excludes the retained patch rows during split contact updates.
+    pub(crate) fn encode_material_patch_contacts_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        enabled: bool,
+    ) {
+        if let VbdBackend::Gpu(gpu) = &self.backend {
+            gpu.kernel.encode_material_patch_contacts(encoder, enabled);
+        }
+    }
+
+    /// Last GPU local patch solve diagnostics.
+    pub(crate) fn material_patch_diagnostics_gpu(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            VbdBackend::Gpu(gpu) => gpu.kernel.material_patch_diagnostics(),
+            _ => None,
+        }
+    }
+
     /// Evaluates the elastic material residual at the supplied candidate velocity, without advancing state.
     pub fn material_force_residual_gpu(
         &mut self,
