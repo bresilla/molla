@@ -932,16 +932,24 @@ fn solve_color(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v = particle_indices_by_color[base + slot];
     if (v >= u.particle_count) { return; }
 
-    solve_vertex(v, false);
+    solve_vertex(v, false, false);
+}
+
+@compute @workgroup_size(64)
+fn polish_color(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= u.work_count { return; }
+    let v = particle_indices_by_color[particle_color_offsets[u.color_index] + gid.x];
+    if v >= u.particle_count { return; }
+    solve_vertex(v, false, true);
 }
 
 @compute @workgroup_size(64)
 fn force_residual(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= u.particle_count { return; }
-    solve_vertex(gid.x, true);
+    solve_vertex(gid.x, true, true);
 }
 
-fn solve_vertex(v: u32, residual_only: bool) {
+fn solve_vertex(v: u32, residual_only: bool, accurate_force: bool) {
 
     let inv_m = particle_inv_mass[v];
     if (inv_m <= 0.0) {
@@ -969,7 +977,7 @@ fn solve_vertex(v: u32, residual_only: bool) {
         let spring_idx = vertex_adj_springs[s];
         var f_s: vec3<f32>;
         var h_s: mat3x3<f32>;
-        spring_force_hessian(v, spring_idx, residual_only, &f_s, &h_s);
+        spring_force_hessian(v, spring_idx, accurate_force, &f_s, &h_s);
         f = f + f_s;
         h = mat3x3<f32>(h[0] + h_s[0], h[1] + h_s[1], h[2] + h_s[2]);
     }
@@ -987,7 +995,7 @@ fn solve_vertex(v: u32, residual_only: bool) {
         viscosity_active = viscosity_active || any(tet_viscosity[tet_id] > vec2<f32>(0.0));
         var f_t: vec3<f32>;
         var h_t: mat3x3<f32>;
-        tet_neo_hookean_block(tet_id, v_order, residual_only, &f_t, &h_t);
+        tet_neo_hookean_block(tet_id, v_order, accurate_force, &f_t, &h_t);
         f = f + f_t;
         h = mat3x3<f32>(h[0] + h_t[0], h[1] + h_t[1], h[2] + h_t[2]);
     }

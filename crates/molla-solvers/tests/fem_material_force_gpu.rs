@@ -782,6 +782,111 @@ fn retained_material_iterates_match_uninterrupted_sweeps_and_enforce_lifecycle()
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn compensated_polish_enforces_lifecycle_and_matches_split_sweeps() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for (pinned, viscous) in [(false, true), (true, true), (false, false)] {
+        let h = 1.0 / 9600.0;
+        let mut model = model(pinned, viscous);
+        let mut input = model.state().unwrap();
+        input.particle_qd.host_mut().unwrap()[2] = Vec3::NEG_Y;
+        let mut output = model.state().unwrap();
+        let mut reference = model.state().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        for state in [&mut input, &mut output, &mut reference] {
+            state.upload_to_device(device, queue).unwrap();
+        }
+        let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut output, h, 8)
+                .is_err()
+        );
+        let before_input =
+            readback::read::<u32>(&engine, input.particle_q.device_buffer().unwrap(), 16);
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 8, true)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut output, h, 8)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut output, h, 120)
+            .unwrap();
+        solver
+            .material_iteration_gpu(&model, &input, &mut reference, h, 8, true)
+            .unwrap();
+        solver
+            .material_polish_gpu(&model, &input, &mut reference, h, 128)
+            .unwrap();
+        assert_eq!(
+            snapshot(&engine, &input, &output),
+            snapshot(&engine, &input, &reference)
+        );
+        assert_eq!(
+            before_input,
+            readback::read::<u32>(&engine, input.particle_q.device_buffer().unwrap(), 16)
+        );
+        let force = solver
+            .material_force_residual_gpu(&model, &input, &mut reference, h)
+            .unwrap();
+        let residuals = readback::read::<[f32; 4]>(&engine, force, 4);
+        assert!(
+            residuals.iter().all(|v| v[3].is_finite() && v[3] <= 1e-4),
+            "{residuals:?}"
+        );
+        if pinned {
+            let velocity = readback::read::<[f32; 4]>(
+                &engine,
+                reference.particle_qd.device_buffer().unwrap(),
+                4,
+            );
+            let projected_h = h as f32 as f64;
+            assert!(axial_residual(projected_h, 1.0, velocity[2][1] as f64, viscous) < 1e-4);
+            for i in [0, 1, 3] {
+                assert_eq!(&velocity[i][..3], &[0.0; 3]);
+            }
+        }
+        assert!(solver.material_force_samples_gpu().is_some());
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut reference, h, 8)
+                .is_err()
+        );
+        assert!(solver.material_force_samples_gpu().is_none());
+        for (dt, iterations) in [(0.0, 8), (f64::NAN, 8), (h * 0.5, 8), (h, 0)] {
+            solver
+                .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+                .unwrap();
+            let before = snapshot(&engine, &input, &output);
+            assert!(
+                solver
+                    .material_polish_gpu(&model, &input, &mut output, dt, iterations)
+                    .is_err()
+            );
+            assert_eq!(before, snapshot(&engine, &input, &output));
+            assert!(
+                solver
+                    .material_polish_gpu(&model, &input, &mut output, h, 8)
+                    .is_err()
+            );
+        }
+        solver
+            .material_iteration_gpu(&model, &input, &mut output, h, 1, true)
+            .unwrap();
+        let before = snapshot(&engine, &input, &reference);
+        assert!(
+            solver
+                .material_polish_gpu(&model, &input, &mut reference, h, 8)
+                .is_err()
+        );
+        assert_eq!(before, snapshot(&engine, &input, &reference));
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn material_force_monitor_rejects_exhaustion_and_nonfinite_values() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();

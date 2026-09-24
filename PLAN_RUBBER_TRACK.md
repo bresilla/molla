@@ -78,6 +78,31 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Compensated final material polish (2026-09-24)
+
+At doubled timestep, the corrected geometry guard rejects the captured state
+instead of falsely accepting it. Ordinary Newton sweeps still oscillate around
+the force limit: three independently over-limit nodes remain after512 sweeps.
+Using the strict material force arithmetic during Newton updates instead gives
+zero independent violations at8/32/128/512 sweeps, with f64 maximum5.60255e-5 at8
+versus GPU5.62429e-5. Initial and one-sweep states remain negative controls.
+Whole-mesh scalar disagreement still reaches2.46e-5; uniform parity is not proven.
+
+The separate `polish_color` GPU entry uses compensated spring and tet forces for
+Newton updates. `material_polish_gpu` continues an active elastic solve under the
+same binding/timestep lifecycle as ordinary continuation. Coupled final material
+polish selects this entry; ordinary outer iterations, contact budgets, physical
+tolerances and device-only ownership remain unchanged. No extra storage binding
+or runtime readback is introduced. Standalone material iteration retains its API.
+
+The runtime shader entry exactly matches the diagnostic accurate-Newton replay
+at0/1/8/32/128/512 sweeps. Lifecycle, split-versus-unsplit, pinned axial and material
+GPU tests pass10/10. The full30-test GPU matrix passes, including11coupled/contact
+tests, gradient precision/cache and plasticity/kinematic-hardening controls.
+High-friction exhaustion still rejects status64 with independent force above6.
+All-target GPU compilation and formatting pass. Native timestep revalidation
+is still pending; this does not authorize simulator FEM activation.
+
 ### Geometry-edge subtraction precision (2026-09-24)
 
 The h1/9600 CEOL screen exposed false GPU convergence: GPU maximum9.6353e-5

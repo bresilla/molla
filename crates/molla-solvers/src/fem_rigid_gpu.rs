@@ -1310,13 +1310,12 @@ impl FemRigidGpuSystem {
                         );
                         coupling.capture(&mut encoder, &self.soft_next, &self.rigid_next);
                         queue.submit([encoder.finish()]);
-                        self.fem.material_iteration_gpu(
+                        self.fem.material_polish_gpu(
                             &self.soft_model,
                             &coupling.input,
                             &mut self.soft_next,
                             h,
                             iterations,
-                            false,
                         )?;
                         encoder = device.create_command_encoder(&Default::default());
                         if last_cycle {

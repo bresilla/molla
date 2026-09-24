@@ -38,6 +38,7 @@ enum DispatchMode {
     Step,
     BeginMaterial,
     ContinueMaterial,
+    PolishMaterial,
     ForceResidual,
 }
 
@@ -60,6 +61,7 @@ pub struct VbdClothKernel {
     pipe_residual_seed: wgpu::ComputePipeline,
     pipe_force_residual: wgpu::ComputePipeline,
     pipe_solve_color: wgpu::ComputePipeline,
+    pipe_polish_color: wgpu::ComputePipeline,
     pipe_shape_contacts: wgpu::ComputePipeline,
     pipe_update_dual: wgpu::ComputePipeline,
     pipe_velocity: wgpu::ComputePipeline,
@@ -237,6 +239,7 @@ impl VbdClothKernel {
         let pipe_residual_seed = make_pipeline("residual_seed");
         let pipe_force_residual = make_pipeline("force_residual");
         let pipe_solve_color = make_pipeline("solve_color");
+        let pipe_polish_color = make_pipeline("polish_color");
         let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
         let pipe_update_dual = make_pipeline("update_dual");
         let pipe_velocity = make_pipeline("velocity_recovery");
@@ -308,6 +311,7 @@ impl VbdClothKernel {
             pipe_residual_seed,
             pipe_force_residual,
             pipe_solve_color,
+            pipe_polish_color,
             pipe_shape_contacts,
             pipe_update_dual,
             pipe_velocity,
@@ -415,6 +419,59 @@ impl VbdClothKernel {
         iterations: u32,
         begin: bool,
     ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            if begin {
+                DispatchMode::BeginMaterial
+            } else {
+                DispatchMode::ContinueMaterial
+            },
+        )
+    }
+
+    /// Continues an active elastic solve using compensated material forces.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_polish(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+    ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            DispatchMode::PolishMaterial,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn material_iterations(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        mode: DispatchMode,
+    ) -> Result<()> {
+        let begin = mode == DispatchMode::BeginMaterial;
         self.force_samples_ready = false;
         if begin {
             self.continuation = None;
@@ -443,20 +500,7 @@ impl VbdClothKernel {
             ));
         }
         self.dispatch_inner(
-            device,
-            queue,
-            model,
-            state_in,
-            state_out,
-            dt,
-            iterations,
-            0.0,
-            false,
-            if begin {
-                DispatchMode::BeginMaterial
-            } else {
-                DispatchMode::ContinueMaterial
-            },
+            device, queue, model, state_in, state_out, dt, iterations, 0.0, false, mode,
         )
     }
 
@@ -517,7 +561,10 @@ impl VbdClothKernel {
         let previous = self.continuation.take();
         self.force_samples_ready = false;
         let residual_only = mode == DispatchMode::ForceResidual;
-        let reuse = mode == DispatchMode::ContinueMaterial;
+        let reuse = matches!(
+            mode,
+            DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
+        );
         if model.particle_count == 0 {
             return Ok(());
         }
@@ -899,7 +946,9 @@ impl VbdClothKernel {
 
         let continuation = if matches!(
             mode,
-            DispatchMode::BeginMaterial | DispatchMode::ContinueMaterial
+            DispatchMode::BeginMaterial
+                | DispatchMode::ContinueMaterial
+                | DispatchMode::PolishMaterial
         ) {
             let key = MaterialContinuation {
                 groups: [
@@ -1069,7 +1118,12 @@ impl VbdClothKernel {
                         let lo = color_offsets_host[k as usize];
                         let hi = color_offsets_host[k as usize + 1];
                         let nc = hi - lo;
-                        dispatch(&mut pass, &self.pipe_solve_color, idx, nc);
+                        let pipeline = if mode == DispatchMode::PolishMaterial {
+                            &self.pipe_polish_color
+                        } else {
+                            &self.pipe_solve_color
+                        };
+                        dispatch(&mut pass, pipeline, idx, nc);
                         idx += 1;
                     }
                     if hard_mode {

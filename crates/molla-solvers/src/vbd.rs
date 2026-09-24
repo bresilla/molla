@@ -760,6 +760,29 @@ impl VbdSolver {
         )
     }
 
+    /// Continues the active GPU elastic solve using compensated material forces.
+    pub fn material_polish_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &mut self.backend else {
+            return Err(Error::Build("material polish requires GPU backend".into()));
+        };
+        gpu.kernel.material_polish(
+            &gpu.device,
+            &gpu.queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+        )
+    }
+
     /// Evaluates the elastic material residual at the supplied candidate velocity, without advancing state.
     pub fn material_force_residual_gpu(
         &mut self,
