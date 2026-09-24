@@ -201,6 +201,15 @@ fn check_snapshot(stopped: bool) {
         for (actual, expected) in [(named[1].1, solved[0].1), (named[8].1, solved[1].1)] {
             assert_eq!(bytes(&engine, actual), bytes(&engine, expected));
         }
+        if !stopped {
+            assert_eq!(
+                bytes(&engine, named[9].1),
+                bytes(
+                    &engine,
+                    captured.rigid_state().body_qd.device_buffer().unwrap()
+                )
+            );
+        }
     }
     captured.configure_contact_snapshot(true).unwrap();
     assert!(captured.contact_snapshot().is_none());
