@@ -1,11 +1,16 @@
 override SWEEP_LANES: u32 = 64u;
 override SWEEP_DOFS: u32 = 64u;
 var<workgroup> sweep_velocity: array<f32, 64>;
+var<workgroup> sweep_delta_velocity: array<f32, 64>;
 var<workgroup> sweep_projected: array<array<f32, 64>, 3>;
 var<workgroup> sweep_response: array<array<f32, 64>, 3>;
 var<workgroup> sweep_count: u32;
 var<workgroup> sweep_fault: u32;
 var<workgroup> sweep_separated: u32;
+
+fn accumulate_rigid_delta(d: u32, delta: f32) {
+    sweep_delta_velocity[d] += delta;
+}
 
 fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
     var value = 0.0;
@@ -14,7 +19,7 @@ fn cooperative_relative(contact: Contact, direction: vec3<f32>, k: u32) -> f32 {
     }
     if contact.ids.y != 0xffffffffu {
         for (var d = 0u; d < SWEEP_DOFS; d += 1u) {
-            value -= sweep_projected[k][d] * sweep_velocity[d];
+            value -= sweep_projected[k][d] * (sweep_velocity[d] + sweep_delta_velocity[d]);
         }
     }
     return value;
@@ -92,7 +97,10 @@ fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
     let initial_fault = workgroupUniformLoad(&sweep_fault);
     let separated = workgroupUniformLoad(&sweep_separated);
     if initial_fault != 0u { return; }
-    if lane < SWEEP_DOFS { sweep_velocity[lane] = rigid_velocity[lane]; }
+    if lane < SWEEP_DOFS {
+        sweep_velocity[lane] = rigid_velocity[lane];
+        sweep_delta_velocity[lane] = 0.0;
+    }
     workgroupBarrier();
     for (var iteration = 0u; iteration < params.iterations; iteration += 1u) {
         for (var rank = 0u; rank < count; rank += 1u) {
@@ -108,6 +116,11 @@ fn solve_cooperative(@builtin(local_invocation_index) lane: u32) {
             if lane == 0u && sweep_fault == 0u { sweep_fault = cooperative_row(r); }
             workgroupBarrier();
         }
+        if lane < SWEEP_DOFS {
+            sweep_velocity[lane] += sweep_delta_velocity[lane];
+            sweep_delta_velocity[lane] = 0.0;
+        }
+        workgroupBarrier();
     }
     if lane < SWEEP_DOFS { rigid_velocity[lane] = sweep_velocity[lane]; }
     if lane == 0u && sweep_fault != 0u { atomicOr(&status, sweep_fault); }

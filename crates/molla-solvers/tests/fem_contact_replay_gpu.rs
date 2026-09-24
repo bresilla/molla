@@ -206,9 +206,10 @@ fn cooperative_contact_checks_workgroup_limits_and_dimensions() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
     for (invocations, width, storage, supported) in [
-        (64, 64, 2048, true),
-        (32, 64, 2048, false),
-        (64, 32, 2048, false),
+        (64, 64, 2060, true),
+        (64, 64, 2059, false),
+        (32, 64, 2060, false),
+        (64, 32, 2060, false),
         (64, 64, 1024, false),
     ] {
         let mut descriptor = wgpu::DeviceDescriptor::default();

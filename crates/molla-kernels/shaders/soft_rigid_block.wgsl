@@ -69,7 +69,7 @@ fn block_relative(r: u32, direction: vec3<f32>, k: u32) -> f32 {
     }
     if contact.ids.y != 0xffffffffu {
         for (var d = 0u; d < SWEEP_DOFS; d += 1u) {
-            value -= projected[(r*3u+k)*SWEEP_DOFS+d]*sweep_velocity[d];
+            value -= projected[(r*3u+k)*SWEEP_DOFS+d]*(sweep_velocity[d] + sweep_delta_velocity[d]);
         }
     }
     return value;
@@ -84,7 +84,7 @@ fn block_delta(r: u32, direction: vec3<f32>, k: u32, impulse: f32) {
     }
     if contact.ids.y != 0xffffffffu {
         for (var d = 0u; d < SWEEP_DOFS; d += 1u) {
-            sweep_velocity[d] -= response[(r*3u+k)*SWEEP_DOFS+d]*impulse;
+            accumulate_rigid_delta(d, -response[(r*3u+k)*SWEEP_DOFS+d]*impulse);
         }
     }
 }

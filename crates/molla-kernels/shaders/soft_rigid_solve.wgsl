@@ -28,6 +28,7 @@ struct Params {
 @group(0) @binding(15) var<storage, read_write> body_velocity: array<SpatialVelocity>;
 @group(0) @binding(16) var<storage, read_write> active_rows: array<u32>;
 var<workgroup> active_prefix: array<u32, 64>;
+var<workgroup> serial_delta_velocity: array<f32, 64>;
 
 fn scan_contacts(row: u32, lane: u32) -> u32 {
     var enabled = 0u;
@@ -281,7 +282,7 @@ fn relative_velocity(r: u32, direction: vec3<f32>, k: u32) -> f32 {
     }
     if contact.ids.y != 0xffffffffu {
         for (var d = 0u; d < params.dofs; d += 1u) {
-            value -= projected[(r*3u+k)*params.dofs+d] * rigid_velocity[d];
+            value -= projected[(r*3u+k)*params.dofs+d] * (rigid_velocity[d] + serial_delta_velocity[d]);
         }
     }
     return value;
@@ -294,7 +295,7 @@ fn apply_delta(r: u32, direction: vec3<f32>, k: u32, impulse: f32) {
     }
     if contact.ids.y != 0xffffffffu {
         for (var d = 0u; d < params.dofs; d += 1u) {
-            rigid_velocity[d] -= response[(r*3u+k)*params.dofs+d] * impulse;
+            serial_delta_velocity[d] -= response[(r*3u+k)*params.dofs+d] * impulse;
         }
     }
 }
@@ -346,6 +347,10 @@ fn solve() {
             apply_delta(r, directions[2], 2u, lambda.z-row.lambda.z);
             rows[r].lambda = vec4<f32>(lambda,0.0);
             if !finite(dot(lambda,lambda)) { atomicStore(&status,4u); return; }
+        }
+        for (var d = 0u; d < params.dofs; d += 1u) {
+            rigid_velocity[d] += serial_delta_velocity[d];
+            serial_delta_velocity[d] = 0.0;
         }
     }
 }
