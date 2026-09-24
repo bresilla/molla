@@ -24,7 +24,7 @@ fn contact_snapshot_preserves_state_replaces_inputs_and_replays_first_solve() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
-fn contact_snapshot_separates_solved_velocities_from_stop_drift() {
+fn contact_snapshot_preserves_coupled_stop_velocities_through_drift() {
     check_snapshot(true);
 }
 
@@ -61,7 +61,7 @@ fn check_snapshot(stopped: bool) {
     assert!(captured.contact_snapshot().is_none());
     captured.configure_contact_snapshot(true).unwrap();
     assert!(captured.contact_snapshot().is_none());
-    for _ in 0..2 {
+    for step in 0..2 {
         let initial_positions = bytes(
             &engine,
             captured.soft_state().particle_q.device_buffer().unwrap(),
@@ -129,11 +129,20 @@ fn check_snapshot(stopped: bool) {
                 captured.rigid_state().joint_qd.device_buffer().unwrap(),
                 1,
             )[0];
-            assert!(
-                before > 1e-6,
-                "stop fixture did not receive contact torque: {before}"
+            assert!(before.abs() < 1e-7, "coupled stop velocity: {before}");
+            assert_eq!(before, after);
+            let rows = readback::read::<[f32; 8]>(
+                &engine,
+                captured.contact_row_diagnostics(),
+                captured.contact_row_count() as usize,
             );
-            assert_eq!(after, 0.0);
+            if step == 0 {
+                assert!(
+                    rows.last().unwrap()[4] > 1e-6,
+                    "upper stop has no reaction: {:?}",
+                    rows.last()
+                );
+            }
         }
         let named = snapshot.buffers().collect::<Vec<_>>();
         assert_eq!(

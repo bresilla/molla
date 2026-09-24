@@ -83,6 +83,8 @@ mod soft_vt_contact;
 #[cfg(feature = "gpu")]
 pub mod soft_rigid_contact;
 #[cfg(feature = "gpu")]
+pub mod soft_rigid_bounds;
+#[cfg(feature = "gpu")]
 pub mod soft_rigid_solve;
 #[cfg(feature = "gpu")]
 pub mod tet_volume;

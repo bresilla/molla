@@ -203,19 +203,45 @@ impl FeatherstoneSolver {
             let mut mass = crate::joint_mass::JointMass::new(model, state_out);
             for art in 0..model.articulation_count.max(1) {
                 crate::joint_limits::react_scalar_stops(
-                    model, state_out, art, &mut acceleration, dt, 0.0, &mut mass,
+                    model,
+                    state_out,
+                    art,
+                    &mut acceleration,
+                    dt,
+                    0.0,
+                    &mut mass,
                 )?;
             }
         }
         integration::integrate(
-            model, 0..model.joint_count, q_in, &qd_in,
-            &acceleration, dt, 0.0,
-            self.rigorous_distance, &mut q, &mut qd,
+            model,
+            0..model.joint_count,
+            q_in,
+            &qd_in,
+            &acceleration,
+            dt,
+            0.0,
+            self.rigorous_distance,
+            &mut q,
+            &mut qd,
         )?;
         state_out.joint_q.host_mut()?.copy_from_slice(&q);
         state_out.joint_qd.host_mut()?.copy_from_slice(&qd);
         eval_fk(model, state_out)?;
         eval_body_velocities(model, state_out)
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_external_scalar_bounds(&mut self, enabled: bool) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel.set_external_scalar_bounds(enabled);
+                Ok(())
+            }
+            _ => Err(Error::Gpu(
+                "external scalar bounds require a GPU backend".into(),
+            )),
+        }
     }
 
     /// Integrate input coordinates using contact-corrected output velocities on the GPU.
@@ -533,10 +559,18 @@ impl FeatherstoneSolver {
         mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
-        self.step_with_collision_response(model, state_in, control, pipeline, contacts, dt,
-            state_out, excluded, |model, state, dt, wrenches, _, _| {
-                forces(model, state, dt, wrenches)
-            }, bounds)
+        self.step_with_collision_response(
+            model,
+            state_in,
+            control,
+            pipeline,
+            contacts,
+            dt,
+            state_out,
+            excluded,
+            |model, state, dt, wrenches, _, _| forces(model, state, dt, wrenches),
+            bounds,
+        )
     }
 
     pub(crate) fn step_with_collision_response(
@@ -549,7 +583,14 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
         mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
-        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector], &mut crate::joint_mass::MassSeed<'_>, &mut Contacts) -> Result<()>,
+        mut forces: impl FnMut(
+            &Model,
+            &State,
+            Real,
+            &mut [SpatialVector],
+            &mut crate::joint_mass::MassSeed<'_>,
+            &mut Contacts,
+        ) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
         self.contact_forces.clear();
@@ -586,8 +627,16 @@ impl FeatherstoneSolver {
             })?;
             applied.copy_from_slice(&persistent);
             let mut mass_seed = crate::joint_mass::MassSeed::new(model);
-            tracing::debug_span!("external_forces")
-                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied, &mut mass_seed, contacts))?;
+            tracing::debug_span!("external_forces").in_scope(|| {
+                forces(
+                    model,
+                    &scratch,
+                    sub_dt,
+                    &mut applied,
+                    &mut mass_seed,
+                    contacts,
+                )
+            })?;
             if applied
                 .iter()
                 .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
@@ -598,7 +647,15 @@ impl FeatherstoneSolver {
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
             tracing::debug_span!("featherstone_substep").in_scope(|| {
-                self.step_inner_seeded(model, &scratch, control, contacts, sub_dt, state_out, Some(mass_seed))
+                self.step_inner_seeded(
+                    model,
+                    &scratch,
+                    control,
+                    contacts,
+                    sub_dt,
+                    state_out,
+                    Some(mass_seed),
+                )
             })?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
@@ -876,13 +933,37 @@ fn cpu_step(
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
     if model.articulation_count <= 1 {
-        cpu_step_inner::<false>(model, state_in, control, contacts, dt, state_out,
-            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation, mass_seed)
+        cpu_step_inner::<false>(
+            model,
+            state_in,
+            control,
+            contacts,
+            dt,
+            state_out,
+            joint_damping,
+            stable_motor_feedback,
+            rigorous_d_solve,
+            rigorous_distance,
+            contact_forces,
+            activation,
+            mass_seed,
+        )
     } else {
-        cpu_step_inner::<true>(model, state_in, control, contacts, dt, state_out,
-            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation, mass_seed)
+        cpu_step_inner::<true>(
+            model,
+            state_in,
+            control,
+            contacts,
+            dt,
+            state_out,
+            joint_damping,
+            stable_motor_feedback,
+            rigorous_d_solve,
+            rigorous_distance,
+            contact_forces,
+            activation,
+            mass_seed,
+        )
     }
 }
 
@@ -961,7 +1042,10 @@ fn cpu_step_inner<const LOCAL: bool>(
 
     let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, mass_seed)?;
     let motor_inertias = effective_drive_inertias(
-        model, control, stable_motor_feedback, &mut joint_mass,
+        model,
+        control,
+        stable_motor_feedback,
+        &mut joint_mass,
         activation.map(|active| active.articulations.as_slice()),
     )?;
 
@@ -984,7 +1068,10 @@ fn cpu_step_inner<const LOCAL: bool>(
         active.filter_readings(model, contact_forces)?;
         if !active.joints.iter().any(|&selected| selected) {
             active.restore(model, state_in, state_out)?;
-            state_out.body_f.host_mut()?.copy_from_slice(state_in.body_f.host()?);
+            state_out
+                .body_f
+                .host_mut()?
+                .copy_from_slice(state_in.body_f.host()?);
             return Ok(());
         }
     }
@@ -1038,13 +1125,16 @@ fn cpu_step_inner<const LOCAL: bool>(
     let mut c_term = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
     let mut i_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialMatrix6::ZERO);
     let mut p_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    let mut s_cols = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut s_cols =
+        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
     let mut dof_active = JointScratch::<_, LOCAL>::new(scratch_len, [false; MAX_JOINT_DOFS]);
     let mut dof_count = JointScratch::<_, LOCAL>::new(scratch_len, 0usize);
-    let mut u_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut u_per_dof =
+        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
     let mut d_inv_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
     let mut u_tau_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
-    let mut l_chol_per_joint = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
+    let mut l_chol_per_joint =
+        JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
 
     // ── Per-articulation outer loop ─────────────────────────────────
     let mut q_new: Vec<Real> = q_in.clone();
@@ -1605,8 +1695,13 @@ fn cpu_step_inner<const LOCAL: bool>(
         let limits_span = tracing::debug_span!("aba_constraints").entered();
         if j_end == j_begin + 1
             && let Some(acceleration) = singular_root::acceleration(
-                model, state_out, art, j_begin, &root_applied_tau,
-                &body_f_in, &mut joint_mass,
+                model,
+                state_out,
+                art,
+                j_begin,
+                &root_applied_tau,
+                &body_f_in,
+                &mut joint_mass,
             )?
         {
             let first = joint_dof_offset[j_begin] as usize;
@@ -1627,8 +1722,16 @@ fn cpu_step_inner<const LOCAL: bool>(
         drop(limits_span);
         let integration_span = tracing::debug_span!("aba_integration").entered();
         integration::integrate(
-            model, j_begin..j_end, &q_in, &qd_in, &q_dd, dt,
-            joint_damping, rigorous_distance, &mut q_new, &mut qd_new,
+            model,
+            j_begin..j_end,
+            &q_in,
+            &qd_in,
+            &q_dd,
+            dt,
+            joint_damping,
+            rigorous_distance,
+            &mut q_new,
+            &mut qd_new,
         )?;
         drop(integration_span);
     } // end per-articulation outer loop
@@ -1816,10 +1919,7 @@ fn effective_drive_inertias(
 fn unit_inverse_diagonal(l: &[Real], n: usize, index: usize, work: &mut [Real]) -> Real {
     for i in index..n {
         let mut value = if i == index { 1.0 } else { 0.0 };
-        for (&coefficient, &previous) in l[i * n + index..i * n + i]
-            .iter()
-            .zip(&work[index..i])
-        {
+        for (&coefficient, &previous) in l[i * n + index..i * n + i].iter().zip(&work[index..i]) {
             value -= coefficient * previous;
         }
         let diagonal = l[i * n + i];
@@ -1875,11 +1975,7 @@ fn forward_sub_packed(l: &[Real], b: &[Real], n: usize) -> Vec<Real> {
 }
 
 /// Solve a packed joint Cholesky block using stack-backed substitutions.
-fn solve_joint_block(
-    l: &[Real],
-    rhs: &[Real; MAX_JOINT_DOFS],
-    n: usize,
-) -> [Real; MAX_JOINT_DOFS] {
+fn solve_joint_block(l: &[Real], rhs: &[Real; MAX_JOINT_DOFS], n: usize) -> [Real; MAX_JOINT_DOFS] {
     let mut y = [0.0; MAX_JOINT_DOFS];
     for i in 0..n {
         let mut value = rhs[i];
@@ -1887,7 +1983,11 @@ fn solve_joint_block(
             value -= l[i * n + k] * y[k];
         }
         let pivot = l[i * n + i];
-        y[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+        y[i] = if pivot.abs() < 1e-30 {
+            0.0
+        } else {
+            value / pivot
+        };
     }
     let mut x = [0.0; MAX_JOINT_DOFS];
     for i in (0..n).rev() {
@@ -1896,7 +1996,11 @@ fn solve_joint_block(
             value -= l[k * n + i] * x[k];
         }
         let pivot = l[i * n + i];
-        x[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+        x[i] = if pivot.abs() < 1e-30 {
+            0.0
+        } else {
+            value / pivot
+        };
     }
     x
 }
@@ -2056,12 +2160,25 @@ mod tests {
     #[test]
     fn joint_blocks_match_allocated_substitutions_exactly() {
         for n in 0..=MAX_JOINT_DOFS {
-            for pivot in [0.0, 1e-31, 1e-30, 1e-25, -0.7, 0.7, Real::INFINITY, Real::NAN] {
+            for pivot in [
+                0.0,
+                1e-31,
+                1e-30,
+                1e-25,
+                -0.7,
+                0.7,
+                Real::INFINITY,
+                Real::NAN,
+            ] {
                 let mut factor = [Real::NAN; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
                 let mut rhs = [Real::NAN; MAX_JOINT_DOFS];
                 for i in 0..n {
                     rhs[i] = ((i * 5 + 1) as Real).cos();
-                    factor[i * n + i] = if i == n / 2 { pivot } else { 0.5 + i as Real * 0.2 };
+                    factor[i * n + i] = if i == n / 2 {
+                        pivot
+                    } else {
+                        0.5 + i as Real * 0.2
+                    };
                     for k in 0..i {
                         factor[i * n + k] = ((i * 7 + k * 3) as Real).sin() * 0.03;
                     }
@@ -2069,8 +2186,10 @@ mod tests {
                 let expected = back_sub_packed(&factor, &forward_sub_packed(&factor, &rhs, n), n);
                 let actual = solve_joint_block(&factor, &rhs, n);
                 for (&a, &b) in actual[..n].iter().zip(&expected) {
-                    assert!(a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
-                        "n={n}, pivot={pivot}: {a} != {b}");
+                    assert!(
+                        a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                        "n={n}, pivot={pivot}: {a} != {b}"
+                    );
                 }
                 assert!(actual[n..].iter().all(|&x| x == 0.0));
             }
@@ -2115,13 +2234,12 @@ mod tests {
                 let mut parent = BodyId::NONE;
                 for i in 0..5 {
                     let weight = if massless_tip && i == 4 { 0.0 } else { scale };
-                    let body = builder.add_body(
-                        BodyParams::new().with_spatial_inertia(SpatialInertia {
+                    let body =
+                        builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
                             mass: weight * (1.0 + i as Real),
                             com: V3::new(0.1, 0.2, -0.1),
                             inertia: Mat3::IDENTITY * weight,
-                        }),
-                    );
+                        }));
                     builder
                         .add_joint_revolute(
                             parent,
@@ -2146,7 +2264,8 @@ mod tests {
                     .unwrap()
                     .fill(JointTargetMode::Velocity as u32);
                 let mut cache = crate::joint_mass::JointMass::new(&model, &state);
-                let result = effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
+                let result =
+                    effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
                 let mass = crate::mass_matrix(&model, &state, 0).unwrap();
                 let shared = cache.factor(0, 5).unwrap();
                 for (i, actual) in result.iter().enumerate() {
@@ -2172,13 +2291,11 @@ mod tests {
     #[test]
     fn drive_inertias_preserve_singular_response_fallback() {
         let mut builder = ModelBuilder::new();
-        let body = builder.add_body(
-            BodyParams::new().with_spatial_inertia(SpatialInertia {
-                mass: 1.0,
-                com: V3::ZERO,
-                inertia: Mat3::from_cols(V3::new(1.0, 1.0, 0.0), V3::new(1.0, 1.0, 0.0), V3::ZERO),
-            }),
-        );
+        let body = builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::from_cols(V3::new(1.0, 1.0, 0.0), V3::new(1.0, 1.0, 0.0), V3::ZERO),
+        }));
         builder
             .add_joint_free(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
             .unwrap();

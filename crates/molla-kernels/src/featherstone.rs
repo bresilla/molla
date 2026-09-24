@@ -25,6 +25,8 @@ struct Uniforms {
     rigorous_distance: u32,
     drift_only: u32,
     stable_motor_feedback: u32,
+    external_scalar_bounds: u32,
+    padding: [u32; 3],
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -52,6 +54,7 @@ pub struct FeatherstoneKernel {
     joint_count: u32,
     dof_total: u32,
     stable_motor_feedback: bool,
+    external_scalar_bounds: bool,
 }
 
 impl FeatherstoneKernel {
@@ -184,6 +187,7 @@ impl FeatherstoneKernel {
             joint_count,
             dof_total,
             stable_motor_feedback: false,
+            external_scalar_bounds: false,
         }
     }
 
@@ -195,6 +199,11 @@ impl FeatherstoneKernel {
     /// Enable effective-inertia stabilization of scalar feedback drives.
     pub fn set_stable_motor_feedback(&mut self, enabled: bool) {
         self.stable_motor_feedback = enabled;
+    }
+
+    /// Delegate nonlocked scalar position and velocity bounds to a coupled solver.
+    pub fn set_external_scalar_bounds(&mut self, enabled: bool) {
+        self.external_scalar_bounds = enabled;
     }
 
     pub fn set_status_buffer(&mut self, buffer: &wgpu::Buffer) -> Result<()> {
@@ -428,6 +437,8 @@ impl FeatherstoneKernel {
             rigorous_distance: u32::from(rigorous_distance),
             drift_only: u32::from(drift_only),
             stable_motor_feedback: u32::from(self.stable_motor_feedback),
+            external_scalar_bounds: u32::from(self.external_scalar_bounds),
+            padding: [0; 3],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::featherstone uniforms"),
